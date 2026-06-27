@@ -5,6 +5,21 @@
 
 ---
 
+## 0. Decisions locked (2026-06-27)
+
+User confirmed against the first mockup:
+
+1. **Brand** — use the **real Mastermind logo** from the macro repo (the `brand-glyph` "M" tile + `MASTERMIND` wordmark, single source). Done in the mockup.
+2. **Data provider** — **Alpaca** (start on Alpaca; confirm the SKU bundles full SIP for production). Polygon/Databento are future graduations, not v1.
+3. **Subscription tiers — keep it minimal for now** (the whole Mastermind + Macro Dashboard suite will be gated later, so don't over-build billing):
+   - **Free** — full chart + market data access, **but cannot use custom Pine indicators or our prebuilt proprietary ("Mastermind") indicators**.
+   - **Pro** — full unlock (custom + proprietary indicators, AI copilot, alerts, backtesting).
+   - Implementation: a single `is_pro` boolean gate on the indicator/script/copilot surfaces; defer multi-tier metering.
+4. **Accent color** — **blue, not violet.** Coinbase-Advanced feel. Accent = `#3b82f6` / `#5b9dff` (the blues already in the logo gradient). §6 tokens below updated to this; the old violet `#7c5cff` is retired as the chrome accent (it survives only as the tail of the logo gradient).
+5. **Chart** — must match TradingView's beauty + responsiveness. We use **TradingView Lightweight Charts** (open-source, TypeScript, **HTML5 Canvas** renderer — the same canvas approach that makes TradingView fast; the flagship TradingView "Advanced Charts" engine is closed-source, but the snappiness recipe — canvas + imperative data updates + Web Workers — is ours to reuse). The mockup already renders on it.
+
+---
+
 ## 1. What changed & why
 
 Phase 0 shipped a **correct but unsellable** thing: a static harness that proves the golden-oracle confluence signal ports faithfully from Pine to Python, with two versioned contracts (`mastermind.indicator/v1`, `backtest_result/v1`), a `model_slice()` that shrinks a 400 KB raw surface to ~6 KB for the Opus brain, a golden-gate parity gate, and real AAPL/NVDA sample contracts. That backend is excellent and stays. The user rejected the **front of the house** as "too simple."
