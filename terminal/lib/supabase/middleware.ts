@@ -29,8 +29,9 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  // protect the terminal; bounce signed-in users away from /login
-  if (!user && path.startsWith("/terminal")) {
+  const PROTECTED = ["/terminal", "/screener", "/scripts", "/portfolio", "/alerts"];
+  // protect the app area; bounce signed-in users away from /login
+  if (!user && PROTECTED.some((p) => path.startsWith(p))) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

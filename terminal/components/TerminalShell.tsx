@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { BrandLockup } from "@/components/BrandMark";
+import { AppNav } from "@/components/AppNav";
 import ChartPanel from "@/components/ChartPanel";
 
 type Row = { name: string; sec: string; col: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
@@ -10,10 +11,10 @@ const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) 
 const vol = (v: number) => (v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v));
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 
-export default function TerminalShell({ symbols, email }: { symbols: { symbol: string; section: string }[]; email: string }) {
+export default function TerminalShell({ symbols, email, initialSymbol }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string }) {
   const [man, setMan] = useState<Manifest | null>(null);
   const firstWithData = symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
-  const [active, setActive] = useState(firstWithData);
+  const [active, setActive] = useState(initialSymbol || firstWithData);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
 
@@ -46,16 +47,7 @@ export default function TerminalShell({ symbols, email }: { symbols: { symbol: s
         <form action="/auth/signout" method="post"><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
       </header>
 
-      {/* APP NAV */}
-      <nav className="appnav">
-        <button className="navbtn on"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 3 4-7 5 9" /><path d="M3 21h18" /></svg><span>Chart</span></button>
-        <button className="navbtn"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" /></svg><span>Markets</span></button>
-        <button className="navbtn"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg><span>Screener</span></button>
-        <button className="navbtn"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9v9z" /></svg><span>Portfolio</span></button>
-        <button className="navbtn"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" /></svg><span>Alerts</span></button>
-        <div className="gap" />
-        <button className="navbtn"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg><span>AI</span></button>
-      </nav>
+      <AppNav />
 
       {/* WORKSPACE */}
       <section className="workspace">

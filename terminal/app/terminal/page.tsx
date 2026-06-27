@@ -3,7 +3,8 @@ import TerminalShell from "@/components/TerminalShell";
 
 export const dynamic = "force-dynamic";
 
-export default async function Terminal() {
+export default async function Terminal({ searchParams }: { searchParams: Promise<{ sym?: string }> }) {
+  const sp = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -26,5 +27,5 @@ export default async function Terminal() {
   const { data: syms } = await supabase
     .from("watchlist_symbols").select("symbol,section").eq("watchlist_id", active.id).order("position");
 
-  return <TerminalShell symbols={(syms as any) || []} email={user?.email || ""} />;
+  return <TerminalShell symbols={(syms as any) || []} email={user?.email || ""} initialSymbol={sp?.sym} />;
 }
