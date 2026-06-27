@@ -9,7 +9,7 @@ const css = (n: string) => getComputedStyle(document.documentElement).getPropert
 
 function ema(a: (number | null)[], p: number) {
   const o: (number | null)[] = Array(a.length).fill(null);
-  let k = 2 / (p + 1), pr: number | null = null, s = 0, c = 0;
+  const k = 2 / (p + 1); let pr: number | null = null, s = 0, c = 0;
   for (let i = 0; i < a.length; i++) { const v = a[i]; if (v == null) { o[i] = pr; continue; }
     if (pr == null) { s += v; c++; if (c === p) { pr = s / p; o[i] = pr; } } else { pr = v * k + pr * (1 - k); o[i] = pr; } }
   return o;
@@ -41,9 +41,10 @@ function nearest(times: string[], iso: string) {
   return bd < 1.2e9 ? b : null;
 }
 
-export default function ChartPanel() {
+export default function ChartPanel({ symbol }: { symbol: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
+  const verdictRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     const el = ref.current; if (!el) return;
@@ -51,10 +52,13 @@ export default function ChartPanel() {
 
     (async () => {
       const [ohlc, slice] = await Promise.all([
-        fetch("/data/NVDA.json").then((r) => r.json()),
-        fetch("/data/NVDA.slice.json").then((r) => r.json()).catch(() => ({})),
+        fetch(`/data/${symbol}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        fetch(`/data/${symbol}.slice.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       ]);
-      if (dead) return;
+      if (dead || !ohlc?.bars?.length) {
+        if (statusRef.current) statusRef.current.textContent = "No data for this symbol yet.";
+        return;
+      }
       const rows = ohlc.bars.slice(-170).map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
       const closes = rows.map((r: any) => r.c);
       const c = { up: css("--up"), down: css("--down"), grid: css("--grid"), line: css("--line"), p3: css("--panel-3"),
@@ -62,8 +66,7 @@ export default function ChartPanel() {
 
       chart = createChart(el, {
         width: el.clientWidth || 900, height: el.clientHeight || 600,
-        layout: { background: { color: "transparent" }, textColor: c.mut, fontSize: 11, attributionLogo: false,
-          panes: { separatorColor: c.line } },
+        layout: { background: { color: "transparent" }, textColor: c.mut, fontSize: 11, attributionLogo: false, panes: { separatorColor: c.line } },
         grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
         crosshair: { mode: CrosshairMode.Normal,
           vertLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: c.p3 },
@@ -71,8 +74,8 @@ export default function ChartPanel() {
         rightPriceScale: { borderColor: c.line, scaleMargins: { top: 0.12, bottom: 0.1 } },
         timeScale: { borderColor: c.line, rightOffset: 6, barSpacing: 8.5 },
       });
-
-      const ps = chart.addSeries(CandlestickSeries, { upColor: c.up, downColor: c.down, wickUpColor: c.up, wickDownColor: c.down, borderVisible: false }, 0);
+      const prec = closes[closes.length - 1] < 10 ? 4 : 2;
+      const ps = chart.addSeries(CandlestickSeries, { upColor: c.up, downColor: c.down, wickUpColor: c.up, wickDownColor: c.down, borderVisible: false, priceFormat: { type: "price", precision: prec, minMove: Math.pow(10, -prec) } }, 0);
       ps.setData(rows.map((r: any) => ({ time: r.time, open: r.o, high: r.h, low: r.l, close: r.c })));
       ([[20, c.warn], [50, c.link], [200, "rgba(214,218,227,.38)"]] as [number, string][]).forEach(([p, col]) => {
         const ln = chart!.addSeries(LineSeries, { color: col, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0);
@@ -80,8 +83,7 @@ export default function ChartPanel() {
       });
       const times = rows.map((r: any) => r.time);
       const sigs = (slice?.indicator?.signals || []).slice(-7);
-      const mk = sigs.map((s: any) => {
-        const t = nearest(times, s.ts); if (!t) return null;
+      const mk = sigs.map((s: any) => { const t = nearest(times, s.ts); if (!t) return null;
         const buy = s.type === "BUY" || s.type === "REBUY";
         return { time: t, position: buy ? "belowBar" : "aboveBar", color: buy ? c.buy : c.sell, shape: buy ? "arrowUp" : "arrowDown", text: s.type };
       }).filter(Boolean);
@@ -96,11 +98,19 @@ export default function ChartPanel() {
 
       const last = rows[rows.length - 1], prev = rows[rows.length - 2];
       if (statusRef.current) {
-        const ch = last.c - prev.c, cp = (ch / prev.c) * 100, u = ch >= 0;
+        const ch = last.c - prev.c, cp = (ch / prev.c) * 100, u = ch >= 0, f = (x: number) => x.toFixed(prec);
         statusRef.current.innerHTML =
-          `<span class="mut">O</span><b>${last.o.toFixed(2)}</b> <span class="mut">H</span><b>${last.h.toFixed(2)}</b> ` +
-          `<span class="mut">L</span><b>${last.l.toFixed(2)}</b> <span class="mut">C</span><b>${last.c.toFixed(2)}</b> ` +
-          `<b class="${u ? "up" : "down"}">${u ? "+" : ""}${ch.toFixed(2)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`;
+          `<span class="mut">O</span><b>${f(last.o)}</b> <span class="mut">H</span><b>${f(last.h)}</b> ` +
+          `<span class="mut">L</span><b>${f(last.l)}</b> <span class="mut">C</span><b>${f(last.c)}</b> ` +
+          `<b class="${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`;
+      }
+      if (verdictRef.current) {
+        const v = slice?.indicator?.state?.last_signal || "—";
+        const buy = v === "BUY" || v === "REBUY";
+        verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`;
+        verdictRef.current.style.color = buy ? c.buy : c.sell;
+        const wrap = verdictRef.current.parentElement as HTMLElement;
+        if (wrap) { wrap.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; wrap.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; }
       }
       chart.timeScale().fitContent();
       ro = new ResizeObserver(() => { if (!chart) return; const r = chart.timeScale().getVisibleLogicalRange(); chart.resize(el.clientWidth, el.clientHeight); if (r) chart.timeScale().setVisibleLogicalRange(r); });
@@ -108,13 +118,13 @@ export default function ChartPanel() {
     })();
 
     return () => { dead = true; ro?.disconnect(); chart?.remove(); };
-  }, []);
+  }, [symbol]);
 
   return (
     <div className="chart-wrap">
       <div className="statusline">
         <span ref={statusRef} />
-        <span className="mm"><i />GOLDEN ORACLE · BUY</span>
+        <span className="mm"><i style={{ background: "currentColor" }} /><span ref={verdictRef}>GOLDEN ORACLE</span></span>
       </div>
       <div ref={ref} style={{ position: "absolute", inset: 0 }} />
     </div>
