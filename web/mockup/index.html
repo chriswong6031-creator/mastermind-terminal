@@ -7,10 +7,11 @@
 <style>
 /* ============ Coinbase-Advanced institutional palette — pure-black, FLAT, no gradients/glows ============ */
 :root{
-  --bg:#07080a; --panel:#0c0e12; --panel-2:#13161c; --panel-3:#1a1e25; --inset:#050609;
-  --line:rgba(255,255,255,.055); --line-2:rgba(255,255,255,.028); --line-3:rgba(255,255,255,.10);
-  --grid:rgba(255,255,255,.032);
-  --text:#eef1f5; --text-2:#969ca8; --muted:#5f6671; --text-dim:#3a404a;
+  /* TradingView blue-tinted dark (not pure black — the premium tell) */
+  --bg:#131722; --panel:#171b26; --panel-2:#1d2230; --panel-3:#262c3b; --inset:#0e121b;
+  --line:rgba(255,255,255,.07); --line-2:rgba(255,255,255,.035); --line-3:rgba(255,255,255,.12);
+  --grid:rgba(255,255,255,.038);
+  --text:#d6dae3; --text-2:#868d9c; --muted:#5a616f; --text-dim:#3c4452;
   --up:#00d18f; --up-soft:#0a8f66; --down:#f6465d; --down-soft:#a13340; --flat:#5f6671;
   --buy:#00d18f; --sell:#f6465d; --signal:#e8b339;
   --brand:#1652f0; --brand-2:#3b82f6; --link:#4d8dff;     /* Coinbase blue, used FLAT + sparingly */
@@ -109,9 +110,21 @@ svg{display:block}
 .rail-tabs .t{height:42px;display:flex;align-items:center;font:600 12.5px/1 var(--font-ui);color:var(--muted);border-bottom:2px solid transparent;cursor:pointer}
 .rail-tabs .t.on{color:var(--text);border-bottom-color:var(--brand)}
 .rail-tabs .srch{margin-left:auto;color:var(--muted)}.rail-tabs .srch svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.9}
-.filters{display:flex;gap:7px;padding:11px 14px;border-bottom:1px solid var(--line);overflow-x:auto}
-.filters button{flex:none;height:28px;padding:0 13px;border-radius:var(--r-pill);background:var(--panel-2);border:1px solid var(--line);color:var(--text-2);font:600 12px/1 var(--font-ui);white-space:nowrap}
-.filters button.on{background:rgba(22,82,240,.14);border-color:rgba(22,82,240,.5);color:var(--brand-2)}
+.wl-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);position:relative}
+.wl-select{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 11px;border-radius:var(--r-md);background:var(--panel-2);border:1px solid var(--line);color:var(--text);font:650 13px/1 var(--font-ui)}
+.wl-select:hover{border-color:var(--line-3)}
+.wl-select svg{width:12px;height:12px;stroke:var(--muted);fill:none;stroke-width:2.2}
+.wl-acts{margin-left:auto;display:flex;gap:2px}
+.wl-acts button{width:28px;height:28px;border-radius:var(--r);display:grid;place-items:center;color:var(--muted)}
+.wl-acts button:hover{background:var(--panel-2);color:var(--text)}
+.wl-acts svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8}
+.wl-menu{position:absolute;top:46px;left:14px;z-index:20;min-width:200px;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:5px;display:none}
+.wl-menu.show{display:block}
+.wl-menu a{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:var(--r);color:var(--text-2);font-size:13px;cursor:pointer}
+.wl-menu a:hover{background:var(--panel-2);color:var(--text)}
+.wl-menu a.on{color:var(--text)} .wl-menu a .ck{color:var(--brand-2)}
+.wl-menu .div{height:1px;background:var(--line);margin:5px 0}
+.wl-menu .new{color:var(--brand-2)}
 .rail-scroll{flex:1;overflow-y:auto;min-height:0}
 .rail-scroll::-webkit-scrollbar{width:9px}.rail-scroll::-webkit-scrollbar-thumb{background:var(--panel-3);border-radius:8px;border:2px solid var(--bg)}
 .wl-cols{display:grid;grid-template-columns:1fr 80px 72px 22px;gap:10px;padding:9px 14px 6px;font:600 10px/1 var(--font-ui);letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
@@ -286,7 +299,23 @@ svg{display:block}
   <!-- RIGHT RAIL -->
   <aside class="rail">
     <div class="rail-tabs"><div class="t on">Watchlist</div><div class="t">Details</div><div class="t">Signals</div><div class="srch"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></div></div>
-    <div class="filters"><button class="on">All</button><button>Crypto</button><button>Equities</button><button>Watchlist</button><button>Movers</button></div>
+    <div class="wl-bar">
+      <button class="wl-select" id="wlSelect">Default <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+      <div class="wl-acts">
+        <button title="Add symbol"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button title="Columns"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg></button>
+        <button title="More"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></button>
+      </div>
+      <div class="wl-menu" id="wlMenu">
+        <a class="on" data-n="Default">Default <span class="ck">✓</span></a>
+        <a data-n="Tech">Tech</a>
+        <a data-n="China / HK">China / HK</a>
+        <a data-n="Crypto majors">Crypto majors</a>
+        <a data-n="Mastermind signals">Mastermind signals</a>
+        <div class="div"></div>
+        <a class="new">+ New watchlist</a>
+      </div>
+    </div>
     <div class="rail-scroll">
       <div class="wl-cols"><span>Name</span><span>Price</span><span>24h</span><span></span></div>
       <div class="wl-sec">Crypto</div>
@@ -434,7 +463,11 @@ document.getElementById('indBtn').onclick=function(){document.getElementById('sc
 document.getElementById('modalX').onclick=function(){document.getElementById('scrim').classList.remove('show');};
 document.getElementById('scrim').onclick=function(e){if(e.target===this)this.classList.remove('show');};
 document.querySelectorAll('.modal .nav a').forEach(function(a){a.onclick=function(){document.querySelectorAll('.modal .nav a').forEach(function(x){x.classList.remove('on','mm');});a.classList.add('on');if(a.textContent.indexOf('Mastermind')>=0){a.classList.add('mm');renderInd('Mastermind');}else if(a.textContent.indexOf('Technicals')>=0)renderInd('Trend');else renderInd('Mastermind');};});
-document.querySelectorAll('.filters button,.rail-tabs .t,.chart-tabs .ct').forEach(function(b){b.onclick=function(){var p=this.parentNode;p.querySelectorAll('button,.t,.ct').forEach(function(x){x.classList.remove('on');});this.classList.add('on');};});
+document.querySelectorAll('.rail-tabs .t,.chart-tabs .ct').forEach(function(b){b.onclick=function(){var p=this.parentNode;p.querySelectorAll('.t,.ct').forEach(function(x){x.classList.remove('on');});this.classList.add('on');};});
+var wlSel=document.getElementById('wlSelect'),wlMenu=document.getElementById('wlMenu');
+wlSel.onclick=function(e){e.stopPropagation();wlMenu.classList.toggle('show');};
+wlMenu.querySelectorAll('a[data-n]').forEach(function(a){a.onclick=function(e){e.stopPropagation();wlMenu.querySelectorAll('a').forEach(function(x){x.classList.remove('on');var c=x.querySelector('.ck');if(c)c.remove();});a.classList.add('on');a.innerHTML=a.dataset.n+' <span class="ck">✓</span>';wlSel.firstChild.nodeValue=a.dataset.n+' ';wlMenu.classList.remove('show');};});
+document.addEventListener('click',function(){wlMenu.classList.remove('show');});
 window.addEventListener('resize',function(){if(chart){var el=document.getElementById('chart');chart.resize(el.clientWidth,el.clientHeight);}});
 })();
 </script>
