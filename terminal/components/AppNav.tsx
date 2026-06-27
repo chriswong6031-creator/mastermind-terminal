@@ -19,7 +19,7 @@ function Glyph({ k }: { k: string }) {
 
 const TOP = [
   { k: "chart", label: "Chart", href: "/terminal" },
-  { k: "markets", label: "Markets", href: "/terminal" },
+  { k: "markets", label: "Markets", href: "/screener" },
   { k: "screener", label: "Screener", href: "/screener" },
   { k: "scripts", label: "Scripts", href: "/scripts" },
   { k: "portfolio", label: "Portfolio", href: "/portfolio" },
