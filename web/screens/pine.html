@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Pine Editor · Mastermind Terminal</title>
+<style>
+:root{
+  --bg:#0a0b0e; --panel:#0d0f13; --panel-2:#15171d; --panel-3:#1f222b; --inset:#08090c;
+  --chart-bg:#131722;
+  --line:#23262f; --line-2:#1a1d24; --line-3:#33373f; --grid:rgba(255,255,255,.04);
+  --text:#d6dae3; --text-2:#868d9c; --muted:#5a616f; --text-dim:#3c4452;
+  --up:#26c281; --down:#f0566b; --buy:#26c281; --sell:#f0566b; --signal:#e8b339;
+  --brand:#2962ff; --brand-2:#4d82ff; --link:#4d82ff;
+  --font-ui:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --font-num:ui-monospace,"SF Mono","Geist Mono",Menlo,monospace;
+  --r:4px; --r-md:6px; --r-lg:8px; --t:110ms;
+  /* syntax tones */
+  --syn-kw:#4d82ff; --syn-fn:#56b6f7; --syn-str:#26c281; --syn-com:#5a616f; --syn-num:#e8b339; --syn-op:#868d9c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font:13px/1.45 var(--font-ui);-webkit-font-smoothing:antialiased;overflow:hidden;letter-spacing:.005em}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+svg{display:block}
+a{color:inherit;text-decoration:none}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--panel-3);border-radius:8px;border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-thumb:hover{background:var(--line-3);background-clip:padding-box}
+
+.app{display:grid;grid-template-columns:60px 1fr;grid-template-rows:54px 1fr 26px;height:100vh;background:var(--bg)}
+
+/* ===== top bar ===== */
+.topbar{grid-column:1/3;display:flex;align-items:center;padding:0 12px 0 12px;background:var(--bg);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:9px;padding-right:14px}
+.brand .wm{display:flex;flex-direction:column;line-height:1}
+.brand .wm b{font:700 13px/1 var(--font-ui);letter-spacing:.05em}
+.brand .wm small{font:600 7.5px/1.4 var(--font-ui);letter-spacing:.3em;color:var(--muted);margin-top:3px}
+.tdiv{width:1px;height:28px;background:var(--line);margin:0 13px}
+.page-title{display:flex;align-items:center;gap:8px;font:650 14px/1 var(--font-ui)}
+.page-title svg{width:16px;height:16px;stroke:var(--brand-2);fill:none;stroke-width:1.9}
+.script-pill{display:inline-flex;align-items:center;gap:9px;height:32px;padding:0 11px;margin-left:14px;border-radius:var(--r-md);background:var(--panel-2);border:1px solid var(--line);cursor:pointer;position:relative}
+.script-pill:hover{border-color:var(--line-3)}
+.script-pill .dot{width:7px;height:7px;border-radius:2px;background:var(--brand);flex:none}
+.script-pill b{font:600 13px/1 var(--font-ui)}
+.script-pill svg{width:12px;height:12px;stroke:var(--muted);fill:none;stroke-width:2.2}
+.spacer{flex:1}
+.acts{display:flex;align-items:center;gap:8px}
+.back-link{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 11px;border-radius:var(--r-md);color:var(--text-2);font:600 12.5px/1 var(--font-ui);transition:color var(--t),background var(--t)}
+.back-link:hover{color:var(--text);background:var(--panel-2)}
+.back-link svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2}
+.btn-ghost{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 14px;border-radius:var(--r-md);background:var(--panel-2);border:1px solid var(--line);color:var(--text-2);font:600 12.5px/1 var(--font-ui);transition:border-color var(--t),color var(--t)}
+.btn-ghost:hover{border-color:var(--line-3);color:var(--text)}
+.btn-ghost svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.9}
+.btn-cta{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 15px;border-radius:var(--r-md);background:var(--brand);color:#fff;font:600 12.5px/1 var(--font-ui);transition:background var(--t)}
+.btn-cta:hover{background:#1d52ed}
+.btn-cta svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2}
+.tdiv-s{width:1px;height:24px;background:var(--line);margin:0 4px}
+
+/* ===== app nav ===== */
+.appnav{grid-row:2;grid-column:1;background:var(--bg);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:3px}
+.navbtn{position:relative;width:48px;height:48px;border-radius:var(--r-md);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--muted);transition:color var(--t),background var(--t)}
+.navbtn:hover{color:var(--text);background:var(--panel-2)}
+.navbtn.on{color:var(--brand-2)}
+.navbtn.on::before{content:"";position:absolute;left:-12px;width:3px;height:24px;border-radius:0 3px 3px 0;background:var(--brand)}
+.navbtn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.7}
+.navbtn span{font:600 8px/1 var(--font-ui)}
+.appnav .gap{flex:1}
+
+/* ===== main split ===== */
+.main{grid-column:2;grid-row:2;display:grid;grid-template-columns:62% 38%;grid-template-rows:1fr 1fr;min-height:0;min-width:0}
+.editor-pane{grid-column:1;grid-row:1/3;display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid var(--line);background:var(--panel)}
+.rightcol{grid-column:2;grid-row:1/3;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--bg);padding:9px;gap:9px}
+
+/* editor header strip */
+.ed-head{display:flex;align-items:center;gap:10px;height:42px;padding:0 12px;border-bottom:1px solid var(--line);background:var(--bg);flex:none}
+.ed-head .fname{display:flex;align-items:center;gap:8px;font:600 12.5px/1 var(--font-ui);color:var(--text)}
+.ed-head .fname svg{width:14px;height:14px;stroke:var(--text-2);fill:none;stroke-width:1.8}
+.pine-badge{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:var(--r);background:rgba(41,98,255,.13);border:1px solid rgba(41,98,255,.3);color:var(--brand-2);font:700 9.5px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase}
+.ed-tools{margin-left:auto;display:flex;align-items:center;gap:2px}
+.ed-tools button{width:28px;height:28px;border-radius:var(--r);display:grid;place-items:center;color:var(--muted);transition:background var(--t),color var(--t)}
+.ed-tools button:hover{background:var(--panel-2);color:var(--text)}
+.ed-tools button.run{color:var(--up)}
+.ed-tools button.run:hover{background:rgba(38,194,129,.12);color:var(--up)}
+.ed-tools button svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8}
+.ed-tools .play{fill:currentColor;stroke:none}
+
+/* code editor body */
+.ed-body{flex:1;display:flex;min-height:0;overflow:auto;background:var(--panel);position:relative}
+.gutter{flex:none;width:48px;padding:12px 0;text-align:right;user-select:none;border-right:1px solid var(--line-2);background:var(--inset)}
+.gutter .ln{display:block;height:19px;padding-right:12px;font:11.5px/19px var(--font-num);color:var(--text-dim);font-variant-numeric:tabular-nums}
+.code{flex:1;padding:12px 0 12px 14px;min-width:0}
+.code pre{margin:0;font:12.5px/19px var(--font-num);white-space:pre;tab-size:2}
+.code .line{display:block;height:19px;min-height:19px;padding-right:18px}
+.code .line:hover{background:rgba(255,255,255,.018)}
+.code .line.cur{background:rgba(41,98,255,.07);box-shadow:inset 2px 0 0 var(--brand)}
+.tk-kw{color:var(--syn-kw);font-weight:500}
+.tk-fn{color:var(--syn-fn)}
+.tk-str{color:var(--syn-str)}
+.tk-com{color:var(--syn-com);font-style:italic}
+.tk-num{color:var(--syn-num)}
+.tk-op{color:var(--syn-op)}
+.tk-var{color:var(--text)}
+.tk-anno{color:var(--brand-2)}
+
+/* ===== boards (bordered sections) ===== */
+.board{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);display:flex;flex-direction:column;overflow:hidden;min-height:0}
+.board .b-head{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);flex:none}
+.board .b-head .ttl{font:600 9.5px/1 var(--font-ui);letter-spacing:.1em;text-transform:uppercase;color:var(--text-2)}
+.board .b-head .cnt{margin-left:auto;font:600 10px/1 var(--font-num);color:var(--muted)}
+.board .b-head button{width:24px;height:24px;border-radius:var(--r);display:grid;place-items:center;color:var(--muted)}
+.board .b-head button:hover{background:var(--panel-2);color:var(--text)}
+.board .b-head button svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.9}
+
+/* my scripts list */
+.scripts-board{flex:1.05;min-height:0}
+.scr-list{flex:1;overflow-y:auto;min-height:0}
+.scr-grp{padding:9px 12px 4px;font:600 9px/1 var(--font-ui);letter-spacing:.11em;text-transform:uppercase;color:var(--text-dim)}
+.scr-row{display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line-2);transition:background var(--t)}
+.scr-row:hover{background:var(--panel-2)}
+.scr-row.on{background:rgba(41,98,255,.08)}
+.scr-row.on .scr-name{color:var(--text)}
+.scr-ic{width:26px;height:26px;border-radius:var(--r-md);flex:none;display:grid;place-items:center;background:var(--panel-3);border:1px solid var(--line-3)}
+.scr-row.on .scr-ic{background:rgba(41,98,255,.16);border-color:rgba(41,98,255,.4)}
+.scr-ic svg{width:14px;height:14px;stroke:var(--muted);fill:none;stroke-width:1.8}
+.scr-row.on .scr-ic svg{stroke:var(--brand-2)}
+.scr-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.scr-name{font:600 12.5px/1 var(--font-ui);color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scr-sub{font:10.5px/1 var(--font-ui);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scr-glyph{flex:none;color:var(--text-dim);display:grid;place-items:center}
+.scr-glyph svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.8}
+.scr-glyph.star{color:var(--signal)}
+.scr-glyph.star svg{fill:var(--signal);stroke:var(--signal)}
+
+/* inputs board */
+.inputs-board{flex:1;min-height:0}
+.in-scroll{flex:1;overflow-y:auto;min-height:0;padding:4px 0}
+.in-grp{padding:11px 13px 5px;font:600 9px/1 var(--font-ui);letter-spacing:.11em;text-transform:uppercase;color:var(--text-dim)}
+.in-row{display:flex;align-items:center;gap:12px;padding:7px 13px;min-height:34px}
+.in-row .lbl{flex:1;font:13px/1.2 var(--font-ui);color:var(--text-2)}
+.in-num{display:inline-flex;align-items:center;height:28px;border-radius:var(--r-md);background:var(--inset);border:1px solid var(--line);overflow:hidden}
+.in-num input{width:46px;height:100%;background:none;border:0;outline:none;text-align:center;color:var(--text);font:600 12.5px/1 var(--font-num);font-variant-numeric:tabular-nums}
+.in-num .step{width:22px;height:100%;display:grid;place-items:center;color:var(--muted);border-left:1px solid var(--line)}
+.in-num .step:first-of-type{border-left:0;border-right:1px solid var(--line)}
+.in-num .step:hover{background:var(--panel-2);color:var(--text)}
+.in-num .step svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2.6}
+.in-sel{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;border-radius:var(--r-md);background:var(--inset);border:1px solid var(--line);color:var(--text);font:600 12.5px/1 var(--font-ui)}
+.in-sel:hover{border-color:var(--line-3)}
+.in-sel svg{width:11px;height:11px;stroke:var(--muted);fill:none;stroke-width:2.2}
+.switch{width:36px;height:20px;border-radius:999px;background:var(--panel);border:1px solid var(--line-3);position:relative;cursor:pointer;transition:background var(--t),border-color var(--t);flex:none}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--muted);transition:transform var(--t),background var(--t)}
+.switch.on{background:var(--brand);border-color:var(--brand)}.switch.on::after{transform:translateX(16px);background:#fff}
+.in-foot{flex:none;display:flex;align-items:center;gap:8px;padding:9px 13px;border-top:1px solid var(--line)}
+.in-foot .reset{font:600 12px/1 var(--font-ui);color:var(--text-2)}
+.in-foot .reset:hover{color:var(--text)}
+.in-foot .apply{margin-left:auto;height:28px;padding:0 14px;border-radius:var(--r-md);background:var(--brand);color:#fff;font:600 12px/1 var(--font-ui)}
+.in-foot .apply:hover{background:#1d52ed}
+
+/* ===== console strip ===== */
+.console{grid-column:1/3;grid-row:3;display:flex;align-items:center;gap:18px;padding:0 14px;background:var(--bg);border-top:1px solid var(--line);overflow:hidden;font:11px/1 var(--font-num)}
+.console .tab{display:inline-flex;align-items:center;gap:6px;color:var(--text-2);font:600 10.5px/1 var(--font-ui);letter-spacing:.04em}
+.console .tab svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.9}
+.console .msg{display:inline-flex;align-items:center;gap:6px;color:var(--text-2);white-space:nowrap}
+.console .msg .ts{color:var(--text-dim)}
+.console .ok{color:var(--up)}
+.console .check{color:var(--up);font-weight:700}
+.console .cdiv{width:1px;height:13px;background:var(--line)}
+.console .right{margin-left:auto;display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+.console .right svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.9}
+
+/* script-name popover */
+.pop{position:absolute;z-index:40;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:5px;display:none;box-shadow:0 16px 38px -12px rgba(0,0,0,.72);min-width:236px}
+.pop.show{display:block}
+.pop .grp{font:600 9px/1 var(--font-ui);letter-spacing:.11em;text-transform:uppercase;color:var(--text-dim);padding:9px 9px 5px}
+.pop a{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:var(--r);color:var(--text-2);font-size:12.5px;cursor:pointer;white-space:nowrap}
+.pop a:hover{background:var(--panel-2);color:var(--text)}
+.pop a.on{color:var(--text)}
+.pop a .pdot{width:7px;height:7px;border-radius:2px;background:var(--brand);flex:none}
+.pop a .ck{margin-left:auto;color:var(--brand-2)}
+.pop a .glyph{margin-left:auto;color:var(--text-dim);display:grid;place-items:center}
+.pop a .glyph svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.8}
+.pop .div{height:1px;background:var(--line);margin:5px 4px}
+.pop .new{color:var(--brand-2)}
+.pop .new svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
+#scriptPop{top:46px;left:0}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ===== top bar ===== -->
+  <header class="topbar">
+    <a class="brand" href="../index.html">
+      <svg width="28" height="28" viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="mbT" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4d82ff"/><stop offset="1" stop-color="#2962ff"/></linearGradient><linearGradient id="mbI" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#dbe7ff"/></linearGradient></defs><rect x="3" y="3" width="34" height="34" rx="8" fill="url(#mbT)"/><rect x="3.6" y="3.6" width="32.8" height="32.8" rx="7.4" fill="none" stroke="#fff" stroke-opacity=".22"/><path d="M13 28 L13 14.5 L20 22 L27 12.5 L27 28" fill="none" stroke="url(#mbI)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="wm"><b>MASTERMIND</b><small>TERMINAL</small></span>
+    </a>
+    <div class="tdiv"></div>
+    <div class="page-title">
+      <svg viewBox="0 0 24 24"><path d="M8 18l-5-6 5-6M16 6l5 6-5 6M14 4l-4 16"/></svg>
+      Pine Editor
+    </div>
+    <div class="script-pill" id="scriptPill">
+      <span class="dot"></span><b id="scriptName">MACD+STOCH RSI</b>
+      <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      <div class="pop" id="scriptPop"></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="acts">
+      <a class="back-link" href="../index.html"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>Back to chart</a>
+      <div class="tdiv-s"></div>
+      <button class="btn-ghost" id="btnSave"><svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>Save</button>
+      <button class="btn-cta" id="btnAdd"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add to chart</button>
+      <button class="btn-ghost" id="btnPublish"><svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></svg>Publish</button>
+    </div>
+  </header>
+
+  <!-- ===== app nav rail ===== -->
+  <nav class="appnav">
+    <button class="navbtn"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 3 4-7 5 9"/><path d="M3 21h18"/></svg><span>Chart</span></button>
+    <button class="navbtn"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Markets</span></button>
+    <button class="navbtn"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Screener</span></button>
+    <button class="navbtn"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9v9z"/></svg><span>Portfolio</span></button>
+    <button class="navbtn"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg><span>Alerts</span></button>
+    <div class="gap"></div>
+    <button class="navbtn"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z"/></svg><span>AI</span></button>
+    <button class="navbtn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82M4.6 9a1.65 1.65 0 0 0-.33-1.82"/></svg><span>Settings</span></button>
+  </nav>
+
+  <!-- ===== main split ===== -->
+  <div class="main">
+    <!-- code editor (left ~62%) -->
+    <section class="editor-pane">
+      <div class="ed-head">
+        <span class="fname"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>confluence_rsimacd_stochrsi_mtf.pine</span>
+        <span class="pine-badge"><svg width="11" height="11" viewBox="0 0 24 24" style="stroke:currentColor;fill:none;stroke-width:2.4"><path d="M5 12l4 4 10-10"/></svg>Pine v6</span>
+        <div class="ed-tools">
+          <button class="run" id="btnRun" title="Run / compile"><svg class="play" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg></button>
+          <button title="Format"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h14"/></svg></button>
+          <button title="Find"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
+          <button title="Editor settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15H4.5a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 6 8a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 11 4.6h.09A1.65 1.65 0 0 0 12 3a2 2 0 0 1 4 0v.09A1.65 1.65 0 0 0 18 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09"/></svg></button>
+        </div>
+      </div>
+      <div class="ed-body">
+        <div class="gutter" id="gutter"></div>
+        <div class="code"><pre id="codePre"></pre></div>
+      </div>
+    </section>
+
+    <!-- right column (~38%) -->
+    <aside class="rightcol">
+      <!-- my scripts -->
+      <div class="board scripts-board">
+        <div class="b-head">
+          <span class="ttl">My Scripts</span>
+          <span class="cnt" id="scrCount">6</span>
+          <button title="New script"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+        <div class="scr-list" id="scrList"></div>
+      </div>
+
+      <!-- inputs -->
+      <div class="board inputs-board">
+        <div class="b-head">
+          <span class="ttl">Inputs</span>
+          <button title="Reset to defaults"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button>
+        </div>
+        <div class="in-scroll">
+          <div class="in-grp">RSI · MACD</div>
+          <div class="in-row"><span class="lbl">RSI length</span>
+            <span class="in-num"><span class="step" data-dec><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span><input value="14" data-in/><span class="step" data-inc><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></span>
+          </div>
+          <div class="in-row"><span class="lbl">MACD fast (EMA of RSI)</span>
+            <span class="in-num"><span class="step" data-dec><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span><input value="14" data-in/><span class="step" data-inc><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></span>
+          </div>
+          <div class="in-row"><span class="lbl">MACD slow (EMA of RSI)</span>
+            <span class="in-num"><span class="step" data-dec><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span><input value="60" data-in/><span class="step" data-inc><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></span>
+          </div>
+          <div class="in-row"><span class="lbl">MACD signal</span>
+            <span class="in-num"><span class="step" data-dec><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span><input value="5" data-in/><span class="step" data-inc><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></span>
+          </div>
+          <div class="in-grp">Confluence</div>
+          <div class="in-row"><span class="lbl">Confluence window</span>
+            <span class="in-num"><span class="step" data-dec><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span><input value="8" data-in/><span class="step" data-inc><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></span>
+          </div>
+          <div class="in-row"><span class="lbl">Confirm timeframe</span>
+            <button class="in-sel">1W <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+          </div>
+          <div class="in-row"><span class="lbl">Buy RSI max</span>
+            <span class="in-num"><span class="step" data-dec><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span><input value="65" data-in/><span class="step" data-inc><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></span>
+          </div>
+          <div class="in-grp">Gates &amp; display</div>
+          <div class="in-row"><span class="lbl">Require weekly confirm</span><span class="switch on" data-sw></span></div>
+          <div class="in-row"><span class="lbl">Gate above 200-EMA</span><span class="switch on" data-sw></span></div>
+          <div class="in-row"><span class="lbl">Plot RE-BUY / CUT shapes</span><span class="switch on" data-sw></span></div>
+          <div class="in-row"><span class="lbl">Alert on cross</span><span class="switch" data-sw></span></div>
+        </div>
+        <div class="in-foot">
+          <button class="reset">Reset</button>
+          <button class="apply">Apply</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ===== console strip ===== -->
+  <div class="console">
+    <span class="tab"><svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></svg>Console</span>
+    <span class="cdiv"></span>
+    <span class="msg"><span class="ts">01:24:07</span> <span class="ok">Compiled successfully</span> · 0 errors, 0 warnings</span>
+    <span class="cdiv"></span>
+    <span class="msg"><span class="ts">01:24:07</span> Golden-gate parity vs oracle: max abs diff 4e-7 <span class="check">&check;</span></span>
+    <span class="right"><svg viewBox="0 0 24 24"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>NVDA · 3D · 2,381 bars</span>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ---------- the user's flagship Pine source ---------- */
+var SRC = [
+"//@version=6",
+"indicator(\"RSI-MACD × StochRSI MTF Confluence\", overlay=true, max_labels_count=500)",
+"",
+"// ---- inputs --------------------------------------------------------------",
+"rsiLen   = input.int(14, \"RSI length\",        group=\"RSI / MACD\")",
+"fastLen  = input.int(14, \"MACD fast (EMA of RSI)\", group=\"RSI / MACD\")",
+"slowLen  = input.int(60, \"MACD slow (EMA of RSI)\", group=\"RSI / MACD\")",
+"sigLen   = input.int(5,  \"MACD signal\",        group=\"RSI / MACD\")",
+"confW    = input.int(8,  \"Confluence window\",  group=\"Confluence\")",
+"confTF   = input.timeframe(\"W\", \"Confirm timeframe\", group=\"Confluence\")",
+"buyRsiMax= input.int(65, \"Buy RSI max\",        group=\"Confluence\")",
+"useWeekly= input.bool(true, \"Require weekly confirm\", group=\"Gates\")",
+"use200   = input.bool(true, \"Gate above 200-EMA\",    group=\"Gates\")",
+"",
+"// ---- RSI-based MACD (NOT price MACD) -------------------------------------",
+"rsi   = ta.rsi(close, rsiLen)",
+"macd  = ta.ema(rsi, fastLen) - ta.ema(rsi, slowLen)",
+"signal= ta.ema(macd, sigLen)",
+"hist  = macd - signal",
+"",
+"// ---- StochRSI (stoch OF the RSI series) ----------------------------------",
+"stoch = ta.stoch(rsi, rsi, rsi, 14)",
+"k     = ta.sma(stoch, 3)",
+"d     = ta.sma(k, 3)",
+"",
+"// ---- multi-timeframe weekly confirm --------------------------------------",
+"wRsi  = request.security(syminfo.tickerid, confTF, ta.rsi(close, rsiLen))",
+"wMacd = request.security(syminfo.tickerid, confTF, ta.ema(ta.rsi(close,rsiLen),fastLen) - ta.ema(ta.rsi(close,rsiLen),slowLen))",
+"wBull = wMacd > 0 and wRsi > 50",
+"",
+"// ---- regime gates --------------------------------------------------------",
+"ema200   = ta.ema(close, 200)",
+"above200 = close > ema200",
+"bullCross= ta.crossover(macd, signal)",
+"bearCross= ta.crossunder(macd, signal)",
+"recentB  = ta.barssince(k < 20) <= confW",
+"recentS  = ta.barssince(k > 80) <= confW",
+"",
+"// ---- composite signals ---------------------------------------------------",
+"buy   = bullCross and recentB and rsi < buyRsiMax and (not useWeekly or wBull) and (not use200 or above200)",
+"sell  = bearCross and recentS and (rsi > 55)",
+"reBuy = bullCross and above200 and wBull and ta.barssince(sell) < confW",
+"cut   = bearCross and not above200",
+"",
+"// ---- plots ---------------------------------------------------------------",
+"plotshape(buy,   \"BUY\",    shape.triangleup,   location.belowbar, color.new(color.teal, 0),  size=size.small, text=\"BUY\")",
+"plotshape(sell,  \"SELL\",   shape.triangledown, location.abovebar, color.new(color.red, 0),   size=size.small, text=\"SELL\")",
+"plotshape(reBuy, \"RE-BUY\", shape.circle,       location.belowbar, color.new(color.aqua, 0),  size=size.tiny,  text=\"RE-BUY\")",
+"plotshape(cut,   \"CUT\",    shape.xcross,       location.abovebar, color.new(color.orange, 0),size=size.tiny,  text=\"CUT\")",
+"plot(ema200, \"200 EMA\", color=color.new(color.gray, 35), linewidth=1)",
+"bgcolor(wBull ? color.new(color.teal, 92) : na, title=\"Weekly regime\")",
+"",
+"alertcondition(buy,  \"Golden Oracle BUY\",  \"Confluence BUY fired on {{ticker}}\")",
+"alertcondition(sell, \"Golden Oracle SELL\", \"Confluence SELL fired on {{ticker}}\")"
+];
+
+/* ---------- lightweight Pine syntax highlighter ---------- */
+var KW = ["indicator","input","int","bool","timeframe","plot","plotshape","alertcondition","bgcolor","and","or","not","na","true","false","color","shape","location","size","close","open","high","low","syminfo","request","ta","math"];
+var FN = ["rsi","ema","sma","stoch","crossover","crossunder","barssince","security","new","tickerid","triangleup","triangledown","circle","xcross","teal","red","aqua","orange","gray","belowbar","abovebar","small","tiny"];
+var kwSet={}, fnSet={};
+KW.forEach(function(w){kwSet[w]=1;});
+FN.forEach(function(w){fnSet[w]=1;});
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function hl(line){
+  // whole-line comment
+  var ci = line.indexOf("//");
+  var head = line, tail = "";
+  if(ci>=0){ head=line.slice(0,ci); tail=line.slice(ci); }
+  // tokenize head: pull out strings first
+  var out="", i=0;
+  while(i<head.length){
+    var ch=head[i];
+    if(ch==='"'){
+      var j=i+1; while(j<head.length && head[j]!=='"') j++;
+      var str=head.slice(i,Math.min(j+1,head.length));
+      out+='<span class="tk-str">'+esc(str)+'</span>'; i=j+1; continue;
+    }
+    if(/[A-Za-z_]/.test(ch)){
+      var w=""; while(i<head.length && /[A-Za-z_0-9]/.test(head[i])){ w+=head[i]; i++; }
+      var next = head[i]==='(' ;
+      if(kwSet[w]) out+='<span class="tk-kw">'+esc(w)+'</span>';
+      else if(fnSet[w] || next) out+='<span class="tk-fn">'+esc(w)+'</span>';
+      else out+='<span class="tk-var">'+esc(w)+'</span>';
+      continue;
+    }
+    if(/[0-9]/.test(ch)){
+      var n=""; while(i<head.length && /[0-9.eE]/.test(head[i])){ n+=head[i]; i++; }
+      out+='<span class="tk-num">'+esc(n)+'</span>'; continue;
+    }
+    if(/[=<>!+\-*\/?:]/.test(ch)){
+      out+='<span class="tk-op">'+esc(ch)+'</span>'; i++; continue;
+    }
+    out+=esc(ch); i++;
+  }
+  if(tail) out+='<span class="tk-com">'+esc(tail)+'</span>';
+  // version annotation tone
+  out=out.replace('<span class="tk-com">//@version=6</span>','<span class="tk-anno">//@version=6</span>');
+  return out===""?"&nbsp;":out;
+}
+function renderCode(){
+  var pre=document.getElementById("codePre"), gut=document.getElementById("gutter");
+  var ph="", gh="";
+  SRC.forEach(function(ln,idx){
+    var cur = idx===27 ? " cur" : "";   // highlight the composite BUY line
+    ph+='<span class="line'+cur+'">'+hl(ln)+'</span>';
+    gh+='<span class="ln">'+(idx+1)+'</span>';
+  });
+  pre.innerHTML=ph; gut.innerHTML=gh;
+}
+renderCode();
+
+/* ---------- my scripts list ---------- */
+var SCRIPTS=[
+  {name:"Golden Oracle Confluence", sub:"RSI-MACD × StochRSI · 3D MTF", grp:"PERSONAL", glyph:"star", active:false, badge:true},
+  {name:"MACD", sub:"Classic price MACD (12,26,9)", grp:"PERSONAL", glyph:"lock", active:false},
+  {name:"MACD+RSI+BB", sub:"Triple-confluence band squeeze", grp:"PERSONAL", glyph:"lock", active:false},
+  {name:"MACD+STOCH RSI", sub:"confluence_rsimacd_stochrsi_mtf", grp:"PERSONAL", glyph:"lock", active:true},
+  {name:"RSI MACD CUSTOM", sub:"Forked tuning sandbox", grp:"PERSONAL", glyph:"lock", active:false},
+  {name:"V&C", sub:"Volume × cycle phase overlay", grp:"SHARED", glyph:"share", active:false}
+];
+var GLYPHS={
+  star:'<svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>',
+  lock:'<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  share:'<svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>'
+};
+var ICON='<svg viewBox="0 0 24 24"><path d="M8 18l-5-6 5-6M16 6l5 6-5 6M14 4l-4 16"/></svg>';
+function renderScripts(){
+  var L=document.getElementById("scrList"), html="", lastGrp=null;
+  SCRIPTS.forEach(function(s,i){
+    if(s.grp!==lastGrp){ html+='<div class="scr-grp">'+s.grp+'</div>'; lastGrp=s.grp; }
+    html+='<div class="scr-row'+(s.active?" on":"")+'" data-i="'+i+'">'+
+      '<span class="scr-ic">'+ICON+'</span>'+
+      '<span class="scr-meta"><span class="scr-name">'+s.name+'</span><span class="scr-sub">'+s.sub+'</span></span>'+
+      '<span class="scr-glyph '+(s.glyph==="star"?"star":"")+'">'+GLYPHS[s.glyph]+'</span></div>';
+  });
+  L.innerHTML=html;
+  L.querySelectorAll(".scr-row").forEach(function(r){
+    r.onclick=function(){ selectScript(parseInt(r.dataset.i,10)); };
+  });
+}
+renderScripts();
+
+/* ---------- script-name popover (mirrors the list) ---------- */
+function renderPop(){
+  var p=document.getElementById("scriptPop"), html="", lastGrp=null;
+  SCRIPTS.forEach(function(s,i){
+    if(s.grp!==lastGrp){ html+='<div class="grp">'+s.grp+'</div>'; lastGrp=s.grp; }
+    html+='<a class="'+(s.active?"on":"")+'" data-i="'+i+'">'+
+      (s.badge?'<span class="pdot"></span>':'')+s.name+
+      (s.active?'<span class="ck">✓</span>':'<span class="glyph">'+GLYPHS[s.glyph]+'</span>')+'</a>';
+  });
+  html+='<div class="div"></div><a class="new"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New Pine script…</a>';
+  p.innerHTML=html;
+  p.querySelectorAll("a[data-i]").forEach(function(a){
+    a.onclick=function(e){ e.stopPropagation(); selectScript(parseInt(a.dataset.i,10)); p.classList.remove("show"); };
+  });
+}
+renderPop();
+
+function selectScript(idx){
+  SCRIPTS.forEach(function(s,i){ s.active = (i===idx); });
+  document.getElementById("scriptName").textContent = SCRIPTS[idx].name;
+  renderScripts(); renderPop();
+}
+
+/* ---------- script pill dropdown ---------- */
+var pill=document.getElementById("scriptPill"), pop=document.getElementById("scriptPop");
+pill.onclick=function(e){ e.stopPropagation(); pop.classList.toggle("show"); };
+document.addEventListener("click",function(){ pop.classList.remove("show"); });
+
+/* ---------- input steppers + toggles (minimal interactivity) ---------- */
+document.querySelectorAll(".in-num").forEach(function(box){
+  var inp=box.querySelector("[data-in]");
+  box.querySelector("[data-inc]").onclick=function(){ inp.value=(parseInt(inp.value,10)||0)+1; };
+  box.querySelector("[data-dec]").onclick=function(){ inp.value=Math.max(0,(parseInt(inp.value,10)||0)-1); };
+});
+document.querySelectorAll("[data-sw]").forEach(function(sw){
+  sw.onclick=function(){ sw.classList.toggle("on"); };
+});
+
+})();
+</script>
+</body>
+</html>

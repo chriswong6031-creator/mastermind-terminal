@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Screener · Mastermind Terminal</title>
+<style>
+:root{
+  --bg:#0a0b0e; --panel:#0d0f13; --panel-2:#15171d; --panel-3:#1f222b; --inset:#08090c;
+  --chart-bg:#131722;
+  --line:#23262f; --line-2:#1a1d24; --line-3:#33373f; --grid:rgba(255,255,255,.04);
+  --text:#d6dae3; --text-2:#868d9c; --muted:#5a616f; --text-dim:#3c4452;
+  --up:#26c281; --down:#f0566b; --buy:#26c281; --sell:#f0566b; --signal:#e8b339;
+  --brand:#2962ff; --brand-2:#4d82ff; --link:#4d82ff;
+  --regime-up:#26c281; --warn:#e8a33d; --danger:#f0566b;
+  --font-ui:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --font-num:ui-monospace,"SF Mono","Geist Mono",Menlo,monospace;
+  --r:4px; --r-md:6px; --r-lg:8px; --r-pill:999px; --t:110ms; --ease:cubic-bezier(.2,.6,.2,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font:13px/1.45 var(--font-ui);-webkit-font-smoothing:antialiased;overflow:hidden;letter-spacing:.005em}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.up{color:var(--up)} .down{color:var(--down)}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+svg{display:block}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--panel-3);border-radius:8px;border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-thumb:hover{background:var(--line-3);background-clip:padding-box}
+
+.app{display:grid;grid-template-columns:60px 1fr;grid-template-rows:54px 1fr 28px;height:100vh;background:var(--bg)}
+
+/* ===== top bar ===== */
+.topbar{grid-column:1/3;display:flex;align-items:center;padding:0 14px 0 12px;background:var(--bg);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:9px;padding-right:14px;text-decoration:none;color:inherit}
+.brand .wm{display:flex;flex-direction:column;line-height:1}
+.brand .wm b{font:700 13px/1 var(--font-ui);letter-spacing:.05em}
+.brand .wm small{font:600 7.5px/1.4 var(--font-ui);letter-spacing:.3em;color:var(--muted);margin-top:3px}
+.tdiv{width:1px;height:28px;background:var(--line);margin:0 12px}
+.scr-title{font:650 15px/1 var(--font-ui);letter-spacing:.01em}
+.mkt{display:flex;align-items:center;gap:9px;height:34px;padding:0 12px;border-radius:var(--r-md);background:var(--panel-2);border:1px solid var(--line);cursor:pointer;margin-left:16px;position:relative}
+.mkt:hover{border-color:var(--line-3)}
+.mkt b{font:600 13px/1 var(--font-ui)}
+.mkt .car{stroke:var(--muted);fill:none;stroke-width:2.2;width:12px;height:12px}
+.spacer{flex:1}
+.count{font:600 12px/1 var(--font-ui);color:var(--text-2);margin-right:6px}
+.count b{color:var(--text);font-weight:650;font-variant-numeric:tabular-nums}
+.acts{display:flex;align-items:center;gap:8px}
+.ghost{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 13px;border-radius:var(--r-md);background:var(--panel-2);border:1px solid var(--line);color:var(--text-2);font:600 12.5px/1 var(--font-ui);transition:border-color var(--t),color var(--t)}
+.ghost:hover{border-color:var(--line-3);color:var(--text)}
+.ghost svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8}
+.cta{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 14px;border-radius:var(--r-md);background:var(--brand);color:#fff;font:600 12.5px/1 var(--font-ui);transition:background var(--t)}
+.cta:hover{background:#1d52ed}
+.cta svg{width:14px;height:14px;stroke:#fff;fill:none;stroke-width:2}
+.avatar{width:30px;height:30px;border-radius:50%;margin-left:6px;background:var(--panel-3);border:1px solid var(--line-3);display:grid;place-items:center;font:700 11px/1 var(--font-ui);color:var(--text-2)}
+
+/* ===== app nav ===== */
+.appnav{grid-row:2;grid-column:1;background:var(--bg);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:3px}
+.navbtn{position:relative;width:48px;height:48px;border-radius:var(--r-md);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--muted);transition:color var(--t),background var(--t)}
+.navbtn:hover{color:var(--text);background:var(--panel-2)}
+.navbtn.on{color:var(--brand-2)}
+.navbtn.on::before{content:"";position:absolute;left:0;width:3px;height:24px;border-radius:0 3px 3px 0;background:var(--brand)}
+.navbtn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.7}
+.navbtn span{font:600 8px/1 var(--font-ui)}
+.appnav .gap{flex:1}
+
+/* ===== main column ===== */
+.main{grid-column:2;grid-row:2;display:flex;flex-direction:column;min-width:0;background:var(--bg);overflow:hidden}
+
+/* filter bar */
+.filterbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:11px 16px;border-bottom:1px solid var(--line);background:var(--bg)}
+.fchip{display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 11px;border-radius:var(--r-md);background:var(--panel-2);border:1px solid var(--line);color:var(--text-2);font:600 12px/1 var(--font-ui);cursor:pointer;transition:border-color var(--t),color var(--t),background var(--t);white-space:nowrap}
+.fchip:hover{border-color:var(--line-3);color:var(--text)}
+.fchip .lbl{color:var(--muted);font-weight:600}
+.fchip .val{color:var(--text);font-weight:600}
+.fchip .car{width:11px;height:11px;stroke:var(--muted);fill:none;stroke-width:2.2}
+.fchip.oracle{border-color:rgba(41,98,255,.45);background:rgba(41,98,255,.1)}
+.fchip.oracle .lbl{color:var(--brand-2)}
+.fchip.oracle .val{color:#cfe0ff}
+.fchip.oracle .car{stroke:var(--brand-2)}
+.fchip.oracle .spark{width:13px;height:13px;fill:var(--brand-2)}
+.fchip.toggle{cursor:pointer}
+.fchip.toggle .sw{width:30px;height:17px;border-radius:var(--r-pill);background:var(--panel);border:1px solid var(--line-3);position:relative;transition:background var(--t),border-color var(--t)}
+.fchip.toggle .sw::after{content:"";position:absolute;top:1px;left:1px;width:13px;height:13px;border-radius:50%;background:var(--muted);transition:transform var(--t),background var(--t)}
+.fchip.toggle.on .sw{background:var(--brand);border-color:var(--brand)}
+.fchip.toggle.on .sw::after{transform:translateX(13px);background:#fff}
+.fchip.toggle.on{color:var(--text)}
+.fchip .rsiop{color:var(--muted);font-weight:600;margin:0 -2px}
+.fadd{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;border-radius:var(--r-md);border:1px dashed var(--line-3);color:var(--muted);font:600 12px/1 var(--font-ui);cursor:pointer;transition:color var(--t),border-color var(--t)}
+.fadd:hover{color:var(--text-2);border-color:var(--text-dim)}
+.fadd svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
+.fsep{flex:1}
+.fclear{color:var(--muted);font:600 11.5px/1 var(--font-ui);cursor:pointer;padding:0 4px}
+.fclear:hover{color:var(--text-2)}
+
+/* table area */
+.tablewrap{flex:1;overflow:auto;min-height:0;background:var(--bg)}
+table.scr{width:100%;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
+table.scr thead th{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);font:600 10px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:11px 14px;text-align:right;white-space:nowrap;cursor:pointer;user-select:none;transition:color var(--t)}
+table.scr thead th:hover{color:var(--text-2)}
+table.scr thead th.l{text-align:left}
+table.scr thead th.c{text-align:center}
+table.scr thead th .ar{display:inline-block;width:8px;margin-left:4px;color:var(--brand-2);opacity:0}
+table.scr thead th.sort .ar{opacity:1}
+table.scr tbody td{padding:0 14px;height:46px;border-bottom:1px solid var(--line-2);text-align:right;white-space:nowrap;font-size:12.5px}
+table.scr tbody td.l{text-align:left}
+table.scr tbody td.c{text-align:center}
+table.scr tbody tr{cursor:pointer;transition:background var(--t)}
+table.scr tbody tr:hover{background:var(--panel-2)}
+table.scr tbody tr.sel{background:rgba(41,98,255,.08)}
+
+.star{color:var(--text-dim);display:grid;place-items:center}
+.star svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8}
+.star.on{color:var(--signal)}.star.on svg{fill:var(--signal);stroke:var(--signal)}
+
+.sym{display:flex;align-items:center;gap:10px;min-width:0}
+.sym .ic{width:26px;height:26px;border-radius:50%;flex:none;display:grid;place-items:center;font:800 10px/1 var(--font-ui);color:#04130a}
+.sym .nm{display:flex;flex-direction:column;gap:2px;min-width:0;overflow:hidden}
+.sym .tk{font-weight:650;font-size:13px}
+.sym .co{font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px}
+
+.last{color:var(--text);font-weight:600}
+.chg{font-weight:600}
+
+.pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px;border-radius:var(--r);font:700 10.5px/1 var(--font-ui);letter-spacing:.05em}
+.pill .d{width:5px;height:5px;border-radius:50%}
+.pill.buy{background:rgba(38,194,129,.13);border:1px solid rgba(38,194,129,.32);color:var(--buy)}.pill.buy .d{background:var(--buy)}
+.pill.rebuy{background:rgba(41,98,255,.13);border:1px solid rgba(41,98,255,.35);color:var(--brand-2)}.pill.rebuy .d{background:var(--brand-2)}
+.pill.sell{background:rgba(240,86,107,.12);border:1px solid rgba(240,86,107,.32);color:var(--sell)}.pill.sell .d{background:var(--sell)}
+
+.rg{display:inline-flex;align-items:center;gap:6px;font:600 11.5px/1 var(--font-ui)}
+.rg .d{width:6px;height:6px;border-radius:50%}
+.rg.up{color:var(--regime-up)}.rg.up .d{background:var(--regime-up)}
+.rg.range{color:var(--text-2)}.rg.range .d{background:var(--muted)}
+.rg.down{color:var(--sell)}.rg.down .d{background:var(--sell)}
+
+.rsi{font-weight:600;color:var(--text)}
+.rsi.lo{color:var(--brand-2)}.rsi.hi{color:var(--warn)}
+
+.confcell{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+.confbar{width:54px;height:5px;border-radius:3px;background:var(--panel-3);overflow:hidden}
+.confbar i{display:block;height:100%;border-radius:3px;background:var(--brand)}
+.confnum{width:22px;text-align:right;color:var(--text);font-weight:600}
+
+.vol{color:var(--text-2);font-weight:600}
+.spk{width:88px;height:26px;display:inline-block;vertical-align:middle}
+
+/* ===== bottom stat strip ===== */
+.strip{grid-column:1/3;grid-row:3;display:flex;align-items:center;gap:0;padding:0 16px;background:var(--bg);border-top:1px solid var(--line);overflow:hidden;font-size:11.5px}
+.strip .item{display:flex;align-items:center;gap:7px;padding-right:18px;margin-right:18px;border-right:1px solid var(--line);height:16px}
+.strip .item:last-child{border-right:0}
+.strip .k{color:var(--muted);font:600 10px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase}
+.strip .v{color:var(--text);font-weight:650;font-variant-numeric:tabular-nums}
+.strip .v.buy{color:var(--buy)}.strip .v.rebuy{color:var(--brand-2)}.strip .v.sell{color:var(--sell)}
+.strip .regbadge{display:inline-flex;align-items:center;gap:6px;color:var(--regime-up);font:600 11px/1 var(--font-ui)}
+.strip .regbadge .d{width:6px;height:6px;border-radius:50%;background:var(--regime-up)}
+.strip .grow{flex:1}
+.strip .stamp{color:var(--text-dim);font:600 10px/1 var(--font-ui);letter-spacing:.04em}
+
+/* ===== market dropdown ===== */
+.pop{position:absolute;z-index:40;top:40px;left:0;min-width:200px;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:5px;display:none;box-shadow:0 14px 34px -10px rgba(0,0,0,.7)}
+.pop.show{display:block}
+.pop a{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:8px 10px;border-radius:var(--r);color:var(--text-2);font-size:13px;cursor:pointer;white-space:nowrap}
+.pop a:hover{background:var(--panel-2);color:var(--text)}
+.pop a.on{color:var(--text)}.pop a .ck{color:var(--brand-2)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <a class="brand" href="../mockup/index.html">
+      <svg width="28" height="28" viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="mbT" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4d82ff"/><stop offset="1" stop-color="#2962ff"/></linearGradient><linearGradient id="mbI" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#dbe7ff"/></linearGradient></defs><rect x="3" y="3" width="34" height="34" rx="8" fill="url(#mbT)"/><rect x="3.6" y="3.6" width="32.8" height="32.8" rx="7.4" fill="none" stroke="#fff" stroke-opacity=".22"/><path d="M13 28 L13 14.5 L20 22 L27 12.5 L27 28" fill="none" stroke="url(#mbI)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="wm"><b>MASTERMIND</b><small>TERMINAL</small></span>
+    </a>
+    <div class="tdiv"></div>
+    <span class="scr-title">Screener</span>
+    <div class="mkt" id="mktBtn"><b id="mktLbl">US Equities</b><svg class="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      <div class="pop" id="mktPop">
+        <a class="on" data-m="US Equities">US Equities <span class="ck">✓</span></a>
+        <a data-m="China / HK">China / HK</a>
+        <a data-m="Crypto majors">Crypto majors</a>
+        <a data-m="ETFs &amp; Sectors">ETFs &amp; Sectors</a>
+        <a data-m="Global macro">Global macro</a>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div class="acts">
+      <span class="count"><b id="matchN">142</b> matches</span>
+      <button class="ghost" id="saveBtn"><svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>Save screen</button>
+      <button class="cta" id="runBtn"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9z"/></svg>Run scan</button>
+      <div class="avatar">T</div>
+    </div>
+  </header>
+
+  <nav class="appnav">
+    <button class="navbtn" title="Chart"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 3 4-7 5 9"/><path d="M3 21h18"/></svg><span>Chart</span></button>
+    <button class="navbtn" title="Markets"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Markets</span></button>
+    <button class="navbtn on" title="Screener"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Screener</span></button>
+    <button class="navbtn" title="Portfolio"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9v9z"/></svg><span>Portfolio</span></button>
+    <button class="navbtn" title="Alerts"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg><span>Alerts</span></button>
+    <div class="gap"></div>
+    <button class="navbtn" title="AI"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z"/></svg><span>AI</span></button>
+    <button class="navbtn" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82M4.6 9a1.65 1.65 0 0 0-.33-1.82"/></svg><span>Settings</span></button>
+  </nav>
+
+  <section class="main">
+    <div class="filterbar" id="filterbar">
+      <div class="fchip oracle" title="Proprietary Golden Oracle confluence verdict"><svg class="spark" viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z"/></svg><span class="lbl">Signal</span><span class="val">Golden Oracle: BUY</span><svg class="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>
+      <div class="fchip"><span class="lbl">Regime</span><span class="val">Uptrend</span><svg class="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>
+      <div class="fchip"><span class="lbl">RSI</span><span class="rsiop">&lt;</span><span class="val">35</span><svg class="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>
+      <div class="fchip toggle on" id="emaChip"><span class="lbl">Above 200-EMA</span><span class="sw"></span></div>
+      <div class="fchip"><span class="lbl">Sector</span><span class="val">Any</span><svg class="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>
+      <div class="fchip"><span class="lbl">Min volume</span><span class="val">1M</span><svg class="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>
+      <div class="fchip"><span class="lbl">Market cap</span><span class="val">Any</span><svg class="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>
+      <div class="fadd" id="addFilter"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add filter</div>
+      <div class="fsep"></div>
+      <div class="fclear" id="clearF">Clear all</div>
+    </div>
+
+    <div class="tablewrap">
+      <table class="scr" id="scr">
+        <thead>
+          <tr>
+            <th class="c" data-k="star" style="width:34px"></th>
+            <th class="l sort" data-k="sym">Symbol <span class="ar">▲</span></th>
+            <th data-k="price">Last <span class="ar"></span></th>
+            <th data-k="chg">Chg% <span class="ar"></span></th>
+            <th class="c" data-k="signal">Signal <span class="ar"></span></th>
+            <th class="l" data-k="regime">Regime <span class="ar"></span></th>
+            <th data-k="rsi">RSI <span class="ar"></span></th>
+            <th data-k="conf">Conf. <span class="ar"></span></th>
+            <th data-k="voln">Volume <span class="ar"></span></th>
+            <th class="c" data-k="spk" style="width:104px">20-bar</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="strip" id="strip">
+    <div class="item"><span class="k">Matches</span><span class="v" id="sN">142</span></div>
+    <div class="item"><span class="k">Buy</span><span class="v buy" id="sBuy">89</span></div>
+    <div class="item"><span class="k">Re-buy</span><span class="v rebuy" id="sReb">31</span></div>
+    <div class="item"><span class="k">Sell</span><span class="v sell" id="sSell">22</span></div>
+    <div class="item"><span class="k">Avg conf</span><span class="v" id="sConf">71</span></div>
+    <div class="item"><span class="regbadge"><i class="d"></i>Macro regime · Risk-on</span></div>
+    <div class="grow"></div>
+    <span class="stamp">Scan as of 2026-06-27 · synthetic deep-store · advisory only</span>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+/* ---------- universe (real-ish tickers, internally consistent signal/regime/rsi) ---------- */
+var ROWS=[
+ {sym:'NVDA', co:'NVIDIA Corp',           price:210.69, chg:1.92,  signal:'BUY',   regime:'up',    rsi:58, conf:84, vol:114.0e6, col:'#76b900', seed:7},
+ {sym:'AMD',  co:'Advanced Micro Devices',price:162.34, chg:3.21,  signal:'BUY',   regime:'up',    rsi:61, conf:79, vol:44.2e6,  col:'#ed1c24', seed:13},
+ {sym:'AVGO', co:'Broadcom Inc',          price:1684.20,chg:2.44,  signal:'BUY',   regime:'up',    rsi:63, conf:81, vol:6.8e6,   col:'#cc092f', seed:21},
+ {sym:'SMCI', co:'Super Micro Computer',  price:44.18,  chg:-3.62, signal:'SELL',  regime:'down',  rsi:39, conf:74, vol:38.5e6,  col:'#6f7178', seed:34},
+ {sym:'MU',   co:'Micron Technology',     price:112.55, chg:1.18,  signal:'BUY',   regime:'up',    rsi:55, conf:72, vol:21.4e6,  col:'#1c4f9c', seed:5},
+ {sym:'ARM',  co:'Arm Holdings',          price:138.22, chg:2.93,  signal:'BUY',   regime:'up',    rsi:60, conf:77, vol:9.7e6,   col:'#0091bd', seed:18},
+ {sym:'PLTR', co:'Palantir Technologies', price:62.41,  chg:1.41,  signal:'REBUY', regime:'up',    rsi:52, conf:75, vol:55.3e6,  col:'#101113', seed:9},
+ {sym:'COIN', co:'Coinbase Global',       price:221.50, chg:-1.12, signal:'REBUY', regime:'range', rsi:47, conf:68, vol:9.1e6,   col:'#0052ff', seed:28},
+ {sym:'MSTR', co:'MicroStrategy Inc',     price:1620.40,chg:4.81,  signal:'BUY',   regime:'up',    rsi:64, conf:73, vol:7.6e6,   col:'#f7931a', seed:41},
+ {sym:'TSLA', co:'Tesla Inc',             price:242.80, chg:-2.40, signal:'SELL',  regime:'down',  rsi:41, conf:66, vol:88.4e6,  col:'#e82127', seed:3},
+ {sym:'META', co:'Meta Platforms',        price:612.30, chg:0.84,  signal:'BUY',   regime:'up',    rsi:57, conf:78, vol:14.2e6,  col:'#0866ff', seed:16},
+ {sym:'GOOGL',co:'Alphabet Inc',          price:198.44, chg:0.62,  signal:'REBUY', regime:'up',    rsi:54, conf:70, vol:23.9e6,  col:'#4285f4', seed:25},
+ {sym:'NFLX', co:'Netflix Inc',           price:892.10, chg:-0.91, signal:'REBUY', regime:'range', rsi:49, conf:67, vol:3.4e6,   col:'#e50914', seed:38},
+ {sym:'CRM',  co:'Salesforce Inc',        price:284.55, chg:1.27,  signal:'BUY',   regime:'up',    rsi:56, conf:71, vol:6.2e6,   col:'#00a1e0', seed:11},
+ {sym:'SOXL', co:'Direxion Semi Bull 3X', price:28.42,  chg:6.11,  signal:'BUY',   regime:'up',    rsi:66, conf:69, vol:142.0e6, col:'#f59e0b', seed:44},
+ {sym:'MARA', co:'MARA Holdings',         price:18.74,  chg:5.32,  signal:'BUY',   regime:'up',    rsi:62, conf:64, vol:61.8e6,  col:'#ffd200', seed:30},
+ {sym:'RIOT', co:'Riot Platforms',        price:11.28,  chg:-2.87, signal:'SELL',  regime:'down',  rsi:38, conf:62, vol:33.1e6,  col:'#f15a24', seed:22},
+ {sym:'XLE',  co:'Energy Select SPDR',    price:91.07,  chg:-0.54, signal:'SELL',  regime:'range', rsi:44, conf:60, vol:18.6e6,  col:'#d62027', seed:6},
+ {sym:'XLF',  co:'Financial Select SPDR', price:48.92,  chg:0.41,  signal:'REBUY', regime:'up',    rsi:53, conf:65, vol:42.3e6,  col:'#1f8a4c', seed:14},
+ {sym:'MSFT', co:'Microsoft Corp',        price:381.87, chg:-0.42, signal:'REBUY', regime:'up',    rsi:51, conf:72, vol:18.0e6,  col:'#3b82f6', seed:19}
+];
+
+var COUNTRIES={ /* per-market headline copy used in strip + chip; kept tiny */ };
+
+function fmt(n,d){return n==null||!isFinite(n)?'—':Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});}
+function vol(v){return v>=1e9?(v/1e9).toFixed(2)+'B':v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(0)+'K':String(v);}
+
+/* deterministic 20-bar sparkline trending with the row's signal/chg */
+function spark(r){
+  var n=20, w=88, h=26, pad=2, rnd=mulberry32(r.seed*2654435761>>>0);
+  var dir = r.signal==='SELL' ? -1 : 1;
+  var drift = dir * (0.55 + Math.abs(r.chg)/14);
+  var pts=[], v=0;
+  for(var i=0;i<n;i++){ v += drift*(i/n) + (rnd()-0.5)*2.4; pts.push(v); }
+  var lo=Math.min.apply(0,pts), hi=Math.max.apply(0,pts), rg=(hi-lo)||1;
+  var sx=(w-pad*2)/(n-1), d='';
+  for(var j=0;j<n;j++){ var x=pad+j*sx, y=pad+(h-pad*2)*(1-(pts[j]-lo)/rg); d+=(j?'L':'M')+x.toFixed(1)+' '+y.toFixed(1); }
+  var up = pts[n-1]>=pts[0];
+  var col = up ? 'var(--up)' : 'var(--down)';
+  var areaCol = up ? 'rgba(38,194,129,.10)' : 'rgba(240,86,107,.10)';
+  var area = d+'L'+(w-pad)+' '+(h-pad)+'L'+pad+' '+(h-pad)+'Z';
+  return '<svg class="spk" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none">'+
+         '<path d="'+area+'" fill="'+areaCol+'" stroke="none"/>'+
+         '<path d="'+d+'" fill="none" stroke="'+col+'" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+}
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+
+var SIGN={BUY:'buy',REBUY:'rebuy',SELL:'sell'},SIGLBL={BUY:'BUY',REBUY:'RE-BUY',SELL:'SELL'};
+var RGLBL={up:'Uptrend',range:'Range',down:'Downtrend'};
+
+var fav={}; /* starred rows */
+
+function row(r){
+  var u=r.chg>=0;
+  var rsiCls = r.rsi<35?'lo':(r.rsi>65?'hi':'');
+  return '<tr data-sym="'+r.sym+'">'+
+    '<td class="c"><span class="star'+(fav[r.sym]?' on':'')+'" data-star="'+r.sym+'"><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg></span></td>'+
+    '<td class="l"><div class="sym"><span class="ic" style="background:'+r.col+'">'+r.sym[0]+'</span><span class="nm"><span class="tk">'+r.sym+'</span><span class="co">'+r.co+'</span></span></div></td>'+
+    '<td class="num last">'+fmt(r.price,r.price<20?2:2)+'</td>'+
+    '<td class="num chg '+(u?'up':'down')+'">'+(u?'+':'')+fmt(r.chg,2)+'%</td>'+
+    '<td class="c"><span class="pill '+SIGN[r.signal]+'"><i class="d"></i>'+SIGLBL[r.signal]+'</span></td>'+
+    '<td class="l"><span class="rg '+r.regime+'"><i class="d"></i>'+RGLBL[r.regime]+'</span></td>'+
+    '<td class="num rsi '+rsiCls+'">'+r.rsi+'</td>'+
+    '<td><div class="confcell"><span class="confbar"><i style="width:'+r.conf+'%"></i></span><span class="confnum num">'+r.conf+'</span></div></td>'+
+    '<td class="num vol">'+vol(r.vol)+'</td>'+
+    '<td class="c">'+spark(r)+'</td>'+
+  '</tr>';
+}
+
+var sortKey='sym', sortDir=1;
+function val(r,k){
+  if(k==='sym')return r.sym;
+  if(k==='signal')return ({BUY:3,REBUY:2,SELL:1})[r.signal];
+  if(k==='regime')return ({up:3,range:2,down:1})[r.regime];
+  if(k==='voln')return r.vol;
+  if(k==='conf')return r.conf;
+  if(k==='rsi')return r.rsi;
+  if(k==='price')return r.price;
+  if(k==='chg')return r.chg;
+  return r.sym;
+}
+function render(){
+  var rows=ROWS.slice().sort(function(a,b){var x=val(a,sortKey),y=val(b,sortKey);if(typeof x==='string')return sortDir*x.localeCompare(y);return sortDir*(x-y);});
+  document.getElementById('tbody').innerHTML=rows.map(row).join('');
+  wireRows();
+}
+function wireRows(){
+  var tb=document.getElementById('tbody');
+  tb.querySelectorAll('tr').forEach(function(tr){
+    tr.onclick=function(){tb.querySelectorAll('tr').forEach(function(x){x.classList.remove('sel');});tr.classList.add('sel');};
+  });
+  tb.querySelectorAll('[data-star]').forEach(function(s){
+    s.onclick=function(e){e.stopPropagation();var k=s.dataset.star;fav[k]=!fav[k];s.classList.toggle('on',fav[k]);};
+  });
+}
+
+/* header sort */
+document.querySelectorAll('th[data-k]').forEach(function(th){
+  var k=th.dataset.k; if(k==='star'||k==='spk')return;
+  th.onclick=function(){
+    if(sortKey===k)sortDir=-sortDir;else{sortKey=k;sortDir=(k==='sym')?1:-1;}
+    document.querySelectorAll('th').forEach(function(x){x.classList.remove('sort');var a=x.querySelector('.ar');if(a)a.textContent='';});
+    th.classList.add('sort');var ar=th.querySelector('.ar');if(ar)ar.textContent=sortDir>0?'▲':'▼';
+    render();
+  };
+});
+
+/* 200-EMA toggle chip */
+document.getElementById('emaChip').onclick=function(){this.classList.toggle('on');};
+
+/* market selector */
+var mktBtn=document.getElementById('mktBtn'),mktPop=document.getElementById('mktPop');
+mktBtn.onclick=function(e){e.stopPropagation();mktPop.classList.toggle('show');};
+mktPop.querySelectorAll('a[data-m]').forEach(function(a){
+  a.onclick=function(e){e.stopPropagation();mktPop.querySelectorAll('a').forEach(function(x){x.classList.remove('on');var c=x.querySelector('.ck');if(c)c.remove();});a.classList.add('on');a.innerHTML=a.dataset.m+' <span class="ck">✓</span>';document.getElementById('mktLbl').textContent=a.dataset.m;mktPop.classList.remove('show');};
+});
+document.addEventListener('click',function(){mktPop.classList.remove('show');});
+
+/* run scan = subtle pulse on the table (visual only) */
+document.getElementById('runBtn').onclick=function(){
+  var tw=document.querySelector('.tablewrap');tw.style.transition='opacity 90ms';tw.style.opacity='.45';setTimeout(function(){tw.style.opacity='1';},120);
+};
+
+/* stat strip stays consistent with the visible result set */
+function recount(){
+  var n=ROWS.length, b=0,rb=0,s=0,cs=0;
+  ROWS.forEach(function(r){if(r.signal==='BUY')b++;else if(r.signal==='REBUY')rb++;else s++;cs+=r.conf;});
+  /* the headline 142 is the full-universe scan; the table shows a 20-row top slice */
+  document.getElementById('sN').textContent='142';
+  document.getElementById('sBuy').textContent='89';
+  document.getElementById('sReb').textContent='31';
+  document.getElementById('sSell').textContent='22';
+  document.getElementById('sConf').textContent='71';
+}
+
+render(); recount();
+})();
+</script>
+</body>
+</html>
