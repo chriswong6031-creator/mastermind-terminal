@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mastermind.indicator/v1",
+  "title": "mastermind.indicator/v1",
+  "description": "One doc per {indicator, symbol, timeframe}. The series/gates/bars arrays are CHART-ONLY and must never be sent to the model — use signal_layer.contracts.model_slice() to project the model-facing surface (signals + state + honest_read).",
+  "type": "object",
+  "required": ["schema", "indicator", "symbol", "timeframe", "bar_quality", "signals", "state", "meta"],
+  "properties": {
+    "schema": { "const": "mastermind.indicator/v1" },
+    "indicator": {
+      "type": "object",
+      "required": ["id", "engine", "source_hash", "macd_kind", "params"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "engine": { "type": "string", "description": "e.g. pinets@<commit>, pynecore@<v>, python:signal_layer.confluence@oracle" },
+        "source_lang": { "enum": ["pine-v5", "pinets-js", "pynecore", "python"] },
+        "source_hash": { "type": "string", "description": "sha256 over script source AND the full params block" },
+        "macd_kind": { "enum": ["rsi_based", "price_1226_9"], "description": "REQUIRED; insufficient alone — params carries the lengths" },
+        "params": { "type": "object", "description": "MANDATORY and folded into source_hash" }
+      }
+    },
+    "symbol": { "type": "string" },
+    "timeframe": { "type": "string" },
+    "as_of": { "type": ["string", "null"] },
+    "bar_quality": { "enum": ["real_ohlc", "synthetic_open_deepstore", "unknown"] },
+    "bars": { "type": "array", "items": { "type": "string" }, "description": "CHART-ONLY ISO date index" },
+    "series": { "type": "object", "description": "CHART-ONLY numeric series aligned to bars" },
+    "gates": { "type": "object", "description": "CHART-ONLY boolean regime series aligned to bars" },
+    "signals": {
+      "type": "array",
+      "description": "MODEL-FACING discrete events",
+      "items": {
+        "type": "object",
+        "required": ["ts", "type"],
+        "properties": {
+          "ts": { "type": "string" },
+          "bar_index": { "type": "integer" },
+          "type": { "enum": ["BUY", "SELL", "EXIT", "REBUY", "CUT"] },
+          "strength": { "type": "number", "minimum": 0, "maximum": 1 },
+          "price": { "type": ["number", "null"] },
+          "reasons": { "type": "array", "items": { "type": "string" } },
+          "regime": { "type": "object" }
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "description": "MODEL-FACING one-row read the picker ranks on",
+      "properties": {
+        "position_hint": { "type": ["string", "null"] },
+        "last_signal": { "type": ["string", "null"] },
+        "bars_since_signal": { "type": ["integer", "null"] },
+        "extended": { "type": "boolean" }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "leakfree": { "type": "boolean" },
+        "scored": { "type": "boolean" },
+        "validated_against": { "type": "string" },
+        "validation": { "type": "object" },
+        "honest_read": { "type": "string" },
+        "warnings": { "type": "array" }
+      }
+    }
+  }
+}

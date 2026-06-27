@@ -1,0 +1,15 @@
+# Charting App — Phase 0 deps. Python 3.11+.
+pandas>=2.0
+numpy>=1.24
+pyarrow>=14.0
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pyyaml>=6.0
+jsonschema>=4.20
+pytest>=8.0
+
+# Phase 1+ (not yet wired):
+#   vectorbt        # Apache-2.0 + Commons Clause — INTERNAL param sweeps only (D4)
+#   alpaca-py       # dev market-data feed (D1)
+#   polygon-api-client / databento   # graduation feeds (D1)
+#   PineTS runs in the Node sidecar (indicator_engine/), not here (AGPL firewall, D3)

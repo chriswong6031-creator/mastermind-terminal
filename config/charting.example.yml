@@ -1,0 +1,43 @@
+# Charting App config — copy to charting.yml (gitignored) and fill in.
+# Secrets are referenced via env vars (NEVER inline a key here — research doc §8 P2-2).
+
+macro_repo: "/Users/chriswong/Documents/Cluade/Macro Dashboard"   # source of deep OHLC (Phase 0)
+
+# --- market data (Phase 1) ---------------------------------------------------
+# DECISION D1 (pending): dev on Alpaca (~$99, confirm SKU bundles full SIP) →
+# graduate to Polygon/Massive (~$199). Re-verify every price on the vendor page.
+data:
+  provider: "alpaca"          # alpaca | polygon | databento
+  mode: "dev"                 # dev (IEX/free) | live (full SIP)
+  api_key_env: "CHARTING_DATA_KEY"      # read from env, not here
+  api_secret_env: "CHARTING_DATA_SECRET"
+  extended_hours: true        # 4:00–20:00 ET
+  ws_max_connections: 1       # Alpaca free/Plus ceiling — a real constraint (D1)
+
+# --- indicator engines (Phase 1) --------------------------------------------
+# DECISION D3: PineTS (AGPL) in an arms-length Node sidecar, commit-pinned;
+# PyneCore (Apache-2.0) in-process. Pin a COMMIT, not just a tag (relicense risk).
+engines:
+  pinets:
+    enabled: false
+    sidecar_url: "http://127.0.0.1:8810"
+    commit: ""                # REQUIRED before enabling — pin a known-good hash
+  pynecore:
+    enabled: false
+
+# --- universe (Phase 2 scan; state a cardinality + IO/cost budget, P2-3) ------
+universe:
+  source: "macro_stock_library"     # site/stockdata/index.json
+  max_symbols: 200                  # hard cap; scans above this need an explicit budget
+
+# --- publish step (D8) -------------------------------------------------------
+# Contract artifacts are committed/pushed to the macro repo; the brain's
+# vendor/macro -> macro_src pulls on the daily/cron cadence (state the latency).
+publish:
+  enabled: false
+  macro_remote: "chriswong6031-creator/macro"
+  staging_dir: "data/publish_staging"
+
+server:
+  host: "127.0.0.1"
+  port: 8800

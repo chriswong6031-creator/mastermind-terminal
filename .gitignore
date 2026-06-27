@@ -1,0 +1,25 @@
+# secrets + local config
+.env
+config/charting.yml
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# node (indicator_engine sidecar, Phase 1)
+node_modules/
+
+# data — caches and generated sidecars are not committed; samples ARE (see below)
+data/cache/
+data/backtests/*.parquet
+data/publish_staging/
+
+# generated chart OHLC (regenerate via ingest/sample_from_macro.py)
+web/ohlc/*.json
+
+# keep the worked contract samples tracked (they document the contract)
+!contracts/samples/*.json
+
+.DS_Store

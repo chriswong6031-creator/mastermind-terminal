@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "backtest_result/v1",
+  "title": "backtest_result/v1",
+  "description": "One doc per {strategy, symbol}. Mirrors the macro repo's data/backtest/*.json shape (as_of/status/honest_read). The trades[] + _returns arrays are stripped by model_slice(); series_ref points at the daily-return parquet that Mastermind loop/harness consumes for the significance verdict.",
+  "type": "object",
+  "required": ["schema", "status", "strategy", "universe", "metrics"],
+  "properties": {
+    "schema": { "const": "backtest_result/v1" },
+    "as_of": { "type": ["string", "null"] },
+    "status": { "type": "string" },
+    "bar_quality": { "enum": ["real_ohlc", "synthetic_open_deepstore", "unknown", null] },
+    "strategy": {
+      "type": "object",
+      "required": ["id", "spec_hash", "params"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "source": { "type": "string" },
+        "spec_hash": { "type": "string", "description": "matches the loop's candidate.spec_hash for DSR trial-count dedupe" },
+        "params": { "type": "object" },
+        "fill": { "type": "string" },
+        "cost_bps": { "type": ["number", "null"] },
+        "slippage_bps": { "type": ["number", "null"] }
+      }
+    },
+    "universe": {
+      "type": "object",
+      "properties": {
+        "ticker": { "type": "string" },
+        "timeframe": { "type": "string" },
+        "start": { "type": ["string", "null"] },
+        "end": { "type": ["string", "null"] },
+        "bars": { "type": ["integer", "null"] }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Scalars only — safe to send to the model. Fields beyond the oracle's 14 (cagr/sharpe/sortino/calmar/exposure) are computed by signal_layer.backtest from the per-bar return series.",
+      "properties": {
+        "n_trades": { "type": "integer" },
+        "win_rate": { "type": "number" },
+        "expectancy": { "type": "number" },
+        "profit_factor": { "type": ["number", "null"] },
+        "max_dd": { "type": "number" },
+        "cagr": { "type": ["number", "null"] },
+        "sharpe": { "type": ["number", "null"] },
+        "sortino": { "type": ["number", "null"] },
+        "calmar": { "type": ["number", "null"] },
+        "exposure": { "type": ["number", "null"] },
+        "vs_buy_hold": { "type": "object" }
+      }
+    },
+    "trades": {
+      "type": "array",
+      "description": "CHART-ONLY (overlay markers). mae/mfe are null unless bar_quality == real_ohlc.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "entry_date": { "type": "string" },
+          "exit_date": { "type": "string" },
+          "entry_px": { "type": "number" },
+          "exit_px": { "type": "number" },
+          "side": { "type": "string" },
+          "ret": { "type": "number" },
+          "bars_held": { "type": "integer" },
+          "exit_reason": { "type": "string" },
+          "mae": { "type": ["number", "null"] },
+          "mfe": { "type": ["number", "null"] }
+        }
+      }
+    },
+    "series_ref": { "type": ["string", "null"], "description": "path to the .returns.parquet the loop/harness consumes" },
+    "validation": { "type": ["object", "null"], "description": "null until loop/harness is invoked (DSR/PBO/holdout verdict)" },
+    "honest_read": { "type": "string" }
+  }
+}
