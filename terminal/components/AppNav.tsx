@@ -22,13 +22,14 @@ const TOP = [
   { k: "markets", label: "Markets", href: "/terminal" },
   { k: "screener", label: "Screener", href: "/screener" },
   { k: "scripts", label: "Scripts", href: "/scripts" },
-  { k: "portfolio", label: "Portfolio", href: null },
-  { k: "alerts", label: "Alerts", href: null },
+  { k: "portfolio", label: "Portfolio", href: "/portfolio" },
+  { k: "alerts", label: "Alerts", href: "/alerts" },
 ];
 
 export function AppNav() {
   const path = usePathname();
-  const activeKey = path.startsWith("/screener") ? "screener" : path.startsWith("/scripts") ? "scripts" : "chart";
+  const activeKey = path.startsWith("/screener") ? "screener" : path.startsWith("/scripts") ? "scripts"
+    : path.startsWith("/portfolio") ? "portfolio" : path.startsWith("/alerts") ? "alerts" : "chart";
   return (
     <nav className="appnav">
       {TOP.map((it) => {

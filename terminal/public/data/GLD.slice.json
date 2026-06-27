@@ -1,0 +1,262 @@
+{
+  "indicator": {
+    "schema": "mastermind.indicator/v1",
+    "indicator_id": "confluence_rsimacd_stochrsi_mtf",
+    "symbol": "GLD",
+    "timeframe": "3D",
+    "as_of": "2026-06-24T00:00:00Z",
+    "bar_quality": "real_ohlc",
+    "macd_kind": "rsi_based",
+    "signals": [
+      {
+        "ts": "2023-04-26",
+        "bar_index": 159,
+        "type": "SELL",
+        "strength": 0.725,
+        "price": 184.8,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2023-07-14",
+        "bar_index": 178,
+        "type": "BUY",
+        "strength": 0.588,
+        "price": 183.64,
+        "reasons": [
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2023-08-04",
+        "bar_index": 183,
+        "type": "SELL",
+        "strength": 0.588,
+        "price": 178.64,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2023-08-30",
+        "bar_index": 189,
+        "type": "BUY",
+        "strength": 0.588,
+        "price": 180.11,
+        "reasons": [
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2023-10-11",
+        "bar_index": 199,
+        "type": "BUY",
+        "strength": 0.45,
+        "price": 178.83,
+        "reasons": [
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": false,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2024-04-25",
+        "bar_index": 246,
+        "type": "SELL",
+        "strength": 0.725,
+        "price": 216.18,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2024-11-05",
+        "bar_index": 292,
+        "type": "SELL",
+        "strength": 0.863,
+        "price": 249.65,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-01-10",
+        "bar_index": 308,
+        "type": "BUY",
+        "strength": 0.588,
+        "price": 247.03,
+        "reasons": [
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-03-06",
+        "bar_index": 321,
+        "type": "SELL",
+        "strength": 0.725,
+        "price": 266.04,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-03-11",
+        "bar_index": 322,
+        "type": "REBUY",
+        "strength": 0.863,
+        "price": 275.13,
+        "reasons": [
+          "fast_reversal_up",
+          "sell_failed"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-04-30",
+        "bar_index": 334,
+        "type": "SELL",
+        "strength": 0.863,
+        "price": 297.98,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-10-28",
+        "bar_index": 377,
+        "type": "SELL",
+        "strength": 0.863,
+        "price": 370.13,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      }
+    ],
+    "state": {
+      "position_hint": "flat",
+      "last_signal": "SELL",
+      "bars_since_signal": 57,
+      "extended": false,
+      "weeklyBull": false,
+      "above200": false
+    },
+    "honest_read": "RSI-MACD \u00d7 StochRSI MTF confluence on Polygon daily\u21923D. Risk/timing overlay + brain input."
+  },
+  "backtest": {
+    "schema": "backtest_result/v1",
+    "strategy_id": "rsimacd_stochrsi_mtf",
+    "symbol": "GLD",
+    "as_of": "2026-06-24",
+    "bar_quality": "real_ohlc",
+    "metrics": {
+      "n_trades": 4,
+      "win_rate": 0.75,
+      "avg_win": 0.1366,
+      "avg_loss": -0.0259,
+      "expectancy": 0.096,
+      "profit_factor": 15.82,
+      "max_dd": -0.0809,
+      "best": 0.1977,
+      "worst": -0.0259,
+      "strat_total_return": 0.4268,
+      "cagr": 0.0905,
+      "sharpe": 1.0294,
+      "sortino": 1.0015,
+      "calmar": 1.1188,
+      "exposure": 0.243,
+      "vs_buy_hold": {
+        "bh_total_return": 1.1734,
+        "bh_max_dd": -0.2375,
+        "beats_return": false,
+        "shallower_dd": true
+      }
+    },
+    "n_trades": 4,
+    "validation": null,
+    "honest_read": "As-traded Polygon backtest after costs; significance verdict delegated to loop/harness."
+  }
+}
