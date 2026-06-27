@@ -1,0 +1,262 @@
+{
+  "indicator": {
+    "schema": "mastermind.indicator/v1",
+    "indicator_id": "confluence_rsimacd_stochrsi_mtf",
+    "symbol": "NVDA",
+    "timeframe": "3D",
+    "as_of": "2026-06-18T00:00:00Z",
+    "bar_quality": "synthetic_open_deepstore",
+    "macd_kind": "rsi_based",
+    "signals": [
+      {
+        "ts": "2025-01-22",
+        "bar_index": 2260,
+        "type": "BUY",
+        "strength": 0.725,
+        "price": 142.407288,
+        "reasons": [
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": true
+        }
+      },
+      {
+        "ts": "2025-01-27",
+        "bar_index": 2261,
+        "type": "CUT",
+        "strength": 0.725,
+        "price": 123.515533,
+        "reasons": [
+          "fast_reversal_down",
+          "buy_failed"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": true
+        }
+      },
+      {
+        "ts": "2025-04-11",
+        "bar_index": 2279,
+        "type": "BUY",
+        "strength": 0.45,
+        "price": 112.042976,
+        "reasons": [
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": false,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-04-16",
+        "bar_index": 2280,
+        "type": "CUT",
+        "strength": 0.45,
+        "price": 101.347961,
+        "reasons": [
+          "fast_reversal_down",
+          "buy_failed"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": false,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-04-21",
+        "bar_index": 2281,
+        "type": "BUY",
+        "strength": 0.45,
+        "price": 102.566261,
+        "reasons": [
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": false,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-08-15",
+        "bar_index": 2309,
+        "type": "SELL",
+        "strength": 0.863,
+        "price": 175.406372,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-11-04",
+        "bar_index": 2328,
+        "type": "SELL",
+        "strength": 0.863,
+        "price": 187.840439,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": true
+        }
+      },
+      {
+        "ts": "2025-12-29",
+        "bar_index": 2341,
+        "type": "BUY",
+        "strength": 0.863,
+        "price": 186.272812,
+        "reasons": [
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": true
+        }
+      },
+      {
+        "ts": "2026-01-22",
+        "bar_index": 2347,
+        "type": "BUY",
+        "strength": 0.725,
+        "price": 186.242844,
+        "reasons": [
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2026-01-30",
+        "bar_index": 2349,
+        "type": "CUT",
+        "strength": 0.725,
+        "price": 180.1203,
+        "reasons": [
+          "fast_reversal_down",
+          "buy_failed"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2026-04-08",
+        "bar_index": 2365,
+        "type": "BUY",
+        "strength": 0.588,
+        "price": 188.410416,
+        "reasons": [
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2026-06-05",
+        "bar_index": 2379,
+        "type": "SELL",
+        "strength": 0.863,
+        "price": 208.190002,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      }
+    ],
+    "state": {
+      "position_hint": "flat",
+      "last_signal": "SELL",
+      "bars_since_signal": 3,
+      "extended": false,
+      "weeklyBull": true,
+      "above200": true
+    },
+    "honest_read": "RSI-MACD \u00d7 StochRSI MTF confluence on the 3D. Risk/timing overlay + brain input, not a standalone return engine. Gate ran on synthetic-open deep-store data \u2014 advisory only."
+  },
+  "backtest": {
+    "schema": "backtest_result/v1",
+    "strategy_id": "rsimacd_stochrsi_mtf",
+    "symbol": "NVDA",
+    "as_of": "2026-06-18",
+    "bar_quality": "synthetic_open_deepstore",
+    "metrics": {
+      "n_trades": 39,
+      "win_rate": 0.641,
+      "avg_win": 0.4641,
+      "avg_loss": -0.1181,
+      "expectancy": 0.2551,
+      "profit_factor": 7.02,
+      "max_dd": -0.5401,
+      "best": 2.5278,
+      "worst": -0.5091,
+      "strat_total_return": 362.3775,
+      "cagr": 0.249,
+      "sharpe": 0.8206,
+      "sortino": 0.9045,
+      "calmar": 0.4611,
+      "exposure": 0.4896,
+      "vs_buy_hold": {
+        "bh_total_return": 3066.7578,
+        "bh_max_dd": -0.8941,
+        "beats_return": false,
+        "shallower_dd": true
+      }
+    },
+    "n_trades": 39,
+    "validation": null,
+    "honest_read": "As-traded result of the user's Pine confluence on the 3D, after costs. Significance verdict is delegated to Mastermind loop/harness via series_ref \u2014 not computed here."
+  }
+}
