@@ -172,6 +172,21 @@ when a symbol leaves all panes. Verified: MTF trendline draws a real line on all
 [1,1,3,1] stays local; no focus-steal. GOTCHA: counting `g[data-id]` is NOT enough to prove a drawing
 renders — an out-of-range/foreign-tf anchor yields an empty `<g>`; assert an inner `line/path` element.
 Commits `68252ad` (feature) + `3d04948` (fixes).
+**Follow-up 10 — drawing UX + copilot annotation + nav fix + perf (same day):**
+- **Nav rail** (recurring complaint): the 60px column's text labels overflowed under any browser
+  min-font-size/zoom (why "shrink it" passes never stuck). Now **icon-only** 40px buttons with a hover
+  tooltip (`data-tip` ::after), VS-Code/TV activity-bar style — can't bleed regardless of font settings.
+- **Drawing UX** (`2be242a`): a context-aware floating style toolbar over a selected drawing — lines get
+  color + thickness (1.5/2.5/4) + dash (solid/dashed/dotted), text gets color + size (S/M/L), all get
+  delete; an **inline editable text box** (`openTextEditor`) replacing `window.prompt` (Enter commits,
+  Esc cancels, double-click a label to re-edit); per-drawing `width`/`dash`/`fontSize` added to the
+  Drawing type, rendered in `shape()`, and persisted via the drawings API.
+- **Copilot annotates the chart** (`2bcbc2b`): a client-executed `annotate_chart` tool — the route streams
+  an SSE `annotate` event after the model fetches real data (get_quote highs/lows, get_intel gamma walls);
+  CopilotPanel's `onAnnotate` → TerminalShell.`annotateChart` maps levels to colored hline/text drawings
+  appended to the shared store. Verified: "Mark support & resistance" drew 7 grounded levels on NVDA.
+- **Perf** (`598d762`): the SVG overlay rebuild on the pan/zoom path is now `requestAnimationFrame`-coalesced
+  (one paint/frame; ×4 panes under sync), interactive paths still immediate, rAF cancelled on teardown.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
