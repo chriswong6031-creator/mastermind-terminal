@@ -163,7 +163,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       let sel: string | null = null;
 
       function shape(d: Drawing, preview = false) {
-        const col = dcol(d); const W = el!.clientWidth, op = preview ? 0.7 : 1; const on = d.id === sel && !preview;
+        const col = dcol(d); const W = el!.clientWidth, H = el!.clientHeight, op = preview ? 0.7 : 1; const on = d.id === sel && !preview;
         const g = mk("g", { "data-id": d.id, opacity: op, "pointer-events": preview ? "none" : "all", style: "cursor:pointer" });
         const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 12 }));
         const grip = (pts: { x: number; y: number }[]) => { if (on) pts.forEach((p) => g.appendChild(mk("circle", { cx: p.x, cy: p.y, r: 4.5, fill: "var(--bg)", stroke: col, "stroke-width": 2 }))); };
@@ -178,14 +178,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           const tx = mk("text", { x: W - 6, y: ay - 4, fill: col, "font-size": 10, "text-anchor": "end", "font-family": "var(--font-num)" }); tx.textContent = String(label);
           g.appendChild(tx); grip([{ x: W / 2, y: ay }]); return g;
         }
+        if (d.kind === "vline") {
+          if (ax == null) return g;
+          g.appendChild(mk("line", { x1: ax, y1: 0, x2: ax, y2: H, stroke: col, "stroke-width": on ? 2.3 : 1.3, "stroke-dasharray": d.auto ? "5 4" : "" }));
+          fat(ax, 0, ax, H); grip([{ x: ax, y: H / 2 }]); return g;
+        }
         const bx = B ? xOf(B.t) : null, by = B ? yOf(B.p) : null;
         if (d.kind === "text") { if (ax == null || ay == null) return g; g.appendChild(mk("rect", { x: ax - 3, y: ay - 13, width: Math.max(40, (d.text || "").length * 7), height: 18, fill: "transparent" })); const tx = mk("text", { x: ax, y: ay, fill: col, "font-size": 12, "font-family": "var(--font-ui)" }); tx.textContent = d.text || "text"; g.appendChild(tx); grip([{ x: ax, y: ay - 6 }]); return g; }
         if (ax == null || ay == null || bx == null || by == null) return g;
-        if (d.kind === "trendline" || d.kind === "ray" || d.kind === "measure") {
+        if (d.kind === "trendline" || d.kind === "ray" || d.kind === "measure" || d.kind === "arrow") {
           let ex = bx, ey = by;
           if (d.kind === "ray" && bx !== ax) { const m = (by - ay) / (bx - ax); ex = W; ey = ay + m * (W - ax); }
           g.appendChild(mk("line", { x1: ax, y1: ay, x2: ex, y2: ey, stroke: col, "stroke-width": on ? 2.4 : 1.6 }));
           fat(ax, ay, ex, ey);
+          if (d.kind === "arrow") { const an = Math.atan2(by - ay, bx - ax), h = 9; g.appendChild(mk("path", { d: `M${bx} ${by} L${bx + h * Math.cos(an + Math.PI - 0.45)} ${by + h * Math.sin(an + Math.PI - 0.45)} M${bx} ${by} L${bx + h * Math.cos(an + Math.PI + 0.45)} ${by + h * Math.sin(an + Math.PI + 0.45)}`, stroke: col, "stroke-width": on ? 2.4 : 1.6, fill: "none" })); }
           if (d.kind === "measure") { const pc = ((B.p - A.p) / A.p) * 100; const di = Math.abs(barIndex(B.t) - barIndex(A.t)); const lab = mk("text", { x: (ax + bx) / 2, y: Math.min(ay, by) - 8, fill: col, "font-size": 11, "text-anchor": "middle", "font-family": "var(--font-num)" }); lab.textContent = `${pc >= 0 ? "+" : ""}${pc.toFixed(2)}% · ${di} bars`; g.appendChild(lab); }
           grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
         }
@@ -238,7 +244,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       const rectXY = (ev: PointerEvent) => { const r = svg.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
       const idAt = (ev: Event) => (ev.target as Element)?.closest?.("g[data-id]")?.getAttribute("data-id") || null;
-      const TWO = new Set(["trendline", "ray", "rect", "fib", "measure"]);
+      const TWO = new Set(["trendline", "ray", "rect", "fib", "measure", "arrow"]);
 
       // select + drag existing drawings in cursor mode (capture phase; runs before creation)
       svg.addEventListener("pointerdown", (ev) => {
@@ -261,6 +267,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const t = toolRef.current; if (!t) return; const { x, y } = rectXY(ev); const a = snap(x, y);
         if (t === "erase") { const id = idAt(ev); if (id) onChangeRef.current?.(drawRef.current.filter((d) => d.id !== id)); return; }
         if (t === "hline") { onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "hline", points: [a] }]); return; }
+        if (t === "vline") { onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "vline", points: [a] }]); return; }
         if (t === "text") { const txt = window.prompt("Label"); if (txt) onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "text", points: [a], text: txt }]); return; }
         if (TWO.has(t)) { pending = { kind: t, a }; try { svg.setPointerCapture(ev.pointerId); } catch {} }
       });

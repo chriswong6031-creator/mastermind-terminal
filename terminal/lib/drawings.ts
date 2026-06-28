@@ -2,7 +2,7 @@
 // Anchors live in DATA space (bar time + price) so they survive zoom/pan/resize.
 
 export type Pt = { t: string; p: number };
-export type DrawKind = "trendline" | "ray" | "hline" | "rect" | "fib" | "text" | "measure";
+export type DrawKind = "trendline" | "ray" | "hline" | "vline" | "rect" | "fib" | "text" | "measure" | "arrow";
 export type Drawing = {
   id: string;
   kind: DrawKind;

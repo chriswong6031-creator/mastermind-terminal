@@ -26,7 +26,7 @@ const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); r
 const TOOLS: [string, string][] = [
   ["cursor", "M12 2v20M2 12h20"], ["trendline", "M4 20L20 4"], ["ray", "M4 20L20 4M15 4h5v5"],
   ["hline", "M3 12h18"], ["rect", "M4 6h16v12H4z"], ["fib", "M3 5h18M3 9h18M3 15h18M3 19h18"],
-  ["text", "M5 5h14M12 5v14"], ["measure", "M3 9h18v6H3zM7 9v6M11 9v6M15 9v6"], ["erase", "M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"],
+  ["text", "M5 5h14M12 5v14"], ["measure", "M3 9h18v6H3zM7 9v6M11 9v6M15 9v6"], ["arrow", "M5 19L19 5M13 5h6v6"], ["vline", "M12 3v18"], ["erase", "M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"],
 ];
 const DETECTORS: [string, string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
