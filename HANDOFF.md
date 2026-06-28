@@ -194,6 +194,23 @@ Commits `68252ad` (feature) + `3d04948` (fixes).
   still clobbered; in-app testing caught it. Always re-verify a reviewer's *fix*, not just the bug. (2)
   inline text `<input>` orphaned on a non-key effect re-run (replay-while-typing) → tracked in a ref,
   removed on teardown. (3) non-finite annotate prices → `Number.isFinite` guard.
+**Follow-up 11 — flagship signals + locale colors + EN/中文 i18n (same day):**
+- **Signal markers** (`fbe75d7`): the RM×ST CUT/RE-BUY (anti-shakeout reversals) were already emitted by
+  `signal_layer/contracts.py` but invisible — the chart slice was the `model_slice` (capped to 12 for the
+  Opus budget) and ChartPanel further sliced to 8, and all signals drew as identical LWC arrows. Fixed:
+  `build_polygon_universe` now writes the FULL indicator to `<SYM>.slice.json`; added `ingest/regen_slices.py`
+  (no-network rebuild from existing OHLC; ran it → NVDA 12→24 signals). ChartPanel drops the cap and renders
+  every signal as a custom SVG badge on a dedicated layer (BUY green ★ / SELL red ★ / CUT orange pill /
+  RE-BUY lime pill, pointer tails), rAF-coalesced. BUY/SELL use `--buy`/`--sell` so they flip with the scheme.
+- **Locale up/down colors + i18n** (`71fcac4`, `1b776c6`): a pre-paint script in `layout.tsx` sets
+  `<html data-updown>` (CN/HK/TW/MO → red-up "east", else "west") + `data-lang` from the browser locale, with
+  a saved override winning. CSS flips `--up/--down/--buy/--sell/--regime-up` for east; ChartPanel rebuilds on
+  the `mm:updown` event. `lib/i18n` (LangProvider + `useT`) localizes chrome reactively; a **settings popover**
+  off the top-right avatar (`SettingsMenu`) holds the color + language toggles + sign-out (both persist).
+  Copilot answers in 简体中文 when zh. Translated so far: nav, settings, chart tabs+buttons. GOTCHA:
+  `suppressHydrationWarning` on `<html>` (the pre-paint script adds attributes the SSR HTML lacks).
+  REMAINING (the "full i18n" tail): Screener/Portfolio/Alerts/Scripts pages, rail/detail labels, the Candles
+  dropdown, and dynamic data strings — mechanical (extend `LEX` + wrap in `t()`); do as a dedicated sweep.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
