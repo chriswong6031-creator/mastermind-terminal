@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import {
   createChart, CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries,
-  CrosshairMode, createSeriesMarkers, type IChartApi, type ISeriesApi,
+  CrosshairMode, type IChartApi, type ISeriesApi,
 } from "lightweight-charts";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
@@ -53,6 +53,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const barRef = useRef<HTMLDivElement | null>(null);
   const ctxRef = useRef<HTMLDivElement | null>(null);
   const textEditRef = useRef<HTMLInputElement | null>(null);
+  const sigRef = useRef<SVGSVGElement | null>(null);
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet;
 
   useEffect(() => {
@@ -129,10 +130,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       const times = rows.map((r) => r.time);
       const lastDate = times[times.length - 1];
-      const sigs = (slice?.indicator?.signals || []).filter((s: any) => s.ts <= lastDate).slice(-8);
       const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(y + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y; } }); return bd < 9e8 ? b : null; };
-      const marks = sigs.map((s: any) => { const t = near(s.ts); if (!t) return null; const buy = s.type === "BUY" || s.type === "REBUY"; return { time: t, position: buy ? "belowBar" : "aboveBar", color: buy ? c.buy : c.sell, shape: buy ? "arrowUp" : "arrowDown", text: s.type }; }).filter(Boolean);
-      if (marks.length) createSeriesMarkers(priceS, marks as any);
+      // resolve EVERY BUY/SELL/CUT/REBUY to its nearest bar — drawn as custom badges (see renderSignals)
+      const sigMarks = (slice?.indicator?.signals || [])
+        .filter((s: any) => s.ts <= lastDate)
+        .map((s: any) => ({ t: near(s.ts), type: s.type as string, price: s.price as number }))
+        .filter((m: any) => m.t && m.price != null) as { t: string; type: string; price: number }[];
 
       let pane = 1;
       if (indicators.has("vol")) { const vs = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "" }, pane); vs.setData(rows.map((r) => ({ time: r.time, value: r.v, color: r.c >= r.o ? "rgba(38,194,129,.4)" : "rgba(240,86,107,.4)" }))); pane++; }
@@ -152,6 +155,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       // ---------- drawing overlay (synced to chart coordinates) ----------
       const wrap = el.parentElement as HTMLElement;
+      // signal-marker layer (below the user-drawing layer); custom TradingView-style badges
+      const sigSvg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none" }) as SVGSVGElement;
+      wrap.appendChild(sigSvg); sigRef.current = sigSvg;
       const svg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
       wrap.appendChild(svg); svgRef.current = svg;
       const dcol = (d: Drawing) => d.color?.startsWith("var(") ? css(d.color.slice(4, -1)) : (d.color || c.brand2);
@@ -162,6 +168,32 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const xOf = (t: string) => chart.timeScale().timeToCoordinate(snapT(t) as any) as number | null;
       const yOf = (p: number) => priceS.priceToCoordinate(p) as number | null;
       const barIndex = (t: string) => { const tt = snapT(t); const b = barsRef.current; for (let k = 0; k < b.length; k++) if (b[k].time === tt) return k; return -1; };
+      // ── signal badges: TradingView-style BUY/SELL (★) + CUT/RE-BUY pills, anchored at each signal bar ──
+      const SIGCFG: Record<string, { dir: "up" | "down"; fill: string; tc: string; txt: string; star?: boolean }> = {
+        BUY:   { dir: "up",   fill: c.buy,    tc: "#fff",     txt: "★",      star: true },
+        SELL:  { dir: "down", fill: c.sell,   tc: "#fff",     txt: "★",      star: true },
+        REBUY: { dir: "up",   fill: "#b6e94a", tc: "#16310a",  txt: "RE-BUY" },
+        CUT:   { dir: "down", fill: "#ff8a3d", tc: "#2a1400",  txt: "CUT" },
+      };
+      const renderSignals = () => {
+        const layer = sigRef.current; if (!layer) return;
+        while (layer.firstChild) layer.removeChild(layer.firstChild);
+        for (const m of sigMarks) {
+          const cfg = SIGCFG[m.type]; if (!cfg) continue;
+          const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
+          const star = !!cfg.star;
+          const w = star ? 19 : Math.max(20, 9 + cfg.txt.length * 7), h = 15, r = 4, ptr = 5, gap = 9;
+          const up = cfg.dir === "up";
+          const top = up ? y + gap + ptr : y - gap - ptr - h;
+          const g = mk("g", { opacity: 0.97 });
+          g.appendChild(mk("rect", { x: x - w / 2, y: top, width: w, height: h, rx: r, ry: r, fill: cfg.fill }));
+          g.appendChild(mk("path", { d: up ? `M${x - ptr} ${top} L${x + ptr} ${top} L${x} ${top - ptr} Z` : `M${x - ptr} ${top + h} L${x + ptr} ${top + h} L${x} ${top + h + ptr} Z`, fill: cfg.fill }));
+          const tEl = mk("text", { x, y: top + h / 2 + (star ? 4.3 : 3.4), fill: cfg.tc, "font-size": star ? 11.5 : 9, "font-weight": 800, "text-anchor": "middle", "font-family": star ? "Georgia,serif" : "var(--font-ui)", "letter-spacing": star ? "0" : ".02em" });
+          tEl.textContent = cfg.txt;
+          g.appendChild(tEl);
+          layer.appendChild(g);
+        }
+      };
       const snap = (px: number, py: number) => {
         const bars = barsRef.current; let bt = bars[bars.length - 1]?.time, bd = 1e18;
         for (const b of bars) { const xc = xOf(b.time); if (xc == null) continue; const dd = Math.abs(xc - px); if (dd < bd) { bd = dd; bt = b.time; } }
@@ -303,9 +335,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       renderRef.current = renderDraw;
       // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path
       // (a drag fires many range-change events; with sync this is also mirrored across panes)
-      const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) renderDraw(); }); };
+      const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderDraw(); } }); };
       chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
-      renderDraw();
+      renderSignals(); renderDraw();
 
       // cross-pane sync: register this pane, then mirror crosshair (by time) + visible range
       if (syncId != null) {
@@ -371,7 +403,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       ro.observe(el);
     })();
 
-    return () => { dead = true; if (rafId != null) cancelAnimationFrame(rafId); if (syncCleanup) syncCleanup(); if (dragCleanup) dragCleanup(); window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); if (winDown) window.removeEventListener("pointerdown", winDown); if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx); ro?.disconnect(); if (textEditRef.current) { try { textEditRef.current.remove(); } catch {} textEditRef.current = null; } if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; } if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
+    return () => { dead = true; if (rafId != null) cancelAnimationFrame(rafId); if (syncCleanup) syncCleanup(); if (dragCleanup) dragCleanup(); window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); if (winDown) window.removeEventListener("pointerdown", winDown); if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx); ro?.disconnect(); if (textEditRef.current) { try { textEditRef.current.remove(); } catch {} textEditRef.current = null; } if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; } if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (sigRef.current) { try { sigRef.current.remove(); } catch {} sigRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
   }, [symbol, chartType, timeframe, replayIdx, Array.from(indicators).sort().join(","), (compare || []).join(","), syncId]); // eslint-disable-line
 
   // re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild)

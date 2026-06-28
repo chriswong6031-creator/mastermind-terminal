@@ -98,7 +98,10 @@ def main(syms: list[str]) -> None:
             btc = contracts.backtest_contract(
                 sym, "3D", bt,
                 honest_read="As-traded Polygon backtest after costs; significance verdict delegated to loop/harness.")
-            slim = {"indicator": contracts.model_slice(ind), "backtest": contracts.model_slice(btc)}
+            # chart slice keeps the FULL indicator signal history (model_slice caps to 12 for the
+            # Opus token budget — the chart needs every BUY/SELL/CUT/REBUY marker, not just recent);
+            # backtest stays sliced (it carries heavy trade/equity arrays).
+            slim = {"indicator": ind, "backtest": contracts.model_slice(btc)}
             (OUT / f"{sym}.slice.json").write_text(json.dumps(slim, indent=2))
 
             # Write full backtest contract + equity curve (HANDOFF §7.3)
