@@ -59,10 +59,10 @@ svg{display:block}
 .ai:hover{background:var(--brand-hov)}.ai svg{width:14px;height:14px;fill:#fff}
 .avatar{width:30px;height:30px;border-radius:50%;margin-left:10px;background:var(--panel-3);border:1px solid var(--line-3);display:grid;place-items:center;font:700 11px/1 var(--font-ui);color:var(--text-2);cursor:pointer}
 
-.appnav{grid-row:2;grid-column:1;border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:3px}
+.appnav{grid-row:2;grid-column:1;border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px}
 .navbtn{position:relative;width:48px;height:48px;border-radius:var(--r-md);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--muted);transition:color var(--t),background var(--t)}
 .navbtn:hover{color:var(--text);background:var(--panel-2)}
-.navbtn.on{color:var(--brand-2)}.navbtn.on::before{content:"";position:absolute;left:0;width:3px;height:24px;border-radius:0 3px 3px 0;background:var(--brand)}
+.navbtn.on{color:var(--brand-2)}.navbtn.on::before{content:"";position:absolute;left:-6px;top:50%;transform:translateY(-50%);width:3px;height:26px;border-radius:0 3px 3px 0;background:var(--brand)}
 .navbtn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.7}.navbtn span{font:600 8px/1 var(--font-ui)}
 .appnav .gap{flex:1}
 
