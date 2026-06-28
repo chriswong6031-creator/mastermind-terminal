@@ -76,6 +76,7 @@ svg{display:block}
 .seg button.on{color:var(--brand-2);background:rgba(41,98,255,.13)}
 .tbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border-radius:var(--r);color:var(--text-2);font:600 12px/1 var(--font-ui)}
 .tbtn:hover{background:var(--panel-2);color:var(--text)}.tbtn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8}
+.tbtn.on{background:rgba(41,98,255,.13);color:var(--brand-2)}
 .chart-body{flex:1;display:flex;min-height:0;background:var(--chart-bg)}
 .tooldock{width:42px;border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding-top:8px;gap:1px;background:var(--bg)}
 .tooldock button{width:32px;height:32px;border-radius:var(--r);display:grid;place-items:center;color:var(--muted)}

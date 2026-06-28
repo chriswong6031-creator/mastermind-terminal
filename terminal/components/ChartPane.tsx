@@ -24,7 +24,7 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         <span className="px num">{f(row?.last, (row?.last ?? 99) < 10 ? 4 : 2)}</span>
         <span className={`cg num ${up ? "up" : "down"}`}>{up ? "+" : ""}{f(row?.chg)}%</span>
       </div>
-      <ChartPanel symbol={symbol} chartType={chartType} indicators={inds} timeframe={tf} replayIdx={isActive ? replayIdx : null} onMeta={isActive ? onMeta : undefined} tool={isActive ? tool : null} drawings={drawings} onDrawingsChange={onChange} detectCmd={isActive ? detectCmd : null} compare={isActive ? compare.filter((c) => c !== symbol) : []} magnet={isActive ? magnet : false} isActive={isActive} key={symbol + tf + chartType} />
+      <ChartPanel symbol={symbol} chartType={chartType} indicators={inds} timeframe={tf} replayIdx={isActive ? replayIdx : null} onMeta={isActive ? onMeta : undefined} tool={isActive ? tool : null} drawings={drawings} onDrawingsChange={onChange} detectCmd={isActive ? detectCmd : null} compare={isActive ? compare.filter((c) => c !== symbol) : []} magnet={isActive ? magnet : false} isActive={isActive} syncId={idx} key={symbol + tf + chartType} />
     </div>
   );
 }

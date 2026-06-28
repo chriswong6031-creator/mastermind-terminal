@@ -10,6 +10,7 @@ import IndicatorsModal from "@/components/IndicatorsModal";
 import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
 import { useLive } from "@/lib/live";
+import { setPaneSync } from "@/lib/paneSync";
 
 type Row = { name: string; sec: string; col: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -39,6 +40,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
   const [panes, setPanes] = useState<string[]>([seed0]);
   const [activePane, setActivePane] = useState(0);
+  const [sync, setSync] = useState(true);
   const active = panes[activePane] ?? panes[0] ?? seed0;
   const [tf, setTf] = useState("D");
   const [chartType, setChartType] = useState("candles");
@@ -71,6 +73,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
   useEffect(() => { localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
   useEffect(() => { localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
+  useEffect(() => { setPaneSync(sync && panes.length > 1); }, [sync, panes.length]);
 
   // per-symbol intel/slice for the rail (drawings now live per-pane in ChartPane); layouts once
   useEffect(() => { let alive = true; setIntel(null); setLivePx(null); setSlice(null);
@@ -197,6 +200,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>Indicators</button>
             <button className="tbtn" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>Compare</button>
             <div className="seg" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={panes.length === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
+            {panes.length > 1 && <button className={`tbtn${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>Sync</button>}
             <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>Detect<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
