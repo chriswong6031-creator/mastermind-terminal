@@ -76,6 +76,16 @@ All verified in the running app, zero console errors. Commits `0690405`/`f6f393f
 live tool-step chips); **compare-symbols** overlay (rebased lines + legend chips, "Compare"
 toolbar button); nav consistency — removed the duplicate dead "Markets" item and wired the
 dead "AI" nav button to open the copilot (`mm:copilot` event / `?ai=1`). All verified.
+**Hardening pass:** an adversarial multi-dimension review (7 finders → verify) surfaced 15
+confirmed bugs, all fixed: sticky drawing-selection (empty-click now deselects via window
+pointerdown); copilot stream crash on mid-stream symbol switch (AbortController + request-gen
+guard + empty-array guard); copilot endpoint now auth-gated + sanitizes client messages (role
+allowlist, size caps, strips forged system/tool turns); cross-symbol drawing data-loss (stale-GET
+`alive` guard + flush-pending-save on switch); async-IIFE leak (dead-recheck after the compare
+await); stranded drag listeners cleaned up; detect retries until bars load; compare reset on symbol
+switch + dynamic precision + common-origin rebase + active-symbol filtered; sticky-bottom copilot
+autoscroll; live-WS dead-guard. Layouts also persist the compare set. All re-verified in-app, zero
+console/server errors. Commit `<this batch>`.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)

@@ -13,23 +13,32 @@ export default function CopilotPanel({ open, symbol, row, onClose }:
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const reqRef = useRef(0);              // request generation — invalidates in-flight streams
+  const acRef = useRef<AbortController | null>(null);
 
-  useEffect(() => { setMsgs([]); }, [symbol]);
-  useEffect(() => { if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight; }, [msgs, busy]);
+  // symbol change / close / unmount: abort any in-flight stream and reset
+  useEffect(() => { setMsgs([]); reqRef.current++; acRef.current?.abort(); setBusy(false); }, [symbol]);
+  useEffect(() => { if (!open) { reqRef.current++; acRef.current?.abort(); } }, [open]);
+  useEffect(() => () => { reqRef.current++; acRef.current?.abort(); }, []);
+  // sticky-bottom autoscroll: only follow if the user is already near the bottom
+  useEffect(() => { const el = bodyRef.current; if (!el) return; if (el.scrollHeight - el.scrollTop - el.clientHeight < 60) el.scrollTop = el.scrollHeight; }, [msgs, busy]);
 
   async function send(text: string) {
     const t = text.trim(); if (!t || busy) return; setInput("");
     const next: Msg[] = [...msgs, { role: "user", content: t }];
     setMsgs(next); setBusy(true);
+    const my = ++reqRef.current; acRef.current?.abort(); const ac = new AbortController(); acRef.current = ac;
+    const apply = (fn: (l: Msg) => Msg) => setMsgs((m) => { if (!m.length) return m; const c = [...m]; c[c.length - 1] = fn(c[c.length - 1]); return c; });
     try {
-      const r = await fetch("/api/copilot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, messages: next.map((m) => ({ role: m.role, content: m.content })) }) });
+      const r = await fetch("/api/copilot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, messages: next.map((m) => ({ role: m.role, content: m.content })) }), signal: ac.signal });
+      if (reqRef.current !== my) return;
       const ct = r.headers.get("content-type") || "";
-      if (!r.body || !ct.includes("event-stream")) { const d = await r.json(); setMsgs((m) => [...m, { role: "assistant", content: d.reply || "(no reply)", steps: d.steps }]); setBusy(false); return; }
+      if (!r.body || !ct.includes("event-stream")) { const d = await r.json(); if (reqRef.current === my) setMsgs((m) => [...m, { role: "assistant", content: d.reply || "(no reply)", steps: d.steps }]); return; }
       setMsgs((m) => [...m, { role: "assistant", content: "", steps: [] }]);
-      const apply = (fn: (l: Msg) => Msg) => setMsgs((m) => { const c = [...m]; c[c.length - 1] = fn(c[c.length - 1]); return c; });
       const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
       for (;;) {
         const { done, value } = await reader.read(); if (done) break;
+        if (reqRef.current !== my) { try { reader.cancel(); } catch {} break; }
         buf += dec.decode(value, { stream: true });
         const lines = buf.split("\n"); buf = lines.pop() || "";
         for (const line of lines) {
@@ -41,8 +50,9 @@ export default function CopilotPanel({ open, symbol, row, onClose }:
           else if (j.type === "error") apply((l) => ({ ...l, content: l.content + (l.content ? "\n\n" : "") + "_" + j.message + "_" }));
         }
       }
-    } catch { setMsgs((m) => [...m, { role: "assistant", content: "Copilot unavailable right now." }]); }
-    setBusy(false);
+    } catch {
+      if (reqRef.current === my && !ac.signal.aborted) setMsgs((m) => [...m, { role: "assistant", content: "Copilot unavailable right now." }]);
+    } finally { if (reqRef.current === my) setBusy(false); }
   }
 
   const v = row?.verdict || "—"; const buy = isBuy(v); const up = (row?.chg ?? 0) >= 0;

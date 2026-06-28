@@ -20,6 +20,7 @@ export function useLive(symbol: string, onTick: (price: number) => void) {
       ws = new WebSocket("wss://socket.polygon.io/stocks");
       ws.onopen = () => ws!.send(JSON.stringify({ action: "auth", params: key }));
       ws.onmessage = (ev) => {
+        if (dead) return;
         try {
           for (const m of JSON.parse(ev.data)) {
             if (m.ev === "status" && m.status === "auth_success") { ws!.send(JSON.stringify({ action: "subscribe", params: `T.${symbol}` })); setStatus("live"); }

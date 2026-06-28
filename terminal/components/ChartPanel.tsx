@@ -55,7 +55,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const el = ref.current; if (!el) return;
     let ro: ResizeObserver | null = null, dead = false;
     let onKey: ((e: KeyboardEvent) => void) | null = null;
-    let onCtx: ((e: MouseEvent) => void) | null = null, winDown: (() => void) | null = null;
+    let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
     const snap = () => { try { const c = chartRef.current!.takeScreenshot(); const a = document.createElement("a"); a.href = c.toDataURL(); a.download = `${symbol}.png`; a.click(); } catch {} };
     window.addEventListener("mm:snapshot", snap);
 
@@ -113,12 +113,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         let crows: Bar[] = co.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
         crows = resampleTf(crows, timeframe);
         const cmap: Record<string, number> = {}; for (const cr of crows) cmap[cr.time] = cr.c;
-        let bse = 0; for (const r of rows) { if (cmap[r.time] != null) { bse = cmap[r.time]; break; } }
-        if (!bse) continue; const scl = rows[0].c / bse; let lv: number | null = null;
-        const cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: +(lv * scl).toFixed(2) } : null; }).filter(Boolean);
+        let bse = 0, baseA = rows[0].c; for (const r of rows) { if (cmap[r.time] != null) { bse = cmap[r.time]; baseA = r.c; break; } }   // anchor to first COMMON date
+        if (!bse) continue; const scl = baseA / bse; let lv: number | null = null;
+        const cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: +(lv * scl).toFixed(prec) } : null; }).filter(Boolean);
         const ln = chart.addSeries(LineSeries, { color: CMP_COLORS[ci % CMP_COLORS.length], lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: cs }, 0);
         ln.setData(cdata as any);
       }
+      if (dead) { try { chart.remove(); } catch {} return; }   // effect re-ran during the compare fetch — bail before wiring listeners/overlay
 
       const times = rows.map((r) => r.time);
       const lastDate = times[times.length - 1];
@@ -223,7 +224,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         else if (a === "reset") { try { chart.timeScale().fitContent(); } catch {} }
       });
       wrap.addEventListener("contextmenu", onCtx);
-      winDown = hideCtx; window.addEventListener("pointerdown", hideCtx);
+      winDown = (e: PointerEvent) => { hideCtx(); if (!toolRef.current && sel) { const tg = e.target as Element; if (tg && !tg.closest?.("g[data-id]") && !tg.closest?.(".draw-bar")) { sel = null; renderDraw(); } } };
+      window.addEventListener("pointerdown", winDown);
       const renderDraw = () => {
         const svgEl = svgRef.current; if (!svgEl) return;
         while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
@@ -249,7 +251,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: orig.map((pt) => { const ni = Math.max(0, Math.min(bars.length - 1, barIndex(pt.t) + di)); return { t: bars[ni]?.time || pt.t, p: +(pt.p + dp).toFixed(prec) }; }) });
           renderDraw();
         };
-        const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); onChangeRef.current?.([...drawRef.current]); };
+        const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); dragCleanup = null; onChangeRef.current?.([...drawRef.current]); };
+        dragCleanup = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
         window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
       }, true);
 
@@ -282,7 +285,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       ro.observe(el);
     })();
 
-    return () => { dead = true; window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); if (winDown) window.removeEventListener("pointerdown", winDown); if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx); ro?.disconnect(); if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; } if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
+    return () => { dead = true; if (dragCleanup) dragCleanup(); window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); if (winDown) window.removeEventListener("pointerdown", winDown); if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx); ro?.disconnect(); if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; } if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
   }, [symbol, chartType, timeframe, replayIdx, Array.from(indicators).sort().join(","), (compare || []).join(",")]); // eslint-disable-line
 
   // re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild)
@@ -290,14 +293,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
   // detection commands → append auto-drawings (or clear)
   useEffect(() => {
-    if (!detectCmd) return; const bars = barsRef.current as DBar[]; if (!bars.length) return;
-    if (detectCmd.kind === "clear") { onChangeRef.current?.(drawRef.current.filter((d) => !d.auto)); return; }
-    let add: Drawing[] = [];
-    if (detectCmd.kind === "trendlines") add = autoTrendlines(bars);
-    else if (detectCmd.kind === "fib") { const f = autoFib(bars); if (f) add = [f]; }
-    else if (detectCmd.kind === "sr") add = srDrawings(bars);
-    else if (detectCmd.kind === "mtfa") add = mtfaDrawings(bars);
-    if (add.length) onChangeRef.current?.([...drawRef.current.filter((d) => !d.auto), ...add]);
+    if (!detectCmd) return; let tries = 0; let timer: any;
+    const run = () => {
+      const bars = barsRef.current as DBar[];
+      if (!bars.length) { if (tries++ < 25) timer = setTimeout(run, 150); return; }   // data still loading — retry instead of silently dropping
+      if (detectCmd.kind === "clear") { onChangeRef.current?.(drawRef.current.filter((d) => !d.auto)); return; }
+      let add: Drawing[] = [];
+      if (detectCmd.kind === "trendlines") add = autoTrendlines(bars);
+      else if (detectCmd.kind === "fib") { const f = autoFib(bars); if (f) add = [f]; }
+      else if (detectCmd.kind === "sr") add = srDrawings(bars);
+      else if (detectCmd.kind === "mtfa") add = mtfaDrawings(bars);
+      if (add.length) onChangeRef.current?.([...drawRef.current.filter((d) => !d.auto), ...add]);
+    };
+    run();
+    return () => clearTimeout(timer);
   }, [detectCmd?.nonce]); // eslint-disable-line
 
   return (

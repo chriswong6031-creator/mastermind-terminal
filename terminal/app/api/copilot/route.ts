@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
+import { createClient } from "@/lib/supabase/server";
 
 const DATA = path.join(process.cwd(), "public", "data");
 const readJson = async (f: string) => { try { return JSON.parse(await fs.readFile(path.join(DATA, f), "utf8")); } catch { return null; } };
@@ -31,9 +32,20 @@ async function runTool(name: string, args: any): Promise<any> {
 const SYSTEM = `You are Mastermind AI, the copilot inside an institutional charting terminal. You reason over a proprietary backtested confluence signal ("Golden Oracle"), a macro/regime read, and a strategy tester. Use the tools to ground every claim in real data — never invent numbers. Be concise, specific, and honest: the confluence is a timing/risk overlay, not a standalone return engine. Nothing is financial advice. When the user asks about a ticker, fetch its quote and intel before answering.`;
 
 export async function POST(req: Request) {
+  // auth-gate (defense in depth; the copilot UI lives behind the /terminal guard)
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ reply: "Please sign in to use the copilot.", steps: [] }, { status: 401 });
+
   const key = process.env.DEEPSEEK_API_KEY;
   const base = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
-  const { messages = [], symbol } = await req.json();
+  const body = await req.json().catch(() => ({} as any));
+  // sanitize client input: only {role:user|assistant, content:string}; cap count + size; drop any forged system/tool turns
+  const symbol = typeof body?.symbol === "string" ? body.symbol.slice(0, 24) : "";
+  const messages = (Array.isArray(body?.messages) ? body.messages : [])
+    .filter((m: any) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+    .slice(-30)
+    .map((m: any) => ({ role: m.role, content: m.content.slice(0, 8000) }));
   if (!key) return NextResponse.json({ reply: "The AI copilot isn't configured (no model key).", steps: [] });
 
   const convo: any[] = [{ role: "system", content: SYSTEM + (symbol ? ` The active chart symbol is ${symbol}.` : "") }, ...messages];
