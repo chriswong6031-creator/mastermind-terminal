@@ -11,6 +11,7 @@ import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
+import { type Drawing } from "@/lib/drawings";
 
 type Row = { name: string; sec: string; col: string; mkt?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -69,6 +70,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
   const nonce = useRef(0);
   const wsMounted = useRef(false);
+  // shared per-symbol drawing store (lifted out of ChartPane so multiple panes on the same
+  // symbol share one set instead of clobbering each other through the replace-all PUT)
+  const [drawStore, setDrawStore] = useState<Record<string, Drawing[]>>({});
+  const drawLoaded = useRef<Set<string>>(new Set());
+  const drawPending = useRef<Record<string, Drawing[]>>({});
+  const drawTimers = useRef<Record<string, any>>({});
+  const flushDrawings = useCallback((sym: string) => { clearTimeout(drawTimers.current[sym]); const d = drawPending.current[sym]; if (d) { delete drawPending.current[sym]; fetch("/api/drawings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym, drawings: d }) }).catch(() => {}); } }, []);
+  const setSymbolDrawings = useCallback((sym: string, d: Drawing[]) => { setDrawStore((s) => ({ ...s, [sym]: d })); drawPending.current[sym] = d; clearTimeout(drawTimers.current[sym]); drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 600); }, [flushDrawings]);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
@@ -101,6 +110,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
   useEffect(() => { localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
   useEffect(() => { setPaneSync(sync && panes.length > 1); }, [sync, panes.length]);
+  // load drawings once per symbol that appears in a pane; don't clobber an in-flight local edit
+  useEffect(() => {
+    for (const sym of new Set(panes)) {
+      if (drawLoaded.current.has(sym)) continue;
+      drawLoaded.current.add(sym);
+      fetch(`/api/drawings?symbol=${sym}`).then((r) => r.json()).then((d) => {
+        if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: d.drawings || [] }));
+      }).catch(() => { drawLoaded.current.delete(sym); });
+    }
+  }, [panes]);
+  useEffect(() => () => { for (const sym of Object.keys(drawPending.current)) flushDrawings(sym); }, [flushDrawings]);
 
   // per-symbol intel/slice for the rail (drawings now live per-pane in ChartPane); layouts once
   useEffect(() => { let alive = true; setIntel(null); setLivePx(null); setSlice(null);
@@ -128,6 +148,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     setPaneTfs((tfs) => next.map((_, i) => tfs[i] ?? tf));
     setActivePane((a) => Math.min(a, next.length - 1));
   }
+  // one-click multi-timeframe: the active symbol across D / 3D / W / 1M (drawings are shared per-symbol)
+  function mtfLayout() { const sym = active; setSplit(4); setPanes([sym, sym, sym, sym]); setPaneTfs(["D", "3D", "W", "1M"]); setActivePane(0); }
   const onTick = useCallback((p: number) => setLivePx(p), []);
   const liveStatus = useLive(active, onTick);
 
@@ -237,6 +259,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>Indicators</button>
             <button className="tbtn" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>Compare</button>
             <div className="seg" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
+            <button className="tbtn" title="Multi-timeframe — the active symbol at D / 3D / W / 1M" onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>MTF</button>
             {panes.length > 1 && <button className={`tbtn${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>Sync</button>}
             <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>Detect<span style={{ color: "var(--muted)" }}>▾</span></button>
@@ -289,7 +312,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} />
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} />
               ))}
             </div>
           </div>
