@@ -187,6 +187,13 @@ Commits `68252ad` (feature) + `3d04948` (fixes).
   appended to the shared store. Verified: "Mark support & resistance" drew 7 grounded levels on NVDA.
 - **Perf** (`598d762`): the SVG overlay rebuild on the pan/zoom path is now `requestAnimationFrame`-coalesced
   (one paint/frame; ×4 panes under sync), interactive paths still immediate, rAF cancelled on teardown.
+- **Review fixes** (`e719919`): a 3-slice review found 4 issues, all fixed — (1) HIGH copilot-annotate
+  clobbered/persisted over existing drawings (stale `drawStore` closure + multi-event overwrite); fix
+  bases the append on the synchronous `drawPending` ref with `drawStore` kept in deps. GOTCHA: the
+  review's own suggested fix (drop `drawStore` from deps) was wrong — it froze the closure at mount and
+  still clobbered; in-app testing caught it. Always re-verify a reviewer's *fix*, not just the bug. (2)
+  inline text `<input>` orphaned on a non-key effect re-run (replay-while-typing) → tracked in a ref,
+  removed on teardown. (3) non-finite annotate prices → `Number.isFinite` guard.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
