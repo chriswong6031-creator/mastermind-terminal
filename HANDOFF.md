@@ -147,6 +147,11 @@ mismatched tfs. Layouts persist/restore `paneTfs` (back-compat: older single-`tf
 The unique-symbol-per-pane invariant is intentionally kept (drawings keyed by symbol), so a same-symbol
 MTF layout is deferred until the drawing store is keyed by symbol+tf. Verified in-app ([D,W] independent,
 toolbar tracks active pane, collapse/expand inherit) + Node sim for the tf-gated sync. Commit `e5f35b9`.
+**Follow-up 8 — workspace persistence (same day):** the split grid + per-pane symbols/timeframes + active
+pane + sync toggle now survive a reload via localStorage `mm.ws` (restore on mount filters saved symbols
+against the current universe and snaps split to the pane count; a `?sym=` deep-link always wins; save is
+gated behind a `restored` ref so the default state can't clobber the saved layout before restore runs).
+Verified: build [NVDA·D, BTC·W] split-2 → reload → fully restored; `?sym=AAPL` → single AAPL pane. Commit `8260ce3`.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
