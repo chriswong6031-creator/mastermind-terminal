@@ -66,6 +66,13 @@ All routes are auth-gated (`terminal/proxy.ts` guards `/terminal /screener /scri
 6. **Brain/Macro integration** — `ingest/pull_macro_intel.py` reads `../Macro Dashboard/site/stockdata/<SYM>.json` → `<SYM>.intel.json` (`intel/v1`); surfaced as a "Macro intel" card in the rail AND consumed by the copilot's `get_intel` tool. (26 symbols.)
 7. **Live data** — `lib/live.ts` Polygon trades-WS client + a Historical/Live badge. OFF by default (account not real-time-entitled yet, per below); flip `NEXT_PUBLIC_LIVE=1` + a real-time `NEXT_PUBLIC_POLYGON_KEY` to activate — wiring is complete.
 
+**Polish pass (2026-06-28, follow-up) — TradingView-grade UX:** drawings now support
+select + drag-to-move + Delete/Esc + magnet-snap to OHLC + fat hit-targets + a floating
+color/delete toolbar over the selection + a right-click chart context menu (hline /
+remove-all / reset). Copilot renders model markdown (tables/headers) via `lib/md.ts`.
+Rail: dropped the dead Watchlist/Details/Signals tabs, added a real "Recent signals" log.
+All verified in the running app, zero console errors. Commits `0690405`/`f6f393f`/`be1c47c`.
+
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
 2. **Automated trendline detection** → **auto-Fibonacci** → **S/R strength heatmap** → **MTFA overlay** — all share #1's overlay + a swing/pivot engine. (TrendSpider signatures; high edge.)
