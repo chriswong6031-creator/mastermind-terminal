@@ -32,9 +32,9 @@ const cache: Record<string, { ohlc: any; slice: any }> = {};
 const NS = "http://www.w3.org/2000/svg";
 const mk = (tag: string, attrs: Record<string, any>) => { const e = document.createElementNS(NS, tag); for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, String(attrs[k])); return e; };
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false }:
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [] }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean }) {
+    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
   const verdictRef = useRef<HTMLSpanElement>(null);
@@ -103,6 +103,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (indicators.has("ema")) ([[20, c.warn], [50, c.link], [200, "rgba(214,218,227,.4)"]] as [number, string][]).forEach(([p, col]) => { const ln = chart.addSeries(LineSeries, { color: col, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0); ln.setData(toLine(rows, ema(closes, p))); });
       if (indicators.has("bb")) { const basis = sma(closes, 20); const sd = stddev(closes, 20); const up = closes.map((_, i) => (basis[i] != null && sd[i] != null ? basis[i]! + 2 * sd[i]! : null)); const lo = closes.map((_, i) => (basis[i] != null && sd[i] != null ? basis[i]! - 2 * sd[i]! : null)); [up, basis, lo].forEach((arr, j) => { const ln = chart.addSeries(LineSeries, { color: j === 1 ? "rgba(214,218,227,.45)" : "rgba(77,130,255,.55)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0); ln.setData(toLine(rows, arr)); }); }
       if (indicators.has("vwap")) { let cum = 0, cumv = 0; const vw = rows.map((r) => { const tp = (r.h + r.l + r.c) / 3; cum += tp * r.v; cumv += r.v; return cumv ? cum / cumv : null; }); const ln = chart.addSeries(LineSeries, { color: "#e8b339", lineWidth: 1.4 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0); ln.setData(toLine(rows, vw)); }
+
+      // compare overlays — each symbol rebased to the main symbol's first price (relative performance)
+      const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
+      for (let ci = 0; ci < (compare || []).length && ci < 4; ci++) {
+        const cs = compare[ci]; if (!cs || cs === symbol) continue;
+        if (!cache[cs]) { const o = await fetch(`/data/${cs}.json`).then((rr) => (rr.ok ? rr.json() : null)).catch(() => null); cache[cs] = { ohlc: o, slice: null }; }
+        const co = cache[cs]?.ohlc; if (!co?.bars?.length || dead) continue;
+        let crows: Bar[] = co.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
+        crows = resampleTf(crows, timeframe);
+        const cmap: Record<string, number> = {}; for (const cr of crows) cmap[cr.time] = cr.c;
+        let bse = 0; for (const r of rows) { if (cmap[r.time] != null) { bse = cmap[r.time]; break; } }
+        if (!bse) continue; const scl = rows[0].c / bse; let lv: number | null = null;
+        const cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: +(lv * scl).toFixed(2) } : null; }).filter(Boolean);
+        const ln = chart.addSeries(LineSeries, { color: CMP_COLORS[ci % CMP_COLORS.length], lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: cs }, 0);
+        ln.setData(cdata as any);
+      }
 
       const times = rows.map((r) => r.time);
       const lastDate = times[times.length - 1];
@@ -267,7 +283,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     })();
 
     return () => { dead = true; window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); if (winDown) window.removeEventListener("pointerdown", winDown); if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx); ro?.disconnect(); if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; } if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
-  }, [symbol, chartType, timeframe, replayIdx, Array.from(indicators).sort().join(",")]); // eslint-disable-line
+  }, [symbol, chartType, timeframe, replayIdx, Array.from(indicators).sort().join(","), (compare || []).join(",")]); // eslint-disable-line
 
   // re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild)
   useEffect(() => { renderRef.current?.(); const svg = svgRef.current; if (svg) { svg.style.pointerEvents = tool ? "auto" : "none"; svg.style.cursor = tool === "erase" ? "pointer" : tool ? "crosshair" : "default"; } }, [tool, drawings]);

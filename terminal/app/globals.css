@@ -366,3 +366,11 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .ctx-menu>div:hover{background:var(--panel-2);color:var(--text)}
 .ctx-menu .sep{padding:0;height:1px;background:var(--line);margin:4px 4px;pointer-events:none}
 .ctx-menu .sep:hover{background:var(--line)}
+
+/* compare-symbols strip */
+.cmp-strip{display:flex;align-items:center;gap:8px;padding:7px 14px;border-bottom:1px solid var(--line);background:var(--bg);flex-wrap:wrap}
+.cmp-strip .cmp-lbl{font:600 9.5px/1 var(--font-ui);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.cmp-chip{display:inline-flex;align-items:center;gap:7px;height:24px;padding:0 5px 0 10px;border-radius:var(--r-pill);background:var(--panel-2);border:1px solid var(--line);font:600 12px/1 var(--font-num);color:var(--text)}
+.cmp-chip i{width:9px;height:2px;border-radius:1px}
+.cmp-chip button{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;color:var(--muted);font-size:10px}
+.cmp-chip button:hover{color:var(--sell);background:var(--panel-3)}

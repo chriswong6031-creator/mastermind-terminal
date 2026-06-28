@@ -1,10 +1,9 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 const ICON: Record<string, string[]> = {
   chart: ["M3 17l5-6 4 3 4-7 5 9", "M3 21h18"],
-  markets: ["M4 6h16M4 12h16M4 18h10"],
   screener: [], // rects drawn inline
   scripts: ["M8 7l-5 5 5 5M16 7l5 5-5 5"],
   portfolio: ["M21 12a9 9 0 1 1-9-9v9z"],
@@ -19,7 +18,6 @@ function Glyph({ k }: { k: string }) {
 
 const TOP = [
   { k: "chart", label: "Chart", href: "/terminal" },
-  { k: "markets", label: "Markets", href: "/screener" },
   { k: "screener", label: "Screener", href: "/screener" },
   { k: "scripts", label: "Scripts", href: "/scripts" },
   { k: "portfolio", label: "Portfolio", href: "/portfolio" },
@@ -28,21 +26,20 @@ const TOP = [
 
 export function AppNav() {
   const path = usePathname();
+  const router = useRouter();
   const activeKey = path.startsWith("/screener") ? "screener" : path.startsWith("/scripts") ? "scripts"
     : path.startsWith("/portfolio") ? "portfolio" : path.startsWith("/alerts") ? "alerts" : "chart";
+  const openAI = () => { if (path.startsWith("/terminal")) window.dispatchEvent(new CustomEvent("mm:copilot")); else router.push("/terminal?ai=1"); };
   return (
     <nav className="appnav">
       {TOP.map((it) => {
         const on = it.k === activeKey;
-        const inner = (<><Glyph k={it.k} /><span>{it.label}</span></>);
-        return it.href ? (
-          <Link key={it.k} href={it.href} className={`navbtn${on ? " on" : ""}`}>{inner}</Link>
-        ) : (
-          <button key={it.k} className="navbtn">{inner}</button>
+        return (
+          <Link key={it.k} href={it.href} className={`navbtn${on ? " on" : ""}`}><Glyph k={it.k} /><span>{it.label}</span></Link>
         );
       })}
       <div className="gap" />
-      <button className="navbtn"><Glyph k="ai" /><span>AI</span></button>
+      <button className="navbtn" onClick={openAI} title="Mastermind AI"><Glyph k="ai" /><span>AI</span></button>
     </nav>
   );
 }

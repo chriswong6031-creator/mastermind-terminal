@@ -72,6 +72,10 @@ color/delete toolbar over the selection + a right-click chart context menu (hlin
 remove-all / reset). Copilot renders model markdown (tables/headers) via `lib/md.ts`.
 Rail: dropped the dead Watchlist/Details/Signals tabs, added a real "Recent signals" log.
 All verified in the running app, zero console errors. Commits `0690405`/`f6f393f`/`be1c47c`.
+**Follow-up 2 (same day):** copilot now STREAMS token-by-token (SSE in `app/api/copilot`,
+live tool-step chips); **compare-symbols** overlay (rebased lines + legend chips, "Compare"
+toolbar button); nav consistency — removed the duplicate dead "Markets" item and wired the
+dead "AI" nav button to open the copilot (`mm:copilot` event / `?ai=1`). All verified.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)

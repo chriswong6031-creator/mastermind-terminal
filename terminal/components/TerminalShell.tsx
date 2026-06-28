@@ -31,6 +31,7 @@ const TOOLS: [string, string][] = [
 const DETECTORS: [string, string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
 ];
+const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
 
 export default function TerminalShell({ symbols, email, initialSymbol }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string }) {
   const [man, setMan] = useState<Manifest | null>(null);
@@ -57,6 +58,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [livePx, setLivePx] = useState<number | null>(null);
   const [slice, setSlice] = useState<any>(null);
   const [magnet, setMagnet] = useState(false);
+  const [compare, setCompare] = useState<string[]>([]);
+  const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
   const saveT = useRef<any>(null); const nonce = useRef(0);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
@@ -74,6 +77,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     fetch(`/data/${active}.slice.json`).then((r) => (r.ok ? r.json() : null)).then(setSlice).catch(() => {});
   }, [active]);
   useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
+  useEffect(() => { const open = () => setCopilot(true); window.addEventListener("mm:copilot", open); try { if (new URLSearchParams(window.location.search).get("ai") === "1") setCopilot(true); } catch {} return () => window.removeEventListener("mm:copilot", open); }, []);
 
   const changeDrawings = useCallback((d: Drawing[]) => { setDrawings(d); clearTimeout(saveT.current); saveT.current = setTimeout(() => { fetch("/api/drawings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: active, drawings: d }) }).catch(() => {}); }, 600); }, [active]);
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
@@ -116,6 +120,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   async function removeSymbol(sym: string) { setWl((w) => w.filter((s) => s.symbol !== sym)); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }); }
   const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const pick = (sym: string) => { setActive(sym); setReplayOn(false); setReplayIdx(null); setPlaying(false); };
+  const onSearchPick = (sym: string) => { if (searchMode === "compare") { if (sym !== active) setCompare((c) => (c.includes(sym) ? c : [...c, sym].slice(0, 4))); } else pick(sym); };
 
   function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { active, tf, chartType, inds: [...inds], favTF }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
   function loadLayout(l: any) { const c = l.config || {}; if (c.tf) setTf(c.tf); if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (c.active) setActive(c.active); setLayoutOpen(false); }
@@ -173,6 +178,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>Indicators</button>
+            <button className="tbtn" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>Compare</button>
             <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>Detect<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
@@ -190,6 +196,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             <button className="icbtn" title="Snapshot" onClick={() => window.dispatchEvent(new CustomEvent("mm:snapshot"))}><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg></button>
           </div>
         </div>
+
+        {view === "price" && compare.length > 0 && (
+          <div className="cmp-strip">
+            <span className="cmp-lbl">Compare</span>
+            {compare.map((cs, i) => (
+              <span className="cmp-chip" key={cs}><i style={{ background: CMP_COLORS[i % CMP_COLORS.length] }} />{cs}<button title="Remove" onClick={() => setCompare((c) => c.filter((x) => x !== cs))}>✕</button></span>
+            ))}
+          </div>
+        )}
 
         {replayOn && view === "price" && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 14px", borderBottom: "1px solid var(--line)", background: "var(--bg)" }}>
@@ -213,7 +228,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               <div className="sp" />
               <button title="Clear detected" onClick={() => detect("clear")}><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg></button>
             </div>
-            <ChartPanel symbol={active} chartType={chartType} indicators={inds} timeframe={tf} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} tool={tool} drawings={drawings} onDrawingsChange={changeDrawings} detectCmd={detectCmd} magnet={magnet} key={active + tf + chartType} />
+            <ChartPanel symbol={active} chartType={chartType} indicators={inds} timeframe={tf} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} tool={tool} drawings={drawings} onDrawingsChange={changeDrawings} detectCmd={detectCmd} magnet={magnet} compare={compare} key={active + tf + chartType} />
           </div>
         ) : (
           <StrategyTester symbol={active} key={"strat" + active} />
@@ -318,7 +333,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         ); })}
       </div>
 
-      <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} onClose={() => setSearchOpen(false)} onPick={pick} onAdd={addSymbol} />
+      <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} />
       <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} />
     </div>

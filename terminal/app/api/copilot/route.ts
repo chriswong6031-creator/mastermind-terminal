@@ -5,7 +5,6 @@ import path from "path";
 const DATA = path.join(process.cwd(), "public", "data");
 const readJson = async (f: string) => { try { return JSON.parse(await fs.readFile(path.join(DATA, f), "utf8")); } catch { return null; } };
 
-// ---- tools the model can call (each reads the published data plane) ----
 const TOOLS = [
   { type: "function", function: { name: "get_quote", description: "Last price, % change, Golden-Oracle verdict (BUY/SELL), win-rate, profit-factor, CAGR and regime for a ticker.", parameters: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"] } } },
   { type: "function", function: { name: "get_intel", description: "Macro analyzer intelligence for a ticker: AI verdict, conviction score, regime, gamma walls, analyst revisions, smart-money trend.", parameters: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"] } } },
@@ -35,33 +34,50 @@ export async function POST(req: Request) {
   const key = process.env.DEEPSEEK_API_KEY;
   const base = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
   const { messages = [], symbol } = await req.json();
-  if (!key) return NextResponse.json({ reply: "The AI copilot isn't configured (no model key). The deterministic read still works from the detail panel.", steps: [] });
+  if (!key) return NextResponse.json({ reply: "The AI copilot isn't configured (no model key).", steps: [] });
 
   const convo: any[] = [{ role: "system", content: SYSTEM + (symbol ? ` The active chart symbol is ${symbol}.` : "") }, ...messages];
-  const steps: { tool: string; args: any }[] = [];
-  try {
-    for (let i = 0; i < 5; i++) {
-      const res = await fetch(`${base}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model: "deepseek-chat", messages: convo, tools: TOOLS, tool_choice: "auto", temperature: 0.3, max_tokens: 700 }),
-      });
-      if (!res.ok) return NextResponse.json({ reply: `Model error (${res.status}). Try again.`, steps });
-      const data = await res.json();
-      const msg = data.choices?.[0]?.message;
-      if (!msg) return NextResponse.json({ reply: "No response from model.", steps });
-      convo.push(msg);
-      const calls = msg.tool_calls;
-      if (!calls || !calls.length) return NextResponse.json({ reply: msg.content || "", steps });
-      for (const call of calls) {
-        let args: any = {}; try { args = JSON.parse(call.function.arguments || "{}"); } catch {}
-        steps.push({ tool: call.function.name, args });
-        const result = await runTool(call.function.name, args);
-        convo.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
-      }
-    }
-    return NextResponse.json({ reply: "(stopped after tool budget — ask a narrower question)", steps });
-  } catch (e: any) {
-    return NextResponse.json({ reply: `Copilot error: ${e?.message || "unknown"}.`, steps });
-  }
+  const E = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (o: any) => { try { controller.enqueue(E.encode(`data: ${JSON.stringify(o)}\n\n`)); } catch {} };
+      try {
+        for (let iter = 0; iter < 6; iter++) {
+          const res = await fetch(`${base}/chat/completions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+            body: JSON.stringify({ model: "deepseek-chat", messages: convo, tools: TOOLS, tool_choice: "auto", temperature: 0.3, max_tokens: 900, stream: true }),
+          });
+          if (!res.ok || !res.body) { send({ type: "error", message: `Model error (${res.status})` }); break; }
+          const reader = res.body.getReader(); const dec = new TextDecoder();
+          let buf = "", content = "", finish: string | null = null; const calls: Record<number, { id: string; name: string; args: string }> = {};
+          for (;;) {
+            const { done, value } = await reader.read(); if (done) break;
+            buf += dec.decode(value, { stream: true });
+            const lines = buf.split("\n"); buf = lines.pop() || "";
+            for (const line of lines) {
+              const t = line.trim(); if (!t.startsWith("data:")) continue;
+              const data = t.slice(5).trim(); if (!data || data === "[DONE]") continue;
+              let j: any; try { j = JSON.parse(data); } catch { continue; }
+              const ch = j.choices?.[0]; if (!ch) continue; const d = ch.delta || {};
+              if (d.content) { content += d.content; send({ type: "token", text: d.content }); }
+              if (d.tool_calls) for (const tc of d.tool_calls) { const i = tc.index ?? 0; const c = calls[i] || (calls[i] = { id: "", name: "", args: "" }); if (tc.id) c.id = tc.id; if (tc.function?.name) c.name = tc.function.name; if (tc.function?.arguments) c.args += tc.function.arguments; }
+              if (ch.finish_reason) finish = ch.finish_reason;
+            }
+          }
+          const tcs = Object.values(calls);
+          if (finish === "tool_calls" || tcs.length) {
+            convo.push({ role: "assistant", content: content || null, tool_calls: tcs.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args } })) });
+            for (const c of tcs) { let a: any = {}; try { a = JSON.parse(c.args || "{}"); } catch {} send({ type: "step", tool: c.name, args: a }); const result = await runTool(c.name, a); convo.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify(result) }); }
+            continue;
+          }
+          break; // got a final text answer
+        }
+      } catch (e: any) { send({ type: "error", message: e?.message || "copilot error" }); }
+      finally { try { controller.enqueue(E.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`)); } catch {} controller.close(); }
+    },
+  });
+
+  return new Response(stream, { headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive" } });
 }

@@ -23,8 +23,24 @@ export default function CopilotPanel({ open, symbol, row, onClose }:
     setMsgs(next); setBusy(true);
     try {
       const r = await fetch("/api/copilot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, messages: next.map((m) => ({ role: m.role, content: m.content })) }) });
-      const d = await r.json();
-      setMsgs((m) => [...m, { role: "assistant", content: d.reply || "(no reply)", steps: d.steps }]);
+      const ct = r.headers.get("content-type") || "";
+      if (!r.body || !ct.includes("event-stream")) { const d = await r.json(); setMsgs((m) => [...m, { role: "assistant", content: d.reply || "(no reply)", steps: d.steps }]); setBusy(false); return; }
+      setMsgs((m) => [...m, { role: "assistant", content: "", steps: [] }]);
+      const apply = (fn: (l: Msg) => Msg) => setMsgs((m) => { const c = [...m]; c[c.length - 1] = fn(c[c.length - 1]); return c; });
+      const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n"); buf = lines.pop() || "";
+        for (const line of lines) {
+          const s = line.trim(); if (!s.startsWith("data:")) continue;
+          const data = s.slice(5).trim(); if (!data) continue;
+          let j: any; try { j = JSON.parse(data); } catch { continue; }
+          if (j.type === "token") apply((l) => ({ ...l, content: l.content + j.text }));
+          else if (j.type === "step") apply((l) => ({ ...l, steps: [...(l.steps || []), { tool: j.tool, args: j.args }] }));
+          else if (j.type === "error") apply((l) => ({ ...l, content: l.content + (l.content ? "\n\n" : "") + "_" + j.message + "_" }));
+        }
+      }
     } catch { setMsgs((m) => [...m, { role: "assistant", content: "Copilot unavailable right now." }]); }
     setBusy(false);
   }
@@ -53,11 +69,11 @@ export default function CopilotPanel({ open, symbol, row, onClose }:
               <div className="steps">{m.steps.map((s, j) => <span key={j} className="step"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10" /></svg>{s.tool}{s.args?.symbol ? ` · ${s.args.symbol}` : ""}</span>)}</div>
             )}
             {m.role === "assistant"
-              ? <div className="bub md" dangerouslySetInnerHTML={{ __html: mdToHtml(m.content) }} />
+              ? (m.content ? <div className="bub md" dangerouslySetInnerHTML={{ __html: mdToHtml(m.content) }} /> : <div className="bub typing">Analyzing<span>…</span></div>)
               : <div className="bub">{m.content}</div>}
           </div>
         ))}
-        {busy && <div className="cmsg assistant"><div className="bub typing">Analyzing<span>…</span></div></div>}
+        {busy && msgs[msgs.length - 1]?.role !== "assistant" && <div className="cmsg assistant"><div className="bub typing">Analyzing<span>…</span></div></div>}
         {msgs.length === 0 && <div className="suggest">{suggestions.map((s, i) => <button key={i} onClick={() => send(s)}>{s}</button>)}</div>}
       </div>
       <div className="ask">
