@@ -48,12 +48,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const onChangeRef = useRef(onDrawingsChange);
   const magnetRef = useRef(magnet);
   const barRef = useRef<HTMLDivElement | null>(null);
+  const ctxRef = useRef<HTMLDivElement | null>(null);
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet;
 
   useEffect(() => {
     const el = ref.current; if (!el) return;
     let ro: ResizeObserver | null = null, dead = false;
     let onKey: ((e: KeyboardEvent) => void) | null = null;
+    let onCtx: ((e: MouseEvent) => void) | null = null, winDown: (() => void) | null = null;
     const snap = () => { try { const c = chartRef.current!.takeScreenshot(); const a = document.createElement("a"); a.href = c.toDataURL(); a.download = `${symbol}.png`; a.click(); } catch {} };
     window.addEventListener("mm:snapshot", snap);
 
@@ -192,6 +194,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (sel && d && d.points[0]) { const ax = xOf(d.points[0].t), ay = yOf(d.points[0].p); if (ax != null && ay != null) { bar.style.display = "flex"; bar.style.left = Math.max(4, Math.min(el!.clientWidth - 150, ax - 8)) + "px"; bar.style.top = Math.max(4, ay - 42) + "px"; return; } }
         bar.style.display = "none";
       };
+      // right-click context menu
+      const ctxm = document.createElement("div"); ctxm.className = "ctx-menu"; ctxm.style.display = "none"; wrap.appendChild(ctxm); ctxRef.current = ctxm;
+      ctxm.innerHTML = `<div data-a="hline">Horizontal line here</div><div data-a="clear">Remove all drawings</div><div class="sep"></div><div data-a="reset">Reset chart view</div>`;
+      let ctxPt: { t: string; p: number } = { t: "", p: 0 };
+      const hideCtx = () => { if (ctxRef.current) ctxRef.current.style.display = "none"; };
+      onCtx = (e: MouseEvent) => { e.preventDefault(); const r = wrap.getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top; ctxPt = snap(x, y); ctxm.style.left = Math.min(x, el!.clientWidth - 180) + "px"; ctxm.style.top = Math.min(y, el!.clientHeight - 130) + "px"; ctxm.style.display = "block"; };
+      ctxm.addEventListener("pointerdown", (e) => {
+        e.stopPropagation(); const a = (e.target as HTMLElement).getAttribute("data-a"); hideCtx();
+        if (a === "hline") onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "hline", points: [ctxPt] }]);
+        else if (a === "clear") onChangeRef.current?.([]);
+        else if (a === "reset") { try { chart.timeScale().fitContent(); } catch {} }
+      });
+      wrap.addEventListener("contextmenu", onCtx);
+      winDown = hideCtx; window.addEventListener("pointerdown", hideCtx);
       const renderDraw = () => {
         const svgEl = svgRef.current; if (!svgEl) return;
         while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
@@ -250,7 +266,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       ro.observe(el);
     })();
 
-    return () => { dead = true; window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); ro?.disconnect(); if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
+    return () => { dead = true; window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); if (winDown) window.removeEventListener("pointerdown", winDown); if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx); ro?.disconnect(); if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; } if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
   }, [symbol, chartType, timeframe, replayIdx, Array.from(indicators).sort().join(",")]); // eslint-disable-line
 
   // re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild)

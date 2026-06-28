@@ -359,3 +359,10 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .draw-bar .bar-sep{width:1px;height:15px;background:var(--line-3);margin:0 1px}
 .draw-bar .bar-del{color:var(--muted);font-size:12px;line-height:1;padding:2px 5px;border-radius:var(--r);cursor:pointer}
 .draw-bar .bar-del:hover{color:var(--sell);background:var(--panel-2)}
+
+/* right-click chart context menu */
+.ctx-menu{position:absolute;z-index:8;min-width:174px;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:5px;box-shadow:0 14px 32px -12px rgba(0,0,0,.7)}
+.ctx-menu>div{padding:7px 11px;border-radius:var(--r);font-size:12.5px;color:var(--text-2);cursor:pointer}
+.ctx-menu>div:hover{background:var(--panel-2);color:var(--text)}
+.ctx-menu .sep{padding:0;height:1px;background:var(--line);margin:4px 4px;pointer-events:none}
+.ctx-menu .sep:hover{background:var(--line)}
