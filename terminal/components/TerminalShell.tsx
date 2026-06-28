@@ -13,6 +13,7 @@ import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
 import SettingsMenu from "@/components/SettingsMenu";
+import { useT } from "@/lib/i18n";
 
 type Row = { name: string; sec: string; col: string; mkt?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -71,6 +72,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
   const nonce = useRef(0);
   const wsMounted = useRef(false);
+  const t = useT();
   // shared per-symbol drawing store (lifted out of ChartPane so multiple panes on the same
   // symbol share one set instead of clobbering each other through the replace-all PUT)
   const [drawStore, setDrawStore] = useState<Record<string, Drawing[]>>({});
@@ -264,8 +266,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
       <section className="workspace">
         <div className="chart-tabs">
-          <div className={`ct${view === "price" ? " on" : ""}`} onClick={() => setView("price")}>Price chart</div>
-          <div className={`ct${view === "strategy" ? " on" : ""}`} onClick={() => setView("strategy")}>Strategy tester</div>
+          <div className={`ct${view === "price" ? " on" : ""}`} onClick={() => setView("price")}>{t("priceChart")}</div>
+          <div className={`ct${view === "strategy" ? " on" : ""}`} onClick={() => setView("strategy")}>{t("strategyTester")}</div>
           <div className="tools">
             <div className="seg pophost">
               {favTF.map((t) => <button key={t} className={tf === t ? "on" : ""} disabled={!FUNCTIONAL.has(t)} style={!FUNCTIONAL.has(t) ? { opacity: .4 } : {}} onClick={() => FUNCTIONAL.has(t) && setTf(t)}>{t}</button>)}
@@ -284,19 +286,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 {CHART_TYPES.map(([k, l]) => <div key={k} className="set-row" style={chartType === k ? { color: "var(--brand-2)" } : {}} onClick={() => { setChartType(k); setCtOpen(false); }}>{l}</div>)}
               </div>
             </div>
-            <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>Indicators</button>
-            <button className="tbtn" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>Compare</button>
+            <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
+            <button className="tbtn" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>{t("compare")}</button>
             <div className="seg" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
             <button className="tbtn" title="Multi-timeframe — the active symbol at D / 3D / W / 1M" onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>MTF</button>
-            {panes.length > 1 && <button className={`tbtn${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>Sync</button>}
+            {panes.length > 1 && <button className={`tbtn${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
             <div className="pophost">
-              <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>Detect<span style={{ color: "var(--muted)" }}>▾</span></button>
+              <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
                 {DETECTORS.map(([k, l]) => <div key={k} className="menu-row" onClick={() => detect(k)}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{l}</div>)}
               </div>
             </div>
             <div className="pophost">
-              <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setLayoutOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>Layouts<span style={{ color: "var(--muted)" }}>▾</span></button>
+              <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setLayoutOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${layoutOpen ? " show" : ""}`} style={{ top: 32, right: 0, minWidth: 230 }} onClick={(e) => e.stopPropagation()}>
                 <div className="menu-save"><input placeholder="Save current as…" value={layoutName} onChange={(e) => setLayoutName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLayout(); }} /><button onClick={saveLayout}>Save</button></div>
                 {layouts.length === 0 && <div className="menu-row" style={{ color: "var(--text-dim)" }}>No saved layouts</div>}
@@ -309,7 +311,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
         {view === "price" && compare.filter((c) => c !== active).length > 0 && (
           <div className="cmp-strip">
-            <span className="cmp-lbl">Compare</span>
+            <span className="cmp-lbl">{t("compare")}</span>
             {compare.filter((c) => c !== active).map((cs, i) => (
               <span className="cmp-chip" key={cs}><i style={{ background: CMP_COLORS[i % CMP_COLORS.length] }} />{cs}<button title="Remove" onClick={() => setCompare((c) => c.filter((x) => x !== cs))}>✕</button></span>
             ))}
