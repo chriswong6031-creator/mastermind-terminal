@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 
-type Row = { name: string; col: string; verdict: string | null };
+type Row = { name: string; col: string; verdict: string | null; mkt?: string };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 
 export default function SearchModal({ open, seed, manifest, inWatchlist, onClose, onPick, onAdd }:
@@ -38,6 +38,7 @@ export default function SearchModal({ open, seed, manifest, inWatchlist, onClose
                 <span className="ic" style={{ background: r.col }}>{s[0]}</span>
                 <div><div className="tk">{s}</div><div className="nm">{r.name}</div></div>
                 <div className="vr">
+                  {r.mkt && <span className="mkt">{r.mkt}</span>}
                   {r.verdict && <span className="verd" style={{ color: buy ? "var(--buy)" : "var(--sell)", background: buy ? "rgba(38,194,129,.13)" : "rgba(240,86,107,.13)" }}>{r.verdict}</span>}
                   <button className={`add${added ? " added" : ""}`} title={added ? "In watchlist" : "Add to watchlist"} onClick={(e) => { e.stopPropagation(); onAdd(s); }}>
                     {added ? <svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg> : <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>}
