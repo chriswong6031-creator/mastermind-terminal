@@ -48,7 +48,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
             <thead><tr><th>Symbol</th><th>Last</th><th>Day</th><th>Signal</th><th>Regime</th><th>Win rate</th><th>Profit factor</th><th>CAGR</th><th>Suggested tilt</th></tr></thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--muted)", padding: "44px 16px", fontSize: 13, cursor: "default" }}>
+                <tr className="empty-row"><td colSpan={9} style={{ textAlign: "center", color: "var(--muted)", padding: "44px 16px", fontSize: 13 }}>
                   {!loaded ? "Loading book…" : "No names in your watchlist yet."}
                 </td></tr>
               )}

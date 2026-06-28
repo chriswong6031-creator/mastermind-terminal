@@ -204,7 +204,8 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .sres .r.sel,.sres .r:hover{background:var(--panel-2)}
 .sres .r .ic{width:26px;height:26px;border-radius:50%;flex:none;display:grid;place-items:center;font:800 10px/1 var(--font-ui);color:#04130a}
 .sres .r .tk{font-weight:600;font-size:13.5px} .sres .r .nm{font-size:11.5px;color:var(--muted)}
-.sres .r .vr{margin-left:auto;display:flex;align-items:center;gap:10px}
+.sres .r .vr{margin-left:auto;display:flex;align-items:center;gap:8px}
+.sres .r .mkt{font:600 9.5px/1.4 var(--font-ui);color:var(--text-dim);letter-spacing:.05em;border:1px solid var(--line);border-radius:var(--r);padding:2px 6px;white-space:nowrap;text-transform:uppercase}
 .sres .r .verd{font:700 10px/1.4 var(--font-ui);padding:2px 7px;border-radius:var(--r)}
 .sres .r .add{width:26px;height:26px;border-radius:var(--r);display:grid;place-items:center;color:var(--muted)}
 .sres .r .add svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2}.sres .r .add.added{color:var(--buy)}
@@ -275,6 +276,8 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .ptable th:first-child{text-align:left}
 .ptable td{text-align:right;padding:11px 15px;border-bottom:1px solid var(--line-2);font-variant-numeric:tabular-nums}.ptable td:first-child{text-align:left}
 .ptable tbody tr{cursor:pointer;transition:background var(--t)}.ptable tbody tr:hover{background:var(--panel-2)}
+.ptable tbody tr.empty-row,table.scr tbody tr.empty-row{cursor:default}
+.ptable tbody tr.empty-row:hover,table.scr tbody tr.empty-row:hover{background:transparent}
 .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
 .kpi{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:14px 16px}.kpi small{font:600 10px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.kpi b{display:block;font:700 22px/1.1 var(--font-ui);margin-top:7px;font-variant-numeric:tabular-nums}
 

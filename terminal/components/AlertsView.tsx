@@ -53,13 +53,14 @@ export default function AlertsView({ email }: { email: string }) {
     }
   }
   async function del(id: string) {
-    const prev = alerts;
+    const removed = alerts.find((x) => x.id === id);
     setAlerts((a) => a.filter((x) => x.id !== id));     // optimistic
     try {
       const r = await fetch(`/api/alerts?id=${id}`, { method: "DELETE" });
       if (!r.ok) throw new Error();
     } catch {
-      setAlerts(prev);                                   // rollback on failure
+      // re-insert ONLY the failed item (functional update preserves any concurrent deletes)
+      if (removed) setAlerts((a) => (a.some((x) => x.id === removed.id) ? a : [removed, ...a]));
       setErr("Could not delete that alert.");
     }
   }

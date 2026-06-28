@@ -84,7 +84,7 @@ export default function ScreenerView({ email }: { email: string }) {
             </tr></thead>
             <tbody>
               {view.length === 0 && (
-                <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--muted)", padding: "44px 16px", fontSize: 13, cursor: "default" }}>
+                <tr className="empty-row"><td colSpan={9} style={{ textAlign: "center", color: "var(--muted)", padding: "44px 16px", fontSize: 13 }}>
                   {!loaded ? "Loading scan…" : err ? "Could not load the scan." : "No symbols match these filters."}
                 </td></tr>
               )}

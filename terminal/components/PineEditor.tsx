@@ -39,7 +39,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
   // close the script picker on any outside click
   useEffect(() => { if (!picker) return; const close = () => setPicker(false); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [picker]);
 
-  const lines = useMemo(() => src.replace(/\n$/, "").split("\n"), [src]);
+  const lines = useMemo(() => src.split("\n"), [src]);   // mirror the textarea 1:1 (incl. a trailing empty line)
   const inputs = Object.entries(params);
   const dirty = !!active && (src !== active.source || JSON.stringify(params) !== JSON.stringify(active.params));
   const isOracle = /oracle/i.test(active?.name || "");

@@ -12,7 +12,7 @@ import SeasonalityCard from "@/components/SeasonalityCard";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 
-type Row = { name: string; sec: string; col: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
+type Row = { name: string; sec: string; col: string; mkt?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
 
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
@@ -41,6 +41,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [panes, setPanes] = useState<string[]>([seed0]);
   const [activePane, setActivePane] = useState(0);
   const [sync, setSync] = useState(true);
+  const [split, setSplit] = useState(1);   // the split the user requested (panes.length may be smaller after dedup)
   const active = panes[activePane] ?? panes[0] ?? seed0;
   const [tf, setTf] = useState("D");
   const [chartType, setChartType] = useState("candles");
@@ -86,6 +87,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
   function setGrid(n: number) {
+    setSplit(n);
     setPanes((p) => {
       if (n <= p.length) return p.slice(0, n);
       const used = new Set(p); const extra: string[] = [];
@@ -143,7 +145,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { if (sym !== active) setCompare((c) => (c.includes(sym) ? c : [...c, sym].slice(0, 4))); } else pick(sym); };
 
   function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, activePane, tf, chartType, inds: [...inds], favTF, compare }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
-  function loadLayout(l: any) { const c = l.config || {}; if (c.tf) setTf(c.tf); if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (Array.isArray(c.panes) && c.panes.length) { setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); } else if (c.active) { setPanes([c.active]); setActivePane(0); } setLayoutOpen(false); }
+  function loadLayout(l: any) { const c = l.config || {}; if (c.tf) setTf(c.tf); if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (Array.isArray(c.panes) && c.panes.length) { setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); setSplit(c.panes.length >= 4 ? 4 : c.panes.length >= 2 ? 2 : 1); } else if (c.active) { setPanes([c.active]); setActivePane(0); setSplit(1); } setLayoutOpen(false); }
   function delLayout(id: string) { fetch(`/api/layouts?id=${id}`, { method: "DELETE" }).then(() => setLayouts((ls) => ls.filter((x) => x.id !== id))); }
 
   const colList = () => { const a: [string, string][] = [["last", "Last"]]; if (set.cols.change) a.push(["change", "Chg"]); if (set.cols.changePct) a.push(["changePct", "Chg%"]); if (set.cols.volume) a.push(["volume", "Vol"]); return a; };
@@ -199,7 +201,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>Indicators</button>
             <button className="tbtn" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>Compare</button>
-            <div className="seg" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={panes.length === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
+            <div className="seg" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
             {panes.length > 1 && <button className={`tbtn${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>Sync</button>}
             <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>Detect<span style={{ color: "var(--muted)" }}>▾</span></button>
@@ -303,7 +305,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="board detail-board">
             <div className="card">
               <div className="hd"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
-                <div><div className="nm">{m?.name || active}</div><div className="ex">{m?.sec || ""} · Polygon</div></div>
+                <div><div className="nm">{m?.name || active}</div><div className="ex">{m?.mkt || m?.sec || ""}</div></div>
                 <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</div></div></div>
               <div className="regime" style={m?.regimeBull ? {} : { color: "var(--warn)" }}><i style={m?.regimeBull ? {} : { background: "var(--warn)" }} />{m?.regimeBull ? "Uptrend regime · above 200-EMA" : "Mixed regime · watch trend"}</div>
               <div className="kv"><span className="k">Open</span><span className="v">{fmt(m?.open, m && m.last < 10 ? 4 : 2)}</span></div>
