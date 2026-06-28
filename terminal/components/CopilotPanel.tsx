@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { mdToHtml } from "@/lib/md";
 
 type Row = { name: string; last: number; chg: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Step = { tool: string; args: any };
@@ -51,7 +52,9 @@ export default function CopilotPanel({ open, symbol, row, onClose }:
             {m.steps && m.steps.length > 0 && (
               <div className="steps">{m.steps.map((s, j) => <span key={j} className="step"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10" /></svg>{s.tool}{s.args?.symbol ? ` · ${s.args.symbol}` : ""}</span>)}</div>
             )}
-            <div className="bub">{m.content}</div>
+            {m.role === "assistant"
+              ? <div className="bub md" dangerouslySetInnerHTML={{ __html: mdToHtml(m.content) }} />
+              : <div className="bub">{m.content}</div>}
           </div>
         ))}
         {busy && <div className="cmsg assistant"><div className="bub typing">Analyzing<span>…</span></div></div>}

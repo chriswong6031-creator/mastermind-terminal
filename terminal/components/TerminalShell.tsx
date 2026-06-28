@@ -55,6 +55,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [intel, setIntel] = useState<any>(null);
   const [layouts, setLayouts] = useState<any[]>([]); const [layoutOpen, setLayoutOpen] = useState(false); const [layoutName, setLayoutName] = useState("");
   const [livePx, setLivePx] = useState<number | null>(null);
+  const [slice, setSlice] = useState<any>(null);
+  const [magnet, setMagnet] = useState(false);
   const saveT = useRef<any>(null); const nonce = useRef(0);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
@@ -66,9 +68,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
 
   // per-symbol drawings + intel; layouts once
-  useEffect(() => { setDrawings([]); setIntel(null); setLivePx(null);
+  useEffect(() => { setDrawings([]); setIntel(null); setLivePx(null); setSlice(null);
     fetch(`/api/drawings?symbol=${active}`).then((r) => r.json()).then((d) => setDrawings(d.drawings || [])).catch(() => {});
     fetch(`/data/${active}.intel.json`).then((r) => (r.ok ? r.json() : null)).then(setIntel).catch(() => {});
+    fetch(`/data/${active}.slice.json`).then((r) => (r.ok ? r.json() : null)).then(setSlice).catch(() => {});
   }, [active]);
   useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
 
@@ -206,10 +209,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               {TOOLS.map(([id, d], i) => (
                 <button key={id} className={(tool === id || (id === "cursor" && !tool)) ? "on" : ""} title={id} onClick={() => setTool(id === "cursor" ? null : id)}><svg viewBox="0 0 24 24"><path d={d} /></svg></button>
               ))}
+              <button className={magnet ? "on" : ""} title="Magnet — snap to OHLC" onClick={() => setMagnet((mg) => !mg)}><svg viewBox="0 0 24 24"><path d="M6 4v7a6 6 0 0 0 12 0V4h-4v7a2 2 0 0 1-4 0V4z" /></svg></button>
               <div className="sp" />
               <button title="Clear detected" onClick={() => detect("clear")}><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg></button>
             </div>
-            <ChartPanel symbol={active} chartType={chartType} indicators={inds} timeframe={tf} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} tool={tool} drawings={drawings} onDrawingsChange={changeDrawings} detectCmd={detectCmd} key={active + tf + chartType} />
+            <ChartPanel symbol={active} chartType={chartType} indicators={inds} timeframe={tf} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} tool={tool} drawings={drawings} onDrawingsChange={changeDrawings} detectCmd={detectCmd} magnet={magnet} key={active + tf + chartType} />
           </div>
         ) : (
           <StrategyTester symbol={active} key={"strat" + active} />
@@ -217,7 +221,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       </section>
 
       <aside className="rail">
-        <div className="rail-tabs"><div className="t on">Watchlist</div><div className="t">Details</div><div className="t">Signals</div></div>
         <div className="rail-body">
           <div className="board wl-board">
             <div className="wl-bar pophost">
@@ -286,6 +289,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                     {ic.analyst?.est_chg_90d != null && <span className="ip"><i style={{ background: "var(--up)" }} />Rev +{Number(ic.analyst.est_chg_90d).toFixed(0)}%</span>}
                     {ic.smart_money?.trend && <span className="ip"><i style={{ background: ic.smart_money.trend === "accumulating" ? "var(--up)" : "var(--muted)" }} />{ic.smart_money.trend}</span>}
                     {itape.short_pct != null && <span className="ip"><i style={{ background: "var(--muted)" }} />Short {Number(itape.short_pct).toFixed(1)}%</span>}
+                  </div>
+                </div>
+              )}
+
+              {slice?.indicator?.signals?.length > 0 && (
+                <div className="intel">
+                  <div className="ih"><svg viewBox="0 0 24 24" style={{ width: 13, height: 13, stroke: "var(--brand-2)", fill: "none", strokeWidth: 1.8 }}><path d="M3 17l5-5 4 4 8-8" /></svg>Recent signals<span className="src">oracle</span></div>
+                  <div className="sig-log">
+                    {slice.indicator.signals.slice(-6).reverse().map((s: any, i: number) => { const b = s.type === "BUY" || s.type === "REBUY"; return (
+                      <div className="sig-row" key={i}><span className={`sig-t ${b ? "buy" : "sell"}`}>{s.type}</span><span className="sig-d">{s.ts}</span><span className="sig-p num">{typeof s.price === "number" ? s.price.toFixed(2) : "—"}</span></div>
+                    ); })}
                   </div>
                 </div>
               )}

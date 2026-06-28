@@ -32,9 +32,9 @@ const cache: Record<string, { ohlc: any; slice: any }> = {};
 const NS = "http://www.w3.org/2000/svg";
 const mk = (tag: string, attrs: Record<string, any>) => { const e = document.createElementNS(NS, tag); for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, String(attrs[k])); return e; };
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null }:
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd }) {
+    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
   const verdictRef = useRef<HTMLSpanElement>(null);
@@ -46,11 +46,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const drawRef = useRef<Drawing[]>(drawings);
   const toolRef = useRef<string | null>(tool);
   const onChangeRef = useRef(onDrawingsChange);
-  drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange;
+  const magnetRef = useRef(magnet);
+  drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet;
 
   useEffect(() => {
     const el = ref.current; if (!el) return;
     let ro: ResizeObserver | null = null, dead = false;
+    let onKey: ((e: KeyboardEvent) => void) | null = null;
     const snap = () => { try { const c = chartRef.current!.takeScreenshot(); const a = document.createElement("a"); a.href = c.toDataURL(); a.download = `${symbol}.png`; a.click(); } catch {} };
     window.addEventListener("mm:snapshot", snap);
 
@@ -129,43 +131,49 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const dcol = (d: Drawing) => d.color?.startsWith("var(") ? css(d.color.slice(4, -1)) : (d.color || c.brand2);
       const xOf = (t: string) => chart.timeScale().timeToCoordinate(t as any) as number | null;
       const yOf = (p: number) => priceS.priceToCoordinate(p) as number | null;
+      const barIndex = (t: string) => { const b = barsRef.current; for (let k = 0; k < b.length; k++) if (b[k].time === t) return k; return -1; };
       const snap = (px: number, py: number) => {
         const bars = barsRef.current; let bt = bars[bars.length - 1]?.time, bd = 1e18;
         for (const b of bars) { const xc = xOf(b.time); if (xc == null) continue; const dd = Math.abs(xc - px); if (dd < bd) { bd = dd; bt = b.time; } }
-        const p = priceS.coordinateToPrice(py) as number | null;
-        return { t: bt, p: p == null ? bars[bars.length - 1].c : +p.toFixed(prec) } as { t: string; p: number };
+        let p = priceS.coordinateToPrice(py) as number | null; if (p == null) p = bars[bars.length - 1].c;
+        if (magnetRef.current) { const bar = bars[barIndex(bt)]; if (bar) { const cand = [bar.o, bar.h, bar.l, bar.c]; p = cand.reduce((a, v) => Math.abs(v - (p as number)) < Math.abs(a - (p as number)) ? v : a, cand[0]); } }
+        return { t: bt, p: +(p as number).toFixed(prec) } as { t: string; p: number };
       };
       let pending: { kind: string; a: { t: string; p: number } } | null = null;
+      let sel: string | null = null;
 
       function shape(d: Drawing, preview = false) {
-        const col = dcol(d); const W = el!.clientWidth, op = preview ? 0.7 : 1;
-        const g = mk("g", { "data-id": d.id, opacity: op });
+        const col = dcol(d); const W = el!.clientWidth, op = preview ? 0.7 : 1; const on = d.id === sel && !preview;
+        const g = mk("g", { "data-id": d.id, opacity: op, "pointer-events": preview ? "none" : "all", style: "cursor:pointer" });
+        const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 12 }));
+        const grip = (pts: { x: number; y: number }[]) => { if (on) pts.forEach((p) => g.appendChild(mk("circle", { cx: p.x, cy: p.y, r: 4.5, fill: "var(--bg)", stroke: col, "stroke-width": 2 }))); };
         const A = d.points[0], B = d.points[1];
         const ax = A ? xOf(A.t) : null, ay = A ? yOf(A.p) : null;
         if (d.kind === "hline") {
           if (ay == null) return g;
-          const sw = d.meta && (d.meta as any).strength ? 0.4 + 0.9 * (d.meta as any).strength : 1.3;
+          const sw = (d.meta && (d.meta as any).strength ? 0.4 + 1.0 * (d.meta as any).strength : 1.3) + (on ? 1 : 0);
           g.appendChild(mk("line", { x1: 0, y1: ay, x2: W, y2: ay, stroke: col, "stroke-width": sw, "stroke-dasharray": d.auto ? "5 4" : "" }));
+          fat(0, ay, W, ay);
           const label = (d.meta as any)?.label || A.p.toFixed(prec);
           const tx = mk("text", { x: W - 6, y: ay - 4, fill: col, "font-size": 10, "text-anchor": "end", "font-family": "var(--font-num)" }); tx.textContent = String(label);
-          g.appendChild(tx); return g;
+          g.appendChild(tx); grip([{ x: W / 2, y: ay }]); return g;
         }
         const bx = B ? xOf(B.t) : null, by = B ? yOf(B.p) : null;
-        if (d.kind === "text") { if (ax == null || ay == null) return g; const tx = mk("text", { x: ax, y: ay, fill: col, "font-size": 12, "font-family": "var(--font-ui)" }); tx.textContent = d.text || "text"; g.appendChild(tx); return g; }
+        if (d.kind === "text") { if (ax == null || ay == null) return g; g.appendChild(mk("rect", { x: ax - 3, y: ay - 13, width: Math.max(40, (d.text || "").length * 7), height: 18, fill: "transparent" })); const tx = mk("text", { x: ax, y: ay, fill: col, "font-size": 12, "font-family": "var(--font-ui)" }); tx.textContent = d.text || "text"; g.appendChild(tx); grip([{ x: ax, y: ay - 6 }]); return g; }
         if (ax == null || ay == null || bx == null || by == null) return g;
         if (d.kind === "trendline" || d.kind === "ray" || d.kind === "measure") {
           let ex = bx, ey = by;
           if (d.kind === "ray" && bx !== ax) { const m = (by - ay) / (bx - ax); ex = W; ey = ay + m * (W - ax); }
-          g.appendChild(mk("line", { x1: ax, y1: ay, x2: ex, y2: ey, stroke: col, "stroke-width": 1.6 }));
-          [{ x: ax, y: ay }, { x: bx, y: by }].forEach((pt) => g.appendChild(mk("circle", { cx: pt.x, cy: pt.y, r: 3, fill: col })));
-          if (d.kind === "measure") { const pc = ((B.p - A.p) / A.p) * 100; const lab = mk("text", { x: (ax + bx) / 2, y: Math.min(ay, by) - 7, fill: col, "font-size": 11, "text-anchor": "middle", "font-family": "var(--font-num)" }); lab.textContent = `${pc >= 0 ? "+" : ""}${pc.toFixed(2)}%`; g.appendChild(lab); }
-          return g;
+          g.appendChild(mk("line", { x1: ax, y1: ay, x2: ex, y2: ey, stroke: col, "stroke-width": on ? 2.4 : 1.6 }));
+          fat(ax, ay, ex, ey);
+          if (d.kind === "measure") { const pc = ((B.p - A.p) / A.p) * 100; const di = Math.abs(barIndex(B.t) - barIndex(A.t)); const lab = mk("text", { x: (ax + bx) / 2, y: Math.min(ay, by) - 8, fill: col, "font-size": 11, "text-anchor": "middle", "font-family": "var(--font-num)" }); lab.textContent = `${pc >= 0 ? "+" : ""}${pc.toFixed(2)}% · ${di} bars`; g.appendChild(lab); }
+          grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
         }
-        if (d.kind === "rect") { g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay), fill: col, "fill-opacity": 0.08, stroke: col, "stroke-width": 1 })); return g; }
+        if (d.kind === "rect") { g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay), fill: col, "fill-opacity": 0.08, stroke: col, "stroke-width": on ? 2 : 1 })); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g; }
         if (d.kind === "fib") {
           const hi = Math.max(A.p, B.p), lo = Math.min(A.p, B.p), x1 = Math.min(ax, bx);
-          FIB.forEach((f) => { const price = hi - (hi - lo) * f; const y = yOf(price); if (y == null) return; g.appendChild(mk("line", { x1, y1: y, x2: W, y2: y, stroke: col, "stroke-width": 1, "stroke-dasharray": "4 4", opacity: 0.65 })); const tx = mk("text", { x: x1 + 4, y: y - 3, fill: col, "font-size": 9.5, "font-family": "var(--font-num)", opacity: 0.85 }); tx.textContent = `${(f * 100).toFixed(1)}%  ${price.toFixed(prec)}`; g.appendChild(tx); });
-          return g;
+          FIB.forEach((f) => { const price = hi - (hi - lo) * f; const y = yOf(price); if (y == null) return; g.appendChild(mk("line", { x1, y1: y, x2: W, y2: y, stroke: col, "stroke-width": 1, "stroke-dasharray": "4 4", opacity: 0.6 })); const tx = mk("text", { x: x1 + 4, y: y - 3, fill: col, "font-size": 9.5, "font-family": "var(--font-num)", opacity: 0.85 }); tx.textContent = `${(f * 100).toFixed(1)}%  ${price.toFixed(prec)}`; g.appendChild(tx); });
+          fat(x1, yOf(hi) ?? 0, x1, yOf(lo) ?? 0); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
         }
         return g;
       }
@@ -173,38 +181,60 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const svgEl = svgRef.current; if (!svgEl) return;
         while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
         for (const d of drawRef.current) svgEl.appendChild(shape(d));
-        if (pending && pending.a) { /* preview handled on move */ }
       };
       renderRef.current = renderDraw;
       chart.timeScale().subscribeVisibleLogicalRangeChange(renderDraw);
       renderDraw();
 
-      // pointer interaction
       const rectXY = (ev: PointerEvent) => { const r = svg.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
+      const idAt = (ev: Event) => (ev.target as Element)?.closest?.("g[data-id]")?.getAttribute("data-id") || null;
       const TWO = new Set(["trendline", "ray", "rect", "fib", "measure"]);
+
+      // select + drag existing drawings in cursor mode (capture phase; runs before creation)
       svg.addEventListener("pointerdown", (ev) => {
-        const t = toolRef.current; if (!t) return; const { x, y } = rectXY(ev as PointerEvent); const a = snap(x, y);
-        if (t === "erase") { const id = (ev.target as Element)?.closest?.("g")?.getAttribute("data-id"); if (id) onChangeRef.current?.(drawRef.current.filter((d) => d.id !== id)); return; }
+        if (toolRef.current) return; const id = idAt(ev); if (!id) { if (sel) { sel = null; renderDraw(); } return; }
+        ev.stopPropagation(); sel = id; renderDraw();
+        const d0 = drawRef.current.find((x) => x.id === id); if (!d0) return;
+        const s0 = rectXY(ev); const start = snap(s0.x, s0.y); const orig = d0.points.map((p) => ({ ...p }));
+        const move = (e: PointerEvent) => {
+          const m0 = rectXY(e); const cur = snap(m0.x, m0.y); const dp = cur.p - start.p, di = barIndex(cur.t) - barIndex(start.t), bars = barsRef.current;
+          drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: orig.map((pt) => { const ni = Math.max(0, Math.min(bars.length - 1, barIndex(pt.t) + di)); return { t: bars[ni]?.time || pt.t, p: +(pt.p + dp).toFixed(prec) }; }) });
+          renderDraw();
+        };
+        const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); onChangeRef.current?.([...drawRef.current]); };
+        window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+      }, true);
+
+      // creation / erase (bubble; svg is pointer-events:auto only when a tool is active)
+      svg.addEventListener("pointerdown", (ev) => {
+        const t = toolRef.current; if (!t) return; const { x, y } = rectXY(ev); const a = snap(x, y);
+        if (t === "erase") { const id = idAt(ev); if (id) onChangeRef.current?.(drawRef.current.filter((d) => d.id !== id)); return; }
         if (t === "hline") { onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "hline", points: [a] }]); return; }
         if (t === "text") { const txt = window.prompt("Label"); if (txt) onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "text", points: [a], text: txt }]); return; }
-        if (TWO.has(t)) { pending = { kind: t, a }; svg.setPointerCapture(ev.pointerId); }
+        if (TWO.has(t)) { pending = { kind: t, a }; try { svg.setPointerCapture(ev.pointerId); } catch {} }
       });
       svg.addEventListener("pointermove", (ev) => {
-        if (!pending) return; const { x, y } = rectXY(ev as PointerEvent); const b = snap(x, y);
-        renderDraw();
-        svg.appendChild(shape({ id: "_p", kind: pending.kind as any, points: [pending.a, b] }, true));
+        if (!pending) return; const { x, y } = rectXY(ev); const b = snap(x, y);
+        renderDraw(); svg.appendChild(shape({ id: "_p", kind: pending.kind as any, points: [pending.a, b] }, true));
       });
       svg.addEventListener("pointerup", (ev) => {
-        if (!pending) return; const { x, y } = rectXY(ev as PointerEvent); const b = snap(x, y); const a = pending.a; const kind = pending.kind; pending = null;
+        if (!pending) return; const { x, y } = rectXY(ev); const b = snap(x, y); const a = pending.a; const kind = pending.kind; pending = null;
         if (Math.abs((xOf(a.t) ?? 0) - (xOf(b.t) ?? 0)) < 3 && Math.abs((yOf(a.p) ?? 0) - (yOf(b.p) ?? 0)) < 3) { renderDraw(); return; }
         onChangeRef.current?.([...drawRef.current, { id: uid(), kind: kind as any, points: [a, b] }]);
       });
+
+      onKey = (e: KeyboardEvent) => {
+        const tag = (e.target as HTMLElement)?.tagName?.toLowerCase(); if (tag === "input" || tag === "textarea") return;
+        if (e.key === "Escape") { if (sel) { sel = null; renderDraw(); } }
+        else if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
+      };
+      window.addEventListener("keydown", onKey);
 
       ro = new ResizeObserver(() => { const ch2 = chartRef.current; if (!ch2) return; const r = ch2.timeScale().getVisibleLogicalRange(); ch2.resize(el.clientWidth, el.clientHeight); if (r) ch2.timeScale().setVisibleLogicalRange(r); renderDraw(); });
       ro.observe(el);
     })();
 
-    return () => { dead = true; window.removeEventListener("mm:snapshot", snap); ro?.disconnect(); if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
+    return () => { dead = true; window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); ro?.disconnect(); if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
   }, [symbol, chartType, timeframe, replayIdx, Array.from(indicators).sort().join(",")]); // eslint-disable-line
 
   // re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild)
