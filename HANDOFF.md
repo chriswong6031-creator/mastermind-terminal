@@ -112,6 +112,18 @@ Escape-close; SeasonalityCard no-sample vs true-0% distinction; nav a11y (`aria-
 CSS hygiene (defined `--ease`, un-clipped the watchlist popover, tokenized Pine colors + brand-hover,
 removed dead `--up-soft`/`--down-soft` + the unreachable `[data-n="3"]` rule, input focus indicators).
 Commit `facc482`.
+**Follow-up 5 — cross-pane sync (same day):** a "Sync" toggle (shown only in 2/4 split, default on)
+that mirrors the focused pane's crosshair + visible time-range onto every other pane via a small bus
+(`lib/paneSync.ts`). Crosshair is mirrored by **time, not price** — each peer looks up its own close at
+that time, so a $192 NVDA crosshair lands on BTC's candle at the same date, not at $192. `ChartPanel`
+gets a `syncId` prop and registers {chart, series, valueAt} + broadcasts on crosshair-move / range-change
+(dead-guarded teardown); a re-entrancy guard kills echo loops; TerminalShell gates the bus to multi-pane.
+Verified deterministically (bus wiring): 2 peers register, range + crosshair forward to peers with each
+peer's own value, null clears, toggle gates. NOTE for future verification: the headless preview tab runs
+**hidden**, and LWC commits range/crosshair on `requestAnimationFrame` which is paused when
+`document.hidden` — so visual range/crosshair changes and synthetic-hover crosshairs won't paint between
+evals (charts still render in `preview_screenshot`, which forces a paint). Assert the driving API calls
+(spy on `setVisibleLogicalRange`/`setCrosshairPosition`) rather than the painted result. Commit `0601426`.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
