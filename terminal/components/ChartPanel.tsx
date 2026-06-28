@@ -153,9 +153,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const svg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
       wrap.appendChild(svg); svgRef.current = svg;
       const dcol = (d: Drawing) => d.color?.startsWith("var(") ? css(d.color.slice(4, -1)) : (d.color || c.brand2);
-      const xOf = (t: string) => chart.timeScale().timeToCoordinate(t as any) as number | null;
+      // snap a (possibly foreign-timeframe) anchor time to THIS pane's nearest bar, so a drawing
+      // made on e.g. the Daily MTF pane still renders on the Weekly/Monthly panes (only t is remapped;
+      // price is timeframe-invariant). Exact-match fast path keeps same-timeframe behavior unchanged.
+      const snapT = (t: string) => { const b = barsRef.current; if (!b.length) return t; for (let k = 0; k < b.length; k++) if (b[k].time === t) return t; const x = +new Date(t + "T00:00:00Z"); let best = b[0].time, bd = Infinity; for (const r of b) { const dd = Math.abs(+new Date(r.time + "T00:00:00Z") - x); if (dd < bd) { bd = dd; best = r.time; } } return best; };
+      const xOf = (t: string) => chart.timeScale().timeToCoordinate(snapT(t) as any) as number | null;
       const yOf = (p: number) => priceS.priceToCoordinate(p) as number | null;
-      const barIndex = (t: string) => { const b = barsRef.current; for (let k = 0; k < b.length; k++) if (b[k].time === t) return k; return -1; };
+      const barIndex = (t: string) => { const tt = snapT(t); const b = barsRef.current; for (let k = 0; k < b.length; k++) if (b[k].time === tt) return k; return -1; };
       const snap = (px: number, py: number) => {
         const bars = barsRef.current; let bt = bars[bars.length - 1]?.time, bd = 1e18;
         for (const b of bars) { const xc = xOf(b.time); if (xc == null) continue; const dd = Math.abs(xc - px); if (dd < bd) { bd = dd; bt = b.time; } }

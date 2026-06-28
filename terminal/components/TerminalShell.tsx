@@ -76,6 +76,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const drawLoaded = useRef<Set<string>>(new Set());
   const drawPending = useRef<Record<string, Drawing[]>>({});
   const drawTimers = useRef<Record<string, any>>({});
+  const prevPaneSyms = useRef<Set<string>>(new Set());
   const flushDrawings = useCallback((sym: string) => { clearTimeout(drawTimers.current[sym]); const d = drawPending.current[sym]; if (d) { delete drawPending.current[sym]; fetch("/api/drawings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym, drawings: d }) }).catch(() => {}); } }, []);
   const setSymbolDrawings = useCallback((sym: string, d: Drawing[]) => { setDrawStore((s) => ({ ...s, [sym]: d })); drawPending.current[sym] = d; clearTimeout(drawTimers.current[sym]); drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 600); }, [flushDrawings]);
 
@@ -112,14 +113,24 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { setPaneSync(sync && panes.length > 1); }, [sync, panes.length]);
   // load drawings once per symbol that appears in a pane; don't clobber an in-flight local edit
   useEffect(() => {
-    for (const sym of new Set(panes)) {
+    const now = new Set(panes);
+    for (const sym of now) {
       if (drawLoaded.current.has(sym)) continue;
       drawLoaded.current.add(sym);
       fetch(`/api/drawings?symbol=${sym}`).then((r) => r.json()).then((d) => {
         if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: d.drawings || [] }));
       }).catch(() => { drawLoaded.current.delete(sym); });
     }
-  }, [panes]);
+    // a symbol that left every pane: flush its pending save, then evict its cache + load-guard so a
+    // later re-visit re-fetches fresh server state (restores the old per-mount refetch behavior)
+    for (const sym of prevPaneSyms.current) {
+      if (now.has(sym)) continue;
+      flushDrawings(sym);
+      drawLoaded.current.delete(sym);
+      setDrawStore((s) => { if (s[sym] === undefined) return s; const n = { ...s }; delete n[sym]; return n; });
+    }
+    prevPaneSyms.current = now;
+  }, [panes, flushDrawings]);
   useEffect(() => () => { for (const sym of Object.keys(drawPending.current)) flushDrawings(sym); }, [flushDrawings]);
 
   // per-symbol intel/slice for the rail (drawings now live per-pane in ChartPane); layouts once
@@ -189,9 +200,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   async function removeSymbol(sym: string) { setWl((w) => w.filter((s) => s.symbol !== sym)); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }); }
   const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const pick = (sym: string) => {
-    const existing = panes.findIndex((s) => s === sym);
-    if (existing >= 0 && existing !== activePane) setActivePane(existing);          // already shown in another pane → focus it (don't duplicate)
-    else setPanes((p) => p.map((s, i) => (i === activePane ? sym : s)));
+    // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
+    // re-clicking the active symbol is a no-op rather than jumping focus to the first matching pane.
+    const existing = panes[activePane] === sym ? activePane : panes.findIndex((s) => s === sym);
+    if (existing >= 0 && existing !== activePane) setActivePane(existing);          // shown in a different pane → focus it (don't duplicate)
+    else if (panes[activePane] !== sym) setPanes((p) => p.map((s, i) => (i === activePane ? sym : s)));
     setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]);
   };
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { if (sym !== active) setCompare((c) => (c.includes(sym) ? c : [...c, sym].slice(0, 4))); } else pick(sym); };
