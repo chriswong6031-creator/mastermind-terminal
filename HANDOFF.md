@@ -86,6 +86,16 @@ await); stranded drag listeners cleaned up; detect retries until bars load; comp
 switch + dynamic precision + common-origin rebase + active-symbol filtered; sticky-bottom copilot
 autoscroll; live-WS dead-guard. Layouts also persist the compare set. All re-verified in-app, zero
 console/server errors. Commit `<this batch>`.
+**Follow-up 3 — multi-pane chart grid (same day):** the toolbar `1 | 2 | 4` split renders a
+synced grid of independent `ChartPane`s (`ChartPane.tsx` + `.pane-grid` CSS), each owning its
+own symbol + drawings; the focused pane is outlined and drives the header/toolbar. A second
+adversarial review (multi-pane focus) found **10 more real bugs**, all fixed & verified: duplicate-
+symbol panes (picking an already-shown symbol focuses that pane; auto-fill seeds unique watchlist
+symbols only); background panes no longer hijack snapshot / Delete-key / click-to-select (gated by an
+`isActive` ref); module OHLC cache split into `ohlcCache`/`sliceCache` so compare can't poison the
+primary series; stale async drawings-GET no longer clobbers fresh edits (`pending.current === null`
+guard); `onActivate` fires only when inactive; 3-pane CSS layout. Verified: 1/2/4 render a clean 2×2
+grid with live charts, no overflow, unique symbols, inactive-pane draws are no-ops. Commit `ecb8ab9`.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
