@@ -158,6 +158,20 @@ workspace loss. Fixed (`697b95e`) by skipping the mount write AND gating the sav
 (a skip-first-run gate alone is insufficient — the unconditional mount `setPaneTfs` forces a 2nd render
 whose save would still write the deep-link default). Deep-link sessions are now read-only w.r.t. `mm.ws`.
 Verified: deep-link leaves the saved 2-pane ws intact (even after a mid-session split); normal reload restores it.
+**Follow-up 9 — one-click MTF + shared per-symbol drawing store (same day):** an "MTF" toolbar button
+lays the active symbol across D/3D/W/1M in the 4-pane grid (the multi-timeframe desk view). This required
+solving same-symbol drawing clobber: drawings were LIFTED out of ChartPane into a shared per-symbol store
+in TerminalShell (`drawStore[symbol]`, load-once-per-symbol, per-symbol debounced PUT, flush-on-unmount),
+so every pane on a symbol shares one set. A 4-finder review then caught 4 issues, all fixed (`3d04948`):
+(a) time-anchored drawings rendered an empty `<g>` on other-tf panes (daily dates aren't bars on W/1M) →
+added a render-time `snapT` in ChartPanel mapping anchor time to the pane's nearest bar (price never
+remapped); (b) auto-DETECTED drawings leaked into the shared store → made pane-local (ChartPane holds an
+`auto` layer, forwards only hand-drawn to the store); (c) `pick()` stole focus to pane 0 from a non-zero
+MTF pane → prefers the active pane; (d) the load-once guard never reset (stale on re-visit) → prune+evict
+when a symbol leaves all panes. Verified: MTF trendline draws a real line on all 4 panes; auto-detect
+[1,1,3,1] stays local; no focus-steal. GOTCHA: counting `g[data-id]` is NOT enough to prove a drawing
+renders — an out-of-range/foreign-tf anchor yields an empty `<g>`; assert an inner `line/path` element.
+Commits `68252ad` (feature) + `3d04948` (fixes).
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
