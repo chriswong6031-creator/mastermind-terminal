@@ -28,7 +28,7 @@ export async function PUT(req: Request) {
   await supabase.from("drawings").delete().eq("symbol", symbol);
   const rows = (drawings || [])
     .filter((d: any) => !d.auto)
-    .map((d: any) => ({ user_id: user.id, symbol, kind: d.kind, data: { points: d.points, color: d.color, text: d.text, meta: d.meta } }));
+    .map((d: any) => ({ user_id: user.id, symbol, kind: d.kind, data: { points: d.points, color: d.color, text: d.text, width: d.width, dash: d.dash, fontSize: d.fontSize, meta: d.meta } }));
   if (rows.length) {
     const { error } = await supabase.from("drawings").insert(rows);
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });

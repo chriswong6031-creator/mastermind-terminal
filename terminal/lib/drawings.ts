@@ -3,12 +3,16 @@
 
 export type Pt = { t: string; p: number };
 export type DrawKind = "trendline" | "ray" | "hline" | "vline" | "rect" | "fib" | "text" | "measure" | "arrow";
+export type Dash = "solid" | "dashed" | "dotted";
 export type Drawing = {
   id: string;
   kind: DrawKind;
   points: Pt[];
   color?: string;
   text?: string;
+  width?: number;          // line thickness (px)
+  dash?: Dash;             // line style
+  fontSize?: number;       // text size (px) — for text drawings
   auto?: boolean;          // produced by detection (vs hand-drawn)
   meta?: Record<string, unknown>;
 };

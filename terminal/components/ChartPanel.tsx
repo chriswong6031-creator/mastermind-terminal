@@ -176,11 +176,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 12 }));
         const grip = (pts: { x: number; y: number }[]) => { if (on) pts.forEach((p) => g.appendChild(mk("circle", { cx: p.x, cy: p.y, r: 4.5, fill: "var(--bg)", stroke: col, "stroke-width": 2 }))); };
         const A = d.points[0], B = d.points[1];
+        const dash = d.dash === "dashed" ? "7 5" : d.dash === "dotted" ? "2 4" : (d.auto ? "5 4" : "");
+        const lw = (base: number, boost: number) => (d.width ?? base) + (on ? boost : 0);
         const ax = A ? xOf(A.t) : null, ay = A ? yOf(A.p) : null;
         if (d.kind === "hline") {
           if (ay == null) return g;
-          const sw = (d.meta && (d.meta as any).strength ? 0.4 + 1.0 * (d.meta as any).strength : 1.3) + (on ? 1 : 0);
-          g.appendChild(mk("line", { x1: 0, y1: ay, x2: W, y2: ay, stroke: col, "stroke-width": sw, "stroke-dasharray": d.auto ? "5 4" : "" }));
+          const sw = (d.width ?? (d.meta && (d.meta as any).strength ? 0.4 + 1.0 * (d.meta as any).strength : 1.3)) + (on ? 1 : 0);
+          g.appendChild(mk("line", { x1: 0, y1: ay, x2: W, y2: ay, stroke: col, "stroke-width": sw, "stroke-dasharray": dash }));
           fat(0, ay, W, ay);
           const label = (d.meta as any)?.label || A.p.toFixed(prec);
           const tx = mk("text", { x: W - 6, y: ay - 4, fill: col, "font-size": 10, "text-anchor": "end", "font-family": "var(--font-num)" }); tx.textContent = String(label);
@@ -188,22 +190,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         }
         if (d.kind === "vline") {
           if (ax == null) return g;
-          g.appendChild(mk("line", { x1: ax, y1: 0, x2: ax, y2: H, stroke: col, "stroke-width": on ? 2.3 : 1.3, "stroke-dasharray": d.auto ? "5 4" : "" }));
+          g.appendChild(mk("line", { x1: ax, y1: 0, x2: ax, y2: H, stroke: col, "stroke-width": lw(1.3, 1), "stroke-dasharray": dash }));
           fat(ax, 0, ax, H); grip([{ x: ax, y: H / 2 }]); return g;
         }
         const bx = B ? xOf(B.t) : null, by = B ? yOf(B.p) : null;
-        if (d.kind === "text") { if (ax == null || ay == null) return g; g.appendChild(mk("rect", { x: ax - 3, y: ay - 13, width: Math.max(40, (d.text || "").length * 7), height: 18, fill: "transparent" })); const tx = mk("text", { x: ax, y: ay, fill: col, "font-size": 12, "font-family": "var(--font-ui)" }); tx.textContent = d.text || "text"; g.appendChild(tx); grip([{ x: ax, y: ay - 6 }]); return g; }
+        if (d.kind === "text") { if (ax == null || ay == null) return g; const fs = d.fontSize ?? 13; g.appendChild(mk("rect", { x: ax - 3, y: ay - fs - 1, width: Math.max(40, (d.text || "").length * fs * 0.6), height: fs + 6, fill: "transparent" })); const tx = mk("text", { x: ax, y: ay, fill: col, "font-size": fs, "font-family": "var(--font-ui)" }); tx.textContent = d.text || "text"; g.appendChild(tx); grip([{ x: ax, y: ay - fs / 2 }]); return g; }
         if (ax == null || ay == null || bx == null || by == null) return g;
         if (d.kind === "trendline" || d.kind === "ray" || d.kind === "measure" || d.kind === "arrow") {
           let ex = bx, ey = by;
           if (d.kind === "ray" && bx !== ax) { const m = (by - ay) / (bx - ax); ex = W; ey = ay + m * (W - ax); }
-          g.appendChild(mk("line", { x1: ax, y1: ay, x2: ex, y2: ey, stroke: col, "stroke-width": on ? 2.4 : 1.6 }));
+          g.appendChild(mk("line", { x1: ax, y1: ay, x2: ex, y2: ey, stroke: col, "stroke-width": lw(1.6, 0.8), "stroke-dasharray": dash }));
           fat(ax, ay, ex, ey);
-          if (d.kind === "arrow") { const an = Math.atan2(by - ay, bx - ax), h = 9; g.appendChild(mk("path", { d: `M${bx} ${by} L${bx + h * Math.cos(an + Math.PI - 0.45)} ${by + h * Math.sin(an + Math.PI - 0.45)} M${bx} ${by} L${bx + h * Math.cos(an + Math.PI + 0.45)} ${by + h * Math.sin(an + Math.PI + 0.45)}`, stroke: col, "stroke-width": on ? 2.4 : 1.6, fill: "none" })); }
+          if (d.kind === "arrow") { const an = Math.atan2(by - ay, bx - ax), h = 9; g.appendChild(mk("path", { d: `M${bx} ${by} L${bx + h * Math.cos(an + Math.PI - 0.45)} ${by + h * Math.sin(an + Math.PI - 0.45)} M${bx} ${by} L${bx + h * Math.cos(an + Math.PI + 0.45)} ${by + h * Math.sin(an + Math.PI + 0.45)}`, stroke: col, "stroke-width": lw(1.6, 0.8), fill: "none" })); }
           if (d.kind === "measure") { const pc = ((B.p - A.p) / A.p) * 100; const di = Math.abs(barIndex(B.t) - barIndex(A.t)); const lab = mk("text", { x: (ax + bx) / 2, y: Math.min(ay, by) - 8, fill: col, "font-size": 11, "text-anchor": "middle", "font-family": "var(--font-num)" }); lab.textContent = `${pc >= 0 ? "+" : ""}${pc.toFixed(2)}% · ${di} bars`; g.appendChild(lab); }
           grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
         }
-        if (d.kind === "rect") { g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay), fill: col, "fill-opacity": 0.08, stroke: col, "stroke-width": on ? 2 : 1 })); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g; }
+        if (d.kind === "rect") { g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay), fill: col, "fill-opacity": 0.08, stroke: col, "stroke-width": lw(1, 1), "stroke-dasharray": dash })); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g; }
         if (d.kind === "fib") {
           const hi = Math.max(A.p, B.p), lo = Math.min(A.p, B.p), x1 = Math.min(ax, bx);
           FIB.forEach((f) => { const price = hi - (hi - lo) * f; const y = yOf(price); if (y == null) return; g.appendChild(mk("line", { x1, y1: y, x2: W, y2: y, stroke: col, "stroke-width": 1, "stroke-dasharray": "4 4", opacity: 0.6 })); const tx = mk("text", { x: x1 + 4, y: y - 3, fill: col, "font-size": 9.5, "font-family": "var(--font-num)", opacity: 0.85 }); tx.textContent = `${(f * 100).toFixed(1)}%  ${price.toFixed(prec)}`; g.appendChild(tx); });
@@ -212,18 +214,68 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         return g;
       }
       // floating style/delete toolbar over the selected drawing
+      // TradingView-style floating style bar over the selected drawing: color, width, dash, (text) size, delete
       const bar = document.createElement("div"); bar.className = "draw-bar"; bar.style.display = "none"; wrap.appendChild(bar); barRef.current = bar;
       const COLORS = ["#4d82ff", "#26c281", "#f0566b", "#e8b339", "#d6dae3"];
-      bar.innerHTML = COLORS.map((cc) => `<button data-c="${cc}" style="background:${cc}" title="${cc}"></button>`).join("") + `<span class="bar-sep"></span><button class="bar-del" data-del="1" title="Delete">✕</button>`;
+      const styled = new Set(["trendline", "ray", "vline", "hline", "arrow", "rect"]);   // width + dash apply
+      const DASHES: [string, string][] = [["solid", "M2 6h16"], ["dashed", "M2 6h4M8 6h4M14 6h4"], ["dotted", "M2 6h.5M6 6h.5M10 6h.5M14 6h.5M18 6h.5"]];
+      const buildBar = (d: Drawing) => {
+        const sw = (a: boolean) => (a ? " on" : "");
+        let h = COLORS.map((cc) => `<button data-c="${cc}" class="dsw${sw((d.color || "#4d82ff") === cc)}" style="background:${cc}" title="${cc}"></button>`).join("");
+        if (d.kind === "text") {
+          h += `<span class="bar-sep"></span>` + [["12", "S"], ["16", "M"], ["22", "L"]].map(([fs, l]) => `<button data-fs="${fs}" class="dfi${sw((d.fontSize ?? 13) === +fs)}">${l}</button>`).join("");
+        } else if (styled.has(d.kind)) {
+          h += `<span class="bar-sep"></span>` + [1.5, 2.5, 4].map((w) => `<button data-w="${w}" class="dwi${sw((d.width ?? 1.6) === w)}" title="${w}px"><i style="height:${Math.max(1, Math.round(w - 0.5))}px"></i></button>`).join("");
+          h += `<span class="bar-sep"></span>` + DASHES.map(([k, p]) => `<button data-dash="${k}" class="ddi${sw((d.dash || "solid") === k)}" title="${k}"><svg viewBox="0 0 20 12"><path d="${p}"/></svg></button>`).join("");
+        }
+        h += `<span class="bar-sep"></span><button class="bar-del" data-del="1" title="Delete"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg></button>`;
+        bar.innerHTML = h;
+      };
       bar.addEventListener("pointerdown", (e) => {
-        e.stopPropagation(); const tg = e.target as HTMLElement; const cc = tg.getAttribute("data-c");
-        if (cc && sel) { drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, color: cc } : d); onChangeRef.current?.([...drawRef.current]); }
-        else if (tg.getAttribute("data-del") && sel) { const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
+        e.stopPropagation(); const tg = (e.target as HTMLElement)?.closest("button") as HTMLElement | null; if (!tg || !sel) return;
+        if (tg.getAttribute("data-del")) { const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); return; }
+        const cc = tg.getAttribute("data-c"), w = tg.getAttribute("data-w"), dd = tg.getAttribute("data-dash"), fs = tg.getAttribute("data-fs");
+        const patch = cc ? { color: cc } : w ? { width: +w } : dd ? { dash: dd as any } : fs ? { fontSize: +fs } : null;
+        if (patch) { drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, ...patch } : d); onChangeRef.current?.([...drawRef.current]); }
       });
+      let barSig = "";
       const positionBar = () => {
         const d = drawRef.current.find((x) => x.id === sel);
-        if (sel && d && d.points[0]) { const ax = xOf(d.points[0].t), ay = yOf(d.points[0].p); if (ax != null && ay != null) { bar.style.display = "flex"; bar.style.left = Math.max(4, Math.min(el!.clientWidth - 150, ax - 8)) + "px"; bar.style.top = Math.max(4, ay - 42) + "px"; return; } }
-        bar.style.display = "none";
+        if (sel && d && d.points[0]) {
+          const ax = xOf(d.points[0].t), ay = yOf(d.points[0].p);
+          if (ax != null && ay != null) {
+            const sig = `${d.id}|${d.kind}|${d.color}|${d.width}|${d.dash}|${d.fontSize}`;
+            if (sig !== barSig) { buildBar(d); barSig = sig; }
+            bar.style.display = "flex";
+            bar.style.left = Math.max(4, Math.min(el!.clientWidth - bar.offsetWidth - 4, ax - 8)) + "px";
+            bar.style.top = Math.max(4, ay - 46) + "px";
+            return;
+          }
+        }
+        bar.style.display = "none"; barSig = "";
+      };
+      // inline, editable text box (replaces the old window.prompt) — type directly on the chart
+      let textEditEl: HTMLInputElement | null = null;
+      const openTextEditor = (at: { t: string; p: number }, existing?: Drawing) => {
+        if (textEditEl) { try { textEditEl.remove(); } catch {} textEditEl = null; }
+        const ax = xOf(at.t), ay = yOf(at.p); if (ax == null || ay == null) return;
+        const fs = existing?.fontSize ?? 13;
+        const inp = document.createElement("input");
+        inp.className = "text-edit"; inp.value = existing?.text || ""; inp.placeholder = "Add text";
+        inp.style.left = ax + "px"; inp.style.top = (ay - fs - 4) + "px"; inp.style.fontSize = fs + "px";
+        inp.style.color = existing ? dcol(existing) : css("--text");
+        wrap.appendChild(inp); textEditEl = inp;
+        window.setTimeout(() => { inp.focus(); inp.select(); }, 0);
+        let done = false;
+        const commit = (save: boolean) => {
+          if (done) return; done = true; const val = inp.value.trim();
+          try { inp.remove(); } catch {} textEditEl = null;
+          if (!save) return;
+          if (existing) onChangeRef.current?.(val ? drawRef.current.map((d) => d.id === existing.id ? { ...d, text: val } : d) : drawRef.current.filter((d) => d.id !== existing.id));
+          else if (val) onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "text", points: [at], text: val, fontSize: fs }]);
+        };
+        inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); commit(true); } else if (e.key === "Escape") { e.preventDefault(); commit(false); } });
+        inp.addEventListener("blur", () => commit(true));
       };
       // right-click context menu
       const ctxm = document.createElement("div"); ctxm.className = "ctx-menu"; ctxm.style.display = "none"; wrap.appendChild(ctxm); ctxRef.current = ctxm;
@@ -238,7 +290,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         else if (a === "reset") { try { chart.timeScale().fitContent(); } catch {} }
       });
       wrap.addEventListener("contextmenu", onCtx);
-      winDown = (e: PointerEvent) => { hideCtx(); if (!toolRef.current && sel) { const tg = e.target as Element; if (tg && !tg.closest?.("g[data-id]") && !tg.closest?.(".draw-bar")) { sel = null; renderDraw(); } } };
+      winDown = (e: PointerEvent) => { hideCtx(); if (!toolRef.current && sel) { const tg = e.target as Element; if (tg && !tg.closest?.("g[data-id]") && !tg.closest?.(".draw-bar") && !tg.closest?.(".text-edit")) { sel = null; renderDraw(); } } };
       window.addEventListener("pointerdown", winDown);
       const renderDraw = () => {
         const svgEl = svgRef.current; if (!svgEl) return;
@@ -284,8 +336,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (t === "erase") { const id = idAt(ev); if (id) onChangeRef.current?.(drawRef.current.filter((d) => d.id !== id)); return; }
         if (t === "hline") { onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "hline", points: [a] }]); return; }
         if (t === "vline") { onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "vline", points: [a] }]); return; }
-        if (t === "text") { const txt = window.prompt("Label"); if (txt) onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "text", points: [a], text: txt }]); return; }
+        if (t === "text") { openTextEditor(a); return; }
         if (TWO.has(t)) { pending = { kind: t, a }; try { svg.setPointerCapture(ev.pointerId); } catch {} }
+      });
+      // double-click a text drawing to edit it in place
+      svg.addEventListener("dblclick", (ev) => {
+        if (!activeRef.current) return; const id = idAt(ev); const d = drawRef.current.find((x) => x.id === id);
+        if (d && d.kind === "text") { ev.stopPropagation(); ev.preventDefault(); openTextEditor(d.points[0], d); }
       });
       svg.addEventListener("pointermove", (ev) => {
         if (!pending) return; const { x, y } = rectXY(ev); const b = snap(x, y);

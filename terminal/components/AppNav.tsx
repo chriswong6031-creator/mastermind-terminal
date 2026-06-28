@@ -35,11 +35,11 @@ export function AppNav() {
       {TOP.map((it) => {
         const on = it.k === activeKey;
         return (
-          <Link key={it.k} href={it.href} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={it.label}><Glyph k={it.k} /><span>{it.label}</span></Link>
+          <Link key={it.k} href={it.href} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={it.label} data-tip={it.label}><Glyph k={it.k} /></Link>
         );
       })}
       <div className="gap" />
-      <button className="navbtn" onClick={openAI} title="Mastermind AI" aria-label="Mastermind AI"><Glyph k="ai" /><span>AI</span></button>
+      <button className="navbtn" onClick={openAI} aria-label="Mastermind AI" data-tip="Mastermind AI"><Glyph k="ai" /></button>
     </nav>
   );
 }
