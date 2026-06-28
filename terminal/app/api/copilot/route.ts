@@ -87,7 +87,7 @@ export async function POST(req: Request) {
               send({ type: "step", tool: c.name, args: a });
               if (c.name === "annotate_chart") {
                 // client-executed tool: stream the levels to the browser to draw on the active chart
-                const anns = (Array.isArray(a?.annotations) ? a.annotations : []).filter((x: any) => x && typeof x.price === "number").slice(0, 12);
+                const anns = (Array.isArray(a?.annotations) ? a.annotations : []).filter((x: any) => x && Number.isFinite(x.price)).slice(0, 12);
                 send({ type: "annotate", symbol, annotations: anns });
                 convo.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify({ ok: true, placed: anns.length }) });
               } else {

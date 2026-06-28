@@ -84,11 +84,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (!Array.isArray(anns) || !anns.length) return;
     const today = new Date().toISOString().slice(0, 10);
     const col: Record<string, string> = { support: "var(--up)", resistance: "var(--down)", target: "var(--signal)", level: "var(--brand-2)", note: "var(--brand-2)" };
-    const add: Drawing[] = anns.filter((a) => a && typeof a.price === "number").map((a) =>
+    const add: Drawing[] = anns.filter((a) => a && Number.isFinite(a.price)).map((a) =>
       a.type === "note"
         ? { id: uid(), kind: "text", points: [{ t: today, p: a.price }], text: a.label || "note", color: col.note, fontSize: 13 }
         : { id: uid(), kind: "hline", points: [{ t: today, p: a.price }], color: col[a.type] || col.level, dash: "dashed", meta: { label: a.label || `${a.type} · ${a.price}` } });
-    if (add.length) setSymbolDrawings(sym, [...(drawStore[sym] ?? []), ...add]);
+    // base on the synchronously-updated pending ref first (covers the post-edit-pre-commit window and lets
+    // back-to-back annotate events accumulate), falling back to the latest committed store (drawStore must
+    // stay in deps so the closure sees the freshest committed value — not a mount-time snapshot)
+    if (add.length) setSymbolDrawings(sym, [...(drawPending.current[sym] ?? drawStore[sym] ?? []), ...add]);
   }, [drawStore, setSymbolDrawings]);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);

@@ -52,6 +52,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const activeRef = useRef(isActive); activeRef.current = isActive;
   const barRef = useRef<HTMLDivElement | null>(null);
   const ctxRef = useRef<HTMLDivElement | null>(null);
+  const textEditRef = useRef<HTMLInputElement | null>(null);
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet;
 
   useEffect(() => {
@@ -258,19 +259,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // inline, editable text box (replaces the old window.prompt) — type directly on the chart
       let textEditEl: HTMLInputElement | null = null;
       const openTextEditor = (at: { t: string; p: number }, existing?: Drawing) => {
-        if (textEditEl) { try { textEditEl.remove(); } catch {} textEditEl = null; }
+        if (textEditEl) { try { textEditEl.remove(); } catch {} textEditEl = null; } textEditRef.current = null;
         const ax = xOf(at.t), ay = yOf(at.p); if (ax == null || ay == null) return;
         const fs = existing?.fontSize ?? 13;
         const inp = document.createElement("input");
         inp.className = "text-edit"; inp.value = existing?.text || ""; inp.placeholder = "Add text";
         inp.style.left = ax + "px"; inp.style.top = (ay - fs - 4) + "px"; inp.style.fontSize = fs + "px";
         inp.style.color = existing ? dcol(existing) : css("--text");
-        wrap.appendChild(inp); textEditEl = inp;
+        wrap.appendChild(inp); textEditEl = inp; textEditRef.current = inp;
         window.setTimeout(() => { inp.focus(); inp.select(); }, 0);
         let done = false;
         const commit = (save: boolean) => {
           if (done) return; done = true; const val = inp.value.trim();
-          try { inp.remove(); } catch {} textEditEl = null;
+          try { inp.remove(); } catch {} textEditEl = null; if (textEditRef.current === inp) textEditRef.current = null;
           if (!save) return;
           if (existing) onChangeRef.current?.(val ? drawRef.current.map((d) => d.id === existing.id ? { ...d, text: val } : d) : drawRef.current.filter((d) => d.id !== existing.id));
           else if (val) onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "text", points: [at], text: val, fontSize: fs }]);
@@ -370,7 +371,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       ro.observe(el);
     })();
 
-    return () => { dead = true; if (rafId != null) cancelAnimationFrame(rafId); if (syncCleanup) syncCleanup(); if (dragCleanup) dragCleanup(); window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); if (winDown) window.removeEventListener("pointerdown", winDown); if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx); ro?.disconnect(); if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; } if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
+    return () => { dead = true; if (rafId != null) cancelAnimationFrame(rafId); if (syncCleanup) syncCleanup(); if (dragCleanup) dragCleanup(); window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); if (winDown) window.removeEventListener("pointerdown", winDown); if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx); ro?.disconnect(); if (textEditRef.current) { try { textEditRef.current.remove(); } catch {} textEditRef.current = null; } if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; } if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
   }, [symbol, chartType, timeframe, replayIdx, Array.from(indicators).sort().join(","), (compare || []).join(","), syncId]); // eslint-disable-line
 
   // re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild)
