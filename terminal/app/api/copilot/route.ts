@@ -43,13 +43,14 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({} as any));
   // sanitize client input: only {role:user|assistant, content:string}; cap count + size; drop any forged system/tool turns
   const symbol = typeof body?.symbol === "string" ? body.symbol.slice(0, 24) : "";
+  const lang = body?.lang === "zh" ? "zh" : "en";
   const messages = (Array.isArray(body?.messages) ? body.messages : [])
     .filter((m: any) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
     .slice(-30)
     .map((m: any) => ({ role: m.role, content: m.content.slice(0, 8000) }));
   if (!key) return NextResponse.json({ reply: "The AI copilot isn't configured (no model key).", steps: [] });
 
-  const convo: any[] = [{ role: "system", content: SYSTEM + (symbol ? ` The active chart symbol is ${symbol}.` : "") }, ...messages];
+  const convo: any[] = [{ role: "system", content: SYSTEM + (symbol ? ` The active chart symbol is ${symbol}.` : "") + (lang === "zh" ? " Respond in 简体中文 (Simplified Chinese); keep ticker symbols, numbers and the signal names (BUY/SELL/CUT/RE-BUY, Golden Oracle) as-is." : "") }, ...messages];
   const E = new TextEncoder();
 
   const stream = new ReadableStream({

@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useT } from "@/lib/i18n";
 
 const ICON: Record<string, string[]> = {
   chart: ["M3 17l5-6 4 3 4-7 5 9", "M3 21h18"],
@@ -27,6 +28,7 @@ const TOP = [
 export function AppNav() {
   const path = usePathname();
   const router = useRouter();
+  const t = useT();
   const activeKey = path.startsWith("/screener") ? "screener" : path.startsWith("/scripts") ? "scripts"
     : path.startsWith("/portfolio") ? "portfolio" : path.startsWith("/alerts") ? "alerts" : "chart";
   const openAI = () => { if (path.startsWith("/terminal")) window.dispatchEvent(new CustomEvent("mm:copilot")); else router.push("/terminal?ai=1"); };
@@ -35,11 +37,11 @@ export function AppNav() {
       {TOP.map((it) => {
         const on = it.k === activeKey;
         return (
-          <Link key={it.k} href={it.href} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={it.label} data-tip={it.label}><Glyph k={it.k} /></Link>
+          <Link key={it.k} href={it.href} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={t(it.k, it.label)} data-tip={t(it.k, it.label)}><Glyph k={it.k} /></Link>
         );
       })}
       <div className="gap" />
-      <button className="navbtn" onClick={openAI} aria-label="Mastermind AI" data-tip="Mastermind AI"><Glyph k="ai" /></button>
+      <button className="navbtn" onClick={openAI} aria-label={t("ai")} data-tip={t("ai")}><Glyph k="ai" /></button>
     </nav>
   );
 }

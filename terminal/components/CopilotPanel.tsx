@@ -30,7 +30,8 @@ export default function CopilotPanel({ open, symbol, row, onClose, onAnnotate }:
     const my = ++reqRef.current; acRef.current?.abort(); const ac = new AbortController(); acRef.current = ac;
     const apply = (fn: (l: Msg) => Msg) => setMsgs((m) => { if (!m.length) return m; const c = [...m]; c[c.length - 1] = fn(c[c.length - 1]); return c; });
     try {
-      const r = await fetch("/api/copilot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, messages: next.map((m) => ({ role: m.role, content: m.content })) }), signal: ac.signal });
+      const lang = (typeof document !== "undefined" && document.documentElement.getAttribute("data-lang")) || "en";
+      const r = await fetch("/api/copilot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, lang, messages: next.map((m) => ({ role: m.role, content: m.content })) }), signal: ac.signal });
       if (reqRef.current !== my) return;
       const ct = r.headers.get("content-type") || "";
       if (!r.body || !ct.includes("event-stream")) { const d = await r.json(); if (reqRef.current === my) setMsgs((m) => [...m, { role: "assistant", content: d.reply || "(no reply)", steps: d.steps }]); return; }

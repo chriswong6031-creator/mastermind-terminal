@@ -12,6 +12,7 @@ import SeasonalityCard from "@/components/SeasonalityCard";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
+import SettingsMenu from "@/components/SettingsMenu";
 
 type Row = { name: string; sec: string; col: string; mkt?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -256,7 +257,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <span className={`livebadge${liveStatus === "live" ? " live" : ""}`} style={{ marginLeft: 16 }} title="Live feed activates with a real-time Polygon key (NEXT_PUBLIC_LIVE=1)"><i />{liveStatus === "live" ? "Live" : "Historical"}</span>
         <div className="spacer" />
         <button className="ai" onClick={() => setCopilot(true)}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
-        <form action="/auth/signout" method="post"><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
+        <SettingsMenu email={email} />
       </header>
 
       <AppNav />
