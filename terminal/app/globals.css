@@ -351,3 +351,11 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .sig-t{font:700 9.5px/1.4 var(--font-ui);letter-spacing:.04em;padding:2px 7px;border-radius:var(--r);text-align:center}
 .sig-t.buy{color:var(--buy);background:rgba(38,194,129,.13)} .sig-t.sell{color:var(--sell);background:rgba(240,86,107,.13)}
 .sig-d{color:var(--muted);font-variant-numeric:tabular-nums} .sig-p{color:var(--text);font-variant-numeric:tabular-nums}
+
+/* floating drawing toolbar (over a selected drawing) */
+.draw-bar{position:absolute;z-index:7;display:flex;align-items:center;gap:5px;padding:5px 6px;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);box-shadow:0 10px 24px -10px rgba(0,0,0,.7)}
+.draw-bar button[data-c]{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--bg);cursor:pointer;transition:transform var(--t)}
+.draw-bar button[data-c]:hover{transform:scale(1.18)}
+.draw-bar .bar-sep{width:1px;height:15px;background:var(--line-3);margin:0 1px}
+.draw-bar .bar-del{color:var(--muted);font-size:12px;line-height:1;padding:2px 5px;border-radius:var(--r);cursor:pointer}
+.draw-bar .bar-del:hover{color:var(--sell);background:var(--panel-2)}

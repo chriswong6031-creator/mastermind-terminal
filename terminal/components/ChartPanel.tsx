@@ -47,6 +47,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const toolRef = useRef<string | null>(tool);
   const onChangeRef = useRef(onDrawingsChange);
   const magnetRef = useRef(magnet);
+  const barRef = useRef<HTMLDivElement | null>(null);
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet;
 
   useEffect(() => {
@@ -177,10 +178,25 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         }
         return g;
       }
+      // floating style/delete toolbar over the selected drawing
+      const bar = document.createElement("div"); bar.className = "draw-bar"; bar.style.display = "none"; wrap.appendChild(bar); barRef.current = bar;
+      const COLORS = ["#4d82ff", "#26c281", "#f0566b", "#e8b339", "#d6dae3"];
+      bar.innerHTML = COLORS.map((cc) => `<button data-c="${cc}" style="background:${cc}" title="${cc}"></button>`).join("") + `<span class="bar-sep"></span><button class="bar-del" data-del="1" title="Delete">✕</button>`;
+      bar.addEventListener("pointerdown", (e) => {
+        e.stopPropagation(); const tg = e.target as HTMLElement; const cc = tg.getAttribute("data-c");
+        if (cc && sel) { drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, color: cc } : d); onChangeRef.current?.([...drawRef.current]); }
+        else if (tg.getAttribute("data-del") && sel) { const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
+      });
+      const positionBar = () => {
+        const d = drawRef.current.find((x) => x.id === sel);
+        if (sel && d && d.points[0]) { const ax = xOf(d.points[0].t), ay = yOf(d.points[0].p); if (ax != null && ay != null) { bar.style.display = "flex"; bar.style.left = Math.max(4, Math.min(el!.clientWidth - 150, ax - 8)) + "px"; bar.style.top = Math.max(4, ay - 42) + "px"; return; } }
+        bar.style.display = "none";
+      };
       const renderDraw = () => {
         const svgEl = svgRef.current; if (!svgEl) return;
         while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
         for (const d of drawRef.current) svgEl.appendChild(shape(d));
+        positionBar();
       };
       renderRef.current = renderDraw;
       chart.timeScale().subscribeVisibleLogicalRangeChange(renderDraw);
@@ -234,7 +250,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       ro.observe(el);
     })();
 
-    return () => { dead = true; window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); ro?.disconnect(); if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
+    return () => { dead = true; window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); ro?.disconnect(); if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
   }, [symbol, chartType, timeframe, replayIdx, Array.from(indicators).sort().join(",")]); // eslint-disable-line
 
   // re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild)
