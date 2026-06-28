@@ -7,8 +7,8 @@ type Step = { tool: string; args: any };
 type Msg = { role: "user" | "assistant"; content: string; steps?: Step[] };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 
-export default function CopilotPanel({ open, symbol, row, onClose }:
-  { open: boolean; symbol: string; row: Row | undefined; onClose: () => void }) {
+export default function CopilotPanel({ open, symbol, row, onClose, onAnnotate }:
+  { open: boolean; symbol: string; row: Row | undefined; onClose: () => void; onAnnotate?: (symbol: string, annotations: any[]) => void }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -47,6 +47,7 @@ export default function CopilotPanel({ open, symbol, row, onClose }:
           let j: any; try { j = JSON.parse(data); } catch { continue; }
           if (j.type === "token") apply((l) => ({ ...l, content: l.content + j.text }));
           else if (j.type === "step") apply((l) => ({ ...l, steps: [...(l.steps || []), { tool: j.tool, args: j.args }] }));
+          else if (j.type === "annotate") onAnnotate?.(j.symbol || symbol, j.annotations || []);
           else if (j.type === "error") apply((l) => ({ ...l, content: l.content + (l.content ? "\n\n" : "") + "_" + j.message + "_" }));
         }
       }
@@ -56,7 +57,7 @@ export default function CopilotPanel({ open, symbol, row, onClose }:
   }
 
   const v = row?.verdict || "—"; const buy = isBuy(v); const up = (row?.chg ?? 0) >= 0;
-  const suggestions = [`Why is ${symbol} a ${v}?`, `How has this signal backtested?`, `What does the macro regime imply?`, `Find BUY setups in an uptrend regime`];
+  const suggestions = [`Why is ${symbol} a ${v}?`, `Mark the key support & resistance on the chart`, `How has this signal backtested?`, `Find BUY setups in an uptrend regime`];
 
   return (
     <aside className={`copilot${open ? " open" : ""}`}>

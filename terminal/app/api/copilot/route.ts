@@ -11,6 +11,7 @@ const TOOLS = [
   { type: "function", function: { name: "get_intel", description: "Macro analyzer intelligence for a ticker: AI verdict, conviction score, regime, gamma walls, analyst revisions, smart-money trend.", parameters: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"] } } },
   { type: "function", function: { name: "get_backtest", description: "Strategy-tester result for a ticker: metrics (win rate, profit factor, CAGR, Sharpe, max drawdown, vs buy-hold) and trade count.", parameters: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"] } } },
   { type: "function", function: { name: "screen", description: "Scan the universe. Optionally filter by verdict (BUY|SELL) and/or regime (bull|mixed). Returns up to 12 tickers ranked by win rate.", parameters: { type: "object", properties: { verdict: { type: "string" }, regime: { type: "string" } }, required: [] } } },
+  { type: "function", function: { name: "annotate_chart", description: "Draw price levels onto the user's active chart. Use this when the user asks you to mark/draw/annotate/show support, resistance, targets or notes. Derive prices from real data you fetched (e.g. day/52-week highs & lows from get_quote, gamma walls from get_intel) — never invent levels.", parameters: { type: "object", properties: { annotations: { type: "array", items: { type: "object", properties: { type: { type: "string", enum: ["support", "resistance", "target", "level", "note"] }, price: { type: "number" }, label: { type: "string" } }, required: ["type", "price"] } } }, required: ["annotations"] } } },
 ];
 
 async function runTool(name: string, args: any): Promise<any> {
@@ -29,7 +30,7 @@ async function runTool(name: string, args: any): Promise<any> {
   return { error: "unknown tool" };
 }
 
-const SYSTEM = `You are Mastermind AI, the copilot inside an institutional charting terminal. You reason over a proprietary backtested confluence signal ("Golden Oracle"), a macro/regime read, and a strategy tester. Use the tools to ground every claim in real data — never invent numbers. Be concise, specific, and honest: the confluence is a timing/risk overlay, not a standalone return engine. Nothing is financial advice. When the user asks about a ticker, fetch its quote and intel before answering.`;
+const SYSTEM = `You are Mastermind AI, the copilot inside an institutional charting terminal. You reason over a proprietary backtested confluence signal ("Golden Oracle"), a macro/regime read, and a strategy tester. Use the tools to ground every claim in real data — never invent numbers. Be concise, specific, and honest: the confluence is a timing/risk overlay, not a standalone return engine. Nothing is financial advice. When the user asks about a ticker, fetch its quote and intel before answering. When they ask you to mark/draw levels on the chart, fetch the data first (get_quote gives day & 52-week highs/lows; get_intel gives gamma walls), then call annotate_chart with those real prices — and say one line about what you drew.`;
 
 export async function POST(req: Request) {
   // auth-gate (defense in depth; the copilot UI lives behind the /terminal guard)
@@ -81,7 +82,18 @@ export async function POST(req: Request) {
           const tcs = Object.values(calls);
           if (finish === "tool_calls" || tcs.length) {
             convo.push({ role: "assistant", content: content || null, tool_calls: tcs.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args } })) });
-            for (const c of tcs) { let a: any = {}; try { a = JSON.parse(c.args || "{}"); } catch {} send({ type: "step", tool: c.name, args: a }); const result = await runTool(c.name, a); convo.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify(result) }); }
+            for (const c of tcs) {
+              let a: any = {}; try { a = JSON.parse(c.args || "{}"); } catch {}
+              send({ type: "step", tool: c.name, args: a });
+              if (c.name === "annotate_chart") {
+                // client-executed tool: stream the levels to the browser to draw on the active chart
+                const anns = (Array.isArray(a?.annotations) ? a.annotations : []).filter((x: any) => x && typeof x.price === "number").slice(0, 12);
+                send({ type: "annotate", symbol, annotations: anns });
+                convo.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify({ ok: true, placed: anns.length }) });
+              } else {
+                const result = await runTool(c.name, a); convo.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify(result) });
+              }
+            }
             continue;
           }
           break; // got a final text answer

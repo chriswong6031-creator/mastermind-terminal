@@ -11,7 +11,7 @@ import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
-import { type Drawing } from "@/lib/drawings";
+import { type Drawing, uid } from "@/lib/drawings";
 
 type Row = { name: string; sec: string; col: string; mkt?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -79,6 +79,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const prevPaneSyms = useRef<Set<string>>(new Set());
   const flushDrawings = useCallback((sym: string) => { clearTimeout(drawTimers.current[sym]); const d = drawPending.current[sym]; if (d) { delete drawPending.current[sym]; fetch("/api/drawings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym, drawings: d }) }).catch(() => {}); } }, []);
   const setSymbolDrawings = useCallback((sym: string, d: Drawing[]) => { setDrawStore((s) => ({ ...s, [sym]: d })); drawPending.current[sym] = d; clearTimeout(drawTimers.current[sym]); drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 600); }, [flushDrawings]);
+  // copilot → chart: convert AI-suggested price levels into drawings appended to the symbol's store
+  const annotateChart = useCallback((sym: string, anns: any[]) => {
+    if (!Array.isArray(anns) || !anns.length) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const col: Record<string, string> = { support: "var(--up)", resistance: "var(--down)", target: "var(--signal)", level: "var(--brand-2)", note: "var(--brand-2)" };
+    const add: Drawing[] = anns.filter((a) => a && typeof a.price === "number").map((a) =>
+      a.type === "note"
+        ? { id: uid(), kind: "text", points: [{ t: today, p: a.price }], text: a.label || "note", color: col.note, fontSize: 13 }
+        : { id: uid(), kind: "hline", points: [{ t: today, p: a.price }], color: col[a.type] || col.level, dash: "dashed", meta: { label: a.label || `${a.type} · ${a.price}` } });
+    if (add.length) setSymbolDrawings(sym, [...(drawStore[sym] ?? []), ...add]);
+  }, [drawStore, setSymbolDrawings]);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
@@ -434,7 +445,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
       <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} />
-      <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} />
+      <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
     </div>
   );
 }
