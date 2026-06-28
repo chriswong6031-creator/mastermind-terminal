@@ -249,7 +249,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // cross-pane sync: register this pane, then mirror crosshair (by time) + visible range
       if (syncId != null) {
         const closeByTime = new Map(barsRef.current.map((r) => [r.time, r.c]));
-        syncCleanup = registerPane(syncId, { chart, series: priceS, valueAt: (t) => closeByTime.get(t as any) ?? null });
+        syncCleanup = registerPane(syncId, { chart, series: priceS, valueAt: (t) => closeByTime.get(t as any) ?? null, tf: timeframe });
         chart.subscribeCrosshairMove((p) => { if (dead) return; broadcastCrosshair(syncId, (p.time ?? null) as any); });
         chart.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (dead) return; broadcastRange(syncId, r as any); });
       }

@@ -403,5 +403,6 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .pane-hd{display:flex;align-items:center;gap:8px;height:28px;padding:0 11px;flex:none;border-bottom:1px solid var(--line);background:var(--bg);font-size:12px;cursor:pointer}
 .pane-hd .pic{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font:800 9px/1 var(--font-ui);color:#04130a;flex:none}
 .pane-hd b{font-weight:650}
+.pane-hd .pane-tf{font:700 9px/1 var(--font-ui);letter-spacing:.04em;color:var(--text-2);background:var(--panel-3);border:1px solid var(--line);border-radius:var(--r);padding:2px 5px;text-transform:uppercase}
 .pane-hd .px{margin-left:auto;font-variant-numeric:tabular-nums}
 .pane-hd .cg{font-size:11px;font-variant-numeric:tabular-nums;min-width:48px;text-align:right}

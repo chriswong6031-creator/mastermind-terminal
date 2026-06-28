@@ -43,7 +43,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [sync, setSync] = useState(true);
   const [split, setSplit] = useState(1);   // the split the user requested (panes.length may be smaller after dedup)
   const active = panes[activePane] ?? panes[0] ?? seed0;
-  const [tf, setTf] = useState("D");
+  const [paneTfs, setPaneTfs] = useState<string[]>(["D"]);   // one timeframe per pane
+  const tf = paneTfs[activePane] ?? paneTfs[0] ?? "D";        // the active pane's timeframe drives the toolbar
+  const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
   const [chartType, setChartType] = useState("candles");
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
@@ -68,7 +70,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const nonce = useRef(0);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
-  useEffect(() => { setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setTf(load("mm.tf", "D")); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true })); }, []);
+  useEffect(() => { setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs([load("mm.tf", "D")]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true })); }, []);
   useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
@@ -88,15 +90,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
   function setGrid(n: number) {
     setSplit(n);
-    setPanes((p) => {
-      if (n <= p.length) return p.slice(0, n);
-      const used = new Set(p); const extra: string[] = [];
+    let next: string[];
+    if (n <= panes.length) { next = panes.slice(0, n); }
+    else {
+      const used = new Set(panes); const extra: string[] = [];
       // only UNIQUE symbols — never duplicate a symbol across panes (two panes on one symbol
       // would own separate drawing stores and clobber each other via the replace-all PUT)
-      for (const s of wl.map((x) => x.symbol)) { if (p.length + extra.length >= n) break; if (!used.has(s)) { extra.push(s); used.add(s); } }
-      return [...p, ...extra];   // may be < n if the watchlist can't supply enough unique symbols
-    });
-    setActivePane((a) => Math.min(a, n - 1));
+      for (const s of wl.map((x) => x.symbol)) { if (panes.length + extra.length >= n) break; if (!used.has(s)) { extra.push(s); used.add(s); } }
+      next = [...panes, ...extra];   // may be < n if the watchlist can't supply enough unique symbols
+    }
+    setPanes(next);
+    // keep one timeframe per pane; new panes inherit the active pane's timeframe
+    setPaneTfs((tfs) => next.map((_, i) => tfs[i] ?? tf));
+    setActivePane((a) => Math.min(a, next.length - 1));
   }
   const onTick = useCallback((p: number) => setLivePx(p), []);
   const liveStatus = useLive(active, onTick);
@@ -144,8 +150,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   };
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { if (sym !== active) setCompare((c) => (c.includes(sym) ? c : [...c, sym].slice(0, 4))); } else pick(sym); };
 
-  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, activePane, tf, chartType, inds: [...inds], favTF, compare }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
-  function loadLayout(l: any) { const c = l.config || {}; if (c.tf) setTf(c.tf); if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (Array.isArray(c.panes) && c.panes.length) { setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); setSplit(c.panes.length >= 4 ? 4 : c.panes.length >= 2 ? 2 : 1); } else if (c.active) { setPanes([c.active]); setActivePane(0); setSplit(1); } setLayoutOpen(false); }
+  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
+  function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare);
+    if (Array.isArray(c.panes) && c.panes.length) {
+      setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); setSplit(c.panes.length >= 4 ? 4 : c.panes.length >= 2 ? 2 : 1);
+      setPaneTfs(Array.isArray(c.paneTfs) && c.paneTfs.length === c.panes.length ? c.paneTfs : c.panes.map(() => c.tf || "D"));   // back-compat: older layouts have a single tf
+    } else if (c.active) { setPanes([c.active]); setActivePane(0); setSplit(1); setPaneTfs([c.tf || "D"]); }
+    setLayoutOpen(false); }
   function delLayout(id: string) { fetch(`/api/layouts?id=${id}`, { method: "DELETE" }).then(() => setLayouts((ls) => ls.filter((x) => x.id !== id))); }
 
   const colList = () => { const a: [string, string][] = [["last", "Last"]]; if (set.cols.change) a.push(["change", "Chg"]); if (set.cols.changePct) a.push(["changePct", "Chg%"]); if (set.cols.volume) a.push(["volume", "Vol"]); return a; };
@@ -254,7 +265,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={tf} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} />
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} />
               ))}
             </div>
           </div>

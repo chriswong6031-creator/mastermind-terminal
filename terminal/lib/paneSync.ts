@@ -5,7 +5,7 @@
 // so a $192 NVDA crosshair lands on BTC's candle at the same date, not at $192.
 import type { IChartApi, ISeriesApi, Time } from "lightweight-charts";
 
-type Peer = { chart: IChartApi; series: ISeriesApi<any>; valueAt: (t: Time) => number | null; suppress?: number };
+type Peer = { chart: IChartApi; series: ISeriesApi<any>; valueAt: (t: Time) => number | null; tf: string; suppress?: number };
 
 const peers = new Map<number, Peer>();
 let enabled = false;
@@ -25,10 +25,11 @@ export function registerPane(id: number, peer: Peer) {
 // time === null means the pointer left the source chart → clear peers' crosshairs
 export function broadcastCrosshair(fromId: number, time: Time | null) {
   if (!enabled || applying) return;
+  const self = peers.get(fromId);
   applying = true;
   try {
     peers.forEach((p, id) => {
-      if (id === fromId) return;
+      if (id === fromId || (self && p.tf !== self.tf)) return;   // only mirror same-timeframe panes
       try {
         const v = time == null ? null : p.valueAt(time);
         if (time == null || v == null) p.chart.clearCrosshairPosition();
@@ -49,7 +50,7 @@ export function broadcastRange(fromId: number, range: { from: number; to: number
   const self = peers.get(fromId);
   if (self && self.suppress && Date.now() - self.suppress < 250) { self.suppress = 0; return; }
   peers.forEach((p, id) => {
-    if (id === fromId) return;
+    if (id === fromId || (self && p.tf !== self.tf)) return;   // only mirror same-timeframe panes
     try {
       const cur = p.chart.timeScale().getVisibleLogicalRange();
       // only drive (and arm suppression) when the peer will actually move —

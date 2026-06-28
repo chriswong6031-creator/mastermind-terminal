@@ -21,6 +21,7 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
       <div className="pane-hd">
         <span className="pic" style={{ background: row?.col || "#888" }}>{symbol[0]}</span>
         <b>{symbol}</b>
+        <span className="pane-tf">{tf}</span>
         <span className="px num">{f(row?.last, (row?.last ?? 99) < 10 ? 4 : 2)}</span>
         <span className={`cg num ${up ? "up" : "down"}`}>{up ? "+" : ""}{f(row?.chg)}%</span>
       </div>
