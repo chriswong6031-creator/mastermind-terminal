@@ -152,6 +152,12 @@ pane + sync toggle now survive a reload via localStorage `mm.ws` (restore on mou
 against the current universe and snaps split to the pane count; a `?sym=` deep-link always wins; save is
 gated behind a `restored` ref so the default state can't clobber the saved layout before restore runs).
 Verified: build [NVDA·D, BTC·W] split-2 → reload → fully restored; `?sym=AAPL` → single AAPL pane. Commit `8260ce3`.
+A 3-finder review then caught a HIGH bug: the mount-time save ran on a deep-link visit (fires on every
+Screener/Portfolio row click) and clobbered the saved `mm.ws` with the single-pane default — silent
+workspace loss. Fixed (`697b95e`) by skipping the mount write AND gating the save with `!initialSymbol`
+(a skip-first-run gate alone is insufficient — the unconditional mount `setPaneTfs` forces a 2nd render
+whose save would still write the deep-link default). Deep-link sessions are now read-only w.r.t. `mm.ws`.
+Verified: deep-link leaves the saved 2-pane ws intact (even after a mid-session split); normal reload restores it.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
