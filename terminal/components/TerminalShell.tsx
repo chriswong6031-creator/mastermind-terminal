@@ -68,7 +68,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [compare, setCompare] = useState<string[]>([]);
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
   const nonce = useRef(0);
-  const restored = useRef(false);
+  const wsMounted = useRef(false);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
@@ -88,9 +88,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         }
       } catch {}
     }
-    restored.current = true;
   }, []);
-  useEffect(() => { if (restored.current) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane })); }, [panes, paneTfs, split, sync, activePane]);
+  // persist the workspace — but skip the mount-time write (no user intent) and never write during a
+  // deep-link (?sym=) session, so following a Screener/Portfolio row can't clobber the saved layout.
+  useEffect(() => {
+    if (!wsMounted.current) { wsMounted.current = true; return; }
+    if (!initialSymbol) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane }));
+  }, [panes, paneTfs, split, sync, activePane]);
   useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
