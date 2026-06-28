@@ -68,9 +68,29 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [compare, setCompare] = useState<string[]>([]);
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
   const nonce = useRef(0);
+  const restored = useRef(false);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
-  useEffect(() => { setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs([load("mm.tf", "D")]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true })); }, []);
+  useEffect(() => {
+    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs([load("mm.tf", "D")]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true }));
+    // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
+    if (!initialSymbol) {
+      try {
+        const ws = load("mm.ws", null);
+        if (ws && Array.isArray(ws.panes)) {
+          const pairs = ws.panes.map((s: string, i: number) => [s, ws.paneTfs?.[i] ?? "D"]).filter(([s]: any) => symbols.some((x) => x.symbol === s));
+          if (pairs.length) {
+            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.map((p: any) => p[1]));
+            setSplit([1, 2, 4].includes(ws.split) ? ws.split : (pairs.length >= 4 ? 4 : pairs.length >= 2 ? 2 : 1));
+            setActivePane(Math.min(ws.activePane || 0, pairs.length - 1));
+            if (typeof ws.sync === "boolean") setSync(ws.sync);
+          }
+        }
+      } catch {}
+    }
+    restored.current = true;
+  }, []);
+  useEffect(() => { if (restored.current) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane })); }, [panes, paneTfs, split, sync, activePane]);
   useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
