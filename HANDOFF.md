@@ -138,6 +138,15 @@ a stale full list (now re-inserts only the failed item), empty-state rows read a
 split-button highlight keyed off `panes.length` instead of the requested split. NOTE: the `preview_start`
 tooling failed this session with `spawn .../Helpers/disclaimer ENOENT` (intermittent env issue) — fall back
 to `npm run dev` over Bash + curl for route/compile checks, and Node sims for pure-logic verification.
+**Follow-up 7 — per-pane timeframes (same day):** each split-grid pane now carries its own timeframe
+(`paneTfs[]` in TerminalShell; `tf` is derived from `paneTfs[activePane]`). The toolbar TF selector
+drives the active pane and reflects its interval on focus change; new panes inherit the active tf; a TF
+chip shows in each pane header. Cross-pane sync is gated to **same-timeframe** panes (logical ranges/bar
+times aren't comparable across intervals) — ChartPanel registers its peer with its tf and paneSync skips
+mismatched tfs. Layouts persist/restore `paneTfs` (back-compat: older single-`tf` layouts fill all panes).
+The unique-symbol-per-pane invariant is intentionally kept (drawings keyed by symbol), so a same-symbol
+MTF layout is deferred until the drawing store is keyed by symbol+tf. Verified in-app ([D,W] independent,
+toolbar tracks active pane, collapse/expand inherit) + Node sim for the tf-gated sync. Commit `e5f35b9`.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
