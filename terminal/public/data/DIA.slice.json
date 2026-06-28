@@ -4,49 +4,16 @@
     "indicator_id": "confluence_rsimacd_stochrsi_mtf",
     "symbol": "DIA",
     "timeframe": "3D",
-    "as_of": "2026-06-24T00:00:00Z",
+    "as_of": "2026-06-25T00:00:00Z",
     "bar_quality": "real_ohlc",
     "macd_kind": "rsi_based",
     "signals": [
       {
-        "ts": "2024-11-13",
-        "bar_index": 294,
+        "ts": "2024-10-24",
+        "bar_index": 289,
         "type": "SELL",
         "strength": 0.725,
-        "price": 434.51,
-        "reasons": [
-          "macd_bear_cross",
-          "recent_s1",
-          "extended"
-        ],
-        "regime": {
-          "weeklyBull": false,
-          "above200": true,
-          "monthlyBull": false
-        }
-      },
-      {
-        "ts": "2024-11-21",
-        "bar_index": 296,
-        "type": "REBUY",
-        "strength": 0.725,
-        "price": 447.56,
-        "reasons": [
-          "fast_reversal_up",
-          "sell_failed"
-        ],
-        "regime": {
-          "weeklyBull": true,
-          "above200": true,
-          "monthlyBull": false
-        }
-      },
-      {
-        "ts": "2024-12-12",
-        "bar_index": 301,
-        "type": "SELL",
-        "strength": 0.725,
-        "price": 438.37,
+        "price": 424.07,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
@@ -59,11 +26,28 @@
         }
       },
       {
-        "ts": "2025-01-23",
-        "bar_index": 311,
+        "ts": "2024-12-10",
+        "bar_index": 300,
+        "type": "SELL",
+        "strength": 0.725,
+        "price": 440.27,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-01-21",
+        "bar_index": 310,
         "type": "BUY",
         "strength": 0.588,
-        "price": 447.12,
+        "price": 445.38,
         "reasons": [
           "macd_bull_cross",
           "recent_b1",
@@ -77,11 +61,28 @@
         }
       },
       {
-        "ts": "2025-08-05",
-        "bar_index": 357,
+        "ts": "2025-02-19",
+        "bar_index": 317,
+        "type": "SELL",
+        "strength": 0.588,
+        "price": 434.15,
+        "reasons": [
+          "macd_bear_cross",
+          "recent_s1",
+          "extended"
+        ],
+        "regime": {
+          "weeklyBull": false,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2025-08-01",
+        "bar_index": 356,
         "type": "SELL",
         "strength": 0.863,
-        "price": 439.72,
+        "price": 441.14,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
@@ -94,11 +95,11 @@
         }
       },
       {
-        "ts": "2025-08-13",
-        "bar_index": 359,
+        "ts": "2025-08-11",
+        "bar_index": 358,
         "type": "BUY",
         "strength": 0.863,
-        "price": 449.53,
+        "price": 449.42,
         "reasons": [
           "macd_bull_cross",
           "recent_b1",
@@ -112,11 +113,11 @@
         }
       },
       {
-        "ts": "2025-10-10",
-        "bar_index": 373,
+        "ts": "2025-10-08",
+        "bar_index": 372,
         "type": "SELL",
         "strength": 0.863,
-        "price": 462.71,
+        "price": 454.87,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
@@ -129,27 +130,11 @@
         }
       },
       {
-        "ts": "2025-10-23",
-        "bar_index": 376,
-        "type": "REBUY",
-        "strength": 0.863,
-        "price": 475.35,
-        "reasons": [
-          "fast_reversal_up",
-          "sell_failed"
-        ],
-        "regime": {
-          "weeklyBull": true,
-          "above200": true,
-          "monthlyBull": false
-        }
-      },
-      {
-        "ts": "2025-11-05",
+        "ts": "2025-11-06",
         "bar_index": 379,
         "type": "SELL",
         "strength": 0.863,
-        "price": 469.86,
+        "price": 473.82,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
@@ -162,14 +147,16 @@
         }
       },
       {
-        "ts": "2025-11-10",
-        "bar_index": 380,
-        "type": "REBUY",
+        "ts": "2025-12-23",
+        "bar_index": 390,
+        "type": "BUY",
         "strength": 0.863,
-        "price": 482.76,
+        "price": 487.01,
         "reasons": [
-          "fast_reversal_up",
-          "sell_failed"
+          "macd_bull_cross",
+          "recent_b1",
+          "confirm_bull",
+          "rsi<65"
         ],
         "regime": {
           "weeklyBull": true,
@@ -178,28 +165,44 @@
         }
       },
       {
-        "ts": "2026-02-10",
-        "bar_index": 402,
+        "ts": "2025-12-26",
+        "bar_index": 391,
+        "type": "CUT",
+        "strength": 0.863,
+        "price": 483.59,
+        "reasons": [
+          "fast_reversal_down",
+          "buy_failed"
+        ],
+        "regime": {
+          "weeklyBull": true,
+          "above200": true,
+          "monthlyBull": false
+        }
+      },
+      {
+        "ts": "2026-01-16",
+        "bar_index": 396,
         "type": "SELL",
-        "strength": 0.725,
-        "price": 494.67,
+        "strength": 0.863,
+        "price": 484.88,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
           "extended"
         ],
         "regime": {
-          "weeklyBull": false,
+          "weeklyBull": true,
           "above200": true,
           "monthlyBull": false
         }
       },
       {
-        "ts": "2026-04-09",
+        "ts": "2026-04-10",
         "bar_index": 416,
         "type": "BUY",
         "strength": 0.588,
-        "price": 482.13,
+        "price": 485.49,
         "reasons": [
           "macd_bull_cross",
           "recent_b1",
@@ -227,32 +230,32 @@
     "schema": "backtest_result/v1",
     "strategy_id": "rsimacd_stochrsi_mtf",
     "symbol": "DIA",
-    "as_of": "2026-06-24",
+    "as_of": "2026-06-25",
     "bar_quality": "real_ohlc",
     "metrics": {
-      "n_trades": 11,
-      "win_rate": 0.5455,
-      "avg_win": 0.053,
-      "avg_loss": -0.0224,
-      "expectancy": 0.0187,
-      "profit_factor": 2.84,
-      "max_dd": -0.2256,
-      "best": 0.1233,
-      "worst": -0.0526,
-      "strat_total_return": 0.2123,
-      "cagr": 0.048,
-      "sharpe": 0.5462,
-      "sortino": 0.4996,
-      "calmar": 0.2129,
-      "exposure": 0.4441,
+      "n_trades": 8,
+      "win_rate": 0.375,
+      "avg_win": 0.0715,
+      "avg_loss": -0.0159,
+      "expectancy": 0.0169,
+      "profit_factor": 2.69,
+      "max_dd": -0.0767,
+      "best": 0.138,
+      "worst": -0.0322,
+      "strat_total_return": 0.1318,
+      "cagr": 0.0306,
+      "sharpe": 0.6467,
+      "sortino": 0.4481,
+      "calmar": 0.3994,
+      "exposure": 0.2374,
       "vs_buy_hold": {
-        "bh_total_return": 0.6532,
-        "bh_max_dd": -0.1612,
+        "bh_total_return": 0.6572,
+        "bh_max_dd": -0.1502,
         "beats_return": false,
-        "shallower_dd": false
+        "shallower_dd": true
       }
     },
-    "n_trades": 11,
+    "n_trades": 8,
     "validation": null,
     "honest_read": "As-traded Polygon backtest after costs; significance verdict delegated to loop/harness."
   }

@@ -1,0 +1,37 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+async function ctx() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  return { supabase, user };
+}
+
+export async function GET(req: Request) {
+  const { supabase, user } = await ctx();
+  if (!user) return NextResponse.json({ drawings: [] });
+  const symbol = new URL(req.url).searchParams.get("symbol");
+  let q = supabase.from("drawings").select("*");
+  if (symbol) q = q.eq("symbol", symbol);
+  const { data, error } = await q;
+  if (error) return NextResponse.json({ drawings: [], error: error.message });
+  const drawings = (data || []).map((r: any) => ({ id: r.id, kind: r.kind, ...(r.data || {}) }));
+  return NextResponse.json({ drawings });
+}
+
+// Replace-all for a symbol (hand-drawn only; auto/detected drawings are never persisted).
+export async function PUT(req: Request) {
+  const { supabase, user } = await ctx();
+  if (!user) return NextResponse.json({ ok: false }, { status: 401 });
+  const { symbol, drawings } = await req.json();
+  if (!symbol) return NextResponse.json({ ok: false }, { status: 400 });
+  await supabase.from("drawings").delete().eq("symbol", symbol);
+  const rows = (drawings || [])
+    .filter((d: any) => !d.auto)
+    .map((d: any) => ({ user_id: user.id, symbol, kind: d.kind, data: { points: d.points, color: d.color, text: d.text, meta: d.meta } }));
+  if (rows.length) {
+    const { error } = await supabase.from("drawings").insert(rows);
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+  }
+  return NextResponse.json({ ok: true });
+}

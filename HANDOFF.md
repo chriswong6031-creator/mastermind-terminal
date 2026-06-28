@@ -56,8 +56,17 @@ All routes are auth-gated (`terminal/proxy.ts` guards `/terminal /screener /scri
 - **`/portfolio`** — `PortfolioView`: "Conviction Book", watchlist ranked by confluence + win-rate-weighted tilt.
 - **Engine (Python, reused as the data builder):** `signal_layer/` = `confluence.py` (the GOLDEN ORACLE — faithful Pine port, never edit), `backtest.py` (Tier-1 + added metrics), `contracts.py` (`mastermind.indicator/v1` + `backtest_result/v1` + `model_slice`), `golden_gate.py`. `ingest/build_polygon_universe.py` runs it across 34 symbols → `terminal/public/data/<SYM>.json` + `<SYM>.slice.json` + `manifest.json`.
 
-## 7. What's DEFERRED (the next big chunk) — see `docs/FEATURE_GAP_AUDIT.md`
-Mostly **one cohesive sub-project: a swing-detection overlay engine**, plus live data + brain integration:
+## 7. ~~DEFERRED~~ → BUILT (2026-06-28) — all items below shipped & smoke-tested
+**Status: all 7 implemented and verified in the running app (logged in as demo, zero console/server errors).** See `docs/FEATURE_GAP_AUDIT.md` for the original spec. What landed:
+1. **Drawing/overlay engine** — `lib/drawings.ts` + an SVG overlay inside `ChartPanel.tsx` synced to LWC coords (`timeToCoordinate`/`priceToCoordinate`, re-rendered on `subscribeVisibleLogicalRangeChange` + ResizeObserver). Left tool dock is now LIVE (trendline/ray/hline/rect/fib/text/measure/erase). Persists to the new `public.drawings` table (migration `0002_drawings.sql`, applied) via `app/api/drawings`.
+2. **Detection** — `lib/drawings.ts` swing/pivot engine → auto-trendlines, auto-Fibonacci, S/R strength clusters, MTFA (daily + ≈weekly). Wired to the "Detect ▾" menu. (Verified: trendlines drew 2 lines + 4 anchors.)
+3. **Strategy-tester report** — builder now emits FULL un-sliced `<SYM>.backtest.json` (trades + reconstructed equity curve). `StrategyTester.tsx` + the "Strategy tester" workspace tab render KPIs + equity curve (LWC) + trade log. (Verified NVDA: ×2.17 vs ×11.53 buy-hold, 6 trades.)
+4. **Agentic copilot** — `app/api/copilot` runs a real tool-calling loop on **DeepSeek** (key pulled into `terminal/.env.local`) with tools `get_quote / get_intel / get_backtest / screen` over the data plane. `CopilotPanel.tsx` is now a chat. (Verified: called get_quote+get_intel, grounded reply.)
+5. **Save/load chart layouts → DB** — `app/api/layouts` (upsert/list/delete) over the existing `chart_layouts` table + a "Layouts ▾" menu in the toolbar. (Verified round-trip.)
+6. **Brain/Macro integration** — `ingest/pull_macro_intel.py` reads `../Macro Dashboard/site/stockdata/<SYM>.json` → `<SYM>.intel.json` (`intel/v1`); surfaced as a "Macro intel" card in the rail AND consumed by the copilot's `get_intel` tool. (26 symbols.)
+7. **Live data** — `lib/live.ts` Polygon trades-WS client + a Historical/Live badge. OFF by default (account not real-time-entitled yet, per below); flip `NEXT_PUBLIC_LIVE=1` + a real-time `NEXT_PUBLIC_POLYGON_KEY` to activate — wiring is complete.
+
+**Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
 2. **Automated trendline detection** → **auto-Fibonacci** → **S/R strength heatmap** → **MTFA overlay** — all share #1's overlay + a swing/pivot engine. (TrendSpider signatures; high edge.)
 3. **Full Strategy-Tester report** — equity curve + trade list. NOTE: `model_slice` strips `trades[]`/`_returns`; to build this, emit a FULL (un-sliced) backtest JSON per symbol from `build_polygon_universe.py` (the data is already computed in `backtest.run_backtest`).

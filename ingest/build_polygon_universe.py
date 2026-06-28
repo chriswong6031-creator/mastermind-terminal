@@ -100,6 +100,27 @@ def main(syms: list[str]) -> None:
                 honest_read="As-traded Polygon backtest after costs; significance verdict delegated to loop/harness.")
             slim = {"indicator": contracts.model_slice(ind), "backtest": contracts.model_slice(btc)}
             (OUT / f"{sym}.slice.json").write_text(json.dumps(slim, indent=2))
+
+            # Write full backtest contract + equity curve (HANDOFF §7.3)
+            if bt.get("status") == "ok" and bt.get("trades"):
+                _rets = bt.get("_returns", [])
+                _idx = bt.get("_returns_index", [])
+                # Build cumulative equity curve: start 1.0, compound each bar return
+                eq_v = [1.0]
+                for r in _rets:
+                    eq_v.append(round(eq_v[-1] * (1.0 + r), 8))
+                bh_tr = bt.get("metrics", {}).get("vs_buy_hold", {}).get("bh_total_return")
+                equity_obj = {
+                    "t": [bt["first"]] + _idx,
+                    "v": eq_v,
+                    "bh_total_return": bh_tr,
+                }
+                # backtest_contract dict + "equity" key; strip raw _returns/_returns_index
+                full_bt = {k: v for k, v in btc.items() if k not in ("_returns", "_returns_index")}
+                full_bt["equity"] = equity_obj
+                (OUT / f"{sym}.backtest.json").write_text(
+                    json.dumps(full_bt, separators=(",", ":"))
+                )
             st = slim["indicator"]["state"]
             m = slim["backtest"]["metrics"]
             row.update(verdict=st.get("last_signal"),

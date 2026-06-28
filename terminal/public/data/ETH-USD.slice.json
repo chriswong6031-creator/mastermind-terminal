@@ -4,16 +4,16 @@
     "indicator_id": "confluence_rsimacd_stochrsi_mtf",
     "symbol": "ETH-USD",
     "timeframe": "3D",
-    "as_of": "2026-06-24T00:00:00Z",
+    "as_of": "2026-06-25T00:00:00Z",
     "bar_quality": "real_ohlc",
     "macd_kind": "rsi_based",
     "signals": [
       {
-        "ts": "2025-08-29",
-        "bar_index": 102,
+        "ts": "2025-08-27",
+        "bar_index": 101,
         "type": "SELL",
         "strength": 0.588,
-        "price": 4326.57,
+        "price": 4391.91,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
@@ -26,11 +26,11 @@
         }
       },
       {
-        "ts": "2026-01-02",
-        "bar_index": 132,
+        "ts": "2025-12-26",
+        "bar_index": 130,
         "type": "BUY",
         "strength": 0.45,
-        "price": 3295.59,
+        "price": 2970.42,
         "reasons": [
           "macd_bull_cross",
           "recent_b1",
@@ -44,11 +44,11 @@
         }
       },
       {
-        "ts": "2026-01-28",
+        "ts": "2026-01-29",
         "bar_index": 138,
         "type": "SELL",
         "strength": 0.45,
-        "price": 2271.7,
+        "price": 2345.11,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
@@ -61,11 +61,11 @@
         }
       },
       {
-        "ts": "2026-03-11",
-        "bar_index": 148,
+        "ts": "2026-03-09",
+        "bar_index": 147,
         "type": "BUY",
         "strength": 0.45,
-        "price": 2178.67,
+        "price": 2052.25,
         "reasons": [
           "macd_bull_cross",
           "recent_b1",
@@ -79,11 +79,11 @@
         }
       },
       {
-        "ts": "2026-05-21",
+        "ts": "2026-05-22",
         "bar_index": 165,
         "type": "SELL",
         "strength": 0.588,
-        "price": 2110.91,
+        "price": 2070.88,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
@@ -110,7 +110,7 @@
     "schema": "backtest_result/v1",
     "strategy_id": "rsimacd_stochrsi_mtf",
     "symbol": "ETH-USD",
-    "as_of": "2026-06-24",
+    "as_of": "2026-06-25",
     "bar_quality": "real_ohlc",
     "metrics": {},
     "n_trades": null,

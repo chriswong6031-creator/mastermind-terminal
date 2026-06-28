@@ -4,16 +4,16 @@
     "indicator_id": "confluence_rsimacd_stochrsi_mtf",
     "symbol": "SOL-USD",
     "timeframe": "3D",
-    "as_of": "2026-06-24T00:00:00Z",
+    "as_of": "2026-06-25T00:00:00Z",
     "bar_quality": "real_ohlc",
     "macd_kind": "rsi_based",
     "signals": [
       {
-        "ts": "2025-06-16",
-        "bar_index": 84,
+        "ts": "2025-06-12",
+        "bar_index": 83,
         "type": "SELL",
         "strength": 0.45,
-        "price": 146.41,
+        "price": 150.77,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
@@ -26,11 +26,11 @@
         }
       },
       {
-        "ts": "2025-07-07",
+        "ts": "2025-07-08",
         "bar_index": 89,
         "type": "BUY",
         "strength": 0.45,
-        "price": 157.11,
+        "price": 164.35,
         "reasons": [
           "macd_bull_cross",
           "recent_b1",
@@ -44,11 +44,11 @@
         }
       },
       {
-        "ts": "2025-09-24",
+        "ts": "2025-09-25",
         "bar_index": 108,
         "type": "SELL",
         "strength": 0.588,
-        "price": 210.89,
+        "price": 212.85,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
@@ -61,11 +61,11 @@
         }
       },
       {
-        "ts": "2026-01-02",
-        "bar_index": 132,
+        "ts": "2025-12-31",
+        "bar_index": 131,
         "type": "BUY",
         "strength": 0.45,
-        "price": 141.04,
+        "price": 134.13,
         "reasons": [
           "macd_bull_cross",
           "recent_b1",
@@ -79,28 +79,28 @@
         }
       },
       {
-        "ts": "2026-01-28",
-        "bar_index": 138,
+        "ts": "2026-02-03",
+        "bar_index": 139,
         "type": "SELL",
-        "strength": 0.588,
-        "price": 100.66,
+        "strength": 0.45,
+        "price": 78.19,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
           "extended"
         ],
         "regime": {
-          "weeklyBull": true,
+          "weeklyBull": false,
           "above200": false,
           "monthlyBull": false
         }
       },
       {
-        "ts": "2026-03-03",
-        "bar_index": 146,
+        "ts": "2026-02-27",
+        "bar_index": 145,
         "type": "BUY",
         "strength": 0.45,
-        "price": 88.78,
+        "price": 86.99,
         "reasons": [
           "macd_bull_cross",
           "recent_b1",
@@ -114,11 +114,11 @@
         }
       },
       {
-        "ts": "2026-05-29",
+        "ts": "2026-06-01",
         "bar_index": 167,
         "type": "SELL",
         "strength": 0.588,
-        "price": 74.12,
+        "price": 71.52,
         "reasons": [
           "macd_bear_cross",
           "recent_s1",
@@ -126,33 +126,15 @@
         ],
         "regime": {
           "weeklyBull": true,
-          "above200": false,
-          "monthlyBull": false
-        }
-      },
-      {
-        "ts": "2026-06-24",
-        "bar_index": 173,
-        "type": "BUY",
-        "strength": 0.45,
-        "price": 71.82,
-        "reasons": [
-          "macd_bull_cross",
-          "recent_b1",
-          "confirm_bull",
-          "rsi<65"
-        ],
-        "regime": {
-          "weeklyBull": false,
           "above200": false,
           "monthlyBull": false
         }
       }
     ],
     "state": {
-      "position_hint": "long",
-      "last_signal": "BUY",
-      "bars_since_signal": 0,
+      "position_hint": "flat",
+      "last_signal": "SELL",
+      "bars_since_signal": 6,
       "extended": false,
       "weeklyBull": false,
       "above200": false
@@ -163,7 +145,7 @@
     "schema": "backtest_result/v1",
     "strategy_id": "rsimacd_stochrsi_mtf",
     "symbol": "SOL-USD",
-    "as_of": "2026-06-24",
+    "as_of": "2026-06-25",
     "bar_quality": "real_ohlc",
     "metrics": {},
     "n_trades": null,
