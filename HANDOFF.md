@@ -96,6 +96,22 @@ symbols only); background panes no longer hijack snapshot / Delete-key / click-t
 primary series; stale async drawings-GET no longer clobbers fresh edits (`pending.current === null`
 guard); `onActivate` fires only when inactive; 3-pane CSS layout. Verified: 1/2/4 render a clean 2×2
 grid with live charts, no overflow, unique symbols, inactive-pane draws are no-ops. Commit `ecb8ab9`.
+**Follow-up 4 — page-consistency sweep (same day):** an adversarial audit of every non-Terminal
+page against the Terminal's bar (7 finders → per-finding verify) confirmed **34 real issues**, all
+fixed & verified in-app (prod build green). The big one was **Scripts**: it went from a wall of
+decorative dead controls to a real tool — editable source (textarea overlay synced to the highlight
+layer, so Save persists real edits), working −/+ steppers, a header script-switcher dropdown, a
+Run/compile button with lightweight client compile (flags unbalanced parens / missing `indicator()`),
+a **script-aware** console (MACD no longer claims oracle backtest parity), an empty state, and a real
+disabled affordance for free accounts. Also: Alerts (create/delete error-handling + in-flight guard +
+rollback + loading state + aria-labels + de-duped heading); Screener (loading/empty/error states,
+Golden-Oracle chip deduped to `.chip.on`, name truncation); Portfolio (loading/empty, the dead `pf`
+field surfaced as a Profit-factor column, CSS row-hover); Home/Login (`?mode=signup` honored under
+Suspense, stale error/busy cleared on mode switch, mode toggles are real buttons); IndicatorsModal
+Escape-close; SeasonalityCard no-sample vs true-0% distinction; nav a11y (`aria-label`/`aria-current`);
+CSS hygiene (defined `--ease`, un-clipped the watchlist popover, tokenized Pine colors + brand-hover,
+removed dead `--up-soft`/`--down-soft` + the unreachable `[data-n="3"]` rule, input focus indicators).
+Commit `facc482`.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
