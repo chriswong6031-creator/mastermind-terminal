@@ -31,15 +31,15 @@ export function AppNav() {
     : path.startsWith("/portfolio") ? "portfolio" : path.startsWith("/alerts") ? "alerts" : "chart";
   const openAI = () => { if (path.startsWith("/terminal")) window.dispatchEvent(new CustomEvent("mm:copilot")); else router.push("/terminal?ai=1"); };
   return (
-    <nav className="appnav">
+    <nav className="appnav" aria-label="Primary">
       {TOP.map((it) => {
         const on = it.k === activeKey;
         return (
-          <Link key={it.k} href={it.href} className={`navbtn${on ? " on" : ""}`}><Glyph k={it.k} /><span>{it.label}</span></Link>
+          <Link key={it.k} href={it.href} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={it.label}><Glyph k={it.k} /><span>{it.label}</span></Link>
         );
       })}
       <div className="gap" />
-      <button className="navbtn" onClick={openAI} title="Mastermind AI"><Glyph k="ai" /><span>AI</span></button>
+      <button className="navbtn" onClick={openAI} title="Mastermind AI" aria-label="Mastermind AI"><Glyph k="ai" /><span>AI</span></button>
     </nav>
   );
 }

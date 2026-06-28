@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const CATS: Record<string, { key: string; label: string; mm?: boolean }[]> = {
   Mastermind: [{ key: "_oracle", label: "Golden Oracle Confluence", mm: true }, { key: "_score", label: "Confluence Score", mm: true }, { key: "_regime", label: "Sniper Regime", mm: true }],
@@ -11,6 +11,13 @@ const CATS: Record<string, { key: string; label: string; mm?: boolean }[]> = {
 export default function IndicatorsModal({ open, active, onClose, onToggle }:
   { open: boolean; active: Set<string>; onClose: () => void; onToggle: (k: string) => void }) {
   const [cat, setCat] = useState("Mastermind");
+  // close on Escape, matching SearchModal's behavior
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
   if (!open) return null;
   return (
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>

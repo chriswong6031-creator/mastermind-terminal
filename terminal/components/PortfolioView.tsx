@@ -11,7 +11,8 @@ const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 export default function PortfolioView({ symbols, email }: { symbols: string[]; email: string }) {
   const router = useRouter();
   const [man, setMan] = useState<Record<string, Row>>({});
-  useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then((m) => setMan(m.symbols || {})).catch(() => {}); }, []);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then((m) => setMan(m.symbols || {})).catch(() => {}).finally(() => setLoaded(true)); }, []);
 
   const rows = symbols.map((s) => ({ sym: s, ...(man[s] || {} as Row) })).filter((r) => r.name);
   const buys = rows.filter((r) => isBuy(r.verdict));
@@ -44,17 +45,23 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
         <div className="panel">
           <div className="ph">Positions<span className="sub">click a row to open it in the chart</span></div>
           <table className="ptable">
-            <thead><tr><th>Symbol</th><th>Last</th><th>Day</th><th>Signal</th><th>Regime</th><th>Win rate</th><th>CAGR</th><th>Suggested tilt</th></tr></thead>
+            <thead><tr><th>Symbol</th><th>Last</th><th>Day</th><th>Signal</th><th>Regime</th><th>Win rate</th><th>Profit factor</th><th>CAGR</th><th>Suggested tilt</th></tr></thead>
             <tbody>
+              {rows.length === 0 && (
+                <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--muted)", padding: "44px 16px", fontSize: 13, cursor: "default" }}>
+                  {!loaded ? "Loading book…" : "No names in your watchlist yet."}
+                </td></tr>
+              )}
               {rows.map((r) => { const u = (r.chg || 0) >= 0; const buy = isBuy(r.verdict);
                 return (
-                  <tr key={r.sym} onClick={() => router.push(`/terminal?sym=${r.sym}`)} style={{ cursor: "pointer" }}>
+                  <tr key={r.sym} onClick={() => router.push(`/terminal?sym=${r.sym}`)}>
                     <td><div className="sym-cell"><span className="ic" style={{ background: r.col }}>{r.sym[0]}</span><div><div className="tk">{r.sym}</div><div className="nm">{r.name}</div></div></div></td>
                     <td>{fmt(r.last, r.last < 10 ? 4 : 2)}</td>
                     <td className={u ? "up" : "down"}>{u ? "+" : ""}{fmt(r.chg)}%</td>
                     <td>{r.verdict ? <span className={`pill ${buy ? "buy" : "sell"}`}>{r.verdict}</span> : "—"}</td>
                     <td><span className={`regchip ${r.regimeBull ? "up" : "warn"}`}>{r.regimeBull ? "Uptrend" : "Mixed"}</span></td>
                     <td>{r.wr != null ? (r.wr * 100).toFixed(0) + "%" : "—"}</td>
+                    <td>{r.pf != null ? r.pf.toFixed(2) : "—"}</td>
                     <td>{r.cagr != null ? (r.cagr * 100).toFixed(1) + "%" : "—"}</td>
                     <td>{tilt[r.sym] ? <><b style={{ color: "var(--brand-2)" }}>{(tilt[r.sym] * 100).toFixed(0)}%</b><span className="bar"><i style={{ width: `${tilt[r.sym] * 100}%` }} /></span></> : <span style={{ color: "var(--text-dim)" }}>—</span>}</td>
                   </tr>

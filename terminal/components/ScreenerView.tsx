@@ -13,16 +13,22 @@ export default function ScreenerView({ email }: { email: string }) {
   const router = useRouter();
   const [rows, setRows] = useState<Row[]>([]);
   const [asOf, setAsOf] = useState<string>("");
+  const [loaded, setLoaded] = useState(false);
+  const [err, setErr] = useState(false);
   const [verdict, setVerdict] = useState<"all" | "buy" | "sell">("all");
   const [sec, setSec] = useState<"all" | "Equities" | "Crypto">("all");
   const [uptrend, setUptrend] = useState(false);
   const [sort, setSort] = useState<{ k: keyof Row; dir: 1 | -1 }>({ k: "cagr", dir: -1 });
 
   useEffect(() => {
-    fetch("/data/manifest.json").then((r) => r.json()).then((m) => {
-      setAsOf(m.as_of || "");
-      setRows(Object.entries(m.symbols).map(([sym, r]: any) => ({ sym, ...r })));
-    }).catch(() => {});
+    fetch("/data/manifest.json")
+      .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then((m) => {
+        setAsOf(m.as_of || "");
+        setRows(Object.entries(m.symbols || {}).map(([sym, r]: any) => ({ sym, ...r })));
+        setLoaded(true);
+      })
+      .catch(() => { setErr(true); setLoaded(true); });
   }, []);
 
   const view = useMemo(() => {
@@ -59,7 +65,7 @@ export default function ScreenerView({ email }: { email: string }) {
       <AppNav />
       <main className="main2">
         <div className="scr-filters">
-          <span className="chip" style={{ borderColor: "rgba(41,98,255,.5)", color: "var(--brand-2)", background: "rgba(41,98,255,.12)", cursor: "default" }}>
+          <span className="chip on" style={{ cursor: "default" }} title="This scan is powered by the Golden Oracle confluence">
             <svg width="13" height="13" viewBox="0 0 24 24" style={{ fill: "var(--brand-2)" }}><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Golden Oracle</span>
           <button className={`chip${verdict === "all" ? " on" : ""}`} onClick={() => setVerdict("all")}>Any signal</button>
           <button className={`chip${verdict === "buy" ? " on" : ""}`} onClick={() => setVerdict("buy")}>BUY</button>
@@ -77,6 +83,11 @@ export default function ScreenerView({ email }: { email: string }) {
               {th("wr", "Win rate")}{th("pf", "Profit factor")}{th("cagr", "CAGR")}{th("vol", "Volume")}
             </tr></thead>
             <tbody>
+              {view.length === 0 && (
+                <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--muted)", padding: "44px 16px", fontSize: 13, cursor: "default" }}>
+                  {!loaded ? "Loading scan…" : err ? "Could not load the scan." : "No symbols match these filters."}
+                </td></tr>
+              )}
               {view.map((r) => { const u = r.chg >= 0; const buy = isBuy(r.verdict);
                 return (
                   <tr key={r.sym} onClick={() => router.push(`/terminal?sym=${r.sym}`)}>
