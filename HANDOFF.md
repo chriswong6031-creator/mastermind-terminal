@@ -124,6 +124,20 @@ peer's own value, null clears, toggle gates. NOTE for future verification: the h
 `document.hidden` — so visual range/crosshair changes and synthetic-hover crosshairs won't paint between
 evals (charts still render in `preview_screenshot`, which forces a paint). Assert the driving API calls
 (spy on `setVisibleLogicalRange`/`setCrosshairPosition`) rather than the painted result. Commit `0601426`.
+**Follow-up 6 — regression self-review (same day):** a finder→verify workflow over this turn's diff
+(base `15dbf6e`) confirmed **5 regressions**, all fixed (`8570f0c`). The important one: the cross-pane
+**range echo loop** — paneSync's synchronous `applying` guard can't contain range mirroring because LWC
+applies `setVisibleLogicalRange` on the NEXT rAF (after the flag resets), so peers re-broadcast and fight
+(differing bar counts → differing clamp). Fixed with a per-peer suppression marker (armed only when a peer
+will actually move; swallows one echo). The crosshair path was already safe — LWC's `setCrosshairPosition`
+uses `skipEvent` and fires no move event. Verified the fix with a **Node simulation** of the async-rAF +
+differing-clamp scenario (compile paneSync.ts with esbuild, mock peers): converges in 2 set-calls, no loop
+— a good pattern when the preview browser is unavailable. Also fixed: AlertsView optimistic-delete restored
+a stale full list (now re-inserts only the failed item), empty-state rows read as clickable (added
+`.empty-row`), PineEditor gutter desynced on a trailing newline (`lines` mirrors the textarea 1:1), and the
+split-button highlight keyed off `panes.length` instead of the requested split. NOTE: the `preview_start`
+tooling failed this session with `spawn .../Helpers/disclaimer ENOENT` (intermittent env issue) — fall back
+to `npm run dev` over Bash + curl for route/compile checks, and Node sims for pure-logic verification.
 
 **Historical context (original deferral notes):**
 1. **Interactive drawing tools** — the left tool dock is currently DECORATIVE. Build an absolutely-positioned canvas/SVG overlay synced to LWC's `timeToCoordinate`/`priceToCoordinate`; persist to a new `drawings` table. (P0 in the audit.)
