@@ -390,3 +390,4 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .pane-hd b{font-weight:650}
 .pane-hd .px{margin-left:auto;font-variant-numeric:tabular-nums}
 .pane-hd .cg{font-size:11px;font-variant-numeric:tabular-nums;min-width:48px;text-align:right}
+.pane-grid[data-n="3"]{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}

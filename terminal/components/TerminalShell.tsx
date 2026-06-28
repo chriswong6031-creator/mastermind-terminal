@@ -86,9 +86,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     setPanes((p) => {
       if (n <= p.length) return p.slice(0, n);
       const used = new Set(p); const extra: string[] = [];
-      for (const s of wl.map((x) => x.symbol)) { if (extra.length >= n - p.length) break; if (!used.has(s)) { extra.push(s); used.add(s); } }
-      while (extra.length < n - p.length) extra.push(p[p.length - 1] || seed0);
-      return [...p, ...extra];
+      // only UNIQUE symbols — never duplicate a symbol across panes (two panes on one symbol
+      // would own separate drawing stores and clobber each other via the replace-all PUT)
+      for (const s of wl.map((x) => x.symbol)) { if (p.length + extra.length >= n) break; if (!used.has(s)) { extra.push(s); used.add(s); } }
+      return [...p, ...extra];   // may be < n if the watchlist can't supply enough unique symbols
     });
     setActivePane((a) => Math.min(a, n - 1));
   }
@@ -130,7 +131,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }
   async function removeSymbol(sym: string) { setWl((w) => w.filter((s) => s.symbol !== sym)); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }); }
   const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  const pick = (sym: string) => { setPanes((p) => p.map((s, i) => (i === activePane ? sym : s))); setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]); };
+  const pick = (sym: string) => {
+    const existing = panes.findIndex((s) => s === sym);
+    if (existing >= 0 && existing !== activePane) setActivePane(existing);          // already shown in another pane → focus it (don't duplicate)
+    else setPanes((p) => p.map((s, i) => (i === activePane ? sym : s)));
+    setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]);
+  };
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { if (sym !== active) setCompare((c) => (c.includes(sym) ? c : [...c, sym].slice(0, 4))); } else pick(sym); };
 
   function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, activePane, tf, chartType, inds: [...inds], favTF, compare }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }

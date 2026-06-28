@@ -28,13 +28,14 @@ function resampleTf(rows: Bar[], tf: string): Bar[] {
 }
 function heikin(rows: Bar[]): Bar[] { const out: Bar[] = []; let po = 0, pc = 0; for (let i = 0; i < rows.length; i++) { const r = rows[i]; const hc = (r.o + r.h + r.l + r.c) / 4; const ho = i === 0 ? (r.o + r.c) / 2 : (po + pc) / 2; out.push({ ...r, o: ho, c: hc, h: Math.max(r.h, ho, hc), l: Math.min(r.l, ho, hc) }); po = ho; pc = hc; } return out; }
 
-const cache: Record<string, { ohlc: any; slice: any }> = {};
+const ohlcCache: Record<string, any> = {};
+const sliceCache: Record<string, any> = {};
 const NS = "http://www.w3.org/2000/svg";
 const mk = (tag: string, attrs: Record<string, any>) => { const e = document.createElementNS(NS, tag); for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, String(attrs[k])); return e; };
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [] }:
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], isActive = true }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[] }) {
+    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; isActive?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
   const verdictRef = useRef<HTMLSpanElement>(null);
@@ -47,6 +48,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const toolRef = useRef<string | null>(tool);
   const onChangeRef = useRef(onDrawingsChange);
   const magnetRef = useRef(magnet);
+  const activeRef = useRef(isActive); activeRef.current = isActive;
   const barRef = useRef<HTMLDivElement | null>(null);
   const ctxRef = useRef<HTMLDivElement | null>(null);
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet;
@@ -56,19 +58,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let ro: ResizeObserver | null = null, dead = false;
     let onKey: ((e: KeyboardEvent) => void) | null = null;
     let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
-    const snap = () => { try { const c = chartRef.current!.takeScreenshot(); const a = document.createElement("a"); a.href = c.toDataURL(); a.download = `${symbol}.png`; a.click(); } catch {} };
+    const snap = () => { if (!activeRef.current) return; try { const c = chartRef.current!.takeScreenshot(); const a = document.createElement("a"); a.href = c.toDataURL(); a.download = `${symbol}.png`; a.click(); } catch {} };
     window.addEventListener("mm:snapshot", snap);
 
     (async () => {
-      if (!cache[symbol]) {
+      if (ohlcCache[symbol] === undefined || sliceCache[symbol] === undefined) {
         const [ohlc, slice] = await Promise.all([
           fetch(`/data/${symbol}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
           fetch(`/data/${symbol}.slice.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
         ]);
-        cache[symbol] = { ohlc, slice };
+        ohlcCache[symbol] = ohlc; sliceCache[symbol] = slice;
       }
       if (dead) return;
-      const { ohlc, slice } = cache[symbol];
+      const ohlc = ohlcCache[symbol], slice = sliceCache[symbol];
       if (!ohlc?.bars?.length) { if (statusRef.current) statusRef.current.textContent = "No data for this symbol."; return; }
 
       let rows: Bar[] = ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
@@ -108,8 +110,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
       for (let ci = 0; ci < (compare || []).length && ci < 4; ci++) {
         const cs = compare[ci]; if (!cs || cs === symbol) continue;
-        if (!cache[cs]) { const o = await fetch(`/data/${cs}.json`).then((rr) => (rr.ok ? rr.json() : null)).catch(() => null); cache[cs] = { ohlc: o, slice: null }; }
-        const co = cache[cs]?.ohlc; if (!co?.bars?.length || dead) continue;
+        if (ohlcCache[cs] === undefined) { const o = await fetch(`/data/${cs}.json`).then((rr) => (rr.ok ? rr.json() : null)).catch(() => null); ohlcCache[cs] = o; }
+        const co = ohlcCache[cs]; if (!co?.bars?.length || dead) continue;
         let crows: Bar[] = co.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
         crows = resampleTf(crows, timeframe);
         const cmap: Record<string, number> = {}; for (const cr of crows) cmap[cr.time] = cr.c;
@@ -248,7 +250,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       // select + drag existing drawings in cursor mode (capture phase; runs before creation)
       svg.addEventListener("pointerdown", (ev) => {
-        if (toolRef.current) return; const id = idAt(ev); if (!id) { if (sel) { sel = null; renderDraw(); } return; }
+        if (toolRef.current || !activeRef.current) return; const id = idAt(ev); if (!id) { if (sel) { sel = null; renderDraw(); } return; }
         ev.stopPropagation(); sel = id; renderDraw();
         const d0 = drawRef.current.find((x) => x.id === id); if (!d0) return;
         const s0 = rectXY(ev); const start = snap(s0.x, s0.y); const orig = d0.points.map((p) => ({ ...p }));
@@ -282,6 +284,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       });
 
       onKey = (e: KeyboardEvent) => {
+        if (!activeRef.current) return;
         const tag = (e.target as HTMLElement)?.tagName?.toLowerCase(); if (tag === "input" || tag === "textarea") return;
         if (e.key === "Escape") { if (sel) { sel = null; renderDraw(); } }
         else if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
