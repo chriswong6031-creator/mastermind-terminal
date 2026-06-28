@@ -2,13 +2,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
-import ChartPanel, { type DetectCmd } from "@/components/ChartPanel";
+import { type DetectCmd } from "@/components/ChartPanel";
+import ChartPane from "@/components/ChartPane";
 import StrategyTester from "@/components/StrategyTester";
 import SearchModal from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
 import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
-import { type Drawing } from "@/lib/drawings";
 import { useLive } from "@/lib/live";
 
 type Row = { name: string; sec: string; col: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
@@ -36,7 +36,10 @@ const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
 export default function TerminalShell({ symbols, email, initialSymbol }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string }) {
   const [man, setMan] = useState<Manifest | null>(null);
   const [wl, setWl] = useState(symbols);
-  const [active, setActive] = useState(initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA");
+  const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
+  const [panes, setPanes] = useState<string[]>([seed0]);
+  const [activePane, setActivePane] = useState(0);
+  const active = panes[activePane] ?? panes[0] ?? seed0;
   const [tf, setTf] = useState("D");
   const [chartType, setChartType] = useState("candles");
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
@@ -50,7 +53,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // §7 state
   const [view, setView] = useState<"price" | "strategy">("price");
   const [tool, setTool] = useState<string | null>(null);
-  const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [detectCmd, setDetectCmd] = useState<DetectCmd>(null);
   const [detectOpen, setDetectOpen] = useState(false);
   const [intel, setIntel] = useState<any>(null);
@@ -60,9 +62,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [magnet, setMagnet] = useState(false);
   const [compare, setCompare] = useState<string[]>([]);
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
-  const saveT = useRef<any>(null); const nonce = useRef(0);
-  const pendingSave = useRef<{ sym: string; drawings: Drawing[] } | null>(null);
-  const flushSave = useCallback(() => { clearTimeout(saveT.current); const p = pendingSave.current; if (p) { pendingSave.current = null; fetch("/api/drawings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: p.sym, drawings: p.drawings }) }).catch(() => {}); } }, []);
+  const nonce = useRef(0);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => { setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setTf(load("mm.tf", "D")); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true })); }, []);
@@ -72,18 +72,26 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
   useEffect(() => { localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
 
-  // per-symbol drawings + intel; layouts once
-  useEffect(() => { let alive = true; setDrawings([]); setIntel(null); setLivePx(null); setSlice(null);
-    fetch(`/api/drawings?symbol=${active}`).then((r) => r.json()).then((d) => { if (alive) setDrawings(d.drawings || []); }).catch(() => {});
+  // per-symbol intel/slice for the rail (drawings now live per-pane in ChartPane); layouts once
+  useEffect(() => { let alive = true; setIntel(null); setLivePx(null); setSlice(null);
     fetch(`/data/${active}.intel.json`).then((r) => (r.ok ? r.json() : null)).then((d) => { if (alive) setIntel(d); }).catch(() => {});
     fetch(`/data/${active}.slice.json`).then((r) => (r.ok ? r.json() : null)).then((d) => { if (alive) setSlice(d); }).catch(() => {});
-    return () => { alive = false; flushSave(); };   // ignore a stale GET for the prior symbol; flush its pending drawing-save so it isn't dropped
-  }, [active, flushSave]);
+    return () => { alive = false; };   // ignore a stale GET for the prior symbol
+  }, [active]);
   useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
   useEffect(() => { const open = () => setCopilot(true); window.addEventListener("mm:copilot", open); try { if (new URLSearchParams(window.location.search).get("ai") === "1") setCopilot(true); } catch {} return () => window.removeEventListener("mm:copilot", open); }, []);
 
-  const changeDrawings = useCallback((d: Drawing[]) => { setDrawings(d); pendingSave.current = { sym: active, drawings: d }; clearTimeout(saveT.current); saveT.current = setTimeout(flushSave, 600); }, [active, flushSave]);
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
+  function setGrid(n: number) {
+    setPanes((p) => {
+      if (n <= p.length) return p.slice(0, n);
+      const used = new Set(p); const extra: string[] = [];
+      for (const s of wl.map((x) => x.symbol)) { if (extra.length >= n - p.length) break; if (!used.has(s)) { extra.push(s); used.add(s); } }
+      while (extra.length < n - p.length) extra.push(p[p.length - 1] || seed0);
+      return [...p, ...extra];
+    });
+    setActivePane((a) => Math.min(a, n - 1));
+  }
   const onTick = useCallback((p: number) => setLivePx(p), []);
   const liveStatus = useLive(active, onTick);
 
@@ -122,11 +130,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }
   async function removeSymbol(sym: string) { setWl((w) => w.filter((s) => s.symbol !== sym)); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }); }
   const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  const pick = (sym: string) => { setActive(sym); setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]); };
+  const pick = (sym: string) => { setPanes((p) => p.map((s, i) => (i === activePane ? sym : s))); setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]); };
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { if (sym !== active) setCompare((c) => (c.includes(sym) ? c : [...c, sym].slice(0, 4))); } else pick(sym); };
 
-  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { active, tf, chartType, inds: [...inds], favTF, compare }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
-  function loadLayout(l: any) { const c = l.config || {}; if (c.tf) setTf(c.tf); if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (c.active) setActive(c.active); setLayoutOpen(false); }
+  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, activePane, tf, chartType, inds: [...inds], favTF, compare }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
+  function loadLayout(l: any) { const c = l.config || {}; if (c.tf) setTf(c.tf); if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (Array.isArray(c.panes) && c.panes.length) { setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); } else if (c.active) { setPanes([c.active]); setActivePane(0); } setLayoutOpen(false); }
   function delLayout(id: string) { fetch(`/api/layouts?id=${id}`, { method: "DELETE" }).then(() => setLayouts((ls) => ls.filter((x) => x.id !== id))); }
 
   const colList = () => { const a: [string, string][] = [["last", "Last"]]; if (set.cols.change) a.push(["change", "Chg"]); if (set.cols.changePct) a.push(["changePct", "Chg%"]); if (set.cols.volume) a.push(["volume", "Vol"]); return a; };
@@ -182,6 +190,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>Indicators</button>
             <button className="tbtn" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>Compare</button>
+            <div className="seg" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={panes.length === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
             <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>Detect<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
@@ -231,7 +240,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               <div className="sp" />
               <button title="Clear detected" onClick={() => detect("clear")}><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg></button>
             </div>
-            <ChartPanel symbol={active} chartType={chartType} indicators={inds} timeframe={tf} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} tool={tool} drawings={drawings} onDrawingsChange={changeDrawings} detectCmd={detectCmd} magnet={magnet} compare={compare.filter((c) => c !== active)} key={active + tf + chartType} />
+            <div className="pane-grid" data-n={panes.length}>
+              {panes.map((sym, i) => (
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={tf} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} />
+              ))}
+            </div>
           </div>
         ) : (
           <StrategyTester symbol={active} key={"strat" + active} />
