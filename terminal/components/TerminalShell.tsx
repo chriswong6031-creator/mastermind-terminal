@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
-import { type DetectCmd } from "@/components/ChartPanel";
+import { type DetectCmd, type PineScript } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
 import StrategyTester from "@/components/StrategyTester";
 import SearchModal from "@/components/SearchModal";
@@ -70,6 +70,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [magnet, setMagnet] = useState(false);
   const [compare, setCompare] = useState<string[]>([]);
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
+  // a user's Pine script handed off from the editor's "Add to chart" (sessionStorage + ?pine=1)
+  const [pineScript, setPineScript] = useState<PineScript | null>(null);
+  const [pineStatus, setPineStatus] = useState<{ ok: boolean; error?: string; plots: number; shapes: number } | null>(null);
   const nonce = useRef(0);
   const wsMounted = useRef(false);
   const t = useT();
@@ -158,6 +161,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, [active]);
   useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
   useEffect(() => { const open = () => setCopilot(true); window.addEventListener("mm:copilot", open); try { if (new URLSearchParams(window.location.search).get("ai") === "1") setCopilot(true); } catch {} return () => window.removeEventListener("mm:copilot", open); }, []);
+  // pick up a script the editor handed off via "Add to chart" (sessionStorage); ?pine=1 marks a fresh handoff
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("mm.pine"); if (!raw) return;
+      const p = JSON.parse(raw);
+      if (p && typeof p.source === "string") { setPineScript({ name: p.name || "Custom script", source: p.source, params: p.params || {} }); if (p.sym && !initialSymbol) pick(p.sym); }
+    } catch {}
+  }, []); // eslint-disable-line
+  const removePine = useCallback(() => { setPineScript(null); setPineStatus(null); try { sessionStorage.removeItem("mm.pine"); } catch {} }, []);
 
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
   function setGrid(n: number) {
@@ -318,6 +330,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           </div>
         )}
 
+        {pineScript && view === "price" && (
+          <div className="cmp-strip">
+            <span className="cmp-lbl" style={{ color: "var(--brand-2)" }}>ƒ Custom Pine</span>
+            <span className="cmp-chip" style={{ borderColor: pineStatus && !pineStatus.ok ? "var(--down)" : "var(--brand-2)" }}>
+              <i style={{ background: pineStatus && !pineStatus.ok ? "var(--down)" : "var(--brand-2)" }} />{pineScript.name}
+              <button title="Remove from chart" onClick={removePine}>✕</button>
+            </span>
+            <span style={{ fontSize: 11.5, color: pineStatus && !pineStatus.ok ? "var(--down)" : "var(--text-2)" }}>
+              {pineStatus == null ? "running…" : pineStatus.ok ? `✓ ${pineStatus.plots} plot${pineStatus.plots === 1 ? "" : "s"} · ${pineStatus.shapes} marker${pineStatus.shapes === 1 ? "" : "s"} · live engine` : `✗ ${pineStatus.error}`}
+            </span>
+          </div>
+        )}
+
         {replayOn && view === "price" && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 14px", borderBottom: "1px solid var(--line)", background: "var(--bg)" }}>
             <button className="icbtn" title="Reset" onClick={() => { setReplayIdx(Math.max(20, total - 80)); setPlaying(false); }}><svg viewBox="0 0 24 24"><path d="M11 19l-7-7 7-7M20 19l-7-7 7-7" /></svg></button>
@@ -342,7 +367,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} />
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} pineScript={pineScript} onPineResult={setPineStatus} />
               ))}
             </div>
           </div>

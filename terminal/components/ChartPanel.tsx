@@ -2,10 +2,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createChart, CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries,
-  CrosshairMode, type IChartApi, type ISeriesApi,
+  CrosshairMode, createSeriesMarkers, type IChartApi, type ISeriesApi,
 } from "lightweight-charts";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
+import { runPine } from "@/lib/pine-engine";
+
+// a user's Pine script handed off from the editor, to be executed + drawn on this chart
+export type PineScript = { name: string; source: string; params: Record<string, any> };
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
@@ -34,9 +38,10 @@ const sliceCache: Record<string, any> = {};
 const NS = "http://www.w3.org/2000/svg";
 const mk = (tag: string, attrs: Record<string, any>) => { const e = document.createElementNS(NS, tag); for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, String(attrs[k])); return e; };
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], isActive = true, syncId = null }:
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], isActive = true, syncId = null, pineScript = null, onPineResult }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; isActive?: boolean; syncId?: number | null }) {
+    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; isActive?: boolean; syncId?: number | null;
+    pineScript?: PineScript | null; onPineResult?: (r: { ok: boolean; error?: string; plots: number; shapes: number } | null) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
   const verdictRef = useRef<HTMLSpanElement>(null);
@@ -54,6 +59,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const ctxRef = useRef<HTMLDivElement | null>(null);
   const textEditRef = useRef<HTMLInputElement | null>(null);
   const sigRef = useRef<SVGSVGElement | null>(null);
+  const onPineRef = useRef(onPineResult); onPineRef.current = onPineResult;
+  // only rebuild the chart when the script's identity/content actually changes (the object is fresh each render)
+  const pineKey = pineScript ? `${pineScript.name}|${pineScript.source.length}|${JSON.stringify(pineScript.params)}` : "";
   // rebuild the chart when the up/down color scheme flips (candle + badge colors are baked from tokens)
   const [csNonce, setCsNonce] = useState(0);
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
@@ -148,6 +156,47 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         pane++;
       }
       if (indicators.has("macd")) { const m = macd(closes); const hs = chart.addSeries(HistogramSeries, {}, pane); hs.setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? "rgba(38,194,129,.5)" : "rgba(240,86,107,.5)" } : null)).filter(Boolean) as any); const lS = chart.addSeries(LineSeries, { color: c.brand2, lineWidth: 1.3 as any, title: "MACD" }, pane); const sS = chart.addSeries(LineSeries, { color: c.warn, lineWidth: 1, title: "signal" }, pane); lS.setData(toLine(rows, m.line)); sS.setData(toLine(rows, m.sig)); pane++; }
+
+      // ── user Pine script: execute via the engine and draw its plots/shapes/hlines ──
+      // overlay plots/markers go on the price pane; the rest fill a dedicated sub-pane.
+      if (pineScript?.source) {
+        try {
+          const out = runPine(pineScript.source, rows as any, { timeframe, symbol, params: pineScript.params || {} });
+          if (!out.ok || !out.result) { onPineRef.current?.({ ok: false, error: out.errors[0]?.message || "run failed", plots: 0, shapes: 0 }); }
+          else {
+            const R = out.result;
+            const ls = (s: string) => (s === "dotted" ? 1 : s === "dashed" ? 2 : 0);
+            const D = (arr: { time: string; value: number }[]) => arr.map((d: { time: string; value: number }) => ({ time: d.time, value: d.value }));
+            const ovMarks: any[] = [], paneMarks: any[] = [];
+            let pineAnchor: any = null; const pinePane = pane; let usedPine = false;
+            for (const pl of R.plots) {
+              const tgt = pl.overlay ? 0 : pinePane; if (!pl.overlay) usedPine = true;
+              const lw = Math.max(1, Math.min(4, Math.round(pl.linewidth || 1))) as any;
+              let s: any;
+              if (pl.kind === "circles" || pl.kind === "cross") {
+                s = chart.addSeries(LineSeries, { color: pl.color, lineVisible: false, pointMarkersVisible: true, pointMarkersRadius: Math.max(2, lw), priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, tgt); s.setData(D(pl.data));
+              } else if (pl.kind === "histogram" || pl.kind === "columns") {
+                s = chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false, ...(pl.overlay ? { priceScaleId: "" } : {}) }, tgt); s.setData(pl.data.map((d) => ({ time: d.time, value: d.value, color: d.color })));
+              } else if (pl.kind === "area") {
+                s = chart.addSeries(AreaSeries, { lineColor: pl.color, topColor: "rgba(41,98,255,.22)", bottomColor: "rgba(41,98,255,.02)", lineWidth: lw, priceLineVisible: false, lastValueVisible: false }, tgt); s.setData(D(pl.data));
+              } else {
+                s = chart.addSeries(LineSeries, { color: pl.color, lineWidth: lw, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: pl.title }, tgt); s.setData(D(pl.data));
+              }
+              if (!pl.overlay && !pineAnchor) pineAnchor = s;
+            }
+            for (const h of R.hlines) { const tgt = h.overlay ? priceS : pineAnchor; if (tgt) try { tgt.createPriceLine({ price: h.price, color: h.color, lineWidth: 1, lineStyle: ls(h.style), axisLabelVisible: false, title: h.title }); } catch {} }
+            for (const sh of R.shapes) (sh.overlay ? ovMarks : paneMarks).push({ time: sh.time, position: sh.position, color: sh.color, shape: sh.shape, text: sh.text });
+            const byT = (a: any, b: any) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0);
+            if (ovMarks.length) createSeriesMarkers(priceS, ovMarks.sort(byT));
+            if (usedPine) {
+              if (!pineAnchor) { pineAnchor = chart.addSeries(LineSeries, { color: "rgba(0,0,0,0)", priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, pinePane); pineAnchor.setData(rows.map((rr) => ({ time: rr.time, value: rr.c }))); }
+              if (paneMarks.length) createSeriesMarkers(pineAnchor, paneMarks.sort(byT));
+              pane = pinePane + 1;
+            }
+            onPineRef.current?.({ ok: true, plots: R.plots.length, shapes: R.shapes.length });
+          }
+        } catch (e) { onPineRef.current?.({ ok: false, error: (e as Error)?.message || "engine error", plots: 0, shapes: 0 }); }
+      }
 
       try { const pn = chart.panes(); pn[0].setStretchFactor(3.4); for (let i = 1; i < pn.length; i++) pn[i].setStretchFactor(1); } catch {}
 
@@ -407,7 +456,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     })();
 
     return () => { dead = true; if (rafId != null) cancelAnimationFrame(rafId); if (syncCleanup) syncCleanup(); if (dragCleanup) dragCleanup(); window.removeEventListener("mm:snapshot", snap); if (onKey) window.removeEventListener("keydown", onKey); if (winDown) window.removeEventListener("pointerdown", winDown); if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx); ro?.disconnect(); if (textEditRef.current) { try { textEditRef.current.remove(); } catch {} textEditRef.current = null; } if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; } if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (sigRef.current) { try { sigRef.current.remove(); } catch {} sigRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
-  }, [symbol, chartType, timeframe, replayIdx, Array.from(indicators).sort().join(","), (compare || []).join(","), syncId, csNonce]); // eslint-disable-line
+  }, [symbol, chartType, timeframe, replayIdx, Array.from(indicators).sort().join(","), (compare || []).join(","), syncId, csNonce, pineKey]); // eslint-disable-line
 
   // re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild)
   useEffect(() => { renderRef.current?.(); const svg = svgRef.current; if (svg) { svg.style.pointerEvents = tool ? "auto" : "none"; svg.style.cursor = tool === "erase" ? "pointer" : tool ? "crosshair" : "default"; } }, [tool, drawings]);
