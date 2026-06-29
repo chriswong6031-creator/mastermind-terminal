@@ -26,8 +26,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "terminal" / "public" / "data"
 MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
-MAX_BARS = 1300
-YEARS = 6
+MAX_BARS = 3900   # ~15y of daily bars
+YEARS = 15
 
 
 def _polygon_key() -> str | None:
@@ -86,9 +86,13 @@ def fetch_polygon(ticker: str) -> list[list]:
 # ---------------------------------------------------------------- yfinance (HK / Canada)
 def fetch_yf(ticker: str) -> list[list]:
     import yfinance as yf
+    # US class shares carry a dot in the manifest (BRK.B) but a dash in Yahoo (BRK-B);
+    # keep the market suffix (.HK/.TO/.SS/.SZ) intact. auto_adjust=True → split/dividend
+    # adjusted, continuous series (essential over 15y, else splits read as cliffs).
+    yt = ticker if ticker.endswith((".HK", ".TO", ".SS", ".SZ")) else ticker.replace(".", "-")
     for attempt in range(3):
         try:
-            df = yf.Ticker(ticker).history(period=f"{YEARS}y", auto_adjust=False)
+            df = yf.Ticker(yt).history(period=f"{YEARS}y", auto_adjust=True)
             if df is None or df.empty:
                 return []
             rows = []
@@ -128,6 +132,7 @@ def main(argv: list[str]) -> None:
         limit = int(argv[argv.index("--limit") + 1])
     if "--workers" in argv:
         workers = int(argv[argv.index("--workers") + 1])
+    force = "--force" in argv   # re-fetch even if a JSON already exists (deepen 5y → 15y)
 
     symbols = json.loads(MANIFEST.read_text())["symbols"]
     todo = []
@@ -137,7 +142,7 @@ def main(argv: list[str]) -> None:
             continue
         if want != "all" and mk != want:
             continue
-        if (OUT / f"{sym}.json").exists():
+        if not force and (OUT / f"{sym}.json").exists():
             continue
         todo.append((sym, mk))
     if limit:
@@ -150,8 +155,10 @@ def main(argv: list[str]) -> None:
 
     def work(item):
         sym, mk = item
-        rows = fetch_polygon(sym) if mk == "US" else fetch_yf(sym)
-        n = write_json(sym, rows, "polygon" if mk == "US" else "yahoo")
+        # Polygon's REST aggregates cap at ~5y on this key, so route every market
+        # through yfinance for the full 15y depth.
+        rows = fetch_yf(sym)
+        n = write_json(sym, rows, "yahoo")
         return sym, mk, n
 
     done = ok = 0
