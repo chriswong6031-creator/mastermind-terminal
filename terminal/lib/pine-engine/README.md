@@ -31,7 +31,10 @@ source ──▶ lexer.ts ──▶ parser.ts ──▶ runtime.ts ──▶ { p
   `:=` reassigns, `expr[n]` reads history, user functions bind params as **aliases** to the
   caller's series so `_src[1]` inside a function reads the argument's real history. `ta.*` keep
   per-call-site state. Tolerant by design: unimplemented calls (tables, labels, fill, bgcolor…)
-  are no-ops returning `na` so a large real-world script still runs and plots what it can.
+  are no-ops returning `na` so a large real-world script still runs and plots what it can. A
+  request.security call to a **coarser** timeframe resamples the chart bars up to that TF, re-runs
+  the whole script on the higher-TF series (one re-run per distinct TF, cached), and reads the
+  requested expression off it — so MTF gates use real higher-TF values, not the chart TF.
 - **builtins.ts** — constant namespaces (`color.*`, `shape.*`, `plot.style_*`, …), color→CSS
   conversion, `str.tostring` formatting, timeframe-seconds.
 - **index.ts** — `runPine(source, bars, opts)` and `compilePine(source)` (parse-only check).
@@ -43,13 +46,35 @@ source ──▶ lexer.ts ──▶ parser.ts ──▶ runtime.ts ──▶ { p
 ✓ `math.*`, `color.new/rgb` + named colors, `str.tostring/format`, arithmetic/compare/ternary/logical
 ✓ series semantics — bar-by-bar, `[n]` history, `var`, `:=`, tuples, single- & multi-line user functions, `for`, `if`
 ✓ `plot` (→ line / histogram / area / circles-as-point-markers), `plotshape`/`plotchar` (→ markers), `hline` (→ price line)
+✓ `request.security` — true higher-timeframe resampling (see below)
+
+### request.security — higher-timeframe resampling
+
+A `request.security(sym, tf, expr, …)` call to a **coarser** `tf` than the chart now resamples for
+real instead of collapsing to the chart TF:
+
+1. the chart bars (already at the chart TF — the engine never sees finer data) are grouped up to
+   `tf` — ISO-week for `W`, calendar buckets for `M`/`3M`/`12M`, an epoch-aligned N-day grid for
+   `nD` — producing HTF bars plus a `chart-bar → HTF-bar` index;
+2. the **whole script re-runs** on those HTF bars (one cached re-run per distinct coarser TF), so
+   every series the expression depends on (`ta.*`, `calc()`, …) is recomputed on the HTF timeline;
+3. each chart bar reads `expr` off its HTF bar. Because the expression keeps its own `[n]` offset,
+   `request.security(sym, tf, _src[1], lookahead=barmerge.lookahead_off)` returns the **confirmed
+   (closed) HTF bar** — non-repainting — while `_src` (no `[1]`) returns the **developing** HTF bar.
+   This is exactly the flagship's `secScalar` (confirmed, `rep=false`) vs `secDev` (developing) split.
+
+Same-timeframe or finer requests evaluate the expression in place (a finer TF can't be rebuilt from
+chart bars). Validated on the flagship over a 3D chart (confirm→1W resampled): the confirm-gate
+sign flips on ~20% of bars vs the old chart-TF passthrough, and the gated BUY★/SELL★/CUT/RE-BUY
+signals differ on 19 of 34 symbols.
 
 Deferred / no-op (clearly reported, never throws):
-- `request.security` is evaluated on the **chart timeframe** (a true higher-timeframe resample
-  is not implemented). In single-timeframe mode the flagship's MTF trend gates collapse to
-  "agree", which is sound for a single-TF read; full MTF fidelity is the main follow-up.
 - Tables, labels, lines, boxes, `fill`, `bgcolor`, `alertcondition` are parsed but draw nothing
   (they aren't chart series). The flagship's MTF dashboard table is therefore not rendered here.
+- A finer-than-chart `request.security` (e.g. the flagship's 1D *lead* TF under a 3D chart) falls
+  back to the chart value — the engine only receives chart-TF bars, so sub-chart bars can't be
+  reconstructed. A fresh `ta.*` computed *inside* a security expression isn't recomputed on the HTF
+  timeline (the flagship passes plain series refs, so this doesn't affect it).
 
 ## Audit & known limitations
 
@@ -78,6 +103,6 @@ The locked `RM×ST — MTF Signal Suite` (`PROPRIETARY_SCRIPT`, `locked: true`) 
 chart — that is the validated, parity-gated path that produces the BUY/SELL/CUT/RE-BUY badges.
 "Add to chart" on the locked indicator does **not** route it through this engine, so the golden
 signals are never duplicated or contradicted. This general-purpose engine runs **arbitrary user
-scripts** instead. (The engine *can* execute the flagship source faithfully for the
-single-timeframe oscillator pane + markers — see the screenshots used in validation — but the
+scripts** instead. (The engine *can* execute the flagship source faithfully — including its MTF
+trend gates, now that `request.security` resamples — for the oscillator pane + markers, but the
 on-chart endorsement of record stays with the oracle.)

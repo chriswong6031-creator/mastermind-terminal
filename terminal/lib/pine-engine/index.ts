@@ -9,8 +9,10 @@
 //   ✓ math.*, color.* (new/rgb + named), str.tostring/format, arithmetic/compare/ternary/logical
 //   ✓ series semantics — bar-by-bar, `[n]` history, `var`, `:=`, user functions (single/multi-line, tuples)
 //   ✓ plot (→ line/histogram/area/circles), plotshape/plotchar (→ markers), hline (→ price line)
-//   ~ request.security: evaluated on the CHART timeframe (true HTF resample is DEFERRED — MTF gates
-//     collapse to "agree" in single-timeframe mode; documented for the flagship below)
+//   ✓ request.security: a COARSER timeframe is truly resampled — the chart bars are grouped up to the
+//     requested TF, the whole script re-runs on those HTF bars, and the expression reads that series.
+//     `_src[1]` = confirmed/closed HTF bar (non-repaint, lookahead_off); `_src` = developing HTF bar.
+//     Same/finer TF evaluates in place (the engine only receives chart-TF bars, so finer can't be rebuilt).
 //   ✗ tables/labels/lines/boxes/fill/bgcolor/alertcondition: parsed and treated as no-ops (they don't
 //     produce chart series). The flagship's MTF dashboard table is therefore not drawn here — its
 //     validated BUY/SELL/CUT/RE-BUY signals keep coming from the precomputed Python oracle path.
