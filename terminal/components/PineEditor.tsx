@@ -6,22 +6,28 @@ import { AppNav } from "@/components/AppNav";
 
 type Script = { id: string; name: string; source: string; lang: string; params: Record<string, any>; updated_at: string };
 
-// lightweight Pine highlighter — string-protect → namespaces → keywords → numbers
-const FN = /\b(ta|math|request|input|str|array|color|shape|location|plot|syminfo)\.[A-Za-z_]\w*/g;
-const KW = /\b(indicator|strategy|input|plot|plotshape|and|or|not|true|false|if|else|for|var)\b/g;
+// lightweight Pine highlighter — single-pass tokenizer (string | comment | namespace.fn | keyword |
+// number), so each token is classified exactly once. Gaps between tokens are HTML-escaped; strings &
+// comments are matched FIRST so a // or digit inside them is never re-tokenized.
 function esc(s: string) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+const TOKEN = /("(?:[^"\\]|\\.)*"?)|(\/\/.*)|\b(ta|math|request|input|str|array|color|shape|location|plot|syminfo)\.([A-Za-z_]\w*)|\b(indicator|strategy|input|plot|plotshape|and|or|not|true|false|if|else|for|var)\b|\b(\d+\.?\d*)\b/g;
 function hl(line: string) {
-  let code = line, comment = "";
-  const ci = line.indexOf("//");
-  if (ci >= 0 && (line.slice(0, ci).match(/"/g)?.length ?? 0) % 2 === 0) { code = line.slice(0, ci); comment = line.slice(ci); }
-  code = esc(code);
-  const strs: string[] = [];
-  code = code.replace(/"[^"]*"/g, (m) => { strs.push(m); return ` ${strs.length - 1} `; });
-  code = code.replace(FN, (m) => `<span class="fn">${m}</span>`)
-    .replace(KW, (m) => `<span class="kw">${m}</span>`)
-    .replace(/\b(\d+\.?\d*)\b/g, '<span class="nu">$1</span>')
-    .replace(/ (\d+) /g, (_, i) => `<span class="st">${strs[+i]}</span>`);
-  return code + (comment ? `<span class="cm">${esc(comment)}</span>` : "");
+  let out = "", last = 0, m: RegExpExecArray | null;
+  TOKEN.lastIndex = 0;
+  while ((m = TOKEN.exec(line)) !== null) {
+    if (m.index > last) out += esc(line.slice(last, m.index));
+    const [full, str, com, ns, fn, kw, num] = m;
+    if (str != null) out += `<span class="st">${esc(str)}</span>`;
+    else if (com != null) out += `<span class="cm">${esc(com)}</span>`;
+    else if (ns != null) out += `<span class="fn">${esc(ns)}.${esc(fn)}</span>`;
+    else if (kw != null) out += `<span class="kw">${kw}</span>`;
+    else if (num != null) out += `<span class="nu">${num}</span>`;
+    else out += esc(full);
+    last = m.index + full.length;
+    if (full.length === 0) TOKEN.lastIndex++;   // guard against a zero-width match looping
+  }
+  if (last < line.length) out += esc(line.slice(last));
+  return out;
 }
 
 export default function PineEditor({ scripts, isPro, email }: { scripts: Script[]; isPro: boolean; email: string }) {
