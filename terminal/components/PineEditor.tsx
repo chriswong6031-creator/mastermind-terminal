@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 
-type Script = { id: string; name: string; source: string; lang: string; params: Record<string, any>; updated_at: string };
+type Script = { id: string; name: string; source: string; lang: string; params: Record<string, any>; updated_at: string; locked?: boolean };
 
 // lightweight Pine highlighter — single-pass tokenizer (string | comment | namespace.fn | keyword |
 // number), so each token is classified exactly once. Gaps between tokens are HTML-escaped; strings &
@@ -47,8 +47,9 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
 
   const lines = useMemo(() => src.split("\n"), [src]);   // mirror the textarea 1:1 (incl. a trailing empty line)
   const inputs = Object.entries(params);
-  const dirty = !!active && (src !== active.source || JSON.stringify(params) !== JSON.stringify(active.params));
-  const isOracle = /oracle/i.test(active?.name || "");
+  const isLocked = !!active?.locked;   // proprietary indicator — viewable + runnable, never editable
+  const dirty = !isLocked && !!active && (src !== active.source || JSON.stringify(params) !== JSON.stringify(active.params));
+  const isOracle = isLocked || /oracle/i.test(active?.name || "");
 
   // lightweight client-side "compile" — enough to catch obvious breakage as you edit
   const compileInfo = useMemo(() => {
@@ -62,7 +63,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
   function compile() { setStatus("compiling"); window.setTimeout(() => setStatus("idle"), 360); }
 
   async function save() {
-    if (!isPro || !active) return;
+    if (!isPro || !active || isLocked) return;
     setStatus("saving");
     const r = await fetch("/api/scripts/save", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: active.id, name: active.name, source: src, params }) }).catch(() => null);
@@ -80,6 +81,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (isLocked) return;
     if (e.key === "Tab") {
       e.preventDefault();
       const ta = e.currentTarget, s = ta.selectionStart, en = ta.selectionEnd;
@@ -101,7 +103,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
               <div className="pop show" style={{ top: 38, left: 0 }} onClick={(e) => e.stopPropagation()}>
                 {scripts.map((s, i) => (
                   <div key={s.id} className="menu-row" onClick={() => { setIdx(i); setPicker(false); }}>
-                    {s.name}{i === idx && <span style={{ marginLeft: "auto", color: "var(--brand-2)" }}>●</span>}
+                    {s.locked && <span style={{ marginRight: 6, color: "var(--brand-2)" }} title="proprietary · read-only">🔒</span>}{s.name}{i === idx && <span style={{ marginLeft: "auto", color: "var(--brand-2)" }}>●</span>}
                   </div>
                 ))}
               </div>
@@ -109,11 +111,17 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
           </span>
         )}
         <div className="spacer" />
-        {!isPro && <span className="lock"><svg width="11" height="11" viewBox="0 0 24 24" style={{ fill: "currentColor" }}><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5zm3 8H9V6a3 3 0 0 1 6 0z" /></svg>Pro</span>}
-        <button className="btn btn-ghost" style={{ height: 32, marginLeft: 10 }} onClick={save} disabled={!isPro || !active}
-          title={!isPro ? "Saving custom indicators requires Pro" : undefined}>
-          {status === "saving" ? "Saving…" : status === "saved" ? "Saved ✓" : status === "err" ? "Error" : dirty ? "Save changes" : "Save"}
-        </button>
+        {!isPro && !isLocked && <span className="lock"><svg width="11" height="11" viewBox="0 0 24 24" style={{ fill: "currentColor" }}><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5zm3 8H9V6a3 3 0 0 1 6 0z" /></svg>Pro</span>}
+        {isLocked ? (
+          <span className="lock" style={{ marginLeft: 10 }} title="Proprietary Mastermind indicator — view & add to chart, editing is disabled">
+            <svg width="11" height="11" viewBox="0 0 24 24" style={{ fill: "currentColor" }}><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5zm3 8H9V6a3 3 0 0 1 6 0z" /></svg>Proprietary · read-only
+          </span>
+        ) : (
+          <button className="btn btn-ghost" style={{ height: 32, marginLeft: 10 }} onClick={save} disabled={!isPro || !active}
+            title={!isPro ? "Saving custom indicators requires Pro" : undefined}>
+            {status === "saving" ? "Saving…" : status === "saved" ? "Saved ✓" : status === "err" ? "Error" : dirty ? "Save changes" : "Save"}
+          </button>
+        )}
         <button className="ai" style={{ marginLeft: 6 }} onClick={() => router.push("/terminal")} disabled={!active}>Add to chart</button>
         <form action="/auth/signout" method="post" style={{ marginLeft: 10 }}><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
       </header>
@@ -144,6 +152,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
           <div className="editor-head">
             <span>{active.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.pine</span>
             <span className="badge">PINE v6</span>
+            {isLocked && <span className="badge" style={{ borderColor: "var(--brand-2)", color: "var(--brand-2)" }} title="Proprietary — protected source, editing disabled">🔒 PROPRIETARY</span>}
             <div className="editor-actions">
               <button className="tbtn" title="Run / compile" onClick={compile}><svg viewBox="0 0 24 24" style={{ fill: "var(--up)", stroke: "none" }}><path d="M5 3l14 9-14 9V3z" /></svg></button>
             </div>
@@ -152,8 +161,8 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
             <div className="gutter">{lines.map((_, i) => <div key={i}>{i + 1}</div>)}</div>
             <div className="code-wrap">
               <div className="code">{lines.map((ln, i) => <div key={i} dangerouslySetInnerHTML={{ __html: hl(ln) || "&nbsp;" }} />)}</div>
-              <textarea ref={taRef} value={src} spellCheck={false} aria-label={`${active.name} source`}
-                onChange={(e) => setSrc(e.target.value)} onKeyDown={onKeyDown} />
+              <textarea ref={taRef} value={src} spellCheck={false} aria-label={`${active.name} source`} readOnly={isLocked}
+                onChange={(e) => { if (!isLocked) setSrc(e.target.value); }} onKeyDown={onKeyDown} />
             </div>
           </div>
           <div className="console">
@@ -181,7 +190,8 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
             {scripts.map((s, i) => (
               <div key={s.id} className={`script-row${i === idx ? " on" : ""}`} onClick={() => setIdx(i)}>
                 <span className="si">{s.lang === "pine" ? "ƒ" : "λ"}</span>
-                <span className="meta"><span>{s.name}</span><small>{s.lang} · edited {new Date(s.updated_at).toLocaleDateString()}</small></span>
+                <span className="meta"><span>{s.name}</span><small>{s.locked ? "proprietary · read-only" : `${s.lang} · edited ${new Date(s.updated_at).toLocaleDateString()}`}</small></span>
+                {s.locked && <svg width="11" height="11" viewBox="0 0 24 24" style={{ marginLeft: "auto", fill: "var(--brand-2)" }} aria-label="locked"><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5zm3 8H9V6a3 3 0 0 1 6 0z" /></svg>}
               </div>
             ))}
           </div>
