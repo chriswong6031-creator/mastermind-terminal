@@ -11,6 +11,7 @@ Outputs into terminal/public/data/ (served by the Next app at /data/*).
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -24,6 +25,7 @@ from ingest.polygon_bars import fetch_daily, ohlc_json   # noqa: E402
 from signal_layer import confluence, contracts, backtest  # noqa: E402
 
 OUT = ROOT / "terminal" / "public" / "data"
+MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
 
 META = {
     "NVDA": ("NVIDIA Corp", "Equities", "#76b900"),
@@ -136,7 +138,7 @@ def main(syms: list[str]) -> None:
         manifest["symbols"][sym] = row
         manifest["as_of"] = bars[-1][0]
         time.sleep(0.2)
-    (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    MANIFEST.write_text(json.dumps(manifest, indent=2))
     print(f"\nmanifest: {len(manifest['symbols'])} symbols, as_of {manifest['as_of']}")
 
 

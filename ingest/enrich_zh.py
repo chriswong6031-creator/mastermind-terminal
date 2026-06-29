@@ -16,6 +16,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "terminal" / "public" / "data"
+MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
 MACRO = Path(os.environ.get("MACRO_REPO", "/Users/chriswong/Documents/Cluade/Macro Dashboard"))
 
 
@@ -43,7 +44,7 @@ def hk_zh() -> dict[str, str]:
 
 
 def main() -> None:
-    man = json.loads((OUT / "manifest.json").read_text())
+    man = json.loads(MANIFEST.read_text())
     syms = man["symbols"]
     cz = china_zh()
     print(f"  china_zh: {len(cz)} names")
@@ -58,7 +59,7 @@ def main() -> None:
         elif mk == "HKEX" and s in hz:
             r["zh"] = hz[s]; n_hk += 1
 
-    (OUT / "manifest.json").write_text(json.dumps(man, separators=(",", ":")))
+    MANIFEST.write_text(json.dumps(man, separators=(",", ":")))
     print(f"zh added: {n_cn} China, {n_hk} HK (of {sum(1 for r in syms.values() if r.get('mkt') in ('SSE','SZSE','HKEX'))} CN/HK symbols)")
 
 

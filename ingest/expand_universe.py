@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from build_universe import OUT, MACRO, color_for, _clean_name, _polygon_key, MIC_LABEL  # noqa: E402
+from build_universe import OUT, MANIFEST, MACRO, color_for, _clean_name, _polygon_key, MIC_LABEL  # noqa: E402
 
 US_REF_CACHE = Path(__file__).resolve().parent / ".polygon_us_ref.json"
 
@@ -138,7 +138,7 @@ def main(argv: list[str]) -> None:
     if "--us" not in argv and "--hk" not in argv:
         us_target, hk_target = 3000, 500  # default: do both
 
-    man_path = OUT / "manifest.json"
+    man_path = MANIFEST
     manifest = json.loads(man_path.read_text())
     symbols: dict[str, dict] = manifest["symbols"]
     before = len(symbols)

@@ -43,6 +43,8 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]                       # charting-app/
 OUT = ROOT / "terminal" / "public" / "data"
+# manifest path override — the nightly refresh stages the manifest then atomically swaps it
+MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
 MACRO = Path(os.environ.get("MACRO_REPO", "/Users/chriswong/Documents/Cluade/Macro Dashboard"))
 MAX_BARS = 1300                                                  # ~5y daily, matches existing US files
 EXCH_CACHE = ROOT / "ingest" / ".polygon_exchanges.json"
@@ -177,7 +179,7 @@ def main(argv: list[str]) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
 
     # 1) preserve the existing rich manifest (price/verdict/backtest for the tracked set)
-    man_path = OUT / "manifest.json"
+    man_path = MANIFEST
     manifest = json.loads(man_path.read_text()) if man_path.exists() else {"as_of": None, "source": "macro", "symbols": {}}
     symbols: dict[str, dict] = manifest.get("symbols", {})
 

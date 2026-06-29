@@ -25,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "terminal" / "public" / "data"
+MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
 MAX_BARS = 1300
 YEARS = 6
 
@@ -128,7 +129,7 @@ def main(argv: list[str]) -> None:
     if "--workers" in argv:
         workers = int(argv[argv.index("--workers") + 1])
 
-    symbols = json.loads((OUT / "manifest.json").read_text())["symbols"]
+    symbols = json.loads(MANIFEST.read_text())["symbols"]
     todo = []
     for sym, rec in symbols.items():
         mk = market_of(sym, rec)

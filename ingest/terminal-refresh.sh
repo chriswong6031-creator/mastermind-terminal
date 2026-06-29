@@ -1,33 +1,39 @@
 #!/usr/bin/env bash
 # Nightly Mastermind Terminal universe + price refresh (VPS /usr/local/bin/terminal-data).
 #
-# Rebuilds the FULL multi-market manifest (~5,250 symbols) + OHLC from the macro
-# parquet stores + Polygon/akshare/yfinance — REPLACING the old build_polygon_universe
-# cron, which produced only 34 symbols and reverted the live universe.
+# Builds the FULL multi-market manifest into a STAGING file (TERMINAL_MANIFEST) and
+# ATOMICALLY swaps it over the live manifest.json only at the very end — so the live
+# universe is NEVER reduced mid-run. This lets build_polygon_universe run (fresh
+# flagship-34 verdicts + slices) without its 34-symbol baseline ever reaching live.
 #
-# FAILURE-GUARDED: backs up the current manifest first; if the rebuild collapses to
-# < 80% of the previous symbol count (akshare/Polygon outage, corrupt mid-write), it
-# restores the backup so the live universe is never degraded. Logs to
-# /var/log/terminal-data.log (cron 30 21 * * *).
+# Side benefit: the rebuild starts from build_polygon_universe's fresh manifest, so the
+# universe is the CURRENT top-N each night (no unbounded additive drift; names that drop
+# out are pruned from search — their watchlist rows + OHLC files still persist).
+#
+# FAILURE-GUARDED: if the staged rebuild ends below 80% of the live count, the swap is
+# skipped and live is left untouched. Per-symbol OHLC/slice files write straight to the
+# live dir (atomic per file). Logs to /var/log/terminal-data.log (cron 30 21 * * *).
 set -u
 cd /opt/terminal || exit 1
 set -a; [ -f /opt/terminal/.env ] && . /opt/terminal/.env; set +a
 export MACRO_REPO=/opt/macro
 PY=/opt/macro/.venv/bin/python
 D=/opt/terminal/terminal/public/data
-MAN="$D/manifest.json"
+LIVE="$D/manifest.json"
+STAGE="$D/manifest.staging.json"
+export TERMINAL_MANIFEST="$STAGE"
 ts(){ date -u "+%Y-%m-%d %H:%M:%S"; }
-echo "[$(ts)] === terminal refresh start ==="
+count(){ "$PY" -c "import json,sys;print(len(json.load(open(sys.argv[1]))['symbols']))" "$1" 2>/dev/null || echo 0; }
+echo "[$(ts)] === terminal refresh start (staging) ==="
 
-[ -f "$MAN" ] && cp -f "$MAN" "$MAN.prev"
-
+rm -f "$STAGE"
 run(){ echo "[$(ts)] -> $*"; "$@" || echo "[$(ts)] WARN: '$*' exited $?"; }
-# NOTE: build_polygon_universe is intentionally NOT run — it rewrites the manifest from
-# its hardcoded 34-symbol META, which would briefly collapse the live universe mid-run.
-# build_universe loads the EXISTING manifest and only grows/refreshes it, so the live
-# universe never dips below full. (Flagship-34 verdict/slice freshness — what
-# build_polygon_universe gave — is deferred "live signals" work; revisit with atomic staging.)
-# base multi-market universe + China/HK/US OHLC from the macro deep stores
+# flagship 34 -> staging manifest + fresh real-OHLC/slices/verdicts (OHLC/slices go to live dir)
+run "$PY" -m ingest.build_polygon_universe
+# if build_polygon_universe produced nothing, fall back to the live manifest so we don't
+# lose the rich flagship records (a later successful run re-prunes any drift)
+[ -s "$STAGE" ] || cp -f "$LIVE" "$STAGE"
+# expand base multi-market universe + China/HK/US OHLC from the macro deep stores
 run "$PY" ingest/build_universe.py --ohlc all
 # US -> ~3,000 (Polygon ref+snapshot) and HK -> ~500 (akshare turnover)
 run "$PY" ingest/expand_universe.py
@@ -36,14 +42,13 @@ run "$PY" ingest/enrich_zh.py
 # fill OHLC for any name still missing one (expanded US via Polygon, HK/Canada via yfinance)
 run "$PY" ingest/backfill_ohlc.py --market all
 
-count(){ "$PY" -c "import json,sys;print(len(json.load(open(sys.argv[1]))['symbols']))" "$1" 2>/dev/null || echo 0; }
-NEW=$(count "$MAN"); PREV=$(count "$MAN.prev")
-MIN=$(( PREV * 80 / 100 )); [ "$MIN" -lt 1000 ] && MIN=1000
-if [ "${NEW:-0}" -lt "$MIN" ]; then
-  echo "[$(ts)] GUARD TRIPPED: new=$NEW prev=$PREV min=$MIN — restoring previous manifest"
-  [ -f "$MAN.prev" ] && cp -f "$MAN.prev" "$MAN"
+NEW=$(count "$STAGE"); LIVEN=$(count "$LIVE")
+MIN=$(( LIVEN * 80 / 100 )); [ "$MIN" -lt 1000 ] && MIN=1000
+if [ "${NEW:-0}" -ge "$MIN" ]; then
+  mv -f "$STAGE" "$LIVE"   # atomic rename — live flips to the full new universe in one step
+  echo "[$(ts)] refresh OK: swapped in $NEW symbols (was $LIVEN)"
 else
-  echo "[$(ts)] refresh OK: $NEW symbols (prev $PREV)"
+  echo "[$(ts)] GUARD: staged $NEW < min $MIN (live $LIVEN) — keeping live, discarding staging"
+  rm -f "$STAGE"
 fi
-rm -f "$MAN.prev"
 echo "[$(ts)] === terminal refresh done ==="
