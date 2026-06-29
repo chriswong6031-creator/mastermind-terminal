@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { type DetectCmd } from "@/components/ChartPanel";
@@ -17,6 +17,7 @@ import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
 import SettingsMenu from "@/components/SettingsMenu";
 import { useT } from "@/lib/i18n";
+import { useFromMacro, backToMacro } from "@/lib/originNav";
 
 const MNAV: [string, string, string][] = [
   ["/terminal", "Chart", "M3 17l5-6 4 3 4-7 5 9"],
@@ -57,7 +58,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [sync, setSync] = useState(true);
   const [split, setSplit] = useState(1);   // the split the user requested (panes.length may be smaller after dedup)
   const active = panes[activePane] ?? panes[0] ?? seed0;
-  const [paneTfs, setPaneTfs] = useState<string[]>(["D"]);   // one timeframe per pane
+  const [paneTfs, setPaneTfs] = useState<string[]>(["3D"]);   // one timeframe per pane — Terminal opens on 3D by default
   const tf = paneTfs[activePane] ?? paneTfs[0] ?? "D";        // the active pane's timeframe drives the toolbar
   const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
   const [chartType, setChartType] = useState("candles");
@@ -84,16 +85,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const nonce = useRef(0);
   const wsMounted = useRef(false);
   const t = useT();
-  const router = useRouter();
   const navPath = usePathname();
   // mobile + fullscreen + expanded-analysis state
   const [fullChart, setFullChart] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [analysisOpen, setAnalysisOpen] = useState(false);
-  const goBack = useCallback(() => {
-    if (typeof window !== "undefined" && window.history.length > 1) router.back();
-    else router.push("/");
-  }, [router]);
+  // only surface a "back" affordance when the user actually arrived from the Macro Dashboard — for direct
+  // visitors a back button would just throw them onto whatever unrelated site they were last on.
+  const { fromMacro, macroHref } = useFromMacro();
+  const onBack = useCallback(() => backToMacro(macroHref), [macroHref]);
   // shared per-symbol drawing store (lifted out of ChartPane so multiple panes on the same
   // symbol share one set instead of clobbering each other through the replace-all PUT)
   const [drawStore, setDrawStore] = useState<Record<string, Drawing[]>>({});
@@ -120,15 +120,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
-    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs([load("mm.tf", "D")]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true }));
+    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true }));
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
         const ws = load("mm.ws", null);
         if (ws && Array.isArray(ws.panes)) {
-          const pairs = ws.panes.map((s: string, i: number) => [s, ws.paneTfs?.[i] ?? "D"]).filter(([s]: any) => symbols.some((x) => x.symbol === s));
+          const pairs = ws.panes.map((s: string, i: number) => [s, ws.paneTfs?.[i] ?? "3D"]).filter(([s]: any) => symbols.some((x) => x.symbol === s));
           if (pairs.length) {
-            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.map((p: any) => p[1]));
+            // a single chart always opens on the 3D default; genuine multi-pane layouts (e.g. MTF) keep their saved per-pane timeframes
+            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.length === 1 ? ["3D"] : pairs.map((p: any) => p[1]));
             setSplit([1, 2, 4].includes(ws.split) ? ws.split : (pairs.length >= 4 ? 4 : pairs.length >= 2 ? 2 : 1));
             setActivePane(Math.min(ws.activePane || 0, pairs.length - 1));
             if (typeof ws.sync === "boolean") setSync(ws.sync);
@@ -263,7 +264,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   return (
     <div className={`app${fullChart ? " fs" : ""}`}>
       <header className="topbar">
-        <BrandLockup />
+        {fromMacro
+          ? <button className="brand-back" onClick={onBack} title="Back to the Macro Dashboard" aria-label="Back to the Macro Dashboard">
+              <span className="bb-chev"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></span>
+              <BrandMark />
+              <span className="wm"><b>MASTERMIND</b><small>← Dashboard</small></span>
+            </button>
+          : <BrandLockup />}
         <div className="tdiv" />
         <div className="pair" onClick={() => { setSeed(""); setSearchOpen(true); }}><span className="dual"><i>{active[0]}</i><i>$</i></span><b>{active}</b>
           <svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></div>
@@ -280,12 +287,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <SettingsMenu email={email} />
       </header>
 
-      {/* ── mobile top bar: menu · back · centered logo · AI ── */}
-      <div className="mobilebar">
-        <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg></button>
-        <button className="m-ic" onClick={goBack} aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
+      {/* ── mobile top bar — left slot: a prominent "Back to Dashboard" button when the user came from the
+           Macro Dashboard, otherwise the menu button. When Back claims the left, the menu moves into the
+           right cluster so the hamburger always has a home. ── */}
+      <div className={`mobilebar${fromMacro ? " from-macro" : ""}`}>
+        {fromMacro
+          ? <button className="m-back-prom breathe" onClick={onBack} aria-label="Back to the Macro Dashboard"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg><span>Dashboard</span></button>
+          : <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg></button>}
         <span className="m-brand"><BrandMark size={22} /><b>MASTERMIND</b></span>
         <div className="m-right">
+          {fromMacro && <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg></button>}
           <button className="m-ic" onClick={() => setCopilot(true)} aria-label="Mastermind AI"><svg viewBox="0 0 24 24" style={{ fill: "var(--brand-2)", stroke: "none" }}><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg></button>
           <SettingsMenu email={email} />
         </div>

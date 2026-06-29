@@ -44,6 +44,29 @@ svg{display:block}
 .brand .wm b{font:700 13px/1 var(--font-ui);letter-spacing:.05em}
 .brand .wm small{font:600 7.5px/1.4 var(--font-ui);letter-spacing:.3em;color:var(--muted);margin-top:3px}
 
+/* the brand lockup becomes a prominent, breathing "back to the Macro Dashboard" button — but ONLY when the
+   user actually arrived from the dashboard (see useFromMacro); direct visitors get the plain logo. */
+.brand-back{display:flex;align-items:center;gap:9px;height:40px;padding:0 15px 0 8px;border-radius:var(--r-pill);cursor:pointer;position:relative;
+  background:linear-gradient(180deg,rgba(41,98,255,.17),rgba(41,98,255,.05));border:1px solid rgba(77,130,255,.42);color:var(--text);
+  transition:background var(--t),border-color var(--t);animation:brandBreath 3.4s var(--ease) infinite}
+.brand-back:hover{background:linear-gradient(180deg,rgba(41,98,255,.28),rgba(41,98,255,.1));border-color:var(--brand-2)}
+.brand-back .bb-chev{display:grid;place-items:center;width:21px;height:21px;border-radius:50%;background:var(--brand);flex:none;animation:chevNudge 1.7s var(--ease) infinite}
+.brand-back .bb-chev svg{width:13px;height:13px;stroke:#fff;fill:none;stroke-width:2.6}
+.brand-back .wm{display:flex;flex-direction:column;line-height:1;text-align:left}
+.brand-back .wm b{font:700 13px/1 var(--font-ui);letter-spacing:.05em}
+.brand-back .wm small{font:600 7.5px/1.4 var(--font-ui);letter-spacing:.16em;color:var(--brand-2);margin-top:3px}
+@keyframes brandBreath{0%,100%{box-shadow:0 0 0 0 rgba(41,98,255,0)}50%{box-shadow:0 0 0 4px rgba(41,98,255,.11),0 0 22px -2px rgba(41,98,255,.45)}}
+@keyframes chevNudge{0%,100%{transform:translateX(0)}50%{transform:translateX(-2.5px)}}
+
+/* shared "breathing" pulse used by the mobile prominent back button */
+.breathe{animation:breathe 2.8s var(--ease) infinite}
+@keyframes breathe{0%,100%{box-shadow:0 0 0 0 rgba(41,98,255,0);transform:scale(1)}50%{box-shadow:0 0 0 4px rgba(41,98,255,.14),0 0 18px -3px rgba(41,98,255,.5);transform:scale(1.035)}}
+
+@media (prefers-reduced-motion:reduce){
+  .brand-back,.brand-back .bb-chev,.breathe{animation:none}
+  .copilot,.settings-pop{transition:opacity .12s linear;animation:none}
+}
+
 /* ===== terminal shell ===== */
 .app{display:grid;grid-template-columns:60px 1fr 360px;grid-template-rows:54px 1fr 28px;height:100vh}
 .topbar{grid-column:1/4;display:flex;align-items:center;padding:0 14px 0 12px;border-bottom:1px solid var(--line)}
@@ -231,9 +254,18 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .imodal .li .chk{margin-left:auto;width:16px;height:16px;border-radius:var(--r);border:1.5px solid var(--line-3);display:grid;place-items:center}.imodal .li.on .chk{background:var(--brand);border-color:var(--brand)}.imodal .li .chk svg{width:11px;height:11px;stroke:#fff;fill:none;stroke-width:3;opacity:0}.imodal .li.on .chk svg{opacity:1}
 .imodal .li .lk{margin-left:auto;color:var(--signal)}
 
-.copilot{position:fixed;top:0;right:0;bottom:0;width:380px;max-width:92vw;background:var(--panel);border-left:1px solid var(--line-3);z-index:55;display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(0,0,0,.6);transform:translateX(100%);transition:transform .2s var(--ease)}
-.copilot.open{transform:translateX(0)}
-.copilot .ch{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--line)}
+/* Mastermind AI — a floating, non-modal panel that "drops in" from beneath the AI button (top-right) */
+.copilot{position:fixed;top:64px;right:16px;bottom:auto;width:400px;max-width:calc(100vw - 32px);max-height:min(72vh,680px);
+  background:linear-gradient(180deg,rgba(21,23,29,.97),rgba(12,14,18,.97));border:1px solid var(--line-3);border-radius:var(--r-lg);
+  z-index:55;display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 30px 70px -24px rgba(0,0,0,.82),0 0 0 1px rgba(77,130,255,.06),inset 0 1px 0 rgba(255,255,255,.04);
+  backdrop-filter:blur(16px) saturate(1.2);-webkit-backdrop-filter:blur(16px) saturate(1.2);
+  transform-origin:top right;transform:translateY(-14px) scale(.96);opacity:0;pointer-events:none;
+  transition:transform .22s cubic-bezier(.2,.9,.25,1.08),opacity .16s var(--ease)}
+.copilot.open{transform:none;opacity:1;pointer-events:auto}
+.copilot .ch{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,rgba(41,98,255,.13),transparent)}
+.copilot .ch .x{width:26px;height:26px;border-radius:var(--r);display:grid;place-items:center;transition:background var(--t),color var(--t)}
+.copilot .ch .x:hover{background:var(--panel-3);color:var(--text)}
 .copilot .ch .mk{width:24px;height:24px;border-radius:6px;background:var(--brand);display:grid;place-items:center}.copilot .ch .mk svg{width:14px;height:14px;fill:#fff}
 .copilot .ch b{font:650 13px/1 var(--font-ui)}.copilot .ch small{font:600 9px/1 var(--font-ui);color:var(--brand-2);letter-spacing:.08em;margin-left:6px}
 .copilot .ch .x{margin-left:auto;color:var(--muted);cursor:pointer}
@@ -257,8 +289,13 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .set-h{display:flex;align-items:center;justify-content:space-between;padding:11px 12px}.set-h b{font:600 13px/1 var(--font-ui)}
 .switch{width:36px;height:20px;border-radius:var(--r-pill);background:var(--panel);border:1px solid var(--line-3);position:relative;cursor:pointer}.switch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--muted);transition:transform var(--t)}.switch.on{background:var(--brand);border-color:var(--brand)}.switch.on::after{transform:translateX(16px);background:#fff}
 .set-grp{font:600 9px/1 var(--font-ui);letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);padding:9px 12px 4px;border-top:1px solid var(--line)}
-/* user-settings popover (avatar) */
-.settings-pop{min-width:236px;padding:0 0 6px}
+/* user-settings popover (avatar) — glassy card that drops in from its top-right anchor */
+.settings-pop{min-width:244px;padding:0 0 7px;border-radius:var(--r-lg);
+  background:linear-gradient(180deg,rgba(31,34,43,.97),rgba(19,21,27,.97));border:1px solid var(--line-3);
+  box-shadow:0 24px 54px -18px rgba(0,0,0,.82),inset 0 1px 0 rgba(255,255,255,.045);
+  backdrop-filter:blur(16px) saturate(1.15);-webkit-backdrop-filter:blur(16px) saturate(1.15);
+  transform-origin:top right;animation:popDrop .17s cubic-bezier(.2,.9,.25,1.06)}
+@keyframes popDrop{from{opacity:0;transform:translateY(-9px) scale(.95)}to{opacity:1;transform:none}}
 .settings-pop .set-h{padding:11px 13px 4px}.settings-pop .set-h b{font:650 13px/1 var(--font-ui)}
 .settings-pop .set-grp:first-of-type{border-top:0}
 .set-seg{display:flex;gap:6px;padding:4px 12px 8px}
@@ -599,6 +636,11 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .mobilebar{display:none;position:relative;align-items:center;height:52px;padding:0 8px;border-bottom:1px solid var(--line);background:var(--bg);gap:2px;flex:none;z-index:30}
 .m-ic{width:38px;height:38px;border-radius:var(--r-md);display:grid;place-items:center;color:var(--text-2)}
 .m-ic:active,.m-ic:hover{background:var(--panel-2);color:var(--text)}.m-ic svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.9}
+/* prominent mobile "back to dashboard" pill (left slot when the user came from macro) */
+.m-back-prom{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 13px 0 8px;border-radius:var(--r-pill);flex:none;position:relative;z-index:1;
+  background:linear-gradient(180deg,rgba(41,98,255,.22),rgba(41,98,255,.08));border:1px solid rgba(77,130,255,.46);color:var(--text);font:700 12.5px/1 var(--font-ui)}
+.m-back-prom:active{background:linear-gradient(180deg,rgba(41,98,255,.32),rgba(41,98,255,.14))}
+.m-back-prom svg{width:18px;height:18px;stroke:var(--brand-2);fill:none;stroke-width:2.5}
 .m-brand{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:7px;pointer-events:none}
 .m-brand b{font:800 13px/1 var(--font-ui);letter-spacing:.1em;color:var(--text)}
 .m-right{margin-left:auto;display:flex;align-items:center;gap:2px}
@@ -650,7 +692,10 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   .detail-hd{position:static}
   .sa{padding:11px 11px 30px}
   .sa-grid3{grid-template-columns:1fr 1fr 1fr}
-  .copilot{width:100vw;max-width:100vw}
+  /* prominent back claims the left → free the centered wordmark so nothing collides */
+  .mobilebar.from-macro .m-brand{display:none}
+  /* floating AI card: near-fullscreen with margins, still a "drop-in" from the top */
+  .copilot{top:58px;left:8px;right:8px;bottom:8px;width:auto;max-width:none;max-height:none;transform-origin:top center}
   .sa-modal{max-height:92vh;border-radius:var(--r-lg) var(--r-lg) 0 0}
   .sa-modal-body .sa{column-count:1}
   .sa-modal-scrim{padding:0;align-items:flex-end}
