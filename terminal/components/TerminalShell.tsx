@@ -1,6 +1,8 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BrandLockup } from "@/components/BrandMark";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
@@ -9,11 +11,20 @@ import SearchModal from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
 import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
+import StockAnalysis from "@/components/StockAnalysis";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
 import SettingsMenu from "@/components/SettingsMenu";
 import { useT } from "@/lib/i18n";
+
+const MNAV: [string, string, string][] = [
+  ["/terminal", "Chart", "M3 17l5-6 4 3 4-7 5 9"],
+  ["/screener", "Screener", "RECT"],
+  ["/scripts", "Scripts", "M8 7l-5 5 5 5M16 7l5 5-5 5"],
+  ["/portfolio", "Portfolio", "M21 12a9 9 0 1 1-9-9v9z"],
+  ["/alerts", "Alerts", "M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"],
+];
 
 type Row = { name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -52,7 +63,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [chartType, setChartType] = useState("candles");
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
-  const [set, setSet] = useState({ tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true });
+  const [set, setSet] = useState({ tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true });
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
   const [indOpen, setIndOpen] = useState(false); const [copilot, setCopilot] = useState(false);
   const [wlSetOpen, setWlSetOpen] = useState(false); const [tfOpen, setTfOpen] = useState(false); const [ctOpen, setCtOpen] = useState(false);
@@ -73,6 +84,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const nonce = useRef(0);
   const wsMounted = useRef(false);
   const t = useT();
+  const router = useRouter();
+  const navPath = usePathname();
+  // mobile + fullscreen + expanded-analysis state
+  const [fullChart, setFullChart] = useState(false);
+  const [drawer, setDrawer] = useState(false);
+  const [analysisOpen, setAnalysisOpen] = useState(false);
+  const goBack = useCallback(() => {
+    if (typeof window !== "undefined" && window.history.length > 1) router.back();
+    else router.push("/");
+  }, [router]);
   // shared per-symbol drawing store (lifted out of ChartPane so multiple panes on the same
   // symbol share one set instead of clobbering each other through the replace-all PUT)
   const [drawStore, setDrawStore] = useState<Record<string, Drawing[]>>({});
@@ -99,7 +120,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
-    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs([load("mm.tf", "D")]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true }));
+    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs([load("mm.tf", "D")]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true }));
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
@@ -239,11 +260,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const colVal = (r: Row | undefined, key: string) => { if (!r) return "—"; const u = r.chg >= 0; if (key === "last") return fmt(r.last, r.last < 10 ? 4 : 2); if (key === "change") return (u ? "+" : "") + fmt(r.last * r.chg / 100, 2); if (key === "changePct") return (u ? "+" : "") + fmt(r.chg) + "%"; if (key === "volume") return vol(r.vol); return ""; };
   const wlGrid = `1fr ${colList().map(() => "1fr").join(" ")} 18px`;
 
-  const ic = intel?.cards || {}; const itape = intel?.tape || {};
-  const intelDir = (itape.ai_lean?.dir || "").toUpperCase();
-
   return (
-    <div className="app">
+    <div className={`app${fullChart ? " fs" : ""}`}>
       <header className="topbar">
         <BrandLockup />
         <div className="tdiv" />
@@ -262,9 +280,30 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <SettingsMenu email={email} />
       </header>
 
+      {/* ── mobile top bar: menu · back · centered logo · AI ── */}
+      <div className="mobilebar">
+        <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg></button>
+        <button className="m-ic" onClick={goBack} aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
+        <span className="m-brand"><BrandMark size={22} /><b>MASTERMIND</b></span>
+        <div className="m-right">
+          <button className="m-ic" onClick={() => setCopilot(true)} aria-label="Mastermind AI"><svg viewBox="0 0 24 24" style={{ fill: "var(--brand-2)", stroke: "none" }}><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg></button>
+          <SettingsMenu email={email} />
+        </div>
+      </div>
+      {/* ── mobile symbol bar (tap → search) ── */}
+      <div className="m-symbar" onClick={() => { setSeed(""); setSearchOpen(true); }}>
+        <span className="m-sym"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span><b>{active}</b><svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></span>
+        <span className="m-px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</span></span>
+      </div>
+
       <AppNav />
 
       <section className="workspace">
+        <button className={`chart-fs-float${fullChart ? " on" : ""}`} title={fullChart ? "Exit fullscreen" : "Fullscreen chart"} onClick={() => setFullChart((f) => !f)}>
+          {fullChart
+            ? <svg viewBox="0 0 24 24"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" /></svg>
+            : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
+        </button>
         <div className="chart-tabs">
           <div className={`ct${view === "price" ? " on" : ""}`} onClick={() => setView("price")}>{t("priceChart")}</div>
           <div className={`ct${view === "strategy" ? " on" : ""}`} onClick={() => setView("strategy")}>{t("strategyTester")}</div>
@@ -287,17 +326,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
-            <button className="tbtn" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>{t("compare")}</button>
-            <div className="seg" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
-            <button className="tbtn" title="Multi-timeframe — the active symbol at D / 3D / W / 1M" onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>MTF</button>
-            {panes.length > 1 && <button className={`tbtn${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
-            <div className="pophost">
+            <button className="tbtn tool-adv" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>{t("compare")}</button>
+            <div className="seg tool-adv" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
+            <button className="tbtn tool-adv" title="Multi-timeframe — the active symbol at D / 3D / W / 1M" onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>MTF</button>
+            {panes.length > 1 && <button className={`tbtn tool-adv${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
+            <div className="pophost tool-adv">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
                 {DETECTORS.map(([k, l]) => <div key={k} className="menu-row" onClick={() => detect(k)}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{l}</div>)}
               </div>
             </div>
-            <div className="pophost">
+            <div className="pophost tool-adv">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setLayoutOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${layoutOpen ? " show" : ""}`} style={{ top: 32, right: 0, minWidth: 230 }} onClick={(e) => e.stopPropagation()}>
                 <div className="menu-save"><input placeholder="Save current as…" value={layoutName} onChange={(e) => setLayoutName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLayout(); }} /><button onClick={saveLayout}>Save</button></div>
@@ -305,7 +344,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 {layouts.map((l) => <div key={l.id} className="menu-row" onClick={() => loadLayout(l)}>{l.name}<span className="rm" onClick={(e) => { e.stopPropagation(); delLayout(l.id); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span></div>)}
               </div>
             </div>
-            <button className="icbtn" title="Snapshot" onClick={() => window.dispatchEvent(new CustomEvent("mm:snapshot"))}><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg></button>
+            <button className="icbtn tool-adv" title="Snapshot" onClick={() => window.dispatchEvent(new CustomEvent("mm:snapshot"))}><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg></button>
+            <button className={`icbtn chart-fs-btn${fullChart ? " on" : ""}`} title={fullChart ? "Exit fullscreen" : "Fullscreen chart"} onClick={() => setFullChart((f) => !f)}>
+              {fullChart
+                ? <svg viewBox="0 0 24 24"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" /></svg>
+                : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
+            </button>
           </div>
         </div>
 
@@ -391,53 +435,29 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           </div>
 
           <div className="board detail-board">
-            <div className="card">
-              <div className="hd"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
-                <div><div className="nm">{m?.name || active}</div><div className="ex">{m?.mkt || m?.sec || ""}</div></div>
-                <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</div></div></div>
-              <div className="regime" style={m?.regimeBull ? {} : { color: "var(--warn)" }}><i style={m?.regimeBull ? {} : { background: "var(--warn)" }} />{m?.regimeBull ? "Uptrend regime · above 200-EMA" : "Mixed regime · watch trend"}</div>
-              <div className="kv"><span className="k">Open</span><span className="v">{fmt(m?.open, m && m.last < 10 ? 4 : 2)}</span></div>
-              <div className="kv"><span className="k">Day Range</span><span className="v">{fmt(m?.low, m && m.last < 10 ? 4 : 2)} – {fmt(m?.high, m && m.last < 10 ? 4 : 2)}</span></div>
-              <div className="kv"><span className="k">Volume</span><span className="v">{m ? vol(m.vol) : "—"}</span></div>
-              <div className="kv"><span className="k">52W High</span><span className="v">{fmt(m?.hi52)} {m && <span className="down">{(((m.last - m.hi52) / m.hi52) * 100).toFixed(1)}%</span>}</span></div>
-              <div className="kv"><span className="k">52W Low</span><span className="v">{fmt(m?.lo52)} {m && <span className="up">+{(((m.last - m.lo52) / m.lo52) * 100).toFixed(1)}%</span>}</span></div>
-              <div className="mmcard" style={{ borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }}>
-                <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Golden Oracle · Confluence</div>
-                <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">backtested · 6yr daily→3D</span></div>
-                <div className="s2"><div>Win rate<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>Profit factor<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>CAGR<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
+            <div className="detail-hd">
+              <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
+              <div style={{ minWidth: 0 }}>
+                <div className="nm">{m?.name || active}</div>
+                <div className="ex">{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</div>
               </div>
-
-              {intel && (
-                <div className="intel">
-                  <div className="ih"><svg viewBox="0 0 24 24" style={{ width: 13, height: 13, stroke: "var(--brand-2)", fill: "none", strokeWidth: 1.8 }}><path d="M12 2a7 7 0 0 1 7 7c0 3-2 4-2 6H7c0-2-2-3-2-6a7 7 0 0 1 7-7zM9 21h6" /></svg>Macro intel<span className="src">analyzer</span></div>
-                  <div className={`verd${intelDir === "BULL" ? " bull" : intelDir === "BEAR" ? " bear" : ""}`}>
-                    <b>{ic.ai_judgment?.verdict || "—"}</b>
-                    {itape.conviction != null && <span className="sc">{Math.round(itape.conviction)}</span>}
-                  </div>
-                  <div className="ipills">
-                    {itape.regime && <span className="ip"><i style={{ background: intelDir === "BEAR" ? "var(--down)" : "var(--up)" }} />{itape.regime}</span>}
-                    {itape.gex_flip != null && <span className="ip"><i style={{ background: "var(--signal)" }} />Flip {Number(itape.gex_flip).toFixed(0)}</span>}
-                    {ic.analyst?.est_chg_90d != null && <span className="ip"><i style={{ background: "var(--up)" }} />Rev +{Number(ic.analyst.est_chg_90d).toFixed(0)}%</span>}
-                    {ic.smart_money?.trend && <span className="ip"><i style={{ background: ic.smart_money.trend === "accumulating" ? "var(--up)" : "var(--muted)" }} />{ic.smart_money.trend}</span>}
-                    {itape.short_pct != null && <span className="ip"><i style={{ background: "var(--muted)" }} />Short {Number(itape.short_pct).toFixed(1)}%</span>}
-                  </div>
-                </div>
-              )}
-
-              {slice?.indicator?.signals?.length > 0 && (
-                <div className="intel">
-                  <div className="ih"><svg viewBox="0 0 24 24" style={{ width: 13, height: 13, stroke: "var(--brand-2)", fill: "none", strokeWidth: 1.8 }}><path d="M3 17l5-5 4 4 8-8" /></svg>Recent signals<span className="src">oracle</span></div>
-                  <div className="sig-log">
-                    {slice.indicator.signals.slice(-6).reverse().map((s: any, i: number) => { const b = s.type === "BUY" || s.type === "REBUY"; return (
-                      <div className="sig-row" key={i}><span className={`sig-t ${b ? "buy" : "sell"}`}>{s.type}</span><span className="sig-d">{s.ts}</span><span className="sig-p num">{typeof s.price === "number" ? s.price.toFixed(2) : "—"}</span></div>
-                    ); })}
-                  </div>
-                </div>
-              )}
-
-              <button className="btn btn-ghost" style={{ width: "100%", marginTop: 12, height: 34 }} onClick={() => setCopilot(true)}>Ask Mastermind AI about {active} →</button>
+              <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</div></div>
+              <button className="ex-btn" title="Open full analysis" onClick={() => setAnalysisOpen(true)}><svg viewBox="0 0 24 24"><path d="M4 14v6h6M20 10V4h-6M14 10l6-6M10 14l-6 6" /></svg></button>
             </div>
-            <SeasonalityCard symbol={active} />
+            <div className="detail-scroll">
+              <div style={{ padding: "12px 12px 0" }}>
+                <div className="mmcard" style={{ marginTop: 0, borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }}>
+                  <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Golden Oracle · Confluence</div>
+                  <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">backtested · 6yr daily→3D</span></div>
+                  <div className="s2"><div>Win rate<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>Profit factor<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>CAGR<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
+                </div>
+              </div>
+              <StockAnalysis intel={intel} row={m} slice={slice} onExpand={() => setAnalysisOpen(true)} />
+              <div style={{ padding: "0 12px" }}>
+                <button className="btn btn-ghost" style={{ width: "100%", height: 36 }} onClick={() => setCopilot(true)}>Ask Mastermind AI about {active} →</button>
+              </div>
+              <div style={{ padding: 12 }}><SeasonalityCard symbol={active} /></div>
+            </div>
           </div>
         </div>
       </aside>
@@ -452,6 +472,42 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} />
       <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
+
+      {/* ── expanded full-analysis modal ── */}
+      {analysisOpen && (
+        <div className="sa-modal-scrim" onClick={() => setAnalysisOpen(false)}>
+          <div className="sa-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="sa-modal-h">
+              <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
+              <div className="tt">{m?.name || active}<small>{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</small></div>
+              <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</div></div>
+              <button className="x" onClick={() => setAnalysisOpen(false)} aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
+            </div>
+            <div className="sa-modal-body"><StockAnalysis intel={intel} row={m} slice={slice} deep /></div>
+          </div>
+        </div>
+      )}
+
+      {/* ── mobile nav drawer ── */}
+      <div className={`m-drawer-scrim${drawer ? " open" : ""}`} onClick={() => setDrawer(false)} />
+      <div className={`m-drawer${drawer ? " open" : ""}`}>
+        <div className="m-drawer-h"><BrandLockup /></div>
+        <nav className="m-nav">
+          {MNAV.map(([href, label, d]) => (
+            <Link key={href} href={href} className={navPath === href || (href === "/terminal" && navPath.startsWith("/terminal")) ? "on" : ""} onClick={() => setDrawer(false)}>
+              {d === "RECT"
+                ? <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>
+                : <svg viewBox="0 0 24 24"><path d={d} /></svg>}
+              {label}
+            </Link>
+          ))}
+          <button onClick={() => { setDrawer(false); setCopilot(true); }}>
+            <svg viewBox="0 0 24 24" style={{ fill: "var(--brand-2)", stroke: "none" }}><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>
+            Mastermind AI
+          </button>
+        </nav>
+        <div className="m-drawer-ft"><SettingsMenu email={email} /></div>
+      </div>
     </div>
   );
 }
