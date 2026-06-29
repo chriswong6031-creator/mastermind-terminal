@@ -29,7 +29,9 @@ const NAMESPACES = new Set(["ta", "math", "input", "color", "str", "request", "t
 const MARKER_SHAPE: Record<string, PineShape["shape"]> = { triangleup: "arrowUp", arrowup: "arrowUp", labelup: "arrowUp", flag: "arrowUp", triangledown: "arrowDown", arrowdown: "arrowDown", labeldown: "arrowDown", circle: "circle", xcross: "square", cross: "square", square: "square", diamond: "square" };
 
 interface Frame { path: string; params: Map<string, ParamBinding>; localNames: Set<string>; }
-interface ParamBinding { alias?: { name: string; frame: Frame | null }; constVal?: any; }
+// a param binds to either an alias of the caller's series (bare-id arg) or a per-call history
+// buffer (expression arg, so `_src[1]` still reads real history)
+interface ParamBinding { alias?: { name: string; frame: Frame | null }; buf?: string; }
 interface Ctx { i: number; frame: Frame | null; scalars: Map<string, number> | null; depth: number; }
 
 export function run(source: string, bars: Bar[], opts: { timeframe?: string; symbol?: string; params?: Record<string, any> } = {}): RunResult {
@@ -44,6 +46,7 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
   const varInited = new Set<string>();          // var decls that have run their one-time init
   const localStore = new Map<string, any[]>();  // function locals/vars, keyed `path|name`
   const localVarInit = new Set<string>();
+  const localVarKeys = new Set<string>();        // storage keys of function-local `var`s — carried forward each bar
   const taState = new Map<string, any>();        // per-call-site state for ta.* and friends
   const histStore = new Map<number, any[]>();    // recorded history for non-identifier index bases
   const funcs = new Map<string, { params: string[]; body: Stmt[]; localNames: Set<string> }>();
@@ -68,7 +71,8 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
     }
   };
   const collectLocalsNode = (n: Node, acc: Set<string>) => {
-    if (n.t === "for") { acc.add(n.vn); collectLocals(n.body, acc); }
+    // NB: a for-iterator is a loop-body-scoped scalar (handled via ctx.scalars), NOT a local series — don't hoist it
+    if (n.t === "for") { collectLocals(n.body, acc); }
     else if (n.t === "if") { collectLocals(n.then, acc); n.elifs.forEach((e) => collectLocals(e.body, acc)); if (n.els) collectLocals(n.els, acc); }
   };
   for (const s of body) if (s.t === "func") { const ln = new Set<string>(); collectLocals(s.body, ln); funcs.set(s.name, { params: s.params, body: s.body, localNames: ln }); }
@@ -92,7 +96,10 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
     if (ctx.scalars && ctx.scalars.has(name)) return offset > 0 ? NA : ctx.scalars.get(name); // loop var
     if (ctx.frame) {
       const pb = ctx.frame.params.get(name);
-      if (pb) { if (pb.alias) { const sub: Ctx = { i: ctx.i, frame: pb.alias.frame, scalars: null, depth: ctx.depth }; return resolveGet(sub, pb.alias.name, offset); } return offset > 0 ? NA : pb.constVal; }
+      if (pb) {
+        if (pb.alias) { const sub: Ctx = { i: ctx.i, frame: pb.alias.frame, scalars: null, depth: ctx.depth }; return resolveGet(sub, pb.alias.name, offset); }
+        const arr = localStore.get(pb.buf!); const idx = ctx.i - offset; return arr && idx >= 0 && arr[idx] !== undefined ? arr[idx] : NA;
+      }
       if (ctx.frame.localNames.has(name)) { const arr = localStore.get(ctx.frame.path + "|" + name); if (arr) { const idx = ctx.i - offset; return idx >= 0 ? (arr[idx] !== undefined ? arr[idx] : NA) : NA; } return NA; }
     }
     const g = globals.get(name);
@@ -137,7 +144,9 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
         const v = num(evalNode(n.e, ctx)); return n.op === "-" ? -v : v;
       }
       case "binary": return evalBinary(n, ctx);
-      case "ternary": return truthy(evalNode(n.c, ctx)) ? evalNode(n.a, ctx) : evalNode(n.b, ctx);
+      // evaluate BOTH arms so any stateful builtin (ta.*) inside an arm advances every bar like Pine,
+      // then return the selected one
+      case "ternary": { const c = truthy(evalNode(n.c, ctx)); const a = evalNode(n.a, ctx); const b = evalNode(n.b, ctx); return c ? a : b; }
       case "tuple": return n.items.map((it) => evalNode(it, ctx));
       case "call": return evalCall(n, ctx);
       case "if": return evalIf(n, ctx);
@@ -147,17 +156,19 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
 
   function evalBinary(n: Extract<Node, { t: "binary" }>, ctx: Ctx): any {
     const op = n.op;
-    if (op === "and") return truthy(evalNode(n.l, ctx)) && truthy(evalNode(n.r, ctx));
-    if (op === "or") return truthy(evalNode(n.l, ctx)) || truthy(evalNode(n.r, ctx));
+    // Pine `and`/`or` evaluate BOTH operands (no short-circuit) so stateful builtins in the rhs
+    // still advance every bar; truthy() handles na as false.
+    if (op === "and") { const l = truthy(evalNode(n.l, ctx)); const r = truthy(evalNode(n.r, ctx)); return l && r; }
+    if (op === "or") { const l = truthy(evalNode(n.l, ctx)); const r = truthy(evalNode(n.r, ctx)); return l || r; }
     const a = evalNode(n.l, ctx), b = evalNode(n.r, ctx);
     if (op === "+") { if (typeof a === "string" || typeof b === "string") return (isNa(a) ? "na" : String(a)) + (isNa(b) ? "na" : String(b)); }
-    switch (op) {
-      case "==": return isNa(a) || isNa(b) ? false : a === b;
-      case "!=": return isNa(a) || isNa(b) ? false : a !== b;
-      case "<": return isNa(a) || isNa(b) ? false : num(a) < num(b);
-      case "<=": return isNa(a) || isNa(b) ? false : num(a) <= num(b);
-      case ">": return isNa(a) || isNa(b) ? false : num(a) > num(b);
-      case ">=": return isNa(a) || isNa(b) ? false : num(a) >= num(b);
+    switch (op) {   // Pine: a comparison with an na operand is na (not false); truthy(na)=false keeps boolean logic intact
+      case "==": return isNa(a) || isNa(b) ? NA : a === b;
+      case "!=": return isNa(a) || isNa(b) ? NA : a !== b;
+      case "<": return isNa(a) || isNa(b) ? NA : num(a) < num(b);
+      case "<=": return isNa(a) || isNa(b) ? NA : num(a) <= num(b);
+      case ">": return isNa(a) || isNa(b) ? NA : num(a) > num(b);
+      case ">=": return isNa(a) || isNa(b) ? NA : num(a) >= num(b);
     }
     const x = num(a), y = num(b);
     if (isNaN(x) || isNaN(y)) return NA;
@@ -172,6 +183,7 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
       if (ns === "barstate") { if (prop === "islast" || prop === "islastconfirmedhistory") return ctx.i === N - 1; if (prop === "isfirst") return ctx.i === 0; if (prop === "ishistory") return ctx.i < N - 1; if (prop === "isrealtime") return false; if (prop === "isnew" || prop === "isconfirmed") return true; return false; }
       if (ns === "syminfo") { if (prop === "tickerid" || prop === "ticker") return symbol; if (prop === "mintick") return 0.01; if (prop === "pointvalue") return 1; if (prop === "type") return "stock"; if (prop === "currency") return "USD"; return ""; }
       if (ns === "bar_index") return ctx.i;
+      if (ns === "ta" && prop === "tr") { const b = bars[ctx.i]; const pc = ctx.i > 0 ? bars[ctx.i - 1].c : NaN; return isNaN(pc) ? b.h - b.l : Math.max(b.h - b.l, Math.abs(b.h - pc), Math.abs(b.l - pc)); }
       const tbl = NS_CONST[ns]; if (tbl && prop in tbl) return tbl[prop];
       return NA;
     }
@@ -190,6 +202,7 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
     const callee = n.callee;
     if (callee.t === "member" && callee.obj.t === "id") return callNs(callee.obj.name, callee.prop, n, ctx);
     if (callee.t === "id") { if (funcs.has(callee.name)) return callUser(callee.name, n, ctx); return callGlobal(callee.name, n, ctx); }
+    if (callee.t === "na") { const { pos } = evalArgs(n.args, ctx); return isNa(pos[0]); }   // `na(x)` — `na` lexes to its own node
     warn("unsupported call form"); return NA;
   }
 
@@ -201,7 +214,11 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
     fn.params.forEach((pn, idx) => {
       const argNode = n.args[idx]?.value;
       if (argNode && argNode.t === "id") frame.params.set(pn, { alias: { name: argNode.name, frame: ctx.frame } });
-      else frame.params.set(pn, { constVal: argNode ? evalNode(argNode, ctx) : NA });
+      else {
+        // expression arg: append its value to a per-call-site history buffer so `_src[1]`/`_src[i]` work
+        const bk = childPath + "|@arg|" + pn; let buf = localStore.get(bk); if (!buf) { buf = []; localStore.set(bk, buf); }
+        buf[ctx.i] = argNode ? evalNode(argNode, ctx) : NA; frame.params.set(pn, { buf: bk });
+      }
     });
     const sub: Ctx = { i: ctx.i, frame, scalars: null, depth: ctx.depth + 1 };
     return execBlock(fn.body, sub);
@@ -271,9 +288,10 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
     const { pos, named } = evalArgs(n.args, ctx);
     let acc = plotAcc.get(n.id);
     if (!acc) {
-      const style = String(named.style ?? "line");
+      // plot(series, title, color, linewidth, style, …) — accept style/linewidth positionally too
+      const style = String(named.style ?? pos[4] ?? "line");
       const kind: PlotKind = style === "histogram" ? "histogram" : style === "columns" ? "columns" : style === "area" ? "area" : style === "circles" ? "circles" : style === "cross" ? "cross" : style === "stepline" ? "stepline" : "line";
-      acc = { id: n.id, title: String(pick(pos, named, 1, "title") ?? `Plot ${plotAcc.size + 1}`), kind, overlay: planeOverlay(named.force_overlay), linewidth: num(named.linewidth) || 1, color: "#787b86", data: [], lastColor: "#787b86" };
+      acc = { id: n.id, title: String(pick(pos, named, 1, "title") ?? `Plot ${plotAcc.size + 1}`), kind, overlay: planeOverlay(named.force_overlay), linewidth: num(pick(pos, named, 3, "linewidth")) || 1, color: "#787b86", data: [], lastColor: "#787b86" };
       plotAcc.set(n.id, acc);
     }
     const v = num(pos[0]);
@@ -309,11 +327,13 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
     const src = num(pos[0]);
     switch (method) {
       case "sma": { const len = Math.round(num(pos[1])); const s = taState_(n, ctx, () => ({ buf: [] as number[], count: 0 })); rollingPush(s.buf, src, len); s.count++; if (s.count < len) return NA; let sum = 0; for (const x of s.buf) { if (isNaN(x)) return NA; sum += x; } return sum / len; }
-      case "ema": case "rma": { const len = Math.round(num(pos[1])); const k = method === "rma" ? 1 / len : 2 / (len + 1); const s = taState_(n, ctx, () => ({ prev: NA })); if (isNaN(src)) return s.prev; s.prev = isNaN(s.prev) ? src : k * src + (1 - k) * s.prev; return s.prev; }
+      case "ema": { const len = Math.round(num(pos[1])); const k = 2 / (len + 1); const s = taState_(n, ctx, () => ({ prev: NA })); if (isNaN(src)) return NA; s.prev = isNaN(s.prev) ? src : k * src + (1 - k) * s.prev; return s.prev; }
+      // Wilder RMA: seed with SMA of the first `len` values (na until then), then recursive 1/len smoothing
+      case "rma": { const len = Math.round(num(pos[1])); const s = taState_(n, ctx, () => ({ buf: [] as number[], prev: NA, count: 0 })); if (isNaN(src)) return NA; s.count++; if (s.count <= len) { s.buf.push(src); if (s.count === len) { s.prev = (s.buf as number[]).reduce((x: number, y: number) => x + y, 0) / len; return s.prev; } return NA; } s.prev = (src + s.prev * (len - 1)) / len; return s.prev; }
       case "wma": { const len = Math.round(num(pos[1])); const s = taState_(n, ctx, () => ({ buf: [] as number[] })); rollingPush(s.buf, src, len); if (s.buf.length < len) return NA; let wsum = 0, w = 0; for (let i = 0; i < len; i++) { if (isNaN(s.buf[i])) return NA; const wt = i + 1; wsum += s.buf[i] * wt; w += wt; } return wsum / w; }
       case "rsi": { const len = Math.round(num(pos[1])); const s = taState_(n, ctx, () => ({ prev: NA, ag: 0, al: 0, c: 0, seeded: false })); if (isNaN(src)) return NA; if (isNaN(s.prev)) { s.prev = src; return NA; } const ch = src - s.prev; s.prev = src; const up = ch > 0 ? ch : 0, dn = ch < 0 ? -ch : 0; s.c++; if (s.c <= len) { s.ag += up; s.al += dn; if (s.c === len) { s.ag /= len; s.al /= len; s.seeded = true; return s.al === 0 ? 100 : 100 - 100 / (1 + s.ag / s.al); } return NA; } s.ag = (s.ag * (len - 1) + up) / len; s.al = (s.al * (len - 1) + dn) / len; return s.al === 0 ? 100 : 100 - 100 / (1 + s.ag / s.al); }
       case "macd": { const fast = Math.round(num(pos[1])), slow = Math.round(num(pos[2])), sig = Math.round(num(pos[3])); const s = taState_(n, ctx, () => ({ ef: NA, es: NA, esig: NA })); const kf = 2 / (fast + 1), ks = 2 / (slow + 1), kg = 2 / (sig + 1); if (!isNaN(src)) { s.ef = isNaN(s.ef) ? src : kf * src + (1 - kf) * s.ef; s.es = isNaN(s.es) ? src : ks * src + (1 - ks) * s.es; } const macd = s.ef - s.es; if (!isNaN(macd)) s.esig = isNaN(s.esig) ? macd : kg * macd + (1 - kg) * s.esig; return [macd, s.esig, macd - s.esig]; }
-      case "stoch": { const hi = num(pos[1]), lo = num(pos[2]), len = Math.round(num(pos[3])); const s = taState_(n, ctx, () => ({ hb: [] as number[], lb: [] as number[] })); rollingPush(s.hb, hi, len); rollingPush(s.lb, lo, len); if (s.hb.length < len) return NA; const hh = winMax(s.hb), ll = winMin(s.lb); const rng = hh - ll; return rng <= 0 ? 0 : (100 * (src - ll)) / rng; }
+      case "stoch": { const hi = num(pos[1]), lo = num(pos[2]), len = Math.round(num(pos[3])); const s = taState_(n, ctx, () => ({ hb: [] as number[], lb: [] as number[] })); rollingPush(s.hb, hi, len); rollingPush(s.lb, lo, len); if (s.hb.length < len) return NA; const hh = winMax(s.hb), ll = winMin(s.lb); const rng = hh - ll; return rng <= 0 ? NA : (100 * (src - ll)) / rng; }
       case "crossover": case "crossunder": case "cross": { const a = src, b = num(pos[1]); const s = taState_(n, ctx, () => ({ pa: NA, pb: NA })); const pa = s.pa, pb = s.pb; s.pa = a; s.pb = b; if (isNaN(a) || isNaN(b) || isNaN(pa) || isNaN(pb)) return false; const over = pa <= pb && a > b, under = pa >= pb && a < b; return method === "crossover" ? over : method === "crossunder" ? under : over || under; }
       case "highest": { const r = highLow(pos, n, ctx); return r.max; }
       case "lowest": { const r = highLow(pos, n, ctx); return r.min; }
@@ -323,7 +343,8 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
       case "barssince": { const s = taState_(n, ctx, () => ({ c: NA as number })); if (truthy(pos[0])) s.c = 0; else if (!isNaN(s.c)) s.c++; return s.c; }
       case "sum": { const len = Math.round(num(pos[1])); const s = taState_(n, ctx, () => ({ buf: [] as number[] })); rollingPush(s.buf, src, len); if (s.buf.length < len) return NA; let sum = 0; for (const x of s.buf) { if (isNaN(x)) return NA; sum += x; } return sum; }
       case "stdev": case "dev": { const len = Math.round(num(pos[1])); const s = taState_(n, ctx, () => ({ buf: [] as number[] })); rollingPush(s.buf, src, len); if (s.buf.length < len) return NA; const bf = s.buf as number[]; const m = bf.reduce((x: number, y: number) => x + y, 0) / len; if (method === "dev") return bf.reduce((x: number, y: number) => x + Math.abs(y - m), 0) / len; return Math.sqrt(bf.reduce((x: number, y: number) => x + (y - m) ** 2, 0) / len); }
-      case "tr": case "atr": { const s = taState_(n, ctx, () => ({ pc: NA, prev: NA, c: 0 })); const b = bars[ctx.i]; const tr = isNaN(s.pc) ? b.h - b.l : Math.max(b.h - b.l, Math.abs(b.h - s.pc), Math.abs(b.l - s.pc)); s.pc = b.c; if (method === "tr") return tr; const len = Math.round(num(pos[0])) || 14; const k = 1 / len; s.c++; s.prev = isNaN(s.prev) ? tr : k * tr + (1 - k) * s.prev; return s.c < len ? NA : s.prev; }
+      // atr = Wilder RMA of true range: seed prev = mean of first `len` TRs (na until then), then 1/len smoothing
+      case "tr": case "atr": { const s = taState_(n, ctx, () => ({ pc: NA, prev: NA, c: 0, buf: [] as number[] })); const b = bars[ctx.i]; const tr = isNaN(s.pc) ? b.h - b.l : Math.max(b.h - b.l, Math.abs(b.h - s.pc), Math.abs(b.l - s.pc)); s.pc = b.c; if (method === "tr") return tr; const len = Math.round(num(pos[0])) || 14; s.c++; if (s.c <= len) { s.buf.push(tr); if (s.c === len) { s.prev = (s.buf as number[]).reduce((x: number, y: number) => x + y, 0) / len; return s.prev; } return NA; } s.prev = (tr + s.prev * (len - 1)) / len; return s.prev; }
       case "cci": { const len = Math.round(num(pos[1])); const s = taState_(n, ctx, () => ({ buf: [] as number[] })); rollingPush(s.buf, src, len); if (s.buf.length < len) return NA; const bf = s.buf as number[]; const m = bf.reduce((x: number, y: number) => x + y, 0) / len; const md = bf.reduce((x: number, y: number) => x + Math.abs(y - m), 0) / len; return md === 0 ? 0 : (src - m) / (0.015 * md); }
       case "rising": case "falling": { const len = Math.round(num(pos[1])); const s = taState_(n, ctx, () => ({ buf: [] as number[] })); s.buf.push(src); if (s.buf.length > len + 1) s.buf.shift(); if (s.buf.length < len + 1) return false; for (let i = 1; i < s.buf.length; i++) { if (method === "rising" && !(s.buf[i] > s.buf[i - 1])) return false; if (method === "falling" && !(s.buf[i] < s.buf[i - 1])) return false; } return true; }
       case "valuewhen": { const s = taState_(n, ctx, () => ({ vals: [] as number[] })); if (truthy(pos[0])) s.vals.unshift(num(pos[1])); const occ = Math.round(num(pos[2])) || 0; return s.vals[occ] !== undefined ? s.vals[occ] : NA; }
@@ -373,7 +394,7 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
       const key = ctx.frame ? ctx.frame.path + "|var|" + s.target : "var|" + String(s.target);
       const inited = ctx.frame ? localVarInit.has(key) : varInited.has(key);
       if (inited) { if (ctx.frame) ctx.frame.localNames.add(s.target as string); else globalVars.add(s.target as string); return resolveGet(ctx, s.target as string, 0); }
-      if (ctx.frame) localVarInit.add(key); else varInited.add(key);
+      if (ctx.frame) { localVarInit.add(key); localVarKeys.add(ctx.frame.path + "|" + s.target); } else varInited.add(key);
     }
     let val = evalNode(s.value, ctx);
     if (s.op === "=" && typeof s.target === "string" && isInputCall(s.value) && params[s.target] !== undefined) val = coerce(params[s.target], val);
@@ -405,7 +426,10 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
   // ── the bar loop ──
   for (let i = 0; i < N; i++) {
     const ctx: Ctx = { i, frame: null, scalars: null, depth: 0 };
-    if (i > 0) for (const name of globalVars) { const arr = globals.get(name)!; if (arr[i] === undefined) arr[i] = arr[i - 1]; }
+    if (i > 0) {
+      for (const name of globalVars) { const arr = globals.get(name)!; if (arr[i] === undefined) arr[i] = arr[i - 1]; }
+      for (const key of localVarKeys) { const arr = localStore.get(key); if (arr && arr[i] === undefined) arr[i] = arr[i - 1]; }   // carry function-local vars too
+    }
     execBlock(body, ctx);
     collectInputs = false;
   }

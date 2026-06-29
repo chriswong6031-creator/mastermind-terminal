@@ -110,8 +110,8 @@ export function parse(src: string): ParseResult {
       eat("op", "]"); target = names;
     } else {
       let first = eat("id").value;
-      // typed decl:  <type> <name> =   (e.g. `float x = …`, `var bool armed = …`)
-      if (TYPE_KW.has(first) && at("id")) first = eat("id").value;
+      // typed decl:  <qualifier>* <type> <name> =   (e.g. `float x = …`, `series float src = …`, `var simple int n = …`)
+      while (TYPE_KW.has(first) && at("id")) first = eat("id").value;
       target = first;
     }
     const op = (at("op", ":=") ? eat("op", ":=") : eat("op", "=")).value as "=" | ":=";
@@ -125,9 +125,9 @@ export function parse(src: string): ParseResult {
     eat("op", "(");
     const params: string[] = [];
     while (!at("op", ")")) {
-      // params may carry a type prefix and/or a default — keep only the binding name
+      // params may carry qualifier+type prefixes and/or a default — keep only the binding name
       let nm = eat("id").value;
-      if (TYPE_KW.has(nm) && at("id")) nm = eat("id").value;
+      while (TYPE_KW.has(nm) && at("id")) nm = eat("id").value;
       if (at("op", "=")) { next(); parseExpr(); } // ignore default value
       params.push(nm);
       if (at("op", ",")) next(); else break;
@@ -175,17 +175,19 @@ export function parse(src: string): ParseResult {
     if (at("op", "?")) { next(); const a = parseTernary(); eat("op", ":"); const b = parseTernary(); return { t: "ternary", c, a, b }; }
     return c;
   }
+  // Pine v6 precedence (loosest→tightest): ?: < or < and < == != < > < >= <= < +- < */% < unary(+ - not) < postfix
   function parseOr(): Node { let l = parseAnd(); while (atId("or")) { next(); l = { t: "binary", op: "or", l, r: parseAnd() }; } return l; }
-  function parseAnd(): Node { let l = parseNot(); while (atId("and")) { next(); l = { t: "binary", op: "and", l, r: parseNot() }; } return l; }
-  function parseNot(): Node { if (atId("not")) { next(); return { t: "unary", op: "not", e: parseNot() }; } return parseCmp(); }
-  function parseCmp(): Node {
-    let l = parseAdd();
-    while (at("op") && ["==", "!=", "<", "<=", ">", ">="].includes(peek().value)) { const op = next().value; l = { t: "binary", op, l, r: parseAdd() }; }
-    return l;
-  }
+  function parseAnd(): Node { let l = parseEquality(); while (atId("and")) { next(); l = { t: "binary", op: "and", l, r: parseEquality() }; } return l; }
+  function parseEquality(): Node { let l = parseRelational(); while (at("op") && (peek().value === "==" || peek().value === "!=")) { const op = next().value; l = { t: "binary", op, l, r: parseRelational() }; } return l; }
+  function parseRelational(): Node { let l = parseAdd(); while (at("op") && ["<", "<=", ">", ">="].includes(peek().value)) { const op = next().value; l = { t: "binary", op, l, r: parseAdd() }; } return l; }
   function parseAdd(): Node { let l = parseMul(); while (at("op") && (peek().value === "+" || peek().value === "-")) { const op = next().value; l = { t: "binary", op, l, r: parseMul() }; } return l; }
   function parseMul(): Node { let l = parseUnary(); while (at("op") && ["*", "/", "%"].includes(peek().value)) { const op = next().value; l = { t: "binary", op, l, r: parseUnary() }; } return l; }
-  function parseUnary(): Node { if (at("op") && (peek().value === "-" || peek().value === "+")) { const op = next().value; return { t: "unary", op, e: parseUnary() }; } return parsePostfix(); }
+  // unary +/-/not all bind tighter than comparison (Pine level 8): `not a > b` is `(not a) > b`
+  function parseUnary(): Node {
+    if (atId("not")) { next(); return { t: "unary", op: "not", e: parseUnary() }; }
+    if (at("op") && (peek().value === "-" || peek().value === "+")) { const op = next().value; return { t: "unary", op, e: parseUnary() }; }
+    return parsePostfix();
+  }
 
   function parsePostfix(): Node {
     let e = parsePrimary();

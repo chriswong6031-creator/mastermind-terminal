@@ -22,6 +22,11 @@ const isHex = (c: string) => /[0-9a-fA-F]/.test(c);
 //  on the next, indented line.)
 const CONT_AFTER = new Set(["+", "-", "*", "/", "%", "==", "!=", "<=", ">=", "<", ">", "=", ":=", "?", ":", "and", "or", "not"]);
 
+// leading-operator continuation: a line whose first token is a binary/ternary operator continues the
+// previous line (no valid Pine statement begins with one). `//` comment lines are excluded.
+const LEADING_CONT = /^(==|!=|<=|>=|and\b|or\b|[-+*/%<>?:])/;
+function startsWithContOp(text: string): boolean { const t = text.replace(/^[ \t]+/, ""); return t !== "" && !t.startsWith("//") && LEADING_CONT.test(t); }
+
 export function lex(src: string): Tok[] {
   const out: Tok[] = [];
   const lines = src.split("\n");
@@ -93,11 +98,11 @@ export function lex(src: string): Tok[] {
         if (j >= text.length) throw new PineSyntaxError("unterminated string", lineNo, col + 1);
         logicalToks.push({ type: "str", value: val, line: lineNo, col: col + 1 }); col = j + 1; continue;
       }
-      // number — 123, 1.5, .5, 1e6, 1.2e-3
+      // number — 123, 1.5, .5, 1e6, 1.2e-3  (at most one '.', exponent only if real digits follow)
       if (isDigit(c) || (c === "." && isDigit(text[col + 1]))) {
-        let j = col;
-        while (j < text.length && (isDigit(text[j]) || text[j] === ".")) j++;
-        if (text[j] === "e" || text[j] === "E") { j++; if (text[j] === "+" || text[j] === "-") j++; while (j < text.length && isDigit(text[j])) j++; }
+        let j = col, seenDot = false;
+        while (j < text.length && (isDigit(text[j]) || (text[j] === "." && !seenDot))) { if (text[j] === ".") seenDot = true; j++; }
+        if (text[j] === "e" || text[j] === "E") { let k = j + 1; if (text[k] === "+" || text[k] === "-") k++; if (isDigit(text[k])) { j = k + 1; while (j < text.length && isDigit(text[j])) j++; } }
         logicalToks.push({ type: "num", value: text.slice(col, j), line: lineNo, col: col + 1 }); col = j; continue;
       }
       // identifier / keyword
@@ -117,10 +122,12 @@ export function lex(src: string): Tok[] {
       if (!matched) throw new PineSyntaxError(`unexpected character '${c}'`, lineNo, col + 1);
     }
 
-    // end of physical line: continue the logical line if inside brackets or after a continuing op
+    // end of physical line: continue the logical line if inside brackets, after a trailing operator,
+    // or if the NEXT line begins with a binary/ternary operator (leading-operator wrap style)
     if (bracket > 0) continue;
     const last = logicalToks[logicalToks.length - 1];
     if (last && CONT_AFTER.has(last.value) && (last.type === "op" || last.type === "id")) continue;
+    if (logicalToks.length && li + 1 < lines.length && startsWithContOp(lines[li + 1])) continue;
     flushLogical();
   }
 

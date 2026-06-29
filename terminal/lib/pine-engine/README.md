@@ -51,6 +51,26 @@ Deferred / no-op (clearly reported, never throws):
 - Tables, labels, lines, boxes, `fill`, `bgcolor`, `alertcondition` are parsed but draw nothing
   (they aren't chart series). The flagship's MTF dashboard table is therefore not rendered here.
 
+## Audit & known limitations
+
+A multi-agent adversarial audit (find → verify-by-running → empirical batteries) drove the engine's
+correctness. Fixed in that pass: `na(x)` dispatch, Wilder `ta.rma`/`ta.atr` seeding, function-local
+`var` carry-forward, `and`/`or` + ternary evaluating both operands so `ta.*` state stays in sync,
+expression-argument history for function params, leading-operator line continuation, two-word type
+qualifiers (`series float`), na-valued comparisons, `ta.stoch` zero-range → na, bare `ta.tr`,
+positional `plot()` style/linewidth, multi-dot/empty-exponent number lexing, `not`/equality operator
+precedence, and the `pineKey` re-run trigger (now keys on full source, not length).
+
+Remaining known limitations (low blast radius, documented on purpose):
+- `ta.*`/`expr[n]` inside an `if`-block branch only advance on bars where the branch runs — Pine
+  itself documents this as unsupported; hoist `ta.*` to top level (the flagship does).
+- Per-bar `plot()` colors render as a single color on **line/area/circle** series (Lightweight-Charts
+  has one color per line series); histograms keep per-bar color.
+- Undefined identifiers resolve to `na` + a surfaced warning (deliberately tolerant) rather than a
+  hard compile error.
+- `color.from_gradient`, `for…in` array iteration, tab-width indentation, and `plotshape`
+  `location.top/bottom` (Lightweight-Charts markers only support above/below/in-bar) are approximated.
+
 ## The proprietary flagship vs. this engine — the decision
 
 The locked `RM×ST — MTF Signal Suite` (`PROPRIETARY_SCRIPT`, `locked: true`) keeps using its

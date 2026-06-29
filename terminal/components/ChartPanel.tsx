@@ -60,8 +60,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const textEditRef = useRef<HTMLInputElement | null>(null);
   const sigRef = useRef<SVGSVGElement | null>(null);
   const onPineRef = useRef(onPineResult); onPineRef.current = onPineResult;
-  // only rebuild the chart when the script's identity/content actually changes (the object is fresh each render)
-  const pineKey = pineScript ? `${pineScript.name}|${pineScript.source.length}|${JSON.stringify(pineScript.params)}` : "";
+  // rebuild the chart whenever the script's content actually changes (full source — not just its
+  // length, so equal-length edits like `>`→`<` still re-run the engine; the object is fresh each render)
+  const pineKey = pineScript ? `${pineScript.name}|${pineScript.source}|${JSON.stringify(pineScript.params)}` : "";
   // rebuild the chart when the up/down color scheme flips (candle + badge colors are baked from tokens)
   const [csNonce, setCsNonce] = useState(0);
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
@@ -184,15 +185,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
               }
               if (!pl.overlay && !pineAnchor) pineAnchor = s;
             }
+            // a sub-pane is needed for ANY non-overlay output (plot, hline, OR marker); create its
+            // anchor series BEFORE drawing hlines/markers so a levels-only or markers-only script isn't dropped
+            const needPine = usedPine || R.hlines.some((h) => !h.overlay) || R.shapes.some((sh) => !sh.overlay);
+            if (needPine && !pineAnchor) { pineAnchor = chart.addSeries(LineSeries, { color: "rgba(0,0,0,0)", priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, pinePane); pineAnchor.setData(rows.map((rr) => ({ time: rr.time, value: rr.c }))); }
             for (const h of R.hlines) { const tgt = h.overlay ? priceS : pineAnchor; if (tgt) try { tgt.createPriceLine({ price: h.price, color: h.color, lineWidth: 1, lineStyle: ls(h.style), axisLabelVisible: false, title: h.title }); } catch {} }
             for (const sh of R.shapes) (sh.overlay ? ovMarks : paneMarks).push({ time: sh.time, position: sh.position, color: sh.color, shape: sh.shape, text: sh.text });
             const byT = (a: any, b: any) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0);
             if (ovMarks.length) createSeriesMarkers(priceS, ovMarks.sort(byT));
-            if (usedPine) {
-              if (!pineAnchor) { pineAnchor = chart.addSeries(LineSeries, { color: "rgba(0,0,0,0)", priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, pinePane); pineAnchor.setData(rows.map((rr) => ({ time: rr.time, value: rr.c }))); }
-              if (paneMarks.length) createSeriesMarkers(pineAnchor, paneMarks.sort(byT));
-              pane = pinePane + 1;
-            }
+            if (pineAnchor && paneMarks.length) createSeriesMarkers(pineAnchor, paneMarks.sort(byT));
+            if (needPine) pane = pinePane + 1;
             onPineRef.current?.({ ok: true, plots: R.plots.length, shapes: R.shapes.length });
           }
         } catch (e) { onPineRef.current?.({ ok: false, error: (e as Error)?.message || "engine error", plots: 0, shapes: 0 }); }
