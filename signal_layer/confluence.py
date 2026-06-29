@@ -168,6 +168,30 @@ def _resample_3d(daily_close: pd.Series, bar_anchor: int = 0) -> pd.Series:
     return pd.Series(px, index=od, name=getattr(daily_close, "name", None))
 
 
+def _resample_2w(daily_close: pd.Series, week_parity: int = 0) -> pd.Series:
+    """2-week bars = calendar weeks paired two at a time (TV treats 2W as a calendar unit).
+
+    Unlike 3D, the only freedom is the PAIRING PHASE: which weeks share a 2W bar. pandas
+    ``resample("2W-FRI")`` anchors that phase to the series' first row, so a TRUNCATED feed
+    pairs the opposite weeks from a full-history TV chart. ``week_parity`` (0/1) restores the
+    full-history pairing — pass ``ipo_week_parity(feed, sym)`` for a truncated feed. The
+    default 0 reproduces ``resample("2W-FRI")`` bar-for-bar on full history (verified).
+
+    Confirmed against TradingView NVDA-2W (2026-06-29): the last CLOSED 2W bar spans the
+    weeks ending 2026-06-05 and 2026-06-19 — full history already matches; the 6-yr feed
+    needed parity=1. (2W only feeds the fixed=True backtest's ``bear_block``, never live CB/CS.)"""
+    wk = daily_close.resample("W-FRI").last().dropna()
+    n = len(wk)
+    if n == 0:
+        return wk
+    gi = np.arange(n) + int(week_parity)
+    opens = np.empty(n, dtype=bool)
+    opens[0] = True
+    opens[1:] = (gi[:-1] % 2 == 0)          # a 2W bar closes on even global-week index; next opens after
+    close_pos = np.append(np.flatnonzero(opens)[1:] - 1, n - 1)
+    return pd.Series(wk.to_numpy()[close_pos], index=wk.index[close_pos], name=wk.name)
+
+
 def ipo_bar_anchor(feed_close: pd.Series, symbol: str) -> int:
     """The ``bar_anchor`` for a TRUNCATED feed: the global session index (counted from the
     symbol's IPO) of ``feed_close``'s first row, so ``compute_signals`` phases the 3D bars
@@ -185,15 +209,31 @@ def ipo_bar_anchor(feed_close: pd.Series, symbol: str) -> int:
         return 0
 
 
-def compute_signals(daily_close: pd.Series, bar_anchor: int = 0) -> pd.DataFrame:
+def ipo_week_parity(feed_close: pd.Series, symbol: str) -> int:
+    """The ``week_parity`` for a TRUNCATED feed: the parity (0/1) of the global weekly-bar
+    index — counted from the symbol's IPO — of the feed's first W-FRI week, so the 2W pairing
+    matches a full-history TradingView chart (see ``_resample_2w``). Reads the deep store;
+    returns 0 if unavailable (then 2W is anchored at the feed start, possibly off by one week
+    — inert for live signals, it only shifts the fixed=True backtest's bear_block)."""
+    try:
+        full = pd.read_parquet(DATA / f"{symbol}.parquet", columns=["close"])["close"]
+        fullwk = full.dropna().resample("W-FRI").last().dropna()
+        feedwk = feed_close.dropna().resample("W-FRI").last().dropna()
+        return int(fullwk.index.searchsorted(feedwk.index[0])) % 2
+    except Exception:
+        return 0
+
+
+def compute_signals(daily_close: pd.Series, bar_anchor: int = 0, week_parity: int = 0) -> pd.DataFrame:
     """All trade-driving signals on the 3D timeframe, with a leak-free weekly
     (confirm-TF) trend gate. Returns a frame indexed by 3D bar OPEN dates.
 
     ``bar_anchor`` phases the session-grouped 3D bars to the symbol's full-history (IPO)
-    anchor — see ``_resample_3d``. Feed the symbol's FULL daily history (bar_anchor=0) for
-    TradingView parity; the weekly / 2-week / monthly confirm timeframes stay calendar
-    resamples because TV treats those as calendar units (only daily-multiples are
-    session-grouped)."""
+    anchor — see ``_resample_3d``. ``week_parity`` phases the 2-week confirm gate the same way
+    (see ``_resample_2w``). Feed the symbol's FULL daily history (both 0) for TradingView
+    parity, or pass ``ipo_bar_anchor`` / ``ipo_week_parity`` for a truncated feed. The weekly
+    and monthly confirm timeframes stay plain calendar resamples (W / ME have no phase
+    ambiguity; only daily-multiples and 2-week pairs do)."""
     open_dates, close_dates, close_px = _3d_groups(daily_close, bar_anchor)
     if len(open_dates) < 90:
         return pd.DataFrame()
@@ -252,8 +292,8 @@ def compute_signals(daily_close: pd.Series, bar_anchor: int = 0) -> pd.DataFrame
     mo = daily_close.resample("ME").last().dropna()
     mmacd, msig = rsi_macd(mo)
     mo_bull = (mmacd >= msig).shift(1).reindex(s3.index, method="ffill").fillna(False).astype(bool)
-    # 2-week RSI-MACD -- the IC-bottom RE-ENABLE the user proposed.
-    w2 = daily_close.resample("2W-FRI").last().dropna()
+    # 2-week RSI-MACD -- the IC-bottom RE-ENABLE the user proposed (TV-phased; see _resample_2w).
+    w2 = _resample_2w(daily_close, week_parity)
     w2macd, w2sig = rsi_macd(w2)
     w2_bull = (w2macd >= w2sig).shift(1).reindex(s3.index, method="ffill").fillna(False).astype(bool)
 

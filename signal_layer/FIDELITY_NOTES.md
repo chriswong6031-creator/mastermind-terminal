@@ -25,9 +25,13 @@ anchored at the symbol's **first listed session (IPO)** — NOT calendar busines
 `resample("3B")` was wrong twice over: it buckets by the Mon–Fri calendar (mis-splitting real
 sessions around every holiday) **and** anchors to the calendar grid, not the session sequence.
 
-Only daily-**multiples** (3D) are session-grouped. W / 2W / 1M confirm timeframes are calendar
-units in TV, so they stay `resample("W-FRI" / "2W-FRI" / "ME")` — verified correct (incl. holiday
-weeks).
+Only daily-**multiples** (3D) are session-grouped. W and 1M stay plain calendar resamples
+(`W-FRI` / `ME`) — verified correct, incl. holiday weeks. **2W** is also calendar but has a
+*pairing phase* (which weeks share a bar): pandas anchors `resample("2W-FRI")` to the series'
+first row, so a truncated feed pairs the opposite weeks from TV. `_resample_2w(week_parity)` +
+`ipo_week_parity()` restore the IPO pairing. Confirmed against TV NVDA-2W (last closed 2W bar =
+weeks ending 06-05 & 06-19, 2026): full history already matched; the 6-yr feed needed parity=1.
+2W only feeds the fixed=True backtest's `bear_block` — **never the live CB/CS markers**.
 
 ## Implementation (`confluence.py`)
 - `_3d_groups` / `_resample_3d` — session-grouped 3D, closes at global idx `%3==0`, bars labeled by
@@ -68,9 +72,11 @@ weeks).
 ## Downstream impact
 - **Terminal slices** regenerated (`ingest/regen_slices.py`, 34 symbols) — markers move to the
   TV-correct grid (current-committed vs new Jaccard 0.12; counts ~unchanged, dates relocated).
-- **Macro Dashboard** shares this file (runs full-history, `bar_anchor=0` → already correct phase):
-  full-history old-vs-new Jaccard ~0.13 (same magnitude; correct direction). **Sync this file back**
-  to the Macro repo's `research/signal_engine/confluence.py` to keep them identical.
+- **Macro Dashboard** shares this file (runs full-history, `bar_anchor=0`/`week_parity=0` → already
+  correct phase): full-history old-vs-new Jaccard ~0.13 (same magnitude; correct direction).
+  **Synced** to the Macro repo's `research/signal_engine/confluence.py` (its `ROOT/DATA` header
+  preserved; bodies spliced) and verified byte-identical to this oracle (max series diff 0.0, all
+  events + gates equal). Commit it in that repo when convenient.
 - **`pine-engine`** (client-side interpreter) does NOT recompute the flagship — unaffected.
 - Call sites now thread the anchor: `regen_slices`, `build_polygon_universe`, `backtest.run_backtest`,
   `golden_gate.check` (all accept/derive `bar_anchor`).
