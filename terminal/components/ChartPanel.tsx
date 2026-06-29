@@ -82,7 +82,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (!ohlc?.bars?.length) { if (statusRef.current) statusRef.current.textContent = "No data for this symbol."; return; }
 
       let rows: Bar[] = ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
-      rows = resampleTf(rows, timeframe).slice(-220);
+      // keep the FULL history (the OHLC store holds ~5y) — no truncation, so the
+      // chart scrolls/zooms back over every loaded bar; the default view is set
+      // to a recent window below (setVisibleLogicalRange).
+      rows = resampleTf(rows, timeframe);
       if (onMeta) onMeta({ total: rows.length });
       if (replayIdx != null) rows = rows.slice(0, Math.max(20, replayIdx + 1));
       const display = chartType === "heikin" ? heikin(rows) : rows;
@@ -154,7 +157,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const last = rows[rows.length - 1], prev = rows[rows.length - 2] || last;
       if (statusRef.current) { const ch = last.c - prev.c, cp = (ch / prev.c) * 100, u = ch >= 0, f = (x: number) => x.toFixed(prec); statusRef.current.innerHTML = `<span class="mut">O</span><b>${f(last.o)}</b> <span class="mut">H</span><b>${f(last.h)}</b> <span class="mut">L</span><b>${f(last.l)}</b> <span class="mut">C</span><b>${f(last.c)}</b> <b class="${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`; }
       if (verdictRef.current) { const v = slice?.indicator?.state?.last_signal || "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? c.buy : c.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
-      chart.timeScale().fitContent();
+      // default to a recent window (~240 bars) but leave the full history scrollable;
+      // replay mode fits its own slice.
+      { const DEFAULT_VIEW = 240, n = rows.length;
+        if (replayIdx == null && n > DEFAULT_VIEW) chart.timeScale().setVisibleLogicalRange({ from: n - DEFAULT_VIEW, to: n - 1 + 6 });
+        else chart.timeScale().fitContent(); }
 
       // ---------- drawing overlay (synced to chart coordinates) ----------
       const wrap = el.parentElement as HTMLElement;
