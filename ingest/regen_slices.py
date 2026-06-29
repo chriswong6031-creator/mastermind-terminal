@@ -33,7 +33,9 @@ for jf in sorted(OUT.glob("*.json")):
             continue
         idx = pd.to_datetime([b[0] for b in bars])
         close = pd.Series([float(b[4]) for b in bars], index=idx)
-        sig = confluence.compute_signals(close)
+        # Phase the 3D bars to the symbol's IPO so the session grid matches TradingView
+        # (the feed is truncated to ~6yr; bar_anchor=0 would anchor at the feed start = wrong phase).
+        sig = confluence.compute_signals(close, bar_anchor=confluence.ipo_bar_anchor(close, sym))
         if sig.empty:
             n_skip += 1
             continue

@@ -34,14 +34,20 @@ def check(
     engine_fn: Callable[[pd.Series], pd.DataFrame] | None = None,
     *,
     bar_quality: str = "unknown",
+    bar_anchor: int = 0,
 ) -> dict:
     """Diff a candidate indicator engine against the oracle.
 
     ``engine_fn`` maps a close Series → a frame with the same columns the oracle
     produces. Defaults to the oracle itself (the Phase 0b self-check).
+
+    ``bar_anchor`` phases the 3D session grid to the symbol's IPO (see
+    ``confluence.compute_signals``). For a truncated feed pass
+    ``oracle.ipo_bar_anchor(close, sym)`` so the gate certifies the engine on the SAME
+    bar grid TradingView (and the live terminal) use, not a feed-anchored one.
     """
-    engine_fn = engine_fn or oracle.compute_signals
-    truth = oracle.compute_signals(close.dropna())
+    engine_fn = engine_fn or (lambda c: oracle.compute_signals(c, bar_anchor=bar_anchor))
+    truth = oracle.compute_signals(close.dropna(), bar_anchor=bar_anchor)
     cand = engine_fn(close.dropna())
     if truth.empty or cand.empty:
         return {"pass": False, "reason": "insufficient_data", "bar_quality": bar_quality}

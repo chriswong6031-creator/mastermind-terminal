@@ -36,14 +36,19 @@ def run_backtest(
     cost_bps: float = 3.0,
     slippage_bps: float = 1.0,
     bar_quality: str = "synthetic_open_deepstore",
+    bar_anchor: int = 0,
 ) -> dict:
     """Long/flat as the user trades it (enter CB/re-buy, exit CS/cut), fills at the
     next 3D bar's close. Returns the metrics + trade list that ``contracts`` serialises.
 
     ``fixed=True`` applies the two regime gates (bear-block + hold-through-strong-bull),
     matching ``confluence.simulate(fixed=True)``.
+
+    ``bar_anchor`` phases the 3D session grid to the symbol's IPO (see
+    ``confluence.compute_signals``); pass ``confluence.ipo_bar_anchor(close, sym)`` when
+    backtesting a truncated feed so the trades land on the same bars TradingView shows.
     """
-    sig = oracle.compute_signals(close.dropna())
+    sig = oracle.compute_signals(close.dropna(), bar_anchor=bar_anchor)
     if sig.empty:
         return {"status": "insufficient_data", "n_trades": 0}
     rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
