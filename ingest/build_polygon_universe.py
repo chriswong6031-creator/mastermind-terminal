@@ -91,12 +91,17 @@ def main(syms: list[str]) -> None:
                "hi52": round(hi52, 2), "lo52": round(lo52, 2),
                "verdict": None, "wr": None, "pf": None, "cagr": None, "regimeBull": None}
 
-        sig = confluence.compute_signals(close)
+        # Phase the 3D session grid (and the 2-week confirm pairing) to the symbol's IPO so they
+        # match a full-history TV chart (Polygon feed is truncated to ~6yr; defaults mis-phase).
+        anchor = confluence.ipo_bar_anchor(close, sym)
+        wparity = confluence.ipo_week_parity(close, sym)
+        sig = confluence.compute_signals(close, bar_anchor=anchor, week_parity=wparity)
         if not sig.empty:
             ind = contracts.indicator_contract(
                 sym, "3D", sig, bar_quality="real_ohlc", src_text=src,
                 honest_read="RSI-MACD × StochRSI MTF confluence on Polygon daily→3D. Risk/timing overlay + brain input.")
-            bt = backtest.run_backtest(close, fixed=True, bar_quality="real_ohlc")
+            bt = backtest.run_backtest(close, fixed=True, bar_quality="real_ohlc",
+                                       bar_anchor=anchor, week_parity=wparity)
             btc = contracts.backtest_contract(
                 sym, "3D", bt,
                 honest_read="As-traded Polygon backtest after costs; significance verdict delegated to loop/harness.")

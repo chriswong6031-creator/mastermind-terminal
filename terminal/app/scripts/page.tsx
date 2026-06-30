@@ -6,7 +6,10 @@ export const dynamic = "force-dynamic";
 
 export default async function ScriptsPage() {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  // getSession() is local (no Supabase round-trip); the profile/scripts queries are
+  // RLS-scoped to the cookie's token, so reading the id from the session is sufficient.
+  const { data: { session } } = await supabase.auth.getSession();
+  const user = session?.user;
   const { data: prof } = await supabase.from("profiles").select("is_pro").eq("id", user!.id).single();
 
   const sel = "id,name,source,lang,params,is_public,updated_at";

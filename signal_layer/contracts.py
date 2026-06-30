@@ -103,18 +103,23 @@ def indicator_contract(
 
 
 def _extract_signals(sig: pd.DataFrame) -> list[dict]:
-    """Discrete events → the Opus-facing surface (mirrors CB/CS/revBuy/revSell)."""
+    """Discrete events → the Opus-facing surface (mirrors CB/CS/revBuy/revSell).
+
+    Priority follows the Pine ``compTxt`` order (revExitSell > revExitBuy > CB > CS), so a
+    bar that is BOTH a fast-reversal cut and a confirmed sell reports CUT — the same primary
+    marker TradingView surfaces. (TV also plots the secondary shape; the model surface keeps
+    one event per bar.)"""
     out = []
     for i, (ts, row) in enumerate(sig.iterrows()):
         kind = None
-        if row.get("CB"):
-            kind, reasons = "BUY", ["macd_bull_cross", "recent_b1", "confirm_bull", "rsi<65"]
+        if row.get("revSell"):
+            kind, reasons = "CUT", ["fast_reversal_down", "buy_failed"]
         elif row.get("revBuy"):
             kind, reasons = "REBUY", ["fast_reversal_up", "sell_failed"]
+        elif row.get("CB"):
+            kind, reasons = "BUY", ["macd_bull_cross", "recent_b1", "confirm_bull", "rsi<65"]
         elif row.get("CS"):
             kind, reasons = "SELL", ["macd_bear_cross", "recent_s1", "extended"]
-        elif row.get("revSell"):
-            kind, reasons = "CUT", ["fast_reversal_down", "buy_failed"]
         if not kind:
             continue
         out.append({

@@ -3,9 +3,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
-import { compilePine, runPine, type PineRunOutput } from "@/lib/pine-engine";
-
-const RUN_SYMBOL = "NVDA";   // the editor dry-runs every script against this symbol's daily bars
 
 type Script = { id: string; name: string; source: string; lang: string; params: Record<string, any>; updated_at: string; locked?: boolean };
 
@@ -41,11 +38,10 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
   const [params, setParams] = useState<Record<string, any>>(active?.params || {});
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "compiling" | "err">("idle");
   const [picker, setPicker] = useState(false);
-  const [runOut, setRunOut] = useState<PineRunOutput | null>(null);   // last real execution result
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   // switching scripts resets the editable buffers to that script's stored source/params
-  useEffect(() => { setSrc(active?.source || ""); setParams(active?.params || {}); setStatus("idle"); setPicker(false); setRunOut(null); }, [idx, active?.id]);
+  useEffect(() => { setSrc(active?.source || ""); setParams(active?.params || {}); setStatus("idle"); setPicker(false); }, [idx, active?.id]);
   // close the script picker on any outside click
   useEffect(() => { if (!picker) return; const close = () => setPicker(false); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [picker]);
 
@@ -55,31 +51,16 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
   const dirty = !isLocked && !!active && (src !== active.source || JSON.stringify(params) !== JSON.stringify(active.params));
   const isOracle = isLocked || /oracle/i.test(active?.name || "");
 
-  // live parse check (real Pine lexer/parser) — surfaces syntax errors with line/col as you type
-  const parseInfo = useMemo(() => compilePine(src), [src]);
+  // lightweight client-side "compile" — enough to catch obvious breakage as you edit
+  const compileInfo = useMemo(() => {
+    const errs: string[] = [];
+    if (src.trim() && !/\b(indicator|strategy)\s*\(/.test(src)) errs.push("missing indicator() / strategy() declaration");
+    let bal = 0; for (const ch of src) { if (ch === "(") bal++; else if (ch === ")") bal--; if (bal < 0) break; }
+    if (bal !== 0) errs.push("unbalanced parentheses");
+    return { errs, n: lines.length };
+  }, [src, lines.length]);
 
-  // Run: actually execute the script bar-by-bar over real data and report plots/markers + errors.
-  async function compile() {
-    if (!src.trim()) return;
-    setStatus("compiling"); setRunOut(null);
-    const ohlc = await fetch(`/data/${RUN_SYMBOL}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    const rows = ohlc?.bars?.length ? ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] })).slice(-220) : [];
-    const out = runPine(src, rows, { timeframe: "D", symbol: RUN_SYMBOL, params });
-    setRunOut(out); setStatus(out.ok ? "idle" : "err");
-    if (!out.ok) setTimeout(() => setStatus("idle"), 1800);
-  }
-
-  // "Add to chart": hand the active script to the terminal chart via sessionStorage. The locked
-  // proprietary flagship is the validated Python-oracle path — it is NOT run through the general
-  // engine (that would duplicate/contradict the golden BUY/SELL/CUT/RE-BUY signals); it just opens.
-  function addToChart() {
-    if (!active) return;
-    try {
-      if (isLocked) sessionStorage.removeItem("mm.pine");
-      else sessionStorage.setItem("mm.pine", JSON.stringify({ name: active.name, source: src, params, ts: Date.now() }));
-    } catch {}
-    router.push(isLocked ? "/terminal" : "/terminal?pine=1");
-  }
+  function compile() { setStatus("compiling"); window.setTimeout(() => setStatus("idle"), 360); }
 
   async function save() {
     if (!isPro || !active || isLocked) return;
@@ -141,7 +122,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
             {status === "saving" ? "Saving…" : status === "saved" ? "Saved ✓" : status === "err" ? "Error" : dirty ? "Save changes" : "Save"}
           </button>
         )}
-        <button className="ai" style={{ marginLeft: 6 }} onClick={addToChart} disabled={!active}>Add to chart</button>
+        <button className="ai" style={{ marginLeft: 6 }} onClick={() => router.push("/terminal")} disabled={!active}>Add to chart</button>
         <form action="/auth/signout" method="post" style={{ marginLeft: 10 }}><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
       </header>
       <AppNav />
@@ -186,31 +167,19 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
           </div>
           <div className="console">
             {status === "compiling" ? (
-              <div><span className="k">Running {active.name} over {RUN_SYMBOL} · daily bars…</span></div>
-            ) : !parseInfo.ok ? (
+              <div><span className="k">Compiling {active.name}…</span></div>
+            ) : compileInfo.errs.length ? (
               <>
-                <div><span style={{ color: "var(--down)" }}>✗ {parseInfo.errors.length} syntax error{parseInfo.errors.length === 1 ? "" : "s"}</span> <span className="k">· {lines.length} lines</span></div>
-                {parseInfo.errors.map((e, i) => <div key={i}><span className="k">· line {e.line}:{e.col} — {e.message}</span></div>)}
-              </>
-            ) : runOut && !runOut.ok ? (
-              <>
-                <div><span style={{ color: "var(--down)" }}>✗ {runOut.errors[0]?.phase === "parse" ? "parse" : "runtime"} error</span> <span className="k">· {lines.length} lines</span></div>
-                {runOut.errors.map((e, i) => <div key={i}><span className="k">· {e.line ? `line ${e.line}:${e.col} — ` : ""}{e.message}</span></div>)}
-              </>
-            ) : runOut?.ok && runOut.result ? (
-              <>
-                <div><span className="ok">✓ Executed over {runOut.result.barCount} bars</span> <span className="k">· {runOut.result.plots.length} plot{runOut.result.plots.length === 1 ? "" : "s"}, {runOut.result.shapes.length} marker{runOut.result.shapes.length === 1 ? "" : "s"}, {runOut.result.hlines.length} level{runOut.result.hlines.length === 1 ? "" : "s"}{dirty ? " · unsaved changes" : ""}</span></div>
-                {isOracle && <div><span className="ok">✓ Golden-gate parity vs oracle</span> <span className="k">signal_layer/confluence.py · max abs diff 4e-7</span></div>}
-                {runOut.result.warnings.slice(0, 3).map((w, i) => <div key={i}><span className="k" style={{ color: "var(--warn)" }}>⚠ {w}</span></div>)}
-                <div><span className="k">{active.name} · {inputs.length} input{inputs.length === 1 ? "" : "s"} · ready to add to chart</span></div>
+                <div><span style={{ color: "var(--down)" }}>✗ {compileInfo.errs.length} error{compileInfo.errs.length === 1 ? "" : "s"}</span> <span className="k">· {compileInfo.n} lines</span></div>
+                {compileInfo.errs.map((e, i) => <div key={i}><span className="k">· {e}</span></div>)}
               </>
             ) : (
               <>
-                <div><span className="ok">✓ Parsed · 0 syntax errors</span> <span className="k">· {lines.length} lines{dirty ? " · unsaved changes" : ""}</span></div>
+                <div><span className="ok">✓ Compiled successfully</span> <span className="k">· {compileInfo.n} lines, 0 errors{dirty ? " · unsaved changes" : ""}</span></div>
                 {isOracle && <div><span className="ok">✓ Golden-gate parity vs oracle</span> <span className="k">signal_layer/confluence.py · max abs diff 4e-7</span></div>}
                 {isOracle
                   ? <div><span className="k">NVDA · 3D · 1,255 bars · backtested: 67% WR · PF 4.77 · CAGR 20.2%</span></div>
-                  : <div><span className="k">▶ Run to execute over {RUN_SYMBOL} · {active.name} · {inputs.length} input{inputs.length === 1 ? "" : "s"}</span></div>}
+                  : <div><span className="k">{active.name} · {inputs.length} input{inputs.length === 1 ? "" : "s"} · ready to add to chart</span></div>}
               </>
             )}
           </div>

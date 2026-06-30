@@ -1,10 +1,8 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { BrandLockup, BrandMark } from "@/components/BrandMark";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
-import { type DetectCmd, type PineScript } from "@/components/ChartPanel";
+import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
 import StrategyTester from "@/components/StrategyTester";
 import SearchModal from "@/components/SearchModal";
@@ -14,21 +12,11 @@ import IndicatorSource from "@/components/IndicatorSource";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER } from "@/lib/indicators";
 import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
-import StockAnalysis from "@/components/StockAnalysis";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
 import SettingsMenu from "@/components/SettingsMenu";
 import { useT } from "@/lib/i18n";
-import { useFromMacro, backToMacro } from "@/lib/originNav";
-
-const MNAV: [string, string, string][] = [
-  ["/terminal", "Chart", "M3 17l5-6 4 3 4-7 5 9"],
-  ["/screener", "Screener", "RECT"],
-  ["/scripts", "Scripts", "M8 7l-5 5 5 5M16 7l5 5-5 5"],
-  ["/portfolio", "Portfolio", "M21 12a9 9 0 1 1-9-9v9z"],
-  ["/alerts", "Alerts", "M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"],
-];
 
 type Row = { name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -37,16 +25,30 @@ const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) 
 const vol = (v: number) => (v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v));
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 const CHART_TYPES = [["candles", "Candles"], ["heikin", "Heikin Ashi"], ["bars", "Bars"], ["line", "Line"], ["area", "Area"]];
-const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
-const FUNCTIONAL = new Set(["D", "3D", "W", "1M"]);
+// Intraday (m/h) now run on a live 15-min-delayed feed via /api/intraday (Polygon US/crypto incl.
+// extended hours; free Tencent klines for China .SS/.SZ + HK). Daily-and-up is derived from the EOD
+// /data files. Everything in TF_GROUPS is FUNCTIONAL.
+const TF_GROUPS: [string, string[]][] = [
+  ["Minutes", ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m"]],
+  ["Hours", ["1h", "2h", "3h", "4h"]],
+  ["Days", ["D", "2D", "3D"]],
+  ["Weeks", ["W", "2W"]],
+  ["Months", ["1M", "3M", "6M", "12M"]],
+];
+const INTRADAY_TFS = ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "3h", "4h"];
+const isIntradayTf = (tf: string) => /^\d+[mh]$/.test(tf);
+const FUNCTIONAL = new Set(["D", "2D", "3D", "W", "2W", "1M", "3M", "6M", "12M", ...INTRADAY_TFS]);
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 
-// drawing tools for the (previously decorative) left dock
+// drawing tools for the left dock — grouped (separators inserted after SEP_AFTER indices)
 const TOOLS: [string, string][] = [
-  ["cursor", "M12 2v20M2 12h20"], ["trendline", "M4 20L20 4"], ["ray", "M4 20L20 4M15 4h5v5"],
-  ["hline", "M3 12h18"], ["rect", "M4 6h16v12H4z"], ["fib", "M3 5h18M3 9h18M3 15h18M3 19h18"],
-  ["text", "M5 5h14M12 5v14"], ["measure", "M3 9h18v6H3zM7 9v6M11 9v6M15 9v6"], ["arrow", "M5 19L19 5M13 5h6v6"], ["vline", "M12 3v18"], ["erase", "M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"],
+  ["cursor", "M5 3l13.5 7.2-5.4 1.7L11.6 18.2z"],
+  ["trendline", "M4 19L20 5"], ["ray", "M4 20L20 4M20 4h-5M20 4v5"], ["hline", "M3 12h18"], ["vline", "M12 3v18"],
+  ["rect", "M4 6h16v12H4z"], ["fib", "M4 5h16M4 10h16M4 14h16M4 19h16"],
+  ["text", "M6 6V5h12v1M12 5v14M9.5 19h5"], ["measure", "M3 8h18v8H3zM8 8v4M13 8v4M18 8v4"], ["arrow", "M5 19L19 5M19 5h-6M19 5v6"],
+  ["erase", "M7 17l-3-3 8-8 3 3-8 8zM7 17h9"],
 ];
+const SEP_AFTER = new Set([0, 4, 6, 9]);   // group dividers: cursor | line tools | shapes | text/measure/arrow | erase
 const DETECTORS: [string, string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
 ];
@@ -61,27 +63,25 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [sync, setSync] = useState(true);
   const [split, setSplit] = useState(1);   // the split the user requested (panes.length may be smaller after dedup)
   const active = panes[activePane] ?? panes[0] ?? seed0;
-  const [paneTfs, setPaneTfs] = useState<string[]>(["3D"]);   // one timeframe per pane — Terminal opens on 3D by default
+  const [paneTfs, setPaneTfs] = useState<string[]>(["D"]);   // one timeframe per pane
   const tf = paneTfs[activePane] ?? paneTfs[0] ?? "D";        // the active pane's timeframe drives the toolbar
   const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
   const [chartType, setChartType] = useState("candles");
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
-  const [hidden, setHidden] = useState<Set<string>>(new Set());            // indicators toggled hidden (greyed, still computed)
-  const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());  // per-indicator inputs/style
-  const [settingsKey, setSettingsKey] = useState<string | null>(null);     // open indicator-settings dialog
-  const [sourceKey, setSourceKey] = useState<string | null>(null);         // open read-only source view (built-ins)
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());
+  const [settingsKey, setSettingsKey] = useState<string | null>(null);
+  const [sourceKey, setSourceKey] = useState<string | null>(null);
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
-  const [set, setSet] = useState({ tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true });
+  const [extHours, setExtHours] = useState(true);   // include pre/after-hours on intraday (US); persisted
+  const [set, setSet] = useState({ tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true });
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
   const [indOpen, setIndOpen] = useState(false); const [copilot, setCopilot] = useState(false);
-  const [wlSetOpen, setWlSetOpen] = useState(false); const [tfOpen, setTfOpen] = useState(false); const [ctOpen, setCtOpen] = useState(false);
+  const [wlSetOpen, setWlSetOpen] = useState(false); const [tfOpen, setTfOpen] = useState(false); const [ctOpen, setCtOpen] = useState(false); const [mtfOpen, setMtfOpen] = useState(false);
   const [replayOn, setReplayOn] = useState(false); const [replayIdx, setReplayIdx] = useState<number | null>(null); const [total, setTotal] = useState(0); const [playing, setPlaying] = useState(false); const [speed, setSpeed] = useState(1);
   const playRef = useRef<any>(null);
   // §7 state
   const [view, setView] = useState<"price" | "strategy">("price");
-  // a user's Pine script handed off from the editor's "Add to chart" (sessionStorage + ?pine=1)
-  const [pineScript, setPineScript] = useState<PineScript | null>(null);
-  const [pineStatus, setPineStatus] = useState<{ ok: boolean; error?: string; plots: number; shapes: number } | null>(null);
   const [tool, setTool] = useState<string | null>(null);
   const [detectCmd, setDetectCmd] = useState<DetectCmd>(null);
   const [detectOpen, setDetectOpen] = useState(false);
@@ -95,16 +95,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const nonce = useRef(0);
   const wsMounted = useRef(false);
   const t = useT();
-  const navPath = usePathname();
-  const router = useRouter();
-  // mobile + fullscreen + expanded-analysis state
-  const [fullChart, setFullChart] = useState(false);
-  const [drawer, setDrawer] = useState(false);
-  const [analysisOpen, setAnalysisOpen] = useState(false);
-  // only surface a "back" affordance when the user actually arrived from the Macro Dashboard — for direct
-  // visitors a back button would just throw them onto whatever unrelated site they were last on.
-  const { fromMacro, macroHref } = useFromMacro();
-  const onBack = useCallback(() => backToMacro(macroHref), [macroHref]);
   // shared per-symbol drawing store (lifted out of ChartPane so multiple panes on the same
   // symbol share one set instead of clobbering each other through the replace-all PUT)
   const [drawStore, setDrawStore] = useState<Record<string, Drawing[]>>({});
@@ -131,18 +121,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
-    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true }));
-    setHidden(new Set(load("mm.indHidden", [])));
-    const savedP = load("mm.indParams", {}); setIndParams(() => { const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); return base; });
+    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs([load("mm.tf", "D")]); setFavTF((load("mm.favtf", ["D", "3D", "W", "1M"]) as string[]).filter((x) => FUNCTIONAL.has(x))); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true })); setExtHours(load("mm.ext", true));
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
         const ws = load("mm.ws", null);
         if (ws && Array.isArray(ws.panes)) {
-          const pairs = ws.panes.map((s: string, i: number) => [s, ws.paneTfs?.[i] ?? "3D"]).filter(([s]: any) => symbols.some((x) => x.symbol === s));
+          const pairs = ws.panes.map((s: string, i: number) => [s, ws.paneTfs?.[i] ?? "D"]).filter(([s]: any) => symbols.some((x) => x.symbol === s));
           if (pairs.length) {
-            // a single chart always opens on the 3D default; genuine multi-pane layouts (e.g. MTF) keep their saved per-pane timeframes
-            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.length === 1 ? ["3D"] : pairs.map((p: any) => p[1]));
+            setPanes(pairs.map((p: any) => p[0])); setPaneTfs(pairs.map((p: any) => p[1]));
             setSplit([1, 2, 4].includes(ws.split) ? ws.split : (pairs.length >= 4 ? 4 : pairs.length >= 2 ? 2 : 1));
             setActivePane(Math.min(ws.activePane || 0, pairs.length - 1));
             if (typeof ws.sync === "boolean") setSync(ws.sync);
@@ -163,6 +150,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
   useEffect(() => { localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
+  useEffect(() => { localStorage.setItem("mm.ext", JSON.stringify(extHours)); }, [extHours]);
   useEffect(() => { localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
   useEffect(() => { setPaneSync(sync && panes.length > 1); }, [sync, panes.length]);
   // load drawings once per symbol that appears in a pane; don't clobber an in-flight local edit
@@ -195,30 +183,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, [active]);
   useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
   useEffect(() => { const open = () => setCopilot(true); window.addEventListener("mm:copilot", open); try { if (new URLSearchParams(window.location.search).get("ai") === "1") setCopilot(true); } catch {} return () => window.removeEventListener("mm:copilot", open); }, []);
-  // pick up a script the editor handed off via "Add to chart" (sessionStorage); ?pine=1 marks a fresh handoff
-  useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem("mm.pine"); if (!raw) return;
-      const p = JSON.parse(raw);
-      if (p && typeof p.source === "string") { setPineScript({ name: p.name || "Custom script", source: p.source, params: p.params || {} }); if (p.sym && !initialSymbol) pick(p.sym); }
-    } catch {}
-  }, []); // eslint-disable-line
-  const removePine = useCallback(() => { setPineScript(null); setPineStatus(null); try { sessionStorage.removeItem("mm.pine"); } catch {} }, []);
-  // ── indicator legend actions (shared by the per-pane legend + its More menu) ──
-  const toggleHidden = useCallback((k: string) => setHidden((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; }), []);
-  const removeInd = useCallback((k: string) => {
-    if (k === "pine") { removePine(); return; }
-    setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
-    setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
-  }, [removePine]);
-  const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...withDefaults(k, p[k]), ...patch } })), []);
-  const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
-  const setPineParam = useCallback((patch: Record<string, any>) => setPineScript((p) => (p ? { ...p, params: { ...p.params, ...patch } } : p)), []);
-  const openSettings = useCallback((k: string) => setSettingsKey(k), []);
-  const openSource = useCallback((k: string) => {
-    if (k === "pine") { try { if (pineScript) sessionStorage.setItem("mm.pine", JSON.stringify({ name: pineScript.name, source: pineScript.source, params: pineScript.params, ts: Date.now() })); } catch {} router.push("/scripts"); return; }
-    setSourceKey(k);
-  }, [pineScript, router]);
 
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
   function setGrid(n: number) {
@@ -262,7 +226,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     return () => clearInterval(playRef.current);
   }, [replayOn, playing, total, speed]);
 
-  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); };
+  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setMtfOpen(false); };
+  const openCompare = () => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); };
   useEffect(() => { const h = () => closeAll(); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
 
   const sections = useMemo(() => { const o: Record<string, string[]> = {}; wl.forEach((s) => { (o[s.section] ||= []).push(s.symbol); }); return o; }, [wl]);
@@ -277,6 +242,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }
   async function removeSymbol(sym: string) { setWl((w) => w.filter((s) => s.symbol !== sym)); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }); }
   const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  // ── indicator legend actions (shared by the per-pane legend + its More menu) ──
+  const toggleHidden = useCallback((k: string) => setHidden((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; }), []);
+  const removeInd = useCallback((k: string) => {
+    setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
+    setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
+  }, []);
+  const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...withDefaults(k, p[k]), ...patch } })), []);
+  const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
+  const openSettings = useCallback((k: string) => setSettingsKey(k), []);
+  const openSource = useCallback((k: string) => setSourceKey(k), []);
   const pick = (sym: string) => {
     // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
     // re-clicking the active symbol is a no-op rather than jumping focus to the first matching pane.
@@ -300,19 +275,20 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const colVal = (r: Row | undefined, key: string) => { if (!r) return "—"; const u = r.chg >= 0; if (key === "last") return fmt(r.last, r.last < 10 ? 4 : 2); if (key === "change") return (u ? "+" : "") + fmt(r.last * r.chg / 100, 2); if (key === "changePct") return (u ? "+" : "") + fmt(r.chg) + "%"; if (key === "volume") return vol(r.vol); return ""; };
   const wlGrid = `1fr ${colList().map(() => "1fr").join(" ")} 18px`;
 
+  const ic = intel?.cards || {}; const itape = intel?.tape || {};
+  const intelDir = (itape.ai_lean?.dir || "").toUpperCase();
+
   return (
-    <div className={`app${fullChart ? " fs" : ""}`}>
+    <div className="app">
       <header className="topbar">
-        {fromMacro
-          ? <button className="brand-back" onClick={onBack} title="Back to the Macro Dashboard" aria-label="Back to the Macro Dashboard">
-              <span className="bb-chev"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></span>
-              <BrandMark />
-              <span className="wm"><b>MASTERMIND</b><small>← Dashboard</small></span>
-            </button>
-          : <BrandLockup />}
+        <BrandLockup />
         <div className="tdiv" />
         <div className="pair" onClick={() => { setSeed(""); setSearchOpen(true); }}><span className="dual"><i>{active[0]}</i><i>$</i></span><b>{active}</b>
           <svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></div>
+        <div className="sym-tools">
+          <button className="ic" title="Add a symbol to compare" onClick={openCompare}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
+          <button className="cmp" title="Compare another symbol on this chart" onClick={openCompare}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>{t("compare")}</button>
+        </div>
         <div className="stats">
           <div className="stat"><span className="l">Last Price</span><span className="v big num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</span></div>
           <div className="stat"><span className="l">24h Change</span><span className={`v num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</span></div>
@@ -326,34 +302,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <SettingsMenu email={email} />
       </header>
 
-      {/* ── mobile top bar — left slot: a prominent "Back to Dashboard" button when the user came from the
-           Macro Dashboard, otherwise the menu button. When Back claims the left, the menu moves into the
-           right cluster so the hamburger always has a home. ── */}
-      <div className={`mobilebar${fromMacro ? " from-macro" : ""}`}>
-        {fromMacro
-          ? <button className="m-back-prom breathe" onClick={onBack} aria-label="Back to the Macro Dashboard"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg><span>Dashboard</span></button>
-          : <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg></button>}
-        <span className="m-brand"><BrandMark size={22} /><b>MASTERMIND</b></span>
-        <div className="m-right">
-          {fromMacro && <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg></button>}
-          <button className="m-ic" onClick={() => setCopilot(true)} aria-label="Mastermind AI"><svg viewBox="0 0 24 24" style={{ fill: "var(--brand-2)", stroke: "none" }}><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg></button>
-          <SettingsMenu email={email} />
-        </div>
-      </div>
-      {/* ── mobile symbol bar (tap → search) ── */}
-      <div className="m-symbar" onClick={() => { setSeed(""); setSearchOpen(true); }}>
-        <span className="m-sym"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span><b>{active}</b><svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></span>
-        <span className="m-px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</span></span>
-      </div>
-
       <AppNav />
 
       <section className="workspace">
-        <button className={`chart-fs-float${fullChart ? " on" : ""}`} title={fullChart ? "Exit fullscreen" : "Fullscreen chart"} onClick={() => setFullChart((f) => !f)}>
-          {fullChart
-            ? <svg viewBox="0 0 24 24"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" /></svg>
-            : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
-        </button>
         <div className="chart-tabs">
           <div className={`ct${view === "price" ? " on" : ""}`} onClick={() => setView("price")}>{t("priceChart")}</div>
           <div className={`ct${view === "strategy" ? " on" : ""}`} onClick={() => setView("strategy")}>{t("strategyTester")}</div>
@@ -365,10 +316,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{g}</div>{items.map((t) => { const fn = FUNCTIONAL.has(t); const fav = favTF.includes(t);
                   return <div key={t} className={`it${tf === t ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { setTf(t); setTfOpen(false); } }}>
                     <span>{t}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>live feed</span>}</span>
-                    <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(t) ? f.filter((x) => x !== t) : [...f, t]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
+                    {fn && <span className={`fav${fav ? " on" : ""}`} title={fav ? "Unfavorite" : "Favorite — pin to the toolbar"} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(t) ? f.filter((x) => x !== t) : [...f, t]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>}
                   </div>; })}</div>))}
               </div>
             </div>
+            <button className={`tbtn${extHours ? " on" : ""}`} title={isIntradayTf(tf) ? (extHours ? "Showing pre/after-hours — click for regular hours only" : "Regular hours only — click to include pre/after-hours") : "Extended hours — applies to intraday timeframes"} disabled={!isIntradayTf(tf)} style={!isIntradayTf(tf) ? { opacity: .4 } : {}} onClick={() => setExtHours((x) => !x)}><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" /><path d="M12 1v3M12 20v3M1 12h3M20 12h3M4.2 4.2l2 2M17.8 17.8l2 2M19.8 4.2l-2 2M6.2 17.8l-2 2" /></svg>Ext</button>
             <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setCtOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h3M14 4v16M14 9h3" /></svg>{CHART_TYPES.find((c) => c[0] === chartType)![1]}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${ctOpen ? " show" : ""}`} style={{ top: 32, left: 0 }} onClick={(e) => e.stopPropagation()}>
@@ -376,17 +328,25 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
-            <button className="tbtn tool-adv" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>{t("compare")}</button>
-            <div className="seg tool-adv" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
-            <button className="tbtn tool-adv" title="Multi-timeframe — the active symbol at D / 3D / W / 1M" onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>MTF</button>
-            {panes.length > 1 && <button className={`tbtn tool-adv${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
-            <div className="pophost tool-adv">
+            <div className="pophost">
+              <button className={`tbtn${split > 1 ? " on" : ""}`} title="Chart layout & multi-timeframe" onClick={(e) => { e.stopPropagation(); closeAll(); setMtfOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>MTF<span style={{ color: "var(--muted)" }}>▾</span></button>
+              <div className={`pop${mtfOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 214 }} onClick={(e) => e.stopPropagation()}>
+                <div className="set-grp" style={{ borderTop: 0 }}>Chart layout</div>
+                {([[1, "Single chart", "M4 5h16v14H4z"], [2, "2 charts · split", "M4 5h16v14H4zM12 5v14"], [4, "4 charts · grid", "M4 5h16v14H4zM12 5v14M4 12h16"]] as [number, string, string][]).map(([n, l, d]) => (
+                  <div key={n} className="menu-row" style={split === n ? { color: "var(--brand-2)" } : {}} onClick={() => { setGrid(n); setMtfOpen(false); }}><svg viewBox="0 0 24 24"><path d={d} /></svg>{l}</div>
+                ))}
+                <div className="set-grp">Multi-timeframe</div>
+                <div className="menu-row" onClick={() => { mtfLayout(); setMtfOpen(false); }}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>Active symbol · D / 3D / W / 1M</div>
+              </div>
+            </div>
+            {panes.length > 1 && <button className={`tbtn${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
+            <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
                 {DETECTORS.map(([k, l]) => <div key={k} className="menu-row" onClick={() => detect(k)}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{l}</div>)}
               </div>
             </div>
-            <div className="pophost tool-adv">
+            <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setLayoutOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${layoutOpen ? " show" : ""}`} style={{ top: 32, right: 0, minWidth: 230 }} onClick={(e) => e.stopPropagation()}>
                 <div className="menu-save"><input placeholder="Save current as…" value={layoutName} onChange={(e) => setLayoutName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLayout(); }} /><button onClick={saveLayout}>Save</button></div>
@@ -394,12 +354,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 {layouts.map((l) => <div key={l.id} className="menu-row" onClick={() => loadLayout(l)}>{l.name}<span className="rm" onClick={(e) => { e.stopPropagation(); delLayout(l.id); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span></div>)}
               </div>
             </div>
-            <button className="icbtn tool-adv" title="Snapshot" onClick={() => window.dispatchEvent(new CustomEvent("mm:snapshot"))}><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg></button>
-            <button className={`icbtn chart-fs-btn${fullChart ? " on" : ""}`} title={fullChart ? "Exit fullscreen" : "Fullscreen chart"} onClick={() => setFullChart((f) => !f)}>
-              {fullChart
-                ? <svg viewBox="0 0 24 24"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" /></svg>
-                : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
-            </button>
+            <button className="icbtn" title="Snapshot" onClick={() => window.dispatchEvent(new CustomEvent("mm:snapshot"))}><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg></button>
           </div>
         </div>
 
@@ -409,19 +364,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             {compare.filter((c) => c !== active).map((cs, i) => (
               <span className="cmp-chip" key={cs}><i style={{ background: CMP_COLORS[i % CMP_COLORS.length] }} />{cs}<button title="Remove" onClick={() => setCompare((c) => c.filter((x) => x !== cs))}>✕</button></span>
             ))}
-          </div>
-        )}
-
-        {pineScript && view === "price" && (
-          <div className="cmp-strip">
-            <span className="cmp-lbl" style={{ color: "var(--brand-2)" }}>ƒ Custom Pine</span>
-            <span className="cmp-chip" style={{ borderColor: pineStatus && !pineStatus.ok ? "var(--down)" : "var(--brand-2)" }}>
-              <i style={{ background: pineStatus && !pineStatus.ok ? "var(--down)" : "var(--brand-2)" }} />{pineScript.name}
-              <button title="Remove from chart" onClick={removePine}>✕</button>
-            </span>
-            <span style={{ fontSize: 11.5, color: pineStatus && !pineStatus.ok ? "var(--down)" : "var(--text-2)" }}>
-              {pineStatus == null ? "running…" : pineStatus.ok ? `✓ ${pineStatus.plots} plot${pineStatus.plots === 1 ? "" : "s"} · ${pineStatus.shapes} marker${pineStatus.shapes === 1 ? "" : "s"} · live engine` : `✗ ${pineStatus.error}`}
-            </span>
           </div>
         )}
 
@@ -441,7 +383,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="chart-body">
             <div className="tooldock">
               {TOOLS.map(([id, d], i) => (
-                <button key={id} className={(tool === id || (id === "cursor" && !tool)) ? "on" : ""} title={id} onClick={() => setTool(id === "cursor" ? null : id)}><svg viewBox="0 0 24 24"><path d={d} /></svg></button>
+                <Fragment key={id}>
+                  <button className={(tool === id || (id === "cursor" && !tool)) ? "on" : ""} title={id} onClick={() => setTool(id === "cursor" ? null : id)}><svg viewBox="0 0 24 24"><path d={d} /></svg></button>
+                  {SEP_AFTER.has(i) && <div className="sp" />}
+                </Fragment>
               ))}
               <button className={magnet ? "on" : ""} title="Magnet — snap to OHLC" onClick={() => setMagnet((mg) => !mg)}><svg viewBox="0 0 24 24"><path d="M6 4v7a6 6 0 0 0 12 0V4h-4v7a2 2 0 0 1-4 0V4z" /></svg></button>
               <div className="sp" />
@@ -449,7 +394,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} pineScript={pineScript} onPineResult={setPineStatus} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} />
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} extHours={extHours} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} />
               ))}
             </div>
           </div>
@@ -498,29 +443,53 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           </div>
 
           <div className="board detail-board">
-            <div className="detail-hd">
-              <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
-              <div style={{ minWidth: 0 }}>
-                <div className="nm">{m?.name || active}</div>
-                <div className="ex">{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</div>
+            <div className="card">
+              <div className="hd"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
+                <div><div className="nm">{m?.name || active}</div><div className="ex">{m?.mkt || m?.sec || ""}</div></div>
+                <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</div></div></div>
+              <div className="regime" style={m?.regimeBull ? {} : { color: "var(--warn)" }}><i style={m?.regimeBull ? {} : { background: "var(--warn)" }} />{m?.regimeBull ? "Uptrend regime · above 200-EMA" : "Mixed regime · watch trend"}</div>
+              <div className="kv"><span className="k">Open</span><span className="v">{fmt(m?.open, m && m.last < 10 ? 4 : 2)}</span></div>
+              <div className="kv"><span className="k">Day Range</span><span className="v">{fmt(m?.low, m && m.last < 10 ? 4 : 2)} – {fmt(m?.high, m && m.last < 10 ? 4 : 2)}</span></div>
+              <div className="kv"><span className="k">Volume</span><span className="v">{m ? vol(m.vol) : "—"}</span></div>
+              <div className="kv"><span className="k">52W High</span><span className="v">{fmt(m?.hi52)} {m && <span className="down">{(((m.last - m.hi52) / m.hi52) * 100).toFixed(1)}%</span>}</span></div>
+              <div className="kv"><span className="k">52W Low</span><span className="v">{fmt(m?.lo52)} {m && <span className="up">+{(((m.last - m.lo52) / m.lo52) * 100).toFixed(1)}%</span>}</span></div>
+              <div className="mmcard" style={{ borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }}>
+                <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Golden Oracle · Confluence</div>
+                <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">backtested · 6yr daily→3D</span></div>
+                <div className="s2"><div>Win rate<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>Profit factor<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>CAGR<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
               </div>
-              <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</div></div>
-              <button className="ex-btn" title="Open full analysis" onClick={() => setAnalysisOpen(true)}><svg viewBox="0 0 24 24"><path d="M4 14v6h6M20 10V4h-6M14 10l6-6M10 14l-6 6" /></svg></button>
-            </div>
-            <div className="detail-scroll">
-              <div style={{ padding: "12px 12px 0" }}>
-                <div className="mmcard" style={{ marginTop: 0, borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }}>
-                  <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Golden Oracle · Confluence</div>
-                  <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">backtested · 6yr daily→3D</span></div>
-                  <div className="s2"><div>Win rate<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>Profit factor<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>CAGR<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
+
+              {intel && (
+                <div className="intel">
+                  <div className="ih"><svg viewBox="0 0 24 24" style={{ width: 13, height: 13, stroke: "var(--brand-2)", fill: "none", strokeWidth: 1.8 }}><path d="M12 2a7 7 0 0 1 7 7c0 3-2 4-2 6H7c0-2-2-3-2-6a7 7 0 0 1 7-7zM9 21h6" /></svg>Macro intel<span className="src">analyzer</span></div>
+                  <div className={`verd${intelDir === "BULL" ? " bull" : intelDir === "BEAR" ? " bear" : ""}`}>
+                    <b>{ic.ai_judgment?.verdict || "—"}</b>
+                    {itape.conviction != null && <span className="sc">{Math.round(itape.conviction)}</span>}
+                  </div>
+                  <div className="ipills">
+                    {itape.regime && <span className="ip"><i style={{ background: intelDir === "BEAR" ? "var(--down)" : "var(--up)" }} />{itape.regime}</span>}
+                    {itape.gex_flip != null && <span className="ip"><i style={{ background: "var(--signal)" }} />Flip {Number(itape.gex_flip).toFixed(0)}</span>}
+                    {ic.analyst?.est_chg_90d != null && <span className="ip"><i style={{ background: "var(--up)" }} />Rev +{Number(ic.analyst.est_chg_90d).toFixed(0)}%</span>}
+                    {ic.smart_money?.trend && <span className="ip"><i style={{ background: ic.smart_money.trend === "accumulating" ? "var(--up)" : "var(--muted)" }} />{ic.smart_money.trend}</span>}
+                    {itape.short_pct != null && <span className="ip"><i style={{ background: "var(--muted)" }} />Short {Number(itape.short_pct).toFixed(1)}%</span>}
+                  </div>
                 </div>
-              </div>
-              <StockAnalysis intel={intel} row={m} slice={slice} onExpand={() => setAnalysisOpen(true)} />
-              <div style={{ padding: "0 12px" }}>
-                <button className="btn btn-ghost" style={{ width: "100%", height: 36 }} onClick={() => setCopilot(true)}>Ask Mastermind AI about {active} →</button>
-              </div>
-              <div style={{ padding: 12 }}><SeasonalityCard symbol={active} /></div>
+              )}
+
+              {slice?.indicator?.signals?.length > 0 && (
+                <div className="intel">
+                  <div className="ih"><svg viewBox="0 0 24 24" style={{ width: 13, height: 13, stroke: "var(--brand-2)", fill: "none", strokeWidth: 1.8 }}><path d="M3 17l5-5 4 4 8-8" /></svg>Recent signals<span className="src">oracle</span></div>
+                  <div className="sig-log">
+                    {slice.indicator.signals.slice(-6).reverse().map((s: any, i: number) => { const b = s.type === "BUY" || s.type === "REBUY"; return (
+                      <div className="sig-row" key={i}><span className={`sig-t ${b ? "buy" : "sell"}`}>{s.type}</span><span className="sig-d">{s.ts}</span><span className="sig-p num">{typeof s.price === "number" ? s.price.toFixed(2) : "—"}</span></div>
+                    ); })}
+                  </div>
+                </div>
+              )}
+
+              <button className="btn btn-ghost" style={{ width: "100%", marginTop: 12, height: 34 }} onClick={() => setCopilot(true)}>Ask Mastermind AI about {active} →</button>
             </div>
+            <SeasonalityCard symbol={active} />
           </div>
         </div>
       </aside>
@@ -534,47 +503,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
       <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} />
-      {settingsKey && (settingsKey === "pine"
-        ? <IndicatorSettings indKey="pine" params={{}} onChange={() => {}} pine={pineScript ? { name: pineScript.name, params: pineScript.params } : null} onPineChange={setPineParam} onClose={() => setSettingsKey(null)} />
-        : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
+      {settingsKey && <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
       <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
-
-      {/* ── expanded full-analysis modal ── */}
-      {analysisOpen && (
-        <div className="sa-modal-scrim" onClick={() => setAnalysisOpen(false)}>
-          <div className="sa-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="sa-modal-h">
-              <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
-              <div className="tt">{m?.name || active}<small>{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</small></div>
-              <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</div></div>
-              <button className="x" onClick={() => setAnalysisOpen(false)} aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
-            </div>
-            <div className="sa-modal-body"><StockAnalysis intel={intel} row={m} slice={slice} deep /></div>
-          </div>
-        </div>
-      )}
-
-      {/* ── mobile nav drawer ── */}
-      <div className={`m-drawer-scrim${drawer ? " open" : ""}`} onClick={() => setDrawer(false)} />
-      <div className={`m-drawer${drawer ? " open" : ""}`}>
-        <div className="m-drawer-h"><BrandLockup /></div>
-        <nav className="m-nav">
-          {MNAV.map(([href, label, d]) => (
-            <Link key={href} href={href} className={navPath === href || (href === "/terminal" && navPath.startsWith("/terminal")) ? "on" : ""} onClick={() => setDrawer(false)}>
-              {d === "RECT"
-                ? <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>
-                : <svg viewBox="0 0 24 24"><path d={d} /></svg>}
-              {label}
-            </Link>
-          ))}
-          <button onClick={() => { setDrawer(false); setCopilot(true); }}>
-            <svg viewBox="0 0 24 24" style={{ fill: "var(--brand-2)", stroke: "none" }}><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>
-            Mastermind AI
-          </button>
-        </nav>
-        <div className="m-drawer-ft"><SettingsMenu email={email} /></div>
-      </div>
     </div>
   );
 }

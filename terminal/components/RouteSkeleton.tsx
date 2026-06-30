@@ -1,25 +1,55 @@
-// Instant on-brand frame shown during route navigation (rendered by each segment's loading.tsx)
-// while its server component fetches. Themed via tokens, so it matches dark/light. The real page
-// mounts over it; a brief layout settle is acceptable in exchange for never flashing a blank screen.
-const box = (style: React.CSSProperties, i = 0) => (
-  <span key={i} className="skel-box" style={{ animationDelay: `${(i % 6) * 0.09}s`, ...style }} />
-);
+import { BrandLockup } from "@/components/BrandMark";
+import { AppNav } from "@/components/AppNav";
 
-export default function RouteSkeleton() {
+// Instant placeholder shown the moment a tab is clicked (via each route's loading.tsx),
+// while the server streams the real page. Reproduces the persistent chrome — topbar +
+// left nav rail (which highlights the destination tab via usePathname) — so switching
+// feels immediate instead of freezing on the previous tab. The body shimmers per variant.
+export default function RouteSkeleton({
+  title,
+  variant,
+}: {
+  title: string;
+  variant: "chart" | "table" | "editor";
+}) {
+  const railRows = Array.from({ length: 9 });
+  const tableRows = Array.from({ length: 11 });
   return (
-    <div className="skel" aria-busy="true" aria-label="Loading">
-      <div className="skel-top">
-        {box({ width: 130, height: 22 })}
-        {box({ width: 170, height: 30 }, 1)}
-        <span style={{ flex: 1 }} />
-        {box({ width: 118, height: 30 }, 2)}
-        {box({ width: 30, height: 30, borderRadius: 999 }, 3)}
-      </div>
-      <div className="skel-nav">{Array.from({ length: 6 }).map((_, i) => box({ width: 40, height: 40 }, i))}</div>
-      <div className="skel-main">
-        {box({ width: 240, height: 26 })}
-        {box({ flex: 1, minHeight: 0 }, 4)}
-        {box({ height: 110 }, 2)}
+    <div className="app2">
+      <header className="topbar">
+        <BrandLockup />
+        <div className="tdiv" />
+        <span className="page-title">{title}</span>
+        <div className="spacer" />
+        <div className="avatar" aria-hidden />
+      </header>
+      <AppNav />
+      <main className="main2">
+        <div className="skbody">
+          {variant !== "table" && (
+            <div className="skrail">
+              {railRows.map((_, i) => (
+                <div key={i} className="sk skrow" />
+              ))}
+            </div>
+          )}
+          <div className="skmain">
+            {variant === "table" ? (
+              <>
+                <div className="sk" style={{ height: 34, width: 280 }} />
+                {tableRows.map((_, i) => (
+                  <div key={i} className="sk" style={{ height: 42 }} />
+                ))}
+              </>
+            ) : (
+              <div className="sk" style={{ flex: 1, minHeight: 0 }} />
+            )}
+          </div>
+        </div>
+      </main>
+      <div className="ticker">
+        <span className="lbl" style={{ opacity: 0.6 }}>{title}</span>
+        <span style={{ color: "var(--text-dim)" }}>loading…</span>
       </div>
     </div>
   );

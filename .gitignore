@@ -23,3 +23,7 @@ web/ohlc/*.json
 !contracts/samples/*.json
 
 .DS_Store
+
+# ingest universe caches (regenerable, not committed)
+ingest/hk_universe_cache.json
+ingest/zh_cache.json

@@ -46,7 +46,7 @@ OUT = ROOT / "terminal" / "public" / "data"
 # manifest path override — the nightly refresh stages the manifest then atomically swaps it
 MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
 MACRO = Path(os.environ.get("MACRO_REPO", "/Users/chriswong/Documents/Cluade/Macro Dashboard"))
-MAX_BARS = 1300                                                  # ~5y daily, matches existing US files
+MAX_BARS = 3900                                                  # ~15y daily (deep history)
 EXCH_CACHE = ROOT / "ingest" / ".polygon_exchanges.json"
 
 
@@ -224,11 +224,12 @@ def main(argv: list[str]) -> None:
 
             if do_ohlc and (sample_left is None or sample_left > 0):
                 out_path = OUT / f"{tk}.json"
-                # never clobber the flagship real-OHLC (polygon) files with deep-store synthetic opens
+                # never clobber real-OHLC feed files (polygon flagship OR the deep 15y
+                # yfinance backfill) with shorter deep-store synthetic opens
                 keep_existing = False
                 if out_path.exists():
                     try:
-                        keep_existing = json.loads(out_path.read_text()).get("src") == "polygon"
+                        keep_existing = json.loads(out_path.read_text()).get("src") in ("polygon", "yahoo")
                     except Exception:
                         keep_existing = False
                 p = ohlc_dir / f"{tk}.parquet"
