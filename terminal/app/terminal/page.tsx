@@ -6,7 +6,17 @@ export const dynamic = "force-dynamic";
 export default async function Terminal({ searchParams }: { searchParams: Promise<{ sym?: string }> }) {
   const sp = await searchParams;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  // getSession() is local (no Supabase round-trip); the watchlist queries below are
+  // RLS-scoped to the cookie's token. This page renders a guest workspace when there's
+  // no session, so the (untrusted) local session read is fine here.
+  const { data: { session } } = await supabase.auth.getSession();
+  const user = session?.user ?? null;
+
+  // login disabled for now — render an open guest workspace (no server-side persistence)
+  if (!user) {
+    const seed: [string, string][] = [["Crypto", "BTC-USD"], ["Crypto", "ETH-USD"], ["Equities", "NVDA"], ["Equities", "AAPL"], ["Equities", "MSFT"], ["Equities", "QQQ"]];
+    return <TerminalShell symbols={seed.map(([section, symbol]) => ({ symbol, section }))} email="" initialSymbol={sp?.sym} />;
+  }
 
   // load or seed the user's first watchlist (idempotent via unique (user_id,name))
   const { data: lists0 } = await supabase.from("watchlists").select("id,name").order("position");
