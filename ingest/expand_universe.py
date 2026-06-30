@@ -26,6 +26,7 @@ import pandas as pd
 from build_universe import OUT, MANIFEST, MACRO, color_for, _clean_name, _polygon_key, MIC_LABEL  # noqa: E402
 
 US_REF_CACHE = Path(__file__).resolve().parent / ".polygon_us_ref.json"
+HK_TOP_CACHE = Path(__file__).resolve().parent / "hk_universe_cache.json"
 
 
 # ---------------------------------------------------------------- US: Polygon reference (name + exchange)
@@ -99,17 +100,31 @@ def us_union(target: int) -> dict[str, dict]:
 
 
 # ---------------------------------------------------------------- HK: akshare turnover list (HSCI proxy)
+def _hk_cache_load() -> dict[str, dict]:
+    try:
+        data = json.loads(HK_TOP_CACHE.read_text())
+        return {k: v for k, v in data.items()
+                if isinstance(v, dict) and v.get("name") and v.get("mkt")}
+    except Exception:
+        return {}
+
+
 def hk_top(target: int) -> dict[str, dict]:
+    """Top-`target` HK names by turnover (akshare HSCI proxy).
+
+    akshare's East Money endpoint (`stock_hk_spot_em`) is unreachable from the VPS on
+    many nights (RemoteDisconnected), which would otherwise collapse HK breadth back to
+    the curated 160. So the last good top-N snapshot is cached to hk_universe_cache.json
+    and replayed on outage nights; the cache is refreshed whenever akshare is reachable.
+    """
     try:
         import akshare as ak
-    except Exception as e:
-        print(f"  [hk] akshare unavailable ({e}) — skipping HK expansion")
-        return {}
-    try:
+
         df = ak.stock_hk_spot_em()
     except Exception as e:
-        print(f"  [hk] stock_hk_spot_em failed ({e}) — skipping HK expansion")
-        return {}
+        cache = _hk_cache_load()
+        print(f"  [hk] akshare unreachable ({type(e).__name__}) — using cache ({len(cache)} names)")
+        return cache
     code_c = next((c for c in ("代码", "symbol", "code") if c in df.columns), df.columns[1])
     name_c = next((c for c in ("名称", "name") if c in df.columns), df.columns[2])
     turn_c = next((c for c in ("成交额", "amount", "turnover") if c in df.columns), None)
@@ -124,6 +139,11 @@ def hk_top(target: int) -> dict[str, dict]:
         tk = f"{int(digits):04d}.HK"
         out[tk] = {"name": _clean_name(row[name_c], tk), "mkt": "HKEX"}
     print(f"  [hk] {len(out)} HK names by turnover (of {len(df)})")
+    if out:
+        try:
+            HK_TOP_CACHE.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")))
+        except Exception as e:
+            print(f"  [hk] cache write failed ({e})")
     return out
 
 
