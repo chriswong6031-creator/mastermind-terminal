@@ -23,28 +23,50 @@ function condText(c: any) {
 
 export default function AlertsView({ email }: { email: string }) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [syms, setSyms] = useState<string[]>([]);
   const [sym, setSym] = useState("NVDA");
   const [ctype, setCtype] = useState("signal_buy");
   const [val, setVal] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/alerts").then((r) => r.json()).then((d) => setAlerts(d.alerts || []));
-    fetch("/data/manifest.json").then((r) => r.json()).then((m) => setSyms(Object.keys(m.symbols))).catch(() => {});
+    fetch("/api/alerts").then((r) => r.json()).then((d) => setAlerts(d.alerts || [])).catch(() => {}).finally(() => setLoaded(true));
+    fetch("/data/manifest.json").then((r) => r.json()).then((m) => setSyms(Object.keys(m.symbols || {}))).catch(() => {});
   }, []);
 
   async function create() {
-    const t = COND_TYPES.find((x) => x.v === ctype)!;
-    const condition = { ...t.cond, ...(t.needsVal ? { value: parseFloat(val) || 0 } : {}) };
-    const r = await fetch("/api/alerts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym, condition }) });
-    const d = await r.json();
-    if (d.alert) { setAlerts((a) => [d.alert, ...a]); setVal(""); }
+    if (busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const t = COND_TYPES.find((x) => x.v === ctype)!;
+      const condition = { ...t.cond, ...(t.needsVal ? { value: parseFloat(val) || 0 } : {}) };
+      const r = await fetch("/api/alerts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym, condition }) });
+      const d = await r.json().catch(() => ({}));
+      if (d.alert) { setAlerts((a) => [d.alert, ...a]); setVal(""); }
+      else setErr(d.error || "Could not create alert.");
+    } catch {
+      setErr("Network error — could not create alert.");
+    } finally {
+      setBusy(false);
+    }
   }
   async function del(id: string) {
-    await fetch(`/api/alerts?id=${id}`, { method: "DELETE" });
-    setAlerts((a) => a.filter((x) => x.id !== id));
+    const removed = alerts.find((x) => x.id === id);
+    setAlerts((a) => a.filter((x) => x.id !== id));     // optimistic
+    try {
+      const r = await fetch(`/api/alerts?id=${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error();
+    } catch {
+      // re-insert ONLY the failed item (functional update preserves any concurrent deletes)
+      if (removed) setAlerts((a) => (a.some((x) => x.id === removed.id) ? a : [removed, ...a]));
+      setErr("Could not delete that alert.");
+    }
   }
   const needsVal = COND_TYPES.find((x) => x.v === ctype)?.needsVal;
+  // the manifest may not have loaded yet (or may omit the default) — keep the selected symbol selectable
+  const symOptions = syms.length ? (syms.includes(sym) ? syms : [sym, ...syms]) : [sym];
 
   return (
     <div className="app2">
@@ -55,19 +77,21 @@ export default function AlertsView({ email }: { email: string }) {
       </header>
       <AppNav />
       <main className="main2"><div className="pg">
-        <div className="pg-head"><h2>Alerts</h2><span className="sub">Signal &amp; regime-aware — alert me when MY confluence aligns. Evaluated on each data refresh (historical feed).</span></div>
+        <div className="pg-head"><h2>Signal &amp; regime alerts</h2><span className="sub">Alert me when MY confluence aligns. Evaluated on each data refresh (historical feed).</span></div>
         <div className="panel">
           <div className="ph">New alert</div>
           <div className="alert-form">
-            <select value={sym} onChange={(e) => setSym(e.target.value)}>{syms.map((s) => <option key={s} value={s}>{s}</option>)}</select>
-            <select value={ctype} onChange={(e) => setCtype(e.target.value)}>{COND_TYPES.map((c) => <option key={c.v} value={c.v}>{c.label}</option>)}</select>
-            {needsVal && <input type="number" placeholder="value" value={val} onChange={(e) => setVal(e.target.value)} style={{ width: 110 }} />}
-            <button className="btn btn-primary" style={{ height: 34 }} onClick={create}>Create alert</button>
+            <select aria-label="Symbol" value={sym} onChange={(e) => setSym(e.target.value)}>{symOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+            <select aria-label="Alert condition" value={ctype} onChange={(e) => setCtype(e.target.value)}>{COND_TYPES.map((c) => <option key={c.v} value={c.v}>{c.label}</option>)}</select>
+            {needsVal && <input aria-label="Trigger value" type="number" placeholder="value" value={val} onChange={(e) => setVal(e.target.value)} style={{ width: 110 }} />}
+            <button className="btn btn-primary" style={{ height: 34 }} onClick={create} disabled={busy}>{busy ? "Creating…" : "Create alert"}</button>
+            {err && <span style={{ color: "var(--danger)", fontSize: 12.5 }}>{err}</span>}
           </div>
         </div>
         <div className="panel">
           <div className="ph">Active alerts<span className="sub">{alerts.length} total</span></div>
-          {alerts.length === 0 && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>No alerts yet — create one above. Try “Golden Oracle flips to BUY” on NVDA.</div>}
+          {!loaded && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>Loading alerts…</div>}
+          {loaded && alerts.length === 0 && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>No alerts yet — create one above. Try “Golden Oracle flips to BUY” on NVDA.</div>}
           {alerts.map((a) => (
             <div key={a.id} className="arow">
               <span className={`dot${a.active ? "" : " off"}`} />

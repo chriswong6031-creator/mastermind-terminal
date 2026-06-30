@@ -29,7 +29,11 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const PROTECTED = ["/terminal", "/screener", "/scripts", "/portfolio", "/alerts"];
+  // /terminal is open while login is disabled — set TERMINAL_REQUIRE_AUTH=1 to re-gate it
+  const requireAuth = process.env.TERMINAL_REQUIRE_AUTH === "1";
+  const PROTECTED = requireAuth
+    ? ["/terminal", "/screener", "/scripts", "/portfolio", "/alerts"]
+    : ["/screener", "/scripts", "/portfolio", "/alerts"];
   // protect the app area; bounce signed-in users away from /login
   if (!user && PROTECTED.some((p) => path.startsWith(p))) {
     const url = request.nextUrl.clone();
