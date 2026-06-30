@@ -2,26 +2,28 @@
 import { useEffect, useState } from "react";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import { useT } from "@/lib/i18n";
 
 type Alert = { id: string; symbol: string; condition: any; active: boolean; created_at: string };
 
 const COND_TYPES = [
-  { v: "signal_buy", label: "Golden Oracle flips to BUY", cond: { type: "signal", target: "BUY" }, needsVal: false },
-  { v: "signal_sell", label: "Golden Oracle flips to SELL", cond: { type: "signal", target: "SELL" }, needsVal: false },
-  { v: "regime_up", label: "Regime flips to Uptrend", cond: { type: "regime", target: "up" }, needsVal: false },
-  { v: "price_above", label: "Price crosses above", cond: { type: "price", op: "above" }, needsVal: true },
-  { v: "price_below", label: "Price crosses below", cond: { type: "price", op: "below" }, needsVal: true },
-  { v: "rsi_below", label: "RSI crosses below", cond: { type: "rsi", op: "below" }, needsVal: true },
+  { v: "signal_buy", tkey: "condSignalBuy", cond: { type: "signal", target: "BUY" }, needsVal: false },
+  { v: "signal_sell", tkey: "condSignalSell", cond: { type: "signal", target: "SELL" }, needsVal: false },
+  { v: "regime_up", tkey: "condRegimeUp", cond: { type: "regime", target: "up" }, needsVal: false },
+  { v: "price_above", tkey: "condPriceAbove", cond: { type: "price", op: "above" }, needsVal: true },
+  { v: "price_below", tkey: "condPriceBelow", cond: { type: "price", op: "below" }, needsVal: true },
+  { v: "rsi_below", tkey: "condRsiBelow", cond: { type: "rsi", op: "below" }, needsVal: true },
 ];
-function condText(c: any) {
-  if (c?.type === "signal") return `Golden Oracle flips to ${c.target}`;
-  if (c?.type === "regime") return `Regime flips to ${c.target === "up" ? "Uptrend" : c.target}`;
-  if (c?.type === "price") return `Price crosses ${c.op} ${c.value}`;
-  if (c?.type === "rsi") return `RSI crosses ${c.op} ${c.value}`;
-  return JSON.stringify(c);
-}
 
 export default function AlertsView({ email }: { email: string }) {
+  const t = useT();
+  const condText = (c: any) => {
+    if (c?.type === "signal") return c.target === "BUY" ? t("condSignalBuy") : t("condSignalSell");
+    if (c?.type === "regime") return t("condRegimeUp");
+    if (c?.type === "price") return `${c.op === "above" ? t("condPriceAbove") : t("condPriceBelow")} ${c.value}`;
+    if (c?.type === "rsi") return `${t("condRsiBelow")} ${c.value}`;
+    return JSON.stringify(c);
+  };
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [syms, setSyms] = useState<string[]>([]);
@@ -40,14 +42,14 @@ export default function AlertsView({ email }: { email: string }) {
     if (busy) return;
     setBusy(true); setErr(null);
     try {
-      const t = COND_TYPES.find((x) => x.v === ctype)!;
-      const condition = { ...t.cond, ...(t.needsVal ? { value: parseFloat(val) || 0 } : {}) };
+      const ct = COND_TYPES.find((x) => x.v === ctype)!;
+      const condition = { ...ct.cond, ...(ct.needsVal ? { value: parseFloat(val) || 0 } : {}) };
       const r = await fetch("/api/alerts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym, condition }) });
       const d = await r.json().catch(() => ({}));
       if (d.alert) { setAlerts((a) => [d.alert, ...a]); setVal(""); }
-      else setErr(d.error || "Could not create alert.");
+      else setErr(d.error || t("couldNotCreateAlert"));
     } catch {
-      setErr("Network error — could not create alert.");
+      setErr(t("alertNetErr"));
     } finally {
       setBusy(false);
     }
@@ -61,7 +63,7 @@ export default function AlertsView({ email }: { email: string }) {
     } catch {
       // re-insert ONLY the failed item (functional update preserves any concurrent deletes)
       if (removed) setAlerts((a) => (a.some((x) => x.id === removed.id) ? a : [removed, ...a]));
-      setErr("Could not delete that alert.");
+      setErr(t("couldNotDeleteAlert"));
     }
   }
   const needsVal = COND_TYPES.find((x) => x.v === ctype)?.needsVal;
@@ -71,40 +73,40 @@ export default function AlertsView({ email }: { email: string }) {
   return (
     <div className="app2">
       <header className="topbar">
-        <BrandLockup /><div className="tdiv" /><span className="page-title">Alerts</span>
+        <BrandLockup /><div className="tdiv" /><span className="page-title">{t("pageAlerts")}</span>
         <div className="spacer" />
         <form action="/auth/signout" method="post"><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
       </header>
       <AppNav />
       <main className="main2"><div className="pg">
-        <div className="pg-head"><h2>Signal &amp; regime alerts</h2><span className="sub">Alert me when MY confluence aligns. Evaluated on each data refresh (historical feed).</span></div>
+        <div className="pg-head"><h2>{t("signalRegimeAlerts")}</h2><span className="sub">{t("alertsSub")}</span></div>
         <div className="panel">
-          <div className="ph">New alert</div>
+          <div className="ph">{t("newAlert")}</div>
           <div className="alert-form">
-            <select aria-label="Symbol" value={sym} onChange={(e) => setSym(e.target.value)}>{symOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select>
-            <select aria-label="Alert condition" value={ctype} onChange={(e) => setCtype(e.target.value)}>{COND_TYPES.map((c) => <option key={c.v} value={c.v}>{c.label}</option>)}</select>
-            {needsVal && <input aria-label="Trigger value" type="number" placeholder="value" value={val} onChange={(e) => setVal(e.target.value)} style={{ width: 110 }} />}
-            <button className="btn btn-primary" style={{ height: 34 }} onClick={create} disabled={busy}>{busy ? "Creating…" : "Create alert"}</button>
+            <select aria-label={t("symbol")} value={sym} onChange={(e) => setSym(e.target.value)}>{symOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+            <select aria-label={t("newAlert")} value={ctype} onChange={(e) => setCtype(e.target.value)}>{COND_TYPES.map((c) => <option key={c.v} value={c.v}>{t(c.tkey)}</option>)}</select>
+            {needsVal && <input aria-label={t("alertValue")} type="number" placeholder={t("alertValue")} value={val} onChange={(e) => setVal(e.target.value)} style={{ width: 110 }} />}
+            <button className="btn btn-primary" style={{ height: 34 }} onClick={create} disabled={busy}>{busy ? t("creating") : t("createAlert")}</button>
             {err && <span style={{ color: "var(--danger)", fontSize: 12.5 }}>{err}</span>}
           </div>
         </div>
         <div className="panel">
-          <div className="ph">Active alerts<span className="sub">{alerts.length} total</span></div>
-          {!loaded && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>Loading alerts…</div>}
-          {loaded && alerts.length === 0 && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>No alerts yet — create one above. Try “Golden Oracle flips to BUY” on NVDA.</div>}
+          <div className="ph">{t("activeAlerts")}<span className="sub">{alerts.length} {t("total")}</span></div>
+          {!loaded && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("loadingAlerts")}</div>}
+          {loaded && alerts.length === 0 && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("noAlertsYet")}</div>}
           {alerts.map((a) => (
             <div key={a.id} className="arow">
               <span className={`dot${a.active ? "" : " off"}`} />
               <span><span className="tk">{a.symbol}</span> <span className="cond">· {condText(a.condition)}</span></span>
               <span />
               <span style={{ color: "var(--muted)", fontSize: 11.5 }}>{new Date(a.created_at).toLocaleDateString()}</span>
-              <span style={{ color: a.active ? "var(--up)" : "var(--muted)", fontSize: 11.5 }}>{a.active ? "Armed" : "Paused"}</span>
-              <button className="icbtn" onClick={() => del(a.id)} title="Delete"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13" /></svg></button>
+              <span style={{ color: a.active ? "var(--up)" : "var(--muted)", fontSize: 11.5 }}>{a.active ? t("armed") : t("paused")}</span>
+              <button className="icbtn" onClick={() => del(a.id)} title={t("remove")}><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13" /></svg></button>
             </div>
           ))}
         </div>
       </div></main>
-      <div className="ticker"><span className="lbl">Alerts</span><span style={{ color: "var(--text-2)" }}>Signal/regime-cross alerts fire on each Polygon refresh · live intraday triggers arrive with the live feed</span></div>
+      <div className="ticker"><span className="lbl">{t("pageAlerts")}</span><span style={{ color: "var(--text-2)" }}>{t("alertsSub")}</span></div>
     </div>
   );
 }

@@ -3,13 +3,15 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import { useT } from "@/lib/i18n";
 
-type Row = { name: string; col: string; last: number; chg: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
+type Row = { name: string; zh?: string; col: string; last: number; chg: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 
 export default function PortfolioView({ symbols, email }: { symbols: string[]; email: string }) {
   const router = useRouter();
+  const t = useT();
   const [man, setMan] = useState<Record<string, Row>>({});
   const [loaded, setLoaded] = useState(false);
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then((m) => setMan(m.symbols || {})).catch(() => {}).finally(() => setLoaded(true)); }, []);
@@ -29,37 +31,37 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
   return (
     <div className="app2">
       <header className="topbar">
-        <BrandLockup /><div className="tdiv" /><span className="page-title">Portfolio</span>
+        <BrandLockup /><div className="tdiv" /><span className="page-title">{t("pagePortfolio")}</span>
         <div className="spacer" />
         <form action="/auth/signout" method="post"><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
       </header>
       <AppNav />
       <main className="main2"><div className="pg">
-        <div className="pg-head"><h2>Conviction Book</h2><span className="sub">Display-only · paper. Your watchlist ranked by the Golden-Oracle confluence + regime — a suggested tilt, not advice.</span></div>
+        <div className="pg-head"><h2>{t("convictionBook")}</h2><span className="sub">{t("convictionSub")}</span></div>
         <div className="kpis">
-          <div className="kpi"><small>Names</small><b>{rows.length}</b></div>
-          <div className="kpi"><small>Bullish signals</small><b className="up">{buys.length}</b></div>
-          <div className="kpi"><small>Avg win rate</small><b>{avgWr.toFixed(0)}%</b></div>
-          <div className="kpi"><small>Avg day move</small><b className={dayPnl >= 0 ? "up" : "down"}>{dayPnl >= 0 ? "+" : ""}{dayPnl.toFixed(2)}%</b></div>
+          <div className="kpi"><small>{t("names")}</small><b>{rows.length}</b></div>
+          <div className="kpi"><small>{t("bullishSignals")}</small><b className="up">{buys.length}</b></div>
+          <div className="kpi"><small>{t("avgWinRate")}</small><b>{avgWr.toFixed(0)}%</b></div>
+          <div className="kpi"><small>{t("avgDayMove")}</small><b className={dayPnl >= 0 ? "up" : "down"}>{dayPnl >= 0 ? "+" : ""}{dayPnl.toFixed(2)}%</b></div>
         </div>
         <div className="panel">
-          <div className="ph">Positions<span className="sub">click a row to open it in the chart</span></div>
+          <div className="ph">{t("positions")}<span className="sub">{t("clickRowOpen")}</span></div>
           <table className="ptable">
-            <thead><tr><th>Symbol</th><th>Last</th><th>Day</th><th>Signal</th><th>Regime</th><th>Win rate</th><th>Profit factor</th><th>CAGR</th><th>Suggested tilt</th></tr></thead>
+            <thead><tr><th>{t("symbol")}</th><th>{t("colLast")}</th><th>{t("day")}</th><th>{t("signalCol")}</th><th>{t("regime")}</th><th>{t("winRate")}</th><th>{t("profitFactor")}</th><th>{t("cagr")}</th><th>{t("suggestedTilt")}</th></tr></thead>
             <tbody>
               {rows.length === 0 && (
                 <tr className="empty-row"><td colSpan={9} style={{ textAlign: "center", color: "var(--muted)", padding: "44px 16px", fontSize: 13 }}>
-                  {!loaded ? "Loading book…" : "No names in your watchlist yet."}
+                  {!loaded ? t("loadingBook") : t("noNamesYet")}
                 </td></tr>
               )}
               {rows.map((r) => { const u = (r.chg || 0) >= 0; const buy = isBuy(r.verdict);
                 return (
                   <tr key={r.sym} onClick={() => router.push(`/terminal?sym=${r.sym}`)}>
-                    <td><div className="sym-cell"><span className="ic" style={{ background: r.col }}>{r.sym[0]}</span><div><div className="tk">{r.sym}</div><div className="nm">{r.name}</div></div></div></td>
+                    <td><div className="sym-cell"><span className="ic" style={{ background: r.col }}>{r.sym[0]}</span><div><div className="tk">{r.sym}</div><div className="nm">{r.zh || r.name}</div></div></div></td>
                     <td>{fmt(r.last, r.last < 10 ? 4 : 2)}</td>
                     <td className={u ? "up" : "down"}>{u ? "+" : ""}{fmt(r.chg)}%</td>
                     <td>{r.verdict ? <span className={`pill ${buy ? "buy" : "sell"}`}>{r.verdict}</span> : "—"}</td>
-                    <td><span className={`regchip ${r.regimeBull ? "up" : "warn"}`}>{r.regimeBull ? "Uptrend" : "Mixed"}</span></td>
+                    <td><span className={`regchip ${r.regimeBull ? "up" : "warn"}`}>{r.regimeBull ? t("uptrend") : t("mixed")}</span></td>
                     <td>{r.wr != null ? (r.wr * 100).toFixed(0) + "%" : "—"}</td>
                     <td>{r.pf != null ? r.pf.toFixed(2) : "—"}</td>
                     <td>{r.cagr != null ? (r.cagr * 100).toFixed(1) + "%" : "—"}</td>
@@ -70,7 +72,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
           </table>
         </div>
       </div></main>
-      <div className="ticker"><span className="lbl">Conviction Book</span><span style={{ color: "var(--text-2)" }}>{buys.length} bullish · tilt weighted by backtested win-rate · paper / display-only</span></div>
+      <div className="ticker"><span className="lbl">{t("convictionBook")}</span><span style={{ color: "var(--text-2)" }}>{t("convictionFoot").replace("{n}", String(buys.length))}</span></div>
     </div>
   );
 }

@@ -16,6 +16,7 @@ import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
 import SettingsMenu from "@/components/SettingsMenu";
+import DayRange from "@/components/DayRange";
 import { useT } from "@/lib/i18n";
 import { useFromMacro, backToMacro } from "@/lib/originNav";
 
@@ -31,7 +32,8 @@ type Row = { name: string; sec: string; col: string; mkt?: string; zh?: string; 
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
 
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
-const vol = (v: number) => (v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v));
+const vol = (v: number | null | undefined) => (v == null || !isFinite(v) ? "—" : v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v));
+const chgStr = (c: number | null | undefined) => (c == null || !isFinite(c) ? "—" : (c >= 0 ? "+" : "") + fmt(c) + "%");
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 const CHART_TYPES = [["candles", "Candles"], ["heikin", "Heikin Ashi"], ["bars", "Bars"], ["line", "Line"], ["area", "Area"]];
 const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
@@ -49,6 +51,17 @@ const DETECTORS: [string, string][] = [
 ];
 const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
 
+// translation key maps for the (otherwise hard-coded) toolbar/tool labels
+const CT_TKEY: Record<string, string> = { candles: "ctCandles", heikin: "ctHeikin", bars: "ctBars", line: "ctLine", area: "ctArea" };
+const TFG_TKEY: Record<string, string> = { Minutes: "tfMinutes", Hours: "tfHours", Days: "tfDays", Weeks: "tfWeeks", Months: "tfMonths" };
+const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "autoFib", sr: "srHeatmap", mtfa: "mtfSR", clear: "clearDetected" };
+const TOOL_TKEY: Record<string, string> = { cursor: "toolCursor", trendline: "toolTrendline", ray: "toolRay", hline: "toolHline", rect: "toolRect", fib: "toolFib", text: "toolText", measure: "toolMeasure", arrow: "toolArrow", vline: "toolVline", erase: "toolErase" };
+
+// watchlist column widths (px). The symbol column + every visible data column is user-resizable.
+const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80 };
+type WLSet = { tableView: boolean; cols: { last: boolean; changePct: boolean; change: boolean; volume: boolean }; disp: string; logo: boolean; colW: Record<string, number> };
+const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true, colW: {} };
+
 export default function TerminalShell({ symbols, email, initialSymbol }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string }) {
   const [man, setMan] = useState<Manifest | null>(null);
   const [wl, setWl] = useState(symbols);
@@ -64,7 +77,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [chartType, setChartType] = useState("candles");
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
-  const [set, setSet] = useState({ tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true });
+  const [set, setSet] = useState<WLSet>(DEFAULT_SET);
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
   const [indOpen, setIndOpen] = useState(false); const [copilot, setCopilot] = useState(false);
   const [wlSetOpen, setWlSetOpen] = useState(false); const [tfOpen, setTfOpen] = useState(false); const [ctOpen, setCtOpen] = useState(false);
@@ -120,7 +133,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
-    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true }));
+    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) });
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
@@ -257,31 +270,42 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     setLayoutOpen(false); }
   function delLayout(id: string) { fetch(`/api/layouts?id=${id}`, { method: "DELETE" }).then(() => setLayouts((ls) => ls.filter((x) => x.id !== id))); }
 
-  const colList = () => { const a: [string, string][] = [["last", "Last"]]; if (set.cols.change) a.push(["change", "Chg"]); if (set.cols.changePct) a.push(["changePct", "Chg%"]); if (set.cols.volume) a.push(["volume", "Vol"]); return a; };
+  const colList = (): [string, string][] => { const a: [string, string][] = [["last", t("colLast")]]; if (set.cols.change) a.push(["change", t("colChgShort")]); if (set.cols.changePct) a.push(["changePct", t("colChgPctShort")]); if (set.cols.volume) a.push(["volume", t("colVolShort")]); return a; };
   const colVal = (r: Row | undefined, key: string) => { if (!r) return "—"; const u = r.chg >= 0; if (key === "last") return fmt(r.last, r.last < 10 ? 4 : 2); if (key === "change") return (u ? "+" : "") + fmt(r.last * r.chg / 100, 2); if (key === "changePct") return (u ? "+" : "") + fmt(r.chg) + "%"; if (key === "volume") return vol(r.vol); return ""; };
-  const wlGrid = `1fr ${colList().map(() => "1fr").join(" ")} 18px`;
+  // resizable columns: symbol track + each visible data track carries an explicit px width
+  const colw = (k: string) => set.colW?.[k] ?? DEFAULT_COLW[k] ?? 80;
+  const dataCols = colList();
+  const wlGrid = `${colw("sym")}px ${dataCols.map(([k]) => colw(k) + "px").join(" ")} 18px`;
+  const wlMinW = colw("sym") + dataCols.reduce((s, [k]) => s + colw(k), 0) + 18 + (dataCols.length + 1) * 8;
+  const nameOf = (r?: Row) => (r?.zh || r?.name || "");   // Chinese stocks carry a `zh` proper name
+  const startResize = (key: string, e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const startX = e.clientX, startW = colw(key);
+    const move = (ev: MouseEvent) => { const w = Math.max(44, Math.round(startW + (ev.clientX - startX))); setSet((s) => ({ ...s, colW: { ...s.colW, [key]: w } })); };
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); document.body.classList.remove("col-resizing"); };
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up); document.body.classList.add("col-resizing");
+  };
 
   return (
     <div className={`app${fullChart ? " fs" : ""}`}>
       <header className="topbar">
         {fromMacro
-          ? <button className="brand-back" onClick={onBack} title="Back to the Macro Dashboard" aria-label="Back to the Macro Dashboard">
+          ? <button className="brand-back" onClick={onBack} title={t("backToDashboard")} aria-label={t("backToDashboard")}>
               <span className="bb-chev"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></span>
               <BrandMark />
-              <span className="wm"><b>MASTERMIND</b><small>← Dashboard</small></span>
+              <span className="wm"><b>MASTERMIND</b><small>← {t("dashboard")}</small></span>
             </button>
           : <BrandLockup />}
         <div className="tdiv" />
         <div className="pair" onClick={() => { setSeed(""); setSearchOpen(true); }}><span className="dual"><i>{active[0]}</i><i>$</i></span><b>{active}</b>
           <svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></div>
         <div className="stats">
-          <div className="stat"><span className="l">Last Price</span><span className="v big num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</span></div>
-          <div className="stat"><span className="l">24h Change</span><span className={`v num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</span></div>
-          <div className="stat"><span className="l">Volume</span><span className="v num">{m ? vol(m.vol) : "—"}</span></div>
-          <div className="stat"><span className="l">Day High</span><span className="v num">{fmt(m?.high, m && m.last < 10 ? 4 : 2)}</span></div>
-          <div className="stat"><span className="l">Day Low</span><span className="v num">{fmt(m?.low, m && m.last < 10 ? 4 : 2)}</span></div>
+          <div className="stat"><span className="l">{t("lastPrice")}</span><span className="v big num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</span></div>
+          <div className="stat"><span className="l">{t("change24h")}</span><span className={`v num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(m?.chg)}</span></div>
+          <div className="stat"><span className="l">{t("volume")}</span><span className="v num">{m ? vol(m.vol) : "—"}</span></div>
+          <DayRange low={m?.low} high={m?.high} last={lastPx} open={m?.open} variant="bar" />
         </div>
-        <span className={`livebadge${liveStatus === "live" ? " live" : ""}`} style={{ marginLeft: 16 }} title="Live feed activates with a real-time Polygon key (NEXT_PUBLIC_LIVE=1)"><i />{liveStatus === "live" ? "Live" : "Historical"}</span>
+        <span className={`livebadge${liveStatus === "live" ? " live" : ""}`} style={{ marginLeft: 16 }} title={t("liveTip")}><i />{liveStatus === "live" ? t("live") : t("historical")}</span>
         <div className="spacer" />
         <button className="ai" onClick={() => setCopilot(true)}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
         <SettingsMenu email={email} />
@@ -292,7 +316,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
            right cluster so the hamburger always has a home. ── */}
       <div className={`mobilebar${fromMacro ? " from-macro" : ""}`}>
         {fromMacro
-          ? <button className="m-back-prom breathe" onClick={onBack} aria-label="Back to the Macro Dashboard"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg><span>Dashboard</span></button>
+          ? <button className="m-back-prom breathe" onClick={onBack} aria-label={t("backToDashboard")}><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg><span>{t("dashboard")}</span></button>
           : <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg></button>}
         <span className="m-brand"><BrandMark size={22} /><b>MASTERMIND</b></span>
         <div className="m-right">
@@ -304,13 +328,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       {/* ── mobile symbol bar (tap → search) ── */}
       <div className="m-symbar" onClick={() => { setSeed(""); setSearchOpen(true); }}>
         <span className="m-sym"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span><b>{active}</b><svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></span>
-        <span className="m-px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</span></span>
+        <span className="m-px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(m?.chg)}</span></span>
       </div>
 
       <AppNav />
 
       <section className="workspace">
-        <button className={`chart-fs-float${fullChart ? " on" : ""}`} title={fullChart ? "Exit fullscreen" : "Fullscreen chart"} onClick={() => setFullChart((f) => !f)}>
+        <button className={`chart-fs-float${fullChart ? " on" : ""}`} title={fullChart ? t("exitFullscreen") : t("fullscreenChart")} onClick={() => setFullChart((f) => !f)}>
           {fullChart
             ? <svg viewBox="0 0 24 24"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" /></svg>
             : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
@@ -323,40 +347,40 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               {favTF.map((t) => <button key={t} className={tf === t ? "on" : ""} disabled={!FUNCTIONAL.has(t)} style={!FUNCTIONAL.has(t) ? { opacity: .4 } : {}} onClick={() => FUNCTIONAL.has(t) && setTf(t)}>{t}</button>)}
               <button onClick={(e) => { e.stopPropagation(); closeAll(); setTfOpen((o) => !o); }} style={{ padding: "0 6px" }}>▾</button>
               <div className={`tfgrid${tfOpen ? " show" : ""}`} onClick={(e) => e.stopPropagation()}>
-                {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{g}</div>{items.map((t) => { const fn = FUNCTIONAL.has(t); const fav = favTF.includes(t);
-                  return <div key={t} className={`it${tf === t ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { setTf(t); setTfOpen(false); } }}>
-                    <span>{t}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>live feed</span>}</span>
-                    <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(t) ? f.filter((x) => x !== t) : [...f, t]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
+                {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{t(TFG_TKEY[g])}</div>{items.map((tfi) => { const fn = FUNCTIONAL.has(tfi); const fav = favTF.includes(tfi);
+                  return <div key={tfi} className={`it${tf === tfi ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
+                    <span>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>{t("liveFeed")}</span>}</span>
+                    <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
                   </div>; })}</div>))}
               </div>
             </div>
             <div className="pophost">
-              <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setCtOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h3M14 4v16M14 9h3" /></svg>{CHART_TYPES.find((c) => c[0] === chartType)![1]}<span style={{ color: "var(--muted)" }}>▾</span></button>
+              <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setCtOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h3M14 4v16M14 9h3" /></svg>{t(CT_TKEY[chartType])}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${ctOpen ? " show" : ""}`} style={{ top: 32, left: 0 }} onClick={(e) => e.stopPropagation()}>
-                {CHART_TYPES.map(([k, l]) => <div key={k} className="set-row" style={chartType === k ? { color: "var(--brand-2)" } : {}} onClick={() => { setChartType(k); setCtOpen(false); }}>{l}</div>)}
+                {CHART_TYPES.map(([k]) => <div key={k} className="set-row" style={chartType === k ? { color: "var(--brand-2)" } : {}} onClick={() => { setChartType(k); setCtOpen(false); }}>{t(CT_TKEY[k])}</div>)}
               </div>
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
             <button className="tbtn tool-adv" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>{t("compare")}</button>
-            <div className="seg tool-adv" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
-            <button className="tbtn tool-adv" title="Multi-timeframe — the active symbol at D / 3D / W / 1M" onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>MTF</button>
-            {panes.length > 1 && <button className={`tbtn tool-adv${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
+            <div className="seg tool-adv" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
+            <button className="tbtn tool-adv" title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
+            {panes.length > 1 && <button className={`tbtn tool-adv${sync ? " on" : ""}`} title={t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
             <div className="pophost tool-adv">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
-                {DETECTORS.map(([k, l]) => <div key={k} className="menu-row" onClick={() => detect(k)}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{l}</div>)}
+                {DETECTORS.map(([k]) => <div key={k} className="menu-row" onClick={() => detect(k)}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t(DET_TKEY[k])}</div>)}
               </div>
             </div>
             <div className="pophost tool-adv">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setLayoutOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${layoutOpen ? " show" : ""}`} style={{ top: 32, right: 0, minWidth: 230 }} onClick={(e) => e.stopPropagation()}>
-                <div className="menu-save"><input placeholder="Save current as…" value={layoutName} onChange={(e) => setLayoutName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLayout(); }} /><button onClick={saveLayout}>Save</button></div>
-                {layouts.length === 0 && <div className="menu-row" style={{ color: "var(--text-dim)" }}>No saved layouts</div>}
+                <div className="menu-save"><input placeholder={t("saveCurrentAs")} value={layoutName} onChange={(e) => setLayoutName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLayout(); }} /><button onClick={saveLayout}>{t("save")}</button></div>
+                {layouts.length === 0 && <div className="menu-row" style={{ color: "var(--text-dim)" }}>{t("noSavedLayouts")}</div>}
                 {layouts.map((l) => <div key={l.id} className="menu-row" onClick={() => loadLayout(l)}>{l.name}<span className="rm" onClick={(e) => { e.stopPropagation(); delLayout(l.id); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span></div>)}
               </div>
             </div>
-            <button className="icbtn tool-adv" title="Snapshot" onClick={() => window.dispatchEvent(new CustomEvent("mm:snapshot"))}><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg></button>
-            <button className={`icbtn chart-fs-btn${fullChart ? " on" : ""}`} title={fullChart ? "Exit fullscreen" : "Fullscreen chart"} onClick={() => setFullChart((f) => !f)}>
+            <button className="icbtn tool-adv" title={t("snapshot")} onClick={() => window.dispatchEvent(new CustomEvent("mm:snapshot"))}><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg></button>
+            <button className={`icbtn chart-fs-btn${fullChart ? " on" : ""}`} title={fullChart ? t("exitFullscreen") : t("fullscreenChart")} onClick={() => setFullChart((f) => !f)}>
               {fullChart
                 ? <svg viewBox="0 0 24 24"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" /></svg>
                 : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
@@ -388,12 +412,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         {view === "price" ? (
           <div className="chart-body">
             <div className="tooldock">
-              {TOOLS.map(([id, d], i) => (
-                <button key={id} className={(tool === id || (id === "cursor" && !tool)) ? "on" : ""} title={id} onClick={() => setTool(id === "cursor" ? null : id)}><svg viewBox="0 0 24 24"><path d={d} /></svg></button>
+              {TOOLS.map(([id, d]) => (
+                <button key={id} className={(tool === id || (id === "cursor" && !tool)) ? "on" : ""} title={t(TOOL_TKEY[id] || id, id)} onClick={() => setTool(id === "cursor" ? null : id)}><svg viewBox="0 0 24 24"><path d={d} /></svg></button>
               ))}
-              <button className={magnet ? "on" : ""} title="Magnet — snap to OHLC" onClick={() => setMagnet((mg) => !mg)}><svg viewBox="0 0 24 24"><path d="M6 4v7a6 6 0 0 0 12 0V4h-4v7a2 2 0 0 1-4 0V4z" /></svg></button>
+              <button className={magnet ? "on" : ""} title={t("magnetTip")} onClick={() => setMagnet((mg) => !mg)}><svg viewBox="0 0 24 24"><path d="M6 4v7a6 6 0 0 0 12 0V4h-4v7a2 2 0 0 1-4 0V4z" /></svg></button>
               <div className="sp" />
-              <button title="Clear detected" onClick={() => detect("clear")}><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg></button>
+              <button title={t("clearDrawings")} onClick={() => detect("clear")}><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg></button>
             </div>
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
@@ -410,38 +434,46 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <div className="rail-body">
           <div className="board wl-board">
             <div className="wl-bar pophost">
-              <button className="wl-select">Default <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></button>
+              <button className="wl-select">{t("defaultList")} <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></button>
               <div className="wl-acts">
-                <button title="Add symbol" onClick={(e) => { e.stopPropagation(); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
-                <button title="Settings" onClick={(e) => { e.stopPropagation(); closeAll(); setWlSetOpen((o) => !o); }}><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg></button>
+                <button title={t("addSymbol")} onClick={(e) => { e.stopPropagation(); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
+                <button title={t("settings")} onClick={(e) => { e.stopPropagation(); closeAll(); setWlSetOpen((o) => !o); }}><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg></button>
               </div>
               <div className={`pop${wlSetOpen ? " show" : ""}`} style={{ top: 40, right: 6 }} onClick={(e) => e.stopPropagation()}>
-                <div className="set-h"><b>Table view</b><span className={`switch${set.tableView ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, tableView: !s.tableView }))} /></div>
-                <div className="set-grp">Columns</div>
-                {([["last", "Last"], ["change", "Change"], ["changePct", "Change %"], ["volume", "Volume"]] as [string, string][]).map(([k, l]) => (
+                <div className="set-h"><b>{t("tableViewLabel")}</b><span className={`switch${set.tableView ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, tableView: !s.tableView }))} /></div>
+                <div className="set-grp">{t("columns")}</div>
+                {([["last", t("colLast")], ["change", t("colChange")], ["changePct", t("colChangePct")], ["volume", t("colVolume")]] as [string, string][]).map(([k, l]) => (
                   <div key={k} className={`set-row${(set.cols as any)[k] ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, cols: { ...s.cols, [k]: !(s.cols as any)[k] } }))}><span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>{l}</div>
                 ))}
-                <div className="set-grp">Symbol display</div>
-                <div className={`set-row${set.logo ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, logo: !s.logo }))}><span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>Logo</div>
-                {["symbol", "name"].map((d) => <div key={d} className={`set-row${set.disp === d ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, disp: d }))}><span className="rdo" />{d[0].toUpperCase() + d.slice(1)}</div>)}
+                <div className="set-grp">{t("symbolDisplay")}</div>
+                <div className={`set-row${set.logo ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, logo: !s.logo }))}><span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>{t("logo")}</div>
+                {([["symbol", t("dispSymbol")], ["name", t("dispName")], ["both", t("dispBoth")]] as [string, string][]).map(([d, l]) => <div key={d} className={`set-row${set.disp === d ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, disp: d }))}><span className="rdo" />{l}</div>)}
               </div>
             </div>
-            <div className="wl-cols" style={{ gridTemplateColumns: wlGrid }}><span>Symbol</span>{colList().map(([k, l]) => <span key={k}>{l}</span>)}<span /></div>
-            <div className="wl-list">
-              {Object.entries(sections).map(([sec, rows]) => (
-                <div key={sec}>
-                  <div className="wl-sec">{sec}</div>
-                  {rows.map((sym) => { const r = man?.symbols?.[sym]; const u = (r?.chg ?? 0) >= 0; const label = set.disp === "name" ? (r?.name || sym) : sym;
-                    return (
-                      <div key={sym} className={`wl-row${sym === active ? " on" : ""}`} style={{ gridTemplateColumns: wlGrid, height: set.tableView ? 32 : 46 }} onClick={() => pick(sym)}>
-                        <div className="s">{set.logo && <span className="ic" style={{ background: r?.col || "#888", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24 }}>{sym[0]}</span>}
-                          <span className="nm"><span className="tk">{label}</span>{!set.tableView && <span className="sub">{set.disp === "name" ? sym : (r?.name || "")}</span>}</span></div>
-                        {colList().map(([k]) => <span key={k} className={`c num ${k === "changePct" || k === "change" ? (u ? "up" : "down") : ""}`}>{colVal(r, k)}</span>)}
-                        <span className="rm" onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
-                      </div>
-                    ); })}
-                </div>
-              ))}
+            <div className="wl-scroll">
+              <div className="wl-cols" style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW }}>
+                <span className="wl-col">{t("symbol")}<i className="wl-rz" title={t("resizeCol")} onMouseDown={(e) => startResize("sym", e)} /></span>
+                {dataCols.map(([k, l]) => <span key={k} className="wl-col"><span className="wl-col-l">{l}</span><i className="wl-rz" title={t("resizeCol")} onMouseDown={(e) => startResize(k, e)} /></span>)}
+                <span />
+              </div>
+              <div className="wl-list">
+                {Object.entries(sections).map(([sec, rows]) => (
+                  <div key={sec}>
+                    <div className="wl-sec" style={{ minWidth: wlMinW }}>{sec}</div>
+                    {rows.map((sym) => { const r = man?.symbols?.[sym]; const u = (r?.chg ?? 0) >= 0; const nm = nameOf(r);
+                      const primary = set.disp === "name" ? (nm || sym) : sym;
+                      const secondary = set.disp === "both" ? nm : set.disp === "name" ? sym : (set.tableView ? "" : nm);
+                      return (
+                        <div key={sym} className={`wl-row${sym === active ? " on" : ""}${set.tableView ? " tv" : ""}`} style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW, height: set.tableView ? 32 : 46 }} onClick={() => pick(sym)}>
+                          <div className="s">{set.logo && <span className="ic" style={{ background: r?.col || "#888", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24 }}>{sym[0]}</span>}
+                            <span className="nm"><span className="tk">{primary}</span>{secondary && <span className={set.tableView ? "tk-sub" : "sub"}>{secondary}</span>}</span></div>
+                          {dataCols.map(([k]) => <span key={k} className={`c num ${k === "changePct" || k === "change" ? (u ? "up" : "down") : ""}`}>{colVal(r, k)}</span>)}
+                          <span className="rm" title={t("remove")} onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
+                        </div>
+                      ); })}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -449,23 +481,24 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             <div className="detail-hd">
               <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
               <div style={{ minWidth: 0 }}>
-                <div className="nm">{m?.name || active}</div>
+                <div className="nm">{nameOf(m) || active}</div>
                 <div className="ex">{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</div>
               </div>
-              <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</div></div>
-              <button className="ex-btn" title="Open full analysis" onClick={() => setAnalysisOpen(true)}><svg viewBox="0 0 24 24"><path d="M4 14v6h6M20 10V4h-6M14 10l6-6M10 14l-6 6" /></svg></button>
+              <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(m?.chg)}</div></div>
+              <button className="ex-btn" title={t("openFullAnalysis")} onClick={() => setAnalysisOpen(true)}><svg viewBox="0 0 24 24"><path d="M4 14v6h6M20 10V4h-6M14 10l6-6M10 14l-6 6" /></svg></button>
             </div>
             <div className="detail-scroll">
               <div style={{ padding: "12px 12px 0" }}>
-                <div className="mmcard" style={{ marginTop: 0, borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }}>
-                  <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Golden Oracle · Confluence</div>
-                  <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">backtested · 6yr daily→3D</span></div>
-                  <div className="s2"><div>Win rate<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>Profit factor<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>CAGR<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
+                <DayRange low={m?.low} high={m?.high} last={lastPx} open={m?.open} variant="panel" />
+                <div className="mmcard" style={{ marginTop: 12, borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }}>
+                  <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>{t("goldenOracle")}</div>
+                  <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">{t("backtestedNote")}</span></div>
+                  <div className="s2"><div>{t("winRate")}<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>{t("profitFactor")}<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>{t("cagr")}<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
                 </div>
               </div>
               <StockAnalysis intel={intel} row={m} slice={slice} onExpand={() => setAnalysisOpen(true)} />
               <div style={{ padding: "0 12px" }}>
-                <button className="btn btn-ghost" style={{ width: "100%", height: 36 }} onClick={() => setCopilot(true)}>Ask Mastermind AI about {active} →</button>
+                <button className="btn btn-ghost" style={{ width: "100%", height: 36 }} onClick={() => setCopilot(true)}>{t("askAIabout")} {active} →</button>
               </div>
               <div style={{ padding: 12 }}><SeasonalityCard symbol={active} /></div>
             </div>
@@ -474,7 +507,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       </aside>
 
       <div className="ticker">
-        <span className="lbl">Movers</span>
+        <span className="lbl">{t("movers")}</span>
         {Object.entries(man?.symbols || {}).slice(0, 16).map(([s, r]) => { const u = r.chg >= 0; return (
           <span key={s} className="tk" style={{ cursor: "pointer" }} onClick={() => pick(s)}><span className="s">{s.replace("-USD", "")}</span><span className="p num">{fmt(r.last, r.last < 10 ? 3 : 2)}</span><span className={`c num ${u ? "up" : "down"}`}>{u ? "+" : ""}{fmt(r.chg)}%</span></span>
         ); })}
@@ -490,8 +523,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="sa-modal" onClick={(e) => e.stopPropagation()}>
             <div className="sa-modal-h">
               <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
-              <div className="tt">{m?.name || active}<small>{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</small></div>
-              <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</div></div>
+              <div className="tt">{nameOf(m) || active}<small>{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</small></div>
+              <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(m?.chg)}</div></div>
               <button className="x" onClick={() => setAnalysisOpen(false)} aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
             </div>
             <div className="sa-modal-body"><StockAnalysis intel={intel} row={m} slice={slice} deep /></div>

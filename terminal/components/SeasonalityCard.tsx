@@ -1,10 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useT } from "@/lib/i18n";
 
 const M = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
 
 // Average monthly return from history → a TrendSpider-style seasonality read (display-only).
 export default function SeasonalityCard({ symbol }: { symbol: string }) {
+  const t = useT();
   // per-month average return, or null for calendar months with no collected samples
   const [bars, setBars] = useState<(number | null)[] | null>(null);
 
@@ -29,14 +31,14 @@ export default function SeasonalityCard({ symbol }: { symbol: string }) {
     <div className="card" style={{ borderTop: "1px solid var(--line)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7, font: "600 10px/1 var(--font-ui)", letterSpacing: ".09em", textTransform: "uppercase", color: "var(--text-2)", marginBottom: 12 }}>
         <svg width="13" height="13" viewBox="0 0 24 24" style={{ stroke: "var(--brand-2)", fill: "none", strokeWidth: 2 }}><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" /></svg>
-        Seasonality · avg monthly return
+        {t("seasonalityTitle")}
       </div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 70 }}>
         {bars.map((b, i) => {
           const mn = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][i];
           const up = (b ?? 0) >= 0;
           return (
-            <div key={i} title={b == null ? `${mn}: no samples` : `${mn}: ${up ? "+" : ""}${b.toFixed(1)}%`}
+            <div key={i} title={b == null ? `${mn}: ${t("noSamples")}` : `${mn}: ${up ? "+" : ""}${b.toFixed(1)}%`}
               style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
               <div style={{ width: "100%", display: "flex", flexDirection: "column", justifyContent: up ? "flex-end" : "flex-start", height: "100%" }}>
                 {b == null
@@ -48,7 +50,7 @@ export default function SeasonalityCard({ symbol }: { symbol: string }) {
           );
         })}
       </div>
-      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>Current month highlighted · from {symbol} history (display-only context).</div>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>{t("seasonalityFoot").replace("{sym}", symbol)}</div>
     </div>
   );
 }
