@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { type DetectCmd, type PineScript } from "@/components/ChartPanel";
@@ -9,6 +9,9 @@ import ChartPane from "@/components/ChartPane";
 import StrategyTester from "@/components/StrategyTester";
 import SearchModal from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
+import IndicatorSettings from "@/components/IndicatorSettings";
+import IndicatorSource from "@/components/IndicatorSource";
+import { allDefaults, indDefaults, withDefaults, IND_ORDER } from "@/lib/indicators";
 import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
 import StockAnalysis from "@/components/StockAnalysis";
@@ -63,6 +66,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
   const [chartType, setChartType] = useState("candles");
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
+  const [hidden, setHidden] = useState<Set<string>>(new Set());            // indicators toggled hidden (greyed, still computed)
+  const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());  // per-indicator inputs/style
+  const [settingsKey, setSettingsKey] = useState<string | null>(null);     // open indicator-settings dialog
+  const [sourceKey, setSourceKey] = useState<string | null>(null);         // open read-only source view (built-ins)
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
   const [set, setSet] = useState({ tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true });
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
@@ -89,6 +96,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const wsMounted = useRef(false);
   const t = useT();
   const navPath = usePathname();
+  const router = useRouter();
   // mobile + fullscreen + expanded-analysis state
   const [fullChart, setFullChart] = useState(false);
   const [drawer, setDrawer] = useState(false);
@@ -124,6 +132,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
     setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true }));
+    setHidden(new Set(load("mm.indHidden", [])));
+    const savedP = load("mm.indParams", {}); setIndParams(() => { const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); return base; });
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
@@ -148,6 +158,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (!initialSymbol) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane }));
   }, [panes, paneTfs, split, sync, activePane]);
   useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
+  useEffect(() => { localStorage.setItem("mm.indHidden", JSON.stringify([...hidden])); }, [hidden]);
+  useEffect(() => { localStorage.setItem("mm.indParams", JSON.stringify(indParams)); }, [indParams]);
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
   useEffect(() => { localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
@@ -192,6 +204,21 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     } catch {}
   }, []); // eslint-disable-line
   const removePine = useCallback(() => { setPineScript(null); setPineStatus(null); try { sessionStorage.removeItem("mm.pine"); } catch {} }, []);
+  // ── indicator legend actions (shared by the per-pane legend + its More menu) ──
+  const toggleHidden = useCallback((k: string) => setHidden((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; }), []);
+  const removeInd = useCallback((k: string) => {
+    if (k === "pine") { removePine(); return; }
+    setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
+    setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
+  }, [removePine]);
+  const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...withDefaults(k, p[k]), ...patch } })), []);
+  const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
+  const setPineParam = useCallback((patch: Record<string, any>) => setPineScript((p) => (p ? { ...p, params: { ...p.params, ...patch } } : p)), []);
+  const openSettings = useCallback((k: string) => setSettingsKey(k), []);
+  const openSource = useCallback((k: string) => {
+    if (k === "pine") { try { if (pineScript) sessionStorage.setItem("mm.pine", JSON.stringify({ name: pineScript.name, source: pineScript.source, params: pineScript.params, ts: Date.now() })); } catch {} router.push("/scripts"); return; }
+    setSourceKey(k);
+  }, [pineScript, router]);
 
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
   function setGrid(n: number) {
@@ -422,7 +449,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} pineScript={pineScript} onPineResult={setPineStatus} />
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} pineScript={pineScript} onPineResult={setPineStatus} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} />
               ))}
             </div>
           </div>
@@ -507,6 +534,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
       <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} />
+      {settingsKey && (settingsKey === "pine"
+        ? <IndicatorSettings indKey="pine" params={{}} onChange={() => {}} pine={pineScript ? { name: pineScript.name, params: pineScript.params } : null} onPineChange={setPineParam} onClose={() => setSettingsKey(null)} />
+        : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
+      {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
       <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
 
       {/* ── expanded full-analysis modal ── */}
