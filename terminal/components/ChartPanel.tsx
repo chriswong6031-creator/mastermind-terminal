@@ -7,6 +7,7 @@ import {
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
+import { type CompareItem, cmpKey } from "@/lib/compare";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
 
 
@@ -61,7 +62,7 @@ const mk = (tag: string, attrs: Record<string, any>) => { const e = document.cre
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", extHours = true, replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], isActive = true, syncId = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; extHours?: boolean; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; isActive?: boolean; syncId?: number | null;
+    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: CompareItem[]; isActive?: boolean; syncId?: number | null;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -88,6 +89,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const panesMeta = useRef<{ key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[]>([]);
   // collapse/maximize/resize state, keyed by pane key ("__price__" | indicator key) so it survives reorder
   const paneCtl = useRef<{ collapsed: Set<string>; maximized: string | null; normal: Map<string, number> }>({ collapsed: new Set(), maximized: null, normal: new Map() });
+  const naturalIdxRef = useRef<Map<string, number>>(new Map());   // sub-pane key → creation-order index; collapse sinks a pane to the bottom, expand restores this order
   const hiddenRef = useRef<Set<string>>(hidden); hiddenRef.current = hidden;
   const wrapElRef = useRef<HTMLElement | null>(null);
   const paneLayoutRef = useRef<PaneInfo[]>([]);
@@ -108,23 +110,57 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ── pane-control operations (read chart refs; safe to recreate every render) ──
   const P = (k: string) => withDefaults(k, indParams[k]);
   const labelOf = (k: string) => (isIndKey(k) ? IND_DEFS[k].label : k);
+  const COLLAPSED_PX = 36;   // collapsed panes become a fixed strip tall enough to hold the top-right ops menu
   const applyStretch = () => {
-    const ctl = paneCtl.current;
-    for (const m of panesMeta.current) {
-      let s: number;
-      if (ctl.maximized) s = m.key === ctl.maximized ? 1000 : 0.0001;
-      else s = ctl.collapsed.has(m.key) ? 0.06 : (ctl.normal.get(m.key) ?? (m.isPrice ? 3.4 : 1));
+    const ctl = paneCtl.current; const metas = panesMeta.current; if (!metas.length) return;
+    if (ctl.maximized) { for (const m of metas) { try { m.pane.setStretchFactor(m.key === ctl.maximized ? 1000 : 0.0001); } catch {} } return; }
+    // lightweight-charts splits height proportional to stretch factors, so we work in pixel-equivalent
+    // weights: each collapsed pane gets COLLAPSED_PX; the expanded panes share the remainder by their
+    // saved ratios. This pins the collapsed strip to ~COLLAPSED_PX regardless of how many panes there are.
+    const H = wrapElRef.current?.clientHeight || ref.current?.clientHeight || 600;
+    const collapsed = metas.filter((m) => ctl.collapsed.has(m.key));
+    const expanded = metas.filter((m) => !ctl.collapsed.has(m.key));
+    const sumExp = expanded.reduce((a, m) => a + (ctl.normal.get(m.key) ?? (m.isPrice ? 3.4 : 1)), 0) || 1;
+    const remPx = Math.max(80, H - COLLAPSED_PX * collapsed.length);
+    for (const m of metas) {
+      const s = ctl.collapsed.has(m.key) ? COLLAPSED_PX : (ctl.normal.get(m.key) ?? (m.isPrice ? 3.4 : 1)) / sumExp * remPx;
       try { m.pane.setStretchFactor(s); } catch {}
+    }
+  };
+  // collapse sinks a pane to the bottom; expand restores it to its natural (creation/move) order.
+  // Desired sub-pane order = expanded by natural index, then collapsed by natural index (price stays #0).
+  const reorderPanes = () => {
+    const ch = chartRef.current; if (!ch) return; const ctl = paneCtl.current;
+    const subs = panesMeta.current.filter((m) => !m.isPrice);
+    const nat = (k: string) => naturalIdxRef.current.get(k) ?? 999;
+    const desired = [...subs].sort((a, b) => {
+      const ca = ctl.collapsed.has(a.key) ? 1 : 0, cb = ctl.collapsed.has(b.key) ? 1 : 0;
+      return ca !== cb ? ca - cb : nat(a.key) - nat(b.key);
+    }).map((m) => m.key);
+    // selection-sort into place via swapPanes (price occupies index 0)
+    for (let pos = 0; pos < desired.length; pos++) {
+      const m = subs.find((x) => x.key === desired[pos]); if (!m) continue;
+      let cur = -1; try { cur = m.pane.paneIndex(); } catch {}
+      const want = pos + 1;
+      if (cur >= 0 && cur !== want) { try { ch.swapPanes(cur, want); } catch {} }
     }
   };
   // a genuine separator drag (normal mode only) becomes the new baseline; ignore programmatic sizing
   const captureNormal = () => { const ctl = paneCtl.current; if (ctl.maximized) return; for (const m of panesMeta.current) { if (ctl.collapsed.has(m.key)) continue; try { ctl.normal.set(m.key, m.pane.getStretchFactor()); } catch {} } };
   const keyOfPaneIndex = (pi: number) => { const m = panesMeta.current.find((x) => { try { return x.pane.paneIndex() === pi; } catch { return false; } }); return m?.key ?? null; };
   const measure = () => measureRef.current();
-  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); requestAnimationFrame(measure); };
-  const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); requestAnimationFrame(measure); };
-  const collapseAllPanes = () => { const ctl = paneCtl.current; ctl.maximized = null; const subs = panesMeta.current.filter((m) => !m.isPrice).map((m) => m.key); if (!subs.length) return; const all = subs.every((k) => ctl.collapsed.has(k)); if (all) subs.forEach((k) => ctl.collapsed.delete(k)); else subs.forEach((k) => ctl.collapsed.add(k)); applyStretch(); requestAnimationFrame(measure); };
-  const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {} requestAnimationFrame(measure); };
+  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { ctl.maximized = key; ctl.collapsed.delete(key); } reorderPanes(); applyStretch(); requestAnimationFrame(measure); };
+  const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key || key === "__price__") return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); reorderPanes(); applyStretch(); requestAnimationFrame(measure); };
+  const collapseAllPanes = () => { const ctl = paneCtl.current; ctl.maximized = null; const subs = panesMeta.current.filter((m) => !m.isPrice).map((m) => m.key); if (!subs.length) return; const all = subs.every((k) => ctl.collapsed.has(k)); if (all) subs.forEach((k) => ctl.collapsed.delete(k)); else subs.forEach((k) => ctl.collapsed.add(k)); reorderPanes(); applyStretch(); requestAnimationFrame(measure); };
+  const doMove = (pi: number, dir: -1 | 1) => {
+    const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return;
+    // persist the move into the natural order (swap the two panes' natural indices) so a later
+    // collapse/expand respects it rather than snapping back to creation order
+    const a = keyOfPaneIndex(pi), b = keyOfPaneIndex(tgt);
+    try { ch.swapPanes(pi, tgt); } catch {}
+    if (a && b && a !== "__price__" && b !== "__price__") { const nm = naturalIdxRef.current; const na = nm.get(a), nb = nm.get(b); if (na != null && nb != null) { nm.set(a, nb); nm.set(b, na); } }
+    requestAnimationFrame(measure);
+  };
   const canMoveUp = (pi: number) => pi > 0;
   const canMoveDown = (pi: number) => pi < paneLayoutRef.current.length - 1;
   // visibility-on-intervals: is this indicator allowed to show on the current timeframe? (Settings → Visibility)
@@ -237,23 +273,49 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0); ln.setData(toLine(rows, vw)); add("vwap", ln);
         overlayEntries.push({ key: "vwap", label: IND_DEFS.vwap.label, kind: "overlay", isPine: false });
       }
+      // ── Volume — pane-less: embedded at the bottom of the price pane on its own hidden overlay scale ──
+      if (indicators.has("vol")) {
+        const p = P("vol");
+        const vs = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "vol", lastValueVisible: false, priceLineVisible: false }, 0);
+        vs.setData(rows.map((r) => ({ time: r.time, value: r.v, color: r.c >= r.o ? p.upCol : p.downCol })));
+        try { chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } }); } catch {}
+        add("vol", vs);
+        overlayEntries.push({ key: "vol", label: IND_DEFS.vol.tag, kind: "overlay", isPine: false });
+      }
 
-      // compare overlays — each symbol rebased to the main symbol's first price (relative performance)
-      const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
-      for (let ci = 0; !isIntra && ci < (compare || []).length && ci < 4; ci++) {
-        const cs = compare[ci]; if (!cs || cs === symbol) continue;
-        if (ohlcCache[cs] === undefined) { const o = await fetch(`/data/${cs}.json`).then((rr) => (rr.ok ? rr.json() : null)).catch(() => null); ohlcCache[cs] = o; }
-        const co = ohlcCache[cs]; if (!co?.bars?.length || dead) continue;
-        let crows: Bar[] = co.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
-        crows = resampleTf(crows, timeframe);
-        const cmap: Record<string, number> = {}; for (const cr of crows) cmap[cr.time] = cr.c;
-        let bse = 0, baseA = rows[0].c; for (const r of rows) { if (cmap[r.time] != null) { bse = cmap[r.time]; baseA = r.c; break; } }   // anchor to first COMMON date
-        if (!bse) continue; const scl = baseA / bse; let lv: number | null = null;
-        const cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: +(lv * scl).toFixed(prec) } : null; }).filter(Boolean);
-        const ln = chart.addSeries(LineSeries, { color: CMP_COLORS[ci % CMP_COLORS.length], lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: cs }, 0);
-        ln.setData(cdata as any);
+      // ── compare symbols (pseudo-indicators) — three scale modes; pct/price draw on the price pane here,
+      //    "pane" mode is added as its own sub-pane after the indicator panes below ──
+      const cmpItems = (isIntra ? [] : (compare || [])).filter((c) => c.sym && c.sym !== symbol).slice(0, 6);
+      const cmpRows: Record<string, Bar[]> = {};
+      for (const c of cmpItems) {
+        if (ohlcCache[c.sym] === undefined) { const o = await fetch(`/data/${c.sym}.json`).then((rr) => (rr.ok ? rr.json() : null)).catch(() => null); ohlcCache[c.sym] = o; }
+        const co = ohlcCache[c.sym]; if (!co?.bars?.length || dead) continue;
+        const cr: Bar[] = co.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
+        cmpRows[c.sym] = resampleTf(cr, timeframe);
       }
       if (dead) { try { chart.remove(); } catch {} return; }   // effect re-ran during the compare fetch — bail before wiring listeners/overlay
+      for (const c of cmpItems) {
+        if (c.mode === "pane") continue;
+        const crows = cmpRows[c.sym]; if (!crows) continue;
+        const cmap: Record<string, number> = {}; for (const cr of crows) cmap[cr.time] = cr.c;
+        const key = cmpKey(c.sym);
+        if (c.mode === "pct") {
+          // rebase to the main symbol's first common close → relative performance on the shared axis
+          let bse = 0, baseA = rows[0].c; for (const r of rows) { if (cmap[r.time] != null) { bse = cmap[r.time]; baseA = r.c; break; } }
+          if (!bse) continue; const scl = baseA / bse; let lv: number | null = null;
+          const cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: +(lv * scl).toFixed(prec) } : null; }).filter(Boolean);
+          const ln = chart.addSeries(LineSeries, { color: c.color, lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: c.sym }, 0);
+          ln.setData(cdata as any); add(key, ln);
+        } else {
+          // "price": its own independent overlay price scale (true prices, autoscaled on its own range)
+          let lv: number | null = null;
+          const cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: lv } : null; }).filter(Boolean);
+          const ln = chart.addSeries(LineSeries, { color: c.color, lineWidth: 1.5 as any, priceScaleId: key, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: c.sym }, 0);
+          ln.setData(cdata as any); add(key, ln);
+          try { chart.priceScale(key).applyOptions({ scaleMargins: { top: 0.1, bottom: 0.08 } }); } catch {}
+        }
+        overlayEntries.push({ key, label: c.sym, kind: "overlay", isPine: false, isCompare: true, color: c.color });
+      }
 
       const times = rows.map((r) => r.time);
       const lastDate = times[times.length - 1];
@@ -266,13 +328,25 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       // ── sub-pane indicators — each gets its OWN pane (1 indicator : 1 pane) ──
       let pane = 1;
-      if (indicators.has("vol")) { const p = P("vol"); const vs = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "" }, pane); vs.setData(rows.map((r) => ({ time: r.time, value: r.v, color: r.c >= r.o ? p.upCol : p.downCol }))); add("vol", vs); subMetas.push({ key: "vol", isPrice: false, entries: [{ key: "vol", label: IND_DEFS.vol.label, kind: "pane", isPine: false }], pane: vs.getPane() }); pane++; }
       if (indicators.has("rsi")) { const p = P("rsi"); const rS = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lastValueVisible: true, title: "RSI" }, pane); rS.setData(toLine(rows, rsi(closes, p.length))); add("rsi", rS); if (p.showLevels) { try { rS.createPriceLine({ price: p.obLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false }); rS.createPriceLine({ price: p.osLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false }); } catch {} } subMetas.push({ key: "rsi", isPrice: false, entries: [{ key: "rsi", label: IND_DEFS.rsi.label, kind: "pane", isPine: false }], pane: rS.getPane() }); pane++; }
       if (indicators.has("stochrsi")) { const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD); const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: "%K" }, pane); const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: "%D" }, pane); kS.setData(toLine(rows, sr.k)); dS.setData(toLine(rows, sr.d)); add("stochrsi", kS); add("stochrsi", dS); subMetas.push({ key: "stochrsi", isPrice: false, entries: [{ key: "stochrsi", label: IND_DEFS.stochrsi.label, kind: "pane", isPine: false }], pane: kS.getPane() }); pane++; }
       if (indicators.has("macd")) { const p = P("macd"); const m = macd(closes, p.fast, p.slow, p.signal); const hs = chart.addSeries(HistogramSeries, {}, pane); hs.setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? p.upHist : p.downHist } : null)).filter(Boolean) as any); const lS = chart.addSeries(LineSeries, { color: p.macdCol, lineWidth: p.width as any, title: "MACD" }, pane); const sS = chart.addSeries(LineSeries, { color: p.signalCol, lineWidth: 1, title: "signal" }, pane); lS.setData(toLine(rows, m.line)); sS.setData(toLine(rows, m.sig)); add("macd", hs); add("macd", lS); add("macd", sS); subMetas.push({ key: "macd", isPrice: false, entries: [{ key: "macd", label: IND_DEFS.macd.label, kind: "pane", isPine: false }], pane: lS.getPane() }); pane++; }
 
+      // compare symbols in "New pane" mode — each gets its own sub-pane (true prices, own axis)
+      for (const c of cmpItems) {
+        if (c.mode !== "pane") continue;
+        const crows = cmpRows[c.sym]; if (!crows) continue;
+        const cmap: Record<string, number> = {}; for (const cr of crows) cmap[cr.time] = cr.c;
+        let lv: number | null = null;
+        const cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: lv } : null; }).filter(Boolean);
+        const ln = chart.addSeries(LineSeries, { color: c.color, lineWidth: 1.6 as any, lastValueVisible: true, title: c.sym }, pane);
+        ln.setData(cdata as any); const key = cmpKey(c.sym); add(key, ln);
+        subMetas.push({ key, isPrice: false, entries: [{ key, label: c.sym, kind: "pane", isPine: false, isCompare: true, color: c.color }], pane: ln.getPane() }); pane++;
+      }
+
       // assemble the pane registry (price pane first) + size the panes
       panesMeta.current = [{ key: "__price__", isPrice: true, entries: overlayEntries, pane: priceS.getPane() }, ...subMetas];
+      naturalIdxRef.current = new Map(subMetas.map((m, i) => [m.key, i]));   // creation order = restore order on un-collapse
       // carry collapse/maximize/resize over to the panes that still exist (keyed by indicator, so a rebuild
       // from a settings edit or an add/remove of another indicator keeps this pane's arrangement)
       { const ctl = paneCtl.current; const surv = new Set(panesMeta.current.map((m) => m.key));
@@ -282,7 +356,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         }
         if (prevCtl.maximized && surv.has(prevCtl.maximized)) ctl.maximized = prevCtl.maximized;
       }
-      applyStretch();
+      reorderPanes(); applyStretch();
 
       const last = rows[rows.length - 1], prev = rows[rows.length - 2] || last;
       if (statusRef.current) { const ch = last.c - prev.c, cp = (ch / prev.c) * 100, u = ch >= 0, f = (x: number) => x.toFixed(prec); statusRef.current.innerHTML = `<span class="mut">O</span><b>${f(last.o)}</b> <span class="mut">H</span><b>${f(last.h)}</b> <span class="mut">L</span><b>${f(last.l)}</b> <span class="mut">C</span><b>${f(last.c)}</b> <b class="${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`; }
@@ -583,7 +657,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       paneRO = new ResizeObserver(() => { if (dead) return; captureNormal(); scheduleMeasure(); });
       for (const m of panesMeta.current) { try { const pe = m.pane.getHTMLElement(); if (pe) paneRO.observe(pe); } catch {} }
 
-      ro = new ResizeObserver(() => { const ch2 = chartRef.current; if (!ch2) return; const r = ch2.timeScale().getVisibleLogicalRange(); ch2.resize(el.clientWidth, el.clientHeight); if (r) ch2.timeScale().setVisibleLogicalRange(r); scheduleRender(); scheduleMeasure(); });
+      ro = new ResizeObserver(() => { const ch2 = chartRef.current; if (!ch2) return; const r = ch2.timeScale().getVisibleLogicalRange(); ch2.resize(el.clientWidth, el.clientHeight); if (r) ch2.timeScale().setVisibleLogicalRange(r); if (paneCtl.current.collapsed.size || paneCtl.current.maximized) applyStretch(); scheduleRender(); scheduleMeasure(); });
       ro.observe(el);
 
       applyHidden();
@@ -591,7 +665,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     })();
 
     return () => { dead = true; if (rafId != null) cancelAnimationFrame(rafId); if (measRaf != null) cancelAnimationFrame(measRaf); if (syncCleanup) syncCleanup(); if (dragCleanup) dragCleanup(); window.removeEventListener("mm:snapshot", snap0); if (onKey) window.removeEventListener("keydown", onKey); if (winDown) window.removeEventListener("pointerdown", winDown); const wEl = wrapElRef.current; if (wEl) { if (onCtx) wEl.removeEventListener("contextmenu", onCtx); if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); } paneRO?.disconnect(); ro?.disconnect(); if (textEditRef.current) { try { textEditRef.current.remove(); } catch {} textEditRef.current = null; } if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; } if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; } if (sigRef.current) { try { sigRef.current.remove(); } catch {} sigRef.current = null; } if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; } if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; } };
-  }, [symbol, chartType, timeframe, extHours, replayIdx, Array.from(indicators).sort().join(","), (compare || []).join(","), syncId, csNonce, indParamsKey]); // eslint-disable-line
+  }, [symbol, chartType, timeframe, extHours, replayIdx, Array.from(indicators).sort().join(","), (compare || []).map((c) => `${c.sym}:${c.mode}:${c.color}`).join(","), syncId, csNonce, indParamsKey]); // eslint-disable-line
 
   // re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild)
   useEffect(() => { renderRef.current?.(); const svg = svgRef.current; if (svg) { svg.style.pointerEvents = tool ? "auto" : "none"; svg.style.cursor = tool === "erase" ? "pointer" : tool ? "crosshair" : "default"; } }, [tool, drawings]);

@@ -41,7 +41,7 @@ export function AppNav() {
         );
       })}
       <div className="gap" />
-      <button className="navbtn" onClick={openAI} aria-label={t("ai")} data-tip={t("ai")}><Glyph k="ai" /></button>
+      <button className="navbtn" data-ai-trigger onClick={openAI} aria-label={t("ai")} data-tip={t("ai")}><Glyph k="ai" /></button>
     </nav>
   );
 }

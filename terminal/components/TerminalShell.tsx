@@ -9,7 +9,10 @@ import SearchModal from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
 import IndicatorSettings from "@/components/IndicatorSettings";
 import IndicatorSource from "@/components/IndicatorSource";
+import CompareModal from "@/components/CompareModal";
+import CompareSettings from "@/components/CompareSettings";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER } from "@/lib/indicators";
+import { type CompareItem, type CmpMode, cmpKey, isCmpKey, cmpSym, nextCmpColor, CMP_PALETTE } from "@/lib/compare";
 import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
 import { useLive } from "@/lib/live";
@@ -52,8 +55,6 @@ const SEP_AFTER = new Set([0, 4, 6, 9]);   // group dividers: cursor | line tool
 const DETECTORS: [string, string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
 ];
-const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
-
 export default function TerminalShell({ symbols, email, initialSymbol }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string }) {
   const [man, setMan] = useState<Manifest | null>(null);
   const [wl, setWl] = useState(symbols);
@@ -67,7 +68,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const tf = paneTfs[activePane] ?? paneTfs[0] ?? "D";        // the active pane's timeframe drives the toolbar
   const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
   const [chartType, setChartType] = useState("candles");
-  const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
+  const [inds, setInds] = useState<Set<string>>(new Set(["ema", "vol", "rsi", "stochrsi"]));
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());
   const [settingsKey, setSettingsKey] = useState<string | null>(null);
@@ -90,8 +91,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [livePx, setLivePx] = useState<number | null>(null);
   const [slice, setSlice] = useState<any>(null);
   const [magnet, setMagnet] = useState(false);
-  const [compare, setCompare] = useState<string[]>([]);
-  const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
+  const [compare, setCompare] = useState<CompareItem[]>([]);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [cmpSetSym, setCmpSetSym] = useState<string | null>(null);   // compare symbol whose settings dialog is open
   const nonce = useRef(0);
   const wsMounted = useRef(false);
   const t = useT();
@@ -121,7 +123,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
-    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs([load("mm.tf", "D")]); setFavTF((load("mm.favtf", ["D", "3D", "W", "1M"]) as string[]).filter((x) => FUNCTIONAL.has(x))); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true })); setExtHours(load("mm.ext", true));
+    setInds(new Set(load("mm.inds", ["ema", "vol", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs([load("mm.tf", "D")]); setFavTF((load("mm.favtf", ["D", "3D", "W", "1M"]) as string[]).filter((x) => FUNCTIONAL.has(x))); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true })); setExtHours(load("mm.ext", true));
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
@@ -213,10 +215,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       if (tag === "input" || tag === "textarea") return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setSeed(""); setSearchOpen(true); return; }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (!searchOpen && e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key)) { setSeed(e.key); setSearchOpen(true); }
+      if (!searchOpen && !compareOpen && !copilot && e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key)) { setSeed(e.key); setSearchOpen(true); }
     };
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
-  }, [searchOpen]);
+  }, [searchOpen, compareOpen, copilot]);
 
   useEffect(() => {
     clearInterval(playRef.current);
@@ -227,7 +229,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, [replayOn, playing, total, speed]);
 
   const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setMtfOpen(false); };
-  const openCompare = () => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); };
+  const openCompare = () => { setSeed(""); setCompareOpen(true); };
   useEffect(() => { const h = () => closeAll(); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
 
   const sections = useMemo(() => { const o: Record<string, string[]> = {}; wl.forEach((s) => { (o[s.section] ||= []).push(s.symbol); }); return o; }, [wl]);
@@ -242,16 +244,28 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }
   async function removeSymbol(sym: string) { setWl((w) => w.filter((s) => s.symbol !== sym)); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }); }
   const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  // ── indicator legend actions (shared by the per-pane legend + its More menu) ──
+  // ── compare-symbol actions (compares are pseudo-indicators; visibility lives in the shared `hidden` set) ──
+  const addCompare = useCallback((sym: string, mode: CmpMode) => {
+    if (sym === active) return;
+    setCompare((c) => c.some((x) => x.sym === sym) ? c.map((x) => (x.sym === sym ? { ...x, mode } : x)) : (c.length >= 6 ? c : [...c, { sym, mode, color: nextCmpColor(c) }]));
+    setHidden((s) => { const k = cmpKey(sym); if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });   // un-hide if re-added
+  }, [active]);
+  const removeCompare = useCallback((sym: string) => {
+    setCompare((c) => c.filter((x) => x.sym !== sym));
+    setHidden((s) => { const k = cmpKey(sym); if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
+  }, []);
+  const patchCompare = useCallback((sym: string, patch: Partial<CompareItem>) => setCompare((c) => c.map((x) => (x.sym === sym ? { ...x, ...patch } : x))), []);
+  // ── indicator legend actions (shared by the per-pane legend + its More menu; route compare keys aside) ──
   const toggleHidden = useCallback((k: string) => setHidden((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; }), []);
   const removeInd = useCallback((k: string) => {
+    if (isCmpKey(k)) { removeCompare(cmpSym(k)); return; }
     setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
     setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
-  }, []);
+  }, [removeCompare]);
   const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...withDefaults(k, p[k]), ...patch } })), []);
   const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
-  const openSettings = useCallback((k: string) => setSettingsKey(k), []);
-  const openSource = useCallback((k: string) => setSourceKey(k), []);
+  const openSettings = useCallback((k: string) => { if (isCmpKey(k)) setCmpSetSym(cmpSym(k)); else setSettingsKey(k); }, []);
+  const openSource = useCallback((k: string) => { if (!isCmpKey(k)) setSourceKey(k); }, []);
   const pick = (sym: string) => {
     // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
     // re-clicking the active symbol is a no-op rather than jumping focus to the first matching pane.
@@ -260,10 +274,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     else if (panes[activePane] !== sym) setPanes((p) => p.map((s, i) => (i === activePane ? sym : s)));
     setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]);
   };
-  const onSearchPick = (sym: string) => { if (searchMode === "compare") { if (sym !== active) setCompare((c) => (c.includes(sym) ? c : [...c, sym].slice(0, 4))); } else pick(sym); };
 
   function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
-  function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare);
+  function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF);
+    if (Array.isArray(c.compare)) setCompare(c.compare.map((x: any, i: number) => (typeof x === "string" ? { sym: x, mode: "pct" as CmpMode, color: CMP_PALETTE[i % CMP_PALETTE.length] } : x)));
     if (Array.isArray(c.panes) && c.panes.length) {
       setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); setSplit(c.panes.length >= 4 ? 4 : c.panes.length >= 2 ? 2 : 1);
       setPaneTfs(Array.isArray(c.paneTfs) && c.paneTfs.length === c.panes.length ? c.paneTfs : c.panes.map(() => c.tf || "D"));   // back-compat: older layouts have a single tf
@@ -286,7 +300,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <div className="pair" onClick={() => { setSeed(""); setSearchOpen(true); }}><span className="dual"><i>{active[0]}</i><i>$</i></span><b>{active}</b>
           <svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></div>
         <div className="sym-tools">
-          <button className="ic" title="Add a symbol to compare" onClick={openCompare}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
           <button className="cmp" title="Compare another symbol on this chart" onClick={openCompare}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>{t("compare")}</button>
         </div>
         <div className="stats">
@@ -298,7 +311,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         </div>
         <span className={`livebadge${liveStatus === "live" ? " live" : ""}`} style={{ marginLeft: 16 }} title="Live feed activates with a real-time Polygon key (NEXT_PUBLIC_LIVE=1)"><i />{liveStatus === "live" ? "Live" : "Historical"}</span>
         <div className="spacer" />
-        <button className="ai" onClick={() => setCopilot(true)}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
+        <div className="ai-host pophost">
+          <button className={`ai${copilot ? " on" : ""}`} onClick={() => setCopilot((o) => !o)}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
+          <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
+        </div>
         <SettingsMenu email={email} />
       </header>
 
@@ -358,14 +374,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           </div>
         </div>
 
-        {view === "price" && compare.filter((c) => c !== active).length > 0 && (
-          <div className="cmp-strip">
-            <span className="cmp-lbl">{t("compare")}</span>
-            {compare.filter((c) => c !== active).map((cs, i) => (
-              <span className="cmp-chip" key={cs}><i style={{ background: CMP_COLORS[i % CMP_COLORS.length] }} />{cs}<button title="Remove" onClick={() => setCompare((c) => c.filter((x) => x !== cs))}>✕</button></span>
-            ))}
-          </div>
-        )}
 
         {replayOn && view === "price" && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 14px", borderBottom: "1px solid var(--line)", background: "var(--bg)" }}>
@@ -501,11 +509,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         ); })}
       </div>
 
-      <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} />
+      <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} onClose={() => setSearchOpen(false)} onPick={pick} onAdd={addSymbol} />
+      <CompareModal open={compareOpen} seed={seed} manifest={(man?.symbols as any) || {}} added={compare} active={active} onClose={() => setCompareOpen(false)} onAdd={addCompare} onRemove={removeCompare} />
+      {cmpSetSym && compare.some((c) => c.sym === cmpSetSym) && <CompareSettings item={compare.find((c) => c.sym === cmpSetSym)!} onChange={(patch) => patchCompare(cmpSetSym, patch)} onClose={() => setCmpSetSym(null)} onRemove={() => { removeCompare(cmpSetSym); setCmpSetSym(null); }} />}
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} />
       {settingsKey && <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
-      <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
     </div>
   );
 }

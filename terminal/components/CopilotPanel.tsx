@@ -19,6 +19,15 @@ export default function CopilotPanel({ open, symbol, row, onClose, onAnnotate }:
   // symbol change / close / unmount: abort any in-flight stream and reset
   useEffect(() => { setMsgs([]); reqRef.current++; acRef.current?.abort(); setBusy(false); }, [symbol]);
   useEffect(() => { if (!open) { reqRef.current++; acRef.current?.abort(); } }, [open]);
+  // dropdown: close on Escape or a click outside the AI host (the effect is added AFTER the opening
+  // click finishes propagating, so it never self-closes on open)
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!(e.target as Element)?.closest?.(".ai-host,[data-ai-trigger]")) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("pointerdown", onDown); window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("pointerdown", onDown); window.removeEventListener("keydown", onKey); };
+  }, [open, onClose]);
   useEffect(() => () => { reqRef.current++; acRef.current?.abort(); }, []);
   // sticky-bottom autoscroll: only follow if the user is already near the bottom
   useEffect(() => { const el = bodyRef.current; if (!el) return; if (el.scrollHeight - el.scrollTop - el.clientHeight < 60) el.scrollTop = el.scrollHeight; }, [msgs, busy]);
@@ -61,7 +70,7 @@ export default function CopilotPanel({ open, symbol, row, onClose, onAnnotate }:
   const suggestions = [`Why is ${symbol} a ${v}?`, `Mark the key support & resistance on the chart`, `How has this signal backtested?`, `Find BUY setups in an uptrend regime`];
 
   return (
-    <aside className={`copilot${open ? " open" : ""}`}>
+    <div className={`copilot${open ? " open" : ""}`} role="dialog" aria-hidden={!open} {...(!open ? { inert: "" } : {}) as any}>
       <div className="ch">
         <span className="mk"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg></span>
         <b>Mastermind AI</b><small>DEEPSEEK · TOOLS</small>
@@ -92,6 +101,6 @@ export default function CopilotPanel({ open, symbol, row, onClose, onAnnotate }:
         <input value={input} placeholder={`Ask about ${symbol}…`} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(input); }} />
         <button className="send" onClick={() => send(input)}><svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-7-8-3z" /></svg></button>
       </div>
-    </aside>
+    </div>
   );
 }

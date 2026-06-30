@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ChartPanel, { type DetectCmd } from "@/components/ChartPanel";
 import { type Drawing } from "@/lib/drawings";
+import { type CompareItem } from "@/lib/compare";
 
 const f = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 
@@ -10,7 +11,7 @@ const f = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? 
 // by contrast, are computed against THIS pane's timeframe and are transient (never persisted), so they
 // stay pane-local and are merged in only for this pane's own render.
 export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, chartType, inds, tool, detectCmd, compare, magnet, replayIdx, onMeta, drawings, onDrawingsChange, extHours = true, indParams, hidden, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource }:
-  { idx: number; symbol: string; isActive: boolean; onActivate: (i: number) => void; row?: { col?: string; last?: number; chg?: number } | null; tf: string; chartType: string; inds: Set<string>; tool: string | null; detectCmd: DetectCmd; compare: string[]; magnet: boolean; replayIdx: number | null; onMeta: (m: { total: number }) => void; drawings: Drawing[]; onDrawingsChange: (d: Drawing[]) => void; extHours?: boolean;
+  { idx: number; symbol: string; isActive: boolean; onActivate: (i: number) => void; row?: { col?: string; last?: number; chg?: number } | null; tf: string; chartType: string; inds: Set<string>; tool: string | null; detectCmd: DetectCmd; compare: CompareItem[]; magnet: boolean; replayIdx: number | null; onMeta: (m: { total: number }) => void; drawings: Drawing[]; onDrawingsChange: (d: Drawing[]) => void; extHours?: boolean;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void }) {
   const [auto, setAuto] = useState<Drawing[]>([]);
   useEffect(() => { setAuto([]); }, [symbol, tf]);   // detection is timeframe-specific — reset on change
@@ -33,7 +34,7 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         <span className="px num">{f(row?.last, (row?.last ?? 99) < 10 ? 4 : 2)}</span>
         <span className={`cg num ${up ? "up" : "down"}`}>{up ? "+" : ""}{f(row?.chg)}%</span>
       </div>
-      <ChartPanel symbol={symbol} chartType={chartType} indicators={inds} timeframe={tf} extHours={extHours} replayIdx={isActive ? replayIdx : null} onMeta={isActive ? onMeta : undefined} tool={isActive ? tool : null} drawings={merged} onDrawingsChange={handleChange} detectCmd={isActive ? detectCmd : null} compare={isActive ? compare.filter((c) => c !== symbol) : []} magnet={isActive ? magnet : false} isActive={isActive} syncId={idx} indParams={indParams} hidden={hidden} onToggleHidden={onToggleHidden} onRemoveInd={onRemoveInd} onOpenSettings={onOpenSettings} onOpenSource={onOpenSource} key={symbol + tf + chartType} />
+      <ChartPanel symbol={symbol} chartType={chartType} indicators={inds} timeframe={tf} extHours={extHours} replayIdx={isActive ? replayIdx : null} onMeta={isActive ? onMeta : undefined} tool={isActive ? tool : null} drawings={merged} onDrawingsChange={handleChange} detectCmd={isActive ? detectCmd : null} compare={isActive ? compare.filter((c) => c.sym !== symbol) : []} magnet={isActive ? magnet : false} isActive={isActive} syncId={idx} indParams={indParams} hidden={hidden} onToggleHidden={onToggleHidden} onRemoveInd={onRemoveInd} onOpenSettings={onOpenSettings} onOpenSource={onOpenSource} key={symbol + tf + chartType} />
     </div>
   );
 }
