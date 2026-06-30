@@ -118,7 +118,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {} requestAnimationFrame(measure); };
   const canMoveUp = (pi: number) => pi > 0;
   const canMoveDown = (pi: number) => pi < paneLayoutRef.current.length - 1;
-  const applyHidden = () => { const h = hiddenRef.current; const SB = seriesByKey.current; for (const k in SB) { const vis = !h.has(k); for (const s of SB[k]) { try { s.applyOptions({ visible: vis } as any); } catch {} } } };
+  // visibility-on-intervals: is this indicator allowed to show on the current timeframe? (Settings → Visibility)
+  const tfVisible = (k: string) => {
+    const v = (indParams[k] || {})._vis; if (!v) return true;
+    const m = /^(\d*)([DWM])$/.exec(timeframe); if (!m) return true;
+    const n = parseInt(m[1] || "1", 10) || 1;
+    const u = m[2] === "D" ? v.days : m[2] === "W" ? v.weeks : v.months;
+    return !u ? true : (u.on !== false && n >= (u.min ?? 1) && n <= (u.max ?? 1e9));
+  };
+  const applyHidden = () => { const h = hiddenRef.current; const SB = seriesByKey.current; for (const k in SB) { const vis = !h.has(k) && tfVisible(k); for (const s of SB[k]) { try { s.applyOptions({ visible: vis } as any); } catch {} } } };
 
   useEffect(() => {
     const el = ref.current; if (!el) return;

@@ -1,10 +1,12 @@
 "use client";
-// Full functional per-indicator settings dialog. For a built-in it renders the registry's Inputs +
-// Style fields and writes them straight into the shared indParams (the chart re-runs live). For the
-// Pine custom script it edits the script's declared input() params the same way the editor does.
+// Full functional per-indicator settings dialog, structured like TradingView: Inputs / Style /
+// Visibility tabs. Every change applies live and is auto-persisted (TerminalShell writes indParams to
+// localStorage), so settings survive across sessions. Cancel reverts to the snapshot taken on open;
+// the "Defaults ▾" menu resets to the registry defaults. For the Pine custom script it edits the
+// script's declared input() params instead.
 
-import { useEffect } from "react";
-import { IND_DEFS, withDefaults, isIndKey, type IndField } from "@/lib/indicators";
+import { useEffect, useRef, useState } from "react";
+import { IND_DEFS, withDefaults, isIndKey, defaultVis, VIS_UNITS, type IndField, type VisUnit, type VisRange } from "@/lib/indicators";
 
 const SWATCHES = ["#4d82ff", "#26c281", "#f0566b", "#e8b339", "#e8a33d", "#9d86ff", "#19c2c2", "#d6dae3", "#868d9c", "#ff8a3d"];
 const hexOf = (c: string) => (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c) ? c : "#888888");
@@ -45,6 +47,23 @@ function Row({ f, val, onChange }: { f: IndField; val: any; onChange: (v: any) =
   );
 }
 
+// one interval-visibility row: enable checkbox + min / slider(max) / max
+function VisRow({ label, unitMax, val, onChange }: { label: string; unitMax: number; val: VisRange; onChange: (patch: Partial<VisRange>) => void }) {
+  const clampMin = (v: number) => Math.max(1, Math.min(val.max, Math.round(v)));
+  const clampMax = (v: number) => Math.max(val.min, Math.min(unitMax, Math.round(v)));
+  return (
+    <div className="vis-row">
+      <span className={`is-cbx${val.on ? " on" : ""}`} onClick={() => onChange({ on: !val.on })} role="checkbox" aria-checked={val.on}>
+        <svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg>
+      </span>
+      <span className="vis-name">{label}</span>
+      <input className="vis-num" type="number" min={1} max={val.max} value={val.min} disabled={!val.on} onChange={(e) => { const v = parseInt(e.target.value); if (!isNaN(v)) onChange({ min: clampMin(v) }); }} />
+      <input className="vis-slider" type="range" min={1} max={unitMax} value={val.max} disabled={!val.on} onChange={(e) => onChange({ max: clampMax(parseInt(e.target.value)) })} />
+      <input className="vis-num" type="number" min={val.min} max={unitMax} value={val.max} disabled={!val.on} onChange={(e) => { const v = parseInt(e.target.value); if (!isNaN(v)) onChange({ max: clampMax(v) }); }} />
+    </div>
+  );
+}
+
 export default function IndicatorSettings({ indKey, params, onChange, pine, onPineChange, onClose, onReset }:
   { indKey: string;
     params: Record<string, any>;
@@ -54,53 +73,84 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
     onClose: () => void;
     onReset?: () => void;
   }) {
+  const [tab, setTab] = useState<"inputs" | "style" | "visibility">("inputs");
+  const [defOpen, setDefOpen] = useState(false);
+  // snapshot the params at open so Cancel can revert this editing session (changes otherwise auto-save live)
+  const snap = useRef(params);
+  const pineSnap = useRef(pine?.params);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  useEffect(() => { if (!defOpen) return; const close = () => setDefOpen(false); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [defOpen]);
 
   const isPine = indKey === "pine";
   const def = isIndKey(indKey) ? IND_DEFS[indKey] : null;
   const title = isPine ? (pine?.name || "Custom script") : def?.label || indKey;
 
-  // Pine: edit declared inputs (numbers/bools) like the editor
   const pineEntries = isPine && pine ? Object.entries(pine.params) : [];
   const inputs = def ? def.fields.filter((f) => f.group === "inputs") : [];
   const styles = def ? def.fields.filter((f) => f.group === "style") : [];
   const P = def ? withDefaults(indKey, params) : params;
+  const vis: Record<VisUnit, VisRange> = (P._vis as any) || defaultVis();
+  const setVis = (unit: VisUnit, patch: Partial<VisRange>) => onChange({ _vis: { ...vis, [unit]: { ...vis[unit], ...patch } } });
+
+  const cancel = () => {
+    if (isPine) { /* revert pine inputs to the snapshot */ const cur = pine?.params || {}; const back: Record<string, any> = {}; for (const k of Object.keys(cur)) back[k] = (pineSnap.current as any)?.[k]; onPineChange?.(back); }
+    else onChange(snap.current);   // snapshot has all fields → merge restores the open-time state
+    onClose();
+  };
+
+  const TABS: ["inputs" | "style" | "visibility", string][] = [["inputs", "Inputs"], ["style", "Style"], ["visibility", "Visibility"]];
 
   return (
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="ind-set" onClick={(e) => e.stopPropagation()}>
         <div className="is-head"><b>{title}</b><span className="x" onClick={onClose} aria-label="Close">✕</span></div>
+        <div className="is-tabs">
+          {TABS.map(([k, l]) => <button key={k} className={`is-tab${tab === k ? " on" : ""}`} onClick={() => setTab(k)}>{l}</button>)}
+        </div>
         <div className="is-body">
-          {isPine ? (
+          {tab === "inputs" && (isPine ? (
             pineEntries.length === 0
               ? <div className="is-empty">This script declares no inputs.</div>
-              : <div className="is-sec"><div className="is-sec-h">Inputs</div>
-                  {pineEntries.map(([k, v]) => (
-                    <div key={k} className="is-row">
-                      <span className="is-label">{k}</span>
-                      {typeof v === "boolean"
-                        ? <span className={`is-switch${v ? " on" : ""}`} onClick={() => onPineChange?.({ [k]: !v })} role="switch" aria-checked={v} />
-                        : typeof v === "number"
-                          ? <NumberField value={v} step={Number.isInteger(v) ? 1 : 0.1} onChange={(nv) => onPineChange?.({ [k]: nv })} />
-                          : <input className="is-text" value={String(v)} onChange={(e) => onPineChange?.({ [k]: e.target.value })} />}
-                    </div>
-                  ))}
+              : pineEntries.map(([k, v]) => (
+                <div key={k} className="is-row">
+                  <span className="is-label">{k}</span>
+                  {typeof v === "boolean"
+                    ? <span className={`is-switch${v ? " on" : ""}`} onClick={() => onPineChange?.({ [k]: !v })} role="switch" aria-checked={v} />
+                    : typeof v === "number"
+                      ? <NumberField value={v} step={Number.isInteger(v) ? 1 : 0.1} onChange={(nv) => onPineChange?.({ [k]: nv })} />
+                      : <input className="is-text" value={String(v)} onChange={(e) => onPineChange?.({ [k]: e.target.value })} />}
                 </div>
+              ))
           ) : def ? (
-            <>
-              {inputs.length > 0 && <div className="is-sec"><div className="is-sec-h">Inputs</div>{inputs.map((f) => <Row key={f.key} f={f} val={P[f.key]} onChange={(v) => onChange({ [f.key]: v })} />)}</div>}
-              {styles.length > 0 && <div className="is-sec"><div className="is-sec-h">Style</div>{styles.map((f) => <Row key={f.key} f={f} val={P[f.key]} onChange={(v) => onChange({ [f.key]: v })} />)}</div>}
-            </>
-          ) : <div className="is-empty">No settings for this item.</div>}
+            inputs.length ? inputs.map((f) => <Row key={f.key} f={f} val={P[f.key]} onChange={(v) => onChange({ [f.key]: v })} />) : <div className="is-empty">No inputs for this indicator.</div>
+          ) : <div className="is-empty">No settings for this item.</div>)}
+
+          {tab === "style" && (def && styles.length
+            ? styles.map((f) => <Row key={f.key} f={f} val={P[f.key]} onChange={(v) => onChange({ [f.key]: v })} />)
+            : <div className="is-empty">No style options.</div>)}
+
+          {tab === "visibility" && (
+            <div className="vis-list">
+              <div className="vis-head">Show this indicator on these timeframes (daily-EOD data — minutes/hours are unavailable).</div>
+              {VIS_UNITS.map((u) => <VisRow key={u.key} label={u.label} unitMax={u.max} val={vis[u.key]} onChange={(patch) => setVis(u.key, patch)} />)}
+            </div>
+          )}
         </div>
         <div className="is-foot">
-          {!isPine && onReset && <button className="btn btn-ghost" onClick={onReset}>Reset</button>}
+          <div className="is-def pophost" onClick={(e) => e.stopPropagation()}>
+            <button className="is-def-btn" onClick={() => setDefOpen((o) => !o)}>Defaults <svg viewBox="0 0 24 24" style={{ width: 12, height: 12, stroke: "currentColor", fill: "none", strokeWidth: 2, transform: defOpen ? "rotate(180deg)" : "none" }}><path d="M6 15l6-6 6 6" /></svg></button>
+            {defOpen && <div className="is-def-menu">
+              <div className="is-def-row" onClick={() => { setDefOpen(false); if (isPine) cancel(); else onReset?.(); }}>Reset settings</div>
+            </div>}
+          </div>
           <div className="spacer" />
-          <button className="ai" onClick={onClose}>Done</button>
+          <button className="btn btn-ghost" onClick={cancel}>Cancel</button>
+          <button className="ai" onClick={onClose}>Ok</button>
         </div>
       </div>
     </div>

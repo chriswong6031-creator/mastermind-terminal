@@ -189,8 +189,24 @@ plot(signalLine, "Signal", color.new(#e8a33d, 0))`,
 export function isIndKey(k: string): k is IndKey {
   return Object.prototype.hasOwnProperty.call(IND_DEFS, k);
 }
+
+// ── visibility-on-intervals (TradingView's "Visibility" tab) ──
+// The terminal is daily-EOD, so only Day/Week/Month timeframes are real; each unit can be toggled
+// off or bounded to a [min,max] multiplier (e.g. show only on D/2D by setting Days max=2). Stored
+// per-indicator under `_vis`, so it persists + resets alongside the rest of the settings.
+export type VisUnit = "days" | "weeks" | "months";
+export type VisRange = { on: boolean; min: number; max: number };
+export function defaultVis(): Record<VisUnit, VisRange> {
+  return { days: { on: true, min: 1, max: 366 }, weeks: { on: true, min: 1, max: 52 }, months: { on: true, min: 1, max: 12 } };
+}
+export const VIS_UNITS: { key: VisUnit; label: string; max: number }[] = [
+  { key: "days", label: "Days", max: 366 },
+  { key: "weeks", label: "Weeks", max: 52 },
+  { key: "months", label: "Months", max: 12 },
+];
+
 export function indDefaults(key: string): Record<string, any> {
-  return isIndKey(key) ? { ...IND_DEFS[key].defaults } : {};
+  return isIndKey(key) ? { ...IND_DEFS[key].defaults, _vis: defaultVis() } : {};
 }
 // merge persisted params over the registry defaults so older saved params backfill new fields
 export function withDefaults(key: string, params?: Record<string, any> | null): Record<string, any> {
