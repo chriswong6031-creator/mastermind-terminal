@@ -1,8 +1,12 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { BrandMark } from "@/components/BrandMark";
 
 // Landing. (Middleware redirects signed-in users straight to /terminal.)
 export default function Landing() {
+  // Auth gate disabled — send everyone straight into the terminal instead of the sign-in splash.
+  // Set TERMINAL_REQUIRE_AUTH=1 to restore the landing + login wall.
+  if (process.env.TERMINAL_REQUIRE_AUTH !== "1") redirect("/terminal");
   return (
     <main className="center">
       <div className="hero">

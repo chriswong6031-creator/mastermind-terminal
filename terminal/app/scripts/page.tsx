@@ -10,6 +10,9 @@ export default async function ScriptsPage() {
   // RLS-scoped to the cookie's token, so reading the id from the session is sufficient.
   const { data: { session } } = await supabase.auth.getSession();
   const user = session?.user;
+  // login disabled — open guest scripts workspace: the proprietary flagship only (read-only; saving
+  // needs an account). Never reached when TERMINAL_REQUIRE_AUTH=1 (middleware redirects guests first).
+  if (!user) return <PineEditor scripts={[PROPRIETARY_SCRIPT] as any} isPro={false} email="" />;
   const { data: prof } = await supabase.from("profiles").select("is_pro").eq("id", user!.id).single();
 
   const sel = "id,name,source,lang,params,is_public,updated_at";
