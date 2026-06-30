@@ -20,11 +20,28 @@ function stochRsi(cl: number[]) { const r = rsi(cl, 14); const raw: (number | nu
 function macd(cl: number[]) { const ef = ema(cl, 12), es = ema(cl, 26); const line = cl.map((_, i) => (ef[i] != null && es[i] != null ? ef[i]! - es[i]! : null)); const sig = ema(line, 9); const hist = line.map((_, i) => (line[i] != null && sig[i] != null ? line[i]! - sig[i]! : null)); return { line, sig, hist }; }
 const toLine = (rows: Bar[], arr: (number | null)[]) => rows.map((r, i) => (arr[i] != null && isFinite(arr[i]!) ? { time: r.time, value: arr[i]! } : null)).filter(Boolean) as any[];
 
+// Resample daily bars to a coarser timeframe. Supports D, nD (n-calendar-day buckets),
+// W / nW (ISO weeks, n at a time) and nM months (1M, 3M=calendar quarter, 6M=half, 12M=year).
+// Each bucket index is derived from an ABSOLUTE calendar reference (UTC day/week/month number),
+// NOT from each symbol's first bar — so identical calendar dates land in identical buckets for
+// every symbol regardless of differing history length. This is what keeps the compare overlay
+// (which aligns symbols by bucket close-date) lined up. Intraday (m/h) isn't derivable from daily
+// data and is gated out in the UI; an unexpected tf falls back to a daily (n=1) passthrough.
+const DAY_MS = 86400000;
 function resampleTf(rows: Bar[], tf: string): Bar[] {
   if (tf === "D" || rows.length === 0) return rows;
+  const m = /^(\d*)([DWM])$/.exec(tf);
+  const n = m ? (parseInt(m[1] || "1", 10) || 1) : 1;
+  const unit = m ? m[2] : "D";
+  const bucketOf = (r: Bar): number => {
+    const dt = new Date(r.time + "T00:00:00Z");
+    if (unit === "M") return Math.floor((dt.getUTCFullYear() * 12 + dt.getUTCMonth()) / n);        // calendar month number / n
+    const dayIdx = Math.floor(dt.getTime() / DAY_MS);                                              // days since unix epoch (UTC)
+    if (unit === "W") { const monday = dayIdx - ((dt.getUTCDay() + 6) % 7); return Math.floor(Math.floor(monday / 7) / n); }   // ISO-week number / n
+    return Math.floor(dayIdx / n);                                                                 // nD: absolute day number / n
+  };
   const out: Bar[] = []; let cur: Bar | null = null; let key: any = null;
-  const isoWeek = (d: string) => { const dt = new Date(d + "T00:00:00Z"); const day = (dt.getUTCDay() + 6) % 7; dt.setUTCDate(dt.getUTCDate() - day); return dt.toISOString().slice(0, 10); };
-  for (let i = 0; i < rows.length; i++) { const r = rows[i]; const k = tf === "W" ? isoWeek(r.time) : tf === "1M" ? r.time.slice(0, 7) : Math.floor(i / 3); if (k !== key) { if (cur) out.push(cur); key = k; cur = { ...r }; } else { cur!.h = Math.max(cur!.h, r.h); cur!.l = Math.min(cur!.l, r.l); cur!.c = r.c; cur!.time = r.time; cur!.v += r.v; } }
+  for (let i = 0; i < rows.length; i++) { const r = rows[i]; const k = bucketOf(r); if (k !== key) { if (cur) out.push(cur); key = k; cur = { ...r }; } else { cur!.h = Math.max(cur!.h, r.h); cur!.l = Math.min(cur!.l, r.l); cur!.c = r.c; cur!.time = r.time; cur!.v += r.v; } }
   if (cur) out.push(cur); return out;
 }
 function heikin(rows: Bar[]): Bar[] { const out: Bar[] = []; let po = 0, pc = 0; for (let i = 0; i < rows.length; i++) { const r = rows[i]; const hc = (r.o + r.h + r.l + r.c) / 4; const ho = i === 0 ? (r.o + r.c) / 2 : (po + pc) / 2; out.push({ ...r, o: ho, c: hc, h: Math.max(r.h, ho, hc), l: Math.min(r.l, ho, hc) }); po = ho; pc = hc; } return out; }

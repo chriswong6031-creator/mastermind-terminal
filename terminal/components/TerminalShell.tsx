@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { type DetectCmd } from "@/components/ChartPanel";
@@ -22,16 +22,27 @@ const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) 
 const vol = (v: number) => (v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v));
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 const CHART_TYPES = [["candles", "Candles"], ["heikin", "Heikin Ashi"], ["bars", "Bars"], ["line", "Line"], ["area", "Area"]];
-const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
-const FUNCTIONAL = new Set(["D", "3D", "W", "1M"]);
+// Intraday (m/h) are shown for parity but need a live intraday feed (data is daily EOD) — gated by FUNCTIONAL.
+// Everything daily-derivable (D / multi-day / week / month / quarter / half / year) is functional.
+const TF_GROUPS: [string, string[]][] = [
+  ["Minutes", ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m"]],
+  ["Hours", ["1h", "2h", "3h", "4h"]],
+  ["Days", ["D", "2D", "3D"]],
+  ["Weeks", ["W", "2W"]],
+  ["Months", ["1M", "3M", "6M", "12M"]],
+];
+const FUNCTIONAL = new Set(["D", "2D", "3D", "W", "2W", "1M", "3M", "6M", "12M"]);
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 
-// drawing tools for the (previously decorative) left dock
+// drawing tools for the left dock — grouped (separators inserted after SEP_AFTER indices)
 const TOOLS: [string, string][] = [
-  ["cursor", "M12 2v20M2 12h20"], ["trendline", "M4 20L20 4"], ["ray", "M4 20L20 4M15 4h5v5"],
-  ["hline", "M3 12h18"], ["rect", "M4 6h16v12H4z"], ["fib", "M3 5h18M3 9h18M3 15h18M3 19h18"],
-  ["text", "M5 5h14M12 5v14"], ["measure", "M3 9h18v6H3zM7 9v6M11 9v6M15 9v6"], ["arrow", "M5 19L19 5M13 5h6v6"], ["vline", "M12 3v18"], ["erase", "M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"],
+  ["cursor", "M5 3l13.5 7.2-5.4 1.7L11.6 18.2z"],
+  ["trendline", "M4 19L20 5"], ["ray", "M4 20L20 4M20 4h-5M20 4v5"], ["hline", "M3 12h18"], ["vline", "M12 3v18"],
+  ["rect", "M4 6h16v12H4z"], ["fib", "M4 5h16M4 10h16M4 14h16M4 19h16"],
+  ["text", "M6 6V5h12v1M12 5v14M9.5 19h5"], ["measure", "M3 8h18v8H3zM8 8v4M13 8v4M18 8v4"], ["arrow", "M5 19L19 5M19 5h-6M19 5v6"],
+  ["erase", "M7 17l-3-3 8-8 3 3-8 8zM7 17h9"],
 ];
+const SEP_AFTER = new Set([0, 4, 6, 9]);   // group dividers: cursor | line tools | shapes | text/measure/arrow | erase
 const DETECTORS: [string, string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
 ];
@@ -55,7 +66,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [set, setSet] = useState({ tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true });
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
   const [indOpen, setIndOpen] = useState(false); const [copilot, setCopilot] = useState(false);
-  const [wlSetOpen, setWlSetOpen] = useState(false); const [tfOpen, setTfOpen] = useState(false); const [ctOpen, setCtOpen] = useState(false);
+  const [wlSetOpen, setWlSetOpen] = useState(false); const [tfOpen, setTfOpen] = useState(false); const [ctOpen, setCtOpen] = useState(false); const [mtfOpen, setMtfOpen] = useState(false);
   const [replayOn, setReplayOn] = useState(false); const [replayIdx, setReplayIdx] = useState<number | null>(null); const [total, setTotal] = useState(0); const [playing, setPlaying] = useState(false); const [speed, setSpeed] = useState(1);
   const playRef = useRef<any>(null);
   // §7 state
@@ -99,7 +110,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
-    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs([load("mm.tf", "D")]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true }));
+    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs([load("mm.tf", "D")]); setFavTF((load("mm.favtf", ["D", "3D", "W", "1M"]) as string[]).filter((x) => FUNCTIONAL.has(x))); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true }));
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
@@ -201,7 +212,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     return () => clearInterval(playRef.current);
   }, [replayOn, playing, total, speed]);
 
-  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); };
+  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setMtfOpen(false); };
+  const openCompare = () => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); };
   useEffect(() => { const h = () => closeAll(); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
 
   const sections = useMemo(() => { const o: Record<string, string[]> = {}; wl.forEach((s) => { (o[s.section] ||= []).push(s.symbol); }); return o; }, [wl]);
@@ -249,6 +261,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <div className="tdiv" />
         <div className="pair" onClick={() => { setSeed(""); setSearchOpen(true); }}><span className="dual"><i>{active[0]}</i><i>$</i></span><b>{active}</b>
           <svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></div>
+        <div className="sym-tools">
+          <button className="ic" title="Add a symbol to compare" onClick={openCompare}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
+          <button className="cmp" title="Compare another symbol on this chart" onClick={openCompare}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>{t("compare")}</button>
+        </div>
         <div className="stats">
           <div className="stat"><span className="l">Last Price</span><span className="v big num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</span></div>
           <div className="stat"><span className="l">24h Change</span><span className={`v num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</span></div>
@@ -276,7 +292,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{g}</div>{items.map((t) => { const fn = FUNCTIONAL.has(t); const fav = favTF.includes(t);
                   return <div key={t} className={`it${tf === t ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { setTf(t); setTfOpen(false); } }}>
                     <span>{t}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>live feed</span>}</span>
-                    <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(t) ? f.filter((x) => x !== t) : [...f, t]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
+                    {fn && <span className={`fav${fav ? " on" : ""}`} title={fav ? "Unfavorite" : "Favorite — pin to the toolbar"} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(t) ? f.filter((x) => x !== t) : [...f, t]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>}
                   </div>; })}</div>))}
               </div>
             </div>
@@ -287,9 +303,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
-            <button className="tbtn" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>{t("compare")}</button>
-            <div className="seg" title="Split layout">{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
-            <button className="tbtn" title="Multi-timeframe — the active symbol at D / 3D / W / 1M" onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>MTF</button>
+            <div className="pophost">
+              <button className={`tbtn${split > 1 ? " on" : ""}`} title="Chart layout & multi-timeframe" onClick={(e) => { e.stopPropagation(); closeAll(); setMtfOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>MTF<span style={{ color: "var(--muted)" }}>▾</span></button>
+              <div className={`pop${mtfOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 214 }} onClick={(e) => e.stopPropagation()}>
+                <div className="set-grp" style={{ borderTop: 0 }}>Chart layout</div>
+                {([[1, "Single chart", "M4 5h16v14H4z"], [2, "2 charts · split", "M4 5h16v14H4zM12 5v14"], [4, "4 charts · grid", "M4 5h16v14H4zM12 5v14M4 12h16"]] as [number, string, string][]).map(([n, l, d]) => (
+                  <div key={n} className="menu-row" style={split === n ? { color: "var(--brand-2)" } : {}} onClick={() => { setGrid(n); setMtfOpen(false); }}><svg viewBox="0 0 24 24"><path d={d} /></svg>{l}</div>
+                ))}
+                <div className="set-grp">Multi-timeframe</div>
+                <div className="menu-row" onClick={() => { mtfLayout(); setMtfOpen(false); }}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>Active symbol · D / 3D / W / 1M</div>
+              </div>
+            </div>
             {panes.length > 1 && <button className={`tbtn${sync ? " on" : ""}`} title="Sync crosshair & time-axis across panes" onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
             <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
@@ -334,7 +358,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="chart-body">
             <div className="tooldock">
               {TOOLS.map(([id, d], i) => (
-                <button key={id} className={(tool === id || (id === "cursor" && !tool)) ? "on" : ""} title={id} onClick={() => setTool(id === "cursor" ? null : id)}><svg viewBox="0 0 24 24"><path d={d} /></svg></button>
+                <Fragment key={id}>
+                  <button className={(tool === id || (id === "cursor" && !tool)) ? "on" : ""} title={id} onClick={() => setTool(id === "cursor" ? null : id)}><svg viewBox="0 0 24 24"><path d={d} /></svg></button>
+                  {SEP_AFTER.has(i) && <div className="sp" />}
+                </Fragment>
               ))}
               <button className={magnet ? "on" : ""} title="Magnet — snap to OHLC" onClick={() => setMagnet((mg) => !mg)}><svg viewBox="0 0 24 24"><path d="M6 4v7a6 6 0 0 0 12 0V4h-4v7a2 2 0 0 1-4 0V4z" /></svg></button>
               <div className="sp" />
