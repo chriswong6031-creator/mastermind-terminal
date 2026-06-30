@@ -8,6 +8,7 @@ import SearchModal from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
 import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
+import { track } from "@/lib/analytics";
 
 type Row = { name: string; sec: string; col: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -46,6 +47,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
   useEffect(() => { localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
 
+  // product analytics: which symbol is on the chart (fires on landing + every switch)
+  useEffect(() => { track("symbol-view", { symbol: active, timeframe: tf }); }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // type-anywhere → search; Ctrl/Cmd+K
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -77,10 +81,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   async function addSymbol(sym: string) {
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
-    if (!inWl.has(sym)) { setWl((w) => [...w, { symbol: sym, section: sec }]); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: sym, section: sec }) }); }
+    if (!inWl.has(sym)) { track("watchlist-add", { symbol: sym, section: sec }); setWl((w) => [...w, { symbol: sym, section: sec }]); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: sym, section: sec }) }); }
   }
   async function removeSymbol(sym: string) { setWl((w) => w.filter((s) => s.symbol !== sym)); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }); }
-  const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const toggleInd = (k: string) => { track("indicator-toggle", { indicator: k, on: !inds.has(k) }); setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; }); };
+  const changeTf = (t: string) => { track("timeframe-change", { timeframe: t, symbol: active }); setTf(t); };
+  const openCopilot = () => { track("copilot-open", { symbol: active, verdict: m?.verdict || "none" }); setCopilot(true); };
   const pick = (sym: string) => { setActive(sym); setReplayOn(false); setReplayIdx(null); setPlaying(false); };
   const colList = () => { const a: [string, string][] = [["last", "Last"]]; if (set.cols.change) a.push(["change", "Chg"]); if (set.cols.changePct) a.push(["changePct", "Chg%"]); if (set.cols.volume) a.push(["volume", "Vol"]); return a; };
   const colVal = (r: Row | undefined, key: string) => { if (!r) return "—"; const u = r.chg >= 0; if (key === "last") return fmt(r.last, r.last < 10 ? 4 : 2); if (key === "change") return (u ? "+" : "") + fmt(r.last * r.chg / 100, 2); if (key === "changePct") return (u ? "+" : "") + fmt(r.chg) + "%"; if (key === "volume") return vol(r.vol); return ""; };
@@ -102,7 +108,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="stat"><span className="l">Day Low</span><span className="v num">{fmt(m?.low, m && m.last < 10 ? 4 : 2)}</span></div>
         </div>
         <div className="spacer" />
-        <button className="ai" onClick={() => setCopilot(true)}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
+        <button className="ai" onClick={openCopilot}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
         <form action="/auth/signout" method="post"><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
       </header>
 
@@ -115,11 +121,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="tools">
             {/* timeframe favorites + dropdown */}
             <div className="seg pophost">
-              {favTF.map((t) => <button key={t} className={tf === t ? "on" : ""} disabled={!FUNCTIONAL.has(t)} style={!FUNCTIONAL.has(t) ? { opacity: .4 } : {}} onClick={() => FUNCTIONAL.has(t) && setTf(t)}>{t}</button>)}
+              {favTF.map((t) => <button key={t} className={tf === t ? "on" : ""} disabled={!FUNCTIONAL.has(t)} style={!FUNCTIONAL.has(t) ? { opacity: .4 } : {}} onClick={() => FUNCTIONAL.has(t) && changeTf(t)}>{t}</button>)}
               <button onClick={(e) => { e.stopPropagation(); closeAll(); setTfOpen((o) => !o); }} style={{ padding: "0 6px" }}>▾</button>
               <div className={`tfgrid${tfOpen ? " show" : ""}`} onClick={(e) => e.stopPropagation()}>
                 {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{g}</div>{items.map((t) => { const fn = FUNCTIONAL.has(t); const fav = favTF.includes(t);
-                  return <div key={t} className={`it${tf === t ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { setTf(t); setTfOpen(false); } }}>
+                  return <div key={t} className={`it${tf === t ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { changeTf(t); setTfOpen(false); } }}>
                     <span>{t}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 10 }}>live feed</span>}</span>
                     <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(t) ? f.filter((x) => x !== t) : [...f, t]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
                   </div>; })}</div>))}
@@ -132,7 +138,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>Indicators</button>
-            <button className={`tbtn${replayOn ? "" : ""}`} style={replayOn ? { color: "var(--signal)" } : {}} onClick={() => { const on = !replayOn; setReplayOn(on); setPlaying(false); setReplayIdx(on ? Math.max(20, total - 40) : null); }}><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z" /></svg>Replay</button>
+            <button className={`tbtn${replayOn ? "" : ""}`} style={replayOn ? { color: "var(--signal)" } : {}} onClick={() => { const on = !replayOn; if (on) track("replay-start", { symbol: active, timeframe: tf }); setReplayOn(on); setPlaying(false); setReplayIdx(on ? Math.max(20, total - 40) : null); }}><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z" /></svg>Replay</button>
             <button className="icbtn" title="Snapshot" onClick={() => window.dispatchEvent(new CustomEvent("mm:snapshot"))}><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg></button>
           </div>
         </div>
@@ -216,7 +222,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">backtested · 6yr daily→3D</span></div>
                 <div className="s2"><div>Win rate<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>Profit factor<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>CAGR<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
               </div>
-              <button className="btn btn-ghost" style={{ width: "100%", marginTop: 12, height: 34 }} onClick={() => setCopilot(true)}>Ask Mastermind AI about {active} →</button>
+              <button className="btn btn-ghost" style={{ width: "100%", marginTop: 12, height: 34 }} onClick={openCopilot}>Ask Mastermind AI about {active} →</button>
             </div>
             <SeasonalityCard symbol={active} />
           </div>

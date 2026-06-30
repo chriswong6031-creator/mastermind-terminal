@@ -1,6 +1,6 @@
 # Mastermind Terminal — Session Handoff
 
-**Last updated:** 2026-06-27 · **Status:** all pages + core features built & verified; one large sub-project + live data deferred.
+**Last updated:** 2026-06-29 · **Status:** all pages + core features built & verified; first-party analytics + error monitoring wired (§10); one large sub-project + live data deferred.
 **Read order for a fresh session:** this doc → `docs/PRODUCT_PLAN_V2.md` (the product bar) → `docs/FEATURE_GAP_AUDIT.md` (what's left) → `docs/RESEARCH_AND_ARCHITECTURE.md` (deep background).
 
 ---
@@ -84,10 +84,26 @@ ingest/{polygon_bars,build_polygon_universe}.py · ingest/refresh.sh
 terminal/
   app/{page(landing),login,terminal,screener,scripts,alerts,portfolio}/  · app/api/{watchlist,alerts,scripts/save}
   components/{TerminalShell,ChartPanel,ScreenerView,PineEditor,AlertsView,PortfolioView,
-             SearchModal,IndicatorsModal,CopilotPanel,SeasonalityCard,AppNav,BrandMark}.tsx
-  lib/{supabase/{client,server,middleware},pine}.ts · app/globals.css (design tokens) · proxy.ts (auth guard)
+             SearchModal,IndicatorsModal,CopilotPanel,SeasonalityCard,AppNav,BrandMark,ErrorMonitor}.tsx
+  lib/{supabase/{client,server,middleware},pine,analytics}.ts · app/globals.css (design tokens) · proxy.ts (auth guard)
+  next.config.ts (Umami proxy rewrites — see §10) · app/layout.tsx (tracker <Script> + <ErrorMonitor/>)
 web/   = original static design mockups (pre-Next.js reference; web/mockup/index.html is the v5 design comp)
 ```
 
-## 10. Git
+## 10. Analytics & error monitoring (Umami — China-safe, first-party)
+**Why first-party:** the audience is split US + mainland China. `cloud.umami.is` (like Google Analytics) is blocked by the Great Firewall, so loading the tracker from it silently drops most China traffic. The fix is to serve **both the script and the beacon from our own domain** so they inherit the app's reachability — if a China user can load the app, they get tracked.
+
+**How it's wired (3 pieces):**
+1. **`terminal/next.config.ts`** — `rewrites()` proxy: `/stats/script.js → cloud.umami.is/script.js` and `/api/send → cloud.umami.is/api/send`. (Umami beacons to the script's own origin by default, so no `data-host-url` needed.)
+2. **`terminal/app/layout.tsx`** — `<Script src="/stats/script.js" data-website-id="d7734c31-99fa-4949-bcde-bec41fbfb2cf" strategy="afterInteractive" />` (Umami **Cloud** account; website id is the only secret-ish value and it's public-by-design). Pageviews auto-track on load.
+3. **`terminal/lib/analytics.ts`** — `track(event, data)` wrapper; no-ops on server / before-load / when blocked, never throws.
+
+**Custom product events** (all in `components/TerminalShell.tsx` except the last, in `CopilotPanel.tsx`): `symbol-view` {symbol,timeframe}, `timeframe-change`, `indicator-toggle` {indicator,on}, `watchlist-add`, `replay-start`, `copilot-open` {symbol,verdict}, `copilot-query` {symbol,query,kind}. ⚠️ `copilot-query` only **records intent** — there's no AI backend yet (the copilot is the deterministic read; see §7.4). It exists to size demand before building the answer pipeline.
+
+**Error monitoring** — `components/ErrorMonitor.tsx` (mounted in layout) reports uncaught `error` + `unhandledrejection` as a `js-error` event {kind,message,source,line,page}. Has dedupe + a 25/load storm cap + a noise filter (`ResizeObserver`, cross-origin `Script error.`). **Not** a Sentry replacement (no stacks/source maps) — just a cheap "is prod throwing, where, roughly what" signal that survives the GFW.
+
+**Verify after deploy:** DevTools → Network: `/stats/script.js` and `POST /api/send` both `200` from **our** domain (not `cloud.umami.is`); switch a symbol / open copilot → events land in the Umami dashboard (custom events under **Events**) within ~1 min. For a `js-error` smoke test: `setTimeout(() => { throw new Error("test-js-error") }, 0)`.
+- ⚠️ **Pre-deploy:** these files were edited in a worktree with **no `node_modules`**, so they were not `next build`/`tsc`-checked — build once where deps exist, and reconcile against live prod (this repo runs behind prod). Optional hardening: rename `/stats/script.js` + `/api/send` to neutral paths to dodge uBlock-style blockers (a US/EU concern, unrelated to the GFW).
+
+## 11. Git
 Local repo (no remote). Latest commits: `f9b8013` (gap audit doc) → `4b39e6a` (polish) → `5a0009a` (terminal features + Alerts/Portfolio) → `725f544` (screener+pine+nav+is_pro) → `6a16788` (Polygon multi-symbol) → `867a160` (Phase 1 Next.js+Supabase). Standing convention in this workspace: commit autonomously; this container is local-only (do NOT push it to GitHub unless the user asks).

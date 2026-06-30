@@ -1,4 +1,6 @@
 "use client";
+import { useState } from "react";
+import { track } from "@/lib/analytics";
 
 type Row = { name: string; last: number; chg: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
@@ -9,6 +11,11 @@ export default function CopilotPanel({ open, symbol, row, onClose }:
   const v = row?.verdict || "—";
   const buy = isBuy(v);
   const up = (row?.chg ?? 0) >= 0;
+  const [q, setQ] = useState("");
+  // No live AI backend yet — this records that the user asked (and what), so we
+  // can size copilot demand before building the answer pipeline.
+  const ask = (query: string, kind: "suggestion" | "freeform") => track("copilot-query", { symbol, query, kind });
+  const submit = () => { const query = q.trim(); if (!query) return; ask(query, "freeform"); setQ(""); };
   const read = !row ? "Loading…" : buy
     ? `momentum and trend align for a long here — the RSI-MACD crossed up with the higher-timeframe trend confirming and price holding its trend gate.`
     : `the signal is defensive — momentum has rolled over relative to the higher timeframe. Historically the engine sits out or cuts here rather than chasing; wait for a fresh BUY confluence.`;
@@ -35,15 +42,15 @@ export default function CopilotPanel({ open, symbol, row, onClose }:
           </>}
         </div>
         <div className="suggest">
-          <button>Why is {symbol} a {v}?</button>
-          <button>How has this signal performed historically?</button>
-          <button>What does the macro regime imply for this name?</button>
-          <button>Find me BUY setups with uptrend regime →</button>
+          <button onClick={() => ask(`Why is ${symbol} a ${v}?`, "suggestion")}>Why is {symbol} a {v}?</button>
+          <button onClick={() => ask("How has this signal performed historically?", "suggestion")}>How has this signal performed historically?</button>
+          <button onClick={() => ask("What does the macro regime imply for this name?", "suggestion")}>What does the macro regime imply for this name?</button>
+          <button onClick={() => ask("Find me BUY setups with uptrend regime", "suggestion")}>Find me BUY setups with uptrend regime →</button>
         </div>
       </div>
       <div className="ask">
-        <input placeholder="Ask Mastermind about this setup…" />
-        <button className="send"><svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-7-8-3z" /></svg></button>
+        <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} placeholder="Ask Mastermind about this setup…" />
+        <button className="send" onClick={submit}><svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-7-8-3z" /></svg></button>
       </div>
     </aside>
   );

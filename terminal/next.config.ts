@@ -10,6 +10,18 @@ const nextConfig: NextConfig = {
   // strictness block production deploys; clean these up later if desired.
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
+  // First-party proxy for Umami analytics. cloud.umami.is is blocked by the
+  // Great Firewall, so loading the tracker from it silently drops mainland-China
+  // traffic. Serving both the script and the /api/send beacon from our own
+  // domain makes them inherit the app's reachability — if a China user can load
+  // the app, they get tracked. (Umami sends to the script's own origin by
+  // default, so no data-host-url is needed on the tag.)
+  async rewrites() {
+    return [
+      { source: "/stats/script.js", destination: "https://cloud.umami.is/script.js" },
+      { source: "/api/send", destination: "https://cloud.umami.is/api/send" },
+    ];
+  },
 };
 
 export default nextConfig;
