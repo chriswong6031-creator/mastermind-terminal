@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { cookieDomainFor } from "./cookie-domain";
 
 // Refreshes the auth session on every request and guards the /terminal area.
 export async function updateSession(request: NextRequest) {
@@ -9,6 +10,8 @@ export async function updateSession(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      // share the session cookie across every *.mastermind-x.com subdomain
+      cookieOptions: { domain: cookieDomainFor(request.headers.get("host")) },
       cookies: {
         getAll() {
           return request.cookies.getAll();
