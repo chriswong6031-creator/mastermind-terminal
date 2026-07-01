@@ -12,4 +12,6 @@ set -a; . ./.env; set +a
 PY="${MACRO_VENV:-/Users/chriswong/Documents/Cluade/Macro Dashboard/.venv/bin/python}"
 echo "[refresh] $(date) — rebuilding Polygon universe…"
 "$PY" ingest/build_polygon_universe.py "$@"
+echo "[refresh] $(date) — pulling macro intel bridge…"
+"$PY" ingest/pull_macro_intel.py "$@"
 echo "[refresh] done."
