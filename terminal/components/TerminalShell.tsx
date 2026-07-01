@@ -64,7 +64,13 @@ const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: tru
 
 export default function TerminalShell({ symbols, email, initialSymbol }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string }) {
   const [man, setMan] = useState<Manifest | null>(null);
-  const [wl, setWl] = useState(symbols);
+  // named watchlists — client-side + localStorage-backed so switching / creating lists works for guests
+  // (no auth needed). The server-provided `symbols` seed becomes the "Default" list.
+  const [lists, setLists] = useState<Record<string, { symbol: string; section: string }[]>>({ Default: symbols });
+  const [activeList, setActiveList] = useState("Default");
+  const [wlMenuOpen, setWlMenuOpen] = useState(false);
+  const wl = lists[activeList] || [];
+  const setWl = (updater: any) => setLists((l) => ({ ...l, [activeList]: typeof updater === "function" ? updater(l[activeList] || []) : updater }));
   const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
   const [panes, setPanes] = useState<string[]>([seed0]);
   const [activePane, setActivePane] = useState(0);
@@ -162,6 +168,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
   useEffect(() => { localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
   useEffect(() => { localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
+  // restore saved named watchlists (falls back to the server-seeded Default list)
+  useEffect(() => {
+    const saved = load("mm.wls", null);
+    if (saved && saved.lists && typeof saved.lists === "object" && Object.keys(saved.lists).length) {
+      setLists(saved.lists);
+      setActiveList(saved.active && saved.lists[saved.active] ? saved.active : Object.keys(saved.lists)[0]);
+    }
+  }, []);
+  useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList })); }, [lists, activeList]);
   useEffect(() => { setPaneSync(sync && panes.length > 1); }, [sync, panes.length]);
   // load drawings once per symbol that appears in a pane; don't clobber an in-flight local edit
   useEffect(() => {
@@ -236,7 +251,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     return () => clearInterval(playRef.current);
   }, [replayOn, playing, total, speed]);
 
-  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); };
+  const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); };
   useEffect(() => { const h = () => closeAll(); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
 
   const sections = useMemo(() => { const o: Record<string, string[]> = {}; wl.forEach((s) => { (o[s.section] ||= []).push(s.symbol); }); return o; }, [wl]);
@@ -247,9 +262,36 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   async function addSymbol(sym: string) {
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
-    if (!inWl.has(sym)) { setWl((w) => [...w, { symbol: sym, section: sec }]); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: sym, section: sec }) }); }
+    if (!inWl.has(sym)) {
+      setWl((w: any[]) => [...w, { symbol: sym, section: sec }]);
+      // only the server-backed Default list syncs upstream; custom lists live client-side
+      if (activeList === "Default") fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: sym, section: sec }) }).catch(() => {});
+    }
   }
-  async function removeSymbol(sym: string) { setWl((w) => w.filter((s) => s.symbol !== sym)); await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }); }
+  async function removeSymbol(sym: string) {
+    setWl((w: any[]) => w.filter((s) => s.symbol !== sym));
+    if (activeList === "Default") fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: sym }) }).catch(() => {});
+  }
+  // watchlist management (client-side; guests get real switch/create/rename/delete via localStorage)
+  function switchList(name: string) { if (lists[name]) setActiveList(name); setWlMenuOpen(false); }
+  function newList() {
+    const name = (typeof window !== "undefined" ? window.prompt(t("newWatchlistPrompt")) : "")?.trim();
+    setWlMenuOpen(false);
+    if (!name || lists[name]) return;
+    setLists((l) => ({ ...l, [name]: [] })); setActiveList(name);
+  }
+  function renameList(name: string) {
+    const next = (typeof window !== "undefined" ? window.prompt(t("renameWatchlistPrompt"), name) : "")?.trim();
+    if (!next || next === name || lists[next]) return;
+    setLists((l) => { const n: Record<string, { symbol: string; section: string }[]> = {}; for (const k of Object.keys(l)) n[k === name ? next : k] = l[k]; return n; });
+    setActiveList((a) => (a === name ? next : a));
+  }
+  function deleteList(name: string) {
+    if (Object.keys(lists).length <= 1) return;
+    if (typeof window !== "undefined" && !window.confirm(t("deleteWatchlistConfirm"))) return;
+    setLists((l) => { const n = { ...l }; delete n[name]; return n; });
+    if (activeList === name) setActiveList(Object.keys(lists).filter((k) => k !== name)[0] || "Default");
+  }
   const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const pick = (sym: string) => {
     // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
@@ -297,8 +339,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </button>
           : <BrandLockup />}
         <div className="tdiv" />
-        <div className="pair" onClick={() => { setSeed(""); setSearchOpen(true); }}><span className="dual"><i>{active[0]}</i><i>$</i></span><b>{active}</b>
+        <div className="pair" onClick={() => { setSeed(""); setSearchMode("go"); setSearchOpen(true); }}><span className="dual"><i>{active[0]}</i><i>$</i></span><b>{active}</b>
           <svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></div>
+        <button className="cmp-btn" title={t("compareTitle")} onClick={(e) => { e.stopPropagation(); setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}>
+          <svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>
+          <span>{t("compare")}</span>
+          {compare.filter((c) => c !== active).length > 0 && <i className="cmp-badge">{compare.filter((c) => c !== active).length}</i>}
+        </button>
         <div className="stats">
           <div className="stat"><span className="l">{t("lastPrice")}</span><span className="v big num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</span></div>
           <div className="stat"><span className="l">{t("change24h")}</span><span className={`v num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(m?.chg)}</span></div>
@@ -361,7 +408,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
-            <button className="tbtn tool-adv" onClick={() => { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M4 18l5-9 4 5 3-4 4 8" /></svg>{t("compare")}</button>
             <div className="seg tool-adv" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
             <button className="tbtn tool-adv" title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
             {panes.length > 1 && <button className={`tbtn tool-adv${sync ? " on" : ""}`} title={t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
@@ -434,7 +480,20 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <div className="rail-body">
           <div className="board wl-board">
             <div className="wl-bar pophost">
-              <button className="wl-select">{t("defaultList")} <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></button>
+              <button className="wl-select" onClick={(e) => { e.stopPropagation(); const willOpen = !wlMenuOpen; closeAll(); setWlMenuOpen(willOpen); }}>{activeList} <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></button>
+              <div className={`pop wl-lists${wlMenuOpen ? " show" : ""}`} style={{ top: 40, left: 6, minWidth: 210 }} onClick={(e) => e.stopPropagation()}>
+                <div className="set-grp">{t("watchlists")}</div>
+                {Object.keys(lists).map((name) => (
+                  <div key={name} className={`set-row wl-list-row${name === activeList ? " on" : ""}`} onClick={() => switchList(name)}>
+                    <span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>
+                    <span className="wl-list-nm">{name}</span>
+                    <span className="wl-list-ct">{lists[name].length}</span>
+                    <span className="wl-list-ic" title={t("renameWatchlist")} onClick={(e) => { e.stopPropagation(); renameList(name); }}><svg viewBox="0 0 24 24"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3M13.5 6.5l3 3" /></svg></span>
+                    {Object.keys(lists).length > 1 && <span className="wl-list-ic del" title={t("deleteWatchlist")} onClick={(e) => { e.stopPropagation(); deleteList(name); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>}
+                  </div>
+                ))}
+                <div className="menu-row wl-new" onClick={() => newList()}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>{t("newWatchlist")}</div>
+              </div>
               <div className="wl-acts">
                 <button title={t("addSymbol")} onClick={(e) => { e.stopPropagation(); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
                 <button title={t("settings")} onClick={(e) => { e.stopPropagation(); closeAll(); setWlSetOpen((o) => !o); }}><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg></button>
@@ -489,8 +548,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="detail-scroll">
               <div style={{ padding: "12px 12px 0" }}>
-                <DayRange low={m?.low} high={m?.high} last={lastPx} open={m?.open} variant="panel" />
-                <div className="mmcard" style={{ marginTop: 12, borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }}>
+                <div className="mmcard" style={{ marginTop: 0, borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }}>
                   <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>{t("goldenOracle")}</div>
                   <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">{t("backtestedNote")}</span></div>
                   <div className="s2"><div>{t("winRate")}<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>{t("profitFactor")}<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>{t("cagr")}<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
@@ -513,7 +571,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         ); })}
       </div>
 
-      <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} />
+      <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} active={active}
+        onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol}
+        onToggleCompare={(s: string) => setCompare((c) => c.includes(s) ? c.filter((x) => x !== s) : (s !== active ? [...c, s].slice(0, 4) : c))} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} />
       <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
 

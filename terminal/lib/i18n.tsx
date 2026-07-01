@@ -143,8 +143,26 @@ const LEX: Record<string, [string, string]> = {
   open: ["Open", "开盘"],
   // seasonality
   seasonalityTitle: ["Seasonality · avg monthly return", "季节性 · 月均收益"],
-  seasonalityFoot: ["Current month highlighted · from {sym} history (display-only context).", "高亮为当前月份 · 基于 {sym} 历史（仅供参考）。"],
+  seasonalityFoot: ["Current month highlighted · hover a bar for its avg return & win rate · from {sym} history (display-only context).", "高亮为当前月份 · 悬停查看月均收益与胜率 · 基于 {sym} 历史（仅供参考）。"],
   noSamples: ["no samples", "无样本"],
+  avgShort: ["avg", "均值"],
+  winRateShort: ["WR", "胜率"],
+  // watchlist management
+  watchlists: ["Watchlists", "自选列表"],
+  newWatchlist: ["New watchlist", "新建自选列表"],
+  newWatchlistPrompt: ["Name your new watchlist", "为新的自选列表命名"],
+  renameWatchlist: ["Rename", "重命名"],
+  renameWatchlistPrompt: ["Rename watchlist", "重命名自选列表"],
+  deleteWatchlist: ["Delete list", "删除列表"],
+  deleteWatchlistConfirm: ["Delete this watchlist?", "确定删除这个自选列表？"],
+  emptyWatchlist: ["No symbols yet — use + to add.", "暂无标的 —— 点击 + 添加。"],
+  // compare
+  compareTitle: ["Compare — overlay symbols", "对比 —— 叠加标的"],
+  comparePlaceholder: ["Symbol or company to overlay…", "要叠加的代码或公司…"],
+  addToCompare: ["Overlay on chart", "叠加到图表"],
+  comparing: ["Overlaid", "已叠加"],
+  compareHint: ["Add up to 4 symbols to overlay on the active chart.", "最多可叠加 4 个标的到当前图表。"],
+  comparingNow: ["On chart", "图表中"],
   // screener
   pageScreener: ["Screener", "选股"],
   matches: ["matches", "个匹配"],
