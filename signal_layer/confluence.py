@@ -28,10 +28,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Promoted VERBATIM from the Macro Dashboard repo
-# (research/signal_engine/confluence.py) — this is the GOLDEN ORACLE every
-# Pine-style indicator engine is diffed against (see golden_gate.py). Keep it a
-# faithful copy; do not "improve" the math here or the parity gate loses meaning.
+# Ported from the Macro Dashboard's CORRECTED confluence math (engine/canon.py). This is
+# NO LONGER the golden oracle — the oracle is now the dashboard's EXPORTED golden vectors
+# (site/factordata/contracts/golden_signals.json). golden_gate.py validates this engine
+# AGAINST those vectors, so a stale fork FAILS and this corrected engine PASSES (audit #7).
+#
+# The three fixes vs the old "VERBATIM" copy (all shipped in the dashboard, none here until
+# this port):
+#   (a) SMA-seeded Wilder RMA (Pine ta.rma) — pure ewm(alpha=1/n) warm-up flipped near-
+#       threshold crosses in the early history.
+#   (b) recursive adjust=False EMA (Pine ta.ema) — the pandas default adjust=True is an
+#       expanding-weight average that disagrees near threshold crosses.
+#   (c) session-GROUPED 3D resample — calendar resample("3B") re-anchors across a market
+#       gap/holiday, which relocated ~80% of NVDA's signal dates.
 #
 # The deep OHLC store lives in the macro repo, not this container. Resolve it via
 # MACRO_REPO (env) so the same code runs from either checkout.
@@ -52,17 +61,50 @@ REV_BARS = 3
 
 
 # ------------------------------------------------------------ indicators ----
+def rma(series: pd.Series, n: int) -> pd.Series:
+    """Wilder's RMA == Pine ``ta.rma``: SMA-seeded, then recursive ``adjust=False``.
+
+    CORRECTED math (audit #7). The seed is the SMA of the first ``n`` finite values; a
+    bare ``ewm(alpha=1/n)`` accumulates from bar 0 with an expanding warm-up that flips
+    near-threshold crosses in the early history. Byte-identical to engine.canon.rma."""
+    s = pd.to_numeric(series, errors="coerce").astype(float)
+    vals = s.to_numpy(dtype=float)
+    out = np.full(len(vals), np.nan)
+    alpha = 1.0 / n
+    finite = np.isfinite(vals)
+    prev = np.nan
+    seeded = False
+    for i in range(len(vals)):
+        if not seeded:
+            if i >= n - 1 and finite[i - n + 1:i + 1].all():
+                prev = float(np.mean(vals[i - n + 1:i + 1]))
+                out[i] = prev
+                seeded = True
+            continue
+        v = vals[i]
+        if not np.isfinite(v):
+            out[i] = prev
+            continue
+        prev = alpha * v + (1.0 - alpha) * prev
+        out[i] = prev
+    return pd.Series(out, index=s.index)
+
+
 def rsi(close: pd.Series, n: int = 14) -> pd.Series:
-    """Wilder's RSI (== Pine ta.rsi == engine.technicals.rsi)."""
+    """Wilder's RSI on the SMA-seeded RMA (== Pine ta.rsi). CORRECTED (audit #7): the old
+    copy used a bare ``ewm(alpha=1/n)`` whose warm-up flips early-history crosses."""
     d = close.diff()
-    up = d.clip(lower=0).ewm(alpha=1 / n, min_periods=n).mean()
-    dn = (-d.clip(upper=0)).ewm(alpha=1 / n, min_periods=n).mean()
+    up = rma(d.clip(lower=0), n)
+    dn = rma((-d).clip(lower=0), n)
     rs = up / dn.replace(0, np.nan)
     return 100 - 100 / (1 + rs)
 
 
 def ema(s: pd.Series, span: int) -> pd.Series:
-    return s.ewm(span=span, min_periods=span).mean()
+    """Recursive EMA == Pine ``ta.ema``: ``adjust=False`` (CORRECTED, audit #7). The old
+    copy omitted adjust=False (pandas default adjust=True), an expanding-weight average
+    that disagrees near threshold crosses."""
+    return s.ewm(span=span, adjust=False, min_periods=span).mean()
 
 
 def rsi_macd(close: pd.Series):
@@ -99,11 +141,30 @@ def bars_since(cond: pd.Series) -> pd.Series:
     return pd.Series(pos, index=cond.index) - last
 
 
+def resample_sessions(daily: pd.Series, n: int) -> pd.Series:
+    """Session-GROUPED resample (CORRECTED, audit #7): bucket the SESSIONS present into
+    groups of ``n`` and take the last close of each group — NOT the calendar
+    ``resample("3B")``, which re-anchors across a market gap/holiday and relocated ~80% of
+    NVDA's signal dates. Byte-identical to engine.canon.resample_sessions (returns the
+    bucketed close series indexed by each bucket's last-session date)."""
+    s = pd.to_numeric(daily, errors="coerce").dropna()
+    if s.empty:
+        return s
+    grp = np.arange(len(s)) // n
+    df = pd.DataFrame({"v": s.to_numpy(), "d": s.index}, index=s.index)
+    df["g"] = grp
+    last = df.groupby("g").last()
+    return pd.Series(last["v"].to_numpy(), index=pd.DatetimeIndex(last["d"]))
+
+
 # ------------------------------------------------------------ signals --------
 def compute_signals(daily_close: pd.Series) -> pd.DataFrame:
     """All trade-driving signals on the 3D timeframe, with a leak-free weekly
-    (confirm-TF) trend gate. Returns a frame indexed by 3D bar dates."""
-    s3 = daily_close.resample("3B").last().dropna()
+    (confirm-TF) trend gate. Returns a frame indexed by 3D bar dates.
+
+    CORRECTED (audit #7): the 3D grid is now the SESSION-grouped resample, not the calendar
+    ``resample("3B")`` the old fork shipped (which relocated ~80% of NVDA's signal dates)."""
+    s3 = resample_sessions(daily_close, 3)
     if len(s3) < 90:
         return pd.DataFrame()
 

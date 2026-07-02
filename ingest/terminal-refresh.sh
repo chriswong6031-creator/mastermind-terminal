@@ -44,6 +44,10 @@ run "$PY" ingest/expand_universe.py
 run "$PY" ingest/enrich_zh.py
 # fill OHLC for any name still missing one (expanded US via Polygon, HK/Canada via yfinance)
 run "$PY" ingest/backfill_ohlc.py --market all
+# artifact freshness conformance (audit #9): consume the dashboard's exported manifest and
+# WARN on any stale handoff artifact per its trading-calendar cadence (the per-symbol intel
+# bridge below still abstains on individual stale files; this surfaces board/regime staleness).
+run "$PY" -m ingest.artifact_conformance
 # pull macro dashboard intel bridge — ai_lean + freshness gate (#18 fix)
 # runs AFTER the universe files are in place so intel covers the full symbol set
 run "$PY" ingest/pull_macro_intel.py

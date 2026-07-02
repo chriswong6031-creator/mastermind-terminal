@@ -50,7 +50,7 @@ def indicator_contract(
     *,
     indicator_id: str = "confluence_rsimacd_stochrsi_mtf",
     title: str = "RSI-MACD × StochRSI MTF Confluence",
-    engine: str = "python:signal_layer.confluence@oracle",
+    engine: str = "python:signal_layer.confluence@corrected",
     source_lang: str = "python",
     params: dict | None = None,
     macd_kind: str = "rsi_based",

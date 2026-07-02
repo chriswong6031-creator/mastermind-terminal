@@ -1,11 +1,15 @@
-"""Phase 0b acceptance: the parity harness works and the oracle self-checks clean.
+"""Golden-gate INVERSION acceptance (audit #7): the gate now validates the local engine
+against the dashboard's EXPORTED corrected golden vectors, so a stale fork FAILS and the
+corrected engine PASSES — the opposite of the old self-check-the-oracle behavior.
 
-When the PineTS sidecar lands (Phase 1), add a case that passes its compute fn as
-``engine_fn`` and asserts parity on a REAL-OHLC symbol (research doc P0-3).
+Covers: the corrected engine reproduces the golden BUY/SELL/tier sequence exactly; a
+deliberately-staled engine_fn FAILS; the inputs-hash guard; the no-contract fallback that
+SKIPS (never silently passes); and the retained engine-vs-engine diff still works.
 """
 import os
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -14,7 +18,7 @@ MACRO = Path(os.environ.get("MACRO_REPO", "/Users/chriswong/Documents/Cluade/Mac
 
 import sys
 sys.path.insert(0, str(ROOT))
-from signal_layer import golden_gate, backtest, contracts   # noqa: E402
+from signal_layer import golden_gate, backtest, contracts, confluence   # noqa: E402
 
 
 def _close(sym="AAPL"):
@@ -24,14 +28,101 @@ def _close(sym="AAPL"):
     return pd.read_parquet(p)["close"].dropna().astype(float)
 
 
-def test_oracle_self_check_is_exact():
-    """The candidate engine == the oracle ⇒ zero series diff and exact event match."""
-    g = golden_gate.check(_close("AAPL"), bar_quality="synthetic_open_deepstore")
-    assert g["pass"] is True
-    assert g["max_series_abs_diff"] == 0.0
-    assert g["event_match"] is True
-    # a deep-store gate is advisory only — flagged, not trusted as real_ohlc parity
-    assert g["gate_valid"] is False
+def _golden_close(sym):
+    """Load a golden-symbol close from wherever it lives (US / CN / HK stores)."""
+    for sub in ("stocks", "china_stocks", "hk_stocks"):
+        p = MACRO / "data" / sub / f"{sym}.parquet"
+        if p.exists():
+            c = pd.read_parquet(p)["close"].dropna().astype(float)
+            c.index = pd.to_datetime(c.index)
+            return c
+    pytest.skip(f"{sym} not in macro store")
+
+
+def _contract():
+    c = golden_gate.load_contract()
+    if not c:
+        pytest.skip("golden contract not exported (run scripts/export_signal_contracts.py)")
+    return c
+
+
+# ── the inversion: corrected engine PASSES, stale fork FAILS ──────────────────
+def test_corrected_engine_passes_all_golden_symbols():
+    contract = _contract()
+    for vec in contract["symbols"]:
+        sym = vec["symbol"]
+        r = golden_gate.check_symbol(sym, _golden_close(sym), contract=contract)
+        assert r["pass"] is True, f"{sym} should PASS: {r}"
+        assert r["sequence_exact"] is True
+        assert r["inputs_hash_match"] is True
+        assert r["moved_dates"] == 0
+
+
+def test_stale_fork_fails_the_gate():
+    """A deliberately-staled engine_fn (calendar 3B + adjust=True EMA + bare RMA) FAILS —
+    the whole point of the inversion (the old gate blessed exactly this bug)."""
+    contract = _contract()
+
+    def stale_fork(dc: pd.Series) -> pd.DataFrame:
+        def lrsi(c, n=14):
+            d = c.diff()
+            up = d.clip(lower=0).ewm(alpha=1 / n, min_periods=n).mean()
+            dn = (-d.clip(upper=0)).ewm(alpha=1 / n, min_periods=n).mean()
+            return 100 - 100 / (1 + up / dn.replace(0, np.nan))
+        lema = lambda s, sp: s.ewm(span=sp, min_periods=sp).mean()
+        s3 = dc.resample("3B").last().dropna()          # the calendar-bin bug
+        if len(s3) < 90:
+            return pd.DataFrame()
+        r = lrsi(s3, 14)
+        macd = lema(r, 14) - lema(r, 60)
+        sig = lema(macd, 5)
+        lo, hi = r.rolling(14).min(), r.rolling(14).max()
+        k = ((r - lo) / (hi - lo).replace(0, np.nan) * 100).rolling(3).mean()
+        d = k.rolling(3).mean()
+        xo = lambda a, b: (a > b) & (a.shift(1) <= b.shift(1))
+        xu = lambda a, b: (a < b) & (a.shift(1) >= b.shift(1))
+        cb = xo(macd, sig) & (r < 65)
+        cs = xu(macd, sig) & ((k.rolling(8).max() >= 80))
+        return pd.DataFrame({"CB": cb.fillna(False), "CS": cs.fillna(False),
+                             "revBuy": False, "revSell": False}, index=s3.index)
+
+    r = golden_gate.check_symbol("NVDA", _golden_close("NVDA"),
+                                 engine_fn=stale_fork, contract=contract)
+    assert r["pass"] is False
+    assert r["sequence_exact"] is False
+    assert r["moved_dates"] > 20   # ~106 in practice — the fork's dates barely overlap
+
+
+def test_check_all_passes_for_corrected_engine():
+    contract = _contract()
+    closes = {s["symbol"]: _golden_close(s["symbol"]) for s in contract["symbols"]}
+    r = golden_gate.check_all(closes)
+    assert r["all_pass"] is True
+    assert r["n_checked"] == len(contract["symbols"])
+
+
+def test_no_contract_skips_never_passes(tmp_path):
+    """A missing contract must return pass=None (SKIP), never a silent True."""
+    r = golden_gate.check_symbol("NVDA", _golden_close("NVDA"),
+                                 contract={})   # empty ⇒ treated as no oracle
+    assert r["pass"] is None
+    assert r["reason"] in ("no_contract", "no_vector_for_symbol")
+
+
+def test_inputs_hash_mismatch_fails():
+    """If the fed inputs differ from the vector's, the gate must not pass on a lucky
+    sequence match — the hash guard rejects it."""
+    contract = _contract()
+    c = _golden_close("NVDA")
+    # perturb a bar INSIDE the vector's window by a visible amount so the rounded-to-6dp
+    # inputs-hash cannot match the exported vector.
+    c2 = c.copy()
+    win = next(v["window"] for v in contract["symbols"] if v["symbol"] == "NVDA")
+    inwin = c2.index[(c2.index >= win["start"]) & (c2.index <= win["end"])]
+    c2.loc[inwin[len(inwin) // 2]] = float(c2.loc[inwin[len(inwin) // 2]]) + 5.0
+    r = golden_gate.check_symbol("NVDA", c2, contract=contract)
+    assert r["inputs_hash_match"] is False
+    assert r["pass"] is False
 
 
 def test_backtest_emits_the_net_new_metrics():
