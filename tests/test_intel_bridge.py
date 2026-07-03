@@ -20,7 +20,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from ingest.pull_macro_intel import _map_ai_dir, build_intel, _is_stale  # noqa: E402
+from ingest.pull_macro_intel import (  # noqa: E402
+    _map_ai_dir, build_intel, _is_stale, _build_sector_pulse,
+)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -267,3 +269,122 @@ def test_is_stale(asof, max_days, expected):
     from ingest.pull_macro_intel import _is_stale
     result = _is_stale(asof, date(2026, 7, 1), max_days)
     assert result == expected, f"_is_stale({asof!r}, ..., {max_days}) = {result}, expected {expected}"
+
+
+# ── sector_pulse pass-through tests ──────────────────────────────────────────
+
+_FULL_PULSE = {
+    "theme_id": "AIINFRA",
+    "theme_name": "AI Infrastructure",
+    "theme_name_zh": "人工智能基础设施",
+    "heat": "heating",
+    "label": "Accelerating",
+    "reco": "overweight",
+    "rank": 3,
+    "n_themes": 46,
+    "rank_delta_5d": -2.0,
+    "theme_ids": ["AIINFRA", "SEMIS"],
+    "as_of": "2026-07-01",
+}
+
+
+class TestSectorPulseHelper:
+    """Unit tests for _build_sector_pulse helper."""
+
+    def test_full_valid_pulse_passes_through(self):
+        out = _build_sector_pulse(_FULL_PULSE)
+        assert out is not None
+        assert out["heat"] == "heating"
+        assert out["theme_id"] == "AIINFRA"
+        assert out["theme_name"] == "AI Infrastructure"
+        assert out["rank"] == 3
+        assert out["n_themes"] == 46
+        assert out["rank_delta_5d"] == -2.0
+        assert out["as_of"] == "2026-07-01"
+
+    def test_internal_fields_omitted(self):
+        """theme_name_zh and theme_ids must NOT leak into terminal output."""
+        out = _build_sector_pulse(_FULL_PULSE)
+        assert out is not None
+        assert "theme_name_zh" not in out
+        assert "theme_ids" not in out
+
+    def test_all_valid_heat_values_accepted(self):
+        for heat in ("heating", "hot", "cooling", "broken", "idle"):
+            pulse = {**_FULL_PULSE, "heat": heat}
+            out = _build_sector_pulse(pulse)
+            assert out is not None and out["heat"] == heat, f"heat={heat!r} was rejected"
+
+    def test_unknown_heat_rejected(self):
+        pulse = {**_FULL_PULSE, "heat": "unknown_future_value"}
+        assert _build_sector_pulse(pulse) is None
+
+    def test_missing_heat_returns_none(self):
+        pulse = {k: v for k, v in _FULL_PULSE.items() if k != "heat"}
+        assert _build_sector_pulse(pulse) is None
+
+    def test_none_input_returns_none(self):
+        assert _build_sector_pulse(None) is None
+
+    def test_non_dict_input_returns_none(self):
+        assert _build_sector_pulse("heating") is None
+        assert _build_sector_pulse([]) is None
+
+    def test_optional_fields_omitted_gracefully(self):
+        """Sparse pulse with only required fields must not raise."""
+        minimal = {"heat": "hot"}
+        out = _build_sector_pulse(minimal)
+        assert out is not None
+        assert out["heat"] == "hot"
+        assert "rank" not in out
+        assert "n_themes" not in out
+
+
+class TestSectorPulseBuildIntel:
+    """Integration tests: sector_pulse in build_intel output."""
+
+    def _src_with_pulse(self, pulse, asof="2026-07-01", **kwargs):
+        src = _src(asof=asof, **kwargs)
+        src["sector_pulse"] = pulse
+        return src
+
+    def test_fresh_with_pulse_emits_sector_pulse(self):
+        src = self._src_with_pulse(_FULL_PULSE)
+        intel = build_intel("NVDA", src, today=TODAY)
+        assert "sector_pulse" in intel["tape"], "sector_pulse must be present when fresh"
+        assert intel["tape"]["sector_pulse"]["heat"] == "heating"
+
+    def test_fresh_without_pulse_omits_field(self):
+        """No sector_pulse in source → field absent (not null) in output."""
+        intel = build_intel("NVDA", _src(), today=TODAY)
+        assert "sector_pulse" not in intel["tape"], (
+            "sector_pulse must be absent (not null) when not in source"
+        )
+
+    def test_fresh_with_null_pulse_omits_field(self):
+        src = _src()
+        src["sector_pulse"] = None
+        intel = build_intel("NVDA", src, today=TODAY)
+        assert "sector_pulse" not in intel["tape"]
+
+    def test_stale_with_pulse_drops_sector_pulse(self):
+        """When the record is stale, sector_pulse must NOT appear even if present."""
+        src = self._src_with_pulse(_FULL_PULSE, asof="2026-06-25")  # 6 days old → stale
+        intel = build_intel("NVDA", src, today=TODAY)
+        assert intel["tape"]["stale"] is True
+        assert "sector_pulse" not in intel["tape"], (
+            "sector_pulse must be dropped when tape is stale"
+        )
+
+    def test_fresh_with_unknown_heat_omits_field(self):
+        """Unknown heat values must not reach the terminal."""
+        pulse = {**_FULL_PULSE, "heat": "mystery"}
+        src = self._src_with_pulse(pulse)
+        intel = build_intel("NVDA", src, today=TODAY)
+        assert "sector_pulse" not in intel["tape"]
+
+    def test_rank_and_n_themes_are_ints(self):
+        intel = build_intel("NVDA", self._src_with_pulse(_FULL_PULSE), today=TODAY)
+        sp = intel["tape"]["sector_pulse"]
+        assert isinstance(sp["rank"], int)
+        assert isinstance(sp["n_themes"], int)

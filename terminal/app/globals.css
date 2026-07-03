@@ -118,6 +118,12 @@ svg{display:block}
 .card .hd .px{margin-left:auto;text-align:right}.card .hd .px b{font:600 22px/1 var(--font-ui);font-variant-numeric:tabular-nums}.card .hd .px .cg{font-size:12px;font-variant-numeric:tabular-nums;margin-top:3px}
 .regime{display:inline-flex;align-items:center;gap:7px;margin:13px 0 8px;padding:6px 11px;border-radius:var(--r);background:var(--panel-2);border:1px solid var(--line);font:600 11.5px/1 var(--font-ui);color:var(--regime-up)}
 .regime i{width:6px;height:6px;border-radius:50%;background:var(--regime-up)}
+/* sector-pulse chip row — sits between regime indicator and key-value stats */
+.sp-row{display:inline-flex;align-items:center;gap:7px;margin:6px 0 8px;padding:5px 10px;border-radius:var(--r);background:var(--panel-2);border:1px solid var(--line);font:600 11.5px/1 var(--font-ui);white-space:nowrap;overflow:hidden}
+.sp-name{color:var(--text-2);overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.sp-chip{padding:2px 7px;border-radius:var(--r-pill);font:700 10px/1.4 var(--font-ui);letter-spacing:.03em;white-space:nowrap}
+.sp-rank{color:var(--muted);font-variant-numeric:tabular-nums;font-size:11px}
+.sp-delta{font:600 10px/1 var(--font-ui);font-variant-numeric:tabular-nums}
 .kv{display:flex;justify-content:space-between;padding:7px 0;font-size:12.5px;border-bottom:1px solid var(--line-2)}
 .kv .k{color:var(--muted)}.kv .v{font-variant-numeric:tabular-nums}
 .mmcard{margin-top:14px;border:1px solid var(--line);border-left:2px solid var(--brand);border-radius:var(--r);padding:13px}

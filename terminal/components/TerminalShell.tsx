@@ -8,9 +8,11 @@ import SearchModal from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
 import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
+import SectorPulseChip, { type SectorPulse } from "@/components/SectorPulseChip";
 
 type Row = { name: string; sec: string; col: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
+type IntelData = { tape?: { stale?: boolean; sector_pulse?: SectorPulse } } | null;
 
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const vol = (v: number) => (v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v));
@@ -39,6 +41,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const playRef = useRef<any>(null);
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
+  const [intel, setIntel] = useState<IntelData>(null);
+  useEffect(() => {
+    setIntel(null);
+    fetch(`/data/${active}.intel.json`)
+      .then((r) => { if (!r.ok) return null; return r.json(); })
+      .then((d) => setIntel(d))
+      .catch(() => setIntel(null));
+  }, [active]);
   useEffect(() => { setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setTf(load("mm.tf", "D")); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet(load("mm.set", { tableView: false, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true })); }, []);
   useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
@@ -206,6 +216,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <div><div className="nm">{m?.name || active}</div><div className="ex">{m?.sec || ""} · Polygon</div></div>
                 <div className="px"><b className="num">{fmt(m?.last, m && m.last < 10 ? 4 : 2)}</b><div className={`cg num ${(m?.chg ?? 0) >= 0 ? "up" : "down"}`}>{(m?.chg ?? 0) >= 0 ? "+" : ""}{fmt(m?.chg)}%</div></div></div>
               <div className="regime" style={m?.regimeBull ? {} : { color: "var(--warn)" }}><i style={m?.regimeBull ? {} : { background: "var(--warn)" }} />{m?.regimeBull ? "Uptrend regime · above 200-EMA" : "Mixed regime · watch trend"}</div>
+              <SectorPulseChip pulse={intel?.tape?.stale ? undefined : intel?.tape?.sector_pulse} />
               <div className="kv"><span className="k">Open</span><span className="v">{fmt(m?.open, m && m.last < 10 ? 4 : 2)}</span></div>
               <div className="kv"><span className="k">Day Range</span><span className="v">{fmt(m?.low, m && m.last < 10 ? 4 : 2)} – {fmt(m?.high, m && m.last < 10 ? 4 : 2)}</span></div>
               <div className="kv"><span className="k">Volume</span><span className="v">{m ? vol(m.vol) : "—"}</span></div>

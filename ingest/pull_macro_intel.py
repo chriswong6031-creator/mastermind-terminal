@@ -16,6 +16,17 @@ terminal/public/data/<SYM>.intel.json in the ``intel/v1`` shape.
      producing empty output.
   4. This script is wired into ingest/terminal-refresh.sh (see that file).
 
+sector_pulse pass-through (feat/sector-pulse-intel):
+  5. When the source stockdata JSON contains a top-level ``sector_pulse`` block, a
+     trimmed subset is forwarded into the intel/v1 output under ``tape.sector_pulse``.
+     Trimmed shape: {theme_id, theme_name, heat, label, reco, rank, n_themes,
+     rank_delta_5d, as_of}.
+     heat ∈ heating | hot | cooling | broken | idle.
+  6. Stale gate applies: when tape.stale is True the sector_pulse block is dropped
+     entirely (not emitted as null) so the panel cannot display a stale heat as live.
+  7. Absent/null source sector_pulse → field omitted from output (never null).
+     Consumers MUST handle missing field — presence is not guaranteed.
+
 Crypto symbols (BTC-USD, ETH-USD, SOL-USD, XRP-USD) and any symbol missing a source
 file are silently skipped (no source file in stockdata/).
 
@@ -139,6 +150,57 @@ def _list(v):
     return None
 
 
+# ── sector_pulse helpers ───────────────────────────────────────────────────────
+# HARD INVARIANT: only these heat values are forwarded to the Terminal.
+# Any unrecognised value from the source is dropped (treat as absent) so a
+# future dashboard experiment cannot push an unknown label into the UI.
+_VALID_HEAT = frozenset({"heating", "hot", "cooling", "broken", "idle"})
+
+
+def _build_sector_pulse(src_pulse: object) -> dict | None:
+    """Extract a trimmed sector_pulse dict from the raw stockdata block.
+
+    Returns None when the block is absent, null, not a dict, or contains no
+    recognisable heat value.  Callers that receive None must omit the field from
+    the output entirely — never write ``sector_pulse: null``.
+
+    Trimmed fields passed through:
+        theme_id, theme_name, heat, label, reco, rank, n_themes, rank_delta_5d, as_of
+
+    Fields intentionally omitted (dashboard-internal / too large for terminal):
+        theme_name_zh, theme_ids (list), region
+    """
+    if not isinstance(src_pulse, dict):
+        return None
+
+    heat = _str(src_pulse.get("heat"))
+    if not heat or heat not in _VALID_HEAT:
+        return None  # unknown or missing heat → treat as absent
+
+    out: dict = {"heat": heat}
+
+    for key in ("theme_id", "theme_name", "label", "reco", "as_of"):
+        v = _str(src_pulse.get(key))
+        if v is not None:
+            out[key] = v
+
+    for key in ("rank", "n_themes"):
+        v = src_pulse.get(key)
+        if v is not None:
+            try:
+                out[key] = int(v)
+            except (TypeError, ValueError):
+                pass
+
+    v_delta = src_pulse.get("rank_delta_5d")
+    if v_delta is not None:
+        rounded = _r(v_delta, 1)
+        if rounded is not None:
+            out["rank_delta_5d"] = rounded
+
+    return out
+
+
 def _is_stale(asof: str | None, today: date, max_days: int) -> bool:
     """Return True if asof is absent or older than max_days calendar days."""
     if not asof:
@@ -212,7 +274,7 @@ def build_intel(sym: str, src: dict, today: date | None = None) -> dict:
             "entry": entry_status,
         }
 
-    tape = {
+    tape: dict = {
         "ai_lean": ai_lean,
         "asof": asof,
         "stale": stale,
@@ -223,6 +285,14 @@ def build_intel(sym: str, src: dict, today: date | None = None) -> dict:
         "put_wall": _r(gex.get("put_wall"), 2),
         "short_pct": _r(g(positioning, "short", "pct_float"), 2),
     }
+
+    # ── sector_pulse pass-through ─────────────────────────────────────────────
+    # Drop when stale: the panel must not display a sector heat that may be days
+    # out of date.  Absent/null source → field omitted (never null in output).
+    if not stale:
+        pulse = _build_sector_pulse(src.get("sector_pulse"))
+        if pulse is not None:
+            tape["sector_pulse"] = pulse
 
     # ── cards.ai_judgment ────────────────────────────────────────────────────
     size = conviction.get("size") or {}
