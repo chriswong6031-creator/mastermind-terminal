@@ -439,11 +439,28 @@ export default function StockAnalysis({
   // clickable trust badge → EventEdgePop (R15): hover keeps the compact tooltip, click opens the
   // anchored event-edge dashboard. We stash the badge's viewport rect for the popover to anchor to.
   const [edgePop, setEdgePop] = useState<DOMRect | null>(null);
-  const a = intel?.analysis;
   // Refactored per §3.5.1: the bilingual selector now comes from the shared lib/finFormat `pick`
   // (signature (zh, en, cn)). This local closure captures `zh` so every existing call site —
   // pick(en, cn) — keeps identical behavior.
   const pick = (en?: string | null, cn?: string | null) => pickI18n(zh, en, cn);
+  // The research desk historically emitted an `intel.analysis` block (rich decision/entry/factors).
+  // The live pipeline now ships the compact `intel.cards` schema instead. Adapt the compact schema
+  // into the fields this component already renders so no information is thrown away — and, crucially,
+  // present conviction + timing as clearly-labelled SUPPORTING dimensions rather than a THIRD verdict
+  // competing with the Golden Oracle (which owns the trade call in the rail card above).
+  const a = useMemo(() => {
+    if (intel?.analysis) return intel.analysis;
+    const c = intel?.cards;
+    if (!c) return null;
+    const cv = c.conviction || {};
+    const aj = c.ai_judgment || {};   // plain-language timing read: "Hold off — timing against you"
+    return {
+      _fromCards: true,
+      conviction: { score: cv.score, band: cv.band, drivers: cv.drivers, cautions: cv.cautions },
+      // ai_judgment answers "act now?" — surface it as a labelled timing headline, not a verdict
+      entry: (aj.verdict || aj.gloss) ? { status: "watch", headline: aj.verdict, action: aj.gloss } : null,
+    } as any;
+  }, [intel]);
 
   const dec = a?.decision, conv = a?.conviction, entry = a?.entry, fac = a?.factors,
     tech = a?.tech, val = a?.valuation, fin = a?.financials, prof = a?.profile,
@@ -455,6 +472,8 @@ export default function StockAnalysis({
   const tn = useMemo(() => toneOf(dec?.verb, dec?.tone), [dec?.verb, dec?.tone]);
   const verb = (zh && dec?.verb_zh) ? dec.verb_zh : (dec?.verb || "—");
   const score = conv?.score ?? dec?.score ?? null;
+  // the compact-schema hero has no research verdict of its own — it's a supporting confidence read
+  const supporting = !!a?._fromCards && !dec;
 
   // spot for the analyst upside / IV context: prefer the live opts spot, then the last daily bar.
   const spot = opts?.spot ?? (bars.length ? bars[bars.length - 1].c : (typeof row?.last === "number" ? row.last : null));
@@ -501,22 +520,44 @@ export default function StockAnalysis({
 
   return (
     <div className="sa">
-      {/* ── DECISION HERO ── */}
-      <div className={`sa-hero ${tn.cls}`}>
-        <div className="sa-hero-l">
-          <div className="sa-verb" style={{ color: tn.color }}>{verb}</div>
-          <div className="sa-band">{pick(dec?.band_label, dec?.band_label_zh) || pick(conv?.band, conv?.band_zh)}</div>
-          <div className="sa-head">{pick(dec?.headline, dec?.headline_zh)}</div>
-          {pick(dec?.gloss, dec?.gloss_zh) && <div className="sa-gloss">{pick(dec?.gloss, dec?.gloss_zh)}</div>}
-        </div>
-        {score != null && (
-          <div className="sa-hero-r">
-            <Ring score={score} color={tn.color} />
-            <span className="sa-ring-lbl">{pick("Conviction", "信心")}</span>
-            {conv?.rank_pctile != null && <span className="sa-rank">{pick("Board rank", "板内排名")} {Math.round(conv.rank_pctile)}%</span>}
+      {/* ── SUPPORTING / DECISION HERO ──
+          When the rich `analysis` schema is present the desk owns a full decision hero.
+          Under the compact `cards` schema there is NO second verdict — the hero is reframed as a
+          labelled "Position confidence" read that supports (never contradicts) the Golden Oracle. */}
+      {supporting ? (
+        <div className="sa-hero support">
+          <div className="sa-hero-l">
+            <div className="sa-support-tag">{pick("Position confidence", "持仓信心")}<small>{pick("supports the Oracle · how strong is the name?", "辅助神谕 · 标的成色如何？")}</small></div>
+            <div className="sa-band">{pick(conv?.band, conv?.band_zh)}</div>
           </div>
-        )}
-      </div>
+          {score != null && (
+            <div className="sa-hero-r">
+              <Ring score={score} color="var(--brand-2)" />
+              <span className="sa-ring-lbl">{pick("Confidence", "信心")}</span>
+              {conv?.rank_pctile != null && <span className="sa-rank">{pick("Board rank", "板内排名")} {Math.round(conv.rank_pctile)}%</span>}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className={`sa-hero ${tn.cls}`}>
+          <div className="sa-hero-l">
+            {/* the desk's read supports the Oracle verdict in the rail card above — label it so the
+                big verb ("WAIT", "ACCUMULATE"…) can never scan as a second, competing trade signal */}
+            <div className="sa-support-tag">{pick("Research desk read", "研究台判读")}<small>{pick("context for the Oracle verdict — not a trade signal", "为神谕判定提供背景——非交易信号")}</small></div>
+            <div className="sa-verb" style={{ color: tn.color }}>{verb}</div>
+            <div className="sa-band">{pick(dec?.band_label, dec?.band_label_zh) || pick(conv?.band, conv?.band_zh)}</div>
+            <div className="sa-head">{pick(dec?.headline, dec?.headline_zh)}</div>
+            {pick(dec?.gloss, dec?.gloss_zh) && <div className="sa-gloss">{pick(dec?.gloss, dec?.gloss_zh)}</div>}
+          </div>
+          {score != null && (
+            <div className="sa-hero-r">
+              <Ring score={score} color={tn.color} />
+              <span className="sa-ring-lbl">{pick("Conviction", "信心")}</span>
+              {conv?.rank_pctile != null && <span className="sa-rank">{pick("Board rank", "板内排名")} {Math.round(conv.rank_pctile)}%</span>}
+            </div>
+          )}
+        </div>
+      )}
       {pick(dec?.trust_en, dec?.trust_zh) && (
         /* Trust tier = compact badge. Hover keeps the tooltip; CLICK (R15) opens the anchored
            EventEdgePop dashboard (trust prose + structured earnings/edge context chips). */
@@ -559,9 +600,9 @@ export default function StockAnalysis({
       {/* ── TV gauges + options minis: Technicals · Analyst · IV ── */}
       {tvWidgets2}
 
-      {/* ── ENTRY TIMING ── */}
+      {/* ── ENTRY TIMING / TIMING QUALITY (answers "act now?") ── */}
       {entry && (entry.status || entry.headline) && (
-        <Section title={pick("Entry timing", "入场时机")} sub={entry.grade ? `${pick("grade", "评级")} ${cap(entry.grade)}` : undefined}
+        <Section title={pick("Timing quality", "时机质量")} sub={entry.grade ? `${pick("grade", "评级")} ${cap(entry.grade)}` : supporting ? pick("act now?", "现在行动？") : undefined}
           accent={entry.status === "open" ? "var(--buy)" : entry.status === "blocked" ? "var(--down)" : "var(--signal)"}>
           <div className="sa-entry-head">
             <span className={`sa-status ${entry.status}`}>{cap(entry.urgency || entry.status)}</span>

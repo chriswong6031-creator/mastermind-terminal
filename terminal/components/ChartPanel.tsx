@@ -2,12 +2,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createChart, CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries,
-  CrosshairMode, type IChartApi, type ISeriesApi,
+  CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi,
 } from "lightweight-charts";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { getJSON, getSliceAndOhlc } from "@/lib/dataCache";
 import { isIntradayTf, classify, type Market } from "@/lib/intradaySources";
+import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
+import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
@@ -74,6 +76,9 @@ export function sessionDateOf(ts: number | undefined, market: Market): string | 
 }
 const US_DATE_FMT = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" });
 
+const EMPTY_SET: Set<string> = new Set();
+const EMPTY_OBJ: Record<string, any> = {};
+
 // Preserve the visible logical range across an indicator toggle (§0.4 ratified = true).
 // The one-line escape hatch: flip to false to restore the pre-refactor "view resets on toggle" behavior.
 const PRESERVE_VIEW_ON_INDICATOR_TOGGLE = true;
@@ -83,8 +88,8 @@ function ema(a: (number | null)[], p: number) { const o: (number | null)[] = Arr
 function sma(a: (number | null)[], p: number) { const o: (number | null)[] = Array(a.length).fill(null); const q: number[] = []; let s = 0; for (let i = 0; i < a.length; i++) { const v = a[i]; q.push(v == null ? 0 : v); if (v != null) s += v; if (q.length > p) s -= q.shift()!; if (q.length === p) o[i] = s / p; } return o; }
 function stddev(a: number[], p: number) { const o: (number | null)[] = Array(a.length).fill(null); for (let i = p - 1; i < a.length; i++) { const w = a.slice(i - p + 1, i + 1); const m = w.reduce((x, y) => x + y, 0) / p; o[i] = Math.sqrt(w.reduce((x, y) => x + (y - m) ** 2, 0) / p); } return o; }
 function rsi(cl: number[], p = 14) { const o: (number | null)[] = Array(cl.length).fill(null); let g = 0, l = 0; for (let i = 1; i < cl.length; i++) { const ch = cl[i] - cl[i - 1], u = ch > 0 ? ch : 0, d = ch < 0 ? -ch : 0; if (i <= p) { g += u; l += d; if (i === p) { g /= p; l /= p; o[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } } else { g = (g * (p - 1) + u) / p; l = (l * (p - 1) + d) / p; o[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } } return o; }
-function stochRsi(cl: number[]) { const r = rsi(cl, 14); const raw: (number | null)[] = Array(cl.length).fill(null); for (let i = 0; i < cl.length; i++) { if (r[i] == null) continue; let hh = -1e9, ll = 1e9, ok = true; for (let j = i - 13; j <= i; j++) { if (j < 0 || r[j] == null) { ok = false; break; } hh = Math.max(hh, r[j]!); ll = Math.min(ll, r[j]!); } if (ok) raw[i] = hh === ll ? 50 : (100 * (r[i]! - ll)) / (hh - ll); } const k = sma(raw, 3); return { k, d: sma(k, 3) }; }
-function macd(cl: number[]) { const ef = ema(cl, 12), es = ema(cl, 26); const line = cl.map((_, i) => (ef[i] != null && es[i] != null ? ef[i]! - es[i]! : null)); const sig = ema(line, 9); const hist = line.map((_, i) => (line[i] != null && sig[i] != null ? line[i]! - sig[i]! : null)); return { line, sig, hist }; }
+function stochRsi(cl: number[], rsiLen = 14, stochLen = 14, smoothK = 3, smoothD = 3) { const r = rsi(cl, rsiLen); const raw: (number | null)[] = Array(cl.length).fill(null); for (let i = 0; i < cl.length; i++) { if (r[i] == null) continue; let hh = -1e9, ll = 1e9, ok = true; for (let j = i - (stochLen - 1); j <= i; j++) { if (j < 0 || r[j] == null) { ok = false; break; } hh = Math.max(hh, r[j]!); ll = Math.min(ll, r[j]!); } if (ok) raw[i] = hh === ll ? 50 : (100 * (r[i]! - ll)) / (hh - ll); } const k = sma(raw, smoothK); return { k, d: sma(k, smoothD) }; }
+function macd(cl: number[], fast = 12, slow = 26, signal = 9) { const ef = ema(cl, fast), es = ema(cl, slow); const line = cl.map((_, i) => (ef[i] != null && es[i] != null ? ef[i]! - es[i]! : null)); const sig = ema(line, signal); const hist = line.map((_, i) => (line[i] != null && sig[i] != null ? line[i]! - sig[i]! : null)); return { line, sig, hist }; }
 const toLine = (rows: Bar[], arr: (number | null)[]) => rows.map((r, i) => (arr[i] != null && isFinite(arr[i]!) ? { time: r.time, value: arr[i]! } : null)).filter(Boolean) as any[];
 
 function resampleTf(rows: Bar[], tf: string): Bar[] {
@@ -117,9 +122,11 @@ const SUBPANE_ORDER = ["vol", "osc", "macd"] as const;
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], isActive = true, syncId = null, liveQuote = null }:
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], isActive = true, syncId = null, liveQuote = null,
+  indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote }) {
+    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
+    indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
   const verdictRef = useRef<HTMLSpanElement>(null);
@@ -155,6 +162,25 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const renderRef = useRef<() => void>(() => {});
   const renderSignalsRef = useRef<() => void>(() => {});
   const syncCleanupRef = useRef<(() => void) | null>(null);
+
+  // ── indicator-legend + pane-management plumbing (grafted onto the persistent-chart model) ──
+  // one entry per chart pane (price pane + each sub-pane); pane KEY is the sub-pane store key
+  // ("__price__" | "vol" | "osc" | "macd") so it survives an incremental sub-pane rebuild / reorder.
+  const panesMeta = useRef<{ key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[]>([]);
+  // collapse/maximize/resize state, keyed by pane key — survives reorder + indicator churn
+  const paneCtl = useRef<{ collapsed: Set<string>; maximized: string | null; normal: Map<string, number> }>({ collapsed: new Set(), maximized: null, normal: new Map() });
+  const hiddenRef = useRef<Set<string>>(hidden); hiddenRef.current = hidden;
+  const indParamsRef = useRef<Record<string, any>>(indParams); indParamsRef.current = indParams;
+  const wrapElRef = useRef<HTMLElement | null>(null);
+  const paneLayoutRef = useRef<PaneInfo[]>([]);
+  const hoveredKeyRef = useRef<string | null>(null);   // pane under cursor, tracked by stable key
+  const measureRef = useRef<() => void>(() => {});
+  const paneRORef = useRef<ResizeObserver | null>(null);
+  const [paneLayout, setPaneLayout] = useState<PaneInfo[]>([]);
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [legendOpen, setLegendOpen] = useState(true);
+  // params for the ACTIVE indicators drive an indicator rebuild (Effect 3b)
+  const indParamsKey = JSON.stringify(Array.from(indicators).sort().map((k) => indParams[k]));
   // ── existing DOM / interaction refs (unchanged) ──
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drawRef = useRef<Drawing[]>(drawings);
@@ -197,43 +223,50 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return chart.addSeries(CandlestickSeries, { upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down, borderVisible: false, priceFormat: pf }, 0);
   };
 
-  // ── indicator builders (parity with the base inline builders) ──
+  // per-indicator params merged over the registry defaults (drives the Settings dialog + the math/style)
+  const P = (k: string) => withDefaults(k, indParamsRef.current[k]);
+  const labelOf = (k: string) => (isIndKey(k) ? IND_DEFS[k].label : k);
+
+  // ── indicator builders (param-driven; params flow from the Settings dialog via indParams) ──
   // Each returns the list of ISeriesApi it created, tracked in indSeriesRef under its indKey.
   const buildEma = (chart: IChartApi, rows: Bar[], closes: number[]): ISeriesApi<any>[] => {
-    const out: ISeriesApi<any>[] = [];
-    ([[20, tokensRef.current.warn], [50, tokensRef.current.link], [200, "rgba(214,218,227,.4)"]] as [number, string][]).forEach(([p, col]) => { const ln = chart.addSeries(LineSeries, { color: col, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0); ln.setData(toLine(rows, ema(closes, p))); out.push(ln); });
+    const out: ISeriesApi<any>[] = []; const p = P("ema");
+    ([[p.ma1On, p.ma1Len, p.ma1Col], [p.ma2On, p.ma2Len, p.ma2Col], [p.ma3On, p.ma3Len, p.ma3Col]] as [boolean, number, string][]).forEach(([on, len, col]) => {
+      if (!on) return; const ln = chart.addSeries(LineSeries, { color: col, lineWidth: p.width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0); ln.setData(toLine(rows, ema(closes, len))); out.push(ln);
+    });
     return out;
   };
   const buildBb = (chart: IChartApi, rows: Bar[], closes: number[]): ISeriesApi<any>[] => {
-    const out: ISeriesApi<any>[] = [];
-    const basis = sma(closes, 20); const sd = stddev(closes, 20);
-    const up = closes.map((_, i) => (basis[i] != null && sd[i] != null ? basis[i]! + 2 * sd[i]! : null));
-    const lo = closes.map((_, i) => (basis[i] != null && sd[i] != null ? basis[i]! - 2 * sd[i]! : null));
-    [up, basis, lo].forEach((arr, j) => { const ln = chart.addSeries(LineSeries, { color: j === 1 ? "rgba(214,218,227,.45)" : "rgba(77,130,255,.55)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0); ln.setData(toLine(rows, arr)); out.push(ln); });
+    const out: ISeriesApi<any>[] = []; const p = P("bb");
+    const basis = sma(closes, p.length); const sd = stddev(closes, p.length);
+    const up = closes.map((_, i) => (basis[i] != null && sd[i] != null ? basis[i]! + p.mult * sd[i]! : null));
+    const lo = closes.map((_, i) => (basis[i] != null && sd[i] != null ? basis[i]! - p.mult * sd[i]! : null));
+    [up, basis, lo].forEach((arr, j) => { const ln = chart.addSeries(LineSeries, { color: j === 1 ? p.basisCol : p.bandCol, lineWidth: p.width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0); ln.setData(toLine(rows, arr)); out.push(ln); });
     return out;
   };
   const buildVwap = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
+    const p = P("vwap");
     let cum = 0, cumv = 0; const vw = rows.map((r) => { const tp = (r.h + r.l + r.c) / 3; cum += tp * r.v; cumv += r.v; return cumv ? cum / cumv : null; });
-    const ln = chart.addSeries(LineSeries, { color: "#e8b339", lineWidth: 1.4 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0); ln.setData(toLine(rows, vw));
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0); ln.setData(toLine(rows, vw));
     return [ln];
   };
-  // volume rebuilt with token-aware colors so Effect 5 can recolor by re-setData (see volData)
-  const volData = (rows: Bar[]) => rows.map((r) => ({ time: r.time, value: r.v, color: r.c >= r.o ? "rgba(38,194,129,.4)" : "rgba(240,86,107,.4)" }));
+  // volume rebuilt with param-aware colors so Effect 5 can recolor by re-setData (see volData)
+  const volData = (rows: Bar[]) => { const p = P("vol"); return rows.map((r) => ({ time: r.time, value: r.v, color: r.c >= r.o ? p.upCol : p.downCol })); };
   const buildVol = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
     const vs = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "" }, pane); vs.setData(volData(rows));
     return [vs];
   };
-  // osc = the shared rsi+stochrsi pane (base combined them into one pane)
+  // osc = the shared rsi+stochrsi pane (this build combines them into one pane)
   const buildOsc = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
-    const out: ISeriesApi<any>[] = []; const t = tokensRef.current; const inds = indicatorsRef.current;
-    if (inds.has("stochrsi")) { const sr = stochRsi(closes); const kS = chart.addSeries(LineSeries, { color: t.buy, lineWidth: 1.6 as any, lastValueVisible: true, title: "%K" }, pane); const dS = chart.addSeries(LineSeries, { color: t.sell, lineWidth: 1, lastValueVisible: true, title: "%D" }, pane); kS.setData(toLine(rows, sr.k)); dS.setData(toLine(rows, sr.d)); out.push(kS, dS); }
-    if (inds.has("rsi")) { const rS = chart.addSeries(LineSeries, { color: inds.has("stochrsi") ? "rgba(214,218,227,.5)" : t.brand2, lineWidth: 1.2 as any, lastValueVisible: true, title: "RSI" }, pane); rS.setData(toLine(rows, rsi(closes, 14))); out.push(rS); }
+    const out: ISeriesApi<any>[] = []; const inds = indicatorsRef.current;
+    if (inds.has("stochrsi")) { const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD); const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: "%K" }, pane); const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: "%D" }, pane); kS.setData(toLine(rows, sr.k)); dS.setData(toLine(rows, sr.d)); out.push(kS, dS); }
+    if (inds.has("rsi")) { const p = P("rsi"); const rS = chart.addSeries(LineSeries, { color: inds.has("stochrsi") ? "rgba(214,218,227,.5)" : p.col, lineWidth: p.width as any, lastValueVisible: true, title: "RSI" }, pane); rS.setData(toLine(rows, rsi(closes, p.length))); if (p.showLevels) { try { rS.createPriceLine({ price: p.obLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); rS.createPriceLine({ price: p.osLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {} } out.push(rS); }
     return out;
   };
   const buildMacd = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
-    const m = macd(closes); const t = tokensRef.current;
-    const hs = chart.addSeries(HistogramSeries, {}, pane); hs.setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? "rgba(38,194,129,.5)" : "rgba(240,86,107,.5)" } : null)).filter(Boolean) as any);
-    const lS = chart.addSeries(LineSeries, { color: t.brand2, lineWidth: 1.3 as any, title: "MACD" }, pane); const sS = chart.addSeries(LineSeries, { color: t.warn, lineWidth: 1, title: "signal" }, pane);
+    const p = P("macd"); const m = macd(closes, p.fast, p.slow, p.signal);
+    const hs = chart.addSeries(HistogramSeries, {}, pane); hs.setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? p.upHist : p.downHist } : null)).filter(Boolean) as any);
+    const lS = chart.addSeries(LineSeries, { color: p.macdCol, lineWidth: p.width as any, title: "MACD" }, pane); const sS = chart.addSeries(LineSeries, { color: p.signalCol, lineWidth: 1, title: "signal" }, pane);
     lS.setData(toLine(rows, m.line)); sS.setData(toLine(rows, m.sig));
     return [hs, lS, sS];
   };
@@ -247,10 +280,81 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return out;
   };
 
-  // Normalize stretch factors: price pane 3.4, every sub-pane 1 (parity with base L155).
-  const normalizeStretch = () => {
-    const chart = chartRef.current; if (!chart) return;
-    try { const pn = chart.panes(); if (pn[0]) pn[0].setStretchFactor(3.4); for (let i = 1; i < pn.length; i++) pn[i].setStretchFactor(1); } catch {}
+  // ── pane sizing: collapse/maximize/normal, keyed by pane KEY so it survives indicator churn+reorder ──
+  // applyStretch is the successor to the base's "price 3.4 / sub 1" normalize: same baseline, but it
+  // also honors the collapsed set + the maximized pane (via paneCtl) and any user-dragged normal sizes.
+  const applyStretch = () => {
+    const ctl = paneCtl.current;
+    for (const m of panesMeta.current) {
+      let s: number;
+      if (ctl.maximized) s = m.key === ctl.maximized ? 1000 : 0.0001;
+      else s = ctl.collapsed.has(m.key) ? 0.06 : (ctl.normal.get(m.key) ?? (m.isPrice ? 3.4 : 1));
+      try { m.pane.setStretchFactor(s); } catch {}
+    }
+  };
+  // legacy call-site name kept: every builder path calls normalizeStretch(). It now rebuilds the pane
+  // registry (from the freshly-assigned paneMapRef), sizes via applyStretch, and re-applies the
+  // eye/tf visibility to the freshly-built series.
+  const normalizeStretch = () => { rebuildPaneMeta(); applyStretch(); applyHidden(); };
+
+  // a genuine separator drag (normal mode only) becomes the new baseline; ignore programmatic sizing
+  const captureNormal = () => { const ctl = paneCtl.current; if (ctl.maximized) return; for (const m of panesMeta.current) { if (ctl.collapsed.has(m.key)) continue; try { ctl.normal.set(m.key, m.pane.getStretchFactor()); } catch {} } };
+
+  // Rebuild the per-pane legend registry from the CURRENT indicator series + paneMapRef. The price pane
+  // carries the active overlay entries (ema/bb/vwap); each sub-pane carries its own indicator(s), with
+  // the shared osc pane listing rsi and/or stochrsi separately. Any stale collapse/normal entries for
+  // panes that no longer exist are pruned so the sizing map can't leak across removals.
+  const rebuildPaneMeta = () => {
+    const chart = chartRef.current, priceS = priceSeriesRef.current; if (!chart || !priceS) return;
+    const inds = indicatorsRef.current;
+    const overlayEntries: Omit<LegendEntry, "hidden">[] = [];
+    for (const k of ["ema", "bb", "vwap"] as const) if (inds.has(k) && indSeriesRef.current.has(k)) overlayEntries.push({ key: k, label: labelOf(k), kind: "overlay", isPine: false });
+    // compare overlays are managed by TerminalShell (the compare bar), NOT the legend — omitted here.
+    const metas: { key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[] = [];
+    metas.push({ key: "__price__", isPrice: true, entries: overlayEntries, pane: priceS.getPane() });
+    for (const key of SUBPANE_ORDER) {
+      const arr = indSeriesRef.current.get(key); if (!arr || !arr.length) continue;
+      const entries: Omit<LegendEntry, "hidden">[] = key === "osc"
+        ? (["stochrsi", "rsi"] as const).filter((k) => inds.has(k)).map((k) => ({ key: k, label: labelOf(k), kind: "pane", isPine: false }))
+        : [{ key, label: labelOf(key), kind: "pane", isPine: false }];
+      metas.push({ key, isPrice: false, entries, pane: arr[0].getPane() });
+    }
+    panesMeta.current = metas;
+    // prune sizing/collapse state for panes that no longer exist
+    const surv = new Set(metas.map((m) => m.key)); const ctl = paneCtl.current;
+    for (const k of Array.from(ctl.collapsed)) if (!surv.has(k)) ctl.collapsed.delete(k);
+    for (const k of Array.from(ctl.normal.keys())) if (!surv.has(k)) ctl.normal.delete(k);
+    if (ctl.maximized && !surv.has(ctl.maximized)) ctl.maximized = null;
+    // re-observe pane elements so separator drags / collapses reposition the overlay + rebaseline
+    const pRO = paneRORef.current; if (pRO) { try { pRO.disconnect(); } catch {} for (const m of metas) { try { const pe = m.pane.getHTMLElement(); if (pe) pRO.observe(pe); } catch {} } }
+    measureRef.current();
+  };
+
+  // ── pane-control operations (read chart refs; safe to recreate every render) ──
+  const keyOfPaneIndex = (pi: number) => { const m = panesMeta.current.find((x) => { try { return x.pane.paneIndex() === pi; } catch { return false; } }); return m?.key ?? null; };
+  const measure = () => measureRef.current();
+  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); requestAnimationFrame(measure); };
+  const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); requestAnimationFrame(measure); };
+  const collapseAllPanes = () => { const ctl = paneCtl.current; ctl.maximized = null; const subs = panesMeta.current.filter((m) => !m.isPrice).map((m) => m.key); if (!subs.length) return; const all = subs.every((k) => ctl.collapsed.has(k)); if (all) subs.forEach((k) => ctl.collapsed.delete(k)); else subs.forEach((k) => ctl.collapsed.add(k)); applyStretch(); requestAnimationFrame(measure); };
+  const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {} requestAnimationFrame(measure); };
+  const canMoveUp = (pi: number) => pi > 0;
+  const canMoveDown = (pi: number) => pi < paneLayoutRef.current.length - 1;
+  // visibility-on-intervals: is this indicator allowed to show on the current timeframe? (Settings → Visibility)
+  const tfVisible = (k: string) => {
+    const v = (indParamsRef.current[k] || {})._vis; if (!v) return true;
+    const m = /^(\d*)([DWM])$/.exec(timeframeRef.current); if (!m) return true;   // intraday tf → no _vis gating
+    const n = parseInt(m[1] || "1", 10) || 1;
+    const u = m[2] === "D" ? v.days : m[2] === "W" ? v.weeks : v.months;
+    return !u ? true : (u.on !== false && n >= (u.min ?? 1) && n <= (u.max ?? 1e9));
+  };
+  // flip series visibility (eye toggle + tf-visibility) WITHOUT a chart/series rebuild
+  const applyHidden = () => {
+    const h = hiddenRef.current; const SB = indSeriesRef.current;
+    // rsi + stochrsi share the osc series list; toggle each series by which indicator it belongs to via its title
+    for (const [k, arr] of SB) {
+      if (k === "osc") { for (const s of arr) { try { const ttl = ((s.options() as any)?.title || "").toUpperCase(); const own = ttl.includes("RSI") && !ttl.includes("%") ? "rsi" : "stochrsi"; s.applyOptions({ visible: !h.has(own) && tfVisible(own) } as any); } catch {} } continue; }
+      const vis = !h.has(k) && tfVisible(k); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} }
+    }
   };
 
   // Remove EVERY tracked indicator series (price/compare/drawings survive). Used by the bounded rebuild.
@@ -392,10 +496,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const el = ref.current; if (!el) return;
-    let ro: ResizeObserver | null = null, dead = false;
+    let ro: ResizeObserver | null = null, paneRO: ResizeObserver | null = null, dead = false;
     let onKey: ((e: KeyboardEvent) => void) | null = null;
     let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
-    let rafId: number | null = null;
+    let rafId: number | null = null, measRaf: number | null = null;
+    let onPaneMove: ((e: MouseEvent) => void) | null = null, onPaneLeave: (() => void) | null = null, onPaneDbl: ((e: MouseEvent) => void) | null = null;
     const snapshot = () => { if (!activeRef.current) return; try { const c = chartRef.current!.takeScreenshot(); const a = document.createElement("a"); a.href = c.toDataURL(); a.download = `${symbol}.png`; a.click(); } catch {} };
     window.addEventListener("mm:snapshot", snapshot);
 
@@ -413,6 +518,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     chartRef.current = chart;
 
     const wrap = el.parentElement as HTMLElement;
+    wrapElRef.current = wrap;
     // signal-marker layer (below the user-drawing layer); custom TradingView-style badges
     const sigSvg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(sigSvg); sigRef.current = sigSvg;
@@ -606,6 +712,50 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
     renderSignals(); renderDraw();
 
+    // ── pane geometry measurement → drives the legend/pane-menu overlay layer (ChartOverlays) ──
+    const measureImpl = () => {
+      const ch = chartRef.current, w = wrapElRef.current; if (!ch || dead || !w) return;
+      const wr = w.getBoundingClientRect();
+      // match panes by current index, not object identity — lightweight-charts hands back fresh
+      // IPaneApi wrappers, so series.getPane() !== chart.panes()[i]; paneIndex() stays consistent
+      // for the same underlying pane (and updates together after swapPanes reorders).
+      const metaByIndex = new Map<number, typeof panesMeta.current[number]>();
+      for (const m of panesMeta.current) { let mi = -1; try { mi = m.pane.paneIndex(); } catch {} if (mi >= 0) metaByIndex.set(mi, m); }
+      const ctl = paneCtl.current;
+      const layout: PaneInfo[] = [];
+      let panesApi: IPaneApi<any>[] = []; try { panesApi = ch.panes(); } catch {}
+      for (const paneApi of panesApi) {
+        let pi = 0; try { pi = paneApi.paneIndex(); } catch {}
+        const m = metaByIndex.get(pi); if (!m) continue;
+        let top = 0, height = 0;
+        try { const pe = paneApi.getHTMLElement(); if (pe) { const r = pe.getBoundingClientRect(); top = r.top - wr.top; height = r.height; } } catch {}
+        layout.push({ key: m.key, paneIndex: pi, isPrice: m.isPrice, top, height, collapsed: ctl.collapsed.has(m.key), maximized: ctl.maximized === m.key, entries: m.entries.map((e) => ({ ...e, hidden: hiddenRef.current.has(e.key) })) });
+      }
+      layout.sort((a, b) => a.paneIndex - b.paneIndex);
+      paneLayoutRef.current = layout; setPaneLayout(layout);
+    };
+    measureRef.current = measureImpl;
+    const scheduleMeasure = () => { if (measRaf != null) return; measRaf = requestAnimationFrame(() => { measRaf = null; if (!dead) measureImpl(); }); };
+
+    // ── pane hover + double-click (collapse-all on the price pane, maximize on a sub-pane) ──
+    onPaneMove = (e: MouseEvent) => {
+      const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect(); const y = e.clientY - wr.top;
+      let hk: string | null = null; for (const p of paneLayoutRef.current) { if (y >= p.top && y <= p.top + p.height) { hk = p.key; break; } }
+      if (hk !== hoveredKeyRef.current) { hoveredKeyRef.current = hk; setHoveredKey(hk); }
+    };
+    onPaneLeave = () => { if (hoveredKeyRef.current !== null) { hoveredKeyRef.current = null; setHoveredKey(null); } };
+    onPaneDbl = (e: MouseEvent) => {
+      if ((e.target as Element)?.closest?.(".chart-overlays")) return; if (toolRef.current) return;
+      const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect(); const y = e.clientY - wr.top;
+      const p = paneLayoutRef.current.find((q) => y >= q.top && y <= q.top + q.height); if (!p) return;
+      if (p.isPrice) collapseAllPanes(); else doMaximize(p.paneIndex);
+    };
+    wrap.addEventListener("mousemove", onPaneMove); wrap.addEventListener("mouseleave", onPaneLeave); wrap.addEventListener("dblclick", onPaneDbl);
+
+    // observe each pane element so separator drags / collapses reposition the overlay + rebaseline sizes
+    paneRO = new ResizeObserver(() => { if (dead) return; captureNormal(); scheduleMeasure(); });
+    paneRORef.current = paneRO;
+
     const rectXY = (ev: PointerEvent) => { const r = svg.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
     const idAt = (ev: Event) => (ev.target as Element)?.closest?.("g[data-id]")?.getAttribute("data-id") || null;
     const TWO = new Set(["trendline", "ray", "rect", "fib", "measure", "arrow"]);
@@ -659,18 +809,21 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     window.addEventListener("keydown", onKey);
 
-    ro = new ResizeObserver(() => { const ch2 = chartRef.current; if (!ch2) return; const r = ch2.timeScale().getVisibleLogicalRange(); ch2.resize(el.clientWidth, el.clientHeight); if (r) ch2.timeScale().setVisibleLogicalRange(r); scheduleRender(); });
+    ro = new ResizeObserver(() => { const ch2 = chartRef.current; if (!ch2) return; const r = ch2.timeScale().getVisibleLogicalRange(); ch2.resize(el.clientWidth, el.clientHeight); if (r) ch2.timeScale().setVisibleLogicalRange(r); scheduleRender(); scheduleMeasure(); });
     ro.observe(el);
 
     // ── mount teardown (base line-416 logic + the new refs) ──
     return () => {
-      dead = true; if (rafId != null) cancelAnimationFrame(rafId);
+      dead = true; if (rafId != null) cancelAnimationFrame(rafId); if (measRaf != null) cancelAnimationFrame(measRaf);
       if (syncCleanupRef.current) { try { syncCleanupRef.current(); } catch {} syncCleanupRef.current = null; }
       if (dragCleanup) dragCleanup();
       window.removeEventListener("mm:snapshot", snapshot);
       if (onKey) window.removeEventListener("keydown", onKey);
       if (winDown) window.removeEventListener("pointerdown", winDown);
+      const wEl = wrapElRef.current;
       if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx);
+      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); }
+      paneRO?.disconnect(); paneRORef.current = null; wrapElRef.current = null;
       ro?.disconnect();
       if (textEditRef.current) { try { textEditRef.current.remove(); } catch {} textEditRef.current = null; }
       if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; }
@@ -911,6 +1064,24 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     buildAllIndicators(rows, closes);
   };
 
+  // ── EFFECT 3b — indicator params [indParamsKey]. A Settings edit changes the math/style of an active
+  //   indicator, so drop + re-add every indicator series in place (bounded rebuild; no chart rebuild).
+  //   Skips the mount pass (Effect 2 already builds against the initial params). ──
+  const paramsMounted = useRef(false);
+  useEffect(() => {
+    if (!paramsMounted.current) { paramsMounted.current = true; return; }
+    const chart = chartRef.current; if (!chart || !barsRef.current.length) return;
+    const saved = PRESERVE_VIEW_ON_INDICATOR_TOGGLE ? (() => { try { const r = chart.timeScale().getVisibleLogicalRange(); return r ? { from: r.from as number, to: r.to as number } : null; } catch { return null; } })() : null;
+    rebuildIndicators();
+    normalizeStretch();
+    renderSignalsRef.current(); renderRef.current();
+    if (saved) { try { chart.timeScale().setVisibleLogicalRange(saved); } catch {} }
+    // eslint-disable-next-line
+  }, [indParamsKey]);
+
+  // ── eye toggle / tf-visibility [hidden] → flip series visibility in place (no chart rebuild) ──
+  useEffect(() => { hiddenRef.current = hidden; applyHidden(); measureRef.current(); }, [hidden]); // eslint-disable-line
+
   // ────────────────────────────────────────────────────────────────────────────
   // EFFECT 4 — replay [replayIdx]. Slice from fullBarsRef; recompute indicators+sigMarks on the slice.
   // ────────────────────────────────────────────────────────────────────────────
@@ -1070,6 +1241,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         {replayIdx != null && <span className="mm" style={{ background: "rgba(232,179,57,.14)", borderColor: "rgba(232,179,57,.35)", color: "var(--signal)" }}><i style={{ background: "var(--signal)" }} />REPLAY</span>}
       </div>
       <div ref={ref} style={{ position: "absolute", inset: 0 }} />
+      <ChartOverlays
+        panes={paneLayout} hoveredKey={hoveredKey} legendOpen={legendOpen} onToggleLegend={() => setLegendOpen((o) => !o)}
+        onEye={(k) => onToggleHidden?.(k)} onSettings={(k) => onOpenSettings?.(k)} onSource={(k) => onOpenSource?.(k)} onRemove={(k) => onRemoveInd?.(k)}
+        onMoveUp={(pi) => doMove(pi, -1)} onMoveDown={(pi) => doMove(pi, 1)} onCollapse={doCollapse} onMaximize={doMaximize}
+        canMoveUp={canMoveUp} canMoveDown={canMoveDown}
+      />
     </div>
   );
 }
