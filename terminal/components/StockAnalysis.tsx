@@ -425,10 +425,10 @@ function verdictBi(v: string): [string, string] {
 
 /* ── main component ─────────────────────────────────────────────────── */
 export default function StockAnalysis({
-  intel, row, slice, deep = false, onExpand, fund = null, opts = null, bars = [], onOpenPane,
+  intel, row, slice, deep = false, onExpand, fund = null, opts = null, bars = [], onOpenPane, onOpenSignals,
 }: {
   intel: any; row?: any; slice?: any; deep?: boolean; onExpand?: () => void;
-  fund?: Fund | null; opts?: Opts | null; bars?: Bar[]; onOpenPane?: (page: FinPage) => void;
+  fund?: Fund | null; opts?: Opts | null; bars?: Bar[]; onOpenPane?: (page: FinPage) => void; onOpenSignals?: () => void;
 }) {
   const { lang } = useLang();
   const zh = lang === "zh";
@@ -520,44 +520,22 @@ export default function StockAnalysis({
 
   return (
     <div className="sa">
-      {/* ── SUPPORTING / DECISION HERO ──
-          When the rich `analysis` schema is present the desk owns a full decision hero.
-          Under the compact `cards` schema there is NO second verdict — the hero is reframed as a
-          labelled "Position confidence" read that supports (never contradicts) the Golden Oracle. */}
-      {supporting ? (
-        <div className="sa-hero support">
-          <div className="sa-hero-l">
-            <div className="sa-support-tag">{pick("Position confidence", "持仓信心")}<small>{pick("supports the Oracle · how strong is the name?", "辅助神谕 · 标的成色如何？")}</small></div>
-            <div className="sa-band">{pick(conv?.band, conv?.band_zh)}</div>
-          </div>
-          {score != null && (
-            <div className="sa-hero-r">
-              <Ring score={score} color="var(--brand-2)" />
-              <span className="sa-ring-lbl">{pick("Confidence", "信心")}</span>
-              {conv?.rank_pctile != null && <span className="sa-rank">{pick("Board rank", "板内排名")} {Math.round(conv.rank_pctile)}%</span>}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className={`sa-hero ${tn.cls}`}>
-          <div className="sa-hero-l">
-            {/* the desk's read supports the Oracle verdict in the rail card above — label it so the
-                big verb ("WAIT", "ACCUMULATE"…) can never scan as a second, competing trade signal */}
-            <div className="sa-support-tag">{pick("Research desk read", "研究台判读")}<small>{pick("context for the Oracle verdict — not a trade signal", "为神谕判定提供背景——非交易信号")}</small></div>
-            <div className="sa-verb" style={{ color: tn.color }}>{verb}</div>
-            <div className="sa-band">{pick(dec?.band_label, dec?.band_label_zh) || pick(conv?.band, conv?.band_zh)}</div>
-            <div className="sa-head">{pick(dec?.headline, dec?.headline_zh)}</div>
-            {pick(dec?.gloss, dec?.gloss_zh) && <div className="sa-gloss">{pick(dec?.gloss, dec?.gloss_zh)}</div>}
-          </div>
-          {score != null && (
-            <div className="sa-hero-r">
-              <Ring score={score} color={tn.color} />
-              <span className="sa-ring-lbl">{pick("Conviction", "信心")}</span>
-              {conv?.rank_pctile != null && <span className="sa-rank">{pick("Board rank", "板内排名")} {Math.round(conv.rank_pctile)}%</span>}
-            </div>
-          )}
-        </div>
-      )}
+      {/* ── RESEARCH-DESK CHIP ──
+          The full research-desk hero (decision verb · band · headline · conviction ring · drivers /
+          cautions · factor profile) now lives in the Signals dashboard. Here we show a compact
+          clickable chip that opens it. Under the compact `cards` schema the label is the position-
+          confidence band; under the rich `analysis` schema it's the decision verb. */}
+      {(() => {
+        const chipVerb = supporting ? (pick(conv?.band, conv?.band_zh) || pick("Confidence", "信心")) : verb;
+        const chipColor = supporting ? "var(--brand-2)" : tn.color;
+        return (
+          <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenSignals?.()} title={pick("Open the Signals dashboard", "打开信号面板")}>
+            <span className="sa-open-k">{pick("Research desk", "研究台")}</span>
+            <span className="sa-open-verb" style={{ color: chipColor }}>{chipVerb}</span>
+            <span className="sa-open-view">{pick("view", "查看")} ›</span>
+          </button>
+        );
+      })()}
       {pick(dec?.trust_en, dec?.trust_zh) && (
         /* Trust tier = compact badge. Hover keeps the tooltip; CLICK (R15) opens the anchored
            EventEdgePop dashboard (trust prose + structured earnings/edge context chips). */
@@ -573,27 +551,7 @@ export default function StockAnalysis({
         </div>
       )}
       {edgePop && <EventEdgePop anchor={edgePop} intel={intel} zh={zh} onClose={() => setEdgePop(null)} />}
-      {(() => {
-        const drivers: string[] = conv?.drivers || [];
-        const cautions: string[] = (zh && conv?.cautions_zh?.length ? conv.cautions_zh : conv?.cautions) || [];
-        if (!drivers.length && !cautions.length) return null;
-        return (
-          <div className="sa-dc">
-            {drivers.length > 0 && (
-              <div className="sa-dc-grp">
-                <span className="sa-dc-lbl up">{pick("Drivers", "驱动因素")}</span>
-                <div className="sa-dc-tags">{drivers.slice(0, 4).map((d: string, i: number) => <span key={"d" + i} className="sa-tag up" title={pick("Supporting factor behind the read", "支撑该判定的因素")}>{d}</span>)}</div>
-              </div>
-            )}
-            {cautions.length > 0 && (
-              <div className="sa-dc-grp">
-                <span className="sa-dc-lbl warn">{pick("Cautions", "风险提示")}</span>
-                <div className="sa-dc-tags">{cautions.slice(0, 3).map((c: string, i: number) => <span key={"c" + i} className="sa-tag warn" title={pick("Risk / watch-out", "需要注意的风险")}>{c}</span>)}</div>
-              </div>
-            )}
-          </div>
-        );
-      })()}
+      {/* Drivers / Cautions moved to the Signals dashboard (rail slimming, Lane C). */}
 
       {/* ── TV market-data widgets: Key stats · Earnings · Dividends · Financials · Performance ── */}
       {tvWidgets}
@@ -681,19 +639,7 @@ export default function StockAnalysis({
         </Section>
       )}
 
-      {/* ── FACTOR PROFILE ── */}
-      {fac?.legs && (
-        <Section title={pick("Factor profile", "因子画像")} sub={fac.z != null ? `z ${fnum(fac.z, 2)}` : undefined}>
-          {Object.entries(fac.legs).map(([k, v]: any) => v != null && (
-            <div key={k} className="sa-factor">
-              <span className="fk">{pick(({ momentum: "Momentum", value: "Value", quality: "Quality", profitability: "Profitability", revisions: "Revisions" } as any)[k] || cap(k),
-                ({ momentum: "动量", value: "价值", quality: "质量", profitability: "盈利", revisions: "修正" } as any)[k])}</span>
-              <Diverge v={v} />
-              <span className={`fv num ${v >= 0 ? "up" : "down"}`}>{v > 0 ? "+" : ""}{fnum(v, 2)}</span>
-            </div>
-          ))}
-        </Section>
-      )}
+      {/* Factor profile moved to the Signals dashboard (rail slimming, Lane C). */}
 
       {/* ── VALUATION ── */}
       {val?.ratios?.length && (
@@ -755,38 +701,8 @@ export default function StockAnalysis({
         </Section>
       )}
 
-      {/* ── ANALYSTS + EARNINGS ── */}
-      {ae && (ae.next_date || ae.surprises || ae.target != null || ae.rating || ae.buy != null) && (
-        <Section title={pick("Analysts & earnings", "分析师与财报")}
-          sub={ae.sue_z != null ? `SUE ${fnum(ae.sue_z, 1)}` : ae.n_analysts != null ? `${fnum(ae.n_analysts, 0)} ${pick("analysts", "分析师")}` : undefined}>
-          {(ae.rating || ae.buy != null || ae.hold != null || ae.sell != null) && (
-            <div className="sa-chips">
-              {ae.rating && <span className={`sa-chip ${(["Buy", "买入"].includes(ae.rating) ? "up" : ["Sell", "卖出"].includes(ae.rating) ? "down" : "")}`}>{pick(ae.rating, ae.rating_zh) || ae.rating}</span>}
-              {(ae.buy != null || ae.hold != null || ae.sell != null) && (
-                <span className="sa-chip">{ae.buy ?? 0} <b className="up">{pick("buy", "买")}</b> · {ae.hold ?? 0} {pick("hold", "持")} · {ae.sell ?? 0} <b className="down">{pick("sell", "卖")}</b></span>
-              )}
-            </div>
-          )}
-          <div className="sa-grid3">
-            {ae.next_date && <Stat k={pick("Next report", "下次财报")} v={ae.next_date} />}
-            {ae.eps_forecast != null && <Stat k={pick("EPS est", "EPS预期")} v={fnum(ae.eps_forecast, 2)} />}
-            {ae.forward_pe != null && <Stat k={pick("Fwd P/E", "预期市盈")} v={fnum(ae.forward_pe, 1)} />}
-            {ae.target != null && <Stat k={pick("Target", "目标价")} v={fnum(ae.target)} />}
-            {ae.upside_pct != null && <Stat k={pick("Upside", "上行空间")} v={fpct(ae.upside_pct, 1)} tone={(ae.upside_pct ?? 0) >= 0 ? "up" : "down"} />}
-            {ae.target_low != null && ae.target_high != null && <Stat k={pick("Target range", "目标区间")} v={`${fnum(ae.target_low)}–${fnum(ae.target_high)}`} />}
-            {ae.beats != null && ae.total != null && <Stat k={pick("Beats", "超预期")} v={`${ae.beats}/${ae.total}`} tone={ae.beats >= ae.total ? "up" : ""} />}
-            {ae.avg_surprise != null && <Stat k={pick("Avg surprise", "平均超预期")} v={fpct(ae.avg_surprise)} tone={(ae.avg_surprise ?? 0) >= 0 ? "up" : "down"} />}
-            {ae.div_yield != null && <Stat k={pick("Div yield", "股息率")} v={fpct(ae.div_yield, 2, false)} />}
-          </div>
-          {ae.surprises?.length && (
-            <div className="sa-surprises">
-              {ae.surprises.slice().reverse().map((s: any, i: number) => (
-                <div key={i} className="sa-surp"><span className="sq">{s.qtr}</span><span className={`sp num ${(s.surprise_pct ?? 0) >= 0 ? "up" : "down"}`}>{fpct(s.surprise_pct)}</span></div>
-              ))}
-            </div>
-          )}
-        </Section>
-      )}
+      {/* Proprietary "Analysts & earnings" section removed — the rail now has ONE analyst surface,
+          the fund-sourced AnalystGauge (with "See forecast ›" → Forecast dash). Lane C. */}
 
       {/* ── FLOWS & POSITIONING (CN 融资 margin / HK 港股通 southbound) ── */}
       {fl && (fl.own_pct != null || fl.fin_balance_yi != null || fl.lhb_count != null || fl.block_count != null) && (
@@ -873,13 +789,7 @@ export default function StockAnalysis({
 
       {/* ── PROFILE (fund-sourced: website / employees / sector / industry) ── */}
       {profileWidget}
-
-      {!deep && onExpand && (
-        <button className="sa-expand" onClick={onExpand}>
-          <svg viewBox="0 0 24 24"><path d="M4 14v6h6M20 10V4h-6M14 10l6-6M10 14l-6 6" /></svg>
-          {pick("Open full analysis", "打开完整分析")}
-        </button>
-      )}
+      {/* inline "Open full analysis" button removed — moved to the shell bottom button group (Lane C). */}
     </div>
   );
 }

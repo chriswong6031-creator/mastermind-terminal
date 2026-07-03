@@ -144,7 +144,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [bars, setBars] = useState<Bar[]>([]);
   // MegaPane (in-shell fundamentals overlay) + OracleDash (Golden Oracle history) overlays
   const [paneOpen, setPaneOpen] = useState<FinPage | null>(null);
-  const [oracleOpen, setOracleOpen] = useState(false);
+  const [signalsOpen, setSignalsOpen] = useState(false);
   const [magnet, setMagnet] = useState(false);
   const [compare, setCompare] = useState<string[]>([]);
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
@@ -729,50 +729,23 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="detail-scroll">
               <div style={{ padding: "12px 12px 0" }}>
-                {/* ── UNIFIED SIGNAL HIERARCHY: one coherent story per ticker ──
-                    Primary = the Golden Oracle (only backtested trade signal). Below it,
-                    two clearly-labelled SUPPORTING reads answering different questions —
-                    position confidence (how strong is the name?) and timing (act now?) —
-                    so the three systems never look like three competing verdicts. */}
-                <div className="mmcard" style={{ marginTop: 0, borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }}>
-                  <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>{t("goldenOracle")}<span className="mm-primary-tag">{t("signalPrimaryTag")}</span></div>
-                  <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">{t("backtestedNote")}</span></div>
-                  <div className="s2"><div>{t("winRate")}<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>{t("profitFactor")}<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>{t("cagr")}<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
-                  {(oracleView.convScore != null || oracleView.timing) && (
-                    <div className="mm-support">
-                      <div className="mm-support-h"><span>{t("supportingReads")}</span><small>{t("supportingNote")}</small></div>
-                      <div className="mm-support-grid">
-                        {oracleView.convScore != null && (
-                          <div className="mm-dim">
-                            <span className="mm-dim-k">{t("posConfidence")}</span>
-                            <b className="mm-dim-v num">{Math.round(oracleView.convScore)}<i>/100</i></b>
-                            <span className="mm-dim-q">{oracleView.convBand ? oracleView.convBand : t("posConfidenceQ")}</span>
-                          </div>
-                        )}
-                        {oracleView.timing && (
-                          <div className="mm-dim">
-                            <span className="mm-dim-k">{t("timingQuality")}</span>
-                            <b className="mm-dim-v tt">{oracleView.timing}</b>
-                            <span className="mm-dim-q">{t("timingQualityQ")}</span>
-                          </div>
-                        )}
-                      </div>
-                      {oracleView.conflict && (
-                        <div className="mm-conflict">
-                          <span className="mm-conflict-h">{t("conflictHeads")}</span>
-                          <span className="mm-conflict-b">{t("conflictSellHighConv").replace("{v}", m?.verdict || "SELL")}</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <button className="sa-more-btn" style={{ marginTop: 10 }} onClick={() => setOracleOpen(true)}>{t("signalHistory")} ›</button>
-                </div>
+                {/* ── Golden Oracle → compact clickable chip. The full scorecard (verdict · WR/PF/CAGR ·
+                    supporting reads · signal history) now lives in the Signals dashboard. ── */}
+                <button className="mm-chip" style={{ borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }} onClick={() => setSignalsOpen(true)} title={t("goldenOracle")}>
+                  <svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>
+                  <span className="mm-chip-lbl">{t("goldenOracle")}</span>
+                  <span className="mm-chip-verdict" style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</span>
+                  <span className="mm-chip-wr">{t("winRate")} {m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</span>
+                  <svg className="mm-chip-car" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>
+                </button>
               </div>
-              <StockAnalysis intel={intel} row={m} slice={slice} fund={fund} opts={opts} bars={bars} onExpand={() => setPaneOpen("overview")} onOpenPane={(p) => setPaneOpen(p)} />
-              <div style={{ padding: "0 12px" }}>
+              <StockAnalysis intel={intel} row={m} slice={slice} fund={fund} opts={opts} bars={bars} onExpand={() => setPaneOpen("overview")} onOpenPane={(p) => setPaneOpen(p)} onOpenSignals={() => setSignalsOpen(true)} />
+              <div style={{ padding: 12 }}><SeasonalityCard symbol={active} onOpenPane={() => setPaneOpen("seasonals")} /></div>
+              {/* ── bottom button group (after Seasonality): full analysis + Ask AI ── */}
+              <div className="sa-btn-group">
+                <button className="btn btn-primary" style={{ width: "100%", height: 38 }} onClick={() => setPaneOpen("overview")}>{t("openFullAnalysis")}</button>
                 <button className="btn btn-ghost" style={{ width: "100%", height: 36 }} onClick={() => setCopilot(true)}>{t("askAIabout")} {active} →</button>
               </div>
-              <div style={{ padding: 12 }}><SeasonalityCard symbol={active} onOpenPane={() => setPaneOpen("seasonals")} /></div>
             </div>
           </div>
         </div>
@@ -810,9 +783,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         />
       )}
 
-      {/* ── Golden Oracle history overlay ── */}
-      {oracleOpen && (
-        <OracleDash sym={active} row={m} slice={slice} zh={lang === "zh"} onClose={() => setOracleOpen(false)} />
+      {/* ── Signals dashboard overlay (Golden Oracle scorecard · research read · signal history) ── */}
+      {signalsOpen && (
+        <OracleDash sym={active} row={m} slice={slice} intel={intel} bars={bars} zh={lang === "zh"} onClose={() => setSignalsOpen(false)} onJump={(ts: string) => { window.dispatchEvent(new CustomEvent("mm:chart-jump", { detail: { ts } })); setSignalsOpen(false); }} />
       )}
 
       {/* ── mobile nav drawer ── */}

@@ -217,8 +217,10 @@ export function Bars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, noLege
   const slot = iw / Math.max(1, labels.length);
   const groupW = slot * 0.66;
   const barW = groupW / series.length;
+  const SVGH = height ?? 170;
   return (
-    <div className="fin-chart" style={height ? { maxHeight: height + 34 } : undefined}>
+    <div className="fin-chart">
+      <div className="fin-svg-box" style={{ height: SVGH }}>
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         {tk.map((t) => (
           <g key={t}>
@@ -244,6 +246,7 @@ export function Bars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, noLege
           );
         })}
       </svg>
+      </div>
       <XAxis labels={labels} />
       {!noLegend && <Legend series={series} />}
       <FinTip tip={tip} />
@@ -275,8 +278,10 @@ export function StackedBars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180,
   const y = (v: number) => PAD.t + ih - (v / hi) * ih;
   const slot = iw / Math.max(1, labels.length);
   const barW = slot * 0.5;
+  const SVGH = height ?? 170;
   return (
-    <div className="fin-chart" style={height ? { maxHeight: height + 34 } : undefined}>
+    <div className="fin-chart">
+      <div className="fin-svg-box" style={{ height: SVGH }}>
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         {tk.map((t) => (
           <g key={t}>
@@ -304,6 +309,7 @@ export function StackedBars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180,
           );
         })}
       </svg>
+      </div>
       <XAxis labels={labels} />
       {!noLegend && <Legend series={series} />}
       <FinTip tip={tip} />
@@ -351,8 +357,10 @@ export function LineSeries({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, 
   const x = (i: number) => PAD.l + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
   const y = (v: number) => PAD.t + ih - ((v - dom[0]) / (dom[1] - dom[0])) * ih;
   const isDotted = (s: Series, si: number) => (dotted as any[])?.some((d) => (typeof d === "number" ? d === si : d === s.name)) ?? false;
+  const SVGH = height ?? 190;
   return (
-    <div className="fin-chart" style={height ? { maxHeight: height + 34 } : undefined}>
+    <div className="fin-chart">
+      <div className="fin-svg-box" style={{ height: SVGH }}>
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         {tk.map((t) => (
           <g key={t}>
@@ -379,6 +387,7 @@ export function LineSeries({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, 
             onMouseLeave={hide} />
         ))}
       </svg>
+      </div>
       <XAxis labels={labels} />
       {!noLegend && <Legend series={series} />}
       <FinTip tip={tip} />
@@ -432,8 +441,10 @@ export function ComboChart({ labels, bars, line, fmtBar = fmtNum, fmtLine = (v) 
   const lcol = line.color ?? "var(--warn)";
   const lpts: string[] = [];
   line.values.forEach((v, i) => { if (num(v)) lpts.push(`${PAD.l + slot * i + slot / 2},${yl(v as number)}`); });
+  const SVGH = height ?? 170;
   return (
-    <div className="fin-chart" style={height ? { maxHeight: height + 34 } : undefined}>
+    <div className="fin-chart">
+      <div className="fin-svg-box" style={{ height: SVGH }}>
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         {btk.map((t) => (
           <g key={t}>
@@ -461,6 +472,7 @@ export function ComboChart({ labels, bars, line, fmtBar = fmtNum, fmtLine = (v) 
         {lpts.length > 0 && <polyline className="fin-line" points={lpts.join(" ")} fill="none" stroke={lcol} />}
         {line.values.map((v, i) => num(v) ? <circle key={i} className="fin-node" cx={PAD.l + slot * i + slot / 2} cy={yl(v as number)} r={2.4} fill={lcol} /> : null)}
       </svg>
+      </div>
       <XAxis labels={labels} />
       {!noLegend && <Legend series={[...bars, { name: line.name, values: [], color: lcol }]} />}
       <FinTip tip={tip} />
@@ -520,8 +532,10 @@ export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFr
   const slot = iw / Math.max(1, points.length);
   const fFrom = forecastFrom ?? points.findIndex((p) => !num(p.actual) && num(p.estimate));
   const labels = points.map((p) => p.label);
+  const SVGH = height ?? 170;
   return (
-    <div className="fin-chart" style={height ? { maxHeight: height + 34 } : undefined}>
+    <div className="fin-chart">
+      <div className="fin-svg-box" style={{ height: SVGH }}>
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         <defs>
           <pattern id={hatchId} width={6} height={6} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -556,6 +570,7 @@ export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFr
           );
         })}
       </svg>
+      </div>
       <XAxis labels={labels} />
       {!noLegend && (
         <div className="fin-legend">
@@ -776,8 +791,10 @@ export function Waterfall({ steps, fmtY = fmtNum, vw = 340, vh = 200, zh, height
   const slot = iw / Math.max(1, bars.length);
   const barW = slot * 0.56;
   const labels = clean.map((s) => s.label);
+  const SVGH = height ?? 170;
   return (
-    <div className="fin-chart" style={height ? { maxHeight: height + 34 } : undefined}>
+    <div className="fin-chart">
+      <div className="fin-svg-box" style={{ height: SVGH }}>
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         {tk.map((t) => (
           <g key={t}>
@@ -803,6 +820,7 @@ export function Waterfall({ steps, fmtY = fmtNum, vw = 340, vh = 200, zh, height
           );
         })}
       </svg>
+      </div>
       <XAxis labels={labels} small />
       <FinTip tip={tip} />
     </div>
@@ -942,7 +960,7 @@ export function YearOverlay({ paths, horizon, monthLabels, vw = 640, vh = 260, z
     return null;
   };
   return (
-    <div className="fin-yearoverlay" style={height ? { maxHeight: height + 70 } : undefined}>
+    <div className="fin-yearoverlay">
       <div className="fin-yo-controls">
         <div className="fin-toggle">
           <button className={pct ? "on" : ""} onClick={() => setPct(true)}>{pick(!!zh, "Percent", "百分比")}</button>
@@ -959,6 +977,7 @@ export function YearOverlay({ paths, horizon, monthLabels, vw = 640, vh = 260, z
         )}
       </div>
       <div className="fin-chart">
+        <div className="fin-svg-box" style={{ height: height ?? 240 }}>
         <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
           {tk.map((t) => (
             <g key={t}>
@@ -986,6 +1005,7 @@ export function YearOverlay({ paths, horizon, monthLabels, vw = 640, vh = 260, z
               onMouseLeave={hide} />
           ))}
         </svg>
+        </div>
         {monthLabels && monthLabels.length > 0 && (
           <div className="fin-xaxis">
             {monthLabels.map((m, i) => <span key={i} className="fin-xlbl">{m}</span>)}

@@ -8,6 +8,7 @@
   --text:#d6dae3; --text-2:#868d9c; --muted:#5a616f; --text-dim:#3c4452;
   --up:#26c281; --down:#f0566b;
   --buy:#26c281; --sell:#f0566b; --signal:#e8b339;
+  --rebuy:#b6e94a; --cut:#ff8a3d;
   --brand:#2962ff; --brand-2:#4d82ff; --brand-hov:#1d52ed; --link:#4d82ff;
   --regime-up:#26c281; --warn:#e8a33d; --danger:#f0566b; --code-fn:#9d86ff;
   --font-ui:var(--font-inter),-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
@@ -18,6 +19,13 @@
    accent colors (brand/signal/warn) are unchanged. Set on <html data-updown="east"> pre-paint. */
 html[data-updown="east"]{
   --up:#f0566b; --down:#26c281; --buy:#f0566b; --sell:#26c281; --regime-up:#f0566b;
+  /* bullish↔bearish swap: rebuy (a BUY variant) → reddish, cut (a SELL variant) → greenish */
+  --rebuy:#ff8a5c; --cut:#7fd4a0;
+}
+/* alias for spec parity: East-Asian red-up convention also selectable via [data-red-up=true] */
+[data-red-up=true]{
+  --up:#f0566b; --down:#26c281; --buy:#f0566b; --sell:#26c281; --regime-up:#f0566b;
+  --rebuy:#ff8a5c; --cut:#7fd4a0;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -186,6 +194,22 @@ svg{display:block}
 .mm-conflict{margin-top:10px;border-radius:var(--r);border:1px solid rgba(232,179,57,.32);background:rgba(232,179,57,.08);padding:8px 10px}
 .mm-conflict-h{display:block;font:700 9px/1 var(--font-ui);letter-spacing:.05em;text-transform:uppercase;color:var(--signal);margin-bottom:4px}
 .mm-conflict-b{display:block;font-size:11px;line-height:1.5;color:var(--text-2)}
+/* compact clickable Golden-Oracle chip (rail top) — opens the Signals dashboard */
+.mm-chip{display:flex;align-items:center;gap:8px;width:100%;min-height:40px;margin-top:0;border:1px solid var(--line);border-left:2px solid var(--brand);border-radius:var(--r);background:var(--panel-2);padding:9px 11px;cursor:pointer;text-align:left;transition:background var(--t),border-color var(--t)}
+.mm-chip:hover{background:var(--panel-3);border-color:var(--brand-2)}
+.mm-chip>svg{width:14px;height:14px;fill:var(--brand-2);flex:none}
+.mm-chip .mm-chip-lbl{font:600 10px/1 var(--font-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--text-2);white-space:nowrap}
+.mm-chip .mm-chip-verdict{font:700 12.5px/1 var(--font-ui);margin-left:2px}
+.mm-chip .mm-chip-wr{margin-left:auto;font:600 10.5px/1 var(--font-ui);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.mm-chip .mm-chip-car{width:12px;height:12px;fill:none;stroke:var(--muted);stroke-width:2;flex:none}
+/* compact clickable Research-desk chip (StockAnalysis top) — opens the Signals dashboard */
+.sa-open-chip{display:flex;align-items:center;gap:8px;width:100%;border:1px solid var(--line);border-left:3px solid var(--brand-2);border-radius:var(--r-lg);background:linear-gradient(180deg,var(--panel-2),var(--panel));padding:10px 12px;cursor:pointer;text-align:left;transition:background var(--t),border-color var(--t)}
+.sa-open-chip:hover{border-color:var(--brand-2)}
+.sa-open-chip .sa-open-k{font:600 9.5px/1 var(--font-ui);letter-spacing:.05em;text-transform:uppercase;color:var(--text-2);white-space:nowrap}
+.sa-open-chip .sa-open-verb{font:700 13px/1 var(--font-ui);white-space:nowrap}
+.sa-open-chip .sa-open-view{margin-left:auto;font:600 11px/1 var(--font-ui);color:var(--brand-2);white-space:nowrap}
+/* bottom rail button group (after Seasonality) */
+.sa-btn-group{display:flex;flex-direction:column;gap:8px;padding:12px}
 .ticker{grid-column:1/4;grid-row:3;display:flex;align-items:center;gap:22px;padding:0 16px;border-top:1px solid var(--line);overflow:hidden;font-size:11.5px}
 .ticker .lbl{color:var(--muted);font:600 10px/1 var(--font-ui);letter-spacing:.08em;text-transform:uppercase}
 .ticker .tk{display:flex;align-items:center;gap:7px;white-space:nowrap}.ticker .tk .s{color:var(--text-2);font-weight:600}.ticker .tk .p{color:var(--muted);font-variant-numeric:tabular-nums}.ticker .tk .c{font-variant-numeric:tabular-nums;font-weight:600}

@@ -291,6 +291,7 @@ function PriceFan({
         vw={420}
         vh={220}
         zh={zh}
+        height={230}
         noLegend
       />
       {/* end brackets: Max / Avg / Current / Min */}
@@ -622,6 +623,7 @@ function ActualsTab({
             vw={640}
             vh={220}
             zh={zh}
+            height={210}
           />
         </div>
       )}
