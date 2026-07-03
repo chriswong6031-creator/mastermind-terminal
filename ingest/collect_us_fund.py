@@ -37,6 +37,7 @@ MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
 OUT = MACRO / "data" / "us_fund"
 MANIFEST_URL = "https://app.mastermind-x.com/data/manifest.json"
 MANIFEST_CACHE = OUT / "_manifest.json"
+TX_INDEX = OUT / "_tx_index.json"
 
 # US-home exchange labels in the manifest's `mkt` field (everything else is a foreign/crypto market)
 US_MKTS = {"NYSE", "NASDAQ", "AMEX", "US", "Cboe", "NYSEARCA", "BATS", "OTC"}
@@ -62,14 +63,24 @@ def load_manifest() -> dict:
 def us_universe() -> list[str]:
     m = load_manifest()
     syms = m.get("symbols") or {}
-    out = []
+    out = set()
     for sym, row in syms.items():
         if sym.endswith(NON_US_SUFFIX) or sym.endswith("-USD"):
             continue
         mkt = (row or {}).get("mkt")
         if mkt in US_MKTS:
-            out.append(sym)
-    return sorted(set(out))
+            out.add(sym)
+    # Union in transcript-indexed names: collect_transcripts.py filters the manifest by suffix only
+    # (no mkt whitelist) and reads the LOCAL repo manifest, so its index can carry names this filter
+    # would drop — and a transcript with no fund.json is unreachable in the UI (2026-07 audit: 248
+    # such orphans after a rate-limited bulk run left them permanently cacheless).
+    if TX_INDEX.exists():
+        try:
+            tx = json.loads(TX_INDEX.read_text())
+            out.update(s for s in tx if not (s.endswith(NON_US_SUFFIX) or s.endswith("-USD")))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  tx-index read failed ({exc}); universe from manifest only", flush=True)
+    return sorted(out)
 
 
 # ───────────────────────────── serialization helpers ─────────────────────────────
@@ -293,6 +304,14 @@ def main(argv: list[str]) -> None:
 
     print(f"done: {ok} written, {empty} empty, {len(want) - len(todo)} skipped fresh"
           f"{' (INTERRUPTED)' if interrupted else ''}", flush=True)
+
+    # Universe names that STILL have no cache file are invisible to cache-scanning repair tooling
+    # (an empty fetch writes nothing) — report them so a rate-limit storm never hides a gap again.
+    if not only and not interrupted:
+        gaps = [s for s in want if not (OUT / f"{s}.json").exists()]
+        if gaps:
+            print(f"  WARNING: {len(gaps)} universe names have no cache file after this run: "
+                  f"{' '.join(gaps[:40])}{' …' if len(gaps) > 40 else ''}", flush=True)
 
 
 if __name__ == "__main__":

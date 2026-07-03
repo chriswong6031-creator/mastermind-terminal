@@ -285,6 +285,12 @@ def build_ratios(cache: dict, ann: Frame, fy_end_m: int) -> dict:
     div_yield = num(info.get("dividendYield"))
     if div_yield is not None:
         div_yield = div_yield / 100.0
+    # UNIT RULING: yfinance reports debtToEquity in PERCENT form (AAPL 79.548 == 0.795x). The fund.json
+    # contract stores debt_to_equity as a RAW RATIO (HK/CN emitters compute debt/equity directly from the
+    # balance sheet → 0700.HK 0.2, 000001.SZ 0.99). Always divide the percent-form by 100.
+    dte = num(info.get("debtToEquity"))
+    if dte is not None:
+        dte = dte / 100.0
     current = {
         "pe_ttm": num(info.get("trailingPE")), "pe_fwd": num(info.get("forwardPE")),
         "ps": num(info.get("priceToSalesTrailing12Months")), "pb": num(info.get("priceToBook")),
@@ -292,7 +298,7 @@ def build_ratios(cache: dict, ann: Frame, fy_end_m: int) -> dict:
         "div_yield": div_yield, "payout": num(info.get("payoutRatio")),
         "gross_margin": num(info.get("grossMargins")), "net_margin": num(info.get("profitMargins")),
         "roe": num(info.get("returnOnEquity")), "roa": num(info.get("returnOnAssets")),
-        "debt_to_equity": num(info.get("debtToEquity")), "current_ratio": num(info.get("currentRatio")),
+        "debt_to_equity": dte, "current_ratio": num(info.get("currentRatio")),
     }
     return {
         "periods": periods, "pe": list(empty), "ps": list(empty), "pb": list(empty),
@@ -742,19 +748,23 @@ def main(argv: list[str]) -> None:
     if only:
         syms = only
     else:
-        syms = sorted(p.stem for p in CACHE.glob("*.json") if not p.name.startswith("_"))
+        # cache glob ∪ tx-index: a transcript-indexed name must get a fund.json even if the raw
+        # collect never succeeded for it, or its transcripts are unreachable in the UI.
+        syms = sorted({p.stem for p in CACHE.glob("*.json") if not p.name.startswith("_")} | set(tx_map))
     if limit:
         syms = syms[:limit]
 
     ok = miss = err = 0
     for sym in syms:
         cf = CACHE / f"{sym}.json"
-        if not cf.exists():
+        if not cf.exists() and not tx_map.get(sym):
             miss += 1
             print(f"  {sym}: no cache", flush=True)
             continue
         try:
-            cache = json.loads(cf.read_text())
+            # No cache but transcripts indexed → build from an empty cache: build_earnings synthesizes
+            # tx-carrier q rows, so the transcripts stay reachable; the next collect upgrades the file.
+            cache = json.loads(cf.read_text()) if cf.exists() else {}
             sf = SITE / f"{sym}.json"
             site = json.loads(sf.read_text()) if sf.exists() else {}
             tx_ids = set(tx_map.get(sym) or []) or None
