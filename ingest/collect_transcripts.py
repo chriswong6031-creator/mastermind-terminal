@@ -58,6 +58,10 @@ LOCAL_PARQUET = TX_CACHE / "stock_earning_call_transcripts.parquet"
 # Minimum parquet size sanity check (2 GB download is expected ~2.1 GB)
 MIN_PARQUET_BYTES = 1_000_000_000  # 1 GB — clearly incomplete if below this
 
+# Re-download the parquet if it is older than this (new quarters land in defeatbeta periodically;
+# without an age check a first download is reused forever and new transcripts are never picked up).
+PARQUET_STALE_DAYS = 14
+
 # ---------------------------------------------------------------------------
 # Ctrl-C safety
 # ---------------------------------------------------------------------------
@@ -105,11 +109,17 @@ def _is_running_in_dbeta_venv() -> bool:
 # ---------------------------------------------------------------------------
 # Download helper
 # ---------------------------------------------------------------------------
-def _need_download() -> bool:
+def _need_download(refresh: bool = False) -> bool:
     if not LOCAL_PARQUET.exists():
         return True
     if LOCAL_PARQUET.stat().st_size < MIN_PARQUET_BYTES:
         print(f"[warn] parquet too small ({LOCAL_PARQUET.stat().st_size} B) — re-downloading", flush=True)
+        LOCAL_PARQUET.unlink()
+        return True
+    age_days = (time.time() - LOCAL_PARQUET.stat().st_mtime) / 86400
+    if refresh or age_days >= PARQUET_STALE_DAYS:
+        why = "forced (--refresh-parquet)" if refresh else f"{age_days:.0f}d old ≥ {PARQUET_STALE_DAYS}d"
+        print(f"[info] parquet stale ({why}) — re-downloading for new quarters", flush=True)
         LOCAL_PARQUET.unlink()
         return True
     return False
@@ -163,16 +173,16 @@ def _load_universe() -> list[str]:
     with open(MANIFEST) as f:
         mf = json.load(f)
     syms: list[str] = []
-    rows = mf if isinstance(mf, list) else mf.get("symbols", [])
-    for row in rows:
-        mkt = row.get("mkt", "")
-        sym = row.get("sym") or row.get("name", "")
+    rows = mf if isinstance(mf, list) else mf.get("symbols", {})
+    # manifest.symbols is a dict keyed by symbol; mkt carries exchange labels
+    # (NYSE/NASDAQ/SSE/…) or None — filter US/ADR by suffix, not by mkt.
+    items = rows.items() if isinstance(rows, dict) else ((r.get("sym", ""), r) for r in rows)
+    for sym, _row in items:
         if not sym:
             continue
-        if mkt in ("us", "crypto"):
-            if not sym.endswith(".TO") and "-" not in sym:
-                syms.append(sym)
-        # include crypto excluded above; ADRs are mkt='us' from expand_universe
+        if sym.endswith((".SS", ".SZ", ".HK", ".TO")) or "-USD" in sym:
+            continue
+        syms.append(sym)
     return sorted(set(syms))
 
 
@@ -284,8 +294,12 @@ def process_symbol(sym: str, parquet: str, quarters: int, duckdb_mod) -> tuple[i
         }
 
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-        with gzip.open(gz_path, "wb", compresslevel=6) as f:
+        # atomic: a kill mid-write must never leave an existing-but-truncated gz (the exists() check
+        # above would then skip it forever and the client DecompressionStream would fail silently).
+        tmp_path = gz_path.with_name(gz_path.name + ".tmp")
+        with gzip.open(tmp_path, "wb", compresslevel=6) as f:
             f.write(raw)
+        os.replace(tmp_path, gz_path)
         written += 1
 
     return written, ids_out
@@ -316,6 +330,9 @@ def main():
     ap.add_argument("--only",     default="",  help="comma-separated symbols (ZS,AAPL,…)")
     ap.add_argument("--quarters", type=int, default=8, help="most-recent quarters per symbol (default 8)")
     ap.add_argument("--limit",    type=int, default=0, help="cap symbol count (0 = no limit)")
+    ap.add_argument("--refresh-parquet", action="store_true",
+                    help="force re-download of the transcripts parquet (else re-downloads when "
+                         f"absent, undersized, or ≥{PARQUET_STALE_DAYS} days old)")
     args = ap.parse_args()
 
     # Re-exec in the defeatbeta venv if not already there
@@ -344,7 +361,7 @@ def main():
     print(f"[info] {len(universe)} symbols | {args.quarters} quarters each", flush=True)
 
     # Ensure parquet is available
-    if _need_download():
+    if _need_download(refresh=args.refresh_parquet):
         _download_parquet()
     else:
         sz_mb = LOCAL_PARQUET.stat().st_size // 1_000_000

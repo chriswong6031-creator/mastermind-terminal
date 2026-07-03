@@ -32,10 +32,11 @@ function NoDivIcon() {
 
 function yieldFmt(v: number | null | undefined): string {
   if (v == null || !isFinite(v)) return "—"
-  // yield_ttm is stored as a percent value (e.g. 0.35 = 0.35% not 35%)
-  // The raw value from AAPL fixture is 0.35, meaning 0.35%
-  // Keep raw and display as-is with fmtPct alreadyPct=true
-  return fmtPct(v, { alreadyPct: true })
+  // UNIT RULING: yield_ttm is a 0..1 FRACTION in the fund.json contract
+  // (emitter divides yfinance's percent-form by 100, consistent with the
+  // gross_margin/roe/payout siblings). Plain fmtPct (default ×100) renders it:
+  // AAPL 0.0035 → "0.35%".
+  return fmtPct(v)
 }
 
 function payoutFmt(v: number | null | undefined): string {

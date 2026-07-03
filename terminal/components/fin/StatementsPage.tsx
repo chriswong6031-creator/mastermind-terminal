@@ -48,16 +48,33 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
   const set: StatementPeriodSet | undefined = aq === "annual" ? fund.statements?.annual : fund.statements?.quarterly;
   const periods = set?.periods ?? [];
 
-  // period-end → tx id map (from earnings.q). Annual periods match by fiscal-year
-  // end date; quarterly by exact end date.
+  // period-end → tx id. Quarterly columns match a quarter's end-date exactly.
+  // Annual columns carry the fiscal-YEAR end (e.g. "2026-07-31") which need not
+  // string-equal any quarter's end; we map the FY to the LAST quarter that ends
+  // in that fiscal year (its Q4 transcript) rather than requiring exact equality.
+  const txQuarters = useMemo(() => {
+    // quarters carrying a tx, sorted oldest→newest by end-date
+    return (fund.earnings?.q ?? [])
+      .filter((q): q is typeof q & { end: string; tx: string } => !!q.end && !!q.tx)
+      .sort((a, b) => a.end.localeCompare(b.end));
+  }, [fund.earnings]);
   const txByEnd = useMemo(() => {
     const m = new Map<string, string>();
-    for (const q of fund.earnings?.q ?? []) if (q.end && q.tx) m.set(q.end, q.tx);
+    for (const q of txQuarters) m.set(q.end, q.tx);
     return m;
-  }, [fund.earnings]);
+  }, [txQuarters]);
   const txForPeriod = (i: number): string | null => {
     const end = set?.period_end?.[i];
-    return end ? txByEnd.get(end) ?? null : null;
+    if (!end) return null;
+    // exact end-date hit (quarterly, or an annual whose FY-end coincides)
+    const exact = txByEnd.get(end);
+    if (exact) return exact;
+    if (aq !== "annual") return null;
+    // annual: last quarter ending in the same fiscal year as this FY-end
+    const fyYear = end.slice(0, 4);
+    let best: string | null = null;
+    for (const q of txQuarters) if (q.end.slice(0, 4) === fyYear && q.end <= end) best = q.tx;
+    return best;
   };
 
   // ── mini bar-chart strip: series swap with statement type ──

@@ -50,10 +50,15 @@ export default function TranscriptDrawer({ sym, id, name, onClose }: TranscriptD
     };
   }, [sym, id]);
 
-  // OWN Esc handler — capture phase + stopPropagation so it wins over MegaPane's
+  // OWN Esc handler — capture phase + stopImmediatePropagation so it wins over
+  // MegaPane's SAME-target (window/capture) Esc listener. stopPropagation alone
+  // does NOT stop sibling listeners on the same target, so Esc would otherwise
+  // reach MegaPane's handler and close the whole pane (belt: MegaPane also
+  // early-returns while a drawer is open).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        e.stopImmediatePropagation();
         e.stopPropagation();
         onClose();
       }

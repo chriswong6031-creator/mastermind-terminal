@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useLang } from "@/lib/i18n";
-import { pick as pickI18n } from "@/lib/finFormat";
+import { pick as pickI18n, fmtPct } from "@/lib/finFormat";
 import type { Fund, Opts, Bar } from "@/lib/fund";
 import { computeRatings } from "@/lib/techRating";
 import { realizedVolCone } from "@/lib/realizedVol";
@@ -179,7 +179,9 @@ function DividendsMini({ fund, pick }: { fund: Fund | null; pick: Pick }) {
   return (
     <Section title={pick("Dividends", "股息")}>
       <div className="sa-grid2">
-        {div.yield_ttm != null && <Stat k={pick("Yield (TTM)", "股息率(TTM)")} v={fpct(div.yield_ttm * 100, 2, false)} />}
+        {/* yield_ttm is a 0..1 FRACTION in the fund contract (sibling of payout_ratio/gross_margin);
+            render via the shared fmtPct default (×100) so AAPL's 0.0035 shows 0.35%, not 35%. */}
+        {div.yield_ttm != null && <Stat k={pick("Yield (TTM)", "股息率(TTM)")} v={fmtPct(div.yield_ttm, { decimals: 2, sign: false })} />}
         {div.payout_ratio != null && <Stat k={pick("Payout", "派息率")} v={fpct(div.payout_ratio * 100, 0, false)} />}
         {nextEx && <Stat k={pick("Latest ex-date", "最近除息日")} v={nextEx} />}
       </div>
@@ -303,11 +305,13 @@ function TechGauge({ bars, pick, onOpen }: { bars: Bar[]; pick: Pick; onOpen?: (
 }
 
 /** Analyst gauge — fund.analyst dist → gauge + target/upside. CN empty-state. */
-function AnalystGauge({ fund, spot, pick, onOpen }: { fund: Fund | null; spot: number | null; pick: Pick; onOpen?: () => void }) {
+function AnalystGauge({ fund, spot, pick, onOpen, hasIntelAnalyst }: { fund: Fund | null; spot: number | null; pick: Pick; onOpen?: () => void; hasIntelAnalyst?: boolean }) {
   const an = fund?.analyst;
   if (!an) {
-    // CN names carry null analyst — a designed empty state (no street consensus, R5).
-    if (fund && fund.analyst === null) return (
+    // CN names carry null fund.analyst but often DO carry an intel analyst block (44 analysts etc.).
+    // Only show the "no consensus" empty state when fund exists, its analyst is null, AND there is no
+    // pre-existing intel analyst section — otherwise the two surfaces would contradict each other.
+    if (fund && fund.analyst === null && !hasIntelAnalyst) return (
       <Section title={pick("Analyst rating", "分析师评级")}>
         <p className="sa-desc" style={{ margin: 0 }}>{pick("No analyst consensus for this market.", "该市场暂无分析师一致预期。")}</p>
       </Section>
@@ -444,6 +448,9 @@ export default function StockAnalysis({
   const dec = a?.decision, conv = a?.conviction, entry = a?.entry, fac = a?.factors,
     tech = a?.tech, val = a?.valuation, fin = a?.financials, prof = a?.profile,
     sm = a?.smart_money, ae = a?.analyst, gex = a?.gex, macro = a?.macro, fl = a?.flows;
+  // Does the pre-existing intel analyst section render? (mirrors its gate below.) When it does, the
+  // new AnalystGauge must NOT show its "no consensus" empty state (CN dual-surface contradiction).
+  const hasIntelAnalyst = !!(ae && (ae.next_date || ae.surprises || ae.target != null || ae.rating || ae.buy != null));
 
   const tn = useMemo(() => toneOf(dec?.verb, dec?.tone), [dec?.verb, dec?.tone]);
   const verb = (zh && dec?.verb_zh) ? dec.verb_zh : (dec?.verb || "—");
@@ -468,7 +475,7 @@ export default function StockAnalysis({
   const tvWidgets2 = !deep && (fund || opts || bars.length) ? (
     <>
       <TechGauge bars={bars} pick={pick} onOpen={onOpenPane && (() => onOpenPane("technicals"))} />
-      <AnalystGauge fund={fund} spot={spot} pick={pick} onOpen={onOpenPane && (() => onOpenPane("forecast"))} />
+      <AnalystGauge fund={fund} spot={spot} pick={pick} onOpen={onOpenPane && (() => onOpenPane("forecast"))} hasIntelAnalyst={hasIntelAnalyst} />
       <IvMini opts={opts} bars={bars} pick={pick} />
     </>
   ) : null;

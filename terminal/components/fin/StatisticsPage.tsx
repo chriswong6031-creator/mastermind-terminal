@@ -94,7 +94,8 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
     v != null && isFinite(v) ? v.toLocaleString("en-US") : "—"
 
   // ── Valuation rows aligned to annual ratios.periods ──
-  const annualPeriods = isAnnual ? rPeriods : qPeriods.slice(-8)
+  // In quarterly mode the ratios table is replaced with fin-empty, so only rPeriods matters here.
+  const annualPeriods = rPeriods
 
   // Build a "Current" column value from live ratios
   const valRows: StatRow[] = [
@@ -203,50 +204,55 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
 
       {/* ── Valuation ratios ── */}
       <div className="fin-sec">
-        <div className="fin-table-scroll">
-          <table className="fin-table fin-stats-tbl">
-            <thead>
-              <tr>
-                <th className="fin-cell fin-cell-sticky fin-cell-corner" scope="col">
-                  {pick(!!zh, "Metrics", "指标")}
-                </th>
-                {annualPeriods.slice(-6).map((p, i) => (
-                  <th key={i} className="fin-cell fin-cell-num fin-cell-head" scope="col">{p}</th>
-                ))}
-                <th className="fin-cell fin-cell-num fin-cell-head fin-cell-current" scope="col">
-                  {pick(!!zh, "Current", "当前")}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr className="fin-row fin-stats-grp-hdr">
-                <th colSpan={annualPeriods.slice(-6).length + 2} className="fin-cell fin-cell-grp" scope="rowgroup">
-                  {pick(!!zh, "Valuation ratios", "估值比率")}
-                </th>
-              </tr>
-              {valRows.map((row, ri) => {
-                const periodSlice = isAnnual
-                  ? row.values.slice(-6)
-                  : row.values.slice(-6) // quarterly same for now (no q series)
-                return (
-                  <tr key={ri} className="fin-row">
-                    <th className="fin-cell fin-cell-sticky" scope="row">{row.label}</th>
-                    {annualPeriods.slice(-6).map((_, ci) => (
-                      <td key={ci} className="fin-cell fin-cell-num">
-                        {periodSlice[ci] != null && isFinite(periodSlice[ci] as number)
-                          ? (periodSlice[ci] as number).toFixed(2)
-                          : "—"}
+        {/* v1 has no quarterly ratio series — show honest empty state in quarterly mode */}
+        {!isAnnual ? (
+          <div className="fin-empty" role="status">
+            {pick(!!zh, "Quarterly valuation ratios are not available.", "季度估值比率暂不可用。")}
+          </div>
+        ) : (
+          <div className="fin-table-scroll">
+            <table className="fin-table fin-stats-tbl">
+              <thead>
+                <tr>
+                  <th className="fin-cell fin-cell-sticky fin-cell-corner" scope="col">
+                    {pick(!!zh, "Metrics", "指标")}
+                  </th>
+                  {annualPeriods.slice(-6).map((p, i) => (
+                    <th key={i} className="fin-cell fin-cell-num fin-cell-head" scope="col">{p}</th>
+                  ))}
+                  <th className="fin-cell fin-cell-num fin-cell-head fin-cell-current" scope="col">
+                    {pick(!!zh, "Current", "当前")}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="fin-row fin-stats-grp-hdr">
+                  <th colSpan={annualPeriods.slice(-6).length + 2} className="fin-cell fin-cell-grp" scope="rowgroup">
+                    {pick(!!zh, "Valuation ratios", "估值比率")}
+                  </th>
+                </tr>
+                {valRows.map((row, ri) => {
+                  const periodSlice = row.values.slice(-6) // annual series only
+                  return (
+                    <tr key={ri} className="fin-row">
+                      <th className="fin-cell fin-cell-sticky" scope="row">{row.label}</th>
+                      {annualPeriods.slice(-6).map((_, ci) => (
+                        <td key={ci} className="fin-cell fin-cell-num">
+                          {periodSlice[ci] != null && isFinite(periodSlice[ci] as number)
+                            ? (periodSlice[ci] as number).toFixed(2)
+                            : "—"}
+                        </td>
+                      ))}
+                      <td className="fin-cell fin-cell-num fin-cell-current">
+                        {row.current != null && isFinite(row.current) ? row.current.toFixed(2) : "—"}
                       </td>
-                    ))}
-                    <td className="fin-cell fin-cell-num fin-cell-current">
-                      {row.current != null && isFinite(row.current) ? row.current.toFixed(2) : "—"}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* ── Profitability ratios ── */}

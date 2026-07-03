@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -289,7 +290,10 @@ def build_ratios(vrow, frow, annual) -> dict:
         cur["pe_ttm"] = _num(vrow, "pe_ttm") if _num(vrow, "pe_ttm") is not None else _num(vrow, "pe")
         cur["ps"] = _num(vrow, "ps_ttm")
         cur["pb"] = _num(vrow, "pb")
-        cur["div_yield"] = _num(vrow, "dv_ttm")
+        # UNIT RULING: Tushare daily_basic dv_ttm is percent-form (4.258 == 4.258%). The contract stores
+        # div_yield as a 0..1 FRACTION → divide by 100 (→ 0.04258).
+        dv = _num(vrow, "dv_ttm")
+        cur["div_yield"] = dv / 100.0 if dv is not None else None
     if frow:
         gms = frow.get("gross_margin_series")
         cur["gross_margin"] = _f(frow.get("gross_margin")) if frow.get("gross_margin") is not None else (
@@ -309,8 +313,11 @@ def build_ratios(vrow, frow, annual) -> dict:
         debt, eq = last("debt"), last("equity")
         if debt is not None and eq:
             cur["debt_to_equity"] = round(debt / eq, 2)
-    return {"periods": (annual or {}).get("periods") or [],
-            "pe": [], "ps": [], "pb": [], "pcf": [], "ev": [], "ev_ebitda": [], "current": cur}
+    periods = (annual or {}).get("periods") or []
+    empty = [None] * len(periods)   # null-pad per-period series to len(periods) (contract §1.1)
+    return {"periods": periods,
+            "pe": list(empty), "ps": list(empty), "pb": list(empty), "pcf": list(empty),
+            "ev": list(empty), "ev_ebitda": list(empty), "current": cur}
 
 
 def build_stats(vrow, dbrow) -> dict:
@@ -418,6 +425,13 @@ def _arg(argv, flag, default=None):
     return argv[argv.index(flag) + 1] if flag in argv else default
 
 
+def atomic_write(dest: Path, text: str) -> None:
+    """Write via tmp+rename so a kill mid-write never leaves a truncated fund.json."""
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, dest)
+
+
 def main(argv: list[str]) -> None:
     only = _arg(argv, "--only")
     limit = int(_arg(argv, "--limit", 0) or 0)
@@ -452,8 +466,8 @@ def main(argv: list[str]) -> None:
                 src = {}
         try:
             fund = build_fund(sym, src, stmts, vmap, dbmap, fmap, divmap, fcmap, hmap)
-            (out_dir / f"{sym}.fund.json").write_text(
-                json.dumps(fund, separators=(",", ":"), ensure_ascii=False, sort_keys=False))
+            atomic_write(out_dir / f"{sym}.fund.json",
+                         json.dumps(fund, separators=(",", ":"), ensure_ascii=False, sort_keys=False))
             ok += 1
         except Exception as exc:   # noqa: BLE001
             err += 1

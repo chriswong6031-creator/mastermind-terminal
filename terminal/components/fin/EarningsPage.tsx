@@ -18,6 +18,10 @@ import type { Fund, EarningsQuarter, EarningsFY } from "../../lib/fund"
 import { fmtNum, fmtDate, daysUntil, periodLabel, pick } from "../../lib/finFormat"
 import { Dumbbell, type DumbbellPoint } from "./FinCharts"
 
+// Extend DumbbellPoint to carry pre-computed surprise so table rows
+// never re-index the raw qs/fys arrays by display position.
+type DumbbellPointWithSurp = DumbbellPoint & { surp_pct?: number | null }
+
 export interface EarningsPageProps {
   fund: Fund | null
   zh?: boolean
@@ -27,19 +31,24 @@ export interface EarningsPageProps {
 
 type Mode = "annual" | "quarterly"
 
-/** Build DumbbellPoint[] from quarterly or annual data. */
+/** Build DumbbellPointWithSurp[] from quarterly or annual data.
+ *  surp_pct is carried ON each point at build time — table rows must read
+ *  p.surp_pct and never re-index the raw qs/fys arrays by display index. */
 function buildEpsDumbbell(
   qs: EarningsQuarter[],
   fys: EarningsFY[],
   mode: Mode,
   estimates: Fund["estimates"]
-): DumbbellPoint[] {
+): DumbbellPointWithSurp[] {
   if (mode === "quarterly") {
-    const pts: DumbbellPoint[] = qs.map((q) => ({
-      label: periodLabel(q.period),
-      actual: q.eps_a,
-      estimate: q.eps_e,
-    }))
+    const pts: DumbbellPointWithSurp[] = qs.map((q) => {
+      // Compute surprise from the source row, not deferred to display time.
+      let surp_pct: number | null = q.surp_pct ?? null
+      if (surp_pct == null && q.eps_a != null && q.eps_e != null && q.eps_e !== 0) {
+        surp_pct = ((q.eps_a - q.eps_e) / Math.abs(q.eps_e)) * 100
+      }
+      return { label: periodLabel(q.period), actual: q.eps_a, estimate: q.eps_e, surp_pct }
+    })
     // Append forward quarter estimates (from estimates.eps_q)
     const eq = estimates?.eps_q
     if (eq) {
@@ -47,23 +56,24 @@ function buildEpsDumbbell(
         // Avoid duplicating a quarter already in qs
         const label = periodLabel(p)
         if (!pts.some((pt) => pt.label === label)) {
-          pts.push({ label, actual: null, estimate: eq.avg[i] ?? null })
+          pts.push({ label, actual: null, estimate: eq.avg[i] ?? null, surp_pct: null })
         }
       })
     }
     return pts.slice(-10) // show last 10
   } else {
-    const pts: DumbbellPoint[] = fys.map((fy) => ({
+    const pts: DumbbellPointWithSurp[] = fys.map((fy) => ({
       label: fy.period,
       actual: fy.eps_a,
       estimate: fy.eps_e,
+      surp_pct: fy.surp_pct ?? null,
     }))
     // Append FY forward estimates (max 2)
     const ef = estimates?.eps_fy
     if (ef) {
       ef.periods.slice(0, 2).forEach((p, i) => {
         if (!pts.some((pt) => pt.label === p)) {
-          pts.push({ label: p, actual: null, estimate: ef.avg[i] ?? null })
+          pts.push({ label: p, actual: null, estimate: ef.avg[i] ?? null, surp_pct: null })
         }
       })
     }
@@ -76,26 +86,30 @@ function buildRevDumbbell(
   fys: EarningsFY[],
   mode: Mode,
   estimates: Fund["estimates"]
-): DumbbellPoint[] {
+): DumbbellPointWithSurp[] {
   if (mode === "quarterly") {
-    const pts: DumbbellPoint[] = qs.map((q) => ({
-      label: periodLabel(q.period),
-      actual: q.rev_a,
-      estimate: q.rev_e,
-    }))
-    const rq = estimates?.rev_fy // no per-quarter rev estimates in spec; skip
+    const pts: DumbbellPointWithSurp[] = qs.map((q) => {
+      let surp_pct: number | null = null
+      if (q.rev_a != null && q.rev_e != null && q.rev_e !== 0) {
+        surp_pct = ((q.rev_a - q.rev_e) / Math.abs(q.rev_e)) * 100
+      }
+      return { label: periodLabel(q.period), actual: q.rev_a, estimate: q.rev_e, surp_pct }
+    })
+    // no per-quarter rev estimates in spec
     return pts.slice(-10)
   } else {
-    const pts: DumbbellPoint[] = fys.map((fy) => ({
-      label: fy.period,
-      actual: fy.rev_a,
-      estimate: fy.rev_e,
-    }))
+    const pts: DumbbellPointWithSurp[] = fys.map((fy) => {
+      let surp_pct: number | null = null
+      if (fy.rev_a != null && fy.rev_e != null && fy.rev_e !== 0) {
+        surp_pct = ((fy.rev_a - fy.rev_e) / Math.abs(fy.rev_e)) * 100
+      }
+      return { label: fy.period, actual: fy.rev_a, estimate: fy.rev_e, surp_pct }
+    })
     const rf = estimates?.rev_fy
     if (rf) {
       rf.periods.slice(0, 2).forEach((p, i) => {
         if (!pts.some((pt) => pt.label === p)) {
-          pts.push({ label: p, actual: null, estimate: rf.avg[i] ?? null })
+          pts.push({ label: p, actual: null, estimate: rf.avg[i] ?? null, surp_pct: null })
         }
       })
     }
@@ -227,18 +241,9 @@ function RevenueModule({
                   {pick(!!zh, "Surprise", "超预期")}
                 </th>
                 {pts.map((p, i) => {
-                  // compute surprise from actual/estimate if not pre-computed
-                  let surp: number | null = null
-                  if (mode === "quarterly") {
-                    const q = qs[i]
-                    surp = q?.surp_pct ?? null
-                    if (surp == null && p.actual != null && p.estimate != null && p.estimate !== 0) {
-                      surp = ((p.actual - p.estimate) / Math.abs(p.estimate)) * 100
-                    }
-                  } else {
-                    const fy = fys[i]
-                    surp = fy?.surp_pct ?? null
-                  }
+                  // surp_pct is pre-computed on each point at build time —
+                  // NEVER re-index raw qs/fys by display index (they diverge after slice)
+                  const surp = (p as DumbbellPointWithSurp).surp_pct ?? null
                   return (
                     <td key={i} className="fin-cell fin-cell-num">
                       {surp != null ? (
@@ -399,18 +404,9 @@ export default function EarningsPage({ fund, zh }: EarningsPageProps) {
                       {pick(!!zh, "Surprise", "超预期")}
                     </th>
                     {epsPts.map((p, i) => {
-                      // Use pre-computed surp_pct from quarterly/FY data when available
-                      let surp: number | null = null
-                      if (epsMode === "quarterly") {
-                        const q = qs[i]
-                        surp = q?.surp_pct ?? null
-                        if (surp == null && p.actual != null && p.estimate != null && p.estimate !== 0) {
-                          surp = ((p.actual - p.estimate) / Math.abs(p.estimate)) * 100
-                        }
-                      } else {
-                        const fy = fys[i]
-                        surp = fy?.surp_pct ?? null
-                      }
+                      // surp_pct is pre-computed on each point at build time —
+                      // NEVER re-index raw qs/fys by display index (they diverge after slice)
+                      const surp = (p as DumbbellPointWithSurp).surp_pct ?? null
                       return (
                         <td key={i} className="fin-cell fin-cell-num">
                           {surp != null ? (

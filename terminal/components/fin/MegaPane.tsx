@@ -11,15 +11,16 @@
  *   - scrim + pane at z-index 90 (fin.css foundation)
  *   - Esc closes: window keydown, capture:true + stopPropagation so it wins over
  *     ChartPanel/SearchModal Esc listeners. The TranscriptDrawer, when open, has
- *     its OWN capture handler that stops propagation first, so Esc closes the
- *     drawer before the pane.
+ *     its OWN capture handler that calls stopImmediatePropagation, AND this
+ *     handler early-returns while a drawer is open — so Esc closes the drawer
+ *     before the pane (belt-and-braces).
  *   - body scroll lock while open
  *   - shallow deep-link: ?pane=<page> synced via history.replaceState
  *
  * FE3 mounts this and passes {sym, fund, intel, row, slice, quote, bars}. Sibling
  * page components (FE2b/FE2c/FE2d) are imported by name — they land in parallel.
  */
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useLang } from "../../lib/i18n";
 import { pick } from "../../lib/finFormat";
 import type { Fund, Bar } from "../../lib/fund";
@@ -107,16 +108,23 @@ export default function MegaPane({
   const { lang } = useLang();
   const zh = lang === "zh";
   const [txId, setTxId] = useState<string | null>(null);
+  // Read the current drawer state inside the (once-registered) Esc handler
+  // without re-subscribing the window listener on every txId change.
+  const txOpenRef = useRef(false);
+  txOpenRef.current = txId != null;
 
   const displayName = name || fund?.ticker || sym;
   const initial = (displayName || sym).trim().charAt(0).toUpperCase();
 
   // ── Esc (capture + stopPropagation so we win over ChartPanel/SearchModal) ──
   // The TranscriptDrawer registers its own capture handler; when it's open it
-  // stops propagation first, so this only fires once the drawer is closed.
+  // calls stopImmediatePropagation so this never fires. Belt-and-braces: we also
+  // early-return here whenever a drawer is open (regardless of listener order),
+  // so Esc closes the drawer BEFORE the pane.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (txOpenRef.current) return; // drawer owns Esc while open
         e.stopPropagation();
         onClose();
       }

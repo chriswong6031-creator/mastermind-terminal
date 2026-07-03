@@ -91,7 +91,13 @@ function resampleTf(rows: Bar[], tf: string): Bar[] {
   if (tf === "D" || rows.length === 0) return rows;
   const out: Bar[] = []; let cur: Bar | null = null; let key: any = null;
   const isoWeek = (d: string) => { const dt = new Date(d + "T00:00:00Z"); const day = (dt.getUTCDay() + 6) % 7; dt.setUTCDate(dt.getUTCDate() - day); return dt.toISOString().slice(0, 10); };
-  for (let i = 0; i < rows.length; i++) { const r = rows[i]; const k = tf === "W" ? isoWeek(r.time) : tf === "1M" ? r.time.slice(0, 7) : Math.floor(i / 3); if (k !== key) { if (cur) out.push(cur); key = k; cur = { ...r }; } else { cur!.h = Math.max(cur!.h, r.h); cur!.l = Math.min(cur!.l, r.l); cur!.c = r.c; cur!.time = r.time; cur!.v += r.v; } }
+  // 2W / 3M use ABSOLUTE-calendar bucketing (anchored to a fixed epoch, not the data's first bar), so
+  // buckets are stable across a month/quarter boundary regardless of where the window starts:
+  //   2W → floor(days-since-epoch of the bar's ISO-week-start / 14)   (fixed fortnight blocks)
+  //   3M → year + calendar quarter (Q0=Jan-Mar … Q3=Oct-Dec)
+  const biWeek = (d: string) => { const dt = new Date(isoWeek(d) + "T00:00:00Z"); return Math.floor(dt.getTime() / 86400_000 / 14); };
+  const quarter = (d: string) => { const y = d.slice(0, 4); const m = +d.slice(5, 7) - 1; return `${y}-Q${Math.floor(m / 3)}`; };
+  for (let i = 0; i < rows.length; i++) { const r = rows[i]; const k = tf === "W" ? isoWeek(r.time) : tf === "2W" ? biWeek(r.time) : tf === "1M" ? r.time.slice(0, 7) : tf === "3M" ? quarter(r.time) : Math.floor(i / 3); if (k !== key) { if (cur) out.push(cur); key = k; cur = { ...r }; } else { cur!.h = Math.max(cur!.h, r.h); cur!.l = Math.min(cur!.l, r.l); cur!.c = r.c; cur!.time = r.time; cur!.v += r.v; } }
   if (cur) out.push(cur); return out;
 }
 function heikin(rows: Bar[]): Bar[] { const out: Bar[] = []; let po = 0, pc = 0; for (let i = 0; i < rows.length; i++) { const r = rows[i]; const hc = (r.o + r.h + r.l + r.c) / 4; const ho = i === 0 ? (r.o + r.c) / 2 : (po + pc) / 2; out.push({ ...r, o: ho, c: hc, h: Math.max(r.h, ho, hc), l: Math.min(r.l, ho, hc) }); po = ho; pc = hc; } return out; }
@@ -354,12 +360,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         bucket = { ...bucket, time: chartLastTime as string };
       }
     }
-    try { priceS.update(chartTypeRef.current === "heikin" ? bucket : (chartTypeRef.current === "line" || chartTypeRef.current === "area" ? { time: bucket.time, value: bucket.c } : { time: bucket.time, open: bucket.o, high: bucket.h, low: bucket.l, close: bucket.c }) as any); } catch { return; }
+    // heikin falls through to the OHLC mapping (raw candle acceptable per spec caveat) — passing the
+    // raw {o,h,l,c,v} bucket to a candlestick series is read as a whitespace point (no `open` key)
+    // and BLANKS the live candle. Map to {open,high,low,close} like the candle/bars family.
+    try { priceS.update((chartTypeRef.current === "line" || chartTypeRef.current === "area" ? { time: bucket.time, value: bucket.c } : { time: bucket.time, open: bucket.o, high: bucket.h, low: bucket.l, close: bucket.c }) as any); } catch { return; }
     // keep the in-memory bar sets in step with what's on the chart (last bucket only)
     const fb = fullBarsRef.current;
-    if (fb.length) { if (fb[fb.length - 1].time === bucket.time) fb[fb.length - 1] = bucket; else fullBarsRef.current = [...fb, bucket]; }
     const bs = barsRef.current;
-    if (bs.length && bs === fb) { /* same ref already patched */ }
+    // Capture ref identity BEFORE the fullBarsRef append below reassigns it to a new array. Off-replay
+    // Effect 2 sets barsRef.current === fullBarsRef.current, so wasSame is true; on the APPEND case
+    // fullBarsRef is reassigned to [...fb, bucket] while `fb`/`bs` still hold the old array — we must
+    // resync barsRef to the new fullBarsRef (else the status line reads the pre-splice tail for a poll).
+    const wasSame = bs.length > 0 && bs === fb;
+    if (fb.length) { if (fb[fb.length - 1].time === bucket.time) fb[fb.length - 1] = bucket; else fullBarsRef.current = [...fb, bucket]; }
+    if (wasSame) { barsRef.current = fullBarsRef.current; }
     else if (bs.length) { if (bs[bs.length - 1].time === bucket.time) bs[bs.length - 1] = bucket; else barsRef.current = [...bs, bucket]; }
     closesRef.current = barsRef.current.map((r) => r.c);
     paintStatus(barsRef.current, sliceRef.current);

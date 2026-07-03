@@ -31,7 +31,7 @@ Writes into  <Macro Dashboard>/data/ :
 Run with the macro venv (pandas + TUSHARE_TOKEN in <Macro Dashboard>/.env):
     "<Macro Dashboard>/.venv/bin/python" ingest/collect_cn_hk_fund.py \
         [--market cn|hk|all] [--only 600519.SH,0700.HK] [--limit N] \
-        [--periods 28] [--skip-stmt] [--skip-div] [--force]
+        [--periods 28] [--stale-days 7] [--skip-stmt] [--skip-div] [--force]
 """
 from __future__ import annotations
 
@@ -100,6 +100,14 @@ def _f(v):
         return None if x != x else x
     except (TypeError, ValueError):
         return None
+
+
+def _atomic_write(dest: Path, text: str) -> None:
+    """Write via tmp+rename so a kill mid-write never leaves a truncated per-ticker cache that the
+    exists()/stale check would then treat as valid."""
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, dest)
 
 
 # ─────────────────────────────── universes ───────────────────────────────
@@ -265,16 +273,21 @@ def _ymd(s):
     return f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 and s.isdigit() else s
 
 
-def collect_cn_dividends(codes: list[str], force: bool) -> None:
+def collect_cn_dividends(codes: list[str], force: bool, stale_days: int = 7) -> None:
     have: dict[str, str] = {}
     path = OUT / "dividends.parquet"
+    stale = False   # if the parquet itself is older than stale_days, re-fetch every ticker
     if path.exists() and not force:
+        age_days = (time.time() - path.stat().st_mtime) / 86400
+        stale = stale_days > 0 and age_days >= stale_days
         try:
             for r in pd.read_parquet(path).to_dict("records"):
                 have[str(r["ts_code"])] = r["events_json"]
         except Exception:
             pass
-    todo = [c for c in codes if c not in have]
+    # A stale parquet re-fetches every code (a late-filed / revised dividend is otherwise never revisited);
+    # a fresh parquet only fetches codes not yet cached.
+    todo = list(codes) if stale else [c for c in codes if c not in have]
     print(f"CN dividends: {len(codes)} names, {len(todo)} to fetch", flush=True)
     done = ok = 0
     try:
@@ -408,19 +421,23 @@ def _fetch_hk(sym: str) -> dict | None:
     return {"ticker": sym, "financials": fin, "yf": yf}
 
 
-def collect_hk_fund(syms: list[str], force: bool) -> None:
+def collect_hk_fund(syms: list[str], force: bool, stale_days: int = 7) -> None:
     HK_OUT.mkdir(parents=True, exist_ok=True)
     done = ok = 0
     try:
         for sym in syms:
             cache = HK_OUT / f"{sym}.json"
+            # Re-fetch when missing, forced, or older than stale_days (otherwise a cache written on the
+            # first backfill is skipped forever and never picks up new report dates / analyst updates).
             if cache.exists() and not force:
-                done += 1
-                continue
+                age_days = (time.time() - cache.stat().st_mtime) / 86400
+                if stale_days <= 0 or age_days < stale_days:
+                    done += 1
+                    continue
             rec = _fetch_hk(sym)
             done += 1
             if rec:
-                cache.write_text(json.dumps(rec, ensure_ascii=False, default=str))
+                _atomic_write(cache, json.dumps(rec, ensure_ascii=False, default=str))
                 ok += 1
             if done % 25 == 0 or done == len(syms):
                 print(f"  hk_fund: {done}/{len(syms)} done, {ok} newly cached", flush=True)
@@ -439,6 +456,7 @@ def main(argv: list[str]) -> None:
     only = _arg(argv, "--only")
     limit = int(_arg(argv, "--limit", 0) or 0)
     periods_n = int(_arg(argv, "--periods", 28) or 28)
+    stale_days = int(_arg(argv, "--stale-days", 7) or 7)
     skip_stmt = "--skip-stmt" in argv
     skip_div = "--skip-div" in argv
     force = "--force" in argv
@@ -466,7 +484,7 @@ def main(argv: list[str]) -> None:
             print("  --only set: statements are whole-market — skipping the period pulls "
                   "(run without --only to refresh stmt parquets)", flush=True)
         if not skip_div:
-            collect_cn_dividends(cn, force)
+            collect_cn_dividends(cn, force, stale_days)
 
     if market in ("hk", "all"):
         hk = hk_universe()
@@ -476,7 +494,7 @@ def main(argv: list[str]) -> None:
         if limit:
             hk = hk[:limit]
         print(f"=== HK ({len(hk)} names) ===", flush=True)
-        collect_hk_fund(hk, force)
+        collect_hk_fund(hk, force, stale_days)
 
     print(f"done in {time.time() - t0:.0f}s", flush=True)
 

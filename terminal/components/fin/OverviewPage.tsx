@@ -78,9 +78,15 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
   const [wfAQ, setWfAQ] = useState<AQ>("annual");
   const [healthAQ, setHealthAQ] = useState<AQ>("annual");
 
-  const cur = fund?.quote_currency || "USD";
-  const curSuffix = ` ${cur}`;
-  const fmtV = (v: number) => fmtNum(v) + curSuffix;
+  // quote_currency = price/mktcap side; stmt_currency = statement/estimate side.
+  // For many HK names these differ (0700.HK: quote HKD vs stmt CNY) — NEVER mix
+  // the two in a ratio or a combined chart, and label each section by its own.
+  const quoteCur = fund?.quote_currency || "USD";
+  const stmtCur = fund?.stmt_currency || quoteCur;
+  const crossCur = quoteCur !== stmtCur;
+  // statement-derived values (waterfall, revenue combo, health bars, segments)
+  const stmtSuffix = ` ${stmtCur}`;
+  const fmtV = (v: number) => fmtNum(v) + stmtSuffix;
 
   if (!fund) {
     return (
@@ -157,6 +163,9 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
       : [];
 
   // ── Valuation: P/S per period ──
+  // P/S = mktcap (quote_currency) / revenue (stmt_currency). When the two
+  // currencies differ we have no FX rate in the contract, so the ratio is
+  // meaningless — suppress the series and show a cross-currency empty state.
   const valSet = valAQ === "annual" ? ann : qtr;
   const psLabels = valSet?.periods ?? [];
   const psSeries: Series[] = [
@@ -225,6 +234,13 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
         ];
   const posLabels = [pick(zh, "Short term", "短期"), pick(zh, "Long term", "长期")];
 
+  // bilingual cross-currency explanation (P/S + capital-structure suppression)
+  const crossCurMsg = pick(
+    zh,
+    `Price is in ${quoteCur} but financials are reported in ${stmtCur}; this comparison is suppressed to avoid mixing currencies.`,
+    `股价以 ${quoteCur} 计价，而财报以 ${stmtCur} 列报；为避免货币混用，此项已隐藏。`,
+  );
+
   return (
     <div className="fin-ov">
       {/* ── KEY FACTS ── */}
@@ -280,13 +296,17 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
           </div>
           <div className="fin-card">
             <div className="fin-card-h">{pick(zh, "Capital structure", "资本结构")}</div>
-            <CapitalStructure
-              marketCap={s?.mktcap ?? null}
-              debt={latestFinite(ann?.balance?.debt) ?? latestFinite(qtr?.balance?.debt)}
-              cash={latestFinite(ann?.balance?.cash) ?? latestFinite(qtr?.balance?.cash)}
-              fmtV={fmtV}
-              zh={zh}
-            />
+            {crossCur ? (
+              <div className="fin-empty">{crossCurMsg}</div>
+            ) : (
+              <CapitalStructure
+                marketCap={s?.mktcap ?? null}
+                debt={latestFinite(ann?.balance?.debt) ?? latestFinite(qtr?.balance?.debt)}
+                cash={latestFinite(ann?.balance?.cash) ?? latestFinite(qtr?.balance?.cash)}
+                fmtV={fmtV}
+                zh={zh}
+              />
+            )}
           </div>
         </div>
       </section>
@@ -303,7 +323,11 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
           <div className="fin-card-h">
             {pick(zh, "Valuation ratios", "估值比率")} <AQToggle v={valAQ} onChange={setValAQ} zh={zh} />
           </div>
-          <LineSeries labels={psLabels} series={psSeries} fmtY={(v) => fmtNum(v)} markers zh={zh} height={190} />
+          {crossCur ? (
+            <div className="fin-empty">{crossCurMsg}</div>
+          ) : (
+            <LineSeries labels={psLabels} series={psSeries} fmtY={(v) => fmtNum(v)} markers zh={zh} height={190} />
+          )}
         </div>
       </section>
 
@@ -486,7 +510,13 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
       </section>
 
       <div className="fin-ov-cur">
-        {pick(zh, "Values in", "计价货币")} {currencySymbol(cur) || cur} · {cur}
+        {pick(zh, "Statement values in", "报表数据计价")} {currencySymbol(stmtCur) || stmtCur} · {stmtCur}
+        {crossCur && (
+          <>
+            {" · "}
+            {pick(zh, "Price values in", "股价数据计价")} {currencySymbol(quoteCur) || quoteCur} · {quoteCur}
+          </>
+        )}
       </div>
     </div>
   );

@@ -24,6 +24,7 @@ Run with the macro venv:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import datetime as dt
 from pathlib import Path
@@ -276,8 +277,11 @@ def build_ratios(cache: dict, ann: Frame, fy_end_m: int) -> dict:
     # history → leave as null-padded arrays aligned to the annual periods; `current` carries the snapshot.
     n = len(periods)
     empty = [None] * n
+    # UNIT RULING: yfinance 1.4.1 reports dividendYield in PERCENT form (0.35 == 0.35%, 3.92 == 3.92%).
+    # The fund.json contract stores div_yield/yield_ttm as a 0..1 FRACTION (sibling to gross_margin/roe/
+    # payout). Always divide the percent-form by 100 → 0.0035 / 0.0392.
     div_yield = num(info.get("dividendYield"))
-    if div_yield is not None and div_yield > 1:      # yfinance sometimes reports percent (0.51) vs frac
+    if div_yield is not None:
         div_yield = div_yield / 100.0
     current = {
         "pe_ttm": num(info.get("trailingPE")), "pe_fwd": num(info.get("forwardPE")),
@@ -535,8 +539,9 @@ def build_dividends(cache: dict) -> dict:
             # yfinance split value 4.0 == a 4:1 split
             rr = f"{int(r)}:1" if r == int(r) else f"{r}:1"
             split_events.append({"date": str(d)[:10], "ratio": rr})
+    # UNIT RULING: yfinance dividendYield is percent-form → normalize to a 0..1 fraction.
     dy = num(info.get("dividendYield"))
-    if dy is not None and dy > 1:
+    if dy is not None:
         dy = dy / 100.0
     return {
         "never_paid": never_paid,
@@ -658,6 +663,13 @@ def dump(fund: dict) -> str:
     return json.dumps(ordered, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def atomic_write(dest: Path, text: str) -> None:
+    """Write text to dest via tmp+rename so a kill mid-write never leaves a truncated file."""
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, dest)
+
+
 # ───────────────────────────── driver ─────────────────────────────
 def load_tx_index() -> dict:
     if TX_INDEX.exists():
@@ -699,7 +711,7 @@ def main(argv: list[str]) -> None:
             site = json.loads(sf.read_text()) if sf.exists() else {}
             tx_ids = set(tx_map.get(sym) or []) or None
             fund = build_fund(sym, cache, site, tx_ids)
-            (OUT / f"{sym}.fund.json").write_text(dump(fund))
+            atomic_write(OUT / f"{sym}.fund.json", dump(fund))
             ok += 1
         except Exception as exc:  # noqa: BLE001
             err += 1

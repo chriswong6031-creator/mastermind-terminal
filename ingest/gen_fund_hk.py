@@ -28,7 +28,9 @@ Usage:
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -70,6 +72,13 @@ def _pick(items: dict, codes) -> float | None:
         if v is not None:
             return _f(v)
     return None
+
+
+def _div_yield_frac(yf: dict):
+    """UNIT RULING: yfinance 1.4.1 reports dividendYield in PERCENT form (3.92 == 3.92%). The
+    fund.json contract stores div_yield/yield_ttm as a 0..1 FRACTION → divide the percent-form by 100."""
+    v = _f((yf or {}).get("div_yield"))
+    return v / 100.0 if v is not None else None
 
 
 def _q_label(end: str) -> str:
@@ -191,9 +200,57 @@ def build_analyst(yf: dict) -> dict | None:
     }
 
 
-def build_estimates(yf: dict) -> dict | None:
+def _latest_annual_year(fin: dict) -> int | None:
+    """Newest completed fiscal-year (Dec-31 / DATE_TYPE 001) from the income statement, as an int."""
+    best = None
+    for r in (fin or {}).get("income") or []:
+        if r.get("date_type") == _ANNUAL_TYPE:
+            end = str(r.get("end") or "")
+            if len(end) >= 4 and end[:4].isdigit():
+                y = int(end[:4])
+                if best is None or y > best:
+                    best = y
+    return best
+
+
+def _fy_periods(fin: dict, yf: dict) -> list[str]:
+    """Real fiscal-year labels for estimates [0y, +1y]. HK filers are Dec-end: 0y = the fiscal year
+    currently in progress = latest completed FY + 1; +1y = the year after. Derive the base from the
+    newest annual statement, falling back to next_earnings' calendar year."""
+    base = _latest_annual_year(fin)
+    if base is None:
+        ne = str((yf or {}).get("next_earnings") or "")
+        if len(ne) >= 4 and ne[:4].isdigit():
+            base = int(ne[:4]) - 1
+    if base is None:
+        return ["0y", "+1y"]   # last resort: keep placeholders rather than emit wrong years
+    fy0 = base + 1
+    return [str(fy0), str(fy0 + 1)]
+
+
+def _q_periods(fin: dict, yf: dict) -> list[str]:
+    """Real quarter labels for eps_q [0q, +1q]. The next earnings date reports the quarter that
+    closed ~35 days earlier (Dec-end filer → calendar quarter); +1q is the following quarter."""
+    ne = str((yf or {}).get("next_earnings") or "")
+    try:
+        d = _dt.date.fromisoformat(ne[:10])
+    except Exception:
+        return ["0q", "+1q"]
+    reported = d - _dt.timedelta(days=35)     # snap back to the reported quarter-end
+    m0 = reported.month
+    q0 = (m0 - 1) // 3 + 1
+    y0 = reported.year
+    q1 = q0 + 1
+    y1 = y0
+    if q1 > 4:
+        q1, y1 = 1, y0 + 1
+    return [f"Q{q0} '{y0 % 100:02d}", f"Q{q1} '{y1 % 100:02d}"]
+
+
+def build_estimates(yf: dict, fin: dict | None = None) -> dict | None:
     if not yf:
         return None
+    fin = fin or {}
     ee = yf.get("eps_est") or {}
     re_ = yf.get("rev_est") or {}
     # yfinance index labels: 0q,+1q,0y,+1y
@@ -211,10 +268,12 @@ def build_estimates(yf: dict) -> dict | None:
     eps_q = row(ee, ["0q", "+1q"])
     if not (any(eps_fy["avg"]) or any(rev_fy["avg"]) or any(eps_q["avg"])):
         return None
+    fy_periods = _fy_periods(fin, yf)
+    q_periods = _q_periods(fin, yf)
     return {
-        "eps_fy": {"periods": ["0y", "+1y"], **eps_fy},
-        "rev_fy": {"periods": ["0y", "+1y"], **rev_fy},
-        "eps_q": {"periods": ["0q", "+1q"], **eps_q},
+        "eps_fy": {"periods": list(fy_periods), **eps_fy},
+        "rev_fy": {"periods": list(fy_periods), **rev_fy},
+        "eps_q": {"periods": list(q_periods), **eps_q},
         "growth": {"rev_yoy": yf.get("rev_growth"), "eps_yoy": yf.get("eps_growth")},
     }
 
@@ -228,7 +287,7 @@ def build_stats(yf: dict) -> dict:
 
 def build_ratios(yf: dict, annual) -> dict:
     cur = {"pe_ttm": yf.get("trailing_pe"), "pe_fwd": yf.get("forward_pe"), "ps": yf.get("ps"),
-           "pb": yf.get("pb"), "ev_ebitda": None, "div_yield": yf.get("div_yield"),
+           "pb": yf.get("pb"), "ev_ebitda": None, "div_yield": _div_yield_frac(yf),
            "payout": yf.get("payout_ratio"),
            "gross_margin": _pctize(yf.get("gross_margin")), "net_margin": _pctize(yf.get("net_margin")),
            "roe": _pctize(yf.get("roe")), "roa": _pctize(yf.get("roa")),
@@ -245,13 +304,30 @@ def build_ratios(yf: dict, annual) -> dict:
         debt, eq = last("debt"), last("equity")
         if debt is not None and eq:
             cur["debt_to_equity"] = round(debt / eq, 2)
-    return {"periods": (annual or {}).get("periods") or [], "pe": [], "ps": [], "pb": [],
-            "pcf": [], "ev": [], "ev_ebitda": [], "current": cur}
+    periods = (annual or {}).get("periods") or []
+    empty = [None] * len(periods)   # null-pad per-period series to len(periods) (contract §1.1)
+    return {"periods": periods, "pe": list(empty), "ps": list(empty), "pb": list(empty),
+            "pcf": list(empty), "ev": list(empty), "ev_ebitda": list(empty), "current": cur}
 
 
 def _pctize(v):
     """yfinance margins/roe are decimals (0.31); contract wants percent (31.0)."""
     return round(v * 100, 2) if isinstance(v, (int, float)) else None
+
+
+def _hk_never_paid(fin: dict, yf: dict, events: list) -> bool:
+    """A HK name is a dividend payer if it has ANY of: DPS events from the statement, a positive
+    yfinance dividend yield, or a yfinance dividends history. The income-statement 每股股息 row is
+    often empty for financials (e.g. 0005.HK/HSBC) even though they pay — so don't rely on it alone."""
+    if events:
+        return False
+    dy = _f((yf or {}).get("div_yield"))
+    if dy is not None and dy > 0:
+        return False
+    hist = (yf or {}).get("dividends") or (yf or {}).get("div_history")
+    if isinstance(hist, (list, dict)) and len(hist) > 0:
+        return False
+    return True
 
 
 def build_dividends(fin: dict, yf: dict) -> dict:
@@ -261,7 +337,7 @@ def build_dividends(fin: dict, yf: dict) -> dict:
         dps = _pick(r.get("items") or {}, INC["dps"])
         if dps and dps > 0 and r.get("date_type") == _ANNUAL_TYPE:
             events.append({"ex": r["end"], "amount": round(dps, 6), "pay": None, "type": "regular"})
-    return {"never_paid": len(events) == 0, "yield_ttm": yf.get("div_yield"),
+    return {"never_paid": _hk_never_paid(fin, yf, events), "yield_ttm": _div_yield_frac(yf),
             "payout_ratio": yf.get("payout_ratio"), "events": events, "splits": []}
 
 
@@ -297,7 +373,7 @@ def build_fund(sym: str, rec: dict) -> dict:
         "statements": {"annual": annual, "quarterly": statements.get("quarterly")},
         "ratios": build_ratios(yf, annual),
         "earnings": build_earnings(yf),
-        "estimates": build_estimates(yf),
+        "estimates": build_estimates(yf, fin),
         "analyst": build_analyst(yf),
         "dividends": build_dividends(fin, yf),
         "ownership": {"free_float_pct": None, "closely_held_pct": None, "top_inst": []},
@@ -312,6 +388,13 @@ def hk_universe() -> list[str]:
 
 def _arg(argv, flag, default=None):
     return argv[argv.index(flag) + 1] if flag in argv else default
+
+
+def atomic_write(dest: Path, text: str) -> None:
+    """Write via tmp+rename so a kill mid-write never leaves a truncated fund.json."""
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, dest)
 
 
 def main(argv: list[str]) -> None:
@@ -334,8 +417,8 @@ def main(argv: list[str]) -> None:
         try:
             rec = json.loads(cache.read_text())
             fund = build_fund(sym, rec)
-            (out_dir / f"{sym}.fund.json").write_text(
-                json.dumps(fund, separators=(",", ":"), ensure_ascii=False, sort_keys=False))
+            atomic_write(out_dir / f"{sym}.fund.json",
+                         json.dumps(fund, separators=(",", ":"), ensure_ascii=False, sort_keys=False))
             ok += 1
         except Exception as exc:   # noqa: BLE001
             err += 1

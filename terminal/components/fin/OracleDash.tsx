@@ -293,8 +293,10 @@ function SignalRow({ sig, zh, onJump }: { sig: Signal; zh: boolean; onJump: (ts:
   return (
     <tr
       className={"od-sig-row" + (hovered ? " od-sig-row-hov" : "")}
+      onClick={() => onJump(sig.ts)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      style={{ cursor: "pointer" }}
     >
       <td>
         <span className="od-badge" style={{ background: col }}>

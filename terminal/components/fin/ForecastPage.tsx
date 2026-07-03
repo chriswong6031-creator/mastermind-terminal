@@ -36,6 +36,7 @@ import {
   type Series,
   type MiniRow,
 } from "./FinCharts";
+import type { FundEarnings } from "../../lib/fund";
 
 interface ForecastPageProps {
   sym: string;
@@ -512,7 +513,9 @@ function buildEstimateRows(
     ? (freq === "A" ? est?.eps_fy : est?.eps_q)
     : (freq === "A" ? est?.rev_fy : null);
   if (fwd) {
-    fwd.periods.forEach((p, i) => {
+    fwd.periods.forEach((rawP, i) => {
+      // Map placeholder labels ('0y', '+1y', '0q', '+1q') to real fiscal labels.
+      const p = mapRawPeriodLabel(rawP, fund?.earnings);
       if (labels.includes(p)) {
         // patch estimate onto an existing (actual) column
         const idx = labels.indexOf(p);
@@ -553,7 +556,7 @@ function ActualsTab({
   ccy: string;
   zh: boolean;
 }) {
-  const built = useMemo(() => buildActualsTable(fund, est, stmt), [fund, est, stmt]);
+  const built = useMemo(() => buildActualsTable(fund, est, stmt, zh), [fund, est, stmt, zh]);
 
   // Top chart plots the EPS estimate fan (Actual / Average / High / Low).
   const chart = useMemo(() => {
@@ -567,7 +570,9 @@ function ActualsTab({
       actual.push(r.eps_a ?? null);
     }
     const labels = [...actLabels];
-    fy.periods.forEach((p) => {
+    // Map raw placeholder labels ('0y', '+1y') to display labels before use.
+    const mappedFyPeriods = fy.periods.map((p) => mapRawPeriodLabel(p, fund?.earnings));
+    mappedFyPeriods.forEach((p) => {
       if (!labels.includes(p)) labels.push(p + " E");
     });
     const actualPadded = new Array(labels.length).fill(null) as (number | null)[];
@@ -575,7 +580,7 @@ function ActualsTab({
     const avg = new Array(labels.length).fill(null) as (number | null)[];
     const high = new Array(labels.length).fill(null) as (number | null)[];
     const low = new Array(labels.length).fill(null) as (number | null)[];
-    fy.periods.forEach((p, i) => {
+    mappedFyPeriods.forEach((p, i) => {
       const li = labels.indexOf(p + " E") >= 0 ? labels.indexOf(p + " E") : labels.indexOf(p);
       if (li >= 0) {
         avg[li] = fy.avg[i] ?? null;
@@ -640,15 +645,45 @@ function ActualsTab({
 }
 
 /**
+ * mapRawPeriodLabel — defensively maps emitter placeholder labels
+ * ('0y', '+1y', '0q', '+1q') to human-readable fiscal labels derived
+ * from the most recent earnings.fy period or the current year.
+ */
+function mapRawPeriodLabel(p: string, earn: FundEarnings | null | undefined): string {
+  const RAW_FY = new Set(["0y", "+1y"]);
+  const RAW_Q = new Set(["0q", "+1q"]);
+  if (!RAW_FY.has(p) && !RAW_Q.has(p)) return p;
+
+  // Derive the current fiscal year from the last earned FY period or fall back to calendar year.
+  const lastFy = earn?.fy ? earn.fy[earn.fy.length - 1]?.period ?? null : null;
+  const baseYear = lastFy ? parseInt(lastFy, 10) : new Date().getFullYear();
+  const currentFY = isNaN(baseYear) ? new Date().getFullYear() : baseYear + 1;
+
+  if (RAW_FY.has(p)) {
+    return p === "0y" ? String(currentFY) : String(currentFY + 1);
+  }
+  // Quarter labels
+  const currentQ = Math.ceil((new Date().getMonth() + 1) / 3);
+  const currentYear = new Date().getFullYear();
+  if (p === "0q") return `Q${currentQ} '${String(currentYear).slice(2)}`;
+  const nextQ = currentQ === 4 ? 1 : currentQ + 1;
+  const nextYear = currentQ === 4 ? currentYear + 1 : currentYear;
+  return `Q${nextQ} '${String(nextYear).slice(2)}`;
+}
+
+/**
  * buildActualsTable — the estimates table: an expandable EPS group
  * (Actual/Average/High/Low/# estimates) plus collapsed statement line-item rows.
  * Estimate detail only exists for EPS + revenue (the only estimate series); other
  * rows show actuals and `—` for the ` E` columns.
+ * All row labels are bilingual via pick(zh, en, cn).
  */
-function buildActualsTable(fund: Fund | null, est: Fund["estimates"], stmt: "income" | "balance" | "cashflow") {
+function buildActualsTable(fund: Fund | null, est: Fund["estimates"], stmt: "income" | "balance" | "cashflow", zh: boolean) {
   const fyEarn = fund?.earnings?.fy ?? [];
   const actualLabels = fyEarn.map((r) => r.period);
-  const estPeriods = est?.eps_fy.periods ?? [];
+  const rawEstPeriods = est?.eps_fy.periods ?? [];
+  // Map any raw yfinance placeholder labels ('0y', '+1y') to real fiscal labels.
+  const estPeriods = rawEstPeriods.map((p) => mapRawPeriodLabel(p, fund?.earnings));
   const periods: string[] = [...actualLabels];
   estPeriods.forEach((p) => {
     if (!periods.includes(p)) periods.push(p + " E");
@@ -657,7 +692,9 @@ function buildActualsTable(fund: Fund | null, est: Fund["estimates"], stmt: "inc
   const alignEst = (series: { periods: string[]; avg: (number | null)[]; high: (number | null)[]; low: (number | null)[]; n: (number | null)[] } | undefined, key: "avg" | "high" | "low" | "n") => {
     const out = new Array(periods.length).fill(null) as (number | null)[];
     if (!series) return out;
-    series.periods.forEach((p, i) => {
+    // Map raw periods to display labels before looking up
+    series.periods.forEach((rawP, i) => {
+      const p = mapRawPeriodLabel(rawP, fund?.earnings);
       const li = periods.indexOf(p + " E") >= 0 ? periods.indexOf(p + " E") : periods.indexOf(p);
       if (li >= 0) out[li] = (series[key] as (number | null)[])[i] ?? null;
     });
@@ -669,18 +706,18 @@ function buildActualsTable(fund: Fund | null, est: Fund["estimates"], stmt: "inc
 
   const rows: MiniRow[] = [];
 
-  // Expandable EPS group.
+  // Expandable EPS group — ALL labels bilingual via pick(zh, en, cn).
   rows.push({
-    label: pick(false, "Earnings per share", "每股收益"),
+    label: pick(zh, "Earnings per share", "每股收益"),
     values: actualEps,
     bold: true,
     fmt: (v) => fmtNum(v, { decimals: 2 }),
     children: [
-      { label: "Actual", values: actualEps, depth: 1, fmt: (v) => fmtNum(v, { decimals: 2 }) },
-      { label: "Average", values: alignEst(est?.eps_fy, "avg"), depth: 1, fmt: (v) => fmtNum(v, { decimals: 2 }) },
-      { label: "High", values: alignEst(est?.eps_fy, "high"), depth: 1, fmt: (v) => fmtNum(v, { decimals: 2 }) },
-      { label: "Low", values: alignEst(est?.eps_fy, "low"), depth: 1, fmt: (v) => fmtNum(v, { decimals: 2 }) },
-      { label: "# estimates", values: alignEst(est?.eps_fy, "n"), depth: 1, fmt: (v) => fmtNum(v, { decimals: 0 }) },
+      { label: pick(zh, "Actual", "实际"), values: actualEps, depth: 1, fmt: (v) => fmtNum(v, { decimals: 2 }) },
+      { label: pick(zh, "Average", "平均"), values: alignEst(est?.eps_fy, "avg"), depth: 1, fmt: (v) => fmtNum(v, { decimals: 2 }) },
+      { label: pick(zh, "High", "最高"), values: alignEst(est?.eps_fy, "high"), depth: 1, fmt: (v) => fmtNum(v, { decimals: 2 }) },
+      { label: pick(zh, "Low", "最低"), values: alignEst(est?.eps_fy, "low"), depth: 1, fmt: (v) => fmtNum(v, { decimals: 2 }) },
+      { label: pick(zh, "# estimates", "预测机构数"), values: alignEst(est?.eps_fy, "n"), depth: 1, fmt: (v) => fmtNum(v, { decimals: 0 }) },
     ],
   });
 
@@ -696,36 +733,36 @@ function buildActualsTable(fund: Fund | null, est: Fund["estimates"], stmt: "inc
     return out;
   };
 
-  const lineItems: [string, (number | null)[] | undefined][] =
+  const lineItems: [string, string, (number | null)[] | undefined][] =
     stmt === "income"
       ? [
-          ["Total revenue", ann?.income.revenue],
-          ["Cost of goods sold", ann?.income.cogs],
-          ["Gross profit", ann?.income.gross_profit],
-          ["Operating income", ann?.income.op_income],
-          ["Pretax income", ann?.income.pretax_income],
-          ["EBITDA", ann?.income.ebitda],
-          ["Net income", ann?.income.net_income],
+          ["Total revenue", "营业总收入", ann?.income.revenue],
+          ["Cost of goods sold", "营业成本", ann?.income.cogs],
+          ["Gross profit", "毛利润", ann?.income.gross_profit],
+          ["Operating income", "营业利润", ann?.income.op_income],
+          ["Pretax income", "税前利润", ann?.income.pretax_income],
+          ["EBITDA", "息税折旧摊销前利润", ann?.income.ebitda],
+          ["Net income", "净利润", ann?.income.net_income],
         ]
       : stmt === "balance"
         ? [
-            ["Total assets", ann?.balance.assets],
-            ["Total liabilities", ann?.balance.liabilities],
-            ["Total equity", ann?.balance.equity],
-            ["Total debt", ann?.balance.debt],
-            ["Cash & equivalents", ann?.balance.cash],
-            ["Net debt", ann?.balance.net_debt],
+            ["Total assets", "总资产", ann?.balance.assets],
+            ["Total liabilities", "总负债", ann?.balance.liabilities],
+            ["Total equity", "股东权益", ann?.balance.equity],
+            ["Total debt", "总债务", ann?.balance.debt],
+            ["Cash & equivalents", "现金及等价物", ann?.balance.cash],
+            ["Net debt", "净债务", ann?.balance.net_debt],
           ]
         : [
-            ["Operating cash flow", ann?.cashflow.cfo],
-            ["Investing cash flow", ann?.cashflow.cfi],
-            ["Financing cash flow", ann?.cashflow.cff],
-            ["Capital expenditure", ann?.cashflow.capex],
-            ["Free cash flow", ann?.cashflow.fcf],
+            ["Operating cash flow", "经营现金流", ann?.cashflow.cfo],
+            ["Investing cash flow", "投资现金流", ann?.cashflow.cfi],
+            ["Financing cash flow", "融资现金流", ann?.cashflow.cff],
+            ["Capital expenditure", "资本支出", ann?.cashflow.capex],
+            ["Free cash flow", "自由现金流", ann?.cashflow.fcf],
           ];
 
-  for (const [name, series] of lineItems) {
-    rows.push({ label: name, values: alignActual(series) });
+  for (const [en, cn, series] of lineItems) {
+    rows.push({ label: pick(zh, en, cn), values: alignActual(series) });
   }
 
   return { periods, rows };

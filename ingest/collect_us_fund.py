@@ -22,6 +22,7 @@ Run with the macro venv:
 from __future__ import annotations
 
 import json
+import os
 import random
 import sys
 import time
@@ -212,6 +213,14 @@ def fetch_one(sym: str) -> dict | None:
 
 
 # ───────────────────────────── driver ─────────────────────────────
+def atomic_write(dest: Path, text: str) -> None:
+    """Write via tmp+rename so a Ctrl-C mid-write never leaves a truncated cache file that would
+    pass the freshness check and get skipped on the next run."""
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, dest)
+
+
 def is_fresh(path: Path, stale_days: int) -> bool:
     if stale_days <= 0 or not path.exists():
         return False
@@ -269,7 +278,7 @@ def main(argv: list[str]) -> None:
                     payload = None
                     print(f"  ERR {sym}: {type(exc).__name__} {exc}", flush=True)
                 if payload:
-                    (OUT / f"{sym}.json").write_text(json.dumps(payload, ensure_ascii=False))
+                    atomic_write(OUT / f"{sym}.json", json.dumps(payload, ensure_ascii=False))
                     ok += 1
                     if payload.get("_errors"):
                         print(f"  {sym}: ok (partial — {','.join(payload['_errors'][:4])})", flush=True)

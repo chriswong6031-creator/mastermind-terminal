@@ -17,8 +17,9 @@
 #   ingest/refresh_fund.sh --prune-cache                 # delete raw us_fund cache after emit
 #   ingest/refresh_fund.sh --dry-run                     # echo commands instead of executing
 #
-# Suggested cron (after CI's 22:40 UTC site/stockdata build):
-#   30 23 * * *  /Users/chriswong/Documents/Cluade/charting-app/ingest/refresh_fund.sh >> /tmp/mm_fund_refresh.log 2>&1
+# Suggested cron (after CI's 22:40 UTC site/stockdata build) — path resolves from wherever this
+# script lives (main checkout or worktree), so no absolute checkout path is baked into the crontab:
+#   30 23 * * *  "$(git -C /Users/chriswong/Documents/Cluade/charting-app rev-parse --show-toplevel)/ingest/refresh_fund.sh" >> /tmp/mm_fund_refresh.log 2>&1
 #
 # JUDGE FIXES implemented:
 #   1. First step: git pull --ff-only the Macro Dashboard clone (site/stockdata is CI-built).
@@ -30,10 +31,13 @@ set -uo pipefail
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-CA="/Users/chriswong/Documents/Cluade/charting-app"
+# Resolve paths from THIS script's own directory, not a hardcoded checkout — so a worktree run uses
+# the worktree's scripts (and the crontab keeps working after the worktree is discarded).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CA="$(cd "$SCRIPT_DIR/.." && pwd)"
 MACRO="/Users/chriswong/Documents/Cluade/Macro Dashboard"
 PY="$MACRO/.venv/bin/python"
-INGEST="$CA/ingest"
+INGEST="$SCRIPT_DIR"
 DATA="$CA/terminal/public/data"
 KEY="$HOME/.ssh/macro_dashboard_deploy_v2"
 VPS="root@146.190.142.17"
@@ -52,6 +56,7 @@ ts() { date -u "+%Y-%m-%d %H:%M:%S UTC"; }
 # ---------------------------------------------------------------------------
 US_ONLY=0; CN_HK_ONLY=0; SKIP_COLLECT=0; SKIP_TX=0; SKIP_OPTS=0
 LIMIT_ARG=""; PRUNE_CACHE=0; DRY_RUN=0
+OPT_TOP="${OPT_TOP:-300}"   # top-N optionable US names by dollar volume (flagship 37 + top-N)
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -103,7 +108,7 @@ fi
 # ---------------------------------------------------------------------------
 # 2. JUDGE FIX (1): git pull --ff-only the Macro Dashboard clone
 #    site/stockdata is produced by GitHub Actions CI (22:40 UTC) — we must
-#    pull it before gen_fund_json reads it, or we work on stale data.
+#    pull it before the gen_fund_* emitters read it, or we work on stale data.
 # ---------------------------------------------------------------------------
 echo "[$(ts)] === git pull Macro Dashboard (site/stockdata is CI-built) ==="
 if git -C "$MACRO" diff --quiet HEAD 2>/dev/null && git -C "$MACRO" diff --cached --quiet 2>/dev/null; then
@@ -147,41 +152,9 @@ if [ "$SKIP_COLLECT" = "0" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Generate fund JSON files
-# ---------------------------------------------------------------------------
-if [ "$US_ONLY" = "1" ]; then
-  GEN_MARKET="--market us"
-elif [ "$CN_HK_ONLY" = "1" ]; then
-  GEN_MARKET="--market cn hk"
-else
-  GEN_MARKET="--market all"
-fi
-
-echo "[$(ts)] === gen_fund_json ($GEN_MARKET) ==="
-# shellcheck disable=SC2086
-run "$PY" "$INGEST/gen_fund_json.py" $GEN_MARKET $LIMIT_ARG \
-  || { echo "[$(ts)] ERROR: gen_fund_json failed"; exit 1; }
-
-# ---------------------------------------------------------------------------
-# 6. Prune raw us_fund cache if requested (reclaims ~1-2 GB per run)
-# ---------------------------------------------------------------------------
-if [ "$PRUNE_CACHE" = "1" ]; then
-  echo "[$(ts)] === prune raw us_fund cache ==="
-  run rm -rf "$MACRO/data/us_fund"
-  echo "[$(ts)] pruned $MACRO/data/us_fund"
-fi
-
-# ---------------------------------------------------------------------------
-# 7. Collect options
-# ---------------------------------------------------------------------------
-if [ "$SKIP_OPTS" = "0" ]; then
-  echo "[$(ts)] === collect options (yfinance chains + CBOE fallback) ==="
-  run "$PY" "$INGEST/collect_options.py" $LIMIT_ARG \
-    || echo "[$(ts)] WARN: collect_options exited $?"
-fi
-
-# ---------------------------------------------------------------------------
-# 8. Collect transcripts (defeatbeta-api venv — separate from macro venv)
+# 5. Collect transcripts (defeatbeta-api venv — separate from macro venv)
+#    MUST run BEFORE the emitters: gen_fund_us.py joins earnings.q[].tx from _tx_index.json, which
+#    collect_transcripts.py writes. Running it after would leave every tx id null on a fresh backfill.
 # ---------------------------------------------------------------------------
 if [ "$SKIP_TX" = "0" ]; then
   if [ -z "$DBETA_VENV" ]; then
@@ -195,7 +168,59 @@ if [ "$SKIP_TX" = "0" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 9. US deep intel (pull_macro_intel --all)
+# 6. Generate fund JSON files — three real emitters (gen_fund_json.py never existed).
+#    US when not --cn-hk-only; CN + HK when not --us-only. The emitters take --only/--limit only
+#    (no --market flag), so we gate by the flags instead of a market string.
+# ---------------------------------------------------------------------------
+if [ "$CN_HK_ONLY" = "0" ]; then
+  echo "[$(ts)] === gen_fund_us ==="
+  # shellcheck disable=SC2086
+  run "$PY" "$INGEST/gen_fund_us.py" $LIMIT_ARG \
+    || { echo "[$(ts)] ERROR: gen_fund_us failed"; exit 1; }
+fi
+if [ "$US_ONLY" = "0" ]; then
+  echo "[$(ts)] === gen_fund_cn ==="
+  # shellcheck disable=SC2086
+  run "$PY" "$INGEST/gen_fund_cn.py" $LIMIT_ARG \
+    || { echo "[$(ts)] ERROR: gen_fund_cn failed"; exit 1; }
+  echo "[$(ts)] === gen_fund_hk ==="
+  # shellcheck disable=SC2086
+  run "$PY" "$INGEST/gen_fund_hk.py" $LIMIT_ARG \
+    || { echo "[$(ts)] ERROR: gen_fund_hk failed"; exit 1; }
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Prune raw us_fund cache if requested (reclaims ~1-2 GB per run)
+# ---------------------------------------------------------------------------
+if [ "$PRUNE_CACHE" = "1" ]; then
+  echo "[$(ts)] === prune raw us_fund cache ==="
+  run rm -rf "$MACRO/data/us_fund"
+  echo "[$(ts)] pruned $MACRO/data/us_fund"
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Collect options (flagship 37 + top-$OPT_TOP optionable US/ADR by dollar volume)
+# ---------------------------------------------------------------------------
+if [ "$SKIP_OPTS" = "0" ]; then
+  echo "[$(ts)] === collect options (yfinance chains + CBOE fallback, --top $OPT_TOP) ==="
+  # shellcheck disable=SC2086
+  run "$PY" "$INGEST/collect_options.py" --top "$OPT_TOP" $LIMIT_ARG \
+    || echo "[$(ts)] WARN: collect_options exited $?"
+fi
+
+# ---------------------------------------------------------------------------
+# 9. Collect US deep (yfinance analyst targets + recommendation trend → us_deep.parquet).
+#    MUST run before pull_macro_intel — it reads us_deep.parquet for analyst.target/dist/revisions.
+# ---------------------------------------------------------------------------
+if [ "$CN_HK_ONLY" = "0" ]; then
+  echo "[$(ts)] === collect US deep (targets+recs → us_deep.parquet) ==="
+  # shellcheck disable=SC2086
+  run "$PY" "$INGEST/collect_us_deep.py" $LIMIT_ARG \
+    || echo "[$(ts)] WARN: collect_us_deep exited $?"
+fi
+
+# ---------------------------------------------------------------------------
+# 10. US deep intel (pull_macro_intel --all)
 # ---------------------------------------------------------------------------
 echo "[$(ts)] === rebuild US intel (pull_macro_intel --all) ==="
 run "$PY" "$INGEST/pull_macro_intel.py" --all $LIMIT_ARG \
@@ -264,21 +289,28 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$SKIP_TX" = "0" ] && [ -d "$DATA/tx" ]; then
   TX_LIST="/tmp/refresh_fund_list_tx.txt"
-  # Generate relative paths for all tx files (tx/<SYM>/<ID>.json.gz)
-  find "$DATA/tx" -name "*.json.gz" -newer "$DATA/tx" 2>/dev/null \
-    | sed "s|^$DATA/||" > "$TX_LIST" || true
-  # Fall back to all tx files if find -newer yields nothing (first run)
-  if [ ! -s "$TX_LIST" ]; then
+  TX_MARKER="$DATA/tx/.last_rsync_ts"
+  # Use a sentinel marker file (touched AFTER each successful rsync) rather than -newer on the tx/
+  # dir: a rewrite of an existing tx/<SYM>/<ID>.json.gz does NOT bump the parent dir's mtime, so
+  # -newer "$DATA/tx" would silently miss refreshed files. -newer the marker catches every file
+  # (created OR modified) since the last upload.
+  if [ -f "$TX_MARKER" ]; then
+    find "$DATA/tx" -name "*.json.gz" -newer "$TX_MARKER" 2>/dev/null \
+      | sed "s|^$DATA/||" > "$TX_LIST" || true
+  else
+    # first run — no marker yet: ship everything
     find "$DATA/tx" -name "*.json.gz" | sed "s|^$DATA/||" > "$TX_LIST" || true
   fi
   N_TX=$(wc -l < "$TX_LIST" | tr -d ' ')
 
   if [ "$N_TX" -gt 0 ]; then
     echo "[$(ts)] === rsync transcripts → VPS tx/ ($N_TX files) ==="
-    run rsync -az --files-from="$TX_LIST" \
-      -e "ssh -i $KEY" \
-      ./ "$VPS:$VPS_DATA/" \
-      && echo "[$(ts)] rsync tx done"
+    if run rsync -az --files-from="$TX_LIST" \
+        -e "ssh -i $KEY" \
+        ./ "$VPS:$VPS_DATA/"; then
+      echo "[$(ts)] rsync tx done"
+      run touch "$TX_MARKER"   # mark the successful upload boundary for the next incremental run
+    fi
   else
     echo "[$(ts)] no new transcript files to rsync — skipping"
   fi
