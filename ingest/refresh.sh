@@ -12,11 +12,4 @@ set -a; . ./.env; set +a
 PY="${MACRO_VENV:-/Users/chriswong/Documents/Cluade/Macro Dashboard/.venv/bin/python}"
 echo "[refresh] $(date) — rebuilding Polygon universe…"
 "$PY" ingest/build_polygon_universe.py "$@"
-# artifact freshness conformance (audit #9): consume the dashboard's exported manifest and
-# WARN on any stale handoff artifact per its trading-calendar cadence. Non-fatal here (the
-# per-symbol intel bridge already abstains on stale files); exit 2 only surfaces staleness.
-echo "[refresh] $(date) — artifact freshness conformance…"
-"$PY" -m ingest.artifact_conformance || echo "[refresh] WARN: stale macro artifacts (see above)"
-echo "[refresh] $(date) — pulling macro intel bridge…"
-"$PY" ingest/pull_macro_intel.py "$@"
 echo "[refresh] done."
