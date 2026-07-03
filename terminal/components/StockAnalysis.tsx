@@ -1,6 +1,13 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLang } from "@/lib/i18n";
+import { pick as pickI18n } from "@/lib/finFormat";
+import type { Fund, Opts, Bar } from "@/lib/fund";
+import { computeRatings } from "@/lib/techRating";
+import { realizedVolCone } from "@/lib/realizedVol";
+import { Dumbbell, ComboChart, HalfGauge, LineSeries, type Series } from "@/components/fin/FinCharts";
+import type { FinPage } from "@/components/fin/MegaPane";
+import EventEdgePop from "@/components/fin/EventEdgePop";
 
 /* ── value formatting ───────────────────────────────────────────────── */
 const fnum = (n: number | null | undefined, d = 2) =>
@@ -88,11 +95,336 @@ function Stat({ k, v, tone }: { k: string; v: React.ReactNode; tone?: "up" | "do
   return <div className="sa-stat"><span className="k">{k}</span><span className={`v num ${tone || ""}`}>{v}</span></div>;
 }
 
+/* ── TV-parity rail widgets (BUILD-SPEC §3.5.1) ─────────────────────────
+   All null-guarded; the parent hides a section when its widget returns null.
+   Labels are bilingual via the `pick` closure passed down from the main
+   component (identical behavior to the rest of the file). "More …" buttons
+   call onOpenPane(page) → MegaPane. */
+
+type Pick = (en?: string | null, cn?: string | null) => string;
+
+const MB = (n: number | null | undefined) => {
+  if (n == null || !isFinite(n)) return "—";
+  const a = Math.abs(n);
+  if (a >= 1e12) return (n / 1e12).toFixed(2) + " T";
+  if (a >= 1e9) return (n / 1e9).toFixed(2) + " B";
+  if (a >= 1e6) return (n / 1e6).toFixed(2) + " M";
+  if (a >= 1e3) return (n / 1e3).toFixed(2) + " K";
+  return fnum(n, 0);
+};
+const daysUntilLocal = (iso?: string | null): number | null => {
+  if (!iso) return null;
+  const d = new Date(iso.length <= 10 ? iso + "T00:00:00Z" : iso);
+  if (isNaN(d.getTime())) return null;
+  const now = new Date();
+  const a = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const b = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  return Math.round((b - a) / 86400000);
+};
+
+/** Key stats: volume / avg vol 30D / mktcap / next-earnings-in-N-days. */
+function KeyStats({ fund, bars, pick }: { fund: Fund | null; bars: Bar[]; pick: Pick }) {
+  const mktcap = fund?.stats?.mktcap ?? null;
+  const lastVol = bars.length ? bars[bars.length - 1].v : null;
+  const avgVol30 = bars.length >= 2
+    ? bars.slice(-30).reduce((s, b) => s + (isFinite(b.v) ? b.v : 0), 0) / Math.min(30, bars.length)
+    : null;
+  const nDays = daysUntilLocal(fund?.earnings?.next_date);
+  const rows: [string, string][] = [];
+  if (nDays != null) rows.push([pick("Next earnings report", "下次财报"), nDays >= 0 ? pick(`In ${nDays} days`, `${nDays} 天后`) : pick(`${-nDays} days ago`, `${-nDays} 天前`)]);
+  if (lastVol != null) rows.push([pick("Volume", "成交量"), MB(lastVol)]);
+  if (avgVol30 != null) rows.push([pick("Avg volume (30D)", "平均成交量(30日)"), MB(avgVol30)]);
+  if (mktcap != null) rows.push([pick("Market capitalization", "总市值"), MB(mktcap)]);
+  if (!rows.length) return null;
+  return (
+    <Section title={pick("Key stats", "关键数据")}>
+      <div className="sa-kstats">
+        {rows.map(([k, v]) => <div key={k} className="sa-kstat"><span className="k">{k}</span><span className="v num">{v}</span></div>)}
+      </div>
+    </Section>
+  );
+}
+
+/** Earnings mini: last-4Q + next EPS dumbbell, days-to-earnings badge, More info. */
+function EarningsMini({ fund, pick, onOpen }: { fund: Fund | null; pick: Pick; onOpen?: () => void }) {
+  const q = fund?.earnings?.q ?? [];
+  if (!q.length) return null;
+  const tail = q.slice(-4);
+  const points = tail.map((r) => ({ label: periodShort(r.period), actual: r.eps_a, estimate: r.eps_e }));
+  // forward estimate-only column
+  if (fund?.earnings?.next_eps_est != null)
+    points.push({ label: periodShort(fund.earnings.next_period), actual: null, estimate: fund.earnings.next_eps_est });
+  if (points.every((p) => p.actual == null && p.estimate == null)) return null;
+  const nDays = daysUntilLocal(fund?.earnings?.next_date);
+  return (
+    <Section title={pick("Earnings", "盈利")} sub={nDays != null && nDays >= 0 ? `${nDays}${pick("d", "天")}` : undefined}>
+      <Dumbbell points={points} vw={300} vh={150} zh={undefined} />
+      {onOpen && <button className="sa-more-btn" onClick={onOpen}>{pick("More info", "更多")} ›</button>}
+    </Section>
+  );
+}
+
+/** Dividends line: never-paid empty copy, else yield + next ex-date. */
+function DividendsMini({ fund, pick }: { fund: Fund | null; pick: Pick }) {
+  const div = fund?.dividends;
+  if (!div) return null;
+  if (div.never_paid) {
+    return (
+      <Section title={pick("Dividends", "股息")}>
+        <p className="sa-desc" style={{ margin: 0 }}>{pick(`${fund!.ticker} has never paid dividends and has no current plans to do so.`, `${fund!.ticker} 从未派发股息，目前也无相关计划。`)}</p>
+      </Section>
+    );
+  }
+  const nextEx = div.events?.length ? div.events[div.events.length - 1].ex : null;
+  return (
+    <Section title={pick("Dividends", "股息")}>
+      <div className="sa-grid2">
+        {div.yield_ttm != null && <Stat k={pick("Yield (TTM)", "股息率(TTM)")} v={fpct(div.yield_ttm * 100, 2, false)} />}
+        {div.payout_ratio != null && <Stat k={pick("Payout", "派息率")} v={fpct(div.payout_ratio * 100, 0, false)} />}
+        {nextEx && <Stat k={pick("Latest ex-date", "最近除息日")} v={nextEx} />}
+      </div>
+    </Section>
+  );
+}
+
+const STMT_KEYS = ["income", "balance", "cashflow"] as const;
+type StmtKey = typeof STMT_KEYS[number];
+
+/** Financials mini: ComboChart driven by a statement dropdown + A/Q toggle. */
+function FinancialsMini({ fund, pick, onOpen }: { fund: Fund | null; pick: Pick; onOpen?: () => void }) {
+  const [stmt, setStmt] = useState<StmtKey>("income");
+  const [annual, setAnnual] = useState(true);
+  const ps = annual ? fund?.statements?.annual : fund?.statements?.quarterly;
+  if (!ps || !ps.periods?.length) return null;
+  const labels = ps.periods.map((p) => periodShort(p));
+  let barsSeries: Series[] = [];
+  let line: Series = { name: "", values: [] };
+  if (stmt === "income") {
+    const rev = ps.income.revenue, ni = ps.income.net_income;
+    barsSeries = [
+      { name: pick("Revenue", "营收"), values: rev, color: "var(--brand-2)" },
+      { name: pick("Net income", "净利润"), values: ni, color: "var(--signal)" },
+    ];
+    line = { name: pick("Net margin %", "净利率%"), values: rev.map((r, i) => (r && ni[i] != null ? (ni[i]! / r) * 100 : null)), color: "var(--warn)" };
+  } else if (stmt === "balance") {
+    barsSeries = [
+      { name: pick("Total assets", "总资产"), values: ps.balance.assets, color: "#9d86ff" },
+      { name: pick("Total liabilities", "总负债"), values: ps.balance.liabilities, color: "#e8a33d" },
+    ];
+    line = { name: pick("Liab / assets %", "负债率%"), values: ps.balance.assets.map((av, i) => (av && ps.balance.liabilities[i] != null ? (ps.balance.liabilities[i]! / av) * 100 : null)), color: "#4aa8ff" };
+  } else {
+    // cash flow: three lines (operating / investing / financing) — no bars
+    return (
+      <Section title={pick("Financials", "财务")}>
+        <FinMiniControls stmt={stmt} setStmt={setStmt} annual={annual} setAnnual={setAnnual} pick={pick} />
+        <LineSeries labels={labels} markers refLine={0}
+          series={[
+            { name: pick("Operating", "经营"), values: ps.cashflow.cfo, color: "#f06bd0" },
+            { name: pick("Investing", "投资"), values: ps.cashflow.cfi, color: "#4aa8ff" },
+            { name: pick("Financing", "筹资"), values: ps.cashflow.cff, color: "var(--up)" },
+          ]}
+          fmtY={MB} vw={300} vh={160} />
+        {onOpen && <button className="sa-more-btn" onClick={onOpen}>{pick("More financials", "更多财务")} ›</button>}
+      </Section>
+    );
+  }
+  return (
+    <Section title={pick("Financials", "财务")}>
+      <FinMiniControls stmt={stmt} setStmt={setStmt} annual={annual} setAnnual={setAnnual} pick={pick} />
+      <ComboChart labels={labels} bars={barsSeries} line={line} fmtBar={MB} vw={300} vh={170} />
+      {onOpen && <button className="sa-more-btn" onClick={onOpen}>{pick("More financials", "更多财务")} ›</button>}
+    </Section>
+  );
+}
+
+function FinMiniControls({ stmt, setStmt, annual, setAnnual, pick }: { stmt: StmtKey; setStmt: (s: StmtKey) => void; annual: boolean; setAnnual: (a: boolean) => void; pick: Pick }) {
+  const label: Record<StmtKey, string> = {
+    income: pick("Income statement", "利润表"),
+    balance: pick("Balance sheet", "资产负债表"),
+    cashflow: pick("Cash flow", "现金流量表"),
+  };
+  return (
+    <div className="sa-fin-ctl">
+      <select className="sa-fin-sel" value={stmt} onChange={(e) => setStmt(e.target.value as StmtKey)}>
+        {STMT_KEYS.map((k) => <option key={k} value={k}>{label[k]}</option>)}
+      </select>
+      <div className="sa-fin-aq">
+        <button className={annual ? "on" : ""} onClick={() => setAnnual(true)}>{pick("Annual", "年度")}</button>
+        <button className={!annual ? "on" : ""} onClick={() => setAnnual(false)}>{pick("Quarterly", "季度")}</button>
+      </div>
+    </div>
+  );
+}
+
+const PERF_PERIODS: [string, number][] = [["1W", 5], ["1M", 21], ["3M", 63], ["6M", 126], ["YTD", -1], ["1Y", 252]];
+
+/** Performance grid — 6 tiles computed client-side from daily bars. */
+function PerfGrid({ bars, pick }: { bars: Bar[]; pick: Pick }) {
+  if (bars.length < 2) return null;
+  const last = bars[bars.length - 1].c;
+  const ytdStart = (() => {
+    const y = new Date().getUTCFullYear();
+    for (let i = bars.length - 1; i >= 0; i--) { if (String(bars[i].time).slice(0, 4) < String(y)) return bars[i].c; }
+    return bars[0].c;
+  })();
+  const tiles = PERF_PERIODS.map(([lbl, n]) => {
+    const base = n < 0 ? ytdStart : (bars.length > n ? bars[bars.length - 1 - n].c : null);
+    const ret = base != null && base !== 0 && isFinite(last) ? ((last - base) / base) * 100 : null;
+    return { lbl, ret };
+  }).filter((t) => t.ret != null);
+  if (!tiles.length) return null;
+  return (
+    <Section title={pick("Performance", "表现")}>
+      <div className="sa-perf-grid">
+        {tiles.map((t) => { const up = (t.ret ?? 0) >= 0; return (
+          <div key={t.lbl} className={`sa-perf-tile ${up ? "up" : "down"}`}>
+            <span className="pv num">{fpct(t.ret, 2)}</span>
+            <span className="pk">{t.lbl}</span>
+          </div>
+        ); })}
+      </div>
+    </Section>
+  );
+}
+
+/** Technicals gauge — compact HalfGauge from techRating on daily bars. */
+function TechGauge({ bars, pick, onOpen }: { bars: Bar[]; pick: Pick; onOpen?: () => void }) {
+  const ratings = useMemo(() => (bars.length >= 30 ? computeRatings(bars) : null), [bars]);
+  if (!ratings) return null;
+  const overall = ratings.summary[2];
+  return (
+    <Section title={pick("Technicals", "技术评级")}>
+      <div className="sa-gauge">
+        <HalfGauge value={overall.score} verdict={pick(...verdictBi(overall.verdict))} counts={{ sell: overall.sell, neutral: overall.neutral, buy: overall.buy }} size={200} variant="tech" zh={undefined} />
+      </div>
+      {onOpen && <button className="sa-more-btn" onClick={onOpen}>{pick("More technicals", "更多技术面")} ›</button>}
+    </Section>
+  );
+}
+
+/** Analyst gauge — fund.analyst dist → gauge + target/upside. CN empty-state. */
+function AnalystGauge({ fund, spot, pick, onOpen }: { fund: Fund | null; spot: number | null; pick: Pick; onOpen?: () => void }) {
+  const an = fund?.analyst;
+  if (!an) {
+    // CN names carry null analyst — a designed empty state (no street consensus, R5).
+    if (fund && fund.analyst === null) return (
+      <Section title={pick("Analyst rating", "分析师评级")}>
+        <p className="sa-desc" style={{ margin: 0 }}>{pick("No analyst consensus for this market.", "该市场暂无分析师一致预期。")}</p>
+      </Section>
+    );
+    return null;
+  }
+  const d = an.dist;
+  const totalN = d.strongBuy + d.buy + d.hold + d.sell + d.strongSell;
+  // map distribution → gauge value in [-1,1] (weighted mean of -1..+1 buckets)
+  const score = totalN > 0 ? (d.strongBuy * 1 + d.buy * 0.5 + d.hold * 0 + d.sell * -0.5 + d.strongSell * -1) / totalN : null;
+  const target = an.target?.mean ?? null;
+  const upside = target != null && spot != null && spot !== 0 ? ((target - spot) / spot) * 100 : null;
+  if (score == null && target == null) return null;
+  return (
+    <Section title={pick("Analyst rating", "分析师评级")}>
+      {score != null && (
+        <div className="sa-gauge">
+          <HalfGauge value={score} verdict={an.rating_label ?? undefined} counts={{ sell: d.sell + d.strongSell, neutral: d.hold, buy: d.buy + d.strongBuy }} size={200} variant="analyst" zh={undefined} />
+        </div>
+      )}
+      {target != null && (
+        <div className="sa-grid2">
+          <Stat k={pick("1yr price target", "1年目标价")} v={fnum(target)} />
+          {upside != null && <Stat k={pick("Upside", "上行空间")} v={fpct(upside, 2)} tone={upside >= 0 ? "up" : "down"} />}
+        </div>
+      )}
+      {onOpen && <button className="sa-more-btn" onClick={onOpen}>{pick("See forecast", "查看预测")} ›</button>}
+    </Section>
+  );
+}
+
+/** IV minis — term structure + smile sparklines from opts; RV-cone fallback. */
+function IvMini({ opts, bars, pick }: { opts: Opts | null; bars: Bar[]; pick: Pick }) {
+  // hooks must run unconditionally — compute the RV cone up front even when opts is present.
+  const cone = useMemo(() => (bars.length >= 30 ? realizedVolCone(bars) : []), [bars]);
+  if (opts && opts.term?.length) {
+    const termLabels = opts.term.map((t) => t.label);
+    const termVals = opts.term.map((t) => t.iv * 100);
+    const smile = opts.smile;
+    const smileOk = smile && smile.strikes?.length > 1;
+    return (
+      <Section title={pick("Implied volatility", "隐含波动率")} sub={smile?.dte != null ? `${smile.dte}${pick("d smile", "天微笑")}` : undefined}>
+        <div className="sa-iv-mini">
+          <div className="sa-iv-lbl">{pick("ATM term structure", "ATM期限结构")}</div>
+          <LineSeries labels={termLabels} series={[{ name: "IV", values: termVals, color: "var(--brand-2)" }]} markers noLegend fmtY={(v) => v.toFixed(0) + "%"} vw={300} vh={110} />
+        </div>
+        {smileOk && (
+          <div className="sa-iv-mini">
+            <div className="sa-iv-lbl">{pick(`Vol curve (${smile.dte}d)`, `波动率曲线 (${smile.dte}天)`)}</div>
+            <LineSeries labels={smile.strikes.map((s) => fnum(s, s < 10 ? 1 : 0))} series={[{ name: "IV", values: smile.iv.map((v) => v * 100), color: "var(--brand-2)" }]} noLegend fmtY={(v) => v.toFixed(0) + "%"} vw={300} vh={110} />
+          </div>
+        )}
+      </Section>
+    );
+  }
+  // non-optionable fallback: realized-vol cone from daily bars (computed above, hooks-safe)
+  const usable = cone.filter((c) => c.current != null);
+  if (!usable.length) return null;
+  return (
+    <Section title={pick("Realized volatility", "已实现波动率")} sub={pick("cone", "锥形")}>
+      <div className="sa-iv-mini">
+        <LineSeries labels={usable.map((c) => c.window + "d")}
+          series={[
+            { name: pick("Current", "当前"), values: usable.map((c) => (c.current ?? 0) * 100), color: "var(--brand-2)" },
+            { name: pick("Median", "中位"), values: usable.map((c) => (c.median ?? 0) * 100), color: "var(--text-2)" },
+          ]}
+          dotted={[1]} markers fmtY={(v) => v.toFixed(0) + "%"} vw={300} vh={120} />
+      </div>
+    </Section>
+  );
+}
+
+/** Profile block — website / employees / sector / industry + description clamp. */
+function ProfileBlock({ fund, pick }: { fund: Fund | null; pick: Pick }) {
+  const p = fund?.profile;
+  if (!p || (!p.website && !p.employees && !p.sector && !p.industry && !p.description)) return null;
+  return (
+    <Section title={pick("Profile", "公司概况")}>
+      <div className="sa-grid2">
+        {p.website && <Stat k={pick("Website", "网站")} v={<a href={/^https?:/.test(p.website) ? p.website : `https://${p.website}`} target="_blank" rel="noreferrer" style={{ color: "var(--brand-2)" }}>{p.website.replace(/^https?:\/\//, "")}</a>} />}
+        {p.employees != null && <Stat k={pick("Employees", "员工")} v={MB(p.employees)} />}
+        {p.sector && <Stat k={pick("Sector", "板块")} v={p.sector} />}
+        {p.industry && <Stat k={pick("Industry", "行业")} v={p.industry} />}
+      </div>
+      {p.description && <p className="sa-desc sa-desc-clamp">{p.description}</p>}
+    </Section>
+  );
+}
+
+/* fiscal-quarter/year short label: "Q3 2026"→"Q3 '26", "2025"→"'25", passthrough otherwise */
+function periodShort(period?: string | null): string {
+  if (!period) return "";
+  const raw = period.trim();
+  let m = raw.match(/^Q([1-4])\s+(\d{4})$/);
+  if (m) return `Q${m[1]} '${m[2].slice(2)}`;
+  m = raw.match(/^(\d{4})-?Q([1-4])$/);
+  if (m) return `Q${m[2]} '${m[1].slice(2)}`;
+  if (/^\d{4}$/.test(raw)) return `'${raw.slice(2)}`;
+  return raw;
+}
+/* techRating Verdict → [en, zh] for the gauge word */
+function verdictBi(v: string): [string, string] {
+  switch (v) {
+    case "Strong buy": return ["Strong buy", "强烈买入"];
+    case "Buy": return ["Buy", "买入"];
+    case "Sell": return ["Sell", "卖出"];
+    case "Strong sell": return ["Strong sell", "强烈卖出"];
+    default: return ["Neutral", "中性"];
+  }
+}
+
 /* ── main component ─────────────────────────────────────────────────── */
 export default function StockAnalysis({
-  intel, row, slice, deep = false, onExpand,
+  intel, row, slice, deep = false, onExpand, fund = null, opts = null, bars = [], onOpenPane,
 }: {
   intel: any; row?: any; slice?: any; deep?: boolean; onExpand?: () => void;
+  fund?: Fund | null; opts?: Opts | null; bars?: Bar[]; onOpenPane?: (page: FinPage) => void;
 }) {
   const { lang } = useLang();
   const zh = lang === "zh";
@@ -100,8 +432,14 @@ export default function StockAnalysis({
   // scrolling detail rail / modal body (an absolute popup gets cut off by their overflow:auto)
   const [trustPop, setTrustPop] = useState<{ x: number; y: number } | null>(null);
   const showTrust = (el: HTMLElement) => { const r = el.getBoundingClientRect(); setTrustPop({ x: Math.round(r.left), y: Math.round(r.bottom + 6) }); };
+  // clickable trust badge → EventEdgePop (R15): hover keeps the compact tooltip, click opens the
+  // anchored event-edge dashboard. We stash the badge's viewport rect for the popover to anchor to.
+  const [edgePop, setEdgePop] = useState<DOMRect | null>(null);
   const a = intel?.analysis;
-  const pick = (en?: string | null, cn?: string | null) => (zh && cn ? cn : en) || "";
+  // Refactored per §3.5.1: the bilingual selector now comes from the shared lib/finFormat `pick`
+  // (signature (zh, en, cn)). This local closure captures `zh` so every existing call site —
+  // pick(en, cn) — keeps identical behavior.
+  const pick = (en?: string | null, cn?: string | null) => pickI18n(zh, en, cn);
 
   const dec = a?.decision, conv = a?.conviction, entry = a?.entry, fac = a?.factors,
     tech = a?.tech, val = a?.valuation, fin = a?.financials, prof = a?.profile,
@@ -111,6 +449,31 @@ export default function StockAnalysis({
   const verb = (zh && dec?.verb_zh) ? dec.verb_zh : (dec?.verb || "—");
   const score = conv?.score ?? dec?.score ?? null;
 
+  // spot for the analyst upside / IV context: prefer the live opts spot, then the last daily bar.
+  const spot = opts?.spot ?? (bars.length ? bars[bars.length - 1].c : (typeof row?.last === "number" ? row.last : null));
+
+  // TV-parity market-data widgets (§3.5.1). Rendered in the deep=false rail even when the research
+  // desk (intel.analysis) is absent, so a long-tail fund-only name still shows real data. Each
+  // widget null-guards and returns null when dataless. Compact in the rail; hidden in `deep` (the
+  // mega-pane's mastermind page shows the proprietary deep sections, not these minis).
+  const tvWidgets = !deep && (fund || opts || bars.length) ? (
+    <>
+      <KeyStats fund={fund} bars={bars} pick={pick} />
+      <EarningsMini fund={fund} pick={pick} onOpen={onOpenPane && (() => onOpenPane("earnings"))} />
+      <DividendsMini fund={fund} pick={pick} />
+      <FinancialsMini fund={fund} pick={pick} onOpen={onOpenPane && (() => onOpenPane("statements"))} />
+      <PerfGrid bars={bars} pick={pick} />
+    </>
+  ) : null;
+  const tvWidgets2 = !deep && (fund || opts || bars.length) ? (
+    <>
+      <TechGauge bars={bars} pick={pick} onOpen={onOpenPane && (() => onOpenPane("technicals"))} />
+      <AnalystGauge fund={fund} spot={spot} pick={pick} onOpen={onOpenPane && (() => onOpenPane("forecast"))} />
+      <IvMini opts={opts} bars={bars} pick={pick} />
+    </>
+  ) : null;
+  const profileWidget = !deep && fund ? <ProfileBlock fund={fund} pick={pick} /> : null;
+
   if (!a) {
     return (
       <div className="sa">
@@ -119,6 +482,10 @@ export default function StockAnalysis({
           <b>{pick("Deep analysis coming online", "深度分析即将上线")}</b>
           <span>{pick("This name isn't in the research desk yet — the chart, levels and oracle verdict above are live.", "该标的尚未进入研究台——上方的图表、关键价位与神谕判定仍然有效。")}</span>
         </div>
+        {/* fund-only long-tail: still surface TV market-data + technicals below the empty notice */}
+        {tvWidgets}
+        {tvWidgets2}
+        {profileWidget}
       </div>
     );
   }
@@ -144,15 +511,20 @@ export default function StockAnalysis({
         )}
       </div>
       {pick(dec?.trust_en, dec?.trust_zh) && (
-        /* the trust tier is now just a compact badge; the full rationale is tucked into a hover/focus popup */
-        <div className="sa-trust" tabIndex={0}
-          onMouseEnter={(e) => showTrust(e.currentTarget)} onMouseLeave={() => setTrustPop(null)}
-          onFocus={(e) => showTrust(e.currentTarget)} onBlur={() => setTrustPop(null)}>
+        /* Trust tier = compact badge. Hover keeps the tooltip; CLICK (R15) opens the anchored
+           EventEdgePop dashboard (trust prose + structured earnings/edge context chips). */
+        <div className="sa-trust" tabIndex={0} role="button"
+          title={pick("Click for the event edge", "点击查看事件驱动详情")}
+          onMouseEnter={(e) => { if (!edgePop) showTrust(e.currentTarget); }} onMouseLeave={() => setTrustPop(null)}
+          onFocus={(e) => { if (!edgePop) showTrust(e.currentTarget); }} onBlur={() => setTrustPop(null)}
+          onClick={(e) => { setTrustPop(null); setEdgePop(e.currentTarget.getBoundingClientRect()); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setTrustPop(null); setEdgePop((e.currentTarget as HTMLElement).getBoundingClientRect()); } }}>
           <span className="sa-trust-tier">{cap(dec?.trust_tier)}</span>
           <svg className="sa-trust-i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 7.6h.01" /></svg>
-          {trustPop && <div className="sa-trust-pop" role="tooltip" style={{ left: trustPop.x, top: trustPop.y }}>{pick(dec?.trust_en, dec?.trust_zh)}</div>}
+          {trustPop && !edgePop && <div className="sa-trust-pop" role="tooltip" style={{ left: trustPop.x, top: trustPop.y }}>{pick(dec?.trust_en, dec?.trust_zh)}</div>}
         </div>
       )}
+      {edgePop && <EventEdgePop anchor={edgePop} intel={intel} zh={zh} onClose={() => setEdgePop(null)} />}
       {(() => {
         const drivers: string[] = conv?.drivers || [];
         const cautions: string[] = (zh && conv?.cautions_zh?.length ? conv.cautions_zh : conv?.cautions) || [];
@@ -174,6 +546,11 @@ export default function StockAnalysis({
           </div>
         );
       })()}
+
+      {/* ── TV market-data widgets: Key stats · Earnings · Dividends · Financials · Performance ── */}
+      {tvWidgets}
+      {/* ── TV gauges + options minis: Technicals · Analyst · IV ── */}
+      {tvWidgets2}
 
       {/* ── ENTRY TIMING ── */}
       {entry && (entry.status || entry.headline) && (
@@ -282,6 +659,7 @@ export default function StockAnalysis({
               </span>
             </div>
           ))}
+          {!deep && onOpenPane && <button className="sa-more-btn" onClick={() => onOpenPane("statistics")}>{pick("More statistics", "更多统计")} ›</button>}
         </Section>
       )}
 
@@ -308,6 +686,7 @@ export default function StockAnalysis({
               {fin.multiyear?.altman != null && <span className="sa-qchip">Altman-Z <b>{fnum(fin.multiyear.altman, 1)}</b></span>}
             </div>
           )}
+          {!deep && onOpenPane && <button className="sa-more-btn" onClick={() => onOpenPane("statements")}>{pick("More financials", "更多财务")} ›</button>}
         </Section>
       )}
 
@@ -443,6 +822,9 @@ export default function StockAnalysis({
           {pick(prof.description, prof.description_zh) && <p className="sa-desc">{pick(prof.description, prof.description_zh)}</p>}
         </Section>
       )}
+
+      {/* ── PROFILE (fund-sourced: website / employees / sector / industry) ── */}
+      {profileWidget}
 
       {!deep && onExpand && (
         <button className="sa-expand" onClick={onExpand}>

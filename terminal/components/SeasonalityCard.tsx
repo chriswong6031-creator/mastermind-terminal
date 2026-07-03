@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useT } from "@/lib/i18n";
+import { getBars } from "@/lib/fund";
 
 const M = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
 const MN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -10,19 +11,20 @@ type MonthStat = { avg: number; wr: number; n: number } | null;
 // Average monthly return from history → a TrendSpider-style seasonality read (display-only).
 // Every month's bar grows UP from a shared baseline (negative months are simply red, not inverted),
 // so the row reads as a single comparable magnitude chart. Hover a bar for its avg return + win rate.
-export default function SeasonalityCard({ symbol }: { symbol: string }) {
+export default function SeasonalityCard({ symbol, onOpenPane }: { symbol: string; onOpenPane?: () => void }) {
   const t = useT();
   // per-month { average return %, win rate %, sample count }, or null for months with no samples
   const [stats, setStats] = useState<MonthStat[] | null>(null);
 
   useEffect(() => {
     let dead = false;
-    fetch(`/data/${symbol}.json`).then((r) => (r.ok ? r.json() : null)).then((d) => {
-      if (dead || !d?.bars?.length) { setStats(null); return; }
+    // getBars routes through dataCache (dedupes with the chart's OHLC fetch — no third raw fetch)
+    getBars(symbol).then((bars) => {
+      if (dead || !bars.length) { setStats(null); return; }
       const byMonthRet: number[][] = Array.from({ length: 12 }, () => []);
       // monthly close series → monthly returns bucketed by calendar month
       const monthly: { ym: string; c: number }[] = [];
-      d.bars.forEach((b: any[]) => { const ym = b[0].slice(0, 7); const last = monthly[monthly.length - 1]; if (!last || last.ym !== ym) monthly.push({ ym, c: b[4] }); else last.c = b[4]; });
+      bars.forEach((b) => { const ym = String(b.time).slice(0, 7); const last = monthly[monthly.length - 1]; if (!last || last.ym !== ym) monthly.push({ ym, c: b.c }); else last.c = b.c; });
       for (let i = 1; i < monthly.length; i++) { const m = parseInt(monthly[i].ym.slice(5, 7)) - 1; byMonthRet[m].push((monthly[i].c - monthly[i - 1].c) / monthly[i - 1].c); }
       setStats(byMonthRet.map((a) => (a.length
         ? { avg: (a.reduce((x, y) => x + y, 0) / a.length) * 100, wr: (a.filter((x) => x > 0).length / a.length) * 100, n: a.length }
@@ -61,6 +63,9 @@ export default function SeasonalityCard({ symbol }: { symbol: string }) {
         })}
       </div>
       <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>{t("seasonalityFoot").replace("{sym}", symbol)}</div>
+      {onOpenPane && (
+        <button className="sa-more-btn" style={{ marginTop: 10 }} onClick={onOpenPane}>{t("moreSeasonals")} ›</button>
+      )}
     </div>
   );
 }

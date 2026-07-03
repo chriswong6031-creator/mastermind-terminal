@@ -799,3 +799,12 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .dr-panel .dr-dot{width:11px;height:11px}
 .dr-panel .dr-cur{font-size:13px}
 .dr-panel .dr-end{font-size:11.5px}
+/* === FE3 rail-mini hooks (TV-parity StockAnalysis widgets) === */
+.sa-more-btn{width:100%;margin-top:8px;padding:6px 0;border:1px solid var(--line);border-radius:var(--r);background:var(--panel-2,var(--panel));color:var(--text-2);font:600 11px/1 var(--font-ui);cursor:pointer}
+.sa-more-btn:hover{color:var(--text);border-color:var(--brand-2)}
+.sa-kstats{display:flex;flex-direction:column;gap:7px}.sa-kstat{display:flex;justify-content:space-between;gap:10px;font:600 12px/1.2 var(--font-ui)}.sa-kstat .k{color:var(--muted)}.sa-kstat .v{color:var(--text);font-family:var(--font-num)}
+.sa-perf-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}.sa-perf-tile{display:flex;flex-direction:column;align-items:center;gap:2px;padding:9px 4px;border-radius:var(--r)}.sa-perf-tile.up{background:rgba(38,194,129,.10)}.sa-perf-tile.down{background:rgba(240,86,107,.10)}.sa-perf-tile .pv{font:700 13px/1 var(--font-num)}.sa-perf-tile.up .pv{color:var(--up)}.sa-perf-tile.down .pv{color:var(--down)}.sa-perf-tile .pk{font:600 10px/1 var(--font-ui);color:var(--muted)}
+.sa-gauge{display:flex;justify-content:center;margin:2px 0}.sa-iv-mini{margin-top:8px}.sa-iv-lbl{font:600 10px/1 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.sa-fin-ctl{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}.sa-fin-sel{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:var(--r);padding:4px 6px;font:600 11px/1 var(--font-ui);cursor:pointer}
+.sa-fin-aq{display:flex;gap:2px}.sa-fin-aq button{background:none;border:none;color:var(--muted);font:600 11px/1 var(--font-ui);padding:4px 6px;cursor:pointer;border-bottom:2px solid transparent}.sa-fin-aq button.on{color:var(--brand-2);border-bottom-color:var(--brand-2)}
+.sa-desc-clamp{display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}

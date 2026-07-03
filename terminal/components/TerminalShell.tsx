@@ -6,6 +6,11 @@ import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
+import { intradayCapable } from "@/components/ChartPanel";
+import { classify } from "@/lib/intradaySources";
+import MegaPane, { type FinPage } from "@/components/fin/MegaPane";
+import OracleDash from "@/components/fin/OracleDash";
+import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
 import StrategyTester from "@/components/StrategyTester";
 import SearchModal from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
@@ -17,7 +22,7 @@ import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
 import SettingsMenu from "@/components/SettingsMenu";
 import DayRange from "@/components/DayRange";
-import { useT } from "@/lib/i18n";
+import { useT, useLang } from "@/lib/i18n";
 import { useFromMacro, backToMacro } from "@/lib/originNav";
 import { getJSON, prefetch } from "@/lib/dataCache";
 
@@ -51,7 +56,17 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 const CHART_TYPES = [["candles", "Candles"], ["heikin", "Heikin Ashi"], ["bars", "Bars"], ["line", "Line"], ["area", "Area"]];
 const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
-const FUNCTIONAL = new Set(["D", "3D", "W", "1M"]);
+// Daily-derived TFs are always functional. Intraday TFs (R12) go live for intraday-capable markets
+// (us/crypto/cn/hk); .TO (ca) stays daily-only — its picker entries render disabled.
+const DAILY_FUNCTIONAL = new Set(["D", "3D", "W", "1M"]);
+const INTRADAY_FUNCTIONAL = ["1m", "5m", "15m", "30m", "1h", "2h", "4h"];
+function functionalSet(sym: string): Set<string> {
+  const s = new Set(DAILY_FUNCTIONAL);
+  if (intradayCapable(classify(sym))) for (const t of INTRADAY_FUNCTIONAL) s.add(t);
+  return s;
+}
+// valid ?pane= deep-link targets (the ten MegaPane pages)
+const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends", "earnings", "revenue", "forecast", "technicals", "seasonals", "mastermind"]);
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 
 // drawing tools for the (previously decorative) left dock
@@ -94,6 +109,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [paneTfs, setPaneTfs] = useState<string[]>(["3D"]);   // one timeframe per pane — Terminal opens on 3D by default
   const tf = paneTfs[activePane] ?? paneTfs[0] ?? "D";        // the active pane's timeframe drives the toolbar
   const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
+  // per-market functional TF set: daily-derived always; intraday TFs only for intraday-capable markets (R12)
+  const FUNCTIONAL = useMemo(() => functionalSet(active), [active]);
   const [chartType, setChartType] = useState("candles");
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
@@ -115,17 +132,23 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // batched /api/quote?syms= poll), so the detail pane and the watchlist can't disagree on a price.
   const [quotes, setQuotes] = useState<Record<string, any>>({});
   const [slice, setSlice] = useState<any>(null);
+  const [fund, setFund] = useState<Fund | null>(null);
+  const [opts, setOpts] = useState<any>(null);
+  const [bars, setBars] = useState<Bar[]>([]);
+  // MegaPane (in-shell fundamentals overlay) + OracleDash (Golden Oracle history) overlays
+  const [paneOpen, setPaneOpen] = useState<FinPage | null>(null);
+  const [oracleOpen, setOracleOpen] = useState(false);
   const [magnet, setMagnet] = useState(false);
   const [compare, setCompare] = useState<string[]>([]);
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
   const nonce = useRef(0);
   const wsMounted = useRef(false);
   const t = useT();
+  const { lang } = useLang();
   const navPath = usePathname();
   // mobile + fullscreen + expanded-analysis state
   const [fullChart, setFullChart] = useState(false);
   const [drawer, setDrawer] = useState(false);
-  const [analysisOpen, setAnalysisOpen] = useState(false);
   // only surface a "back" affordance when the user actually arrived from the Macro Dashboard — for direct
   // visitors a back button would just throw them onto whatever unrelated site they were last on.
   const { fromMacro, macroHref } = useFromMacro();
@@ -217,11 +240,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, [panes, flushDrawings]);
   useEffect(() => () => { for (const sym of Object.keys(drawPending.current)) flushDrawings(sym); }, [flushDrawings]);
 
-  // per-symbol intel/slice for the rail (drawings now live per-pane in ChartPane); layouts once
-  useEffect(() => { let alive = true; setIntel(null); setLivePx(null); setSlice(null);
+  // per-symbol intel/slice/fund/bars for the rail (drawings now live per-pane in ChartPane); layouts once.
+  // getFund is negative-cached (long-tail 404s don't storm); getBars shares the chart's OHLC fetch.
+  useEffect(() => { let alive = true; setIntel(null); setLivePx(null); setSlice(null); setFund(null); setOpts(null); setBars([]);
     getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
     getJSON(`/data/${active}.slice.json`).then((d) => { if (alive) setSlice(d); });
-    return () => { alive = false; };   // ignore a stale intel/slice fetch for the prior symbol
+    getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {});
+    getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
+    getBars(active).then((b) => { if (alive) setBars(b); }).catch(() => {});
+    return () => { alive = false; };   // ignore a stale fetch for the prior symbol
   }, [active]);
 
   // ONE batched live-quote poll for the active symbol + every watchlist row. Symbol-keyed results
@@ -253,6 +280,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, [quoteSymsKey]);
   useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
   useEffect(() => { const open = () => setCopilot(true); window.addEventListener("mm:copilot", open); try { if (new URLSearchParams(window.location.search).get("ai") === "1") setCopilot(true); } catch {} return () => window.removeEventListener("mm:copilot", open); }, []);
+  // shallow deep-link: ?pane=<page> opens the MegaPane on that page (MegaPane keeps the URL in sync
+  // and strips ?pane= on close). Read once on mount.
+  useEffect(() => { try { const p = new URLSearchParams(window.location.search).get("pane"); if (p && VALID_PANES.has(p)) setPaneOpen(p as FinPage); } catch {} }, []);
 
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
   function setGrid(n: number) {
@@ -520,7 +550,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} />
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} />
               ))}
             </div>
           </div>
@@ -597,7 +627,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <div className="ex">{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</div>
               </div>
               <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</div></div>
-              <button className="ex-btn" title={t("openFullAnalysis")} onClick={() => setAnalysisOpen(true)}><svg viewBox="0 0 24 24"><path d="M4 14v6h6M20 10V4h-6M14 10l6-6M10 14l-6 6" /></svg></button>
+              <button className="ex-btn" title={t("openFullAnalysis")} onClick={() => setPaneOpen("overview")}><svg viewBox="0 0 24 24"><path d="M4 14v6h6M20 10V4h-6M14 10l6-6M10 14l-6 6" /></svg></button>
             </div>
             <div className="detail-scroll">
               <div style={{ padding: "12px 12px 0" }}>
@@ -605,13 +635,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                   <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>{t("goldenOracle")}</div>
                   <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">{t("backtestedNote")}</span></div>
                   <div className="s2"><div>{t("winRate")}<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>{t("profitFactor")}<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>{t("cagr")}<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
+                  <button className="sa-more-btn" style={{ marginTop: 10 }} onClick={() => setOracleOpen(true)}>{t("signalHistory")} ›</button>
                 </div>
               </div>
-              <StockAnalysis intel={intel} row={m} slice={slice} onExpand={() => setAnalysisOpen(true)} />
+              <StockAnalysis intel={intel} row={m} slice={slice} fund={fund} opts={opts} bars={bars} onExpand={() => setPaneOpen("overview")} onOpenPane={(p) => setPaneOpen(p)} />
               <div style={{ padding: "0 12px" }}>
                 <button className="btn btn-ghost" style={{ width: "100%", height: 36 }} onClick={() => setCopilot(true)}>{t("askAIabout")} {active} →</button>
               </div>
-              <div style={{ padding: 12 }}><SeasonalityCard symbol={active} /></div>
+              <div style={{ padding: 12 }}><SeasonalityCard symbol={active} onOpenPane={() => setPaneOpen("seasonals")} /></div>
             </div>
           </div>
         </div>
@@ -630,19 +661,26 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} />
       <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
 
-      {/* ── expanded full-analysis modal ── */}
-      {analysisOpen && (
-        <div className="sa-modal-scrim" onClick={() => setAnalysisOpen(false)}>
-          <div className="sa-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="sa-modal-h">
-              <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
-              <div className="tt">{nameOf(m) || active}<small>{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</small></div>
-              <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</div></div>
-              <button className="x" onClick={() => setAnalysisOpen(false)} aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
-            </div>
-            <div className="sa-modal-body"><StockAnalysis intel={intel} row={m} slice={slice} deep /></div>
-          </div>
-        </div>
+      {/* ── MegaPane: in-shell full-coverage fundamentals overlay (replaces the old .sa-modal) ── */}
+      {paneOpen && (
+        <MegaPane
+          sym={active}
+          fund={fund}
+          intel={intel}
+          row={m}
+          slice={slice}
+          quote={liveQuote ? { last: lastPx ?? null } : null}
+          bars={bars}
+          page={paneOpen}
+          onPage={(p) => setPaneOpen(p)}
+          onClose={() => setPaneOpen(null)}
+          name={nameOf(m) || active}
+        />
+      )}
+
+      {/* ── Golden Oracle history overlay ── */}
+      {oracleOpen && (
+        <OracleDash sym={active} row={m} slice={slice} zh={lang === "zh"} onClose={() => setOracleOpen(false)} />
       )}
 
       {/* ── mobile nav drawer ── */}

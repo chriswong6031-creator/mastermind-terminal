@@ -7,10 +7,72 @@ import {
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { getJSON, getSliceAndOhlc } from "@/lib/dataCache";
+import { isIntradayTf, classify, type Market } from "@/lib/intradaySources";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
 export type DetectCmd = { kind: "trendlines" | "fib" | "sr" | "mtfa" | "clear"; nonce: number } | null;
+
+// Optional live/delayed snapshot threaded ChartPane → ChartPanel for the R11 live-bar splice.
+// `ts` is a unix epoch in SECONDS (from the quote hub); `basis` gates whether we splice at all.
+export type LiveQuote = { last?: number; open?: number; high?: number; low?: number; vol?: number; ts?: number; basis?: string } | null | undefined;
+
+// Which markets can show intraday TFs (R12): everyone but Canadian `.TO` (no Polygon intraday leg).
+// Exported so the shell can gate its TF picker per active symbol.
+export function intradayCapable(market: Market): boolean { return market !== "ca"; }
+
+// ── R11 live-bar splice (pure, exported for unit tests) ────────────────────────
+// Splice a live quote onto a DAILY bar array. `sessionDate` is the quote's market-local
+// wall-clock date ("YYYY-MM-DD"). Returns a NEW daily array (never mutates the input):
+//   • sessionDate > last bar date  → APPEND a synthetic in-progress daily bar
+//   • sessionDate === last bar date → PATCH the last bar (c=last, h=max, l=min, v when known)
+//   • sessionDate < last bar date OR no quote/last → return the input unchanged (no-op)
+// Callers own the replay / basis / intraday guards (this helper is math-only).
+export function spliceDaily(daily: Bar[], q: { last?: number; open?: number; high?: number; low?: number; vol?: number } | null | undefined, sessionDate: string | null): Bar[] {
+  if (!daily.length || !q || sessionDate == null) return daily;
+  const last = q.last;
+  if (last == null || !isFinite(last)) return daily;
+  const tail = daily[daily.length - 1];
+  if (sessionDate < tail.time) return daily;   // quote is older than the freshest bar — nothing to do
+  if (sessionDate === tail.time) {
+    const h = Math.max(tail.h, last, isFinite(q.high as number) ? (q.high as number) : -Infinity);
+    const l = Math.min(tail.l, last, isFinite(q.low as number) ? (q.low as number) : Infinity);
+    const patched: Bar = { ...tail, h, l, c: last, v: isFinite(q.vol as number) ? (q.vol as number) : tail.v };
+    return [...daily.slice(0, -1), patched];
+  }
+  // newer session → append a synthetic bar built from the snapshot fields (open/high/low fall back to last)
+  const o = isFinite(q.open as number) ? (q.open as number) : last;
+  const h = Math.max(o, last, isFinite(q.high as number) ? (q.high as number) : -Infinity);
+  const l = Math.min(o, last, isFinite(q.low as number) ? (q.low as number) : Infinity);
+  const bar: Bar = { time: sessionDate, o, h, l, c: last, v: isFinite(q.vol as number) ? (q.vol as number) : 0 };
+  return [...daily, bar];
+}
+
+// Fold a spliced DAILY array into the final resampled bucket for tf∈{3D,W,1M}. Returns the ONE
+// bucket (time key + OHLCV) that `series.update()` should push — reusing the existing bucketer so
+// the time key matches whatever Effect 2 produced (never invents a bucket unless the new daily date
+// genuinely starts one, e.g. a fresh ISO week). Returns null for tf=D (caller updates the raw bar).
+export function foldFinalBucket(daily: Bar[], tf: string): Bar | null {
+  if (!daily.length) return null;
+  if (tf === "D") return daily[daily.length - 1];
+  const res = resampleTf(daily, tf);
+  return res.length ? res[res.length - 1] : null;
+}
+
+// Derive the quote's session date in the symbol's market-local wall-clock ("YYYY-MM-DD").
+// CN/HK live in UTC+8 (no DST); US in America/New_York; crypto/ca fall back to UTC.
+export function sessionDateOf(ts: number | undefined, market: Market): string | null {
+  if (ts == null || !isFinite(ts)) return null;
+  const ms = ts * 1000;
+  if (market === "cn" || market === "hk") return new Date(ms + 8 * 3600_000).toISOString().slice(0, 10);
+  if (market === "us") {
+    const p: Record<string, string> = {};
+    for (const part of US_DATE_FMT.formatToParts(ms)) p[part.type] = part.value;
+    return `${p.year}-${p.month}-${p.day}`;
+  }
+  return new Date(ms).toISOString().slice(0, 10);
+}
+const US_DATE_FMT = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" });
 
 // Preserve the visible logical range across an indicator toggle (§0.4 ratified = true).
 // The one-line escape hatch: flip to false to restore the pre-refactor "view resets on toggle" behavior.
@@ -46,9 +108,12 @@ const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: 
 // rsi + stochrsi SHARE one sub-pane (the "osc" pane), exactly as the base did.
 const SUBPANE_ORDER = ["vol", "osc", "macd"] as const;
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], isActive = true, syncId = null }:
+// Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
+const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
+
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], isActive = true, syncId = null, liveQuote = null }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; isActive?: boolean; syncId?: number | null }) {
+    tool?: string | null; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
   const verdictRef = useRef<HTMLSpanElement>(null);
@@ -61,9 +126,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const paneMapRef = useRef<Map<string, number>>(new Map());                 // sub-pane indKey → pane index
   const barsRef = useRef<Bar[]>([]);        // the bars currently ON the chart (full OR replay-sliced)
   const fullBarsRef = useRef<Bar[]>([]);    // the full resampled history — NEVER mutated by replay
+  const dailyBarsRef = useRef<Bar[]>([]);   // the raw DAILY source (pre-resample) — the R11 splice operates here
+  const isIntradayRef = useRef<boolean>(false);   // true when the active TF is an intraday branch (skip splice/resample/date-keyed overlays)
   const closesRef = useRef<number[]>([]);   // closes of barsRef
   const precRef = useRef<number>(2);
-  const sigMarksRef = useRef<{ t: string; type: string; price: number }[]>([]);
+  const sigMarksRef = useRef<{ t: string; type: string; price: number; highlight?: boolean }[]>([]);
+  const highlightTimerRef = useRef<any>(null);   // R14 pulse timer — cleared on symbol/TF change
   const epochRef = useRef(0);               // race guard: latest data-effect run wins
   const cmpGenRef = useRef(0);              // compare-specific generation token (epoch doesn't bump on compare change)
   const sliceRef = useRef<any>(null);       // latest slice, so replay re-resolves sig marks without a refetch
@@ -77,6 +145,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const indicatorsRef = useRef<Set<string>>(indicators);
   const syncIdRef = useRef<number | null>(syncId);
   const replayIdxRef = useRef<number | null>(replayIdx);   // live replayIdx so Effect 2 doesn't build against a stale closure if replay starts mid-fetch
+  const liveQuoteRef = useRef<LiveQuote>(liveQuote);       // latest live quote, so Effect 2's tail can re-apply the splice after setData
   const renderRef = useRef<() => void>(() => {});
   const renderSignalsRef = useRef<() => void>(() => {});
   const syncCleanupRef = useRef<(() => void) | null>(null);
@@ -96,7 +165,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
-  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx;
+  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote;
 
   // ────────────────────────────────────────────────────────────────────────────
   // Shared helpers (module-level within the component, referenced from every effect).
@@ -248,6 +317,55 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (verdictRef.current) { const v = slice?.indicator?.state?.last_signal || "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
   };
 
+  // ── R11 live-bar splice ───────────────────────────────────────────────────
+  // Patch/append the live quote onto the last (daily or resampled) bar so the chart's newest
+  // candle agrees with the header price. Operates on the RAW daily source (dailyBarsRef), folds
+  // the final bucket for resampled TFs, and `series.update()`s exactly one bar. Also updates
+  // barsRef/fullBarsRef so the status line, sig-mark snapping and pane-sync map stay consistent.
+  // Guards (any → no-op): no chart/series, intraday TF, replay active, basis not spliceable,
+  // no quote/last, or the daily source is empty.
+  const applyLiveSplice = () => {
+    const priceS = priceSeriesRef.current; if (!priceS) return;
+    if (isIntradayRef.current) return;                     // intraday is already live
+    if (replayIdxRef.current != null) return;              // never splice under replay
+    const q = liveQuoteRef.current;
+    if (!q || q.last == null || !isFinite(q.last)) return;
+    if (!SPLICE_BASES.has(q.basis || "")) return;          // EOD / missing basis → no splice
+    const daily = dailyBarsRef.current; if (!daily.length) return;
+    const tf = timeframeRef.current;
+    const market = classify(symbol);
+    const sd = sessionDateOf(q.ts, market);
+    if (sd == null) return;
+    const spliced = spliceDaily(daily, q, sd);
+    if (spliced === daily) return;                         // nothing changed (older session)
+    // fold to the bar the chart actually plots at this TF, then push it via update()
+    let bucket = foldFinalBucket(spliced, tf);
+    if (!bucket) return;
+    // R11: reuse the EXISTING final-bucket time key unless the spliced daily date GENUINELY starts a
+    // new bucket (e.g. a fresh ISO week / month / 3D group). For resampled TFs the bucketer re-stamps
+    // the merged bucket's time to the newest daily date, which > the on-chart key → update() would
+    // APPEND a phantom bar. Detect "same bucket" by comparing pre/post bucket counts and, if equal,
+    // rewrite the key to the on-chart final bucket's time so update() REPLACES it in place.
+    if (tf !== "D") {
+      const preCount = resampleTf(daily, tf).length;
+      const postCount = resampleTf(spliced, tf).length;
+      const chartLastTime = fullBarsRef.current[fullBarsRef.current.length - 1]?.time;
+      if (postCount === preCount && chartLastTime != null && chartLastTime !== bucket.time) {
+        bucket = { ...bucket, time: chartLastTime as string };
+      }
+    }
+    try { priceS.update(chartTypeRef.current === "heikin" ? bucket : (chartTypeRef.current === "line" || chartTypeRef.current === "area" ? { time: bucket.time, value: bucket.c } : { time: bucket.time, open: bucket.o, high: bucket.h, low: bucket.l, close: bucket.c }) as any); } catch { return; }
+    // keep the in-memory bar sets in step with what's on the chart (last bucket only)
+    const fb = fullBarsRef.current;
+    if (fb.length) { if (fb[fb.length - 1].time === bucket.time) fb[fb.length - 1] = bucket; else fullBarsRef.current = [...fb, bucket]; }
+    const bs = barsRef.current;
+    if (bs.length && bs === fb) { /* same ref already patched */ }
+    else if (bs.length) { if (bs[bs.length - 1].time === bucket.time) bs[bs.length - 1] = bucket; else barsRef.current = [...bs, bucket]; }
+    closesRef.current = barsRef.current.map((r) => r.c);
+    paintStatus(barsRef.current, sliceRef.current);
+    renderSignalsRef.current();
+  };
+
   // Apply the default view (recent ~240 window in normal mode; fit the slice in replay).
   const applyView = (rows: Bar[], replay: number | null) => {
     const chart = chartRef.current; if (!chart) return;
@@ -312,6 +430,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const up = cfg.dir === "up";
         const top = up ? y + gap + ptr : y - gap - ptr - h;
         const g = mk("g", { opacity: 0.97 });
+        // R14 jump pulse: an expanding ring behind the marker (transient highlight flag, ~2.5s)
+        if ((m as any).highlight) {
+          const ring = mk("circle", { cx: x, cy: top + h / 2, r: w, fill: "none", stroke: cfg.fill, "stroke-width": 2, opacity: 0.9 });
+          ring.appendChild(mk("animate", { attributeName: "r", values: `${w};${w * 2.4}`, dur: "0.9s", repeatCount: "indefinite" }));
+          ring.appendChild(mk("animate", { attributeName: "opacity", values: "0.9;0", dur: "0.9s", repeatCount: "indefinite" }));
+          g.appendChild(ring);
+        }
         g.appendChild(mk("rect", { x: x - w / 2, y: top, width: w, height: h, rx: r, ry: r, fill: cfg.fill }));
         g.appendChild(mk("path", { d: up ? `M${x - ptr} ${top} L${x + ptr} ${top} L${x} ${top - ptr} Z` : `M${x - ptr} ${top + h} L${x + ptr} ${top + h} L${x} ${top + h + ptr} Z`, fill: cfg.fill }));
         const tEl = mk("text", { x, y: top + h / 2 + (star ? 4.3 : 3.4), fill: cfg.tc, "font-size": star ? 11.5 : 9, "font-weight": 800, "text-anchor": "middle", "font-family": star ? "Georgia,serif" : "var(--font-ui)", "letter-spacing": star ? "0" : ".02em" });
@@ -551,14 +676,66 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const chart = chartRef.current; if (!chart) return;
     const epoch = ++epochRef.current;
     let cancelled = false;
+    const intraday = isIntradayTf(timeframe);
+    isIntradayRef.current = intraday;
+    // any in-flight pulse belongs to the prior symbol/TF — cancel it (R14 timer cleanup guard)
+    if (highlightTimerRef.current) { clearTimeout(highlightTimerRef.current); highlightTimerRef.current = null; }
     (async () => {
+      // ── R12 intraday branch: fetch /api/intraday DIRECTLY (no dataCache — it's no-store; a stale
+      //    client cache would lag a fast session). Epoch-second axis. Skip resampleTf + date-keyed
+      //    signal/compare overlays (those are "YYYY-MM-DD" keyed). Indicators are bar-agnostic → kept. ──
+      if (intraday) {
+        let bars: any[] = [];
+        try {
+          const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(timeframe)}&ext=1`, { cache: "no-store" });
+          if (r.ok) { const j = await r.json(); bars = Array.isArray(j?.bars) ? j.bars : []; }
+        } catch {}
+        if (cancelled || epochRef.current !== epoch) return;
+        sliceRef.current = null;                 // no daily slice on intraday → no sig marks
+        sigMarksRef.current = [];
+        dailyBarsRef.current = [];               // splice is daily-only; disable it here
+        if (!bars.length) { if (statusRef.current) statusRef.current.textContent = "No intraday data for this symbol."; return; }
+        // epoch-second Bar6 [t,o,h,l,c,v] → Bar with a NUMERIC time (lightweight-charts accepts UTCTimestamp)
+        const rows: Bar[] = bars.map((b: any[]) => ({ time: b[0] as any, o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
+        if (onMeta) onMeta({ total: rows.length });
+        fullBarsRef.current = rows;
+        const ri = replayIdxRef.current;
+        const onChart = ri != null ? rows.slice(0, Math.max(20, ri + 1)) : rows;
+        barsRef.current = onChart;
+        const closes = onChart.map((r) => r.c);
+        closesRef.current = closes;
+        precRef.current = closes.length && closes[closes.length - 1] < 10 ? 4 : 2;
+        tokensRef.current = readTokens();
+        const familyOf = (ct: string) => (ct === "line" ? "line" : ct === "area" ? "area" : ct === "bars" ? "bars" : "candle");
+        const wantFamily = familyOf(chartType);
+        let priceS = priceSeriesRef.current;
+        if (!priceS || priceFamilyRef.current !== wantFamily) {
+          if (priceS) { try { chart.removeSeries(priceS); } catch {} }
+          priceS = addPriceSeries(chart, tokensRef.current);
+          priceFamilyRef.current = wantFamily;
+          priceSeriesRef.current = priceS;
+        } else { priceS.applyOptions({ priceFormat: priceFmt() }); }
+        priceS!.setData(priceData(onChart) as any);
+        clearAllIndicators();
+        buildAllIndicators(onChart, closes);
+        // compare overlays are cross-market date-string joins → skip on intraday; drop any stale ones
+        for (const s of cmpSeriesRef.current.values()) { try { chart.removeSeries(s); } catch {} }
+        cmpSeriesRef.current.clear();
+        paintStatus(onChart, null);
+        applyView(onChart, ri);
+        renderSignalsRef.current(); renderRef.current();
+        reRegisterSync();
+        return;
+      }
+
       const { ohlc, slice } = await getSliceAndOhlc(symbol);
       if (cancelled || epochRef.current !== epoch) return;
       sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)
       if (!ohlc?.bars?.length) { if (statusRef.current) statusRef.current.textContent = "No data for this symbol."; return; }
 
-      let rows: Bar[] = ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
-      rows = resampleTf(rows, timeframe);   // FULL resampled history — replayIdx is NOT applied here
+      const daily: Bar[] = ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
+      dailyBarsRef.current = daily;         // raw daily source — the R11 splice operates on THIS
+      let rows: Bar[] = resampleTf(daily, timeframe);   // FULL resampled history — replayIdx is NOT applied here
       if (onMeta) onMeta({ total: rows.length });
       fullBarsRef.current = rows;
       // Read the LIVE replayIdx (not the effect's closure): if the user started replay while this
@@ -603,6 +780,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       // ── cross-pane sync: register in the TAIL of Effect 2 (after series + bars exist, §Effect 6) ──
       reRegisterSync();
+
+      // ── R11: re-apply the live splice AFTER setData (which erased any prior splice). No-op under
+      //    replay / EOD basis / intraday (guarded inside). Runs last so status + sig marks agree. ──
+      applyLiveSplice();
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line
@@ -749,8 +930,59 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     renderSignalsRef.current(); renderRef.current();
     // re-register sync so its close-by-time map matches the visible bar set
     reRegisterSync();
+    // exiting replay returns to the live series → re-apply the splice (self-guards under replay/EOD/intraday)
+    applyLiveSplice();
     // eslint-disable-next-line
   }, [replayIdx]);
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // EFFECT 7 — live-bar splice [liveQuote]. R11: patch/append the live quote onto the last bar.
+  //   Keyed on a stable signature so it fires on each new snapshot from the 6s poll. All guards
+  //   (intraday / replay / EOD basis / no-quote) live inside applyLiveSplice.
+  // ────────────────────────────────────────────────────────────────────────────
+  const liveSig = liveQuote ? `${liveQuote.last ?? ""}|${liveQuote.ts ?? ""}|${liveQuote.basis ?? ""}` : "";
+  useEffect(() => {
+    if (!chartRef.current || !priceSeriesRef.current) return;
+    if (!barsRef.current.length) return;   // no data yet — Effect 2's tail will apply it
+    applyLiveSplice();
+    // eslint-disable-next-line
+  }, [liveSig]);
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // EFFECT 8 — jump-to-signal [mount]. R14: window `mm:chart-jump` {sym, ts}. If this pane's active
+  //   symbol matches and the TF is daily-derived, snap ts to the nearest bar (SAME near() the marker
+  //   renderer uses), center ±40 bars, and pulse the target sigMark ~2.5s (transient highlight flag),
+  //   cleared on symbol/TF change (Effect 2 clears the timer) or when the next jump arrives.
+  // ────────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const onJump = (e: Event) => {
+      const d = (e as CustomEvent).detail as { sym?: string; ts?: string } | undefined;
+      if (!d || d.sym !== symbol || !d.ts) return;
+      if (isIntradayRef.current) return;                 // ts is a date string; intraday axis is epoch-sec
+      const chart = chartRef.current; if (!chart) return;
+      const bars = barsRef.current; if (!bars.length) return;
+      // nearest-bar snapping identical to resolveSigMarks' near()
+      const x = new Date(d.ts + "T00:00:00Z").getTime();
+      let bi = -1, bd = 1e18;
+      for (let k = 0; k < bars.length; k++) { const dd = Math.abs(new Date(bars[k].time + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; bi = k; } }
+      if (bi < 0 || bd >= 9e8) return;
+      try { chart.timeScale().setVisibleLogicalRange({ from: bi - 40, to: bi + 40 }); } catch {}
+      // pulse the matching sigMark (if one sits on that bar); transient highlight flag → renderSignals
+      const tBar = bars[bi].time;
+      if (highlightTimerRef.current) { clearTimeout(highlightTimerRef.current); highlightTimerRef.current = null; }
+      let hit = false;
+      for (const m of sigMarksRef.current) { const on = m.t === tBar; m.highlight = on; if (on) hit = true; }
+      renderSignalsRef.current();
+      if (hit) highlightTimerRef.current = setTimeout(() => {
+        for (const m of sigMarksRef.current) m.highlight = false;
+        highlightTimerRef.current = null;
+        renderSignalsRef.current();
+      }, 2500);
+    };
+    window.addEventListener("mm:chart-jump", onJump as EventListener);
+    return () => { window.removeEventListener("mm:chart-jump", onJump as EventListener); if (highlightTimerRef.current) { clearTimeout(highlightTimerRef.current); highlightTimerRef.current = null; } };
+    // eslint-disable-next-line
+  }, [symbol]);
 
   // ────────────────────────────────────────────────────────────────────────────
   // EFFECT 5 — style [csNonce]. Re-read tokens; recolor chart + price + volume. NO createChart/removeSeries.

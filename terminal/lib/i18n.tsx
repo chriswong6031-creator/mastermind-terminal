@@ -121,6 +121,8 @@ const LEX: Record<string, [string, string]> = {
   cagr: ["CAGR", "年化收益"],
   askAIabout: ["Ask Mastermind AI about", "向智脑 AI 询问"],
   openFullAnalysis: ["Open full analysis", "打开完整分析"],
+  signalHistory: ["Signal history", "信号历史"],
+  moreSeasonals: ["More seasonals", "更多季节性"],
   // search
   searchPlaceholder: ["Search symbol or company…", "搜索代码或公司…"],
   noSymbolMatch: ["No supported symbol matches", "没有匹配的代码"],
