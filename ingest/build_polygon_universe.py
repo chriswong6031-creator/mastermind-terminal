@@ -11,6 +11,7 @@ Outputs into terminal/public/data/ (served by the Next app at /data/*).
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -24,6 +25,7 @@ from ingest.polygon_bars import fetch_daily, ohlc_json   # noqa: E402
 from signal_layer import confluence, contracts, backtest  # noqa: E402
 
 OUT = ROOT / "terminal" / "public" / "data"
+MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
 
 META = {
     "NVDA": ("NVIDIA Corp", "Equities", "#76b900"),
@@ -49,6 +51,12 @@ META = {
     "XOM": ("Exxon Mobil", "Equities", "#e31837"),
     "LLY": ("Eli Lilly", "Equities", "#d52b1e"),
     "COST": ("Costco Wholesale", "Equities", "#005daa"),
+    # Chinese ADRs (US-listed). Polygon types them ADRC, not CS, so expand_universe's
+    # type=CS filter never adds them, and the macro store has no ADRs either — carry them
+    # here so they get flagship OHLC/slice/verdict and survive the nightly manifest rebuild.
+    "BABA": ("Alibaba Group", "Equities", "#ff6a00"),
+    "JD": ("JD.com", "Equities", "#d92332"),
+    "PDD": ("PDD Holdings", "Equities", "#e60012"),
     "SPY": ("SPDR S&P 500 ETF", "Equities", "#1f8a4c"),
     "QQQ": ("Invesco QQQ Trust", "Equities", "#4d82ff"),
     "IWM": ("iShares Russell 2000", "Equities", "#6f42c1"),
@@ -62,6 +70,11 @@ META = {
     "XRP-USD": ("XRP", "Crypto", "#23292f"),
 }
 DEFAULT = list(META.keys())
+
+# Home-exchange label for the search row. build_universe only auto-tags names it finds in
+# the Polygon type=CS reference; these ADRs aren't in it, so emit the label here so the
+# nightly rebuild keeps NYSE/NASDAQ instead of falling back to the generic "US" tag.
+MKT = {"BABA": "NYSE", "JD": "NASDAQ", "PDD": "NASDAQ"}
 
 
 def main(syms: list[str]) -> None:
@@ -88,18 +101,49 @@ def main(syms: list[str]) -> None:
                "open": lb[1], "high": lb[2], "low": lb[3], "vol": lb[5],
                "hi52": round(hi52, 2), "lo52": round(lo52, 2),
                "verdict": None, "wr": None, "pf": None, "cagr": None, "regimeBull": None}
+        if sym in MKT:
+            row["mkt"] = MKT[sym]
 
-        sig = confluence.compute_signals(close)
+        # Phase the 3D session grid (and the 2-week confirm pairing) to the symbol's IPO so they
+        # match a full-history TV chart (Polygon feed is truncated to ~6yr; defaults mis-phase).
+        anchor = confluence.ipo_bar_anchor(close, sym)
+        wparity = confluence.ipo_week_parity(close, sym)
+        sig = confluence.compute_signals(close, bar_anchor=anchor, week_parity=wparity)
         if not sig.empty:
             ind = contracts.indicator_contract(
                 sym, "3D", sig, bar_quality="real_ohlc", src_text=src,
                 honest_read="RSI-MACD × StochRSI MTF confluence on Polygon daily→3D. Risk/timing overlay + brain input.")
-            bt = backtest.run_backtest(close, fixed=True, bar_quality="real_ohlc")
+            bt = backtest.run_backtest(close, fixed=True, bar_quality="real_ohlc",
+                                       bar_anchor=anchor, week_parity=wparity)
             btc = contracts.backtest_contract(
                 sym, "3D", bt,
                 honest_read="As-traded Polygon backtest after costs; significance verdict delegated to loop/harness.")
-            slim = {"indicator": contracts.model_slice(ind), "backtest": contracts.model_slice(btc)}
+            # chart slice keeps the FULL indicator signal history (model_slice caps to 12 for the
+            # Opus token budget — the chart needs every BUY/SELL/CUT/REBUY marker, not just recent);
+            # backtest stays sliced (it carries heavy trade/equity arrays).
+            slim = {"indicator": ind, "backtest": contracts.model_slice(btc)}
             (OUT / f"{sym}.slice.json").write_text(json.dumps(slim, indent=2))
+
+            # Write full backtest contract + equity curve (HANDOFF §7.3)
+            if bt.get("status") == "ok" and bt.get("trades"):
+                _rets = bt.get("_returns", [])
+                _idx = bt.get("_returns_index", [])
+                # Build cumulative equity curve: start 1.0, compound each bar return
+                eq_v = [1.0]
+                for r in _rets:
+                    eq_v.append(round(eq_v[-1] * (1.0 + r), 8))
+                bh_tr = bt.get("metrics", {}).get("vs_buy_hold", {}).get("bh_total_return")
+                equity_obj = {
+                    "t": [bt["first"]] + _idx,
+                    "v": eq_v,
+                    "bh_total_return": bh_tr,
+                }
+                # backtest_contract dict + "equity" key; strip raw _returns/_returns_index
+                full_bt = {k: v for k, v in btc.items() if k not in ("_returns", "_returns_index")}
+                full_bt["equity"] = equity_obj
+                (OUT / f"{sym}.backtest.json").write_text(
+                    json.dumps(full_bt, separators=(",", ":"))
+                )
             st = slim["indicator"]["state"]
             m = slim["backtest"]["metrics"]
             row.update(verdict=st.get("last_signal"),
@@ -112,7 +156,7 @@ def main(syms: list[str]) -> None:
         manifest["symbols"][sym] = row
         manifest["as_of"] = bars[-1][0]
         time.sleep(0.2)
-    (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    MANIFEST.write_text(json.dumps(manifest, indent=2))
     print(f"\nmanifest: {len(manifest['symbols'])} symbols, as_of {manifest['as_of']}")
 
 
