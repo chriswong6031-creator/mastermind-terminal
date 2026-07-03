@@ -34,6 +34,7 @@ import pandas as pd
 
 CA_ROOT = Path(__file__).resolve().parents[1]
 MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+CA = Path(__file__).resolve().parents[1]  # charting-app root (worktree-safe)
 TU = MACRO / "data" / "tushare"
 CN_SITE = MACRO / "site" / "chinastockdata"
 DEFAULT_OUT = CA_ROOT / "terminal" / "public" / "data"
@@ -413,11 +414,19 @@ def build_fund(sym: str, src: dict, stmts, vmap, dbmap, fmap, divmap, fcmap, hma
 
 
 def cn_universe() -> list[str]:
-    out = []
-    for p in CN_SITE.glob("*.json"):
-        n = p.name[:-5]
-        if n.endswith((".SS", ".SZ")):
-            out.append(n)
+    # Universe = the terminal manifest's CN symbols (what the app actually serves).
+    # The site/chinastockdata JSON is OPTIONAL enrichment — it must not gate the
+    # universe (the R2 migration untracked those files; the dir can be empty).
+    man = CA / "terminal" / "public" / "data" / "manifest.json"
+    out: list[str] = []
+    if man.exists():
+        try:
+            symbols = json.loads(man.read_text()).get("symbols", {})
+            out = [s for s in symbols if s.endswith((".SS", ".SZ"))]
+        except Exception:
+            out = []
+    if not out:  # fallback: site glob (legacy behavior)
+        out = [p.name[:-5] for p in CN_SITE.glob("*.json") if p.name[:-5].endswith((".SS", ".SZ"))]
     return sorted(set(out))
 
 
