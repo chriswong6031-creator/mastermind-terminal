@@ -1,5 +1,5 @@
 "use client";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useLang } from "@/lib/i18n";
 
 /* ── value formatting ───────────────────────────────────────────────── */
@@ -16,6 +16,12 @@ const money = (n: number | null | undefined) => {
   return `$${n.toFixed(0)}`;
 };
 const cap = (s?: string | null) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+/* buy zone / band: the engine emits either a [lo,hi] tuple or a {low,high} object — render both */
+const bandStr = (bz: any): string => {
+  if (Array.isArray(bz)) return bz.length >= 2 && bz[0] != null ? (bz[0] === bz[1] ? fnum(bz[0]) : `${fnum(bz[0])}–${fnum(bz[1])}`) : "—";
+  if (bz && bz.low != null && bz.high != null) return bz.low === bz.high ? fnum(bz.low) : `${fnum(bz.low)}–${fnum(bz.high)}`;
+  return "—";
+};
 
 /* decision tone → semantic color + label */
 function toneOf(verb?: string | null, tone?: string | null): { cls: string; color: string } {
@@ -90,16 +96,39 @@ export default function StockAnalysis({
 }) {
   const { lang } = useLang();
   const zh = lang === "zh";
-  const a = intel?.analysis;
+  // trust-tier popup: anchored with position:fixed to the badge so it can't be clipped by the
+  // scrolling detail rail / modal body (an absolute popup gets cut off by their overflow:auto)
+  const [trustPop, setTrustPop] = useState<{ x: number; y: number } | null>(null);
+  const showTrust = (el: HTMLElement) => { const r = el.getBoundingClientRect(); setTrustPop({ x: Math.round(r.left), y: Math.round(r.bottom + 6) }); };
   const pick = (en?: string | null, cn?: string | null) => (zh && cn ? cn : en) || "";
+  // The research desk historically emitted an `intel.analysis` block (rich decision/entry/factors).
+  // The live pipeline now ships the compact `intel.cards` schema instead. Adapt the compact schema
+  // into the fields this component already renders so no information is thrown away — and, crucially,
+  // present conviction + timing as clearly-labelled SUPPORTING dimensions rather than a THIRD verdict
+  // competing with the Golden Oracle (which owns the trade call in the rail card above).
+  const a = useMemo(() => {
+    if (intel?.analysis) return intel.analysis;
+    const c = intel?.cards;
+    if (!c) return null;
+    const cv = c.conviction || {};
+    const aj = c.ai_judgment || {};   // plain-language timing read: "Hold off — timing against you"
+    return {
+      _fromCards: true,
+      conviction: { score: cv.score, band: cv.band, drivers: cv.drivers, cautions: cv.cautions },
+      // ai_judgment answers "act now?" — surface it as a labelled timing headline, not a verdict
+      entry: (aj.verdict || aj.gloss) ? { status: "watch", headline: aj.verdict, action: aj.gloss } : null,
+    } as any;
+  }, [intel]);
 
   const dec = a?.decision, conv = a?.conviction, entry = a?.entry, fac = a?.factors,
     tech = a?.tech, val = a?.valuation, fin = a?.financials, prof = a?.profile,
-    sm = a?.smart_money, ae = a?.analyst, gex = a?.gex, macro = a?.macro;
+    sm = a?.smart_money, ae = a?.analyst, gex = a?.gex, macro = a?.macro, fl = a?.flows;
 
   const tn = useMemo(() => toneOf(dec?.verb, dec?.tone), [dec?.verb, dec?.tone]);
   const verb = (zh && dec?.verb_zh) ? dec.verb_zh : (dec?.verb || "—");
   const score = conv?.score ?? dec?.score ?? null;
+  // the compact-schema hero has no research verdict of its own — it's a supporting confidence read
+  const supporting = !!a?._fromCards && !dec;
 
   if (!a) {
     return (
@@ -117,67 +146,129 @@ export default function StockAnalysis({
 
   return (
     <div className="sa">
-      {/* ── DECISION HERO ── */}
-      <div className={`sa-hero ${tn.cls}`}>
-        <div className="sa-hero-l">
-          <div className="sa-verb" style={{ color: tn.color }}>{verb}</div>
-          <div className="sa-band">{pick(dec?.band_label, dec?.band_label_zh) || pick(conv?.band, conv?.band_zh)}</div>
-          <div className="sa-head">{pick(dec?.headline, dec?.headline_zh)}</div>
-          {pick(dec?.gloss, dec?.gloss_zh) && <div className="sa-gloss">{pick(dec?.gloss, dec?.gloss_zh)}</div>}
-        </div>
-        {score != null && (
-          <div className="sa-hero-r">
-            <Ring score={score} color={tn.color} />
-            <span className="sa-ring-lbl">{pick("Conviction", "信心")}</span>
-            {conv?.rank_pctile != null && <span className="sa-rank">{pick("Board rank", "板内排名")} {Math.round(conv.rank_pctile)}%</span>}
+      {/* ── SUPPORTING / DECISION HERO ──
+          When the rich `analysis` schema is present the desk owns a full decision hero.
+          Under the compact `cards` schema there is NO second verdict — the hero is reframed as a
+          labelled "Position confidence" read that supports (never contradicts) the Golden Oracle. */}
+      {supporting ? (
+        <div className="sa-hero support">
+          <div className="sa-hero-l">
+            <div className="sa-support-tag">{pick("Position confidence", "持仓信心")}<small>{pick("supports the Oracle · how strong is the name?", "辅助神谕 · 标的成色如何？")}</small></div>
+            <div className="sa-band">{pick(conv?.band, conv?.band_zh)}</div>
           </div>
-        )}
-      </div>
-      {pick(dec?.trust_en, dec?.trust_zh) && (
-        <div className="sa-trust"><span className="sa-trust-tier">{cap(dec?.trust_tier)}</span>{pick(dec?.trust_en, dec?.trust_zh)}</div>
-      )}
-      {(conv?.drivers?.length || conv?.cautions?.length) && (
-        <div className="sa-dc">
-          {conv?.drivers?.slice(0, 4).map((d: string, i: number) => <span key={"d" + i} className="sa-tag up">＋ {d}</span>)}
-          {(zh && conv?.cautions_zh?.length ? conv.cautions_zh : conv?.cautions || []).slice(0, 3).map((c: string, i: number) => <span key={"c" + i} className="sa-tag warn">⚠ {c}</span>)}
+          {score != null && (
+            <div className="sa-hero-r">
+              <Ring score={score} color="var(--brand-2)" />
+              <span className="sa-ring-lbl">{pick("Confidence", "信心")}</span>
+              {conv?.rank_pctile != null && <span className="sa-rank">{pick("Board rank", "板内排名")} {Math.round(conv.rank_pctile)}%</span>}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className={`sa-hero ${tn.cls}`}>
+          <div className="sa-hero-l">
+            {/* the desk's read supports the Oracle verdict in the rail card above — label it so the
+                big verb ("WAIT", "ACCUMULATE"…) can never scan as a second, competing trade signal */}
+            <div className="sa-support-tag">{pick("Research desk read", "研究台判读")}<small>{pick("context for the Oracle verdict — not a trade signal", "为神谕判定提供背景——非交易信号")}</small></div>
+            <div className="sa-verb" style={{ color: tn.color }}>{verb}</div>
+            <div className="sa-band">{pick(dec?.band_label, dec?.band_label_zh) || pick(conv?.band, conv?.band_zh)}</div>
+            <div className="sa-head">{pick(dec?.headline, dec?.headline_zh)}</div>
+            {pick(dec?.gloss, dec?.gloss_zh) && <div className="sa-gloss">{pick(dec?.gloss, dec?.gloss_zh)}</div>}
+          </div>
+          {score != null && (
+            <div className="sa-hero-r">
+              <Ring score={score} color={tn.color} />
+              <span className="sa-ring-lbl">{pick("Conviction", "信心")}</span>
+              {conv?.rank_pctile != null && <span className="sa-rank">{pick("Board rank", "板内排名")} {Math.round(conv.rank_pctile)}%</span>}
+            </div>
+          )}
         </div>
       )}
+      {pick(dec?.trust_en, dec?.trust_zh) && (
+        /* the trust tier is now just a compact badge; the full rationale is tucked into a hover/focus popup */
+        <div className="sa-trust" tabIndex={0}
+          onMouseEnter={(e) => showTrust(e.currentTarget)} onMouseLeave={() => setTrustPop(null)}
+          onFocus={(e) => showTrust(e.currentTarget)} onBlur={() => setTrustPop(null)}>
+          <span className="sa-trust-tier">{cap(dec?.trust_tier)}</span>
+          <svg className="sa-trust-i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 7.6h.01" /></svg>
+          {trustPop && <div className="sa-trust-pop" role="tooltip" style={{ left: trustPop.x, top: trustPop.y }}>{pick(dec?.trust_en, dec?.trust_zh)}</div>}
+        </div>
+      )}
+      {(() => {
+        const drivers: string[] = conv?.drivers || [];
+        const cautions: string[] = (zh && conv?.cautions_zh?.length ? conv.cautions_zh : conv?.cautions) || [];
+        if (!drivers.length && !cautions.length) return null;
+        return (
+          <div className="sa-dc">
+            {drivers.length > 0 && (
+              <div className="sa-dc-grp">
+                <span className="sa-dc-lbl up">{pick("Drivers", "驱动因素")}</span>
+                <div className="sa-dc-tags">{drivers.slice(0, 4).map((d: string, i: number) => <span key={"d" + i} className="sa-tag up" title={pick("Supporting factor behind the read", "支撑该判定的因素")}>{d}</span>)}</div>
+              </div>
+            )}
+            {cautions.length > 0 && (
+              <div className="sa-dc-grp">
+                <span className="sa-dc-lbl warn">{pick("Cautions", "风险提示")}</span>
+                <div className="sa-dc-tags">{cautions.slice(0, 3).map((c: string, i: number) => <span key={"c" + i} className="sa-tag warn" title={pick("Risk / watch-out", "需要注意的风险")}>{c}</span>)}</div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
-      {/* ── ENTRY TIMING ── */}
+      {/* ── ENTRY TIMING / TIMING QUALITY (answers "act now?") ── */}
       {entry && (entry.status || entry.headline) && (
-        <Section title={pick("Entry timing", "入场时机")} sub={entry.grade ? `${pick("grade", "评级")} ${cap(entry.grade)}` : undefined}
+        <Section title={pick("Timing quality", "时机质量")} sub={entry.grade ? `${pick("grade", "评级")} ${cap(entry.grade)}` : supporting ? pick("act now?", "现在行动？") : undefined}
           accent={entry.status === "open" ? "var(--buy)" : entry.status === "blocked" ? "var(--down)" : "var(--signal)"}>
           <div className="sa-entry-head">
             <span className={`sa-status ${entry.status}`}>{cap(entry.urgency || entry.status)}</span>
             <b>{pick(entry.headline, entry.headline_zh)}</b>
           </div>
           {pick(entry.action, entry.action_zh) && <div className="sa-entry-act">{pick(entry.action, entry.action_zh)}</div>}
+          {/* two-column stacked mini-stats: labels sit above values so nothing clips or overlaps at any rail width */}
           <div className="sa-levels">
-            <Stat k={pick("Spot", "现价")} v={fnum(entry.spot)} />
-            <Stat k={pick("Buy zone", "买入区")} v={Array.isArray(entry.buy_zone) ? `${fnum(entry.buy_zone[0])}–${fnum(entry.buy_zone[1])}` : "—"} />
+            <Stat k={pick("Buy zone", "买入区")} v={bandStr(entry.buy_zone)} />
             <Stat k={pick("Chase >", "追入>")} v={fnum(entry.chase_above)} />
+            <Stat k={pick("Spot", "现价")} v={fnum(entry.spot)} />
             <Stat k={pick("Stop", "止损")} v={fnum(entry.stop)} tone="down" />
             <Stat k="ATR" v={fpct(entry.atr_pct, 1, false)} />
-            <Stat k={pick("Confidence", "置信度")} v={entry.confidence != null ? `${fnum(entry.confidence, 1)}/5` : "—"} />
+            <Stat k={pick("Confidence", "置信度")} v={entry.confidence != null ? fnum(entry.confidence, 1) : "—"} />
           </div>
           {entry.horizon && (entry.horizon.d3 != null || entry.horizon.d21 != null || entry.horizon.d63 != null) && (
             <div className="sa-horizon">
               <span className="sa-horizon-lbl">{pick("Forward edge", "前瞻收益")}</span>
-              {([["3d", entry.horizon.d3], ["21d", entry.horizon.d21], ["63d", entry.horizon.d63]] as [string, number][]).map(([k, v]) => (
-                <div key={k} className="sa-hz"><span className="hk">{k}</span><span className={`hv num ${v >= 0 ? "up" : "down"}`}>{fpct(v, 2)}</span></div>
-              ))}
-            </div>
-          )}
-          {entry.cycle && entry.cycle.pct_through != null && (
-            <div className="sa-cycle">
-              <div className="sa-cycle-h"><span>{pick("Cycle position", "周期位置")}</span><span className="num">{cap(entry.cycle.phase)} · {pick("day", "第")} {entry.cycle.dc_day}</span></div>
-              <div className="sa-cycle-track"><i style={{ width: `${Math.max(0, Math.min(100, entry.cycle.pct_through))}%` }} />
-                {Array.isArray(entry.cycle.dc_band) && entry.cycle.dc_band.length === 2 && entry.cycle.dc_band[1] && (
-                  <span className="sa-cycle-band" style={{ left: `${Math.min(100, (entry.cycle.dc_band[0] / (entry.cycle.dc_band[1] * 1.4)) * 100)}%`, width: `${Math.min(40, ((entry.cycle.dc_band[1] - entry.cycle.dc_band[0]) / (entry.cycle.dc_band[1] * 1.4)) * 100)}%` }} />
-                )}
+              <div className="sa-horizon-boxes">
+                {([["3d", entry.horizon.d3], ["21d", entry.horizon.d21], ["63d", entry.horizon.d63]] as [string, number][]).map(([k, v]) => (
+                  <div key={k} className="sa-hz"><span className="hk">{k}</span><span className={`hv num ${(v ?? 0) >= 0 ? "up" : "down"}`}>{fpct(v, 2)}</span></div>
+                ))}
               </div>
             </div>
           )}
+          {entry.cycle && entry.cycle.pct_through != null && (() => {
+            const cyc = entry.cycle;
+            const pct = Math.max(0, Math.min(100, cyc.pct_through));
+            const band = Array.isArray(cyc.dc_band) && cyc.dc_band.length === 2 && cyc.dc_band[1]
+              ? { left: Math.max(0, Math.min(100, (cyc.dc_band[0] / (cyc.dc_band[1] * 1.4)) * 100)), width: Math.max(0, Math.min(40, (Math.abs(cyc.dc_band[1] - cyc.dc_band[0]) / (cyc.dc_band[1] * 1.4)) * 100)) }
+              : null;
+            const phase = cap((cyc.phase || "").replace(/_/g, " "));
+            return (
+              <div className="sa-cycle">
+                <div className="sa-cycle-h">
+                  <span>{pick("Cycle position", "周期位置")}</span>
+                  <span className="num">{phase}{cyc.dc_day != null ? ` · ${pick("day", "第")} ${fnum(cyc.dc_day, 0)}` : ""}</span>
+                </div>
+                <div className="sa-cycle-track" title={pick("How far through the current cycle price is. The gold band is the typical entry window; the marker is where price sits now.", "价格在当前周期中的进度。金色区间为典型入场窗口，标记为当前位置。")}>
+                  {band && <span className="sa-cycle-band" style={{ left: `${band.left}%`, width: `${band.width}%` }} />}
+                  <i className="sa-cycle-fill" style={{ width: `${pct}%` }} />
+                  <span className="sa-cycle-now" style={{ left: `${pct}%` }} />
+                </div>
+                <div className="sa-cycle-legend">
+                  <span className="lg band">{pick("Entry window", "入场窗口")}</span>
+                  <span className="lg now">{pick("Now", "当前")}</span>
+                </div>
+              </div>
+            );
+          })()}
         </Section>
       )}
 
@@ -194,11 +285,9 @@ export default function StockAnalysis({
           </div>
           <div className="sa-grid2">
             <Stat k="RSI(14)" v={fnum(tech.rsi14, 0)} tone={tech.rsi14 != null ? (tech.rsi14 > 70 ? "down" : tech.rsi14 < 30 ? "up" : "") : ""} />
-            <Stat k="ADX(14)" v={fnum(tech.adx14, 0)} />
             <Stat k={pick("vs 50-MA", "相对50日")} v={fpct(tech.pct_vs_50dma)} tone={(tech.pct_vs_50dma ?? 0) >= 0 ? "up" : "down"} />
             <Stat k={pick("vs 200-MA", "相对200日")} v={fpct(tech.pct_vs_200dma)} tone={(tech.pct_vs_200dma ?? 0) >= 0 ? "up" : "down"} />
             <Stat k={pick("Off 52w high", "距52周高")} v={fpct(tech.off_52w_high_pct)} tone="down" />
-            <Stat k={pick("Rel volume", "相对成交")} v={tech.rel_volume != null ? `${fnum(tech.rel_volume, 1)}×` : "—"} />
           </div>
           <div className="sa-rets">
             {([["1M", tech.ret_1m], ["3M", tech.ret_3m], ["6M", tech.ret_6m], ["12M", tech.ret_12m]] as [string, number][]).map(([k, v]) => (
@@ -281,15 +370,27 @@ export default function StockAnalysis({
       )}
 
       {/* ── ANALYSTS + EARNINGS ── */}
-      {ae && (ae.next_date || ae.surprises) && (
-        <Section title={pick("Analysts & earnings", "分析师与财报")} sub={ae.sue_z != null ? `SUE ${fnum(ae.sue_z, 1)}` : undefined}>
+      {ae && (ae.next_date || ae.surprises || ae.target != null || ae.rating || ae.buy != null) && (
+        <Section title={pick("Analysts & earnings", "分析师与财报")}
+          sub={ae.sue_z != null ? `SUE ${fnum(ae.sue_z, 1)}` : ae.n_analysts != null ? `${fnum(ae.n_analysts, 0)} ${pick("analysts", "分析师")}` : undefined}>
+          {(ae.rating || ae.buy != null || ae.hold != null || ae.sell != null) && (
+            <div className="sa-chips">
+              {ae.rating && <span className={`sa-chip ${(["Buy", "买入"].includes(ae.rating) ? "up" : ["Sell", "卖出"].includes(ae.rating) ? "down" : "")}`}>{pick(ae.rating, ae.rating_zh) || ae.rating}</span>}
+              {(ae.buy != null || ae.hold != null || ae.sell != null) && (
+                <span className="sa-chip">{ae.buy ?? 0} <b className="up">{pick("buy", "买")}</b> · {ae.hold ?? 0} {pick("hold", "持")} · {ae.sell ?? 0} <b className="down">{pick("sell", "卖")}</b></span>
+              )}
+            </div>
+          )}
           <div className="sa-grid3">
             {ae.next_date && <Stat k={pick("Next report", "下次财报")} v={ae.next_date} />}
             {ae.eps_forecast != null && <Stat k={pick("EPS est", "EPS预期")} v={fnum(ae.eps_forecast, 2)} />}
+            {ae.forward_pe != null && <Stat k={pick("Fwd P/E", "预期市盈")} v={fnum(ae.forward_pe, 1)} />}
+            {ae.target != null && <Stat k={pick("Target", "目标价")} v={fnum(ae.target)} />}
+            {ae.upside_pct != null && <Stat k={pick("Upside", "上行空间")} v={fpct(ae.upside_pct, 1)} tone={(ae.upside_pct ?? 0) >= 0 ? "up" : "down"} />}
+            {ae.target_low != null && ae.target_high != null && <Stat k={pick("Target range", "目标区间")} v={`${fnum(ae.target_low)}–${fnum(ae.target_high)}`} />}
             {ae.beats != null && ae.total != null && <Stat k={pick("Beats", "超预期")} v={`${ae.beats}/${ae.total}`} tone={ae.beats >= ae.total ? "up" : ""} />}
             {ae.avg_surprise != null && <Stat k={pick("Avg surprise", "平均超预期")} v={fpct(ae.avg_surprise)} tone={(ae.avg_surprise ?? 0) >= 0 ? "up" : "down"} />}
             {ae.div_yield != null && <Stat k={pick("Div yield", "股息率")} v={fpct(ae.div_yield, 2, false)} />}
-            {ae.target != null && <Stat k={pick("Target", "目标价")} v={fnum(ae.target)} />}
           </div>
           {ae.surprises?.length && (
             <div className="sa-surprises">
@@ -298,6 +399,31 @@ export default function StockAnalysis({
               ))}
             </div>
           )}
+        </Section>
+      )}
+
+      {/* ── FLOWS & POSITIONING (CN 融资 margin / HK 港股通 southbound) ── */}
+      {fl && (fl.own_pct != null || fl.fin_balance_yi != null || fl.lhb_count != null || fl.block_count != null) && (
+        <Section title={pick("Flows & positioning", "资金与持仓")}
+          sub={fl.kind === "southbound" ? pick("Southbound", "南向资金") : pick("Margin · dragon-tiger", "融资 · 龙虎榜")}>
+          <div className="sa-chips">
+            {fl.kind === "southbound" ? (
+              <>
+                {fl.own_pct != null && <span className="sa-chip">{pick("Owns", "持股")} {fpct(fl.own_pct, 1, false)} {pick("of float", "流通")}</span>}
+                {fl.chg5_pct != null && <span className={`sa-chip ${fl.chg5_pct >= 0 ? "up" : "down"}`}>{pick("5-day", "5日")} {fpct(fl.chg5_pct, 1)}</span>}
+                {fl.hold_b != null && <span className="sa-chip">HK${fnum(fl.hold_b, 1)}B</span>}
+                {fl.label && <span className="sa-chip">{cap(fl.label)}</span>}
+              </>
+            ) : (
+              <>
+                {fl.fin_balance_yi != null && <span className="sa-chip">{pick("Margin bal", "融资余额")} ¥{fnum(fl.fin_balance_yi, 1)}亿</span>}
+                {fl.chg_pct != null && <span className={`sa-chip ${fl.chg_pct >= 0 ? "up" : "down"}`}>{fpct(fl.chg_pct, 1)}</span>}
+                {fl.pct_mcap != null && <span className="sa-chip">{fpct(fl.pct_mcap, 1, false)} {pick("of mkt cap", "占市值")}</span>}
+                {fl.lhb_count != null && <span className={`sa-chip ${(fl.lhb_net_yi ?? 0) >= 0 ? "up" : "down"}`}>{pick("龙虎榜", "龙虎榜")} ×{fl.lhb_count}{fl.lhb_net_yi != null ? ` · ${fl.lhb_net_yi >= 0 ? "+" : ""}¥${fnum(fl.lhb_net_yi, 1)}亿` : ""}</span>}
+                {fl.block_count != null && <span className="sa-chip">{pick("Block", "大宗")} ×{fl.block_count}{fl.block_amount_yi != null ? ` · ¥${fnum(fl.block_amount_yi, 1)}亿` : ""}</span>}
+              </>
+            )}
+          </div>
         </Section>
       )}
 

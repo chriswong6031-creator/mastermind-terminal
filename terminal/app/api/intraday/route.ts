@@ -25,10 +25,14 @@ export async function GET(req: Request) {
   const hit = CACHE.get(ckey);
   if (hit && Date.now() - hit.at < TTL) return NextResponse.json(hit.data);
 
-  // a fresh fetch spends our paid Polygon key — keep it behind the same sign-in as the terminal
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  // a fresh fetch spends our paid Polygon key. Open while login is disabled (the 45s cache above
+  // already bounds upstream call volume to ~1 fetch per symbol/tf/ext); re-gated with the rest of the
+  // app via TERMINAL_REQUIRE_AUTH=1 — the same switch as the page gate.
+  if (process.env.TERMINAL_REQUIRE_AUTH === "1") {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
 
   try {
     const bars = await fetchIntraday(sym, tf, ext);

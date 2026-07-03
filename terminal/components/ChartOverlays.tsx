@@ -11,11 +11,13 @@
 import { useEffect, useRef, useState } from "react";
 
 export type LegendEntry = {
-  key: string;          // "ema" | "bb" | … | "pine"
+  key: string;          // "ema" | "bb" | … | "pine" | "cmp:SYM"
   label: string;
   kind: "overlay" | "pane";
   hidden: boolean;
   isPine: boolean;
+  isCompare?: boolean;  // compare symbol pseudo-indicator — no read-only source view
+  color?: string;       // line color (used for the compare row's swatch dot)
 };
 
 export type PaneInfo = {
@@ -43,7 +45,7 @@ export type OverlayActions = {
 };
 
 const I = (d: string, sw = 1.7) => (
-  <svg viewBox="0 0 24 24" style={{ width: 13, height: 13, stroke: "currentColor", fill: "none", strokeWidth: sw, strokeLinecap: "round", strokeLinejoin: "round" }}>
+  <svg viewBox="0 0 24 24" style={{ width: 15, height: 15, stroke: "currentColor", fill: "none", strokeWidth: sw, strokeLinecap: "round", strokeLinejoin: "round" }}>
     <path d={d} />
   </svg>
 );
@@ -51,7 +53,7 @@ const EYE = "M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z";
 const EYE_OFF = "M3 3l18 18M10.6 10.7a2 2 0 0 0 2.8 2.8M9.4 5.2A10.6 10.6 0 0 1 12 5c7 0 11 7 11 7a18 18 0 0 1-3.2 4M6.1 6.2A18 18 0 0 0 1 12s4 7 11 7a10.6 10.6 0 0 0 3-.4";
 
 function EyeIcon({ off }: { off: boolean }) {
-  const base = { width: 13, height: 13, stroke: "currentColor", fill: "none", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  const base = { width: 15, height: 15, stroke: "currentColor", fill: "none", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   return off
     ? <svg viewBox="0 0 24 24" style={base}><path d={EYE_OFF} /></svg>
     : <svg viewBox="0 0 24 24" style={base}><path d={EYE} /><circle cx="12" cy="12" r="3" /></svg>;
@@ -68,7 +70,7 @@ const ICONS = {
   maximize: "M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5",
 };
 
-type MoreState = { key: string; paneIndex: number; isPane: boolean; hidden: boolean; x: number; y: number };
+type MoreState = { key: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; x: number; y: number };
 
 export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: string | null; legendOpen: boolean; onToggleLegend: () => void } & OverlayActions) {
   const [more, setMore] = useState<MoreState | null>(null);
@@ -82,7 +84,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
 
   const stop = (fn: () => void) => (ev: React.MouseEvent) => { ev.stopPropagation(); ev.preventDefault(); fn(); };
   const openMore = (e: LegendEntry, paneIndex: number, rect: DOMRect) =>
-    setMore({ key: e.key, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, x: rect.left, y: rect.bottom + 4 });
+    setMore({ key: e.key, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, x: rect.left, y: rect.bottom + 4 });
 
   return (
     <div className="chart-overlays">
@@ -95,12 +97,13 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
             {p.entries.length > 0 && (
               <div className="lg-block" style={{ top: legendTop, left: 8 }}>
                 {(p.isPrice ? props.legendOpen : true) && p.entries.map((e) => (
-                  <div key={e.key} className={`lg-row${e.hidden ? " is-hidden" : ""}`}>
+                  <div key={e.key} className={`lg-row${e.hidden ? " is-hidden" : ""}${e.isCompare ? " is-cmp" : ""}`}>
+                    {e.isCompare && <span className="lg-dot" style={{ background: e.color || "currentColor" }} />}
                     <span className="lg-name">{e.label}</span>
                     <span className="lg-menu">
                       <button className="lg-ic eye" data-tip={e.hidden ? "Show" : "Hide"} onClick={stop(() => props.onEye(e.key))} aria-label={e.hidden ? "Show" : "Hide"}><EyeIcon off={e.hidden} /></button>
                       <button className="lg-ic" data-tip="Settings" onClick={stop(() => props.onSettings(e.key))} aria-label="Settings">{I(ICONS.settings, 1.6)}</button>
-                      <button className="lg-ic" data-tip="Source code" onClick={stop(() => props.onSource(e.key))} aria-label="Source code">{I(ICONS.source)}</button>
+                      {!e.isCompare && <button className="lg-ic" data-tip="Source code" onClick={stop(() => props.onSource(e.key))} aria-label="Source code">{I(ICONS.source)}</button>}
                       <button className="lg-ic" data-tip="Remove" onClick={stop(() => props.onRemove(e.key))} aria-label="Remove">{I(ICONS.remove)}</button>
                       <button className="lg-ic" data-tip="More" onClick={(ev) => { ev.stopPropagation(); ev.preventDefault(); openMore(e, p.paneIndex, (ev.currentTarget as HTMLElement).getBoundingClientRect()); }} aria-label="More">{I(ICONS.more, 2.4)}</button>
                     </span>
@@ -131,7 +134,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
         <div className="lg-more" style={{ left: more.x, top: more.y }} onPointerDown={(e) => e.stopPropagation()}>
           <div className="lg-more-row" onClick={stop(() => { props.onEye(more.key); setMore(null); })}><span className="mi"><EyeIcon off={more.hidden} /></span>{more.hidden ? "Show" : "Hide"}</div>
           <div className="lg-more-row" onClick={stop(() => { props.onSettings(more.key); setMore(null); })}><span className="mi">{I(ICONS.settings, 1.6)}</span>Settings…</div>
-          <div className="lg-more-row" onClick={stop(() => { props.onSource(more.key); setMore(null); })}><span className="mi">{I(ICONS.source)}</span>Source code…</div>
+          {!more.isCompare && <div className="lg-more-row" onClick={stop(() => { props.onSource(more.key); setMore(null); })}><span className="mi">{I(ICONS.source)}</span>Source code…</div>}
           {more.isPane && <>
             <div className="lg-more-sep" />
             <div className={`lg-more-row${props.canMoveUp(more.paneIndex) ? "" : " dis"}`} onClick={stop(() => { if (props.canMoveUp(more.paneIndex)) { props.onMoveUp(more.paneIndex); setMore(null); } })}><span className="mi">{I(ICONS.up)}</span>Move pane up</div>

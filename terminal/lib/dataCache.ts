@@ -1,0 +1,172 @@
+/**
+ * dataCache.ts — client-side JSON cache for Terminal data files.
+ *
+ * CONTRACT (§0.2, §3 of BUILD-SPEC):
+ *   - SINGLE AUTHOR: frontend agent.  ChartPanel + TerminalShell are pure consumers.
+ *   - Provides getJSON/prefetch/peek/invalidate/getOhlc/getSlice/getSliceAndOhlc.
+ *   - Inflight-request deduplication (collapse double slice fetch).
+ *   - TTL = 60 s, stale-while-revalidate by default.
+ *   - Never stores null responses — on null/error the key is evicted so the next call retries.
+ *   - LRU cap ~400 entries.
+ *   - SSR-safe: prefetch is a no-op on the server; getJSON works (no window APIs needed).
+ */
+
+type Entry = { data: any; ts: number; inflight: Promise<any> | null };
+
+const store = new Map<string, Entry>();
+
+export interface GetOpts {
+  ttl?: number;   // milliseconds; default 60_000
+  swr?: boolean;  // stale-while-revalidate; default true
+}
+
+const DEFAULT_TTL = 60_000;
+
+// ── LRU eviction: delete the oldest entry when the store exceeds 400 items ──
+function evictOldest(): void {
+  if (store.size <= 400) return;
+  // Map iteration order is insertion order; first item is oldest.
+  const first = store.keys().next().value;
+  if (first !== undefined) store.delete(first);
+}
+
+// ── Touch an entry (move to end = most-recently-used) ──
+function touch(url: string, entry: Entry): void {
+  store.delete(url);
+  store.set(url, entry);
+}
+
+// ── Core fetch: issues the request, writes/evicts on settle ──
+function doFetch(url: string, entry: Entry): Promise<any> {
+  const inflight: Promise<any> = fetch(url)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
+    .then((data) => {
+      // Only commit if this specific inflight is still the one registered.
+      const current = store.get(url);
+      if (current && current.inflight === inflight) {
+        if (data === null || data === undefined) {
+          // Never pin null — clear the key so the next call retries.
+          store.delete(url);
+        } else {
+          const committed: Entry = { data, ts: Date.now(), inflight: null };
+          touch(url, committed);
+        }
+      }
+      return data;
+    });
+
+  entry.inflight = inflight;
+  store.delete(url);
+  store.set(url, entry);
+  evictOldest();
+  return inflight;
+}
+
+/**
+ * getJSON — the core cache primitive.
+ *
+ * Algorithm:
+ *   1. Inflight request present → return it (deduplication).
+ *   2. Fresh (now - ts < ttl) → return cached data immediately.
+ *   3. Stale + swr=true → kick off background revalidate; return stale data.
+ *   4. Otherwise → fetch synchronously (caller awaits).
+ */
+export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
+  const ttl = opts?.ttl ?? DEFAULT_TTL;
+  const swr = opts?.swr ?? true;
+  const now = Date.now();
+
+  const entry = store.get(url);
+
+  if (entry) {
+    // 1. Deduplicate in-flight requests.
+    if (entry.inflight !== null) {
+      return entry.inflight;
+    }
+
+    const age = now - entry.ts;
+
+    // 2. Fresh — serve from cache.
+    if (age < ttl) {
+      touch(url, entry);
+      return Promise.resolve(entry.data);
+    }
+
+    // 3. Stale + swr — serve stale, revalidate in background.
+    if (swr) {
+      // Schedule background revalidation (microtask so the stale data is
+      // returned to the caller before the fetch starts).
+      const staleData = entry.data;
+      const bgEntry: Entry = { data: staleData, ts: entry.ts, inflight: null };
+      doFetch(url, bgEntry); // fire-and-forget
+      return Promise.resolve(staleData);
+    }
+  }
+
+  // 4. Miss or expired (swr=false): blocking fetch.
+  const fresh: Entry = { data: null, ts: 0, inflight: null };
+  return doFetch(url, fresh);
+}
+
+/**
+ * prefetch — warm the cache without blocking the caller.
+ * No-op on the server (SSR-safe).
+ */
+export function prefetch(url: string, opts?: GetOpts): void {
+  if (typeof window === "undefined") return;
+
+  const ttl = opts?.ttl ?? DEFAULT_TTL;
+  const now = Date.now();
+  const entry = store.get(url);
+
+  // Already in-flight or fresh — nothing to do.
+  if (entry) {
+    if (entry.inflight !== null) return;
+    if (now - entry.ts < ttl) return;
+  }
+
+  const fresh: Entry = { data: entry?.data ?? null, ts: entry?.ts ?? 0, inflight: null };
+  doFetch(url, fresh);
+}
+
+/**
+ * peek — synchronous cache read; undefined if not cached.
+ */
+export function peek(url: string): any | undefined {
+  const entry = store.get(url);
+  return entry?.data;
+}
+
+/**
+ * invalidate — remove one key (or all keys if url is omitted).
+ */
+export function invalidate(url?: string): void {
+  if (url === undefined) {
+    store.clear();
+  } else {
+    store.delete(url);
+  }
+}
+
+// ── Convenience helpers ──
+
+/** Fetch a symbol's OHLC file: /data/<sym>.json */
+export function getOhlc(sym: string): Promise<any> {
+  return getJSON("/data/" + sym + ".json");
+}
+
+/** Fetch a symbol's slice file: /data/<sym>.slice.json */
+export function getSlice(sym: string): Promise<any> {
+  return getJSON("/data/" + sym + ".slice.json");
+}
+
+/**
+ * getSliceAndOhlc — parallel fetch with shared inflight deduplication.
+ * ChartPanel calls this; if TerminalShell already triggered getSlice,
+ * the slice request collapses onto the same inflight Promise.
+ */
+export async function getSliceAndOhlc(sym: string): Promise<{ ohlc: any; slice: any }> {
+  const [ohlc, slice] = await Promise.all([getOhlc(sym), getSlice(sym)]);
+  return { ohlc, slice };
+}

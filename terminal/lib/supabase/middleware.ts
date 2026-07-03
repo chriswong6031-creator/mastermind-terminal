@@ -29,15 +29,21 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  // /terminal is open while login is disabled — set TERMINAL_REQUIRE_AUTH=1 to re-gate it
+  // Login is disabled — the whole app is public. Set TERMINAL_REQUIRE_AUTH=1 to re-gate everything.
   const requireAuth = process.env.TERMINAL_REQUIRE_AUTH === "1";
   const PROTECTED = requireAuth
     ? ["/terminal", "/screener", "/scripts", "/portfolio", "/alerts"]
-    : ["/screener", "/scripts", "/portfolio", "/alerts"];
+    : [];
   // protect the app area; bounce signed-in users away from /login
   if (!user && PROTECTED.some((p) => path.startsWith(p))) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
+    return NextResponse.redirect(url);
+  }
+  // login disabled → skip the sign-in splash and drop every visitor straight into the app
+  if (!requireAuth && path === "/") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/terminal";
     return NextResponse.redirect(url);
   }
   if (user && (path === "/login" || path === "/")) {

@@ -10,13 +10,6 @@ const nextConfig: NextConfig = {
   // strictness block production deploys; clean these up later if desired.
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
-  // Client-side Router Cache retention. Tabs (Chart/Screener/Scripts/Portfolio) are
-  // separate routes; without this, Next's default for dynamic pages is 0s, so every
-  // tab click re-hits the server. Holding the rendered payload for 30s makes
-  // re-clicking a recently-visited tab instant (no round-trip).
-  experimental: {
-    staleTimes: { dynamic: 30, static: 180 },
-  },
 };
 
 export default nextConfig;

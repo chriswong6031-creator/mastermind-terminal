@@ -6,11 +6,7 @@ export const dynamic = "force-dynamic";
 export default async function Terminal({ searchParams }: { searchParams: Promise<{ sym?: string }> }) {
   const sp = await searchParams;
   const supabase = await createClient();
-  // getSession() is local (no Supabase round-trip); the watchlist queries below are
-  // RLS-scoped to the cookie's token. This page renders a guest workspace when there's
-  // no session, so the (untrusted) local session read is fine here.
-  const { data: { session } } = await supabase.auth.getSession();
-  const user = session?.user ?? null;
+  const { data: { user } } = await supabase.auth.getUser();
 
   // login disabled for now — render an open guest workspace (no server-side persistence)
   if (!user) {

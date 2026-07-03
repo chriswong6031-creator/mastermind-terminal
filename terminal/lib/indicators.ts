@@ -107,7 +107,8 @@ typical = (high + low + close) / 3
 plot(ta.cum(typical * volume) / ta.cum(volume), "VWAP", color.new(#e8b339, 0))`,
   },
   vol: {
-    key: "vol", label: "Volume", tag: "Vol", kind: "pane",
+    // pane-less: drawn embedded at the bottom of the price pane on its own hidden overlay scale
+    key: "vol", label: "Volume", tag: "Vol", kind: "overlay",
     defaults: { upCol: COL.upFill, downCol: COL.downFill },
     fields: [
       { key: "upCol", label: "Up color", type: "color", group: "style" },
