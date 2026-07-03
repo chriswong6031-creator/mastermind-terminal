@@ -9,6 +9,8 @@ the judge-fixed §1.1 contract EXACTLY:
                     (e.g. NIO stmt=CNY / quote=USD) — never mixed into a ratio without this field.
   estimates       = EXACTLY two FY periods (0y,+1y) and two Q periods (0q,+1q) — yfinance carries no 3rd year.
   earnings.q[]    = per-quarter EPS actual/estimate/surprise; rev_a/rev_e stay null for US (yfinance has none).
+                    PLUS synthesized all-null "tx-carrier" rows (report_date null) for transcript ids that no
+                    earnings_dates announcement covers — earnings_dates is a rolling window and goes stale.
   next_period     = DERIVED from the fiscal-year-end month + quarter arithmetic (algorithm documented below).
   period labels    = fiscal "Q3 '26" (quarter within the issuer's fiscal year, not the calendar quarter).
   arrays           = oldest→newest, aligned to `periods` with null holes; raw currency units (never millions).
@@ -356,6 +358,37 @@ def build_earnings(cache: dict, fy_end_m: int, tx_ids: set[str] | None) -> dict:
                 "surp_pct": surp, "tx": tx,
             })
 
+    # Orphan transcripts: earnings_dates is a rolling ~8-12 announcement window (stale or ancient
+    # for some names — AACG's stops in 2014), so tx ids in the index routinely cover quarters with
+    # no q row and the transcript is unreachable in the UI (2026-07 audit: 3,357 of 22,789 ids
+    # across 926 symbols). Synthesize a minimal tx-carrier row per orphan id (eps/rev all null —
+    # q[] otherwise holds actuals only). end prefers the quarterly-statement column carrying the
+    # same fiscal label, because StatementsPage joins tx by EXACT period_end string and 4-4-5
+    # filers (NVDA) close quarters off month-end; fiscal month-end from the id is the fallback.
+    if tx_ids:
+        attached = {r["tx"] for r in q_rows if r["tx"]}
+        orphans = sorted(tx_ids - attached)
+        if orphans:
+            qtr = build_frame(cache, "quarterly_income_stmt")
+            stmt_end_by_id = {}
+            for e in (qtr.cols if qtr else []):
+                lbl = fiscal_q_label(e, fy_end_m, style="long")
+                if lbl:
+                    qn, yr = lbl.split()
+                    stmt_end_by_id.setdefault(f"{yr}{qn}", e[:10])
+            for tid in orphans:
+                derived = tx_period_end(tid, fy_end_m)
+                if derived is None:
+                    continue    # malformed id — not "YYYYQn"
+                period, end = derived
+                q_rows.append({
+                    "period": period, "end": stmt_end_by_id.get(tid, end),
+                    "report_date": None,
+                    "eps_a": None, "eps_e": None, "rev_a": None, "rev_e": None,
+                    "surp_pct": None, "tx": tid,
+                })
+            q_rows.sort(key=lambda r: r["end"] or "")
+
     # annual EPS actual vs estimate: aggregate from the site treasure summary is unavailable per-FY;
     # yfinance has no clean FY actual/estimate pairs → leave fy[] empty-but-typed (contract allows).
     # We still emit fy rows from earnings_estimate 0y/+1y as forward estimates? No — fy[] is ACTUALS.
@@ -389,6 +422,21 @@ def next_period_from_end(approx_end: dt.date, fy_end_m: int):
             m, y = 12, y - 1
     last = (dt.date(y, 12, 31) if m == 12 else dt.date(y, m + 1, 1) - dt.timedelta(days=1))
     return fiscal_q_label(last.isoformat(), fy_end_m, style="long"), last.isoformat()
+
+
+def tx_period_end(tx_id: str, fy_end_m: int):
+    """Invert a defeatbeta fiscal id ("2025Q3") to (long label, ISO quarter-end) under the
+    issuer's fiscal calendar — the exact inverse of fiscal_q_label's month math, so the
+    derived end round-trips: fiscal_q_label(end) == label. None for malformed ids."""
+    if len(tx_id) != 6 or tx_id[4] != "Q" or not (tx_id[:4].isdigit() and tx_id[5].isdigit()):
+        return None
+    fy_year, q = int(tx_id[:4]), int(tx_id[5])
+    if not 1 <= q <= 4:
+        return None
+    m = (fy_end_m + 3 * q - 1) % 12 + 1                     # last month of fiscal quarter q
+    y = fy_year if m <= fy_end_m else fy_year - 1
+    last = dt.date(y, 12, 31) if m == 12 else dt.date(y, m + 1, 1) - dt.timedelta(days=1)
+    return f"Q{q} {fy_year}", last.isoformat()
 
 
 # ───────────────────────────── estimates ─────────────────────────────
