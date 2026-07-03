@@ -119,6 +119,21 @@ const LEX: Record<string, [string, string]> = {
   winRate: ["Win rate", "胜率"],
   profitFactor: ["Profit factor", "盈亏比"],
   cagr: ["CAGR", "年化收益"],
+  // unified signal hierarchy — one story per ticker: the Oracle is the primary (only backtested)
+  // trade signal; conviction ("how strongly") and timing ("act now") are supporting dimensions.
+  oracleTradeSignal: ["Trade signal · backtested", "交易信号 · 已回测"],
+  signalPrimaryTag: ["The verdict — own it?", "结论 — 是否持有？"],
+  posConfidence: ["Position confidence", "持仓信心"],
+  posConfidenceQ: ["How strong is the name?", "标的成色如何？"],
+  timingQuality: ["Timing quality", "时机质量"],
+  timingQualityQ: ["Act now?", "现在行动？"],
+  supportingReads: ["Supporting reads", "辅助解读"],
+  supportingNote: ["Different questions — not a second verdict", "回答不同的问题 —— 并非第二个结论"],
+  conflictHeads: ["Oracle vs. conviction — reconciled", "神谕 vs. 信心 —— 说明"],
+  conflictSellHighConv: [
+    "Oracle says {v} (the backtested trade signal). The high conviction reading is a research-thesis score on the name's quality — not a buy trigger. Wait for the Oracle to turn before adding.",
+    "神谕给出 {v}（已回测的交易信号）。高信心读数是对该标的质量的研究评分 —— 并非买入触发。请等待神谕转向后再加仓。",
+  ],
   askAIabout: ["Ask Mastermind AI about", "向智脑 AI 询问"],
   openFullAnalysis: ["Open full analysis", "打开完整分析"],
   // search
@@ -143,6 +158,7 @@ const LEX: Record<string, [string, string]> = {
   // misc
   uptrendRegime: ["Uptrend regime", "上升趋势"],
   open: ["Open", "开盘"],
+  marketClosed: ["Closed", "休市"],
   // seasonality
   seasonalityTitle: ["Seasonality · avg monthly return", "季节性 · 月均收益"],
   seasonalityFoot: ["Current month highlighted · hover a bar for its avg return & win rate · from {sym} history (display-only context).", "高亮为当前月份 · 悬停查看月均收益与胜率 · 基于 {sym} 历史（仅供参考）。"],

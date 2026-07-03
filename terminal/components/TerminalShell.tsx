@@ -9,6 +9,9 @@ import ChartPane from "@/components/ChartPane";
 import StrategyTester from "@/components/StrategyTester";
 import SearchModal from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
+import IndicatorSettings from "@/components/IndicatorSettings";
+import IndicatorSource from "@/components/IndicatorSource";
+import { allDefaults, indDefaults, withDefaults, IND_ORDER } from "@/lib/indicators";
 import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
 import StockAnalysis from "@/components/StockAnalysis";
@@ -96,6 +99,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
   const [chartType, setChartType] = useState("candles");
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
+  const [hidden, setHidden] = useState<Set<string>>(new Set());                       // indicators the eye has hidden
+  const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());      // per-indicator params (Settings dialog)
+  const [settingsKey, setSettingsKey] = useState<string | null>(null);                 // indicator whose Settings dialog is open
+  const [sourceKey, setSourceKey] = useState<string | null>(null);                     // indicator whose Source view is open
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
   const [set, setSet] = useState<WLSet>(DEFAULT_SET);
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
@@ -156,7 +163,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
   useEffect(() => {
-    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) });
+    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) });
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
@@ -181,6 +188,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (!initialSymbol) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane }));
   }, [panes, paneTfs, split, sync, activePane]);
   useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
+  // skip the mount-pass write (state is still the pre-load default) — otherwise a reload/discard
+  // landing inside the mount→load window can permanently clobber the saved value with the default
+  const hidMounted = useRef(false); const ipMounted = useRef(false);
+  useEffect(() => { if (!hidMounted.current) { hidMounted.current = true; return; } localStorage.setItem("mm.indHidden", JSON.stringify([...hidden])); }, [hidden]);
+  useEffect(() => { if (!ipMounted.current) { ipMounted.current = true; return; } localStorage.setItem("mm.indParams", JSON.stringify(indParams)); }, [indParams]);
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
   useEffect(() => { localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
@@ -304,9 +316,75 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const m = man?.symbols?.[active];
   const liveQuote = quotes[active] ?? null;   // header/badge quote = the active symbol's entry in the shared map
   const buy = isBuy(m?.verdict ?? null);
+  // ── unified signal hierarchy ──────────────────────────────────────────────
+  // Every ticker used to show three competing verdicts (Oracle · conviction · timing).
+  // We keep the Oracle as the single PRIMARY (only backtested) verdict and demote the
+  // intel-desk conviction + entry-timing to clearly-labelled SUPPORTING dimensions that
+  // answer different questions. Read straight from the live intel `cards` schema.
+  const oracleView = useMemo(() => {
+    const c = intel?.cards || {};
+    const conv = c.conviction || {};
+    const aj = c.ai_judgment || {};
+    const convScore: number | null = typeof conv.score === "number" ? conv.score : null;
+    const sell = m?.verdict === "SELL" || m?.verdict === "CUT";
+    // conflict = the backtested trade signal is bearish but the research thesis reads strong;
+    // this is the exact case that confuses first-time users (e.g. NVDA SELL @ conviction 96).
+    const conflict = sell && convScore != null && convScore >= 60;
+    return {
+      convScore,
+      convBand: conv.band as string | undefined,
+      timing: (aj.gloss || aj.verdict) as string | undefined,   // plain-language "act now?" line
+      conflict,
+    };
+  }, [intel, m?.verdict]);
   // live quote (China/HK) wins over the WS tick and the manifest EOD row for both price and % change
   const lastPx = liveQuote?.last ?? livePx ?? m?.last;
   const chgNow = liveQuote?.chg ?? m?.chg;
+
+  // ── market-closed chip ──────────────────────────────────────────────────────
+  // Recomputes every minute via setInterval (no holiday calendar — see risks).
+  const [mktClosed, setMktClosed] = useState(false);
+  useEffect(() => {
+    const isCrypto = m?.sec === "Crypto" || active.endsWith("-USD");
+    function compute() {
+      if (isCrypto) { setMktClosed(false); return; }
+      const mkt = m?.mkt ?? "";
+      // Known per-market sessions (local open/close HH:MM + IANA timezone).
+      // Unlisted markets: show no chip rather than wrong status.
+      const US = { tz: "America/New_York", open: "09:30", close: "16:00" };
+      const sessions: Record<string, { tz: string; open: string; close: string }> = {
+        NASDAQ: US, NYSE: US, AMEX: US, ARCA: US, BATS: US,   // manifest carries the exchange name for US rows
+        HKEX: { tz: "Asia/Hong_Kong",  open: "09:30", close: "16:00" },
+        KRX:  { tz: "Asia/Seoul",      open: "09:00", close: "15:30" },
+        TSE:  { tz: "Asia/Tokyo",      open: "09:00", close: "15:30" },
+        LSE:  { tz: "Europe/London",   open: "08:00", close: "16:30" },
+        XETRA:{ tz: "Europe/Berlin",   open: "09:00", close: "17:30" },
+      };
+      const sess = mkt ? sessions[mkt] : US;
+      if (!sess) { setMktClosed(false); return; }  // unknown market → no chip
+      const now = new Date();
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: sess.tz, hour: "numeric", minute: "2-digit",
+        weekday: "short", hour12: false,
+      }).formatToParts(now);
+      const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+      const wd = get("weekday");          // "Mon" "Tue" … "Sat" "Sun"
+      const hh = parseInt(get("hour"), 10);
+      const mm = parseInt(get("minute"), 10);
+      const isWeekend = wd === "Sat" || wd === "Sun";
+      const [oh, om] = sess.open.split(":").map(Number);
+      const [ch, cm] = sess.close.split(":").map(Number);
+      const nowMin = hh * 60 + mm;
+      const openMin = oh * 60 + om;
+      const closeMin = ch * 60 + cm;
+      const isOpen = !isWeekend && nowMin >= openMin && nowMin < closeMin;
+      setMktClosed(!isOpen);
+    }
+    compute();
+    const id = setInterval(compute, 60_000);
+    return () => clearInterval(id);
+  }, [active, m?.sec, m?.mkt]);
+  // ────────────────────────────────────────────────────────────────────────────
 
   async function addSymbol(sym: string) {
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
@@ -341,6 +419,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (activeList === name) setActiveList(Object.keys(lists).filter((k) => k !== name)[0] || "Default");
   }
   const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  // ── indicator legend actions (shared by the per-pane legend + its More menu) ──
+  const toggleHidden = useCallback((k: string) => setHidden((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; }), []);
+  const removeInd = useCallback((k: string) => {
+    setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
+    setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
+  }, []);
+  const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...withDefaults(k, p[k]), ...patch } })), []);
+  const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
+  const openSettings = useCallback((k: string) => setSettingsKey(k), []);
+  const openSource = useCallback((k: string) => setSourceKey(k), []);
   const pick = (sym: string) => {
     // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
     // re-clicking the active symbol is a no-op rather than jumping focus to the first matching pane.
@@ -443,9 +531,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className={`ct${view === "price" ? " on" : ""}`} onClick={() => setView("price")}>{t("priceChart")}</div>
           <div className={`ct${view === "strategy" ? " on" : ""}`} onClick={() => setView("strategy")}>{t("strategyTester")}</div>
           <div className="tools">
-            <div className="seg pophost">
-              {favTF.map((t) => <button key={t} className={tf === t ? "on" : ""} disabled={!FUNCTIONAL.has(t)} style={!FUNCTIONAL.has(t) ? { opacity: .4 } : {}} onClick={() => FUNCTIONAL.has(t) && setTf(t)}>{t}</button>)}
-              <button onClick={(e) => { e.stopPropagation(); closeAll(); setTfOpen((o) => !o); }} style={{ padding: "0 6px" }}>▾</button>
+            <div className="pophost">
+              <div className="seg">
+                {favTF.map((t) => <button key={t} className={tf === t ? "on" : ""} disabled={!FUNCTIONAL.has(t)} style={!FUNCTIONAL.has(t) ? { opacity: .4 } : {}} onClick={() => FUNCTIONAL.has(t) && setTf(t)}>{t}</button>)}
+                <button onClick={(e) => { e.stopPropagation(); const willOpen = !tfOpen; closeAll(); setTfOpen(willOpen); }} style={{ padding: "0 6px" }}>▾</button>
+              </div>
               <div className={`tfgrid${tfOpen ? " show" : ""}`} onClick={(e) => e.stopPropagation()}>
                 {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{t(TFG_TKEY[g])}</div>{items.map((tfi) => { const fn = FUNCTIONAL.has(tfi); const fav = favTF.includes(tfi);
                   return <div key={tfi} className={`it${tf === tfi ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
@@ -455,7 +545,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
             </div>
             <div className="pophost">
-              <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setCtOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h3M14 4v16M14 9h3" /></svg>{t(CT_TKEY[chartType])}<span style={{ color: "var(--muted)" }}>▾</span></button>
+              <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !ctOpen; closeAll(); setCtOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h3M14 4v16M14 9h3" /></svg>{t(CT_TKEY[chartType])}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${ctOpen ? " show" : ""}`} style={{ top: 32, left: 0 }} onClick={(e) => e.stopPropagation()}>
                 {CHART_TYPES.map(([k]) => <div key={k} className="set-row" style={chartType === k ? { color: "var(--brand-2)" } : {}} onClick={() => { setChartType(k); setCtOpen(false); }}>{t(CT_TKEY[k])}</div>)}
               </div>
@@ -465,13 +555,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             <button className="tbtn tool-adv" title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
             {panes.length > 1 && <button className={`tbtn tool-adv${sync ? " on" : ""}`} title={t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
             <div className="pophost tool-adv">
-              <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setDetectOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
+              <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !detectOpen; closeAll(); setDetectOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
                 {DETECTORS.map(([k]) => <div key={k} className="menu-row" onClick={() => detect(k)}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t(DET_TKEY[k])}</div>)}
               </div>
             </div>
             <div className="pophost tool-adv">
-              <button className="tbtn" onClick={(e) => { e.stopPropagation(); closeAll(); setLayoutOpen((o) => !o); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span style={{ color: "var(--muted)" }}>▾</span></button>
+              <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !layoutOpen; closeAll(); setLayoutOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M9 9v10" /></svg>{t("layouts")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${layoutOpen ? " show" : ""}`} style={{ top: 32, right: 0, minWidth: 230 }} onClick={(e) => e.stopPropagation()}>
                 <div className="menu-save"><input placeholder={t("saveCurrentAs")} value={layoutName} onChange={(e) => setLayoutName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLayout(); }} /><button onClick={saveLayout}>{t("save")}</button></div>
                 {layouts.length === 0 && <div className="menu-row" style={{ color: "var(--text-dim)" }}>{t("noSavedLayouts")}</div>}
@@ -520,7 +610,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} />
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} />
               ))}
             </div>
           </div>
@@ -549,7 +639,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
               <div className="wl-acts">
                 <button title={t("addSymbol")} onClick={(e) => { e.stopPropagation(); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
-                <button title={t("settings")} onClick={(e) => { e.stopPropagation(); closeAll(); setWlSetOpen((o) => !o); }}><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg></button>
+                <button title={t("settings")} onClick={(e) => { e.stopPropagation(); const willOpen = !wlSetOpen; closeAll(); setWlSetOpen(willOpen); }}><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg></button>
               </div>
               <div className={`pop${wlSetOpen ? " show" : ""}`} style={{ top: 40, right: 6 }} onClick={(e) => e.stopPropagation()}>
                 <div className="set-h"><b>{t("tableViewLabel")}</b><span className={`switch${set.tableView ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, tableView: !s.tableView }))} /></div>
@@ -590,21 +680,60 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           </div>
 
           <div className="board detail-board">
+            {/* detail-hd: flex-wrap 2-row — top: icon+name, bottom: big price + status chip */}
             <div className="detail-hd">
               <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
-              <div style={{ minWidth: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="nm">{nameOf(m) || active}</div>
                 <div className="ex">{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</div>
               </div>
-              <div className="px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><div className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</div></div>
+              {/* ex-btn is order:1 → stays in the top row at right via margin-left:auto */}
               <button className="ex-btn" title={t("openFullAnalysis")} onClick={() => setAnalysisOpen(true)}><svg viewBox="0 0 24 24"><path d="M4 14v6h6M20 10V4h-6M14 10l6-6M10 14l-6 6" /></svg></button>
+              {/* price row: order:2 → wraps below name row (width:100% in CSS) */}
+              <div className="px">
+                <b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b>
+                <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
+                {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
+              </div>
             </div>
             <div className="detail-scroll">
               <div style={{ padding: "12px 12px 0" }}>
+                {/* ── UNIFIED SIGNAL HIERARCHY: one coherent story per ticker ──
+                    Primary = the Golden Oracle (only backtested trade signal). Below it,
+                    two clearly-labelled SUPPORTING reads answering different questions —
+                    position confidence (how strong is the name?) and timing (act now?) —
+                    so the three systems never look like three competing verdicts. */}
                 <div className="mmcard" style={{ marginTop: 0, borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }}>
-                  <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>{t("goldenOracle")}</div>
+                  <div className="t"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>{t("goldenOracle")}<span className="mm-primary-tag">{t("signalPrimaryTag")}</span></div>
                   <div className="verdict"><b style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</b><span className="conf">{t("backtestedNote")}</span></div>
                   <div className="s2"><div>{t("winRate")}<b>{m?.wr != null ? (m.wr * 100).toFixed(0) + "%" : "—"}</b></div><div>{t("profitFactor")}<b>{m?.pf != null ? m.pf.toFixed(2) : "—"}</b></div><div>{t("cagr")}<b>{m?.cagr != null ? (m.cagr * 100).toFixed(1) + "%" : "—"}</b></div></div>
+                  {(oracleView.convScore != null || oracleView.timing) && (
+                    <div className="mm-support">
+                      <div className="mm-support-h"><span>{t("supportingReads")}</span><small>{t("supportingNote")}</small></div>
+                      <div className="mm-support-grid">
+                        {oracleView.convScore != null && (
+                          <div className="mm-dim">
+                            <span className="mm-dim-k">{t("posConfidence")}</span>
+                            <b className="mm-dim-v num">{Math.round(oracleView.convScore)}<i>/100</i></b>
+                            <span className="mm-dim-q">{oracleView.convBand ? oracleView.convBand : t("posConfidenceQ")}</span>
+                          </div>
+                        )}
+                        {oracleView.timing && (
+                          <div className="mm-dim">
+                            <span className="mm-dim-k">{t("timingQuality")}</span>
+                            <b className="mm-dim-v tt">{oracleView.timing}</b>
+                            <span className="mm-dim-q">{t("timingQualityQ")}</span>
+                          </div>
+                        )}
+                      </div>
+                      {oracleView.conflict && (
+                        <div className="mm-conflict">
+                          <span className="mm-conflict-h">{t("conflictHeads")}</span>
+                          <span className="mm-conflict-b">{t("conflictSellHighConv").replace("{v}", m?.verdict || "SELL")}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
               <StockAnalysis intel={intel} row={m} slice={slice} onExpand={() => setAnalysisOpen(true)} />
@@ -628,6 +757,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol}
         onToggleCompare={(s: string) => setCompare((c) => c.includes(s) ? c.filter((x) => x !== s) : (s !== active ? [...c, s].slice(0, 4) : c))} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} />
+      {settingsKey && <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />}
+      {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
       <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
 
       {/* ── expanded full-analysis modal ── */}
