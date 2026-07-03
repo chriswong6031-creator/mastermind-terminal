@@ -23,3 +23,8 @@ web/ohlc/*.json
 !contracts/samples/*.json
 
 .DS_Store
+
+# tvdash emitted data artifacts (built on Mac, rsync-deployed)
+terminal/public/data/*.fund.json
+terminal/public/data/*.opts.json
+terminal/public/data/tx/
