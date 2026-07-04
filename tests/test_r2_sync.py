@@ -118,18 +118,16 @@ class TestSyncR2Stockdata:
         names = ["SPY.json", "AAPL.json", "MSFT.json"]
         tag = "xyz"
 
-        call_count = [0]
-
         def fake_fetch(url: str):
             if url.endswith("_manifest.json"):
                 return _manifest_body(names), tag
-            call_count[0] += 1
-            # Fail the second file
-            if call_count[0] == 2:
+            # AAPL fails persistently (every attempt, including retry passes)
+            if url.endswith("AAPL.json"):
                 return None
             return b'{"ok":true}', ""
 
-        with patch("ingest.pull_macro_intel._r2_fetch", side_effect=fake_fetch):
+        with patch("ingest.pull_macro_intel._r2_fetch", side_effect=fake_fetch), \
+             patch("time.sleep", lambda s: None):
             result = sync_r2_stockdata(dest)
 
         # Should be 2 (2 of 3 succeeded)
@@ -187,3 +185,52 @@ class TestSyncR2Stockdata:
             result = sync_r2_stockdata(tmp_path / "stockdata")
 
         assert result is None
+
+
+# ── retry pass: transient rate-limit failures heal within one sync ─────────────
+
+def test_sync_retries_transient_failures(tmp_path, monkeypatch):
+    """Names that fail on the first parallel pass are retried at lower
+    concurrency and count toward a complete sync (stamp written)."""
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    names = ["A.json", "B.json", "C.json"]
+    attempts: dict[str, int] = {}
+
+    def fake_fetch(url):
+        if url.endswith("_manifest.json"):
+            return _manifest_body(names), "etag-retry"
+        name = url.rsplit("/", 1)[1]
+        attempts[name] = attempts.get(name, 0) + 1
+        if name in ("B.json", "C.json") and attempts[name] == 1:
+            return None  # transient failure on first attempt only
+        return b'{"asof":"2026-07-04"}', ""
+
+    with patch("ingest.pull_macro_intel._r2_fetch", side_effect=fake_fetch):
+        ok = sync_r2_stockdata(tmp_path)
+
+    assert ok == 3
+    assert (tmp_path / "B.json").exists() and (tmp_path / "C.json").exists()
+    assert attempts["B.json"] == 2 and attempts["C.json"] == 2
+    # complete after retry → stamp written
+    assert json.loads((tmp_path / _R2_META).read_text())["etag"] == "etag-retry"
+
+
+def test_sync_persistent_failures_no_stamp(tmp_path, monkeypatch):
+    """A name that fails every attempt leaves the sync incomplete: no stamp,
+    ok reflects only the files actually written."""
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    names = ["A.json", "B.json"]
+
+    def fake_fetch(url):
+        if url.endswith("_manifest.json"):
+            return _manifest_body(names), "etag-x"
+        name = url.rsplit("/", 1)[1]
+        if name == "B.json":
+            return None  # hard failure, every attempt
+        return b"{}", ""
+
+    with patch("ingest.pull_macro_intel._r2_fetch", side_effect=fake_fetch):
+        ok = sync_r2_stockdata(tmp_path)
+
+    assert ok == 1
+    assert not (tmp_path / _R2_META).exists()

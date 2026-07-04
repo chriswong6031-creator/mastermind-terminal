@@ -39,6 +39,7 @@ import json
 import logging
 import os
 import sys
+import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -132,7 +133,22 @@ def sync_r2_stockdata(dest: Path) -> int | None:
             return True
 
         with ThreadPoolExecutor(max_workers=_R2_WORKERS) as ex:
-            ok = sum(ex.map(_pull, names))
+            results = list(ex.map(_pull, names))
+        failed = [n for n, r in zip(names, results) if not r]
+        # Transient rate-limit failures under full parallelism resolve on narrower
+        # passes (observed 2026-07-04: 1023/1666 failed at 16 workers, yet every
+        # straggler succeeded when fetched individually).
+        for pause, workers in ((2, 4), (5, 2)):
+            if not failed or len(failed) == len(names):
+                break
+            time.sleep(pause)
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                retry = list(ex.map(_pull, failed))
+            failed = [n for n, r in zip(failed, retry) if not r]
+        ok = len(names) - len(failed)
+        if failed:
+            log.warning("R2 sync incomplete: %d/%d files failed (will retry next run)",
+                        len(failed), len(names))
         if ok == len(names) and tag:   # only stamp a complete sync
             meta_path.write_text(json.dumps({"etag": tag, "count": ok}))
         return ok
