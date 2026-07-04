@@ -39,6 +39,8 @@ import json
 import logging
 import os
 import sys
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -65,7 +67,77 @@ OUT = ROOT / "terminal" / "public" / "data"
 # but safe when no trading-calendar helper is available.
 MAX_STALE_DAYS: int = int(os.environ.get("INTEL_MAX_STALE_DAYS", "5"))
 
+# ── R2 stockdata sync ─────────────────────────────────────────────────────────
+# site/stockdata/ was gitignored from the macro repo on 2026-07-01 and now lives
+# exclusively on R2.  This leg mirrors the public bucket into MACRO_STOCKDATA so
+# pull_macro_intel can read it regardless of how the VPS checkout is set up.
+# No credentials: the bucket is publicly readable (same URL the browser clients use).
+# Cloudflare WAF blocks the default Python-urllib User-Agent — must send a custom one.
+_R2_BASE     = os.environ.get("MACRO_R2_BASE",
+                               "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev")
+_R2_UA       = "mastermind-feed/1.0"
+_R2_DIR      = "stockdata"
+_R2_TIMEOUT  = 30        # seconds per request
+_R2_WORKERS  = 16
+_R2_META     = ".r2_sync.json"   # local stamp: {"etag": "...", "count": N}
+
 log = logging.getLogger(__name__)
+
+
+def _r2_fetch(url: str) -> tuple[bytes, str] | None:
+    """GET url → (body, etag) or None on any error."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _R2_UA})
+        with urllib.request.urlopen(req, timeout=_R2_TIMEOUT) as r:
+            return r.read(), (r.headers.get("ETag") or "").strip('"')
+    except Exception:
+        return None
+
+
+def sync_r2_stockdata(dest: Path) -> int | None:
+    """Mirror the R2 stockdata dir into *dest*.
+
+    Returns the number of files written (0 = ETag fast-path, nothing changed)
+    or None when the sync could not run.  Never raises — keeps the last-good
+    local mirror intact on any failure.
+
+    The sync destination is always MACRO_STOCKDATA so pull_macro_intel reads
+    fresh files regardless of whether the VPS git checkout carries them.
+    """
+    try:
+        got = _r2_fetch(f"{_R2_BASE}/{_R2_DIR}/_manifest.json")
+        if not got:
+            return None
+        try:
+            names = [str(n) for n in json.loads(got[0])["files"]]
+        except Exception:
+            return None
+        tag, meta_path = got[1], dest / _R2_META
+        try:  # ETag fast-path: same manifest + local count matches → nothing to do
+            if tag and json.loads(meta_path.read_text()).get("etag") == tag \
+                    and sum(1 for _ in dest.glob("*.json")) >= len(names):
+                return 0
+        except Exception:
+            pass
+        dest.mkdir(parents=True, exist_ok=True)
+
+        def _pull(name: str) -> bool:
+            result = _r2_fetch(f"{_R2_BASE}/{_R2_DIR}/{name}")
+            if not result:
+                return False
+            out = dest / name
+            tmp = out.with_name(f".{out.name}.tmp")
+            tmp.write_bytes(result[0])
+            tmp.replace(out)
+            return True
+
+        with ThreadPoolExecutor(max_workers=_R2_WORKERS) as ex:
+            ok = sum(ex.map(_pull, names))
+        if ok == len(names) and tag:   # only stamp a complete sync
+            meta_path.write_text(json.dumps({"etag": tag, "count": ok}))
+        return ok
+    except Exception:
+        return None
 
 # ── ai_lean mapping table ──────────────────────────────────────────────────────
 # HARD INVARIANT: dir must never contradict decision.band.
@@ -366,6 +438,18 @@ def build_intel(sym: str, src: dict, today: date | None = None) -> dict:
 
 def main(syms: list[str]) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    # ── R2 sync leg ─────────────────────────────────────────────────────────
+    # site/stockdata/ is gitignored from the macro repo since 2026-07-01 and
+    # lives exclusively on the public R2 bucket.  Pull it before reading files.
+    n = sync_r2_stockdata(MACRO_STOCKDATA)
+    if n is None:
+        log.warning("R2 sync failed — reading last-good local mirror at %s", MACRO_STOCKDATA)
+    elif n == 0:
+        log.info("R2 stockdata fresh (ETag match) — %d files in %s",
+                 sum(1 for _ in MACRO_STOCKDATA.glob("*.json")), MACRO_STOCKDATA)
+    else:
+        log.info("R2 stockdata synced: %d files written to %s", n, MACRO_STOCKDATA)
 
     # ── loud directory check ─────────────────────────────────────────────────
     if not MACRO_STOCKDATA.is_dir():
