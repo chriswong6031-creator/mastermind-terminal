@@ -1,0 +1,489 @@
+/* ===========================================================================
+ * fin.css — foundation stylesheet for the TradingView-parity fundamentals suite
+ * (BUILD-SPEC §3.6). Authored by lane FE1b. Imported ONCE from app/layout.tsx
+ * by FE3. Everything themes off the globals.css :root custom properties — NO
+ * hard-coded colors. Dark, hairline, tabular numerics.
+ *
+ * OWNERSHIP: this file's foundation block (below) is FE1b's. Other lanes append
+ * ONLY inside their clearly-marked `=== FE2x ===` blocks at the very end, after
+ * the lane-blocks marker, to keep merges trivial.
+ * ========================================================================== */
+
+/* ── mega-pane shell (FE2a hosts the container; these are the frame classes) ── */
+.fin-scrim{position:fixed;inset:0;z-index:90;background:rgba(4,5,7,.72);backdrop-filter:blur(2px);animation:fin-fade .14s ease}
+@keyframes fin-fade{from{opacity:0}to{opacity:1}}
+.fin-pane{position:fixed;inset:0;z-index:90;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font:var(--font-ui);overflow:hidden}
+.fin-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);flex:none}
+.fin-head-logo{width:22px;height:22px;border-radius:50%;background:var(--panel-3);display:grid;place-items:center;font:700 11px/1 var(--font-ui);color:var(--text-2);flex:none}
+.fin-head-title{font:650 14px/1.2 var(--font-ui);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fin-head-sub{color:var(--text-2);font-weight:500}
+.fin-head-back{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font:600 12px/1 var(--font-ui);color:var(--text-2);background:none;border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 11px;cursor:pointer;transition:color var(--t),border-color var(--t)}
+.fin-head-back:hover{color:var(--text);border-color:var(--line-3)}
+
+/* ── tab pill bar ── */
+.fin-tabs{display:flex;align-items:center;gap:4px;padding:8px 16px;border-bottom:1px solid var(--line);overflow-x:auto;flex:none;scrollbar-width:none}
+.fin-tabs::-webkit-scrollbar{display:none}
+.fin-tab{font:600 12px/1 var(--font-ui);color:var(--text-2);background:transparent;border:none;border-radius:var(--r-pill);padding:7px 13px;cursor:pointer;white-space:nowrap;transition:color var(--t),background var(--t)}
+.fin-tab:hover{color:var(--text)}
+.fin-tab.on{background:var(--text);color:var(--bg)}
+
+/* ── body / sections ── */
+.fin-body{flex:1;overflow-y:auto;padding:18px 16px 60px;scroll-behavior:smooth}
+.fin-sec{margin-bottom:26px}
+.fin-sec-h{display:flex;align-items:baseline;gap:7px;font:650 15px/1.2 var(--font-ui);color:var(--text);margin-bottom:3px}
+.fin-sec-h .chev{color:var(--brand);cursor:pointer}
+.fin-sec-h.link{cursor:pointer}
+.fin-sec-h.link:hover .chev{color:var(--brand-2)}
+.fin-sec-cap{font:500 11.5px/1.45 var(--font-ui);color:var(--text-2);margin-bottom:13px}
+
+/* ── responsive grids ── */
+.fin-grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.fin-grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.fin-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px 20px}
+@media (min-width:900px){
+  .fin-pane>.fin-tabs{padding-left:clamp(28px,5vw,88px);padding-right:clamp(28px,5vw,88px)}
+  .fin-pane>.fin-body{padding:24px clamp(28px,5vw,88px) 64px}
+  .fin-pane>.fin-body>.fin-sec,.fin-pane>.fin-body>.fin-grid2,.fin-pane>.fin-body>.fin-grid3,.fin-pane>.fin-body>.fin-grid4,.fin-pane>.fin-body>.fin-body,.fin-seas>.fin-table-scroll{max-width:1440px;margin-left:auto;margin-right:auto}
+  .fin-seas>.fin-sec{max-width:1320px;margin-left:0;margin-right:0}
+}
+@media (max-width:640px){.fin-grid2,.fin-grid3,.fin-grid4{grid-template-columns:1fr}.fin-body{padding:14px 12px 60px}}
+
+/* ── card ── */
+.fin-card{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:13px 14px}
+.fin-card-h{font:600 12px/1.2 var(--font-ui);color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.fin-card-h .q{width:12px;height:12px;border-radius:50%;border:1px solid var(--line-3);color:var(--muted);font:600 8px/12px var(--font-ui);text-align:center;cursor:help}
+
+/* ── key-fact cell (label over value) ── */
+.fin-fact{display:flex;flex-direction:column;gap:3px;min-width:0}
+.fin-fact .k{font:500 11px/1.3 var(--font-ui);color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fin-fact .v{font:600 15px/1.15 var(--font-num);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-feature-settings:"tnum"}
+
+/* ── table primitives ── */
+.fin-table-wrap{width:100%}
+.fin-table-pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:6px}
+.fin-pg-chev{width:22px;height:22px;border-radius:var(--r);border:1px solid var(--line);background:var(--panel-2);color:var(--text-2);font-size:13px;line-height:1;cursor:pointer;transition:color var(--t),border-color var(--t)}
+.fin-pg-chev:hover:not(:disabled){color:var(--text);border-color:var(--line-3)}
+.fin-pg-chev:disabled{opacity:.35;cursor:default}
+.fin-pg-info{font:600 10.5px/1 var(--font-num);color:var(--muted)}
+.fin-table-scroll{overflow-x:auto;scrollbar-width:thin}
+.fin-table{width:100%;border-collapse:collapse;font:500 12px/1.3 var(--font-ui)}
+.fin-row{transition:background var(--t)}
+.fin-row-b .fin-cell{font-weight:650;color:var(--text)}
+.fin-row-hl{background:rgba(41,98,255,.07)}
+.fin-cell{padding:7px 10px;text-align:right;color:var(--text);border-bottom:1px solid var(--line-2);white-space:nowrap;font-feature-settings:"tnum"}
+.fin-cell-sticky{position:sticky;left:0;z-index:1;text-align:left;background:var(--panel);color:var(--text-2);font-weight:500;max-width:180px}
+.fin-row-hl .fin-cell-sticky{background:var(--panel-2)}
+.fin-cell-corner{background:var(--panel)}
+.fin-cell-head{color:var(--muted);font:600 11px/1 var(--font-num);font-weight:600}
+.fin-cell-num{font-family:var(--font-num)}
+.fin-cell-v{display:inline-flex;align-items:center;gap:5px;justify-content:flex-end}
+.fin-cell-chg{display:block;font:500 9.5px/1.2 var(--font-num);margin-top:1px}
+.fin-cell-chg.up{color:var(--up)}.fin-cell-chg.down{color:var(--down)}
+.fin-row-toggle{background:none;border:none;color:var(--muted);font-size:10px;cursor:pointer;margin-right:5px;padding:0;width:12px}
+.fin-row-toggle:hover{color:var(--text)}
+
+/* ── chips / toggles / pills / segments ── */
+.fin-chip{display:inline-flex;align-items:center;gap:5px;font:600 10.5px/1 var(--font-ui);color:var(--text-2);background:var(--panel-2);border:1px solid var(--line);padding:5px 9px;border-radius:var(--r-pill);white-space:nowrap}
+.fin-chip.up{color:var(--up);border-color:rgba(38,194,129,.25)}
+.fin-chip.down{color:var(--down);border-color:rgba(240,86,107,.25)}
+.fin-toggle{display:inline-flex;max-width:100%;flex:none;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);padding:2px}
+.fin-toggle button{font:600 11px/1 var(--font-ui);color:var(--text-2);background:none;border:none;border-radius:var(--r-pill);padding:5px 11px;cursor:pointer;transition:color var(--t),background var(--t)}
+.fin-toggle button.on{color:var(--bg);background:var(--text)}
+.fin-seg{display:inline-flex;gap:14px;align-items:center}
+.fin-seg button{font:600 12px/1 var(--font-ui);color:var(--text-2);background:none;border:none;padding:4px 0;cursor:pointer;border-bottom:2px solid transparent;transition:color var(--t)}
+.fin-seg button.on{color:var(--brand);border-bottom-color:var(--brand)}
+.fin-pill{display:inline-flex;align-items:center;justify-content:center;gap:5px;font:600 11.5px/1 var(--font-ui);color:var(--text-2);background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);padding:7px 13px;cursor:pointer;transition:color var(--t),border-color var(--t)}
+.fin-pill:hover{color:var(--text);border-color:var(--line-3)}
+
+/* ── chart frame (SVG stretches to width:100%) ── */
+.fin-chart{width:100%}
+.fin-svg-box{width:100%;position:relative;overflow:hidden}
+.fin-svg{width:100%;height:100%;display:block}
+.fin-grid{stroke:var(--grid);stroke-width:1;vector-effect:non-scaling-stroke}
+.fin-grid-0{stroke:var(--line-3)}
+.fin-refline{stroke:var(--line-3);stroke-width:1;stroke-dasharray:2 3;vector-effect:non-scaling-stroke}
+.fin-axis-y{fill:var(--muted);font:500 9.5px/1 var(--font-num);dominant-baseline:middle}
+.fin-hoverband{fill:transparent;transition:fill var(--t)}
+.fin-hoverband:hover,g:hover>.fin-hoverband{fill:rgba(255,255,255,.03)}
+.fin-hitcol{cursor:crosshair}
+.fin-bar{transition:opacity var(--t)}
+.fin-line{stroke-width:1.6;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round}
+.fin-line-dotted{stroke-dasharray:3 3}
+.fin-line-emph{stroke-width:2.4}
+.fin-node{stroke:var(--panel);stroke-width:1}
+.fin-stem{stroke:var(--line-3);stroke-width:1.4;vector-effect:non-scaling-stroke}
+.fin-dot-act{stroke:var(--panel);stroke-width:1.5;filter:drop-shadow(0 1px 2px rgba(0,0,0,.45))}
+.fin-dot-est{stroke-width:1.8;vector-effect:non-scaling-stroke}
+.fin-hatch{stroke:var(--line-3);stroke-width:1}
+.fin-forecast{opacity:.5}
+.fin-wf-conn{stroke:var(--line-3);stroke-width:1;stroke-dasharray:2 2;vector-effect:non-scaling-stroke}
+
+/* ── x-axis + legend (HTML below the SVG so labels never clip) ── */
+.fin-xaxis{display:flex;justify-content:space-between;padding:6px 50px 0 8px;font:500 10px/1 var(--font-num);color:var(--muted)}
+.fin-xaxis-sm{font-size:8.5px}
+.fin-xaxis-xs{font-size:7.5px;padding-left:6px;padding-right:48px}
+/* equal-width centered cells so crowded period labels ("Q2 '26") stay whole instead of clipping */
+.fin-xlbl{white-space:nowrap;text-align:center;flex:1 1 0;min-width:0}
+.fin-legend{display:flex;flex-wrap:nowrap;justify-content:center;gap:6px 10px;margin-top:9px;overflow-x:auto;scrollbar-width:none}
+.fin-legend::-webkit-scrollbar{display:none}
+.fin-leg{display:inline-flex;align-items:center;gap:5px;font:500 10px/1 var(--font-ui);color:var(--text-2);white-space:nowrap}
+.fin-leg-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.fin-leg-ring{background:transparent!important;border:1.4px solid var(--text-2);box-sizing:border-box}
+.fin-leg-dotted{background:linear-gradient(90deg,var(--muted) 55%,transparent 0) 0/4px 2px repeat-x!important;border-radius:0;height:2px;width:12px}
+
+/* ── donut ── */
+.fin-donut{display:flex;flex-direction:column;align-items:center;gap:12px}
+.fin-donut-svg{flex:none}
+.fin-donut-c{fill:var(--text);font:650 17px/1 var(--font-num)}
+.fin-donut-cl{fill:var(--muted);font:500 9px/1 var(--font-ui)}
+.fin-donut-legend{width:100%;display:flex;flex-direction:column;gap:6px}
+.fin-donut-row{display:flex;align-items:center;gap:7px;font:500 11px/1.3 var(--font-ui)}
+.fin-donut-lbl{color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.fin-donut-val{color:var(--text);font-family:var(--font-num);font-weight:600;white-space:nowrap}
+.fin-donut-pct{color:var(--muted);font-weight:500}
+
+/* ── capital structure ── */
+.fin-capstruct{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center}
+.fin-capstruct-chart{min-width:0}
+.fin-capstruct-legend{display:flex;flex-direction:column;gap:7px;min-width:120px}
+@media (max-width:640px){.fin-capstruct{grid-template-columns:1fr}}
+
+/* ── half-gauge ── */
+.fin-gauge{display:flex;flex-direction:column;align-items:center;gap:6px}
+.fin-gauge-svg{flex:none;max-width:100%}
+.fin-gauge-tick{stroke:var(--bg);stroke-width:1.5;vector-effect:non-scaling-stroke}
+.fin-needle{stroke:var(--text);stroke-width:2.2;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.fin-needle-hub{fill:var(--text);stroke:var(--bg);stroke-width:1.5}
+.fin-gauge-verdict{font:700 15px/1 var(--font-ui);letter-spacing:.01em}
+.fin-gauge-counts{display:flex;gap:12px;font:600 10px/1 var(--font-ui)}
+.fin-gauge-counts .up{color:var(--up)}.fin-gauge-counts .down{color:var(--down)}.fin-gauge-counts .mut{color:var(--muted)}
+
+/* ── year overlay (seasonals) ── */
+.fin-yearoverlay{width:100%;display:flex;flex-direction:column;gap:10px}
+.fin-yo-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.fin-yo-endlbl{font:600 9px/1 var(--font-num)}
+.fin-slider{display:flex;align-items:center;gap:8px}
+.fin-slider-lbl{font:600 10px/1 var(--font-num);color:var(--muted);white-space:nowrap}
+.fin-slider input[type=range]{width:70px;accent-color:var(--brand);height:3px}
+
+/* ── FinTip tooltip (fixed, .sa-trust-pop pattern) ── */
+.fin-tip{position:fixed;z-index:95;width:min(220px,72vw);background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:8px 10px;box-shadow:0 14px 32px -12px rgba(0,0,0,.75);pointer-events:none;animation:fin-tip-in .1s ease}
+@keyframes fin-tip-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+.fin-tip-h{font:650 11px/1.3 var(--font-ui);color:var(--text);margin-bottom:5px}
+.fin-tip-row{display:flex;align-items:center;gap:6px;font:500 11px/1.5 var(--font-ui)}
+.fin-tip-dot{width:7px;height:7px;border-radius:50%;flex:none}
+.fin-tip-lbl{color:var(--text-2);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fin-tip-val{color:var(--text);font-family:var(--font-num);font-weight:600;white-space:nowrap}
+
+/* ── empty placeholder ── */
+.fin-empty{display:flex;align-items:center;justify-content:center;min-height:80px;padding:18px;font:500 11.5px/1.4 var(--font-ui);color:var(--muted);text-align:center;border:1px dashed var(--line);border-radius:var(--r-md);background:var(--panel-2)}
+.fin-empty-lg{min-height:220px;flex-direction:column;gap:12px}
+.fin-empty-icon{width:56px;height:56px;color:var(--line-3)}
+.fin-empty-title{font:600 14px/1.2 var(--font-ui);color:var(--text-2)}
+
+/* ── drawer (transcript slide-in; FE2a hosts, foundation here) ── */
+.fin-drawer{position:fixed;top:0;right:0;bottom:0;z-index:96;width:min(560px,94vw);background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-18px 0 40px -20px rgba(0,0,0,.7);animation:fin-drawer-in .18s var(--ease)}
+@keyframes fin-drawer-in{from{transform:translateX(100%)}to{transform:none}}
+.fin-drawer-h{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);flex:none}
+.fin-drawer-h .t{font:650 13px/1.3 var(--font-ui);color:var(--text)}
+.fin-drawer-h .x{margin-left:auto;background:none;border:none;color:var(--text-2);font-size:18px;cursor:pointer;line-height:1}
+.fin-drawer-body{flex:1;overflow-y:auto;padding:16px}
+
+/* ===========================================================================
+ * === lane blocks below ===
+ * Lanes FE2a/FE2b/FE2c/FE2d append component-specific classes ONLY below this
+ * marker, each inside its own `=== FE2x ===` block. Do not edit the foundation.
+ * ========================================================================== */
+
+/* ===========================================================================
+ * === FE2b === StatisticsPage · DividendsPage · EarningsPage · RevenuePage
+ * ========================================================================== */
+
+/* ── Statistics ── */
+.fin-stats-hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.fin-stats-meta{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-bottom:6px;display:flex;gap:10px}
+.fin-stats-ccy{color:var(--muted)}
+.fin-stats-tbl{min-width:420px}
+/* group header band row inside table */
+.fin-stats-grp-hdr .fin-cell,.fin-cell-grp{background:var(--panel-2)!important;color:var(--text);font:650 11px/1.3 var(--font-ui);text-align:left;padding:6px 10px;border-bottom:1px solid var(--line)}
+/* Current column highlight */
+.fin-cell-current{color:var(--text);font-weight:650}
+
+/* ── Dividends ── */
+.fin-div-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:260px;padding:32px 24px;text-align:center}
+.fin-div-empty-body{font:500 13px/1.55 var(--font-ui);color:var(--text-2);max-width:360px}
+.fin-div-cards{margin-bottom:0}
+.fin-div-type{color:var(--text-2);text-transform:capitalize}
+.fin-div-more{font:500 10.5px/1.3 var(--font-ui);color:var(--muted);margin-top:8px;text-align:center}
+
+/* ── Earnings ── */
+.fin-earn-strip{margin-bottom:20px}
+.fin-earn-days{font:500 10.5px/1 var(--font-num);color:var(--muted);margin-left:4px}
+.fin-earn-module{border:1px solid var(--line);border-radius:var(--r-lg);padding:14px;background:var(--panel-2);margin-bottom:20px;overflow:hidden}
+.fin-earn-module-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px}
+.fin-earn-module-title{font:650 13px/1.2 var(--font-ui);color:var(--text)}
+.fin-earn-meta{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin:10px 0 5px;display:flex;gap:10px}
+.fin-earn-ccy{color:var(--muted)}
+/* Estimate row: slightly muted */
+.fin-earn-est-row{color:var(--text-2)!important}
+/* Surprise color spans */
+.fin-cell-surp{font:600 11.5px/1 var(--font-num)}
+.fin-cell-surp.up{color:var(--up)}
+.fin-cell-surp.down{color:var(--down)}
+.fin-earn-rev-empty{min-height:80px;margin-top:8px}
+
+/* ── Revenue ── */
+.fin-seg-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;flex:none;vertical-align:middle}
+.fin-rev-deferred{text-align:center}
+.fin-rev-deferred-body{font:500 12px/1.55 var(--font-ui);color:var(--text-2);margin-top:6px;padding:12px 0 4px}
+.fin-rev-growth{display:flex;align-items:center;gap:10px;margin-top:12px;font:500 11px/1.3 var(--font-ui)}
+.fin-rev-growth-lbl{color:var(--text-2)}
+
+/* ===========================================================================
+ * === FE2d === OracleDash + EventEdgePop
+ * ========================================================================== */
+
+/* ── OracleDash overlay ── */
+.od-scrim{position:fixed;inset:0;z-index:92;background:rgba(4,5,7,.72);backdrop-filter:blur(2px);display:flex;align-items:flex-start;justify-content:flex-end;animation:fin-fade .14s ease}
+.od-panel{position:relative;width:min(520px,96vw);height:100vh;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-20px 0 48px -16px rgba(0,0,0,.7);overflow:hidden}
+
+/* header */
+.od-head{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);flex:none}
+.od-brand{display:inline-flex;align-items:center;gap:7px;font:700 13px/1 var(--font-ui);color:var(--brand);letter-spacing:.02em}
+.od-star{width:16px;height:16px;fill:var(--brand);stroke:none}
+.od-sym{font:600 11.5px/1 var(--font-num);color:var(--text-2);margin-left:auto}
+.od-close{background:none;border:none;color:var(--text-2);font-size:20px;line-height:1;cursor:pointer;padding:2px 6px;border-radius:var(--r);transition:color var(--t)}
+.od-close:hover{color:var(--text)}
+
+/* body */
+.od-body{flex:1;overflow-y:auto;padding:18px 16px 32px;display:flex;flex-direction:column;gap:20px}
+
+/* verdict hero */
+.od-hero{display:flex;flex-direction:column;gap:14px}
+.od-verdict{font:800 32px/1 var(--font-num);letter-spacing:.04em}
+.od-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.od-stat{display:flex;flex-direction:column;gap:4px;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-md);padding:10px 12px}
+.od-stat-k{font:500 10.5px/1.2 var(--font-ui);color:var(--text-2)}
+.od-stat-v{font:700 16px/1 var(--font-num);color:var(--text);font-feature-settings:"tnum"}
+@media (max-width:480px){.od-stats{grid-template-columns:1fr 1fr}}
+
+/* equity curve */
+.od-curve{display:flex;flex-direction:column;gap:8px}
+.od-curve-loading{font:500 11.5px/1 var(--font-ui);color:var(--muted);padding:8px 0}
+
+/* section header */
+.od-sec-h{display:flex;align-items:center;gap:8px;font:650 13px/1.2 var(--font-ui);color:var(--text)}
+.od-sig-count{display:inline-grid;place-items:center;min-width:20px;height:18px;padding:0 5px;border-radius:9px;background:var(--panel-3);color:var(--muted);font:600 10px/1 var(--font-num)}
+
+/* signal table */
+.od-sig-section{display:flex;flex-direction:column;gap:8px}
+.od-sig-scroll{overflow-x:auto;overflow-y:auto;max-height:420px;border:1px solid var(--line);border-radius:var(--r-md);scrollbar-width:thin}
+.od-sig-table{width:100%;border-collapse:collapse;font:500 11.5px/1.3 var(--font-ui)}
+.od-sig-table th{position:sticky;top:0;background:var(--panel-3);padding:7px 10px;text-align:left;font:600 10.5px/1 var(--font-ui);color:var(--muted);border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
+.od-sig-table td{padding:8px 10px;border-bottom:1px solid var(--line-2);vertical-align:middle;white-space:nowrap}
+.od-sig-table tr:last-child td{border-bottom:none}
+.od-sig-row{transition:background var(--t)}
+.od-sig-row-hov{background:rgba(41,98,255,.06)}
+.od-badge{display:inline-flex;align-items:center;justify-content:center;padding:3px 7px;border-radius:var(--r-pill);font:700 10px/1 var(--font-ui);color:#fff;letter-spacing:.04em}
+.od-sig-date{color:var(--text-2);font-family:var(--font-num)}
+.od-sig-price{font-family:var(--font-num);font-weight:600;color:var(--text)}
+.od-sig-str{font-family:var(--font-num);color:var(--muted)}
+.od-chips{display:flex;flex-wrap:wrap;gap:4px;max-width:200px}
+.od-jump-cell{padding:4px 8px}
+.od-jump-btn{font:600 11px/1 var(--font-ui);color:var(--brand);background:none;border:1px solid rgba(41,98,255,.3);border-radius:var(--r-pill);padding:5px 10px;cursor:pointer;white-space:nowrap;transition:background var(--t),color var(--t)}
+.od-jump-btn:hover{background:var(--brand);color:#fff}
+
+/* footer note */
+.od-note{font:500 10px/1.45 var(--font-ui);color:var(--muted);padding-top:4px}
+
+/* ── EventEdgePop popover ── */
+.eep-pop{position:fixed;z-index:97;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:14px 15px;box-shadow:0 16px 40px -12px rgba(0,0,0,.8);display:flex;flex-direction:column;gap:11px;animation:fin-tip-in .12s ease;max-height:min(420px,80vh);overflow-y:auto;scrollbar-width:thin}
+.eep-tier-row{display:flex;align-items:center;gap:8px}
+.eep-tier-pill{display:inline-flex;align-items:center;padding:5px 11px;border-radius:var(--r-pill);border:1.5px solid;font:700 11px/1 var(--font-ui);letter-spacing:.02em;background:transparent}
+.eep-prose{font:500 12px/1.6 var(--font-ui);color:var(--text);margin:0;white-space:pre-wrap;word-break:break-word}
+.eep-chips{display:flex;flex-direction:column;gap:7px}
+.eep-chip{display:flex;align-items:baseline;gap:6px;font:500 11.5px/1.3 var(--font-ui)}
+.eep-chip-k{color:var(--text-2);white-space:nowrap;min-width:90px;flex:none}
+.eep-chip-v{font:600 11.5px/1.2 var(--font-num);color:var(--text)}
+.eep-chip-sub{font:500 10px/1 var(--font-num);color:var(--muted);margin-left:5px}
+.eep-chip-driver .eep-chip-v{color:var(--text-2);font-weight:500;font-family:var(--font-ui)}
+.eep-footer{font:500 10px/1.3 var(--font-ui);color:var(--muted);border-top:1px solid var(--line-2);padding-top:9px;margin-top:2px}
+
+/* ===========================================================================
+ * === FE2c === ForecastPage / TechnicalsPage / SeasonalsPage
+ * ========================================================================== */
+
+/* ── shared: sibling tab bar + section head + disclaimer ── */
+.fin-fc-tabs,.fin-seas-view{margin-bottom:16px}
+.fin-fc-sec-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+.fin-disclaimer p{font:500 11px/1.5 var(--font-ui);color:var(--text-2);max-width:760px;margin:6px 0 0}
+.fin-empty-inline{color:var(--text-2);font:500 12px/1.4 var(--font-ui)}
+
+/* ── Forecast: price-target header + fan ── */
+.fin-fc-top{margin-bottom:22px}
+.fin-fc-lbl{font:600 11px/1 var(--font-ui);color:var(--text-2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.fin-fc-price{font:650 30px/1.05 var(--font-num);color:var(--text);font-feature-settings:"tnum"}
+.fin-fc-ccy{font:600 13px/1 var(--font-ui);color:var(--text-2)}
+.fin-fc-chg{display:flex;gap:12px;margin-top:5px;font:600 14px/1 var(--font-num);font-feature-settings:"tnum"}
+.fin-fc-summary{margin-top:12px;font:500 12px/1.5 var(--font-ui);color:var(--text-2);max-width:420px}
+.fin-fc-fanwrap{display:flex;gap:12px;align-items:stretch;margin-top:14px}
+.fin-fc-fanwrap .fin-chart{flex:1;min-width:0}
+.fin-fc-brackets{display:flex;flex-direction:column;justify-content:center;gap:6px;flex:none;width:132px}
+.fin-fc-bracket{display:flex;border-radius:var(--r);overflow:hidden;font:600 11px/1 var(--font-num);font-feature-settings:"tnum"}
+.fin-fc-bracket .lbl{flex:1;padding:5px 7px;color:#fff;display:flex;flex-direction:column;gap:2px}
+.fin-fc-bracket .lbl .pct{font-size:10px;opacity:.92}
+.fin-fc-bracket .val{padding:5px 7px;background:var(--panel-3);color:var(--text);display:flex;align-items:center}
+.fin-fc-bracket.t-up .lbl{background:var(--up)}
+.fin-fc-bracket.t-avg .lbl{background:var(--warn)}
+.fin-fc-bracket.t-cur .lbl{background:var(--brand)}
+.fin-fc-bracket.t-down .lbl{background:var(--down)}
+
+/* ── Forecast: analyst rating distribution ── */
+.fin-fc-dist{display:flex;flex-direction:column;gap:7px;margin-top:14px}
+.fin-fc-dist-row{display:flex;align-items:center;gap:10px;font:500 12px/1 var(--font-ui)}
+.fin-fc-dist-row .lbl{width:88px;color:var(--text-2);flex:none}
+.fin-fc-dist-row .track{flex:1;height:8px;background:var(--panel-3);border-radius:var(--r-pill);overflow:hidden}
+.fin-fc-dist-row .track .bar{display:block;height:100%;border-radius:var(--r-pill)}
+.fin-fc-dist-row .track .bar.t-up{background:var(--up)}
+.fin-fc-dist-row .track .bar.t-up2{background:var(--up);opacity:.7}
+.fin-fc-dist-row .track .bar.t-neu{background:var(--muted)}
+.fin-fc-dist-row .cnt{width:30px;text-align:right;color:var(--text);font-feature-settings:"tnum";flex:none}
+.fin-fc-analyst-empty{flex-direction:column;gap:12px;padding:26px 10px}
+.fin-fc-guidance{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center}
+.fin-fc-guidance .chip{background:var(--brand);color:#fff;font:600 11px/1 var(--font-ui);padding:5px 9px;border-radius:var(--r-pill)}
+.fin-fc-guidance .txt{font:500 12px/1.4 var(--font-ui);color:var(--text-2)}
+
+/* ── Technicals: TF pill row ── */
+.fin-tf-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
+.fin-tf-pill{font:600 12px/1 var(--font-ui);color:var(--text-2);background:transparent;border:1px solid transparent;border-radius:var(--r-pill);padding:7px 12px;cursor:pointer;transition:color var(--t),background var(--t)}
+.fin-tf-pill:hover{color:var(--text)}
+.fin-tf-pill.on{background:var(--text);color:var(--bg)}
+
+/* ── Technicals: three gauges ── */
+.fin-tech-summary{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:8px;align-items:end;justify-items:center}
+.fin-tech-gauge{display:flex;flex-direction:column;align-items:center;gap:4px}
+.fin-tech-gauge-t{font:600 12px/1 var(--font-ui);color:var(--text-2)}
+@media (max-width:640px){.fin-tech-summary{grid-template-columns:1fr}}
+
+/* ── Technicals: rating + pivots tables ── */
+.fin-tech-tbl{padding:12px 12px 6px}
+.fin-tech-table{width:100%;border-collapse:collapse;font:500 12px/1.35 var(--font-ui)}
+.fin-tech-table th,.fin-tech-table td{padding:7px 6px;border-bottom:1px solid var(--line)}
+.fin-tech-table thead th{color:var(--text-2);font-weight:600;text-align:left}
+.fin-tech-table thead th.fin-cell-num,.fin-tech-table td.fin-cell-num{text-align:right;font-feature-settings:"tnum"}
+.fin-tech-table th[scope=row]{color:var(--text);font-weight:500;text-align:left}
+.fin-tech-act.up{color:var(--brand)}
+.fin-tech-act.down{color:var(--down)}
+.fin-tech-act.mut{color:var(--text-2)}
+.fin-pivots th[scope=row]{color:var(--text-2);font-weight:600}
+
+/* ── Seasonals: monthly-returns grid ── */
+.fin-seas-grid{width:100%;border-collapse:collapse;font:500 11px/1.3 var(--font-num);font-feature-settings:"tnum"}
+.fin-seas-grid th,.fin-seas-grid td{padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:right}
+.fin-seas-grid thead th{color:var(--text-2);font-weight:600;position:sticky;top:0;background:var(--bg)}
+.fin-seas-grid th.fin-cell-sticky{left:0;position:sticky;background:var(--bg);text-align:left;color:var(--text)}
+.fin-seas-cell.up{color:var(--up)}
+.fin-seas-cell.down{color:var(--down)}
+.fin-seas-cell.b{font-weight:700;border-left:1px solid var(--line)}
+
+/* === FE2a === (MegaPane · OverviewPage · StatementsPage · TranscriptDrawer) */
+
+/* ── Overview / Statements shared ── */
+.fin-ov,.fin-stmts{display:block}
+.fin-ov-cur{font:500 10px/1.3 var(--font-num);color:var(--muted);text-align:right;margin-top:6px}
+
+/* key-fact external link */
+.fin-fact-link{color:var(--brand);text-decoration:none;cursor:pointer}
+.fin-fact-link:hover{color:var(--brand-2);text-decoration:underline}
+
+/* About + Show more */
+.fin-about{font:500 12.5px/1.6 var(--font-ui);color:var(--text-2);margin:0;max-width:78ch}
+.fin-showmore{background:none;border:none;color:var(--brand);font:600 12px/1.6 var(--font-ui);cursor:pointer;padding:0;margin-left:5px}
+.fin-showmore:hover{color:var(--brand-2)}
+
+/* inline "Next: <date>" on the Estimates earnings card header */
+.fin-next-lbl{margin-left:auto;font:600 10.5px/1 var(--font-num);color:var(--muted)}
+
+/* card-header A/Q toggle sits inline, pushed right */
+.fin-aq{margin-left:auto}
+.fin-card-h .fin-aq{transform:scale(.92);transform-origin:right center}
+
+/* Dividends empty-state card (Overview) */
+.fin-div-empty{display:flex;align-items:center;gap:14px}
+.fin-div-glyph{width:34px;height:34px;flex:none;fill:none;stroke:var(--muted);stroke-width:1.6}
+.fin-div-empty-t{font:650 13px/1.2 var(--font-ui);color:var(--text)}
+.fin-div-empty-s{font:500 11.5px/1.5 var(--font-ui);color:var(--text-2);margin-top:2px}
+
+/* ── Statements controls ── */
+.fin-stmt-ctrl{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.fin-stmt-pills button{padding:6px 12px}
+@media (max-width:520px){.fin-stmt-ctrl{flex-direction:column;align-items:stretch}.fin-stmt-pills{overflow-x:auto}}
+
+/* ── transcript documents strip (doc-icon per period) ── */
+.fin-doc-strip{display:flex;align-items:center;gap:10px;margin-bottom:10px;padding:6px 2px;border-bottom:1px solid var(--line-2)}
+.fin-doc-strip-lbl{font:600 10px/1 var(--font-ui);color:var(--muted);flex:none;text-transform:uppercase;letter-spacing:.04em}
+.fin-doc-strip-cells{display:flex;gap:2px;overflow-x:auto;scrollbar-width:thin;flex:1}
+.fin-doc-cell{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:52px;flex:1}
+.fin-doc-per{font:500 9.5px/1 var(--font-num);color:var(--muted);white-space:nowrap}
+.fin-doc-icon{width:22px;height:22px;display:grid;place-items:center;background:none;border:1px solid var(--line);border-radius:var(--r);color:var(--text-2);cursor:pointer;transition:color var(--t),border-color var(--t),background var(--t)}
+.fin-doc-icon:hover{color:var(--brand);border-color:var(--brand);background:rgba(41,98,255,.08)}
+.fin-doc-icon svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.fin-doc-none{color:var(--line-3);font:400 12px/1 var(--font-ui);height:22px;display:grid;place-items:center}
+
+/* ── mastermind host (existing deep-analysis inside the pane) ── */
+.fin-mm-host{max-width:920px;margin:0 auto}
+
+/* ── TranscriptDrawer ── */
+.fin-drawer-scrim{position:fixed;inset:0;z-index:94;background:rgba(4,5,7,.4);animation:fin-fade .12s ease}
+.fin-tx-drawer{z-index:96}
+.fin-tx-head{display:flex;flex-direction:column;gap:3px;min-width:0}
+.fin-tx-crumb{font:600 10px/1 var(--font-ui);color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.fin-tx-title{font:700 15px/1.3 var(--font-ui);color:var(--text)}
+.fin-tx-date{font:500 11px/1 var(--font-num);color:var(--text-2)}
+.fin-tx-body{scroll-behavior:smooth}
+.fin-tx-section{font:650 12px/1.2 var(--font-ui);color:var(--text);margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--line-2)}
+.fin-tx-status{font:500 12px/1.5 var(--font-ui);color:var(--muted);padding:20px 0;text-align:center}
+.fin-tx-seg{font:500 12.5px/1.62 var(--font-ui);color:var(--text-2);margin:0 0 14px}
+.fin-tx-speaker{color:var(--text);font-weight:650}
+.fin-tx-text{color:var(--text-2)}
+
+@media (max-width:520px){
+  .fin-mm-host{max-width:100%}
+  .fin-doc-strip-lbl{display:none}
+}
+
+/* === SIGNALS === (Lane B) — Signals-dashboard sections appended for OracleDash */
+.sig-card{border:1px solid var(--line);border-radius:var(--r-lg);background:linear-gradient(180deg,var(--panel-2),var(--panel));padding:12px 13px;margin-bottom:12px}
+.sig-card-h{display:flex;align-items:baseline;gap:8px;font:700 11px/1 var(--font-ui);letter-spacing:.05em;text-transform:uppercase;color:var(--text-2);margin-bottom:10px}
+.sig-card-sub{font:600 10px/1 var(--font-num);color:var(--muted);letter-spacing:.02em;text-transform:none}
+.sig-dims{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:8px;margin-top:11px;padding-top:11px;border-top:1px solid var(--line-2)}
+.sig-dim{display:flex;flex-direction:column;gap:3px}
+.sig-dim-k{font:600 9.5px/1 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.sig-dim-v{font:700 14px/1 var(--font-num);color:var(--text)}
+.sig-dim-v i{font:600 9.5px/1 var(--font-ui);color:var(--muted);font-style:normal;margin-left:1px}
+.sig-conflict{margin-top:9px;padding:8px 10px;border-radius:var(--r-md);background:rgba(232,179,57,.08);border:1px solid rgba(232,179,57,.28);color:var(--signal);font:500 11.5px/1.5 var(--font-ui)}
+/* research desk */
+.sig-desk{display:flex;gap:13px;align-items:flex-start}
+.sig-ring{position:relative;width:56px;height:56px;flex:0 0 56px}
+.sig-ring svg{width:56px;height:56px}
+.sig-ring-v{position:absolute;inset:0;display:grid;place-items:center;font:700 15px/1 var(--font-num)}
+.sig-desk-body{min-width:0;flex:1}
+.sig-desk-verb{display:flex;align-items:baseline;gap:8px;font:700 16px/1.1 var(--font-ui)}
+.sig-desk-band{font:600 10px/1 var(--font-ui);color:var(--muted);letter-spacing:.03em}
+.sig-desk-head{font:650 12.5px/1.4 var(--font-ui);color:var(--text);margin-top:5px}
+.sig-desk-gloss{font:500 11.5px/1.5 var(--font-ui);color:var(--text-2);margin-top:3px}
+.sig-desk-rank{font:600 10.5px/1 var(--font-num);color:var(--muted);margin-top:6px}
+.sig-caveat{margin-top:10px;font:500 10.5px/1.4 var(--font-ui);color:var(--muted);font-style:italic}
+/* drivers / cautions */
+.sig-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.sig-tags:first-of-type{margin-top:0}
+/* factor profile */
+.sig-factors{display:flex;flex-direction:column;gap:7px}
+.sig-fac-row{display:grid;grid-template-columns:96px 1fr 52px;align-items:center;gap:9px}
+.sig-fac-lbl{font:600 11px/1 var(--font-ui);color:var(--text-2)}
+.sig-fac-track{position:relative;height:8px;border-radius:var(--r-pill);background:var(--inset);overflow:hidden}
+.sig-fac-mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line-3);z-index:1}
+.sig-fac-fill{position:absolute;top:0;bottom:0;border-radius:var(--r-pill)}
+.sig-fac-num{font:700 11px/1 var(--font-num);text-align:right}
+/* event edge */
+.sig-edge{font:500 12px/1.6 var(--font-ui);color:var(--text-2)}

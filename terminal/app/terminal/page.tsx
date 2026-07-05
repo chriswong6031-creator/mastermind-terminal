@@ -8,6 +8,12 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
+  // login disabled for now — render an open guest workspace (no server-side persistence)
+  if (!user) {
+    const seed: [string, string][] = [["Crypto", "BTC-USD"], ["Crypto", "ETH-USD"], ["Equities", "NVDA"], ["Equities", "AAPL"], ["Equities", "MSFT"], ["Equities", "QQQ"]];
+    return <TerminalShell symbols={seed.map(([section, symbol]) => ({ symbol, section }))} email="" initialSymbol={sp?.sym} />;
+  }
+
   // load or seed the user's first watchlist (idempotent via unique (user_id,name))
   const { data: lists0 } = await supabase.from("watchlists").select("id,name").order("position");
   let lists = lists0;
