@@ -41,8 +41,8 @@ const LEX: Record<string, [string, string]> = {
   open: ["Open", "开盘"],
   dayRange: ["Day Range", "当日区间"],
   volume: ["Volume", "成交量"],
-  // flow desk
-  flow: ["Flow", "资金流"],
+  // flow desk / options hub
+  flow: ["Options", "期权"],
   asOf: ["as of", "更新于"],
   loadingHeat: ["Loading group data…", "加载分组数据中…"],
   minPrem: ["Min prem", "最低保费"],
@@ -59,6 +59,60 @@ const LEX: Record<string, [string, string]> = {
   colSize: ["Size", "数量"],
   colPrem: ["Prem", "保费"],
   colFlags: ["Flags", "标记"],
+  colSector: ["Sector", "板块"],
+  // Options Hub tabs
+  tabTape: ["Tape", "逐笔"],
+  tabTide: ["Tide", "资金潮"],
+  tabTickers: ["Tickers", "个股"],
+  tabScreener: ["Screener", "筛选"],
+  tabVol: ["Vol", "波动率"],
+  tabGex: ["GEX", "敞口"],
+  // Tide tab
+  tideTitle: ["Market Tide", "市场资金潮"],
+  tideMethodNote: ["Method note", "方法说明"],
+  tideNcpLabel: ["Net Call Prem (~cumulative)", "净认购保费（~累计）"],
+  tideNppLabel: ["Net Put Prem (~cumulative)", "净认沽保费（~累计）"],
+  tideSpyLabel: ["SPY", "SPY"],
+  tideSectorTitle: ["Sector Tide", "板块资金潮"],
+  tideImpactTitle: ["Top Net Impact", "最大净影响"],
+  tideDteTitle: ["DTE Buckets", "到期分组"],
+  tideMethodText: [
+    "NCP / NPP show the running intraday cumulative net call / net put premium. Direction is ~-soft (heuristic tape-signing, multi-session calibration pending). SPY overlay uses option tape underlying refs. All figures are display-only and not investment advice.",
+    "NCP / NPP 显示当日盘中累计净认购/净认沽保费。方向为~软性标注（启发式签约，多会话校准待完成）。SPY叠加层使用期权行情底层参考价。所有数据仅供展示，不构成投资建议。",
+  ],
+  // Tickers tab
+  tickersTitle: ["Ticker Drill", "个股详情"],
+  tickersSearch: ["Search ticker…", "搜索代码…"],
+  tickersSelectPrompt: ["Select a ticker from the list or search above", "从列表选择或搜索代码"],
+  tickersDayGross: ["Day Gross", "当日总保费"],
+  tickersNetSoft: ["Net (~soft)", "净值（~软性）"],
+  tickersCallShare: ["Call Share", "认购占比"],
+  tickersPremZ: ["Prem z-score", "保费z值"],
+  tickersBaselineWarm: ["baseline warming", "基线积累中"],
+  tickersMinChart: ["Minute Net Prem", "分钟净保费"],
+  tickersStrikeLadder: ["Strike Ladder", "行权价梯度"],
+  tickersExpBars: ["By Expiry", "按到期日"],
+  tickersTopContracts: ["Top Contracts", "主力合约"],
+  tickersVolGtOi: ["vol > OI", "量超持仓"],
+  // Screener tab
+  screenerTitle: ["Screener", "筛选器"],
+  screenerComingSoon: ["Screener coming in next build (H2 analytics)", "筛选器将在下一版本推出（H2分析）"],
+  // Vol tab
+  volTitle: ["Volatility", "波动率"],
+  volComingSoon: ["Volatility analytics coming in next build (H2)", "波动率分析将在下一版本推出（H2）"],
+  // GEX tab
+  gexTitle: ["Dealer Exposure", "庄家敞口"],
+  gexComingSoon: ["GEX analytics coming in next build (H2)", "敞口分析将在下一版本推出（H2）"],
+  // Presets dropdown
+  presets: ["Presets", "预设视图"],
+  presetLargeBuys: ["Large ~buys", "大额~买入"],
+  presetRepeat: ["Repeat hits", "重复命中"],
+  preset0DTE: ["0DTE", "当日到期"],
+  presetPutsOnStrength: ["Puts on strength", "强势认沽"],
+  // Flags
+  flagSwept: ["swept (heuristic)", "扫单（启发式）"],
+  // Coverage
+  coverageExpanding: ["Coverage expanding", "覆盖扩展中"],
 };
 
 const Ctx = createContext<{ lang: Lang; setLang: (l: Lang) => void }>({ lang: "en", setLang: () => {} });

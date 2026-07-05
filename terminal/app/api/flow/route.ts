@@ -6,15 +6,48 @@ import path from "path";
 const BACKEND = process.env.FLOW_API_BASE || "http://127.0.0.1:8000";
 const R2_BASE = "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev";
 const FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_fixture.json");
+const TIDE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "tide_fixture.json");
+const TICKER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ticker_fixture.json");
+const DTE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "dte_fixture.json");
 
 // Bare-minimum in-memory cache so concurrent renders share one fetch.
 type CacheEntry = { data: Record<string, unknown>; ts: number };
 const CACHE: Record<string, CacheEntry> = {};
 const TTL_MS = 30_000;
 
+// Valid f-param values: existing feed|heat|meta, plus new hub params.
+// Parameterized sub-types: tide, dte, ticker:{ROOT}, vol:{ROOT}, gex:{ROOT}, oi, hot
+type FParam = string;
+
+function isValidF(f: FParam): boolean {
+  if (["feed", "heat", "meta", "tide", "dte", "oi", "hot"].includes(f)) return true;
+  if (f.startsWith("ticker:") && f.length > 7) return true;
+  if (f.startsWith("vol:") && f.length > 4) return true;
+  if (f.startsWith("gex:") && f.length > 4) return true;
+  return false;
+}
+
+function backendPath(f: string): string {
+  if (f === "tide") return "/api/flow/tide";
+  if (f === "dte") return "/api/flow/dte";
+  if (f.startsWith("ticker:")) return `/api/flow/ticker/${f.slice(7)}`;
+  if (f.startsWith("vol:")) return `/api/hub/vol/${f.slice(4)}`;
+  if (f.startsWith("gex:")) return `/api/hub/gex/${f.slice(4)}`;
+  if (f === "oi") return "/api/hub/oi";
+  if (f === "hot") return "/api/hub/hot";
+  if (f === "meta") return "/api/flow/meta";
+  return `/api/flow/${f}`;
+}
+
 function r2Key(f: string): string {
-  // feed -> live_flow/feed_current.json; meta -> live_flow/meta.json
   if (f === "meta") return "live_flow/meta.json";
+  if (f === "tide") return "live_flow/tide_current.json";
+  if (f === "dte") return "live_flow/dte_tide_current.json";
+  if (f.startsWith("ticker:")) return `live_flow/tickers/${f.slice(7)}.json`;
+  if (f.startsWith("vol:")) return `options_hub/vol/${f.slice(4)}.json`;
+  if (f.startsWith("gex:")) return `options_hub/gex/${f.slice(4)}.json`;
+  if (f === "oi") return "options_hub/oi_movers.json";
+  if (f === "hot") return "options_hub/hot_contracts.json";
   return `live_flow/${f}_current.json`;
 }
 
@@ -35,6 +68,25 @@ async function fetchWithUA(url: string): Promise<Record<string, unknown>> {
 }
 
 async function fixtureFor(f: string): Promise<Record<string, unknown>> {
+  // Tide, DTE, and ticker fixtures live in separate files.
+  if (f === "tide") {
+    const raw = await fs.readFile(TIDE_FIXTURE_FILE, "utf8");
+    return JSON.parse(raw) as Record<string, unknown>;
+  }
+  if (f === "dte") {
+    const raw = await fs.readFile(DTE_FIXTURE_FILE, "utf8");
+    return JSON.parse(raw) as Record<string, unknown>;
+  }
+  if (f.startsWith("ticker:")) {
+    const root = f.slice(7);
+    const raw = await fs.readFile(TICKER_FIXTURE_FILE, "utf8");
+    const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+    return all[root] ?? all[Object.keys(all)[0]] ?? {};
+  }
+  // Stub placeholders for vol/gex/oi/hot — not built in H1.
+  if (f.startsWith("vol:") || f.startsWith("gex:") || f === "oi" || f === "hot") {
+    return { schema: `placeholder/${f}`, asof: new Date().toISOString(), coverage: { n_days: 0, since: "" } };
+  }
   const raw = await fs.readFile(FIXTURE_FILE, "utf8");
   const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
   return all[f] ?? {};
@@ -43,7 +95,7 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const f = url.searchParams.get("f") ?? "feed";
-  if (f !== "feed" && f !== "heat" && f !== "meta") {
+  if (!isValidF(f)) {
     return NextResponse.json({ error: "bad f param" }, { status: 400 });
   }
 
@@ -61,16 +113,13 @@ export async function GET(req: Request): Promise<Response> {
 
   const now = Date.now();
   const cached = CACHE[f];
-  // Serve from in-memory cache within TTL, but keep fetching async in background.
-  // On fresh entry we wait; on stale entry we serve cached + mark stale.
 
   // Try backend first, fall back to R2 CDN.
   const tryFetch = async (): Promise<Record<string, unknown> | null> => {
-    const backendUrl = `${BACKEND}/api/flow/${f}`;
+    const bUrl = `${BACKEND}${backendPath(f)}`;
     try {
-      return await fetchWithUA(backendUrl);
+      return await fetchWithUA(bUrl);
     } catch {
-      // Backend unavailable — try R2 CDN.
       try {
         const r2Url = `${R2_BASE}/${r2Key(f)}`;
         return await fetchWithUA(r2Url);
@@ -81,7 +130,6 @@ export async function GET(req: Request): Promise<Response> {
   };
 
   if (!cached) {
-    // First request — must wait.
     const data = await tryFetch();
     if (!data) {
       return NextResponse.json(
@@ -95,13 +143,10 @@ export async function GET(req: Request): Promise<Response> {
 
   const age = now - cached.ts;
   if (age < TTL_MS) {
-    // Fresh cache — return immediately.
     return NextResponse.json(cached.data, { headers: { "Cache-Control": "no-store" } });
   }
 
-  // Stale cache — return last-known with stale flag while re-fetching.
   const stale = { ...cached.data, stale: true };
-  // Re-fetch in background (fire-and-forget, no await).
   tryFetch().then((data) => {
     if (data) CACHE[f] = { data, ts: Date.now() };
   });

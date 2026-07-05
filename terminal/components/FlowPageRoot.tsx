@@ -1,7 +1,7 @@
 "use client";
 import Script from "next/script";
 import { LangProvider } from "@/lib/i18n";
-import FlowView from "@/components/FlowView";
+import OptionsHubView from "@/components/OptionsHubView";
 
 // Client wrapper that mounts LangProvider for the /flow route.
 // The beforeInteractive Script seeds data-lang from localStorage("mm.lang")
@@ -19,7 +19,7 @@ export default function FlowPageRoot() {
           } catch(e) {}
         })();
       `}</Script>
-      <FlowView />
+      <OptionsHubView />
     </LangProvider>
   );
 }
