@@ -31,11 +31,10 @@ ROOT = Path(__file__).resolve().parents[1]
 # live/repo data dir. MANIFEST stays independently overridable.
 OUT = Path(os.environ.get("TERMINAL_DATA_DIR") or (ROOT / "terminal" / "public" / "data"))
 MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
-# PERIOD drives yfinance history depth. Default "max" = ENTIRE listed history (back to
-# IPO / Yahoo's earliest bar), which is what the full-history backfill wants. Override
-# with BACKFILL_PERIOD=15y etc. for a shallower/faster run. MAX_BARS is a safety ceiling
-# only (60y of daily ~= 15,120 bars; 20k never truncates a real equity's full history).
-PERIOD = os.environ.get("BACKFILL_PERIOD", "max")
+# PERIOD drives yfinance history depth. Default "15y" matches the VPS nightly's existing
+# behavior (do NOT deepen HK/CA silently). Override with BACKFILL_PERIOD=max for a deep
+# one-shot. MAX_BARS is a safety ceiling only (20k never truncates a real equity's history).
+PERIOD = os.environ.get("BACKFILL_PERIOD", "15y")
 MAX_BARS = 20000
 YEARS = 15  # legacy fallback for the (unused) Polygon date-range path
 
