@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "terminal-flow",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "terminal",
+      "port": 3000,
+      "env": {
+        "FLOW_FIXTURE": "1"
+      }
+    }
+  ]
+}
