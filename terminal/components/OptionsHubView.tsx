@@ -101,6 +101,56 @@ interface TickerPayload {
   expiries: ExpiryRow[]; top_contracts: TopContract[];
 }
 
+// ─── Screener types ──────────────────────────────────────────────────────────
+interface OiMover {
+  root: string; right: "C" | "P"; exp: string; strike: number;
+  oi: number; oi_prev: number; d_oi: number; mid: number | null;
+}
+interface OiMoversPayload {
+  schema?: string; asof: string; movers: OiMover[];
+  coverage?: { n_days: number; universe_note?: string };
+}
+interface HotContract {
+  root: string; right: "C" | "P"; exp: string; strike: number;
+  premium: number; vol: number; oi_prev: number | null; vol_gt_oi: boolean | null; close: number;
+}
+interface HotPayload {
+  schema?: string; asof: string;
+  by_premium: HotContract[]; by_volume: HotContract[];
+  coverage?: { n_days: number; universe_note?: string };
+}
+
+// ─── Vol types ───────────────────────────────────────────────────────────────
+interface VolTerm { dte: number; exp: string; atm_iv: number }
+interface VolSmilePoint { strike: number; call_iv: number; put_iv: number }
+interface VolSmileExp { exp: string; points: VolSmilePoint[] }
+interface VolHistPoint { date: string; iv_rank: number | null; atm_iv: number; close: number }
+interface VolPayload {
+  schema?: string; asof: string; root: string;
+  iv_rank_252: number | null; atm_iv: number;
+  iv_52w_hi: number; iv_52w_lo: number;
+  rv20: number; vrp: number;
+  spot_ref?: number;
+  term: VolTerm[]; smile: VolSmileExp[]; history: VolHistPoint[];
+  coverage: { n_days: number; since: string };
+}
+
+// ─── GEX types ───────────────────────────────────────────────────────────────
+interface GexStrikeRow {
+  strike: number;
+  gamma_net: number; gamma_call: number; gamma_put: number;
+  delta_net: number; vanna_net: number; charm_net: number;
+}
+interface GexExpiryRow { exp: string; gamma_net: number; delta_net: number }
+interface GexPayload {
+  schema?: string; asof: string; root: string;
+  spot_ref: number; net_gex_bn: number;
+  gamma_flip: number | null; call_wall: number | null; put_wall: number | null;
+  by_strike: GexStrikeRow[]; by_expiry: GexExpiryRow[];
+  convention: string;
+  coverage: { n_days: number; since: string };
+}
+
 // ─── Formatting helpers ──────────────────────────────────────────────────────
 
 function fmtPremium(n: number): string {
@@ -512,6 +562,273 @@ function MinuteNetChart({ minutes, height = 80 }: { minutes: TickerMinute[]; hei
   );
 }
 
+// ─── Term structure chart (ATM IV vs DTE, dots + line) ──────────────────────
+
+function TermStructureChart({ term }: { term: VolTerm[] }) {
+  if (term.length < 2) return null;
+  const dtes = term.map((p) => p.dte);
+  const ivs = term.map((p) => p.atm_iv);
+  const minDte = Math.min(...dtes); const maxDte = Math.max(...dtes);
+  const minIv = Math.min(...ivs) * 0.98; const maxIv = Math.max(...ivs) * 1.02;
+  const W = 400; const H = 120;
+  const PAD = { l: 40, r: 12, t: 8, b: 24 };
+  const cx = (dte: number) => PAD.l + ((dte - minDte) / (maxDte - minDte)) * (W - PAD.l - PAD.r);
+  const cy = (iv: number) => PAD.t + (1 - (iv - minIv) / (maxIv - minIv)) * (H - PAD.t - PAD.b);
+  const pts = term.map((p) => `${cx(p.dte).toFixed(1)},${cy(p.atm_iv).toFixed(1)}`).join(" ");
+  const nTicks = 4;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} style={{ display: "block", overflow: "visible" }}>
+      {/* Y axis ticks */}
+      {Array.from({ length: nTicks + 1 }, (_, i) => {
+        const iv = minIv + (i / nTicks) * (maxIv - minIv);
+        const y = cy(iv);
+        return (
+          <g key={i}>
+            <line x1={PAD.l - 4} y1={y} x2={W - PAD.r} y2={y} stroke="var(--line)" strokeWidth="0.5" />
+            <text x={PAD.l - 6} y={y + 3} textAnchor="end" fill="var(--muted)" fontSize={9}>{(iv * 100).toFixed(0)}%</text>
+          </g>
+        );
+      })}
+      {/* Line */}
+      <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.5" points={pts} />
+      {/* Dots + DTE labels */}
+      {term.map((p) => {
+        const x = cx(p.dte); const y = cy(p.atm_iv);
+        return (
+          <g key={p.exp}>
+            <circle cx={x} cy={y} r={3} fill="var(--brand-2)" />
+            <text x={x} y={H - 6} textAnchor="middle" fill="var(--text-dim)" fontSize={9}>{p.dte}d</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ─── Smile chart (call_iv / put_iv vs strike, spot_ref vertical line) ────────
+
+function SmileChart({ points, spotRef }: { points: VolSmilePoint[]; spotRef: number | null }) {
+  if (points.length < 2) return null;
+  const strikes = points.map((p) => p.strike);
+  const allIvs = points.flatMap((p) => [p.call_iv, p.put_iv]);
+  const minS = Math.min(...strikes); const maxS = Math.max(...strikes);
+  const minIv = Math.min(...allIvs) * 0.98; const maxIv = Math.max(...allIvs) * 1.02;
+  const W = 400; const H = 100;
+  const PAD = { l: 36, r: 8, t: 6, b: 20 };
+  const cx = (s: number) => PAD.l + ((s - minS) / (maxS - minS)) * (W - PAD.l - PAD.r);
+  const cy = (iv: number) => PAD.t + (1 - (iv - minIv) / (maxIv - minIv)) * (H - PAD.t - PAD.b);
+  const callPts = points.map((p) => `${cx(p.strike).toFixed(1)},${cy(p.call_iv).toFixed(1)}`).join(" ");
+  const putPts = points.map((p) => `${cx(p.strike).toFixed(1)},${cy(p.put_iv).toFixed(1)}`).join(" ");
+  const nTicks = 3;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} style={{ display: "block", overflow: "visible" }}>
+      {Array.from({ length: nTicks + 1 }, (_, i) => {
+        const iv = minIv + (i / nTicks) * (maxIv - minIv);
+        const y = cy(iv);
+        return (
+          <g key={i}>
+            <line x1={PAD.l} y1={y} x2={W - PAD.r} y2={y} stroke="var(--line)" strokeWidth="0.5" />
+            <text x={PAD.l - 4} y={y + 3} textAnchor="end" fill="var(--muted)" fontSize={9}>{(iv * 100).toFixed(0)}%</text>
+          </g>
+        );
+      })}
+      {/* Spot reference vertical line */}
+      {spotRef != null && spotRef >= minS && spotRef <= maxS && (
+        <line
+          x1={cx(spotRef)} y1={PAD.t} x2={cx(spotRef)} y2={H - PAD.b}
+          stroke="var(--warn)" strokeWidth="1" strokeDasharray="3,2"
+        />
+      )}
+      {/* Call IV line */}
+      <polyline fill="none" stroke="var(--up)" strokeWidth="1.5" points={callPts} />
+      {/* Put IV dashed line */}
+      <polyline fill="none" stroke="var(--down)" strokeWidth="1.5" strokeDasharray="4,2" points={putPts} />
+      {/* Strike labels (every other) */}
+      {points.filter((_, i) => i % 3 === 0).map((p) => (
+        <text key={p.strike} x={cx(p.strike)} y={H - 4} textAnchor="middle" fill="var(--text-dim)" fontSize={9}>{p.strike}</text>
+      ))}
+    </svg>
+  );
+}
+
+// ─── IV Rank history sparkline ────────────────────────────────────────────────
+
+function IvRankHistory({ history }: { history: VolHistPoint[] }) {
+  const withRank = history.filter((h) => h.iv_rank != null);
+  if (withRank.length < 2) return null;
+  const vals = withRank.map((h) => h.iv_rank as number);
+  const mn = 0; const mx = 100;
+  const W = 100; const H = 60;
+  const pt = (i: number) => {
+    const x = (i / (vals.length - 1)) * W;
+    const y = H - ((vals[i] - mn) / (mx - mn)) * (H - 6) - 2;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  };
+  const pts = vals.map((_, i) => pt(i)).join(" ");
+  // 50-line reference
+  const ref50y = H - ((50 - mn) / (mx - mn)) * (H - 6) - 2;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: "block" }}>
+      <line x1="0" y1={ref50y} x2={W} y2={ref50y} stroke="var(--line)" strokeWidth="0.5" strokeDasharray="2,2" />
+      <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.2" points={pts} />
+      <circle cx={(vals.length - 1) / (vals.length - 1) * W} cy={pt(vals.length - 1).split(",")[1]} r={2.5} fill="var(--brand-2)" />
+    </svg>
+  );
+}
+
+// ─── GEX strike ladder (horizontal bars, net + call/put split) ────────────────
+
+type GreekKey = "gamma" | "delta" | "vanna" | "charm";
+
+function getGreekValues(row: GexStrikeRow, greek: GreekKey): { net: number; call: number; put: number } {
+  switch (greek) {
+    case "gamma": return { net: row.gamma_net, call: row.gamma_call, put: row.gamma_put };
+    case "delta": return { net: row.delta_net, call: row.delta_net > 0 ? row.delta_net : 0, put: row.delta_net < 0 ? row.delta_net : 0 };
+    case "vanna": return { net: row.vanna_net, call: row.vanna_net > 0 ? row.vanna_net : 0, put: row.vanna_net < 0 ? row.vanna_net : 0 };
+    case "charm": return { net: row.charm_net, call: row.charm_net > 0 ? row.charm_net : 0, put: row.charm_net < 0 ? row.charm_net : 0 };
+  }
+}
+
+function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, lang }: {
+  rows: GexStrikeRow[];
+  greek: GreekKey;
+  spotRef: number;
+  gammaFlip: number | null;
+  callWall: number | null;
+  putWall: number | null;
+  lang: string;
+}) {
+  if (!rows.length) return null;
+  const netVals = rows.map((r) => getGreekValues(r, greek).net);
+  const maxAbs = Math.max(...netVals.map(Math.abs), 0.001);
+  const BAR_MAX = 120;
+  const ROW_H = 28;
+  const H = rows.length * ROW_H + 30;
+  const MID = BAR_MAX + 60; // center x
+
+  return (
+    <svg viewBox={`0 0 ${MID * 2} ${H}`} width="100%" style={{ display: "block", maxHeight: 420, overflow: "visible" }}>
+      {/* Column headers */}
+      <text x={MID - 4} y={14} textAnchor="end" fill="var(--up)" fontSize={10} fontWeight={600}>
+        {lang === "zh" ? "净多" : "+net"}
+      </text>
+      <text x={MID + 60 + 4} y={14} textAnchor="start" fill="var(--down)" fontSize={10} fontWeight={600}>
+        {lang === "zh" ? "净空" : "-net"}
+      </text>
+      <text x={MID + 30} y={14} textAnchor="middle" fill="var(--muted)" fontSize={10}>
+        {lang === "zh" ? "行权价" : "Strike"}
+      </text>
+
+      {rows.map((row, i) => {
+        const { net, call, put } = getGreekValues(row, greek);
+        const y = 22 + i * ROW_H;
+        const netW = Math.abs(net) / maxAbs * BAR_MAX;
+        const callW = Math.abs(greek === "gamma" ? call : Math.max(call, 0)) / maxAbs * BAR_MAX;
+        const putW = Math.abs(greek === "gamma" ? put : Math.abs(Math.min(put, 0))) / maxAbs * BAR_MAX;
+        const isPos = net >= 0;
+
+        // Markers
+        const isFlip = gammaFlip != null && row.strike === gammaFlip;
+        const isCallWall = callWall != null && row.strike === callWall;
+        const isPutWall = putWall != null && row.strike === putWall;
+
+        return (
+          <g key={row.strike}>
+            {/* Net bar */}
+            {isPos ? (
+              <rect x={MID - netW} y={y + 3} width={netW} height={ROW_H - 10}
+                fill="rgba(38,194,129,.35)" rx={2} />
+            ) : (
+              <rect x={MID + 60} y={y + 3} width={netW} height={ROW_H - 10}
+                fill="rgba(240,86,107,.3)" rx={2} />
+            )}
+            {/* Call overlay (gamma only — call split) */}
+            {greek === "gamma" && call > 0 && (
+              <rect x={MID - callW} y={y + 3} width={callW} height={ROW_H - 10}
+                fill="rgba(38,194,129,.15)" rx={2} />
+            )}
+            {/* Put overlay (gamma only — put split, grows right from center) */}
+            {greek === "gamma" && put < 0 && (
+              <rect x={MID + 60} y={y + 3} width={putW} height={ROW_H - 10}
+                fill="rgba(240,86,107,.12)" rx={2} />
+            )}
+            {/* Strike label */}
+            <text x={MID + 30} y={y + ROW_H / 2 + 2} textAnchor="middle"
+              fill="var(--text-2)" fontSize={11} fontWeight={row.strike === Math.round(spotRef) ? 700 : 400}>
+              {row.strike}
+            </text>
+            {/* Spot ref line */}
+            {row.strike === rows.reduce((closest, r) =>
+              Math.abs(r.strike - spotRef) < Math.abs(closest.strike - spotRef) ? r : closest
+            ).strike && (
+              <line x1={0} y1={y + ROW_H - 1} x2={MID * 2} y2={y + ROW_H - 1}
+                stroke="var(--warn)" strokeWidth="1" strokeDasharray="3,2" opacity={0.6} />
+            )}
+            {/* Marker labels */}
+            {isFlip && (
+              <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--warn)" fontSize={9} fontWeight={600}>
+                {lang === "zh" ? "伽马翻转" : "flip"}
+              </text>
+            )}
+            {isCallWall && (
+              <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--up)" fontSize={9} fontWeight={600}>
+                {lang === "zh" ? "看涨墙" : "call wall"}
+              </text>
+            )}
+            {isPutWall && (
+              <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--down)" fontSize={9} fontWeight={600}>
+                {lang === "zh" ? "看跌墙" : "put wall"}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ─── GEX by-expiry bars ──────────────────────────────────────────────────────
+
+function GexExpiryBars({ rows, greek, lang }: { rows: GexExpiryRow[]; greek: GreekKey; lang: string }) {
+  if (!rows.length) return null;
+  const getVal = (r: GexExpiryRow) => greek === "delta" ? r.delta_net : r.gamma_net;
+  const maxAbs = Math.max(...rows.map((r) => Math.abs(getVal(r))), 0.001);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {rows.map((r) => {
+        const v = getVal(r);
+        const w = Math.round((Math.abs(v) / maxAbs) * 100);
+        const isPos = v >= 0;
+        return (
+          <div key={r.exp} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
+            <span style={{ color: "var(--text-2)", fontVariantNumeric: "tabular-nums", width: 56, flexShrink: 0 }}>{r.exp.slice(5)}</span>
+            <div style={{ flex: 1, height: 8, borderRadius: 4, background: "var(--panel-3)", overflow: "hidden" }}>
+              <div style={{
+                height: "100%", width: `${w}%`,
+                background: isPos ? "rgba(38,194,129,.5)" : "rgba(240,86,107,.45)",
+                borderRadius: 4,
+              }} />
+            </div>
+            <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: isPos ? "var(--up)" : "var(--down)", width: 64, textAlign: "right" }}>
+              {isPos ? "+" : ""}{v.toFixed(3)}
+            </span>
+          </div>
+        );
+      })}
+      <div style={{ display: "flex", gap: 16, fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ display: "inline-block", width: 10, height: 6, background: "rgba(38,194,129,.5)", borderRadius: 1 }} />
+          {lang === "zh" ? "正值（看涨压力）" : "Positive (call-side)"}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ display: "inline-block", width: 10, height: 6, background: "rgba(240,86,107,.45)", borderRadius: 1 }} />
+          {lang === "zh" ? "负值（看跌压力）" : "Negative (put-side)"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // ─── Top-level component ─────────────────────────────────────────────────────
 
 export default function OptionsHubView() {
@@ -696,6 +1013,93 @@ export default function OptionsHubView() {
   const filteredCandidates = tickerSearch.trim()
     ? tickerCandidates.filter((r) => r.includes(tickerSearch.toUpperCase()))
     : tickerCandidates.slice(0, 20);
+
+  // ── Screener fetch ────────────────────────────────────────────────────────
+  const [oiData, setOiData] = useState<OiMoversPayload | null>(null);
+  const [hotData, setHotData] = useState<HotPayload | null>(null);
+  const [screenerLoading, setScreenerLoading] = useState(false);
+
+  const fetchScreener = useCallback(async () => {
+    if (oiData && hotData) return;
+    setScreenerLoading(true);
+    try {
+      const [or, hr] = await Promise.all([
+        fetch("/api/flow?f=oi", { cache: "no-store" }),
+        fetch("/api/flow?f=hot", { cache: "no-store" }),
+      ]);
+      if (or.ok) setOiData(await or.json() as OiMoversPayload);
+      if (hr.ok) setHotData(await hr.json() as HotPayload);
+    } catch {}
+    setScreenerLoading(false);
+  }, [oiData, hotData]);
+
+  useEffect(() => {
+    if (activeTab === "screener") fetchScreener();
+  }, [activeTab, fetchScreener]);
+
+  const [hotView, setHotView] = useState<"by_premium" | "by_volume">("by_premium");
+
+  // ── Vol fetch ─────────────────────────────────────────────────────────────
+  const [volSearch, setVolSearch] = useState("");
+  const [selectedVolRoot, setSelectedVolRoot] = useState<string | null>(null);
+  const [volData, setVolData] = useState<VolPayload | null>(null);
+  const [volLoading, setVolLoading] = useState(false);
+
+  // Vol root candidates from tide top_net_impact (or fallback list)
+  const volCandidates: string[] = useMemo(() => {
+    const from = tideData?.top_net_impact.map((x) => x.root) ?? [];
+    const defaults = ["NVDA", "SPY", "QQQ", "AAPL", "TSLA"];
+    const set = new Set([...from, ...defaults]);
+    return Array.from(set).sort();
+  }, [tideData]);
+
+  const filteredVolCandidates = volSearch.trim()
+    ? volCandidates.filter((r) => r.includes(volSearch.toUpperCase()))
+    : volCandidates.slice(0, 20);
+
+  const fetchVol = useCallback(async (root: string) => {
+    setVolLoading(true); setVolData(null);
+    try {
+      const r = await fetch(`/api/flow?f=vol:${root}`, { cache: "no-store" });
+      if (r.ok) setVolData(await r.json() as VolPayload);
+    } catch {}
+    setVolLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (selectedVolRoot) fetchVol(selectedVolRoot);
+  }, [selectedVolRoot, fetchVol]);
+
+  // ── GEX fetch ─────────────────────────────────────────────────────────────
+  const [gexSearch, setGexSearch] = useState("");
+  const [selectedGexRoot, setSelectedGexRoot] = useState<string | null>(null);
+  const [gexData, setGexData] = useState<GexPayload | null>(null);
+  const [gexLoading, setGexLoading] = useState(false);
+  const [gexGreek, setGexGreek] = useState<GreekKey>("gamma");
+
+  const gexCandidates: string[] = useMemo(() => {
+    const from = tideData?.top_net_impact.map((x) => x.root) ?? [];
+    const defaults = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"];
+    const set = new Set([...from, ...defaults]);
+    return Array.from(set).sort();
+  }, [tideData]);
+
+  const filteredGexCandidates = gexSearch.trim()
+    ? gexCandidates.filter((r) => r.includes(gexSearch.toUpperCase()))
+    : gexCandidates.slice(0, 20);
+
+  const fetchGex = useCallback(async (root: string) => {
+    setGexLoading(true); setGexData(null);
+    try {
+      const r = await fetch(`/api/flow?f=gex:${root}`, { cache: "no-store" });
+      if (r.ok) setGexData(await r.json() as GexPayload);
+    } catch {}
+    setGexLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (selectedGexRoot) fetchGex(selectedGexRoot);
+  }, [selectedGexRoot, fetchGex]);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -1378,25 +1782,450 @@ export default function OptionsHubView() {
 
           {/* ═══ SCREENER TAB ═══════════════════════════════════════════════ */}
           {activeTab === "screener" && (
-            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, color: "var(--muted)" }}>
-              <div style={{ fontSize: 13 }}>{t("screenerComingSoon", "Screener coming in next build (H2 analytics)")}</div>
-              <div style={{ fontSize: 11 }}>{lang === "zh" ? "筛选器将在下一版本推出（H2分析）" : "OI movers, hot contracts, and chain screener arrive with the H2 analytics build."}</div>
+            <div style={{ flex: 1, overflow: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 20 }}>
+              {screenerLoading && !oiData && !hotData && (
+                <div style={{ color: "var(--muted)", fontSize: 13 }}>{lang === "zh" ? "加载中…" : "Loading…"}</div>
+              )}
+
+              {/* Coverage banner when small */}
+              {(oiData || hotData) && (
+                <div style={{ fontSize: 11, color: "var(--text-dim)", background: "rgba(41,98,255,.06)", border: "1px solid rgba(41,98,255,.18)", borderRadius: "var(--r-md)", padding: "6px 12px" }}>
+                  {lang === "zh" ? "ETF品种覆盖；个股覆盖扩展中" : "ETF universe; single names expanding 覆盖扩展中"}
+                </div>
+              )}
+
+              {/* Hot Contracts card */}
+              {hotData && (
+                <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+                    <span style={{ fontWeight: 650, fontSize: 14 }}>
+                      {lang === "zh" ? "热门合约" : "Hot Contracts 热门合约"}
+                    </span>
+                    <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+                      <button
+                        className={`chip${hotView === "by_premium" ? " on" : ""}`}
+                        style={{ height: 26, fontSize: 11 }}
+                        onClick={() => setHotView("by_premium")}
+                      >
+                        {t("screenerByPrem", "By Premium")}
+                      </button>
+                      <button
+                        className={`chip${hotView === "by_volume" ? " on" : ""}`}
+                        style={{ height: 26, fontSize: 11 }}
+                        onClick={() => setHotView("by_volume")}
+                      >
+                        {t("screenerByVol", "By Volume")}
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="scr" style={{ fontSize: 12 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: "left" }}>{t("colTicker", "Ticker")}</th>
+                          <th style={{ textAlign: "left" }}>{t("colRight", "C/P")}</th>
+                          <th style={{ textAlign: "left" }}>{t("colExp", "Exp")}</th>
+                          <th>{t("colStrike", "Strike")}</th>
+                          <th>{t("colPrem", "Prem")}</th>
+                          <th>{t("colVol", "Vol")}</th>
+                          <th>{t("colClose", "Close")}</th>
+                          <th>{t("colVolGtOi", "vol>OI")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(hotData[hotView] ?? []).map((c, i) => (
+                          <tr key={i}>
+                            <td style={{ textAlign: "left", fontWeight: 700 }}>{c.root}</td>
+                            <td style={{ textAlign: "left" }}>
+                              <span style={{ color: c.right === "C" ? "var(--up)" : "var(--down)", fontWeight: 700 }}>{c.right}</span>
+                            </td>
+                            <td style={{ textAlign: "left", color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>{c.exp.slice(5)}</td>
+                            <td style={{ fontVariantNumeric: "tabular-nums" }}>{c.strike}</td>
+                            <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(c.premium)}</td>
+                            <td style={{ fontVariantNumeric: "tabular-nums" }}>{c.vol.toLocaleString("en-US")}</td>
+                            <td style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>{c.close.toFixed(2)}</td>
+                            <td>
+                              {c.vol_gt_oi && (
+                                <span className="flow-flag-chip">{lang === "zh" ? "量超持仓" : "vol>OI"}</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* OI Movers card */}
+              {oiData && (
+                <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+                    <span style={{ fontWeight: 650, fontSize: 14 }}>
+                      {lang === "zh" ? "持仓异动" : "OI Movers 持仓异动"}
+                    </span>
+                    <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 4 }}>
+                      {lang === "zh" ? "截至上一交易日" : "as of previous session 截至上一交易日"}
+                    </span>
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="scr" style={{ fontSize: 12 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: "left" }}>{t("colTicker", "Ticker")}</th>
+                          <th style={{ textAlign: "left" }}>{t("colRight", "C/P")}</th>
+                          <th style={{ textAlign: "left" }}>{t("colExp", "Exp")}</th>
+                          <th>{t("colStrike", "Strike")}</th>
+                          <th>{t("colOi", "OI (t-1)")}</th>
+                          <th>{t("colOiPrev", "OI (t-2)")}</th>
+                          <th>{t("colDOi", "ΔOI")}</th>
+                          <th>{t("colMid", "Mid")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {oiData.movers.map((m, i) => {
+                          const isAdd = m.d_oi > 0;
+                          return (
+                            <tr key={i}>
+                              <td style={{ textAlign: "left", fontWeight: 700 }}>{m.root}</td>
+                              <td style={{ textAlign: "left" }}>
+                                <span style={{ color: m.right === "C" ? "var(--up)" : "var(--down)", fontWeight: 700 }}>{m.right}</span>
+                              </td>
+                              <td style={{ textAlign: "left", color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>{m.exp.slice(5)}</td>
+                              <td style={{ fontVariantNumeric: "tabular-nums" }}>{m.strike}</td>
+                              <td style={{ fontVariantNumeric: "tabular-nums" }}>{m.oi.toLocaleString("en-US")}</td>
+                              <td style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-dim)" }}>{m.oi_prev.toLocaleString("en-US")}</td>
+                              <td style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700, color: isAdd ? "var(--up)" : "var(--down)" }}>
+                                {isAdd ? "+" : ""}{m.d_oi.toLocaleString("en-US")}
+                              </td>
+                              <td style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>
+                                {m.mid != null ? `$${m.mid.toFixed(2)}` : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {/* ═══ VOL TAB ════════════════════════════════════════════════════ */}
           {activeTab === "vol" && (
-            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, color: "var(--muted)" }}>
-              <div style={{ fontSize: 13 }}>{t("volComingSoon", "Volatility analytics coming in next build (H2)")}</div>
-              <div style={{ fontSize: 11 }}>{lang === "zh" ? "IV rank、期限结构、VRP 即将推出（H2）" : "IV rank, term structure, smile, and VRP surface in the H2 analytics build."}</div>
+            <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
+              {/* Sidebar */}
+              <div style={{ width: 200, flexShrink: 0, borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column", minHeight: 0 }}>
+                <div style={{ padding: "10px 10px 8px" }}>
+                  <input
+                    type="text"
+                    placeholder={lang === "zh" ? "搜索代码…" : "Search ticker…"}
+                    value={volSearch}
+                    onChange={(e) => setVolSearch(e.target.value)}
+                    style={{ width: "100%", height: 30, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)", outline: "none" }}
+                  />
+                </div>
+                <div style={{ flex: 1, overflow: "auto" }}>
+                  {filteredVolCandidates.map((root) => (
+                    <button
+                      key={root}
+                      onClick={() => setSelectedVolRoot(root)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 8, width: "100%",
+                        padding: "8px 12px", textAlign: "left", fontSize: 13,
+                        fontWeight: selectedVolRoot === root ? 700 : 400,
+                        color: selectedVolRoot === root ? "var(--text)" : "var(--text-2)",
+                        background: selectedVolRoot === root ? "rgba(41,98,255,.1)" : "none",
+                        borderRadius: "var(--r)", cursor: "pointer", transition: "background var(--t)",
+                      }}
+                      onMouseEnter={(e) => { if (selectedVolRoot !== root) e.currentTarget.style.background = "var(--panel-2)"; }}
+                      onMouseLeave={(e) => { if (selectedVolRoot !== root) e.currentTarget.style.background = "none"; }}
+                    >
+                      {root}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Vol drill pane */}
+              <div style={{ flex: 1, overflow: "auto", padding: "16px 18px" }}>
+                {!selectedVolRoot && (
+                  <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
+                    {t("volRootPrompt", "Select a root to view volatility analytics")}
+                  </div>
+                )}
+                {selectedVolRoot && volLoading && (
+                  <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
+                    {lang === "zh" ? "加载中…" : "Loading…"}
+                  </div>
+                )}
+                {selectedVolRoot && !volLoading && volData && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+
+                    {/* IV Rank hero */}
+                    <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "18px 20px" }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 28, alignItems: "flex-start" }}>
+                        {/* Big IV rank number */}
+                        <div>
+                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 6 }}>
+                            {t("volIvRank", "IV Rank (252d)")}
+                          </div>
+                          {volData.iv_rank_252 != null ? (
+                            <>
+                              <div style={{ fontWeight: 700, fontSize: 36, lineHeight: 1, color: volData.iv_rank_252 > 75 ? "var(--down)" : volData.iv_rank_252 > 50 ? "var(--warn)" : "var(--up)" }}>
+                                {volData.iv_rank_252.toFixed(1)}
+                              </div>
+                              <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+                                {lang === "zh" ? "分位（0–100）" : "percentile (0–100)"}
+                              </div>
+                              {/* 52w range bar */}
+                              <div style={{ marginTop: 10, width: 160 }}>
+                                <div style={{ height: 6, borderRadius: 4, background: "var(--panel-3)", position: "relative", overflow: "visible" }}>
+                                  <div style={{
+                                    position: "absolute", left: 0, top: 0, height: "100%",
+                                    width: `${volData.iv_rank_252}%`,
+                                    background: volData.iv_rank_252 > 75 ? "var(--down)" : volData.iv_rank_252 > 50 ? "var(--warn)" : "var(--up)",
+                                    borderRadius: 4,
+                                  }} />
+                                </div>
+                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--text-dim)", marginTop: 3 }}>
+                                  <span>0</span>
+                                  <span>100</span>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <div style={{ fontWeight: 600, fontSize: 15, color: "var(--muted)", marginTop: 4 }}>
+                              {lang === "zh" ? "基线积累中" : "warming 基线积累中"}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Stat mini-cards */}
+                        {[
+                          { key: "volAtmIv", label: "ATM IV", v: (volData.atm_iv * 100).toFixed(1) + "%" },
+                          { key: "vol52wHi", label: "52w Hi", v: (volData.iv_52w_hi * 100).toFixed(1) + "%" },
+                          { key: "vol52wLo", label: "52w Lo", v: (volData.iv_52w_lo * 100).toFixed(1) + "%" },
+                          { key: "volRv20", label: "RV (20d)", v: (volData.rv20 * 100).toFixed(1) + "%" },
+                          { key: "volVrp", label: "VRP (IV-RV)", v: ((volData.vrp) * 100).toFixed(1) + "%", color: volData.vrp > 0 ? "var(--down)" : "var(--up)" },
+                        ].map((kv) => (
+                          <div key={kv.key}>
+                            <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>
+                              {t(kv.key, kv.label)}
+                            </div>
+                            <div style={{ fontWeight: 650, fontSize: 15, color: (kv as any).color ?? "var(--text)", fontVariantNumeric: "tabular-nums" }}>
+                              {kv.v}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Term structure chart */}
+                    {volData.term.length >= 2 && (
+                      <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 16px" }}>
+                        <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                          {t("volTermTitle", "Term Structure")}
+                        </div>
+                        <TermStructureChart term={volData.term} />
+                      </div>
+                    )}
+
+                    {/* Volatility smile */}
+                    {volData.smile.length > 0 && (
+                      <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 16px" }}>
+                        <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                          {t("volSmileTitle", "Volatility Smile")}
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                          {volData.smile.slice(0, 2).map((se) => (
+                            <div key={se.exp}>
+                              <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 6 }}>
+                                {lang === "zh" ? "到期：" : "Exp: "}{se.exp}
+                              </div>
+                              <SmileChart points={se.points} spotRef={volData.spot_ref ?? null} />
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 8, display: "flex", gap: 16 }}>
+                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <span style={{ display: "inline-block", width: 10, height: 2, background: "var(--up)" }} />
+                            {lang === "zh" ? "认购IV" : "Call IV"}
+                          </span>
+                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <span style={{ display: "inline-block", width: 10, height: 2, borderBottom: "1px dashed var(--down)" }} />
+                            {lang === "zh" ? "认沽IV" : "Put IV"}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* IV Rank history sparkline */}
+                    {volData.history.length >= 2 && (
+                      <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 16px" }}>
+                        <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                          {t("volHistTitle", "IV Rank History (90 sessions)")}
+                        </div>
+                        <IvRankHistory history={volData.history} />
+                      </div>
+                    )}
+
+                    {/* Coverage */}
+                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                      {lang === "zh"
+                        ? `数据覆盖：${volData.coverage.n_days} 天，起始 ${volData.coverage.since}`
+                        : `Coverage: ${volData.coverage.n_days} days since ${volData.coverage.since}`}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
           {/* ═══ GEX TAB ════════════════════════════════════════════════════ */}
           {activeTab === "gex" && (
-            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, color: "var(--muted)" }}>
-              <div style={{ fontSize: 13 }}>{t("gexComingSoon", "GEX analytics coming in next build (H2)")}</div>
-              <div style={{ fontSize: 11 }}>{lang === "zh" ? "Gamma敞口梯度（按行权价/到期日）即将推出" : "Gamma, delta, vanna, charm ladders by strike and expiry in the H2 analytics build."}</div>
+            <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
+              {/* Sidebar */}
+              <div style={{ width: 200, flexShrink: 0, borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column", minHeight: 0 }}>
+                <div style={{ padding: "10px 10px 8px" }}>
+                  <input
+                    type="text"
+                    placeholder={lang === "zh" ? "搜索代码…" : "Search ticker…"}
+                    value={gexSearch}
+                    onChange={(e) => setGexSearch(e.target.value)}
+                    style={{ width: "100%", height: 30, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)", outline: "none" }}
+                  />
+                </div>
+                <div style={{ flex: 1, overflow: "auto" }}>
+                  {filteredGexCandidates.map((root) => (
+                    <button
+                      key={root}
+                      onClick={() => setSelectedGexRoot(root)}
+                      style={{
+                        display: "flex", alignItems: "center", width: "100%",
+                        padding: "8px 12px", textAlign: "left", fontSize: 13,
+                        fontWeight: selectedGexRoot === root ? 700 : 400,
+                        color: selectedGexRoot === root ? "var(--text)" : "var(--text-2)",
+                        background: selectedGexRoot === root ? "rgba(41,98,255,.1)" : "none",
+                        borderRadius: "var(--r)", cursor: "pointer", transition: "background var(--t)",
+                      }}
+                      onMouseEnter={(e) => { if (selectedGexRoot !== root) e.currentTarget.style.background = "var(--panel-2)"; }}
+                      onMouseLeave={(e) => { if (selectedGexRoot !== root) e.currentTarget.style.background = "none"; }}
+                    >
+                      {root}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* GEX drill pane */}
+              <div style={{ flex: 1, overflow: "auto", padding: "16px 18px" }}>
+                {!selectedGexRoot && (
+                  <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
+                    {t("gexRootPrompt", "Select a root to view dealer exposure")}
+                  </div>
+                )}
+                {selectedGexRoot && gexLoading && (
+                  <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
+                    {lang === "zh" ? "加载中…" : "Loading…"}
+                  </div>
+                )}
+                {selectedGexRoot && !gexLoading && gexData && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+
+                    {/* GEX hero stats */}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 20, border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 18px" }}>
+                      <div>
+                        <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{t("gexNetGex", "Net GEX (bn)")}</div>
+                        <div style={{ fontWeight: 700, fontSize: 22, color: gexData.net_gex_bn >= 0 ? "var(--up)" : "var(--down)" }}>
+                          {gexData.net_gex_bn >= 0 ? "+" : ""}{gexData.net_gex_bn.toFixed(2)}B
+                        </div>
+                      </div>
+                      {gexData.spot_ref != null && (
+                        <div>
+                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{t("volSpotRef", "Spot ref")}</div>
+                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums" }}>{gexData.spot_ref.toFixed(2)}</div>
+                        </div>
+                      )}
+                      {gexData.gamma_flip != null && (
+                        <div>
+                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{lang === "zh" ? "伽马翻转" : "Gamma Flip"}</div>
+                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--warn)" }}>{gexData.gamma_flip.toFixed(1)}</div>
+                        </div>
+                      )}
+                      {gexData.call_wall != null && (
+                        <div>
+                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{lang === "zh" ? "看涨墙" : "Call Wall"}</div>
+                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--up)" }}>{gexData.call_wall.toFixed(1)}</div>
+                        </div>
+                      )}
+                      {gexData.put_wall != null && (
+                        <div>
+                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{lang === "zh" ? "看跌墙" : "Put Wall"}</div>
+                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--down)" }}>{gexData.put_wall.toFixed(1)}</div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Greek selector chips */}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 11, color: "var(--muted)" }}>{lang === "zh" ? "希腊值：" : "Greek:"}</span>
+                      {(["gamma", "delta", "vanna", "charm"] as GreekKey[]).map((g) => (
+                        <button
+                          key={g}
+                          className={`chip${gexGreek === g ? " on" : ""}`}
+                          style={{ height: 26, fontSize: 11 }}
+                          onClick={() => setGexGreek(g)}
+                        >
+                          {t(`gex${g.charAt(0).toUpperCase()}${g.slice(1)}` as any, g)}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Strike ladder */}
+                    <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 16px" }}>
+                      <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                        {t("gexLadderTitle", "Strike Ladder")}
+                        <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 8 }}>
+                          {lang === "zh" ? "（做市商净头寸方向）" : "(dealer net positioning direction)"}
+                        </span>
+                      </div>
+                      <GexStrikeLadder
+                        rows={gexData.by_strike}
+                        greek={gexGreek}
+                        spotRef={gexData.spot_ref}
+                        gammaFlip={gexData.gamma_flip}
+                        callWall={gexData.call_wall}
+                        putWall={gexData.put_wall}
+                        lang={lang}
+                      />
+                    </div>
+
+                    {/* By-expiry bars */}
+                    <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 16px" }}>
+                      <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                        {t("gexByExpTitle", "By Expiry")}
+                      </div>
+                      <GexExpiryBars rows={gexData.by_expiry} greek={gexGreek} lang={lang} />
+                    </div>
+
+                    {/* Convention footnote */}
+                    <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
+                      {lang === "zh"
+                        ? "做市商持仓模型估算 — 模型推导，仅供参考"
+                        : "Dealer-positioning model estimate 做市商持仓模型估算 — model-derived, approximate"}
+                    </div>
+
+                    {/* Coverage */}
+                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                      {lang === "zh"
+                        ? `数据覆盖：${gexData.coverage.n_days} 天，起始 ${gexData.coverage.since}`
+                        : `Coverage: ${gexData.coverage.n_days} day(s) since ${gexData.coverage.since} — OI is t-1`}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

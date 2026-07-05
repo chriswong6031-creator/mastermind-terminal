@@ -1,0 +1,226 @@
+{
+  "NVDA": {
+    "schema": "options_hub.vol/v1",
+    "asof": "2026-07-05T16:05:00Z",
+    "root": "NVDA",
+    "iv_rank_252": 72.4,
+    "atm_iv": 0.582,
+    "iv_52w_hi": 0.891,
+    "iv_52w_lo": 0.298,
+    "rv20": 0.491,
+    "vrp": 0.091,
+    "term": [
+      {"dte": 4, "exp": "2026-07-11", "atm_iv": 0.641},
+      {"dte": 11, "exp": "2026-07-18", "atm_iv": 0.618},
+      {"dte": 18, "exp": "2026-07-25", "atm_iv": 0.602},
+      {"dte": 32, "exp": "2026-08-08", "atm_iv": 0.588},
+      {"dte": 46, "exp": "2026-08-22", "atm_iv": 0.574},
+      {"dte": 74, "exp": "2026-09-19", "atm_iv": 0.562},
+      {"dte": 137, "exp": "2026-11-21", "atm_iv": 0.551},
+      {"dte": 228, "exp": "2027-02-20", "atm_iv": 0.541}
+    ],
+    "smile": [
+      {
+        "exp": "2026-07-11",
+        "points": [
+          {"strike": 95, "call_iv": 0.725, "put_iv": 0.812},
+          {"strike": 100, "call_iv": 0.698, "put_iv": 0.778},
+          {"strike": 105, "call_iv": 0.661, "put_iv": 0.742},
+          {"strike": 110, "call_iv": 0.641, "put_iv": 0.718},
+          {"strike": 115, "call_iv": 0.623, "put_iv": 0.694},
+          {"strike": 120, "call_iv": 0.610, "put_iv": 0.671},
+          {"strike": 125, "call_iv": 0.598, "put_iv": 0.654},
+          {"strike": 130, "call_iv": 0.589, "put_iv": 0.638},
+          {"strike": 135, "call_iv": 0.582, "put_iv": 0.629},
+          {"strike": 140, "call_iv": 0.583, "put_iv": 0.619},
+          {"strike": 145, "call_iv": 0.591, "put_iv": 0.612},
+          {"strike": 150, "call_iv": 0.603, "put_iv": 0.608},
+          {"strike": 155, "call_iv": 0.618, "put_iv": 0.609},
+          {"strike": 160, "call_iv": 0.638, "put_iv": 0.614}
+        ]
+      },
+      {
+        "exp": "2026-07-18",
+        "points": [
+          {"strike": 95, "call_iv": 0.695, "put_iv": 0.776},
+          {"strike": 100, "call_iv": 0.672, "put_iv": 0.748},
+          {"strike": 105, "call_iv": 0.648, "put_iv": 0.721},
+          {"strike": 110, "call_iv": 0.631, "put_iv": 0.702},
+          {"strike": 115, "call_iv": 0.618, "put_iv": 0.685},
+          {"strike": 120, "call_iv": 0.608, "put_iv": 0.665},
+          {"strike": 125, "call_iv": 0.600, "put_iv": 0.648},
+          {"strike": 130, "call_iv": 0.594, "put_iv": 0.635},
+          {"strike": 135, "call_iv": 0.590, "put_iv": 0.624},
+          {"strike": 140, "call_iv": 0.590, "put_iv": 0.615},
+          {"strike": 145, "call_iv": 0.594, "put_iv": 0.608},
+          {"strike": 150, "call_iv": 0.601, "put_iv": 0.604},
+          {"strike": 155, "call_iv": 0.612, "put_iv": 0.604},
+          {"strike": 160, "call_iv": 0.628, "put_iv": 0.609}
+        ]
+      }
+    ],
+    "history": [
+      {"date": "2026-04-07", "iv_rank": 96.2, "atm_iv": 0.891, "close": 85.1},
+      {"date": "2026-04-14", "iv_rank": 88.4, "atm_iv": 0.812, "close": 92.4},
+      {"date": "2026-04-21", "iv_rank": 81.7, "atm_iv": 0.756, "close": 98.8},
+      {"date": "2026-04-28", "iv_rank": 76.3, "atm_iv": 0.718, "close": 104.3},
+      {"date": "2026-05-05", "iv_rank": 71.8, "atm_iv": 0.688, "close": 109.2},
+      {"date": "2026-05-12", "iv_rank": 68.9, "atm_iv": 0.671, "close": 113.5},
+      {"date": "2026-05-19", "iv_rank": 65.4, "atm_iv": 0.654, "close": 116.7},
+      {"date": "2026-05-26", "iv_rank": 62.1, "atm_iv": 0.638, "close": 119.4},
+      {"date": "2026-06-02", "iv_rank": 59.8, "atm_iv": 0.628, "close": 121.8},
+      {"date": "2026-06-09", "iv_rank": 57.3, "atm_iv": 0.614, "close": 124.6},
+      {"date": "2026-06-16", "iv_rank": 56.1, "atm_iv": 0.608, "close": 127.1},
+      {"date": "2026-06-23", "iv_rank": 58.9, "atm_iv": 0.618, "close": 128.9},
+      {"date": "2026-06-30", "iv_rank": 63.4, "atm_iv": 0.645, "close": 126.3},
+      {"date": "2026-07-01", "iv_rank": 65.8, "atm_iv": 0.656, "close": 129.8},
+      {"date": "2026-07-02", "iv_rank": 67.2, "atm_iv": 0.663, "close": 131.2},
+      {"date": "2026-07-05", "iv_rank": 72.4, "atm_iv": 0.582, "close": 135.7}
+    ],
+    "coverage": {"n_days": 252, "since": "2025-07-05"}
+  },
+  "SPY": {
+    "schema": "options_hub.vol/v1",
+    "asof": "2026-07-05T16:05:00Z",
+    "root": "SPY",
+    "iv_rank_252": 38.1,
+    "atm_iv": 0.162,
+    "iv_52w_hi": 0.481,
+    "iv_52w_lo": 0.088,
+    "rv20": 0.141,
+    "vrp": 0.021,
+    "term": [
+      {"dte": 4, "exp": "2026-07-11", "atm_iv": 0.178},
+      {"dte": 11, "exp": "2026-07-18", "atm_iv": 0.168},
+      {"dte": 18, "exp": "2026-07-25", "atm_iv": 0.165},
+      {"dte": 32, "exp": "2026-08-08", "atm_iv": 0.162},
+      {"dte": 46, "exp": "2026-08-22", "atm_iv": 0.161},
+      {"dte": 74, "exp": "2026-09-19", "atm_iv": 0.159},
+      {"dte": 137, "exp": "2026-11-21", "atm_iv": 0.158},
+      {"dte": 228, "exp": "2027-02-20", "atm_iv": 0.157}
+    ],
+    "smile": [
+      {
+        "exp": "2026-07-11",
+        "points": [
+          {"strike": 520, "call_iv": 0.198, "put_iv": 0.265},
+          {"strike": 525, "call_iv": 0.185, "put_iv": 0.248},
+          {"strike": 530, "call_iv": 0.174, "put_iv": 0.231},
+          {"strike": 535, "call_iv": 0.167, "put_iv": 0.217},
+          {"strike": 540, "call_iv": 0.162, "put_iv": 0.204},
+          {"strike": 545, "call_iv": 0.160, "put_iv": 0.193},
+          {"strike": 548, "call_iv": 0.159, "put_iv": 0.188},
+          {"strike": 551, "call_iv": 0.159, "put_iv": 0.184},
+          {"strike": 554, "call_iv": 0.160, "put_iv": 0.181},
+          {"strike": 558, "call_iv": 0.162, "put_iv": 0.178},
+          {"strike": 562, "call_iv": 0.166, "put_iv": 0.176},
+          {"strike": 566, "call_iv": 0.171, "put_iv": 0.175},
+          {"strike": 570, "call_iv": 0.178, "put_iv": 0.176},
+          {"strike": 575, "call_iv": 0.187, "put_iv": 0.178}
+        ]
+      },
+      {
+        "exp": "2026-07-18",
+        "points": [
+          {"strike": 520, "call_iv": 0.191, "put_iv": 0.252},
+          {"strike": 525, "call_iv": 0.180, "put_iv": 0.238},
+          {"strike": 530, "call_iv": 0.171, "put_iv": 0.224},
+          {"strike": 535, "call_iv": 0.165, "put_iv": 0.211},
+          {"strike": 540, "call_iv": 0.161, "put_iv": 0.199},
+          {"strike": 545, "call_iv": 0.159, "put_iv": 0.190},
+          {"strike": 548, "call_iv": 0.158, "put_iv": 0.186},
+          {"strike": 551, "call_iv": 0.158, "put_iv": 0.182},
+          {"strike": 554, "call_iv": 0.159, "put_iv": 0.179},
+          {"strike": 558, "call_iv": 0.161, "put_iv": 0.176},
+          {"strike": 562, "call_iv": 0.164, "put_iv": 0.174},
+          {"strike": 566, "call_iv": 0.169, "put_iv": 0.173},
+          {"strike": 570, "call_iv": 0.175, "put_iv": 0.173},
+          {"strike": 575, "call_iv": 0.183, "put_iv": 0.175}
+        ]
+      }
+    ],
+    "history": [
+      {"date": "2026-04-07", "iv_rank": 91.8, "atm_iv": 0.481, "close": 491.2},
+      {"date": "2026-04-14", "iv_rank": 82.4, "atm_iv": 0.421, "close": 503.8},
+      {"date": "2026-04-21", "iv_rank": 71.3, "atm_iv": 0.368, "close": 514.1},
+      {"date": "2026-04-28", "iv_rank": 62.8, "atm_iv": 0.318, "close": 521.7},
+      {"date": "2026-05-05", "iv_rank": 55.1, "atm_iv": 0.278, "close": 527.4},
+      {"date": "2026-05-12", "iv_rank": 49.7, "atm_iv": 0.249, "close": 531.2},
+      {"date": "2026-05-19", "iv_rank": 45.2, "atm_iv": 0.229, "close": 534.8},
+      {"date": "2026-05-26", "iv_rank": 42.1, "atm_iv": 0.214, "close": 538.1},
+      {"date": "2026-06-02", "iv_rank": 39.8, "atm_iv": 0.202, "close": 541.4},
+      {"date": "2026-06-09", "iv_rank": 37.4, "atm_iv": 0.191, "close": 544.8},
+      {"date": "2026-06-16", "iv_rank": 35.8, "atm_iv": 0.183, "close": 547.3},
+      {"date": "2026-06-23", "iv_rank": 36.2, "atm_iv": 0.184, "close": 549.1},
+      {"date": "2026-06-30", "iv_rank": 37.1, "atm_iv": 0.187, "close": 550.8},
+      {"date": "2026-07-01", "iv_rank": 37.4, "atm_iv": 0.188, "close": 551.9},
+      {"date": "2026-07-02", "iv_rank": 37.8, "atm_iv": 0.189, "close": 552.4},
+      {"date": "2026-07-05", "iv_rank": 38.1, "atm_iv": 0.162, "close": 554.2}
+    ],
+    "coverage": {"n_days": 252, "since": "2025-07-05"}
+  },
+  "QQQ": {
+    "schema": "options_hub.vol/v1",
+    "asof": "2026-07-05T16:05:00Z",
+    "root": "QQQ",
+    "iv_rank_252": null,
+    "atm_iv": 0.198,
+    "iv_52w_hi": 0.541,
+    "iv_52w_lo": 0.112,
+    "rv20": 0.168,
+    "vrp": 0.030,
+    "term": [
+      {"dte": 4, "exp": "2026-07-11", "atm_iv": 0.214},
+      {"dte": 11, "exp": "2026-07-18", "atm_iv": 0.204},
+      {"dte": 32, "exp": "2026-08-08", "atm_iv": 0.199},
+      {"dte": 74, "exp": "2026-09-19", "atm_iv": 0.195}
+    ],
+    "smile": [
+      {
+        "exp": "2026-07-11",
+        "points": [
+          {"strike": 450, "call_iv": 0.241, "put_iv": 0.298},
+          {"strike": 460, "call_iv": 0.224, "put_iv": 0.278},
+          {"strike": 468, "call_iv": 0.212, "put_iv": 0.261},
+          {"strike": 474, "call_iv": 0.205, "put_iv": 0.248},
+          {"strike": 478, "call_iv": 0.200, "put_iv": 0.238},
+          {"strike": 481, "call_iv": 0.198, "put_iv": 0.231},
+          {"strike": 484, "call_iv": 0.198, "put_iv": 0.226},
+          {"strike": 487, "call_iv": 0.199, "put_iv": 0.221},
+          {"strike": 490, "call_iv": 0.201, "put_iv": 0.218},
+          {"strike": 494, "call_iv": 0.206, "put_iv": 0.215},
+          {"strike": 498, "call_iv": 0.213, "put_iv": 0.214},
+          {"strike": 502, "call_iv": 0.221, "put_iv": 0.215},
+          {"strike": 506, "call_iv": 0.232, "put_iv": 0.218},
+          {"strike": 512, "call_iv": 0.247, "put_iv": 0.224}
+        ]
+      },
+      {
+        "exp": "2026-07-18",
+        "points": [
+          {"strike": 450, "call_iv": 0.233, "put_iv": 0.287},
+          {"strike": 460, "call_iv": 0.218, "put_iv": 0.269},
+          {"strike": 468, "call_iv": 0.207, "put_iv": 0.254},
+          {"strike": 474, "call_iv": 0.202, "put_iv": 0.243},
+          {"strike": 478, "call_iv": 0.199, "put_iv": 0.234},
+          {"strike": 481, "call_iv": 0.198, "put_iv": 0.228},
+          {"strike": 484, "call_iv": 0.198, "put_iv": 0.223},
+          {"strike": 487, "call_iv": 0.199, "put_iv": 0.219},
+          {"strike": 490, "call_iv": 0.201, "put_iv": 0.216},
+          {"strike": 494, "call_iv": 0.205, "put_iv": 0.213},
+          {"strike": 498, "call_iv": 0.211, "put_iv": 0.212},
+          {"strike": 502, "call_iv": 0.219, "put_iv": 0.213},
+          {"strike": 506, "call_iv": 0.229, "put_iv": 0.215},
+          {"strike": 512, "call_iv": 0.243, "put_iv": 0.221}
+        ]
+      }
+    ],
+    "history": [
+      {"date": "2026-04-07", "iv_rank": null, "atm_iv": 0.541, "close": 434.1},
+      {"date": "2026-05-05", "iv_rank": null, "atm_iv": 0.312, "close": 461.2},
+      {"date": "2026-06-02", "iv_rank": null, "atm_iv": 0.231, "close": 472.8},
+      {"date": "2026-07-05", "iv_rank": null, "atm_iv": 0.198, "close": 484.3}
+    ],
+    "coverage": {"n_days": 62, "since": "2026-05-03"}
+  }
+}

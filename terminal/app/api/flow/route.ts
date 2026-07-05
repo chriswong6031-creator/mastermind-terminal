@@ -9,6 +9,9 @@ const FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_fixture.js
 const TIDE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "tide_fixture.json");
 const TICKER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ticker_fixture.json");
 const DTE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "dte_fixture.json");
+const VOL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "vol_fixture.json");
+const GEX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gex_fixture.json");
+const SCREENER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "screener_fixture.json");
 
 // Bare-minimum in-memory cache so concurrent renders share one fetch.
 type CacheEntry = { data: Record<string, unknown>; ts: number };
@@ -83,9 +86,25 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     return all[root] ?? all[Object.keys(all)[0]] ?? {};
   }
-  // Stub placeholders for vol/gex/oi/hot — not built in H1.
-  if (f.startsWith("vol:") || f.startsWith("gex:") || f === "oi" || f === "hot") {
-    return { schema: `placeholder/${f}`, asof: new Date().toISOString(), coverage: { n_days: 0, since: "" } };
+  // Vol fixtures keyed by root.
+  if (f.startsWith("vol:")) {
+    const root = f.slice(4).toUpperCase();
+    const raw = await fs.readFile(VOL_FIXTURE_FILE, "utf8");
+    const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+    return all[root] ?? all[Object.keys(all)[0]] ?? {};
+  }
+  // GEX fixtures keyed by root.
+  if (f.startsWith("gex:")) {
+    const root = f.slice(4).toUpperCase();
+    const raw = await fs.readFile(GEX_FIXTURE_FILE, "utf8");
+    const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+    return all[root] ?? all[Object.keys(all)[0]] ?? {};
+  }
+  // Screener fixtures: "oi" and "hot" are sub-keys in screener_fixture.json.
+  if (f === "oi" || f === "hot") {
+    const raw = await fs.readFile(SCREENER_FIXTURE_FILE, "utf8");
+    const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+    return all[f] ?? {};
   }
   const raw = await fs.readFile(FIXTURE_FILE, "utf8");
   const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
