@@ -447,7 +447,7 @@ function MethodNotePopover({ lang, t }: { lang: string; t: (k: string, fb?: stri
             padding: "12px 14px", fontSize: 12, lineHeight: 1.6, color: "var(--text-2)",
           }}
         >
-          {lang === "zh" ? (t("tideMethodText", "") as any)[1] ?? "" : (t("tideMethodText", "") as any)[0] ?? t("tideMethodText", "")}
+          {t("tideMethodText", "")}
         </div>
       )}
     </div>
@@ -1790,7 +1790,7 @@ export default function OptionsHubView() {
               {/* Coverage banner when small */}
               {(oiData || hotData) && (
                 <div style={{ fontSize: 11, color: "var(--text-dim)", background: "rgba(41,98,255,.06)", border: "1px solid rgba(41,98,255,.18)", borderRadius: "var(--r-md)", padding: "6px 12px" }}>
-                  {lang === "zh" ? "ETF品种覆盖；个股覆盖扩展中" : "ETF universe; single names expanding 覆盖扩展中"}
+                  {lang === "zh" ? "ETF品种覆盖；个股覆盖扩展中" : "ETF universe; single names expanding"}
                 </div>
               )}
 
@@ -1799,7 +1799,7 @@ export default function OptionsHubView() {
                 <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
                     <span style={{ fontWeight: 650, fontSize: 14 }}>
-                      {lang === "zh" ? "热门合约" : "Hot Contracts 热门合约"}
+                      {lang === "zh" ? "热门合约" : "Hot Contracts"}
                     </span>
                     <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
                       <button
@@ -1862,10 +1862,10 @@ export default function OptionsHubView() {
                 <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
                     <span style={{ fontWeight: 650, fontSize: 14 }}>
-                      {lang === "zh" ? "持仓异动" : "OI Movers 持仓异动"}
+                      {lang === "zh" ? "持仓异动" : "OI Movers"}
                     </span>
                     <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 4 }}>
-                      {lang === "zh" ? "截至上一交易日" : "as of previous session 截至上一交易日"}
+                      {lang === "zh" ? "截至上一交易日" : "as of previous session"}
                     </span>
                   </div>
                   <div style={{ overflowX: "auto" }}>
@@ -1997,7 +1997,7 @@ export default function OptionsHubView() {
                             </>
                           ) : (
                             <div style={{ fontWeight: 600, fontSize: 15, color: "var(--muted)", marginTop: 4 }}>
-                              {lang === "zh" ? "基线积累中" : "warming 基线积累中"}
+                              {lang === "zh" ? "基线积累中" : "warming"}
                             </div>
                           )}
                         </div>
@@ -2214,7 +2214,7 @@ export default function OptionsHubView() {
                     <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
                       {lang === "zh"
                         ? "做市商持仓模型估算 — 模型推导，仅供参考"
-                        : "Dealer-positioning model estimate 做市商持仓模型估算 — model-derived, approximate"}
+                        : "Dealer-positioning model estimate — model-derived, approximate"}
                     </div>
 
                     {/* Coverage */}
