@@ -149,7 +149,7 @@ const MNY_BUCKETS: { key: MnyBucket; en: string; zh: string }[] = [
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function FlowView() {
-  const { lang } = useLang();
+  const { lang, setLang } = useLang();
   const t = useT();
 
   // Data state
@@ -278,6 +278,14 @@ export default function FlowView() {
             )}
           </span>
         )}
+        <button
+          className="chip"
+          style={{ marginLeft: 8 }}
+          onClick={() => setLang(lang === "zh" ? "en" : "zh")}
+          title={lang === "zh" ? "Switch to English" : "切换中文"}
+        >
+          {lang === "zh" ? "EN" : "中文"}
+        </button>
       </header>
 
       <AppNav />
