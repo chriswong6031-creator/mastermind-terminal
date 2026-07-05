@@ -19,6 +19,7 @@ Markets & sources (relative to MACRO_REPO):
     China   data/china_search/members.parquet     +  data/china_stocks/<T>.parquet
     HK      data/hk_breadth/constituents.parquet  +  data/hk_stocks/<T>.parquet
     Canada  data/canada_search/members.parquet    +  (no OHLC store yet)
+    Intl    data/intl_search/members.parquet      +  data/intl_stocks/<T>.parquet (OHLC via backfill_ohlc.py)
 
 Usage:
     MACRO_REPO=/path/to/macro python ingest/build_universe.py            # manifest only
@@ -49,6 +50,10 @@ MACRO = Path(os.environ.get("MACRO_REPO", "/Users/chriswong/Documents/Cluade/Mac
 MAX_BARS = 3900                                                  # ~15y daily (deep history)
 EXCH_CACHE = ROOT / "ingest" / ".polygon_exchanges.json"
 
+# Schema sentinel for the exchange cache: must cover CS + ADRC to give ADRs NYSE/NASDAQ labels.
+# Absent or mismatched sentinel triggers a fresh two-type fetch (auto-heals old CS-only cache).
+_EXCH_SCHEMA = "cs+adrc-v1"
+
 
 # ---------------------------------------------------------------- market labels
 def _mkt_cn(t: str) -> str:
@@ -56,15 +61,16 @@ def _mkt_cn(t: str) -> str:
 
 
 # (key, members parquet, english-name column, per-name OHLC dir, market-label fn)
-# For Intl the market-label fn receives (ticker, meta_row) but the tuple shape only passes
-# the ticker; we read the `market` column from the parquet directly in the main loop for Intl.
-# A sentinel lambda returning None triggers the per-row market-column lookup below.
+# For Intl, mkt_fn=None signals the loop to read the `market` column from the parquet row
+# (falls back to exch.get(tk, "US") if the column is absent), preserving country-level
+# granularity without changing the tuple shape.
 STORES = [
     ("US",     "data/breadth/constituents.parquet",    "name",    "data/stocks",        None),
     ("China",  "data/china_search/members.parquet",     "name_en", "data/china_stocks",  _mkt_cn),
     ("HK",     "data/hk_breadth/constituents.parquet",  "name",    "data/hk_stocks",     lambda t: "HKEX"),
     ("Canada", "data/canada_search/members.parquet",    "name",    "data/canada_stocks", lambda t: "TSX"),
-    # International (998 non-CN/HK/CA cross-listed names; OHLC via yfinance backfill_ohlc.py)
+    # International: 998 cross-listed names; OHLC fetched by backfill_ohlc.py via yfinance.
+    # mkt label is read from the parquet's `market` column (e.g. "Japan", "United Kingdom").
     ("Intl",   "data/intl_search/members.parquet",      "name",    "data/intl_stocks",   None),
 ]
 
@@ -131,33 +137,63 @@ def _polygon_key() -> str | None:
 
 
 def us_exchange_map() -> dict[str, str]:
-    """ticker -> 'NYSE'/'NASDAQ'/... from Polygon reference (cached). {} on failure."""
+    """ticker -> 'NYSE'/'NASDAQ'/... from Polygon reference (cached). {} on failure.
+
+    Fetches BOTH CS and ADRC types so that US-listed foreign companies (ADRs such as
+    NIO/TSM/BIDU/LI/XPEV) receive correct NYSE/NASDAQ labels rather than the generic
+    'US' fallback.  The cache carries a __schema__='cs+adrc-v1' sentinel; a missing or
+    mismatched sentinel forces a fresh two-type fetch (auto-heals the box's CS-only cache).
+    Both type passes must succeed before the cache is written (all-or-nothing).
+    """
     if EXCH_CACHE.exists():
         try:
-            return json.loads(EXCH_CACHE.read_text())
+            raw = json.loads(EXCH_CACHE.read_text())
+            # Strip sentinel key on read; only use cache if schema matches
+            sentinel = raw.get("__schema__")
+            if sentinel == _EXCH_SCHEMA:
+                return {k: v for k, v in raw.items() if k != "__schema__"}
+            else:
+                print(f"  [exch] cache schema mismatch ({sentinel!r} != {_EXCH_SCHEMA!r}) — refetch")
         except Exception:
             pass
+
     key = _polygon_key()
     if not key:
         print("  [exch] no POLYGON_API_KEY — US names get the generic 'US' tag")
         return {}
+
     out: dict[str, str] = {}
-    url = ("https://api.polygon.io/v3/reference/tickers?market=stocks&active=true"
-           f"&type=CS&limit=1000&apiKey={key}")
-    pages = 0
+    cs_count = 0
+    adrc_count = 0
     try:
-        while url and pages < 40:
-            with urllib.request.urlopen(url, timeout=30) as r:
-                payload = json.loads(r.read())
-            for t in payload.get("results", []):
-                tk, mic = t.get("ticker"), t.get("primary_exchange")
-                if tk and mic:
-                    out[tk] = MIC_LABEL.get(mic, "US")
-            nxt = payload.get("next_url")
-            url = f"{nxt}&apiKey={key}" if nxt else None
-            pages += 1
-        EXCH_CACHE.write_text(json.dumps(out))
-        print(f"  [exch] polygon reference: {len(out)} US tickers mapped ({pages} pages)")
+        # Both type passes; write cache only after BOTH succeed (all-or-nothing).
+        for tk_type in ("CS", "ADRC"):
+            url = ("https://api.polygon.io/v3/reference/tickers?market=stocks&active=true"
+                   f"&type={tk_type}&limit=1000&apiKey={key}")
+            pages = 0
+            type_count = 0
+            while url and pages < 40:
+                with urllib.request.urlopen(url, timeout=30) as r:
+                    payload = json.loads(r.read())
+                for t in payload.get("results", []):
+                    tk, mic = t.get("ticker"), t.get("primary_exchange")
+                    if tk and mic:
+                        out[tk] = MIC_LABEL.get(mic, "US")
+                        type_count += 1
+                nxt = payload.get("next_url")
+                url = f"{nxt}&apiKey={key}" if nxt else None
+                pages += 1
+            print(f"  [exch/{tk_type}] {type_count} tickers ({pages} pages)")
+            if tk_type == "CS":
+                cs_count = type_count
+            else:
+                adrc_count = type_count
+
+        # Write cache with schema sentinel — only after BOTH passes succeed
+        to_write = dict(out)
+        to_write["__schema__"] = _EXCH_SCHEMA
+        EXCH_CACHE.write_text(json.dumps(to_write))
+        print(f"  [exch] polygon reference: {len(out)} US tickers mapped (CS={cs_count}, ADRC={adrc_count})")
     except Exception as e:
         print(f"  [exch] polygon fetch failed ({e}); falling back to 'US' tag")
         return {}
@@ -226,9 +262,9 @@ def main(argv: list[str]) -> None:
                 if mkt_fn is not None:
                     mkt = mkt_fn(tk)
                 elif key == "Intl" and "market" in meta.columns:
-                    # Intl parquet carries a `market` column with full country names
-                    # (e.g. "Japan", "United Kingdom") — use it directly as the mkt label.
-                    mkt = _clean_name(meta.at[tk, "market"], tk)
+                    # Intl parquet carries a `market` column (e.g. "Japan", "United Kingdom").
+                    # Fall back to exch.get(tk, "US") if the value is missing/blank.
+                    mkt = _clean_name(meta.at[tk, "market"], None) or exch.get(tk, "US")
                 else:
                     mkt = exch.get(tk, "US")
                 symbols[tk] = {"name": name, "sec": "Equities", "col": color_for(tk), "mkt": mkt}

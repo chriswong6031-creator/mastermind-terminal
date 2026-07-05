@@ -94,7 +94,7 @@ def fetch_polygon(ticker: str) -> list[list]:
 
 
 # All Yahoo Finance exchange suffixes that must be kept intact (dot preserved).
-# US class shares (BRK.B → BRK-B) hit the .replace() branch; everything else here
+# US class shares (BRK.B → BRK-B) hit the .replace() branch; everything here
 # passes through verbatim so Yahoo resolves the correct exchange.
 _YF_SUFFIXES = (
     ".HK", ".TO", ".SS", ".SZ",            # already handled; kept for completeness
@@ -104,7 +104,7 @@ _YF_SUFFIXES = (
     ".ST", ".VI", ".IR", ".OL", ".LS",     # Stockholm / Vienna / Dublin / Oslo / Lisbon
 )
 
-# All 20 intl suffixes (excludes the primary HK/CA/CN group above) for market routing.
+# All 20 intl suffixes (excludes the primary HK/CA/CN group) for market_of() routing.
 _INTL_SUFFIXES = (
     ".T", ".KS", ".TW", ".NS", ".AX",
     ".L", ".SW", ".DE", ".MC", ".PA",
