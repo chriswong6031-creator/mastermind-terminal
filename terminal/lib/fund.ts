@@ -92,6 +92,9 @@ export interface RatiosCurrent {
   ps: number | null;
   pb: number | null;
   ev_ebitda: number | null;
+  ev_sales: number | null;
+  ev_ebit: number | null;
+  p_fcf: number | null;
   div_yield: number | null;
   payout: number | null;
   gross_margin: number | null;

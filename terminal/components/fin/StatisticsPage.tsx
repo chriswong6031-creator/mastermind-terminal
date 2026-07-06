@@ -105,6 +105,9 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
     { label: pick(!!zh, "Price to cash flow ratio", "市现率"), values: fund.ratios?.pcf ?? [], current: null },
     { label: pick(!!zh, "Enterprise value to EBITDA", "EV/EBITDA"), values: fund.ratios?.ev_ebitda ?? [], current: cur.ev_ebitda },
     { label: pick(!!zh, "Price to earnings forward", "预期市盈率"), values: [], current: cur.pe_fwd },
+    { label: pick(!!zh, "EV to sales", "EV/销售额"), values: [], current: cur.ev_sales },
+    { label: pick(!!zh, "EV to EBIT", "EV/息税前利润"), values: [], current: cur.ev_ebit },
+    { label: pick(!!zh, "Price to FCF", "价格/自由现金流"), values: [], current: cur.p_fcf },
   ]
 
   // ── Profitability rows from ratios.current (no period series in v1) ──
