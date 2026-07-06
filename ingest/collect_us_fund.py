@@ -1,0 +1,318 @@
+"""Collect raw US/ADR fundamentals from yfinance into a per-symbol cache the fund emitter
+(gen_fund_us.py) reads. Companion to collect_cn_deep.py / collect_hk_deep.py — same house style
+(macro venv, resumable, threaded, jittered, Ctrl-C-safe, --only/--limit flags).
+
+Universe = the live Terminal manifest US/ADR symbols: pulled once from
+https://app.mastermind-x.com/data/manifest.json (cached to data/us_fund/_manifest.json) and filtered
+to US-home markets (mkt in NYSE/NASDAQ/AMEX/US/Cboe) — i.e. everything that is NOT .SS/.SZ/.HK/.TO/-USD.
+
+Per symbol we dump the RAW yfinance payload (no interpretation — that's gen_fund_us.py's job) to
+    <Macro Dashboard>/data/us_fund/<SYM>.json
+DataFrames are serialized as {columns, index, data} records with ISO dates so the emitter can rebuild
+them without pandas quirks; Series (dividends/splits) as {index, values}; dicts/scalars verbatim.
+
+Every per-field fetch is wrapped so one broken endpoint (e.g. NIO's missing quarterly cashflow) never
+loses the whole symbol — the field lands as null and we log it. Resumable via --stale-days: a cache
+file newer than N days is skipped. Threaded (≤4, yfinance-etiquette) with ~1s jitter per symbol.
+
+Run with the macro venv:
+    "<Macro Dashboard>/.venv/bin/python" ingest/collect_us_fund.py \
+        [--only AAPL,ZS,NVDA] [--limit N] [--stale-days 3] [--workers 4] [--force]
+"""
+from __future__ import annotations
+
+import json
+import os
+import random
+import sys
+import time
+import datetime as dt
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+import pandas as pd
+
+MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+OUT = MACRO / "data" / "us_fund"
+MANIFEST_URL = "https://app.mastermind-x.com/data/manifest.json"
+MANIFEST_CACHE = OUT / "_manifest.json"
+TX_INDEX = OUT / "_tx_index.json"
+
+# US-home exchange labels in the manifest's `mkt` field (everything else is a foreign/crypto market)
+US_MKTS = {"NYSE", "NASDAQ", "AMEX", "US", "Cboe", "NYSEARCA", "BATS", "OTC"}
+NON_US_SUFFIX = (".SS", ".SZ", ".HK", ".TO")
+
+
+# ───────────────────────────── universe ─────────────────────────────
+def load_manifest() -> dict:
+    """Fetch the live manifest once, cache to disk; fall back to the cache if the fetch fails."""
+    OUT.mkdir(parents=True, exist_ok=True)
+    try:
+        with urllib.request.urlopen(MANIFEST_URL, timeout=60) as r:
+            m = json.loads(r.read())
+        MANIFEST_CACHE.write_text(json.dumps(m))
+        return m
+    except Exception as exc:  # noqa: BLE001
+        print(f"  manifest fetch failed ({exc}); using cache", flush=True)
+        if MANIFEST_CACHE.exists():
+            return json.loads(MANIFEST_CACHE.read_text())
+        sys.exit("no manifest (fetch failed and no cache)")
+
+
+def us_universe() -> list[str]:
+    m = load_manifest()
+    syms = m.get("symbols") or {}
+    out = set()
+    for sym, row in syms.items():
+        if sym.endswith(NON_US_SUFFIX) or sym.endswith("-USD"):
+            continue
+        mkt = (row or {}).get("mkt")
+        if mkt in US_MKTS:
+            out.add(sym)
+    # Union in transcript-indexed names: collect_transcripts.py filters the manifest by suffix only
+    # (no mkt whitelist) and reads the LOCAL repo manifest, so its index can carry names this filter
+    # would drop — and a transcript with no fund.json is unreachable in the UI (2026-07 audit: 248
+    # such orphans after a rate-limited bulk run left them permanently cacheless).
+    if TX_INDEX.exists():
+        try:
+            tx = json.loads(TX_INDEX.read_text())
+            out.update(s for s in tx if not (s.endswith(NON_US_SUFFIX) or s.endswith("-USD")))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  tx-index read failed ({exc}); universe from manifest only", flush=True)
+    return sorted(out)
+
+
+# ───────────────────────────── serialization helpers ─────────────────────────────
+def _iso(v):
+    """Timestamp/date → ISO date string; pass everything else through."""
+    if isinstance(v, (pd.Timestamp, dt.datetime, dt.date)):
+        try:
+            return pd.Timestamp(v).strftime("%Y-%m-%d")
+        except Exception:
+            return str(v)
+    return v
+
+
+def _clean(v):
+    """NaN/NaT → None; numpy scalar → python; Timestamp → ISO; leave the rest."""
+    if v is None:
+        return None
+    if isinstance(v, (pd.Timestamp, dt.datetime, dt.date)):
+        return _iso(v)
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(v, "item"):          # numpy scalar
+        try:
+            return v.item()
+        except Exception:
+            pass
+    return v
+
+
+def df_to_records(df) -> dict | None:
+    """DataFrame → {columns:[ISO], index:[str], data:[[...]]}. Statement frames have datetime columns
+    (period-ends) and string index (line items); we ISO-ify both axes and NaN→null the cells."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+    cols = [str(_iso(c)) for c in df.columns]
+    index = [str(_iso(i)) for i in df.index]
+    data = [[_clean(x) for x in row] for row in df.values.tolist()]
+    return {"columns": cols, "index": index, "data": data}
+
+
+def series_to_obj(s) -> dict | None:
+    """Series → {index:[ISO], values:[float]} (dividends/splits keyed by ex-date)."""
+    if not isinstance(s, pd.Series) or s.empty:
+        return None
+    return {"index": [str(_iso(i)) for i in s.index], "values": [_clean(v) for v in s.values.tolist()]}
+
+
+def dict_clean(d) -> dict | None:
+    """calendar / analyst_price_targets / info dicts → JSON-safe, dates ISO-ified."""
+    if not isinstance(d, dict) or not d:
+        return None
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, list):
+            out[str(k)] = [_clean(x) for x in v]
+        else:
+            out[str(k)] = _clean(v)
+    return out
+
+
+# ───────────────────────────── per-symbol fetch ─────────────────────────────
+# field name -> (yfinance attr, serializer). Each is fetched independently and null on failure.
+DF_FIELDS = {
+    "income_stmt": "income_stmt",
+    "quarterly_income_stmt": "quarterly_income_stmt",
+    "balance_sheet": "balance_sheet",
+    "quarterly_balance_sheet": "quarterly_balance_sheet",
+    "cashflow": "cashflow",
+    "quarterly_cashflow": "quarterly_cashflow",
+    "earnings_dates": "earnings_dates",
+    "earnings_estimate": "earnings_estimate",
+    "revenue_estimate": "revenue_estimate",
+    "eps_trend": "eps_trend",
+    "recommendations_summary": "recommendations_summary",
+    "institutional_holders": "institutional_holders",
+    "major_holders": "major_holders",
+}
+SERIES_FIELDS = {"dividends": "dividends", "splits": "splits"}
+DICT_FIELDS = {"calendar": "calendar", "analyst_price_targets": "analyst_price_targets"}
+
+
+def _grab(errs: list, name: str, fn):
+    """Run one field fetch; on any exception log to errs and return None (never lose the symbol)."""
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001
+        errs.append(f"{name}:{type(exc).__name__}")
+        return None
+
+
+# INFO_KEYS: only the fields gen_fund_us.py consumes — keeps the cache small (info is ~180 keys).
+INFO_KEYS = (
+    "financialCurrency", "currency", "quoteType", "longName", "shortName",
+    "marketCap", "sharesOutstanding", "floatShares", "impliedSharesOutstanding",
+    "heldPercentInstitutions", "heldPercentInsiders", "beta",
+    "fullTimeEmployees", "website", "sector", "industry", "longBusinessSummary",
+    "country", "city", "state", "address1", "phone",
+    "trailingPE", "forwardPE", "priceToBook", "priceToSalesTrailing12Months",
+    "enterpriseValue", "enterpriseToEbitda", "enterpriseToRevenue", "trailingPegRatio",
+    "dividendYield", "dividendRate", "payoutRatio", "lastDividendValue", "lastDividendDate",
+    "exDividendDate", "grossMargins", "profitMargins", "operatingMargins",
+    "returnOnEquity", "returnOnAssets", "debtToEquity", "currentRatio", "quickRatio",
+    "totalRevenue", "ebitda", "freeCashflow", "operatingCashflow",
+    "targetMeanPrice", "targetHighPrice", "targetLowPrice", "targetMedianPrice",
+    "numberOfAnalystOpinions", "recommendationKey", "recommendationMean", "averageAnalystRating",
+    "earningsTimestamp", "mostRecentQuarter", "lastFiscalYearEnd", "nextFiscalYearEnd",
+    "currentPrice", "regularMarketPrice", "previousClose",
+)
+
+
+def fetch_one(sym: str) -> dict | None:
+    """Full raw payload for one symbol, robust to any per-field exception."""
+    import yfinance as yf  # local import so a missing dep fails only inside the worker
+    t = yf.Ticker(sym)
+    errs: list[str] = []
+
+    info_raw = _grab(errs, "info", lambda: t.info) or {}
+    info = {k: _clean(info_raw.get(k)) for k in INFO_KEYS if k in info_raw}
+
+    payload: dict = {
+        "ticker": sym,
+        "fetched_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "info": info,
+    }
+    for key, attr in DF_FIELDS.items():
+        payload[key] = _grab(errs, key, lambda a=attr: df_to_records(getattr(t, a)))
+    for key, attr in SERIES_FIELDS.items():
+        payload[key] = _grab(errs, key, lambda a=attr: series_to_obj(getattr(t, a)))
+    for key, attr in DICT_FIELDS.items():
+        payload[key] = _grab(errs, key, lambda a=attr: dict_clean(getattr(t, a)))
+
+    payload["_errors"] = errs
+    # A symbol with nothing but errors and no info is a dead fetch — signal skip so we don't cache junk.
+    got_any = bool(info) or any(payload.get(k) for k in list(DF_FIELDS) + list(SERIES_FIELDS) + list(DICT_FIELDS))
+    if not got_any:
+        return None
+    return payload
+
+
+# ───────────────────────────── driver ─────────────────────────────
+def atomic_write(dest: Path, text: str) -> None:
+    """Write via tmp+rename so a Ctrl-C mid-write never leaves a truncated cache file that would
+    pass the freshness check and get skipped on the next run."""
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, dest)
+
+
+def is_fresh(path: Path, stale_days: int) -> bool:
+    if stale_days <= 0 or not path.exists():
+        return False
+    age = time.time() - path.stat().st_mtime
+    return age < stale_days * 86400
+
+
+def main(argv: list[str]) -> None:
+    only = None
+    limit = 0
+    stale_days = 3
+    workers = 4
+    force = "--force" in argv
+    if "--only" in argv:
+        only = [s.strip().upper() for s in argv[argv.index("--only") + 1].split(",") if s.strip()]
+    if "--limit" in argv:
+        limit = int(argv[argv.index("--limit") + 1])
+    if "--stale-days" in argv:
+        stale_days = int(argv[argv.index("--stale-days") + 1])
+    if "--workers" in argv:
+        workers = max(1, min(4, int(argv[argv.index("--workers") + 1])))
+    if force:
+        stale_days = 0
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    if only:
+        want = only
+    else:
+        want = us_universe()
+    if limit:
+        want = want[:limit]
+
+    todo = [s for s in want if not is_fresh(OUT / f"{s}.json", stale_days)]
+    print(f"us_fund: {len(want)} US/ADR names, {len(todo)} to fetch "
+          f"(workers={workers}, stale_days={stale_days})", flush=True)
+
+    ok = empty = 0
+    done = 0
+    interrupted = False
+
+    def worker(sym: str):
+        # jitter BEFORE the (thread-shared) network burst to spread the yfinance load
+        time.sleep(random.uniform(0.4, 1.4))
+        return sym, fetch_one(sym)
+
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(worker, s): s for s in todo}
+            for fut in as_completed(futs):
+                sym = futs[fut]
+                done += 1
+                try:
+                    _, payload = fut.result()
+                except Exception as exc:  # noqa: BLE001
+                    payload = None
+                    print(f"  ERR {sym}: {type(exc).__name__} {exc}", flush=True)
+                if payload:
+                    atomic_write(OUT / f"{sym}.json", json.dumps(payload, ensure_ascii=False))
+                    ok += 1
+                    if payload.get("_errors"):
+                        print(f"  {sym}: ok (partial — {','.join(payload['_errors'][:4])})", flush=True)
+                else:
+                    empty += 1
+                    print(f"  {sym}: empty (no data)", flush=True)
+                if done % 25 == 0 or done == len(todo):
+                    print(f"  progress {done}/{len(todo)} — {ok} ok, {empty} empty", flush=True)
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\ninterrupted — cached symbols are safe, rerun to resume", flush=True)
+
+    print(f"done: {ok} written, {empty} empty, {len(want) - len(todo)} skipped fresh"
+          f"{' (INTERRUPTED)' if interrupted else ''}", flush=True)
+
+    # Universe names that STILL have no cache file are invisible to cache-scanning repair tooling
+    # (an empty fetch writes nothing) — report them so a rate-limit storm never hides a gap again.
+    if not only and not interrupted:
+        gaps = [s for s in want if not (OUT / f"{s}.json").exists()]
+        if gaps:
+            print(f"  WARNING: {len(gaps)} universe names have no cache file after this run: "
+                  f"{' '.join(gaps[:40])}{' …' if len(gaps) > 40 else ''}", flush=True)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
