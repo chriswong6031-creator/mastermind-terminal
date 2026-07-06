@@ -48,6 +48,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
         </div>
         <div className="panel">
           <div className="ph">{t("positions")}<span className="sub">{t("clickRowOpen")}</span></div>
+          <div className="tbl-scroll">
           <table className="ptable">
             <thead><tr><th>{t("symbol")}</th><th>{t("colLast")}</th><th>{t("day")}</th><th>{t("signalCol")}</th><th>{t("regime")}</th><th>{t("winRate")}</th><th>{t("profitFactor")}</th><th>{t("cagr")}</th><th>{t("suggestedTilt")}</th></tr></thead>
             <tbody>
@@ -72,6 +73,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
                 ); })}
             </tbody>
           </table>
+          </div>
         </div>
       </div></main>
       <div className="ticker"><span className="lbl">{t("convictionBook")}</span><span style={{ color: "var(--text-2)" }}>{t("convictionFoot").replace("{n}", String(buys.length))}</span></div>

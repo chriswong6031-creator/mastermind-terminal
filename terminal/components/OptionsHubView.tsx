@@ -1404,7 +1404,7 @@ export default function OptionsHubView() {
                   );
                 })}
                 {groupFilter && !drillTicker && (
-                  <button className="chip" onClick={() => setGroupFilter("")} style={{ marginLeft: 4, color: "var(--muted)" }}>✕</button>
+                  <button className="chip" onClick={() => setGroupFilter("")} style={{ marginLeft: 4, color: "var(--muted)" }} aria-label={t("clearFilter")} title={t("clearFilter")}>✕</button>
                 )}
               </div>
 
@@ -1436,7 +1436,7 @@ export default function OptionsHubView() {
 
                 {/* Min premium */}
                 <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  <span style={{ color: "var(--muted)", fontSize: 11, whiteSpace: "nowrap" }}>{t("minPrem", "Min prem")}</span>
+                  <span className="hub-cap">{t("minPrem", "Min prem")}</span>
                   <select
                     value={minPrem}
                     onChange={(e) => setMinPrem(Number(e.target.value))}
@@ -1449,7 +1449,7 @@ export default function OptionsHubView() {
 
                 {/* DTE buckets */}
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ color: "var(--muted)", fontSize: 11, whiteSpace: "nowrap" }}>{t("dte", "DTE")}</span>
+                  <span className="hub-cap">{t("dte", "DTE")}</span>
                   <button className={`chip${dteMidOn ? " on" : ""}`} style={{ height: 26, fontSize: 11 }} onClick={toggleDteMid} title={lang === "zh" ? "8–90天快选" : "8–90d preset"}>8–90d</button>
                   {DTE_BUCKETS.map((b) => (
                     <button
@@ -1465,7 +1465,7 @@ export default function OptionsHubView() {
 
                 {/* Moneyness */}
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ color: "var(--muted)", fontSize: 11, whiteSpace: "nowrap" }}>{t("mny", "Mny")}</span>
+                  <span className="hub-cap">{t("mny", "Mny")}</span>
                   {MNY_BUCKETS.map((b) => (
                     <button
                       key={b.key}
@@ -1484,7 +1484,7 @@ export default function OptionsHubView() {
                   placeholder={t("tapeTickerPlaceholder", "Ticker…")}
                   value={tapeTickerSearch}
                   onChange={(e) => { setTapeTickerSearch(e.target.value); setDrillTicker(null); }}
-                  style={{ height: 28, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)", outline: "none", width: 110 }}
+                  style={{ height: 28, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)", width: 110 }}
                 />
 
                 {/* Reset */}
@@ -1523,7 +1523,7 @@ export default function OptionsHubView() {
                         )}
                       </>
                     )}
-                    <button className="chip" style={{ marginLeft: "auto", height: 24, fontSize: 11, color: "var(--muted)" }} onClick={() => setDrillTicker(null)}>✕</button>
+                    <button className="chip" style={{ marginLeft: "auto", height: 24, fontSize: 11, color: "var(--muted)" }} onClick={() => setDrillTicker(null)} aria-label={t("clearFilter")} title={t("clearFilter")}>✕</button>
                   </div>
                 </div>
               )}
@@ -1845,7 +1845,7 @@ export default function OptionsHubView() {
                       width: "100%", height: 30, padding: "0 10px",
                       borderRadius: "var(--r-md)", background: "var(--inset)",
                       border: "1px solid var(--line)", color: "var(--text)",
-                      font: "13px var(--font-ui)", outline: "none",
+                      font: "13px var(--font-ui)",
                     }}
                   />
                 </div>
@@ -1907,7 +1907,7 @@ export default function OptionsHubView() {
                       }}
                     >
                       <div>
-                        <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>
+                        <div className="hub-sec">
                           {lang === "zh" ? tickerData.group_zh : tickerData.group}
                         </div>
                         <div style={{ fontWeight: 700, fontSize: 22 }}>{tickerData.root}</div>
@@ -1921,7 +1921,7 @@ export default function OptionsHubView() {
                         },
                       ].map((kv) => (
                         <div key={kv.lk}>
-                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>
+                          <div className="hub-sec">
                             {t(kv.lk, kv.lb)}
                           </div>
                           <div style={{ fontWeight: 650, fontSize: 15, color: (kv as any).color ?? "var(--text)", fontVariantNumeric: "tabular-nums" }}>
@@ -1986,7 +1986,7 @@ export default function OptionsHubView() {
                     {/* Expiry bars */}
                     {tickerData.expiries.length > 0 && (
                       <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 14px" }}>
-                        <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                        <div className="hub-stat">
                           {t("tickersExpBars", "By Expiry")}
                         </div>
                         <ExpiryBars expiries={tickerData.expiries} lang={lang} />
@@ -2180,7 +2180,7 @@ export default function OptionsHubView() {
                     placeholder={lang === "zh" ? "搜索代码…" : "Search ticker…"}
                     value={volSearch}
                     onChange={(e) => setVolSearch(e.target.value)}
-                    style={{ width: "100%", height: 30, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)", outline: "none" }}
+                    style={{ width: "100%", height: 30, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)" }}
                   />
                 </div>
                 <div style={{ flex: 1, overflow: "auto" }}>
@@ -2278,7 +2278,7 @@ export default function OptionsHubView() {
                           { key: "volVrp", label: "VRP (IV-RV)", v: ((volData.vrp) * 100).toFixed(1) + "%", color: volData.vrp > 0 ? "var(--down)" : "var(--up)" },
                         ].map((kv) => (
                           <div key={kv.key}>
-                            <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>
+                            <div className="hub-sec">
                               {t(kv.key, kv.label)}
                             </div>
                             <div style={{ fontWeight: 650, fontSize: 15, color: (kv as any).color ?? "var(--text)", fontVariantNumeric: "tabular-nums" }}>
@@ -2291,8 +2291,8 @@ export default function OptionsHubView() {
 
                     {/* Term structure chart */}
                     {volData.term.length >= 2 && (
-                      <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 16px" }}>
-                        <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                      <div className="hub-card">
+                        <div className="hub-stat">
                           {t("volTermTitle", "Term Structure")}
                         </div>
                         <TermStructureChart term={volData.term} />
@@ -2301,8 +2301,8 @@ export default function OptionsHubView() {
 
                     {/* Volatility smile */}
                     {volData.smile.length > 0 && (
-                      <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 16px" }}>
-                        <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                      <div className="hub-card">
+                        <div className="hub-stat">
                           {t("volSmileTitle", "Volatility Smile")}
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -2330,8 +2330,8 @@ export default function OptionsHubView() {
 
                     {/* IV Rank history sparkline */}
                     {volData.history.length >= 2 && (
-                      <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 16px" }}>
-                        <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                      <div className="hub-card">
+                        <div className="hub-stat">
                           {t("volHistTitle", "IV Rank History (90 sessions)")}
                         </div>
                         <IvRankHistory history={volData.history} />
@@ -2361,7 +2361,7 @@ export default function OptionsHubView() {
                     placeholder={lang === "zh" ? "搜索代码…" : "Search ticker…"}
                     value={gexSearch}
                     onChange={(e) => setGexSearch(e.target.value)}
-                    style={{ width: "100%", height: 30, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)", outline: "none" }}
+                    style={{ width: "100%", height: 30, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)" }}
                   />
                 </div>
                 <div style={{ flex: 1, overflow: "auto" }}>
@@ -2432,32 +2432,32 @@ export default function OptionsHubView() {
                     {/* GEX hero stats */}
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 20, border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 18px" }}>
                       <div>
-                        <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{t("gexNetGex", "Net GEX (bn)")}</div>
+                        <div className="hub-sec">{t("gexNetGex", "Net GEX (bn)")}</div>
                         <div style={{ fontWeight: 700, fontSize: 22, color: "var(--text)" }}>
                           {gexData.net_gex_bn >= 0 ? "+" : ""}{gexData.net_gex_bn.toFixed(2)}B
                         </div>
                       </div>
                       {gexData.spot_ref != null && (
                         <div>
-                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{t("volSpotRef", "Spot ref")}</div>
+                          <div className="hub-sec">{t("volSpotRef", "Spot ref")}</div>
                           <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums" }}>{gexData.spot_ref.toFixed(2)}</div>
                         </div>
                       )}
                       {gexData.gamma_flip != null && (
                         <div>
-                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{lang === "zh" ? "伽马翻转" : "Gamma Flip"}</div>
+                          <div className="hub-sec">{lang === "zh" ? "伽马翻转" : "Gamma Flip"}</div>
                           <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--warn)" }}>{gexData.gamma_flip.toFixed(1)}</div>
                         </div>
                       )}
                       {gexData.call_wall != null && (
                         <div>
-                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{lang === "zh" ? "认购集中" : "Call concentration"}</div>
+                          <div className="hub-sec">{lang === "zh" ? "认购集中" : "Call concentration"}</div>
                           <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>{gexData.call_wall.toFixed(1)}</div>
                         </div>
                       )}
                       {gexData.put_wall != null && (
                         <div>
-                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{lang === "zh" ? "认沽集中" : "Put concentration"}</div>
+                          <div className="hub-sec">{lang === "zh" ? "认沽集中" : "Put concentration"}</div>
                           <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>{gexData.put_wall.toFixed(1)}</div>
                         </div>
                       )}
@@ -2489,8 +2489,8 @@ export default function OptionsHubView() {
                     </div>
 
                     {/* Strike ladder */}
-                    <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 16px" }}>
-                      <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                    <div className="hub-card">
+                      <div className="hub-stat">
                         {t("gexLadderTitle", "Strike Ladder")}
                         <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 8 }}>
                           {lang === "zh" ? "（做市商净头寸方向）" : "(dealer net positioning direction)"}
@@ -2508,8 +2508,8 @@ export default function OptionsHubView() {
                     </div>
 
                     {/* By-expiry bars */}
-                    <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 16px" }}>
-                      <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                    <div className="hub-card">
+                      <div className="hub-stat">
                         {t("gexByExpTitle", "By Expiry")}
                       </div>
                       <GexExpiryBars rows={gexData.by_expiry} greek={gexGreek} lang={lang} />

@@ -170,11 +170,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // mobile + fullscreen + expanded-analysis state
   const [fullChart, setFullChart] = useState(false);
   const [drawer, setDrawer] = useState(false);
-  const [railW, setRailW] = useState<number>(() => {
-    if (typeof window === "undefined") return 360;
-    const saved = Number(localStorage.getItem("mm.railW"));
-    return Number.isFinite(saved) ? Math.min(520, Math.max(300, saved)) : 360;
-  });
+  // SSR-consistent default; the persisted width is read after mount (below) so the server- and
+  // client-rendered `--rail-w` style always agree on the first paint (no hydration mismatch).
+  const [railW, setRailW] = useState<number>(360);
   // only surface a "back" affordance when the user actually arrived from the Macro Dashboard — for direct
   // visitors a back button would just throw them onto whatever unrelated site they were last on.
   const { fromMacro, macroHref } = useFromMacro();
@@ -207,6 +205,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive && m) setMan(m); }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
     setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) });
+    { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
       try {
@@ -703,7 +702,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             <div className="pophost">
               <div className="seg">
                 {favTF.map((t) => <button key={t} className={tf === t ? "on" : ""} disabled={!FUNCTIONAL.has(t)} style={!FUNCTIONAL.has(t) ? { opacity: .4 } : {}} onClick={() => FUNCTIONAL.has(t) && setTf(t)}>{t}</button>)}
-                <button onClick={(e) => { e.stopPropagation(); const willOpen = !tfOpen; closeAll(); setTfOpen(willOpen); }} style={{ padding: "0 6px" }}>▾</button>
+                <button onClick={(e) => { e.stopPropagation(); const willOpen = !tfOpen; closeAll(); setTfOpen(willOpen); }} style={{ padding: "0 6px" }} aria-label={t("moreTimeframes")} title={t("moreTimeframes")}>▾</button>
               </div>
               <div className={`tfgrid${tfOpen ? " show" : ""}`} onClick={(e) => e.stopPropagation()}>
                 {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{t(TFG_TKEY[g])}</div>{items.map((tfi) => { const fn = FUNCTIONAL.has(tfi); const fav = favTF.includes(tfi);
@@ -757,10 +756,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
         {replayOn && view === "price" && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 14px", borderBottom: "1px solid var(--line)", background: "var(--bg)" }}>
-            <button className="icbtn" title="Reset" onClick={() => { setReplayIdx(Math.max(20, total - 80)); setPlaying(false); }}><svg viewBox="0 0 24 24"><path d="M11 19l-7-7 7-7M20 19l-7-7 7-7" /></svg></button>
-            <button className="icbtn" disabled={mixedTfs} onClick={() => setReplayIdx((i) => Math.max(20, (i ?? 0) - 1))}><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
-            <button className="icbtn" disabled={mixedTfs} title={mixedTfs ? t("replayMixedTip") : undefined} onClick={() => setPlaying((p) => !p)}>{playing ? <svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></svg> : <svg viewBox="0 0 24 24" style={{ fill: "var(--signal)", stroke: "none" }}><path d="M6 4l14 8-14 8V4z" /></svg>}</button>
-            <button className="icbtn" disabled={mixedTfs} onClick={() => setReplayIdx((i) => Math.min(total - 1, (i ?? 0) + 1))}><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg></button>
+            <button className="icbtn" title={t("replayReset")} aria-label={t("replayReset")} onClick={() => { setReplayIdx(Math.max(20, total - 80)); setPlaying(false); }}><svg viewBox="0 0 24 24"><path d="M11 19l-7-7 7-7M20 19l-7-7 7-7" /></svg></button>
+            <button className="icbtn" disabled={mixedTfs} aria-label={t("replayPrev")} title={t("replayPrev")} onClick={() => setReplayIdx((i) => Math.max(20, (i ?? 0) - 1))}><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
+            <button className="icbtn" disabled={mixedTfs} aria-label={playing ? t("replayPause") : t("replayPlay")} title={mixedTfs ? t("replayMixedTip") : (playing ? t("replayPause") : t("replayPlay"))} onClick={() => setPlaying((p) => !p)}>{playing ? <svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></svg> : <svg viewBox="0 0 24 24" style={{ fill: "var(--signal)", stroke: "none" }}><path d="M6 4l14 8-14 8V4z" /></svg>}</button>
+            <button className="icbtn" disabled={mixedTfs} aria-label={t("replayNext")} title={t("replayNext")} onClick={() => setReplayIdx((i) => Math.min(total - 1, (i ?? 0) + 1))}><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg></button>
             <div className="seg" style={{ height: 26 }}>{[1, 2, 4].map((s) => <button key={s} className={speed === s ? "on" : ""} onClick={() => setSpeed(s)}>{s}x</button>)}</div>
             <input type="range" min={20} max={Math.max(21, total - 1)} value={replayIdx ?? total - 1} disabled={mixedTfs} title={mixedTfs ? t("replayMixedTip") : undefined} onChange={(e) => setReplayIdx(parseInt(e.target.value))} style={{ flex: 1, accentColor: "var(--brand)" }} />
             <span className="num" style={{ color: "var(--muted)", fontSize: 11.5, minWidth: 70, textAlign: "right" }}>{(replayIdx ?? total - 1) + 1} / {total}</span>
