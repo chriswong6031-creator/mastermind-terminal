@@ -35,7 +35,14 @@
       {"exp": "2027-02-20", "gamma_net": 0.140, "delta_net": 0.68}
     ],
     "convention": "dealer-sign per engine/gex_model",
-    "coverage": {"n_days": 1, "since": "2026-07-04"}
+    "coverage": {"n_days": 1, "since": "2026-07-04"},
+    "history": [
+      {"date": "2026-06-30", "net_gex_bn": -2.14, "gamma_flip": 130.0, "call_wall": 145.0, "put_wall": 118.0, "regime": "negative"},
+      {"date": "2026-07-01", "net_gex_bn": -1.84, "gamma_flip": 130.0, "call_wall": 148.0, "put_wall": 119.0, "regime": "negative"},
+      {"date": "2026-07-02", "net_gex_bn": -1.64, "gamma_flip": 130.0, "call_wall": 149.0, "put_wall": 120.0, "regime": "negative"},
+      {"date": "2026-07-03", "net_gex_bn": -1.44, "gamma_flip": 130.0, "call_wall": 150.0, "put_wall": 120.0, "regime": "negative"},
+      {"date": "2026-07-05", "net_gex_bn": -1.24, "gamma_flip": 130.0, "call_wall": 150.0, "put_wall": 120.0, "regime": "negative"}
+    ]
   },
   "SPY": {
     "schema": "options_hub.gex/v1",

@@ -1,0 +1,18 @@
+[
+  {
+    "root": "NVDA",
+    "right": "C",
+    "exp": "2026-07-18",
+    "strike": 160,
+    "prev_premium": 980000,
+    "delta_oi": 3200
+  },
+  {
+    "root": "SPY",
+    "right": "P",
+    "exp": "2026-07-31",
+    "strike": 530,
+    "prev_premium": 420000,
+    "delta_oi": 1500
+  }
+]

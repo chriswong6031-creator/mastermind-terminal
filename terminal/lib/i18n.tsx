@@ -361,11 +361,46 @@ const LEX: Record<string, [string, string]> = {
   presetLargeBuys: ["Large ~buys", "大额~买入"],
   presetRepeat: ["Repeat hits", "重复命中"],
   preset0DTE: ["0DTE", "当日到期"],
-  presetPutsOnStrength: ["Puts on strength", "强势认沽"],
+  presetPutsOnStrength: ["Put ~buys", "认沽~买入"],
   // Flags
   flagSwept: ["swept (heuristic)", "扫单（启发式）"],
   // Coverage
   coverageExpanding: ["Coverage expanding", "覆盖扩展中"],
+  // Tape filter i18n
+  tapeReset: ["Reset", "重置"],
+  tapeTickerPlaceholder: ["Ticker…", "代码筛选…"],
+  tapeRunningPrem: ["Running prem", "运行保费"],
+  tapeBaselineWarm: ["baseline warming", "基线积累中"],
+  tapeSideBuy: ["~buy", "~买入"],
+  tapeSideSell: ["~sell", "~卖出"],
+  tapeOiConfirmed: ["OI-confirmed", "持仓确认"],
+  // GEX tone fixes
+  gexCallConc: ["call concentration", "认购集中"],
+  gexPutConc: ["put concentration", "认沽集中"],
+  gexNetPos: ["positive", "正值"],
+  gexNetNeg: ["negative", "负值"],
+  gexExpLegendPos: ["positive (call-side)", "正值（认购端）"],
+  gexExpLegendNeg: ["negative (put-side)", "负值（认沽端）"],
+  gexHistTitle: ["30-session GEX history", "30日GEX历史"],
+  gexHistNetGex: ["Net GEX (bn)", "净GEX（十亿）"],
+  // GEX context bar
+  gexCtxTitle: ["Market GEX Context", "市场GEX环境"],
+  gexCtxRegime: ["regime", "状态"],
+  gexCtxFearGreed: ["Fear/Greed", "恐贪指数"],
+  gexCtxDistFlip: ["dist to flip", "距翻转"],
+  // Vol full-history rank
+  volIvRankFull: ["full-history", "全历史"],
+  volCoverageDays: ["coverage", "覆盖"],
+  // Tickers tctx chips
+  tctxNetPremZ: ["Net prem z", "净保费z值"],
+  tctxZerodteShare: ["0DTE share z", "当日到期占比z"],
+  tctxOtmCallShare: ["OTM call share z", "虚值认购占比z"],
+  tctxVolGtOiShare: ["vol>OI share z", "量超仓占比z"],
+  tctxBlockShare: ["Block share z", "大单占比z"],
+  tctxBaseline: ["baseline warming", "基线积累中"],
+  // Tide ETF flow chip
+  tideEtfFlowProxy: ["proxy", "代理"],
+  tideEtfFlow: ["flow", "资金流向"],
 };
 
 const Ctx = createContext<{ lang: Lang; setLang: (l: Lang) => void }>({ lang: "en", setLang: () => {} });

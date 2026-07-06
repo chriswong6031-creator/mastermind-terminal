@@ -12,6 +12,9 @@ const DTE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "dte_fixture
 const VOL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "vol_fixture.json");
 const GEX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gex_fixture.json");
 const SCREENER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "screener_fixture.json");
+const CTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ctx_fixture.json");
+const TCTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "tctx_fixture.json");
+const OICONF_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oiconf_fixture.json");
 
 // Bare-minimum in-memory cache so concurrent renders share one fetch.
 type CacheEntry = { data: Record<string, unknown>; ts: number };
@@ -23,10 +26,11 @@ const TTL_MS = 30_000;
 type FParam = string;
 
 function isValidF(f: FParam): boolean {
-  if (["feed", "heat", "meta", "tide", "dte", "oi", "hot"].includes(f)) return true;
+  if (["feed", "heat", "meta", "tide", "dte", "oi", "hot", "ctx", "oiconf"].includes(f)) return true;
   if (f.startsWith("ticker:") && f.length > 7) return true;
   if (f.startsWith("vol:") && f.length > 4) return true;
   if (f.startsWith("gex:") && f.length > 4) return true;
+  if (f.startsWith("tctx:") && f.length > 5) return true;
   return false;
 }
 
@@ -39,6 +43,9 @@ function backendPath(f: string): string {
   if (f === "oi") return "/api/hub/oi";
   if (f === "hot") return "/api/hub/hot";
   if (f === "meta") return "/api/flow/meta";
+  if (f === "ctx") return "/api/hub/ctx";
+  if (f === "oiconf") return "/api/hub/oiconf";
+  if (f.startsWith("tctx:")) return `/api/hub/tctx/${f.slice(5)}`;
   return `/api/flow/${f}`;
 }
 
@@ -51,6 +58,9 @@ function r2Key(f: string): string {
   if (f.startsWith("gex:")) return `options_hub/gex/${f.slice(4)}.json`;
   if (f === "oi") return "options_hub/oi_movers.json";
   if (f === "hot") return "options_hub/hot_contracts.json";
+  if (f === "ctx") return "options_hub/context.json";
+  if (f === "oiconf") return "options_hub/oi_confirmed.json";
+  if (f.startsWith("tctx:")) return `options_hub/tickers_ctx/${f.slice(5)}.json`;
   return `live_flow/${f}_current.json`;
 }
 
@@ -105,6 +115,29 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     const raw = await fs.readFile(SCREENER_FIXTURE_FILE, "utf8");
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     return all[f] ?? {};
+  }
+  // Hub context fixture.
+  if (f === "ctx") {
+    try {
+      const raw = await fs.readFile(CTX_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch { return {}; }
+  }
+  // OI-confirmed fixture.
+  if (f === "oiconf") {
+    try {
+      const raw = await fs.readFile(OICONF_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch { return { confirmed: [] }; }
+  }
+  // Ticker context fixture keyed by root.
+  if (f.startsWith("tctx:")) {
+    const root = f.slice(5).toUpperCase();
+    try {
+      const raw = await fs.readFile(TCTX_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? all[Object.keys(all)[0]] ?? {};
+    } catch { return {}; }
   }
   const raw = await fs.readFile(FIXTURE_FILE, "utf8");
   const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;

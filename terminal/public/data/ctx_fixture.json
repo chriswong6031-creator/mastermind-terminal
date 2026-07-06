@@ -1,0 +1,18 @@
+{
+  "schema": "hub_ctx_v2",
+  "asof": "2026-07-05T16:00:00Z",
+  "index_gex": {
+    "SPX": { "regime": "positive", "net_gex_bn": 12.4, "gamma_flip": 5400.0, "dist_to_flip_pct": 0.021 },
+    "NDX": { "regime": "positive", "net_gex_bn": 7.1, "gamma_flip": 19200.0, "dist_to_flip_pct": -0.008 },
+    "RUT": { "regime": "negative", "net_gex_bn": -1.3, "gamma_flip": 2100.0, "dist_to_flip_pct": 0.034 },
+    "SPY": { "regime": "positive", "net_gex_bn": 9.8, "gamma_flip": 539.0, "dist_to_flip_pct": 0.019 }
+  },
+  "fear_greed": { "dial": 62, "label_en": "Greed", "label_zh": "贪婪" },
+  "sector_etf_flows": {
+    "Technology": { "d1": 480000000, "w1": 1200000000 },
+    "Financials":  { "d1": 210000000, "w1":  540000000 },
+    "Healthcare":  { "d1": -95000000, "w1": -230000000 },
+    "Energy":      { "d1": 130000000, "w1":  310000000 },
+    "Consumer Discretionary": { "d1": 60000000, "w1": 190000000 }
+  }
+}
