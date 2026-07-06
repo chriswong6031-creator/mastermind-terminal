@@ -19,6 +19,27 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      // Statically-prerendered HTML would otherwise ship Next's s-maxage=31536000, which the
+      // EdgeOne CDN pins for a year (a deploy then can't refresh these shells without a manual
+      // console purge — no purge creds exist on the VPS/Mac). Cap edge caching at 5 minutes.
+      {
+        source: "/",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, s-maxage=300, stale-while-revalidate=600",
+          },
+        ],
+      },
+      {
+        source: "/(screener|alerts|flow|login)",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, s-maxage=300, stale-while-revalidate=600",
+          },
+        ],
+      },
     ];
   },
 };
