@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import { compilePine, type PineError } from "@/lib/pine-engine";
 
 type Script = { id: string; name: string; source: string; lang: string; params: Record<string, any>; updated_at: string; locked?: boolean };
 
@@ -32,7 +33,11 @@ function hl(line: string) {
 
 export default function PineEditor({ scripts, isPro, email }: { scripts: Script[]; isPro: boolean; email: string }) {
   const router = useRouter();
-  const [idx, setIdx] = useState(0);
+  const searchParams = useSearchParams();
+  // ?id=<scriptId> deep-links a specific script (from the terminal legend "Source code" / "Edit"); fall
+  // back to the first script when absent or unknown.
+  const initialIdx = (() => { const id = searchParams.get("id"); if (!id) return 0; const i = scripts.findIndex((s) => s.id === id); return i >= 0 ? i : 0; })();
+  const [idx, setIdx] = useState(initialIdx);
   const active = scripts[idx];
   const [src, setSrc] = useState(active?.source || "");
   const [params, setParams] = useState<Record<string, any>>(active?.params || {});
@@ -49,26 +54,44 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
   const inputs = Object.entries(params);
   const isLocked = !!active?.locked;   // proprietary indicator — viewable + runnable, never editable
   const dirty = !isLocked && !!active && (src !== active.source || JSON.stringify(params) !== JSON.stringify(active.params));
-  const isOracle = isLocked || /oracle/i.test(active?.name || "");
 
-  // lightweight client-side "compile" — enough to catch obvious breakage as you edit
-  const compileInfo = useMemo(() => {
-    const errs: string[] = [];
-    if (src.trim() && !/\b(indicator|strategy)\s*\(/.test(src)) errs.push("missing indicator() / strategy() declaration");
-    let bal = 0; for (const ch of src) { if (ch === "(") bal++; else if (ch === ")") bal--; if (bal < 0) break; }
-    if (bal !== 0) errs.push("unbalanced parentheses");
-    return { errs, n: lines.length };
-  }, [src, lines.length]);
+  // Real compile diagnostics via the Pine engine's parse-only pass (line/col/message), debounced ~300ms
+  // so we don't re-parse on every keystroke. `null` while the debounce is pending on a fresh edit.
+  const [diag, setDiag] = useState<PineError[]>([]);
+  useEffect(() => {
+    const id = window.setTimeout(() => { const r = compilePine(src); setDiag(r.ok ? [] : r.errors); }, 300);
+    return () => window.clearTimeout(id);
+  }, [src]);
+  const hasErrors = diag.length > 0;
 
-  function compile() { setStatus("compiling"); window.setTimeout(() => setStatus("idle"), 360); }
+  // Run/compile button: kick an immediate (non-debounced) recompile with brief "Compiling…" feedback.
+  function compile() { setStatus("compiling"); const r = compilePine(src); setDiag(r.ok ? [] : r.errors); window.setTimeout(() => setStatus("idle"), 300); }
 
-  async function save() {
-    if (!isPro || !active || isLocked) return;
+  // Save the current buffer. Returns the saved id (existing id on success, null on failure). Locked
+  // scripts and non-Pro users can't save — but the proprietary/locked script is still addable to the
+  // chart from its stable id (no save needed), handled in addToChart().
+  async function save(): Promise<string | null> {
+    if (!isPro || !active || isLocked) return null;
     setStatus("saving");
     const r = await fetch("/api/scripts/save", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: active.id, name: active.name, source: src, params }) }).catch(() => null);
-    setStatus(r && r.ok ? "saved" : "err");
+    const ok = !!(r && r.ok);
+    setStatus(ok ? "saved" : "err");
     setTimeout(() => setStatus("idle"), 2200);
+    if (!ok) return null;
+    try { const d = await r!.json(); return (d?.id as string) || active.id; } catch { return active.id; }
+  }
+
+  // "Add to chart": persist any dirty editable buffer first (so the terminal loads the latest source),
+  // then deep-link the terminal with ?addScript=<id> (TerminalShell enables it on the active chart).
+  // Disabled when the script has compile errors OR when the script is the locked/proprietary flagship:
+  // that indicator lives only as a constant (never in saved_scripts / guest LS), so the terminal can't
+  // resolve its id and would silently drop it from the chart — so we don't offer the action for it.
+  async function addToChart() {
+    if (!active || hasErrors || isLocked) return;
+    let id = active.id;
+    if (dirty) { const saved = await save(); if (!saved) return; id = saved; }
+    router.push(`/terminal?addScript=${encodeURIComponent(id)}`);
   }
 
   function step(k: string, dir: 1 | -1) {
@@ -122,7 +145,8 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
             {status === "saving" ? "Saving…" : status === "saved" ? "Saved ✓" : status === "err" ? "Error" : dirty ? "Save changes" : "Save"}
           </button>
         )}
-        <button className="ai" style={{ marginLeft: 6 }} onClick={() => router.push("/terminal")} disabled={!active}>Add to chart</button>
+        <button className="ai" style={{ marginLeft: 6 }} onClick={addToChart} disabled={!active || hasErrors || isLocked}
+          title={isLocked ? "The proprietary flagship already backs the chart's built-in BUY/SELL signals — it can't be added as a separate script" : hasErrors ? "Fix compile errors before adding to the chart" : "Add this script to the chart"}>Add to chart</button>
         <form action="/auth/signout" method="post" style={{ marginLeft: 10 }}><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
       </header>
       <AppNav />
@@ -168,18 +192,17 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
           <div className="console">
             {status === "compiling" ? (
               <div><span className="k">Compiling {active.name}…</span></div>
-            ) : compileInfo.errs.length ? (
+            ) : hasErrors ? (
               <>
-                <div><span style={{ color: "var(--down)" }}>✗ {compileInfo.errs.length} error{compileInfo.errs.length === 1 ? "" : "s"}</span> <span className="k">· {compileInfo.n} lines</span></div>
-                {compileInfo.errs.map((e, i) => <div key={i}><span className="k">· {e}</span></div>)}
+                <div><span style={{ color: "var(--down)" }}>✗ {diag.length} error{diag.length === 1 ? "" : "s"}</span> <span className="k">· {lines.length} lines</span></div>
+                {diag.map((e, i) => (
+                  <div key={i}><span style={{ color: "var(--down)" }}>{e.line ? `line ${e.line}${e.col ? `:${e.col}` : ""}` : e.phase}</span> <span className="k">· {e.message}</span></div>
+                ))}
               </>
             ) : (
               <>
-                <div><span className="ok">✓ Compiled successfully</span> <span className="k">· {compileInfo.n} lines, 0 errors{dirty ? " · unsaved changes" : ""}</span></div>
-                {isOracle && <div><span className="ok">✓ Golden-gate parity vs oracle</span> <span className="k">signal_layer/confluence.py · max abs diff 4e-7</span></div>}
-                {isOracle
-                  ? <div><span className="k">NVDA · 3D · 1,255 bars · backtested: 67% WR · PF 4.77 · CAGR 20.2%</span></div>
-                  : <div><span className="k">{active.name} · {inputs.length} input{inputs.length === 1 ? "" : "s"} · ready to add to chart</span></div>}
+                <div><span className="ok">✓ Compiled successfully</span> <span className="k">· {lines.length} lines, 0 errors{dirty ? " · unsaved changes" : ""}</span></div>
+                <div><span className="k">{active.name} · {inputs.length} input{inputs.length === 1 ? "" : "s"} · ready to add to chart</span></div>
               </>
             )}
           </div>

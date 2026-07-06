@@ -34,6 +34,8 @@ import { useT, useLang } from "@/lib/i18n";
 import { useFromMacro, backToMacro } from "@/lib/originNav";
 import { getJSON, prefetch } from "@/lib/dataCache";
 import { CMP_PALETTE } from "@/lib/compare";
+import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
+import { type PineScript } from "@/components/ChartPanel";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -122,6 +124,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());      // per-indicator params (Settings dialog)
   const [settingsKey, setSettingsKey] = useState<string | null>(null);                 // indicator whose Settings dialog is open
   const [sourceKey, setSourceKey] = useState<string | null>(null);                     // indicator whose Source view is open
+  // ── custom scripts (Pine): the user's saved scripts + which are ENABLED on the chart + param overrides ──
+  const [scripts, setScripts] = useState<UserScript[]>([]);
+  const [enabledIds, setEnabledIds] = useState<string[]>([]);                           // enabled script ids (persisted 'mm.pineOn')
+  const [pineParams, setPineParamsState] = useState<Record<string, Record<string, any>>>({}); // per-script overrides ('mm.pineParams')
+  const loggedIn = !!email;
+  // id → script, in a ref so the legend callbacks (declared above the derivations) can look it up
+  const scriptByIdRef = useRef<Record<string, UserScript>>({});
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
   const [set, setSet] = useState<WLSet>(DEFAULT_SET);
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
@@ -495,13 +504,82 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // ── indicator legend actions (shared by the per-pane legend + its More menu) ──
   const toggleHidden = useCallback((k: string) => setHidden((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; }), []);
   const removeInd = useCallback((k: string) => {
+    // a legend "remove" on a custom-script row disables the script rather than mutating the built-in set
+    if (scriptByIdRef.current[k]) { setEnabledIds((ids) => ids.filter((x) => x !== k)); setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; }); return; }
     setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
     setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
   }, []);
   const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...withDefaults(k, p[k]), ...patch } })), []);
   const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
   const openSettings = useCallback((k: string) => setSettingsKey(k), []);
-  const openSource = useCallback((k: string) => setSourceKey(k), []);
+
+  // ── custom-script wiring ──────────────────────────────────────────────────────────────────────
+  // load scripts + enable-state + param overrides on mount (dual-tier: API for members, LS for guests)
+  const scriptsLoadedRef = useRef(false);
+  useEffect(() => {
+    setEnabledIds(enabledScriptIds());
+    setPineParamsState(pineParamStore());
+    let alive = true;
+    listScripts(loggedIn).then((list) => { if (alive) { setScripts(list); scriptsLoadedRef.current = true; } }).catch(() => { if (alive) scriptsLoadedRef.current = true; });
+    return () => { alive = false; };
+  }, [loggedIn]);
+  // persist enable-state + overrides (both tiers use localStorage — mirrors mm.inds / mm.indParams).
+  // skip the mount write so the pre-load default can't clobber the saved value.
+  const pineOnMounted = useRef(false); const pinePMounted = useRef(false);
+  useEffect(() => { if (!pineOnMounted.current) { pineOnMounted.current = true; return; } setEnabledScriptIds(enabledIds); }, [enabledIds]);
+  useEffect(() => { if (!pinePMounted.current) { pinePMounted.current = true; return; } setPineParamStore(pineParams); }, [pineParams]);
+
+  // ?addScript=<id> → enable that script on the chart, then strip the param (mirror ?pane consumption).
+  // ONLY enable an id that resolves to a known script (saved_scripts / guest LS): the proprietary flagship
+  // lives as a constant outside both stores, so its id can never render on a pane — enabling it would just
+  // permanently pollute 'mm.pineOn' with an unrenderable id. Re-runs when `scripts` finishes loading so a
+  // valid id that arrived before the async list resolved still gets enabled; once the list has loaded, an
+  // id that still doesn't resolve is dropped (param stripped) instead of lingering.
+  useEffect(() => {
+    const id = searchParams.get("addScript");
+    if (!id) return;
+    const resolvable = !!scriptByIdRef.current[id];
+    if (resolvable) setEnabledIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+    else if (!scriptsLoadedRef.current) return;   // list not loaded yet — keep ?addScript= and retry after load
+    try { const u = new URL(window.location.href); u.searchParams.delete("addScript"); window.history.replaceState({}, "", u.toString()); } catch {}
+  }, [searchParams, scripts]);
+
+  // derive the enabled PineScript[] (declared defaults + per-script overrides merged), passed to every pane
+  const scriptById = useMemo(() => { const m: Record<string, UserScript> = {}; for (const s of scripts) m[s.id] = s; return m; }, [scripts]);
+  scriptByIdRef.current = scriptById;
+  const pineScripts = useMemo<PineScript[]>(
+    () => enabledIds.map((id) => scriptById[id]).filter(Boolean).map((s) => ({ id: s.id, name: s.name, source: s.source, params: mergedParams(s, pineParams) })),
+    [enabledIds, scriptById, pineParams]
+  );
+  const enabledSet = useMemo(() => new Set(enabledIds), [enabledIds]);
+  const isPineKey = useCallback((k: string) => !!scriptById[k], [scriptById]);   // a legend key that is a known scriptId
+
+  const toggleScript = useCallback((id: string) => setEnabledIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])), []);
+  const handleRenameScript = useCallback((id: string, name: string) => {
+    const s = scriptById[id]; if (!s || !name.trim() || name.trim() === s.name) return;
+    const nm = name.trim(); const prev = s.name;
+    setScripts((list) => list.map((x) => (x.id === id ? { ...x, name: nm } : x)));   // optimistic
+    // roll back on server failure (a logged-in non-Pro user hits the save 403 → renScript returns false),
+    // otherwise the legend/modal keep an optimistic name that silently reverts on the next reload. Only
+    // revert if the name is still the one we set (don't clobber a newer concurrent rename).
+    renScript(loggedIn, { id, name: nm, source: s.source, params: s.params }).then((ok) => {
+      if (!ok) setScripts((list) => list.map((x) => (x.id === id && x.name === nm ? { ...x, name: prev } : x)));
+    });
+  }, [scriptById, loggedIn]);
+  const handleDeleteScript = useCallback((id: string) => {
+    setScripts((list) => list.filter((x) => x.id !== id));
+    setEnabledIds((ids) => ids.filter((x) => x !== id));
+    setPineParamsState((p) => { if (!(id in p)) return p; const n = { ...p }; delete n[id]; return n; });
+    // close this script's Settings dialog if it's open: once it leaves `scripts`, isPineKey(settingsKey)
+    // flips false and the render would fall into the built-in <IndicatorSettings indKey={rawId}> branch —
+    // a broken dialog titled with the raw id and no inputs. Clear it (settingsKey/sourceKey) instead.
+    setSettingsKey((k) => (k === id ? null : k));
+    setSourceKey((k) => (k === id ? null : k));
+    void delScript(loggedIn, id);
+  }, [loggedIn]);
+  const setPineParam = useCallback((id: string, patch: Record<string, any>) => setPineParamsState((p) => ({ ...p, [id]: { ...(p[id] || {}), ...patch } })), []);
+  // "Source code" on a legend row: a custom script opens the Pine editor (deep-linked); a built-in opens its read-only source view
+  const openSource = useCallback((k: string) => { if (scriptById[k]) { window.location.href = `/scripts?id=${encodeURIComponent(k)}`; return; } setSourceKey(k); }, [scriptById]);
   const pick = (sym: string) => {
     // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
     // re-clicking the active symbol is a no-op rather than jumping focus to the first matching pane.
@@ -716,7 +794,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             )}
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} />
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} />
               ))}
             </div>
           </div>
@@ -840,8 +918,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} active={active}
         onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol}
         onToggleCompare={(s: string) => setCompare((c) => c.includes(s) ? c.filter((x) => x !== s) : (s !== active ? [...c, s].slice(0, 4) : c))} />
-      <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} />
-      {settingsKey && <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />}
+      <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
+        scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
+      {settingsKey && (isPineKey(settingsKey)
+        ? <IndicatorSettings indKey="pine" params={{}} onChange={() => {}}
+            pine={{ name: scriptById[settingsKey].name, params: mergedParams(scriptById[settingsKey], pineParams) }}
+            onPineChange={(patch) => setPineParam(settingsKey, patch)}
+            onClose={() => setSettingsKey(null)} />
+        : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
       <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
 

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { CMP_PALETTE } from "@/lib/compare";
 
@@ -20,13 +20,20 @@ export default function SearchModal({ open, seed, manifest, inWatchlist, mode = 
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (open) { setQ(seed || ""); setSel(0); setTimeout(() => inputRef.current?.focus(), 10); } }, [open, seed]);
+
+  // Defer the query so keystrokes are never blocked by filtering ~8 800-row manifest.
+  const deferredQ = useDeferredValue(q);
+  const cmp = mode === "compare";
+
+  const results = useMemo(() => {
+    const ql = deferredQ.trim().toLowerCase();
+    return Object.entries(manifest)
+      .filter(([s, r]) => (!cmp || s !== active) && (!ql || s.toLowerCase().includes(ql) || r.name.toLowerCase().includes(ql) || (!!r.zh && r.zh.toLowerCase().includes(ql))))
+      .slice(0, 30);
+  }, [deferredQ, manifest, cmp, active]);
+
   if (!open) return null;
 
-  const cmp = mode === "compare";
-  const ql = q.trim().toLowerCase();
-  const results = Object.entries(manifest)
-    .filter(([s, r]) => (!cmp || s !== active) && (!ql || s.toLowerCase().includes(ql) || r.name.toLowerCase().includes(ql) || (!!r.zh && r.zh.toLowerCase().includes(ql))))
-    .slice(0, 30);
   const added = compare.filter((c) => c !== active);
 
   function choose(sym: string) {

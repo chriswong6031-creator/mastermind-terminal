@@ -383,6 +383,17 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .imodal .li .mmdot{width:5px;height:5px;border-radius:50%;background:var(--brand)}
 .imodal .li .chk{margin-left:auto;width:16px;height:16px;border-radius:var(--r);border:1.5px solid var(--line-3);display:grid;place-items:center}.imodal .li.on .chk{background:var(--brand);border-color:var(--brand)}.imodal .li .chk svg{width:11px;height:11px;stroke:#fff;fill:none;stroke-width:3;opacity:0}.imodal .li.on .chk svg{opacity:1}
 .imodal .li .lk{margin-left:auto;color:var(--signal)}
+/* My Scripts section — script rows with inline rename + edit/delete actions + enable check */
+.imodal .li .li-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.imodal .li .li-tag{margin-left:7px;font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em}
+.imodal .li .li-rename{flex:1;min-width:0;background:var(--panel-3);border:1px solid var(--brand);border-radius:var(--r);color:var(--text);font:13px var(--font-ui);padding:3px 7px}
+.imodal .li .li-acts{margin-left:auto;display:flex;align-items:center;gap:4px}
+.imodal .li .li-ic{width:24px;height:24px;display:grid;place-items:center;border-radius:var(--r);color:var(--muted);cursor:pointer;background:none;border:none}
+.imodal .li .li-ic:hover{background:var(--panel-3);color:var(--text)}
+.imodal .li .li-ic.del:hover{color:var(--down)}
+.imodal .li .li-ic svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.imodal .li-empty{padding:22px 14px;font-size:12.5px;color:var(--text-2);line-height:1.6}
+.imodal .li-empty .li-link{color:var(--brand-2);cursor:pointer}
 
 /* Mastermind AI — a floating, non-modal panel that "drops in" from beneath the AI button (top-right) */
 .copilot{position:fixed;top:64px;right:16px;bottom:auto;width:400px;max-width:calc(100vw - 32px);max-height:min(72vh,680px);

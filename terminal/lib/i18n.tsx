@@ -153,6 +153,15 @@ const LEX: Record<string, [string, string]> = {
   catTrend: ["Trend", "趋势"],
   catMomentum: ["Momentum", "动量"],
   catVolume: ["Volume", "成交量"],
+  // my custom scripts (Pine) section
+  myScripts: ["My Scripts", "我的脚本"],
+  noScriptsYet: ["No custom scripts yet.", "还没有自定义脚本。"],
+  openPineEditor: ["Open the Pine editor", "打开 Pine 编辑器"],
+  editScript: ["Edit in Pine editor", "在 Pine 编辑器中编辑"],
+  rename: ["Rename", "重命名"],
+  delete: ["Delete", "删除"],
+  readOnly: ["read-only", "只读"],
+  deleteScriptConfirm: ["Delete this script? This can't be undone.", "删除此脚本？此操作无法撤销。"],
   // copilot
   askAbout: ["Ask about", "询问"],
   analyzing: ["Analyzing", "分析中"],
@@ -161,6 +170,11 @@ const LEX: Record<string, [string, string]> = {
   sugMarkSR: ["Mark the key support & resistance on the chart", "在图表上标出关键支撑与阻力"],
   sugBacktest: ["How has this signal backtested?", "这个信号的回测表现如何？"],
   sugFindBuys: ["Find BUY setups in an uptrend regime", "在上升趋势中寻找买入机会"],
+  // error boundary
+  errTitle: ["Something went wrong", "出现错误"],
+  errBody: ["An unexpected error occurred. Try reloading — if it persists, please refresh the page.", "发生了意外错误。请尝试重试，若问题持续请刷新页面。"],
+  errRetry: ["Try again", "重试"],
+  errGoChart: ["Go to chart", "返回图表"],
   // misc
   uptrendRegime: ["Uptrend regime", "上升趋势"],
   open: ["Open", "开盘"],
@@ -187,6 +201,9 @@ const LEX: Record<string, [string, string]> = {
   comparing: ["Overlaid", "已叠加"],
   compareHint: ["Add up to 4 symbols to overlay on the active chart.", "最多可叠加 4 个标的到当前图表。"],
   comparingNow: ["On chart", "图表中"],
+  // sector pulse chip (SectorPulseChip — detail card sector-rotation awareness line)
+  sectorTheme: ["Sector theme", "板块主题"],
+  sectorRankOf: ["#{rank} of {n}", "第{rank}/{n}位"],
   // screener
   pageScreener: ["Screener", "选股"],
   matches: ["matches", "个匹配"],
