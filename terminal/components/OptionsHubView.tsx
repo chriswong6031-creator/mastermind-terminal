@@ -148,7 +148,12 @@ interface GexPayload {
   gamma_flip: number | null; call_wall: number | null; put_wall: number | null;
   by_strike: GexStrikeRow[]; by_expiry: GexExpiryRow[];
   convention: string;
-  coverage: { n_days: number; since: string };
+  /** Superset coverage shape: new payloads carry n_days+since; old payloads carry n_contracts+oi_date */
+  coverage: {
+    n_days?: number; since?: string;
+    n_contracts?: number; oi_date?: string;
+  };
+  by_strike_full_n?: number;
 }
 
 // ─── Formatting helpers ──────────────────────────────────────────────────────
@@ -689,6 +694,14 @@ function getGreekValues(row: GexStrikeRow, greek: GreekKey): { net: number; call
   }
 }
 
+/** Pure function — filters rows to within `pct` of spotRef (e.g. 0.10 = ±10%). */
+function windowGexRows(rows: GexStrikeRow[], spotRef: number, pct: number): GexStrikeRow[] {
+  if (!spotRef || !rows.length) return rows;
+  const lo = spotRef * (1 - pct);
+  const hi = spotRef * (1 + pct);
+  return rows.filter((r) => r.strike >= lo && r.strike <= hi);
+}
+
 function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, lang }: {
   rows: GexStrikeRow[];
   greek: GreekKey;
@@ -698,92 +711,137 @@ function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, l
   putWall: number | null;
   lang: string;
 }) {
-  if (!rows.length) return null;
-  const netVals = rows.map((r) => getGreekValues(r, greek).net);
+  const [wideMode, setWideMode] = useState(false);
+
+  // Empty state — render bilingual pending message instead of null
+  if (!rows.length) {
+    return (
+      <div style={{ padding: "20px 0", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+        {lang === "zh"
+          ? "该标的夜间数据待更新"
+          : "Nightly data pending for this root"}
+      </div>
+    );
+  }
+
+  // Client-side windowing: Near = ±10% of spot_ref; Wide = full payload
+  const displayRows = wideMode ? rows : windowGexRows(rows, spotRef, 0.10);
+  // If the windowed view is empty (e.g. very OTM spot_ref), fall back to full
+  const visibleRows = displayRows.length > 0 ? displayRows : rows;
+  // Apply scroll whenever the rendered set is large (fallback path or explicit Wide mode)
+  const needsScroll = visibleRows.length > 20;
+
+  const netVals = visibleRows.map((r) => getGreekValues(r, greek).net);
   const maxAbs = Math.max(...netVals.map(Math.abs), 0.001);
   const BAR_MAX = 120;
   const ROW_H = 28;
-  const H = rows.length * ROW_H + 30;
+  const H = visibleRows.length * ROW_H + 30;
   const MID = BAR_MAX + 60; // center x
 
   return (
-    <svg viewBox={`0 0 ${MID * 2} ${H}`} width="100%" style={{ display: "block", maxHeight: 420, overflow: "visible" }}>
-      {/* Column headers */}
-      <text x={MID - 4} y={14} textAnchor="end" fill="var(--up)" fontSize={10} fontWeight={600}>
-        {lang === "zh" ? "净多" : "+net"}
-      </text>
-      <text x={MID + 60 + 4} y={14} textAnchor="start" fill="var(--down)" fontSize={10} fontWeight={600}>
-        {lang === "zh" ? "净空" : "-net"}
-      </text>
-      <text x={MID + 30} y={14} textAnchor="middle" fill="var(--muted)" fontSize={10}>
-        {lang === "zh" ? "行权价" : "Strike"}
-      </text>
+    <div>
+      {/* Near / Wide toggle */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
+        <button
+          className={`chip${!wideMode ? " on" : ""}`}
+          style={{ height: 22, fontSize: 10 }}
+          onClick={() => setWideMode(false)}
+        >
+          {lang === "zh" ? "近档 ±10%" : "Near ±10%"}
+        </button>
+        <button
+          className={`chip${wideMode ? " on" : ""}`}
+          style={{ height: 22, fontSize: 10 }}
+          onClick={() => setWideMode(true)}
+        >
+          {lang === "zh" ? "全档" : "Wide"}
+        </button>
+        <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 4 }}>
+          {visibleRows.length}{rows.length !== visibleRows.length ? `/${rows.length}` : ""} rows
+        </span>
+      </div>
 
-      {rows.map((row, i) => {
-        const { net, call, put } = getGreekValues(row, greek);
-        const y = 22 + i * ROW_H;
-        const netW = Math.abs(net) / maxAbs * BAR_MAX;
-        const callW = Math.abs(greek === "gamma" ? call : Math.max(call, 0)) / maxAbs * BAR_MAX;
-        const putW = Math.abs(greek === "gamma" ? put : Math.abs(Math.min(put, 0))) / maxAbs * BAR_MAX;
-        const isPos = net >= 0;
+      {/* SVG ladder — scrollable in Wide mode or fallback (large row count) */}
+      <div style={needsScroll ? { maxHeight: 420, overflowY: "auto" } : {}}>
+        <svg viewBox={`0 0 ${MID * 2} ${H}`} width="100%" style={{ display: "block" }}>
+          {/* Column headers */}
+          <text x={MID - 4} y={14} textAnchor="end" fill="var(--up)" fontSize={10} fontWeight={600}>
+            {lang === "zh" ? "净多" : "+net"}
+          </text>
+          <text x={MID + 60 + 4} y={14} textAnchor="start" fill="var(--down)" fontSize={10} fontWeight={600}>
+            {lang === "zh" ? "净空" : "-net"}
+          </text>
+          <text x={MID + 30} y={14} textAnchor="middle" fill="var(--muted)" fontSize={10}>
+            {lang === "zh" ? "行权价" : "Strike"}
+          </text>
 
-        // Markers
-        const isFlip = gammaFlip != null && row.strike === gammaFlip;
-        const isCallWall = callWall != null && row.strike === callWall;
-        const isPutWall = putWall != null && row.strike === putWall;
+          {visibleRows.map((row, i) => {
+            const { net, call, put } = getGreekValues(row, greek);
+            const y = 22 + i * ROW_H;
+            const netW = Math.abs(net) / maxAbs * BAR_MAX;
+            const callW = Math.abs(greek === "gamma" ? call : Math.max(call, 0)) / maxAbs * BAR_MAX;
+            const putW = Math.abs(greek === "gamma" ? put : Math.abs(Math.min(put, 0))) / maxAbs * BAR_MAX;
+            const isPos = net >= 0;
 
-        return (
-          <g key={row.strike}>
-            {/* Net bar */}
-            {isPos ? (
-              <rect x={MID - netW} y={y + 3} width={netW} height={ROW_H - 10}
-                fill="rgba(38,194,129,.35)" rx={2} />
-            ) : (
-              <rect x={MID + 60} y={y + 3} width={netW} height={ROW_H - 10}
-                fill="rgba(240,86,107,.3)" rx={2} />
-            )}
-            {/* Call overlay (gamma only — call split) */}
-            {greek === "gamma" && call > 0 && (
-              <rect x={MID - callW} y={y + 3} width={callW} height={ROW_H - 10}
-                fill="rgba(38,194,129,.15)" rx={2} />
-            )}
-            {/* Put overlay (gamma only — put split, grows right from center) */}
-            {greek === "gamma" && put < 0 && (
-              <rect x={MID + 60} y={y + 3} width={putW} height={ROW_H - 10}
-                fill="rgba(240,86,107,.12)" rx={2} />
-            )}
-            {/* Strike label */}
-            <text x={MID + 30} y={y + ROW_H / 2 + 2} textAnchor="middle"
-              fill="var(--text-2)" fontSize={11} fontWeight={row.strike === Math.round(spotRef) ? 700 : 400}>
-              {row.strike}
-            </text>
-            {/* Spot ref line */}
-            {row.strike === rows.reduce((closest, r) =>
-              Math.abs(r.strike - spotRef) < Math.abs(closest.strike - spotRef) ? r : closest
-            ).strike && (
-              <line x1={0} y1={y + ROW_H - 1} x2={MID * 2} y2={y + ROW_H - 1}
-                stroke="var(--warn)" strokeWidth="1" strokeDasharray="3,2" opacity={0.6} />
-            )}
-            {/* Marker labels */}
-            {isFlip && (
-              <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--warn)" fontSize={9} fontWeight={600}>
-                {lang === "zh" ? "伽马翻转" : "flip"}
-              </text>
-            )}
-            {isCallWall && (
-              <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--up)" fontSize={9} fontWeight={600}>
-                {lang === "zh" ? "看涨墙" : "call wall"}
-              </text>
-            )}
-            {isPutWall && (
-              <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--down)" fontSize={9} fontWeight={600}>
-                {lang === "zh" ? "看跌墙" : "put wall"}
-              </text>
-            )}
-          </g>
-        );
-      })}
-    </svg>
+            // Markers — these remain correct within the windowed domain
+            const isFlip = gammaFlip != null && row.strike === gammaFlip;
+            const isCallWall = callWall != null && row.strike === callWall;
+            const isPutWall = putWall != null && row.strike === putWall;
+
+            return (
+              <g key={row.strike}>
+                {/* Net bar */}
+                {isPos ? (
+                  <rect x={MID - netW} y={y + 3} width={netW} height={ROW_H - 10}
+                    fill="rgba(38,194,129,.35)" rx={2} />
+                ) : (
+                  <rect x={MID + 60} y={y + 3} width={netW} height={ROW_H - 10}
+                    fill="rgba(240,86,107,.3)" rx={2} />
+                )}
+                {/* Call overlay (gamma only — call split) */}
+                {greek === "gamma" && call > 0 && (
+                  <rect x={MID - callW} y={y + 3} width={callW} height={ROW_H - 10}
+                    fill="rgba(38,194,129,.15)" rx={2} />
+                )}
+                {/* Put overlay (gamma only — put split, grows right from center) */}
+                {greek === "gamma" && put < 0 && (
+                  <rect x={MID + 60} y={y + 3} width={putW} height={ROW_H - 10}
+                    fill="rgba(240,86,107,.12)" rx={2} />
+                )}
+                {/* Strike label */}
+                <text x={MID + 30} y={y + ROW_H / 2 + 2} textAnchor="middle"
+                  fill="var(--text-2)" fontSize={11} fontWeight={row.strike === Math.round(spotRef) ? 700 : 400}>
+                  {row.strike}
+                </text>
+                {/* Spot ref line */}
+                {row.strike === visibleRows.reduce((closest, r) =>
+                  Math.abs(r.strike - spotRef) < Math.abs(closest.strike - spotRef) ? r : closest
+                ).strike && (
+                  <line x1={0} y1={y + ROW_H - 1} x2={MID * 2} y2={y + ROW_H - 1}
+                    stroke="var(--warn)" strokeWidth="1" strokeDasharray="3,2" opacity={0.6} />
+                )}
+                {/* Marker labels */}
+                {isFlip && (
+                  <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--warn)" fontSize={9} fontWeight={600}>
+                    {lang === "zh" ? "伽马翻转" : "flip"}
+                  </text>
+                )}
+                {isCallWall && (
+                  <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--up)" fontSize={9} fontWeight={600}>
+                    {lang === "zh" ? "看涨墙" : "call wall"}
+                  </text>
+                )}
+                {isPutWall && (
+                  <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--down)" fontSize={9} fontWeight={600}>
+                    {lang === "zh" ? "看跌墙" : "put wall"}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
   );
 }
 
@@ -2217,12 +2275,20 @@ export default function OptionsHubView() {
                         : "Dealer-positioning model estimate — model-derived, approximate"}
                     </div>
 
-                    {/* Coverage */}
-                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                      {lang === "zh"
-                        ? `数据覆盖：${gexData.coverage.n_days} 天，起始 ${gexData.coverage.since}`
-                        : `Coverage: ${gexData.coverage.n_days} day(s) since ${gexData.coverage.since} — OI is t-1`}
-                    </div>
+                    {/* Coverage — prefer new shape (n_days/since), fall back to old shape (n_contracts/oi_date) */}
+                    {(() => {
+                      const cov = gexData.coverage;
+                      const days = cov.n_days != null ? `${cov.n_days} day(s)` : cov.n_contracts != null ? `${cov.n_contracts} contracts` : null;
+                      const since = cov.since ?? cov.oi_date ?? null;
+                      if (!days && !since) return null;
+                      return (
+                        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                          {lang === "zh"
+                            ? `数据覆盖：${cov.n_days != null ? `${cov.n_days} 天` : cov.n_contracts != null ? `${cov.n_contracts} 合约` : ""}${since ? `，起始 ${since}` : ""}`
+                            : `Coverage: ${days ?? ""}${since ? ` since ${since}` : ""} — OI is t-1`}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>
