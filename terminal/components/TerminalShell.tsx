@@ -338,6 +338,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // ChartPanel's intraday empty-state overlay dispatches mm:set-tf {tf} ("Back to Daily" → "D"). Mirror
   // the open-pane pattern: switch the ACTIVE pane's timeframe, guarded on its functional TF set.
   useEffect(() => { const h = (e: Event) => { const nt = (e as CustomEvent).detail?.tf as string | undefined; if (nt && FUNCTIONAL.has(nt)) setTf(nt); }; window.addEventListener("mm:set-tf", h); return () => window.removeEventListener("mm:set-tf", h); }, [FUNCTIONAL, activePane]);
+  // Broadcast the overlay's open/close so AppNav's left-rail "Analyst" highlight tracks the REAL pane
+  // state (page name on open, null on close). The URL ?pane= is stripped via replaceState on close and
+  // is invisible to Next's useSearchParams, so a URL-derived highlight would stay lit after closing.
+  useEffect(() => { window.dispatchEvent(new CustomEvent("mm:pane-state", { detail: paneOpen })); }, [paneOpen]);
 
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
   function setGrid(n: number) {
@@ -909,9 +913,18 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
       <div className="ticker">
         <span className="lbl">{t("movers")}</span>
-        {Object.entries(man?.symbols || {}).slice(0, 16).map(([s, r0]) => { const r = mergeLive(r0, quotes[s])!; const u = r.chg >= 0; return (
-          <span key={s} className="tk" style={{ cursor: "pointer" }} onClick={() => pick(s)}><span className="s">{s.replace("-USD", "")}</span><span className="p num">{fmt(r.last, r.last < 10 ? 3 : 2)}</span><span className={`c num ${u ? "up" : "down"}`}>{u ? "+" : ""}{fmt(r.chg)}%</span></span>
-        ); })}
+        <div className="tk-marquee">
+          {/* two identical runs so the -50% translate loops seamlessly (see .tk-marquee in globals.css) */}
+          <div className="tk-track">
+            {[0, 1].map((dup) => (
+              <div className="tk-run" key={dup} aria-hidden={dup === 1 || undefined}>
+                {Object.entries(man?.symbols || {}).slice(0, 16).map(([s, r0]) => { const r = mergeLive(r0, quotes[s])!; const u = r.chg >= 0; return (
+                  <span key={s} className="tk" style={{ cursor: "pointer" }} onClick={() => pick(s)}><span className="s">{s.replace("-USD", "")}</span><span className="p num">{fmt(r.last, r.last < 10 ? 3 : 2)}</span><span className={`c num ${u ? "up" : "down"}`}>{u ? "+" : ""}{fmt(r.chg)}%</span></span>
+                ); })}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} active={active}

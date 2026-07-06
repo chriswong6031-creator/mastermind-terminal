@@ -95,6 +95,7 @@ const PINE_RUNTIME_CAP_MS = 2000;
 // The one-line escape hatch: flip to false to restore the pre-refactor "view resets on toggle" behavior.
 const PRESERVE_VIEW_ON_INDICATOR_TOGGLE = true;
 
+
 // ---- indicator math ----
 function ema(a: (number | null)[], p: number) { const o: (number | null)[] = Array(a.length).fill(null); const k = 2 / (p + 1); let pr: number | null = null, s = 0, c = 0; for (let i = 0; i < a.length; i++) { const v = a[i]; if (v == null) { o[i] = pr; continue; } if (pr == null) { s += v; c++; if (c === p) { pr = s / p; o[i] = pr; } } else { pr = v * k + pr * (1 - k); o[i] = pr; } } return o; }
 function sma(a: (number | null)[], p: number) { const o: (number | null)[] = Array(a.length).fill(null); const q: number[] = []; let s = 0; for (let i = 0; i < a.length; i++) { const v = a[i]; q.push(v == null ? 0 : v); if (v != null) s += v; if (q.length > p) s -= q.shift()!; if (q.length === p) o[i] = s / p; } return o; }
@@ -116,6 +117,23 @@ function resampleTf(rows: Bar[], tf: string): Bar[] {
   const quarter = (d: string) => { const y = d.slice(0, 4); const m = +d.slice(5, 7) - 1; return `${y}-Q${Math.floor(m / 3)}`; };
   for (let i = 0; i < rows.length; i++) { const r = rows[i]; const k = tf === "W" ? isoWeek(r.time) : tf === "2W" ? biWeek(r.time) : tf === "1M" ? r.time.slice(0, 7) : tf === "3M" ? quarter(r.time) : Math.floor(i / 3); if (k !== key) { if (cur) out.push(cur); key = k; cur = { ...r }; } else { cur!.h = Math.max(cur!.h, r.h); cur!.l = Math.min(cur!.l, r.l); cur!.c = r.c; cur!.time = r.time; cur!.v += r.v; } }
   if (cur) out.push(cur); return out;
+}
+
+// ── resampleTf memoization: cache per (symbol, tf) so D→W→D doesn't recompute ──
+// Keys are evicted when the symbol changes (clearResampleCache). Max ~10 entries (6 TFs × recent symbols).
+// The cache stores the FULL resampled array; callers still slice for replay.
+const _resampleCache = new Map<string, Bar[]>();
+function resampleTfCached(rows: Bar[], tf: string, sym: string): Bar[] {
+  const key = sym + "::" + tf;
+  const cached = _resampleCache.get(key);
+  if (cached !== undefined) return cached;
+  const result = resampleTf(rows, tf);
+  _resampleCache.set(key, result);
+  return result;
+}
+function clearResampleCache(sym?: string): void {
+  if (sym === undefined) { _resampleCache.clear(); return; }
+  for (const k of Array.from(_resampleCache.keys())) { if (k.startsWith(sym + "::")) _resampleCache.delete(k); }
 }
 function heikin(rows: Bar[]): Bar[] { const out: Bar[] = []; let po = 0, pc = 0; for (let i = 0; i < rows.length; i++) { const r = rows[i]; const hc = (r.o + r.h + r.l + r.c) / 4; const ho = i === 0 ? (r.o + r.c) / 2 : (po + pc) / 2; out.push({ ...r, o: ho, c: hc, h: Math.max(r.h, ho, hc), l: Math.min(r.l, ho, hc) }); po = ho; pc = hc; } return out; }
 
@@ -161,6 +179,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const dailyBarsRef = useRef<Bar[]>([]);   // the raw DAILY source (pre-resample) — the R11 splice operates here
   const isIntradayRef = useRef<boolean>(false);   // true when the active TF is an intraday branch (skip splice/resample/date-keyed overlays)
   const closesRef = useRef<number[]>([]);   // closes of barsRef
+  const prevSymbolRef = useRef<string>("");  // tracks the symbol from the last Effect 2 run to detect symbol changes
   const precRef = useRef<number>(2);
   const sigMarksRef = useRef<{ t: string; type: string; price: number; highlight?: boolean }[]>([]);
   const highlightTimerRef = useRef<any>(null);   // R14 pulse timer — cleared on symbol/TF change
@@ -544,6 +563,45 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     clearAllPine();
     if (!isIntradayRef.current) buildAllPine(rows);
     normalizeStretch();
+  };
+
+  // Update EXISTING indicator series in-place via setData (no removeSeries/addSeries).
+  // Safe to call only when the indicator SET is unchanged (same keys in indSeriesRef).
+  // Used by Effect 2 on same-symbol timeframe/chartType switches to avoid the DOM series lifecycle cost.
+  const updateAllIndicators = (rows: Bar[], closes: number[]) => {
+    const inds = indicatorsRef.current; const SB = indSeriesRef.current;
+    if (!SB.size) return;  // nothing to update (no indicators active)
+    // overlays
+    if (inds.has("ema")) {
+      const sArr = SB.get("ema"); const p = P("ema");
+      const configs = ([[p.ma1On, p.ma1Len], [p.ma2On, p.ma2Len], [p.ma3On, p.ma3Len]] as [boolean, number][]).filter(([on]) => on);
+      if (sArr) configs.forEach(([, len], i) => { if (sArr[i]) sArr[i].setData(toLine(rows, ema(closes, len))); });
+    }
+    if (inds.has("bb")) {
+      const sArr = SB.get("bb"); const p = P("bb");
+      const basis = sma(closes, p.length); const sd = stddev(closes, p.length);
+      const up = closes.map((_, i) => (basis[i] != null && sd[i] != null ? basis[i]! + p.mult * sd[i]! : null));
+      const lo = closes.map((_, i) => (basis[i] != null && sd[i] != null ? basis[i]! - p.mult * sd[i]! : null));
+      if (sArr) { [up, basis, lo].forEach((arr, j) => { if (sArr[j]) sArr[j].setData(toLine(rows, arr)); }); }
+    }
+    if (inds.has("vwap")) {
+      const sArr = SB.get("vwap"); if (sArr?.[0]) { let cum = 0, cumv = 0; const vw = rows.map((r) => { const tp = (r.h + r.l + r.c) / 3; cum += tp * r.v; cumv += r.v; return cumv ? cum / cumv : null; }); sArr[0].setData(toLine(rows, vw)); }
+    }
+    if (inds.has("vol")) {
+      const sArr = SB.get("vol"); if (sArr?.[0]) sArr[0].setData(volData(rows));
+    }
+    // sub-pane oscillators
+    if (SB.has("osc")) {
+      const sArr = SB.get("osc")!; let si = 0;
+      if (inds.has("stochrsi")) { const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD); if (sArr[si]) sArr[si].setData(toLine(rows, sr.k)); si++; if (sArr[si]) sArr[si].setData(toLine(rows, sr.d)); si++; }
+      if (inds.has("rsi")) { const p = P("rsi"); if (sArr[si]) sArr[si].setData(toLine(rows, rsi(closes, p.length))); }
+    }
+    if (SB.has("macd")) {
+      const sArr = SB.get("macd")!; const p = P("macd"); const m = macd(closes, p.fast, p.slow, p.signal);
+      if (sArr[0]) sArr[0].setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? p.upHist : p.downHist } : null)).filter(Boolean) as any);
+      if (sArr[1]) sArr[1].setData(toLine(rows, m.line));
+      if (sArr[2]) sArr[2].setData(toLine(rows, m.sig));
+    }
   };
 
   // Rebuild ONLY the compare overlays onto `rows` (used by data + replay effects).
@@ -995,8 +1053,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     wrap.addEventListener("mousemove", onPaneMove); wrap.addEventListener("mouseleave", onPaneLeave); wrap.addEventListener("dblclick", onPaneDbl);
 
-    // observe each pane element so separator drags / collapses reposition the overlay + rebaseline sizes
-    paneRO = new ResizeObserver(() => { if (dead) return; captureNormal(); scheduleMeasure(); });
+    // observe each pane element so separator drags / collapses reposition the overlay + rebaseline sizes.
+    // scheduleRender() re-lays the signal-marker + drawing SVG overlays: a pane collapse/maximize/drag
+    // changes the price pane's height (→ priceToCoordinate) WITHOUT resizing the chart container, so the
+    // container `ro` below never fires — without this the BUY/SELL/CUT/REBUY badges lag at stale Y coords
+    // until an unrelated pan/hover triggers a render.
+    paneRO = new ResizeObserver(() => { if (dead) return; captureNormal(); scheduleMeasure(); scheduleRender(); });
     paneRORef.current = paneRO;
 
     const rectXY = (ev: PointerEvent) => { const r = svg.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
@@ -1165,6 +1227,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // intraday branch flips timeVisible on; a persistent chart carries that across a TF switch).
       hideEmptyRef.current();
       chart.applyOptions({ timeScale: { timeVisible: false, secondsVisible: false } });
+
+      // ── PERF-FIX (b): clear the resample cache on symbol change so stale entries don't survive ──
+      const symbolChanged = symbol !== prevSymbolRef.current;
+      if (symbolChanged) { clearResampleCache(prevSymbolRef.current); prevSymbolRef.current = symbol; }
       const { ohlc, slice } = await getSliceAndOhlc(symbol);
       if (cancelled || epochRef.current !== epoch) return;
       sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)
@@ -1172,7 +1238,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       const daily: Bar[] = ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
       dailyBarsRef.current = daily;         // raw daily source — the R11 splice operates on THIS
-      let rows: Bar[] = resampleTf(daily, timeframe);   // FULL resampled history — replayIdx is NOT applied here
+      // ── PERF-FIX (b): use cached resample; same-symbol TF switches skip the O(N) bucketing pass ──
+      let rows: Bar[] = resampleTfCached(daily, timeframe, symbol);
       if (onMeta) onMeta({ total: rows.length });
       fullBarsRef.current = rows;
       // Read the LIVE replayIdx (not the effect's closure): if the user started replay while this
@@ -1200,9 +1267,21 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       priceS!.setData(priceData(onChart) as any);
 
-      // ── indicators (full rebuild for this fresh dataset) ──
-      clearAllIndicators();
-      buildAllIndicators(onChart, closes);
+      // ── PERF-FIX (a): indicators — on same-symbol TF/chartType switch, update series data in-place
+      //    (setData only, no removeSeries/addSeries lifecycle). On symbol change, do a full rebuild. ──
+      const canUpdateInPlace = !symbolChanged && indSeriesRef.current.size > 0;
+      if (canUpdateInPlace) {
+        updateAllIndicators(onChart, closes);
+        // updateAllIndicators only touches the built-in series registry (indSeriesRef); Pine scripts are
+        // tracked separately and are date-keyed, so a same-symbol TF switch must still rebuild them onto
+        // the new bars — mirror the full-rebuild path (buildAllIndicators) so an active Pine overlay
+        // doesn't strand at the previous timeframe's data.
+        clearAllPine();
+        if (!isIntradayRef.current) buildAllPine(onChart);
+      } else {
+        clearAllIndicators();
+        buildAllIndicators(onChart, closes);
+      }
 
       // ── compare overlays ──
       await rebuildCompare(onChart, epoch);

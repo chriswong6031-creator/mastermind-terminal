@@ -62,11 +62,10 @@ export function useFromMacro() {
  * there's nothing to pop (opened in a fresh tab) we hard-navigate to the captured dashboard URL.
  */
 export function backToMacro(macroHref: string) {
-  try {
-    if (window.history.length > 1 && document.referrer) {
-      const u = new URL(document.referrer);
-      if (isMacroHost(u.hostname)) { window.history.back(); return; }
-    }
-  } catch {}
+  // Always hard-navigate to the captured dashboard URL. A history.back() shortcut looked tempting
+  // (bfcache-instant in the pure macro→terminal→back flow), but after ANY in-app navigation
+  // (chart → analyst → options → screener → …) the previous history entry is another Terminal page,
+  // so back() dumped the user on the last visited sub-page instead of the dashboard. assign() to the
+  // remembered macroHref lands on the right dashboard page every time.
   window.location.assign(macroHref || MACRO_ORIGIN);
 }

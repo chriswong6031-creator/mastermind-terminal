@@ -9,6 +9,7 @@
  * - quote: { last: number | null } | null — provides the 'Current' column price
  * - zh: boolean — language selector
  */
+import { useState } from "react"
 import type { Fund, RatiosCurrent } from "../../lib/fund"
 import { fmtNum, fmtPct, pick } from "../../lib/finFormat"
 import { Bars, type Series } from "./FinCharts"
@@ -22,6 +23,8 @@ export interface StatisticsPageProps {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
+
+type Mode = "annual" | "quarterly"
 
 function n2(v: number | null | undefined): string {
   return v != null && isFinite(v) ? v.toFixed(2) : "—"
@@ -40,6 +43,8 @@ interface StatRow {
 // ── main component ──────────────────────────────────────────────────────────
 
 export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps) {
+  const [mode, setMode] = useState<Mode>("annual")
+
   if (!fund) {
     return (
       <div className="fin-body">
@@ -51,13 +56,11 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
   }
 
   const cur = fund.ratios?.current ?? ({} as RatiosCurrent)
+  const isAnnual = mode === "annual"
 
   // ── top bar chart: P/E + P/S per period ──
-  // fund.json v1 carries ANNUAL ratio series only — there is no per-quarter ratio
-  // data — so this page is annual-only (the Annual/Quarterly toggle was removed).
   const rPeriods = fund.ratios?.periods ?? []
-  const chartPeriods = rPeriods
-  const chartSeries: Series[] = [
+  const peSeries: Series[] = [
     {
       name: pick(!!zh, "Price to earnings ratio", "市盈率"),
       values: fund.ratios?.pe ?? [],
@@ -70,6 +73,18 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
     },
   ]
 
+  // fund.json v1 carries ANNUAL ratio series only — there is no per-quarter ratio data. The toggle
+  // still switches the P/E·P/S chart's period axis to the quarterly earnings periods (with empty ratio
+  // series underneath) and swaps the valuation table below for an honest "not available" note.
+  const qPeriods = fund.statements?.quarterly?.periods ?? []
+  const chartPeriods = isAnnual ? rPeriods : qPeriods.slice(-8)
+  const chartSeries: Series[] = isAnnual
+    ? peSeries
+    : [
+        { name: pick(!!zh, "Price to earnings ratio", "市盈率"), values: [], color: "var(--brand)" },
+        { name: pick(!!zh, "Price to sales ratio", "市销率"), values: [], color: "var(--up)" },
+      ]
+
   // ── Key stats rows ──
   // These come from fund.stats (not period-indexed by annual/quarterly in v1)
   // We show them as single current-value rows (no period array per §1.1 — stats.shares_out is a scalar)
@@ -79,6 +94,7 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
     v != null && isFinite(v) ? v.toLocaleString("en-US") : "—"
 
   // ── Valuation rows aligned to annual ratios.periods (v1 has annual ratios only) ──
+  // In quarterly mode the ratios table is replaced with fin-empty, so only rPeriods matters here.
   const annualPeriods = rPeriods
 
   // Build a "Current" column value from live ratios
@@ -111,10 +127,17 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
 
   return (
     <div className="fin-body">
-      {/* ── Header ── */}
+      {/* ── Header + toggle ── */}
       <div className="fin-stats-hdr">
         <div className="fin-sec-h">{pick(!!zh, "Statistics", "统计数据")}</div>
-        <span className="fin-stats-basis">{pick(!!zh, "Annual", "年度")}</span>
+        <div className="fin-toggle">
+          <button className={mode === "annual" ? "on" : ""} onClick={() => setMode("annual")}>
+            {pick(!!zh, "Annual", "年度")}
+          </button>
+          <button className={mode === "quarterly" ? "on" : ""} onClick={() => setMode("quarterly")}>
+            {pick(!!zh, "Quarterly", "季度")}
+          </button>
+        </div>
       </div>
 
       {/* ── Top bar chart: P/E + P/S ── */}
@@ -184,48 +207,55 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
 
       {/* ── Valuation ratios (annual series + live Current column) ── */}
       <div className="fin-sec">
-        <div className="fin-table-scroll">
-          <table className="fin-table fin-stats-tbl">
-            <thead>
-              <tr>
-                <th className="fin-cell fin-cell-sticky fin-cell-corner" scope="col">
-                  {pick(!!zh, "Metrics", "指标")}
-                </th>
-                {annualPeriods.slice(-6).map((p, i) => (
-                  <th key={i} className="fin-cell fin-cell-num fin-cell-head" scope="col">{p}</th>
-                ))}
-                <th className="fin-cell fin-cell-num fin-cell-head fin-cell-current" scope="col">
-                  {pick(!!zh, "Current", "当前")}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr className="fin-row fin-stats-grp-hdr">
-                <th colSpan={annualPeriods.slice(-6).length + 2} className="fin-cell fin-cell-grp" scope="rowgroup">
-                  {pick(!!zh, "Valuation ratios", "估值比率")}
-                </th>
-              </tr>
-              {valRows.map((row, ri) => {
-                const periodSlice = row.values.slice(-6) // annual series only
-                return (
-                  <tr key={ri} className="fin-row">
-                    <th className="fin-cell fin-cell-sticky" scope="row">{row.label}</th>
-                    {annualPeriods.slice(-6).map((_, ci) => (
-                      <td key={ci} className="fin-cell fin-cell-num">
-                        {periodSlice[ci] != null && isFinite(periodSlice[ci] as number)
-                          ? (periodSlice[ci] as number).toFixed(2)
-                          : "—"}
+        {/* v1 has no quarterly ratio series — show honest empty state in quarterly mode */}
+        {!isAnnual ? (
+          <div className="fin-empty" role="status">
+            {pick(!!zh, "Quarterly valuation ratios are not available.", "季度估值比率暂不可用。")}
+          </div>
+        ) : (
+          <div className="fin-table-scroll">
+            <table className="fin-table fin-stats-tbl">
+              <thead>
+                <tr>
+                  <th className="fin-cell fin-cell-sticky fin-cell-corner" scope="col">
+                    {pick(!!zh, "Metrics", "指标")}
+                  </th>
+                  {annualPeriods.slice(-6).map((p, i) => (
+                    <th key={i} className="fin-cell fin-cell-num fin-cell-head" scope="col">{p}</th>
+                  ))}
+                  <th className="fin-cell fin-cell-num fin-cell-head fin-cell-current" scope="col">
+                    {pick(!!zh, "Current", "当前")}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="fin-row fin-stats-grp-hdr">
+                  <th colSpan={annualPeriods.slice(-6).length + 2} className="fin-cell fin-cell-grp" scope="rowgroup">
+                    {pick(!!zh, "Valuation ratios", "估值比率")}
+                  </th>
+                </tr>
+                {valRows.map((row, ri) => {
+                  const periodSlice = row.values.slice(-6) // annual series only
+                  return (
+                    <tr key={ri} className="fin-row">
+                      <th className="fin-cell fin-cell-sticky" scope="row">{row.label}</th>
+                      {annualPeriods.slice(-6).map((_, ci) => (
+                        <td key={ci} className="fin-cell fin-cell-num">
+                          {periodSlice[ci] != null && isFinite(periodSlice[ci] as number)
+                            ? (periodSlice[ci] as number).toFixed(2)
+                            : "—"}
+                        </td>
+                      ))}
+                      <td className="fin-cell fin-cell-num fin-cell-current">
+                        {row.current != null && isFinite(row.current) ? row.current.toFixed(2) : "—"}
                       </td>
-                    ))}
-                    <td className="fin-cell fin-cell-num fin-cell-current">
-                      {row.current != null && isFinite(row.current) ? row.current.toFixed(2) : "—"}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* ── Profitability ratios ── */}
