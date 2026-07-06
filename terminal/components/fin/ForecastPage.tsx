@@ -512,7 +512,9 @@ function buildEstimateRows(
       estimate.push(pickE(fy));
     }
   } else {
-    for (const q of fund?.earnings?.q ?? []) {
+    // Cap quarterly actuals to the last 12 periods (still generous) so the x-axis
+    // isn't crushed; the forward estimate tail below is appended after the cap.
+    for (const q of (fund?.earnings?.q ?? []).slice(-12)) {
       labels.push(q.period);
       reported.push(pickA(q));
       estimate.push(pickE(q));

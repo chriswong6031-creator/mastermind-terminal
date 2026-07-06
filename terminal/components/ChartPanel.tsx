@@ -2,11 +2,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createChart, CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries,
+  createSeriesMarkers, type ISeriesMarkersPluginApi,
   CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi,
 } from "lightweight-charts";
+import { runPine, type RunResult } from "@/lib/pine-engine";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { getJSON, getSliceAndOhlc } from "@/lib/dataCache";
+import { CMP_PALETTE } from "@/lib/compare";
 import { isIntradayTf, classify, type Market } from "@/lib/intradaySources";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
@@ -78,10 +81,20 @@ const US_DATE_FMT = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_Yo
 
 const EMPTY_SET: Set<string> = new Set();
 const EMPTY_OBJ: Record<string, any> = {};
+const EMPTY_PINE: PineScript[] = [];
+
+// An enabled custom script threaded from TerminalShell. `params` already has the user's per-script
+// overrides merged over the script's declared input defaults (keyed by the input's assignment-var).
+export type PineScript = { id: string; name: string; source: string; params: Record<string, any> };
+// Sub-pane pine scripts get a namespaced pane key so they never collide with a built-in sub-pane key.
+const pineKeyOf = (id: string) => "pine:" + id;
+// ~2s coarse runtime cap: a pathological script is skipped with an error rather than freezing the tab.
+const PINE_RUNTIME_CAP_MS = 2000;
 
 // Preserve the visible logical range across an indicator toggle (§0.4 ratified = true).
 // The one-line escape hatch: flip to false to restore the pre-refactor "view resets on toggle" behavior.
 const PRESERVE_VIEW_ON_INDICATOR_TOGGLE = true;
+
 
 // ---- indicator math ----
 function ema(a: (number | null)[], p: number) { const o: (number | null)[] = Array(a.length).fill(null); const k = 2 / (p + 1); let pr: number | null = null, s = 0, c = 0; for (let i = 0; i < a.length; i++) { const v = a[i]; if (v == null) { o[i] = pr; continue; } if (pr == null) { s += v; c++; if (c === p) { pr = s / p; o[i] = pr; } } else { pr = v * k + pr * (1 - k); o[i] = pr; } } return o; }
@@ -105,6 +118,23 @@ function resampleTf(rows: Bar[], tf: string): Bar[] {
   for (let i = 0; i < rows.length; i++) { const r = rows[i]; const k = tf === "W" ? isoWeek(r.time) : tf === "2W" ? biWeek(r.time) : tf === "1M" ? r.time.slice(0, 7) : tf === "3M" ? quarter(r.time) : Math.floor(i / 3); if (k !== key) { if (cur) out.push(cur); key = k; cur = { ...r }; } else { cur!.h = Math.max(cur!.h, r.h); cur!.l = Math.min(cur!.l, r.l); cur!.c = r.c; cur!.time = r.time; cur!.v += r.v; } }
   if (cur) out.push(cur); return out;
 }
+
+// ── resampleTf memoization: cache per (symbol, tf) so D→W→D doesn't recompute ──
+// Keys are evicted when the symbol changes (clearResampleCache). Max ~10 entries (6 TFs × recent symbols).
+// The cache stores the FULL resampled array; callers still slice for replay.
+const _resampleCache = new Map<string, Bar[]>();
+function resampleTfCached(rows: Bar[], tf: string, sym: string): Bar[] {
+  const key = sym + "::" + tf;
+  const cached = _resampleCache.get(key);
+  if (cached !== undefined) return cached;
+  const result = resampleTf(rows, tf);
+  _resampleCache.set(key, result);
+  return result;
+}
+function clearResampleCache(sym?: string): void {
+  if (sym === undefined) { _resampleCache.clear(); return; }
+  for (const k of Array.from(_resampleCache.keys())) { if (k.startsWith(sym + "::")) _resampleCache.delete(k); }
+}
 function heikin(rows: Bar[]): Bar[] { const out: Bar[] = []; let po = 0, pc = 0; for (let i = 0; i < rows.length; i++) { const r = rows[i]; const hc = (r.o + r.h + r.l + r.c) / 4; const ho = i === 0 ? (r.o + r.c) / 2 : (po + pc) / 2; out.push({ ...r, o: ho, c: hc, h: Math.max(r.h, ho, hc), l: Math.min(r.l, ho, hc) }); po = ho; pc = hc; } return out; }
 
 const NS = "http://www.w3.org/2000/svg";
@@ -123,10 +153,10 @@ const SUBPANE_ORDER = ["osc", "macd"] as const;
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], isActive = true, syncId = null, liveQuote = null,
-  indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource }:
+  indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
-    indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void }) {
+    indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
   const verdictRef = useRef<HTMLSpanElement>(null);
@@ -137,11 +167,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const indSeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());   // indKey → its series
   const cmpSeriesRef = useRef<Map<string, ISeriesApi<any>>>(new Map());      // compare-sym → series
   const paneMapRef = useRef<Map<string, number>>(new Map());                 // sub-pane indKey → pane index
+  // ── custom-script (Pine) render state (parallels the built-in indicator refs) ──
+  const pineSeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());   // scriptId → its series (all panes)
+  const pineMarkersRef = useRef<Map<string, ISeriesMarkersPluginApi<any>>>(new Map()); // scriptId → its markers plugin
+  const pinePaneMapRef = useRef<Map<string, number>>(new Map());             // sub-pane scriptId → pane index (overlay scripts absent)
+  const pineErrRef = useRef<Map<string, string>>(new Map());                 // scriptId → error text (surfaced in the legend)
+  const pineCacheRef = useRef<Map<string, { key: string; result: RunResult | null; error: string | null }>>(new Map()); // memo: scriptId → last run
+  const pineScriptsRef = useRef<PineScript[]>(pineScripts); pineScriptsRef.current = pineScripts;
   const barsRef = useRef<Bar[]>([]);        // the bars currently ON the chart (full OR replay-sliced)
   const fullBarsRef = useRef<Bar[]>([]);    // the full resampled history — NEVER mutated by replay
   const dailyBarsRef = useRef<Bar[]>([]);   // the raw DAILY source (pre-resample) — the R11 splice operates here
   const isIntradayRef = useRef<boolean>(false);   // true when the active TF is an intraday branch (skip splice/resample/date-keyed overlays)
   const closesRef = useRef<number[]>([]);   // closes of barsRef
+  const prevSymbolRef = useRef<string>("");  // tracks the symbol from the last Effect 2 run to detect symbol changes
   const precRef = useRef<number>(2);
   const sigMarksRef = useRef<{ t: string; type: string; price: number; highlight?: boolean }[]>([]);
   const highlightTimerRef = useRef<any>(null);   // R14 pulse timer — cleared on symbol/TF change
@@ -193,6 +231,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const ctxRef = useRef<HTMLDivElement | null>(null);
   const textEditRef = useRef<HTMLInputElement | null>(null);
   const sigRef = useRef<SVGSVGElement | null>(null);
+  // intraday dead-end empty-state overlay ("Back to Daily") — built in Effect 1, toggled from Effect 2
+  const emptyRef = useRef<HTMLDivElement | null>(null);
+  const showEmptyRef = useRef<(msg: string) => void>(() => {});
+  const hideEmptyRef = useRef<() => void>(() => {});
   // rebuild the CHART STYLE (not the chart) when the up/down color scheme flips (Effect 5)
   const [csNonce, setCsNonce] = useState(0);
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
@@ -279,6 +321,103 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return [hs, lS, sS];
   };
 
+  // ── custom-script (Pine) run + translate layer ─────────────────────────────────────────────────
+  // Memoized per-script run: re-runs only when (id, source, params, symbol, tf, bar identity) change.
+  // A throwing/slow/invalid script never crashes the chart — the error is captured and surfaced in the
+  // legend row; its series are simply skipped. Bar identity = fullBarsRef.current (the on-chart set is
+  // a prefix during replay; v1 re-runs on the full set, cache-keyed by its length + last time).
+  const runPineMemo = (script: PineScript, rows: Bar[]): { result: RunResult | null; error: string | null } => {
+    const barSig = rows.length ? `${rows.length}:${rows[rows.length - 1].time}` : "0";
+    const key = `${script.source} ${JSON.stringify(script.params)} ${symbol} ${timeframeRef.current} ${barSig}`;
+    const cached = pineCacheRef.current.get(script.id);
+    if (cached && cached.key === key) return { result: cached.result, error: cached.error };
+    let result: RunResult | null = null; let error: string | null = null;
+    try {
+      const t0 = Date.now();
+      const out = runPine(script.source, rows as any, { timeframe: timeframeRef.current, symbol, params: script.params || {} });
+      if (Date.now() - t0 > PINE_RUNTIME_CAP_MS) { error = "Script exceeded the 2s runtime cap"; }
+      else if (!out.ok) { const e = out.errors[0]; error = e ? (e.line ? `Line ${e.line}: ${e.message}` : e.message) : "Script failed to run"; }
+      else result = out.result;
+    } catch (e: any) { error = e?.message ? String(e.message) : "Script crashed"; }
+    pineCacheRef.current.set(script.id, { key, result, error });
+    return { result, error };
+  };
+
+  // Map a Pine PlotKind → a Lightweight-Charts series on `pane`. Histogram/columns → HistogramSeries
+  // (per-bar colors preserved); area → AreaSeries; everything else (line/stepline/circles/cross) → a
+  // LineSeries. Returns the series (or null if the plot has no finite points).
+  const addPinePlot = (chart: IChartApi, plot: RunResult["plots"][number], pane: number): ISeriesApi<any> | null => {
+    const data = plot.data.filter((d) => d.value != null && isFinite(d.value));
+    if (!data.length) return null;
+    const lw = Math.max(1, plot.linewidth || 1) as any;
+    let s: ISeriesApi<any>;
+    if (plot.kind === "histogram" || plot.kind === "columns") {
+      s = chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false, title: plot.title }, pane);
+      s.setData(data.map((d) => ({ time: d.time, value: d.value, color: d.color || plot.color })) as any);
+    } else if (plot.kind === "area") {
+      s = chart.addSeries(AreaSeries, { lineColor: plot.color, topColor: plot.color, bottomColor: "rgba(0,0,0,0)", lineWidth: lw, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, pane);
+      s.setData(data.map((d) => ({ time: d.time, value: d.value })) as any);
+    } else {
+      s = chart.addSeries(LineSeries, { color: plot.color, lineWidth: lw, lineStyle: plot.kind === "stepline" ? 0 : 0, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: plot.title }, pane);
+      s.setData(data.map((d) => ({ time: d.time, value: d.value })) as any);
+    }
+    return s;
+  };
+
+  // Build ONE script's series onto the chart. Overlay scripts (meta.overlay) plot on the price pane
+  // (pane 0); non-overlay scripts get their own sub-pane at index `subPane` (caller-assigned). hlines
+  // → createPriceLine on the first series (or the price series for empty overlay scripts); shapes →
+  // one markers plugin. Records series/markers/pane in the pine refs. Returns true if it got a pane.
+  const buildPineScript = (script: PineScript, rows: Bar[], subPane: number): { ok: boolean; usedPane: boolean } => {
+    const chart = chartRef.current, priceS = priceSeriesRef.current; if (!chart || !priceS) return { ok: false, usedPane: false };
+    const { result, error } = runPineMemo(script, rows);
+    if (error || !result) { pineErrRef.current.set(script.id, error || "Script produced no output"); return { ok: false, usedPane: false }; }
+    pineErrRef.current.delete(script.id);
+    const overlay = result.meta.overlay;
+    const pane = overlay ? 0 : subPane;
+    const series: ISeriesApi<any>[] = [];
+    for (const plot of result.plots) { const s = addPinePlot(chart, plot, pane); if (s) series.push(s); }
+    // hlines → price lines on the anchor series (first plot series, else the price series for overlays)
+    const anchor = series[0] || (overlay ? priceS : null);
+    if (anchor) for (const hl of result.hlines) { try { anchor.createPriceLine({ price: hl.price, color: hl.color, lineWidth: 1, lineStyle: hl.style === "dashed" ? 2 : hl.style === "dotted" ? 1 : 0, axisLabelVisible: true, title: hl.title } as any); } catch {} }
+    // shapes → markers on the anchor series (only meaningful when there's a series to hang them on)
+    if (anchor && result.shapes.length) {
+      try {
+        const markers = result.shapes.map((sh) => ({ time: sh.time as any, position: sh.position, shape: sh.shape, color: sh.color, text: sh.text }));
+        const plugin = createSeriesMarkers(anchor, markers as any);
+        pineMarkersRef.current.set(script.id, plugin);
+      } catch {}
+    }
+    pineSeriesRef.current.set(script.id, series);
+    // a non-overlay script claims its pane only if it actually rendered at least one series there
+    const usedPane = !overlay && series.length > 0;
+    if (usedPane) pinePaneMapRef.current.set(script.id, subPane);
+    return { ok: true, usedPane };
+  };
+
+  // Remove EVERY tracked pine series + markers (price/compare/built-ins/drawings survive).
+  const clearAllPine = () => {
+    const chart = chartRef.current; if (!chart) return;
+    for (const plugin of pineMarkersRef.current.values()) { try { plugin.detach(); } catch {} }
+    pineMarkersRef.current.clear();
+    for (const arr of pineSeriesRef.current.values()) for (const s of arr) { try { chart.removeSeries(s); } catch {} }
+    pineSeriesRef.current.clear(); pinePaneMapRef.current.clear();
+  };
+
+  // Build ALL enabled scripts onto `rows`. Non-overlay scripts append sub-panes AFTER any built-in
+  // sub-panes (osc/macd) in the scripts' array order. Errors are captured per-script (legend), never thrown.
+  const buildAllPine = (rows: Bar[]) => {
+    const chart = chartRef.current; if (!chart) return;
+    const scripts = pineScriptsRef.current; if (!scripts.length) return;
+    // next free pane = 1 + max(any built-in sub-pane index already assigned)
+    let pane = 1;
+    for (const idx of paneMapRef.current.values()) pane = Math.max(pane, idx + 1);
+    for (const s of scripts) {
+      const { usedPane } = buildPineScript(s, rows, pane);
+      if (usedPane) pane++;
+    }
+  };
+
   // Which sub-pane keys are active given the current indicator set (canonical order).
   const activeSubpanes = (): string[] => {
     const inds = indicatorsRef.current; const out: string[] = [];
@@ -307,15 +446,39 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // a genuine separator drag (normal mode only) becomes the new baseline; ignore programmatic sizing
   const captureNormal = () => { const ctl = paneCtl.current; if (ctl.maximized) return; for (const m of panesMeta.current) { if (ctl.collapsed.has(m.key)) continue; try { ctl.normal.set(m.key, m.pane.getStretchFactor()); } catch {} } };
 
+  // Legend swatch color for a script = its first rendered series' color (best-effort), else grey.
+  const pineColorOf = (arr?: ISeriesApi<any>[]): string => {
+    try { const c = (arr?.[0]?.options() as any)?.color || (arr?.[0]?.options() as any)?.lineColor; if (c) return c; } catch {}
+    return tokensRef.current.mut || "#787b86";
+  };
+  // Build a LegendEntry for a custom script. `key` is the raw scriptId (isPine:true tells the shell
+  // to route Settings to the pine branch + resolve remove/eye by scriptId). An error surfaces in the
+  // label (⚠ suffix) and — because ChartOverlays doesn't take a tooltip — the shell can read it too.
+  const pineLegendEntry = (s: PineScript, kind: "overlay" | "pane", series: ISeriesApi<any>[] | undefined, err?: string): Omit<LegendEntry, "hidden"> => ({
+    key: s.id, label: err ? `${s.name} ⚠` : s.name, kind, isPine: true, color: pineColorOf(series),
+  });
+
   // Rebuild the per-pane legend registry from the CURRENT indicator series + paneMapRef. The price pane
-  // carries the active overlay entries (ema/bb/vwap/vol); each sub-pane carries its own indicator(s), with
-  // the shared osc pane listing rsi and/or stochrsi separately. Any stale collapse/normal entries for
-  // panes that no longer exist are pruned so the sizing map can't leak across removals.
+  // carries the active overlay entries (ema/bb/vwap/vol + overlay scripts); each sub-pane carries its own
+  // indicator(s) / script, with the shared osc pane listing rsi and/or stochrsi separately. Any stale
+  // collapse/normal entries for panes that no longer exist are pruned so the sizing map can't leak.
   const rebuildPaneMeta = () => {
     const chart = chartRef.current, priceS = priceSeriesRef.current; if (!chart || !priceS) return;
     const inds = indicatorsRef.current;
     const overlayEntries: Omit<LegendEntry, "hidden">[] = [];
     for (const k of ["ema", "bb", "vwap", "vol"] as const) if (inds.has(k) && indSeriesRef.current.has(k)) overlayEntries.push({ key: k, label: labelOf(k), kind: "overlay", isPine: false });
+    // custom scripts: OVERLAY ones (or errored ones) list on the price pane; each SUB-PANE script gets
+    // its own pane meta below. An errored script still gets a legend row so the user sees + can remove it.
+    // On INTRADAY the pine build is skipped entirely (buildAllPine is date-keyed — see buildAllIndicators),
+    // so NO series or engine error exists for any enabled script; surface an explicit "not available on
+    // intraday" error on the row (⚠) instead of a phantom active-looking legend entry with no plot.
+    for (const s of pineScriptsRef.current) {
+      const err = isIntradayRef.current ? "Not available on intraday timeframes" : pineErrRef.current.get(s.id);
+      const series = pineSeriesRef.current.get(s.id);
+      const hasPane = pinePaneMapRef.current.has(s.id);
+      if (hasPane) continue;   // sub-pane script → handled in the sub-pane loop
+      overlayEntries.push(pineLegendEntry(s, "overlay", series, err));
+    }
     // compare overlays are managed by TerminalShell (the compare bar), NOT the legend — omitted here.
     const metas: { key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[] = [];
     metas.push({ key: "__price__", isPrice: true, entries: overlayEntries, pane: priceS.getPane() });
@@ -325,6 +488,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         ? (["stochrsi", "rsi"] as const).filter((k) => inds.has(k)).map((k) => ({ key: k, label: labelOf(k), kind: "pane", isPine: false }))
         : [{ key, label: labelOf(key), kind: "pane", isPine: false }];
       metas.push({ key, isPrice: false, entries, pane: arr[0].getPane() });
+    }
+    // pine SUB-PANE scripts, in their assigned-pane order
+    for (const s of pineScriptsRef.current) {
+      if (!pinePaneMapRef.current.has(s.id)) continue;
+      const arr = pineSeriesRef.current.get(s.id); if (!arr || !arr.length) continue;
+      metas.push({ key: pineKeyOf(s.id), isPrice: false, entries: [pineLegendEntry(s, "pane", arr, pineErrRef.current.get(s.id))], pane: arr[0].getPane() });
     }
     panesMeta.current = metas;
     // prune sizing/collapse state for panes that no longer exist
@@ -362,6 +531,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (k === "osc") { for (const s of arr) { try { const ttl = ((s.options() as any)?.title || "").toUpperCase(); const own = ttl.includes("RSI") && !ttl.includes("%") ? "rsi" : "stochrsi"; s.applyOptions({ visible: !h.has(own) && tfVisible(own) } as any); } catch {} } continue; }
       const vis = !h.has(k) && tfVisible(k); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} }
     }
+    // custom scripts: eye toggle by scriptId (no tf-visibility gating — scripts don't declare _vis)
+    for (const [id, arr] of pineSeriesRef.current) { const vis = !h.has(id); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} } }
   };
 
   // Remove EVERY tracked indicator series (price/compare/drawings survive). Used by the bounded rebuild.
@@ -385,7 +556,52 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (key === "macd") indSeriesRef.current.set("macd", buildMacd(chart, rows, closes, pane));
       paneMapRef.current.set(key, pane); pane++;
     }
+    // custom scripts always ride along a full indicator rebuild (bars/indicator/replay change): rebuild
+    // them on the SAME on-chart `rows` so their series align with the visible bars. runPineMemo caches
+    // per script, so unchanged scripts don't recompute; only a fresh bar set / edited script re-runs.
+    // Skipped on intraday (bars carry a NUMERIC epoch `time`; the engine's date math assumes "YYYY-MM-DD").
+    clearAllPine();
+    if (!isIntradayRef.current) buildAllPine(rows);
     normalizeStretch();
+  };
+
+  // Update EXISTING indicator series in-place via setData (no removeSeries/addSeries).
+  // Safe to call only when the indicator SET is unchanged (same keys in indSeriesRef).
+  // Used by Effect 2 on same-symbol timeframe/chartType switches to avoid the DOM series lifecycle cost.
+  const updateAllIndicators = (rows: Bar[], closes: number[]) => {
+    const inds = indicatorsRef.current; const SB = indSeriesRef.current;
+    if (!SB.size) return;  // nothing to update (no indicators active)
+    // overlays
+    if (inds.has("ema")) {
+      const sArr = SB.get("ema"); const p = P("ema");
+      const configs = ([[p.ma1On, p.ma1Len], [p.ma2On, p.ma2Len], [p.ma3On, p.ma3Len]] as [boolean, number][]).filter(([on]) => on);
+      if (sArr) configs.forEach(([, len], i) => { if (sArr[i]) sArr[i].setData(toLine(rows, ema(closes, len))); });
+    }
+    if (inds.has("bb")) {
+      const sArr = SB.get("bb"); const p = P("bb");
+      const basis = sma(closes, p.length); const sd = stddev(closes, p.length);
+      const up = closes.map((_, i) => (basis[i] != null && sd[i] != null ? basis[i]! + p.mult * sd[i]! : null));
+      const lo = closes.map((_, i) => (basis[i] != null && sd[i] != null ? basis[i]! - p.mult * sd[i]! : null));
+      if (sArr) { [up, basis, lo].forEach((arr, j) => { if (sArr[j]) sArr[j].setData(toLine(rows, arr)); }); }
+    }
+    if (inds.has("vwap")) {
+      const sArr = SB.get("vwap"); if (sArr?.[0]) { let cum = 0, cumv = 0; const vw = rows.map((r) => { const tp = (r.h + r.l + r.c) / 3; cum += tp * r.v; cumv += r.v; return cumv ? cum / cumv : null; }); sArr[0].setData(toLine(rows, vw)); }
+    }
+    if (inds.has("vol")) {
+      const sArr = SB.get("vol"); if (sArr?.[0]) sArr[0].setData(volData(rows));
+    }
+    // sub-pane oscillators
+    if (SB.has("osc")) {
+      const sArr = SB.get("osc")!; let si = 0;
+      if (inds.has("stochrsi")) { const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD); if (sArr[si]) sArr[si].setData(toLine(rows, sr.k)); si++; if (sArr[si]) sArr[si].setData(toLine(rows, sr.d)); si++; }
+      if (inds.has("rsi")) { const p = P("rsi"); if (sArr[si]) sArr[si].setData(toLine(rows, rsi(closes, p.length))); }
+    }
+    if (SB.has("macd")) {
+      const sArr = SB.get("macd")!; const p = P("macd"); const m = macd(closes, p.fast, p.slow, p.signal);
+      if (sArr[0]) sArr[0].setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? p.upHist : p.downHist } : null)).filter(Boolean) as any);
+      if (sArr[1]) sArr[1].setData(toLine(rows, m.line));
+      if (sArr[2]) sArr[2].setData(toLine(rows, m.sig));
+    }
   };
 
   // Rebuild ONLY the compare overlays onto `rows` (used by data + replay effects).
@@ -398,7 +614,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     for (const s of cmpSeriesRef.current.values()) { try { chart.removeSeries(s); } catch {} }
     cmpSeriesRef.current.clear();
     const prec = precRef.current; const cmp = compareRef.current || [];
-    const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
     for (let ci = 0; ci < cmp.length && ci < 4; ci++) {
       const cs = cmp[ci]; if (!cs || cs === symbol) continue;
       const co = await getJSON(`/data/${cs}.json`);
@@ -410,7 +625,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       let bse = 0, baseA = rows[0]?.c ?? 0; for (const r of rows) { if (cmap[r.time] != null) { bse = cmap[r.time]; baseA = r.c; break; } }
       if (!bse) continue; const scl = baseA / bse; let lv: number | null = null;
       const cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: +(lv * scl).toFixed(prec) } : null; }).filter(Boolean);
-      const ln = chart.addSeries(LineSeries, { color: CMP_COLORS[ci % CMP_COLORS.length], lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: cs }, 0);
+      const ln = chart.addSeries(LineSeries, { color: CMP_PALETTE[ci % CMP_PALETTE.length], lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: cs }, 0);
       ln.setData(cdata as any); cmpSeriesRef.current.set(cs, ln);
     }
   };
@@ -508,7 +723,74 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
     let rafId: number | null = null, measRaf: number | null = null;
     let onPaneMove: ((e: MouseEvent) => void) | null = null, onPaneLeave: (() => void) | null = null, onPaneDbl: ((e: MouseEvent) => void) | null = null;
-    const snapshot = () => { if (!activeRef.current) return; try { const c = chartRef.current!.takeScreenshot(); const a = document.createElement("a"); a.href = c.toDataURL(); a.download = `${symbol}.png`; a.click(); } catch {} };
+    // ── snapshot: composite the chart under a metadata header band, copy to clipboard + download ──
+    // Reads the LIVE refs (indicatorsRef/timeframeRef/chartTypeRef) so the header matches what's on
+    // screen even though this closure is bound at mount. Clipboard write is best-effort (secure-context
+    // + user-gesture are satisfied by the toolbar click); the download always fires.
+    const snapshot = () => {
+      if (!activeRef.current) return;
+      try {
+        const src = chartRef.current!.takeScreenshot();          // an HTMLCanvasElement of the chart
+        const dpr = window.devicePixelRatio || 1;
+        const HDR = Math.round(56 * dpr);                        // header band, ~56 CSS px scaled to device px
+        const out = document.createElement("canvas");
+        out.width = src.width; out.height = src.height + HDR;
+        const g = out.getContext("2d"); if (!g) return;
+        // background band in the chart bg color (falls back to the page --bg)
+        g.fillStyle = css("--bg") || "#0a0b0e";
+        g.fillRect(0, 0, out.width, HDR);
+        g.drawImage(src, 0, HDR);
+        // header text (all sizes scaled by dpr so the band reads crisp on hi-dpi displays)
+        const tf = timeframeRef.current;
+        const ctLabel: Record<string, string> = { candles: "Candles", bars: "Bars", line: "Line", area: "Area", heikin: "Heikin Ashi" };
+        const ct = ctLabel[chartTypeRef.current] || chartTypeRef.current;
+        const inds = Array.from(indicatorsRef.current).map((k) => labelOf(k));
+        const date = new Date().toISOString().slice(0, 10);
+        const pad = Math.round(16 * dpr);
+        const text = css("--text") || "#d6dae3";
+        const mut = tokensRef.current.mut || css("--muted") || "#5a616f";
+        const brand = tokensRef.current.brand2 || css("--brand-2") || "#4d82ff";
+        // canvas `font` can't resolve a CSS var() — resolve the family token to its literal stack first
+        const fam = css("--font-ui") || "system-ui, sans-serif";
+        g.textBaseline = "alphabetic";
+        // line 1: bold symbol + timeframe + chart type
+        g.textAlign = "left";
+        g.fillStyle = text;
+        g.font = `800 ${Math.round(17 * dpr)}px ${fam}`;
+        g.fillText(symbol, pad, Math.round(24 * dpr));
+        const symW = g.measureText(symbol).width;
+        g.font = `500 ${Math.round(12 * dpr)}px ${fam}`;
+        g.fillStyle = mut;
+        g.fillText(`${tf}  ·  ${ct}`, pad + symW + Math.round(10 * dpr), Math.round(24 * dpr));
+        // line 2: active indicator labels (or an em dash when none) + date
+        g.font = `500 ${Math.round(11 * dpr)}px ${fam}`;
+        g.fillStyle = mut;
+        g.fillText(`${inds.length ? inds.join("  ·  ") : "—"}     ${date}`, pad, Math.round(44 * dpr));
+        // right-aligned brand
+        g.textAlign = "right";
+        g.font = `700 ${Math.round(13 * dpr)}px ${fam}`;
+        g.fillStyle = brand;
+        g.fillText("Mastermind Terminal", out.width - pad, Math.round(30 * dpr));
+        const fname = `${symbol}_${tf}_${date}.png`;
+        out.toBlob((blob) => {
+          if (!blob) return;
+          // best-effort clipboard copy, then always download
+          (async () => {
+            let copied = false;
+            try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); copied = true; } catch {}
+            const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+            try { URL.revokeObjectURL(a.href); } catch {}
+            // transient statusline feedback (restores the OHLC line after ~2s)
+            const sEl = statusRef.current;
+            if (sEl) {
+              const prev = sEl.innerHTML;
+              sEl.innerHTML = `<b class="up">${copied ? "Snapshot copied + downloaded" : "Snapshot downloaded"}</b>`;
+              setTimeout(() => { if (statusRef.current === sEl) paintStatus(barsRef.current, sliceRef.current); else sEl.innerHTML = prev; }, 2000);
+            }
+          })();
+        }, "image/png");
+      } catch {}
+    };
     window.addEventListener("mm:snapshot", snapshot);
 
     // ── create the ONE chart (the hard invariant: exactly one createChart in this file) ──
@@ -705,6 +987,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (a === "reset") { try { chart.timeScale().fitContent(); } catch {} }
     });
     wrap.addEventListener("contextmenu", onCtx);
+
+    // ── intraday dead-end empty-state: a centered card with a "Back to Daily" button. Shown when the
+    //    intraday branch has no bars (feed unavailable OR genuinely empty); a click dispatches
+    //    `mm:set-tf` (TerminalShell owns the listener → setTf on the active pane). Kept out of the CSS
+    //    files (styling is inline) so it lives entirely in this component. ──
+    const empty = document.createElement("div"); empty.className = "chart-empty"; empty.style.cssText = "position:absolute;inset:0;z-index:6;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:24px;pointer-events:auto";
+    empty.innerHTML = `<div class="ce-msg" style="color:var(--text-2);font-size:13px;max-width:320px;line-height:1.5"></div><button class="ce-btn" style="cursor:pointer;font:600 12px var(--font-ui),system-ui;color:var(--text);background:var(--panel-2);border:1px solid var(--line-3);border-radius:6px;padding:7px 14px">Back to Daily</button>`;
+    wrap.appendChild(empty); emptyRef.current = empty;
+    empty.querySelector(".ce-btn")!.addEventListener("pointerdown", (e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("mm:set-tf", { detail: { tf: "D" } })); });
+    showEmptyRef.current = (msg: string) => { const e2 = emptyRef.current; if (!e2) return; const m = e2.querySelector(".ce-msg"); if (m) m.textContent = msg; e2.style.display = "flex"; };
+    hideEmptyRef.current = () => { const e2 = emptyRef.current; if (e2) e2.style.display = "none"; };
+
     winDown = (e: PointerEvent) => { hideCtx(); if (!toolRef.current && sel) { const tg = e.target as Element; if (tg && !tg.closest?.("g[data-id]") && !tg.closest?.(".draw-bar") && !tg.closest?.(".text-edit")) { sel = null; renderDraw(); } } };
     window.addEventListener("pointerdown", winDown);
     const renderDraw = () => {
@@ -759,8 +1053,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     wrap.addEventListener("mousemove", onPaneMove); wrap.addEventListener("mouseleave", onPaneLeave); wrap.addEventListener("dblclick", onPaneDbl);
 
-    // observe each pane element so separator drags / collapses reposition the overlay + rebaseline sizes
-    paneRO = new ResizeObserver(() => { if (dead) return; captureNormal(); scheduleMeasure(); });
+    // observe each pane element so separator drags / collapses reposition the overlay + rebaseline sizes.
+    // scheduleRender() re-lays the signal-marker + drawing SVG overlays: a pane collapse/maximize/drag
+    // changes the price pane's height (→ priceToCoordinate) WITHOUT resizing the chart container, so the
+    // container `ro` below never fires — without this the BUY/SELL/CUT/REBUY badges lag at stale Y coords
+    // until an unrelated pan/hover triggers a render.
+    paneRO = new ResizeObserver(() => { if (dead) return; captureNormal(); scheduleMeasure(); scheduleRender(); });
     paneRORef.current = paneRO;
 
     const rectXY = (ev: PointerEvent) => { const r = svg.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
@@ -840,10 +1138,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       ro?.disconnect();
       if (textEditRef.current) { try { textEditRef.current.remove(); } catch {} textEditRef.current = null; }
       if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; }
+      if (emptyRef.current) { try { emptyRef.current.remove(); } catch {} emptyRef.current = null; }
       if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; }
       if (sigRef.current) { try { sigRef.current.remove(); } catch {} sigRef.current = null; }
       if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; }
       indSeriesRef.current.clear(); cmpSeriesRef.current.clear(); paneMapRef.current.clear();
+      pineSeriesRef.current.clear(); pineMarkersRef.current.clear(); pinePaneMapRef.current.clear(); pineErrRef.current.clear(); pineCacheRef.current.clear();
       priceSeriesRef.current = null; priceFamilyRef.current = null;
       if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; }   // ONLY chart.remove() in the file
     };
@@ -866,15 +1166,30 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       //    signal/compare overlays (those are "YYYY-MM-DD" keyed). Indicators are bar-agnostic → kept. ──
       if (intraday) {
         let bars: any[] = [];
+        let feedErr: string | null = null;       // the route's j.error (route returns {bars:[],error} on an upstream/config failure)
         try {
           const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(timeframe)}&ext=1`, { cache: "no-store" });
-          if (r.ok) { const j = await r.json(); bars = Array.isArray(j?.bars) ? j.bars : []; }
-        } catch {}
+          const j = await r.json().catch(() => null);
+          bars = Array.isArray(j?.bars) ? j.bars : [];
+          if (!r.ok || j?.error) feedErr = String(j?.error || `HTTP ${r.status}`);
+        } catch (e: any) { feedErr = e?.message || "network error"; }
         if (cancelled || epochRef.current !== epoch) return;
         sliceRef.current = null;                 // no daily slice on intraday → no sig marks
         sigMarksRef.current = [];
         dailyBarsRef.current = [];               // splice is daily-only; disable it here
-        if (!bars.length) { if (statusRef.current) statusRef.current.textContent = "No intraday data for this symbol."; return; }
+        if (!bars.length) {
+          // Differentiate a feed/entitlement/config failure ("POLYGON_API_KEY not set", "polygon 403",
+          // "unauthenticated", …) from a genuinely-empty symbol. Both dead-end the intraday chart, so
+          // surface a "Back to Daily" affordance instead of a blank chart.
+          const unavailable = feedErr != null;
+          if (statusRef.current) statusRef.current.textContent = unavailable ? "Intraday feed unavailable." : "No intraday data for this symbol.";
+          showEmptyRef.current(unavailable
+            ? `Intraday feed unavailable for ${symbol} on ${timeframe}. Switch back to the daily timeframe to keep charting.`
+            : `No intraday data for ${symbol} on ${timeframe}. Switch back to the daily timeframe to keep charting.`);
+          return;
+        }
+        hideEmptyRef.current();                   // data arrived → clear any prior dead-end overlay
+        chart.applyOptions({ timeScale: { timeVisible: true, secondsVisible: false } });   // HH:MM on the intraday axis (no repeated dates)
         // epoch-second Bar6 [t,o,h,l,c,v] → Bar with a NUMERIC time (lightweight-charts accepts UTCTimestamp)
         const rows: Bar[] = bars.map((b: any[]) => ({ time: b[0] as any, o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
         if (onMeta) onMeta({ total: rows.length });
@@ -908,6 +1223,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         return;
       }
 
+      // daily branch: clear any intraday dead-end overlay + reset the axis to date-only labels (the
+      // intraday branch flips timeVisible on; a persistent chart carries that across a TF switch).
+      hideEmptyRef.current();
+      chart.applyOptions({ timeScale: { timeVisible: false, secondsVisible: false } });
+
+      // ── PERF-FIX (b): clear the resample cache on symbol change so stale entries don't survive ──
+      const symbolChanged = symbol !== prevSymbolRef.current;
+      if (symbolChanged) { clearResampleCache(prevSymbolRef.current); prevSymbolRef.current = symbol; }
       const { ohlc, slice } = await getSliceAndOhlc(symbol);
       if (cancelled || epochRef.current !== epoch) return;
       sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)
@@ -915,7 +1238,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       const daily: Bar[] = ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
       dailyBarsRef.current = daily;         // raw daily source — the R11 splice operates on THIS
-      let rows: Bar[] = resampleTf(daily, timeframe);   // FULL resampled history — replayIdx is NOT applied here
+      // ── PERF-FIX (b): use cached resample; same-symbol TF switches skip the O(N) bucketing pass ──
+      let rows: Bar[] = resampleTfCached(daily, timeframe, symbol);
       if (onMeta) onMeta({ total: rows.length });
       fullBarsRef.current = rows;
       // Read the LIVE replayIdx (not the effect's closure): if the user started replay while this
@@ -943,9 +1267,21 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       priceS!.setData(priceData(onChart) as any);
 
-      // ── indicators (full rebuild for this fresh dataset) ──
-      clearAllIndicators();
-      buildAllIndicators(onChart, closes);
+      // ── PERF-FIX (a): indicators — on same-symbol TF/chartType switch, update series data in-place
+      //    (setData only, no removeSeries/addSeries lifecycle). On symbol change, do a full rebuild. ──
+      const canUpdateInPlace = !symbolChanged && indSeriesRef.current.size > 0;
+      if (canUpdateInPlace) {
+        updateAllIndicators(onChart, closes);
+        // updateAllIndicators only touches the built-in series registry (indSeriesRef); Pine scripts are
+        // tracked separately and are date-keyed, so a same-symbol TF switch must still rebuild them onto
+        // the new bars — mirror the full-rebuild path (buildAllIndicators) so an active Pine overlay
+        // doesn't strand at the previous timeframe's data.
+        clearAllPine();
+        if (!isIntradayRef.current) buildAllPine(onChart);
+      } else {
+        clearAllIndicators();
+        buildAllIndicators(onChart, closes);
+      }
 
       // ── compare overlays ──
       await rebuildCompare(onChart, epoch);
@@ -1058,6 +1394,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         else if (a === "macd") indSeriesRef.current.set("macd", buildMacd(chart, rows, closes, pane));
         paneMapRef.current.set(a, pane);
       }
+      // ONLY when a built-in SUB-PANE was added/removed → re-seat pine sub-panes ABOVE the new built-in
+      // panes so a pine pane index can't collide with a freshly-added built-in one. A pure overlay toggle
+      // (ema/bb/vwap/vol on pane 0) leaves sub-pane indices untouched, so pine is left alone. (The
+      // bounded-rebuild branch already rebuilt pine via buildAllIndicators.)
+      if ((added.length || removed.length) && pineScriptsRef.current.length && !isIntradayRef.current) { clearAllPine(); buildAllPine(rows); }
     }
 
     normalizeStretch();
@@ -1066,8 +1407,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // eslint-disable-next-line
   }, [indKey]);
 
-  // The next pane index for a tail-appended sub-pane = 1 + max assigned sub-pane index (or 1 when no sub-panes yet).
-  const nextFreePane = () => { if (!paneMapRef.current.size) return 1; let mx = 1; for (const idx of paneMapRef.current.values()) mx = Math.max(mx, idx); return mx + 1; };
+  // The next pane index for a tail-appended sub-pane = 1 + max assigned sub-pane index across BOTH the
+  // built-in and pine sub-pane maps (or 1 when none exist), so a new built-in pane can't land on a pane
+  // a script already occupies. (Effect 3 re-runs buildAllPine afterward to re-seat pine above the new pane.)
+  const nextFreePane = () => {
+    let mx = 0;
+    for (const idx of paneMapRef.current.values()) mx = Math.max(mx, idx);
+    for (const idx of pinePaneMapRef.current.values()) mx = Math.max(mx, idx);
+    return mx ? mx + 1 : 1;
+  };
 
   // Bounded rebuild: drop every indicator series and re-add the full requested set in canonical order.
   const rebuildIndicators = () => {
@@ -1091,6 +1439,30 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (saved) { try { chart.timeScale().setVisibleLogicalRange(saved); } catch {} }
     // eslint-disable-next-line
   }, [indParamsKey]);
+
+  // ── EFFECT 3c — custom scripts [pineKey]. Add / remove / param-edit a script WITHOUT touching the
+  //   built-in indicators (do NOT clearAllIndicators — that would flash + reset every built-in). Only
+  //   pine series are dropped + rebuilt; runPineMemo caches per script so a single param change re-runs
+  //   ONLY that script. Skips the mount pass (Effect 2 already built the initial set). Runs on the SAME
+  //   on-chart bar set the built-ins use. ──
+  const pineKey = pineScripts.map((s) => `${s.id}:${s.source.length}:${JSON.stringify(s.params)}`).join("|");
+  const pineMounted = useRef(false);
+  useEffect(() => {
+    if (!pineMounted.current) { pineMounted.current = true; return; }
+    const chart = chartRef.current; if (!chart || !barsRef.current.length) return;
+    const saved = PRESERVE_VIEW_ON_INDICATOR_TOGGLE ? (() => { try { const r = chart.timeScale().getVisibleLogicalRange(); return r ? { from: r.from as number, to: r.to as number } : null; } catch { return null; } })() : null;
+    // drop cache entries for scripts that are no longer enabled (frees memory; a re-add re-runs fresh)
+    const live = new Set(pineScriptsRef.current.map((s) => s.id));
+    for (const id of Array.from(pineCacheRef.current.keys())) if (!live.has(id)) pineCacheRef.current.delete(id);
+    for (const id of Array.from(pineErrRef.current.keys())) if (!live.has(id)) pineErrRef.current.delete(id);
+    clearAllPine();
+    if (!isIntradayRef.current) buildAllPine(barsRef.current);
+    normalizeStretch();
+    applyHidden();
+    renderSignalsRef.current(); renderRef.current();
+    if (saved) { try { chart.timeScale().setVisibleLogicalRange(saved); } catch {} }
+    // eslint-disable-next-line
+  }, [pineKey]);
 
   // ── eye toggle / tf-visibility [hidden] → flip series visibility in place (no chart rebuild) ──
   useEffect(() => { hiddenRef.current = hidden; applyHidden(); measureRef.current(); }, [hidden]); // eslint-disable-line

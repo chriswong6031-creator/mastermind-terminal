@@ -73,11 +73,11 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
     },
   ]
 
-  // Quarterly: derive from quarterly earnings periods if available
+  // fund.json v1 carries ANNUAL ratio series only — there is no per-quarter ratio data. The toggle
+  // still switches the P/E·P/S chart's period axis to the quarterly earnings periods (with empty ratio
+  // series underneath) and swaps the valuation table below for an honest "not available" note.
   const qPeriods = fund.statements?.quarterly?.periods ?? []
   const chartPeriods = isAnnual ? rPeriods : qPeriods.slice(-8)
-  // For quarterly bar chart, we only have annual ratio data — reuse annual with
-  // a note, or show empty for quarterly (no per-quarter ratio series in fund.json v1)
   const chartSeries: Series[] = isAnnual
     ? peSeries
     : [
@@ -93,7 +93,7 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
   const empFmt = (v: number | null | undefined) =>
     v != null && isFinite(v) ? v.toLocaleString("en-US") : "—"
 
-  // ── Valuation rows aligned to annual ratios.periods ──
+  // ── Valuation rows aligned to annual ratios.periods (v1 has annual ratios only) ──
   // In quarterly mode the ratios table is replaced with fin-empty, so only rPeriods matters here.
   const annualPeriods = rPeriods
 
@@ -105,6 +105,9 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
     { label: pick(!!zh, "Price to cash flow ratio", "市现率"), values: fund.ratios?.pcf ?? [], current: null },
     { label: pick(!!zh, "Enterprise value to EBITDA", "EV/EBITDA"), values: fund.ratios?.ev_ebitda ?? [], current: cur.ev_ebitda },
     { label: pick(!!zh, "Price to earnings forward", "预期市盈率"), values: [], current: cur.pe_fwd },
+    { label: pick(!!zh, "EV to sales", "EV/销售额"), values: [], current: cur.ev_sales },
+    { label: pick(!!zh, "EV to EBIT", "EV/息税前利润"), values: [], current: cur.ev_ebit },
+    { label: pick(!!zh, "Price to FCF", "价格/自由现金流"), values: [], current: cur.p_fcf },
   ]
 
   // ── Profitability rows from ratios.current (no period series in v1) ──
@@ -202,7 +205,7 @@ export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps)
         </div>
       </div>
 
-      {/* ── Valuation ratios ── */}
+      {/* ── Valuation ratios (annual series + live Current column) ── */}
       <div className="fin-sec">
         {/* v1 has no quarterly ratio series — show honest empty state in quarterly mode */}
         {!isAnnual ? (

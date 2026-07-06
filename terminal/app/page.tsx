@@ -10,7 +10,7 @@ export default function Landing() {
         <h1>As fast as TradingView.<br />Smarter than both.</h1>
         <p className="tag">
           An institutional charting terminal where a verified, backtested confluence signal,
-          a top-down macro&nbsp;/&nbsp;regime read, and an Opus AI copilot work as one system —
+          a top-down macro&nbsp;/&nbsp;regime read, and an AI copilot work as one system —
           so you don&apos;t just see the chart, you understand the setup.
         </p>
         <div className="cta">

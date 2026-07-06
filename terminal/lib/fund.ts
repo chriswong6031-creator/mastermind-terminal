@@ -92,6 +92,9 @@ export interface RatiosCurrent {
   ps: number | null;
   pb: number | null;
   ev_ebitda: number | null;
+  ev_sales: number | null;
+  ev_ebit: number | null;
+  p_fcf: number | null;
   div_yield: number | null;
   payout: number | null;
   gross_margin: number | null;
@@ -116,7 +119,7 @@ export interface FundRatios {
 export interface EarningsQuarter {
   period: string; // "Q3 2026"
   end: string;
-  report_date: string;
+  report_date: string | null; // null on synthesized tx-carrier rows (transcript with no earnings_dates row)
   eps_a: number | null;
   eps_e: number | null;
   rev_a: number | null; // null for US/HK (yfinance carries no per-quarter revenue)

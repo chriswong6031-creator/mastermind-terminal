@@ -1,11 +1,11 @@
 "use client";
 /**
  * MegaPane — the in-shell full-coverage fundamentals overlay (BUILD-SPEC R7/R8,
- * §3.4 FE2a). NOT a route: a fixed z-90 overlay above the workspace. Hosts ten
+ * §3.4 FE2a). NOT a route: a fixed z-90 overlay above the workspace. Hosts nine
  * pages — the six TV "Financials" tabs (overview/statements/statistics/dividends/
- * earnings/revenue) plus sibling dashboards (forecast/technicals/seasonals) and
- * `mastermind` (the existing deep-analysis, so the old modal's content has a
- * real home).
+ * earnings/revenue) plus sibling dashboards (forecast/technicals/seasonals). The
+ * former deep-analysis ("mastermind") page was merged into the OracleDash
+ * Research-Desk surface — the research read lives there now.
  *
  * JUDGE-FIXED behaviors (R7):
  *   - scrim + pane at z-index 90 (fin.css foundation)
@@ -17,8 +17,8 @@
  *   - body scroll lock while open
  *   - shallow deep-link: ?pane=<page> synced via history.replaceState
  *
- * FE3 mounts this and passes {sym, fund, intel, row, slice, quote, bars}. Sibling
- * page components (FE2b/FE2c/FE2d) are imported by name — they land in parallel.
+ * FE3 mounts this and passes {sym, fund, quote, bars}. Sibling page components
+ * (FE2b/FE2c/FE2d) are imported by name — they land in parallel.
  */
 import { useCallback, useEffect, useRef } from "react";
 import { useLang } from "../../lib/i18n";
@@ -35,12 +35,11 @@ import ForecastPage from "./ForecastPage";
 // Sibling dashboards land from FE2c in parallel; imports resolve at integration.
 import TechnicalsPage from "./TechnicalsPage";
 import SeasonalsPage from "./SeasonalsPage";
-// mastermind page = the existing deep-analysis (FE3-owned file; imported read-only).
-import StockAnalysis from "../StockAnalysis";
 import TranscriptDrawer from "./TranscriptDrawer";
 import { useState } from "react";
 
-/** The ten hostable pages. First six share the Financials tab bar. */
+/** The nine hostable pages. First six share the Financials tab bar. The former deep-analysis
+ *  ("mastermind") page was merged into the OracleDash Research-Desk surface. */
 export type FinPage =
   | "overview"
   | "statements"
@@ -50,8 +49,7 @@ export type FinPage =
   | "revenue"
   | "forecast"
   | "technicals"
-  | "seasonals"
-  | "mastermind";
+  | "seasonals";
 
 /** The six pages that share the TV "Financials" tab pill bar. */
 const FIN_TABS: FinPage[] = ["overview", "statements", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast"];
@@ -66,18 +64,11 @@ const PAGE_LABELS: Record<FinPage, [string, string]> = {
   forecast: ["Analyst", "分析师"],
   technicals: ["Technicals", "技术面"],
   seasonals: ["Seasonal", "季节性"],
-  mastermind: ["Full analysis", "深度分析"],
 };
 
 export interface MegaPaneProps {
   sym: string;
   fund: Fund | null;
-  /** intel/v1 analysis blob for the mastermind page (any — StockAnalysis owns its shape). */
-  intel?: any;
-  /** research-desk row (mastermind hero context). */
-  row?: any;
-  /** signal slice (mastermind signal history / oracle context). */
-  slice?: any;
   /** live/delayed quote (statistics Current column, forecast spot). */
   quote?: { last: number | null } | null;
   /** OHLC bars for forecast/technicals/seasonals (from getBars). */
@@ -95,9 +86,6 @@ export interface MegaPaneProps {
 export default function MegaPane({
   sym,
   fund,
-  intel,
-  row,
-  slice,
   quote,
   bars = [],
   page,
@@ -173,18 +161,18 @@ export default function MegaPane({
       <div className="fin-pane" role="dialog" aria-modal="true" aria-label={`${displayName} · ${pageTitle}`}>
         {/* ── header ── */}
         <div className="fin-head">
-          <span className="fin-head-logo" aria-hidden>
-            {initial}
-          </span>
-          <span className="fin-head-title">
-            {displayName} <span className="fin-head-sub">· {pageTitle}</span>
-          </span>
           <button className="fin-head-back" onClick={onClose}>
             <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden style={{ fill: "none", stroke: "currentColor", strokeWidth: 2 }}>
               <path d="M15 18l-6-6 6-6" />
             </svg>
             {pick(zh, "Back to chart", "返回图表")}
           </button>
+          <span className="fin-head-logo" aria-hidden>
+            {initial}
+          </span>
+          <span className="fin-head-title">
+            {displayName} <span className="fin-head-sub">· {pageTitle}</span>
+          </span>
         </div>
 
         {/* ── Financials tab pill bar (six tabs) ── */}
@@ -215,11 +203,6 @@ export default function MegaPane({
           {page === "forecast" && <ForecastPage sym={sym} fund={fund} bars={bars} zh={zh} />}
           {page === "technicals" && <TechnicalsPage sym={sym} bars={bars} zh={zh} />}
           {page === "seasonals" && <SeasonalsPage sym={sym} bars={bars} zh={zh} />}
-          {page === "mastermind" && (
-            <div className="fin-mm-host">
-              <StockAnalysis intel={intel} row={row} slice={slice} deep />
-            </div>
-          )}
         </div>
       </div>
 

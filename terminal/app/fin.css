@@ -17,7 +17,8 @@
 .fin-head-logo{width:22px;height:22px;border-radius:50%;background:var(--panel-3);display:grid;place-items:center;font:700 11px/1 var(--font-ui);color:var(--text-2);flex:none}
 .fin-head-title{font:650 14px/1.2 var(--font-ui);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fin-head-sub{color:var(--text-2);font-weight:500}
-.fin-head-back{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font:600 12px/1 var(--font-ui);color:var(--text-2);background:none;border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 11px;cursor:pointer;transition:color var(--t),border-color var(--t)}
+/* leftmost in .fin-head (before the logo/title) — back-to-chart sits top-left of the pane */
+.fin-head-back{display:inline-flex;align-items:center;gap:6px;font:600 12px/1 var(--font-ui);color:var(--text-2);background:none;border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 11px;cursor:pointer;transition:color var(--t),border-color var(--t)}
 .fin-head-back:hover{color:var(--text);border-color:var(--line-3)}
 
 /* ── tab pill bar ── */
@@ -35,6 +36,8 @@
 .fin-sec-h.link{cursor:pointer}
 .fin-sec-h.link:hover .chev{color:var(--brand-2)}
 .fin-sec-cap{font:500 11.5px/1.45 var(--font-ui);color:var(--text-2);margin-bottom:13px}
+/* muted one-liner under a chart clarifying a basis/caveat (e.g. constant-mktcap P/S) */
+.fin-chart-note{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:7px}
 
 /* ── responsive grids ── */
 .fin-grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -49,7 +52,7 @@
 @media (max-width:640px){.fin-grid2,.fin-grid3,.fin-grid4{grid-template-columns:1fr}.fin-body{padding:14px 12px 60px}}
 
 /* ── card ── */
-.fin-card{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:13px 14px}
+.fin-card{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:var(--sp-3);box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
 .fin-card-h{font:600 12px/1.2 var(--font-ui);color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:6px}
 .fin-card-h .q{width:12px;height:12px;border-radius:50%;border:1px solid var(--line-3);color:var(--muted);font:600 8px/12px var(--font-ui);text-align:center;cursor:help}
 
@@ -122,6 +125,9 @@
 .fin-xaxis{display:flex;justify-content:space-between;padding:6px 50px 0 8px;font:500 10px/1 var(--font-num);color:var(--muted)}
 .fin-xaxis-sm{font-size:8.5px}
 .fin-xaxis-xs{font-size:7.5px;padding-left:6px;padding-right:48px}
+/* rotated variant: densest axes tilt labels ~-35° instead of dropping them; extra height clears the tilt */
+.fin-xaxis-rot{align-items:flex-start;height:26px;padding-top:8px}
+.fin-xaxis-rot .fin-xlbl{transform:rotate(-35deg);transform-origin:center top;white-space:nowrap;overflow:visible}
 /* equal-width centered cells so crowded period labels ("Q2 '26") stay whole instead of clipping */
 .fin-xlbl{white-space:nowrap;text-align:center;flex:1 1 0;min-width:0}
 .fin-legend{display:flex;flex-wrap:nowrap;justify-content:center;gap:6px 10px;margin-top:9px;overflow-x:auto;scrollbar-width:none}
@@ -167,7 +173,7 @@
 .fin-slider input[type=range]{width:70px;accent-color:var(--brand);height:3px}
 
 /* ── FinTip tooltip (fixed, .sa-trust-pop pattern) ── */
-.fin-tip{position:fixed;z-index:95;width:min(220px,72vw);background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:8px 10px;box-shadow:0 14px 32px -12px rgba(0,0,0,.75);pointer-events:none;animation:fin-tip-in .1s ease}
+.fin-tip{position:fixed;z-index:95;width:min(220px,72vw);background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:8px 10px;box-shadow:var(--shadow-2);pointer-events:none;animation:fin-tip-in .1s ease}
 @keyframes fin-tip-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
 .fin-tip-h{font:650 11px/1.3 var(--font-ui);color:var(--text);margin-bottom:5px}
 .fin-tip-row{display:flex;align-items:center;gap:6px;font:500 11px/1.5 var(--font-ui)}
@@ -201,6 +207,7 @@
 
 /* ── Statistics ── */
 .fin-stats-hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.fin-stats-basis{font:500 10.5px/1 var(--font-ui);color:var(--muted)}
 .fin-stats-meta{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-bottom:6px;display:flex;gap:10px}
 .fin-stats-ccy{color:var(--muted)}
 .fin-stats-tbl{min-width:420px}
@@ -297,7 +304,7 @@
 .od-note{font:500 10px/1.45 var(--font-ui);color:var(--muted);padding-top:4px}
 
 /* ── EventEdgePop popover ── */
-.eep-pop{position:fixed;z-index:97;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:14px 15px;box-shadow:0 16px 40px -12px rgba(0,0,0,.8);display:flex;flex-direction:column;gap:11px;animation:fin-tip-in .12s ease;max-height:min(420px,80vh);overflow-y:auto;scrollbar-width:thin}
+.eep-pop{position:fixed;z-index:97;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:14px 15px;box-shadow:var(--shadow-2);display:flex;flex-direction:column;gap:11px;animation:fin-tip-in .12s ease;max-height:min(420px,80vh);overflow-y:auto;scrollbar-width:thin}
 .eep-tier-row{display:flex;align-items:center;gap:8px}
 .eep-tier-pill{display:inline-flex;align-items:center;padding:5px 11px;border-radius:var(--r-pill);border:1.5px solid;font:700 11px/1 var(--font-ui);letter-spacing:.02em;background:transparent}
 .eep-prose{font:500 12px/1.6 var(--font-ui);color:var(--text);margin:0;white-space:pre-wrap;word-break:break-word}
@@ -430,8 +437,6 @@
 .fin-doc-icon svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .fin-doc-none{color:var(--line-3);font:400 12px/1 var(--font-ui);height:22px;display:grid;place-items:center}
 
-/* ── mastermind host (existing deep-analysis inside the pane) ── */
-.fin-mm-host{max-width:920px;margin:0 auto}
 
 /* ── TranscriptDrawer ── */
 .fin-drawer-scrim{position:fixed;inset:0;z-index:94;background:rgba(4,5,7,.4);animation:fin-fade .12s ease}
@@ -448,7 +453,6 @@
 .fin-tx-text{color:var(--text-2)}
 
 @media (max-width:520px){
-  .fin-mm-host{max-width:100%}
   .fin-doc-strip-lbl{display:none}
 }
 

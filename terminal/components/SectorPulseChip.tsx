@@ -15,6 +15,7 @@
  *   broken  → --sell     (red)     — theme broken
  *   idle    → --muted    (grey)    — no direction
  */
+import { useT } from "@/lib/i18n";
 
 export type SectorPulse = {
   theme_id?: string;
@@ -45,6 +46,7 @@ const HEAT_BG: Record<SectorPulse["heat"], string> = {
 };
 
 export default function SectorPulseChip({ pulse }: { pulse: SectorPulse | null | undefined }) {
+  const t = useT();
   if (!pulse || !pulse.heat) return null;
 
   const color = HEAT_COLOR[pulse.heat] ?? "var(--muted)";
@@ -52,7 +54,7 @@ export default function SectorPulseChip({ pulse }: { pulse: SectorPulse | null |
   const label = pulse.heat.charAt(0).toUpperCase() + pulse.heat.slice(1);
 
   const rankStr = pulse.rank != null && pulse.n_themes != null
-    ? `#${pulse.rank} of ${pulse.n_themes}`
+    ? t("sectorRankOf").replace("{rank}", String(pulse.rank)).replace("{n}", String(pulse.n_themes))
     : pulse.rank != null
     ? `#${pulse.rank}`
     : null;
@@ -63,7 +65,7 @@ export default function SectorPulseChip({ pulse }: { pulse: SectorPulse | null |
 
   return (
     <div className="sp-row">
-      <span className="sp-name">{pulse.theme_name ?? pulse.theme_id ?? "Sector theme"}</span>
+      <span className="sp-name">{pulse.theme_name ?? pulse.theme_id ?? t("sectorTheme")}</span>
       <span className="sp-chip" style={{ color, background: bg }}>{label}</span>
       {rankStr && <span className="sp-rank">{rankStr}</span>}
       {deltaStr && (
