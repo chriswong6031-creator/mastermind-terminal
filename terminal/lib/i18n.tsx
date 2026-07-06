@@ -366,11 +366,6 @@ const LEX: Record<string, [string, string]> = {
   flagSwept: ["swept (heuristic)", "扫单（启发式）"],
   // Coverage
   coverageExpanding: ["Coverage expanding", "覆盖扩展中"],
-  // GEX ladder view toggle
-  gexViewNear: ["Near ±10%", "近档 ±10%"],
-  gexViewWide: ["Wide", "全档"],
-  // GEX empty / pending state
-  gexNightlyPending: ["Nightly data pending for this root", "该标的夜间数据待更新"],
 };
 
 const Ctx = createContext<{ lang: Lang; setLang: (l: Lang) => void }>({ lang: "en", setLang: () => {} });
