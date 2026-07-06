@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import PortfolioView from "@/components/PortfolioView";
 
-export const dynamic = "force-dynamic";
+// dynamic='auto': supabase reads cookies → Next auto-detects dynamic; no need to force it.
 
 export default async function PortfolioPage() {
   const supabase = await createClient();

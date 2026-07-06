@@ -1,7 +1,6 @@
 import FlowPageRoot from "@/components/FlowPageRoot";
 
-export const dynamic = "force-dynamic";
-
+// No server-side request data reads — static shell renders instantly; FlowPageRoot fetches client-side.
 export default function FlowPage() {
   return <FlowPageRoot />;
 }

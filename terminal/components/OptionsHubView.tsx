@@ -1,10 +1,12 @@
 "use client";
 import {
+  memo,
   useCallback, useEffect, useMemo, useRef, useState,
 } from "react";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { useLang, useT } from "@/lib/i18n";
+import { windowGexRows } from "@/lib/windowGexRows.mjs";
 import {
   createChart, LineSeries, AreaSeries,
   type IChartApi, type ISeriesApi,
@@ -238,6 +240,32 @@ function netToneGlyph(net: number): string {
   if (net > 0) return "~▲"; if (net < 0) return "~▼"; return "·";
 }
 
+/**
+ * US-Eastern UTC offset (in hours, negative) for a given YYYY-MM-DD date.
+ * DST-aware — computes the actual America/New_York offset via Intl instead of
+ * hardcoding -04:00. Returns "-04:00" (EDT) or "-05:00" (EST) as a fixed-offset
+ * suffix usable in an ISO timestamp string.
+ */
+function etOffsetSuffix(sessionDate: string): string {
+  try {
+    // Noon on the session date sidesteps DST-boundary edge cases at midnight.
+    const noonUtc = new Date(`${sessionDate}T12:00:00Z`);
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour12: false, timeZoneName: "shortOffset",
+    }).formatToParts(noonUtc);
+    const tzName = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
+    // tzName looks like "GMT-4" / "GMT-5"; normalize to "-0H:00".
+    const m = tzName.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);
+    if (m) {
+      const sign = m[1];
+      const hh = m[2].padStart(2, "0");
+      const mm = m[3] ?? "00";
+      return `${sign}${hh}:${mm}`;
+    }
+  } catch {}
+  return "-04:00"; // EDT fallback
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const PREM_FILTERS = [
@@ -317,9 +345,10 @@ interface TideChartProps {
   minutes: TideMinute[];
   spy: SpyPoint[];
   height: number;
+  sessionDate?: string;
 }
 
-function TideChart({ minutes, spy, height }: TideChartProps) {
+const TideChart = memo(function TideChart({ minutes, spy, height, sessionDate }: TideChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const ncpRef = useRef<ISeriesApi<"Area"> | null>(null);
@@ -336,11 +365,13 @@ function TideChart({ minutes, spy, height }: TideChartProps) {
     );
     if (validMins.length < 2) return;
 
-    // Convert "HH:MM" to seconds-from-epoch for LWC. Use 2026-07-05 as session date.
+    // Convert "HH:MM" to seconds-from-epoch for LWC. Anchor to the payload's
+    // session_date with the DST-aware US-Eastern offset for that date.
+    const date = sessionDate || new Date().toISOString().slice(0, 10);
+    const etOff = etOffsetSuffix(date);
     const toTs = (hhmm: string) => {
       const [hh, mm] = hhmm.split(":").map(Number);
-      // ET offset: -04:00. Use UTC epoch for a fixed date.
-      return Math.floor(new Date(`2026-07-05T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00-04:00`).getTime() / 1000);
+      return Math.floor(new Date(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00${etOff}`).getTime() / 1000);
     };
 
     const upColor = css("--up");
@@ -438,14 +469,14 @@ function TideChart({ minutes, spy, height }: TideChartProps) {
       chartRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [minutes, spy, height]);
+  }, [minutes, spy, height, sessionDate]);
 
   return <div ref={ref} style={{ width: "100%", height }} />;
-}
+});
 
 // ─── Sparkline SVG (sector mini-chart) ──────────────────────────────────────
 
-function Sparkline({ data, color, width = 80, height = 30 }: {
+const Sparkline = memo(function Sparkline({ data, color, width = 80, height = 30 }: {
   data: number[]; color: string; width?: number; height?: number;
 }) {
   if (data.length < 2) return <span style={{ display: "inline-block", width, height }} />;
@@ -461,7 +492,7 @@ function Sparkline({ data, color, width = 80, height = 30 }: {
       <polyline fill="none" stroke={color} strokeWidth="1.5" points={pts} />
     </svg>
   );
-}
+});
 
 // ─── Method note popover ─────────────────────────────────────────────────────
 
@@ -502,7 +533,7 @@ function MethodNotePopover({ lang, t }: { lang: string; t: (k: string, fb?: stri
 
 // ─── Strike ladder SVG ───────────────────────────────────────────────────────
 
-function StrikeLadder({ strikes, lang }: { strikes: StrikeRow[]; lang: string }) {
+const StrikeLadder = memo(function StrikeLadder({ strikes, lang }: { strikes: StrikeRow[]; lang: string }) {
   if (!strikes.length) return null;
   const maxVal = Math.max(...strikes.flatMap((s) => [s.call_prem, s.put_prem])) || 1;
   const BAR_WIDTH = 120;
@@ -510,40 +541,42 @@ function StrikeLadder({ strikes, lang }: { strikes: StrikeRow[]; lang: string })
   const H = strikes.length * ROW_H + 28;
 
   return (
-    <svg viewBox={`0 0 ${BAR_WIDTH * 2 + 80} ${H}`} width="100%" style={{ display: "block", maxHeight: 320, overflow: "visible" }}>
-      {/* Column headers */}
-      <text x={BAR_WIDTH - 4} y={14} textAnchor="end" fill="var(--up)" fontSize={10} fontWeight={600}>
-        {lang === "zh" ? "认购" : "Call"}
-      </text>
-      <text x={BAR_WIDTH + 80 + 4} y={14} textAnchor="start" fill="var(--down)" fontSize={10} fontWeight={600}>
-        {lang === "zh" ? "认沽" : "Put"}
-      </text>
-      <text x={BAR_WIDTH + 40} y={14} textAnchor="middle" fill="var(--muted)" fontSize={10}>
-        {lang === "zh" ? "行权价" : "Strike"}
-      </text>
-      {strikes.map((s, i) => {
-        const y = 24 + i * ROW_H;
-        const callW = (s.call_prem / maxVal) * BAR_WIDTH;
-        const putW = (s.put_prem / maxVal) * BAR_WIDTH;
-        return (
-          <g key={s.strike}>
-            {/* Call bar (grows left) */}
-            <rect x={BAR_WIDTH - callW} y={y + 4} width={callW} height={ROW_H - 8}
-              fill="rgba(38,194,129,.25)" rx={2} />
-            {/* Put bar (grows right) */}
-            <rect x={BAR_WIDTH + 80} y={y + 4} width={putW} height={ROW_H - 8}
-              fill="rgba(240,86,107,.2)" rx={2} />
-            {/* Strike label */}
-            <text x={BAR_WIDTH + 40} y={y + ROW_H / 2 + 4} textAnchor="middle"
-              fill="var(--text-2)" fontSize={11}>
-              {s.strike}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+    <div style={{ maxHeight: 320, overflowY: "auto" }}>
+      <svg viewBox={`0 0 ${BAR_WIDTH * 2 + 80} ${H}`} width="100%" height={H} preserveAspectRatio="xMinYMin meet" style={{ display: "block" }}>
+        {/* Column headers */}
+        <text x={BAR_WIDTH - 4} y={14} textAnchor="end" fill="var(--up)" fontSize={10} fontWeight={600}>
+          {lang === "zh" ? "认购" : "Call"}
+        </text>
+        <text x={BAR_WIDTH + 80 + 4} y={14} textAnchor="start" fill="var(--down)" fontSize={10} fontWeight={600}>
+          {lang === "zh" ? "认沽" : "Put"}
+        </text>
+        <text x={BAR_WIDTH + 40} y={14} textAnchor="middle" fill="var(--muted)" fontSize={10}>
+          {lang === "zh" ? "行权价" : "Strike"}
+        </text>
+        {strikes.map((s, i) => {
+          const y = 24 + i * ROW_H;
+          const callW = (s.call_prem / maxVal) * BAR_WIDTH;
+          const putW = (s.put_prem / maxVal) * BAR_WIDTH;
+          return (
+            <g key={s.strike}>
+              {/* Call bar (grows left) */}
+              <rect x={BAR_WIDTH - callW} y={y + 4} width={callW} height={ROW_H - 8}
+                fill="rgba(38,194,129,.25)" rx={2} />
+              {/* Put bar (grows right) */}
+              <rect x={BAR_WIDTH + 80} y={y + 4} width={putW} height={ROW_H - 8}
+                fill="rgba(240,86,107,.2)" rx={2} />
+              {/* Strike label */}
+              <text x={BAR_WIDTH + 40} y={y + ROW_H / 2 + 4} textAnchor="middle"
+                fill="var(--text-2)" fontSize={11}>
+                {s.strike}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
   );
-}
+});
 
 // ─── Expiry horizontal bars ───────────────────────────────────────────────────
 
@@ -587,7 +620,7 @@ function ExpiryBars({ expiries, lang }: { expiries: ExpiryRow[]; lang: string })
 
 // ─── Minute net-prem chart (ticker drill, inline SVG) ──────────────────────
 
-function MinuteNetChart({ minutes, height = 80 }: { minutes: TickerMinute[]; height?: number }) {
+const MinuteNetChart = memo(function MinuteNetChart({ minutes, height = 80 }: { minutes: TickerMinute[]; height?: number }) {
   if (!minutes || minutes.length < 2) return null;
   const vals = minutes.map((m) => (m.ncp + m.npp) / 1_000_000);
   const mn = Math.min(...vals, 0); const mx = Math.max(...vals, 0);
@@ -606,11 +639,11 @@ function MinuteNetChart({ minutes, height = 80 }: { minutes: TickerMinute[]; hei
       <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.2" points={pts} />
     </svg>
   );
-}
+});
 
 // ─── Term structure chart (ATM IV vs DTE, dots + line) ──────────────────────
 
-function TermStructureChart({ term }: { term: VolTerm[] }) {
+const TermStructureChart = memo(function TermStructureChart({ term }: { term: VolTerm[] }) {
   if (term.length < 2) return null;
   const dtes = term.map((p) => p.dte);
   const ivs = term.map((p) => p.atm_iv);
@@ -649,11 +682,11 @@ function TermStructureChart({ term }: { term: VolTerm[] }) {
       })}
     </svg>
   );
-}
+});
 
 // ─── Smile chart (call_iv / put_iv vs strike, spot_ref vertical line) ────────
 
-function SmileChart({ points, spotRef }: { points: VolSmilePoint[]; spotRef: number | null }) {
+const SmileChart = memo(function SmileChart({ points, spotRef }: { points: VolSmilePoint[]; spotRef: number | null }) {
   if (points.length < 2) return null;
   const strikes = points.map((p) => p.strike);
   const allIvs = points.flatMap((p) => [p.call_iv, p.put_iv]);
@@ -695,11 +728,11 @@ function SmileChart({ points, spotRef }: { points: VolSmilePoint[]; spotRef: num
       ))}
     </svg>
   );
-}
+});
 
 // ─── IV Rank history sparkline ────────────────────────────────────────────────
 
-function IvRankHistory({ history }: { history: VolHistPoint[] }) {
+const IvRankHistory = memo(function IvRankHistory({ history }: { history: VolHistPoint[] }) {
   const withRank = history.filter((h) => h.iv_rank != null);
   if (withRank.length < 2) return null;
   const vals = withRank.map((h) => h.iv_rank as number);
@@ -720,11 +753,11 @@ function IvRankHistory({ history }: { history: VolHistPoint[] }) {
       <circle cx={(vals.length - 1) / (vals.length - 1) * W} cy={pt(vals.length - 1).split(",")[1]} r={2.5} fill="var(--brand-2)" />
     </svg>
   );
-}
+});
 
 // ─── GEX 30-session history sparkline strip ──────────────────────────────────
 
-function GexHistSparkline({ history }: { history: GexHistRow[] }) {
+const GexHistSparkline = memo(function GexHistSparkline({ history }: { history: GexHistRow[] }) {
   if (history.length < 2) return null;
   const vals = history.map((h) => h.net_gex_bn);
   const mn = Math.min(...vals); const mx = Math.max(...vals);
@@ -761,7 +794,7 @@ function GexHistSparkline({ history }: { history: GexHistRow[] }) {
       )}
     </div>
   );
-}
+});
 
 // ─── GEX strike ladder (horizontal bars, net + call/put split) ────────────────
 
@@ -776,15 +809,7 @@ function getGreekValues(row: GexStrikeRow, greek: GreekKey): { net: number; call
   }
 }
 
-/** Pure function — filters rows to within `pct` of spotRef (e.g. 0.10 = ±10%). */
-function windowGexRows(rows: GexStrikeRow[], spotRef: number, pct: number): GexStrikeRow[] {
-  if (!spotRef || !rows.length) return rows;
-  const lo = spotRef * (1 - pct);
-  const hi = spotRef * (1 + pct);
-  return rows.filter((r) => r.strike >= lo && r.strike <= hi);
-}
-
-function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, lang }: {
+const GexStrikeLadder = memo(function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, lang }: {
   rows: GexStrikeRow[];
   greek: GreekKey;
   spotRef: number;
@@ -810,8 +835,6 @@ function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, l
   const displayRows = wideMode ? rows : windowGexRows(rows, spotRef, 0.10);
   // If the windowed view is empty (e.g. very OTM spot_ref), fall back to full
   const visibleRows = displayRows.length > 0 ? displayRows : rows;
-  // Apply scroll whenever the rendered set is large (fallback path or explicit Wide mode)
-  const needsScroll = visibleRows.length > 20;
 
   const netVals = visibleRows.map((r) => getGreekValues(r, greek).net);
   const maxAbs = Math.max(...netVals.map(Math.abs), 0.001);
@@ -819,6 +842,11 @@ function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, l
   const ROW_H = 28;
   const H = visibleRows.length * ROW_H + 30;
   const MID = BAR_MAX + 60; // center x
+
+  // Closest strike to spot — computed once for the whole set (not per-row).
+  const spotStrike = visibleRows.reduce((closest, r) =>
+    Math.abs(r.strike - spotRef) < Math.abs(closest.strike - spotRef) ? r : closest
+  ).strike;
 
   return (
     <div>
@@ -843,9 +871,9 @@ function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, l
         </span>
       </div>
 
-      {/* SVG ladder — scrollable in Wide mode or fallback (large row count) */}
-      <div style={needsScroll ? { maxHeight: 420, overflowY: "auto" } : {}}>
-        <svg viewBox={`0 0 ${MID * 2} ${H}`} width="100%" style={{ display: "block" }}>
+      {/* SVG ladder — always bounded + scrollable so tall row sets don't over-scale */}
+      <div style={{ maxHeight: 420, overflowY: "auto" }}>
+        <svg viewBox={`0 0 ${MID * 2} ${H}`} width="100%" height={H} preserveAspectRatio="xMinYMin meet" style={{ display: "block" }}>
           {/* Column headers — neutral colors (not up/down) */}
           <text x={MID - 4} y={14} textAnchor="end" fill="var(--text-2)" fontSize={10} fontWeight={600}>
             {lang === "zh" ? "正值" : "+pos"}
@@ -896,9 +924,7 @@ function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, l
                   {row.strike}
                 </text>
                 {/* Spot ref line */}
-                {row.strike === visibleRows.reduce((closest, r) =>
-                  Math.abs(r.strike - spotRef) < Math.abs(closest.strike - spotRef) ? r : closest
-                ).strike && (
+                {row.strike === spotStrike && (
                   <line x1={0} y1={y + ROW_H - 1} x2={MID * 2} y2={y + ROW_H - 1}
                     stroke="var(--warn)" strokeWidth="1" strokeDasharray="3,2" opacity={0.6} />
                 )}
@@ -925,11 +951,11 @@ function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, l
       </div>
     </div>
   );
-}
+});
 
 // ─── GEX by-expiry bars ──────────────────────────────────────────────────────
 
-function GexExpiryBars({ rows, greek, lang }: { rows: GexExpiryRow[]; greek: GreekKey; lang: string }) {
+const GexExpiryBars = memo(function GexExpiryBars({ rows, greek, lang }: { rows: GexExpiryRow[]; greek: GreekKey; lang: string }) {
   if (!rows.length) return null;
   const getVal = (r: GexExpiryRow) => greek === "delta" ? r.delta_net : r.gamma_net;
   const maxAbs = Math.max(...rows.map((r) => Math.abs(getVal(r))), 0.001);
@@ -967,7 +993,7 @@ function GexExpiryBars({ rows, greek, lang }: { rows: GexExpiryRow[]; greek: Gre
       </div>
     </div>
   );
-}
+});
 
 // ─── Top-level component ─────────────────────────────────────────────────────
 
@@ -1210,11 +1236,36 @@ export default function OptionsHubView() {
     if (selectedVolRoot) fetchVol(selectedVolRoot);
   }, [selectedVolRoot, fetchVol]);
 
-  // ── Hub context (ctx) fetch ────────────────────────────────────────────────
+  // ── Hub context (ctx) fetch — consumed by Tide + GEX tabs, lazy on activate ──
   const [ctxData, setCtxData] = useState<CtxPayload | null>(null);
+  const fetchCtx = useCallback(async () => {
+    if (ctxData) return; // already loaded
+    try {
+      const r = await fetch("/api/flow?f=ctx", { cache: "no-store" });
+      if (r.ok) setCtxData(await r.json() as CtxPayload);
+    } catch {}
+  }, [ctxData]);
 
-  // ── OI-confirmed fetch ────────────────────────────────────────────────────
+  // ── OI-confirmed fetch — consumed by Tape tab only, lazy on activate ─────────
   const [oiConfData, setOiConfData] = useState<OiConfPayload>([]);
+  const oiConfLoaded = useRef(false);
+  const fetchOiConf = useCallback(async () => {
+    if (oiConfLoaded.current) return; // already loaded
+    oiConfLoaded.current = true;
+    try {
+      const r = await fetch("/api/flow?f=oiconf", { cache: "no-store" });
+      if (r.ok) {
+        const raw = await r.json();
+        // Payload is either an array directly or wrapped
+        setOiConfData(Array.isArray(raw) ? raw : (raw.confirmed ?? []));
+      }
+    } catch { oiConfLoaded.current = false; }
+  }, []);
+  // Membership set for O(1) per-row OI-confirmed lookup (avoids per-row .some())
+  const oiConfSet = useMemo(
+    () => new Set(oiConfData.map((oc) => `${oc.root}|${oc.right}|${oc.exp}|${oc.strike}`)),
+    [oiConfData],
+  );
 
   // ── Ticker context (tctx) fetch ───────────────────────────────────────────
   const [tctxData, setTctxData] = useState<TctxPayload | null>(null);
@@ -1228,24 +1279,11 @@ export default function OptionsHubView() {
     } catch {}
   }, [tctxRoot, tctxData]);
 
-  // Fetch ctx + oiconf once on mount
+  // Lazy-load ctx (Tide + GEX) and oiconf (Tape) when their consuming tab activates
   useEffect(() => {
-    (async () => {
-      try {
-        const [cr, or] = await Promise.all([
-          fetch("/api/flow?f=ctx", { cache: "no-store" }),
-          fetch("/api/flow?f=oiconf", { cache: "no-store" }),
-        ]);
-        if (cr.ok) setCtxData(await cr.json() as CtxPayload);
-        if (or.ok) {
-          const raw = await or.json();
-          // Payload is either an array directly or wrapped
-          setOiConfData(Array.isArray(raw) ? raw : (raw.confirmed ?? []));
-        }
-      } catch {}
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (activeTab === "tide" || activeTab === "gex") fetchCtx();
+    if (activeTab === "tape") fetchOiConf();
+  }, [activeTab, fetchCtx, fetchOiConf]);
 
   // Fetch tctx when ticker is selected
   useEffect(() => {
@@ -1317,24 +1355,12 @@ export default function OptionsHubView() {
       <main className="main2" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
 
         {/* ── Tab bar ── */}
-        <div
-          style={{
-            display: "flex", alignItems: "center", gap: 0,
-            borderBottom: "1px solid var(--line)", flexShrink: 0, padding: "0 16px",
-            overflowX: "auto",
-          }}
-        >
+        <div className="hub-tab-bar">
           {TABS.map((tb) => (
             <button
               key={tb.key}
+              className={`hub-tab${activeTab === tb.key ? " on" : ""}`}
               onClick={() => switchTab(tb.key)}
-              style={{
-                height: 44, padding: "0 16px", fontWeight: 600, fontSize: 13,
-                color: activeTab === tb.key ? "var(--text)" : "var(--muted)",
-                borderBottom: `2px solid ${activeTab === tb.key ? "var(--brand)" : "transparent"}`,
-                whiteSpace: "nowrap", cursor: "pointer",
-                transition: "color 110ms, border-color 110ms",
-              }}
             >
               {lang === "zh"
                 ? t(tb.zhKey, tb.key)
@@ -1511,9 +1537,7 @@ export default function OptionsHubView() {
                     </div>
                   )}
                   {!fetchError && !feed && (
-                    <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
-                      {lang === "zh" ? "加载中…" : "Loading…"}
-                    </div>
+                    <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
                   )}
                   {feed && (
                     <table className="scr" style={{ fontSize: 12 }}>
@@ -1580,7 +1604,7 @@ export default function OptionsHubView() {
                                   {e.vol_gt_oi && <span className="flow-flag-chip">{lang === "zh" ? "量超持仓" : "vol>OI"}</span>}
                                   {e.repeated && <span className="flow-flag-chip">{lang === "zh" ? "重复" : "repeat"}</span>}
                                   {e.swept && <span className="flow-flag-chip" style={{ color: "var(--warn)", borderColor: "rgba(232,163,61,.4)" }}>{lang === "zh" ? "扫单" : "swept"}</span>}
-                                  {oiConfData.some((oc) => oc.root === e.root && oc.right === e.right && oc.exp === e.exp && oc.strike === e.strike) && (
+                                  {oiConfSet.has(`${e.root}|${e.right}|${e.exp}|${e.strike}`) && (
                                     <span className="flow-flag-chip" style={{ color: "var(--brand-2)", borderColor: "rgba(41,98,255,.35)" }}>{t("tapeOiConfirmed", "OI-confirmed")}</span>
                                   )}
                                 </span>
@@ -1623,7 +1647,7 @@ export default function OptionsHubView() {
           {activeTab === "tide" && (
             <div style={{ flex: 1, overflow: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 20 }}>
               {tideLoading && !tideData && (
-                <div style={{ color: "var(--muted)", fontSize: 13, padding: "32px 0" }}>{lang === "zh" ? "加载中…" : "Loading…"}</div>
+                <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
               )}
               {tideData && (
                 <>
@@ -1653,7 +1677,7 @@ export default function OptionsHubView() {
 
                   {/* Main tide chart — explicit height so LWC canvas isn't clipped */}
                   <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 4px 4px", height: 240, boxSizing: "border-box" }}>
-                    <TideChart minutes={tideData.minutes} spy={tideData.spy} height={216} />
+                    <TideChart minutes={tideData.minutes} spy={tideData.spy} height={216} sessionDate={tideData.session_date} />
                   </div>
 
                   {/* Sector tide grid */}
@@ -1719,9 +1743,11 @@ export default function OptionsHubView() {
                   <div>
                     <div style={{ fontWeight: 650, fontSize: 13, marginBottom: 12 }}>{t("tideImpactTitle", "Top Net Impact")}</div>
                     <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                      {tideData.top_net_impact.slice(0, 20).map((item, i) => {
-                        const maxGross = Math.max(...tideData.top_net_impact.map((x) => x.gross));
-                        const barW = Math.round((Math.abs(item.net_prem_soft) / Math.max(...tideData.top_net_impact.map((x) => Math.abs(x.net_prem_soft)))) * 100);
+                      {(() => {
+                        // Hoisted once — bar scale is the max |net_prem_soft| across the set.
+                        const maxNet = Math.max(...tideData.top_net_impact.map((x) => Math.abs(x.net_prem_soft)), 1);
+                        return tideData.top_net_impact.slice(0, 20).map((item, i) => {
+                        const barW = Math.round((Math.abs(item.net_prem_soft) / maxNet) * 100);
                         const isPos = item.net_prem_soft >= 0;
                         return (
                           <div
@@ -1751,7 +1777,8 @@ export default function OptionsHubView() {
                             </span>
                           </div>
                         );
-                      })}
+                        });
+                      })()}
                     </div>
                   </div>
 
@@ -1867,9 +1894,7 @@ export default function OptionsHubView() {
                   </div>
                 )}
                 {selectedTicker && tickerLoading && (
-                  <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
-                    {lang === "zh" ? "加载中…" : "Loading…"}
-                  </div>
+                  <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
                 )}
                 {selectedTicker && !tickerLoading && tickerData && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -2016,7 +2041,7 @@ export default function OptionsHubView() {
           {activeTab === "screener" && (
             <div style={{ flex: 1, overflow: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 20 }}>
               {screenerLoading && !oiData && !hotData && (
-                <div style={{ color: "var(--muted)", fontSize: 13 }}>{lang === "zh" ? "加载中…" : "Loading…"}</div>
+                <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
               )}
 
               {/* Coverage banner when small */}
@@ -2188,9 +2213,7 @@ export default function OptionsHubView() {
                   </div>
                 )}
                 {selectedVolRoot && volLoading && (
-                  <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
-                    {lang === "zh" ? "加载中…" : "Loading…"}
-                  </div>
+                  <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
                 )}
                 {selectedVolRoot && !volLoading && volData && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -2371,9 +2394,7 @@ export default function OptionsHubView() {
                   </div>
                 )}
                 {selectedGexRoot && gexLoading && (
-                  <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
-                    {lang === "zh" ? "加载中…" : "Loading…"}
-                  </div>
+                  <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
                 )}
                 {selectedGexRoot && !gexLoading && gexData && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>

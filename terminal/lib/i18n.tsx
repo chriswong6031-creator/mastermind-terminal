@@ -203,6 +203,9 @@ const LEX: Record<string, [string, string]> = {
   noFilterMatch: ["No symbols match these filters.", "没有符合筛选条件的标的。"],
   goldenOracleScan: ["Golden Oracle scan", "黄金神谕扫描"],
   scanFootClick: ["{nBuy} BUY · {nSell} SELL · {n} symbols · click a row to open it in the chart", "{nBuy} 买入 · {nSell} 卖出 · {n} 个标的 · 点击行可在图表中打开"],
+  scrSearchPlaceholder: ["Search symbol or name…", "搜索代码或名称…"],
+  scrShowAll: ["All symbols", "全部标的"],
+  scrShowAllTitle: ["Show all symbols including those without metrics", "显示全部标的（含无指标的薄行）"],
   // portfolio
   pagePortfolio: ["Portfolio", "投资组合"],
   convictionBook: ["Conviction Book", "信念账本"],
@@ -263,6 +266,7 @@ const LEX: Record<string, [string, string]> = {
   // nav
   flow: ["Options", "期权"],
   asOf: ["as of", "更新于"],
+  loading: ["Loading…", "加载中…"],
   loadingHeat: ["Loading group data…", "加载分组数据中…"],
   minPrem: ["Min prem", "最低保费"],
   colSide: ["Side", "方向"],

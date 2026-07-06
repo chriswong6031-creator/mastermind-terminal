@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { Suspense } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useT } from "@/lib/i18n";
 
@@ -31,7 +32,17 @@ const TOP = [
   { k: "flow", label: "Options", href: "/flow" },
 ];
 
+// useSearchParams() forces a CSR bailout during static prerender, so the hook lives in an inner
+// component behind Suspense (statically-prerendered pages — screener/alerts/flow — need this).
 export function AppNav() {
+  return (
+    <Suspense fallback={<nav className="appnav" aria-label="Primary" />}>
+      <AppNavInner />
+    </Suspense>
+  );
+}
+
+function AppNavInner() {
   const path = usePathname();
   const params = useSearchParams();
   const router = useRouter();

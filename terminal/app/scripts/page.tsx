@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import PineEditor from "@/components/PineEditor";
 import { SAMPLE_MACD, PROPRIETARY_SCRIPT } from "@/lib/pine";
 
-export const dynamic = "force-dynamic";
+// dynamic='auto': supabase reads cookies → Next auto-detects dynamic; no need to force it.
 
 export default async function ScriptsPage() {
   const supabase = await createClient();

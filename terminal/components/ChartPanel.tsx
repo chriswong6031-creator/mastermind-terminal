@@ -193,6 +193,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const ctxRef = useRef<HTMLDivElement | null>(null);
   const textEditRef = useRef<HTMLInputElement | null>(null);
   const sigRef = useRef<SVGSVGElement | null>(null);
+  // intraday dead-end empty-state overlay ("Back to Daily") — built in Effect 1, toggled from Effect 2
+  const emptyRef = useRef<HTMLDivElement | null>(null);
+  const showEmptyRef = useRef<(msg: string) => void>(() => {});
+  const hideEmptyRef = useRef<() => void>(() => {});
   // rebuild the CHART STYLE (not the chart) when the up/down color scheme flips (Effect 5)
   const [csNonce, setCsNonce] = useState(0);
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
@@ -508,7 +512,74 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
     let rafId: number | null = null, measRaf: number | null = null;
     let onPaneMove: ((e: MouseEvent) => void) | null = null, onPaneLeave: (() => void) | null = null, onPaneDbl: ((e: MouseEvent) => void) | null = null;
-    const snapshot = () => { if (!activeRef.current) return; try { const c = chartRef.current!.takeScreenshot(); const a = document.createElement("a"); a.href = c.toDataURL(); a.download = `${symbol}.png`; a.click(); } catch {} };
+    // ── snapshot: composite the chart under a metadata header band, copy to clipboard + download ──
+    // Reads the LIVE refs (indicatorsRef/timeframeRef/chartTypeRef) so the header matches what's on
+    // screen even though this closure is bound at mount. Clipboard write is best-effort (secure-context
+    // + user-gesture are satisfied by the toolbar click); the download always fires.
+    const snapshot = () => {
+      if (!activeRef.current) return;
+      try {
+        const src = chartRef.current!.takeScreenshot();          // an HTMLCanvasElement of the chart
+        const dpr = window.devicePixelRatio || 1;
+        const HDR = Math.round(56 * dpr);                        // header band, ~56 CSS px scaled to device px
+        const out = document.createElement("canvas");
+        out.width = src.width; out.height = src.height + HDR;
+        const g = out.getContext("2d"); if (!g) return;
+        // background band in the chart bg color (falls back to the page --bg)
+        g.fillStyle = css("--bg") || "#0a0b0e";
+        g.fillRect(0, 0, out.width, HDR);
+        g.drawImage(src, 0, HDR);
+        // header text (all sizes scaled by dpr so the band reads crisp on hi-dpi displays)
+        const tf = timeframeRef.current;
+        const ctLabel: Record<string, string> = { candles: "Candles", bars: "Bars", line: "Line", area: "Area", heikin: "Heikin Ashi" };
+        const ct = ctLabel[chartTypeRef.current] || chartTypeRef.current;
+        const inds = Array.from(indicatorsRef.current).map((k) => labelOf(k));
+        const date = new Date().toISOString().slice(0, 10);
+        const pad = Math.round(16 * dpr);
+        const text = css("--text") || "#d6dae3";
+        const mut = tokensRef.current.mut || css("--muted") || "#5a616f";
+        const brand = tokensRef.current.brand2 || css("--brand-2") || "#4d82ff";
+        // canvas `font` can't resolve a CSS var() — resolve the family token to its literal stack first
+        const fam = css("--font-ui") || "system-ui, sans-serif";
+        g.textBaseline = "alphabetic";
+        // line 1: bold symbol + timeframe + chart type
+        g.textAlign = "left";
+        g.fillStyle = text;
+        g.font = `800 ${Math.round(17 * dpr)}px ${fam}`;
+        g.fillText(symbol, pad, Math.round(24 * dpr));
+        const symW = g.measureText(symbol).width;
+        g.font = `500 ${Math.round(12 * dpr)}px ${fam}`;
+        g.fillStyle = mut;
+        g.fillText(`${tf}  ·  ${ct}`, pad + symW + Math.round(10 * dpr), Math.round(24 * dpr));
+        // line 2: active indicator labels (or an em dash when none) + date
+        g.font = `500 ${Math.round(11 * dpr)}px ${fam}`;
+        g.fillStyle = mut;
+        g.fillText(`${inds.length ? inds.join("  ·  ") : "—"}     ${date}`, pad, Math.round(44 * dpr));
+        // right-aligned brand
+        g.textAlign = "right";
+        g.font = `700 ${Math.round(13 * dpr)}px ${fam}`;
+        g.fillStyle = brand;
+        g.fillText("Mastermind Terminal", out.width - pad, Math.round(30 * dpr));
+        const fname = `${symbol}_${tf}_${date}.png`;
+        out.toBlob((blob) => {
+          if (!blob) return;
+          // best-effort clipboard copy, then always download
+          (async () => {
+            let copied = false;
+            try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); copied = true; } catch {}
+            const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+            try { URL.revokeObjectURL(a.href); } catch {}
+            // transient statusline feedback (restores the OHLC line after ~2s)
+            const sEl = statusRef.current;
+            if (sEl) {
+              const prev = sEl.innerHTML;
+              sEl.innerHTML = `<b class="up">${copied ? "Snapshot copied + downloaded" : "Snapshot downloaded"}</b>`;
+              setTimeout(() => { if (statusRef.current === sEl) paintStatus(barsRef.current, sliceRef.current); else sEl.innerHTML = prev; }, 2000);
+            }
+          })();
+        }, "image/png");
+      } catch {}
+    };
     window.addEventListener("mm:snapshot", snapshot);
 
     // ── create the ONE chart (the hard invariant: exactly one createChart in this file) ──
@@ -705,6 +776,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (a === "reset") { try { chart.timeScale().fitContent(); } catch {} }
     });
     wrap.addEventListener("contextmenu", onCtx);
+
+    // ── intraday dead-end empty-state: a centered card with a "Back to Daily" button. Shown when the
+    //    intraday branch has no bars (feed unavailable OR genuinely empty); a click dispatches
+    //    `mm:set-tf` (TerminalShell owns the listener → setTf on the active pane). Kept out of the CSS
+    //    files (styling is inline) so it lives entirely in this component. ──
+    const empty = document.createElement("div"); empty.className = "chart-empty"; empty.style.cssText = "position:absolute;inset:0;z-index:6;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:24px;pointer-events:auto";
+    empty.innerHTML = `<div class="ce-msg" style="color:var(--text-2);font-size:13px;max-width:320px;line-height:1.5"></div><button class="ce-btn" style="cursor:pointer;font:600 12px var(--font-ui),system-ui;color:var(--text);background:var(--panel-2);border:1px solid var(--line-3);border-radius:6px;padding:7px 14px">Back to Daily</button>`;
+    wrap.appendChild(empty); emptyRef.current = empty;
+    empty.querySelector(".ce-btn")!.addEventListener("pointerdown", (e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("mm:set-tf", { detail: { tf: "D" } })); });
+    showEmptyRef.current = (msg: string) => { const e2 = emptyRef.current; if (!e2) return; const m = e2.querySelector(".ce-msg"); if (m) m.textContent = msg; e2.style.display = "flex"; };
+    hideEmptyRef.current = () => { const e2 = emptyRef.current; if (e2) e2.style.display = "none"; };
+
     winDown = (e: PointerEvent) => { hideCtx(); if (!toolRef.current && sel) { const tg = e.target as Element; if (tg && !tg.closest?.("g[data-id]") && !tg.closest?.(".draw-bar") && !tg.closest?.(".text-edit")) { sel = null; renderDraw(); } } };
     window.addEventListener("pointerdown", winDown);
     const renderDraw = () => {
@@ -840,6 +923,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       ro?.disconnect();
       if (textEditRef.current) { try { textEditRef.current.remove(); } catch {} textEditRef.current = null; }
       if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; }
+      if (emptyRef.current) { try { emptyRef.current.remove(); } catch {} emptyRef.current = null; }
       if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; }
       if (sigRef.current) { try { sigRef.current.remove(); } catch {} sigRef.current = null; }
       if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; }
@@ -866,15 +950,30 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       //    signal/compare overlays (those are "YYYY-MM-DD" keyed). Indicators are bar-agnostic → kept. ──
       if (intraday) {
         let bars: any[] = [];
+        let feedErr: string | null = null;       // the route's j.error (route returns {bars:[],error} on an upstream/config failure)
         try {
           const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(timeframe)}&ext=1`, { cache: "no-store" });
-          if (r.ok) { const j = await r.json(); bars = Array.isArray(j?.bars) ? j.bars : []; }
-        } catch {}
+          const j = await r.json().catch(() => null);
+          bars = Array.isArray(j?.bars) ? j.bars : [];
+          if (!r.ok || j?.error) feedErr = String(j?.error || `HTTP ${r.status}`);
+        } catch (e: any) { feedErr = e?.message || "network error"; }
         if (cancelled || epochRef.current !== epoch) return;
         sliceRef.current = null;                 // no daily slice on intraday → no sig marks
         sigMarksRef.current = [];
         dailyBarsRef.current = [];               // splice is daily-only; disable it here
-        if (!bars.length) { if (statusRef.current) statusRef.current.textContent = "No intraday data for this symbol."; return; }
+        if (!bars.length) {
+          // Differentiate a feed/entitlement/config failure ("POLYGON_API_KEY not set", "polygon 403",
+          // "unauthenticated", …) from a genuinely-empty symbol. Both dead-end the intraday chart, so
+          // surface a "Back to Daily" affordance instead of a blank chart.
+          const unavailable = feedErr != null;
+          if (statusRef.current) statusRef.current.textContent = unavailable ? "Intraday feed unavailable." : "No intraday data for this symbol.";
+          showEmptyRef.current(unavailable
+            ? `Intraday feed unavailable for ${symbol} on ${timeframe}. Switch back to the daily timeframe to keep charting.`
+            : `No intraday data for ${symbol} on ${timeframe}. Switch back to the daily timeframe to keep charting.`);
+          return;
+        }
+        hideEmptyRef.current();                   // data arrived → clear any prior dead-end overlay
+        chart.applyOptions({ timeScale: { timeVisible: true, secondsVisible: false } });   // HH:MM on the intraday axis (no repeated dates)
         // epoch-second Bar6 [t,o,h,l,c,v] → Bar with a NUMERIC time (lightweight-charts accepts UTCTimestamp)
         const rows: Bar[] = bars.map((b: any[]) => ({ time: b[0] as any, o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
         if (onMeta) onMeta({ total: rows.length });
@@ -908,6 +1007,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         return;
       }
 
+      // daily branch: clear any intraday dead-end overlay + reset the axis to date-only labels (the
+      // intraday branch flips timeVisible on; a persistent chart carries that across a TF switch).
+      hideEmptyRef.current();
+      chart.applyOptions({ timeScale: { timeVisible: false, secondsVisible: false } });
       const { ohlc, slice } = await getSliceAndOhlc(symbol);
       if (cancelled || epochRef.current !== epoch) return;
       sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)

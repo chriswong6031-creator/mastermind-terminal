@@ -7,6 +7,7 @@ export type CmpMode = "pct" | "price" | "pane";
 export type CompareItem = { sym: string; color: string; mode: CmpMode };
 
 // distinct, legible line colors handed out in order as symbols are added
+// SYNC: these six values are mirrored as --cat-1..--cat-6 in app/globals.css :root — keep in sync
 export const CMP_PALETTE = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0", "#4d82ff", "#26c281"];
 
 export const cmpKey = (sym: string) => `cmp:${sym}`;

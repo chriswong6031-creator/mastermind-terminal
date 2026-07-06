@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import TerminalShell from "@/components/TerminalShell";
 
-export const dynamic = "force-dynamic";
+// dynamic='auto': supabase reads cookies → Next auto-detects dynamic; no need to force it.
 
 export default async function Terminal({ searchParams }: { searchParams: Promise<{ sym?: string }> }) {
   const sp = await searchParams;
