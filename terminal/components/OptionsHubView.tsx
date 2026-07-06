@@ -133,6 +133,10 @@ interface VolPayload {
   spot_ref?: number;
   term: VolTerm[]; smile: VolSmileExp[]; history: VolHistPoint[];
   coverage: { n_days: number; since: string };
+  /** Full-history rank fields — optional, absent on old payloads */
+  iv_rank_all?: number | null;
+  coverage_days_all?: number;
+  since_all?: string;
 }
 
 // ─── GEX types ───────────────────────────────────────────────────────────────
@@ -142,6 +146,10 @@ interface GexStrikeRow {
   delta_net: number; vanna_net: number; charm_net: number;
 }
 interface GexExpiryRow { exp: string; gamma_net: number; delta_net: number }
+interface GexHistRow {
+  date: string; net_gex_bn: number; gamma_flip: number | null;
+  call_wall: number | null; put_wall: number | null; regime: string;
+}
 interface GexPayload {
   schema?: string; asof: string; root: string;
   spot_ref: number; net_gex_bn: number;
@@ -154,7 +162,40 @@ interface GexPayload {
     n_contracts?: number; oi_date?: string;
   };
   by_strike_full_n?: number;
+  /** Last 30 sessions of GEX summary — optional, absent on old payloads */
+  history?: GexHistRow[];
 }
+
+// ─── Hub context types ────────────────────────────────────────────────────────
+interface IndexGexEntry {
+  regime: string; net_gex_bn: number;
+  gamma_flip: number | null; dist_to_flip_pct: number | null;
+}
+interface CtxPayload {
+  schema?: string; asof?: string;
+  index_gex?: Record<string, IndexGexEntry>;
+  fear_greed?: { dial: number; label_en: string; label_zh: string };
+  sector_etf_flows?: Record<string, { d1: number; w1: number }>;
+}
+
+// ─── Ticker context types ─────────────────────────────────────────────────────
+interface TctxPayload {
+  asof?: string; history_n?: number;
+  z?: {
+    net_signed_premium_z252: number | null;
+    zerodte_share_z252: number | null;
+    short_dated_otm_call_share_z252: number | null;
+    vol_gt_oi_share_z252: number | null;
+    block_share_z252: number | null;
+  };
+}
+
+// ─── OI-confirmed types ───────────────────────────────────────────────────────
+interface OiConfEntry {
+  root: string; right: "C" | "P"; exp: string; strike: number;
+  prev_premium: number; delta_oi: number;
+}
+type OiConfPayload = OiConfEntry[];
 
 // ─── Formatting helpers ──────────────────────────────────────────────────────
 
@@ -681,6 +722,47 @@ function IvRankHistory({ history }: { history: VolHistPoint[] }) {
   );
 }
 
+// ─── GEX 30-session history sparkline strip ──────────────────────────────────
+
+function GexHistSparkline({ history }: { history: GexHistRow[] }) {
+  if (history.length < 2) return null;
+  const vals = history.map((h) => h.net_gex_bn);
+  const mn = Math.min(...vals); const mx = Math.max(...vals);
+  const range = (mx - mn) || 1;
+  const W = 100; const H = 40;
+  const zeroY = H - ((-mn) / range) * (H - 6) - 2;
+  const pts = vals.map((v, i) => {
+    const x = (i / (vals.length - 1)) * W;
+    const y = H - ((v - mn) / range) * (H - 6) - 2;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+  const last = history[history.length - 1];
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width={180} height={H} preserveAspectRatio="none" style={{ display: "block", flexShrink: 0 }}>
+        <line x1="0" y1={zeroY} x2={W} y2={zeroY} stroke="var(--line)" strokeWidth="0.5" strokeDasharray="2,2" />
+        <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.2" points={pts} />
+        <circle cx={W} cy={pts.split(" ").pop()!.split(",")[1]} r={2.5} fill="var(--brand-2)" />
+      </svg>
+      {last.gamma_flip != null && (
+        <span style={{ fontSize: 10, color: "var(--warn)", fontVariantNumeric: "tabular-nums" }}>
+          flip {last.gamma_flip.toFixed(1)}
+        </span>
+      )}
+      {last.call_wall != null && (
+        <span style={{ fontSize: 10, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
+          call {last.call_wall.toFixed(1)}
+        </span>
+      )}
+      {last.put_wall != null && (
+        <span style={{ fontSize: 10, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
+          put {last.put_wall.toFixed(1)}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ─── GEX strike ladder (horizontal bars, net + call/put split) ────────────────
 
 type GreekKey = "gamma" | "delta" | "vanna" | "charm";
@@ -764,12 +846,12 @@ function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, l
       {/* SVG ladder — scrollable in Wide mode or fallback (large row count) */}
       <div style={needsScroll ? { maxHeight: 420, overflowY: "auto" } : {}}>
         <svg viewBox={`0 0 ${MID * 2} ${H}`} width="100%" style={{ display: "block" }}>
-          {/* Column headers */}
-          <text x={MID - 4} y={14} textAnchor="end" fill="var(--up)" fontSize={10} fontWeight={600}>
-            {lang === "zh" ? "净多" : "+net"}
+          {/* Column headers — neutral colors (not up/down) */}
+          <text x={MID - 4} y={14} textAnchor="end" fill="var(--text-2)" fontSize={10} fontWeight={600}>
+            {lang === "zh" ? "正值" : "+pos"}
           </text>
-          <text x={MID + 60 + 4} y={14} textAnchor="start" fill="var(--down)" fontSize={10} fontWeight={600}>
-            {lang === "zh" ? "净空" : "-net"}
+          <text x={MID + 60 + 4} y={14} textAnchor="start" fill="var(--text-2)" fontSize={10} fontWeight={600}>
+            {lang === "zh" ? "负值" : "-neg"}
           </text>
           <text x={MID + 30} y={14} textAnchor="middle" fill="var(--muted)" fontSize={10}>
             {lang === "zh" ? "行权价" : "Strike"}
@@ -827,13 +909,13 @@ function GexStrikeLadder({ rows, greek, spotRef, gammaFlip, callWall, putWall, l
                   </text>
                 )}
                 {isCallWall && (
-                  <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--up)" fontSize={9} fontWeight={600}>
-                    {lang === "zh" ? "看涨墙" : "call wall"}
+                  <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--warn)" fontSize={9} fontWeight={600}>
+                    {lang === "zh" ? "认购集中" : "call concentration"}
                   </text>
                 )}
                 {isPutWall && (
-                  <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--down)" fontSize={9} fontWeight={600}>
-                    {lang === "zh" ? "看跌墙" : "put wall"}
+                  <text x={MID * 2 - 4} y={y + 14} textAnchor="end" fill="var(--warn)" fontSize={9} fontWeight={600}>
+                    {lang === "zh" ? "认沽集中" : "put concentration"}
                   </text>
                 )}
               </g>
@@ -876,11 +958,11 @@ function GexExpiryBars({ rows, greek, lang }: { rows: GexExpiryRow[]; greek: Gre
       <div style={{ display: "flex", gap: 16, fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
         <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <span style={{ display: "inline-block", width: 10, height: 6, background: "rgba(38,194,129,.5)", borderRadius: 1 }} />
-          {lang === "zh" ? "正值（看涨压力）" : "Positive (call-side)"}
+          {lang === "zh" ? "正值（认购端）" : "Positive (call-side)"}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <span style={{ display: "inline-block", width: 10, height: 6, background: "rgba(240,86,107,.45)", borderRadius: 1 }} />
-          {lang === "zh" ? "负值（看跌压力）" : "Negative (put-side)"}
+          {lang === "zh" ? "负值（认沽端）" : "Negative (put-side)"}
         </span>
       </div>
     </div>
@@ -1128,6 +1210,48 @@ export default function OptionsHubView() {
     if (selectedVolRoot) fetchVol(selectedVolRoot);
   }, [selectedVolRoot, fetchVol]);
 
+  // ── Hub context (ctx) fetch ────────────────────────────────────────────────
+  const [ctxData, setCtxData] = useState<CtxPayload | null>(null);
+
+  // ── OI-confirmed fetch ────────────────────────────────────────────────────
+  const [oiConfData, setOiConfData] = useState<OiConfPayload>([]);
+
+  // ── Ticker context (tctx) fetch ───────────────────────────────────────────
+  const [tctxData, setTctxData] = useState<TctxPayload | null>(null);
+  const [tctxRoot, setTctxRoot] = useState<string | null>(null);
+  const tctxFetch = useCallback(async (root: string) => {
+    if (tctxRoot === root && tctxData) return;
+    setTctxRoot(root); setTctxData(null);
+    try {
+      const r = await fetch(`/api/flow?f=tctx:${root}`, { cache: "no-store" });
+      if (r.ok) setTctxData(await r.json() as TctxPayload);
+    } catch {}
+  }, [tctxRoot, tctxData]);
+
+  // Fetch ctx + oiconf once on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const [cr, or] = await Promise.all([
+          fetch("/api/flow?f=ctx", { cache: "no-store" }),
+          fetch("/api/flow?f=oiconf", { cache: "no-store" }),
+        ]);
+        if (cr.ok) setCtxData(await cr.json() as CtxPayload);
+        if (or.ok) {
+          const raw = await or.json();
+          // Payload is either an array directly or wrapped
+          setOiConfData(Array.isArray(raw) ? raw : (raw.confirmed ?? []));
+        }
+      } catch {}
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fetch tctx when ticker is selected
+  useEffect(() => {
+    if (selectedTicker) tctxFetch(selectedTicker);
+  }, [selectedTicker, tctxFetch]);
+
   // ── GEX fetch ─────────────────────────────────────────────────────────────
   const [gexSearch, setGexSearch] = useState("");
   const [selectedGexRoot, setSelectedGexRoot] = useState<string | null>(null);
@@ -1331,7 +1455,7 @@ export default function OptionsHubView() {
                 {/* Ticker search */}
                 <input
                   type="text"
-                  placeholder={lang === "zh" ? "代码筛选…" : "Ticker…"}
+                  placeholder={t("tapeTickerPlaceholder", "Ticker…")}
                   value={tapeTickerSearch}
                   onChange={(e) => { setTapeTickerSearch(e.target.value); setDrillTicker(null); }}
                   style={{ height: 28, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)", outline: "none", width: 110 }}
@@ -1344,7 +1468,7 @@ export default function OptionsHubView() {
                     style={{ marginLeft: 4, color: "var(--muted)", height: 26, fontSize: 11 }}
                     onClick={() => { setMinPrem(0); setDteBuckets(new Set()); setMnyBuckets(new Set()); setGroupFilter(""); setTapeTickerSearch(""); setDrillTicker(null); setSideFilter(""); setFlagFilter(""); }}
                   >
-                    {lang === "zh" ? "重置" : "Reset"}
+                    {t("tapeReset", "Reset")}
                   </button>
                 )}
               </div>
@@ -1358,10 +1482,10 @@ export default function OptionsHubView() {
                       <>
                         <span style={{ color: "var(--muted)", fontSize: 12 }}>{lang === "zh" ? drillUnusual.group_zh : drillUnusual.group}</span>
                         <span style={{ color: "var(--text-2)", fontSize: 12 }}>
-                          {lang === "zh" ? "运行保费" : "Running prem"} <strong>{fmtPremium(drillUnusual.gross_premium_today)}</strong>
+                          {t("tapeRunningPrem", "Running prem")} <strong>{fmtPremium(drillUnusual.gross_premium_today)}</strong>
                         </span>
                         <span style={{ color: "var(--text-2)", fontSize: 12 }}>
-                          {drillUnusual.prem_z != null ? `z=${drillUnusual.prem_z.toFixed(1)}` : lang === "zh" ? "基线积累中" : "baseline warming"}
+                          {drillUnusual.prem_z != null ? `z=${drillUnusual.prem_z.toFixed(1)}` : t("tapeBaselineWarm", "baseline warming")}
                         </span>
                         {drillUnusual.top_contracts.length > 0 && (
                           <span style={{ color: "var(--muted)", fontSize: 11 }}>
@@ -1456,6 +1580,9 @@ export default function OptionsHubView() {
                                   {e.vol_gt_oi && <span className="flow-flag-chip">{lang === "zh" ? "量超持仓" : "vol>OI"}</span>}
                                   {e.repeated && <span className="flow-flag-chip">{lang === "zh" ? "重复" : "repeat"}</span>}
                                   {e.swept && <span className="flow-flag-chip" style={{ color: "var(--warn)", borderColor: "rgba(232,163,61,.4)" }}>{lang === "zh" ? "扫单" : "swept"}</span>}
+                                  {oiConfData.some((oc) => oc.root === e.root && oc.right === e.right && oc.exp === e.exp && oc.strike === e.strike) && (
+                                    <span className="flow-flag-chip" style={{ color: "var(--brand-2)", borderColor: "rgba(41,98,255,.35)" }}>{t("tapeOiConfirmed", "OI-confirmed")}</span>
+                                  )}
                                 </span>
                               </td>
                             </tr>
@@ -1482,7 +1609,7 @@ export default function OptionsHubView() {
                         <span style={{ color: "var(--text-2)", fontSize: 11, marginLeft: 4 }}>{lang === "zh" ? u.group_zh : u.group}</span>
                         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>
                           {fmtPremium(u.gross_premium_today)}{" "}
-                          {u.prem_z != null ? `· z=${u.prem_z.toFixed(1)} (${u.baseline_source})` : lang === "zh" ? "· 基线积累中" : "· baseline warming"}
+                          {u.prem_z != null ? `· z=${u.prem_z.toFixed(1)} (${u.baseline_source})` : `· ${t("tapeBaselineWarm", "baseline warming")}`}
                         </div>
                       </button>
                     ))}
@@ -1566,6 +1693,19 @@ export default function OptionsHubView() {
                               </span>
                             </div>
                             <Sparkline data={ncpVals} color={color} width={120} height={28} />
+                            {/* ETF flow chip from ctx — d1 creation/redemption proxy */}
+                            {ctxData?.sector_etf_flows && ctxData.sector_etf_flows[s.group] != null && (() => {
+                              const fl = ctxData.sector_etf_flows![s.group];
+                              const pos = fl.d1 >= 0;
+                              return (
+                                <div style={{ fontSize: 10, color: pos ? "var(--up)" : "var(--down)", marginTop: 3, display: "flex", alignItems: "center", gap: 3 }}>
+                                  <span style={{ color: "var(--text-dim)" }}>{t("tideEtfFlowProxy", "proxy")}</span>
+                                  <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+                                    {pos ? "+" : ""}{fmtPremSigned(fl.d1)}
+                                  </span>
+                                </div>
+                              );
+                            })()}
                             <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
                               {lang === "zh" ? "点击筛选逐笔" : "click to filter Tape"}
                             </div>
@@ -1765,6 +1905,40 @@ export default function OptionsHubView() {
                         </div>
                       ))}
                     </div>
+
+                    {/* Tctx percentile chip row */}
+                    {tctxData && (() => {
+                      const histN = tctxData.history_n ?? 0;
+                      const minN = 20;
+                      const warming = histN < minN;
+                      const chips: { labelKey: string; label: string; zKey: keyof NonNullable<TctxPayload["z"]> }[] = [
+                        { labelKey: "tctxNetPremZ", label: "Net prem z", zKey: "net_signed_premium_z252" },
+                        { labelKey: "tctxZerodteShare", label: "0DTE share z", zKey: "zerodte_share_z252" },
+                        { labelKey: "tctxOtmCallShare", label: "OTM call share z", zKey: "short_dated_otm_call_share_z252" },
+                        { labelKey: "tctxVolGtOiShare", label: "vol>OI share z", zKey: "vol_gt_oi_share_z252" },
+                        { labelKey: "tctxBlockShare", label: "Block share z", zKey: "block_share_z252" },
+                      ];
+                      return (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                          {chips.map((c) => {
+                            const zVal = tctxData.z?.[c.zKey];
+                            return (
+                              <div key={c.zKey} style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "6px 10px", background: "var(--panel)", minWidth: 110 }}>
+                                <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>
+                                  {t(c.labelKey, c.label)}
+                                </div>
+                                <div style={{ fontSize: 13, fontWeight: 650, fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
+                                  {warming || zVal == null
+                                    ? <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{t("tctxBaseline", "baseline warming")} {histN}/{minN}</span>
+                                    : `${zVal >= 0 ? "+" : ""}${zVal.toFixed(2)}`
+                                  }
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
 
                     {/* Minute net prem chart */}
                     <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 14px" }}>
@@ -2024,7 +2198,7 @@ export default function OptionsHubView() {
                     {/* IV Rank hero */}
                     <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "18px 20px" }}>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 28, alignItems: "flex-start" }}>
-                        {/* Big IV rank number */}
+                        {/* Big IV rank number — primary: 252d; secondary: full-history if available */}
                         <div>
                           <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 6 }}>
                             {t("volIvRank", "IV Rank (252d)")}
@@ -2037,6 +2211,18 @@ export default function OptionsHubView() {
                               <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
                                 {lang === "zh" ? "分位（0–100）" : "percentile (0–100)"}
                               </div>
+                              {/* Full-history rank, when present */}
+                              {volData.iv_rank_all != null && (
+                                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
+                                  {t("volIvRankFull", "full-history")}
+                                  {volData.coverage_days_all != null
+                                    ? ` (${Math.round(volData.coverage_days_all / 252)}y)`
+                                    : ""}: <strong style={{ color: "var(--text-2)" }}>{volData.iv_rank_all.toFixed(1)}</strong>
+                                  {volData.since_all && (
+                                    <span style={{ color: "var(--text-dim)", marginLeft: 4 }}>since {volData.since_all}</span>
+                                  )}
+                                </div>
+                              )}
                               {/* 52w range bar */}
                               <div style={{ marginTop: 10, width: 160 }}>
                                 <div style={{ height: 6, borderRadius: 4, background: "var(--panel-3)", position: "relative", overflow: "visible" }}>
@@ -2192,11 +2378,41 @@ export default function OptionsHubView() {
                 {selectedGexRoot && !gexLoading && gexData && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
 
+                    {/* Context bar — SPX/NDX/RUT/SPY regime chips + fear/greed from ctx */}
+                    {ctxData && (ctxData.index_gex || ctxData.fear_greed) && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                        {ctxData.index_gex && Object.entries(ctxData.index_gex).map(([sym, entry]) => (
+                          <span
+                            key={sym}
+                            className="chip"
+                            style={{ height: 26, fontSize: 11, gap: 5, pointerEvents: "none" }}
+                          >
+                            <span style={{ fontWeight: 700, color: "var(--text)" }}>{sym}</span>
+                            <span style={{ color: "var(--text-2)" }}>{entry.regime}</span>
+                            {entry.dist_to_flip_pct != null && (
+                              <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
+                                {entry.dist_to_flip_pct >= 0 ? "+" : ""}{(entry.dist_to_flip_pct * 100).toFixed(1)}%
+                              </span>
+                            )}
+                          </span>
+                        ))}
+                        {ctxData.fear_greed && (
+                          <span className="chip" style={{ height: 26, fontSize: 11, gap: 5, pointerEvents: "none" }}>
+                            <span style={{ color: "var(--text-2)" }}>{t("gexCtxFearGreed", "Fear/Greed")}</span>
+                            <span style={{ fontWeight: 700, color: "var(--text)" }}>{ctxData.fear_greed.dial}</span>
+                            <span style={{ color: "var(--muted)", fontSize: 10 }}>
+                              {lang === "zh" ? ctxData.fear_greed.label_zh : ctxData.fear_greed.label_en}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {/* GEX hero stats */}
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 20, border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 18px" }}>
                       <div>
                         <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{t("gexNetGex", "Net GEX (bn)")}</div>
-                        <div style={{ fontWeight: 700, fontSize: 22, color: gexData.net_gex_bn >= 0 ? "var(--up)" : "var(--down)" }}>
+                        <div style={{ fontWeight: 700, fontSize: 22, color: "var(--text)" }}>
                           {gexData.net_gex_bn >= 0 ? "+" : ""}{gexData.net_gex_bn.toFixed(2)}B
                         </div>
                       </div>
@@ -2214,14 +2430,24 @@ export default function OptionsHubView() {
                       )}
                       {gexData.call_wall != null && (
                         <div>
-                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{lang === "zh" ? "看涨墙" : "Call Wall"}</div>
-                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--up)" }}>{gexData.call_wall.toFixed(1)}</div>
+                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{lang === "zh" ? "认购集中" : "Call concentration"}</div>
+                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>{gexData.call_wall.toFixed(1)}</div>
                         </div>
                       )}
                       {gexData.put_wall != null && (
                         <div>
-                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{lang === "zh" ? "看跌墙" : "Put Wall"}</div>
-                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--down)" }}>{gexData.put_wall.toFixed(1)}</div>
+                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>{lang === "zh" ? "认沽集中" : "Put concentration"}</div>
+                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>{gexData.put_wall.toFixed(1)}</div>
+                        </div>
+                      )}
+
+                      {/* 30-session history sparkline — when present */}
+                      {gexData.history && gexData.history.length >= 2 && (
+                        <div style={{ width: "100%", borderTop: "1px solid var(--line-2)", marginTop: 4, paddingTop: 10 }}>
+                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 6 }}>
+                            {t("gexHistTitle", "30-session GEX history")}
+                          </div>
+                          <GexHistSparkline history={gexData.history} />
                         </div>
                       )}
                     </div>
