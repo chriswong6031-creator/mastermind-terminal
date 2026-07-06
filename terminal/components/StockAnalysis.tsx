@@ -425,10 +425,12 @@ function verdictBi(v: string): [string, string] {
 
 /* ── main component ─────────────────────────────────────────────────── */
 export default function StockAnalysis({
-  intel, row, slice, deep = false, onExpand, fund = null, opts = null, bars = [], onOpenPane, onOpenSignals,
+  intel, row, fund = null, opts = null, bars = [], onOpenPane, onOpenSignals, beforeIv,
 }: {
-  intel: any; row?: any; slice?: any; deep?: boolean; onExpand?: () => void;
+  intel: any; row?: any;
   fund?: Fund | null; opts?: Opts | null; bars?: Bar[]; onOpenPane?: (page: FinPage) => void; onOpenSignals?: () => void;
+  /** Rendered immediately BEFORE the IV/RV section so callers can guarantee order (e.g. Seasonality → IV). */
+  beforeIv?: React.ReactNode;
 }) {
   const { lang } = useLang();
   const zh = lang === "zh";
@@ -464,7 +466,7 @@ export default function StockAnalysis({
 
   const dec = a?.decision, conv = a?.conviction, entry = a?.entry, fac = a?.factors,
     tech = a?.tech, val = a?.valuation, fin = a?.financials, prof = a?.profile,
-    sm = a?.smart_money, ae = a?.analyst, gex = a?.gex, macro = a?.macro, fl = a?.flows;
+    sm = a?.smart_money, ae = a?.analyst, fl = a?.flows;
   // Does the pre-existing intel analyst section render? (mirrors its gate below.) When it does, the
   // new AnalystGauge must NOT show its "no consensus" empty state (CN dual-surface contradiction).
   const hasIntelAnalyst = !!(ae && (ae.next_date || ae.surprises || ae.target != null || ae.rating || ae.buy != null));
@@ -478,11 +480,10 @@ export default function StockAnalysis({
   // spot for the analyst upside / IV context: prefer the live opts spot, then the last daily bar.
   const spot = opts?.spot ?? (bars.length ? bars[bars.length - 1].c : (typeof row?.last === "number" ? row.last : null));
 
-  // TV-parity market-data widgets (§3.5.1). Rendered in the deep=false rail even when the research
-  // desk (intel.analysis) is absent, so a long-tail fund-only name still shows real data. Each
-  // widget null-guards and returns null when dataless. Compact in the rail; hidden in `deep` (the
-  // mega-pane's mastermind page shows the proprietary deep sections, not these minis).
-  const tvWidgets = !deep && (fund || opts || bars.length) ? (
+  // TV-parity market-data widgets (§3.5.1). Rendered even when the research desk (intel.analysis) is
+  // absent, so a long-tail fund-only name still shows real data. Each widget null-guards and returns
+  // null when dataless.
+  const tvWidgets = (fund || opts || bars.length) ? (
     <>
       <KeyStats fund={fund} bars={bars} pick={pick} />
       <EarningsMini fund={fund} pick={pick} onOpen={onOpenPane && (() => onOpenPane("earnings"))} />
@@ -491,14 +492,16 @@ export default function StockAnalysis({
       <PerfGrid bars={bars} pick={pick} />
     </>
   ) : null;
-  const tvWidgets2 = !deep && (fund || opts || bars.length) ? (
+  // Split so `beforeIv` (e.g. the Seasonality card from the shell) can land between the Analyst gauge
+  // and the IV/RV section — guaranteeing the order analysis → Seasonality → IV.
+  const tvWidgets2 = (fund || opts || bars.length) ? (
     <>
       <TechGauge bars={bars} pick={pick} onOpen={onOpenPane && (() => onOpenPane("technicals"))} />
       <AnalystGauge fund={fund} spot={spot} pick={pick} onOpen={onOpenPane && (() => onOpenPane("forecast"))} hasIntelAnalyst={hasIntelAnalyst} />
-      <IvMini opts={opts} bars={bars} pick={pick} />
     </>
   ) : null;
-  const profileWidget = !deep && fund ? <ProfileBlock fund={fund} pick={pick} /> : null;
+  const ivWidget = (fund || opts || bars.length) ? <IvMini opts={opts} bars={bars} pick={pick} /> : null;
+  const profileWidget = fund ? <ProfileBlock fund={fund} pick={pick} /> : null;
 
   if (!a) {
     return (
@@ -511,25 +514,25 @@ export default function StockAnalysis({
         {/* fund-only long-tail: still surface TV market-data + technicals below the empty notice */}
         {tvWidgets}
         {tvWidgets2}
+        {beforeIv}
+        {ivWidget}
         {profileWidget}
       </div>
     );
   }
 
-  const sigs: any[] = slice?.indicator?.signals || [];
-
   return (
     <div className="sa">
       {/* ── RESEARCH-DESK CHIP ──
           The full research-desk hero (decision verb · band · headline · conviction ring · drivers /
-          cautions · factor profile) now lives in the Signals dashboard. Here we show a compact
-          clickable chip that opens it. Under the compact `cards` schema the label is the position-
-          confidence band; under the rich `analysis` schema it's the decision verb. */}
+          cautions · factor profile) now lives in the merged Research Desk · Golden Oracle dashboard
+          (OracleDash), opened via onOpenSignals. Under the compact `cards` schema the label is the
+          position-confidence band; under the rich `analysis` schema it's the decision verb. */}
       {(() => {
         const chipVerb = supporting ? (pick(conv?.band, conv?.band_zh) || pick("Confidence", "信心")) : verb;
         const chipColor = supporting ? "var(--brand-2)" : tn.color;
         return (
-          <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenPane?.("mastermind")} title={pick("Open the full research desk", "打开完整研究台")}>
+          <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenSignals?.()} title={pick("Open the full research desk", "打开完整研究台")}>
             <span className="sa-open-k">{pick("Research desk", "研究台")}</span>
             <span className="sa-open-verb" style={{ color: chipColor }}>{chipVerb}</span>
             <span className="sa-open-view">{pick("view", "查看")} ›</span>
@@ -555,8 +558,10 @@ export default function StockAnalysis({
 
       {/* ── TV market-data widgets: Key stats · Earnings · Dividends · Financials · Performance ── */}
       {tvWidgets}
-      {/* ── TV gauges + options minis: Technicals · Analyst · IV ── */}
+      {/* ── TV gauges: Technicals · Analyst ── then any caller-injected block (Seasonality) ── then IV ── */}
       {tvWidgets2}
+      {beforeIv}
+      {ivWidget}
 
       {/* ── ENTRY TIMING / TIMING QUALITY (answers "act now?") ── */}
       {entry && (entry.status || entry.headline) && (
@@ -653,7 +658,7 @@ export default function StockAnalysis({
               </span>
             </div>
           ))}
-          {!deep && onOpenPane && <button className="sa-more-btn" onClick={() => onOpenPane("statistics")}>{pick("More statistics", "更多统计")} ›</button>}
+          {onOpenPane && <button className="sa-more-btn" onClick={() => onOpenPane("statistics")}>{pick("More statistics", "更多统计")} ›</button>}
         </Section>
       )}
 
@@ -680,14 +685,14 @@ export default function StockAnalysis({
               {fin.multiyear?.altman != null && <span className="sa-qchip">Altman-Z <b>{fnum(fin.multiyear.altman, 1)}</b></span>}
             </div>
           )}
-          {!deep && onOpenPane && <button className="sa-more-btn" onClick={() => onOpenPane("statements")}>{pick("More financials", "更多财务")} ›</button>}
+          {onOpenPane && <button className="sa-more-btn" onClick={() => onOpenPane("statements")}>{pick("More financials", "更多财务")} ›</button>}
         </Section>
       )}
 
       {/* ── SMART MONEY ── */}
       {sm?.holders?.length && (
         <Section title={pick("Smart money", "聪明钱")} sub={sm.n_holders != null ? `${sm.n_holders} ${pick("funds", "基金")}${sm.is_vip ? " · VIP" : ""}` : undefined}>
-          {sm.holders.slice(0, deep ? 6 : 4).map((h: any, i: number) => (
+          {sm.holders.slice(0, 4).map((h: any, i: number) => (
             <div key={i} className="sa-holder">
               <span className={`sa-act ${h.action}`}>{cap(h.action)}</span>
               <span className="hn">{h.fund}{h.grade && <small className="hg">{h.grade}</small>}</span>
@@ -729,50 +734,8 @@ export default function StockAnalysis({
         </Section>
       )}
 
-      {/* ── DEEP: OPTIONS / DEALER GAMMA ── */}
-      {deep && gex && (
-        <Section title={pick("Options · dealer gamma", "期权 · 做市商Gamma")} sub={gex.gamma_regime ? `${cap(gex.gamma_regime)} γ` : undefined} accent="var(--signal)">
-          <div className="sa-grid2">
-            <Stat k={pick("Gamma flip", "Gamma翻转")} v={fnum(gex.gamma_flip)} />
-            <Stat k={pick("Dist to flip", "距翻转")} v={fpct(gex.dist_to_flip_pct)} />
-            <Stat k={pick("Call wall", "看涨墙")} v={fnum(gex.call_wall)} tone="down" />
-            <Stat k={pick("Put wall", "看跌墙")} v={fnum(gex.put_wall)} tone="up" />
-            <Stat k="Net GEX" v={gex.net_gex_bn != null ? `${fnum(gex.net_gex_bn, 2)}B` : "—"} />
-            <Stat k="IV30" v={gex.iv30 != null ? fpct(gex.iv30 * 100, 0, false) : "—"} />
-          </div>
-          {gex.vol_hole?.state && (
-            <div className="sa-volhole">
-              <span className="sa-chip warn">{pick("Vol hole", "波动洞")}: {gex.vol_hole.state.replace(/_/g, " ")}</span>
-              {gex.vol_hole.band_width_pct != null && <span className="vh-meta">{pick("band", "区间")} {fpct(gex.vol_hole.band_width_pct, 1, false)}</span>}
-            </div>
-          )}
-        </Section>
-      )}
-
-      {/* ── DEEP: MACRO SENSITIVITY ── */}
-      {deep && macro && (macro.tier_en || macro.headline_en) && (
-        <Section title={pick("Macro sensitivity", "宏观敏感度")}>
-          <div className="sa-chips">
-            {macro.tier_en && <span className="sa-chip">{pick("Rate: ", "利率：")}{pick(macro.tier_en, macro.tier_zh)}</span>}
-            {macro.duration_en && <span className="sa-chip">{macro.duration_en}</span>}
-            {macro.regime_en && <span className="sa-chip">{macro.regime_en}</span>}
-            {macro.inflation_en && <span className="sa-chip">{macro.inflation_en}</span>}
-          </div>
-          {pick(macro.headline_en, macro.headline_zh) && <div className="sa-macro-head">{pick(macro.headline_en, macro.headline_zh)}</div>}
-        </Section>
-      )}
-
-      {/* ── DEEP: SIGNAL HISTORY ── */}
-      {deep && sigs.length > 0 && (
-        <Section title={pick("Signal history", "信号历史")} sub={`${sigs.length} ${pick("events", "次")}`}>
-          <div className="sa-siglog">
-            {sigs.slice(-12).reverse().map((s: any, i: number) => {
-              const b = s.type === "BUY" || s.type === "REBUY";
-              return <div key={i} className="sa-sigrow"><span className={`sa-sigt ${b ? "buy" : "sell"}`}>{s.type}</span><span className="sd">{s.ts}</span><span className="spx num">{typeof s.price === "number" ? fnum(s.price) : "—"}</span></div>;
-            })}
-          </div>
-        </Section>
-      )}
+      {/* The deep-only Options/dealer-gamma, Macro-sensitivity and Signal-history sections were removed
+          with the mastermind page — the signal history now lives in the OracleDash Research surface. */}
 
       {/* ── BUSINESS PROFILE ── */}
       {prof && (prof.description || prof.sector) && (

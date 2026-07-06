@@ -151,6 +151,46 @@ function factorLabel(key: string, zh: boolean): string {
   return l ? pick(zh, l[0], l[1]) : key.replace(/_/g, " ")
 }
 
+/* ── GroupHeader: sticky labeled divider separating the two merged surfaces
+ *  (Golden Oracle vs Research Desk). Inline-styled to match the .od-* token
+ *  language (uppercase, letter-spaced, muted) without adding new CSS. */
+function GroupHeader({ label, icon }: { label: string; icon: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 2,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        margin: "0 -16px",
+        padding: "10px 16px",
+        background: "var(--panel)",
+        borderTop: "1px solid var(--line)",
+        borderBottom: "1px solid var(--line)",
+        font: "700 11px/1 var(--font-ui)",
+        letterSpacing: ".08em",
+        textTransform: "uppercase",
+        color: "var(--brand)",
+      }}
+    >
+      <span style={{ display: "inline-flex", width: 14, height: 14 }}>{icon}</span>
+      {label}
+    </div>
+  )
+}
+const OracleStar = (
+  <svg viewBox="0 0 24 24" aria-hidden style={{ width: 14, height: 14, fill: "var(--brand)", stroke: "none" }}>
+    <path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" />
+  </svg>
+)
+const DeskGlyph = (
+  <svg viewBox="0 0 24 24" aria-hidden style={{ width: 14, height: 14, fill: "none", stroke: "var(--brand)", strokeWidth: 2 }}>
+    <path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" />
+  </svg>
+)
+
 /* ── BacktestCurve: lazy-fetch <SYM>.backtest.json and draw equity curve ── */
 function BacktestCurve({ sym, zh }: { sym: string; zh: boolean }) {
   const [data, setData] = useState<{ labels: string[]; values: (number | null)[] } | null>(null)
@@ -324,15 +364,15 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
   }
 
   return (
-    <div className="od-scrim" onClick={handleScrimClick} role="dialog" aria-modal="true" aria-label={pick(zh, "Signals Dashboard", "信号面板")}>
+    <div className="od-scrim" onClick={handleScrimClick} role="dialog" aria-modal="true" aria-label={pick(zh, "Research Desk · Golden Oracle", "研究台 · 黄金神谕")}>
       <div className="od-panel" ref={panelRef}>
-        {/* ── 1. header ── */}
+        {/* ── 1. header — single merged research surface ── */}
         <div className="od-head">
           <span className="od-brand">
             <svg viewBox="0 0 24 24" aria-hidden="true" className="od-star">
               <path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" />
             </svg>
-            {pick(zh, "Signals", "信号")}
+            {pick(zh, "Research Desk", "研究台")}
           </span>
           <span className="od-sym">{sym}</span>
           <button className="od-close" onClick={onClose} aria-label={pick(zh, "Close", "关闭")}>×</button>
@@ -340,9 +380,11 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
 
         {/* ── scrollable body ── */}
         <div className="od-body">
+          {/* ── GROUP A: GOLDEN ORACLE (backtested trade call + signal history + equity) ── */}
+          <GroupHeader label={pick(zh, "Golden Oracle", "黄金神谕")} icon={OracleStar} />
+
           {/* 2. Golden Oracle scorecard */}
           <div className="sig-card">
-            <div className="sig-card-h">{pick(zh, "Golden Oracle", "黄金神谕")}</div>
             <div className="od-hero">
               <div className="od-verdict" style={{ color: verdictColor }}>
                 {verdict ?? "—"}
@@ -399,6 +441,43 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
               <div className="sig-conflict">{conviction.size_note}</div>
             )}
           </div>
+
+          {/* 7. signal history table (Golden Oracle group) */}
+          <div className="od-sig-section">
+            <div className="od-sec-h">
+              {pick(zh, "Signal history", "信号历史")}
+              {sigs.length > 0 && <span className="od-sig-count">{sigs.length}</span>}
+            </div>
+
+            {sigs.length === 0 ? (
+              <div className="fin-empty">{pick(zh, "No signals", "暂无信号")}</div>
+            ) : (
+              <div className="od-sig-scroll">
+                <table className="od-sig-table">
+                  <thead>
+                    <tr>
+                      <th>{pick(zh, "Type", "类型")}</th>
+                      <th>{pick(zh, "Date", "日期")}</th>
+                      <th>{pick(zh, "Price", "价格")}</th>
+                      <th>{pick(zh, "Strength", "强度")}</th>
+                      <th>{pick(zh, "Reasons", "信号原因")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sigs.map((sig, i) => (
+                      <SignalRow key={i} sig={sig} zh={zh} onJump={handleJump} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* 8. equity curve — only for flagships that have a backtest.json */}
+          <BacktestCurve sym={sym} zh={zh} />
+
+          {/* ── GROUP B: RESEARCH DESK (thesis read + drivers/cautions + factors + event edge) ── */}
+          <GroupHeader label={pick(zh, "Research Desk", "研究台")} icon={DeskGlyph} />
 
           {/* 3. Research desk read */}
           {decision && (decision.verb || decision.headline) && (
@@ -474,40 +553,6 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
               <div className="sig-edge">{pick(zh, decision.trust_en, decision.trust_zh)}</div>
             </div>
           )}
-
-          {/* 7. signal history table */}
-          <div className="od-sig-section">
-            <div className="od-sec-h">
-              {pick(zh, "Signal history", "信号历史")}
-              {sigs.length > 0 && <span className="od-sig-count">{sigs.length}</span>}
-            </div>
-
-            {sigs.length === 0 ? (
-              <div className="fin-empty">{pick(zh, "No signals", "暂无信号")}</div>
-            ) : (
-              <div className="od-sig-scroll">
-                <table className="od-sig-table">
-                  <thead>
-                    <tr>
-                      <th>{pick(zh, "Type", "类型")}</th>
-                      <th>{pick(zh, "Date", "日期")}</th>
-                      <th>{pick(zh, "Price", "价格")}</th>
-                      <th>{pick(zh, "Strength", "强度")}</th>
-                      <th>{pick(zh, "Reasons", "信号原因")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sigs.map((sig, i) => (
-                      <SignalRow key={i} sig={sig} zh={zh} onJump={handleJump} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* 8. equity curve — only for flagships that have a backtest.json */}
-          <BacktestCurve sym={sym} zh={zh} />
 
           {/* backtested note */}
           <div className="od-note">

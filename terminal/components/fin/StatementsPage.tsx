@@ -78,7 +78,14 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
   };
 
   // ── mini bar-chart strip: series swap with statement type ──
-  const chartSeries: Series[] = buildChartSeries(stmt, set, zh);
+  // Cap the chart to the last 12 periods so quarterly sets (which can carry 20+
+  // columns) don't crush the x-axis; the full-history MiniTable below stays paged.
+  const CHART_CAP = 12;
+  const chartPeriods = periods.slice(-CHART_CAP);
+  const chartSeries: Series[] = buildChartSeries(stmt, set, zh).map((s) => ({
+    ...s,
+    values: s.values.slice(-CHART_CAP),
+  }));
 
   // ── table rows: TV taxonomy per statement ──
   const rows: MiniRow[] = buildRows(stmt, set, aq, zh);
@@ -91,7 +98,7 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
       {/* ── 1. MINI CHART STRIP ── */}
       <section className="fin-sec">
         <div className="fin-card">
-          <Bars labels={periods} series={chartSeries} fmtY={fmtNum} zh={zh} height={170} />
+          <Bars labels={chartPeriods} series={chartSeries} fmtY={fmtNum} zh={zh} height={170} />
         </div>
       </section>
 

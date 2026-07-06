@@ -59,6 +59,14 @@ const LEX: Record<string, [string, string]> = {
   splitLayout: ["Split layout", "分屏布局"],
   mtfTip: ["Multi-timeframe — the active symbol at D / 3D / W / 1M", "多周期 — 当前标的的 日/3日/周/月 图"],
   syncTip: ["Sync crosshair & time-axis across panes", "跨窗格同步十字光标与时间轴"],
+  syncMixedTip: ["Sync needs matching timeframes across panes", "同步需要各窗格使用相同周期"],
+  replayMixedTip: ["Replay needs matching timeframes across panes", "回放需要各窗格使用相同周期"],
+  replayReset: ["Reset replay", "重置回放"],
+  replayPrev: ["Previous bar", "上一根K线"],
+  replayNext: ["Next bar", "下一根K线"],
+  replayPlay: ["Play", "播放"],
+  replayPause: ["Pause", "暂停"],
+  moreTimeframes: ["More timeframes", "更多周期"],
   magnetTip: ["Magnet — snap to OHLC", "磁吸 — 吸附到OHLC"],
   clearDrawings: ["Clear detected", "清除识别"],
   toolCursor: ["Cursor", "光标"],
@@ -115,6 +123,8 @@ const LEX: Record<string, [string, string]> = {
   recentSignals: ["Recent signals", "近期信号"],
   macroIntel: ["Macro intel", "宏观情报"],
   goldenOracle: ["Golden Oracle · Confluence", "黄金神谕 · 共振"],
+  // merged research surface — one entry point for the Golden Oracle scorecard + Research Desk read
+  researchOracle: ["Research Desk · Golden Oracle", "研究台 · 黄金神谕"],
   backtestedNote: ["backtested · 6yr daily→3D", "回测 · 6年 日线→3日"],
   winRate: ["Win rate", "胜率"],
   profitFactor: ["Profit factor", "盈亏比"],
@@ -149,6 +159,15 @@ const LEX: Record<string, [string, string]> = {
   catTrend: ["Trend", "趋势"],
   catMomentum: ["Momentum", "动量"],
   catVolume: ["Volume", "成交量"],
+  // my custom scripts (Pine) section
+  myScripts: ["My Scripts", "我的脚本"],
+  noScriptsYet: ["No custom scripts yet.", "还没有自定义脚本。"],
+  openPineEditor: ["Open the Pine editor", "打开 Pine 编辑器"],
+  editScript: ["Edit in Pine editor", "在 Pine 编辑器中编辑"],
+  rename: ["Rename", "重命名"],
+  delete: ["Delete", "删除"],
+  readOnly: ["read-only", "只读"],
+  deleteScriptConfirm: ["Delete this script? This can't be undone.", "删除此脚本？此操作无法撤销。"],
   // copilot
   askAbout: ["Ask about", "询问"],
   analyzing: ["Analyzing", "分析中"],
@@ -157,6 +176,11 @@ const LEX: Record<string, [string, string]> = {
   sugMarkSR: ["Mark the key support & resistance on the chart", "在图表上标出关键支撑与阻力"],
   sugBacktest: ["How has this signal backtested?", "这个信号的回测表现如何？"],
   sugFindBuys: ["Find BUY setups in an uptrend regime", "在上升趋势中寻找买入机会"],
+  // error boundary
+  errTitle: ["Something went wrong", "出现错误"],
+  errBody: ["An unexpected error occurred. Try reloading — if it persists, please refresh the page.", "发生了意外错误。请尝试重试，若问题持续请刷新页面。"],
+  errRetry: ["Try again", "重试"],
+  errGoChart: ["Go to chart", "返回图表"],
   // misc
   uptrendRegime: ["Uptrend regime", "上升趋势"],
   open: ["Open", "开盘"],
@@ -183,6 +207,9 @@ const LEX: Record<string, [string, string]> = {
   comparing: ["Overlaid", "已叠加"],
   compareHint: ["Add up to 4 symbols to overlay on the active chart.", "最多可叠加 4 个标的到当前图表。"],
   comparingNow: ["On chart", "图表中"],
+  // sector pulse chip (SectorPulseChip — detail card sector-rotation awareness line)
+  sectorTheme: ["Sector theme", "板块主题"],
+  sectorRankOf: ["#{rank} of {n}", "第{rank}/{n}位"],
   // screener
   pageScreener: ["Screener", "选股"],
   matches: ["matches", "个匹配"],
@@ -203,6 +230,9 @@ const LEX: Record<string, [string, string]> = {
   noFilterMatch: ["No symbols match these filters.", "没有符合筛选条件的标的。"],
   goldenOracleScan: ["Golden Oracle scan", "黄金神谕扫描"],
   scanFootClick: ["{nBuy} BUY · {nSell} SELL · {n} symbols · click a row to open it in the chart", "{nBuy} 买入 · {nSell} 卖出 · {n} 个标的 · 点击行可在图表中打开"],
+  scrSearchPlaceholder: ["Search symbol or name…", "搜索代码或名称…"],
+  scrShowAll: ["All symbols", "全部标的"],
+  scrShowAllTitle: ["Show all symbols including those without metrics", "显示全部标的（含无指标的薄行）"],
   // portfolio
   pagePortfolio: ["Portfolio", "投资组合"],
   convictionBook: ["Conviction Book", "信念账本"],
@@ -263,8 +293,10 @@ const LEX: Record<string, [string, string]> = {
   // nav
   flow: ["Options", "期权"],
   asOf: ["as of", "更新于"],
+  loading: ["Loading…", "加载中…"],
   loadingHeat: ["Loading group data…", "加载分组数据中…"],
   minPrem: ["Min prem", "最低保费"],
+  clearFilter: ["Clear filter", "清除筛选"],
   colSide: ["Side", "方向"],
   colSize: ["Size", "数量"],
   colPrem: ["Prem", "保费"],

@@ -7,5 +7,6 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|data/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|js)$).*)"],
+  // Exclude /api/* so the 6-second quote/intraday/flow poll does not pay the auth hop.
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|data/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|js)$).*)"],
 };

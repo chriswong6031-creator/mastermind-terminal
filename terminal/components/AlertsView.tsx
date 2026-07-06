@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { useT } from "@/lib/i18n";
+import { getJSON } from "@/lib/dataCache";
 
 type Alert = { id: string; symbol: string; condition: any; active: boolean; created_at: string };
 
@@ -34,8 +35,11 @@ export default function AlertsView({ email }: { email: string }) {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/alerts").then((r) => r.json()).then((d) => setAlerts(d.alerts || [])).catch(() => {}).finally(() => setLoaded(true));
-    fetch("/data/manifest.json").then((r) => r.json()).then((m) => setSyms(Object.keys(m.symbols || {}))).catch(() => {});
+    let alive = true;
+    fetch("/api/alerts").then((r) => r.json()).then((d) => { if (alive) setAlerts(d.alerts || []); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); });
+    // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
+    getJSON("/data/manifest.json").then((m) => { if (alive) setSyms(Object.keys(m?.symbols || {})); }).catch(() => {});
+    return () => { alive = false; };
   }, []);
 
   async function create() {

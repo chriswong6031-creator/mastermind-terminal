@@ -1,10 +1,10 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "@/lib/i18n";
+import { CMP_PALETTE } from "@/lib/compare";
 
 type Row = { name: string; col: string; verdict: string | null; mkt?: string; zh?: string };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
-const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
 
 // One dialog, two modes. "go" = jump to / add a symbol to the watchlist (the Cmd-K search).
 // "compare" = a dedicated overlay picker: rows toggle the symbol onto the active chart, the dialog
@@ -20,13 +20,20 @@ export default function SearchModal({ open, seed, manifest, inWatchlist, mode = 
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (open) { setQ(seed || ""); setSel(0); setTimeout(() => inputRef.current?.focus(), 10); } }, [open, seed]);
+
+  // Defer the query so keystrokes are never blocked by filtering ~8 800-row manifest.
+  const deferredQ = useDeferredValue(q);
+  const cmp = mode === "compare";
+
+  const results = useMemo(() => {
+    const ql = deferredQ.trim().toLowerCase();
+    return Object.entries(manifest)
+      .filter(([s, r]) => (!cmp || s !== active) && (!ql || s.toLowerCase().includes(ql) || r.name.toLowerCase().includes(ql) || (!!r.zh && r.zh.toLowerCase().includes(ql))))
+      .slice(0, 30);
+  }, [deferredQ, manifest, cmp, active]);
+
   if (!open) return null;
 
-  const cmp = mode === "compare";
-  const ql = q.trim().toLowerCase();
-  const results = Object.entries(manifest)
-    .filter(([s, r]) => (!cmp || s !== active) && (!ql || s.toLowerCase().includes(ql) || r.name.toLowerCase().includes(ql) || (!!r.zh && r.zh.toLowerCase().includes(ql))))
-    .slice(0, 30);
   const added = compare.filter((c) => c !== active);
 
   function choose(sym: string) {
@@ -57,7 +64,7 @@ export default function SearchModal({ open, seed, manifest, inWatchlist, mode = 
         {cmp && added.length > 0 && (
           <div className="scmp-chips">
             {added.map((s, i) => (
-              <span className="scmp-chip" key={s}><i style={{ background: CMP_COLORS[i % CMP_COLORS.length] }} />{s}
+              <span className="scmp-chip" key={s}><i style={{ background: CMP_PALETTE[i % CMP_PALETTE.length] }} />{s}
                 <button title={t("remove")} onClick={() => onToggleCompare?.(s)}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button></span>
             ))}
           </div>

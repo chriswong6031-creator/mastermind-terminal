@@ -1,25 +1,9 @@
 "use client";
-import Script from "next/script";
-import { LangProvider } from "@/lib/i18n";
 import OptionsHubView from "@/components/OptionsHubView";
 
-// Client wrapper that mounts LangProvider for the /flow route.
-// The beforeInteractive Script seeds data-lang from localStorage("mm.lang")
-// before hydration so the provider reads the persisted lang on first mount.
+// Client wrapper for the /flow route. LangProvider and the beforeInteractive
+// locale-init Script are already provided by the root app/layout.tsx, so this
+// just mounts the hub view directly.
 export default function FlowPageRoot() {
-  return (
-    <LangProvider>
-      <Script id="flow-locale-init" strategy="beforeInteractive">{`
-        (function(){
-          try {
-            var lg = localStorage.getItem("mm.lang");
-            if (lg === "zh" || lg === "en") {
-              document.documentElement.setAttribute("data-lang", lg);
-            }
-          } catch(e) {}
-        })();
-      `}</Script>
-      <OptionsHubView />
-    </LangProvider>
-  );
+  return <OptionsHubView />;
 }

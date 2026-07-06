@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import PineEditor from "@/components/PineEditor";
 import { SAMPLE_MACD, PROPRIETARY_SCRIPT } from "@/lib/pine";
 
-export const dynamic = "force-dynamic";
+// dynamic='auto': supabase reads cookies → Next auto-detects dynamic; no need to force it.
 
 export default async function ScriptsPage() {
   const supabase = await createClient();
@@ -17,11 +17,16 @@ export default async function ScriptsPage() {
 
   const sel = "id,name,source,lang,params,is_public,updated_at";
   let { data: scripts } = await supabase.from("saved_scripts").select(sel).order("updated_at", { ascending: false });
-  // seed ONE editable example (the proprietary flagship is NOT stored here — it's a locked constant below)
+  // seed ONE editable example (the proprietary flagship is NOT stored here — it's a locked constant below).
+  // Idempotent: only seed when the user has NO scripts AND no existing "MACD" row (select-before-insert),
+  // so a reload / second tab landing here concurrently can't create a duplicate MACD seed.
   if (!scripts || scripts.length === 0) {
-    await supabase.from("saved_scripts").insert([
-      { user_id: user.id, name: "MACD", lang: "pine", source: SAMPLE_MACD, params: { fast: 12, slow: 26, signal: 9 } },
-    ]);
+    const { data: existingSeed } = await supabase.from("saved_scripts").select("id").eq("user_id", user.id).eq("name", "MACD").maybeSingle();
+    if (!existingSeed) {
+      await supabase.from("saved_scripts").insert([
+        { user_id: user.id, name: "MACD", lang: "pine", source: SAMPLE_MACD, params: { fast: 12, slow: 26, signal: 9 } },
+      ]);
+    }
     ({ data: scripts } = await supabase.from("saved_scripts").select(sel).order("updated_at", { ascending: false }));
   }
   // the proprietary RM×ST indicator is always first + read-only (users can run it, never edit/delete it)

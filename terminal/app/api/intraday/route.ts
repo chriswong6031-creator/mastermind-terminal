@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { fetchIntraday, isIntradayTf } from "@/lib/intradaySources";
 import { withStoredHistory } from "@/lib/intradayStore";
+import type { Bar6 } from "@/lib/intradayShared";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,14 +37,35 @@ export async function GET(req: Request) {
     if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
 
+  // Always consult the on-disk store even when the live leg fails (missing key, 429, network).
+  // The store holds up to 20 000 bars (2021→now) so 4h/1h can serve fully from it with no key.
+  let live: Bar6[] = [];
+  let liveErr: string | undefined;
   try {
-    const live = await fetchIntraday(sym, tf, ext);
-    const bars = await withStoredHistory(sym, tf, ext, live);
-    const data = { t: sym, tf, bars };
-    CACHE.set(ckey, { at: Date.now(), data });
-    return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } });
+    live = await fetchIntraday(sym, tf, ext);
   } catch (e: any) {
-    if (hit) return NextResponse.json(hit.data); // serve stale on an upstream hiccup
-    return NextResponse.json({ t: sym, tf, bars: [], error: e?.message || "fetch failed" });
+    liveErr = e?.message || "fetch failed";
   }
+
+  let bars: Bar6[];
+  try {
+    bars = await withStoredHistory(sym, tf, ext, live);
+  } catch (e: any) {
+    // store read failed entirely (unlikely; readStore swallows its own errors)
+    if (hit) return NextResponse.json(hit.data);
+    return NextResponse.json({ t: sym, tf, bars: [], error: e?.message || "store error" });
+  }
+
+  if (bars.length === 0 && liveErr) {
+    // nothing at all — propagate the live error; stale cache wins if present
+    if (hit) return NextResponse.json(hit.data);
+    return NextResponse.json({ t: sym, tf, bars: [], error: liveErr });
+  }
+
+  // bars available (store-backed or live); build response — include a note when live leg failed
+  // so the client can label freshness without treating it as a hard error.
+  const data: Record<string, any> = { t: sym, tf, bars };
+  if (liveErr) data.note = "store-only: " + liveErr;
+  CACHE.set(ckey, { at: Date.now(), data });
+  return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } });
 }

@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { Suspense } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useT } from "@/lib/i18n";
 
@@ -13,7 +14,7 @@ const ICON: Record<string, string[]> = {
   flow: [], // custom inline — options hub
   ai: ["M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z"],
 };
-function Glyph({ k }: { k: string }) {
+export function Glyph({ k }: { k: string }) {
   if (k === "screener")
     return (<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>);
   if (k === "flow")
@@ -21,7 +22,9 @@ function Glyph({ k }: { k: string }) {
   return (<svg viewBox="0 0 24 24">{ICON[k].map((d, i) => <path key={i} d={d} />)}</svg>);
 }
 
-const TOP = [
+// The single source of truth for the primary nav. Exported so the mobile drawer (TerminalShell)
+// derives its items from the SAME list — the two nav surfaces can't drift.
+export const TOP = [
   { k: "chart", label: "Chart", href: "/terminal" },
   { k: "analyst", label: "Analyst", href: "/terminal?pane=analyst" },
   { k: "screener", label: "Screener", href: "/screener" },
@@ -31,7 +34,17 @@ const TOP = [
   { k: "flow", label: "Options", href: "/flow" },
 ];
 
+// useSearchParams() forces a CSR bailout during static prerender, so the hook lives in an inner
+// component behind Suspense (statically-prerendered pages — screener/alerts/flow — need this).
 export function AppNav() {
+  return (
+    <Suspense fallback={<nav className="appnav" aria-label="Primary" />}>
+      <AppNavInner />
+    </Suspense>
+  );
+}
+
+function AppNavInner() {
   const path = usePathname();
   const params = useSearchParams();
   const router = useRouter();

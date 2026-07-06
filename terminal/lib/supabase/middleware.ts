@@ -3,6 +3,22 @@ import { NextResponse, type NextRequest } from "next/server";
 
 // Refreshes the auth session on every request and guards the /terminal area.
 export async function updateSession(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+  // Login is disabled — the whole app is public. Set TERMINAL_REQUIRE_AUTH=1 to re-gate everything.
+  const requireAuth = process.env.TERMINAL_REQUIRE_AUTH === "1";
+
+  // Fast path: when auth is off, skip the Supabase getUser() round-trip entirely.
+  // All we need is the / → /terminal redirect; everything else passes straight through.
+  if (!requireAuth) {
+    if (path === "/") {
+      const url = request.nextUrl.clone();
+      url.pathname = "/terminal";
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next({ request });
+  }
+
+  // Auth is on: create the Supabase client and validate the session cookie.
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -28,24 +44,14 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const path = request.nextUrl.pathname;
-  // Login is disabled — the whole app is public. Set TERMINAL_REQUIRE_AUTH=1 to re-gate everything.
-  const requireAuth = process.env.TERMINAL_REQUIRE_AUTH === "1";
-  const PROTECTED = requireAuth
-    ? ["/terminal", "/screener", "/scripts", "/portfolio", "/alerts"]
-    : [];
-  // protect the app area; bounce signed-in users away from /login
+  const PROTECTED = ["/terminal", "/screener", "/scripts", "/portfolio", "/alerts"];
+  // protect the app area; bounce unauthenticated users to /login
   if (!user && PROTECTED.some((p) => path.startsWith(p))) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
-  // login disabled → skip the sign-in splash and drop every visitor straight into the app
-  if (!requireAuth && path === "/") {
-    const url = request.nextUrl.clone();
-    url.pathname = "/terminal";
-    return NextResponse.redirect(url);
-  }
+  // bounce signed-in users away from / and /login
   if (user && (path === "/login" || path === "/")) {
     const url = request.nextUrl.clone();
     url.pathname = "/terminal";

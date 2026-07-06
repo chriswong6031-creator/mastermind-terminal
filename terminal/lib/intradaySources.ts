@@ -10,44 +10,12 @@
 // wall-clock components (ET for US, UTC+8 for CN/HK), not the true UTC instant. Cross-market compare
 // is disabled on intraday in the chart, so this local-time shift has no alignment cost.
 
-export type Bar6 = [number, number, number, number, number, number];
-
-export const INTRADAY_TFS = ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "3h", "4h"];
-const INTRADAY_SET = new Set(INTRADAY_TFS);
-export const isIntradayTf = (tf: string) => INTRADAY_SET.has(tf);
-
-export function tfMinutes(tf: string): number {
-  const m = /^(\d+)(m|h)$/.exec(tf);
-  if (!m) return 0;
-  const n = parseInt(m[1], 10) || 1;
-  return m[2] === "h" ? n * 60 : n;
-}
-
-export type Market = "cn" | "hk" | "crypto" | "us" | "ca";
-export function classify(sym: string): Market {
-  if (/\.(SS|SZ)$/i.test(sym)) return "cn";
-  if (/\.HK$/i.test(sym)) return "hk";
-  if (/\.TO$/i.test(sym)) return "ca";
-  if (/-USD$/i.test(sym)) return "crypto";
-  return "us";
-}
-
-// Aggregate base bars into coarser `minutes` buckets, keyed by absolute (display-)epoch so buckets
-// align to local clock boundaries. Bar6 layout: [epoch, open, high, low, close, vol].
-export function resample(bars: Bar6[], minutes: number): Bar6[] {
-  if (minutes <= 0 || bars.length === 0) return bars;
-  const span = minutes * 60;
-  const out: Bar6[] = [];
-  let cur: Bar6 | null = null;
-  let key = NaN;
-  for (const b of bars) {
-    const k = Math.floor(b[0] / span);
-    if (k !== key) { if (cur) out.push(cur); key = k; cur = [k * span, b[1], b[2], b[3], b[4], b[5]]; }
-    else { cur![2] = Math.max(cur![2], b[2]); cur![3] = Math.min(cur![3], b[3]); cur![4] = b[4]; cur![5] += b[5]; }
-  }
-  if (cur) out.push(cur);
-  return out;
-}
+// Pure helpers (Bar6, tfMinutes, classify, resample, isIntradayTf) live in intradayShared so they
+// can be imported by both this module (client-shared) and intradayStore (server-only, node:fs).
+export type { Bar6, Market } from "./intradayShared";
+export { INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
+import type { Bar6, Market } from "./intradayShared";
+import { isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
 
 // ── US / crypto → Polygon ──
 const ET_FMT = new Intl.DateTimeFormat("en-US", {
@@ -76,7 +44,10 @@ async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolea
   const ticker = market === "crypto" ? "X:" + sym.replace(/-/g, "").toUpperCase() : sym.toUpperCase();
   const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(ticker)}/range/${mult}/${unit}/${iso(from)}/${iso(to)}?adjusted=true&sort=asc&limit=50000&apiKey=${key}`;
   const r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) throw new Error("polygon " + r.status);
+  if (!r.ok) {
+    if (r.status === 429) throw new Error("polygon rate-limited");
+    throw new Error("polygon " + r.status);
+  }
   const j: any = await r.json();
   const res: any[] = j?.results || [];
   const out: Bar6[] = [];
