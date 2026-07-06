@@ -17,7 +17,8 @@
 .fin-head-logo{width:22px;height:22px;border-radius:50%;background:var(--panel-3);display:grid;place-items:center;font:700 11px/1 var(--font-ui);color:var(--text-2);flex:none}
 .fin-head-title{font:650 14px/1.2 var(--font-ui);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fin-head-sub{color:var(--text-2);font-weight:500}
-.fin-head-back{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font:600 12px/1 var(--font-ui);color:var(--text-2);background:none;border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 11px;cursor:pointer;transition:color var(--t),border-color var(--t)}
+/* leftmost in .fin-head (before the logo/title) — back-to-chart sits top-left of the pane */
+.fin-head-back{display:inline-flex;align-items:center;gap:6px;font:600 12px/1 var(--font-ui);color:var(--text-2);background:none;border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 11px;cursor:pointer;transition:color var(--t),border-color var(--t)}
 .fin-head-back:hover{color:var(--text);border-color:var(--line-3)}
 
 /* ── tab pill bar ── */
