@@ -173,18 +173,18 @@ export default function MegaPane({
       <div className="fin-pane" role="dialog" aria-modal="true" aria-label={`${displayName} · ${pageTitle}`}>
         {/* ── header ── */}
         <div className="fin-head">
-          <span className="fin-head-logo" aria-hidden>
-            {initial}
-          </span>
-          <span className="fin-head-title">
-            {displayName} <span className="fin-head-sub">· {pageTitle}</span>
-          </span>
           <button className="fin-head-back" onClick={onClose}>
             <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden style={{ fill: "none", stroke: "currentColor", strokeWidth: 2 }}>
               <path d="M15 18l-6-6 6-6" />
             </svg>
             {pick(zh, "Back to chart", "返回图表")}
           </button>
+          <span className="fin-head-logo" aria-hidden>
+            {initial}
+          </span>
+          <span className="fin-head-title">
+            {displayName} <span className="fin-head-sub">· {pageTitle}</span>
+          </span>
         </div>
 
         {/* ── Financials tab pill bar (six tabs) ── */}
