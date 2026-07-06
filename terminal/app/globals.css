@@ -228,6 +228,15 @@ svg{display:block}
 .ticker{grid-column:1/4;grid-row:3;display:flex;align-items:center;gap:22px;padding:0 16px;border-top:1px solid var(--line);overflow:hidden;font-size:11.5px}
 .ticker .lbl{color:var(--muted);font:600 10px/1 var(--font-ui);letter-spacing:.08em;text-transform:uppercase}
 .ticker .tk{display:flex;align-items:center;gap:7px;white-space:nowrap}.ticker .tk .s{color:var(--text-2);font-weight:600}.ticker .tk .p{color:var(--muted);font-variant-numeric:tabular-nums}.ticker .tk .c{font-variant-numeric:tabular-nums;font-weight:600}
+/* movers marquee — a slow, seamless left-scroll of the movers tape. Two identical runs sit side by
+   side inside the track; the track translates exactly one run-width (-50%) and loops, so there is no
+   visible seam. Pauses on hover so a mover can still be clicked; respects prefers-reduced-motion. */
+.ticker .tk-marquee{flex:1;min-width:0;overflow:hidden;display:flex;-webkit-mask:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent);mask:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
+.ticker .tk-track{display:flex;flex:none;animation:tk-marq 70s linear infinite;will-change:transform}
+.ticker .tk-run{display:flex;align-items:center;gap:22px;padding-left:22px;flex:none}
+.ticker:hover .tk-track{animation-play-state:paused}
+@keyframes tk-marq{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@media (prefers-reduced-motion:reduce){.ticker .tk-track{animation:none}}
 
 /* ===== screener / scripts shared 2-col layout ===== */
 .app2{display:grid;grid-template-columns:60px minmax(0,1fr);grid-template-rows:54px 1fr 28px;height:100vh}
@@ -970,3 +979,34 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .is-def-row{padding:8px 11px;border-radius:var(--r);font-size:12.5px;color:var(--text-2);cursor:pointer}
 .is-def-row:hover{background:var(--panel-2);color:var(--text)}
 .is-foot .btn{height:32px;padding:0 16px}
+
+/* ===== Flow desk / Options Hub ===== */
+.flow-heat-strip{display:flex;align-items:center;gap:6px;padding:9px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap;flex:none}
+.flow-filter-bar{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap;flex:none;overflow-x:auto}
+.flow-drill-card{padding:10px 14px;border-bottom:1px solid var(--line);background:rgba(41,98,255,.06);display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:none}
+.flow-unusual-rail{width:210px;flex:none;border-left:1px solid var(--line);display:flex;flex-direction:column;padding:12px 10px;gap:4px;overflow-y:auto;min-height:0}
+.flow-unusual-row{display:flex;flex-direction:column;padding:8px 9px;border-radius:var(--r-md);background:none;border:0;text-align:left;cursor:pointer;color:var(--text);transition:background var(--t)}
+.flow-unusual-row:hover{background:var(--panel-2)}
+.flow-unusual-row.on{background:rgba(41,98,255,.1);outline:1px solid rgba(41,98,255,.3)}
+.flow-dte-chip{display:inline-block;padding:2px 6px;border-radius:var(--r);background:var(--panel-3);border:1px solid var(--line-2);color:var(--text-2);font:600 10px/1.4 var(--font-ui);white-space:nowrap}
+.flow-mny-chip{display:inline-block;padding:2px 6px;border-radius:var(--r);background:var(--panel-3);border:1px solid var(--line-2);color:var(--text-2);font:600 10px/1.4 var(--font-ui);white-space:nowrap}
+.flow-flag-chip{display:inline-block;padding:2px 6px;border-radius:var(--r);background:var(--panel-3);border:1px solid var(--line-2);color:var(--text-dim);font:600 10px/1.4 var(--font-ui);white-space:nowrap}
+.flow-disclaimer{padding:7px 14px;border-top:1px solid var(--line);font-size:11px;color:var(--text-dim);flex:none;line-height:1.5}
+/* Options Hub tab bar */
+.hub-tab-bar{display:flex;align-items:center;gap:0;border-bottom:1px solid var(--line);flex-shrink:0;padding:0 16px;overflow-x:auto}
+.hub-tab{height:44px;padding:0 16px;font:600 13px/1 var(--font-ui);color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;cursor:pointer;transition:color 110ms,border-color 110ms}
+.hub-tab.on{color:var(--text);border-bottom-color:var(--brand)}
+/* Options Hub sector sparkline card */
+.hub-sector-card{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:10px 12px;text-align:left;cursor:pointer;transition:background var(--t),border-color var(--t)}
+.hub-sector-card:hover{background:var(--panel-2)}
+/* Options Hub placeholder tabs */
+.hub-placeholder{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--muted)}
+@media(max-width:640px){
+  .flow-unusual-rail{display:none}
+  .flow-filter-bar{gap:6px;padding:6px 10px}
+  .flow-heat-strip{padding:7px 10px;gap:4px}
+  .main2 table.scr td:nth-child(3),.main2 table.scr th:nth-child(3){display:none}
+  .main2 table.scr td:nth-child(7),.main2 table.scr th:nth-child(7),
+  .main2 table.scr td:nth-child(8),.main2 table.scr th:nth-child(8){display:none}
+  .hub-tab{padding:0 10px;font-size:12px}
+}

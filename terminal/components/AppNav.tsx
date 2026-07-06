@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { useT } from "@/lib/i18n";
 
 const ICON: Record<string, string[]> = {
@@ -20,7 +21,7 @@ function Glyph({ k }: { k: string }) {
 
 const TOP = [
   { k: "chart", label: "Chart", href: "/terminal" },
-  { k: "analyst", label: "Analyst", href: "/terminal?pane=analyst" },
+  { k: "analyst", label: "Analyst", href: "/terminal?pane=overview" },
   { k: "screener", label: "Screener", href: "/screener" },
   { k: "scripts", label: "Scripts", href: "/scripts" },
   { k: "portfolio", label: "Portfolio", href: "/portfolio" },
@@ -32,17 +33,27 @@ export function AppNav() {
   const params = useSearchParams();
   const router = useRouter();
   const t = useT();
-  const pane = params.get("pane");
-  const activeKey = path.startsWith("/terminal") && (pane === "analyst" || pane === "forecast") ? "analyst"
-    : path.startsWith("/screener") ? "screener" : path.startsWith("/scripts") ? "scripts"
-    : path.startsWith("/portfolio") ? "portfolio" : path.startsWith("/alerts") ? "alerts" : "chart";
+  // The research/fundamentals MegaPane lives in TerminalShell and strips its ?pane= via
+  // history.replaceState on close — invisible to useSearchParams, so the URL keeps reading
+  // ?pane=… and the old logic left "Analyst" lit after the pane was closed. Track the REAL
+  // overlay state from the mm:pane-state event TerminalShell broadcasts (fires on open AND close);
+  // the URL param only seeds the initial highlight for a deep-linked ?pane= load.
+  const [paneOpen, setPaneOpen] = useState(() => path.startsWith("/terminal") && !!params.get("pane"));
+  useEffect(() => {
+    const h = (e: Event) => setPaneOpen(!!(e as CustomEvent).detail);
+    window.addEventListener("mm:pane-state", h);
+    return () => window.removeEventListener("mm:pane-state", h);
+  }, []);
+  const activeKey = path.startsWith("/screener") ? "screener" : path.startsWith("/scripts") ? "scripts"
+    : path.startsWith("/portfolio") ? "portfolio" : path.startsWith("/alerts") ? "alerts"
+    : (path.startsWith("/terminal") && paneOpen) ? "analyst" : "chart";
   const openAI = () => { if (path.startsWith("/terminal")) window.dispatchEvent(new CustomEvent("mm:copilot")); else router.push("/terminal?ai=1"); };
   return (
     <nav className="appnav" aria-label="Primary">
       {TOP.map((it) => {
         const on = it.k === activeKey;
         return (
-          <Link key={it.k} href={it.href} onClick={it.k === "analyst" && path.startsWith("/terminal") ? () => window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "analyst" })) : undefined} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={t(it.k, it.label)} data-tip={t(it.k, it.label)}><Glyph k={it.k} /></Link>
+          <Link key={it.k} href={it.href} onClick={it.k === "analyst" && path.startsWith("/terminal") ? () => window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "overview" })) : undefined} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={t(it.k, it.label)} data-tip={t(it.k, it.label)}><Glyph k={it.k} /></Link>
         );
       })}
       <div className="gap" />
