@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { useT } from "@/lib/i18n";
+import { getJSON } from "@/lib/dataCache";
 
 type Row = { name: string; zh?: string; col: string; last: number; chg: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
@@ -14,7 +15,8 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
   const t = useT();
   const [man, setMan] = useState<Record<string, Row>>({});
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then((m) => setMan(m.symbols || {})).catch(() => {}).finally(() => setLoaded(true)); }, []);
+  // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
+  useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive) setMan(m?.symbols || {}); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); }); return () => { alive = false; }; }, []);
 
   const rows = symbols.map((s) => ({ sym: s, ...(man[s] || {} as Row) })).filter((r) => r.name);
   const buys = rows.filter((r) => isBuy(r.verdict));

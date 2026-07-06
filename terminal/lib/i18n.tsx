@@ -59,6 +59,8 @@ const LEX: Record<string, [string, string]> = {
   splitLayout: ["Split layout", "分屏布局"],
   mtfTip: ["Multi-timeframe — the active symbol at D / 3D / W / 1M", "多周期 — 当前标的的 日/3日/周/月 图"],
   syncTip: ["Sync crosshair & time-axis across panes", "跨窗格同步十字光标与时间轴"],
+  syncMixedTip: ["Sync needs matching timeframes across panes", "同步需要各窗格使用相同周期"],
+  replayMixedTip: ["Replay needs matching timeframes across panes", "回放需要各窗格使用相同周期"],
   magnetTip: ["Magnet — snap to OHLC", "磁吸 — 吸附到OHLC"],
   clearDrawings: ["Clear detected", "清除识别"],
   toolCursor: ["Cursor", "光标"],
@@ -115,6 +117,8 @@ const LEX: Record<string, [string, string]> = {
   recentSignals: ["Recent signals", "近期信号"],
   macroIntel: ["Macro intel", "宏观情报"],
   goldenOracle: ["Golden Oracle · Confluence", "黄金神谕 · 共振"],
+  // merged research surface — one entry point for the Golden Oracle scorecard + Research Desk read
+  researchOracle: ["Research Desk · Golden Oracle", "研究台 · 黄金神谕"],
   backtestedNote: ["backtested · 6yr daily→3D", "回测 · 6年 日线→3日"],
   winRate: ["Win rate", "胜率"],
   profitFactor: ["Profit factor", "盈亏比"],

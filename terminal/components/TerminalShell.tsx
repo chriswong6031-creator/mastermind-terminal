@@ -1,24 +1,29 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
-import { AppNav } from "@/components/AppNav";
+import { AppNav, TOP as NAV_TOP, Glyph as NavGlyph } from "@/components/AppNav";
 import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
 import { intradayCapable } from "@/components/ChartPanel";
 import { classify } from "@/lib/intradaySources";
-import MegaPane, { type FinPage } from "@/components/fin/MegaPane";
-import OracleDash from "@/components/fin/OracleDash";
+import { type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
-import StrategyTester from "@/components/StrategyTester";
 import SearchModal from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
 import IndicatorSettings from "@/components/IndicatorSettings";
 import IndicatorSource from "@/components/IndicatorSource";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER } from "@/lib/indicators";
-import CopilotPanel from "@/components/CopilotPanel";
 import SeasonalityCard from "@/components/SeasonalityCard";
+// Code-split the conditionally-mounted heavies out of the /terminal first-paint bundle (task 9).
+// TerminalShell is a Client Component, so ssr:false is allowed — none of these render on any SSR
+// path (each mounts only when opened: paneOpen / signalsOpen / view==='strategy' / copilot toggle).
+const MegaPane = dynamic(() => import("@/components/fin/MegaPane"), { ssr: false });
+const OracleDash = dynamic(() => import("@/components/fin/OracleDash"), { ssr: false });
+const StrategyTester = dynamic(() => import("@/components/StrategyTester"), { ssr: false });
+const CopilotPanel = dynamic(() => import("@/components/CopilotPanel"), { ssr: false });
 import StockAnalysis from "@/components/StockAnalysis";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
@@ -28,16 +33,9 @@ import DayRange from "@/components/DayRange";
 import { useT, useLang } from "@/lib/i18n";
 import { useFromMacro, backToMacro } from "@/lib/originNav";
 import { getJSON, prefetch } from "@/lib/dataCache";
+import { CMP_PALETTE } from "@/lib/compare";
 
-const MNAV: [string, string, string][] = [
-  ["/terminal", "Chart", "M3 17l5-6 4 3 4-7 5 9"],
-  ["/screener", "Screener", "RECT"],
-  ["/scripts", "Scripts", "M8 7l-5 5 5 5M16 7l5 5-5 5"],
-  ["/portfolio", "Portfolio", "M21 12a9 9 0 1 1-9-9v9z"],
-  ["/alerts", "Alerts", "M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"],
-];
-
-type Row = { name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
+type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
 
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
@@ -68,8 +66,9 @@ function functionalSet(sym: string): Set<string> {
   if (intradayCapable(classify(sym))) for (const t of INTRADAY_FUNCTIONAL) s.add(t);
   return s;
 }
-// valid ?pane= deep-link targets (the ten MegaPane pages)
-const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends", "earnings", "revenue", "forecast", "analyst", "technicals", "seasonals", "mastermind"]);
+// valid ?pane= deep-link targets (the nine MegaPane pages; "analyst" is an alias for forecast).
+// "mastermind" was retired — its research read now lives in the OracleDash Research-Desk surface.
+const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends", "earnings", "revenue", "forecast", "analyst", "technicals", "seasonals"]);
 const normalizePane = (pane: string): FinPage => (pane === "analyst" ? "forecast" : pane) as FinPage;
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 
@@ -84,7 +83,7 @@ const STYLEABLE = new Set(["trendline", "arrow", "rect", "hline", "vline"]);
 const DETECTORS: [string, string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
 ];
-const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
+// compare-overlay palette: the canonical 6-color set from lib/compare (mirrors --cat-1..--cat-6).
 
 // translation key maps for the (otherwise hard-coded) toolbar/tool labels
 const CT_TKEY: Record<string, string> = { candles: "ctCandles", heikin: "ctHeikin", bars: "ctBars", line: "ctLine", area: "ctArea" };
@@ -195,7 +194,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (add.length) setSymbolDrawings(sym, [...(drawPending.current[sym] ?? drawStore[sym] ?? []), ...add]);
   }, [drawStore, setSymbolDrawings]);
 
-  useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then(setMan).catch(() => {}); }, []);
+  // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
+  useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive && m) setMan(m); }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
     setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) });
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
@@ -240,7 +240,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     }
   }, []);
   useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList })); }, [lists, activeList]);
-  useEffect(() => { setPaneSync(sync && panes.length > 1); }, [sync, panes.length]);
+  // paneSync mirrors same-timeframe peers only — disable it entirely when the panes carry mixed timeframes
+  // (the Sync button is rendered disabled in that case), so a stale sync=true can't silently half-work.
+  useEffect(() => { setPaneSync(sync && panes.length > 1 && new Set(paneTfs.slice(0, panes.length)).size <= 1); }, [sync, panes.length, paneTfs]);
   // load drawings once per symbol that appears in a pane; don't clobber an in-flight local edit
   useEffect(() => {
     const now = new Set(panes);
@@ -283,13 +285,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     [active, wl]
   );
   const quoteSymsKey = quoteSyms.join(",");
-  useEffect(() => {
-    if (!quoteSymsKey) return;
-    let alive = true;
-    const poll = () => fetch(`/api/quote?syms=${encodeURIComponent(quoteSymsKey)}`)
+  // The polled symbol set lives in a ref so a rapid watchlist edit doesn't tear down + immediately
+  // re-fire the interval (which bursts /api/quote). The interval is mounted ONCE and reads the ref;
+  // key changes only schedule a single debounced fresh poll so back-to-back edits coalesce.
+  const quoteSymsKeyRef = useRef(quoteSymsKey);
+  quoteSymsKeyRef.current = quoteSymsKey;
+  const quoteAliveRef = useRef(true);
+  const pollQuotes = useCallback(() => {
+    const key = quoteSymsKeyRef.current;
+    if (!key) return;
+    fetch(`/api/quote?syms=${encodeURIComponent(key)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!alive || !d || !d.quotes) return;
+        if (!quoteAliveRef.current || !d || !d.quotes) return;
         setQuotes((prev) => {
           const n = { ...prev };
           for (const k of Object.keys(d.quotes)) { const q = d.quotes[k]; if (q) n[k] = q; else delete n[k]; }
@@ -297,10 +305,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         });
       })
       .catch(() => {});
-    poll();
-    const id = setInterval(poll, 6000);
-    return () => { alive = false; clearInterval(id); };
-  }, [quoteSymsKey]);
+  }, []);
+  // stable 6s interval, mounted once
+  useEffect(() => {
+    quoteAliveRef.current = true;
+    const id = setInterval(pollQuotes, 6000);
+    return () => { quoteAliveRef.current = false; clearInterval(id); };
+  }, [pollQuotes]);
+  // debounced fresh poll whenever the symbol set changes (rapid edits collapse to one fetch)
+  useEffect(() => {
+    if (!quoteSymsKey) return;
+    const id = setTimeout(pollQuotes, 250);
+    return () => clearTimeout(id);
+  }, [quoteSymsKey, pollQuotes]);
   useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
   useEffect(() => { const open = () => setCopilot(true); window.addEventListener("mm:copilot", open); try { if (new URLSearchParams(window.location.search).get("ai") === "1") setCopilot(true); } catch {} return () => window.removeEventListener("mm:copilot", open); }, []);
   // shallow deep-link: ?pane=<page> opens the MegaPane on that page (MegaPane keeps the URL in sync
@@ -310,6 +327,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Direct open event — AppNav dispatches this on every click, so re-opening the SAME pane after a close
   // works even though MegaPane's replaceState strip is invisible to Next's router (searchParams stays stale).
   useEffect(() => { const h = (e: Event) => { const p = (e as CustomEvent).detail as string; if (p && VALID_PANES.has(p)) setPaneOpen(normalizePane(p)); }; window.addEventListener("mm:open-pane", h); return () => window.removeEventListener("mm:open-pane", h); }, []);
+  // ChartPanel's intraday empty-state overlay dispatches mm:set-tf {tf} ("Back to Daily" → "D"). Mirror
+  // the open-pane pattern: switch the ACTIVE pane's timeframe, guarded on its functional TF set.
+  useEffect(() => { const h = (e: Event) => { const nt = (e as CustomEvent).detail?.tf as string | undefined; if (nt && FUNCTIONAL.has(nt)) setTf(nt); }; window.addEventListener("mm:set-tf", h); return () => window.removeEventListener("mm:set-tf", h); }, [FUNCTIONAL, activePane]);
 
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
   function setGrid(n: number) {
@@ -328,8 +348,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     setPaneTfs((tfs) => next.map((_, i) => tfs[i] ?? tf));
     setActivePane((a) => Math.min(a, next.length - 1));
   }
-  // one-click multi-timeframe: the active symbol across D / 3D / W / 1M (drawings are shared per-symbol)
-  function mtfLayout() { const sym = active; setSplit(4); setPanes([sym, sym, sym, sym]); setPaneTfs(["D", "3D", "W", "1M"]); setActivePane(0); }
+  // one-click multi-timeframe: the active symbol across D / 3D / W / 1M (drawings are shared per-symbol).
+  // Clicking again while already in the MTF layout collapses back to a single pane on the active symbol.
+  const isMtf = panes.length === 4 && panes.every((s) => s === active) && paneTfs.slice(0, 4).join(",") === "D,3D,W,1M";
+  // paneSync only mirrors same-timeframe peers, and the single replay slider assumes one bar count: with
+  // heterogeneous per-pane timeframes both are incoherent, so we disable Sync + replay in that case.
+  const mixedTfs = panes.length > 1 && new Set(paneTfs.slice(0, panes.length)).size > 1;
+  function mtfLayout() {
+    if (isMtf) { setSplit(1); setPanes([active]); setPaneTfs([tf]); setActivePane(0); return; }
+    const sym = active; setSplit(4); setPanes([sym, sym, sym, sym]); setPaneTfs(["D", "3D", "W", "1M"]); setActivePane(0);
+  }
   const onTick = useCallback((p: number) => setLivePx(p), []);
   const liveStatus = useLive(active, onTick);
 
@@ -615,8 +643,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
             <div className="seg tool-adv" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
-            <button className="tbtn tool-adv" title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
-            {panes.length > 1 && <button className={`tbtn tool-adv${sync ? " on" : ""}`} title={t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
+            <button className={`tbtn tool-adv${isMtf ? " on" : ""}`} title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
+            {panes.length > 1 && <button className={`tbtn tool-adv${sync && !mixedTfs ? " on" : ""}`} disabled={mixedTfs} title={mixedTfs ? t("syncMixedTip") : t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
             <div className="pophost tool-adv">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !detectOpen; closeAll(); setDetectOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
@@ -644,7 +672,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="cmp-strip">
             <span className="cmp-lbl">{t("compare")}</span>
             {compare.filter((c) => c !== active).map((cs, i) => (
-              <span className="cmp-chip" key={cs}><i style={{ background: CMP_COLORS[i % CMP_COLORS.length] }} />{cs}<button title="Remove" onClick={() => setCompare((c) => c.filter((x) => x !== cs))}>✕</button></span>
+              <span className="cmp-chip" key={cs}><i style={{ background: CMP_PALETTE[i % CMP_PALETTE.length] }} />{cs}<button title="Remove" onClick={() => setCompare((c) => c.filter((x) => x !== cs))}>✕</button></span>
             ))}
           </div>
         )}
@@ -652,11 +680,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         {replayOn && view === "price" && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 14px", borderBottom: "1px solid var(--line)", background: "var(--bg)" }}>
             <button className="icbtn" title="Reset" onClick={() => { setReplayIdx(Math.max(20, total - 80)); setPlaying(false); }}><svg viewBox="0 0 24 24"><path d="M11 19l-7-7 7-7M20 19l-7-7 7-7" /></svg></button>
-            <button className="icbtn" onClick={() => setReplayIdx((i) => Math.max(20, (i ?? 0) - 1))}><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
-            <button className="icbtn" onClick={() => setPlaying((p) => !p)}>{playing ? <svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></svg> : <svg viewBox="0 0 24 24" style={{ fill: "var(--signal)", stroke: "none" }}><path d="M6 4l14 8-14 8V4z" /></svg>}</button>
-            <button className="icbtn" onClick={() => setReplayIdx((i) => Math.min(total - 1, (i ?? 0) + 1))}><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg></button>
+            <button className="icbtn" disabled={mixedTfs} onClick={() => setReplayIdx((i) => Math.max(20, (i ?? 0) - 1))}><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
+            <button className="icbtn" disabled={mixedTfs} title={mixedTfs ? t("replayMixedTip") : undefined} onClick={() => setPlaying((p) => !p)}>{playing ? <svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></svg> : <svg viewBox="0 0 24 24" style={{ fill: "var(--signal)", stroke: "none" }}><path d="M6 4l14 8-14 8V4z" /></svg>}</button>
+            <button className="icbtn" disabled={mixedTfs} onClick={() => setReplayIdx((i) => Math.min(total - 1, (i ?? 0) + 1))}><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg></button>
             <div className="seg" style={{ height: 26 }}>{[1, 2, 4].map((s) => <button key={s} className={speed === s ? "on" : ""} onClick={() => setSpeed(s)}>{s}x</button>)}</div>
-            <input type="range" min={20} max={Math.max(21, total - 1)} value={replayIdx ?? total - 1} onChange={(e) => setReplayIdx(parseInt(e.target.value))} style={{ flex: 1, accentColor: "var(--brand)" }} />
+            <input type="range" min={20} max={Math.max(21, total - 1)} value={replayIdx ?? total - 1} disabled={mixedTfs} title={mixedTfs ? t("replayMixedTip") : undefined} onChange={(e) => setReplayIdx(parseInt(e.target.value))} style={{ flex: 1, accentColor: "var(--brand)" }} />
             <span className="num" style={{ color: "var(--muted)", fontSize: 11.5, minWidth: 70, textAlign: "right" }}>{(replayIdx ?? total - 1) + 1} / {total}</span>
           </div>
         )}
@@ -778,17 +806,20 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="detail-scroll">
               <div style={{ padding: "12px 12px 0" }}>
-                {/* ── Golden Oracle → compact clickable chip. The full scorecard (verdict · WR/PF/CAGR ·
-                    supporting reads · signal history) now lives in the Signals dashboard. ── */}
-                <button className="mm-chip" style={{ borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }} onClick={() => setSignalsOpen(true)} title={t("goldenOracle")}>
+                {/* ── Merged Research Desk · Golden Oracle → ONE compact clickable chip. The full scorecard
+                    (verdict · WR/PF/CAGR · signal history) AND the research read (drivers/cautions · factor
+                    profile · event edge) now live together in the OracleDash overlay. ── */}
+                <button className="mm-chip" style={{ borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }} onClick={() => setSignalsOpen(true)} title={t("researchOracle")}>
                   <svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>
-                  <span className="mm-chip-lbl">{t("goldenOracle")}</span>
+                  <span className="mm-chip-lbl">{t("researchOracle")}</span>
                   <span className="mm-chip-verdict" style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</span>
                   <svg className="mm-chip-car" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>
                 </button>
               </div>
-              <StockAnalysis intel={intel} row={m} slice={slice} fund={fund} opts={opts} bars={bars} onExpand={() => setPaneOpen("overview")} onOpenPane={(p) => setPaneOpen(p)} onOpenSignals={() => setSignalsOpen(true)} />
-              <div style={{ padding: 12 }}><SeasonalityCard symbol={active} onOpenPane={() => setPaneOpen("seasonals")} /></div>
+              {/* Seasonality is injected via beforeIv so it renders BETWEEN the Analyst gauge and Implied
+                  Volatility (order: analysis → Seasonality → IV) rather than after the whole card. */}
+              <StockAnalysis intel={intel} row={m} fund={fund} opts={opts} bars={bars} onOpenPane={(p) => setPaneOpen(p)} onOpenSignals={() => setSignalsOpen(true)}
+                beforeIv={<div style={{ padding: 12 }}><SeasonalityCard symbol={active} onOpenPane={() => setPaneOpen("seasonals")} /></div>} />
               {/* ── bottom button group (after Seasonality): full analysis + Ask AI ── */}
               <div className="sa-btn-group">
                 <button className="btn btn-primary" style={{ width: "100%", height: 38 }} onClick={() => setPaneOpen("overview")}>{t("openFullAnalysis")}</button>
@@ -819,9 +850,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <MegaPane
           sym={active}
           fund={fund}
-          intel={intel}
-          row={m}
-          slice={slice}
           quote={liveQuote ? { last: lastPx ?? null } : null}
           bars={bars}
           page={paneOpen}
@@ -841,17 +869,29 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       <div className={`m-drawer${drawer ? " open" : ""}`}>
         <div className="m-drawer-h"><BrandLockup /></div>
         <nav className="m-nav">
-          {MNAV.map(([href, label, d]) => (
-            <Link key={href} href={href} className={navPath === href || (href === "/terminal" && navPath.startsWith("/terminal")) ? "on" : ""} onClick={() => setDrawer(false)}>
-              {d === "RECT"
-                ? <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>
-                : <svg viewBox="0 0 24 24"><path d={d} /></svg>}
-              {label}
-            </Link>
-          ))}
+          {/* Derived from AppNav's exported TOP so the mobile drawer + desktop rail can't drift (task 6).
+              Active-key logic mirrors AppNav (chart vs analyst-pane disambiguated by ?pane=). */}
+          {(() => {
+            const pane = searchParams.get("pane");
+            const activeKey = navPath.startsWith("/terminal") && (pane === "analyst" || pane === "forecast") ? "analyst"
+              : navPath.startsWith("/screener") ? "screener" : navPath.startsWith("/scripts") ? "scripts"
+              : navPath.startsWith("/portfolio") ? "portfolio" : navPath.startsWith("/alerts") ? "alerts"
+              : navPath.startsWith("/flow") ? "flow" : "chart";
+            return NAV_TOP.map((it) => {
+              // "analyst" opens the in-shell pane rather than navigating — mirror AppNav's dispatch.
+              const isAnalyst = it.k === "analyst";
+              const onNav = () => { setDrawer(false); if (isAnalyst && navPath.startsWith("/terminal")) window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "analyst" })); };
+              return (
+                <Link key={it.k} href={it.href} className={it.k === activeKey ? "on" : ""} onClick={onNav}>
+                  <NavGlyph k={it.k} />
+                  {t(it.k, it.label)}
+                </Link>
+              );
+            });
+          })()}
           <button onClick={() => { setDrawer(false); setCopilot(true); }}>
             <svg viewBox="0 0 24 24" style={{ fill: "var(--brand-2)", stroke: "none" }}><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>
-            Mastermind AI
+            {t("ai")}
           </button>
         </nav>
         <div className="m-drawer-ft"><SettingsMenu email={email} /></div>

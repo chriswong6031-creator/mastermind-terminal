@@ -1,10 +1,10 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useT } from "@/lib/i18n";
+import { CMP_PALETTE } from "@/lib/compare";
 
 type Row = { name: string; col: string; verdict: string | null; mkt?: string; zh?: string };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
-const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
 
 // One dialog, two modes. "go" = jump to / add a symbol to the watchlist (the Cmd-K search).
 // "compare" = a dedicated overlay picker: rows toggle the symbol onto the active chart, the dialog
@@ -57,7 +57,7 @@ export default function SearchModal({ open, seed, manifest, inWatchlist, mode = 
         {cmp && added.length > 0 && (
           <div className="scmp-chips">
             {added.map((s, i) => (
-              <span className="scmp-chip" key={s}><i style={{ background: CMP_COLORS[i % CMP_COLORS.length] }} />{s}
+              <span className="scmp-chip" key={s}><i style={{ background: CMP_PALETTE[i % CMP_PALETTE.length] }} />{s}
                 <button title={t("remove")} onClick={() => onToggleCompare?.(s)}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button></span>
             ))}
           </div>

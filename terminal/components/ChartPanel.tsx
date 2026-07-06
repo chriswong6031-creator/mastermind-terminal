@@ -7,6 +7,7 @@ import {
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { getJSON, getSliceAndOhlc } from "@/lib/dataCache";
+import { CMP_PALETTE } from "@/lib/compare";
 import { isIntradayTf, classify, type Market } from "@/lib/intradaySources";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
@@ -402,7 +403,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     for (const s of cmpSeriesRef.current.values()) { try { chart.removeSeries(s); } catch {} }
     cmpSeriesRef.current.clear();
     const prec = precRef.current; const cmp = compareRef.current || [];
-    const CMP_COLORS = ["#e8a33d", "#9d86ff", "#19c2c2", "#f06bd0"];
     for (let ci = 0; ci < cmp.length && ci < 4; ci++) {
       const cs = cmp[ci]; if (!cs || cs === symbol) continue;
       const co = await getJSON(`/data/${cs}.json`);
@@ -414,7 +414,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       let bse = 0, baseA = rows[0]?.c ?? 0; for (const r of rows) { if (cmap[r.time] != null) { bse = cmap[r.time]; baseA = r.c; break; } }
       if (!bse) continue; const scl = baseA / bse; let lv: number | null = null;
       const cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: +(lv * scl).toFixed(prec) } : null; }).filter(Boolean);
-      const ln = chart.addSeries(LineSeries, { color: CMP_COLORS[ci % CMP_COLORS.length], lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: cs }, 0);
+      const ln = chart.addSeries(LineSeries, { color: CMP_PALETTE[ci % CMP_PALETTE.length], lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: cs }, 0);
       ln.setData(cdata as any); cmpSeriesRef.current.set(cs, ln);
     }
   };

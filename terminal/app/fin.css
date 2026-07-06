@@ -35,6 +35,8 @@
 .fin-sec-h.link{cursor:pointer}
 .fin-sec-h.link:hover .chev{color:var(--brand-2)}
 .fin-sec-cap{font:500 11.5px/1.45 var(--font-ui);color:var(--text-2);margin-bottom:13px}
+/* muted one-liner under a chart clarifying a basis/caveat (e.g. constant-mktcap P/S) */
+.fin-chart-note{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:7px}
 
 /* ── responsive grids ── */
 .fin-grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -122,6 +124,9 @@
 .fin-xaxis{display:flex;justify-content:space-between;padding:6px 50px 0 8px;font:500 10px/1 var(--font-num);color:var(--muted)}
 .fin-xaxis-sm{font-size:8.5px}
 .fin-xaxis-xs{font-size:7.5px;padding-left:6px;padding-right:48px}
+/* rotated variant: densest axes tilt labels ~-35° instead of dropping them; extra height clears the tilt */
+.fin-xaxis-rot{align-items:flex-start;height:26px;padding-top:8px}
+.fin-xaxis-rot .fin-xlbl{transform:rotate(-35deg);transform-origin:center top;white-space:nowrap;overflow:visible}
 /* equal-width centered cells so crowded period labels ("Q2 '26") stay whole instead of clipping */
 .fin-xlbl{white-space:nowrap;text-align:center;flex:1 1 0;min-width:0}
 .fin-legend{display:flex;flex-wrap:nowrap;justify-content:center;gap:6px 10px;margin-top:9px;overflow-x:auto;scrollbar-width:none}
@@ -201,6 +206,7 @@
 
 /* ── Statistics ── */
 .fin-stats-hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.fin-stats-basis{font:500 10.5px/1 var(--font-ui);color:var(--muted)}
 .fin-stats-meta{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-bottom:6px;display:flex;gap:10px}
 .fin-stats-ccy{color:var(--muted)}
 .fin-stats-tbl{min-width:420px}
@@ -430,8 +436,6 @@
 .fin-doc-icon svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .fin-doc-none{color:var(--line-3);font:400 12px/1 var(--font-ui);height:22px;display:grid;place-items:center}
 
-/* ── mastermind host (existing deep-analysis inside the pane) ── */
-.fin-mm-host{max-width:920px;margin:0 auto}
 
 /* ── TranscriptDrawer ── */
 .fin-drawer-scrim{position:fixed;inset:0;z-index:94;background:rgba(4,5,7,.4);animation:fin-fade .12s ease}
@@ -448,7 +452,6 @@
 .fin-tx-text{color:var(--text-2)}
 
 @media (max-width:520px){
-  .fin-mm-host{max-width:100%}
   .fin-doc-strip-lbl{display:none}
 }
 
