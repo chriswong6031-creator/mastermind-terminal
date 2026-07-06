@@ -58,6 +58,16 @@ export default function AlertsView({ email }: { email: string }) {
       setBusy(false);
     }
   }
+  async function rearm(id: string) {
+    try {
+      const r = await fetch("/api/alerts", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+      const d = await r.json().catch(() => ({}));
+      if (d.alert) setAlerts((a) => a.map((x) => (x.id === id ? d.alert : x)));
+      else setErr(d.error || t("couldNotRearm"));
+    } catch {
+      setErr(t("couldNotRearm"));
+    }
+  }
   async function del(id: string) {
     const removed = alerts.find((x) => x.id === id);
     setAlerts((a) => a.filter((x) => x.id !== id));     // optimistic
@@ -98,16 +108,25 @@ export default function AlertsView({ email }: { email: string }) {
           <div className="ph">{t("activeAlerts")}<span className="sub">{alerts.length} {t("total")}</span></div>
           {!loaded && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("loadingAlerts")}</div>}
           {loaded && alerts.length === 0 && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("noAlertsYet")}</div>}
-          {alerts.map((a) => (
-            <div key={a.id} className="arow">
-              <span className={`dot${a.active ? "" : " off"}`} />
-              <span><span className="tk">{a.symbol}</span> <span className="cond">· {condText(a.condition)}</span></span>
-              <span />
-              <span style={{ color: "var(--muted)", fontSize: 11.5 }}>{new Date(a.created_at).toLocaleDateString()}</span>
-              <span style={{ color: a.active ? "var(--up)" : "var(--muted)", fontSize: 11.5 }}>{a.active ? t("armed") : t("paused")}</span>
-              <button className="icbtn" onClick={() => del(a.id)} title={t("remove")}><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13" /></svg></button>
-            </div>
-          ))}
+          {alerts.map((a) => {
+            const trig = !a.active && a.condition?.triggered; // engine one-shot: fired -> disarmed + stamped
+            return (
+              <div key={a.id} className="arow">
+                <span className={`dot${a.active ? "" : " off"}`} style={trig ? { background: "var(--signal)" } : undefined} />
+                <span><span className="tk">{a.symbol}</span> <span className="cond">· {condText(a.condition)}</span></span>
+                {trig ? <button className="btn" style={{ height: 26, fontSize: 11.5, justifySelf: "end" }} onClick={() => rearm(a.id)}>{t("rearm")}</button> : <span />}
+                <span style={{ color: "var(--muted)", fontSize: 11.5 }}>{new Date(a.created_at).toLocaleDateString()}</span>
+                {trig ? (
+                  <span style={{ color: "var(--signal)", fontSize: 11.5 }} title={`${a.condition.triggered.note ?? ""}${a.condition.triggered.value != null ? ` · ${a.condition.triggered.value}` : ""}`}>
+                    {t("triggeredAt")} {new Date(a.condition.triggered.at).toLocaleDateString()}
+                  </span>
+                ) : (
+                  <span style={{ color: a.active ? "var(--up)" : "var(--muted)", fontSize: 11.5 }}>{a.active ? t("armed") : t("paused")}</span>
+                )}
+                <button className="icbtn" onClick={() => del(a.id)} title={t("remove")}><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13" /></svg></button>
+              </div>
+            );
+          })}
         </div>
       </div></main>
       <div className="ticker"><span className="lbl">{t("pageAlerts")}</span><span style={{ color: "var(--text-2)" }}>{t("alertsSub")}</span></div>
