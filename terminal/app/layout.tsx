@@ -8,7 +8,7 @@ const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Mastermind Terminal",
-  description: "Institutional charting — proprietary confluence signals, macro regime, and an Opus AI copilot.",
+  description: "Institutional charting — proprietary confluence signals, macro regime, and an AI copilot.",
 };
 
 // Runs before first paint (no flash): pick the up/down color scheme + language from a saved

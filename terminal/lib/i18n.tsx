@@ -251,7 +251,10 @@ const LEX: Record<string, [string, string]> = {
   // alerts
   pageAlerts: ["Alerts", "提醒"],
   signalRegimeAlerts: ["Signal & regime alerts", "信号与趋势提醒"],
-  alertsSub: ["Alert me when MY confluence aligns. Evaluated on each data refresh (historical feed).", "当我的共振条件满足时提醒我。每次数据刷新时评估（历史行情）。"],
+  alertsSub: ["Alert me when MY confluence aligns. Checked server-side every 5 minutes; an alert fires once, then disarms until re-armed.", "当我的共振条件满足时提醒我。服务器每 5 分钟检查一次；提醒触发一次后即停用，可重新启用。"],
+  triggeredAt: ["Triggered", "已触发"],
+  rearm: ["Re-arm", "重新启用"],
+  couldNotRearm: ["Could not re-arm the alert.", "无法重新启用提醒。"],
   newAlert: ["New alert", "新建提醒"],
   createAlert: ["Create alert", "创建提醒"],
   creating: ["Creating…", "创建中…"],
