@@ -523,22 +523,6 @@ export default function StockAnalysis({
 
   return (
     <div className="sa">
-      {/* ── RESEARCH-DESK CHIP ──
-          The full research-desk hero (decision verb · band · headline · conviction ring · drivers /
-          cautions · factor profile) now lives in the merged Research Desk · Golden Oracle dashboard
-          (OracleDash), opened via onOpenSignals. Under the compact `cards` schema the label is the
-          position-confidence band; under the rich `analysis` schema it's the decision verb. */}
-      {(() => {
-        const chipVerb = supporting ? (pick(conv?.band, conv?.band_zh) || pick("Confidence", "信心")) : verb;
-        const chipColor = supporting ? "var(--brand-2)" : tn.color;
-        return (
-          <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenSignals?.()} title={pick("Open the full research desk", "打开完整研究台")}>
-            <span className="sa-open-k">{pick("Research desk", "研究台")}</span>
-            <span className="sa-open-verb" style={{ color: chipColor }}>{chipVerb}</span>
-            <span className="sa-open-view">{pick("view", "查看")} ›</span>
-          </button>
-        );
-      })()}
       {pick(dec?.trust_en, dec?.trust_zh) && (
         /* Trust tier = compact badge. Hover keeps the tooltip; CLICK (R15) opens the anchored
            EventEdgePop dashboard (trust prose + structured earnings/edge context chips). */

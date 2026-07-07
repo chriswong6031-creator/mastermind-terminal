@@ -25,6 +25,8 @@ const OracleDash = dynamic(() => import("@/components/fin/OracleDash"), { ssr: f
 const StrategyTester = dynamic(() => import("@/components/StrategyTester"), { ssr: false });
 const CopilotPanel = dynamic(() => import("@/components/CopilotPanel"), { ssr: false });
 import StockAnalysis from "@/components/StockAnalysis";
+import SignalButton from "@/components/SignalButton";
+import { oracleVerdict, deskVerdict } from "@/lib/signalVerdict";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
@@ -57,7 +59,6 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
   }
   return base;
 }
-const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 const CHART_TYPES = [["candles", "Candles"], ["heikin", "Heikin Ashi"], ["bars", "Bars"], ["line", "Line"], ["area", "Area"]];
 const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
 // Daily-derived TFs are always functional. Intraday TFs (R12) go live for intraday-capable markets
@@ -401,7 +402,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const inWl = useMemo(() => new Set(wl.map((s) => s.symbol)), [wl]);
   const m = man?.symbols?.[active];
   const liveQuote = quotes[active] ?? null;   // header/badge quote = the active symbol's entry in the shared map
-  const buy = isBuy(m?.verdict ?? null);
+  const ov = oracleVerdict(m?.verdict ?? null);
+  const dv = deskVerdict(intel?.analysis?.decision ?? null, lang === "zh");
   // ── unified signal hierarchy ──────────────────────────────────────────────
   // Every ticker used to show three competing verdicts (Oracle · conviction · timing).
   // We keep the Oracle as the single PRIMARY (only backtested) verdict and demote the
@@ -892,15 +894,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="detail-scroll">
               <div style={{ padding: "12px 12px 0" }}>
-                {/* ── Merged Research Desk · Golden Oracle → ONE compact clickable chip. The full scorecard
-                    (verdict · WR/PF/CAGR · signal history) AND the research read (drivers/cautions · factor
-                    profile · event edge) now live together in the OracleDash overlay. ── */}
-                <button className="mm-chip" style={{ borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }} onClick={() => setSignalsOpen(true)} title={t("researchOracle")}>
-                  <svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>
-                  <span className="mm-chip-lbl">{t("researchOracle")}</span>
-                  <span className="mm-chip-verdict" style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</span>
-                  <svg className="mm-chip-car" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>
-                </button>
+                <SignalButton oracle={ov} desk={dv} oracleLabel={t("goldenOracleLbl")} deskLabel={t("researchDeskLbl")} viewLabel={t("signalView")} onView={() => setSignalsOpen(true)} />
               </div>
               {/* Seasonality is injected via beforeIv so it renders BETWEEN the Analyst gauge and Implied
                   Volatility (order: analysis → Seasonality → IV) rather than after the whole card. */}
@@ -964,7 +958,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
       {/* ── Signals dashboard overlay (Golden Oracle scorecard · research read · signal history) ── */}
       {signalsOpen && (
-        <OracleDash sym={active} row={m} slice={slice} intel={intel} bars={bars} zh={lang === "zh"} onClose={() => setSignalsOpen(false)} onJump={(ts: string) => { window.dispatchEvent(new CustomEvent("mm:chart-jump", { detail: { ts } })); setSignalsOpen(false); }} />
+        <OracleDash sym={active} row={m} slice={slice} intel={intel} bars={bars} zh={lang === "zh"} onClose={() => setSignalsOpen(false)} onJump={(ts: string) => { window.dispatchEvent(new CustomEvent("mm:chart-jump", { detail: { ts } })); setSignalsOpen(false); }} onOpenFull={() => { setSignalsOpen(false); setPaneOpen("overview"); }} />
       )}
 
       {/* ── mobile nav drawer ── */}
