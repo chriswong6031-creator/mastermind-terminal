@@ -32,10 +32,26 @@ interface Signal {
   price?: number | null
   reasons?: string[]
   regime?: Record<string, boolean>
+  // GC v2 keeper/recipe grading (BUY|REBUY only; absent on v1 slices, null tier/score for regime_blocked)
+  quality?: "take" | "block" | "pending" | "regime_blocked" | string | null
+  quality_reason?: string | null
+  tier?: "aplus" | "quality" | "base" | string | null
+  score?: number | null
+  score_basis?: "full" | "partial" | string | null
+  // CUT: scored:false — a caution, not a scored exit
+  scored?: boolean | null
+}
+
+/** GC v2 structure-break warning side channel: {ts, kind:"arm"|"confirm"}. */
+interface Warning {
+  ts: string
+  kind: "arm" | "confirm" | string
 }
 
 interface SliceIndicator {
   signals?: Signal[]
+  early_dots?: string[]
+  warnings?: Warning[]
 }
 
 interface BacktestMetrics {
@@ -123,6 +139,32 @@ function signalColor(type: string): string {
   if (t === "CUT") return "var(--cut)"
   if (t === "SELL") return "var(--sell)"
   return "var(--signal)"
+}
+
+/** GC v2 tier → bilingual badge label. aplus="强烈 A+", quality="优质", base=none. */
+function tierLabel(tier: string | null | undefined, zh: boolean): string {
+  const t = (tier || "").toLowerCase()
+  if (t === "aplus") return pick(zh, "A+", "A+级")
+  if (t === "quality") return pick(zh, "Quality", "优质")
+  return ""
+}
+
+/** GC v2 quality verdict → bilingual label + color. */
+function qualityLabel(q: string | null | undefined, zh: boolean): string {
+  const v = (q || "").toLowerCase()
+  if (v === "take") return pick(zh, "Take", "采纳")
+  if (v === "block") return pick(zh, "Blocked", "拦截")
+  if (v === "pending") return pick(zh, "Pending", "待定")
+  if (v === "regime_blocked") return pick(zh, "Regime-blocked", "结构破位")
+  return ""
+}
+function qualityColor(q: string | null | undefined): string {
+  const v = (q || "").toLowerCase()
+  if (v === "take") return "var(--buy)"
+  if (v === "block") return "var(--sell)"
+  if (v === "pending") return "var(--signal)"
+  if (v === "regime_blocked") return "var(--muted)"
+  return "var(--muted)"
 }
 
 /** legs → readable factor labels (bilingual) */
@@ -263,6 +305,55 @@ function FactorBar({ label, value, zh }: { label: string; value: number | null |
   )
 }
 
+/* ── MarketRisk: compact regime chip (market_risk.json mirror of macro Risk Radar) ── */
+
+interface MarketRiskDisplay {
+  verdict?: string | null
+  score?: number | null
+  label_en?: string | null
+  label_zh?: string | null
+  color?: string | null
+}
+interface MarketRiskData {
+  built?: string | null
+  display?: MarketRiskDisplay | null
+}
+
+function MarketRiskChip({ zh }: { zh: boolean }) {
+  const [data, setData] = useState<MarketRiskData | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch("/data/market_risk.json")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((raw: MarketRiskData | null) => {
+        if (cancelled || !raw) return
+        // graceful degradation: hide if data older than 48 h
+        const built = raw?.built ? Date.parse(raw.built) : NaN
+        if (!isNaN(built) && Date.now() - built > 48 * 3600 * 1000) return
+        if (!raw?.display?.verdict) return
+        setData(raw)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  if (!data) return null
+  const disp = data.display!
+  const dotColor = disp.color === "green" ? "var(--up)" : disp.color === "red" ? "var(--down)" : "var(--warn)"
+  const label = pick(zh, disp.label_en ?? disp.verdict ?? "—", disp.label_zh ?? disp.verdict ?? "—")
+  const score = disp.score != null && isFinite(disp.score) ? Math.round(disp.score) : null
+
+  return (
+    <div className="sig-conflict" style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-2)" }}>
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0, display: "inline-block" }} aria-hidden />
+      <span style={{ fontWeight: 600, color: dotColor }}>{label}</span>
+      {score != null && <span style={{ opacity: 0.7 }}>{score}/100</span>}
+      <span style={{ marginLeft: "auto", opacity: 0.5, fontSize: "10px" }}>{pick(zh, "Market risk", "市场风险")}</span>
+    </div>
+  )
+}
+
 /* ── main component ───────────────────────────────────────────────────── */
 
 export default function OracleDash({ sym, row, slice, intel, zh = false, onClose, onJump, onOpenFull }: OracleDashProps) {
@@ -348,6 +439,14 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
 
   // signals: most-recent first, ALL of them
   const sigs: Signal[] = [...(slice?.indicator?.signals ?? [])].reverse()
+  const latestSig = sigs[0] ?? null   // freshest signal (already reversed → index 0)
+
+  // GC v2 side channel: surface the freshest structure-break warning only when it POST-DATES the
+  // latest signal (i.e. new information the last marker doesn't yet reflect). ts are "YYYY-MM-DD" → lexical compare is chronological.
+  const warnings: Warning[] = slice?.indicator?.warnings ?? []
+  const latestWarn: Warning | null = warnings.length ? warnings[warnings.length - 1] : null
+  const freshWarn: Warning | null =
+    latestWarn && (!latestSig || latestWarn.ts > latestSig.ts) ? latestWarn : null
 
   const handleJump = (ts: string) => {
     // Dispatch the standard CustomEvent that ChartPanel listens for (R14)
@@ -545,6 +644,40 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
               {conviction?.size_note && (
                 <div className="sig-conflict">{conviction.size_note}</div>
               )}
+              {/* GC v2: latest signal's keeper quality + recipe tier (BUY|REBUY only) */}
+              {latestSig && (latestSig.type === "BUY" || latestSig.type === "REBUY") && latestSig.quality && (
+                <div className="sig-dims">
+                  <div className="sig-dim">
+                    <span className="sig-dim-k">{pick(zh, "Latest quality", "最新质量")}</span>
+                    <span className="sig-dim-v" style={{ color: qualityColor(latestSig.quality) }}>
+                      {qualityLabel(latestSig.quality, zh) || "—"}
+                    </span>
+                  </div>
+                  {tierLabel(latestSig.tier, zh) && (
+                    <div className="sig-dim">
+                      <span className="sig-dim-k">{pick(zh, "Tier", "级别")}</span>
+                      <span className="sig-dim-v" style={{ color: "var(--buy)" }}>{tierLabel(latestSig.tier, zh)}</span>
+                    </div>
+                  )}
+                  {latestSig.score != null && isFinite(latestSig.score) && (
+                    <div className="sig-dim">
+                      <span className="sig-dim-k">{pick(zh, "Score", "评分")}</span>
+                      <span className="sig-dim-v">{Math.round(latestSig.score)}<i>/100{latestSig.score_basis === "partial" ? "*" : ""}</i></span>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* GC v2: fresh structure-break warning (only when it post-dates the latest signal) */}
+              {freshWarn && (
+                <div className="sig-conflict" style={{ color: "var(--warn)" }}>
+                  {freshWarn.kind === "confirm"
+                    ? pick(zh, "⛔ Structure break confirmed", "⛔ 结构破位（已确认）")
+                    : pick(zh, "⚠ Structure-break warning (armed)", "⚠ 结构破位预警（预备）")}
+                  <span style={{ opacity: 0.7, marginLeft: 6 }}>{fmtDate(freshWarn.ts)}</span>
+                </div>
+              )}
+              {/* Market-level risk regime (macro Risk Radar mirror — additive, graceful-degrade) */}
+              <MarketRiskChip zh={zh} />
             </div>
 
             {/* Signal history table */}
@@ -593,6 +726,11 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
 function SignalRow({ sig, zh, onJump }: { sig: Signal; zh: boolean; onJump: (ts: string) => void }) {
   const [hovered, setHovered] = useState(false)
   const col = signalColor(sig.type)
+  // GC v2: CUT is a caution, not an exit; BUY|REBUY may carry keeper quality + recipe tier.
+  const isCut = (sig.type || "").toUpperCase() === "CUT"
+  const isEntry = sig.type === "BUY" || sig.type === "REBUY"
+  const qLabel = isEntry ? qualityLabel(sig.quality, zh) : ""
+  const tLabel = isEntry ? tierLabel(sig.tier, zh) : ""
 
   return (
     <tr
@@ -606,6 +744,16 @@ function SignalRow({ sig, zh, onJump }: { sig: Signal; zh: boolean; onJump: (ts:
         <span className="od-badge" style={{ background: col }}>
           {sig.type}
         </span>
+        {isCut && (
+          <span style={{ marginLeft: 5, fontSize: 9.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+            {pick(zh, "caution (not an exit)", "谨慎（非退出）")}
+          </span>
+        )}
+        {qLabel && (
+          <span style={{ marginLeft: 5, fontSize: 9.5, fontWeight: 700, color: qualityColor(sig.quality) }}>
+            {tLabel ? tLabel + " · " : ""}{qLabel}
+          </span>
+        )}
       </td>
       <td className="od-sig-date">{fmtDate(sig.ts)}</td>
       <td className="od-sig-price">
