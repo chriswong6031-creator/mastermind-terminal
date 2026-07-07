@@ -25,6 +25,8 @@ const OracleDash = dynamic(() => import("@/components/fin/OracleDash"), { ssr: f
 const StrategyTester = dynamic(() => import("@/components/StrategyTester"), { ssr: false });
 const CopilotPanel = dynamic(() => import("@/components/CopilotPanel"), { ssr: false });
 import StockAnalysis from "@/components/StockAnalysis";
+import SignalButton from "@/components/SignalButton";
+import { oracleVerdict, deskVerdict } from "@/lib/signalVerdict";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
@@ -33,7 +35,8 @@ import DayRange from "@/components/DayRange";
 import { useT, useLang } from "@/lib/i18n";
 import { useFromMacro, backToMacro } from "@/lib/originNav";
 import { getJSON, prefetch } from "@/lib/dataCache";
-import { CMP_PALETTE } from "@/lib/compare";
+import { type CmpCfg, type CmpMode, defaultCmpCfg, cmpKey, isCmpKey, cmpSymOf } from "@/lib/compare";
+import CompareSettings from "@/components/CompareSettings";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
 import { type PineScript } from "@/components/ChartPanel";
 
@@ -56,7 +59,6 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
   }
   return base;
 }
-const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 const CHART_TYPES = [["candles", "Candles"], ["heikin", "Heikin Ashi"], ["bars", "Bars"], ["line", "Line"], ["area", "Area"]];
 const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
 // Daily-derived TFs are always functional. Intraday TFs (R12) go live for intraday-capable markets
@@ -85,8 +87,6 @@ const STYLEABLE = new Set(["trendline", "arrow", "rect", "hline", "vline"]);
 const DETECTORS: [string, string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
 ];
-// compare-overlay palette: the canonical 6-color set from lib/compare (mirrors --cat-1..--cat-6).
-
 // translation key maps for the (otherwise hard-coded) toolbar/tool labels
 const CT_TKEY: Record<string, string> = { candles: "ctCandles", heikin: "ctHeikin", bars: "ctBars", line: "ctLine", area: "ctArea" };
 const TFG_TKEY: Record<string, string> = { Minutes: "tfMinutes", Hours: "tfHours", Days: "tfDays", Weeks: "tfWeeks", Months: "tfMonths" };
@@ -160,6 +160,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // pre-draw style chosen BEFORE drawing (color/width/dash) — applied to each new line/arrow/box/HV drawing
   const [drawStyle, setDrawStyle] = useState<{ color: string; width: number; dash: "solid" | "dashed" | "dotted" }>({ color: "#4d82ff", width: 1.5, dash: "solid" });
   const [compare, setCompare] = useState<string[]>([]);
+  const [compareCfg, setCompareCfg] = useState<Record<string, CmpCfg>>({});
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
   const nonce = useRef(0);
   const wsMounted = useRef(false);
@@ -204,7 +205,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
   useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive && m) setMan(m); }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
-    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) });
+    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) }); setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
@@ -232,9 +233,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   // skip the mount-pass write (state is still the pre-load default) — otherwise a reload/discard
   // landing inside the mount→load window can permanently clobber the saved value with the default
-  const hidMounted = useRef(false); const ipMounted = useRef(false);
+  const hidMounted = useRef(false); const ipMounted = useRef(false); const cmpCfgMounted = useRef(false);
   useEffect(() => { if (!hidMounted.current) { hidMounted.current = true; return; } localStorage.setItem("mm.indHidden", JSON.stringify([...hidden])); }, [hidden]);
   useEffect(() => { if (!ipMounted.current) { ipMounted.current = true; return; } localStorage.setItem("mm.indParams", JSON.stringify(indParams)); }, [indParams]);
+  useEffect(() => { if (!cmpCfgMounted.current) { cmpCfgMounted.current = true; return; } localStorage.setItem("mm.cmpCfg", JSON.stringify(compareCfg)); }, [compareCfg]);
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
   useEffect(() => { localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
@@ -400,7 +402,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const inWl = useMemo(() => new Set(wl.map((s) => s.symbol)), [wl]);
   const m = man?.symbols?.[active];
   const liveQuote = quotes[active] ?? null;   // header/badge quote = the active symbol's entry in the shared map
-  const buy = isBuy(m?.verdict ?? null);
+  const ov = oracleVerdict(m?.verdict ?? null);
+  const dv = deskVerdict(intel?.analysis?.decision ?? null, lang === "zh");
   // ── unified signal hierarchy ──────────────────────────────────────────────
   // Every ticker used to show three competing verdicts (Oracle · conviction · timing).
   // We keep the Oracle as the single PRIMARY (only backtested) verdict and demote the
@@ -504,14 +507,27 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (activeList === name) setActiveList(Object.keys(lists).filter((k) => k !== name)[0] || "Default");
   }
   const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const toggleCompare = useCallback((s: string, mode: CmpMode = "percent") => {
+    if (s === active) return;
+    if (compare.includes(s)) {
+      setCompare((c) => c.filter((x) => x !== s));
+      setCompareCfg((c) => { const n = { ...c }; delete n[s]; return n; });
+      setHidden((h) => { if (!h.has(cmpKey(s))) return h; const n = new Set(h); n.delete(cmpKey(s)); return n; });
+    } else if (compare.length < 4) {
+      const idx = compare.length;
+      setCompare((c) => [...c, s].slice(0, 4));
+      setCompareCfg((c) => ({ ...c, [s]: defaultCmpCfg(idx, mode) }));
+    }
+  }, [active, compare]);
   // ── indicator legend actions (shared by the per-pane legend + its More menu) ──
   const toggleHidden = useCallback((k: string) => setHidden((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; }), []);
   const removeInd = useCallback((k: string) => {
+    if (isCmpKey(k)) { toggleCompare(cmpSymOf(k)); return; }
     // a legend "remove" on a custom-script row disables the script rather than mutating the built-in set
     if (scriptByIdRef.current[k]) { setEnabledIds((ids) => ids.filter((x) => x !== k)); setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; }); return; }
     setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
     setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
-  }, []);
+  }, [toggleCompare]);
   const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...withDefaults(k, p[k]), ...patch } })), []);
   const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
   const openSettings = useCallback((k: string) => setSettingsKey(k), []);
@@ -591,10 +607,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     else if (panes[activePane] !== sym) setPanes((p) => p.map((s, i) => (i === activePane ? sym : s)));
     setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]);
   };
-  const onSearchPick = (sym: string) => { if (searchMode === "compare") { if (sym !== active) setCompare((c) => (c.includes(sym) ? c : [...c, sym].slice(0, 4))); } else pick(sym); };
+  const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
 
-  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
-  function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare);
+  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare, compareCfg }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
+  function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (c.compareCfg) setCompareCfg(c.compareCfg);
     if (Array.isArray(c.panes) && c.panes.length) {
       setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); setSplit(c.panes.length >= 4 ? 4 : c.panes.length >= 2 ? 2 : 1);
       setPaneTfs(Array.isArray(c.paneTfs) && c.paneTfs.length === c.panes.length ? c.paneTfs : c.panes.map(() => c.tf || "D"));   // back-compat: older layouts have a single tf
@@ -749,15 +765,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           </div>
         </div>
 
-        {view === "price" && compare.filter((c) => c !== active).length > 0 && (
-          <div className="cmp-strip">
-            <span className="cmp-lbl">{t("compare")}</span>
-            {compare.filter((c) => c !== active).map((cs, i) => (
-              <span className="cmp-chip" key={cs}><i style={{ background: CMP_PALETTE[i % CMP_PALETTE.length] }} />{cs}<button title="Remove" onClick={() => setCompare((c) => c.filter((x) => x !== cs))}>✕</button></span>
-            ))}
-          </div>
-        )}
-
         {replayOn && view === "price" && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 14px", borderBottom: "1px solid var(--line)", background: "var(--bg)" }}>
             <button className="icbtn" title={t("replayReset")} aria-label={t("replayReset")} onClick={() => { setReplayIdx(Math.max(20, total - 80)); setPlaying(false); }}><svg viewBox="0 0 24 24"><path d="M11 19l-7-7 7-7M20 19l-7-7 7-7" /></svg></button>
@@ -797,7 +804,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             )}
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} />
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} />
               ))}
             </div>
           </div>
@@ -887,15 +894,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
             <div className="detail-scroll">
               <div style={{ padding: "12px 12px 0" }}>
-                {/* ── Merged Research Desk · Golden Oracle → ONE compact clickable chip. The full scorecard
-                    (verdict · WR/PF/CAGR · signal history) AND the research read (drivers/cautions · factor
-                    profile · event edge) now live together in the OracleDash overlay. ── */}
-                <button className="mm-chip" style={{ borderLeftColor: buy ? "var(--buy)" : "var(--sell)" }} onClick={() => setSignalsOpen(true)} title={t("researchOracle")}>
-                  <svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>
-                  <span className="mm-chip-lbl">{t("researchOracle")}</span>
-                  <span className="mm-chip-verdict" style={{ color: buy ? "var(--buy)" : "var(--sell)" }}>{m?.verdict || "—"}</span>
-                  <svg className="mm-chip-car" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>
-                </button>
+                <SignalButton oracle={ov} desk={dv} oracleLabel={t("goldenOracleLbl")} deskLabel={t("researchDeskLbl")} viewLabel={t("signalView")} onView={() => setSignalsOpen(true)} />
               </div>
               {/* Seasonality is injected via beforeIv so it renders BETWEEN the Analyst gauge and Implied
                   Volatility (order: analysis → Seasonality → IV) rather than after the whole card. */}
@@ -927,17 +926,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         </div>
       </div>
 
-      <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} active={active}
+      <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} compareCfg={compareCfg} active={active}
         onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol}
-        onToggleCompare={(s: string) => setCompare((c) => c.includes(s) ? c.filter((x) => x !== s) : (s !== active ? [...c, s].slice(0, 4) : c))} />
+        onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
         scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
-      {settingsKey && (isPineKey(settingsKey)
-        ? <IndicatorSettings indKey="pine" params={{}} onChange={() => {}}
-            pine={{ name: scriptById[settingsKey].name, params: mergedParams(scriptById[settingsKey], pineParams) }}
-            onPineChange={(patch) => setPineParam(settingsKey, patch)}
-            onClose={() => setSettingsKey(null)} />
-        : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
+      {settingsKey && (isCmpKey(settingsKey)
+        ? <CompareSettings sym={cmpSymOf(settingsKey)} cfg={compareCfg[cmpSymOf(settingsKey)] || defaultCmpCfg(0)} onChange={(patch) => setCompareCfg((c) => ({ ...c, [cmpSymOf(settingsKey)]: { ...(c[cmpSymOf(settingsKey)] || defaultCmpCfg(0)), ...patch } }))} onClose={() => setSettingsKey(null)} />
+        : isPineKey(settingsKey)
+          ? <IndicatorSettings indKey="pine" params={{}} onChange={() => {}}
+              pine={{ name: scriptById[settingsKey].name, params: mergedParams(scriptById[settingsKey], pineParams) }}
+              onPineChange={(patch) => setPineParam(settingsKey, patch)}
+              onClose={() => setSettingsKey(null)} />
+          : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
       <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
 
@@ -957,7 +958,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
       {/* ── Signals dashboard overlay (Golden Oracle scorecard · research read · signal history) ── */}
       {signalsOpen && (
-        <OracleDash sym={active} row={m} slice={slice} intel={intel} bars={bars} zh={lang === "zh"} onClose={() => setSignalsOpen(false)} onJump={(ts: string) => { window.dispatchEvent(new CustomEvent("mm:chart-jump", { detail: { ts } })); setSignalsOpen(false); }} />
+        <OracleDash sym={active} row={m} slice={slice} intel={intel} bars={bars} zh={lang === "zh"} onClose={() => setSignalsOpen(false)} onJump={(ts: string) => { window.dispatchEvent(new CustomEvent("mm:chart-jump", { detail: { ts } })); setSignalsOpen(false); }} onOpenFull={() => { setSignalsOpen(false); setPaneOpen("overview"); }} />
       )}
 
       {/* ── mobile nav drawer ── */}
