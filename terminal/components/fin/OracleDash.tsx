@@ -1,28 +1,19 @@
 "use client"
 /**
- * OracleDash — the "Signals" dashboard overlay (REVISION-SPEC Lane B).
+ * OracleDash — TWO-CONTAINER DOCK overlay (REVISION-SPEC Lane B4).
  *
- * Renders as a fixed overlay (z-90 scrim + panel) opened from the compact
- * Golden Oracle / Research-desk rail chips. Sections (top→bottom), all
- * null-guarded + bilingual via pick():
- *   1. Header (symbol + "Signals" + close)
- *   2. Golden Oracle scorecard (verdict + WR/PF/CAGR + conviction/decision dims)
- *   3. Research desk read (decision verb/band/headline/gloss + conviction ring)
- *   4. Drivers / Cautions chips
- *   5. Factor profile diverging bars (factors.legs + factors.z)
- *   6. Event edge (decision.trust_en/zh prose)
- *   7. Signal history table — RECOLORED to match the chart markers exactly
- *      (BUY→--buy, REBUY→--rebuy, CUT→--cut, SELL→--sell); row click → onJump(ts)
- *   8. Equity curve (backtest.json)
+ * Renders as a fixed overlay (sd-scrim + sd-dock) with two side-by-side
+ * containers on web (Research Desk LEFT, Golden Oracle RIGHT) and stacked
+ * full-screen on mobile.
  *
- * Filename + default-export name are KEPT (OracleDash) to avoid import churn.
- * Props (FROZEN): {sym, row, slice, intel, bars, zh?, onClose?, onJump?}
- * Wired by the shell — do NOT import here.
+ * Props (FROZEN + new onOpenFull?):
+ *   {sym, row, slice, intel, bars, zh?, onClose?, onJump?, onOpenFull?}
  */
 import { useEffect, useRef, useState } from "react"
 import { pick, fmtPct, fmtDate } from "../../lib/finFormat"
 import { LineSeries } from "./FinCharts"
 import { getJSON } from "../../lib/dataCache"
+import { oracleVerdict, deskVerdict } from "../../lib/signalVerdict"
 
 /* ── types (narrow; only what we consume) ────────────────────────────── */
 
@@ -122,6 +113,8 @@ export interface OracleDashProps {
   onClose?: () => void
   /** Called by signal-row click; parent may also handle mm:chart-jump event. */
   onJump?: (ts: string) => void
+  /** Opens the MegaPane full analysis view; passed from TerminalShell. */
+  onOpenFull?: () => void
 }
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
@@ -193,42 +186,14 @@ function factorLabel(key: string, zh: boolean): string {
   return l ? pick(zh, l[0], l[1]) : key.replace(/_/g, " ")
 }
 
-/* ── GroupHeader: sticky labeled divider separating the two merged surfaces
- *  (Golden Oracle vs Research Desk). Inline-styled to match the .od-* token
- *  language (uppercase, letter-spaced, muted) without adding new CSS. */
-function GroupHeader({ label, icon }: { label: string; icon: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        position: "sticky",
-        top: 0,
-        zIndex: 2,
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        margin: "0 -16px",
-        padding: "10px 16px",
-        background: "var(--panel)",
-        borderTop: "1px solid var(--line)",
-        borderBottom: "1px solid var(--line)",
-        font: "700 11px/1 var(--font-ui)",
-        letterSpacing: ".08em",
-        textTransform: "uppercase",
-        color: "var(--brand)",
-      }}
-    >
-      <span style={{ display: "inline-flex", width: 14, height: 14 }}>{icon}</span>
-      {label}
-    </div>
-  )
-}
+/* ── Icon constants — reused in .sd-ic container headers ────────────── */
 const OracleStar = (
-  <svg viewBox="0 0 24 24" aria-hidden style={{ width: 14, height: 14, fill: "var(--brand)", stroke: "none" }}>
+  <svg viewBox="0 0 24 24" aria-hidden style={{ width: 14, height: 14, fill: "var(--vc,var(--brand))", stroke: "none" }}>
     <path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" />
   </svg>
 )
 const DeskGlyph = (
-  <svg viewBox="0 0 24 24" aria-hidden style={{ width: 14, height: 14, fill: "none", stroke: "var(--brand)", strokeWidth: 2 }}>
+  <svg viewBox="0 0 24 24" aria-hidden style={{ width: 14, height: 14, fill: "none", stroke: "var(--vc,var(--brand))", strokeWidth: 2 }}>
     <path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" />
   </svg>
 )
@@ -391,10 +356,30 @@ function MarketRiskChip({ zh }: { zh: boolean }) {
 
 /* ── main component ───────────────────────────────────────────────────── */
 
-export default function OracleDash({ sym, row, slice, intel, zh = false, onClose, onJump }: OracleDashProps) {
-  const panelRef = useRef<HTMLDivElement>(null)
+export default function OracleDash({ sym, row, slice, intel, zh = false, onClose, onJump, onOpenFull }: OracleDashProps) {
+  const dockRef = useRef<HTMLDivElement>(null)
 
-  // Esc to close — capture phase so it wins over ChartPanel/SearchModal handlers (R7)
+  // Rail-left measurement for web positioning
+  const [railLeft, setRailLeft] = useState<number | null>(null)
+  const [mobile, setMobile] = useState(false)
+
+  useEffect(() => {
+    function measure() {
+      const r = document.querySelector(".rail")?.getBoundingClientRect()
+      setRailLeft(r?.left ?? null)
+      setMobile(window.innerWidth <= 860)
+    }
+    measure()
+    window.addEventListener("resize", measure)
+    return () => window.removeEventListener("resize", measure)
+  }, [])
+
+  const dockStyle: React.CSSProperties | undefined =
+    !mobile && railLeft != null
+      ? { right: Math.max(12, window.innerWidth - railLeft + 12) }
+      : undefined
+
+  // Esc to close — capture phase so it wins over ChartPanel/SearchModal handlers
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -406,12 +391,30 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
     return () => window.removeEventListener("keydown", handler, true)
   }, [onClose])
 
-  // click outside the panel to close
+  // Click outside the dock to close
   const handleScrimClick = (e: React.MouseEvent) => {
-    if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+    if (dockRef.current && !dockRef.current.contains(e.target as Node)) {
       onClose?.()
     }
   }
+
+  // Mobile swipe-to-close state (per-container, shared refs)
+  const swipeStartY = useRef<number | null>(null)
+  const handleTouchStart = (e: React.TouchEvent) => {
+    swipeStartY.current = e.touches[0]?.clientY ?? null
+  }
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (swipeStartY.current == null) return
+    const dy = (e.touches[0]?.clientY ?? swipeStartY.current) - swipeStartY.current
+    if (dy > 70) {
+      swipeStartY.current = null
+      onClose?.()
+    }
+  }
+
+  // Derived verdicts using shared helpers
+  const ov = oracleVerdict(row?.verdict ?? null)
+  const dv = deskVerdict(intel?.analysis?.decision ?? null, zh)
 
   // derived stats: prefer slice.backtest.metrics over row for consistency
   const bt = slice?.backtest
@@ -420,12 +423,6 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
   const pf = metrics?.profit_factor ?? row?.pf ?? null
   const cagr = metrics?.cagr ?? row?.cagr ?? null
   const nTrades = metrics?.n_trades ?? bt?.n_trades ?? null
-
-  const verdict = row?.verdict ?? null
-  const isBuy = verdict ? ["BUY", "REBUY", "ADD"].includes(verdict.toUpperCase()) : false
-  const verdictColor = verdict
-    ? (isBuy ? "var(--buy)" : ["SELL", "TRIM", "CUT"].includes(verdict.toUpperCase()) ? "var(--sell)" : "var(--signal)")
-    : "var(--text-2)"
 
   // intel.analysis sub-shapes (all null-guarded)
   const analysis = intel?.analysis ?? null
@@ -439,10 +436,6 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
   const cautionsZh = Array.isArray(conviction?.cautions_zh) ? conviction!.cautions_zh! : []
   const legs = factors?.legs ?? null
   const legKeys = legs ? Object.keys(legs) : []
-
-  // decision verb tone → color
-  const dTone = (decision?.tone || "").toLowerCase()
-  const decisionColor = dTone === "go" ? "var(--buy)" : dTone === "stop" ? "var(--sell)" : "var(--signal)"
 
   // signals: most-recent first, ALL of them
   const sigs: Signal[] = [...(slice?.indicator?.signals ?? [])].reverse()
@@ -463,235 +456,266 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
   }
 
   return (
-    <div className="od-scrim" onClick={handleScrimClick} role="dialog" aria-modal="true" aria-label={pick(zh, "Research Desk · Golden Oracle", "研究台 · 黄金神谕")}>
-      <div className="od-panel" ref={panelRef}>
-        {/* ── 1. header — single merged research surface ── */}
-        <div className="od-head">
-          <span className="od-brand">
-            <svg viewBox="0 0 24 24" aria-hidden="true" className="od-star">
-              <path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" />
-            </svg>
-            {pick(zh, "Research Desk", "研究台")}
-          </span>
-          <span className="od-sym">{sym}</span>
-          <button className="od-close" onClick={onClose} aria-label={pick(zh, "Close", "关闭")}>×</button>
-        </div>
+    <div
+      className="sd-scrim"
+      onClick={handleScrimClick}
+      role="dialog"
+      aria-modal="true"
+      aria-label={pick(zh, "Research Desk and Golden Oracle", "研究台与黄金神谕")}
+    >
+      <div className="sd-dock" ref={dockRef} style={dockStyle}>
 
-        {/* ── scrollable body ── */}
-        <div className="od-body">
-          {/* ── GROUP A: GOLDEN ORACLE (backtested trade call + signal history + equity) ── */}
-          <GroupHeader label={pick(zh, "Golden Oracle", "黄金神谕")} icon={OracleStar} />
-
-          {/* 2. Golden Oracle scorecard */}
-          <div className="sig-card">
-            <div className="od-hero">
-              <div className="od-verdict" style={{ color: verdictColor }}>
-                {verdict ?? "—"}
-              </div>
-              <div className="od-stats">
-                <div className="od-stat">
-                  <span className="od-stat-k">{pick(zh, "Win rate", "胜率")}</span>
-                  <span className="od-stat-v">{fmtPctLocal(wr, true)}</span>
-                </div>
-                <div className="od-stat">
-                  <span className="od-stat-k">{pick(zh, "Profit factor", "盈亏比")}</span>
-                  <span className="od-stat-v">{fmt2(pf)}</span>
-                </div>
-                <div className="od-stat">
-                  <span className="od-stat-k">{pick(zh, "CAGR", "年化收益")}</span>
-                  <span className="od-stat-v">{fmtPctLocal(cagr, true)}</span>
-                </div>
-                <div className="od-stat">
-                  <span className="od-stat-k">{pick(zh, "Trades", "交易次数")}</span>
-                  <span className="od-stat-v">{nTrades ?? "—"}</span>
-                </div>
-              </div>
-            </div>
-            {/* supporting dims from conviction/decision */}
-            {(convScore != null || conviction?.band || conviction?.size_pct != null || decision?.band_label) && (
-              <div className="sig-dims">
-                {convScore != null && (
-                  <div className="sig-dim">
-                    <span className="sig-dim-k">{pick(zh, "Conviction", "信念度")}</span>
-                    <span className="sig-dim-v">{Math.round(convScore)}<i>/100</i></span>
-                  </div>
-                )}
-                {(conviction?.band || decision?.band_label) && (
-                  <div className="sig-dim">
-                    <span className="sig-dim-k">{pick(zh, "Band", "评级")}</span>
-                    <span className="sig-dim-v">{pick(zh, conviction?.band ?? decision?.band_label, conviction?.band_zh ?? decision?.band_label_zh) || "—"}</span>
-                  </div>
-                )}
-                {conviction?.size_pct != null && (
-                  <div className="sig-dim">
-                    <span className="sig-dim-k">{pick(zh, "Size", "仓位")}</span>
-                    <span className="sig-dim-v">{Math.round(conviction.size_pct)}%</span>
-                  </div>
-                )}
-                {conviction?.rank_pctile != null && (
-                  <div className="sig-dim">
-                    <span className="sig-dim-k">{pick(zh, "Rank", "排名")}</span>
-                    <span className="sig-dim-v">{Math.round(conviction.rank_pctile)}<i>%ile</i></span>
-                  </div>
-                )}
-              </div>
-            )}
-            {conviction?.size_note && (
-              <div className="sig-conflict">{conviction.size_note}</div>
-            )}
-            {/* GC v2: latest signal's keeper quality + recipe tier (BUY|REBUY only) */}
-            {latestSig && (latestSig.type === "BUY" || latestSig.type === "REBUY") && latestSig.quality && (
-              <div className="sig-dims">
-                <div className="sig-dim">
-                  <span className="sig-dim-k">{pick(zh, "Latest quality", "最新质量")}</span>
-                  <span className="sig-dim-v" style={{ color: qualityColor(latestSig.quality) }}>
-                    {qualityLabel(latestSig.quality, zh) || "—"}
-                  </span>
-                </div>
-                {tierLabel(latestSig.tier, zh) && (
-                  <div className="sig-dim">
-                    <span className="sig-dim-k">{pick(zh, "Tier", "级别")}</span>
-                    <span className="sig-dim-v" style={{ color: "var(--buy)" }}>{tierLabel(latestSig.tier, zh)}</span>
-                  </div>
-                )}
-                {latestSig.score != null && isFinite(latestSig.score) && (
-                  <div className="sig-dim">
-                    <span className="sig-dim-k">{pick(zh, "Score", "评分")}</span>
-                    <span className="sig-dim-v">{Math.round(latestSig.score)}<i>/100{latestSig.score_basis === "partial" ? "*" : ""}</i></span>
-                  </div>
-                )}
-              </div>
-            )}
-            {/* GC v2: fresh structure-break warning (only when it post-dates the latest signal) */}
-            {freshWarn && (
-              <div className="sig-conflict" style={{ color: "var(--warn)" }}>
-                {freshWarn.kind === "confirm"
-                  ? pick(zh, "⛔ Structure break confirmed", "⛔ 结构破位（已确认）")
-                  : pick(zh, "⚠ Structure-break warning (armed)", "⚠ 结构破位预警（预备）")}
-                <span style={{ opacity: 0.7, marginLeft: 6 }}>{fmtDate(freshWarn.ts)}</span>
-              </div>
-            )}
-            {/* Market-level risk regime (macro Risk Radar mirror — additive, graceful-degrade) */}
-            <MarketRiskChip zh={zh} />
+        {/* ── Research Desk container (LEFT on web, TOP on mobile) ── */}
+        <section
+          className="sd-cont sd-rd"
+          style={{ borderTopColor: dv.color, ["--vc" as any]: dv.color }}
+        >
+          <div className="sd-head">
+            <span className="sd-ic">{DeskGlyph}</span>
+            <span className="sd-lbl">{pick(zh, "Research Desk", "研究台")}</span>
+            <span className="sd-badge">{dv.label}</span>
+            <button className="sd-x" onClick={onClose} aria-label={pick(zh, "Close", "关闭")}>×</button>
           </div>
+          <div
+            className="sd-grab"
+            aria-hidden="true"
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+          />
+          <div className="sd-body">
 
-          {/* 7. signal history table (Golden Oracle group) */}
-          <div className="od-sig-section">
-            <div className="od-sec-h">
-              {pick(zh, "Signal history", "信号历史")}
-              {sigs.length > 0 && <span className="od-sig-count">{sigs.length}</span>}
-            </div>
-
-            {sigs.length === 0 ? (
-              <div className="fin-empty">{pick(zh, "No signals", "暂无信号")}</div>
-            ) : (
-              <div className="od-sig-scroll">
-                <table className="od-sig-table">
-                  <thead>
-                    <tr>
-                      <th>{pick(zh, "Type", "类型")}</th>
-                      <th>{pick(zh, "Date", "日期")}</th>
-                      <th>{pick(zh, "Price", "价格")}</th>
-                      <th>{pick(zh, "Strength", "强度")}</th>
-                      <th>{pick(zh, "Reasons", "信号原因")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sigs.map((sig, i) => (
-                      <SignalRow key={i} sig={sig} zh={zh} onJump={handleJump} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* 8. equity curve — only for flagships that have a backtest.json */}
-          <BacktestCurve sym={sym} zh={zh} />
-
-          {/* ── GROUP B: RESEARCH DESK (thesis read + drivers/cautions + factors + event edge) ── */}
-          <GroupHeader label={pick(zh, "Research Desk", "研究台")} icon={DeskGlyph} />
-
-          {/* 3. Research desk read */}
-          {decision && (decision.verb || decision.headline) && (
-            <div className="sig-card">
-              <div className="sig-card-h">{pick(zh, "Research desk read", "研究台解读")}</div>
-              <div className="sig-desk">
-                <ConvictionRing score={convScore} zh={zh} />
-                <div className="sig-desk-body">
-                  <div className="sig-desk-verb" style={{ color: decisionColor }}>
-                    {pick(zh, decision.verb, decision.verb_zh) || "—"}
-                    {decision.band_label && (
-                      <span className="sig-desk-band">{pick(zh, decision.band_label, decision.band_label_zh)}</span>
+            {/* Research desk read */}
+            {decision && (decision.verb || decision.headline) && (
+              <div className="sig-card">
+                <div className="sig-card-h">{pick(zh, "Research desk read", "研究台解读")}</div>
+                <div className="sig-desk">
+                  <ConvictionRing score={convScore} zh={zh} />
+                  <div className="sig-desk-body">
+                    <div className="sig-desk-verb" style={{ color: dv.color }}>
+                      {pick(zh, decision.verb, decision.verb_zh) || "—"}
+                      {decision.band_label && (
+                        <span className="sig-desk-band">{pick(zh, decision.band_label, decision.band_label_zh)}</span>
+                      )}
+                    </div>
+                    {(decision.headline || decision.headline_zh) && (
+                      <div className="sig-desk-head">{pick(zh, decision.headline, decision.headline_zh)}</div>
+                    )}
+                    {(decision.gloss || decision.gloss_zh) && (
+                      <div className="sig-desk-gloss">{pick(zh, decision.gloss, decision.gloss_zh)}</div>
+                    )}
+                    {conviction?.rank_pctile != null && (
+                      <div className="sig-desk-rank">{pick(zh, "Rank percentile", "排名分位")}: {Math.round(conviction.rank_pctile)}%</div>
                     )}
                   </div>
-                  {(decision.headline || decision.headline_zh) && (
-                    <div className="sig-desk-head">{pick(zh, decision.headline, decision.headline_zh)}</div>
+                </div>
+                <div className="sig-caveat">{pick(zh, "Context for the Oracle verdict — not a trade signal.", "作为神谕结论的背景参考——非交易信号。")}</div>
+              </div>
+            )}
+
+            {/* Drivers / Cautions */}
+            {(drivers.length > 0 || cautions.length > 0) && (
+              <div className="sig-card">
+                <div className="sig-card-h">{pick(zh, "Drivers & Cautions", "驱动与警示")}</div>
+                {drivers.length > 0 && (
+                  <div className="sig-tags">
+                    {drivers.slice(0, 6).map((d, i) => (
+                      <span key={"d" + i} className="sa-tag up">{d}</span>
+                    ))}
+                  </div>
+                )}
+                {cautions.length > 0 && (
+                  <div className="sig-tags">
+                    {cautions.slice(0, 6).map((c, i) => (
+                      <span key={"c" + i} className="sa-tag warn">{pick(zh, c, cautionsZh[i] ?? c)}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Factor profile */}
+            {legKeys.length > 0 && (
+              <div className="sig-card">
+                <div className="sig-card-h">
+                  {pick(zh, "Factor profile", "因子画像")}
+                  {factors?.z != null && <span className="sig-card-sub">z {factors.z.toFixed(2)}</span>}
+                </div>
+                <div className="sig-factors">
+                  {legKeys.map((k) => (
+                    <FactorBar key={k} label={factorLabel(k, zh)} value={legs![k]} zh={zh} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Event edge */}
+            {(decision?.trust_en || decision?.trust_zh) && (
+              <div className="sig-card">
+                <div className="sig-card-h">
+                  {pick(zh, "Event edge", "事件驱动优势")}
+                  {decision?.trust_tier && <span className="sig-card-sub">{decision.trust_tier}</span>}
+                </div>
+                <div className="sig-edge">{pick(zh, decision.trust_en, decision.trust_zh)}</div>
+              </div>
+            )}
+
+            {/* Open full analysis link */}
+            {onOpenFull && (
+              <button className="sd-full" onClick={onOpenFull}>
+                {pick(zh, "Open full analysis", "打开完整分析")} ›
+              </button>
+            )}
+          </div>
+        </section>
+
+        {/* ── Golden Oracle container (RIGHT on web, BOTTOM on mobile) ── */}
+        <section
+          className="sd-cont sd-go"
+          style={{ borderTopColor: ov.color, ["--vc" as any]: ov.color }}
+        >
+          <div className="sd-head">
+            <span className="sd-ic">{OracleStar}</span>
+            <span className="sd-lbl">{pick(zh, "Golden Oracle", "黄金神谕")}</span>
+            <span className="sd-badge">{ov.label}</span>
+            <button className="sd-x" onClick={onClose} aria-label={pick(zh, "Close", "关闭")}>×</button>
+          </div>
+          <div
+            className="sd-grab"
+            aria-hidden="true"
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+          />
+          <div className="sd-body">
+
+            {/* Golden Oracle scorecard */}
+            <div className="sig-card">
+              <div className="od-hero">
+                <div className="od-verdict" style={{ color: ov.color }}>
+                  {ov.label !== "—" ? ov.label : (row?.verdict ?? "—")}
+                </div>
+                <div className="od-stats">
+                  <div className="od-stat">
+                    <span className="od-stat-k">{pick(zh, "Win rate", "胜率")}</span>
+                    <span className="od-stat-v">{fmtPctLocal(wr, true)}</span>
+                  </div>
+                  <div className="od-stat">
+                    <span className="od-stat-k">{pick(zh, "Profit factor", "盈亏比")}</span>
+                    <span className="od-stat-v">{fmt2(pf)}</span>
+                  </div>
+                  <div className="od-stat">
+                    <span className="od-stat-k">{pick(zh, "CAGR", "年化收益")}</span>
+                    <span className="od-stat-v">{fmtPctLocal(cagr, true)}</span>
+                  </div>
+                  <div className="od-stat">
+                    <span className="od-stat-k">{pick(zh, "Trades", "交易次数")}</span>
+                    <span className="od-stat-v">{nTrades ?? "—"}</span>
+                  </div>
+                </div>
+              </div>
+              {/* supporting dims from conviction/decision */}
+              {(convScore != null || conviction?.band || conviction?.size_pct != null || decision?.band_label) && (
+                <div className="sig-dims">
+                  {convScore != null && (
+                    <div className="sig-dim">
+                      <span className="sig-dim-k">{pick(zh, "Conviction", "信念度")}</span>
+                      <span className="sig-dim-v">{Math.round(convScore)}<i>/100</i></span>
+                    </div>
                   )}
-                  {(decision.gloss || decision.gloss_zh) && (
-                    <div className="sig-desk-gloss">{pick(zh, decision.gloss, decision.gloss_zh)}</div>
+                  {(conviction?.band || decision?.band_label) && (
+                    <div className="sig-dim">
+                      <span className="sig-dim-k">{pick(zh, "Band", "评级")}</span>
+                      <span className="sig-dim-v">{pick(zh, conviction?.band ?? decision?.band_label, conviction?.band_zh ?? decision?.band_label_zh) || "—"}</span>
+                    </div>
+                  )}
+                  {conviction?.size_pct != null && (
+                    <div className="sig-dim">
+                      <span className="sig-dim-k">{pick(zh, "Size", "仓位")}</span>
+                      <span className="sig-dim-v">{Math.round(conviction.size_pct)}%</span>
+                    </div>
                   )}
                   {conviction?.rank_pctile != null && (
-                    <div className="sig-desk-rank">{pick(zh, "Rank percentile", "排名分位")}: {Math.round(conviction.rank_pctile)}%</div>
+                    <div className="sig-dim">
+                      <span className="sig-dim-k">{pick(zh, "Rank", "排名")}</span>
+                      <span className="sig-dim-v">{Math.round(conviction.rank_pctile)}<i>%ile</i></span>
+                    </div>
                   )}
                 </div>
-              </div>
-              <div className="sig-caveat">{pick(zh, "Context for the Oracle verdict — not a trade signal.", "作为神谕结论的背景参考——非交易信号。")}</div>
-            </div>
-          )}
-
-          {/* 4. Drivers / Cautions */}
-          {(drivers.length > 0 || cautions.length > 0) && (
-            <div className="sig-card">
-              <div className="sig-card-h">{pick(zh, "Drivers & Cautions", "驱动与警示")}</div>
-              {drivers.length > 0 && (
-                <div className="sig-tags">
-                  {drivers.slice(0, 6).map((d, i) => (
-                    <span key={"d" + i} className="sa-tag up">{d}</span>
-                  ))}
+              )}
+              {conviction?.size_note && (
+                <div className="sig-conflict">{conviction.size_note}</div>
+              )}
+              {/* GC v2: latest signal's keeper quality + recipe tier (BUY|REBUY only) */}
+              {latestSig && (latestSig.type === "BUY" || latestSig.type === "REBUY") && latestSig.quality && (
+                <div className="sig-dims">
+                  <div className="sig-dim">
+                    <span className="sig-dim-k">{pick(zh, "Latest quality", "最新质量")}</span>
+                    <span className="sig-dim-v" style={{ color: qualityColor(latestSig.quality) }}>
+                      {qualityLabel(latestSig.quality, zh) || "—"}
+                    </span>
+                  </div>
+                  {tierLabel(latestSig.tier, zh) && (
+                    <div className="sig-dim">
+                      <span className="sig-dim-k">{pick(zh, "Tier", "级别")}</span>
+                      <span className="sig-dim-v" style={{ color: "var(--buy)" }}>{tierLabel(latestSig.tier, zh)}</span>
+                    </div>
+                  )}
+                  {latestSig.score != null && isFinite(latestSig.score) && (
+                    <div className="sig-dim">
+                      <span className="sig-dim-k">{pick(zh, "Score", "评分")}</span>
+                      <span className="sig-dim-v">{Math.round(latestSig.score)}<i>/100{latestSig.score_basis === "partial" ? "*" : ""}</i></span>
+                    </div>
+                  )}
                 </div>
               )}
-              {cautions.length > 0 && (
-                <div className="sig-tags">
-                  {cautions.slice(0, 6).map((c, i) => (
-                    <span key={"c" + i} className="sa-tag warn">{pick(zh, c, cautionsZh[i] ?? c)}</span>
-                  ))}
+              {/* GC v2: fresh structure-break warning (only when it post-dates the latest signal) */}
+              {freshWarn && (
+                <div className="sig-conflict" style={{ color: "var(--warn)" }}>
+                  {freshWarn.kind === "confirm"
+                    ? pick(zh, "⛔ Structure break confirmed", "⛔ 结构破位（已确认）")
+                    : pick(zh, "⚠ Structure-break warning (armed)", "⚠ 结构破位预警（预备）")}
+                  <span style={{ opacity: 0.7, marginLeft: 6 }}>{fmtDate(freshWarn.ts)}</span>
+                </div>
+              )}
+              {/* Market-level risk regime (macro Risk Radar mirror — additive, graceful-degrade) */}
+              <MarketRiskChip zh={zh} />
+            </div>
+
+            {/* Signal history table */}
+            <div className="od-sig-section">
+              <div className="od-sec-h">
+                {pick(zh, "Signal history", "信号历史")}
+                {sigs.length > 0 && <span className="od-sig-count">{sigs.length}</span>}
+              </div>
+
+              {sigs.length === 0 ? (
+                <div className="fin-empty">{pick(zh, "No signals", "暂无信号")}</div>
+              ) : (
+                <div className="od-sig-scroll">
+                  <table className="od-sig-table">
+                    <thead>
+                      <tr>
+                        <th>{pick(zh, "Type", "类型")}</th>
+                        <th>{pick(zh, "Date", "日期")}</th>
+                        <th>{pick(zh, "Price", "价格")}</th>
+                        <th>{pick(zh, "Strength", "强度")}</th>
+                        <th>{pick(zh, "Reasons", "信号原因")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sigs.map((sig, i) => (
+                        <SignalRow key={i} sig={sig} zh={zh} onJump={handleJump} />
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
-          )}
 
-          {/* 5. Factor profile */}
-          {legKeys.length > 0 && (
-            <div className="sig-card">
-              <div className="sig-card-h">
-                {pick(zh, "Factor profile", "因子画像")}
-                {factors?.z != null && <span className="sig-card-sub">z {factors.z.toFixed(2)}</span>}
-              </div>
-              <div className="sig-factors">
-                {legKeys.map((k) => (
-                  <FactorBar key={k} label={factorLabel(k, zh)} value={legs![k]} zh={zh} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 6. Event edge */}
-          {(decision?.trust_en || decision?.trust_zh) && (
-            <div className="sig-card">
-              <div className="sig-card-h">
-                {pick(zh, "Event edge", "事件驱动优势")}
-                {decision?.trust_tier && <span className="sig-card-sub">{decision.trust_tier}</span>}
-              </div>
-              <div className="sig-edge">{pick(zh, decision.trust_en, decision.trust_zh)}</div>
-            </div>
-          )}
-
-          {/* backtested note */}
-          <div className="od-note">
-            {pick(zh, "Backtested results. Past performance does not guarantee future results.", "回测结果。历史表现不代表未来收益。")}
+            {/* Equity curve */}
+            <BacktestCurve sym={sym} zh={zh} />
           </div>
-        </div>
+        </section>
+
       </div>
     </div>
   )
