@@ -338,7 +338,7 @@ export function FeedPane({
       )}
 
       {/* ── Feed list ── */}
-      <div style={LIST_STYLE}>
+      <div style={LIST_STYLE} data-tut="flow-feed">
         {/* Loading state */}
         {feed === null && <LoadingState zh={zh} />}
 

@@ -151,6 +151,7 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
       onClick={() => onSelect(ev)}
       aria-selected={selected}
       role="option"
+      data-tut="flow-card"
     >
       {/* ── Row 1: ticker / C|P / lean / premium / time ── */}
       <div style={ROW}>

@@ -90,7 +90,7 @@ export function FlowGauge({ feed, lang }: FlowGaugeProps) {
   const sessionPct = feed.session_pct != null ? Math.round(feed.session_pct * 100) : null;
 
   return (
-    <div style={styles.gauge}>
+    <div style={styles.gauge} data-tut="flow-gauge">
       {/* ── Header ── */}
       <div style={styles.header}>
         <span style={styles.label}>{pick(zh, FD.sessionGauge.en, FD.sessionGauge.zh)}</span>

@@ -17,6 +17,7 @@ const TCTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "tctx_fixtu
 const OICONF_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oiconf_fixture.json");
 const CHAINHEAT_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "chain_heat_fixture.json");
 const GEXSTATE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gexstate_fixture.json");
+const MATRIX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "matrix_fixture.json");
 const MANIFEST_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "manifest.json");
 
 // Bare-minimum in-memory cache so concurrent renders share one fetch.
@@ -35,6 +36,7 @@ function isValidF(f: FParam): boolean {
   if (f.startsWith("gex:") && f.length > 4) return true;
   if (f.startsWith("tctx:") && f.length > 5) return true;
   if (f.startsWith("gexstate:") && f.length > 9) return true;
+  if (f.startsWith("matrix:") && f.length > 7) return true;
   if (f === "manifest") return true;
   if (f === "flow_idx") return true;
   return false;
@@ -54,6 +56,7 @@ function backendPath(f: string): string {
   if (f.startsWith("tctx:")) return `/api/hub/tctx/${f.slice(5)}`;
   if (f === "chainheat") return "/api/flow/chainheat";
   if (f.startsWith("gexstate:")) return `/api/hub/gexstate/${f.slice(9)}`;
+  if (f.startsWith("matrix:")) return `/api/hub/matrix/${f.slice(7)}`;
   if (f === "manifest") return "/api/flow/manifest";
   if (f === "flow_idx") return "/api/flow/flow_idx";
   return `/api/flow/${f}`;
@@ -73,6 +76,7 @@ function r2Key(f: string): string {
   if (f.startsWith("tctx:")) return `options_hub/tickers_ctx/${f.slice(5)}.json`;
   if (f === "chainheat") return "live_flow/chain_heat_current.json";
   if (f.startsWith("gexstate:")) return `options_structure/gex_state/${f.slice(9)}.json`;
+  if (f.startsWith("matrix:")) return `options_structure/matrix/${f.slice(7)}.json`;
   if (f === "manifest") return "live_flow/manifest.json";
   if (f === "flow_idx") return "live_flow/flow_idx.json";
   return `live_flow/${f}_current.json`;
@@ -165,6 +169,15 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     try {
       const raw = await fs.readFile(GEXSTATE_FIXTURE_FILE, "utf8");
       return JSON.parse(raw) as Record<string, unknown>;
+    } catch { return {}; }
+  }
+  // Matrix fixture — keyed by root; falls back to SPY if requested root absent.
+  if (f.startsWith("matrix:")) {
+    const root = f.slice(7).toUpperCase();
+    try {
+      const raw = await fs.readFile(MATRIX_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? all["SPY"] ?? all[Object.keys(all)[0]] ?? {};
     } catch { return {}; }
   }
   // Manifest fixture — static public/data/manifest.json (34 names, nightly).

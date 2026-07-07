@@ -65,7 +65,7 @@ export function GexSummaryBar({ payload, lang }: GexSummaryBarProps) {
 
   if (!payload) {
     return (
-      <div style={BAR_OUTER}>
+      <div style={BAR_OUTER} data-tut="gex-summary">
         {[...Array(6)].map((_, i) => (
           <div key={i} style={{ ...CELL, opacity: 0.35 }}>
             <span style={CELL_LABEL}>{t("loading")}</span>
@@ -95,7 +95,7 @@ export function GexSummaryBar({ payload, lang }: GexSummaryBarProps) {
   const iv30Str = payload.iv30 != null ? fmtPct(payload.iv30) : "—";
 
   return (
-    <div style={BAR_OUTER}>
+    <div style={BAR_OUTER} data-tut="gex-summary">
       <MetricCell
         label={t("sumNetGex")}
         value={netGexStr}

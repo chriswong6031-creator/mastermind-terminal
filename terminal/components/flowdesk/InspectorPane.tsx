@@ -106,7 +106,7 @@ export function InspectorPane({ event, tickerCtx, lang }: InspectorPaneProps) {
 
   if (!event) {
     return (
-      <div style={styles.pane}>
+      <div style={styles.pane} data-tut="flow-inspector">
         <div style={styles.empty}>
           {pick(zh, FD.inspectorEmpty.en, FD.inspectorEmpty.zh)}
         </div>
@@ -115,7 +115,7 @@ export function InspectorPane({ event, tickerCtx, lang }: InspectorPaneProps) {
   }
 
   return (
-    <div style={styles.pane}>
+    <div style={styles.pane} data-tut="flow-inspector">
       <EventDetail event={event} zh={zh} tickerCtx={tickerCtx} />
     </div>
   );

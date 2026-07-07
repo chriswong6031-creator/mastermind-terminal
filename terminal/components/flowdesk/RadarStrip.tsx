@@ -86,7 +86,7 @@ export function RadarStrip({ feed, lang }: RadarStripProps) {
     : pick(zh, FD.radarBaseline.en, FD.radarBaseline.zh);
 
   return (
-    <section style={styles.strip}>
+    <section style={styles.strip} data-tut="flow-radar">
       {/* ── Header ── */}
       <div style={styles.header}>
         <span style={styles.title}>{pick(zh, FD.smartMoneyRadar.en, FD.smartMoneyRadar.zh)}</span>

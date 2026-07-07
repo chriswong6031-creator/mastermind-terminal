@@ -160,7 +160,7 @@ export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelPro
     filters.badges.size > 0;
 
   return (
-    <div style={PANEL_STYLE}>
+    <div style={PANEL_STYLE} data-tut="flow-filter-panel">
       {/* ── Type ── */}
       <FilterRow label={zh ? "类型" : "Type"}>
         <div className="fin-toggle">

@@ -13,10 +13,11 @@ import {
 } from "lightweight-charts";
 import { FlowDeskView } from "@/components/flowdesk/FlowDeskView";
 import { GexDeskView } from "@/components/gexdesk/GexDeskView";
+import { PrismView } from "@/components/prism/PrismView";
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-type TabKey = "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex";
+type TabKey = "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "desk",     enKey: "tabDesk",     zhKey: "tabDesk" },
@@ -26,6 +27,7 @@ const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "screener", enKey: "tabScreener", zhKey: "tabScreener" },
   { key: "vol",      enKey: "tabVol",      zhKey: "tabVol" },
   { key: "gex",      enKey: "tabGex",      zhKey: "tabGex" },
+  { key: "prism",    enKey: "tabPrism",    zhKey: "tabPrism" },
 ];
 
 // ─── Types from feed contract ────────────────────────────────────────────────
@@ -2371,6 +2373,13 @@ export default function OptionsHubView() {
           {activeTab === "gex" && (
             <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
               <GexDeskView />
+            </div>
+          )}
+
+          {/* ═══ PRISM TAB ══════════════════════════════════════════════════ */}
+          {activeTab === "prism" && (
+            <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
+              <PrismView />
             </div>
           )}
 

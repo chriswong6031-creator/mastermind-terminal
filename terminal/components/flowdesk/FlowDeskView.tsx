@@ -27,6 +27,10 @@ import { FlowGauge } from "./FlowGauge";
 import { FeedPane, type FlowEvent, type FeedPayload } from "./FeedPane";
 import { InspectorPane } from "./InspectorPane";
 import { DEFAULT_FILTERS, type FlowFilters } from "./FiltersPanel";
+import { TutorialOverlay } from "../tutorial/TutorialOverlay";
+
+const TUTORIAL_KEY = "flowdesk.tutorial";
+const AUTO_PROMPT_DELAY_MS = 1500;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -123,7 +127,7 @@ function ChainHeatRail({ data, lang }: ChainHeatRailProps) {
 
   if (!data) {
     return (
-      <div style={CHAIN_RAIL}>
+      <div style={CHAIN_RAIL} data-tut="chain-heat">
         <div style={CHAIN_HEADER}>
           <span style={CHAIN_TITLE}>{t("chainHeatTitle")}</span>
         </div>
@@ -140,7 +144,7 @@ function ChainHeatRail({ data, lang }: ChainHeatRailProps) {
   const note = zh ? (data.note_zh ?? "") : (data.note_en ?? "");
 
   return (
-    <div style={CHAIN_RAIL}>
+    <div style={CHAIN_RAIL} data-tut="chain-heat">
       <div style={CHAIN_HEADER}>
         <span style={CHAIN_TITLE}>{t("chainHeatTitle")}</span>
         <span style={CHAIN_SUBTITLE}>{zh ? `≥$${threshold}M` : `≥$${threshold}M cumul`}</span>
@@ -152,8 +156,8 @@ function ChainHeatRail({ data, lang }: ChainHeatRailProps) {
         <div style={CHAIN_EMPTY}>{t("chainHeatEmpty")}</div>
       )}
 
-      {campaigns.map((c) => (
-        <ChainCampaignRow key={c.option_symbol} campaign={c} zh={zh} t={t} />
+      {campaigns.map((c, idx) => (
+        <ChainCampaignRow key={c.option_symbol} campaign={c} zh={zh} t={t} firstCampaign={idx === 0} />
       ))}
     </div>
   );
@@ -163,10 +167,12 @@ function ChainCampaignRow({
   campaign,
   zh,
   t,
+  firstCampaign,
 }: {
   campaign: ChainHeatCampaign;
   zh: boolean;
   t: (key: Parameters<ReturnType<typeof makeFlowT>>[0]) => string;
+  firstCampaign?: boolean;
 }) {
   const isCall = campaign.type === "CALL";
   const isContested = campaign.lean === "contested";
@@ -197,7 +203,7 @@ function ChainCampaignRow({
   }
 
   return (
-    <div style={CHAIN_ROW}>
+    <div style={CHAIN_ROW} {...(firstCampaign ? { "data-tut": "chain-heat-campaign" } : {})}>
       {/* Ticker + contract type */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
         <span style={CHAIN_TICKER}>{campaign.ticker}</span>
@@ -278,6 +284,10 @@ export function FlowDeskView() {
 
   // ── Filters ──────────────────────────────────────────────────────────────────
   const [filters, setFilters] = useState<FlowFilters>(DEFAULT_FILTERS);
+
+  // ── Tutorial ─────────────────────────────────────────────────────────────────
+  const [tutOpen, setTutOpen] = useState(false);
+  const autoPromptRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Polling refs ─────────────────────────────────────────────────────────────
   const feedTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -408,6 +418,23 @@ export function FlowDeskView() {
       }
     : { unusual_names: [], baseline_note: undefined };
 
+  // ── Auto-prompt tutorial on first visit (no 'flowdesk.tutorial' key) ─────────
+  useEffect(() => {
+    let hasKey = false;
+    try {
+      hasKey = localStorage.getItem(TUTORIAL_KEY) !== null;
+    } catch {}
+    if (!hasKey) {
+      autoPromptRef.current = setTimeout(() => {
+        setTutOpen(true);
+      }, AUTO_PROMPT_DELAY_MS);
+    }
+    return () => {
+      if (autoPromptRef.current) clearTimeout(autoPromptRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
@@ -430,6 +457,17 @@ export function FlowDeskView() {
 
       {/* ═══ CENTER (FlowGauge + RadarStrip + FeedPane) ══════════════════════ */}
       <div style={CENTER_COL}>
+        {/* Tutorial button row */}
+        <div style={TUT_HEADER_ROW}>
+          <button
+            style={TUT_BTN}
+            onClick={() => setTutOpen(true)}
+            aria-label={lang === "zh" ? "打开教程" : "Open tutorial"}
+          >
+            {lang === "zh" ? "教程" : "Tutorial"}
+          </button>
+        </div>
+
         {/* FlowGauge strip — always shown; empty feed renders $0 gracefully */}
         <FlowGauge feed={feedForGauge} lang={lang} />
 
@@ -466,6 +504,14 @@ export function FlowDeskView() {
         <ChainHeatRail data={chainHeat} lang={lang} />
       </div>
 
+      {/* Tutorial overlay (portal-like; renders above everything) */}
+      {tutOpen && (
+        <TutorialOverlay
+          open={tutOpen}
+          onClose={() => setTutOpen(false)}
+        />
+      )}
+
     </div>
   );
 }
@@ -493,6 +539,30 @@ const CENTER_COL: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   overflowY: "hidden",
+};
+
+const TUT_HEADER_ROW: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  alignItems: "center",
+  padding: "4px 10px",
+  borderBottom: "1px solid var(--line)",
+  flexShrink: 0,
+  background: "var(--panel)",
+};
+
+const TUT_BTN: React.CSSProperties = {
+  height: 24,
+  padding: "0 10px",
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: "0.04em",
+  background: "rgba(77,130,255,0.12)",
+  border: "1px solid rgba(77,130,255,0.35)",
+  borderRadius: "var(--r-pill)",
+  color: "var(--brand-2)",
+  cursor: "pointer",
+  transition: "background 0.15s",
 };
 
 const FEED_COL: React.CSSProperties = {

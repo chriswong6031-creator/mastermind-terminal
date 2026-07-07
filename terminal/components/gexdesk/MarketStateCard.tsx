@@ -96,7 +96,7 @@ export function MarketStateCard({
 
   if (!statePayload) {
     return (
-      <div style={CARD_OUTER}>
+      <div style={CARD_OUTER} data-tut="gex-state-card">
         <div style={CARD_HEADER}>
           <span style={CARD_TITLE}>{t("stateTitle")}</span>
         </div>
@@ -159,7 +159,7 @@ export function MarketStateCard({
       : "var(--muted)";
 
   return (
-    <div style={CARD_OUTER}>
+    <div style={CARD_OUTER} data-tut="gex-state-card">
       <div style={CARD_HEADER}>
         <span style={CARD_TITLE}>{t("stateTitle")}</span>
         <span style={{ ...REGIME_CHIP, color: regimeColor, borderColor: `${regimeColor}55` }}>

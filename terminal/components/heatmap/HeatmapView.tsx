@@ -368,7 +368,7 @@ export function HeatmapView() {
       </div>
 
       {/* ═══ CONTROLS ROW ════════════════════════════════════════════════════ */}
-      <div style={CONTROLS_ROW}>
+      <div style={CONTROLS_ROW} data-tut="heatmap-controls">
         {/* Layer toggle */}
         <ToggleGroup>
           <ToggleBtn active={layer === "price"} onClick={() => handleLayerChange("price")}>
@@ -476,7 +476,7 @@ export function HeatmapView() {
       )}
 
       {/* ═══ MAIN CANVAS ═════════════════════════════════════════════════════ */}
-      <div style={CANVAS_AREA}>
+      <div style={CANVAS_AREA} data-tut="heatmap-canvas">
         {isLoading ? (
           <LoadingState t={t} />
         ) : tiles.length === 0 ? (

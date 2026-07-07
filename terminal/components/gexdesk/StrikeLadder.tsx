@@ -201,14 +201,14 @@ export function StrikeLadder({
 
   if (sorted.length === 0) {
     return (
-      <div style={LADDER_OUTER}>
+      <div style={LADDER_OUTER} data-tut="gex-ladder">
         <div style={LADDER_EMPTY}>{t("ladderNoData")}</div>
       </div>
     );
   }
 
   return (
-    <div style={LADDER_OUTER} ref={containerRef}>
+    <div style={LADDER_OUTER} ref={containerRef} data-tut="gex-ladder">
       {/* ── Expiry filter chips ─────────────────────────────────────────────── */}
       {byExpiry && byExpiry.length > 0 && (
         <div style={EXPIRY_CHIPS_ROW}>
@@ -264,7 +264,7 @@ export function StrikeLadder({
             <React.Fragment key={s.strike}>
               {/* Gamma flip divider line (inserted between straddling strikes) */}
               {flipInsertAfter === i - 1 && flipStrike != null && (
-                <div style={FLIP_LINE}>
+                <div style={FLIP_LINE} data-tut="gex-flip">
                   <span style={FLIP_LABEL}>{t("ladderFlipLine")}</span>
                   <div style={FLIP_GRADIENT} />
                   <span style={FLIP_PRICE}>{fmtStrike(flipStrike)}</span>
