@@ -231,6 +231,24 @@ function isStale(iso: string): boolean {
   try { return Date.now() - new Date(iso).getTime() > 10 * 60 * 1000; } catch { return false; }
 }
 
+// Approx US regular-hours check in America/New_York (holidays not handled — used
+// only to choose feed-status tone: an empty/stale tape during RTH means the live
+// feed is stalled; outside RTH it's the expected intraday-only gap, not a fault).
+function isUsMarketHoursNow(): boolean {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", weekday: "short",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    const wd = parts.find((p) => p.type === "weekday")?.value ?? "";
+    if (wd === "Sat" || wd === "Sun") return false;
+    const hh = Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+    const mm = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+    const mins = hh * 60 + mm;
+    return mins >= 9 * 60 + 30 && mins < 16 * 60;
+  } catch { return false; }
+}
+
 function fmtContract(right: "C" | "P", exp: string, strike: number): string {
   const month = exp.slice(5, 7); const day = exp.slice(8, 10);
   return `${strike}${right} ${month}/${day}`;
@@ -1031,7 +1049,7 @@ export default function OptionsHubView() {
         fetch("/api/flow?f=feed", { cache: "no-store" }),
         fetch("/api/flow?f=heat", { cache: "no-store" }),
       ]);
-      if (fr.ok) { const fj = await fr.json() as FeedPayload; setFeed(fj); setLastFeedTs(fj.asof); setFetchError(false); }
+      if (fr.ok) { const fj = await fr.json() as FeedPayload; setFeed(fj); setLastFeedTs(fj.asof); setFetchError(false); } else { setFetchError(true); }
       if (hr.ok) { const hj = await hr.json() as HeatPayload; setHeat(hj); }
     } catch { setFetchError(true); }
   }, []);
@@ -1101,7 +1119,7 @@ export default function OptionsHubView() {
           fetch("/api/flow?f=feed", { cache: "no-store" }),
           fetch("/api/flow?f=heat", { cache: "no-store" }),
         ]);
-        if (fr.ok) { const fj = await fr.json() as FeedPayload; setFeed(fj); setLastFeedTs(fj.asof); setFetchError(false); }
+        if (fr.ok) { const fj = await fr.json() as FeedPayload; setFeed(fj); setLastFeedTs(fj.asof); setFetchError(false); } else { setFetchError(true); }
         if (hr.ok) { const hj = await hr.json() as HeatPayload; setHeat(hj); }
       } catch { setFetchError(true); }
     })();
@@ -1167,6 +1185,17 @@ export default function OptionsHubView() {
   const dataStale = (feed?.stale) || (lastFeedTs ? isStale(lastFeedTs) : false);
   const heatGroups = heat?.groups ?? [];
   const unusualNames = feed?.unusual_names ?? [];
+
+  // ── Live-feed health — distinguish an outage/delay from a genuinely quiet tape
+  // so an empty Tape/Tide isn't silently shown as "no events match these filters".
+  const rawTapeCount = feed?.events?.length ?? 0;
+  const marketOpenNow = isUsMarketHoursNow();
+  const feedUnavailable = fetchError && !feed;        // couldn't load the feed at all
+  const feedDelayed = !!feed && dataStale;            // have data, but it isn't fresh
+  const feedProblem = feedUnavailable || (feedDelayed && marketOpenNow);
+  const lastUpdatedLabel = lastFeedTs
+    ? `${feed?.session_date ? feed.session_date + " · " : ""}${fmtAsof(lastFeedTs)} ET`
+    : "";
 
   // Ticker search candidates from tide top_net_impact + unusual names
   const tickerCandidates: string[] = useMemo(() => {
@@ -1369,6 +1398,35 @@ export default function OptionsHubView() {
           ))}
         </div>
 
+        {/* ── Live-feed status banner (Tape + Tide are intraday-live) ── */}
+        {(activeTab === "tape" || activeTab === "tide") && (feedUnavailable || feedDelayed) && (
+          <div
+            role="status"
+            style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "6px 12px", fontSize: 12, fontWeight: 600, lineHeight: 1.4,
+              borderBottom: "1px solid var(--border, #222)",
+              color: feedProblem ? "var(--warn)" : "var(--text-dim)",
+              background: feedProblem ? "color-mix(in srgb, var(--warn) 12%, transparent)" : "transparent",
+            }}
+          >
+            <span aria-hidden>{feedProblem ? "⚠" : "◷"}</span>
+            <span>
+              {feedUnavailable
+                ? (lang === "zh"
+                    ? "实时期权流不可用 — 暂时无法连接数据源。"
+                    : "Live options feed unavailable — can’t reach the data source right now.")
+                : marketOpenNow
+                ? (lang === "zh"
+                    ? `实时期权流延迟 — 最近更新 ${lastUpdatedLabel}，盘口可能未在刷新。`
+                    : `Live options feed delayed — last update ${lastUpdatedLabel}; the tape may not be refreshing.`)
+                : (lang === "zh"
+                    ? `市场休市 — 显示上一交易时段（${lastUpdatedLabel}）。实时盘口 9:30 ET 恢复。`
+                    : `Market closed — showing the last session (${lastUpdatedLabel}). Live tape resumes at 9:30 ET.`)}
+            </span>
+          </div>
+        )}
+
         {/* ── Tab content ── */}
         <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
 
@@ -1564,7 +1622,13 @@ export default function OptionsHubView() {
                         {events.length === 0 && (
                           <tr className="empty-row">
                             <td colSpan={11} style={{ textAlign: "center", color: "var(--muted)", padding: "40px 16px", fontSize: 13 }}>
-                              {lang === "zh" ? "暂无符合条件的记录。" : "No events match these filters."}
+                              {rawTapeCount > 0
+                                ? (lang === "zh" ? "暂无符合条件的记录。" : "No events match these filters.")
+                                : feedDelayed && marketOpenNow
+                                ? (lang === "zh" ? "实时盘口暂未刷新。" : "Live feed isn’t updating right now.")
+                                : feedDelayed
+                                ? (lang === "zh" ? "市场休市 — 实时盘口 9:30 ET 恢复。" : "Market closed — live tape resumes at 9:30 ET.")
+                                : (lang === "zh" ? "本时段暂无异常期权流。" : "No unusual options flow yet this session.")}
                             </td>
                           </tr>
                         )}
