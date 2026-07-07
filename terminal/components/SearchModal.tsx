@@ -1,7 +1,7 @@
 "use client";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "@/lib/i18n";
-import { CMP_PALETTE } from "@/lib/compare";
+import { CMP_PALETTE, CmpMode, CmpCfg } from "@/lib/compare";
 
 type Row = { name: string; col: string; verdict: string | null; mkt?: string; zh?: string };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
@@ -9,17 +9,20 @@ const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 // One dialog, two modes. "go" = jump to / add a symbol to the watchlist (the Cmd-K search).
 // "compare" = a dedicated overlay picker: rows toggle the symbol onto the active chart, the dialog
 // stays open so several can be layered, and the currently-overlaid symbols show as removable chips.
-export default function SearchModal({ open, seed, manifest, inWatchlist, mode = "go", compare = [], active = "", onClose, onPick, onAdd, onToggleCompare }:
+export default function SearchModal({ open, seed, manifest, inWatchlist, mode = "go", compare = [], active = "", onClose, onPick, onAdd, onToggleCompare, compareCfg }:
   {
     open: boolean; seed: string; manifest: Record<string, Row>; inWatchlist: Set<string>;
     mode?: "go" | "compare"; compare?: string[]; active?: string;
-    onClose: () => void; onPick: (s: string) => void; onAdd: (s: string) => void; onToggleCompare?: (s: string) => void;
+    onClose: () => void; onPick: (s: string) => void; onAdd: (s: string) => void;
+    onToggleCompare?: (s: string, mode?: CmpMode) => void;
+    compareCfg?: Record<string, CmpCfg>;
   }) {
   const t = useT();
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
+  const [choosing, setChoosing] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (open) { setQ(seed || ""); setSel(0); setTimeout(() => inputRef.current?.focus(), 10); } }, [open, seed]);
+  useEffect(() => { if (open) { setQ(seed || ""); setSel(0); setChoosing(null); setTimeout(() => inputRef.current?.focus(), 10); } }, [open, seed]);
 
   // Defer the query so keystrokes are never blocked by filtering ~8 800-row manifest.
   const deferredQ = useDeferredValue(q);
@@ -37,8 +40,10 @@ export default function SearchModal({ open, seed, manifest, inWatchlist, mode = 
   const added = compare.filter((c) => c !== active);
 
   function choose(sym: string) {
-    if (cmp) onToggleCompare?.(sym);          // compare: toggle the overlay, keep the dialog open
-    else { onPick(sym); onClose(); }          // go: jump to the symbol and close
+    if (cmp) {
+      if (compare.includes(sym)) { onToggleCompare?.(sym); }  // already comparing -> remove
+      else { setChoosing(sym); }                               // reveal Price/Percent chooser
+    } else { onPick(sym); onClose(); }                        // go: jump to symbol and close
   }
   function key(e: React.KeyboardEvent) {
     if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, results.length - 1)); }
@@ -63,10 +68,13 @@ export default function SearchModal({ open, seed, manifest, inWatchlist, mode = 
         </div>
         {cmp && added.length > 0 && (
           <div className="scmp-chips">
-            {added.map((s, i) => (
-              <span className="scmp-chip" key={s}><i style={{ background: CMP_PALETTE[i % CMP_PALETTE.length] }} />{s}
-                <button title={t("remove")} onClick={() => onToggleCompare?.(s)}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button></span>
-            ))}
+            {added.map((s, i) => {
+              const chipColor = compareCfg?.[s]?.color ?? CMP_PALETTE[i % CMP_PALETTE.length];
+              return (
+                <span className="scmp-chip" key={s}><i style={{ background: chipColor }} />{s}
+                  <button title={t("remove")} onClick={() => onToggleCompare?.(s)}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button></span>
+              );
+            })}
           </div>
         )}
         <div className="sres">
@@ -83,11 +91,19 @@ export default function SearchModal({ open, seed, manifest, inWatchlist, mode = 
                   {r.mkt && <span className="mkt">{r.mkt}</span>}
                   {r.verdict && <span className="verd" style={{ color: buy ? "var(--buy)" : "var(--sell)", background: buy ? "rgba(38,194,129,.13)" : "rgba(240,86,107,.13)" }}>{r.verdict}</span>}
                   {cmp
-                    ? <button className={`add cmp${inCmp ? " added" : ""}`} title={inCmp ? t("comparing") : t("addToCompare")} onClick={(e) => { e.stopPropagation(); onToggleCompare?.(s); }}>
-                        {inCmp
-                          ? <><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg>{t("comparingNow")}</>
-                          : <><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>{t("addToCompare")}</>}
-                      </button>
+                    ? <div className={"cmp-add-wrap" + (inCmp ? " is-added" : choosing === s ? " is-choosing" : "")}>
+                        <button className="cmp-add-idle add cmp" title={t("addToCompare")} onClick={(e) => { e.stopPropagation(); setChoosing(s); }}>
+                          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>{t("addToCompare")}
+                        </button>
+                        <div className="cmp-seg">
+                          <button className="cmp-seg-half" onClick={(e) => { e.stopPropagation(); onToggleCompare?.(s, "price"); setChoosing(null); }}>{t("cmpPrice")}</button>
+                          <span className="cmp-seg-div" />
+                          <button className="cmp-seg-half" onClick={(e) => { e.stopPropagation(); onToggleCompare?.(s, "percent"); setChoosing(null); }}>{t("cmpPercent")}</button>
+                        </div>
+                        <button className="cmp-add-done add cmp added" title={t("comparing")} onClick={(e) => { e.stopPropagation(); onToggleCompare?.(s); }}>
+                          <svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg>{t("comparingNow")}
+                        </button>
+                      </div>
                     : <button className={`add${inWl ? " added" : ""}`} title={inWl ? t("inWatchlist") : t("addToWatchlist")} onClick={(e) => { e.stopPropagation(); onAdd(s); }}>
                         {inWl ? <svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg> : <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>}
                       </button>}
