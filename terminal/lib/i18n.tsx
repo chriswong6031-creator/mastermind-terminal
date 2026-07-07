@@ -125,6 +125,9 @@ const LEX: Record<string, [string, string]> = {
   goldenOracle: ["Golden Oracle · Confluence", "黄金神谕 · 共振"],
   // merged research surface — one entry point for the Golden Oracle scorecard + Research Desk read
   researchOracle: ["Research Desk · Golden Oracle", "研究台 · 黄金神谕"],
+  goldenOracleLbl: ["Golden Oracle", "黄金神谕"],
+  researchDeskLbl: ["Research Desk", "研究台"],
+  signalView: ["View", "查看"],
   backtestedNote: ["backtested · 6yr daily→3D", "回测 · 6年 日线→3日"],
   winRate: ["Win rate", "胜率"],
   profitFactor: ["Profit factor", "盈亏比"],
