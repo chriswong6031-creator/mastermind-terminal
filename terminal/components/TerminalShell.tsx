@@ -26,6 +26,7 @@ const StrategyTester = dynamic(() => import("@/components/StrategyTester"), { ss
 const CopilotPanel = dynamic(() => import("@/components/CopilotPanel"), { ssr: false });
 import StockAnalysis from "@/components/StockAnalysis";
 import SignalButton from "@/components/SignalButton";
+import MarketRiskChip, { type MarketRisk } from "@/components/MarketRiskChip";
 import { oracleVerdict, deskVerdict } from "@/lib/signalVerdict";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
@@ -144,6 +145,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [detectCmd, setDetectCmd] = useState<DetectCmd>(null);
   const [detectOpen, setDetectOpen] = useState(false);
   const [intel, setIntel] = useState<any>(null);
+  const [risk, setRisk] = useState<MarketRisk | null>(null);   // global top-down market-risk tape
   const [layouts, setLayouts] = useState<any[]>([]); const [layoutOpen, setLayoutOpen] = useState(false); const [layoutName, setLayoutName] = useState("");
   const [livePx, setLivePx] = useState<number | null>(null);
   // symbol-keyed live top-of-book — ONE source for the header AND every watchlist row (via a single
@@ -274,6 +276,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     prevPaneSyms.current = now;
   }, [panes, flushDrawings]);
   useEffect(() => () => { for (const sym of Object.keys(drawPending.current)) flushDrawings(sym); }, [flushDrawings]);
+
+  // market-risk chip — global top-down tape (not per-symbol); fetch once on mount.
+  useEffect(() => { getJSON(`/data/market_risk.json`).then((d) => setRisk(d)).catch(() => {}); }, []);
 
   // per-symbol intel/slice/fund/bars for the rail (drawings now live per-pane in ChartPane); layouts once.
   // getFund is negative-cached (long-tail 404s don't storm); getBars shares the chart's OHLC fetch.
@@ -683,6 +688,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           return <span className={badgeCls} style={{ marginLeft: 16 }} title={t("liveTip")}><i />{badgeLbl}</span>;
         })()}
         <div className="spacer" />
+        <MarketRiskChip risk={risk} />
         <button className="ai" onClick={() => setCopilot(true)}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
         <SettingsMenu email={email} />
       </header>

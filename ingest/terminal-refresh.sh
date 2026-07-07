@@ -67,6 +67,10 @@ run "$PY" -m ingest.artifact_conformance
 # pull macro dashboard intel bridge — R2 stockdata sync + ai_lean + freshness gate.
 # Runs AFTER the universe files are in place so intel covers the full symbol set.
 run "$PY" ingest/pull_macro_intel.py
+# pull macro dashboard market-risk state — one global market_risk.json for the header
+# chip (top-down tape). Reads $MACRO_RISK_URL (the web-served risk_state.json) when set,
+# else the local macro checkout. Display-only; a stale tape is flagged, never a sell.
+run "$PY" ingest/pull_macro_risk.py
 
 NEW=$(count "$STAGE"); LIVEN=$(count "$LIVE")
 MIN=$(( LIVEN * 80 / 100 )); [ "$MIN" -lt 1000 ] && MIN=1000
