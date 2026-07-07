@@ -30,6 +30,9 @@ import { DEFAULT_FILTERS, type FlowFilters } from "./FiltersPanel";
 import { TutorialOverlay } from "../tutorial/TutorialOverlay";
 
 const TUTORIAL_KEY = "flowdesk.tutorial";
+/** Written the moment the auto-prompt fires so it never re-fires on future visits,
+ *  independent of whether the user completes a module (which writes TUTORIAL_KEY). */
+const TUTORIAL_SEEN_KEY = "flowdesk.tutorial.seen";
 const AUTO_PROMPT_DELAY_MS = 1500;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -418,13 +421,21 @@ export function FlowDeskView() {
       }
     : { unusual_names: [], baseline_note: undefined };
 
-  // ── Auto-prompt tutorial on first visit (no 'flowdesk.tutorial' key) ─────────
+  // ── Auto-prompt tutorial exactly once per browser (gate on seen flag) ────────
+  // We check TUTORIAL_SEEN_KEY (not TUTORIAL_KEY) so that a user who opens and
+  // then closes/skips the overlay without completing a module is still marked as
+  // having seen the auto-prompt and does not see it again on the next /flow visit.
   useEffect(() => {
-    let hasKey = false;
+    let alreadySeen = false;
     try {
-      hasKey = localStorage.getItem(TUTORIAL_KEY) !== null;
+      alreadySeen = localStorage.getItem(TUTORIAL_SEEN_KEY) !== null;
     } catch {}
-    if (!hasKey) {
+    if (!alreadySeen) {
+      // Mark as seen immediately — before the timeout fires — so that even if the
+      // component unmounts before the delay elapses the flag is persisted.
+      try {
+        localStorage.setItem(TUTORIAL_SEEN_KEY, "1");
+      } catch {}
       autoPromptRef.current = setTimeout(() => {
         setTutOpen(true);
       }, AUTO_PROMPT_DELAY_MS);
