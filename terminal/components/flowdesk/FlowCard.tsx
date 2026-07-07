@@ -66,14 +66,14 @@ function deriveBadges(ev: FlowEvent): BadgeSet {
 
 // ── Score tier → pill color (magnitude-based, NOT buy/sell) ──────────────────
 
-type Tier = "ELITE" | "STRONG" | "HIGH" | "MED" | "LOW";
+type Tier = "ELITE" | "STRONG" | "HIGH" | "MEDIUM" | "LOW";
 
 function tierColor(tier: Tier): string {
   switch (tier) {
     case "ELITE":  return "#9d86ff"; // purple — top tier
     case "STRONG": return "#e8a33d"; // amber
     case "HIGH":   return "#4d82ff"; // brand blue
-    case "MED":    return "var(--text-2)";
+    case "MEDIUM": return "var(--text-2)";
     default:       return "var(--muted)";
   }
 }
@@ -83,7 +83,7 @@ function tierBg(tier: Tier): string {
     case "ELITE":  return "rgba(157,134,255,.15)";
     case "STRONG": return "rgba(232,163,61,.13)";
     case "HIGH":   return "rgba(77,130,255,.13)";
-    case "MED":    return "rgba(134,141,156,.1)";
+    case "MEDIUM": return "rgba(134,141,156,.1)";
     default:       return "rgba(90,97,111,.08)";
   }
 }

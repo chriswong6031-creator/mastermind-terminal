@@ -88,8 +88,8 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
     return { total, callPrem, putPrem, callShare: total > 0 ? callPrem / total : 0.5 };
   }, [feed.events, tide]);
 
-  const pc = overview.putPrem > 0
-    ? (overview.callPrem / overview.putPrem).toFixed(2)
+  const pc = overview.callPrem > 0
+    ? (overview.putPrem / overview.callPrem).toFixed(2)
     : "—";
 
   // --- Best score per ticker (from today's feed events) ---

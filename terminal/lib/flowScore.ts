@@ -6,7 +6,8 @@
  * recovery is 0.41 (coin-flip-plus) without NBBO — magnitude and OI/freshness
  * are the reliable reads (RELIABLE family).
  *
- * All weights sum to 1.00.
+ * Positive weights sum to 0.95; a direction-reliability penalty (weight 0.05) can subtract up to 5 points,
+ * making the achievable range 0–94 (ELITE ≥90 is reachable; 95–100 is not).
  *
  * Weight breakdown (documented here and reflected in each ScoreComponent):
  *   premiumMagnitude    0.30  — log ramp $50k → $5M; largest reliable signal

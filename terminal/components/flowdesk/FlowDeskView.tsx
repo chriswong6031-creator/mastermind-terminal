@@ -360,7 +360,7 @@ export function FlowDeskView() {
   }, []);
 
   const handlePickTicker = useCallback((root: string) => {
-    // Selecting a ticker from the watchlist selects its highest-score event
+    // Selecting a ticker from the watchlist selects its most recent event (latest timestamp)
     if (!feed) return;
     const eventsForRoot = feed.events.filter((ev) => ev.root === root);
     if (eventsForRoot.length === 0) return;

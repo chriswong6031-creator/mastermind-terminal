@@ -80,7 +80,7 @@ export function FlowGauge({ feed, lang }: FlowGaugeProps) {
     }
     const total = callPrem + putPrem;
     const callShare = total > 0 ? callPrem / total : 0.5;
-    const pc = putPrem > 0 ? callPrem / putPrem : null;
+    const pc = callPrem > 0 ? putPrem / callPrem : null;
     const tone = deriveTone(callShare);
     return { total, callPrem, putPrem, callShare, pc, tone };
   }, [feed.events]);

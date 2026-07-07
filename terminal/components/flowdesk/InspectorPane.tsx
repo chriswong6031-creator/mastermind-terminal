@@ -20,7 +20,7 @@ import { useMemo } from "react";
 import { pick, fmtDate } from "../../lib/finFormat";
 import type { Lang } from "../../lib/i18n";
 import { computeFlowScore } from "../../lib/flowScore";
-import { FD } from "../../lib/flowdeskStrings";
+import { FD, getFlowStr } from "../../lib/flowdeskStrings";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -83,9 +83,9 @@ function fmtExp(exp: string): string {
   return fmtDate(exp, { short: true });
 }
 
-function bool3(v: boolean | null | undefined): string {
+function bool3(v: boolean | null | undefined, zh: boolean): string {
   if (v == null) return "—";
-  return v ? "Yes" : "No";
+  return v ? pick(zh, "Yes", "是") : pick(zh, "No", "否");
 }
 
 /** Soft direction label — never asserts NBBO-confirmed direction. */
@@ -192,11 +192,18 @@ function EventDetail({ event, zh, tickerCtx }: { event: FlowEvent; zh: boolean; 
           v={event.premium_z != null ? event.premium_z.toFixed(2) : "—"}
           note={event.baseline_source}
         />
-        <FieldRow k={pick(zh, "Vol > OI", "成交量>持仓")} v={bool3(event.vol_gt_oi)} />
-        <FieldRow k={pick(zh, "Repeated", "重复")} v={bool3(event.repeated)} />
-        <FieldRow k={pick(zh, "Zero DTE", "零日到期")} v={bool3(event.zerodte)} />
+        <FieldRow
+          k={pick(zh, "Vol > OI", "成交量>持仓")}
+          v={event.vol_gt_oi == null
+            ? "—"
+            : event.vol_gt_oi
+              ? getFlowStr(zh ? "zh" : "en", "inspectorVolGtOiYes")
+              : getFlowStr(zh ? "zh" : "en", "inspectorVolGtOiNo")}
+        />
+        <FieldRow k={pick(zh, "Repeated", "重复")} v={bool3(event.repeated, zh)} />
+        <FieldRow k={pick(zh, "Zero DTE", "零日到期")} v={bool3(event.zerodte, zh)} />
         {event.swept != null && (
-          <FieldRow k={pick(zh, "Swept", "扫货")} v={bool3(event.swept)} />
+          <FieldRow k={pick(zh, "Swept", "扫货")} v={bool3(event.swept, zh)} />
         )}
         <FieldRow k={pick(zh, "N Prints", "打印次数")} v={String(event.n_prints)} />
         <FieldRow k={pick(zh, "Signing", "签名来源")} v={event.signing_source} />
@@ -300,9 +307,11 @@ function scoreColor(score: number): string {
 }
 
 function tierBg(tier: string): string {
-  if (tier === "A" || tier === "S") return "rgba(232,179,57,0.18)";
-  if (tier === "B") return "rgba(77,130,255,0.18)";
-  return "rgba(90,97,111,0.15)";
+  if (tier === "ELITE")  return "rgba(157,134,255,0.15)";
+  if (tier === "STRONG") return "rgba(232,163,61,0.13)";
+  if (tier === "HIGH")   return "rgba(77,130,255,0.13)";
+  if (tier === "MEDIUM") return "rgba(134,141,156,0.1)";
+  return "rgba(90,97,111,0.08)"; // LOW or unknown
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────
