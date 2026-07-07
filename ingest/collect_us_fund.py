@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pandas as pd
 
-MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+MACRO = Path(os.environ.get("MACRO_ROOT", "/Users/chriswong/Documents/Cluade/Macro Dashboard"))
 OUT = MACRO / "data" / "us_fund"
 MANIFEST_URL = "https://app.mastermind-x.com/data/manifest.json"
 MANIFEST_CACHE = OUT / "_manifest.json"
@@ -245,6 +245,8 @@ def main(argv: list[str]) -> None:
     stale_days = 3
     workers = 4
     force = "--force" in argv
+    jitter_lo = 0.4
+    jitter_hi = 1.4
     if "--only" in argv:
         only = [s.strip().upper() for s in argv[argv.index("--only") + 1].split(",") if s.strip()]
     if "--limit" in argv:
@@ -253,6 +255,12 @@ def main(argv: list[str]) -> None:
         stale_days = int(argv[argv.index("--stale-days") + 1])
     if "--workers" in argv:
         workers = max(1, min(4, int(argv[argv.index("--workers") + 1])))
+    if "--delay" in argv:
+        # Override jitter range: --delay MIN MAX  (e.g. --delay 2.0 5.0)
+        # Used for second-pass recovery runs to avoid rate-limit storms.
+        idx = argv.index("--delay")
+        jitter_lo = float(argv[idx + 1])
+        jitter_hi = float(argv[idx + 2])
     if force:
         stale_days = 0
 
@@ -266,15 +274,15 @@ def main(argv: list[str]) -> None:
 
     todo = [s for s in want if not is_fresh(OUT / f"{s}.json", stale_days)]
     print(f"us_fund: {len(want)} US/ADR names, {len(todo)} to fetch "
-          f"(workers={workers}, stale_days={stale_days})", flush=True)
+          f"(workers={workers}, stale_days={stale_days}, jitter={jitter_lo:.1f}-{jitter_hi:.1f}s)", flush=True)
 
     ok = empty = 0
     done = 0
     interrupted = False
 
-    def worker(sym: str):
+    def worker(sym: str, _jlo=jitter_lo, _jhi=jitter_hi):
         # jitter BEFORE the (thread-shared) network burst to spread the yfinance load
-        time.sleep(random.uniform(0.4, 1.4))
+        time.sleep(random.uniform(_jlo, _jhi))
         return sym, fetch_one(sym)
 
     try:
