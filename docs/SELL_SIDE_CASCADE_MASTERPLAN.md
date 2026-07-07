@@ -10,6 +10,17 @@ this document reconciles that with the Terminal's **own already-run bake-offs** 
 the live `signal_layer/confluence.py` semantics, and adds the cycle-timing layer the
 owner asked for.
 
+> **UPDATE 2026-07-07 (post-write correction).** Step 0 below — dropping the `revSell`
+> early cut — is **already LIVE in prod**, deployed the morning of 2026-07-07 inside the
+> GC-v2 package (`confluence_v2.py`; `backtest.py` default `use_cut_exit=False`). It is
+> NOT unshipped; treat every "unshipped / ship it" phrasing in §0(A), §2.1 and §9-step-0
+> as historical. This doc's live forward value is the **D1–D4 display cascade (§4)** and
+> the **top-down HY-OAS/NFCI market-risk bridge (§5)** — the latter independently
+> corroborated by the GC-v2 session's kill of a name-level top-risk gauge ("name-level
+> technicals cannot see regime tops; the 2022 hole needs a market-level overlay"). A
+> `scored_cut` toggle briefly added to the v1 `confluence.py`/`backtest.py` (PR #11) was
+> **reverted** as redundant with the live v2 no-cut.
+
 ---
 
 ## 0. Executive ruling
