@@ -8,7 +8,7 @@
 //     remove / collapse / maximize, with active-state highlighting.
 // It owns NO chart logic — every action is a callback into ChartPanel, which holds the chart refs.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type LegendEntry = {
   key: string;          // "ema" | "bb" | … | "pine" | "cmp:SYM"
@@ -74,9 +74,6 @@ type MoreState = { key: string; paneIndex: number; isPane: boolean; hidden: bool
 
 export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: string | null; legendOpen: boolean; onToggleLegend: () => void } & OverlayActions) {
   const [more, setMore] = useState<MoreState | null>(null);
-  const [flip, setFlip] = useState<{ key: string; n: number } | null>(null);
-  // bump `n` (a monotonic nonce) so the flipped icon remounts and the CSS animation replays on every click
-  const doFlip = (key: string) => setFlip((f) => ({ key, n: (f?.n ?? 0) + 1 }));
   useEffect(() => {
     if (!more) return;
     const close = () => setMore(null);
@@ -122,8 +119,8 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
 
             {showOps && (props.hoveredKey === p.key || p.collapsed || p.maximized) && (
               <div className="pane-ops" style={{ top: p.top + 3, right: 10 }}>
-                <button className="po-ic" data-tip="Move pane up" disabled={!props.canMoveUp(p.paneIndex)} onClick={stop(() => { props.onMoveUp(p.paneIndex); doFlip(p.paneIndex + ":up"); })} aria-label="Move pane up">{flip?.key === p.paneIndex + ":up" ? <span key={flip.n} className="po-flip">{I(ICONS.up)}</span> : I(ICONS.up)}</button>
-                <button className="po-ic" data-tip="Move pane down" disabled={!props.canMoveDown(p.paneIndex)} onClick={stop(() => { props.onMoveDown(p.paneIndex); doFlip(p.paneIndex + ":down"); })} aria-label="Move pane down">{flip?.key === p.paneIndex + ":down" ? <span key={flip.n} className="po-flip">{I(ICONS.down)}</span> : I(ICONS.down)}</button>
+                <button className="po-ic" data-tip="Move pane up" disabled={!props.canMoveUp(p.paneIndex)} onClick={stop(() => props.onMoveUp(p.paneIndex))} aria-label="Move pane up">{I(ICONS.up)}</button>
+                <button className="po-ic" data-tip="Move pane down" disabled={!props.canMoveDown(p.paneIndex)} onClick={stop(() => props.onMoveDown(p.paneIndex))} aria-label="Move pane down">{I(ICONS.down)}</button>
                 <button className="po-ic" data-tip="Remove" onClick={stop(() => props.onRemove(primaryKey!))} aria-label="Remove">{I(ICONS.remove)}</button>
                 <button className={`po-ic${p.collapsed ? " on" : ""}`} data-tip={p.collapsed ? "Restore pane" : "Collapse pane"} onClick={stop(() => props.onCollapse(p.paneIndex))} aria-label="Collapse pane">{I(ICONS.collapse)}</button>
                 <button className={`po-ic${p.maximized ? " on" : ""}`} data-tip={p.maximized ? "Restore pane" : "Maximize pane"} onClick={stop(() => props.onMaximize(p.paneIndex))} aria-label="Maximize pane">{I(ICONS.maximize)}</button>

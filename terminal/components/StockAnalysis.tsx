@@ -81,6 +81,129 @@ function Spark({ data, color = "var(--brand-2)" }: { data: (number | null)[]; co
   );
 }
 
+/* ── ConfluenceChip — display-only chip for the Mastermind Confluence Score ──
+ * Reads intel.analysis.confluence (precomputed state — no chart math here).
+ * Contract fields: tier, weight, sub, ticks, bars_to_cross, provisional, not_topped, htf_s1, asof.
+ * Null-guarded: renders a dimmed "—" when the block is absent or tier is null. */
+function ConfluenceChip({ confluence }: { confluence: any }) {
+  const [open, setOpen] = useState(false);
+  if (!confluence || confluence.tier == null) {
+    return (
+      <div className="sa-mm-chip sa-mm-chip--absent" title="Confluence Score — not yet available">
+        <span className="sa-mm-chip-k">CONFLUENCE</span>
+        <span className="sa-mm-chip-v">—</span>
+      </div>
+    );
+  }
+  const tier: string = confluence.tier;
+  const weight: number | null = typeof confluence.weight === "number" ? confluence.weight : null;
+  const htfS1: boolean = !!confluence.htf_s1;
+  const provisional: boolean = !!confluence.provisional;
+  // Tier colour: T1 = buy, T2 = signal (watch), T3/T4 = muted (bars-to-cross still needed)
+  const tierColor = tier === "T1" ? "var(--buy)" : tier === "T2" ? "var(--signal)" : "var(--muted)";
+
+  // Tier definition one-liners (display-only — descriptive, no performance claims)
+  const TIER_DEF: Record<string, string> = {
+    T1: "3D MACD-RSI × 3D StochRSI confirmed cross — the master signal",
+    T2: "2D MACD-RSI cross + 3D StochRSI crossed — confirmed bar, fills nearest the trough",
+    T3: "2D MACD-RSI projected to cross ≤1–2 bars + 3D StochRSI crossed — anticipation (provisional)",
+    T4: "2D MACD-RSI projected + 2D StochRSI crossed + above 200MA — earliest scout",
+  };
+
+  return (
+    <div
+      className={"sa-mm-chip" + (open ? " sa-mm-chip--open" : "")}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      tabIndex={0}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+      role="button"
+      aria-haspopup="true"
+      aria-expanded={open}
+      title="Confluence Score — display-only, precomputed state"
+    >
+      <span className="sa-mm-chip-k">CONFLUENCE</span>
+      <span className="sa-mm-chip-v" style={{ color: tierColor }}>
+        {tier}{weight != null ? ` · ${weight.toFixed(1)}` : ""}
+      </span>
+      {htfS1 && <span className="sa-mm-chip-accent" title="2W+3D higher-timeframe confluence — display-only">S1</span>}
+      {provisional && <span className="sa-mm-chip-prov" title="Provisional — threshold recently crossed">~</span>}
+      {open && (
+        <div className="sa-mm-chip-pop" role="tooltip">
+          <div className="sa-mm-pop-tier" style={{ color: tierColor }}>{tier}</div>
+          <div className="sa-mm-pop-def">{TIER_DEF[tier] ?? tier}</div>
+          {confluence.sub && <div className="sa-mm-pop-row"><span>Sub</span><span>{confluence.sub}</span></div>}
+          {typeof confluence.ticks === "number" && <div className="sa-mm-pop-row"><span>Ticks (freshness)</span><span>{confluence.ticks}</span></div>}
+          {(tier === "T3" || tier === "T4") && confluence.bars_to_cross != null && (
+            <div className="sa-mm-pop-row"><span>Bars to cross</span><span>{confluence.bars_to_cross}</span></div>
+          )}
+          {confluence.not_topped != null && (
+            <div className="sa-mm-pop-row"><span>Not topped</span><span>{confluence.not_topped ? "yes" : "no"}</span></div>
+          )}
+          {provisional && <div className="sa-mm-pop-note">Provisional — T3 semantics: threshold recently crossed</div>}
+          {htfS1 && <div className="sa-mm-pop-note">S1: 2W+3D higher-timeframe confluence — display-only</div>}
+          {confluence.asof && <div className="sa-mm-pop-asof">as of {confluence.asof}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── SniperChip — display-only chip for the Mastermind Sniper Regime ──
+ * Reads intel.analysis.sniper (precomputed state — no chart math here).
+ * Contract fields: w2_washout, w2_stoch_d, days_since_63d_low, coiled, asof.
+ * Null-guarded: renders a dimmed "—" when the block is absent. */
+function SniperChip({ sniper }: { sniper: any }) {
+  const [open, setOpen] = useState(false);
+  if (!sniper) {
+    return (
+      <div className="sa-mm-chip sa-mm-chip--absent" title="Sniper Regime — not yet available">
+        <span className="sa-mm-chip-k">SNIPER</span>
+        <span className="sa-mm-chip-v">—</span>
+      </div>
+    );
+  }
+  const washout: boolean = !!sniper.w2_washout;
+  const coiled: boolean | null = sniper.coiled != null ? !!sniper.coiled : null;
+  // State label: WASHOUT overrides; else show QUIET + optional +COILED accent
+  const stateLabel = washout ? "WASHOUT" : "QUIET";
+  const stateColor = washout ? "var(--buy)" : "var(--muted)";
+
+  return (
+    <div
+      className={"sa-mm-chip" + (open ? " sa-mm-chip--open" : "")}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      tabIndex={0}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+      role="button"
+      aria-haspopup="true"
+      aria-expanded={open}
+      title="Sniper Regime — display-only, precomputed state"
+    >
+      <span className="sa-mm-chip-k">SNIPER</span>
+      <span className="sa-mm-chip-v" style={{ color: stateColor }}>{stateLabel}</span>
+      {coiled && <span className="sa-mm-chip-accent" style={{ color: "var(--signal)" }}>+COILED</span>}
+      {open && (
+        <div className="sa-mm-chip-pop" role="tooltip">
+          <div className="sa-mm-pop-tier" style={{ color: stateColor }}>{stateLabel}</div>
+          {coiled != null && <div className="sa-mm-pop-row"><span>Coiled</span><span>{coiled ? "yes" : "no"}</span></div>}
+          {typeof sniper.w2_stoch_d === "number" && (
+            <div className="sa-mm-pop-row"><span>W2 Stoch-D</span><span>{sniper.w2_stoch_d.toFixed(1)}</span></div>
+          )}
+          {typeof sniper.days_since_63d_low === "number" && (
+            <div className="sa-mm-pop-row"><span>Days since 63d low</span><span>{sniper.days_since_63d_low}</span></div>
+          )}
+          {sniper.asof && <div className="sa-mm-pop-asof">as of {sniper.asof}</div>}
+          <div className="sa-mm-pop-note">Display-only — precomputed by the Macro nightly</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Section({ title, sub, children, accent }: { title: string; sub?: string; children: React.ReactNode; accent?: string }) {
   return (
     <div className="sa-sec">
@@ -425,12 +548,10 @@ function verdictBi(v: string): [string, string] {
 
 /* ── main component ─────────────────────────────────────────────────── */
 export default function StockAnalysis({
-  intel, row, fund = null, opts = null, bars = [], onOpenPane, onOpenSignals, beforeIv,
+  intel, row, slice, deep = false, onExpand, fund = null, opts = null, bars = [], onOpenPane, onOpenSignals,
 }: {
-  intel: any; row?: any;
+  intel: any; row?: any; slice?: any; deep?: boolean; onExpand?: () => void;
   fund?: Fund | null; opts?: Opts | null; bars?: Bar[]; onOpenPane?: (page: FinPage) => void; onOpenSignals?: () => void;
-  /** Rendered immediately BEFORE the IV/RV section so callers can guarantee order (e.g. Seasonality → IV). */
-  beforeIv?: React.ReactNode;
 }) {
   const { lang } = useLang();
   const zh = lang === "zh";
@@ -466,7 +587,12 @@ export default function StockAnalysis({
 
   const dec = a?.decision, conv = a?.conviction, entry = a?.entry, fac = a?.factors,
     tech = a?.tech, val = a?.valuation, fin = a?.financials, prof = a?.profile,
-    sm = a?.smart_money, ae = a?.analyst, fl = a?.flows;
+    sm = a?.smart_money, ae = a?.analyst, gex = a?.gex, macro = a?.macro, fl = a?.flows;
+  // New Mastermind suite blocks (null when not yet produced by the Macro nightly).
+  // These live at intel.analysis.confluence / intel.analysis.sniper regardless of whether
+  // `a` was constructed from intel.analysis directly or synthesised from intel.cards.
+  const confluence = intel?.analysis?.confluence ?? null;
+  const sniper = intel?.analysis?.sniper ?? null;
   // Does the pre-existing intel analyst section render? (mirrors its gate below.) When it does, the
   // new AnalystGauge must NOT show its "no consensus" empty state (CN dual-surface contradiction).
   const hasIntelAnalyst = !!(ae && (ae.next_date || ae.surprises || ae.target != null || ae.rating || ae.buy != null));
@@ -480,10 +606,11 @@ export default function StockAnalysis({
   // spot for the analyst upside / IV context: prefer the live opts spot, then the last daily bar.
   const spot = opts?.spot ?? (bars.length ? bars[bars.length - 1].c : (typeof row?.last === "number" ? row.last : null));
 
-  // TV-parity market-data widgets (§3.5.1). Rendered even when the research desk (intel.analysis) is
-  // absent, so a long-tail fund-only name still shows real data. Each widget null-guards and returns
-  // null when dataless.
-  const tvWidgets = (fund || opts || bars.length) ? (
+  // TV-parity market-data widgets (§3.5.1). Rendered in the deep=false rail even when the research
+  // desk (intel.analysis) is absent, so a long-tail fund-only name still shows real data. Each
+  // widget null-guards and returns null when dataless. Compact in the rail; hidden in `deep` (the
+  // mega-pane's mastermind page shows the proprietary deep sections, not these minis).
+  const tvWidgets = !deep && (fund || opts || bars.length) ? (
     <>
       <KeyStats fund={fund} bars={bars} pick={pick} />
       <EarningsMini fund={fund} pick={pick} onOpen={onOpenPane && (() => onOpenPane("earnings"))} />
@@ -492,16 +619,14 @@ export default function StockAnalysis({
       <PerfGrid bars={bars} pick={pick} />
     </>
   ) : null;
-  // Split so `beforeIv` (e.g. the Seasonality card from the shell) can land between the Analyst gauge
-  // and the IV/RV section — guaranteeing the order analysis → Seasonality → IV.
-  const tvWidgets2 = (fund || opts || bars.length) ? (
+  const tvWidgets2 = !deep && (fund || opts || bars.length) ? (
     <>
       <TechGauge bars={bars} pick={pick} onOpen={onOpenPane && (() => onOpenPane("technicals"))} />
       <AnalystGauge fund={fund} spot={spot} pick={pick} onOpen={onOpenPane && (() => onOpenPane("forecast"))} hasIntelAnalyst={hasIntelAnalyst} />
+      <IvMini opts={opts} bars={bars} pick={pick} />
     </>
   ) : null;
-  const ivWidget = (fund || opts || bars.length) ? <IvMini opts={opts} bars={bars} pick={pick} /> : null;
-  const profileWidget = fund ? <ProfileBlock fund={fund} pick={pick} /> : null;
+  const profileWidget = !deep && fund ? <ProfileBlock fund={fund} pick={pick} /> : null;
 
   if (!a) {
     return (
@@ -514,15 +639,38 @@ export default function StockAnalysis({
         {/* fund-only long-tail: still surface TV market-data + technicals below the empty notice */}
         {tvWidgets}
         {tvWidgets2}
-        {beforeIv}
-        {ivWidget}
         {profileWidget}
       </div>
     );
   }
 
+  const sigs: any[] = slice?.indicator?.signals || [];
+
   return (
     <div className="sa">
+      {/* ── RESEARCH-DESK CHIP ──
+          The full research-desk hero (decision verb · band · headline · conviction ring · drivers /
+          cautions · factor profile) now lives in the Signals dashboard. Here we show a compact
+          clickable chip that opens it. Under the compact `cards` schema the label is the position-
+          confidence band; under the rich `analysis` schema it's the decision verb. */}
+      {(() => {
+        const chipVerb = supporting ? (pick(conv?.band, conv?.band_zh) || pick("Confidence", "信心")) : verb;
+        const chipColor = supporting ? "var(--brand-2)" : tn.color;
+        return (
+          <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenPane?.("mastermind")} title={pick("Open the full research desk", "打开完整研究台")}>
+            <span className="sa-open-k">{pick("Research desk", "研究台")}</span>
+            <span className="sa-open-verb" style={{ color: chipColor }}>{chipVerb}</span>
+            <span className="sa-open-view">{pick("view", "查看")} ›</span>
+          </button>
+        );
+      })()}
+      {/* ── MASTERMIND CONFLUENCE + SNIPER CHIPS ──
+          Display-only — precomputed by the Macro nightly. Null-guard: shows dimmed "—" when
+          intel.analysis.confluence / .sniper is absent (today's state for most names). */}
+      <div className="sa-mm-chips">
+        <ConfluenceChip confluence={confluence} />
+        <SniperChip sniper={sniper} />
+      </div>
       {pick(dec?.trust_en, dec?.trust_zh) && (
         /* Trust tier = compact badge. Hover keeps the tooltip; CLICK (R15) opens the anchored
            EventEdgePop dashboard (trust prose + structured earnings/edge context chips). */
@@ -542,10 +690,8 @@ export default function StockAnalysis({
 
       {/* ── TV market-data widgets: Key stats · Earnings · Dividends · Financials · Performance ── */}
       {tvWidgets}
-      {/* ── TV gauges: Technicals · Analyst ── then any caller-injected block (Seasonality) ── then IV ── */}
+      {/* ── TV gauges + options minis: Technicals · Analyst · IV ── */}
       {tvWidgets2}
-      {beforeIv}
-      {ivWidget}
 
       {/* ── ENTRY TIMING / TIMING QUALITY (answers "act now?") ── */}
       {entry && (entry.status || entry.headline) && (
@@ -642,7 +788,7 @@ export default function StockAnalysis({
               </span>
             </div>
           ))}
-          {onOpenPane && <button className="sa-more-btn" onClick={() => onOpenPane("statistics")}>{pick("More statistics", "更多统计")} ›</button>}
+          {!deep && onOpenPane && <button className="sa-more-btn" onClick={() => onOpenPane("statistics")}>{pick("More statistics", "更多统计")} ›</button>}
         </Section>
       )}
 
@@ -669,14 +815,14 @@ export default function StockAnalysis({
               {fin.multiyear?.altman != null && <span className="sa-qchip">Altman-Z <b>{fnum(fin.multiyear.altman, 1)}</b></span>}
             </div>
           )}
-          {onOpenPane && <button className="sa-more-btn" onClick={() => onOpenPane("statements")}>{pick("More financials", "更多财务")} ›</button>}
+          {!deep && onOpenPane && <button className="sa-more-btn" onClick={() => onOpenPane("statements")}>{pick("More financials", "更多财务")} ›</button>}
         </Section>
       )}
 
       {/* ── SMART MONEY ── */}
       {sm?.holders?.length && (
         <Section title={pick("Smart money", "聪明钱")} sub={sm.n_holders != null ? `${sm.n_holders} ${pick("funds", "基金")}${sm.is_vip ? " · VIP" : ""}` : undefined}>
-          {sm.holders.slice(0, 4).map((h: any, i: number) => (
+          {sm.holders.slice(0, deep ? 6 : 4).map((h: any, i: number) => (
             <div key={i} className="sa-holder">
               <span className={`sa-act ${h.action}`}>{cap(h.action)}</span>
               <span className="hn">{h.fund}{h.grade && <small className="hg">{h.grade}</small>}</span>
@@ -718,8 +864,50 @@ export default function StockAnalysis({
         </Section>
       )}
 
-      {/* The deep-only Options/dealer-gamma, Macro-sensitivity and Signal-history sections were removed
-          with the mastermind page — the signal history now lives in the OracleDash Research surface. */}
+      {/* ── DEEP: OPTIONS / DEALER GAMMA ── */}
+      {deep && gex && (
+        <Section title={pick("Options · dealer gamma", "期权 · 做市商Gamma")} sub={gex.gamma_regime ? `${cap(gex.gamma_regime)} γ` : undefined} accent="var(--signal)">
+          <div className="sa-grid2">
+            <Stat k={pick("Gamma flip", "Gamma翻转")} v={fnum(gex.gamma_flip)} />
+            <Stat k={pick("Dist to flip", "距翻转")} v={fpct(gex.dist_to_flip_pct)} />
+            <Stat k={pick("Call wall", "看涨墙")} v={fnum(gex.call_wall)} tone="down" />
+            <Stat k={pick("Put wall", "看跌墙")} v={fnum(gex.put_wall)} tone="up" />
+            <Stat k="Net GEX" v={gex.net_gex_bn != null ? `${fnum(gex.net_gex_bn, 2)}B` : "—"} />
+            <Stat k="IV30" v={gex.iv30 != null ? fpct(gex.iv30 * 100, 0, false) : "—"} />
+          </div>
+          {gex.vol_hole?.state && (
+            <div className="sa-volhole">
+              <span className="sa-chip warn">{pick("Vol hole", "波动洞")}: {gex.vol_hole.state.replace(/_/g, " ")}</span>
+              {gex.vol_hole.band_width_pct != null && <span className="vh-meta">{pick("band", "区间")} {fpct(gex.vol_hole.band_width_pct, 1, false)}</span>}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {/* ── DEEP: MACRO SENSITIVITY ── */}
+      {deep && macro && (macro.tier_en || macro.headline_en) && (
+        <Section title={pick("Macro sensitivity", "宏观敏感度")}>
+          <div className="sa-chips">
+            {macro.tier_en && <span className="sa-chip">{pick("Rate: ", "利率：")}{pick(macro.tier_en, macro.tier_zh)}</span>}
+            {macro.duration_en && <span className="sa-chip">{macro.duration_en}</span>}
+            {macro.regime_en && <span className="sa-chip">{macro.regime_en}</span>}
+            {macro.inflation_en && <span className="sa-chip">{macro.inflation_en}</span>}
+          </div>
+          {pick(macro.headline_en, macro.headline_zh) && <div className="sa-macro-head">{pick(macro.headline_en, macro.headline_zh)}</div>}
+        </Section>
+      )}
+
+      {/* ── DEEP: SIGNAL HISTORY ── */}
+      {deep && sigs.length > 0 && (
+        <Section title={pick("Signal history", "信号历史")} sub={`${sigs.length} ${pick("events", "次")}`}>
+          <div className="sa-siglog">
+            {sigs.slice(-12).reverse().map((s: any, i: number) => {
+              const b = s.type === "BUY" || s.type === "REBUY";
+              return <div key={i} className="sa-sigrow"><span className={`sa-sigt ${b ? "buy" : "sell"}`}>{s.type}</span><span className="sd">{s.ts}</span><span className="spx num">{typeof s.price === "number" ? fnum(s.price) : "—"}</span></div>;
+            })}
+          </div>
+        </Section>
+      )}
 
       {/* ── BUSINESS PROFILE ── */}
       {prof && (prof.description || prof.sector) && (

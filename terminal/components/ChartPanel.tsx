@@ -9,7 +9,7 @@ import { runPine, type RunResult } from "@/lib/pine-engine";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { getJSON, getSliceAndOhlc } from "@/lib/dataCache";
-import { CMP_PALETTE, type CmpCfg, defaultCmpCfg, cmpKey } from "@/lib/compare";
+import { CMP_PALETTE } from "@/lib/compare";
 import { isIntradayTf, classify, type Market } from "@/lib/intradaySources";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
@@ -152,10 +152,10 @@ const SUBPANE_ORDER = ["osc", "macd"] as const;
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
+    tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -181,7 +181,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const closesRef = useRef<number[]>([]);   // closes of barsRef
   const prevSymbolRef = useRef<string>("");  // tracks the symbol from the last Effect 2 run to detect symbol changes
   const precRef = useRef<number>(2);
-  const sigMarksRef = useRef<{ t: string; type: string; price: number; highlight?: boolean }[]>([]);
+  // GC v2: sig marks additionally carry keeper quality + recipe tier for BUY|REBUY (drives the marker
+  // dimming/hollow style + the A+/Q badge). CUT is discriminated by `type` (the schema guarantees CUT ⟺
+  // scored:false), so `score`/`scored` aren't needed on the chart. All optional — v1 slices omit them.
+  const sigMarksRef = useRef<{ t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null }[]>([]);
+  // GC v2 side channels: anticipation dots (dates) + structure-break warnings ({t, kind}), resolved to bar times.
+  const earlyDotsRef = useRef<{ t: string }[]>([]);
+  const warnMarksRef = useRef<{ t: string; kind: string }[]>([]);
+  const showDetailRef = useRef<boolean>(true);   // "Signals detail" chip → early dots + warnings visibility
   const highlightTimerRef = useRef<any>(null);   // R14 pulse timer — cleared on symbol/TF change
   const epochRef = useRef(0);               // race guard: latest data-effect run wins
   const cmpGenRef = useRef(0);              // compare-specific generation token (epoch doesn't bump on compare change)
@@ -193,7 +200,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const chartTypeRef = useRef<string>(chartType);
   const timeframeRef = useRef<string>(timeframe);
   const compareRef = useRef<string[]>(compare || []);
-  const compareCfgRef = useRef<Record<string, CmpCfg>>(compareCfg);
   const indicatorsRef = useRef<Set<string>>(indicators);
   const syncIdRef = useRef<number | null>(syncId);
   const replayIdxRef = useRef<number | null>(replayIdx);   // live replayIdx so Effect 2 doesn't build against a stale closure if replay starts mid-fetch
@@ -218,6 +224,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const [paneLayout, setPaneLayout] = useState<PaneInfo[]>([]);
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [legendOpen, setLegendOpen] = useState(true);
+  const [showDetail, setShowDetail] = useState(true);   // GC v2: early-dots + warnings overlay toggle
+  useEffect(() => { showDetailRef.current = showDetail; renderSignalsRef.current(); }, [showDetail]);
   // params for the ACTIVE indicators drive an indicator rebuild (Effect 3b)
   const indParamsKey = JSON.stringify(Array.from(indicators).sort().map((k) => indParams[k]));
   // ── existing DOM / interaction refs (unchanged) ──
@@ -241,7 +249,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
-  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote;
+  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote;
 
   // ────────────────────────────────────────────────────────────────────────────
   // Shared helpers (module-level within the component, referenced from every effect).
@@ -480,9 +488,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (hasPane) continue;   // sub-pane script → handled in the sub-pane loop
       overlayEntries.push(pineLegendEntry(s, "overlay", series, err));
     }
-    // compare overlays: append to overlay entries so they appear as real legend rows in the price pane.
-    const cmp = compareRef.current || []; const cfgM = compareCfgRef.current || {};
-    for (let ci = 0; ci < cmp.length && ci < 4; ci++) { const cs = cmp[ci]; if (!cs || cs === symbol) continue; const cfg = cfgM[cs]; overlayEntries.push({ key: cmpKey(cs), label: cs, kind: "overlay", isPine: false, isCompare: true, color: cfg?.color || CMP_PALETTE[ci % CMP_PALETTE.length] }); }
+    // compare overlays are managed by TerminalShell (the compare bar), NOT the legend — omitted here.
     const metas: { key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[] = [];
     metas.push({ key: "__price__", isPrice: true, entries: overlayEntries, pane: priceS.getPane() });
     for (const key of SUBPANE_ORDER) {
@@ -536,8 +542,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     }
     // custom scripts: eye toggle by scriptId (no tf-visibility gating — scripts don't declare _vis)
     for (const [id, arr] of pineSeriesRef.current) { const vis = !h.has(id); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} } }
-    // compare series: eye toggle by cmpKey(sym)
-    for (const [sym, s] of cmpSeriesRef.current) { try { s.applyOptions({ visible: !h.has(cmpKey(sym)) } as any); } catch {} }
   };
 
   // Remove EVERY tracked indicator series (price/compare/drawings survive). Used by the bounded rebuild.
@@ -627,20 +631,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       let crows: Bar[] = co.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
       crows = resampleTf(crows, timeframeRef.current);
       const cmap: Record<string, number> = {}; for (const cr of crows) cmap[cr.time] = cr.c;
-      const cfg = compareCfgRef.current[cs] || defaultCmpCfg(ci);
-      let lv: number | null = null;
-      let cdata: any[];
-      if (cfg.mode === "price") {
-        cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: +lv.toFixed(prec) } : null; }).filter(Boolean);
-        const ln = chart.addSeries(LineSeries, { color: cfg.color, lineWidth: cfg.lineWidth as any, lineStyle: cfg.lineStyle as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: cs, priceScaleId: cmpKey(cs), visible: !hiddenRef.current.has(cmpKey(cs)) }, 0);
-        ln.setData(cdata as any); cmpSeriesRef.current.set(cs, ln);
-      } else {
-        let bse = 0, baseA = rows[0]?.c ?? 0; for (const r of rows) { if (cmap[r.time] != null) { bse = cmap[r.time]; baseA = r.c; break; } }
-        if (!bse) continue; const scl = baseA / bse;
-        cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: +(lv * scl).toFixed(prec) } : null; }).filter(Boolean);
-        const ln = chart.addSeries(LineSeries, { color: cfg.color, lineWidth: cfg.lineWidth as any, lineStyle: cfg.lineStyle as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: cs, visible: !hiddenRef.current.has(cmpKey(cs)) }, 0);
-        ln.setData(cdata as any); cmpSeriesRef.current.set(cs, ln);
-      }
+      let bse = 0, baseA = rows[0]?.c ?? 0; for (const r of rows) { if (cmap[r.time] != null) { bse = cmap[r.time]; baseA = r.c; break; } }
+      if (!bse) continue; const scl = baseA / bse; let lv: number | null = null;
+      const cdata = rows.map((r) => { const v = cmap[r.time]; if (v != null) lv = v; return lv != null ? { time: r.time, value: +(lv * scl).toFixed(prec) } : null; }).filter(Boolean);
+      const ln = chart.addSeries(LineSeries, { color: CMP_PALETTE[ci % CMP_PALETTE.length], lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: cs }, 0);
+      ln.setData(cdata as any); cmpSeriesRef.current.set(cs, ln);
     }
   };
 
@@ -651,8 +646,28 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(y + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y; } }); return bd < 9e8 ? b : null; };
     return (slice?.indicator?.signals || [])
       .filter((s: any) => s.ts <= lastDate)
-      .map((s: any) => ({ t: near(s.ts), type: s.type as string, price: s.price as number }))
-      .filter((m: any) => m.t && m.price != null) as { t: string; type: string; price: number }[];
+      // GC v2: carry quality/tier so renderSignals can style keeper take/block/pending + regime_blocked
+      // entries and draw the A+/Q tier badge. All optional — v1 slices leave them undefined.
+      .map((s: any) => ({ t: near(s.ts), type: s.type as string, price: s.price as number, quality: s.quality, tier: s.tier }))
+      .filter((m: any) => m.t && m.price != null) as { t: string; type: string; price: number; quality?: string; tier?: string | null }[];
+  };
+
+  // GC v2 side channels → bar-snapped marks. early_dots is a list of date strings (anticipation
+  // pre-cross); warnings is a list of {ts, kind:"arm"|"confirm"} (structure-break). Both live on the
+  // slice indicator parallel to signals (emitter: ingest/gen_slices_all.py writes {"indicator": ind}).
+  const resolveSideChannels = (slice: any, rows: Bar[]) => {
+    const times = rows.map((r) => r.time);
+    const lastDate = times[times.length - 1];
+    const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(y + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y; } }); return bd < 9e8 ? b : null; };
+    const dots = ((slice?.indicator?.early_dots || []) as string[])
+      .filter((ts) => ts <= lastDate)
+      .map((ts) => ({ t: near(ts) as string | null }))
+      .filter((m) => m.t) as { t: string }[];
+    const warns = ((slice?.indicator?.warnings || []) as { ts: string; kind: string }[])
+      .filter((w) => w?.ts <= lastDate)
+      .map((w) => ({ t: near(w.ts) as string | null, kind: w.kind }))
+      .filter((m) => m.t) as { t: string; kind: string }[];
+    return { dots, warns };
   };
 
   // Status line + verdict badge from the current bars + slice.
@@ -835,7 +850,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const yOf = (p: number) => { const s = priceSeriesRef.current; return s ? (s.priceToCoordinate(p) as number | null) : null; };
     const barIndex = (tm: string) => { const tt = snapT(tm); const b = barsRef.current; for (let k = 0; k < b.length; k++) if (b[k].time === tt) return k; return -1; };
 
-    // ── signal badges: BUY/SELL (★) + CUT/RE-BUY pills ──
+    // ── signal badges: BUY/SELL (★) + RE-BUY pill; GC v2 keeper quality/tier styling + CUT caution ──
     const renderSignals = () => {
       const layer = sigRef.current; if (!layer) return; const t2 = tokensRef.current;
       const SIGCFG: Record<string, { dir: "up" | "down"; fill: string; tc: string; txt: string; star?: boolean }> = {
@@ -844,28 +859,89 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         REBUY: { dir: "up",   fill: "#b6e94a", tc: "#16310a",  txt: "RE-BUY" },
         CUT:   { dir: "down", fill: "#ff8a3d", tc: "#2a1400",  txt: "CUT" },
       };
+      // GC v2 tier → marker badge glyph (aplus="A+", quality="Q", base/none → no badge).
+      const tierBadge = (tier?: string | null) => (tier === "aplus" ? "A+" : tier === "quality" ? "Q" : "");
+      const SLATE = "#7c8aa0";   // regime_blocked dim slate (no matching CSS token — inline hex)
       while (layer.firstChild) layer.removeChild(layer.firstChild);
+
+      // GC v2: fast-reversal CUT is a caution, NOT an exit — render a small orange "•caution" dot below
+      // the bar instead of the old down-pointing CUT pill (the ✕/exit look). Everything else keeps the pill.
       for (const m of sigMarksRef.current) {
+        if (m.type === "CUT") {
+          const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
+          const cy = y + 16;
+          const g = mk("g", { opacity: 0.9 });
+          g.appendChild(mk("circle", { cx: x, cy, r: 3.4, fill: "#ff8a3d" }));
+          const tEl = mk("text", { x: x + 6, y: cy + 3, fill: "#ff8a3d", "font-size": 8.5, "font-weight": 700, "text-anchor": "start", "font-family": "var(--font-ui)", "letter-spacing": ".02em" });
+          tEl.textContent = "caution";
+          g.appendChild(tEl);
+          layer.appendChild(g);
+          continue;
+        }
         const cfg = SIGCFG[m.type]; if (!cfg) continue;
         const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
         const star = !!cfg.star;
+        // GC v2 quality on BUY|REBUY: take=solid, block=hollow outline, pending=dim gray, regime_blocked=dim slate.
+        // (This SVG overlay has full shape control — the prompt's "○ glyph" fallback for shape-limited
+        //  lightweight-charts markers is unnecessary here; we draw a true hollow badge for `block`.)
+        const q = (m.type === "BUY" || m.type === "REBUY") ? m.quality : undefined;
+        const hollow = q === "block";
+        const dim = q === "pending" || q === "regime_blocked";
+        const fill = q === "regime_blocked" ? SLATE : (q === "pending" ? t2.mut : cfg.fill);
+        const groupOp = dim ? 0.5 : 0.97;
+        // tier badge is appended to the marker text for taken entries (take/undefined); suppressed on blocked/pending.
+        // tier badge ("A+"/"Q") shown only for TAKEN entries (take / ungraded v1); suppressed on block/pending/regime_blocked.
+        const badge = (m.type === "BUY" || m.type === "REBUY") && (q === "take" || q == null) ? tierBadge(m.tier) : "";
         const w = star ? 19 : Math.max(20, 9 + cfg.txt.length * 7), h = 15, r = 4, ptr = 5, gap = 9;
         const up = cfg.dir === "up";
         const top = up ? y + gap + ptr : y - gap - ptr - h;
-        const g = mk("g", { opacity: 0.97 });
+        const g = mk("g", { opacity: groupOp });
         // R14 jump pulse: an expanding ring behind the marker (transient highlight flag, ~2.5s)
         if ((m as any).highlight) {
-          const ring = mk("circle", { cx: x, cy: top + h / 2, r: w, fill: "none", stroke: cfg.fill, "stroke-width": 2, opacity: 0.9 });
+          const ring = mk("circle", { cx: x, cy: top + h / 2, r: w, fill: "none", stroke: fill, "stroke-width": 2, opacity: 0.9 });
           ring.appendChild(mk("animate", { attributeName: "r", values: `${w};${w * 2.4}`, dur: "0.9s", repeatCount: "indefinite" }));
           ring.appendChild(mk("animate", { attributeName: "opacity", values: "0.9;0", dur: "0.9s", repeatCount: "indefinite" }));
           g.appendChild(ring);
         }
-        g.appendChild(mk("rect", { x: x - w / 2, y: top, width: w, height: h, rx: r, ry: r, fill: cfg.fill }));
-        g.appendChild(mk("path", { d: up ? `M${x - ptr} ${top} L${x + ptr} ${top} L${x} ${top - ptr} Z` : `M${x - ptr} ${top + h} L${x + ptr} ${top + h} L${x} ${top + h + ptr} Z`, fill: cfg.fill }));
-        const tEl = mk("text", { x, y: top + h / 2 + (star ? 4.3 : 3.4), fill: cfg.tc, "font-size": star ? 11.5 : 9, "font-weight": 800, "text-anchor": "middle", "font-family": star ? "Georgia,serif" : "var(--font-ui)", "letter-spacing": star ? "0" : ".02em" });
+        // block → hollow (fill:none + colored stroke); take/pending/regime_blocked → solid (possibly dimmed) fill.
+        g.appendChild(mk("rect", { x: x - w / 2, y: top, width: w, height: h, rx: r, ry: r, fill: hollow ? "none" : fill, stroke: hollow ? fill : "none", "stroke-width": hollow ? 1.4 : 0 }));
+        g.appendChild(mk("path", { d: up ? `M${x - ptr} ${top} L${x + ptr} ${top} L${x} ${top - ptr} Z` : `M${x - ptr} ${top + h} L${x + ptr} ${top + h} L${x} ${top + h + ptr} Z`, fill: hollow ? "none" : fill, stroke: hollow ? fill : "none", "stroke-width": hollow ? 1.4 : 0 }));
+        const tEl = mk("text", { x, y: top + h / 2 + (star ? 4.3 : 3.4), fill: hollow ? fill : cfg.tc, "font-size": star ? 11.5 : 9, "font-weight": 800, "text-anchor": "middle", "font-family": star ? "Georgia,serif" : "var(--font-ui)", "letter-spacing": star ? "0" : ".02em" });
         tEl.textContent = cfg.txt;
         g.appendChild(tEl);
+        // tier badge ("A+"/"Q") as a small superscript pill to the top-right of the marker (taken entries only).
+        if (badge) {
+          const bx = x + w / 2 + 1, by = top - 1;
+          g.appendChild(mk("rect", { x: bx, y: by, width: badge.length * 6 + 4, height: 10, rx: 2, ry: 2, fill: fill, opacity: 0.92 }));
+          const bEl = mk("text", { x: bx + (badge.length * 6 + 4) / 2, y: by + 8, fill: "#0b1220", "font-size": 7.5, "font-weight": 800, "text-anchor": "middle", "font-family": "var(--font-ui)" });
+          bEl.textContent = badge;
+          g.appendChild(bEl);
+        }
         layer.appendChild(g);
+      }
+
+      // ── GC v2 side channels (toggleable via the "Signals detail" chip) ──
+      if (showDetailRef.current) {
+        // early_dots: faint small dot BELOW the bar (anticipation pre-cross) — distinct from the BUY ▲.
+        for (const d of earlyDotsRef.current) {
+          const x = xOf(d.t); if (x == null) continue;
+          const b = barsRef.current[barIndex(d.t)];
+          const y = b ? yOf(b.l) : null; if (y == null) continue;
+          const g = mk("g", { opacity: 0.55 });
+          g.appendChild(mk("circle", { cx: x, cy: y + 9, r: 2.2, fill: t2.mut }));
+          layer.appendChild(g);
+        }
+        // warnings: ⚠ (arm) / ⛔ (confirm) small glyphs ABOVE the bar (structure-break anticipation).
+        for (const w of warnMarksRef.current) {
+          const x = xOf(w.t); if (x == null) continue;
+          const b = barsRef.current[barIndex(w.t)];
+          const y = b ? yOf(b.h) : null; if (y == null) continue;
+          const g = mk("g", { opacity: 0.85 });
+          const tEl = mk("text", { x, y: y - 8, "font-size": 11, "text-anchor": "middle", "font-family": "var(--font-ui)" });
+          tEl.textContent = w.kind === "confirm" ? "⛔" : "⚠";
+          g.appendChild(tEl);
+          layer.appendChild(g);
+        }
       }
     };
     renderSignalsRef.current = renderSignals;
@@ -1190,6 +1266,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (cancelled || epochRef.current !== epoch) return;
         sliceRef.current = null;                 // no daily slice on intraday → no sig marks
         sigMarksRef.current = [];
+        earlyDotsRef.current = []; warnMarksRef.current = [];   // GC v2 side channels: daily-only too
         dailyBarsRef.current = [];               // splice is daily-only; disable it here
         if (!bars.length) {
           // Differentiate a feed/entitlement/config failure ("POLYGON_API_KEY not set", "polygon 403",
@@ -1303,6 +1380,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       // ── signal marks, status, verdict, view ──
       sigMarksRef.current = resolveSigMarks(slice, onChart);
+      { const sc = resolveSideChannels(slice, onChart); earlyDotsRef.current = sc.dots; warnMarksRef.current = sc.warns; }
       paintStatus(onChart, slice);
       applyView(onChart, ri);
 
@@ -1496,6 +1574,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // recompute compare on the full set (fire-and-forget; guarded by epoch)
       void rebuildCompare(full, epochRef.current);
       sigMarksRef.current = resolveSigMarks(sliceRef.current, full);
+      { const sc = resolveSideChannels(sliceRef.current, full); earlyDotsRef.current = sc.dots; warnMarksRef.current = sc.warns; }
       paintStatus(full, sliceRef.current);
       applyView(full, null);
     } else {
@@ -1507,6 +1586,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       clearAllIndicators(); buildAllIndicators(rows, closes);
       void rebuildCompare(rows, epochRef.current);
       sigMarksRef.current = resolveSigMarks(sliceRef.current, rows);
+      { const sc = resolveSideChannels(sliceRef.current, rows); earlyDotsRef.current = sc.dots; warnMarksRef.current = sc.warns; }
       paintStatus(rows, sliceRef.current);
       try { chart.timeScale().fitContent(); } catch {}
     }
@@ -1626,12 +1706,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   }, [detectCmd?.nonce]); // eslint-disable-line
 
   // ── compare change → rebuild only the compare overlays on the current bar set (no chart rebuild) ──
-  const cmpDep = JSON.stringify({ c: compare || [], g: compareCfg });
+  const cmpKey = (compare || []).join(",");
   useEffect(() => {
     const chart = chartRef.current; if (!chart || !barsRef.current.length) return;
-    void rebuildCompare(barsRef.current, epochRef.current).then(() => { rebuildPaneMeta(); renderSignalsRef.current(); renderRef.current(); });
+    void rebuildCompare(barsRef.current, epochRef.current).then(() => { renderSignalsRef.current(); renderRef.current(); });
     // eslint-disable-next-line
-  }, [cmpDep]);
+  }, [cmpKey]);
 
   return (
     <div className="chart-wrap">
@@ -1639,6 +1719,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         <span ref={statusRef} />
         <span className="mm"><i style={{ background: "currentColor" }} /><span ref={verdictRef}>GOLDEN ORACLE</span></span>
         {replayIdx != null && <span className="mm" style={{ background: "rgba(232,179,57,.14)", borderColor: "rgba(232,179,57,.35)", color: "var(--signal)" }}><i style={{ background: "var(--signal)" }} />REPLAY</span>}
+        {/* GC v2: toggle the early-dots + arm/confirm warning overlay (side channels) */}
+        <span className="mm" role="button" tabIndex={0} onClick={() => setShowDetail((v) => !v)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShowDetail((v) => !v); } }}
+          title="Toggle early dots & structure-break warnings"
+          style={{ cursor: "pointer", opacity: showDetail ? 1 : 0.5 }}>
+          <i style={{ background: "var(--muted)" }} />{showDetail ? "⚠ detail" : "⚠ off"}
+        </span>
       </div>
       <div ref={ref} style={{ position: "absolute", inset: 0 }} />
       <ChartOverlays
