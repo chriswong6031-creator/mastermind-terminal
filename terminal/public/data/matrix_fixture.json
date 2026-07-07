@@ -1,0 +1,102 @@
+{
+  "SPY": {
+    "schema": "options_structure.matrix/v1",
+    "asof": "2026-07-07T16:00:00-04:00",
+    "root": "SPY",
+    "spot": 548.72,
+    "authority_tier": "display-only",
+    "expiries": ["2026-07-11", "2026-07-18", "2026-07-25", "2026-08-15"],
+    "strikes": [570, 565, 560, 555, 550, 548, 545, 542, 540, 535, 530, 525, 520, 515, 510],
+    "cells": [
+      { "strike": 570, "expiry": "2026-07-11", "gex": 12.4, "call_oi": 24800, "put_oi": 3100, "call_vol": 8200, "put_vol": 900, "delta_oi": { "call": 1200, "put": -400 } },
+      { "strike": 570, "expiry": "2026-07-18", "gex": 31.2, "call_oi": 58200, "put_oi": 7400, "call_vol": 18300, "put_vol": 2100, "delta_oi": { "call": 3100, "put": -800 } },
+      { "strike": 570, "expiry": "2026-07-25", "gex": 8.1, "call_oi": 14100, "put_oi": 2900, "call_vol": 3400, "put_vol": 700, "delta_oi": { "call": 600, "put": -200 } },
+      { "strike": 570, "expiry": "2026-08-15", "gex": 4.2, "call_oi": 9800, "put_oi": 1800, "call_vol": 2100, "put_vol": 400, "delta_oi": { "call": 300, "put": -100 } },
+
+      { "strike": 565, "expiry": "2026-07-11", "gex": 18.9, "call_oi": 32700, "put_oi": 5200, "call_vol": 11400, "put_vol": 1600, "delta_oi": { "call": 1800, "put": -500 } },
+      { "strike": 565, "expiry": "2026-07-18", "gex": 44.6, "call_oi": 71300, "put_oi": 11200, "call_vol": 24600, "put_vol": 3800, "delta_oi": { "call": 4200, "put": -1100 } },
+      { "strike": 565, "expiry": "2026-07-25", "gex": 11.3, "call_oi": 19400, "put_oi": 4100, "call_vol": 5100, "put_vol": 1100, "delta_oi": { "call": 900, "put": -300 } },
+      { "strike": 565, "expiry": "2026-08-15", "gex": 6.7, "call_oi": 13200, "put_oi": 2900, "call_vol": 3200, "put_vol": 700, "delta_oi": { "call": 500, "put": -200 } },
+
+      { "strike": 560, "expiry": "2026-07-11", "gex": 28.4, "call_oi": 47100, "put_oi": 9800, "call_vol": 17200, "put_vol": 3100, "delta_oi": { "call": 2700, "put": -900 } },
+      { "strike": 560, "expiry": "2026-07-18", "gex": 72.3, "call_oi": 112400, "put_oi": 22100, "call_vol": 38700, "put_vol": 7200, "delta_oi": { "call": 7100, "put": -2400 } },
+      { "strike": 560, "expiry": "2026-07-25", "gex": 19.1, "call_oi": 31600, "put_oi": 7300, "call_vol": 8900, "put_vol": 2100, "delta_oi": { "call": 1600, "put": -600 } },
+      { "strike": 560, "expiry": "2026-08-15", "gex": 11.4, "call_oi": 21800, "put_oi": 5100, "call_vol": 5300, "put_vol": 1400, "delta_oi": { "call": 900, "put": -400 } },
+
+      { "strike": 555, "expiry": "2026-07-11", "gex": 41.2, "call_oi": 63400, "put_oi": 16200, "call_vol": 24100, "put_vol": 5300, "delta_oi": { "call": 3900, "put": -1600 } },
+      { "strike": 555, "expiry": "2026-07-18", "gex": 98.7, "call_oi": 148600, "put_oi": 38400, "call_vol": 52300, "put_vol": 12800, "delta_oi": { "call": 9800, "put": -4100 } },
+      { "strike": 555, "expiry": "2026-07-25", "gex": 27.4, "call_oi": 43200, "put_oi": 11700, "call_vol": 13100, "put_vol": 3600, "delta_oi": { "call": 2300, "put": -1000 } },
+      { "strike": 555, "expiry": "2026-08-15", "gex": 16.8, "call_oi": 29900, "put_oi": 8200, "call_vol": 7400, "put_vol": 2200, "delta_oi": { "call": 1400, "put": -700 } },
+
+      { "strike": 550, "expiry": "2026-07-11", "gex": 87.3, "call_oi": 124700, "put_oi": 42300, "call_vol": 48200, "put_vol": 14100, "delta_oi": { "call": 8200, "put": -4600 } },
+      { "strike": 550, "expiry": "2026-07-18", "gex": 184.6, "call_oi": 267800, "put_oi": 91400, "call_vol": 103600, "put_vol": 31200, "delta_oi": { "call": 19400, "put": -10200 } },
+      { "strike": 550, "expiry": "2026-07-25", "gex": 52.1, "call_oi": 78300, "put_oi": 27600, "call_vol": 26800, "put_vol": 9200, "delta_oi": { "call": 4800, "put": -3100 } },
+      { "strike": 550, "expiry": "2026-08-15", "gex": 31.9, "call_oi": 53600, "put_oi": 19200, "call_vol": 14700, "put_vol": 5800, "delta_oi": { "call": 2800, "put": -2000 } },
+
+      { "strike": 548, "expiry": "2026-07-11", "gex": 52.8, "call_oi": 78100, "put_oi": 31400, "call_vol": 31400, "put_vol": 11200, "delta_oi": { "call": 5100, "put": -3400 } },
+      { "strike": 548, "expiry": "2026-07-18", "gex": 113.4, "call_oi": 168200, "put_oi": 67800, "call_vol": 67200, "put_vol": 23700, "delta_oi": { "call": 12100, "put": -7600 } },
+      { "strike": 548, "expiry": "2026-07-25", "gex": 31.7, "call_oi": 49400, "put_oi": 20100, "call_vol": 17600, "put_vol": 7000, "delta_oi": { "call": 3100, "put": -2300 } },
+      { "strike": 548, "expiry": "2026-08-15", "gex": 19.4, "call_oi": 33800, "put_oi": 14100, "call_vol": 9400, "put_vol": 4300, "delta_oi": { "call": 1800, "put": -1500 } },
+
+      { "strike": 545, "expiry": "2026-07-11", "gex": -38.4, "call_oi": 42100, "put_oi": 58700, "call_vol": 14800, "put_vol": 21300, "delta_oi": { "call": -1200, "put": -5800 } },
+      { "strike": 545, "expiry": "2026-07-18", "gex": -82.1, "call_oi": 89300, "put_oi": 124600, "call_vol": 31600, "put_vol": 45200, "delta_oi": { "call": -2700, "put": -12600 } },
+      { "strike": 545, "expiry": "2026-07-25", "gex": -22.6, "call_oi": 24600, "put_oi": 34800, "call_vol": 8200, "put_vol": 12100, "delta_oi": { "call": -700, "put": -3600 } },
+      { "strike": 545, "expiry": "2026-08-15", "gex": -14.1, "call_oi": 17400, "put_oi": 24200, "call_vol": 4700, "put_vol": 7600, "delta_oi": { "call": -400, "put": -2200 } },
+
+      { "strike": 542, "expiry": "2026-07-11", "gex": -61.7, "call_oi": 29800, "put_oi": 87400, "call_vol": 9200, "put_vol": 32600, "delta_oi": { "call": -800, "put": -9200 } },
+      { "strike": 542, "expiry": "2026-07-18", "gex": -128.3, "call_oi": 61400, "put_oi": 182100, "call_vol": 19400, "put_vol": 67800, "delta_oi": { "call": -1800, "put": -19400 } },
+      { "strike": 542, "expiry": "2026-07-25", "gex": -36.4, "call_oi": 17200, "put_oi": 51300, "call_vol": 5100, "put_vol": 18200, "delta_oi": { "call": -500, "put": -5300 } },
+      { "strike": 542, "expiry": "2026-08-15", "gex": -22.1, "call_oi": 11900, "put_oi": 35700, "call_vol": 3200, "put_vol": 11400, "delta_oi": { "call": -300, "put": -3700 } },
+
+      { "strike": 540, "expiry": "2026-07-11", "gex": -94.2, "call_oi": 21400, "put_oi": 134600, "call_vol": 6800, "put_vol": 51200, "delta_oi": { "call": -600, "put": -14800 } },
+      { "strike": 540, "expiry": "2026-07-18", "gex": -196.8, "call_oi": 44700, "put_oi": 281400, "call_vol": 14200, "put_vol": 106800, "delta_oi": { "call": -1300, "put": -31200 } },
+      { "strike": 540, "expiry": "2026-07-25", "gex": -54.3, "call_oi": 12600, "put_oi": 79100, "call_vol": 3800, "put_vol": 28700, "delta_oi": { "call": -400, "put": -8600 } },
+      { "strike": 540, "expiry": "2026-08-15", "gex": -33.7, "call_oi": 8900, "put_oi": 55200, "call_vol": 2400, "put_vol": 18300, "delta_oi": { "call": -200, "put": -5800 } },
+
+      { "strike": 535, "expiry": "2026-07-11", "gex": -58.1, "call_oi": 12100, "put_oi": 89300, "call_vol": 3200, "put_vol": 31400, "delta_oi": { "call": -300, "put": -9600 } },
+      { "strike": 535, "expiry": "2026-07-18", "gex": -121.4, "call_oi": 25600, "put_oi": 186400, "call_vol": 6800, "put_vol": 65800, "delta_oi": { "call": -700, "put": -20200 } },
+      { "strike": 535, "expiry": "2026-07-25", "gex": -33.6, "call_oi": 7200, "put_oi": 52400, "call_vol": 1800, "put_vol": 17600, "delta_oi": { "call": -200, "put": -5600 } },
+      { "strike": 535, "expiry": "2026-08-15", "gex": -20.8, "call_oi": 5100, "put_oi": 36700, "call_vol": 1200, "put_vol": 11200, "delta_oi": { "call": -100, "put": -3800 } },
+
+      { "strike": 530, "expiry": "2026-07-11", "gex": -29.4, "call_oi": 6800, "put_oi": 52100, "call_vol": 1700, "put_vol": 16400, "delta_oi": { "call": -200, "put": -5200 } },
+      { "strike": 530, "expiry": "2026-07-18", "gex": -62.7, "call_oi": 14200, "put_oi": 108700, "call_vol": 3600, "put_vol": 34200, "delta_oi": { "call": -400, "put": -11100 } },
+      { "strike": 530, "expiry": "2026-07-25", "gex": -17.3, "call_oi": 4000, "put_oi": 30600, "call_vol": 1000, "put_vol": 9300, "delta_oi": { "call": -100, "put": -3100 } },
+      { "strike": 530, "expiry": "2026-08-15", "gex": -10.6, "call_oi": 2800, "put_oi": 21400, "call_vol": 700, "put_vol": 6200, "delta_oi": { "call": -100, "put": -2100 } },
+
+      { "strike": 525, "expiry": "2026-07-11", "gex": -14.2, "call_oi": 3400, "put_oi": 28700, "call_vol": 900, "put_vol": 8400, "delta_oi": { "call": -100, "put": -2800 } },
+      { "strike": 525, "expiry": "2026-07-18", "gex": -29.8, "call_oi": 7100, "put_oi": 59800, "call_vol": 1800, "put_vol": 17600, "delta_oi": { "call": -200, "put": -5900 } },
+      { "strike": 525, "expiry": "2026-07-25", "gex": -8.3, "call_oi": 2100, "put_oi": 16800, "call_vol": 500, "put_vol": 4800, "delta_oi": { "call": null, "put": -1700 } },
+      { "strike": 525, "expiry": "2026-08-15", "gex": -5.1, "call_oi": 1500, "put_oi": 11700, "call_vol": 400, "put_vol": 3200, "delta_oi": { "call": null, "put": -1100 } },
+
+      { "strike": 520, "expiry": "2026-07-11", "gex": -6.3, "call_oi": 1600, "put_oi": 14200, "call_vol": 400, "put_vol": 3800, "delta_oi": { "call": null, "put": -1300 } },
+      { "strike": 520, "expiry": "2026-07-18", "gex": -13.4, "call_oi": 3400, "put_oi": 29800, "call_vol": 900, "put_vol": 8100, "delta_oi": { "call": null, "put": -2800 } },
+      { "strike": 520, "expiry": "2026-07-25", "gex": -3.7, "call_oi": 1100, "put_oi": 8400, "call_vol": 300, "put_vol": 2200, "delta_oi": { "call": null, "put": -800 } },
+      { "strike": 520, "expiry": "2026-08-15", "gex": -2.3, "call_oi": 800, "put_oi": 5900, "call_vol": 200, "put_vol": 1500, "delta_oi": { "call": null, "put": -500 } },
+
+      { "strike": 515, "expiry": "2026-07-11", "gex": -2.8, "call_oi": 800, "put_oi": 7100, "call_vol": 200, "put_vol": 1800, "delta_oi": { "call": null, "put": -600 } },
+      { "strike": 515, "expiry": "2026-07-18", "gex": -5.9, "call_oi": 1700, "put_oi": 14800, "call_vol": 500, "put_vol": 3900, "delta_oi": { "call": null, "put": -1300 } },
+      { "strike": 515, "expiry": "2026-07-25", "gex": -1.7, "call_oi": 600, "put_oi": 4200, "call_vol": 200, "put_vol": 1100, "delta_oi": { "call": null, "put": -400 } },
+      { "strike": 515, "expiry": "2026-08-15", "gex": -1.1, "call_oi": 400, "put_oi": 2900, "call_vol": 100, "put_vol": 700, "delta_oi": { "call": null, "put": -300 } },
+
+      { "strike": 510, "expiry": "2026-07-11", "gex": -1.2, "call_oi": 400, "put_oi": 3600, "call_vol": 100, "put_vol": 900, "delta_oi": { "call": null, "put": -300 } },
+      { "strike": 510, "expiry": "2026-07-18", "gex": -2.7, "call_oi": 900, "put_oi": 7600, "call_vol": 200, "put_vol": 2000, "delta_oi": { "call": null, "put": -700 } },
+      { "strike": 510, "expiry": "2026-07-25", "gex": -0.8, "call_oi": 300, "put_oi": 2100, "call_vol": 100, "put_vol": 600, "delta_oi": { "call": null, "put": -200 } },
+      { "strike": 510, "expiry": "2026-08-15", "gex": -0.5, "call_oi": 200, "put_oi": 1500, "call_vol": 100, "put_vol": 400, "delta_oi": { "call": null, "put": -100 } }
+    ],
+    "levels": {
+      "call_wall": 560,
+      "put_support": 540,
+      "hvl": 548,
+      "gamma_flip": 545,
+      "max_pain": 547
+    },
+    "heat_seeker": {
+      "strike": 550,
+      "expiry": "2026-07-18",
+      "lens": "OI",
+      "standout_ratio": 2.31,
+      "confidence": 0.74,
+      "note": "Highest OI concentration near spot across the Jul-18 expiry. Largest call-side cluster in the matrix. Descriptive — not a recommendation."
+    }
+  }
+}

@@ -303,6 +303,8 @@ const LEX: Record<string, [string, string]> = {
   thReason: ["Reason", "原因"],
   noStratData: ["No strategy-tester data for {sym}.", "{sym} 暂无策略回测数据。"],
   stratLoadErr: ["Could not load strategy data.", "无法加载策略数据。"],
+  // ─── Heatmap ─────────────────────────────────────────────────────────────
+  heatmap: ["Heatmap", "热力图"],
   // ─── Options Hub ──────────────────────────────────────────────────────────
   // nav
   flow: ["Options", "期权"],
@@ -317,12 +319,14 @@ const LEX: Record<string, [string, string]> = {
   colFlags: ["Flags", "标记"],
   colSector: ["Sector", "板块"],
   // tabs
+  tabDesk: ["Flow Desk", "资金流台"],
   tabTape: ["Tape", "逐笔"],
   tabTide: ["Tide", "资金潮"],
   tabTickers: ["Tickers", "个股"],
   tabScreener: ["Screener", "筛选"],
   tabVol: ["Vol", "波动率"],
   tabGex: ["GEX", "敞口"],
+  tabPrism: ["PRISM", "矩阵"],
   // Tide tab
   tideTitle: ["Market Tide", "市场资金潮"],
   tideMethodNote: ["Method note", "方法说明"],
