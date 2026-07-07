@@ -92,6 +92,17 @@ This is exactly the "raise per-name exit sensitivity when the market is distribu
 from the masterplan §5 — the piece that makes 2022-type regime tops visible *per name*,
 which name-level technicals alone could not see.
 
+**External corroboration** — Codex `research/sell_exit_backtest/results/SEGMENTED_SELL_INDICATOR_FINDINGS.md`
+(2026-07-07), a segmented sell bake-off (68 names, entries held constant), found the best sell
+trigger is **regime-dependent** — direct evidence for this dial: **fast 3D exits win in bear/choppy
+years (2018, 2022); weekly confirmation wins in continuation years (2016, 2017, 2023, 2024).** Its
+ladder maps onto the table above (3D StochRSI cross>80 = early trim, 3D exit<80 = default trim,
+EMA8 3D break = structural flag, weekly StochRSI = escalation, 2W/monthly = investor-cycle context;
+full exit needs ≥2 keys). **Still hypothesis-tier:** that study ranks on drawdown+capture, picks its
+per-year "best policy" *in-sample*, and never measures **expectancy** (our binding killer) or uses
+held-out/next-bar discipline. It strengthens the *case* for the dial but does **not** clear it — the
+pre-registered falsifier below still governs before the dial modulates any warning.
+
 ## Guardrails (house law)
 
 - **Display-only end to end.** Propagate `is_display_only`. The chip and the dial change
