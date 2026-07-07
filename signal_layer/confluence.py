@@ -232,31 +232,23 @@ def compute_signals(daily_close: pd.Series) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------ trade sim ------
-def simulate(sig: pd.DataFrame, fixed: bool = False, scored_cut: bool = True) -> dict:
+def simulate(sig: pd.DataFrame, fixed: bool = False) -> dict:
     """Long/flat as the user trades it: enter on CB or re-buy, exit on CS or cut.
     Fills at the NEXT 3D bar's close (conservative, no look-ahead).
-    fixed=True applies the two regime/cycle gates (bear-block + hold-through-bull).
-
-    scored_cut=False is "X1 no-cut": drop the fast-reversal ``revSell`` from the SCORED
-    exit (keep the ``revBuy`` re-entry). Validated on the full US panel — WR +5pp,
-    expectancy +48%, shake-outs 11.1->3.9%, 2022 improves — because the fast cut
-    manufactures whipsaw (forward move after dropped cuts p50 +1.2% / p75 +5.3%).
-    ``revSell`` is still EMITTED as an event for a display-only CUT caution; it just no
-    longer sells. Default True preserves the current live behavior until owner approval."""
+    fixed=True applies the two regime/cycle gates (bear-block + hold-through-bull)."""
     rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
     if len(rows) < 20:
         return {}
     dates = rows.index.to_list()
     px = rows["close"]
-    cut = rows["revSell"] if scored_cut else False
     if fixed:
         # PROBLEM 2: no new longs while bear-blocked.  PROBLEM 1: hold through
-        # oscillator-top sells in a strong bull (cut-loss still fires unless X1 no-cut).
+        # oscillator-top sells in a strong bull (cut-loss still fires).
         enter = ((rows["CB"] | rows["revBuy"]) & ~rows["bear_block"]).to_numpy()
-        exit_ = ((rows["CS"] & ~rows["strong_bull"]) | cut).to_numpy()
+        exit_ = ((rows["CS"] & ~rows["strong_bull"]) | rows["revSell"]).to_numpy()
     else:
         enter = (rows["CB"] | rows["revBuy"]).to_numpy()
-        exit_ = (rows["CS"] | cut).to_numpy()
+        exit_ = (rows["CS"] | rows["revSell"]).to_numpy()
 
     pos = 0
     entry_px = entry_dt = None
