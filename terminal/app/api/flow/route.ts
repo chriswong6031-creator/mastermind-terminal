@@ -239,6 +239,18 @@ export async function GET(req: Request): Promise<Response> {
         const r2Url = `${R2_BASE}/${r2Key(f)}`;
         return await fetchWithUA(r2Url);
       } catch {
+        // flow_idx has a canonical always-fresh origin: the macro dashboard's
+        // deployed site copy. Final fallback so the heatmap flow layer survives
+        // a missing/stale R2 mirror.
+        if (f === "flow_idx") {
+          try {
+            return await fetchWithUA(
+              "https://chriswong6031-creator.github.io/macro/flow/index.json"
+            );
+          } catch {
+            return null;
+          }
+        }
         return null;
       }
     }
