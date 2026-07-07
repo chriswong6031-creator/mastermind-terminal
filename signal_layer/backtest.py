@@ -33,6 +33,7 @@ def run_backtest(
     close: pd.Series,
     *,
     fixed: bool = True,
+    scored_cut: bool = True,
     cost_bps: float = 3.0,
     slippage_bps: float = 1.0,
     bar_quality: str = "synthetic_open_deepstore",
@@ -42,6 +43,11 @@ def run_backtest(
 
     ``fixed=True`` applies the two regime gates (bear-block + hold-through-strong-bull),
     matching ``confluence.simulate(fixed=True)``.
+
+    ``scored_cut=False`` is "X1 no-cut": drop the fast-reversal ``revSell`` from the
+    scored exit (validated +48% expectancy). Mirrors ``confluence.simulate`` — keep the
+    two in sync. Default True preserves current live behavior; deploy = flip to False
+    at the ingest/api call sites.
     """
     sig = oracle.compute_signals(close.dropna())
     if sig.empty:
@@ -53,12 +59,13 @@ def run_backtest(
     dates = rows.index.to_list()
     px = rows["close"].astype(float)
 
+    cut = rows["revSell"] if scored_cut else False
     if fixed:
         enter = ((rows["CB"] | rows["revBuy"]) & ~rows["bear_block"]).to_numpy()
-        exit_ = ((rows["CS"] & ~rows["strong_bull"]) | rows["revSell"]).to_numpy()
+        exit_ = ((rows["CS"] & ~rows["strong_bull"]) | cut).to_numpy()
     else:
         enter = (rows["CB"] | rows["revBuy"]).to_numpy()
-        exit_ = (rows["CS"] | rows["revSell"]).to_numpy()
+        exit_ = (rows["CS"] | cut).to_numpy()
     cs_arr = rows["CS"].to_numpy()
     rev_arr = rows["revSell"].to_numpy()
 
