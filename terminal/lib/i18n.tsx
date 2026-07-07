@@ -292,6 +292,8 @@ const LEX: Record<string, [string, string]> = {
   thReason: ["Reason", "原因"],
   noStratData: ["No strategy-tester data for {sym}.", "{sym} 暂无策略回测数据。"],
   stratLoadErr: ["Could not load strategy data.", "无法加载策略数据。"],
+  // ─── Heatmap ─────────────────────────────────────────────────────────────
+  heatmap: ["Heatmap", "热力图"],
   // ─── Options Hub ──────────────────────────────────────────────────────────
   // nav
   flow: ["Options", "期权"],

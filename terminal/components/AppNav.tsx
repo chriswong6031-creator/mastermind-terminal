@@ -12,6 +12,7 @@ const ICON: Record<string, string[]> = {
   portfolio: ["M21 12a9 9 0 1 1-9-9v9z"],
   alerts: ["M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"],
   flow: [], // custom inline — options hub
+  heatmap: [], // custom inline — market heatmap
   ai: ["M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z"],
 };
 export function Glyph({ k }: { k: string }) {
@@ -19,6 +20,8 @@ export function Glyph({ k }: { k: string }) {
     return (<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>);
   if (k === "flow")
     return (<svg viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>);
+  if (k === "heatmap")
+    return (<svg viewBox="0 0 24 24"><rect x="3" y="3" width="4" height="4" rx="0.5" /><rect x="10" y="3" width="4" height="4" rx="0.5" /><rect x="17" y="3" width="4" height="4" rx="0.5" /><rect x="3" y="10" width="4" height="4" rx="0.5" /><rect x="10" y="10" width="4" height="4" rx="0.5" /><rect x="17" y="10" width="4" height="4" rx="0.5" /><rect x="3" y="17" width="4" height="4" rx="0.5" /><rect x="10" y="17" width="4" height="4" rx="0.5" /><rect x="17" y="17" width="4" height="4" rx="0.5" /></svg>);
   return (<svg viewBox="0 0 24 24">{ICON[k].map((d, i) => <path key={i} d={d} />)}</svg>);
 }
 
@@ -32,6 +35,7 @@ export const TOP = [
   { k: "portfolio", label: "Portfolio", href: "/portfolio" },
   { k: "alerts", label: "Alerts", href: "/alerts" },
   { k: "flow", label: "Options", href: "/flow" },
+  { k: "heatmap", label: "Heatmap", href: "/heatmap" },
 ];
 
 // useSearchParams() forces a CSR bailout during static prerender, so the hook lives in an inner
@@ -63,6 +67,7 @@ function AppNavInner() {
   const activeKey = path.startsWith("/screener") ? "screener" : path.startsWith("/scripts") ? "scripts"
     : path.startsWith("/portfolio") ? "portfolio" : path.startsWith("/alerts") ? "alerts"
     : path.startsWith("/flow") ? "flow"
+    : path.startsWith("/heatmap") ? "heatmap"
     : (path.startsWith("/terminal") && paneOpen) ? "analyst" : "chart";
   const openAI = () => { if (path.startsWith("/terminal")) window.dispatchEvent(new CustomEvent("mm:copilot")); else router.push("/terminal?ai=1"); };
   return (

@@ -12,6 +12,7 @@ import {
   type IChartApi, type ISeriesApi,
 } from "lightweight-charts";
 import { FlowDeskView } from "@/components/flowdesk/FlowDeskView";
+import { GexDeskView } from "@/components/gexdesk/GexDeskView";
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
@@ -2356,194 +2357,20 @@ export default function OptionsHubView() {
           )}
 
           {/* ═══ GEX TAB ════════════════════════════════════════════════════ */}
+          {/* Wave 2: replaced inline GEX panel with GexDeskView (see components/gexdesk/).
+              Old inline code retained below as a comment so other waves can reference the
+              GexStrikeLadder / GexExpiryBars / GexHistSparkline sub-components.
+              ── OLD INLINE CODE PRESERVED (do not delete) ──────────────────────
+              The inline GEX sidebar + drill pane that was here used:
+                selectedGexRoot, gexData, gexLoading, gexGreek, gexSearch,
+                gexCandidates, filteredGexCandidates, ctxData, fetchGex,
+                GexStrikeLadder, GexExpiryBars, GexHistSparkline
+              All those state vars / components are still defined above and remain available
+              for any wave that imports or extends this file.
+              ──────────────────────────────────────────────────────────────────── */}
           {activeTab === "gex" && (
             <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
-              {/* Sidebar */}
-              <div style={{ width: 200, flexShrink: 0, borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column", minHeight: 0 }}>
-                <div style={{ padding: "10px 10px 8px" }}>
-                  <input
-                    type="text"
-                    placeholder={lang === "zh" ? "搜索代码…" : "Search ticker…"}
-                    value={gexSearch}
-                    onChange={(e) => setGexSearch(e.target.value)}
-                    style={{ width: "100%", height: 30, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)" }}
-                  />
-                </div>
-                <div style={{ flex: 1, overflow: "auto" }}>
-                  {filteredGexCandidates.map((root) => (
-                    <button
-                      key={root}
-                      onClick={() => setSelectedGexRoot(root)}
-                      style={{
-                        display: "flex", alignItems: "center", width: "100%",
-                        padding: "8px 12px", textAlign: "left", fontSize: 13,
-                        fontWeight: selectedGexRoot === root ? 700 : 400,
-                        color: selectedGexRoot === root ? "var(--text)" : "var(--text-2)",
-                        background: selectedGexRoot === root ? "rgba(41,98,255,.1)" : "none",
-                        borderRadius: "var(--r)", cursor: "pointer", transition: "background var(--t)",
-                      }}
-                      onMouseEnter={(e) => { if (selectedGexRoot !== root) e.currentTarget.style.background = "var(--panel-2)"; }}
-                      onMouseLeave={(e) => { if (selectedGexRoot !== root) e.currentTarget.style.background = "none"; }}
-                    >
-                      {root}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* GEX drill pane */}
-              <div style={{ flex: 1, overflow: "auto", padding: "16px 18px" }}>
-                {!selectedGexRoot && (
-                  <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
-                    {t("gexRootPrompt", "Select a root to view dealer exposure")}
-                  </div>
-                )}
-                {selectedGexRoot && gexLoading && (
-                  <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
-                )}
-                {selectedGexRoot && !gexLoading && gexData && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-
-                    {/* Context bar — SPX/NDX/RUT/SPY regime chips + fear/greed from ctx */}
-                    {ctxData && (ctxData.index_gex || ctxData.fear_greed) && (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-                        {ctxData.index_gex && Object.entries(ctxData.index_gex).map(([sym, entry]) => (
-                          <span
-                            key={sym}
-                            className="chip"
-                            style={{ height: 26, fontSize: 11, gap: 5, pointerEvents: "none" }}
-                          >
-                            <span style={{ fontWeight: 700, color: "var(--text)" }}>{sym}</span>
-                            <span style={{ color: "var(--text-2)" }}>{entry.regime}</span>
-                            {entry.dist_to_flip_pct != null && (
-                              <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
-                                {entry.dist_to_flip_pct >= 0 ? "+" : ""}{(entry.dist_to_flip_pct * 100).toFixed(1)}%
-                              </span>
-                            )}
-                          </span>
-                        ))}
-                        {ctxData.fear_greed && (
-                          <span className="chip" style={{ height: 26, fontSize: 11, gap: 5, pointerEvents: "none" }}>
-                            <span style={{ color: "var(--text-2)" }}>{t("gexCtxFearGreed", "Fear/Greed")}</span>
-                            <span style={{ fontWeight: 700, color: "var(--text)" }}>{ctxData.fear_greed.dial}</span>
-                            <span style={{ color: "var(--muted)", fontSize: 10 }}>
-                              {lang === "zh" ? ctxData.fear_greed.label_zh : ctxData.fear_greed.label_en}
-                            </span>
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {/* GEX hero stats */}
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 20, border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "14px 18px" }}>
-                      <div>
-                        <div className="hub-sec">{t("gexNetGex", "Net GEX (bn)")}</div>
-                        <div style={{ fontWeight: 700, fontSize: 22, color: "var(--text)" }}>
-                          {gexData.net_gex_bn >= 0 ? "+" : ""}{gexData.net_gex_bn.toFixed(2)}B
-                        </div>
-                      </div>
-                      {gexData.spot_ref != null && (
-                        <div>
-                          <div className="hub-sec">{t("volSpotRef", "Spot ref")}</div>
-                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums" }}>{gexData.spot_ref.toFixed(2)}</div>
-                        </div>
-                      )}
-                      {gexData.gamma_flip != null && (
-                        <div>
-                          <div className="hub-sec">{lang === "zh" ? "伽马翻转" : "Gamma Flip"}</div>
-                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--warn)" }}>{gexData.gamma_flip.toFixed(1)}</div>
-                        </div>
-                      )}
-                      {gexData.call_wall != null && (
-                        <div>
-                          <div className="hub-sec">{lang === "zh" ? "认购集中" : "Call concentration"}</div>
-                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>{gexData.call_wall.toFixed(1)}</div>
-                        </div>
-                      )}
-                      {gexData.put_wall != null && (
-                        <div>
-                          <div className="hub-sec">{lang === "zh" ? "认沽集中" : "Put concentration"}</div>
-                          <div style={{ fontWeight: 650, fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>{gexData.put_wall.toFixed(1)}</div>
-                        </div>
-                      )}
-
-                      {/* 30-session history sparkline — when present */}
-                      {gexData.history && gexData.history.length >= 2 && (
-                        <div style={{ width: "100%", borderTop: "1px solid var(--line-2)", marginTop: 4, paddingTop: 10 }}>
-                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 6 }}>
-                            {t("gexHistTitle", "30-session GEX history")}
-                          </div>
-                          <GexHistSparkline history={gexData.history} />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Greek selector chips */}
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <span style={{ fontSize: 11, color: "var(--muted)" }}>{lang === "zh" ? "希腊值：" : "Greek:"}</span>
-                      {(["gamma", "delta", "vanna", "charm"] as GreekKey[]).map((g) => (
-                        <button
-                          key={g}
-                          className={`chip${gexGreek === g ? " on" : ""}`}
-                          style={{ height: 26, fontSize: 11 }}
-                          onClick={() => setGexGreek(g)}
-                        >
-                          {t(`gex${g.charAt(0).toUpperCase()}${g.slice(1)}` as any, g)}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Strike ladder */}
-                    <div className="hub-card">
-                      <div className="hub-stat">
-                        {t("gexLadderTitle", "Strike Ladder")}
-                        <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 8 }}>
-                          {lang === "zh" ? "（做市商净头寸方向）" : "(dealer net positioning direction)"}
-                        </span>
-                      </div>
-                      <GexStrikeLadder
-                        rows={gexData.by_strike}
-                        greek={gexGreek}
-                        spotRef={gexData.spot_ref}
-                        gammaFlip={gexData.gamma_flip}
-                        callWall={gexData.call_wall}
-                        putWall={gexData.put_wall}
-                        lang={lang}
-                      />
-                    </div>
-
-                    {/* By-expiry bars */}
-                    <div className="hub-card">
-                      <div className="hub-stat">
-                        {t("gexByExpTitle", "By Expiry")}
-                      </div>
-                      <GexExpiryBars rows={gexData.by_expiry} greek={gexGreek} lang={lang} />
-                    </div>
-
-                    {/* Convention footnote */}
-                    <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
-                      {lang === "zh"
-                        ? "做市商持仓模型估算 — 模型推导，仅供参考"
-                        : "Dealer-positioning model estimate — model-derived, approximate"}
-                    </div>
-
-                    {/* Coverage — prefer new shape (n_days/since), fall back to old shape (n_contracts/oi_date) */}
-                    {(() => {
-                      const cov = gexData.coverage;
-                      const days = cov.n_days != null ? `${cov.n_days} day(s)` : cov.n_contracts != null ? `${cov.n_contracts} contracts` : null;
-                      const since = cov.since ?? cov.oi_date ?? null;
-                      if (!days && !since) return null;
-                      return (
-                        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                          {lang === "zh"
-                            ? `数据覆盖：${cov.n_days != null ? `${cov.n_days} 天` : cov.n_contracts != null ? `${cov.n_contracts} 合约` : ""}${since ? `，起始 ${since}` : ""}`
-                            : `Coverage: ${days ?? ""}${since ? ` since ${since}` : ""} — OI is t-1`}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-              </div>
+              <GexDeskView />
             </div>
           )}
 
