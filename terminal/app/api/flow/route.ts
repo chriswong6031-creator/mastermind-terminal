@@ -15,6 +15,7 @@ const SCREENER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "screen
 const CTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ctx_fixture.json");
 const TCTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "tctx_fixture.json");
 const OICONF_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oiconf_fixture.json");
+const CHAINHEAT_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "chain_heat_fixture.json");
 
 // Bare-minimum in-memory cache so concurrent renders share one fetch.
 type CacheEntry = { data: Record<string, unknown>; ts: number };
@@ -26,7 +27,7 @@ const TTL_MS = 30_000;
 type FParam = string;
 
 function isValidF(f: FParam): boolean {
-  if (["feed", "heat", "meta", "tide", "dte", "oi", "hot", "ctx", "oiconf"].includes(f)) return true;
+  if (["feed", "heat", "meta", "tide", "dte", "oi", "hot", "ctx", "oiconf", "chainheat"].includes(f)) return true;
   if (f.startsWith("ticker:") && f.length > 7) return true;
   if (f.startsWith("vol:") && f.length > 4) return true;
   if (f.startsWith("gex:") && f.length > 4) return true;
@@ -46,6 +47,7 @@ function backendPath(f: string): string {
   if (f === "ctx") return "/api/hub/ctx";
   if (f === "oiconf") return "/api/hub/oiconf";
   if (f.startsWith("tctx:")) return `/api/hub/tctx/${f.slice(5)}`;
+  if (f === "chainheat") return "/api/flow/chainheat";
   return `/api/flow/${f}`;
 }
 
@@ -61,6 +63,7 @@ function r2Key(f: string): string {
   if (f === "ctx") return "options_hub/context.json";
   if (f === "oiconf") return "options_hub/oi_confirmed.json";
   if (f.startsWith("tctx:")) return `options_hub/tickers_ctx/${f.slice(5)}.json`;
+  if (f === "chainheat") return "live_flow/chain_heat_current.json";
   return `live_flow/${f}_current.json`;
 }
 
@@ -129,6 +132,13 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       const raw = await fs.readFile(OICONF_FIXTURE_FILE, "utf8");
       return JSON.parse(raw) as Record<string, unknown>;
     } catch { return { confirmed: [] }; }
+  }
+  // Chain Heat fixture.
+  if (f === "chainheat") {
+    try {
+      const raw = await fs.readFile(CHAINHEAT_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch { return { schema: "options_flow.chain_heat/v1", campaigns: [] }; }
   }
   // Ticker context fixture keyed by root.
   if (f.startsWith("tctx:")) {

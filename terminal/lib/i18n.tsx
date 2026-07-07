@@ -306,6 +306,7 @@ const LEX: Record<string, [string, string]> = {
   colFlags: ["Flags", "标记"],
   colSector: ["Sector", "板块"],
   // tabs
+  tabDesk: ["Flow Desk", "资金流台"],
   tabTape: ["Tape", "逐笔"],
   tabTide: ["Tide", "资金潮"],
   tabTickers: ["Tickers", "个股"],

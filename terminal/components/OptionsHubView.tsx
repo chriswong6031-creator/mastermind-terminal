@@ -11,12 +11,14 @@ import {
   createChart, LineSeries, AreaSeries,
   type IChartApi, type ISeriesApi,
 } from "lightweight-charts";
+import { FlowDeskView } from "@/components/flowdesk/FlowDeskView";
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-type TabKey = "tape" | "tide" | "tickers" | "screener" | "vol" | "gex";
+type TabKey = "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
+  { key: "desk",     enKey: "tabDesk",     zhKey: "tabDesk" },
   { key: "tape",     enKey: "tabTape",     zhKey: "tabTape" },
   { key: "tide",     enKey: "tabTide",     zhKey: "tabTide" },
   { key: "tickers",  enKey: "tabTickers",  zhKey: "tabTickers" },
@@ -1371,6 +1373,9 @@ export default function OptionsHubView() {
 
         {/* ── Tab content ── */}
         <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+
+          {/* ═══ DESK TAB ══════════════════════════════════════════════════ */}
+          {activeTab === "desk" && <FlowDeskView />}
 
           {/* ═══ TAPE TAB ═══════════════════════════════════════════════════ */}
           {activeTab === "tape" && (
