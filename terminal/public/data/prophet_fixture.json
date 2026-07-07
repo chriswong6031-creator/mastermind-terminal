@@ -1,0 +1,151 @@
+{
+  "schema": "prophet.index/v1",
+  "asof": "2026-07-07T16:00:00-04:00",
+  "cadence": "nightly EOD",
+  "plans": [
+    {
+      "id": "plan-nvda-bull-001",
+      "asset": "NVDA",
+      "direction": "BULL",
+      "archetype": "Resumption",
+      "entry": 127.50,
+      "targets": [138.00, 148.00],
+      "invalidation": 121.80,
+      "horizon_days": 25,
+      "min_hold_days": 7,
+      "asof": "2026-06-28T16:00:00-04:00",
+      "last_price": 133.20,
+      "option_contract": {
+        "type": "CALL",
+        "strike": 130.00,
+        "expiry": "2026-08-15",
+        "entry_premium": 4.85,
+        "eod_mark": 7.20
+      },
+      "state": {
+        "phase": "triggered_pre_t1",
+        "management_confidence": 71,
+        "recommended_action": "hold",
+        "geometry": {
+          "dist_to_stop_r": 1.97,
+          "dist_to_t1_r": 0.83,
+          "horizon_pct_used": 36.0
+        },
+        "components": {
+          "validity": 90,
+          "progress": 52,
+          "pace": 78,
+          "retention": 83,
+          "overlay": 55
+        },
+        "change_reason": "Price cleared the primary consolidation; volume expansion on break confirms resumption thesis."
+      },
+      "thesis": "NVDA re-entering prior channel after flush below 125. Archetype: failed breakdown / resumption. Entry at structural support confluence with Nasdaq Internals positive. Stop below weekly swing low at 121.80. T1 = prior high cluster at 138."
+    },
+    {
+      "id": "plan-aapl-bull-002",
+      "asset": "AAPL",
+      "direction": "BULL",
+      "archetype": "Recovery",
+      "entry": 195.40,
+      "targets": [210.00],
+      "invalidation": 188.00,
+      "horizon_days": 30,
+      "min_hold_days": 10,
+      "asof": "2026-07-01T16:00:00-04:00",
+      "last_price": 198.15,
+      "option_contract": null,
+      "state": {
+        "phase": "pre_trigger",
+        "management_confidence": 48,
+        "recommended_action": "wait",
+        "geometry": {
+          "dist_to_stop_r": 2.50,
+          "dist_to_t1_r": 2.13,
+          "horizon_pct_used": 20.0
+        },
+        "components": {
+          "validity": 100,
+          "progress": 27,
+          "pace": 45,
+          "retention": 60,
+          "overlay": 42
+        },
+        "change_reason": "Pre-trigger state — price approaching but has not cleared the entry trigger at 195.40."
+      },
+      "thesis": "AAPL structural recovery from Q2 selloff. Archetype: oversold recovery. Watching for trigger confirmation above 195.40 with daily close above 50-day EMA. Stop below 188. T1 = prior distribution zone at 210."
+    },
+    {
+      "id": "plan-spy-bear-003",
+      "asset": "SPY",
+      "direction": "BEAR",
+      "archetype": "Breakout",
+      "entry": 548.00,
+      "targets": [530.00, 515.00],
+      "invalidation": 556.00,
+      "horizon_days": 20,
+      "min_hold_days": 5,
+      "asof": "2026-07-03T16:00:00-04:00",
+      "last_price": 539.40,
+      "option_contract": {
+        "type": "PUT",
+        "strike": 545.00,
+        "expiry": "2026-07-25",
+        "entry_premium": 6.10,
+        "eod_mark": 9.45
+      },
+      "state": {
+        "phase": "between_t1_t2",
+        "management_confidence": 63,
+        "recommended_action": "trail",
+        "geometry": {
+          "dist_to_stop_r": 2.07,
+          "dist_to_t1_r": null,
+          "horizon_pct_used": 60.0
+        },
+        "components": {
+          "validity": 85,
+          "progress": 80,
+          "pace": 70,
+          "retention": 55,
+          "overlay": 68
+        },
+        "change_reason": "T1 hit and price consolidated. Trail stop recommended to protect gains; watching T2 at 515."
+      },
+      "thesis": "SPY distribution pattern at macro resistance. Archetype: range-top breakdown. BEAR thesis intact while below reclaim level at 556. Price has reached T1; trailing stop active. T2 target 515 requires further tape confirmation."
+    },
+    {
+      "id": "plan-smci-bull-004",
+      "asset": "SMCI",
+      "direction": "BULL",
+      "archetype": "Resumption",
+      "entry": 42.00,
+      "targets": [52.00],
+      "invalidation": 37.50,
+      "horizon_days": 40,
+      "min_hold_days": 14,
+      "asof": "2026-06-18T16:00:00-04:00",
+      "last_price": 38.20,
+      "option_contract": null,
+      "state": {
+        "phase": "overtime",
+        "management_confidence": 28,
+        "recommended_action": "exit",
+        "geometry": {
+          "dist_to_stop_r": 0.16,
+          "dist_to_t1_r": 3.11,
+          "horizon_pct_used": 97.5
+        },
+        "components": {
+          "validity": 40,
+          "progress": 0,
+          "pace": 5,
+          "retention": 15,
+          "overlay": 30
+        },
+        "change_reason": "Horizon exhausted; price drifted below entry without follow-through. Stop proximity elevated — exit signal active."
+      },
+      "thesis": "SMCI attempted resumption from coiled base at 42. Server infra capex theme intact but price has not moved in the expected window. Horizon expired; management confidence degraded."
+    }
+  ]
+}

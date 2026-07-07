@@ -1,0 +1,344 @@
+"use client";
+/**
+ * SignalCard — one row in the Prophet signal stream (left pane).
+ *
+ * Collapsed shows: ticker, BULL/BEAR badge, archetype tag, entry, days active,
+ * live-vs-plan P&L (if last_price present), T1-progress bar, min-hold bar with
+ * lock icon, phase chip.
+ *
+ * Expanded reveals: OptionCard sub-card.
+ *
+ * HONESTY DOCTRINE:
+ *   - BULL/BEAR are engine-assigned direction labels — not recommendations.
+ *   - Phase chip is descriptive lifecycle state.
+ *   - P&L is live-vs-plan — labeled "vs plan" to avoid implying realized.
+ *   - No "validated", no predictive copy.
+ */
+
+import { useState } from "react";
+import { makeProphetT } from "./prophetStrings";
+import { OptionCard } from "./OptionCard";
+import type { OptionContractPayload } from "./OptionCard";
+import type { Lang } from "@/lib/i18n";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface PlanSummary {
+  id: string;
+  asset: string;
+  direction: "BULL" | "BEAR";
+  /** signal archetype tag e.g. "Resumption", "Recovery" */
+  archetype?: string | null;
+  entry: number | null;
+  targets: number[];
+  invalidation: number | null;
+  horizon_days: number | null;
+  min_hold_days: number | null;
+  asof: string;
+  option_contract: OptionContractPayload | null;
+  /** From management state */
+  state?: {
+    phase?: string | null;
+    management_confidence?: number | null;
+    recommended_action?: string | null;
+    geometry?: {
+      dist_to_stop_r?: number | null;
+      dist_to_t1_r?:   number | null;
+      horizon_pct_used?: number | null;
+    } | null;
+  } | null;
+  /** Last price from payload (optional — may be absent) */
+  last_price?: number | null;
+}
+
+interface SignalCardProps {
+  plan: PlanSummary;
+  lang: Lang;
+  selected: boolean;
+  onSelect: (plan: PlanSummary) => void;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function daysActive(asof: string): number {
+  const issued = new Date(asof).getTime();
+  const now    = Date.now();
+  return Math.max(0, Math.floor((now - issued) / 86_400_000));
+}
+
+function t1Progress(entry: number | null, t1: number | null, last: number | null, isBear: boolean): number | null {
+  if (entry == null || t1 == null || last == null) return null;
+  if (isBear) {
+    // BEAR: progress is downward (entry→t1 = entry−t1 total; entry−last = so far)
+    const total = entry - t1;
+    const done  = entry - last;
+    if (total <= 0) return null;
+    return Math.max(0, Math.min(100, (done / total) * 100));
+  }
+  const total = t1 - entry;
+  const done  = last - entry;
+  if (total <= 0) return null;
+  return Math.max(0, Math.min(100, (done / total) * 100));
+}
+
+function archetypeColor(tag: string): string {
+  const t = tag.toLowerCase();
+  if (t === "resumption") return "#e8a33d";
+  if (t === "recovery")   return "#19c2c2";
+  if (t === "breakout")   return "#9d86ff";
+  return "var(--text-2)";
+}
+
+function archetypeBg(tag: string): string {
+  const t = tag.toLowerCase();
+  if (t === "resumption") return "rgba(232,163,61,.15)";
+  if (t === "recovery")   return "rgba(25,194,194,.14)";
+  if (t === "breakout")   return "rgba(157,134,255,.15)";
+  return "rgba(134,141,156,.1)";
+}
+
+// ── Component ──────────────────────────────────────────────────────────────────
+
+export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) {
+  const t = makeProphetT(lang);
+  const [expanded, setExpanded] = useState(false);
+
+  const isBear  = plan.direction === "BEAR";
+  const t1      = plan.targets?.[0] ?? null;
+  const days    = daysActive(plan.asof);
+  const t1pct   = t1Progress(plan.entry, t1, plan.last_price ?? null, isBear);
+
+  // Min-hold bar
+  const minHold = plan.min_hold_days ?? null;
+  const minPct  = minHold != null && minHold > 0
+    ? Math.min(100, (days / minHold) * 100)
+    : null;
+  const isLocked    = minPct != null && minPct < 100;
+  const holdLabel   = isLocked ? t("locked") : t("eligible");
+  const holdColor   = isLocked ? "var(--text-dim)" : "var(--up)";
+
+  // P&L vs plan
+  let pnlPct: number | null = null;
+  if (plan.last_price != null && plan.entry != null && plan.entry > 0) {
+    const raw = (plan.last_price - plan.entry) / plan.entry * 100;
+    pnlPct = isBear ? -raw : raw;
+  }
+
+  // Phase chip
+  const state = plan.state;
+  const phaseMap: Record<string, string> = {
+    pre_trigger:       t("phasePretrigger"),
+    triggered_pre_t1:  t("phaseTriggered"),
+    at_t1:             t("phaseAtT1"),
+    between_t1_t2:     t("phaseBetweenT1T2"),
+    at_t2:             t("phaseAtT2"),
+    overtime:          t("phaseOvertime"),
+    invalidated:       t("phaseInvalidated"),
+  };
+  const phaseDisplay = state?.phase ? (phaseMap[state.phase] ?? state.phase) : null;
+  const isInvalidated = state?.phase === "invalidated";
+  const phaseColor = isInvalidated
+    ? "var(--down)"
+    : state?.phase?.includes("t1") || state?.phase?.includes("t2")
+    ? "var(--up)"
+    : "var(--text-2)";
+
+  const dirColor = isBear ? "var(--down)" : "var(--up)";
+  const dirBg    = isBear ? "rgba(240,86,107,.15)" : "rgba(38,194,129,.15)";
+
+  return (
+    <div
+      style={{
+        ...CARD_STYLE,
+        border: `1px solid ${selected ? "var(--brand)" : "var(--line)"}`,
+        background: selected ? "var(--panel-2)" : "var(--panel)",
+        opacity: isInvalidated ? 0.6 : 1,
+      }}
+      onClick={() => onSelect(plan)}
+      role="option"
+      aria-selected={selected}
+    >
+      {/* Row 1: ticker + direction + archetype + phase */}
+      <div style={ROW}>
+        <span style={TICKER_STYLE}>{plan.asset}</span>
+
+        {/* Direction badge */}
+        <span style={{ ...CHIP_BASE, background: dirBg, color: dirColor, fontWeight: 700 }}>
+          {isBear ? `▼ ${t("bear")}` : `▲ ${t("bull")}`}
+        </span>
+
+        {/* Archetype tag */}
+        {plan.archetype && (
+          <span
+            style={{
+              ...CHIP_BASE,
+              background: archetypeBg(plan.archetype),
+              color: archetypeColor(plan.archetype),
+            }}
+          >
+            {plan.archetype}
+          </span>
+        )}
+
+        {/* Spacer */}
+        <div style={{ flex: 1 }} />
+
+        {/* Phase chip */}
+        {phaseDisplay && (
+          <span style={{ ...CHIP_BASE, color: phaseColor, border: `1px solid ${phaseColor}22`, fontSize: 9 }}>
+            {phaseDisplay}
+          </span>
+        )}
+      </div>
+
+      {/* Row 2: entry / days / P&L */}
+      <div style={{ ...ROW, marginTop: 6, gap: 12, fontSize: 10.5 }}>
+        <span style={FACT}>
+          <span style={FACT_LABEL}>{t("entryLabel")}</span>
+          <span style={FACT_VAL}>{plan.entry != null ? `$${plan.entry.toFixed(2)}` : "—"}</span>
+        </span>
+        <span style={FACT}>
+          <span style={FACT_LABEL}></span>
+          <span style={{ ...FACT_VAL, color: "var(--muted)" }}>{days}{t("daysActive")}</span>
+        </span>
+        {pnlPct != null && (
+          <span style={{ marginLeft: "auto", font: "600 11px/1 var(--font-num)", color: pnlPct >= 0 ? "var(--up)" : "var(--down)" }}>
+            {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%
+            <span style={{ font: "500 9px/1 var(--font-ui)", color: "var(--muted)", marginLeft: 3 }}>
+              vs plan
+            </span>
+          </span>
+        )}
+      </div>
+
+      {/* T1 progress bar */}
+      {t1pct != null && (
+        <div style={{ marginTop: 7 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+            <span style={{ font: "500 9.5px/1 var(--font-ui)", color: "var(--muted)" }}>{t1pct.toFixed(0)}% {t("t1Progress")}</span>
+          </div>
+          <div style={PROGRESS_TRACK}>
+            <div
+              style={{
+                height: "100%",
+                width: `${t1pct}%`,
+                background: "var(--up)",
+                borderRadius: "var(--r-pill)",
+                transition: "width .3s",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Min-hold bar */}
+      {minPct != null && (
+        <div style={{ marginTop: 5 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3, alignItems: "center" }}>
+            <span style={{ font: "500 9.5px/1 var(--font-ui)", color: "var(--muted)" }}>
+              {days}d / {minHold}d {t("minHold")}
+            </span>
+            <span style={{ font: "600 9px/1 var(--font-ui)", color: holdColor }}>
+              {isLocked ? "🔒 " : ""}{holdLabel}
+            </span>
+          </div>
+          <div style={PROGRESS_TRACK}>
+            <div
+              style={{
+                height: "100%",
+                width: `${minPct}%`,
+                background: isLocked ? "var(--line-3)" : "var(--up)",
+                borderRadius: "var(--r-pill)",
+                transition: "width .3s",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Expand toggle for OptionCard */}
+      {plan.option_contract && (
+        <button
+          style={EXPAND_BTN}
+          onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
+          aria-expanded={expanded}
+        >
+          {expanded ? "▲" : "▼"}
+        </button>
+      )}
+
+      {/* OptionCard sub-card (expanded) */}
+      {expanded && plan.option_contract && (
+        <OptionCard contract={plan.option_contract} lang={lang} />
+      )}
+    </div>
+  );
+}
+
+// ── Style constants ───────────────────────────────────────────────────────────
+
+const CARD_STYLE: React.CSSProperties = {
+  position: "relative",
+  borderRadius: "var(--r-lg)",
+  padding: "10px 12px",
+  cursor: "pointer",
+  transition: "border-color var(--t), background var(--t)",
+  marginBottom: 4,
+};
+
+const ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 5,
+};
+
+const TICKER_STYLE: React.CSSProperties = {
+  font: "700 13px/1 var(--font-ui)",
+  color: "var(--text)",
+  letterSpacing: ".01em",
+};
+
+const CHIP_BASE: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  font: "600 10px/1 var(--font-ui)",
+  borderRadius: "var(--r-pill)",
+  padding: "3px 7px",
+  whiteSpace: "nowrap",
+};
+
+const FACT: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+};
+
+const FACT_LABEL: React.CSSProperties = {
+  font: "500 9px/1 var(--font-ui)",
+  color: "var(--muted)",
+};
+
+const FACT_VAL: React.CSSProperties = {
+  font: "600 11px/1 var(--font-num)",
+  color: "var(--text)",
+};
+
+const PROGRESS_TRACK: React.CSSProperties = {
+  height: 4,
+  background: "var(--line-2)",
+  borderRadius: "var(--r-pill)",
+  overflow: "hidden",
+};
+
+const EXPAND_BTN: React.CSSProperties = {
+  position: "absolute",
+  bottom: 6,
+  right: 8,
+  font: "600 8px/1 var(--font-ui)",
+  color: "var(--muted)",
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  padding: "2px 4px",
+};

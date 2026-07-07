@@ -19,6 +19,7 @@ const CHAINHEAT_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "chain
 const GEXSTATE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gexstate_fixture.json");
 const MATRIX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "matrix_fixture.json");
 const MANIFEST_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "manifest.json");
+const PROPHET_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_fixture.json");
 
 // Bare-minimum in-memory cache so concurrent renders share one fetch.
 type CacheEntry = { data: Record<string, unknown>; ts: number };
@@ -39,6 +40,7 @@ function isValidF(f: FParam): boolean {
   if (f.startsWith("matrix:") && f.length > 7) return true;
   if (f === "manifest") return true;
   if (f === "flow_idx") return true;
+  if (f === "prophet_idx") return true;
   return false;
 }
 
@@ -59,6 +61,7 @@ function backendPath(f: string): string {
   if (f.startsWith("matrix:")) return `/api/hub/matrix/${f.slice(7)}`;
   if (f === "manifest") return "/api/flow/manifest";
   if (f === "flow_idx") return "/api/flow/flow_idx";
+  if (f === "prophet_idx") return "/api/hub/prophet";
   return `/api/flow/${f}`;
 }
 
@@ -79,6 +82,7 @@ function r2Key(f: string): string {
   if (f.startsWith("matrix:")) return `options_structure/matrix/${f.slice(7)}.json`;
   if (f === "manifest") return "live_flow/manifest.json";
   if (f === "flow_idx") return "live_flow/flow_idx.json";
+  if (f === "prophet_idx") return "prophet/index.json";
   return `live_flow/${f}_current.json`;
 }
 
@@ -190,6 +194,13 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
   // Flow index fixture — fall back gracefully; HeatmapView degrades to price-only.
   if (f === "flow_idx") {
     return { rows: [], as_of: "", source: "fixture-empty" };
+  }
+  // Prophet index fixture.
+  if (f === "prophet_idx") {
+    try {
+      const raw = await fs.readFile(PROPHET_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch { return { schema: "prophet.index/v1", asof: "", plans: [] }; }
   }
   const raw = await fs.readFile(FIXTURE_FILE, "utf8");
   const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;

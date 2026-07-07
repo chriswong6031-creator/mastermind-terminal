@@ -14,12 +14,14 @@ import {
 import { FlowDeskView } from "@/components/flowdesk/FlowDeskView";
 import { GexDeskView } from "@/components/gexdesk/GexDeskView";
 import { PrismView } from "@/components/prism/PrismView";
+import { ProphetView } from "@/components/prophet/ProphetView";
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-type TabKey = "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism";
+type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
+  { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
   { key: "desk",     enKey: "tabDesk",     zhKey: "tabDesk" },
   { key: "tape",     enKey: "tabTape",     zhKey: "tabTape" },
   { key: "tide",     enKey: "tabTide",     zhKey: "tabTide" },
@@ -2444,6 +2446,13 @@ export default function OptionsHubView() {
           {activeTab === "prism" && (
             <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
               <PrismView />
+            </div>
+          )}
+
+          {/* ═══ PROPHET TAB ════════════════════════════════════════════════ */}
+          {activeTab === "prophet" && (
+            <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
+              <ProphetView />
             </div>
           )}
 
