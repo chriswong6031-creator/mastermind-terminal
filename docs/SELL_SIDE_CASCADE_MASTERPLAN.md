@@ -205,6 +205,15 @@ philosophy.
 | **E · Crowding/exhaustion** | did late demand become forward risk? | EXIT_CROWDING L1–L4 (call-share, IV blowout, P/C-OI collapse, ETF-flow) | future key — **ACCRUE, not usable yet** |
 | **F · Systemic cycle context** | is the *market* distributing? | §5 gauge (breadth divergence, sector TOPPING breadth, credit de-risk, CPI hazard) | **top-down multiplier** on sensitivity |
 
+> **External corroboration** — Codex `research/sell_exit_backtest/results/SEGMENTED_SELL_INDICATOR_FINDINGS.md`
+> (2026-07-07), a 68-name segmented sell bake-off, independently found *"sell speed should be
+> inverse to trend quality"*: fast trim on choppy mean-reverters, slower/partial (require a 2nd
+> key + structural break) on smooth compounders. So **Axis A should *condition sensitivity* on
+> per-name trend quality (Kaufman efficiency), not merely gate on `strong_bull`** — high-efficiency
+> smooth names demote escalation harder; low-efficiency choppy names allow faster trim. Caveat:
+> that study ranks on drawdown+capture, **not expectancy** (the metric that killed every prior
+> mechanical exit) — adopt as a display-cascade hypothesis, not a cleared rule.
+
 ### 4.2 The tiers and the action ladder
 
 **Two-key rule:** anything above "watch" requires **≥2 axes from different families**
