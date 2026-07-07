@@ -142,14 +142,14 @@ function squarifyRecurse(
   const rowThick = shorter > 0 ? rowArea / shorter : 0;
 
   const isWide = w >= h;
-  let pos = isWide ? x : y;
+  let pos = isWide ? y : x;
   for (const r of row) {
     const rFrac = rowValue > 0 ? r.value / rowValue : 0;
     const rLen = rFrac * shorter;
     if (isWide) {
-      result.push({ x: pos, y, w: rowThick, h: rLen, tile: r.tile });
+      result.push({ x, y: pos, w: rowThick, h: rLen, tile: r.tile });
     } else {
-      result.push({ x, y: pos, w: rLen, h: rowThick, tile: r.tile });
+      result.push({ x: pos, y, w: rLen, h: rowThick, tile: r.tile });
     }
     pos += rLen;
   }

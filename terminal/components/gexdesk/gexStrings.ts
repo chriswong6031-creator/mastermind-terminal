@@ -192,7 +192,8 @@ const GEX_LEX = {
 type GexDeskKey = keyof typeof GEX_LEX;
 
 export function getGexStr(lang: Lang, key: GexDeskKey): string {
-  const entry = GEX_LEX[key];
+  const entry = GEX_LEX[key as keyof typeof GEX_LEX];
+  if (!entry) return "";
   return lang === "zh" ? entry[1] : entry[0];
 }
 
