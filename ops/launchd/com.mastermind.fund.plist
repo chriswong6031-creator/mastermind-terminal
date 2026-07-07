@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.mastermind.fund.plist — nightly Terminal fundamentals refresh (.fund.json + EV metrics).
+
+  Runs ops/nightly_fund.sh from the fund ops clone once per day. The script refreshes
+  EV stockdata via panels(), runs collect_us_fund + gen_fund_us, then rsyncs the
+  per-symbol data files to the VPS (data-only; never touches the app).
+
+  ── TCC LAW — script MUST live OUTSIDE ~/Documents/ ────────────────────────
+  launchd (Aqua) is denied open-for-read on anything under ~/Documents/ by
+  macOS TCC: bash exec of a script there fails "Operation not permitted"
+  (exit 126) and file/git reads fail identically (binary exec + writes are,
+  counterintuitively, allowed — probed 2026-07-06). This job previously ran
+  from ~/Documents/Cluade/charting-app-fund-deploy and sat at exit 126; the
+  whole lane (script, engine clone, data, venv) now lives in $HOME. Same
+  failure class previously hit com.macro.thetadata-backfill and
+  com.mastermind.liveflow. Lane layout + recreate instructions: see the
+  header of ops/nightly_fund.sh.
+
+  SCHEDULE: 16:30 America/Vancouver = 23:30 UTC (summer/PDT), i.e. after the ~22:40 UTC
+  stockdata build. NOTE: launchd uses local wall-clock — in winter (PST) 16:30 local is
+  00:30 UTC; adjust to 15:30 if you want to hold 23:30 UTC year-round.
+
+  INSTALL (as the mac user — not root):
+    cp /Users/chriswong/fund-ops-wt/ops/launchd/com.mastermind.fund.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mastermind.fund.plist
+
+  UNINSTALL:
+    launchctl bootout gui/$(id -u)/com.mastermind.fund
+    rm ~/Library/LaunchAgents/com.mastermind.fund.plist
+
+  MANUAL RUN (skips the self-update exec hop):
+    /bin/bash /Users/chriswong/fund-ops-wt/ops/nightly_fund.sh --post-update
+
+  LOG:
+    tail -f /tmp/mm_fund_refresh.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mastermind.fund</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <!-- MUST be outside ~/Documents/ — see TCC LAW above. -->
+    <string>/Users/chriswong/fund-ops-wt/ops/nightly_fund.sh</string>
+  </array>
+
+  <!-- MUST be outside ~/Documents/ too: launchd chdir into a TCC-denied
+       directory breaks getcwd in the child ("shell-init: … Operation not
+       permitted"). -->
+  <key>WorkingDirectory</key>
+  <string>/Users/chriswong/fund-ops-wt</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>16</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- Only run in the user's GUI session — never as a system daemon. -->
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/mm_fund_refresh.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/mm_fund_refresh.log</string>
+</dict>
+</plist>
