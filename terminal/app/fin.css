@@ -262,9 +262,25 @@
 .sd-x{color:var(--muted);font-size:17px;line-height:1;cursor:pointer;background:none;border:none;padding:0 2px}
 .sd-x:hover{color:var(--text)}
 .sd-grab{display:none}
-.sd-body{flex:1;overflow-y:auto;padding:14px 13px 22px;display:flex;flex-direction:column;gap:14px}
+.sd-body{flex:1;overflow-y:auto;padding:14px 13px 22px;display:flex;flex-direction:column;gap:14px;scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
+.sd-body::-webkit-scrollbar{width:7px}
+.sd-body::-webkit-scrollbar-thumb{background:var(--line-3);border-radius:4px}
+.sd-body::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+.sd-body::-webkit-scrollbar-track{background:transparent}
 .sd-full{align-self:flex-start;margin-top:2px;font:600 11.5px/1 var(--font-ui);color:var(--brand-2);background:none;border:none;cursor:pointer;padding:4px 0}
 .sd-full:hover{color:var(--brand)}
+/* signal history — compact date·price rows with a native slim dark scrollbar */
+.sd-siglist{display:flex;flex-direction:column;gap:1px;max-height:248px;overflow-y:auto;margin:0 -4px;padding:0 2px;scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
+.sd-siglist::-webkit-scrollbar{width:6px}
+.sd-siglist::-webkit-scrollbar-thumb{background:var(--line-3);border-radius:3px}
+.sd-siglist::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+.sd-siglist::-webkit-scrollbar-track{background:transparent}
+.sd-sigrow{display:flex;align-items:center;gap:9px;width:100%;padding:6px 6px;border:none;background:none;border-radius:var(--r);cursor:pointer;text-align:left;transition:background var(--t)}
+.sd-sigrow:hover{background:var(--panel-2)}
+.sd-sig-badge{display:inline-flex;align-items:center;justify-content:center;min-width:46px;padding:3px 7px;border-radius:var(--r-pill);font:700 10px/1 var(--font-ui);color:#fff;letter-spacing:.03em;flex:none}
+.sd-sig-q{font:700 9.5px/1 var(--font-ui);white-space:nowrap}
+.sd-sig-date{margin-left:auto;font:500 11.5px/1 var(--font-num);color:var(--text-2);white-space:nowrap}
+.sd-sig-price{font:600 11.5px/1 var(--font-num);color:var(--text);min-width:58px;text-align:right}
 @media (max-width:860px){
   .sd-scrim{background:rgba(4,5,7,.6);backdrop-filter:blur(2px)}
   .sd-dock{inset:8px;top:8px;right:8px;bottom:8px;left:8px;flex-direction:column;max-width:none}

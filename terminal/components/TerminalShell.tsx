@@ -403,7 +403,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const m = man?.symbols?.[active];
   const liveQuote = quotes[active] ?? null;   // header/badge quote = the active symbol's entry in the shared map
   const ov = oracleVerdict(m?.verdict ?? null);
-  const dv = deskVerdict(intel?.analysis?.decision ?? null, lang === "zh");
+  const dv = deskVerdict(intel, lang === "zh");
   // ── unified signal hierarchy ──────────────────────────────────────────────
   // Every ticker used to show three competing verdicts (Oracle · conviction · timing).
   // We keep the Oracle as the single PRIMARY (only backtested) verdict and demote the

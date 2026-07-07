@@ -16,31 +16,15 @@ export function oracleVerdict(v?: string | null): Verdict {
   return { label: u.charAt(0) + u.slice(1).toLowerCase(), color, raw: u };
 }
 
-// Research Desk verdict from intel.analysis.decision {verb, verb_zh, tone}. tone: "go"|"stop"|other
-export function deskVerdict(
-  decision?: { verb?: string | null; verb_zh?: string | null; tone?: string | null } | null,
-  zh = false
-): Verdict {
-  const tone = (decision?.tone || "").toLowerCase();
-  const color =
-    tone === "go"
-      ? "var(--buy)"
-      : tone === "stop"
-        ? "var(--sell)"
-        : "var(--signal)";
-  const verb = (zh ? decision?.verb_zh || decision?.verb : decision?.verb) || "";
-  const label = verb
-    ? verb.charAt(0).toUpperCase() + verb.slice(1)
-    : tone === "go"
-      ? zh
-        ? "看多"
-        : "Bullish"
-      : tone === "stop"
-        ? zh
-          ? "看空"
-          : "Bearish"
-        : zh
-          ? "中性"
-          : "Neutral";
-  return { label, color, raw: tone || null };
+// Research Desk verdict = the macro research-desk directional lean.
+// Reads intel.tape.ai_lean.dir (BULL | BEAR | NEUTRAL) — the LIVE `cards`/`tape` schema.
+// (The old intel.analysis.decision schema is deprecated and no longer populated.)
+export function deskVerdict(intel: any, zh = false): Verdict {
+  const dir = String(intel?.tape?.ai_lean?.dir || "").toUpperCase();
+  const color = dir === "BULL" ? "var(--buy)" : dir === "BEAR" ? "var(--sell)" : "var(--signal)";
+  const label =
+    dir === "BULL" ? (zh ? "看多" : "Bullish")
+      : dir === "BEAR" ? (zh ? "看空" : "Bearish")
+        : (zh ? "中性" : "Neutral");
+  return { label, color, raw: dir || null };
 }
