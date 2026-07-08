@@ -32,7 +32,7 @@ import datetime as dt
 from pathlib import Path
 
 CA_ROOT = Path(__file__).resolve().parents[1]
-MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+MACRO = Path(os.environ.get("MACRO_ROOT", "/Users/chriswong/Documents/Cluade/Macro Dashboard"))
 CACHE = MACRO / "data" / "us_fund"
 SITE = MACRO / "site" / "stockdata"
 TX_INDEX = CACHE / "_tx_index.json"
