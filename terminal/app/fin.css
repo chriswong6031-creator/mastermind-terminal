@@ -699,3 +699,33 @@
   .fin-seas-selsum-stats{gap:16px}
   .fin-adv-cards{grid-template-columns:repeat(auto-fit,minmax(128px,1fr))}
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Insider Power tab (InsiderPage)
+ * ───────────────────────────────────────────────────────────────────────── */
+.fin-insider-hero{display:grid;grid-template-columns:minmax(200px,240px) 1fr;gap:22px;align-items:center;margin-top:12px}
+@media (max-width:640px){.fin-insider-hero{grid-template-columns:1fr;gap:16px}}
+.fin-insider-gaugebox{display:flex;flex-direction:column;align-items:center;gap:2px}
+.fin-insider-score{display:flex;align-items:baseline;gap:4px;margin-top:2px}
+.fin-insider-score .num{font:700 34px/1 var(--font-num);letter-spacing:-.01em}
+.fin-insider-score .scale{font:600 12px/1 var(--font-num);color:var(--muted)}
+.fin-insider-scorelbl{font:500 10.5px/1 var(--font-ui);color:var(--muted)}
+.fin-insider-signal{min-width:0}
+.fin-insider-sigrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.fin-insider-sigbadge{font:700 12px/1 var(--font-ui);letter-spacing:.04em;padding:6px 11px;border-radius:var(--r-pill);border:1px solid var(--line)}
+.fin-insider-sigbadge.up{color:var(--up);background:color-mix(in srgb,var(--up) 12%,transparent);border-color:color-mix(in srgb,var(--up) 34%,transparent)}
+.fin-insider-sigbadge.down{color:var(--down);background:color-mix(in srgb,var(--down) 12%,transparent);border-color:color-mix(in srgb,var(--down) 34%,transparent)}
+.fin-insider-sigbadge.mut{color:var(--text-2);background:var(--panel-2)}
+.fin-insider-conf{font:600 11px/1 var(--font-ui);color:var(--text-2);text-transform:capitalize}
+.fin-insider-analysis{font:500 13px/1.5 var(--font-ui);color:var(--text);margin:11px 0 0}
+.fin-insider-stats{display:flex;flex-wrap:wrap;gap:22px;margin-top:15px}
+.fin-insider-stat{display:flex;flex-direction:column;gap:3px}
+.fin-insider-stat .lbl{font:500 10px/1 var(--font-ui);color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.fin-insider-stat .val{font:700 15px/1 var(--font-num);color:var(--text)}
+.fin-insider-stat .val.up{color:var(--up)}
+.fin-insider-stat .val.down{color:var(--down)}
+.fin-insider-tbl .fin-insider-role{color:var(--text);font:500 12px/1.3 var(--font-ui)}
+.fin-insider-side{display:inline-flex;align-items:center;font:700 10.5px/1 var(--font-ui);letter-spacing:.03em;padding:3px 8px;border-radius:var(--r-pill)}
+.fin-insider-side.up{color:var(--up);background:color-mix(in srgb,var(--up) 13%,transparent)}
+.fin-insider-side.down{color:var(--down);background:color-mix(in srgb,var(--down) 13%,transparent)}
+.fin-insider-asof{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:9px}
