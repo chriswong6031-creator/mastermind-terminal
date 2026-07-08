@@ -532,6 +532,8 @@
   overflow: hidden; /* card clips; the rows container scrolls via obs-scroll */
   border-top: 1px solid rgba(255,255,255,0.06);
   border-radius: 0; /* flush in rail — no card-level radius */
+  display: flex;            /* FIX: card must be a flex container so that     */
+  flex-direction: column;   /* inner .obs-fd-radar-rows flex:1 actually works */
 }
 .obs-fd-radar-rows {
   padding: 4px 8px 10px;
@@ -843,13 +845,23 @@
 }
 
 /* ── Inspector pane — sits below Chain Heat in right rail ────────────────── */
-/* Empty state: slim one-line hint. Selected: auto-expand (content drives height).  */
+/* Empty state: slim one-line hint. Selected: capped at 45% rail height so
+   Chain Heat above is never starved. Internal .obs-insp-body scrolls the body. */
 .obs-fd-inspector.obs-card {
   padding: 0;
   overflow: hidden;
-  flex: 0 0 auto;          /* shrink to content; chain heat fills the space above */
+  flex: 0 0 auto;          /* don't stretch — chain heat fills the space above */
+  max-height: 45%;         /* FIX: cap so chain heat is never starved            */
+  display: flex;           /* FIX: need flex-column so body flex:1 works         */
+  flex-direction: column;
   border-top: 1px solid rgba(255,255,255,0.06);
   border-radius: 0;
+}
+/* Scrollable body inside the inspector card */
+.obs-insp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .obs-insp-head {
   padding: 10px 14px 6px;

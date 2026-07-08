@@ -229,18 +229,21 @@ export function StrikeLadder({
 
     let rafId: number | null = null;
     let observer: ResizeObserver | null = null;
+    // Retry cap: prevent infinite loops if spot row is genuinely absent
+    let retries = 0;
+    const MAX_RETRIES = 30;
 
     function isScrollable(container: Element): boolean {
       return container.clientHeight > 0 && container.scrollHeight > container.clientHeight;
     }
 
-    function doCenter() {
+    // Returns true if centering succeeded (scrollTop moved or spot already in view).
+    function doCenter(): boolean {
       // Re-query from DOM every time — works even after early-return renders
       const container = containerRef.current?.querySelector<HTMLDivElement>(".obs-scroll") ?? null;
-      if (!container || !isScrollable(container)) return;
+      if (!container || !isScrollable(container)) return false;
 
       // Find the spot row by the ▶ marker span (always rendered on isCurrent rows)
-      // We look for the row child containing the SPOT_MARKER (▶ text)
       const rows = container.children;
       let spotRow: Element | null = null;
       for (let i = 0; i < rows.length; i++) {
@@ -249,18 +252,42 @@ export function StrikeLadder({
           break;
         }
       }
-      if (!spotRow) return;
+      if (!spotRow) return false;
 
       const elTop = (spotRow as HTMLElement).offsetTop;
       const elHeight = (spotRow as HTMLElement).offsetHeight;
       const containerHeight = container.clientHeight;
-      container.scrollTop = elTop - containerHeight / 2 + elHeight / 2;
+      const target = elTop - containerHeight / 2 + elHeight / 2;
+      const before = container.scrollTop;
+      container.scrollTop = target;
+      // Success: scrollTop moved toward target, or spot is already in view
+      const moved = Math.abs(container.scrollTop - before) > 0.5;
+      const inView =
+        (spotRow as HTMLElement).offsetTop >= container.scrollTop &&
+        (spotRow as HTMLElement).offsetTop + elHeight <=
+          container.scrollTop + containerHeight;
+      return moved || inView;
     }
 
     function tryCenter() {
+      if (retries >= MAX_RETRIES) return;
+      retries++;
       const container = containerRef.current?.querySelector<HTMLDivElement>(".obs-scroll") ?? null;
       if (container && isScrollable(container)) {
-        doCenter();
+        const success = doCenter();
+        if (!success) {
+          // scrollTop assignment was clamped (layout not yet final) — retry next frame
+          rafId = requestAnimationFrame(tryCenter);
+        } else {
+          // Success: keep ResizeObserver armed so resize events re-center
+          if (!observer && containerRef.current) {
+            observer = new ResizeObserver(() => {
+              retries = 0;
+              requestAnimationFrame(tryCenter);
+            });
+            observer.observe(container);
+          }
+        }
       } else if (!observer && containerRef.current) {
         // Not yet scrollable — watch for layout change (hidden→visible OR constrained layout)
         const target = container ?? containerRef.current;
@@ -269,7 +296,8 @@ export function StrikeLadder({
           if (c && isScrollable(c)) {
             observer?.disconnect();
             observer = null;
-            doCenter();
+            retries = 0;
+            rafId = requestAnimationFrame(tryCenter);
           }
         });
         observer.observe(target);
@@ -281,6 +309,7 @@ export function StrikeLadder({
     // Visibility-change fallback (harness preview late-load path)
     function onVisibilityChange() {
       if (document.visibilityState === "visible") {
+        retries = 0;
         requestAnimationFrame(tryCenter);
       }
     }

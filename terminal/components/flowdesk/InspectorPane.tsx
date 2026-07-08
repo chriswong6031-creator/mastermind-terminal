@@ -107,7 +107,11 @@ export function InspectorPane({ event, tickerCtx, lang }: InspectorPaneProps) {
 
   return (
     <div className="obs-card obs-fd-inspector" data-tut="flow-inspector">
-      <EventDetail event={event} zh={zh} tickerCtx={tickerCtx} />
+      {/* obs-insp-body is a capped internal scroller so the inspector never
+          starves Chain Heat above it in the right rail */}
+      <div className="obs-insp-body obs-scroll">
+        <EventDetail event={event} zh={zh} tickerCtx={tickerCtx} />
+      </div>
     </div>
   );
 }
