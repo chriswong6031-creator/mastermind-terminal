@@ -40,6 +40,7 @@ import { MatrixGrid, type MatrixCell, type MatrixLevels } from "./MatrixGrid";
 import { HeatSeekerCard, type HeatSeekerPick } from "./HeatSeekerCard";
 import { OiMoversRail, type OiMoverRow } from "./OiMoversRail";
 import { ConfluenceView } from "./ConfluenceView";
+import { flowGet } from "@/lib/flowClientCache";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -86,9 +87,9 @@ type NormMode = "column" | "global";
 
 async function safeFetch<T>(url: string): Promise<T | null> {
   try {
-    const r = await fetch(url, { cache: "no-store" });
-    if (!r.ok) return null;
-    return (await r.json()) as T;
+    const f = new URL(url, "http://x").searchParams.get("f") ?? url;
+    const data = await flowGet(f);
+    return (data as T) ?? null;
   } catch {
     return null;
   }
@@ -241,7 +242,7 @@ export function PrismView() {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div style={VIEW_OUTER}>
+    <div style={VIEW_OUTER} className="obs obs-ambient">
 
       {/* ── Controls bar ──────────────────────────────────────────────────── */}
       <div style={CONTROLS_BAR}>
@@ -306,15 +307,13 @@ export function PrismView() {
       <div style={LENS_BAR_ROW}>
         <LensBar activeLens={activeLens} onLens={setLens} lang={lang} />
 
-        {/* DTE range chips */}
+        {/* DTE range chips — Observatory .obs-chip */}
         <div style={DTE_CHIPS}>
           {([7, 30, 90, null] as DteRange[]).map((dte) => (
             <button
               key={String(dte)}
-              style={{
-                ...DTE_CHIP,
-                ...(dteFilter === dte ? DTE_CHIP_ACTIVE : {}),
-              }}
+              className={`obs-chip${dteFilter === dte ? " on" : ""}`}
+              style={DTE_CHIP_BASE}
               onClick={() => setDteFilter(dte)}
               aria-pressed={dteFilter === dte}
             >
@@ -329,16 +328,14 @@ export function PrismView() {
           ))}
         </div>
 
-        {/* Normalization toggle (SINGLE mode only) */}
+        {/* Normalization toggle — Observatory .obs-chip */}
         {mode === "single" && (
           <div style={NORM_GROUP}>
             {(["column", "global"] as NormMode[]).map((n) => (
               <button
                 key={n}
-                style={{
-                  ...NORM_BTN,
-                  ...(norm === n ? NORM_BTN_ACTIVE : {}),
-                }}
+                className={`obs-chip${norm === n ? " on" : ""}`}
+                style={DTE_CHIP_BASE}
                 onClick={() => setNorm(n)}
                 aria-pressed={norm === n}
               >
@@ -349,9 +346,9 @@ export function PrismView() {
         )}
       </div>
 
-      {/* ── Honesty banner (GEX / DOI signed lenses) ─────────────────────── */}
+      {/* ── Honesty banner — obs-note (amber, always visible when GEX/DOI) ── */}
       {(activeLens === "GEX" || activeLens === "DOI") && mode === "single" && (
-        <div style={HONESTY_BANNER}>
+        <div className="obs-note" style={HONESTY_BANNER_OBS}>
           {t("magnitudeFirst")}
         </div>
       )}
@@ -524,58 +521,28 @@ const DTE_CHIPS: React.CSSProperties = {
   marginLeft: 6,
 };
 
-const DTE_CHIP: React.CSSProperties = {
-  fontSize: 9,
-  fontWeight: 700,
-  color: "var(--text-2)",
-  background: "var(--panel-3)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-pill)",
-  padding: "2px 7px",
-  cursor: "pointer",
-  letterSpacing: "0.03em",
-  transition: "background 0.1s, border-color 0.1s, color 0.1s",
-};
-
-const DTE_CHIP_ACTIVE: React.CSSProperties = {
-  color: "var(--brand-2)",
-  borderColor: "var(--brand-2)",
-  background: "rgba(77,130,255,0.12)",
+/** Compact size override for .obs-chip used in the lens bar row */
+const DTE_CHIP_BASE: React.CSSProperties = {
+  padding: "3px 9px",
+  fontSize: 10,
+  borderRadius: 8,
 };
 
 const NORM_GROUP: React.CSSProperties = {
   display: "flex",
+  gap: 3,
   marginLeft: "auto",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-md)",
-  overflow: "hidden",
 };
 
-const NORM_BTN: React.CSSProperties = {
-  padding: "3px 8px",
-  height: 24,
-  background: "transparent",
-  border: "none",
-  color: "var(--text-2)",
-  fontSize: 9,
-  fontWeight: 700,
-  letterSpacing: "0.06em",
-  cursor: "pointer",
-  transition: "background 0.1s, color 0.1s",
-};
-
-const NORM_BTN_ACTIVE: React.CSSProperties = {
-  background: "rgba(77,130,255,0.12)",
-  color: "var(--brand-2)",
-};
-
-const HONESTY_BANNER: React.CSSProperties = {
-  padding: "4px 14px",
-  background: "rgba(157,134,255,0.06)",
-  borderBottom: "1px solid rgba(157,134,255,0.14)",
-  fontSize: 9,
-  color: "rgba(157,134,255,0.85)",
-  letterSpacing: "0.02em",
+/** obs-note override: inline strip (no block margin) */
+const HONESTY_BANNER_OBS: React.CSSProperties = {
+  margin: 0,
+  borderRadius: 0,
+  borderLeft: "none",
+  borderRight: "none",
+  borderTop: "none",
+  padding: "5px 14px",
+  fontSize: 10,
   flexShrink: 0,
 };
 

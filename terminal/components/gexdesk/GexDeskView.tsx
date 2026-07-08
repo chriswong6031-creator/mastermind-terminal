@@ -34,6 +34,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { flowGet } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
 import { makeGexT } from "./gexStrings";
 import { GexSummaryBar } from "./GexSummaryBar";
@@ -104,9 +105,9 @@ const GEX_POLL_MS = 60_000;
 
 async function safeFetch<T>(url: string): Promise<T | null> {
   try {
-    const r = await fetch(url, { cache: "no-store" });
-    if (!r.ok) return null;
-    return (await r.json()) as T;
+    const f = new URL(url, "http://x").searchParams.get("f") ?? url;
+    const data = await flowGet(f);
+    return (data as T) ?? null;
   } catch {
     return null;
   }
@@ -251,7 +252,7 @@ export function GexDeskView() {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div style={DESK_OUTER}>
+    <div style={DESK_OUTER} className="obs obs-ambient">
 
       {/* ── Controls bar ──────────────────────────────────────────────────── */}
       <div style={CONTROLS_BAR}>

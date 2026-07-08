@@ -67,10 +67,8 @@ export function LensBar({ activeLens, onLens, lang }: LensBarProps) {
         return (
           <div key={key} style={LENS_WRAP}>
             <button
-              style={{
-                ...LENS_BTN,
-                ...(isActive ? (isGex ? LENS_ACTIVE_GEX : LENS_ACTIVE_FLOW) : {}),
-              }}
+              className={`obs-chip${isActive ? " on" : ""}`}
+              style={LENS_BTN_BASE}
               onClick={() => onLens(key)}
               aria-label={`${t(labelKey)} (${shortcut})`}
               aria-pressed={isActive}
@@ -90,7 +88,7 @@ export function LensBar({ activeLens, onLens, lang }: LensBarProps) {
 
       {/* VEX — disabled, "experimental — deferred" */}
       <div style={LENS_WRAP}>
-        <button style={LENS_BTN_DISABLED} disabled aria-disabled="true">
+        <button className="obs-chip" style={LENS_BTN_DISABLED_BASE} disabled aria-disabled="true">
           <span>{t("lensVex")}</span>
         </button>
         {/* Visible caption instead of title= (CI-guarded against translated title=) */}
@@ -99,7 +97,7 @@ export function LensBar({ activeLens, onLens, lang }: LensBarProps) {
 
       {/* UNUSUAL — disabled, "accruing baseline" */}
       <div style={LENS_WRAP}>
-        <button style={LENS_BTN_DISABLED} disabled aria-disabled="true">
+        <button className="obs-chip" style={LENS_BTN_DISABLED_BASE} disabled aria-disabled="true">
           <span>{t("lensUnusual")}</span>
         </button>
         <span style={DISABLED_CAPTION}>{t("lensUnusualDisabled")}</span>
@@ -125,33 +123,14 @@ const LENS_WRAP: React.CSSProperties = {
   gap: 2,
 };
 
-const LENS_BTN: React.CSSProperties = {
+/** Compact override for .obs-chip in the lens bar */
+const LENS_BTN_BASE: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 5,
   padding: "4px 10px",
-  height: 28,
-  background: "var(--panel-3)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-md)",
-  color: "var(--text-2)",
   fontSize: 11,
-  fontWeight: 700,
-  letterSpacing: "0.06em",
-  cursor: "pointer",
-  transition: "background 0.12s, border-color 0.12s, color 0.12s",
-};
-
-const LENS_ACTIVE_GEX: React.CSSProperties = {
-  background: "rgba(77,130,255,0.15)",
-  borderColor: "var(--brand-2)",
-  color: "var(--brand-2)",
-};
-
-const LENS_ACTIVE_FLOW: React.CSSProperties = {
-  background: "rgba(77,210,200,0.12)",
-  borderColor: "rgba(77,210,200,0.7)",
-  color: "rgb(77,210,200)",
+  borderRadius: 8,
 };
 
 const SHORTCUT_HINT: React.CSSProperties = {
@@ -161,9 +140,9 @@ const SHORTCUT_HINT: React.CSSProperties = {
   fontWeight: 400,
 };
 
-const LENS_BTN_DISABLED: React.CSSProperties = {
-  ...LENS_BTN,
-  opacity: 0.38,
+const LENS_BTN_DISABLED_BASE: React.CSSProperties = {
+  ...LENS_BTN_BASE,
+  opacity: 0.32,
   cursor: "not-allowed",
   pointerEvents: "none",
 };

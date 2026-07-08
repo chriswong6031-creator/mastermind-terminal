@@ -213,10 +213,8 @@ export function StrikeLadder({
       {byExpiry && byExpiry.length > 0 && (
         <div style={EXPIRY_CHIPS_ROW}>
           <button
-            style={{
-              ...EXPIRY_CHIP,
-              ...(selectedExpiry === null ? EXPIRY_CHIP_ACTIVE : {}),
-            }}
+            className={`obs-chip${selectedExpiry === null ? " on" : ""}`}
+            style={EXPIRY_CHIP_BASE}
             onClick={() => onSelectExpiry(null)}
           >
             {t("expiryAll")}
@@ -224,14 +222,12 @@ export function StrikeLadder({
           {byExpiry.map((e) => (
             <button
               key={e.exp}
-              style={{
-                ...EXPIRY_CHIP,
-                ...(selectedExpiry === e.exp ? EXPIRY_CHIP_ACTIVE : {}),
-              }}
+              className={`obs-chip${selectedExpiry === e.exp ? " on" : ""}`}
+              style={EXPIRY_CHIP_BASE}
               onClick={() => onSelectExpiry(e.exp)}
             >
               {e.exp.slice(5)}{" "}
-              <span style={{ color: "var(--muted)", fontSize: 9 }}>
+              <span style={{ opacity: 0.6, fontSize: 9, marginLeft: 2 }}>
                 {dteLabelStr(e.exp)}
               </span>
             </button>
@@ -355,9 +351,10 @@ export function StrikeLadder({
 
                 {/* GEX value */}
                 <span
+                  className="num"
                   style={{
                     ...GEX_VAL,
-                    color: isPos ? "var(--brand-2)" : "var(--down)",
+                    color: isPos ? "var(--up)" : "var(--down)",
                   }}
                 >
                   {fmtGexVal(s.gamma_net)}
@@ -448,27 +445,16 @@ const EXPIRY_CHIPS_ROW: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
   gap: 4,
-  padding: "6px 12px",
+  padding: "6px 10px",
   borderBottom: "1px solid var(--line-2)",
   background: "var(--panel)",
 };
 
-const EXPIRY_CHIP: React.CSSProperties = {
+// Base overrides for .obs-chip in the compact ladder context (smaller than default)
+const EXPIRY_CHIP_BASE: React.CSSProperties = {
+  padding: "3px 8px",
   fontSize: 10,
-  fontWeight: 600,
-  color: "var(--text-2)",
-  background: "var(--panel-3)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-pill)",
-  padding: "2px 8px",
-  cursor: "pointer",
-  letterSpacing: "0.03em",
-};
-
-const EXPIRY_CHIP_ACTIVE: React.CSSProperties = {
-  color: "var(--brand-2)",
-  borderColor: "var(--brand-2)",
-  background: "rgba(77,130,255,0.12)",
+  borderRadius: 8,
 };
 
 const COL_HEADER_ROW: React.CSSProperties = {
@@ -573,7 +559,7 @@ const BAR_POS: React.CSSProperties = {
   left: "50%",
   height: 12,
   borderRadius: "0 2px 2px 0",
-  background: "linear-gradient(90deg, rgba(77,130,255,0.45), rgba(77,130,255,0.85))",
+  background: "linear-gradient(90deg, color-mix(in srgb, var(--brand) 45%, transparent), color-mix(in srgb, var(--brand) 85%, transparent))",
   transition: "width 0.35s cubic-bezier(.22,1,.36,1)",
   transformOrigin: "left",
 };
@@ -583,7 +569,7 @@ const BAR_NEG: React.CSSProperties = {
   right: "50%",
   height: 12,
   borderRadius: "2px 0 0 2px",
-  background: "linear-gradient(270deg, rgba(240,86,107,0.45), rgba(240,86,107,0.85))",
+  background: "linear-gradient(270deg, color-mix(in srgb, var(--down) 45%, transparent), color-mix(in srgb, var(--down) 85%, transparent))",
   transition: "width 0.35s cubic-bezier(.22,1,.36,1)",
   transformOrigin: "right",
 };

@@ -17,6 +17,7 @@
 import React from "react";
 import { makePrismT } from "./prismStrings";
 import type { Lang } from "@/lib/i18n";
+import { RingGauge } from "@/components/ui/RingGauge";
 
 // ─── Type (matches options_structure.matrix/v1 heat_seeker field) ─────────────
 
@@ -94,7 +95,7 @@ export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
 
   if (!pick) {
     return (
-      <div style={CARD_NULL}>
+      <div className="obs-card" style={CARD_NULL}>
         <span style={NULL_STAR}>☆</span>
         <span style={NULL_TEXT}>{t("heatSeekerNull")}</span>
       </div>
@@ -106,49 +107,50 @@ export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
   const confPct = Math.round(pick.confidence * 100);
 
   return (
-    <div style={CARD_OUTER}>
+    <div className="obs-card" style={CARD_OUTER}>
       {/* Header */}
-      <div style={CARD_HEADER}>
+      <div className="obs-card-hd" style={CARD_HEADER}>
         <span style={PICK_STAR}>★</span>
-        <span style={CARD_TITLE}>{t("heatSeekerTitle")}</span>
+        <span className="obs-lbl" style={{ flex: 1 }}>{t("heatSeekerTitle")}</span>
         <span style={CARD_LENS}>{pick.lens}</span>
       </div>
 
-      {/* Disclaimer — verbatim, non-removable */}
-      <div style={DISCLAIMER}>
+      {/* Disclaimer — verbatim, non-removable, always amber */}
+      <div className="obs-note" style={DISCLAIMER_NOTE}>
         {t("heatSeekerDisclaimer")}
       </div>
 
-      {/* Core pick values */}
-      <div style={PICK_GRID}>
-        <div style={PICK_CELL}>
-          <span style={PICK_LABEL}>{t("heatSeekerStrike")}</span>
-          <span style={PICK_VALUE}>
-            {fmtStrike(pick.strike)}
-            {pct != null && (
-              <span style={PCT_FROM_SPOT}> {pct}</span>
-            )}
-          </span>
-        </div>
-        <div style={PICK_CELL}>
-          <span style={PICK_LABEL}>{t("heatSeekerExpiry")}</span>
-          <span style={PICK_VALUE}>
-            {fmtExpiry(pick.expiry)}
-            <span style={DTE_CHIP}>{dte === 0 ? "0DTE" : `${dte}d`}</span>
-          </span>
-        </div>
-        <div style={PICK_CELL}>
-          <span style={PICK_LABEL}>{t("heatSeekerRatio")}</span>
-          <span style={PICK_VALUE}>{pick.standout_ratio.toFixed(2)}×</span>
-        </div>
-        <div style={PICK_CELL}>
-          <span style={PICK_LABEL}>{t("heatSeekerConf")}</span>
-          <span style={PICK_VALUE}>{confPct}%</span>
+      {/* Confidence ring + pick cells */}
+      <div style={PICK_BODY}>
+        <RingGauge
+          value={confPct}
+          size="md"
+          tone="auto"
+          label={t("heatSeekerConf")}
+        />
+        <div style={PICK_GRID}>
+          <div style={PICK_CELL}>
+            <span className="obs-lbl">{t("heatSeekerStrike")}</span>
+            <span className="num" style={PICK_VALUE}>
+              {fmtStrike(pick.strike)}
+              {pct != null && (
+                <span style={PCT_FROM_SPOT}> {pct}</span>
+              )}
+            </span>
+          </div>
+          <div style={PICK_CELL}>
+            <span className="obs-lbl">{t("heatSeekerExpiry")}</span>
+            <span className="num" style={PICK_VALUE}>
+              {fmtExpiry(pick.expiry)}
+              <span style={DTE_CHIP}>{dte === 0 ? "0DTE" : `${dte}d`}</span>
+            </span>
+          </div>
+          <div style={PICK_CELL}>
+            <span className="obs-lbl">{t("heatSeekerRatio")}</span>
+            <span className="num" style={PICK_VALUE}>{pick.standout_ratio.toFixed(2)}×</span>
+          </div>
         </div>
       </div>
-
-      {/* Confidence bar */}
-      {confBar(pick.confidence)}
     </div>
   );
 }
@@ -156,22 +158,19 @@ export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const CARD_OUTER: React.CSSProperties = {
-  background: "var(--panel)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-md)",
-  padding: "10px 12px",
   display: "flex",
   flexDirection: "column",
-  gap: 7,
+  gap: 0,
 };
 
 const CARD_NULL: React.CSSProperties = {
-  ...CARD_OUTER,
   alignItems: "center",
   justifyContent: "center",
   padding: "14px 12px",
   gap: 6,
   opacity: 0.6,
+  display: "flex",
+  flexDirection: "column",
 };
 
 const NULL_STAR: React.CSSProperties = {
@@ -190,6 +189,21 @@ const CARD_HEADER: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 6,
+};
+
+const DISCLAIMER_NOTE: React.CSSProperties = {
+  margin: "0 10px 0",
+  padding: "6px 10px",
+  borderRadius: 8,
+  fontSize: 10,
+  lineHeight: 1.4,
+};
+
+const PICK_BODY: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  padding: "10px 12px 12px",
 };
 
 const PICK_STAR: React.CSSProperties = {
