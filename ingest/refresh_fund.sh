@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command fund/opts/transcript/intel refresh — fundamentals pipeline driver.
+# One-command fund/opts/transcript/intel/insider refresh — fundamentals pipeline driver.
 #
 # Runs on the Mac (needs macro venv + TUSHARE_TOKEN in Macro Dashboard/.env,
 # POLYGON_API_KEY in charting-app/.env, defeatbeta venv at /tmp/dbeta-venv or
@@ -227,6 +227,22 @@ run "$PY" "$INGEST/pull_macro_intel.py" --all $LIMIT_ARG \
   || echo "[$(ts)] WARN: pull_macro_intel exited $?"
 
 # ---------------------------------------------------------------------------
+# 10b. Insider Power — per-ticker <SYM>.insider.json for the Terminal "Insider"
+#      tab. Scoring is owned by the Macro pipeline (engine/insider_power.py) and
+#      reads the PIT SEC Form-4 panel that the nightly Macro build_site already
+#      rebuilds (data/sec_insider/insider_panel.parquet). Writes into $DATA
+#      alongside fund/opts so the same rsync ships it. US-only (Form-4 = US
+#      names). Non-fatal: a missing/unbuilt panel just skips this artifact.
+# ---------------------------------------------------------------------------
+if [ "$CN_HK_ONLY" = "0" ]; then
+  echo "[$(ts)] === export insider power (<SYM>.insider.json) ==="
+  run "$PY" "$MACRO/scripts/export_insider_power.py" \
+      --panel "$MACRO/data/sec_insider/insider_panel.parquet" \
+      --out "$DATA" \
+    || echo "[$(ts)] WARN: export_insider_power exited $?"
+fi
+
+# ---------------------------------------------------------------------------
 # 10. JUDGE FIX (4): refuse bulk rsync in 21:00–22:30 UTC
 #     (nightly terminal-data window on the VPS — avoids race on the manifest)
 # ---------------------------------------------------------------------------
@@ -265,23 +281,28 @@ ls ./*.intel.json 2>/dev/null | sed 's|^\./||' \
   | grep -v '\.SS\.intel\.json\|\.SZ\.intel\.json\|\.HK\.intel\.json' > "$INTEL_LIST" || true
 N_INTEL=$(wc -l < "$INTEL_LIST" | tr -d ' ')
 
-echo "[$(ts)] name lists: fund=$N_FUND  opts=$N_OPTS  us_intel=$N_INTEL"
+# insider.json (per-ticker Insider Power; US names only)
+INSIDER_LIST="/tmp/refresh_fund_list_insider.txt"
+ls ./*.insider.json 2>/dev/null | sed 's|^\./||' > "$INSIDER_LIST" || true
+N_INSIDER=$(wc -l < "$INSIDER_LIST" | tr -d ' ')
+
+echo "[$(ts)] name lists: fund=$N_FUND  opts=$N_OPTS  us_intel=$N_INTEL  insider=$N_INSIDER"
 
 # ---------------------------------------------------------------------------
 # 12. rsync fund + opts + intel
 # ---------------------------------------------------------------------------
-if [ "$N_FUND" -gt 0 ] || [ "$N_OPTS" -gt 0 ] || [ "$N_INTEL" -gt 0 ]; then
-  # Merge all three lists for a single rsync pass to keep SSH round-trips minimal
+if [ "$N_FUND" -gt 0 ] || [ "$N_OPTS" -gt 0 ] || [ "$N_INTEL" -gt 0 ] || [ "$N_INSIDER" -gt 0 ]; then
+  # Merge all lists for a single rsync pass to keep SSH round-trips minimal
   MERGED_LIST="/tmp/refresh_fund_list_merged.txt"
-  cat "$FUND_LIST" "$OPTS_LIST" "$INTEL_LIST" > "$MERGED_LIST"
+  cat "$FUND_LIST" "$OPTS_LIST" "$INTEL_LIST" "$INSIDER_LIST" > "$MERGED_LIST"
 
-  echo "[$(ts)] === rsync fund/opts/intel → VPS ($N_FUND + $N_OPTS + $N_INTEL files) ==="
+  echo "[$(ts)] === rsync fund/opts/intel/insider → VPS ($N_FUND + $N_OPTS + $N_INTEL + $N_INSIDER files) ==="
   run rsync -az --files-from="$MERGED_LIST" \
     -e "ssh -i $KEY" \
     ./ "$VPS:$VPS_DATA/" \
-    && echo "[$(ts)] rsync fund/opts/intel done"
+    && echo "[$(ts)] rsync fund/opts/intel/insider done"
 else
-  echo "[$(ts)] no fund/opts/intel files to rsync — skipping"
+  echo "[$(ts)] no fund/opts/intel/insider files to rsync — skipping"
 fi
 
 # ---------------------------------------------------------------------------
@@ -325,3 +346,4 @@ echo "[$(ts)] === refresh_fund.sh complete ==="
 echo "[$(ts)]   fund files : $N_FUND"
 echo "[$(ts)]   opts files : $N_OPTS"
 echo "[$(ts)]   intel files: $N_INTEL"
+echo "[$(ts)]   insider files: $N_INSIDER"
