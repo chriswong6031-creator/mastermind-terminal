@@ -10,7 +10,7 @@ import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDr
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { getJSON, getSliceAndOhlc } from "@/lib/dataCache";
 import { CMP_PALETTE, type CmpCfg, defaultCmpCfg, cmpKey } from "@/lib/compare";
-import { isIntradayTf, classify, type Market } from "@/lib/intradaySources";
+import { isIntradayTf, classify, tfMinutes, type Market } from "@/lib/intradaySources";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
 
@@ -78,6 +78,60 @@ export function sessionDateOf(ts: number | undefined, market: Market): string | 
   return new Date(ms).toISOString().slice(0, 10);
 }
 const US_DATE_FMT = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" });
+
+// ── last-price tag: bar-close countdown (the "07:36" / "1d 20h" next to the price) ──
+// Per-market UTC offsets + session-close hours (both DST/holiday-agnostic — good enough for a
+// countdown; ≤1h drift under DST). Intraday close is exact (bar open + interval). Daily+ counts
+// to the exchange session close of the last trading day of the period: 24/7 crypto rolls at local
+// midnight (closeH=24), equities close at 16:00 (15:00 CN) on the last weekday of the period.
+const MARKET_TZ_OFFSET: Record<Market, number> = { us: -5 * 3600, ca: -5 * 3600, cn: 8 * 3600, hk: 8 * 3600, crypto: 0 };
+const SESSION_CLOSE_H: Record<Market, number> = { us: 16, ca: 16, cn: 15, hk: 16, crypto: 24 };
+
+/** Unix seconds when the current daily/weekly/2-week/monthly/quarter bar closes. */
+export function periodCloseTs(tf: string, nowSec: number, market: Market): number {
+  const off = MARKET_TZ_OFFSET[market] ?? 0;
+  const closeH = SESSION_CLOSE_H[market] ?? 24;
+  const weekend = market === "crypto";                        // 24/7 → no weekend walk-back, midnight roll
+  const HOUR = 3600, DAYMS = 86400_000;
+  const d = new Date((nowSec + off) * 1000);
+  const Y = d.getUTCFullYear(), Mo = d.getUTCMonth(), Da = d.getUTCDate();
+  // unix-sec of the session close on local calendar day (y,m,dd), walked back to the last
+  // trading weekday for markets that don't trade weekends.
+  const closeOn = (y: number, m: number, dd: number): number => {
+    let t = Date.UTC(y, m, dd);
+    if (!weekend) { let wd = new Date(t).getUTCDay(); while (wd === 0 || wd === 6) { t -= DAYMS; wd = new Date(t).getUTCDay(); } }
+    return Math.floor(t / 1000) + closeH * HOUR - off;
+  };
+  for (let i = 0; i < 3; i++) {                               // advance to the next period if this one already closed
+    let cand: number;
+    if (tf === "W" || tf === "2W") {
+      const dow = new Date(Date.UTC(Y, Mo, Da)).getUTCDay();
+      cand = closeOn(Y, Mo, Da + ((7 - dow) % 7) + i * 7);    // ISO-week end (Sunday) → walked to Fri close for equities
+    } else if (tf === "1M") {
+      cand = closeOn(Y, Mo + i, new Date(Date.UTC(Y, Mo + i + 1, 0)).getUTCDate());   // last day of month
+    } else if (tf === "3M") {
+      const qEndMo = Math.floor(Mo / 3) * 3 + 2 + i * 3;      // last month of the calendar quarter
+      cand = closeOn(Y, qEndMo, new Date(Date.UTC(Y, qEndMo + 1, 0)).getUTCDate());
+    } else {
+      cand = closeOn(Y, Mo, Da + i);                          // D + any unknown daily-derived TF
+    }
+    if (cand > nowSec) return cand;
+  }
+  return closeOn(Y, Mo, Da + 1);
+}
+
+/** Format a bar-close countdown (seconds), TradingView-style, tiered by timeframe. */
+export function fmtCountdown(remaining: number, intraday: boolean): string {
+  let r = Math.max(0, Math.floor(remaining));
+  const d = Math.floor(r / 86400); r -= d * 86400;
+  const h = Math.floor(r / 3600); r -= h * 3600;
+  const m = Math.floor(r / 60); const s = r - m * 60;
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  if (d > 0) return `${d}d ${h}h`;
+  if (intraday) return h > 0 ? `${h}:${p2(m)}:${p2(s)}` : `${p2(m)}:${p2(s)}`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
 
 const EMPTY_SET: Set<string> = new Set();
 const EMPTY_OBJ: Record<string, any> = {};
@@ -206,6 +260,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const replayIdxRef = useRef<number | null>(replayIdx);   // live replayIdx so Effect 2 doesn't build against a stale closure if replay starts mid-fetch
   const liveQuoteRef = useRef<LiveQuote>(liveQuote);       // latest live quote, so Effect 2's tail can re-apply the splice after setData
   const renderRef = useRef<() => void>(() => {});
+  const renderTagRef = useRef<(() => void) | null>(null);   // updates the last-price + bar-close-countdown axis tag
+  const symbolRef = useRef(symbol);                          // current symbol (Effect 1 mounts once; symbol changes in Effect 2)
   const renderSignalsRef = useRef<() => void>(() => {});
   const syncCleanupRef = useRef<(() => void) | null>(null);
 
@@ -241,6 +297,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const ctxRef = useRef<HTMLDivElement | null>(null);
   const textEditRef = useRef<HTMLInputElement | null>(null);
   const sigRef = useRef<SVGSVGElement | null>(null);
+  const priceTagRef = useRef<HTMLDivElement | null>(null);  // TradingView-style last-price + countdown tag on the right axis
+  const tagTimerRef = useRef<number | null>(null);          // 1s ticker so the bar-close countdown stays live
   // intraday dead-end empty-state overlay ("Back to Daily") — built in Effect 1, toggled from Effect 2
   const emptyRef = useRef<HTMLDivElement | null>(null);
   const showEmptyRef = useRef<(msg: string) => void>(() => {});
@@ -250,7 +308,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
-  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote;
+  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol;
 
   // ────────────────────────────────────────────────────────────────────────────
   // Shared helpers (module-level within the component, referenced from every effect).
@@ -270,10 +328,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Create the price series (removed+re-added when the chartType actually changes).
   const addPriceSeries = (chart: IChartApi, t: Tokens) => {
     const pf = priceFmt();
-    if (chartTypeRef.current === "line") return chart.addSeries(LineSeries, { color: t.brand2, lineWidth: 2, priceFormat: pf }, 0);
-    if (chartTypeRef.current === "area") return chart.addSeries(AreaSeries, { lineColor: t.brand2, topColor: "rgba(41,98,255,.30)", bottomColor: "rgba(41,98,255,.02)", lineWidth: 2, priceFormat: pf }, 0);
-    if (chartTypeRef.current === "bars") return chart.addSeries(BarSeries, { upColor: t.up, downColor: t.down, priceFormat: pf }, 0);
-    return chart.addSeries(CandlestickSeries, { upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down, borderVisible: false, priceFormat: pf }, 0);
+    if (chartTypeRef.current === "line") return chart.addSeries(LineSeries, { color: t.brand2, lineWidth: 2, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
+    if (chartTypeRef.current === "area") return chart.addSeries(AreaSeries, { lineColor: t.brand2, topColor: "rgba(41,98,255,.30)", bottomColor: "rgba(41,98,255,.02)", lineWidth: 2, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
+    if (chartTypeRef.current === "bars") return chart.addSeries(BarSeries, { upColor: t.up, downColor: t.down, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
+    return chart.addSeries(CandlestickSeries, { upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down, borderVisible: false, priceFormat: pf, lastValueVisible: false, priceLineVisible: true }, 0);
   };
 
   // per-indicator params merged over the registry defaults (drives the Settings dialog + the math/style)
@@ -747,6 +805,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     closesRef.current = barsRef.current.map((r) => r.c);
     paintStatus(barsRef.current, sliceRef.current);
     renderSignalsRef.current();
+    renderTagRef.current?.();   // live-quote splice moved the last close → refresh the price/countdown tag now
   };
 
   // Apply the default view (recent ~240 window in normal mode; fit the slice in replay).
@@ -856,6 +915,55 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     wrap.appendChild(sigSvg); sigRef.current = sigSvg;
     const svg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(svg); svgRef.current = svg;
+
+    // ── last-price tag (symbol · price · bar-close countdown) on the right axis ──
+    // Replaces lightweight-charts' built-in last-value label (disabled on the price series). The
+    // countdown differs per timeframe: exact for intraday, calendar-boundary for daily+ (see periodCloseTs).
+    const priceTag = document.createElement("div");
+    priceTag.style.cssText = "position:absolute;z-index:5;right:1px;display:none;flex-direction:row;align-items:center;gap:2px;pointer-events:none;transform:translateY(-50%);white-space:nowrap";
+    const tagSym = document.createElement("div");
+    tagSym.style.cssText = "padding:2px 5px;border-radius:3px;color:#fff;font:700 10px/1 var(--font-num);letter-spacing:.02em";
+    const tagVal = document.createElement("div");
+    tagVal.style.cssText = "display:flex;flex-direction:column;align-items:flex-end;padding:2px 6px;border-radius:3px;color:#fff;text-align:right";
+    const tagPrice = document.createElement("div");
+    tagPrice.style.cssText = "font:700 11px/1.15 var(--font-num)";
+    const tagCd = document.createElement("div");
+    tagCd.style.cssText = "font:600 9px/1.15 var(--font-num);opacity:.85";
+    tagVal.appendChild(tagPrice); tagVal.appendChild(tagCd);
+    priceTag.appendChild(tagSym); priceTag.appendChild(tagVal);
+    wrap.appendChild(priceTag); priceTagRef.current = priceTag;
+
+    const renderPriceTag = () => {
+      const tag = priceTagRef.current, s = priceSeriesRef.current;
+      if (!tag || !s || dead) return;
+      const bars = barsRef.current; const last = bars[bars.length - 1];
+      if (!last) { tag.style.display = "none"; return; }
+      const price = last.c;
+      const y = s.priceToCoordinate(price) as number | null;
+      if (y == null) { tag.style.display = "none"; return; }
+      const prev = bars[bars.length - 2];
+      const up = prev ? price >= prev.c : price >= last.o;
+      const col = up ? tokensRef.current.up : tokensRef.current.down;
+      const prec = precRef.current;
+      tagSym.textContent = symbolRef.current;
+      tagPrice.textContent = price.toLocaleString("en-US", { minimumFractionDigits: prec, maximumFractionDigits: prec });
+      let cd = "";
+      if (replayIdxRef.current == null) {                     // no meaningful "time to close" while replaying history
+        const nowSec = Date.now() / 1000; let rem: number | null = null;
+        if (isIntradayRef.current) {
+          const mins = tfMinutes(timeframeRef.current); const openTs = Number(last.time);
+          if (mins > 0 && isFinite(openTs)) rem = openTs + mins * 60 - nowSec;
+        } else {
+          rem = periodCloseTs(timeframeRef.current, nowSec, classify(symbolRef.current)) - nowSec;
+        }
+        if (rem != null && isFinite(rem)) cd = fmtCountdown(rem, isIntradayRef.current);
+      }
+      tagCd.textContent = cd; tagCd.style.display = cd ? "block" : "none";
+      tagSym.style.background = col; tagVal.style.background = col;
+      tag.style.top = Math.round(y) + "px"; tag.style.display = "flex";
+    };
+    renderTagRef.current = renderPriceTag;
+    tagTimerRef.current = window.setInterval(() => { if (!dead) renderPriceTag(); }, 1000);
 
     // ── coordinate helpers (read *Ref.current so they stay valid across reloads) ──
     const dcol = (d: Drawing) => d.color?.startsWith("var(") ? css(d.color.slice(4, -1)) : (d.color || tokensRef.current.brand2);
@@ -1110,6 +1218,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
       for (const d of drawRef.current) svgEl.appendChild(shape(d));
       positionBar();
+      renderPriceTag();   // keep the last-price + countdown tag in step with every data/pan/style render
     };
     renderRef.current = renderDraw;
     // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path
@@ -1246,6 +1355,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; }
       if (sigRef.current) { try { sigRef.current.remove(); } catch {} sigRef.current = null; }
       if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; }
+      if (tagTimerRef.current != null) { clearInterval(tagTimerRef.current); tagTimerRef.current = null; }
+      if (priceTagRef.current) { try { priceTagRef.current.remove(); } catch {} priceTagRef.current = null; }
+      renderTagRef.current = null;
       indSeriesRef.current.clear(); cmpSeriesRef.current.clear(); paneMapRef.current.clear();
       pineSeriesRef.current.clear(); pineMarkersRef.current.clear(); pinePaneMapRef.current.clear(); pineErrRef.current.clear(); pineCacheRef.current.clear();
       priceSeriesRef.current = null; priceFamilyRef.current = null;
