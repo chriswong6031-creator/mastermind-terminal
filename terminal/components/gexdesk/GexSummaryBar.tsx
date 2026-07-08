@@ -2,8 +2,11 @@
 /**
  * GexSummaryBar — horizontal strip of computed GEX key levels.
  *
- * Displays: Net GEX, Call Wall, Put Support, Magnet/HVL, Max Pain, P/C OI, IV30,
- * Gamma Flip. Fields are omitted gracefully when absent in the payload.
+ * MomoEdge parity (Pass 3): NET GEX, CALL WALL, PUT SUPPORT, HVL/MAGNET,
+ * GAMMA FLIP, P/C RATIO, CALL OI, PUT OI.
+ *
+ * P/C RATIO and OI fields come from payload when present; omitted gracefully
+ * when absent (never faked).
  *
  * HONESTY DOCTRINE: all values are display-only levels-map metrics. No directional
  * claims. Net GEX color (cyan/red) indicates sign only — not a signal.
@@ -16,6 +19,9 @@ import type { GexPayload } from "./GexDeskView";
 
 interface GexSummaryBarProps {
   payload: GexPayload | null;
+  /** Extended statePayload fields available for Call OI / Put OI */
+  callOI?: number | null;
+  putOI?: number | null;
   lang: Lang;
 }
 
@@ -38,35 +44,43 @@ function fmtRatio(val: number | null | undefined): string {
   return val.toFixed(2);
 }
 
-function fmtPct(val: number | null | undefined): string {
+function fmtOI(val: number | null | undefined): string {
   if (val == null || !Number.isFinite(val)) return "—";
-  return `${(val * 100).toFixed(1)}%`;
+  const abs = Math.abs(val);
+  if (abs >= 1_000_000) return `${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${(abs / 1_000).toFixed(0)}K`;
+  return String(Math.round(abs));
 }
 
 interface MetricCellProps {
   label: string;
   value: string;
   valueColor?: string;
+  /** Subtle text shown after value, e.g. " +" or unit hint */
+  suffix?: string;
 }
 
-function MetricCell({ label, value, valueColor }: MetricCellProps) {
+function MetricCell({ label, value, valueColor, suffix }: MetricCellProps) {
   return (
     <div style={CELL}>
       <span style={CELL_LABEL}>{label}</span>
       <span style={{ ...CELL_VALUE, color: valueColor ?? "var(--text)" }}>
         {value}
+        {suffix && value !== "—" && (
+          <span style={{ fontSize: 10, opacity: 0.6, marginLeft: 2 }}>{suffix}</span>
+        )}
       </span>
     </div>
   );
 }
 
-export function GexSummaryBar({ payload, lang }: GexSummaryBarProps) {
+export function GexSummaryBar({ payload, callOI, putOI, lang }: GexSummaryBarProps) {
   const t = makeGexT(lang);
 
   if (!payload) {
     return (
       <div style={BAR_OUTER} data-tut="gex-summary">
-        {[...Array(6)].map((_, i) => (
+        {[...Array(7)].map((_, i) => (
           <div key={i} style={{ ...CELL, opacity: 0.35 }}>
             <span style={CELL_LABEL}>{t("loading")}</span>
             <span style={CELL_VALUE}>—</span>
@@ -82,66 +96,80 @@ export function GexSummaryBar({ payload, lang }: GexSummaryBarProps) {
     netGexVal == null
       ? "var(--muted)"
       : netGexVal >= 0
-      ? "var(--brand-2)"   // cyan-ish: positive gamma (dealer-sign convention)
-      : "var(--down)";     // red: negative gamma
+      ? "var(--brand-2)"
+      : "var(--down)";
 
-  const flipStr = fmtLevel(payload.gamma_flip);
-
-  // Put-call OI ratio — payload may not have it; gracefully absent
-  const pcOiStr = payload.put_call_oi_ratio != null
-    ? fmtRatio(payload.put_call_oi_ratio)
-    : "—";
-
-  const iv30Str = payload.iv30 != null ? fmtPct(payload.iv30) : "—";
+  // P/C OI ratio — from payload when present
+  const pcRatioVal = payload.put_call_oi_ratio;
+  const pcRatioStr = fmtRatio(pcRatioVal);
+  const pcRatioColor =
+    pcRatioVal != null
+      ? pcRatioVal > 1
+        ? "var(--down)"
+        : "var(--up)"
+      : "var(--text)";
 
   return (
     <div style={BAR_OUTER} data-tut="gex-summary">
+      {/* 1. Net GEX — hero metric */}
       <MetricCell
         label={t("sumNetGex")}
         value={netGexStr}
         valueColor={netGexColor}
       />
+      {/* 2. Call Wall */}
       <MetricCell
         label={t("sumCallWall")}
         value={fmtLevel(payload.call_wall)}
         valueColor="var(--brand-2)"
       />
+      {/* 3. Put Support */}
       <MetricCell
         label={t("sumPutSupport")}
         value={fmtLevel(payload.put_wall)}
         valueColor="var(--down)"
       />
+      {/* 4. HVL / Magnet */}
       <MetricCell
         label={t("sumMagnet")}
         value={fmtLevel(payload.hvl ?? payload.magnet)}
         valueColor="var(--signal)"
       />
+      {/* 5. Gamma Flip */}
       <MetricCell
         label={t("sumFlip")}
-        value={flipStr}
-        valueColor="var(--cat-2)"   // purple
+        value={fmtLevel(payload.gamma_flip)}
+        valueColor="var(--cat-2)"
       />
+      {/* 6. P/C Ratio — omit gracefully when absent */}
+      {pcRatioStr !== "—" && (
+        <MetricCell
+          label={t("sumPcOi")}
+          value={pcRatioStr}
+          valueColor={pcRatioColor}
+        />
+      )}
+      {/* 7. Call OI — from caller (gexstate or extended payload) */}
+      {callOI != null && (
+        <MetricCell
+          label={t("sumCallOI")}
+          value={fmtOI(callOI)}
+          valueColor="var(--brand-2)"
+        />
+      )}
+      {/* 8. Put OI */}
+      {putOI != null && (
+        <MetricCell
+          label={t("sumPutOI")}
+          value={fmtOI(putOI)}
+          valueColor="var(--down)"
+        />
+      )}
+      {/* Max pain — if present */}
       {payload.max_pain != null && (
         <MetricCell
           label={t("sumMaxPain")}
           value={fmtLevel(payload.max_pain)}
-        />
-      )}
-      {pcOiStr !== "—" && (
-        <MetricCell
-          label={t("sumPcOi")}
-          value={pcOiStr}
-          valueColor={
-            payload.put_call_oi_ratio != null && payload.put_call_oi_ratio > 1
-              ? "var(--down)"
-              : "var(--up)"
-          }
-        />
-      )}
-      {iv30Str !== "—" && (
-        <MetricCell
-          label={t("sumIv30")}
-          value={iv30Str}
         />
       )}
     </div>

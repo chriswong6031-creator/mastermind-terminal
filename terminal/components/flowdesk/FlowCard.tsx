@@ -102,13 +102,18 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
       data-tut="flow-card"
       style={{ position: "relative" }}
     >
-      {/* ── Row 1: ticker / C|P / lean / time ── */}
+      {/* ── Line 1: ticker / C|P / score ring / lean / time ── */}
       <div className="obs-fc-row1">
         <span className="obs-fc-ticker">{ev.root}</span>
 
         {/* C/P chip — East-Asian flip aware via var(--up)/var(--down) */}
         <span className={`obs-fc-cp ${isCall ? "call" : "put"}`}>
           {isCall ? (zh ? "认购" : "C") : (zh ? "认沽" : "P")}
+        </span>
+
+        {/* Score ring — compact sm size on line 1 */}
+        <span className="obs-fc-ring-wrap obs-fc-ring-inline">
+          <RingGauge value={score} size="sm" tone="auto" />
         </span>
 
         {/* Lean chip — dashed border, neutral color */}
@@ -119,10 +124,10 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
           aria-label={t("leanTooltip")}
         >
           {ev.side === "~buy"
-            ? (zh ? "~买" : "lean ~buy")
+            ? (zh ? "~买" : "~buy")
             : ev.side === "~sell"
-            ? (zh ? "~卖" : "lean ~sell")
-            : (zh ? "混合" : "lean mixed")}
+            ? (zh ? "~卖" : "~sell")
+            : (zh ? "混合" : "mixed")}
           {tipVisible && (
             <span style={LEAN_TIP_STYLE}>{t("leanTooltip")}</span>
           )}
@@ -131,51 +136,30 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
         <span className="obs-fc-time">{fmtTime(ev.ts)}</span>
       </div>
 
-      {/* ── Subtitle: strike / exp / DTE ── */}
-      <div className="obs-fc-subtitle num">
-        ${ev.strike} · {ev.exp} · {ev.dte}d
+      {/* ── Line 2: strike / exp / DTE + premium prominent ── */}
+      <div className="obs-fc-line2">
+        <span className="obs-fc-subtitle num">${ev.strike} · {ev.exp} · {ev.dte}d</span>
+        <span className="obs-fc-prem">{fmtPremium(ev.premium)}</span>
       </div>
 
-      {/* ── Row 2: fact grid + premium ── */}
-      <div className="obs-fc-facts">
-        <div className="obs-fc-fact">
-          <span className="obs-lbl">{zh ? "价外%" : "OTM%"}</span>
-          <span className="num" style={{ fontSize: 12, color: "var(--text)", fontWeight: 600 }}>{otmPct(ev)}</span>
-        </div>
-        <div className="obs-fc-fact">
-          <span className="obs-lbl">{zh ? "权利金" : "Premium"}</span>
-          <span className="obs-fc-prem">{fmtPremium(ev.premium)}</span>
-        </div>
-      </div>
-
-      {/* ── Row 3: size / OI / IV secondary ── */}
-      <div className="obs-fc-meta">
-        <span className="num">{zh ? "张数" : "Size"} {ev.size.toLocaleString()}</span>
-        {ev.oi != null && (
-          <>
-            <span className="obs-fc-meta-sep">·</span>
-            <span className="num">OI {(ev.oi as number).toLocaleString()}</span>
-            <span className="obs-fc-meta-sep">·</span>
-            <span className="num">{zh ? "量/OI" : "Sz/OI"} {((ev.size / (ev.oi as number))).toFixed(2)}</span>
-          </>
-        )}
-        {ev.iv != null && (
-          <>
-            <span className="obs-fc-meta-sep">·</span>
-            <span className="num">IV {((ev.iv as number) * 100).toFixed(1)}%</span>
-          </>
-        )}
-        {ev.spot != null && (
-          <>
-            <span className="obs-fc-meta-sep">·</span>
-            <span className="num">{zh ? "现价" : "Spot"} {(ev.spot as number).toFixed(2)}</span>
-          </>
-        )}
-      </div>
-
-      {/* ── Row 4: badges + ring ── */}
-      {(Object.values(badges).some(Boolean) || true) && (
-        <div className="obs-fc-badges-row">
+      {/* ── Line 3: size / OI + lean badges ── */}
+      <div className="obs-fc-line3">
+        <span className="obs-fc-meta">
+          <span className="num">{zh ? "张" : "Sz"} {ev.size.toLocaleString()}</span>
+          {ev.oi != null && (
+            <>
+              <span className="obs-fc-meta-sep">·</span>
+              <span className="num">OI {(ev.oi as number).toLocaleString()}</span>
+            </>
+          )}
+          {ev.iv != null && (
+            <>
+              <span className="obs-fc-meta-sep">·</span>
+              <span className="num">IV {((ev.iv as number) * 100).toFixed(1)}%</span>
+            </>
+          )}
+        </span>
+        <span className="obs-fc-badges-row obs-fc-badges-inline">
           {badges.whale && (
             <Badge cls="whale" label={zh ? "巨单" : "WHALE"} tip={t("badgeWhaleDesc")} />
           )}
@@ -183,7 +167,7 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
             <Badge cls="cluster" label={zh ? "集群" : "CLUSTER"} tip={t("badgeClusterDesc")} />
           )}
           {badges.sweep && (
-            <Badge cls="sweep" label={zh ? "扫单(启发)" : "SWEEP ≈"} tip={t("badgeSweepDesc")} />
+            <Badge cls="sweep" label={zh ? "扫单≈" : "SWEEP≈"} tip={t("badgeSweepDesc")} />
           )}
           {badges.unusual && (
             <Badge cls="unusual" label={zh ? "异常" : "UNUSUAL"} tip={t("badgeUnusualDesc")} />
@@ -191,12 +175,8 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
           {badges.block && (
             <Badge cls="block" label={zh ? "大宗" : "BLOCK"} tip={t("badgeBlockDesc")} />
           )}
-          {/* RingGauge md — score ring right-aligned */}
-          <span className="obs-fc-ring-wrap">
-            <RingGauge value={score} size="md" tone="auto" />
-          </span>
-        </div>
-      )}
+        </span>
+      </div>
 
       {/* ── Expand toggle ── */}
       <button

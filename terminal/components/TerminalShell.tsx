@@ -777,7 +777,23 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           </div>
         )}
 
-        {view === "price" ? (
+        {/* ── MegaPane in-slot: on desktop (>860px via CSS) this fills the chart-pane area in-place,
+             keeping the AppNav + watchlist rail mounted and interactive. On mobile the CSS reverts it
+             to a full-screen fixed overlay (existing behavior). Ticker changes propagate automatically
+             because `active` is the same symbol-selection state the chart uses. ── */}
+        {paneOpen ? (
+          <MegaPane
+            sym={active}
+            fund={fund}
+            quote={liveQuote ? { last: lastPx ?? null } : null}
+            bars={bars}
+            page={paneOpen}
+            onPage={(p) => setPaneOpen(p)}
+            onClose={() => setPaneOpen(null)}
+            name={nameOf(m) || active}
+            mode="workspace"
+          />
+        ) : view === "price" ? (
           <div className="chart-body">
             <div className="tooldock">
               {TOOLS.map(([id, d]) => (
@@ -941,20 +957,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
       <CopilotPanel open={copilot} symbol={active} row={m} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
-
-      {/* ── MegaPane: in-shell full-coverage fundamentals overlay (replaces the old .sa-modal) ── */}
-      {paneOpen && (
-        <MegaPane
-          sym={active}
-          fund={fund}
-          quote={liveQuote ? { last: lastPx ?? null } : null}
-          bars={bars}
-          page={paneOpen}
-          onPage={(p) => setPaneOpen(p)}
-          onClose={() => setPaneOpen(null)}
-          name={nameOf(m) || active}
-        />
-      )}
 
       {/* ── Signals dashboard overlay (Golden Oracle scorecard · research read · signal history) ── */}
       {signalsOpen && (

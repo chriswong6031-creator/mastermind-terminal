@@ -181,10 +181,27 @@ function computeBreadth(tiles: HeatmapTile[]): BreadthStats {
 interface SectorChipData {
   sector: GicsSector;
   label: string;
-  avgChg: number;
+  avgChg: number;           // price layer: avg %chg
+  avgTone: number;          // flow layer: avg tone score (−1..+1)
+  flowSentPct: number | null; // flow layer: (bullish_tiles / active_tiles) * 100, null if no flow
   count: number;
 }
 
+/**
+ * Compute sector chip values.
+ *
+ * PRICE mode: avgChg = mean 1D %chg across all tiles in sector.
+ *
+ * FLOW mode (formula extracted from MomoEdge heatmap-widget.js calcFlow):
+ *   - MomoEdge computes per-sector avg sentiment = avg(sent) for active (tp>0) stocks,
+ *     where sent = (bullish_premium - bearish_premium) / total_premium ∈ [−1, +1].
+ *   - The displayed chip "ENERGY +100%" means sector avg sentiment × 100.
+ *   - Our data: we have `tone` (pos/neg/neutral) on 368 flow-universe names.
+ *   - We compute: avgTone = mean(tone_score) for tiles with hasFlow, where
+ *     tone_score = +1 (pos) / 0 (neutral) / −1 (neg).
+ *   - flowSentPct = (bullish_count / active_count) * 100, shown as breadth reading.
+ *   - Both are honest equivalents on our data; labeled explicitly in UI.
+ */
 function computeSectorChips(tiles: HeatmapTile[]): SectorChipData[] {
   const bySector: Partial<Record<GicsSector, HeatmapTile[]>> = {};
   for (const t of tiles) {
@@ -195,7 +212,21 @@ function computeSectorChips(tiles: HeatmapTile[]): SectorChipData[] {
     const ts = bySector[s];
     if (!ts || ts.length === 0) return [];
     const avgChg = ts.reduce((a, t) => a + t.chg1d, 0) / ts.length;
-    return [{ sector: s, label: SECTOR_LABEL[s] ?? s, avgChg, count: ts.length }];
+
+    // Flow sentiment: use tone field (ΔOI-based, reliable)
+    const flowTiles = ts.filter(t => t.hasFlow && t.tone && t.tone !== "neutral");
+    const posTiles = flowTiles.filter(t => t.tone === "pos").length;
+    const flowSentPct = flowTiles.length > 0
+      ? Math.round(posTiles / flowTiles.length * 100)
+      : null;
+
+    // avgTone for flow layer chip value
+    const activeTiles = ts.filter(t => t.hasFlow);
+    const avgTone = activeTiles.length > 0
+      ? activeTiles.reduce((sum, t) => sum + (t.tone === "pos" ? 1 : t.tone === "neg" ? -1 : 0), 0) / activeTiles.length
+      : 0;
+
+    return [{ sector: s, label: SECTOR_LABEL[s] ?? s, avgChg, avgTone, flowSentPct, count: ts.length }];
   });
 }
 
@@ -216,7 +247,7 @@ export function HeatmapView() {
   // ── UI state ─────────────────────────────────────────────────────────────────
   const [layer,     setLayer]     = useState<Layer>("price");
   const [view,      setView]      = useState<View>("map");
-  const [sizing,    setSizing]    = useState<SizingMode>("equal");
+  const [sizing,    setSizing]    = useState<SizingMode>("cap");  // default CAP (dollar-vol proxy)
   const [timeframe] = useState<Timeframe>("1D");  // only 1D enabled in v1
   const [sectorFilt, setSectorFilt] = useState<GicsSector | null>(null);
   const [search,    setSearch]    = useState("");
@@ -276,7 +307,7 @@ export function HeatmapView() {
   // ── Layer change: auto-select sizing ─────────────────────────────────────────
   const handleLayerChange = useCallback((l: Layer) => {
     setLayer(l);
-    setSizing(l === "flow" ? "premium" : "equal");
+    setSizing(l === "flow" ? "premium" : "cap");  // CAP (dollar-vol) for price; PREMIUM for flow
     setSelected(null);
   }, []);
 
@@ -426,6 +457,11 @@ export function HeatmapView() {
           <>
             <div style={{ display: "flex", gap: 4 }}>
               <button
+                className={`obs-chip${sizing === "cap" ? " on" : ""}`}
+                style={CHIP_COMPACT}
+                onClick={() => setSizing("cap")}
+              >{t("sizeCap")}</button>
+              <button
                 className={`obs-chip${sizing === "equal" ? " on" : ""}`}
                 style={CHIP_COMPACT}
                 onClick={() => setSizing("equal")}
@@ -437,12 +473,6 @@ export function HeatmapView() {
                   onClick={() => setSizing("premium")}
                 >{t("sizePremium")}</button>
               )}
-              {/* CAP sizing deferred */}
-              <button
-                className="obs-chip"
-                style={{ ...CHIP_COMPACT, opacity: 0.4, cursor: "not-allowed" }}
-                disabled
-              >{t("sizeCapDeferred")}</button>
             </div>
             <div style={CTRL_SEP} />
           </>
@@ -482,7 +512,8 @@ export function HeatmapView() {
         <SectorChip
           label={t("sectorAll")}
           active={sectorFilt === null}
-          avgChg={null}
+          value={null}
+          isFlow={false}
           onClick={() => setSectorFilt(null)}
         />
         {sectorChips.map(sc => (
@@ -490,7 +521,8 @@ export function HeatmapView() {
             key={sc.sector}
             label={sc.label}
             active={sectorFilt === sc.sector}
-            avgChg={sc.avgChg}
+            value={layer === "flow" ? sc.avgTone : sc.avgChg}
+            isFlow={layer === "flow"}
             onClick={() => setSectorFilt(prev => prev === sc.sector ? null : sc.sector)}
           />
         ))}
@@ -552,15 +584,22 @@ export function HeatmapView() {
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function SectorChip({
-  label, active, avgChg, onClick,
+  label, active, value, isFlow, onClick,
 }: {
   label: string;
   active: boolean;
-  avgChg: number | null;
+  value: number | null;  // price: avg%chg; flow: avg tone (−1..+1)
+  isFlow?: boolean;
   onClick: () => void;
 }) {
-  const chgColor = avgChg == null ? undefined
-    : avgChg > 0 ? "var(--up)" : avgChg < 0 ? "var(--down)" : "var(--muted)";
+  const valColor = value == null ? undefined
+    : value > 0 ? "var(--up)" : value < 0 ? "var(--down)" : "var(--muted)";
+
+  // Display: price = "+1.2%"; flow = avg tone × 100 → "+53%" means avg tone = 0.53
+  const valStr = value == null ? null
+    : isFlow
+      ? `${value >= 0 ? "+" : ""}${Math.round(value * 100)}%`
+      : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
 
   return (
     <button
@@ -569,12 +608,12 @@ function SectorChip({
       style={CHIP_COMPACT}
     >
       {label}
-      {avgChg != null && (
+      {valStr != null && (
         <span className="num" style={{
-          color: active ? "rgba(255,255,255,0.8)" : chgColor,
+          color: active ? "rgba(255,255,255,0.8)" : valColor,
           marginLeft: 3,
         }}>
-          {avgChg >= 0 ? "+" : ""}{avgChg.toFixed(1)}%
+          {valStr}
         </span>
       )}
     </button>

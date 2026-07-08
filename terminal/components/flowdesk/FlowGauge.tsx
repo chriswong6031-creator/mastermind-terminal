@@ -136,16 +136,7 @@ export function FlowGauge({ feed, lang }: FlowGaugeProps) {
         </div>
       </div>
 
-      {/* ── Dead zone disclosure ── */}
-      {tone === "MIXED" && (
-        <div style={styles.deadNote}>
-          {pick(
-            zh,
-            `Dead zone: |call% − 50%| < ${DEAD_ZONE * 100}pp → MIXED`,
-            `无效区: |认购% − 50%| < ${DEAD_ZONE * 100}pp → 混合`
-          )}
-        </div>
-      )}
+      {/* Dead zone caption intentionally omitted — tone word "MIXED" is self-describing */}
     </div>
   );
 }
@@ -231,11 +222,5 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text)",
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
-  },
-  deadNote: {
-    marginTop: 6,
-    fontSize: 10,
-    color: "var(--muted)",
-    fontStyle: "italic",
   },
 };

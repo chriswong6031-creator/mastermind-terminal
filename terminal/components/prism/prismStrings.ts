@@ -52,6 +52,15 @@ const PRISM_LEX = {
   range10:  ["±10", "±10"],
   range20:  ["±20", "±20"],
   range40:  ["±40", "±40"],
+  strikeRangeLabel: ["RANGE", "区间"],
+
+  // ── DTE column count ───────────────────────────────────────────────────────
+  dteCols: ["COLS", "列数"],
+
+  // ── Expiry scope ──────────────────────────────────────────────────────────
+  scopeDefault: ["DEFAULT", "默认"],
+  scope0dte:    ["0DTE", "0DTE"],
+  scopeAll:     ["ALL Σ", "全部Σ"],
 
   // ── Spot ──────────────────────────────────────────────────────────────────
   spotLabel: ["Spot", "现价"],

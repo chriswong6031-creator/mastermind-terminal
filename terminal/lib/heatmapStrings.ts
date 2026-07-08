@@ -25,6 +25,7 @@ const HM_LEX = {
   viewTable:        ["TABLE", "列表"],
 
   // ── Sizing modes ─────────────────────────────────────────────────────────────
+  sizeCap:          ["CAP", "市值"],
   sizeEqual:        ["EQUAL", "等面积"],
   sizeCapDeferred:  ["CAP (soon)", "市值（即将上线）"],
   sizePremium:      ["PREMIUM", "权利金"],

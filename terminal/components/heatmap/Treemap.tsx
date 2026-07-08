@@ -7,8 +7,15 @@
  *   - FLOW layer: color = tone field (pos/neg/neutral). Dead-zone = "neutral".
  *     Call-share dead-zone ±0.08 → "MIXED" gray (not used for color here —
  *     we use the `tone` field which is ΔOI-based and reliability-labeled).
- *   - Size = EQUAL (v1); CAP deferred (no mcap in manifest); PREMIUM = flow netPremiumMn.
+ *   - Size = EQUAL / CAP (dollar-volume proxy, manifest has price×vol) / PREMIUM.
  *   - No directional buy/sell assertions anywhere in this component.
+ *
+ * DESIGN: Matches MomoEdge visual fidelity:
+ *   - Sector blocks with dark header bands, abbrev label + avg chg.
+ *   - Tiles: ticker bold centered, %chg below. Font scales with tile size.
+ *   - Labels hidden below min size (same threshold as MomoEdge ~20×10).
+ *   - Color ramp: stepped intensity gradient (t = min(|chg|/4, 1) — exact port).
+ *   - Dead-zone: |chg| < 0.10 → near-black (no color bleed at flatline).
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -16,12 +23,11 @@ import type { HeatmapTile, Layer, SizingMode, SectorBlock, TreemapNode, LayoutRe
 import { SECTOR_LABEL, SECTOR_ORDER } from "./sectorMap";
 import type { GicsSector } from "./types";
 
-// ─── Color scales ─────────────────────────────────────────────────────────────
+// ─── Color scales (ported from MomoEdge heatmap-widget.js priceTileColor / flowTileColor) ──
 
-/** Price tile gradient stop colors. Dead-zone = |chg| < 0.10 */
+/** Price tile gradient. Dead-zone = |chg| < 0.10. Exact MomoEdge port. */
 function priceColor(chg: number): { top: string; bot: string } {
-  const DEAD = 0.10;
-  if (Math.abs(chg) < DEAD) {
+  if (Math.abs(chg) < 0.10) {
     return { top: "rgb(24,28,36)", bot: "rgb(16,20,26)" };
   }
   const t = Math.min(Math.abs(chg) / 4, 1);
@@ -39,24 +45,21 @@ function priceColor(chg: number): { top: string; bot: string } {
 }
 
 /**
- * Flow tile color. Uses `tone` field (ΔOI-based, reliable for direction).
- * Dead-zone = "neutral" → gray.
+ * Flow tile color using tone. Dead-zone = "neutral".
+ * Saturation from netPremiumMn magnitude for visual density.
  * HONESTY: we never assert call/put direction from net_premium_mn magnitude.
  */
 function flowColor(tone: "neg" | "neutral" | "pos" | undefined, premMn: number | undefined): { top: string; bot: string } {
   if (!tone || tone === "neutral") {
     return { top: "rgb(30,35,42)", bot: "rgb(22,26,32)" };
   }
-  // Saturation from premium magnitude (soft — just for visual density)
-  const mag = Math.min((premMn ?? 0) / 50, 1);  // saturates at $50M
-  const t = 0.3 + mag * 0.7;  // min 0.3 so color is always visible
+  const t = Math.min(0.3 + Math.min((premMn ?? 0) / 50, 1) * 0.7, 1);
   if (tone === "pos") {
     return {
       top: `rgb(${Math.round(5 + t * 5)},${Math.round(35 + t * 156)},${Math.round(30 + t * 135)})`,
       bot: `rgb(${Math.round(3 + t * 3)},${Math.round(18 + t * 65)},${Math.round(16 + t * 55)})`,
     };
   }
-  // tone === "neg"
   return {
     top: `rgb(${Math.round(40 + t * 215)},${Math.round(18 + t * 89)},${Math.round(18 + t * 89)})`,
     bot: `rgb(${Math.round(22 + t * 85)},${Math.round(10 + t * 35)},${Math.round(10 + t * 35)})`,
@@ -65,33 +68,6 @@ function flowColor(tone: "neg" | "neutral" | "pos" | undefined, premMn: number |
 
 // ─── Squarified treemap algorithm ─────────────────────────────────────────────
 
-/**
- * Squarify layout. Standard Bruls/Wijk/van Wijk algorithm.
- * items: array of { value, tile }
- * Returns array of { x, y, w, h, tile }.
- */
-function squarify(
-  items: { value: number; tile: HeatmapTile }[],
-  x: number, y: number, w: number, h: number
-): TreemapNode[] {
-  if (items.length === 0 || w <= 0 || h <= 0) return [];
-
-  const totalValue = items.reduce((s, i) => s + i.value, 0);
-  if (totalValue <= 0) {
-    // equal area fallback
-    return squarify(items.map(i => ({ ...i, value: 1 })), x, y, w, h);
-  }
-
-  // Canonical precondition: descending by value.
-  const sorted = [...items].sort((a, b) => b.value - a.value);
-  const result: TreemapNode[] = [];
-  squarifyRecurse(sorted, x, y, w, h, totalValue, result);
-  return result;
-}
-
-// Worst aspect ratio of a row: s = row's total scaled area, mx/mn = largest/
-// smallest scaled area in the row, short = length of the side the row spans.
-// (Bruls, Huizing & van Wijk, "Squarified Treemaps", eq. for worst().)
 function worstAspect(s: number, mx: number, mn: number, short: number): number {
   const s2 = s * s;
   const short2 = short * short;
@@ -110,12 +86,10 @@ function squarifyRecurse(
     return;
   }
 
-  // Scale values so they sum to the rect's area.
   const scale = (w * h) / totalValue;
   const areas = items.map(i => Math.max(i.value * scale, 1e-9));
   const short = Math.min(w, h);
 
-  // Grow the row while the worst aspect ratio keeps improving.
   let count = 1;
   let sum = areas[0];
   let mx = areas[0];
@@ -133,7 +107,6 @@ function squarifyRecurse(
     }
   }
 
-  // Lay the row along the shorter side; its thickness fills the longer side.
   const thick = sum / short;
   const isWide = w >= h;
   let pos = isWide ? y : x;
@@ -156,31 +129,67 @@ function squarifyRecurse(
   }
 }
 
+function squarify(
+  items: { value: number; tile: HeatmapTile }[],
+  x: number, y: number, w: number, h: number
+): TreemapNode[] {
+  if (items.length === 0 || w <= 0 || h <= 0) return [];
+  const totalValue = items.reduce((s, i) => s + i.value, 0);
+  if (totalValue <= 0) {
+    return squarify(items.map(i => ({ ...i, value: 1 })), x, y, w, h);
+  }
+  const sorted = [...items].sort((a, b) => b.value - a.value);
+  const result: TreemapNode[] = [];
+  squarifyRecurse(sorted, x, y, w, h, totalValue, result);
+  return result;
+}
+
 // ─── Tile value function ──────────────────────────────────────────────────────
 
+/**
+ * Tile sizing:
+ *   - "cap" → dollar-volume proxy (price × vol), falls back to equal if missing.
+ *     min floor = 1 so no tile vanishes.
+ *   - "premium" (flow layer) → abs(netPremiumMn), min 0.01.
+ *   - "equal" → 1.
+ *
+ * NOTE: manifest lacks market_cap; dollar-volume (price×vol) is the documented
+ * proxy and correlates well with cap rank for large/mid caps.
+ * This will be superseded when nightly manifest injects mcap.
+ */
 function tileValue(tile: HeatmapTile, sizing: SizingMode, layer: Layer): number {
   if (sizing === "premium" && layer === "flow" && tile.hasFlow) {
-    return Math.max(tile.netPremiumMn ?? 0, 0.01);  // min to keep tile visible
+    return Math.max(Math.abs(tile.netPremiumMn ?? 0), 0.01);
   }
-  // equal or cap (cap deferred, treated as equal in v1)
+  if (sizing === "cap") {
+    // Dollar-volume proxy: price * vol. Floor at 1 so tiles with zero vol still render.
+    const dv = (tile.price ?? 0) * (tile.vol ?? 0);
+    return Math.max(dv, 1);
+  }
   return 1;
 }
 
 // ─── Sector block layout ──────────────────────────────────────────────────────
 
-/**
- * Lay out sector blocks first, then tiles within each block.
- * Sectors sized by their aggregate tile value.
- */
+const HEADER_H_BIG = 24;  // sector label band height when sector block is tall
+const HEADER_H_MED = 14;  // compact header for medium blocks
+const HEADER_H_SML = 8;   // minimal header for small blocks
+
+function getHeaderH(blockH: number): number {
+  if (blockH > 55) return HEADER_H_BIG;
+  if (blockH > 35) return HEADER_H_MED;
+  if (blockH > 20) return HEADER_H_SML;
+  return 0;
+}
+
 function layoutSectors(
   tiles: HeatmapTile[],
   sizing: SizingMode,
   layer: Layer,
   canvasW: number,
   canvasH: number,
-  gap: number = 2
+  gap: number = 1
 ): SectorBlock[] {
-  // Group by sector
   const bySector: Partial<Record<GicsSector, HeatmapTile[]>> = {};
   for (const tile of tiles) {
     const s = tile.sector;
@@ -188,7 +197,6 @@ function layoutSectors(
     bySector[s]!.push(tile);
   }
 
-  // Build sector items sorted by SECTOR_ORDER, then by value desc
   const sectorItems: { sector: GicsSector; tiles: HeatmapTile[]; value: number }[] = [];
   for (const sector of SECTOR_ORDER) {
     const ts = bySector[sector];
@@ -201,13 +209,10 @@ function layoutSectors(
 
   const totalValue = sectorItems.reduce((s, i) => s + i.value, 0);
 
-  // Squarify sector blocks
   const sectorTmpItems = sectorItems.map(s => ({
     value: s.value,
     tile: { ticker: s.sector, name: s.sector, sector: s.sector, price: 0, chg1d: 0, hasFlow: false } as HeatmapTile,
   }));
-
-  const HEADER_H = 18; // sector label header height
 
   const sectorRects: LayoutRect[] = [];
   squarifyRecurse(sectorTmpItems, 0, 0, canvasW, canvasH, totalValue, sectorRects as unknown as TreemapNode[]);
@@ -218,20 +223,20 @@ function layoutSectors(
     if (!rect) continue;
     const { sector, tiles: sectorTiles } = sectorItems[i];
 
-    // Inner canvas for tiles (below sector header, with gap)
+    const hH = getHeaderH(rect.h);
     const innerX = rect.x + gap;
-    const innerY = rect.y + HEADER_H + gap;
+    const innerY = rect.y + hH + gap;
     const innerW = rect.w - gap * 2;
-    const innerH = rect.h - HEADER_H - gap * 2;
+    const innerH = rect.h - hH - gap * 2;
 
     if (innerW < 4 || innerH < 4) {
-      // Too small — still include block but no inner tiles
       blocks.push({ x: rect.x, y: rect.y, w: rect.w, h: rect.h, sector, nodes: [] });
       continue;
     }
 
-    // Lay out tiles within sector
     const tileItems = sectorTiles.map(t => ({ value: tileValue(t, sizing, layer), tile: t }));
+    // Sort descending so largest tiles anchor top-left (best readability).
+    tileItems.sort((a, b) => b.value - a.value);
     const nodes = squarify(tileItems, innerX, innerY, innerW, innerH);
 
     blocks.push({ x: rect.x, y: rect.y, w: rect.w, h: rect.h, sector, nodes });
@@ -248,6 +253,22 @@ interface TooltipState {
   cy: number;
 }
 
+// ─── Sector avg-change for header color ──────────────────────────────────────
+
+function sectorAvgChg(block: SectorBlock, layer: Layer): number {
+  if (block.nodes.length === 0) return 0;
+  if (layer === "price") {
+    return block.nodes.reduce((s, n) => s + n.tile.chg1d, 0) / block.nodes.length;
+  }
+  // flow: average tone mapped to -1/0/+1
+  const flowNodes = block.nodes.filter(n => n.tile.hasFlow);
+  if (flowNodes.length === 0) return 0;
+  return flowNodes.reduce((s, n) => {
+    const v = n.tile.tone === "pos" ? 1 : n.tile.tone === "neg" ? -1 : 0;
+    return s + v;
+  }, 0) / flowNodes.length;
+}
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface TreemapProps {
@@ -261,14 +282,13 @@ interface TreemapProps {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-const MIN_TILE_AREA = 64; // px² — tiles below this area are not rendered
+const MIN_TILE_AREA = 64;  // px² — below this tiles are not rendered (MomoEdge: ~20x8 ≈ 160; we use 64 to show more names)
 
 export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }: TreemapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState<{ w: number; h: number }>({ w: 900, h: 500 });
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
-  // ResizeObserver — 120ms debounce
   useEffect(() => {
     if (!containerRef.current) return;
     let timer: ReturnType<typeof setTimeout>;
@@ -276,20 +296,16 @@ export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }
       clearTimeout(timer);
       timer = setTimeout(() => {
         const e = entries[0];
-        if (e) {
-          setDims({ w: e.contentRect.width, h: e.contentRect.height });
-        }
+        if (e) setDims({ w: e.contentRect.width, h: e.contentRect.height });
       }, 120);
     });
     ro.observe(containerRef.current);
-    // Initial measure
     const rect = containerRef.current.getBoundingClientRect();
     if (rect.width > 0) setDims({ w: rect.width, h: rect.height });
     return () => { ro.disconnect(); clearTimeout(timer); };
   }, []);
 
-  // Compute layout
-  const blocks = layoutSectors(tiles, sizing, layer, dims.w, dims.h, 2);
+  const blocks = layoutSectors(tiles, sizing, layer, dims.w, dims.h, 1);
 
   const handleMouseLeave = useCallback(() => setTooltip(null), []);
 
@@ -304,19 +320,14 @@ export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }
 
   const zh = lang === "zh";
 
-  // Gradient id cache
-  const gradId = useCallback((ticker: string, type: "top" | "bot") => {
-    return `hm-grad-${ticker.replace(/[^a-zA-Z0-9]/g, "_")}-${type}`;
+  // Pre-generate gradient ids for all tiles
+  const gradId = useCallback((ticker: string) => {
+    return `hm-g-${ticker.replace(/[^a-zA-Z0-9]/g, "_")}`;
   }, []);
 
   return (
     <div ref={containerRef} style={TREEMAP_CONTAINER} onMouseLeave={handleMouseLeave}>
-      <svg
-        width={dims.w}
-        height={dims.h}
-        style={{ display: "block", overflow: "visible" }}
-      >
-        {/* Define gradients for each tile */}
+      <svg width={dims.w} height={dims.h} style={{ display: "block" }}>
         <defs>
           {blocks.flatMap(block =>
             block.nodes.map(node => {
@@ -327,7 +338,7 @@ export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }
               return (
                 <linearGradient
                   key={`grad-${tile.ticker}`}
-                  id={gradId(tile.ticker, "top")}
+                  id={gradId(tile.ticker)}
                   x1="0" y1="0" x2="0" y2="1"
                 >
                   <stop offset="0%" stopColor={colors.top} />
@@ -338,7 +349,6 @@ export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }
           )}
         </defs>
 
-        {/* Sector blocks */}
         {blocks.map(block => (
           <SectorBlockGroup
             key={block.sector}
@@ -353,7 +363,6 @@ export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }
         ))}
       </svg>
 
-      {/* Hover tooltip */}
       {tooltip && (
         <HoverTooltip tooltip={tooltip} layer={layer} canvasW={dims.w} canvasH={dims.h} zh={zh} />
       )}
@@ -367,16 +376,21 @@ interface SectorBlockGroupProps {
   block: SectorBlock;
   layer: Layer;
   selectedTicker: string | null;
-  gradId: (ticker: string, type: "top" | "bot") => string;
+  gradId: (ticker: string) => string;
   onTileMouseEnter: (tile: HeatmapTile, cx: number, cy: number) => void;
   onTileClick: (tile: HeatmapTile) => void;
   zh: boolean;
 }
 
 function SectorBlockGroup({
-  block, layer, selectedTicker, gradId, onTileMouseEnter, onTileClick, zh,
+  block, layer, selectedTicker, gradId, onTileMouseEnter, onTileClick,
 }: SectorBlockGroupProps) {
-  const label = SECTOR_LABEL[block.sector] ?? block.sector;
+  const abbrev = SECTOR_LABEL[block.sector] ?? block.sector;
+  const hH = getHeaderH(block.h);
+  const avg = sectorAvgChg(block, layer);
+  const avgColor = avg > 0 ? "var(--up)" : avg < 0 ? "var(--down)" : "rgba(148,163,184,0.6)";
+  const big = block.h > 55 && block.w > 75;
+  const med = !big && block.h > 30 && block.w > 40;
 
   return (
     <g>
@@ -386,23 +400,108 @@ function SectorBlockGroup({
         y={block.y}
         width={block.w}
         height={block.h}
-        fill="var(--panel)"
-        stroke="var(--line)"
-        strokeWidth={1}
+        fill="rgba(255,255,255,0.003)"
+        stroke={`rgba(${avg > 0 ? "0,200,83" : avg < 0 ? "255,23,68" : "148,163,184"},0.18)`}
+        strokeWidth={1.2}
         rx={3}
       />
 
-      {/* Sector header label */}
-      <text
-        x={block.x + 6}
-        y={block.y + 13}
-        fontSize={10}
-        fontWeight={700}
-        fill="var(--muted)"
-        style={{ letterSpacing: "0.05em", userSelect: "none", fontFamily: "var(--font-ui)" }}
-      >
-        {label}
-      </text>
+      {/* Sector header band */}
+      {big && hH >= HEADER_H_BIG && (
+        <>
+          <rect
+            x={block.x}
+            y={block.y}
+            width={block.w}
+            height={hH}
+            fill="rgba(0,0,0,0.45)"
+            rx={3}
+          />
+          <line
+            x1={block.x + 1}
+            y1={block.y + hH}
+            x2={block.x + block.w - 1}
+            y2={block.y + hH}
+            stroke={`rgba(148,163,184,0.15)`}
+            strokeWidth={0.5}
+          />
+          <text
+            x={block.x + 8}
+            y={block.y + 10}
+            fontSize={9}
+            fontWeight={700}
+            fill="#94a3b8"
+            style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)", letterSpacing: "0.06em" }}
+          >
+            {abbrev}
+          </text>
+          {block.nodes.length > 0 && (
+            <text
+              x={block.x + block.w - 6}
+              y={block.y + 10}
+              fontSize={9}
+              fontWeight={700}
+              fill={avgColor}
+              textAnchor="end"
+              style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)" }}
+            >
+              {layer === "price"
+                ? `${avg >= 0 ? "+" : ""}${avg.toFixed(1)}%`
+                : `${avg >= 0 ? "+" : ""}${(avg * 100).toFixed(0)}%`
+              }
+            </text>
+          )}
+          {/* Breadth / leader sub-line */}
+          <text
+            x={block.x + 8}
+            y={block.y + 19}
+            fontSize={6}
+            fill="rgba(255,255,255,0.18)"
+            style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)" }}
+          >
+            {block.nodes.length > 0 ? block.nodes[0].tile.ticker : ""}
+          </text>
+        </>
+      )}
+
+      {med && hH >= HEADER_H_MED && (
+        <>
+          <rect
+            x={block.x}
+            y={block.y}
+            width={block.w}
+            height={hH}
+            fill="rgba(0,0,0,0.35)"
+            rx={2}
+          />
+          <text
+            x={block.x + 4}
+            y={block.y + 9}
+            fontSize={7}
+            fontWeight={700}
+            fill="#8b95a5"
+            style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)", letterSpacing: "0.04em" }}
+          >
+            {abbrev}
+          </text>
+          {block.nodes.length > 0 && (
+            <text
+              x={block.x + block.w - 4}
+              y={block.y + 9}
+              fontSize={7}
+              fontWeight={600}
+              fill={avgColor.replace("0.6)", "0.5)")}
+              textAnchor="end"
+              style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)" }}
+            >
+              {layer === "price"
+                ? `${avg >= 0 ? "+" : ""}${avg.toFixed(1)}%`
+                : `${avg >= 0 ? "+" : ""}${(avg * 100).toFixed(0)}%`
+              }
+            </text>
+          )}
+        </>
+      )}
 
       {/* Tiles */}
       {block.nodes.map(node => {
@@ -414,10 +513,9 @@ function SectorBlockGroup({
             node={node}
             layer={layer}
             isSelected={selectedTicker === node.tile.ticker}
-            gradId={gradId(node.tile.ticker, "top")}
+            gradId={gradId(node.tile.ticker)}
             onMouseEnter={onTileMouseEnter}
             onClick={onTileClick}
-            zh={zh}
           />
         );
       })}
@@ -434,30 +532,26 @@ interface TileRectProps {
   gradId: string;
   onMouseEnter: (tile: HeatmapTile, cx: number, cy: number) => void;
   onClick: (tile: HeatmapTile) => void;
-  zh: boolean;
 }
 
-function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick, zh: _zh }: TileRectProps) {
+function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick }: TileRectProps) {
   const { x, y, w, h, tile } = node;
-  const PAD = 3;
 
-  // Label: ticker + value
+  // Font sizing — mirrors MomoEdge: tFs = min(w/4.5, h/2.2, 16), cFs = min(w/6, h/3.5, 12)
+  const tFs = Math.min(w / 4.5, h / 2.2, 16);
+  const cFs = Math.min(w / 6, h / 3.5, 12);
+
+  // Show ticker if scaled width > 20 and height > 10 (MomoEdge threshold)
+  const showTicker = (w * 1) > 20 && (h * 1) > 10;
+  // Show value if enough room for two lines
+  const showValue = (w * 1) > 26 && (h * 1) > 22;
+
   const chg1d = tile.chg1d ?? 0;
   const valueLabel = layer === "price"
-    ? `${chg1d >= 0 ? "+" : ""}${chg1d.toFixed(2)}%`
-    : tile.netPremiumMn != null
+    ? `${chg1d >= 0 ? "+" : ""}${chg1d.toFixed(1)}%`
+    : tile.hasFlow && tile.netPremiumMn != null
       ? `$${tile.netPremiumMn.toFixed(1)}M`
       : "";
-
-  const showTicker = w > 28 && h > 16;
-  const showValue  = w > 40 && h > 28;
-
-  // "price only" badge on flow layer when no flow data
-  const showPriceOnly = layer === "flow" && !tile.hasFlow && w > 36 && h > 16;
-
-  // Volume spike indicator (price layer)
-  const showVolSpike = layer === "price" && tile.vol != null && w > 20 && h > 16;
-  const isVolSpike = false; // vol/prev_vol not in manifest v1; placeholder
 
   return (
     <g
@@ -466,32 +560,31 @@ function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick, zh: 
         const svgEl = (e.target as SVGElement).closest("svg");
         if (!svgEl) return;
         const svgRect = svgEl.getBoundingClientRect();
-        const cx = e.clientX - svgRect.left;
-        const cy = e.clientY - svgRect.top;
-        onMouseEnter(tile, cx, cy);
+        onMouseEnter(tile, e.clientX - svgRect.left, e.clientY - svgRect.top);
       }}
       style={{ cursor: "pointer" }}
     >
       <rect
-        x={x + 1}
-        y={y + 1}
-        width={w - 2}
-        height={h - 2}
+        x={x + 0.3}
+        y={y + 0.3}
+        width={Math.max(0, w - 0.6)}
+        height={Math.max(0, h - 0.6)}
         fill={`url(#${gradId})`}
-        stroke={isSelected ? "var(--brand-2)" : "var(--line-2)"}
-        strokeWidth={isSelected ? 2 : 0.5}
-        rx={2}
+        stroke={isSelected ? "var(--brand, #00e5ff)" : "rgba(255,255,255,0.02)"}
+        strokeWidth={isSelected ? 2 : 0.2}
+        rx={1.5}
       />
 
       {showTicker && (
         <text
-          x={x + PAD + 2}
-          y={y + PAD + 11}
-          fontSize={Math.min(11, Math.max(9, w / 5))}
+          x={x + w / 2}
+          y={y + h / 2 - (showValue ? cFs * 0.55 + 1 : 0)}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize={tFs}
           fontWeight={700}
-          fill="rgba(255,255,255,0.92)"
-          style={{ userSelect: "none", fontFamily: "var(--font-ui)" }}
-          clipPath={`inset(0 0 0 0)`}
+          fill="#f1f5f9"
+          style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)", pointerEvents: "none" }}
         >
           {tile.ticker}
         </text>
@@ -499,30 +592,36 @@ function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick, zh: 
 
       {showValue && (
         <text
-          x={x + PAD + 2}
-          y={y + PAD + 24}
-          fontSize={Math.min(10, Math.max(8, w / 6))}
-          fill="rgba(255,255,255,0.72)"
-          style={{ userSelect: "none", fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums" }}
+          x={x + w / 2}
+          y={y + h / 2 + tFs * 0.55 + 1}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize={cFs}
+          fontWeight={600}
+          fill="rgba(255,255,255,0.85)"
+          style={{
+            userSelect: "none",
+            fontFamily: "var(--font-num, monospace)",
+            fontVariantNumeric: "tabular-nums",
+            pointerEvents: "none",
+          }}
         >
           {valueLabel}
         </text>
       )}
 
-      {showPriceOnly && (
+      {/* "price only" badge on flow layer when no flow data */}
+      {layer === "flow" && !tile.hasFlow && w > 36 && h > 16 && (
         <text
-          x={x + PAD + 2}
+          x={x + w / 2}
           y={y + h - 5}
-          fontSize={8}
-          fill="rgba(255,255,255,0.4)"
-          style={{ userSelect: "none", fontFamily: "var(--font-ui)" }}
+          textAnchor="middle"
+          fontSize={7}
+          fill="rgba(255,255,255,0.3)"
+          style={{ userSelect: "none", fontFamily: "var(--font-ui)", pointerEvents: "none" }}
         >
           price
         </text>
-      )}
-
-      {showVolSpike && isVolSpike && (
-        <rect x={x + w - 7} y={y + h - 7} width={5} height={5} fill="var(--brand-2)" rx={1} />
       )}
     </g>
   );
@@ -543,15 +642,13 @@ function HoverTooltip({ tooltip, layer, canvasW, canvasH, zh }: HoverTooltipProp
   const TIP_W = 180;
   const TIP_H = layer === "flow" ? 230 : 170;
 
-  // Clamp position
-  const left = Math.min(cx + 12, canvasW - TIP_W - 4);
+  const left = Math.min(Math.max(4, cx + 12), canvasW - TIP_W - 4);
   const top  = cy + TIP_H > canvasH ? cy - TIP_H - 8 : cy + 16;
 
   const tipChg = tile.chg1d ?? 0;
   const chgColor = tipChg >= 0 ? "var(--up)" : "var(--down)";
   const chgStr = `${tipChg >= 0 ? "+" : ""}${tipChg.toFixed(2)}%`;
 
-  // Divergence: price up + tone neg, or price down + tone pos
   const priceUp = tile.chg1d >= 0.05;
   const priceDn = tile.chg1d <= -0.05;
   const tonePos = tile.tone === "pos";
@@ -565,72 +662,79 @@ function HoverTooltip({ tooltip, layer, canvasW, canvasH, zh }: HoverTooltipProp
         left,
         top,
         width: TIP_W,
-        background: "var(--panel-2)",
-        border: "1px solid var(--line-3)",
+        background: "rgba(10,14,20,0.96)",
+        border: "1px solid rgba(255,255,255,0.08)",
         borderRadius: 6,
         padding: "8px 10px",
         pointerEvents: "none",
         zIndex: 100,
-        boxShadow: "var(--shadow-1)",
+        boxShadow: "0 6px 20px rgba(0,0,0,0.6)",
         fontSize: 11,
         fontFamily: "var(--font-ui)",
       }}
     >
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
-        {tile.ticker}
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span>{tile.ticker}</span>
         {isDivergent && (
-          <span style={{ marginLeft: 6, fontSize: 9, color: "var(--warn)", fontWeight: 600 }}>
-            DIV
+          <span style={{ fontSize: 9, color: "var(--warn)", fontWeight: 600 }}>DIV</span>
+        )}
+        {layer === "flow" && tile.hasFlow && (
+          <span style={{
+            fontSize: 8, fontWeight: 600, padding: "1px 4px", borderRadius: 2,
+            background: tile.tone === "pos" ? "rgba(0,191,165,0.1)" : tile.tone === "neg" ? "rgba(255,107,107,0.1)" : "rgba(148,163,184,0.1)",
+            color: tile.tone === "pos" ? "var(--up)" : tile.tone === "neg" ? "var(--down)" : "var(--muted)",
+          }}>
+            {tile.tone ?? "—"}
+          </span>
+        )}
+        {layer === "price" && (
+          <span style={{ fontSize: 8, fontWeight: 600, padding: "1px 4px", borderRadius: 2,
+            background: tipChg >= 0 ? "rgba(0,200,83,0.08)" : "rgba(255,23,68,0.08)",
+            color: chgColor }}>
+            {chgStr}
           </span>
         )}
       </div>
-      <div style={{ color: "var(--text-2)", marginBottom: 5, fontSize: 10 }}>{tile.name}</div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-        <span style={{ color: "var(--muted)" }}>{zh ? "价格" : "Price"}</span>
-        <span style={{ fontVariantNumeric: "tabular-nums" }}>${(tile.price ?? 0).toFixed(2)}</span>
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-        <span style={{ color: "var(--muted)" }}>{zh ? "涨跌" : "Chg 1D"}</span>
-        <span style={{ color: chgColor, fontVariantNumeric: "tabular-nums" }}>{chgStr}</span>
-      </div>
+      <div style={{ color: "rgba(148,163,184,0.7)", marginBottom: 5, fontSize: 10 }}>{tile.name}</div>
 
-      {layer === "flow" && tile.hasFlow && (
-        <>
-          <div style={{ borderTop: "1px solid var(--line-2)", margin: "5px 0" }} />
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-            <span style={{ color: "var(--muted)" }}>{zh ? "权利金" : "Premium"}</span>
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3px 10px", fontSize: 10 }}>
+        <span style={{ color: "#475569" }}>{zh ? "价格" : "Price"}</span>
+        <span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>${(tile.price ?? 0).toFixed(2)}</span>
+
+        <span style={{ color: "#475569" }}>{zh ? "涨跌 1D" : "Chg 1D"}</span>
+        <span style={{ textAlign: "right", color: chgColor, fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{chgStr}</span>
+
+        {layer === "flow" && tile.hasFlow && (
+          <>
+            <span style={{ color: "#475569" }}>{zh ? "权利金" : "Premium"}</span>
+            <span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
               {tile.netPremiumMn != null ? `$${tile.netPremiumMn.toFixed(1)}M` : "—"}
             </span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-            <span style={{ color: "var(--muted)" }}>{zh ? "倾向" : "Tone"}</span>
-            <span style={{ color: tile.tone === "pos" ? "var(--up)" : tile.tone === "neg" ? "var(--down)" : "var(--muted)" }}>
-              {tile.tone ?? "—"}
-            </span>
-          </div>
-          {tile.doiPc != null && (
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-              <span style={{ color: "var(--muted)" }}>ΔOI P/C</span>
-              <span style={{ fontVariantNumeric: "tabular-nums" }}>{(tile.doiPc ?? 0).toFixed(2)}</span>
-            </div>
-          )}
-          {isDivergent && (
-            <div style={{ marginTop: 4, padding: "3px 5px", background: "rgba(232,179,57,0.12)", borderRadius: 3, fontSize: 9, color: "var(--warn)", lineHeight: 1.4 }}>
-              {zh ? "价格/流向背离 — 以规模为准" : "price/flow divergence — magnitude read"}
-            </div>
-          )}
-          <div style={{ marginTop: 5, fontSize: 9, color: "var(--muted)", fontStyle: "italic" }}>
-            {zh ? "方向为软性读数" : "direction is soft"}
-          </div>
-        </>
-      )}
 
-      {layer === "flow" && !tile.hasFlow && (
-        <div style={{ color: "var(--muted)", fontSize: 9, fontStyle: "italic", marginTop: 4 }}>
-          {zh ? "仅价格数据" : "price only"}
-        </div>
-      )}
+            {tile.doiPc != null && (
+              <>
+                <span style={{ color: "#475569" }}>ΔOI P/C</span>
+                <span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{tile.doiPc.toFixed(2)}</span>
+              </>
+            )}
+
+            {isDivergent && (
+              <div style={{ gridColumn: "1 / -1", marginTop: 4, padding: "3px 5px", background: "rgba(232,179,57,0.12)", borderRadius: 3, fontSize: 9, color: "var(--warn)", lineHeight: 1.4 }}>
+                {zh ? "价格/流向背离 — 以规模为准" : "price/flow divergence — magnitude read"}
+              </div>
+            )}
+            <div style={{ gridColumn: "1 / -1", marginTop: 3, fontSize: 9, color: "var(--muted)", fontStyle: "italic" }}>
+              {zh ? "方向为软性读数" : "direction is soft"}
+            </div>
+          </>
+        )}
+
+        {layer === "flow" && !tile.hasFlow && (
+          <div style={{ gridColumn: "1 / -1", color: "var(--muted)", fontSize: 9, fontStyle: "italic", marginTop: 4 }}>
+            {zh ? "仅价格数据" : "price only"}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -642,4 +746,5 @@ const TREEMAP_CONTAINER: React.CSSProperties = {
   width: "100%",
   height: "100%",
   overflow: "hidden",
+  background: "#0c1018",
 };

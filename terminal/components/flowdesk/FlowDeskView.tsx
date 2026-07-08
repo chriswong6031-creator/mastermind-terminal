@@ -131,7 +131,7 @@ function ChainHeatRail({ data, lang }: ChainHeatRailProps) {
 
   if (!data) {
     return (
-      <div className="obs-card obs-fd-chain" data-tut="chain-heat">
+      <div className="obs-card obs-fd-chain obs-scroll" data-tut="chain-heat">
         <div className="obs-card-hd">
           <span className="obs-lbl">{t("chainHeatTitle")}</span>
         </div>
@@ -148,7 +148,7 @@ function ChainHeatRail({ data, lang }: ChainHeatRailProps) {
   const note = zh ? (data.note_zh ?? "") : (data.note_en ?? "");
 
   return (
-    <div className="obs-card obs-fd-chain" data-tut="chain-heat">
+    <div className="obs-card obs-fd-chain obs-scroll" data-tut="chain-heat">
       <div className="obs-card-hd">
         <span className="obs-lbl">{t("chainHeatTitle")}</span>
         <span className="obs-lbl" style={{ color: "var(--muted)" }}>
@@ -449,8 +449,12 @@ export function FlowDeskView() {
   return (
     <div className="obs obs-ambient obs-flowdesk">
 
-      {/* ═══ LEFT RAIL (WatchlistRail) ════════════════════════════════════════ */}
+      {/* ═══ LEFT RAIL (FlowGauge strip + WatchlistRail + Smart Money Radar) ═ */}
       <div className="obs-fd-left">
+        {/* FlowGauge — slim strip pinned at top of left rail */}
+        <FlowGauge feed={feedForGauge} lang={lang} />
+
+        {/* WatchlistRail — compacted rings (26px) + tighter rows */}
         {feedForWatchlist && (
           <WatchlistRail
             feed={feedForWatchlist}
@@ -459,58 +463,43 @@ export function FlowDeskView() {
             watchlist={watchlist}
             onToggleTicker={handleToggleTicker}
             onPickTicker={handlePickTicker}
+            onOpenTutorial={() => setTutOpen(true)}
           />
         )}
         {!feedForWatchlist && <div style={RAIL_LOADING} />}
-      </div>
 
-      {/* ═══ CENTER (FlowGauge + RadarStrip + FeedPane) ══════════════════════ */}
-      <div className="obs-fd-center">
-        {/* Tutorial button row */}
-        <div style={TUT_HEADER_ROW}>
-          <button
-            style={TUT_BTN}
-            onClick={() => setTutOpen(true)}
-            aria-label={lang === "zh" ? "打开教程" : "Open tutorial"}
-          >
-            {lang === "zh" ? "教程" : "Tutorial"}
-          </button>
-        </div>
-
-        {/* FlowGauge strip — always shown; empty feed renders $0 gracefully */}
-        <FlowGauge feed={feedForGauge} lang={lang} />
-
-        {/* RadarStrip — show only if unusual_names populated */}
+        {/* Smart Money Radar — fills remaining left-rail height, obs-scroll inside */}
         {feedForRadar.unusual_names.length > 0 && (
           <RadarStrip feed={feedForRadar} lang={lang} />
         )}
-
-        {/* FeedPane — feed + filters + events */}
-        <div style={FEED_COL}>
-          <FeedPane
-            feed={feed}
-            lang={lang}
-            selectedId={selectedEvent?.id ?? null}
-            onSelect={(ev) => setSelectedEvent((prev) =>
-              prev?.id === ev.id ? null : ev
-            )}
-            filters={filters}
-            onFiltersChange={setFilters}
-          />
-        </div>
       </div>
 
-      {/* ═══ RIGHT RAIL (InspectorPane + ChainHeatRail) ══════════════════════ */}
+      {/* ═══ CENTER — feed ONLY (toolbar + card grid) ════════════════════════ */}
+      <div className="obs-fd-center">
+        {/* FeedPane takes full center column height */}
+        <FeedPane
+          feed={feed}
+          lang={lang}
+          selectedId={selectedEvent?.id ?? null}
+          onSelect={(ev) => setSelectedEvent((prev) =>
+            prev?.id === ev.id ? null : ev
+          )}
+          filters={filters}
+          onFiltersChange={setFilters}
+        />
+      </div>
+
+      {/* ═══ RIGHT RAIL — Chain Heat FIRST, then Inspector ═══════════════════ */}
       <div className="obs-fd-right">
-        {/* Inspector — shown whenever an event is selected */}
+        {/* Chain Heat Rail — top of right column, scrollable */}
+        <ChainHeatRail data={chainHeat} lang={lang} />
+
+        {/* Inspector — slim one-line hint when nothing selected; full view on click */}
         <InspectorPane
           event={selectedEvent}
           tickerCtx={tickerCtx}
           lang={lang}
         />
-
-        {/* Chain Heat Rail */}
-        <ChainHeatRail data={chainHeat} lang={lang} />
       </div>
 
       {/* Tutorial overlay (portal-like; renders above everything) */}
@@ -526,36 +515,6 @@ export function FlowDeskView() {
 }
 
 // ─── Layout styles ────────────────────────────────────────────────────────────
-
-const TUT_HEADER_ROW: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  alignItems: "center",
-  padding: "4px 10px",
-  borderBottom: "1px solid var(--line)",
-  flexShrink: 0,
-  background: "var(--panel)",
-};
-
-const TUT_BTN: React.CSSProperties = {
-  height: 24,
-  padding: "0 10px",
-  fontSize: 11,
-  fontWeight: 600,
-  letterSpacing: "0.04em",
-  background: "rgba(77,130,255,0.12)",
-  border: "1px solid rgba(77,130,255,0.35)",
-  borderRadius: "var(--r-pill)",
-  color: "var(--brand-2)",
-  cursor: "pointer",
-  transition: "background 0.15s",
-};
-
-const FEED_COL: React.CSSProperties = {
-  flex: 1,
-  minHeight: 0,
-  overflowY: "auto",
-};
 
 const RAIL_LOADING: React.CSSProperties = {
   height: "100%",

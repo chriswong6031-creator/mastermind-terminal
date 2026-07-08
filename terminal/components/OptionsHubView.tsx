@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { useLang, useT } from "@/lib/i18n";
+import { abbrevSector } from "@/lib/sectorAbbrev";
 import { windowGexRows } from "@/lib/windowGexRows.mjs";
 import { flowPrefetch } from "@/lib/flowClientCache";
 import {
@@ -47,7 +48,7 @@ const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "tide",     enKey: "tabTide",     zhKey: "tabTide" },
   { key: "tickers",  enKey: "tabTickers",  zhKey: "tabTickers" },
   { key: "screener", enKey: "tabScreener", zhKey: "tabScreener" },
-  { key: "vol",      enKey: "tabVol",      zhKey: "tabVol" },
+  // "vol" tab removed from bar — vol surface now lives in the Tickers tab right column
   { key: "gex",      enKey: "tabGex",      zhKey: "tabGex" },
   { key: "prism",    enKey: "tabPrism",    zhKey: "tabPrism" },
 ];
@@ -586,7 +587,7 @@ const StrikeLadder = memo(function StrikeLadder({ strikes, lang }: { strikes: St
   const H = strikes.length * ROW_H + 28;
 
   return (
-    <div style={{ maxHeight: 320, overflowY: "auto" }}>
+    <div className="obs-scroll" style={{ overflowY: "auto" }}>
       <svg viewBox={`0 0 ${BAR_WIDTH * 2 + 80} ${H}`} width="100%" height={H} preserveAspectRatio="xMinYMin meet" style={{ display: "block" }}>
         {/* Column headers */}
         <text x={BAR_WIDTH - 4} y={14} textAnchor="end" fill="var(--up)" fontSize={10} fontWeight={600}>
@@ -1040,6 +1041,9 @@ const GexExpiryBars = memo(function GexExpiryBars({ rows, greek, lang }: { rows:
   );
 });
 
+// ─── Screener preset key ──────────────────────────────────────────────────────
+type ScreenerPreset = "top_prem" | "unusual_z" | "fresh" | "doi" | "zerodte" | "hot";
+
 // ─── Top-level component ─────────────────────────────────────────────────────
 
 export default function OptionsHubView() {
@@ -1170,10 +1174,16 @@ export default function OptionsHubView() {
     if (activeTab === "tide") fetchTide();
   }, [activeTab, fetchTide]);
 
-  // Fetch ticker data when selected
+  // Fetch ticker data when selected; also sync vol surface for the merged right column.
+  // The existing vol useEffect (below) triggers fetchVol when selectedVolRoot changes.
   useEffect(() => {
-    if (selectedTicker) fetchTicker(selectedTicker);
-  }, [selectedTicker, fetchTicker]);
+    if (selectedTicker) {
+      fetchTicker(selectedTicker);
+      // Sync vol root → triggers the existing vol useEffect which calls fetchVol
+      setSelectedVolRoot(selectedTicker);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTicker]);
 
   // ── Filtered events (Tape) ────────────────────────────────────────────────
   const events = useMemo<FlowEvent[]>(() => {
@@ -1270,6 +1280,17 @@ export default function OptionsHubView() {
   }, [activeTab, fetchScreener]);
 
   const [hotView, setHotView] = useState<"by_premium" | "by_volume">("by_premium");
+
+  // ── Screener preset view state ────────────────────────────────────────────
+  const [screenerPreset, setScreenerPreset] = useState<ScreenerPreset>("top_prem");
+  // Sort state for screener preset tables
+  const [scrSortKey, setScrSortKey] = useState<string>("");
+  const [scrSortDir, setScrSortDir] = useState<1 | -1>(-1);
+
+  function scrSort(key: string) {
+    if (scrSortKey === key) setScrSortDir((d) => (d === -1 ? 1 : -1));
+    else { setScrSortKey(key); setScrSortDir(-1); }
+  }
 
   // ── Vol fetch ─────────────────────────────────────────────────────────────
   const [volSearch, setVolSearch] = useState("");
@@ -1499,7 +1520,7 @@ export default function OptionsHubView() {
                   const toneUp = g.net_signed_premium_soft > 0;
                   const toneDown = g.net_signed_premium_soft < 0;
                   const on = groupFilter === g.group && !drillTicker;
-                  const gName = lang === "zh" ? g.group_zh : g.group;
+                  const gName = lang === "zh" ? g.group_zh : abbrevSector(g.group);
                   return (
                     <button
                       key={g.group}
@@ -1693,7 +1714,7 @@ export default function OptionsHubView() {
                               <td style={{ textAlign: "left", fontVariantNumeric: "tabular-nums", color: "var(--text-dim)" }}>{fmtTime(e.ts)}</td>
                               <td style={{ textAlign: "left", fontWeight: 600 }}>{e.root}</td>
                               <td style={{ textAlign: "left", color: "var(--text-2)", fontSize: 11 }}>
-                                {lang === "zh" ? e.group_zh : e.group}
+                                {lang === "zh" ? e.group_zh : abbrevSector(e.group)}
                               </td>
                               <td>
                                 <span className={isBuy ? "pill buy" : isSell ? "pill sell" : ""} style={!isBuy && !isSell ? { color: "var(--muted)", fontSize: 11 } : {}}>
@@ -1828,7 +1849,7 @@ export default function OptionsHubView() {
                           >
                             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                               <span style={{ fontWeight: 600, fontSize: 12 }}>
-                                {lang === "zh" ? s.group_zh : s.group}
+                                {lang === "zh" ? s.group_zh : abbrevSector(s.group)}
                               </span>
                               <span style={{ marginLeft: "auto", color, fontSize: 12, fontWeight: 700 }}>
                                 {fmtPremSigned(net / 1_000_000)}M
@@ -1943,13 +1964,19 @@ export default function OptionsHubView() {
             </div>
           )}
 
-          {/* ═══ TICKERS TAB ════════════════════════════════════════════════ */}
+          {/* ═══ TICKERS TAB ════════════════════════════════════════════════
+               Merged layout: ticker search sidebar + main area split:
+                 LEFT col: intraday flow (minute chart + top contracts list)
+                 RIGHT col: strike ladder (full width of column) + vol surface below
+               The standalone "Vol" tab is removed from the tab bar; its content
+               lives here to surface IV surface in the same per-ticker context.
+          ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === "tickers" && (
             <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
-              {/* Sidebar */}
+              {/* Left sidebar — ticker search + candidate list */}
               <div
                 style={{
-                  width: 200, flexShrink: 0, borderRight: "1px solid var(--line)",
+                  width: 180, flexShrink: 0, borderRight: "1px solid var(--line)",
                   display: "flex", flexDirection: "column", minHeight: 0,
                 }}
               >
@@ -2004,176 +2031,638 @@ export default function OptionsHubView() {
                 </div>
               </div>
 
-              {/* Drill pane */}
-              <div style={{ flex: 1, overflow: "auto", padding: "16px 18px" }}>
+              {/* Main area — fills remaining width */}
+              <div style={{ flex: 1, overflow: "auto", minWidth: 0 }}>
                 {!selectedTicker && (
                   <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
                     {t("tickersSelectPrompt", "Select a ticker from the list or search above")}
                   </div>
                 )}
-                {selectedTicker && tickerLoading && (
+                {selectedTicker && (tickerLoading && !tickerData) && (
                   <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
                 )}
-                {selectedTicker && !tickerLoading && tickerData && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-                    {/* Day stats card */}
-                    <div
-                      style={{
-                        display: "flex", flexWrap: "wrap", gap: 20,
-                        border: "1px solid var(--line)", borderRadius: "var(--r-lg)",
-                        background: "var(--panel)", padding: "14px 18px",
-                      }}
-                    >
+                {selectedTicker && tickerData && (
+                  <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
+
+                    {/* ── Header: ticker + spot ref + IV chips ── */}
+                    <div style={{
+                      display: "flex", alignItems: "center", flexWrap: "wrap", gap: 14,
+                      borderBottom: "1px solid var(--line)", paddingBottom: 12,
+                    }}>
                       <div>
-                        <div className="hub-sec">
-                          {lang === "zh" ? tickerData.group_zh : tickerData.group}
+                        <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em" }}>
+                          {lang === "zh" ? tickerData.group_zh : abbrevSector(tickerData.group)}
                         </div>
-                        <div style={{ fontWeight: 700, fontSize: 22 }}>{tickerData.root}</div>
+                        <div style={{ fontWeight: 700, fontSize: 22, lineHeight: 1.1 }}>{tickerData.root}</div>
                       </div>
-                      {[
-                        { lk: "tickersDayGross", lb: "Day Gross", v: fmtPremium(tickerData.day.gross) },
-                        { lk: "tickersNetSoft", lb: "Net (~soft)", v: fmtPremSigned(tickerData.day.net_soft), color: tickerData.day.net_soft >= 0 ? "var(--up)" : "var(--down)" },
-                        { lk: "tickersCallShare", lb: "Call Share", v: `${(tickerData.day.call_share * 100).toFixed(1)}%`, color: tickerData.day.call_share > 0.5 ? "var(--up)" : "var(--down)" },
-                        {
-                          lk: "tickersPremZ", lb: "Prem z", v: tickerData.day.prem_z != null ? tickerData.day.prem_z.toFixed(1) : (lang === "zh" ? "基线积累中" : "baseline warming"),
-                        },
-                      ].map((kv) => (
-                        <div key={kv.lk}>
-                          <div className="hub-sec">
-                            {t(kv.lk, kv.lb)}
+                      {/* Flow stats chips */}
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        {[
+                          { lk: "tickersDayGross", lb: "Day Gross", v: fmtPremium(tickerData.day.gross) },
+                          { lk: "tickersNetSoft", lb: "Net", v: fmtPremSigned(tickerData.day.net_soft), color: tickerData.day.net_soft >= 0 ? "var(--up)" : "var(--down)" },
+                          { lk: "tickersCallShare", lb: "Call%", v: `${(tickerData.day.call_share * 100).toFixed(1)}%`, color: tickerData.day.call_share > 0.5 ? "var(--up)" : "var(--down)" },
+                          { lk: "tickersPremZ", lb: "Prem z", v: tickerData.day.prem_z != null ? tickerData.day.prem_z.toFixed(1) : (lang === "zh" ? "积累中" : "—") },
+                        ].map((kv) => (
+                          <div key={kv.lk} style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
+                            <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t(kv.lk, kv.lb)}</div>
+                            <div style={{ fontWeight: 650, fontSize: 13, color: (kv as any).color ?? "var(--text)", fontVariantNumeric: "tabular-nums" }}>{kv.v}</div>
                           </div>
-                          <div style={{ fontWeight: 650, fontSize: 15, color: (kv as any).color ?? "var(--text)", fontVariantNumeric: "tabular-nums" }}>
-                            {kv.v}
-                          </div>
-                        </div>
-                      ))}
+                        ))}
+                        {/* IV30 and IV rank chips from vol data */}
+                        {volData && volData.root === selectedTicker && (
+                          <>
+                            <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
+                              <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t("tickersAtmIv", "ATM IV")}</div>
+                              <div style={{ fontWeight: 650, fontSize: 13, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{(volData.atm_iv * 100).toFixed(1)}%</div>
+                            </div>
+                            <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
+                              <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t("tickersIvRank", "IV Rank")}</div>
+                              <div style={{ fontWeight: 650, fontSize: 13, fontVariantNumeric: "tabular-nums",
+                                color: volData.iv_rank_252 == null ? "var(--text-dim)"
+                                  : volData.iv_rank_252 > 75 ? "var(--down)"
+                                  : volData.iv_rank_252 > 50 ? "var(--warn)" : "var(--up)" }}>
+                                {volData.iv_rank_252 != null ? volData.iv_rank_252.toFixed(0) : (lang === "zh" ? "积累中" : "—")}
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Tctx z-score chips */}
+                      {tctxData && (() => {
+                        const histN = tctxData.history_n ?? 0;
+                        const minN = 20;
+                        const warming = histN < minN;
+                        const chips: { labelKey: string; label: string; zKey: keyof NonNullable<TctxPayload["z"]> }[] = [
+                          { labelKey: "tctxNetPremZ", label: "Net z", zKey: "net_signed_premium_z252" },
+                          { labelKey: "tctxVolGtOiShare", label: "vol>OI z", zKey: "vol_gt_oi_share_z252" },
+                        ];
+                        return chips.map((c) => {
+                          const zVal = tctxData.z?.[c.zKey];
+                          return (
+                            <div key={c.zKey} style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
+                              <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t(c.labelKey, c.label)}</div>
+                              <div style={{ fontSize: 13, fontWeight: 650, fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
+                                {warming || zVal == null
+                                  ? <span style={{ fontSize: 10, color: "var(--text-dim)" }}>—</span>
+                                  : `${zVal >= 0 ? "+" : ""}${zVal.toFixed(2)}`}
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
                     </div>
 
-                    {/* Tctx percentile chip row */}
-                    {tctxData && (() => {
-                      const histN = tctxData.history_n ?? 0;
-                      const minN = 20;
-                      const warming = histN < minN;
-                      const chips: { labelKey: string; label: string; zKey: keyof NonNullable<TctxPayload["z"]> }[] = [
-                        { labelKey: "tctxNetPremZ", label: "Net prem z", zKey: "net_signed_premium_z252" },
-                        { labelKey: "tctxZerodteShare", label: "0DTE share z", zKey: "zerodte_share_z252" },
-                        { labelKey: "tctxOtmCallShare", label: "OTM call share z", zKey: "short_dated_otm_call_share_z252" },
-                        { labelKey: "tctxVolGtOiShare", label: "vol>OI share z", zKey: "vol_gt_oi_share_z252" },
-                        { labelKey: "tctxBlockShare", label: "Block share z", zKey: "block_share_z252" },
-                      ];
-                      return (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                          {chips.map((c) => {
-                            const zVal = tctxData.z?.[c.zKey];
-                            return (
-                              <div key={c.zKey} style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "6px 10px", background: "var(--panel)", minWidth: 110 }}>
-                                <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>
-                                  {t(c.labelKey, c.label)}
+                    {/* ── Two-column body ── */}
+                    <div style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 16,
+                      alignItems: "start",
+                    }}>
+
+                      {/* LEFT: intraday flow */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                        <div style={{ fontWeight: 650, fontSize: 12, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: ".05em" }}>
+                          {t("tickersIntraday", "Intraday Flow")}
+                        </div>
+
+                        {/* Minute net-premium chart */}
+                        <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
+                          <div style={{ fontWeight: 600, fontSize: 11, color: "var(--text-2)", marginBottom: 6 }}>
+                            {t("tickersMinChart", "Minute Net Prem")}
+                          </div>
+                          <MinuteNetChart minutes={tickerData.minutes} height={80} />
+                        </div>
+
+                        {/* Top contracts list */}
+                        {tickerData.top_contracts.length > 0 && (
+                          <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
+                            <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--line)", fontWeight: 600, fontSize: 11, color: "var(--text-2)" }}>
+                              {t("tickersTopContracts", "Top Contracts")}
+                            </div>
+                            <table className="scr" style={{ fontSize: 11 }}>
+                              <thead>
+                                <tr>
+                                  <th style={{ textAlign: "left" }}>{t("colCP", "C/P")}</th>
+                                  <th style={{ textAlign: "left" }}>{lang === "zh" ? "到期日" : "Exp"}</th>
+                                  <th>{lang === "zh" ? "行权价" : "Strike"}</th>
+                                  <th>{t("colPrem", "Prem")}</th>
+                                  <th>{lang === "zh" ? "数量" : "Vol"}</th>
+                                  <th>{lang === "zh" ? "标记" : "Flags"}</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {tickerData.top_contracts.map((c, i) => (
+                                  <tr key={i}>
+                                    <td style={{ textAlign: "left" }}>
+                                      <span style={{ color: c.right === "C" ? "var(--up)" : "var(--down)", fontWeight: 700 }}>{c.right}</span>
+                                    </td>
+                                    <td style={{ textAlign: "left", fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>{c.exp.slice(5)}</td>
+                                    <td style={{ fontVariantNumeric: "tabular-nums" }}>{c.strike}</td>
+                                    <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(c.premium)}</td>
+                                    <td style={{ fontVariantNumeric: "tabular-nums" }}>{c.vol.toLocaleString("en-US")}</td>
+                                    <td>
+                                      {c.vol_gt_oi && (
+                                        <span className="flow-flag-chip">{lang === "zh" ? "量超持仓" : "vol>OI"}</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
+                        {/* Expiry bars */}
+                        {tickerData.expiries.length > 0 && (
+                          <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
+                            <div style={{ fontWeight: 600, fontSize: 11, color: "var(--text-2)", marginBottom: 8 }}>
+                              {t("tickersExpBars", "By Expiry")}
+                            </div>
+                            <ExpiryBars expiries={tickerData.expiries} lang={lang} />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* RIGHT: strike ladder + vol surface below */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                        <div style={{ fontWeight: 650, fontSize: 12, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: ".05em" }}>
+                          {t("tickersStrikeLadder", "Strike Ladder")} · {t("tickersIvSurface", "Vol Surface")}
+                        </div>
+
+                        {/* Strike ladder — fills full column width */}
+                        {tickerData.strikes.length > 0 && (
+                          <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
+                            <StrikeLadder strikes={tickerData.strikes} lang={lang} />
+                          </div>
+                        )}
+
+                        {/* Vol surface: IV rank sparkline + term structure + skew */}
+                        {volData && volData.root === selectedTicker && !volLoading && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+
+                            {/* IV rank history sparkline */}
+                            {volData.history.length >= 2 && (
+                              <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
+                                <div style={{ fontWeight: 600, fontSize: 11, color: "var(--text-2)", marginBottom: 6 }}>
+                                  {t("tickersIvRankHistory", "IV Rank History")}
                                 </div>
-                                <div style={{ fontSize: 13, fontWeight: 650, fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
-                                  {warming || zVal == null
-                                    ? <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{t("tctxBaseline", "baseline warming")} {histN}/{minN}</span>
-                                    : `${zVal >= 0 ? "+" : ""}${zVal.toFixed(2)}`
-                                  }
+                                <IvRankHistory history={volData.history} />
+                              </div>
+                            )}
+
+                            {/* Term structure */}
+                            {volData.term.length >= 2 && (
+                              <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
+                                <div style={{ fontWeight: 600, fontSize: 11, color: "var(--text-2)", marginBottom: 6 }}>
+                                  {t("volTermTitle", "Term Structure")}
+                                </div>
+                                <TermStructureChart term={volData.term} />
+                              </div>
+                            )}
+
+                            {/* Skew (first two expiries) */}
+                            {volData.smile.length > 0 && (
+                              <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
+                                <div style={{ fontWeight: 600, fontSize: 11, color: "var(--text-2)", marginBottom: 6 }}>
+                                  {t("volSmileTitle", "Volatility Smile")}
+                                </div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                                  {volData.smile.slice(0, 2).map((se) => (
+                                    <div key={se.exp}>
+                                      <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 4 }}>
+                                        {lang === "zh" ? "到期：" : "Exp: "}{se.exp}
+                                      </div>
+                                      <SmileChart points={se.points} spotRef={volData.spot_ref ?? null} />
+                                    </div>
+                                  ))}
+                                </div>
+                                <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 6, display: "flex", gap: 14 }}>
+                                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                    <span style={{ display: "inline-block", width: 10, height: 2, background: "var(--up)" }} />
+                                    {lang === "zh" ? "认购IV" : "Call IV"}
+                                  </span>
+                                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                    <span style={{ display: "inline-block", width: 10, height: 2, borderBottom: "1px dashed var(--down)" }} />
+                                    {lang === "zh" ? "认沽IV" : "Put IV"}
+                                  </span>
                                 </div>
                               </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
-
-                    {/* Minute net prem chart */}
-                    <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 14px" }}>
-                      <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>
-                        {t("tickersMinChart", "Minute Net Prem")}
+                            )}
+                          </div>
+                        )}
+                        {volLoading && (
+                          <div style={{ color: "var(--muted)", fontSize: 12, padding: "12px 0" }}>
+                            {lang === "zh" ? "波动率数据加载中…" : "Loading vol surface…"}
+                          </div>
+                        )}
                       </div>
-                      <MinuteNetChart minutes={tickerData.minutes} height={80} />
                     </div>
-
-                    {/* Strike ladder */}
-                    {tickerData.strikes.length > 0 && (
-                      <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 14px" }}>
-                        <div style={{ fontWeight: 600, fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>
-                          {t("tickersStrikeLadder", "Strike Ladder")}
-                        </div>
-                        <StrikeLadder strikes={tickerData.strikes} lang={lang} />
-                      </div>
-                    )}
-
-                    {/* Expiry bars */}
-                    {tickerData.expiries.length > 0 && (
-                      <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 14px" }}>
-                        <div className="hub-stat">
-                          {t("tickersExpBars", "By Expiry")}
-                        </div>
-                        <ExpiryBars expiries={tickerData.expiries} lang={lang} />
-                      </div>
-                    )}
-
-                    {/* Top contracts */}
-                    {tickerData.top_contracts.length > 0 && (
-                      <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                        <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)", fontWeight: 600, fontSize: 12, color: "var(--text-2)" }}>
-                          {t("tickersTopContracts", "Top Contracts")}
-                        </div>
-                        <table className="scr" style={{ fontSize: 12 }}>
-                          <thead>
-                            <tr>
-                              <th style={{ textAlign: "left" }}>{t("colCP", "C/P")}</th>
-                              <th style={{ textAlign: "left" }}>{lang === "zh" ? "到期日" : "Exp"}</th>
-                              <th>{lang === "zh" ? "行权价" : "Strike"}</th>
-                              <th>{t("colPrem", "Prem")}</th>
-                              <th>{lang === "zh" ? "数量" : "Vol"}</th>
-                              <th>{lang === "zh" ? "标记" : "Flags"}</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {tickerData.top_contracts.map((c, i) => (
-                              <tr key={i}>
-                                <td style={{ textAlign: "left" }}>
-                                  <span style={{ color: c.right === "C" ? "var(--up)" : "var(--down)", fontWeight: 700 }}>{c.right}</span>
-                                </td>
-                                <td style={{ textAlign: "left", fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>{c.exp.slice(5)}</td>
-                                <td style={{ fontVariantNumeric: "tabular-nums" }}>{c.strike}</td>
-                                <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(c.premium)}</td>
-                                <td style={{ fontVariantNumeric: "tabular-nums" }}>{c.vol.toLocaleString("en-US")}</td>
-                                <td>
-                                  {c.vol_gt_oi && (
-                                    <span className="flow-flag-chip">{lang === "zh" ? "量超持仓" : "vol>OI"}</span>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          {/* ═══ SCREENER TAB ═══════════════════════════════════════════════ */}
+          {/* ═══ SCREENER TAB ═══════════════════════════════════════════════
+               Ranked insight views over data already fetched.
+               Preset chips each render a sortable table; no new endpoints.
+          ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === "screener" && (
-            <div style={{ flex: 1, overflow: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 20 }}>
-              {screenerLoading && !oiData && !hotData && (
+            <div style={{ flex: 1, overflow: "auto", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
+              {screenerLoading && !oiData && !hotData && !feed && (
                 <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
               )}
 
-              {/* Coverage banner when small */}
-              {(oiData || hotData) && (
-                <div style={{ fontSize: 11, color: "var(--text-dim)", background: "rgba(41,98,255,.06)", border: "1px solid rgba(41,98,255,.18)", borderRadius: "var(--r-md)", padding: "6px 12px" }}>
-                  {lang === "zh" ? "ETF品种覆盖；个股覆盖扩展中" : "ETF universe; single names expanding"}
-                </div>
-              )}
+              {/* Preset view chip bar */}
+              {(feed || oiData || hotData) && (() => {
+                type PresetDef = { key: ScreenerPreset; en: string; zh: string; needsFeed?: boolean; needsOi?: boolean; needsHot?: boolean };
+                const PRESET_DEFS: PresetDef[] = [
+                  { key: "top_prem",  en: "Top Premium",       zh: "保费最大",     needsFeed: true },
+                  { key: "unusual_z", en: "Unusual (z)",        zh: "异常（z值）",  needsFeed: true },
+                  { key: "fresh",     en: "Fresh Positioning",  zh: "新建仓位",     needsFeed: true },
+                  { key: "doi",       en: "ΔOI Builds",         zh: "持仓增长",     needsOi: true },
+                  { key: "zerodte",   en: "0DTE Heavy",         zh: "高0DTE占比",   needsFeed: true },
+                  { key: "hot",       en: "Hot Contracts",      zh: "热门合约",     needsHot: true },
+                ];
+                // Filter out chips whose data isn't available
+                const available = PRESET_DEFS.filter((p) =>
+                  (p.needsFeed && feed) || (p.needsOi && oiData) || (p.needsHot && hotData)
+                );
+                return (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                    {available.map((p) => (
+                      <button
+                        key={p.key}
+                        className={`chip${screenerPreset === p.key ? " on" : ""}`}
+                        style={{ height: 28, fontSize: 12 }}
+                        onClick={() => { setScreenerPreset(p.key); setScrSortKey(""); setScrSortDir(-1); }}
+                      >
+                        {lang === "zh" ? p.zh : p.en}
+                      </button>
+                    ))}
+                    <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-dim)" }}>
+                      {lang === "zh" ? "ETF品种覆盖，个股扩展中" : "ETF universe · single names expanding"}
+                    </span>
+                  </div>
+                );
+              })()}
 
-              {/* Hot Contracts card */}
-              {hotData && (
+              {/* ── Top Premium view — unusual_names sorted by gross_premium_today ── */}
+              {screenerPreset === "top_prem" && feed && (() => {
+                const rows = [...(feed.unusual_names ?? [])].sort((a, b) => {
+                  if (scrSortKey === "gross") return (a.gross_premium_today - b.gross_premium_today) * scrSortDir;
+                  if (scrSortKey === "z") return ((a.prem_z ?? -999) - (b.prem_z ?? -999)) * scrSortDir;
+                  if (scrSortKey === "call_share") return (a.call_prem_share - b.call_prem_share) * scrSortDir;
+                  // default: by gross descending
+                  return b.gross_premium_today - a.gross_premium_today;
+                });
+                const hdr = (key: string, en: string, zh: string, tip?: string) => (
+                  <th
+                    style={{ cursor: "pointer" }}
+                    className={scrSortKey === key ? "sorted" : ""}
+                    onClick={() => scrSort(key)}
+                    title={tip}
+                  >
+                    {lang === "zh" ? zh : en}{scrSortKey === key ? (scrSortDir === -1 ? " ↓" : " ↑") : ""}
+                  </th>
+                );
+                return (
+                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
+                    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13 }}>
+                      {lang === "zh" ? "保费最大（今日）" : "Top Premium — Today"}
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="scr" style={{ fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: "left" }}>{lang === "zh" ? "代码" : "Ticker"}</th>
+                            <th style={{ textAlign: "left" }}>{t("screenerColSector", "Sector")}</th>
+                            {hdr("gross", "Gross Prem", "总保费", "Total premium across all flow events today")}
+                            {hdr("z", "Prem z", "保费z值", "z-score vs historical baseline (blank = baseline warming)")}
+                            {hdr("call_share", "Call%", "认购占比", "Call premium share of total")}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((u) => (
+                            <tr key={u.root}
+                              style={{ cursor: "pointer" }}
+                              onClick={() => { switchTab("tickers"); setSelectedTicker(u.root); }}
+                            >
+                              <td style={{ textAlign: "left", fontWeight: 700 }}>{u.root}</td>
+                              <td style={{ textAlign: "left", color: "var(--text-2)", fontSize: 11 }}>
+                                {lang === "zh" ? u.group_zh : abbrevSector(u.group)}
+                              </td>
+                              <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(u.gross_premium_today)}</td>
+                              <td style={{ fontVariantNumeric: "tabular-nums", color: u.prem_z != null && Math.abs(u.prem_z) > 2 ? "var(--warn)" : "var(--text)" }}>
+                                {u.prem_z != null ? u.prem_z.toFixed(1) : <span style={{ color: "var(--text-dim)" }}>—</span>}
+                              </td>
+                              <td style={{ fontVariantNumeric: "tabular-nums", color: u.call_prem_share > 0.6 ? "var(--up)" : u.call_prem_share < 0.4 ? "var(--down)" : "var(--text)" }}>
+                                {(u.call_prem_share * 100).toFixed(1)}%
+                              </td>
+                            </tr>
+                          ))}
+                          {rows.length === 0 && (
+                            <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
+                              {lang === "zh" ? "本时段暂无数据" : "No data yet this session"}
+                            </td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ padding: "6px 14px", fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--line)" }}>
+                      {lang === "zh" ? "点击行跳转至个股详情。z值为启发式基线估算。" : "Click row to open Tickers drill. z-score is a heuristic baseline estimate."}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── Unusual (z) view — sorted by prem_z descending ── */}
+              {screenerPreset === "unusual_z" && feed && (() => {
+                const rows = [...(feed.unusual_names ?? [])]
+                  .filter((u) => u.prem_z != null)
+                  .sort((a, b) => {
+                    if (scrSortKey === "gross") return (a.gross_premium_today - b.gross_premium_today) * scrSortDir;
+                    if (scrSortKey === "call_share") return (a.call_prem_share - b.call_prem_share) * scrSortDir;
+                    // default: by |z| descending
+                    return (Math.abs(b.prem_z ?? 0) - Math.abs(a.prem_z ?? 0)) * (scrSortKey === "z" ? scrSortDir : 1);
+                  });
+                const warming = (feed.unusual_names ?? []).filter((u) => u.prem_z == null);
+                const hdr = (key: string, en: string, zh: string, tip?: string) => (
+                  <th style={{ cursor: "pointer" }} className={scrSortKey === key ? "sorted" : ""} onClick={() => scrSort(key)} title={tip}>
+                    {lang === "zh" ? zh : en}{scrSortKey === key ? (scrSortDir === -1 ? " ↓" : " ↑") : ""}
+                  </th>
+                );
+                return (
+                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
+                    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13, display: "flex", alignItems: "center", gap: 12 }}>
+                      <span>{lang === "zh" ? "异常活跃（z值排序）" : "Unusual Activity — by z-score"}</span>
+                      {warming.length > 0 && (
+                        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                          {lang === "zh" ? `${warming.length} 基线积累中（未显示）` : `${warming.length} warming baselines hidden`}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="scr" style={{ fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: "left" }}>{lang === "zh" ? "代码" : "Ticker"}</th>
+                            <th style={{ textAlign: "left" }}>{t("screenerColSector", "Sector")}</th>
+                            {hdr("z", "Prem z", "保费z值", "Signed z-score: |z|>2 = unusual")}
+                            {hdr("gross", "Gross", "总保费", "Total premium today")}
+                            {hdr("call_share", "Call%", "认购占比")}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((u) => {
+                            const absZ = Math.abs(u.prem_z ?? 0);
+                            return (
+                              <tr key={u.root} style={{ cursor: "pointer" }} onClick={() => { switchTab("tickers"); setSelectedTicker(u.root); }}>
+                                <td style={{ textAlign: "left", fontWeight: 700 }}>{u.root}</td>
+                                <td style={{ textAlign: "left", color: "var(--text-2)", fontSize: 11 }}>
+                                  {lang === "zh" ? u.group_zh : abbrevSector(u.group)}
+                                </td>
+                                <td style={{
+                                  fontVariantNumeric: "tabular-nums", fontWeight: absZ > 2 ? 700 : 400,
+                                  color: absZ > 3 ? "var(--warn)" : absZ > 2 ? "var(--text)" : "var(--text-2)",
+                                }}>
+                                  {(u.prem_z ?? 0) >= 0 ? "+" : ""}{(u.prem_z ?? 0).toFixed(1)}
+                                </td>
+                                <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(u.gross_premium_today)}</td>
+                                <td style={{ fontVariantNumeric: "tabular-nums", color: u.call_prem_share > 0.6 ? "var(--up)" : u.call_prem_share < 0.4 ? "var(--down)" : "var(--text)" }}>
+                                  {(u.call_prem_share * 100).toFixed(1)}%
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {rows.length === 0 && (
+                            <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
+                              {lang === "zh" ? "基线积累中，暂无z值" : "Baselines warming — no z-scores yet"}
+                            </td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ padding: "6px 14px", fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--line)" }}>
+                      {lang === "zh" ? "|z|>2 为统计显著（启发式）；点击行跳转详情。" : "|z|>2 = statistically notable (heuristic). Click row → Tickers drill."}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── Fresh Positioning view — unusual_names with vol>OI flow count ── */}
+              {screenerPreset === "fresh" && feed && (() => {
+                // "Fresh" = vol>OI events per ticker today, from feed.events
+                const freshCounts: Record<string, number> = {};
+                const freshPrem: Record<string, number> = {};
+                for (const ev of feed.events ?? []) {
+                  if (ev.vol_gt_oi) {
+                    freshCounts[ev.root] = (freshCounts[ev.root] ?? 0) + 1;
+                    freshPrem[ev.root] = (freshPrem[ev.root] ?? 0) + ev.premium;
+                  }
+                }
+                // Join with unusual_names for sector/group context
+                const nameMap: Record<string, { group: string; group_zh: string }> = {};
+                for (const u of feed.unusual_names ?? []) nameMap[u.root] = { group: u.group, group_zh: u.group_zh };
+
+                const rows = Object.entries(freshCounts).map(([root, n]) => ({
+                  root, n, prem: freshPrem[root] ?? 0,
+                  group: nameMap[root]?.group ?? "",
+                  group_zh: nameMap[root]?.group_zh ?? "",
+                })).sort((a, b) => {
+                  if (scrSortKey === "n") return (a.n - b.n) * scrSortDir;
+                  if (scrSortKey === "prem") return (a.prem - b.prem) * scrSortDir;
+                  return b.prem - a.prem;
+                });
+                const hdr = (key: string, en: string, zh: string, tip?: string) => (
+                  <th style={{ cursor: "pointer" }} className={scrSortKey === key ? "sorted" : ""} onClick={() => scrSort(key)} title={tip}>
+                    {lang === "zh" ? zh : en}{scrSortKey === key ? (scrSortDir === -1 ? " ↓" : " ↑") : ""}
+                  </th>
+                );
+                return (
+                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
+                    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13 }}>
+                      {lang === "zh" ? "新建仓位（vol>OI 信号）" : "Fresh Positioning — vol > OI signals"}
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="scr" style={{ fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: "left" }}>{lang === "zh" ? "代码" : "Ticker"}</th>
+                            <th style={{ textAlign: "left" }}>{t("screenerColSector", "Sector")}</th>
+                            {hdr("n", "Fresh hits", "新开仓次数", "Number of vol>OI events today")}
+                            {hdr("prem", "Prem", "保费", "Total premium on vol>OI events")}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr key={r.root} style={{ cursor: "pointer" }} onClick={() => { switchTab("tickers"); setSelectedTicker(r.root); }}>
+                              <td style={{ textAlign: "left", fontWeight: 700 }}>{r.root}</td>
+                              <td style={{ textAlign: "left", color: "var(--text-2)", fontSize: 11 }}>
+                                {lang === "zh" ? r.group_zh : abbrevSector(r.group)}
+                              </td>
+                              <td style={{ fontVariantNumeric: "tabular-nums" }}>{r.n}</td>
+                              <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(r.prem)}</td>
+                            </tr>
+                          ))}
+                          {rows.length === 0 && (
+                            <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
+                              {lang === "zh" ? "本时段暂无 vol>OI 信号" : "No vol>OI signals this session"}
+                            </td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ padding: "6px 14px", fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--line)" }}>
+                      {lang === "zh" ? "vol>OI 表示当日成交量超过昨日持仓，为新开仓信号（非确认）。" : "vol>OI means today's volume exceeds prior OI — a fresh-positioning signal (not confirmed)."}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── ΔOI Builds view — oiData.movers ── */}
+              {screenerPreset === "doi" && oiData && (() => {
+                const rows = [...oiData.movers].sort((a, b) => {
+                  if (scrSortKey === "doi") return (Math.abs(a.d_oi) - Math.abs(b.d_oi)) * scrSortDir;
+                  if (scrSortKey === "oi") return (a.oi - b.oi) * scrSortDir;
+                  if (scrSortKey === "mid") return ((a.mid ?? 0) - (b.mid ?? 0)) * scrSortDir;
+                  // default: |ΔOI| desc
+                  return Math.abs(b.d_oi) - Math.abs(a.d_oi);
+                });
+                const hdr = (key: string, en: string, zh: string, tip?: string) => (
+                  <th style={{ cursor: "pointer" }} className={scrSortKey === key ? "sorted" : ""} onClick={() => scrSort(key)} title={tip}>
+                    {lang === "zh" ? zh : en}{scrSortKey === key ? (scrSortDir === -1 ? " ↓" : " ↑") : ""}
+                  </th>
+                );
+                return (
+                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
+                    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13, display: "flex", alignItems: "center", gap: 12 }}>
+                      <span>{lang === "zh" ? "持仓增长（ΔOI）" : "OI Builds — ΔOI"}</span>
+                      <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                        {lang === "zh" ? "截至上一交易日" : "as of previous session"}
+                      </span>
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="scr" style={{ fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: "left" }}>{lang === "zh" ? "代码" : "Ticker"}</th>
+                            <th style={{ textAlign: "left" }}>{lang === "zh" ? "认购/认沽" : "C/P"}</th>
+                            <th style={{ textAlign: "left" }}>{lang === "zh" ? "到期日" : "Exp"}</th>
+                            <th>{lang === "zh" ? "行权价" : "Strike"}</th>
+                            {hdr("doi", "ΔOI", "持仓变动", "Open interest change (t-1 vs t-2)")}
+                            {hdr("oi", "OI t-1", "持仓（前日）")}
+                            {hdr("mid", "Mid", "中间价")}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((m, i) => {
+                            const isAdd = m.d_oi > 0;
+                            return (
+                              <tr key={i} style={{ cursor: "pointer" }} onClick={() => { switchTab("tickers"); setSelectedTicker(m.root); }}>
+                                <td style={{ textAlign: "left", fontWeight: 700 }}>{m.root}</td>
+                                <td style={{ textAlign: "left" }}>
+                                  <span style={{ color: m.right === "C" ? "var(--up)" : "var(--down)", fontWeight: 700 }}>{m.right}</span>
+                                </td>
+                                <td style={{ textAlign: "left", color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>{m.exp.slice(5)}</td>
+                                <td style={{ fontVariantNumeric: "tabular-nums" }}>{m.strike}</td>
+                                <td style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700, color: isAdd ? "var(--up)" : "var(--down)" }}>
+                                  {isAdd ? "+" : ""}{m.d_oi.toLocaleString("en-US")}
+                                </td>
+                                <td style={{ fontVariantNumeric: "tabular-nums" }}>{m.oi.toLocaleString("en-US")}</td>
+                                <td style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>
+                                  {m.mid != null ? `$${m.mid.toFixed(2)}` : "—"}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ padding: "6px 14px", fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--line)" }}>
+                      {lang === "zh" ? "ΔOI为前两个交易日持仓差值，不代表当日方向。" : "ΔOI = OI(t-1)−OI(t-2); does not imply direction of today's flow."}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── 0DTE Heavy view — aggregate 0DTE premium per ticker ── */}
+              {screenerPreset === "zerodte" && feed && (() => {
+                // Aggregate 0DTE premium per ticker from feed events
+                const zdPrem: Record<string, number> = {};
+                const totalPrem: Record<string, number> = {};
+                const nameMap2: Record<string, { group: string; group_zh: string }> = {};
+                for (const ev of feed.events ?? []) {
+                  totalPrem[ev.root] = (totalPrem[ev.root] ?? 0) + ev.premium;
+                  if (ev.zerodte) zdPrem[ev.root] = (zdPrem[ev.root] ?? 0) + ev.premium;
+                  nameMap2[ev.root] = { group: ev.group, group_zh: ev.group_zh };
+                }
+                const rows = Object.keys(zdPrem).map((root) => ({
+                  root,
+                  zd_prem: zdPrem[root],
+                  zd_share: zdPrem[root] / (totalPrem[root] || 1),
+                  group: nameMap2[root]?.group ?? "",
+                  group_zh: nameMap2[root]?.group_zh ?? "",
+                })).sort((a, b) => {
+                  if (scrSortKey === "share") return (a.zd_share - b.zd_share) * scrSortDir;
+                  if (scrSortKey === "prem") return (a.zd_prem - b.zd_prem) * scrSortDir;
+                  return b.zd_prem - a.zd_prem;
+                });
+                const hdr = (key: string, en: string, zh: string, tip?: string) => (
+                  <th style={{ cursor: "pointer" }} className={scrSortKey === key ? "sorted" : ""} onClick={() => scrSort(key)} title={tip}>
+                    {lang === "zh" ? zh : en}{scrSortKey === key ? (scrSortDir === -1 ? " ↓" : " ↑") : ""}
+                  </th>
+                );
+                return (
+                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
+                    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13 }}>
+                      {lang === "zh" ? "高0DTE占比" : "0DTE Heavy"}
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="scr" style={{ fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: "left" }}>{lang === "zh" ? "代码" : "Ticker"}</th>
+                            <th style={{ textAlign: "left" }}>{t("screenerColSector", "Sector")}</th>
+                            {hdr("prem", "0DTE Prem", "0DTE保费", "Premium in 0DTE contracts today")}
+                            {hdr("share", "0DTE%", "0DTE占比", "0DTE share of total flow premium")}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr key={r.root} style={{ cursor: "pointer" }} onClick={() => { switchTab("tickers"); setSelectedTicker(r.root); }}>
+                              <td style={{ textAlign: "left", fontWeight: 700 }}>{r.root}</td>
+                              <td style={{ textAlign: "left", color: "var(--text-2)", fontSize: 11 }}>
+                                {lang === "zh" ? r.group_zh : abbrevSector(r.group)}
+                              </td>
+                              <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(r.zd_prem)}</td>
+                              <td style={{ fontVariantNumeric: "tabular-nums", color: r.zd_share > 0.5 ? "var(--warn)" : "var(--text)" }}>
+                                {(r.zd_share * 100).toFixed(1)}%
+                              </td>
+                            </tr>
+                          ))}
+                          {rows.length === 0 && (
+                            <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
+                              {lang === "zh" ? "本时段暂无0DTE事件" : "No 0DTE events this session"}
+                            </td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ padding: "6px 14px", fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--line)" }}>
+                      {lang === "zh" ? "0DTE=当日到期合约；高占比可能反映日内投机活动。" : "0DTE = same-day expiry contracts. High share may indicate intraday speculative activity."}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── Hot Contracts view — hotData by_premium / by_volume ── */}
+              {screenerPreset === "hot" && hotData && (
                 <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-                    <span style={{ fontWeight: 650, fontSize: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: "1px solid var(--line)" }}>
+                    <span style={{ fontWeight: 650, fontSize: 13 }}>
                       {lang === "zh" ? "热门合约" : "Hot Contracts"}
                     </span>
                     <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
@@ -2209,7 +2698,7 @@ export default function OptionsHubView() {
                       </thead>
                       <tbody>
                         {(hotData[hotView] ?? []).map((c, i) => (
-                          <tr key={i}>
+                          <tr key={i} style={{ cursor: "pointer" }} onClick={() => { switchTab("tickers"); setSelectedTicker(c.root); }}>
                             <td style={{ textAlign: "left", fontWeight: 700 }}>{c.root}</td>
                             <td style={{ textAlign: "left" }}>
                               <span style={{ color: c.right === "C" ? "var(--up)" : "var(--down)", fontWeight: 700 }}>{c.right}</span>
@@ -2229,58 +2718,8 @@ export default function OptionsHubView() {
                       </tbody>
                     </table>
                   </div>
-                </div>
-              )}
-
-              {/* OI Movers card */}
-              {oiData && (
-                <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-                    <span style={{ fontWeight: 650, fontSize: 14 }}>
-                      {lang === "zh" ? "持仓异动" : "OI Movers"}
-                    </span>
-                    <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 4 }}>
-                      {lang === "zh" ? "截至上一交易日" : "as of previous session"}
-                    </span>
-                  </div>
-                  <div style={{ overflowX: "auto" }}>
-                    <table className="scr" style={{ fontSize: 12 }}>
-                      <thead>
-                        <tr>
-                          <th style={{ textAlign: "left" }}>{t("colTicker", "Ticker")}</th>
-                          <th style={{ textAlign: "left" }}>{t("colRight", "C/P")}</th>
-                          <th style={{ textAlign: "left" }}>{t("colExp", "Exp")}</th>
-                          <th>{t("colStrike", "Strike")}</th>
-                          <th>{t("colOi", "OI (t-1)")}</th>
-                          <th>{t("colOiPrev", "OI (t-2)")}</th>
-                          <th>{t("colDOi", "ΔOI")}</th>
-                          <th>{t("colMid", "Mid")}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {oiData.movers.map((m, i) => {
-                          const isAdd = m.d_oi > 0;
-                          return (
-                            <tr key={i}>
-                              <td style={{ textAlign: "left", fontWeight: 700 }}>{m.root}</td>
-                              <td style={{ textAlign: "left" }}>
-                                <span style={{ color: m.right === "C" ? "var(--up)" : "var(--down)", fontWeight: 700 }}>{m.right}</span>
-                              </td>
-                              <td style={{ textAlign: "left", color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>{m.exp.slice(5)}</td>
-                              <td style={{ fontVariantNumeric: "tabular-nums" }}>{m.strike}</td>
-                              <td style={{ fontVariantNumeric: "tabular-nums" }}>{m.oi.toLocaleString("en-US")}</td>
-                              <td style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-dim)" }}>{m.oi_prev.toLocaleString("en-US")}</td>
-                              <td style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700, color: isAdd ? "var(--up)" : "var(--down)" }}>
-                                {isAdd ? "+" : ""}{m.d_oi.toLocaleString("en-US")}
-                              </td>
-                              <td style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>
-                                {m.mid != null ? `$${m.mid.toFixed(2)}` : "—"}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                  <div style={{ padding: "6px 14px", fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--line)" }}>
+                    {lang === "zh" ? "ETF覆盖；仅供展示参考，非投资建议。" : "ETF universe. Display only — not investment advice."}
                   </div>
                 </div>
               )}

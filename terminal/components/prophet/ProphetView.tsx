@@ -2,30 +2,24 @@
 /**
  * ProphetView — managed-pick desk for the Prophet tab.
  *
- * Layout (desktop):
- *   Left  — signal stream (list of SignalCards, sort controls, SIGNALS / PERF sub-tabs)
- *   Right — selected signal detail:
- *             top  → ticker header + direction badge + phase chip + honesty chips
- *             mid  → ConfidencePanel (arc + components + reason)
- *             bot  → GeometryRail (price levels + R-distances)
- *                  → OptionCard (hidden if null)
- *                  → Thesis + brief (machine-generated caption)
- *                  → PERF sub-tab placeholder
+ * Layout (desktop) — THREE columns, matching competitor reference quality:
+ *   LEFT   — Alert stream (signal cards, sort controls, SIGNALS/PERF sub-tabs)
+ *   CENTER — Analysis: ticker header + phase + geometry rail + WHAT TO DO NOW
+ *             + PROFIT TAKING PLAN + SIGNAL THESIS
+ *   RIGHT  — Confidence Index: arc gauge + component bars + R/R + option card
  *
- * State owned here:
- *   - raw fetch payload from /api/flow?f=prophet_idx
- *   - selectedId (which plan is loaded in right pane)
- *   - sort mode (new | best | gainers)
- *   - activeSubTab (signals | perf)
- *   - fetch error / loading
+ * Narrow-width: CENTER and RIGHT stack vertically below LEFT.
  *
  * HONESTY DOCTRINE:
  *   - Cadence chip: "nightly EOD — updates after close"
  *   - Authority chip: "display-only — forward ledger accruing"
  *   - Thesis rendered with "machine-generated from engine fields" caption
+ *   - what_to_do_now rendered with "phase-keyed action guide — display only"
+ *   - profit_plan rendered with "exit levels from engine geometry — display only"
  *   - No "validated", no predictive copy
  *   - Empty state: "No active prophecies — ledger accruing."
  *   - PERF sub-tab: placeholder only ("outcome ledger accruing")
+ *   - Content blocks (what_to_do_now, profit_plan) hide gracefully when absent
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -56,24 +50,20 @@ function sortPlans(plans: PlanSummary[], mode: SortMode): PlanSummary[] {
   const copy = [...plans];
   switch (mode) {
     case "new":
-      // newest issuance first — accepts both _signal_date (flat) and asof (nested)
       return copy.sort((a, b) => {
         const ta = new Date(planAsof(a)).getTime();
         const tb = new Date(planAsof(b)).getTime();
-        // Invalid dates sort to end
         const fa = Number.isFinite(ta) ? ta : 0;
         const fb = Number.isFinite(tb) ? tb : 0;
         return fb - fa;
       });
     case "best":
-      // highest management_confidence first — accepts both flat and nested shapes
       return copy.sort((a, b) => {
         const ca = planConfidence(a) ?? 0;
         const cb = planConfidence(b) ?? 0;
         return cb - ca;
       });
     case "gainers":
-      // best live P&L vs plan first
       return copy.sort((a, b) => {
         const pnl = (p: PlanSummary) => {
           if (p.last_price == null || p.entry == null || p.entry === 0) return -Infinity;
@@ -108,12 +98,10 @@ export function ProphetView() {
     setLoading(true);
     setError(null);
     try {
-      // flowGet provides SWR caching; the AbortController only guards the unmount case.
       const data = await flowGet("prophet_idx") as ProphetIndexPayload | null;
       if (ctrl.signal.aborted) return;
       if (!data) throw new Error("fetch error");
       setPayload(data);
-      // Auto-select first plan if none selected
       if (data.plans?.length > 0) {
         setSelectedId((id) => id ?? data.plans[0].id);
       }
@@ -169,9 +157,9 @@ export function ProphetView() {
 
   return (
     <div style={OUTER}>
-      {/* ── LEFT — signal stream ── */}
+      {/* ── LEFT — alert stream ── */}
       <div className="obs-card" style={LEFT_PANE}>
-        {/* Sub-tabs as pill nav */}
+        {/* Sub-tabs */}
         <div style={SUBTAB_ROW}>
           <nav className="obs-pillnav" style={{ padding: "3px", gap: 2 }}>
             <button
@@ -186,20 +174,16 @@ export function ProphetView() {
             >{t("tabPerf")}</button>
           </nav>
           <div style={{ flex: 1 }} />
-          {/* Cadence chip */}
           <span style={INFO_CHIP}>{t("cadenceLabel")}</span>
         </div>
 
         {subTab === "signals" && (
           <>
-            {/* Sort controls */}
             <div style={SORT_ROW}>
               <SortButton mode="new"     label={t("sortNew")} />
               <SortButton mode="best"    label={t("sortBest")} />
               <SortButton mode="gainers" label={t("sortGainers")} />
             </div>
-
-            {/* Signal cards */}
             <div style={CARD_LIST}>
               {sortedPlans.length === 0 ? (
                 <div style={EMPTY_STATE}>{t("noPlans")}</div>
@@ -226,21 +210,30 @@ export function ProphetView() {
         )}
       </div>
 
-      {/* ── RIGHT — selected signal detail ── */}
+      {/* ── CENTER — analysis ── */}
+      <div className="obs-card" style={CENTER_PANE}>
+        {!selected ? (
+          <div style={FULL_CENTER}>{t("noPlans")}</div>
+        ) : (
+          <AnalysisPanel plan={selected} lang={lang} t={t} />
+        )}
+      </div>
+
+      {/* ── RIGHT — confidence index ── */}
       <div className="obs-card" style={RIGHT_PANE}>
         {!selected ? (
           <div style={FULL_CENTER}>{t("noPlans")}</div>
         ) : (
-          <SelectedDetail plan={selected} lang={lang} t={t} />
+          <ConfidenceColumn plan={selected} lang={lang} t={t} />
         )}
       </div>
     </div>
   );
 }
 
-// ── SelectedDetail sub-component ──────────────────────────────────────────────
+// ── AnalysisPanel (CENTER column) ─────────────────────────────────────────────
 
-function SelectedDetail({
+function AnalysisPanel({
   plan,
   lang,
   t,
@@ -255,47 +248,58 @@ function SelectedDetail({
     ? "color-mix(in srgb, var(--down) 15%, transparent)"
     : "color-mix(in srgb, var(--up) 15%, transparent)";
 
-  // Support both flat (plan.management_confidence / plan.phase) and nested (plan.state.*) shapes
+  const phase      = planPhase(plan);
   const state      = plan.state;
-  const confidence = planConfidence(plan);
-  const components = (state as { components?: ConfidenceComponents } | null | undefined)?.components ?? null;
   const geometry   = state?.geometry ?? null;
-
   const t1 = plan.targets?.[0] ?? null;
   const t2 = plan.targets?.[1] ?? null;
 
-  // Simple R/R from entry/stop/t1 prices
-  const rrRatio: number | null =
-    plan.entry != null && plan.invalidation != null && t1 != null
-      ? Math.abs(t1 - plan.entry) / Math.abs(plan.entry - plan.invalidation)
-      : null;
+  // Phase chip colors
+  const phaseMap: Record<string, string> = {
+    pre_trigger:       t("phasePretrigger"),
+    triggered_pre_t1:  t("phaseTriggered"),
+    at_t1:             t("phaseAtT1"),
+    between_t1_t2:     t("phaseBetweenT1T2"),
+    at_t2:             t("phaseAtT2"),
+    overtime:          t("phaseOvertime"),
+    invalidated:       t("phaseInvalidated"),
+  };
+  const phaseLabel = phase ? (phaseMap[phase] ?? phase) : null;
+  const phaseColor = phase === "invalidated"
+    ? "var(--down)"
+    : phase?.includes("t1") || phase?.includes("t2")
+    ? "var(--up)"
+    : phase === "triggered_pre_t1"
+    ? "var(--warn)"
+    : "var(--text-2)";
+
+  // What-to-do-now from payload
+  const whatToDo = plan.what_to_do_now;
+  // Profit plan from payload
+  const profitPlan = plan.profit_plan;
+  // Thesis from payload
+  const thesis = (plan as unknown as { thesis?: string | null }).thesis;
 
   return (
-    <div style={DETAIL_SCROLL}>
-      {/* Ticker header */}
-      <div style={DETAIL_HEADER}>
-        <span style={DETAIL_TICKER}>{plan.asset}</span>
-        <span style={{ ...DIR_BADGE, background: dirBg, color: dirColor }}>
-          {isBear ? `▼ ${t("bear")}` : `▲ ${t("bull")}`}
-        </span>
-        {/* Authority chip */}
+    <div style={ANALYSIS_SCROLL}>
+      {/* ── Ticker header ── */}
+      <div style={ANALYSIS_HEADER}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={ANALYSIS_TICKER}>{plan.asset}</span>
+          <span style={{ ...DIR_BADGE, background: dirBg, color: dirColor }}>
+            {isBear ? `▼ ${t("bear")}` : `▲ ${t("bull")}`}
+          </span>
+          {phaseLabel && (
+            <span style={{ ...PHASE_BADGE, color: phaseColor, borderColor: `${phaseColor}44` }}>
+              {phaseLabel}
+            </span>
+          )}
+        </div>
         <span style={AUTH_CHIP}>{t("authorityLabel")}</span>
       </div>
 
-      {/* Confidence panel */}
-      <div style={{ marginBottom: 10 }}>
-        <ConfidencePanel
-          confidence={confidence}
-          components={components}
-          phase={planPhase(plan)}
-          change_reason={(state as { change_reason?: string | null } | null | undefined)?.change_reason ?? null}
-          recommended_action={planRecommendedAction(plan)}
-          lang={lang}
-        />
-      </div>
-
-      {/* Geometry rail */}
-      <div style={{ marginBottom: 10 }}>
+      {/* ── Trade geometry price rail ── */}
+      <div style={{ marginBottom: 14 }}>
         <GeometryRail
           direction={plan.direction}
           entry={plan.entry}
@@ -308,12 +312,134 @@ function SelectedDetail({
         />
       </div>
 
-      {/* Option card */}
-      {plan.option_contract && (
-        <div style={{ marginBottom: 10 }}>
-          <OptionCard contract={plan.option_contract} lang={lang} />
+      {/* ── WHAT TO DO NOW ── */}
+      {whatToDo && whatToDo.length > 0 && (
+        <div style={SECTION_BOX}>
+          <div style={SECTION_HDR_ROW}>
+            <span style={SECTION_LABEL}>{t("briefLabel")}</span>
+            <span style={SECTION_CAPTION}>{t("briefCaption")}</span>
+          </div>
+          <ol style={BULLET_LIST}>
+            {whatToDo.map((line, i) => (
+              <li key={i} style={BULLET_ITEM}>
+                <span style={BULLET_NUMBER}>{i + 1}</span>
+                <span style={BULLET_TEXT}>{line}</span>
+              </li>
+            ))}
+          </ol>
         </div>
       )}
+
+      {/* ── PROFIT TAKING PLAN ── */}
+      {profitPlan && profitPlan.length > 0 && (
+        <div style={SECTION_BOX}>
+          <div style={SECTION_HDR_ROW}>
+            <span style={SECTION_LABEL}>{t("profitPlanLabel")}</span>
+            <span style={SECTION_CAPTION}>{t("profitPlanCaption")}</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {profitPlan.map((row, i) => (
+              <ProfitRow key={i} row={row} t={t} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── SIGNAL THESIS ── */}
+      {thesis && (
+        <div style={SECTION_BOX}>
+          <div style={SECTION_HDR_ROW}>
+            <span style={SECTION_LABEL}>{t("thesisLabel")}</span>
+            <span style={SECTION_CAPTION}>{t("thesisCaption")}</span>
+          </div>
+          <p style={THESIS_TEXT}>{thesis}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ProfitRow ─────────────────────────────────────────────────────────────────
+
+function ProfitRow({
+  row,
+  t,
+}: {
+  row: NonNullable<PlanSummary["profit_plan"]>[number];
+  t: ReturnType<typeof makeProphetT>;
+}) {
+  const statusColor =
+    row.status === "DONE"    ? "var(--muted)" :
+    row.status === "ACTIVE"  ? "var(--up)" :
+    "var(--text-dim)";
+  const statusLabel =
+    row.status === "DONE"    ? t("profitStatusDone") :
+    row.status === "ACTIVE"  ? t("profitStatusActive") :
+    t("profitStatusPending");
+
+  return (
+    <div style={PROFIT_ROW}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+        {/* Level chip */}
+        <span style={{ ...PROFIT_LEVEL, opacity: row.status === "DONE" ? 0.5 : 1 }}>
+          {row.level != null ? `$${row.level.toFixed(2)}` : "—"}
+        </span>
+        {/* Label badge */}
+        <span style={PROFIT_LABEL_BADGE}>{row.label}</span>
+        {/* Action text */}
+        <span style={{ ...PROFIT_ACTION, textDecoration: row.status === "DONE" ? "line-through" : "none", opacity: row.status === "DONE" ? 0.45 : 1 }}>
+          {row.action}
+        </span>
+      </div>
+      {/* Status chip */}
+      <span style={{ ...STATUS_CHIP, color: statusColor, borderColor: `${statusColor}55` }}>
+        {statusLabel}
+      </span>
+    </div>
+  );
+}
+
+// ── ConfidenceColumn (RIGHT column) ──────────────────────────────────────────
+
+function ConfidenceColumn({
+  plan,
+  lang,
+  t,
+}: {
+  plan: PlanSummary;
+  lang: "en" | "zh";
+  t: ReturnType<typeof makeProphetT>;
+}) {
+  const state      = plan.state;
+  const confidence = planConfidence(plan);
+  const components = (state as { components?: ConfidenceComponents } | null | undefined)?.components ?? null;
+  const geometry   = state?.geometry ?? null;
+
+  const t1 = plan.targets?.[0] ?? null;
+
+  const rrRatio: number | null =
+    plan.entry != null && plan.invalidation != null && t1 != null
+      ? Math.abs(t1 - plan.entry) / Math.abs(plan.entry - plan.invalidation)
+      : null;
+
+  return (
+    <div style={CONFIDENCE_SCROLL}>
+      {/* Section label */}
+      <div style={CONF_HDR}>
+        <span style={CONF_HDR_LABEL}>{t("confidenceTitle")}</span>
+      </div>
+
+      {/* Confidence panel (arc + bars) */}
+      <div style={{ marginBottom: 10 }}>
+        <ConfidencePanel
+          confidence={confidence}
+          components={components}
+          phase={planPhase(plan)}
+          change_reason={(state as { change_reason?: string | null } | null | undefined)?.change_reason ?? null}
+          recommended_action={planRecommendedAction(plan)}
+          lang={lang}
+        />
+      </div>
 
       {/* R/R at entry */}
       {rrRatio != null && (
@@ -335,14 +461,10 @@ function SelectedDetail({
         </div>
       )}
 
-      {/* Thesis */}
-      {(plan as unknown as { thesis?: string | null }).thesis && (
-        <div style={THESIS_BOX}>
-          <div style={THESIS_HEADER}>
-            <span style={SECTION_LABEL}>{t("thesisLabel")}</span>
-            <span style={THESIS_CAPTION}>{t("thesisCaption")}</span>
-          </div>
-          <p style={THESIS_TEXT}>{(plan as unknown as { thesis: string }).thesis}</p>
+      {/* Option card */}
+      {plan.option_contract && (
+        <div style={{ marginBottom: 10 }}>
+          <OptionCard contract={plan.option_contract} lang={lang} />
         </div>
       )}
     </div>
@@ -353,25 +475,33 @@ function SelectedDetail({
 
 const OUTER: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "320px 1fr",
-  gap: 12,
+  // 3 columns: LEFT fixed 280px, CENTER flex, RIGHT fixed 260px
+  gridTemplateColumns: "280px 1fr 260px",
+  gap: 10,
   height: "100%",
   minHeight: 0,
   overflow: "hidden",
 };
 
-// obs-card provides background/border/radius
 const LEFT_PANE: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
+  minWidth: 0,
+};
+
+const CENTER_PANE: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+  minWidth: 0,
 };
 
 const RIGHT_PANE: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
-  minHeight: 0,
+  minWidth: 0,
 };
 
 const SUBTAB_ROW: React.CSSProperties = {
@@ -391,7 +521,6 @@ const SORT_ROW: React.CSSProperties = {
   borderBottom: "1px solid rgba(255,255,255,0.07)",
 };
 
-// compact override for obs-chip in sort row
 const SORT_CHIP_STYLE: React.CSSProperties = {
   padding: "4px 10px",
   fontSize: 10,
@@ -442,23 +571,27 @@ const PERF_BODY: React.CSSProperties = {
   maxWidth: 260,
 };
 
-const DETAIL_SCROLL: React.CSSProperties = {
+// ── Analysis panel styles ─────────────────────────────────────────────────────
+
+const ANALYSIS_SCROLL: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",
   padding: "12px 14px",
 };
 
-const DETAIL_HEADER: React.CSSProperties = {
+const ANALYSIS_HEADER: React.CSSProperties = {
   display: "flex",
-  alignItems: "center",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
   gap: 8,
-  marginBottom: 12,
+  marginBottom: 14,
   flexWrap: "wrap",
 };
 
-const DETAIL_TICKER: React.CSSProperties = {
-  font: "700 18px/1 var(--font-ui)",
+const ANALYSIS_TICKER: React.CSSProperties = {
+  font: "700 20px/1 var(--font-ui)",
   color: "var(--text)",
+  letterSpacing: ".01em",
 };
 
 const DIR_BADGE: React.CSSProperties = {
@@ -469,22 +602,165 @@ const DIR_BADGE: React.CSSProperties = {
   padding: "4px 9px",
 };
 
-const AUTH_CHIP: React.CSSProperties = {
-  marginLeft: "auto",
-  font: "500 9.5px/1 var(--font-ui)",
-  color: "var(--muted)",
-  border: "1px solid rgba(255,255,255,0.09)",
+const PHASE_BADGE: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  font: "600 10px/1 var(--font-ui)",
+  border: "1px solid",
   borderRadius: "var(--r-pill)",
   padding: "3px 8px",
   whiteSpace: "nowrap",
 };
 
+const AUTH_CHIP: React.CSSProperties = {
+  flexShrink: 0,
+  font: "500 9px/1 var(--font-ui)",
+  color: "var(--muted)",
+  border: "1px solid rgba(255,255,255,0.09)",
+  borderRadius: "var(--r-pill)",
+  padding: "3px 7px",
+  whiteSpace: "nowrap",
+  marginLeft: "auto",
+};
+
+const SECTION_BOX: React.CSSProperties = {
+  background: "rgba(255,255,255,0.026)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "var(--r-lg)",
+  padding: "11px 13px",
+  marginBottom: 10,
+};
+
+const SECTION_HDR_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  marginBottom: 9,
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+const SECTION_LABEL: React.CSSProperties = {
+  font: "600 10.5px/1 var(--font-ui)",
+  color: "var(--text-2)",
+  textTransform: "uppercase",
+  letterSpacing: ".10em",
+};
+
+const SECTION_CAPTION: React.CSSProperties = {
+  font: "500 9px/1 var(--font-ui)",
+  color: "var(--muted)",
+  fontStyle: "italic",
+};
+
+const BULLET_LIST: React.CSSProperties = {
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
+const BULLET_ITEM: React.CSSProperties = {
+  display: "flex",
+  gap: 10,
+  alignItems: "flex-start",
+};
+
+const BULLET_NUMBER: React.CSSProperties = {
+  flexShrink: 0,
+  width: 20,
+  height: 20,
+  borderRadius: "50%",
+  background: "rgba(var(--brand-rgb, 100 160 255) / 0.18)",
+  border: "1px solid rgba(var(--brand-rgb, 100 160 255) / 0.30)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  font: "700 10px/1 var(--font-ui)",
+  color: "var(--brand)",
+};
+
+const BULLET_TEXT: React.CSSProperties = {
+  font: "500 12px/1.55 var(--font-ui)",
+  color: "var(--text-2)",
+};
+
+const PROFIT_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "7px 10px",
+  background: "rgba(255,255,255,0.026)",
+  border: "1px solid rgba(255,255,255,0.07)",
+  borderRadius: "var(--r-md)",
+};
+
+const PROFIT_LEVEL: React.CSSProperties = {
+  font: "700 13px/1 var(--font-num)",
+  color: "var(--text)",
+  minWidth: 72,
+};
+
+const PROFIT_LABEL_BADGE: React.CSSProperties = {
+  font: "600 9.5px/1 var(--font-ui)",
+  color: "var(--brand)",
+  background: "rgba(var(--brand-rgb, 100 160 255) / 0.12)",
+  borderRadius: "var(--r-sm)",
+  padding: "2px 6px",
+  whiteSpace: "nowrap",
+};
+
+const PROFIT_ACTION: React.CSSProperties = {
+  font: "500 11px/1.4 var(--font-ui)",
+  color: "var(--text-2)",
+  flex: 1,
+};
+
+const STATUS_CHIP: React.CSSProperties = {
+  flexShrink: 0,
+  font: "600 9.5px/1 var(--font-ui)",
+  border: "1px solid",
+  borderRadius: "var(--r-pill)",
+  padding: "3px 8px",
+  whiteSpace: "nowrap",
+};
+
+const THESIS_TEXT: React.CSSProperties = {
+  font: "500 11.5px/1.65 var(--font-ui)",
+  color: "var(--text-2)",
+  margin: 0,
+  whiteSpace: "pre-wrap",
+};
+
+// ── Confidence column styles ──────────────────────────────────────────────────
+
+const CONFIDENCE_SCROLL: React.CSSProperties = {
+  flex: 1,
+  overflowY: "auto",
+  padding: "12px 12px",
+};
+
+const CONF_HDR: React.CSSProperties = {
+  marginBottom: 10,
+  paddingBottom: 8,
+  borderBottom: "1px solid rgba(255,255,255,0.08)",
+};
+
+const CONF_HDR_LABEL: React.CSSProperties = {
+  font: "600 10.5px/1 var(--font-ui)",
+  color: "var(--text-2)",
+  textTransform: "uppercase",
+  letterSpacing: ".10em",
+};
+
 const RR_ROW: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 10,
+  gap: 8,
   flexWrap: "wrap",
-  padding: "8px 12px",
+  padding: "8px 10px",
   background: "rgba(255,255,255,0.033)",
   border: "1px solid rgba(255,255,255,0.09)",
   borderRadius: "var(--r-md)",
@@ -497,50 +773,13 @@ const RR_LABEL: React.CSSProperties = {
 };
 
 const RR_VAL: React.CSSProperties = {
-  font: "700 13px/1 var(--font-num)",
+  font: "700 14px/1 var(--font-num)",
   color: "var(--text)",
 };
 
 const RR_SUB: React.CSSProperties = {
   font: "500 10px/1 var(--font-ui)",
   color: "var(--muted)",
-};
-
-const THESIS_BOX: React.CSSProperties = {
-  background: "rgba(255,255,255,0.033)",
-  border: "1px solid rgba(255,255,255,0.09)",
-  borderRadius: "var(--r-lg)",
-  padding: "10px 12px",
-  marginBottom: 10,
-};
-
-const THESIS_HEADER: React.CSSProperties = {
-  display: "flex",
-  alignItems: "baseline",
-  justifyContent: "space-between",
-  marginBottom: 7,
-  gap: 8,
-  flexWrap: "wrap",
-};
-
-const SECTION_LABEL: React.CSSProperties = {
-  font: "600 10.5px/1 var(--font-ui)",
-  color: "var(--text-2)",
-  textTransform: "uppercase",
-  letterSpacing: ".1em",
-};
-
-const THESIS_CAPTION: React.CSSProperties = {
-  font: "500 9px/1 var(--font-ui)",
-  color: "var(--muted)",
-  fontStyle: "italic",
-};
-
-const THESIS_TEXT: React.CSSProperties = {
-  font: "500 11px/1.6 var(--font-ui)",
-  color: "var(--text-2)",
-  margin: 0,
-  whiteSpace: "pre-wrap",
 };
 
 const FULL_CENTER: React.CSSProperties = {

@@ -188,8 +188,20 @@ export function GexDeskView() {
       void fetchGexState(ticker);
     }, GEX_POLL_MS);
 
+    // Hidden-tab deferral: fetches skip while document is hidden (harness/
+    // backgrounded mounts). Load immediately when the tab becomes visible so
+    // the ladder never sits empty waiting for the next poll tick.
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        void fetchGex(ticker);
+        void fetchGexState(ticker);
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener("visibilitychange", onVis);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticker]);
@@ -293,7 +305,12 @@ export function GexDeskView() {
       </div>
 
       {/* ── Summary bar ──────────────────────────────────────────────────── */}
-      <GexSummaryBar payload={gexPayload} lang={lang} />
+      <GexSummaryBar
+        payload={gexPayload}
+        callOI={(statePayload as unknown as Record<string, number | null | undefined>)?.call_oi ?? null}
+        putOI={(statePayload as unknown as Record<string, number | null | undefined>)?.put_oi ?? null}
+        lang={lang}
+      />
 
       {/* ── Body (two-pane) ──────────────────────────────────────────────── */}
       <div style={BODY_ROW}>
@@ -319,6 +336,7 @@ export function GexDeskView() {
         {/* ── Right pane: Market state ──────────────────────────────────── */}
         <MarketStateCard
           statePayload={statePayload}
+          gexPayload={gexPayload}
           isIndexProduct={isIndex}
           lang={lang}
         />
@@ -332,6 +350,7 @@ export function GexDeskView() {
 const DESK_OUTER: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  flex: 1,
   height: "100%",
   overflow: "hidden",
   background: "var(--bg)",
@@ -405,14 +424,19 @@ const BODY_ROW: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflow: "hidden",
+  flexWrap: "wrap",   /* responsive: right rail wraps below at ~1100px */
+  alignItems: "stretch",
 };
 
 const LEFT_PANE: React.CSSProperties = {
-  flex: 1,
-  minWidth: 0,
+  flex: "1 1 0px",
+  minWidth: 480,       /* ladder gets all remaining space above 480px */
+  minHeight: 0,        /* allow flex shrink past content height */
+  alignSelf: "stretch",/* fill BODY_ROW track height */
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
+  maxHeight: "100%",   /* cap at BODY_ROW cross-axis height in wrapping flex */
 };
 
 const LADDER_LOADING: React.CSSProperties = {

@@ -10,6 +10,13 @@
       "env": {
         "FLOW_FIXTURE": "1"
       }
+    },
+    {
+      "name": "terminal-revamp",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "terminal",
+      "port": 3016
     }
   ]
 }

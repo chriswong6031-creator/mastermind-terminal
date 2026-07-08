@@ -6,18 +6,13 @@
  *   (HeatSeekerCard + OiMoversRail).
  * CONFLUENCE mode: ConfluenceView (SPY + QQQ + IWM side-by-side).
  *
- * Data fetching:
- *   - Matrix: /api/flow?f=matrix:<ROOT> → options_structure.matrix/v1
- *   - GEX state: /api/flow?f=gexstate:<ROOT> → options_structure.gex_state/v1
- *     (hvl/magnet + levels supplement for PRISM level badges)
- *   - OI movers: /api/flow?f=oi → options_hub.oi_movers/v1
- *   All polled every ~60s (tab visible), 87s jitter avoided via no-op interval.
- *
- * Controls:
- *   - Ticker input (default SPY), commits on Enter/blur
+ * Controls (MomoEdge parity):
+ *   - Ticker input, commits on Enter/blur
  *   - SINGLE | CONFLUENCE mode toggle
- *   - DTE range chips: ≤7 / ≤30 / ≤90 / ALL
- *   - Normalization: GLOBAL | PER-COL
+ *   - DTE column count: 4 | 8 (default 4 = spacious; 8 = tighter)
+ *   - Expiry scope: DEFAULT | 0DTE | ALL
+ *   - Strike range: ±10 | ±20 | ±40 (default ±10, centered on spot, no scroll)
+ *   - Normalization: PER-COL | GLOBAL
  *   - LensBar (GEX | OI | VOL | ΔOI; VEX + UNUSUAL disabled)
  *
  * HONESTY DOCTRINE:
@@ -26,13 +21,9 @@
  *   - VEX and UNUSUAL are rendered disabled with honest labels.
  *   - No "validated", "predictive", or asserted-direction copy.
  *   - Confluence is index-only; noted prominently.
- *
- * Integration note:
- *   The integrator wires this view into OptionsHubView.tsx under the "prism" tab.
- *   This component does NOT edit OptionsHubView.tsx (frozen; integrator handles).
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useLang } from "@/lib/i18n";
 import { makePrismT } from "./prismStrings";
 import { LensBar, type ActiveLens } from "./LensBar";
@@ -44,7 +35,6 @@ import { flowGet } from "@/lib/flowClientCache";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-/** options_structure.matrix/v1 — what /api/flow?f=matrix:<ROOT> returns */
 export interface MatrixPayload {
   schema: string;
   asof: string;
@@ -58,7 +48,6 @@ export interface MatrixPayload {
   authority_tier?: string;
 }
 
-/** options_structure.gex_state/v1 (used for supplemental level info) */
 interface GexStatePayload {
   root?: string;
   spot?: number;
@@ -70,17 +59,19 @@ interface GexStatePayload {
   max_pain?: number | null;
 }
 
-/** options_hub.oi_movers/v1 */
 interface OiPayload {
   schema: string;
   asof: string;
   movers: OiMoverRow[];
 }
 
-// ─── Mode / DTE types ─────────────────────────────────────────────────────────
+// ─── Mode / control types ─────────────────────────────────────────────────────
 
 type Mode = "single" | "confluence";
-type DteRange = 7 | 30 | 90 | null; // null = ALL
+/** 0DTE scope: only expirations with dte < 1. ALL scope: all, showing only Σ column. */
+type ScopeMode = "default" | "0dte" | "all";
+type DteColCount = 4 | 8;
+type StrikeRange = 10 | 20 | 40;
 type NormMode = "column" | "global";
 
 // ─── Fetch helpers ────────────────────────────────────────────────────────────
@@ -97,6 +88,23 @@ async function safeFetch<T>(url: string): Promise<T | null> {
 
 const POLL_MS = 60_000;
 
+// ─── Expiry date helpers ──────────────────────────────────────────────────────
+
+function expDate(exp: string): string {
+  return (exp || "").split(" ")[0].split("T")[0];
+}
+
+function dteDays(exp: string): number {
+  try {
+    const now = Date.now();
+    const ms = new Date(expDate(exp) + "T20:00:00Z").getTime();
+    if (!Number.isFinite(ms)) return -1;
+    return Math.round((ms - now) / 86_400_000);
+  } catch {
+    return 0;
+  }
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function PrismView() {
@@ -104,19 +112,21 @@ export function PrismView() {
   const t = makePrismT(lang);
 
   // ── State ────────────────────────────────────────────────────────────────────
-  const [ticker, setTicker]       = useState("SPY");
-  const [inputVal, setInputVal]   = useState("SPY");
-  const [mode, setMode]           = useState<Mode>("single");
-  const [activeLens, setLens]     = useState<ActiveLens>("GEX");
-  const [dteFilter, setDteFilter] = useState<DteRange>(30);
-  const [norm, setNorm]           = useState<NormMode>("column");
+  const [ticker, setTicker]             = useState("SPY");
+  const [inputVal, setInputVal]         = useState("SPY");
+  const [mode, setMode]                 = useState<Mode>("single");
+  const [activeLens, setLens]           = useState<ActiveLens>("GEX");
+  const [scope, setScope]               = useState<ScopeMode>("default");
+  const [dteColCount, setDteColCount]   = useState<DteColCount>(4);
+  const [strikeRange, setStrikeRange]   = useState<StrikeRange>(10);
+  const [norm, setNorm]                 = useState<NormMode>("column");
 
-  const [matrix, setMatrix]       = useState<MatrixPayload | null>(null);
-  const [gexState, setGexState]   = useState<GexStatePayload | null>(null);
-  const [oiPayload, setOiPayload] = useState<OiPayload | null>(null);
+  const [matrix, setMatrix]             = useState<MatrixPayload | null>(null);
+  const [gexState, setGexState]         = useState<GexStatePayload | null>(null);
+  const [oiPayload, setOiPayload]       = useState<OiPayload | null>(null);
 
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState(false);
+  const [loading, setLoading]           = useState(false);
+  const [error, setError]               = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -128,7 +138,6 @@ export function PrismView() {
       `/api/flow?f=matrix:${root}`
     );
     if (!data) return null;
-    // Server may return top-level dict keyed by root or the payload directly
     const payload: MatrixPayload | null =
       (data as Record<string, MatrixPayload>)[root] ??
       (data as unknown as MatrixPayload) ?? null;
@@ -136,9 +145,7 @@ export function PrismView() {
   }, []);
 
   const fetchGexState = useCallback(async (root: string) => {
-    const data = await safeFetch<GexStatePayload>(
-      `/api/flow?f=gexstate:${root}`
-    );
+    const data = await safeFetch<GexStatePayload>(`/api/flow?f=gexstate:${root}`);
     setGexState(data);
   }, []);
 
@@ -151,6 +158,11 @@ export function PrismView() {
 
   const loadTicker = useCallback(
     async (root: string) => {
+      // If the tab is hidden at mount time (e.g. cmd-click open, session restore),
+      // fetchMatrix returns null immediately via its own visibility guard — that null
+      // is NOT a real failure. Skip the load silently; the visibilitychange handler
+      // below will retry once the tab is foregrounded.
+      if (document.visibilityState === "hidden") return;
       setLoading(true);
       setMatrix(null);
       setError(false);
@@ -180,13 +192,21 @@ export function PrismView() {
       void fetchGexState(ticker);
     }, POLL_MS);
 
+    // If the tab was hidden at mount, loadTicker returned early without data.
+    // Retry the full load when the tab is foregrounded while matrix is still null.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        setMatrix((prev) => { if (prev === null) void loadTicker(ticker); return prev; });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener("visibilitychange", onVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticker, mode]);
-
-  // ── OI poll (independent of ticker, same for any view) ───────────────────────
 
   useEffect(() => {
     void fetchOi();
@@ -198,9 +218,7 @@ export function PrismView() {
 
   const commitTicker = useCallback(() => {
     const root = inputVal.trim().toUpperCase();
-    if (root && root !== ticker) {
-      setTicker(root);
-    }
+    if (root && root !== ticker) setTicker(root);
   }, [inputVal, ticker]);
 
   const handleKeyDown = useCallback(
@@ -213,11 +231,11 @@ export function PrismView() {
   // ── Derived: merged levels from matrix + gexstate ────────────────────────────
 
   const levels: MatrixLevels = {
-    call_wall:   matrix?.levels?.call_wall  ?? gexState?.call_wall  ?? null,
-    put_support: matrix?.levels?.put_support ?? gexState?.put_wall  ?? null,
-    hvl:         matrix?.levels?.hvl        ?? gexState?.hvl        ?? gexState?.magnet ?? null,
-    gamma_flip:  matrix?.levels?.gamma_flip ?? gexState?.gamma_flip ?? null,
-    max_pain:    matrix?.levels?.max_pain   ?? null,
+    call_wall:   matrix?.levels?.call_wall   ?? gexState?.call_wall  ?? null,
+    put_support: matrix?.levels?.put_support ?? gexState?.put_wall   ?? null,
+    hvl:         matrix?.levels?.hvl         ?? gexState?.hvl        ?? gexState?.magnet ?? null,
+    gamma_flip:  matrix?.levels?.gamma_flip  ?? gexState?.gamma_flip ?? null,
+    max_pain:    matrix?.levels?.max_pain    ?? null,
   };
 
   // Format asof
@@ -239,6 +257,24 @@ export function PrismView() {
   const tickerMovers: OiMoverRow[] =
     oiPayload?.movers.filter((m) => m.root === ticker) ?? [];
 
+  // ── Scope → effective expiries list ──────────────────────────────────────────
+  //
+  // "default" → pass expiries as-is; MatrixGrid caps at dteColCount
+  // "0dte"    → filter to dte < 1; MatrixGrid caps at dteColCount
+  // "all"     → all expiries (Σ column is the primary read; MatrixGrid still shows cols)
+  //
+  const effectiveExpiries = useMemo((): string[] => {
+    if (!matrix?.expiries) return [];
+    if (scope === "0dte") {
+      const zeroDte = matrix.expiries.filter((e) => dteDays(e) < 1);
+      return zeroDte.length > 0 ? zeroDte : matrix.expiries.slice(0, 1);
+    }
+    return matrix.expiries;
+  }, [matrix, scope]);
+
+  // In ALL scope we show more columns but emphasize Σ
+  const effectiveDteColCount: DteColCount = scope === "all" ? 8 : dteColCount;
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
@@ -247,7 +283,7 @@ export function PrismView() {
       {/* ── Controls bar ──────────────────────────────────────────────────── */}
       <div style={CONTROLS_BAR}>
 
-        {/* Ticker input (only relevant in SINGLE mode) */}
+        {/* Ticker input */}
         <div style={TICKER_GROUP}>
           <input
             style={{
@@ -272,7 +308,7 @@ export function PrismView() {
           )}
         </div>
 
-        {/* Mode toggle */}
+        {/* SINGLE | CONFLUENCE mode toggle */}
         <div style={MODE_TOGGLE}>
           {(["single", "confluence"] as Mode[]).map((m) => (
             <button
@@ -294,48 +330,79 @@ export function PrismView() {
           {asofStr && mode === "single" && (
             <span style={ASOF_BADGE}>{t("asOf")} {asofStr}</span>
           )}
-          {loading && (
-            <span style={STATUS_BADGE_LOADING}>{t("loading")}</span>
-          )}
-          {error && !loading && (
-            <span style={STATUS_BADGE_ERROR}>{t("errorMatrix")}</span>
-          )}
+          {loading && <span style={STATUS_LOADING}>{t("loading")}</span>}
+          {error && !loading && <span style={STATUS_ERROR}>{t("errorMatrix")}</span>}
         </div>
       </div>
 
-      {/* ── Lens bar ──────────────────────────────────────────────────────── */}
-      <div style={LENS_BAR_ROW}>
-        <LensBar activeLens={activeLens} onLens={setLens} lang={lang} />
+      {/* ── Secondary toolbar: lens + DTE count + scope + range + norm ─── */}
+      {mode === "single" && (
+        <div style={TOOLBAR_ROW}>
 
-        {/* DTE range chips — Observatory .obs-chip */}
-        <div style={DTE_CHIPS}>
-          {([7, 30, 90, null] as DteRange[]).map((dte) => (
-            <button
-              key={String(dte)}
-              className={`obs-chip${dteFilter === dte ? " on" : ""}`}
-              style={DTE_CHIP_BASE}
-              onClick={() => setDteFilter(dte)}
-              aria-pressed={dteFilter === dte}
-            >
-              {dte === 7
-                ? t("dte7")
-                : dte === 30
-                ? t("dte30")
-                : dte === 90
-                ? t("dte90")
-                : t("dteAll")}
-            </button>
-          ))}
-        </div>
+          {/* LensBar */}
+          <LensBar activeLens={activeLens} onLens={setLens} lang={lang} />
 
-        {/* Normalization toggle — Observatory .obs-chip */}
-        {mode === "single" && (
-          <div style={NORM_GROUP}>
+          {/* Separator */}
+          <div style={TOOLBAR_SEP} />
+
+          {/* DTE column count: 4 | 8 — default scoped */}
+          <div style={CHIP_GROUP}>
+            {([4, 8] as DteColCount[]).map((n) => (
+              <button
+                key={n}
+                className={`obs-chip${dteColCount === n && scope === "default" ? " on" : ""}`}
+                style={CHIP_SM}
+                onClick={() => { setDteColCount(n); setScope("default"); }}
+                aria-pressed={dteColCount === n && scope === "default"}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+
+          {/* Scope: DEFAULT | 0DTE | ALL */}
+          <div style={CHIP_GROUP}>
+            {(["default", "0dte", "all"] as ScopeMode[]).map((s) => (
+              <button
+                key={s}
+                className={`obs-chip${scope === s ? " on" : ""}`}
+                style={CHIP_SM}
+                onClick={() => setScope(s)}
+                aria-pressed={scope === s}
+              >
+                {s === "default" ? t("scopeDefault") : s === "0dte" ? t("scope0dte") : t("scopeAll")}
+              </button>
+            ))}
+          </div>
+
+          {/* Separator */}
+          <div style={TOOLBAR_SEP} />
+
+          {/* Strike range: ±10 | ±20 | ±40 (centered on spot) */}
+          <div style={CHIP_GROUP}>
+            {([10, 20, 40] as StrikeRange[]).map((r) => (
+              <button
+                key={r}
+                className={`obs-chip${strikeRange === r ? " on" : ""}`}
+                style={CHIP_SM}
+                onClick={() => setStrikeRange(r)}
+                aria-pressed={strikeRange === r}
+              >
+                {r === 10 ? t("range10") : r === 20 ? t("range20") : t("range40")}
+              </button>
+            ))}
+          </div>
+
+          {/* Separator */}
+          <div style={TOOLBAR_SEP} />
+
+          {/* Normalization: PER-COL | GLOBAL */}
+          <div style={CHIP_GROUP}>
             {(["column", "global"] as NormMode[]).map((n) => (
               <button
                 key={n}
                 className={`obs-chip${norm === n ? " on" : ""}`}
-                style={DTE_CHIP_BASE}
+                style={CHIP_SM}
                 onClick={() => setNorm(n)}
                 aria-pressed={norm === n}
               >
@@ -343,10 +410,10 @@ export function PrismView() {
               </button>
             ))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* ── Honesty banner — obs-note (amber, always visible when GEX/DOI) ── */}
+      {/* ── Honesty banner ────────────────────────────────────────────────── */}
       {(activeLens === "GEX" || activeLens === "DOI") && mode === "single" && (
         <div className="obs-note" style={HONESTY_BANNER_OBS}>
           {t("magnitudeFirst")}
@@ -374,13 +441,14 @@ export function PrismView() {
             ) : (
               <MatrixGrid
                 cells={matrix.cells}
-                expiries={matrix.expiries}
+                expiries={effectiveExpiries}
                 strikes={matrix.strikes}
                 spot={matrix.spot}
                 levels={levels}
                 activeLens={activeLens}
                 norm={norm}
-                dteFilter={dteFilter}
+                dteColCount={effectiveDteColCount}
+                strikeRange={strikeRange}
                 lang={lang}
               />
             )}
@@ -410,6 +478,7 @@ export function PrismView() {
 const VIEW_OUTER: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  flex: 1,
   height: "100%",
   overflow: "hidden",
   background: "var(--bg)",
@@ -419,7 +488,7 @@ const CONTROLS_BAR: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 10,
-  padding: "7px 14px",
+  padding: "6px 14px",
   borderBottom: "1px solid var(--line)",
   background: "var(--panel)",
   flexShrink: 0,
@@ -433,8 +502,8 @@ const TICKER_GROUP: React.CSSProperties = {
 };
 
 const TICKER_INPUT: React.CSSProperties = {
-  width: 84,
-  height: 28,
+  width: 78,
+  height: 26,
   padding: "0 8px",
   background: "var(--inset)",
   border: "1px solid var(--line)",
@@ -450,7 +519,7 @@ const TICKER_INPUT: React.CSSProperties = {
 };
 
 const SPOT_DISPLAY: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: 11,
   color: "var(--text-2)",
   fontVariantNumeric: "tabular-nums",
   fontWeight: 600,
@@ -464,8 +533,8 @@ const MODE_TOGGLE: React.CSSProperties = {
 };
 
 const MODE_BTN: React.CSSProperties = {
-  padding: "4px 10px",
-  height: 28,
+  padding: "3px 10px",
+  height: 26,
   background: "transparent",
   border: "none",
   color: "var(--text-2)",
@@ -494,55 +563,67 @@ const ASOF_BADGE: React.CSSProperties = {
   fontVariantNumeric: "tabular-nums",
 };
 
-const STATUS_BADGE_LOADING: React.CSSProperties = {
+const STATUS_LOADING: React.CSSProperties = {
   fontSize: 9,
   color: "var(--brand-2)",
 };
 
-const STATUS_BADGE_ERROR: React.CSSProperties = {
+const STATUS_ERROR: React.CSSProperties = {
   fontSize: 9,
   color: "var(--down)",
 };
 
-const LENS_BAR_ROW: React.CSSProperties = {
+/** Secondary toolbar row: all PRISM-specific controls */
+const TOOLBAR_ROW: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
-  padding: "5px 14px",
+  gap: 4,
+  padding: "4px 14px",
   borderBottom: "1px solid var(--line)",
   background: "var(--panel)",
   flexShrink: 0,
   flexWrap: "wrap",
+  minHeight: 36,
 };
 
-const DTE_CHIPS: React.CSSProperties = {
+const TOOLBAR_SEP: React.CSSProperties = {
+  width: 1,
+  height: 20,
+  background: "var(--line)",
+  margin: "0 4px",
+  flexShrink: 0,
+};
+
+const CHIP_GROUP: React.CSSProperties = {
   display: "flex",
+  alignItems: "center",
   gap: 3,
-  marginLeft: 6,
 };
 
-/** Compact size override for .obs-chip used in the lens bar row */
-const DTE_CHIP_BASE: React.CSSProperties = {
-  padding: "3px 9px",
-  fontSize: 10,
-  borderRadius: 8,
+const CHIP_LABEL_SM: React.CSSProperties = {
+  fontSize: 8,
+  color: "var(--muted)",
+  letterSpacing: "0.05em",
+  textTransform: "uppercase",
+  marginRight: 2,
 };
 
-const NORM_GROUP: React.CSSProperties = {
-  display: "flex",
-  gap: 3,
-  marginLeft: "auto",
+/** Compact chip override for the toolbar row */
+const CHIP_SM: React.CSSProperties = {
+  padding: "2px 8px",
+  fontSize: 9,
+  borderRadius: 6,
+  height: 22,
 };
 
-/** obs-note override: inline strip (no block margin) */
 const HONESTY_BANNER_OBS: React.CSSProperties = {
   margin: 0,
   borderRadius: 0,
   borderLeft: "none",
   borderRight: "none",
   borderTop: "none",
-  padding: "5px 14px",
-  fontSize: 10,
+  padding: "4px 14px",
+  fontSize: 9,
   flexShrink: 0,
 };
 
@@ -551,24 +632,27 @@ const BODY_ROW: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflow: "hidden",
+  flexWrap: "wrap",  /* responsive: right rail wraps below at ~1100px */
 };
 
 const MATRIX_PANE: React.CSSProperties = {
   flex: 1,
-  minWidth: 0,
+  minWidth: 540,     /* matrix absorbs all space above this threshold */
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
 };
 
 const RIGHT_RAIL: React.CSSProperties = {
-  width: 220,
-  minWidth: 200,
+  width: 320,
+  minWidth: 280,
   display: "flex",
   flexDirection: "column",
   borderLeft: "1px solid var(--line)",
   background: "var(--panel)",
   overflowY: "auto",
+  scrollbarWidth: "thin" as const,
+  scrollbarColor: "rgba(255,255,255,0.13) transparent",
   padding: 8,
 } as React.CSSProperties;
 

@@ -2,34 +2,40 @@
 /**
  * MatrixGrid — strike rows × expiry cols heat matrix for PRISM.
  *
- * Color normalization: PER-COLUMN (each expiry column normalized to its own max).
- * Global norm is also supported via the norm prop.
+ * DESIGN TARGETS (MomoEdge parity pass):
+ *   - ONE ROW PER CELL: each cell is a single compact value line; cell height ~22-26px.
+ *     No two-line fat cells.
+ *   - DTE-count toggle: 4 expiries (default, spacious) | 8 expiries (tighter).
+ *     Rendered as chip buttons in the toolbar row.
+ *   - Strike-range toggle: ±10 (default) | ±20 | ±40 strikes centered on spot.
+ *     Default 10-strike view fits viewport with no vertical scroll.
+ *   - Σ All column pinned at the right: sum/net across all visible expiries per strike.
+ *   - Spot row: highlighted with var(--brand-2) teal chip showing spot price.
+ *
+ * Color normalization: PER-COLUMN (each expiry col) or GLOBAL.
  *
  * Cell color per lens:
  *   GEX  — signed diverging (green = positive/call-dominant, red = negative/put-dominant)
- *   OI   — sequential cyan (call or put OI, always ≥0)
- *   VOL  — sequential cyan
+ *   OI   — sequential cyan (total OI)
+ *   VOL  — sequential cyan (total VOL)
  *   DOI  — signed diverging (positive = added, negative = removed)
  *
- * Color intensity: quantile-based tiers (5 tiers, q20/q40/q60/q80 breakpoints),
- * matching prism_spec §4. Cells below P_FAINT (q75) are near-transparent.
+ * Intensity: quantile-based 5-tier system matching prism_spec §4.
+ * Level badges on strike rows (WALL/SUPPORT/FLIP/MAGNET/MAX PAIN).
  *
- * Level badges on their strike rows (WALL/SUPPORT/FLIP/MAGNET/MAX PAIN).
- * Spot separator line between rows straddling spot.
- *
- * Hover tooltip: ALL raw cell values + GEX formula unit line ("$ gamma per 1% move — dealer-sign assumed").
- * Keyboard 1/2/3/4 lens switching is handled in LensBar (not re-wired here).
+ * Hover tooltip: raw cell values + formula unit line.
  *
  * Props:
- *   cells       — from MatrixPayload.cells
- *   expiries    — ordered list from MatrixPayload.expiries
- *   strikes     — ordered list (desc) from MatrixPayload.strikes
- *   spot        — MatrixPayload.spot
- *   levels      — MatrixPayload.levels
- *   activeLens  — which lens to color
- *   norm        — "column" (default) | "global"
- *   dteFilter   — max DTE to include (null = all)
- *   lang        — "en" | "zh"
+ *   cells          — MatrixPayload.cells
+ *   expiries       — ordered list from MatrixPayload.expiries
+ *   strikes        — ordered list (desc) from MatrixPayload.strikes
+ *   spot           — MatrixPayload.spot
+ *   levels         — MatrixPayload.levels
+ *   activeLens     — which lens to color
+ *   norm           — "column" | "global"
+ *   dteColCount    — 4 | 8 — how many expiry columns to show (default 4)
+ *   strikeRange    — 10 | 20 | 40 — strikes each side of spot (default 10)
+ *   lang           — "en" | "zh"
  */
 
 import React, { useMemo, useState, useCallback, useRef } from "react";
@@ -75,7 +81,10 @@ interface MatrixGridProps {
   levels: MatrixLevels;
   activeLens: ActiveLens;
   norm?: "column" | "global";
-  dteFilter?: number | null;
+  /** Number of expiry columns to show (4 = spacious, 8 = tighter). Default 4. */
+  dteColCount?: 4 | 8;
+  /** Strikes each side of spot (±10, ±20, ±40). Default 10. */
+  strikeRange?: 10 | 20 | 40;
   lang: Lang;
 }
 
@@ -86,7 +95,6 @@ function fmtStrike(s: number): string {
 }
 
 function fmtExpShort(exp: string): string {
-  // "2026-07-18" (or "2026-07-18 00:00:00") -> "7/18"
   try {
     const parts = expDate(exp).split("-");
     return `${parseInt(parts[1])}/${parseInt(parts[2])}`;
@@ -95,9 +103,6 @@ function fmtExpShort(exp: string): string {
   }
 }
 
-
-/** Normalize an expiry string to YYYY-MM-DD. The engine emits pandas-style
- *  "2026-07-06 00:00:00"; older fixtures used plain ISO dates. */
 function expDate(exp: string): string {
   return (exp || "").split(" ")[0].split("T")[0];
 }
@@ -107,8 +112,6 @@ function dteDays(exp: string): number {
     const now = Date.now();
     const ms = new Date(expDate(exp) + "T20:00:00Z").getTime();
     if (!Number.isFinite(ms)) return -1;
-    // True signed DTE — expired contracts go negative and are filtered out of
-    // the column list (the engine's one-shot payloads carried expired rows).
     return Math.round((ms - now) / 86_400_000);
   } catch {
     return 0;
@@ -140,7 +143,6 @@ function fmtRaw(n: number | null | undefined): string {
   return String(Math.round(n));
 }
 
-/** Extract the display value for a cell under the active lens */
 function cellValue(cell: MatrixCell, lens: ActiveLens): number | null {
   switch (lens) {
     case "GEX": return cell.gex ?? null;
@@ -150,7 +152,6 @@ function cellValue(cell: MatrixCell, lens: ActiveLens): number | null {
   }
 }
 
-/** Quantile-based intensity tiers (prism_spec §4) */
 function computeTierBreaks(mags: number[]): [number, number, number, number] {
   const sorted = [...mags].filter((v) => v > 0).sort((a, b) => a - b);
   if (sorted.length === 0) return [0, 0, 0, 0];
@@ -171,7 +172,6 @@ function tier(mag: number, breaks: [number, number, number, number]): 0 | 1 | 2 
   return 5;
 }
 
-/** Cell background color for a given tier and lens/sign */
 function cellBg(
   value: number | null,
   t5: 0 | 1 | 2 | 3 | 4 | 5,
@@ -179,22 +179,29 @@ function cellBg(
 ): string {
   if (t5 === 0) return "transparent";
 
-  // For signed lenses (GEX, DOI): green = positive, red = negative
   if (lens === "GEX" || lens === "DOI") {
     const isPos = (value ?? 0) >= 0;
     const alphas = [0, 0.06, 0.14, 0.26, 0.44, 0.70];
     const a = alphas[t5];
     return isPos
-      ? `rgba(77,210,120,${a})`   // green for positive (call-dominant / OI added)
-      : `rgba(240,86,107,${a})`;  // red for negative (put-dominant / OI removed)
+      ? `rgba(77,210,120,${a})`
+      : `rgba(240,86,107,${a})`;
   }
 
-  // Sequential cyan for OI / VOL
   const alphas = [0, 0.07, 0.15, 0.27, 0.45, 0.72];
   return `rgba(77,210,200,${alphas[t5]})`;
 }
 
-/** Classify a strike to a level badge */
+function cellTextColor(value: number | null, lens: ActiveLens, t5: number): string {
+  if (t5 === 0) return "var(--text-3)";
+  if (lens === "GEX" || lens === "DOI") {
+    return (value ?? 0) >= 0
+      ? "rgba(100,230,150,0.95)"
+      : "rgba(240,120,130,0.95)";
+  }
+  return "rgba(77,210,200,0.95)";
+}
+
 type BadgeInfo = { tag: string; tone: "cyan" | "red" | "amber" | "purple" | "orange" };
 
 function strikeBadge(strike: number, levels: MatrixLevels, step: number): BadgeInfo | null {
@@ -258,7 +265,8 @@ export function MatrixGrid({
   levels,
   activeLens,
   norm = "column",
-  dteFilter = null,
+  dteColCount = 4,
+  strikeRange = 10,
   lang,
 }: MatrixGridProps) {
   const t = makePrismT(lang);
@@ -274,32 +282,46 @@ export function MatrixGrid({
     return m;
   }, [cells]);
 
-  // Filter expiries by DTE
+  // Filter expiries: only non-expired ones, then cap at dteColCount
   const filteredExpiries = useMemo(() => {
-    if (!dteFilter) return expiries;
-    return expiries.filter((e) => { const d = dteDays(e); return d >= 0 && d <= dteFilter; });
-  }, [expiries, dteFilter]);
+    const nonExpired = expiries.filter((e) => {
+      const d = dteDays(e);
+      return d >= 0;
+    });
+    return nonExpired.slice(0, dteColCount);
+  }, [expiries, dteColCount]);
 
-  // Sort strikes descending (highest at top)
-  const sortedStrikes = useMemo(
+  // Sort all strikes descending
+  const allStrikes = useMemo(
     () => [...strikes].sort((a, b) => b - a),
     [strikes]
   );
 
-  // Find spot row (nearest strike to spot)
+  // Spot strike = nearest strike to spot
   const spotStrike = useMemo(() => {
-    if (spot == null || sortedStrikes.length === 0) return null;
-    return sortedStrikes.reduce((best, s) =>
+    if (spot == null || allStrikes.length === 0) return null;
+    return allStrikes.reduce((best, s) =>
       Math.abs(s - spot) < Math.abs(best - spot) ? s : best
     );
-  }, [spot, sortedStrikes]);
+  }, [spot, allStrikes]);
+
+  // Apply strike range: take ±strikeRange strikes centered on spotStrike
+  const sortedStrikes = useMemo(() => {
+    if (spotStrike == null) return allStrikes.slice(0, strikeRange * 2 + 1);
+
+    const spotIdx = allStrikes.indexOf(spotStrike);
+    if (spotIdx < 0) return allStrikes.slice(0, strikeRange * 2 + 1);
+
+    const start = Math.max(0, spotIdx - strikeRange);
+    const end = Math.min(allStrikes.length, spotIdx + strikeRange + 1);
+    return allStrikes.slice(start, end);
+  }, [allStrikes, spotStrike, strikeRange]);
 
   const step = useMemo(() => estimateStep(sortedStrikes), [sortedStrikes]);
 
-  // Compute per-column (or global) tier breaks per lens
+  // Compute per-column (or global) tier breaks
   const tierBreaks = useMemo(() => {
     if (norm === "global") {
-      // One set of breaks across all cells
       const mags = cells
         .map((c) => magnitudeOf(cellValue(c, activeLens)))
         .filter((v) => v > 0);
@@ -308,6 +330,8 @@ export function MatrixGrid({
       for (const exp of filteredExpiries) {
         out.set(exp, breaks);
       }
+      // Also for Σ column
+      out.set("__sigma__", breaks);
       return out;
     }
     // Per-column
@@ -321,10 +345,37 @@ export function MatrixGrid({
         .filter((v) => v > 0);
       out.set(exp, computeTierBreaks(mags));
     }
+    // Σ column uses global breaks (aggregate of all visible cells)
+    const sigMags = sortedStrikes.flatMap((s) =>
+      filteredExpiries.map((e) => {
+        const c = cellMap.get(`${s}|${e}`);
+        return c ? magnitudeOf(cellValue(c, activeLens)) : 0;
+      })
+    ).filter((v) => v > 0);
+    out.set("__sigma__", computeTierBreaks(sigMags));
     return out;
   }, [cells, filteredExpiries, sortedStrikes, cellMap, activeLens, norm]);
 
-  // Find spot separator row index (insert below the row where strike >= spot and next is < spot)
+  // Σ (sum) value per strike across all visible expiries
+  const sigmaByStrike = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const strike of sortedStrikes) {
+      let total = 0;
+      let hasAny = false;
+      for (const exp of filteredExpiries) {
+        const c = cellMap.get(`${strike}|${exp}`);
+        const v = c ? cellValue(c, activeLens) : null;
+        if (v != null && Number.isFinite(v)) {
+          total += v;
+          hasAny = true;
+        }
+      }
+      m.set(strike, hasAny ? total : 0);
+    }
+    return m;
+  }, [sortedStrikes, filteredExpiries, cellMap, activeLens]);
+
+  // Spot separator: insert below the row where strike >= spot and next row < spot
   const spotSepAfterIdx = useMemo(() => {
     if (spot == null) return null;
     for (let i = 0; i < sortedStrikes.length - 1; i++) {
@@ -361,23 +412,34 @@ export function MatrixGrid({
     );
   }
 
+  const sigmaBreaks = tierBreaks.get("__sigma__") ?? [0, 0, 0, 0];
+
   return (
     <div style={GRID_OUTER} ref={containerRef}>
       <div style={{ overflowX: "auto", overflowY: "auto", flex: 1, minHeight: 0 }}>
         <table style={TABLE}>
           <thead>
             <tr>
-              {/* Strike header cell */}
+              {/* Strike header */}
               <th style={TH_STRIKE}>{t("colStrike")}</th>
-              {/* Level badge header cell */}
+              {/* Level badge header */}
               <th style={TH_BADGE} />
               {/* Expiry column headers */}
               {filteredExpiries.map((exp) => {
                 const dte = dteDays(exp);
+                const isMonthly = (() => {
+                  try {
+                    const d = new Date(expDate(exp));
+                    return d.getDay() === 5 && d.getDate() >= 15 && d.getDate() <= 21;
+                  } catch { return false; }
+                })();
                 return (
                   <th key={exp} style={TH_EXP}>
                     <div style={EXP_HEADER_WRAP}>
-                      <span style={EXP_DATE}>{fmtExpShort(exp)}</span>
+                      <span style={EXP_DATE}>
+                        {fmtExpShort(exp)}
+                        {isMonthly && <span style={MONTHLY_DOT} title="">·</span>}
+                      </span>
                       <span style={EXP_DTE}>
                         {dte === 0 ? "0DTE" : `${dte}d`}
                       </span>
@@ -385,6 +447,8 @@ export function MatrixGrid({
                   </th>
                 );
               })}
+              {/* Σ All column */}
+              <th style={TH_SIGMA}>Σ</th>
             </tr>
           </thead>
           <tbody>
@@ -395,22 +459,21 @@ export function MatrixGrid({
                 spot != null
                   ? `${((strike - spot) / spot * 100).toFixed(1)}%`
                   : null;
+              const sigmaVal = sigmaByStrike.get(strike) ?? null;
+              const sigmaMag = magnitudeOf(sigmaVal ?? null);
+              const sigmaT5 = tier(sigmaMag, sigmaBreaks);
+              const sigmaBg = cellBg(sigmaVal, sigmaT5, activeLens);
+              const sigmaText = fmtVal(sigmaVal, activeLens);
 
               return (
                 <React.Fragment key={strike}>
-                  {/* Spot separator line */}
+                  {/* Spot separator line — inserted BEFORE the first row below spot */}
                   {rowIdx === (spotSepAfterIdx ?? -1) + 1 && spot != null && (
                     <tr style={{ height: 0 }}>
                       <td
-                        colSpan={2 + filteredExpiries.length}
+                        colSpan={2 + filteredExpiries.length + 1}
                         style={SPOT_SEPARATOR}
-                      >
-                        <div style={SPOT_SEP_LINE}>
-                          <span style={SPOT_SEP_LABEL}>
-                            {t("levelSpot")} {spot.toFixed(2)}
-                          </span>
-                        </div>
-                      </td>
+                      />
                     </tr>
                   )}
 
@@ -420,28 +483,48 @@ export function MatrixGrid({
                       ...(isSpot ? SPOT_ROW : {}),
                     }}
                   >
-                    {/* Strike cell */}
-                    <td style={TD_STRIKE}>
-                      <span
-                        style={{
-                          ...STRIKE_NUM,
-                          color: isSpot
-                            ? "var(--signal)"
-                            : badge
-                            ? badgeColor(badge.tone)
-                            : "var(--text-2)",
-                          fontWeight: isSpot || badge ? 700 : 400,
-                        }}
-                      >
-                        {fmtStrike(strike)}
-                      </span>
-                      {spotPctStr && (
-                        <span style={SPOT_PCT}>{spotPctStr}</span>
+                    {/* Strike label cell */}
+                    <td style={{
+                      ...TD_STRIKE,
+                      background: isSpot ? "rgba(77,130,255,0.06)" : "var(--bg)",
+                    }}>
+                      {isSpot ? (
+                        // Spot row: teal chip with spot price
+                        <div style={SPOT_CHIP_WRAP}>
+                          <span style={SPOT_CHIP_LABEL}>
+                            {fmtStrike(strike)}
+                          </span>
+                          {spot != null && (
+                            <span style={SPOT_PRICE_CHIP}>
+                              {spot.toFixed(2)}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={STRIKE_WRAP}>
+                          <span
+                            style={{
+                              ...STRIKE_NUM,
+                              color: badge
+                                ? badgeColor(badge.tone)
+                                : "var(--text-2)",
+                              fontWeight: badge ? 700 : 400,
+                            }}
+                          >
+                            {fmtStrike(strike)}
+                          </span>
+                          {spotPctStr && (
+                            <span style={SPOT_PCT}>{spotPctStr}</span>
+                          )}
+                        </div>
                       )}
                     </td>
 
                     {/* Badge cell */}
-                    <td style={TD_BADGE}>
+                    <td style={{
+                      ...TD_BADGE,
+                      background: isSpot ? "rgba(77,130,255,0.06)" : "var(--bg)",
+                    }}>
                       {badge && (
                         <span
                           style={{
@@ -464,6 +547,8 @@ export function MatrixGrid({
                       const t5 = tier(mag, breaks);
                       const bg = cellBg(v, t5, activeLens);
                       const displayText = fmtVal(v, activeLens);
+                      const textColor = cellTextColor(v, activeLens, t5);
+                      const showText = t5 >= 1 && v != null && v !== 0;
 
                       return (
                         <td
@@ -477,16 +562,12 @@ export function MatrixGrid({
                           }
                           onMouseLeave={handleMouseLeave}
                         >
-                          {t5 >= 2 && (
+                          {showText && (
                             <span
                               style={{
                                 ...CELL_TEXT,
-                                color:
-                                  activeLens === "GEX" || activeLens === "DOI"
-                                    ? (v ?? 0) >= 0
-                                      ? "rgba(100,230,150,0.95)"
-                                      : "rgba(240,120,130,0.95)"
-                                    : "rgba(77,210,200,0.95)",
+                                color: textColor,
+                                opacity: t5 === 1 ? 0.55 : 1,
                               }}
                             >
                               {displayText}
@@ -495,6 +576,27 @@ export function MatrixGrid({
                         </td>
                       );
                     })}
+
+                    {/* Σ All cell */}
+                    <td
+                      style={{
+                        ...TD_SIGMA,
+                        background: sigmaBg,
+                      }}
+                    >
+                      {sigmaT5 >= 1 && sigmaVal != null && sigmaVal !== 0 && (
+                        <span
+                          style={{
+                            ...CELL_TEXT,
+                            color: cellTextColor(sigmaVal, activeLens, sigmaT5),
+                            opacity: sigmaT5 === 1 ? 0.55 : 1,
+                            fontWeight: 700,
+                          }}
+                        >
+                          {sigmaText}
+                        </span>
+                      )}
+                    </td>
                   </tr>
                 </React.Fragment>
               );
@@ -509,11 +611,12 @@ export function MatrixGrid({
           style={{
             ...TOOLTIP,
             left: Math.min(tooltip.x, (containerRef.current?.clientWidth ?? 400) - 210),
-            top: tooltip.y,
+            top: Math.max(8, tooltip.y),
           }}
         >
           <div style={TIP_TITLE}>
-            ${fmtStrike(tooltip.strike)} · {fmtExpShort(tooltip.expiry)}{" "}
+            ${fmtStrike(tooltip.strike)}{" "}
+            <span style={TIP_EXP}>{fmtExpShort(tooltip.expiry)}</span>{" "}
             <span style={TIP_DTE}>
               {dteDays(tooltip.expiry) === 0 ? "0DTE" : `${dteDays(tooltip.expiry)}d`}
             </span>
@@ -540,7 +643,6 @@ export function MatrixGrid({
             />
           )}
           <div style={TIP_SEP} />
-          {/* Formula unit line — verbatim from spec */}
           <div style={TIP_FORMULA}>{t("gexFormulaUnit")}</div>
         </div>
       )}
@@ -609,27 +711,43 @@ const TH_STRIKE: React.CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: "0.06em",
   textAlign: "left",
-  minWidth: 70,
+  minWidth: 62,
   fontWeight: 600,
 };
 
 const TH_BADGE: React.CSSProperties = {
   position: "sticky",
-  left: 70,
+  left: 62,
   zIndex: 3,
   background: "var(--panel)",
   padding: "4px 4px",
   borderBottom: "1px solid var(--line)",
-  minWidth: 68,
+  minWidth: 56,
 };
 
 const TH_EXP: React.CSSProperties = {
-  padding: "4px 8px",
+  padding: "3px 6px",
   borderBottom: "1px solid var(--line)",
   borderLeft: "1px solid var(--line-2)",
   textAlign: "center",
-  minWidth: 72,
+  minWidth: 62,
   background: "var(--panel)",
+};
+
+const TH_SIGMA: React.CSSProperties = {
+  padding: "3px 6px",
+  borderBottom: "1px solid var(--line)",
+  borderLeft: "2px solid var(--line)",
+  textAlign: "center",
+  minWidth: 66,
+  background: "var(--panel)",
+  fontSize: 10,
+  color: "var(--brand-2)",
+  fontWeight: 800,
+  letterSpacing: "0.04em",
+  position: "sticky",
+  right: 0,
+  zIndex: 3,
 };
 
 const EXP_HEADER_WRAP: React.CSSProperties = {
@@ -651,51 +769,98 @@ const EXP_DTE: React.CSSProperties = {
   color: "var(--muted)",
 };
 
-const STRIKE_ROW: React.CSSProperties = {
-  transition: "background 0.08s",
+const MONTHLY_DOT: React.CSSProperties = {
+  color: "var(--brand-2)",
+  marginLeft: 2,
+  fontSize: 12,
+  lineHeight: 0,
+  verticalAlign: "middle",
 };
 
-const SPOT_ROW: React.CSSProperties = {
-  background: "rgba(232,179,57,0.05)",
-  outline: "1px solid rgba(232,179,57,0.18)",
+// ── Row styles ───────────────────────────────────────────────────────────────
+
+const STRIKE_ROW: React.CSSProperties = {
+  transition: "background 0.06s",
 };
+
+/** Spot row: subtle teal ambient */
+const SPOT_ROW: React.CSSProperties = {
+  outline: "1px solid rgba(77,130,255,0.28)",
+};
+
+// ── Strike cell ──────────────────────────────────────────────────────────────
 
 const TD_STRIKE: React.CSSProperties = {
   position: "sticky",
   left: 0,
   zIndex: 2,
-  background: "var(--bg)",
-  padding: "3px 8px",
+  padding: "0 6px",
   borderBottom: "1px solid var(--line-2)",
+  height: 24,
+  verticalAlign: "middle",
   whiteSpace: "nowrap",
 };
 
-const TD_BADGE: React.CSSProperties = {
-  position: "sticky",
-  left: 70,
-  zIndex: 2,
-  background: "var(--bg)",
-  padding: "3px 4px",
-  borderBottom: "1px solid var(--line-2)",
-  borderRight: "1px solid var(--line-2)",
+const STRIKE_WRAP: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
 };
 
 const STRIKE_NUM: React.CSSProperties = {
   fontSize: 11,
   fontVariantNumeric: "tabular-nums",
-  display: "block",
 };
 
 const SPOT_PCT: React.CSSProperties = {
   fontSize: 8,
   color: "var(--muted)",
-  display: "block",
+};
+
+/** Spot row strike cell: teal chip pattern */
+const SPOT_CHIP_WRAP: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+};
+
+const SPOT_CHIP_LABEL: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: "var(--brand-2)",
+  fontVariantNumeric: "tabular-nums",
+};
+
+/** Spot price chip — brand-teal token, matches competitor pattern */
+const SPOT_PRICE_CHIP: React.CSSProperties = {
+  fontSize: 8,
+  fontWeight: 700,
+  color: "var(--brand-2)",
+  background: "rgba(77,130,255,0.14)",
+  border: "1px solid rgba(77,130,255,0.35)",
+  borderRadius: 3,
+  padding: "0 4px",
+  fontVariantNumeric: "tabular-nums",
+  letterSpacing: "0.01em",
+};
+
+// ── Badge cell ───────────────────────────────────────────────────────────────
+
+const TD_BADGE: React.CSSProperties = {
+  position: "sticky",
+  left: 62,
+  zIndex: 2,
+  padding: "0 4px",
+  borderBottom: "1px solid var(--line-2)",
+  borderRight: "1px solid var(--line-2)",
+  height: 24,
+  verticalAlign: "middle",
 };
 
 const BADGE: React.CSSProperties = {
   fontSize: 7,
   fontWeight: 900,
-  letterSpacing: "0.07em",
+  letterSpacing: "0.06em",
   padding: "1px 3px",
   borderRadius: 2,
   border: "1px solid",
@@ -703,48 +868,48 @@ const BADGE: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+// ── Data cells ───────────────────────────────────────────────────────────────
+
+/** Standard data cell — the key "one row" constraint: height 24px, single line */
 const TD_CELL: React.CSSProperties = {
-  padding: "0 4px",
-  height: 20,
+  padding: "0 5px",
+  height: 24,
   borderBottom: "1px solid var(--line-2)",
   borderLeft: "1px solid var(--line-2)",
   textAlign: "center",
   cursor: "default",
-  transition: "background 0.1s",
+  transition: "background 0.08s",
   verticalAlign: "middle",
+  whiteSpace: "nowrap",
+};
+
+/** Σ All column cell — pinned right, slightly heavier left border */
+const TD_SIGMA: React.CSSProperties = {
+  ...TD_CELL,
+  borderLeft: "2px solid var(--line)",
+  position: "sticky",
+  right: 0,
+  zIndex: 2,
+  background: "var(--panel)",
+  textAlign: "center",
 };
 
 const CELL_TEXT: React.CSSProperties = {
-  fontSize: 9,
+  fontSize: 10,
   fontWeight: 600,
   fontVariantNumeric: "tabular-nums",
-  letterSpacing: "-0.02em",
+  letterSpacing: "-0.01em",
 };
+
+// ── Spot separator (thin teal accent line) ───────────────────────────────────
 
 const SPOT_SEPARATOR: React.CSSProperties = {
   padding: 0,
-  height: 0,
+  height: 2,
+  background: "rgba(77,130,255,0.45)",
 };
 
-const SPOT_SEP_LINE: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  height: 18,
-  borderTop: "2px solid rgba(232,179,57,0.45)",
-  background: "rgba(232,179,57,0.04)",
-  paddingLeft: 8,
-};
-
-const SPOT_SEP_LABEL: React.CSSProperties = {
-  fontSize: 8,
-  color: "var(--signal)",
-  fontWeight: 700,
-  letterSpacing: "0.06em",
-  textTransform: "uppercase",
-  fontVariantNumeric: "tabular-nums",
-};
-
-// ── Tooltip ─────────────────────────────────────────────────────────────────
+// ── Tooltip ──────────────────────────────────────────────────────────────────
 
 const TOOLTIP: React.CSSProperties = {
   position: "absolute",
@@ -766,11 +931,16 @@ const TIP_TITLE: React.CSSProperties = {
   fontVariantNumeric: "tabular-nums",
 };
 
+const TIP_EXP: React.CSSProperties = {
+  color: "var(--text-2)",
+  fontWeight: 600,
+};
+
 const TIP_DTE: React.CSSProperties = {
   fontSize: 9,
   color: "var(--muted)",
   fontWeight: 400,
-  marginLeft: 4,
+  marginLeft: 3,
 };
 
 const TIP_SEP: React.CSSProperties = {
