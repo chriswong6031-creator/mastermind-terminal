@@ -231,6 +231,17 @@ export async function GET(req: Request): Promise<Response> {
 
   // Try backend first, fall back to R2 CDN.
   const tryFetch = async (): Promise<Record<string, unknown> | null> => {
+    // manifest is a LOCAL static file on this box (public/data/manifest.json,
+    // refreshed nightly on the VPS) — never an R2 object. Read it directly:
+    // zero network hops, and the old backend→R2 chain 503'd in prod.
+    if (f === "manifest") {
+      try {
+        const raw = await fs.readFile(MANIFEST_FIXTURE_FILE, "utf8");
+        return JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    }
     const bUrl = `${BACKEND}${backendPath(f)}`;
     try {
       return await fetchWithUA(bUrl);

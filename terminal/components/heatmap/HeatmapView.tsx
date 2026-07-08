@@ -77,6 +77,9 @@ function buildTiles(
 
   const tiles: HeatmapTile[] = [];
   for (const [ticker, sym] of Object.entries(manifest.symbols)) {
+    // The prod manifest carries ~8.7k names, dozens with missing/null price
+    // fields (halted/new listings) — those crash number formatting downstream.
+    if (sym == null || typeof sym.last !== "number" || typeof sym.chg !== "number") continue;
     const flow = flowMap[ticker.toUpperCase()];
     const sector: GicsSector = getSector(ticker);
 
@@ -107,6 +110,23 @@ function buildTiles(
     }
 
     tiles.push(tile);
+  }
+
+  // Cap the render set: the full universe (~8.7k) makes the treemap unreadable
+  // and slow. Keep every name with flow data (the 368-name flow universe) plus
+  // the most liquid names by dollar volume, up to ~500 tiles total.
+  const MAX_TILES = 500;
+  if (tiles.length > MAX_TILES) {
+    const dollarVol = (t: HeatmapTile) => (t.price ?? 0) * (t.vol ?? 0);
+    // US-listed only for the map: the manifest carries international listings
+    // (7203.T, 0700.HK, TRENT.NS …) whose local-currency volumes distort a
+    // dollar-volume ranking. Allow plain tickers and A/B share classes.
+    const isUS = (t: HeatmapTile) => /^[A-Z]+(\.[AB])?$/.test(t.ticker) && !/^\d/.test(t.ticker);
+    const flowTiles = tiles.filter(t => t.hasFlow);
+    const rest = tiles
+      .filter(t => !t.hasFlow && isUS(t))
+      .sort((a, b) => dollarVol(b) - dollarVol(a));
+    return [...flowTiles, ...rest.slice(0, Math.max(0, MAX_TILES - flowTiles.length))];
   }
 
   return tiles;
