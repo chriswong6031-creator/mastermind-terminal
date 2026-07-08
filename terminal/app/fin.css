@@ -635,6 +635,7 @@
 /* holding-window matrix */
 .fin-adv-bestcall{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:10px;padding:7px 10px;border-radius:var(--r-md);background:rgba(232,163,61,.08);border:1px solid rgba(232,163,61,.24)}
 .fin-adv-bestcall-w{font:700 12.5px/1 var(--font-num);color:var(--text)}
+.fin-adv-holdlen{font-weight:600;font-size:.72em;color:var(--muted)}
 .fin-adv-bestcall-v{font:700 13px/1 var(--font-num)}
 .fin-adv-bestcall-v.up{color:var(--up)}
 .fin-adv-bestcall-s{font:600 10px/1 var(--font-num);color:var(--muted)}
