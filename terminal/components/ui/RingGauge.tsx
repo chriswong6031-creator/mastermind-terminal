@@ -31,8 +31,10 @@ export type RingTone = "brand" | "up" | "down" | "muted" | "auto";
 export type RingSize = "sm" | "md" | "lg";
 
 export interface RingGaugeProps {
-  /** 0–100 score or confidence value */
+  /** Score or confidence value — displayed as-is */
   value: number;
+  /** Scale for the ring FILL (e.g. 92 for capped confidence). Display number is unaffected. */
+  max?: number;
   /** Visual size variant */
   size?: RingSize;
   /**
@@ -52,20 +54,25 @@ function resolveAutoTone(value: number): Exclude<RingTone, "auto"> {
   return "down";
 }
 
-export function RingGauge({ value, size = "sm", tone = "auto", label }: RingGaugeProps) {
-  const clampedPct = isNaN(value) ? 0 : Math.max(0, Math.min(100, Math.round(value)));
+export function RingGauge({ value, max = 100, size = "sm", tone = "auto", label }: RingGaugeProps) {
+  // The DISPLAYED number is always the true value; `max` only scales the fill.
+  // (A confidence of 68 with a 92 cap must read "68", never a normalized 74.)
+  const displayValue = isNaN(value) ? 0 : Math.max(0, Math.round(value));
+  const fillPct = isNaN(value) || max <= 0
+    ? 0
+    : Math.max(0, Math.min(100, Math.round((value / max) * 100)));
   const resolvedTone: Exclude<RingTone, "auto"> =
-    tone === "auto" ? resolveAutoTone(clampedPct) : tone;
+    tone === "auto" ? resolveAutoTone(fillPct) : tone;
 
   const ring = (
     <span
       className={`obs-ring obs-ring--${size} obs-ring--${resolvedTone}`}
-      style={{ "--pct": `${clampedPct}%` } as React.CSSProperties}
-      aria-label={`${clampedPct} out of 100`}
+      style={{ "--pct": `${fillPct}%` } as React.CSSProperties}
+      aria-label={`${displayValue} out of ${max}`}
       role="img"
     >
       <span className="obs-ring-inner">
-        <span className="obs-ring-value num">{clampedPct}</span>
+        <span className="obs-ring-value num">{displayValue}</span>
       </span>
     </span>
   );

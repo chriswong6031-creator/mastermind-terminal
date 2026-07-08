@@ -19,6 +19,10 @@ import { makePrismT } from "./prismStrings";
 import type { Lang } from "@/lib/i18n";
 import { RingGauge } from "@/components/ui/RingGauge";
 
+function expDate(exp: string): string {
+  return (exp || "").split(" ")[0].split("T")[0];
+}
+
 // ─── Type (matches options_structure.matrix/v1 heat_seeker field) ─────────────
 
 export interface HeatSeekerPick {
@@ -45,7 +49,7 @@ function fmtStrike(s: number): string {
 function fmtExpiry(exp: string): string {
   // "2026-07-18" -> "Jul 18"
   try {
-    const d = new Date(exp + "T12:00:00Z");
+    const d = new Date(expDate(exp) + "T12:00:00Z");
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   } catch {
     return exp.slice(5);
@@ -55,7 +59,7 @@ function fmtExpiry(exp: string): string {
 function dteDays(exp: string): number {
   try {
     const now = Date.now();
-    const ms = new Date(exp + "T20:00:00Z").getTime();
+    const ms = new Date(expDate(exp) + "T20:00:00Z").getTime();
     return Math.max(0, Math.round((ms - now) / 86_400_000));
   } catch {
     return 0;
@@ -91,6 +95,14 @@ function confBar(conf: number): React.ReactNode {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
+  // Engine one-shot payloads can carry an expired pick; never surface those.
+  {
+    const raw = pick?.expiry ? new Date(expDate(pick.expiry) + "T20:00:00Z").getTime() : NaN;
+    if (!Number.isFinite(raw) || raw < Date.now()) {
+      return null;
+    }
+  }
+
   const t = makePrismT(lang);
 
   if (!pick) {

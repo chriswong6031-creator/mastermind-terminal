@@ -224,7 +224,7 @@ export function PrismView() {
   let asofStr = "";
   if (matrix?.asof) {
     try {
-      asofStr = new Date(matrix.asof).toLocaleTimeString("en-US", {
+      asofStr = new Date(String(matrix.asof).replace(" ", "T")).toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
         hour12: false,

@@ -136,7 +136,8 @@ export function ConfidencePanel({
       {/* Ring gauge (lg) replaces SVG arc — cap-92 note preserved */}
       <div style={ARC_WRAPPER}>
         <RingGauge
-          value={confidence != null ? Math.round((score / CEILING) * 100) : 0}
+          value={confidence != null ? score : 0}
+          max={CEILING}
           size="lg"
           tone="auto"
         />
