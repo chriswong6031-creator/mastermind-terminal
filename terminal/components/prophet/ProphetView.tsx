@@ -32,7 +32,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { flowGet } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
 import { makeProphetT } from "./prophetStrings";
-import { SignalCard } from "./SignalCard";
+import { SignalCard, planAsof, planConfidence, planPhase, planRecommendedAction } from "./SignalCard";
 import type { PlanSummary } from "./SignalCard";
 import { ConfidencePanel } from "./ConfidencePanel";
 import type { ConfidenceComponents } from "./ConfidencePanel";
@@ -42,7 +42,7 @@ import { OptionCard } from "./OptionCard";
 // ── API payload types ─────────────────────────────────────────────────────────
 
 interface ProphetIndexPayload {
-  asof: string;
+  asof?: string | null;
   cadence?: string;
   plans: PlanSummary[];
 }
@@ -56,13 +56,20 @@ function sortPlans(plans: PlanSummary[], mode: SortMode): PlanSummary[] {
   const copy = [...plans];
   switch (mode) {
     case "new":
-      // newest issuance first
-      return copy.sort((a, b) => new Date(b.asof).getTime() - new Date(a.asof).getTime());
-    case "best":
-      // highest management_confidence first
+      // newest issuance first — accepts both _signal_date (flat) and asof (nested)
       return copy.sort((a, b) => {
-        const ca = a.state?.management_confidence ?? 0;
-        const cb = b.state?.management_confidence ?? 0;
+        const ta = new Date(planAsof(a)).getTime();
+        const tb = new Date(planAsof(b)).getTime();
+        // Invalid dates sort to end
+        const fa = Number.isFinite(ta) ? ta : 0;
+        const fb = Number.isFinite(tb) ? tb : 0;
+        return fb - fa;
+      });
+    case "best":
+      // highest management_confidence first — accepts both flat and nested shapes
+      return copy.sort((a, b) => {
+        const ca = planConfidence(a) ?? 0;
+        const cb = planConfidence(b) ?? 0;
         return cb - ca;
       });
     case "gainers":
@@ -248,8 +255,9 @@ function SelectedDetail({
     ? "color-mix(in srgb, var(--down) 15%, transparent)"
     : "color-mix(in srgb, var(--up) 15%, transparent)";
 
+  // Support both flat (plan.management_confidence / plan.phase) and nested (plan.state.*) shapes
   const state      = plan.state;
-  const confidence = state?.management_confidence ?? null;
+  const confidence = planConfidence(plan);
   const components = (state as { components?: ConfidenceComponents } | null | undefined)?.components ?? null;
   const geometry   = state?.geometry ?? null;
 
@@ -279,9 +287,9 @@ function SelectedDetail({
         <ConfidencePanel
           confidence={confidence}
           components={components}
-          phase={state?.phase ?? null}
+          phase={planPhase(plan)}
           change_reason={(state as { change_reason?: string | null } | null | undefined)?.change_reason ?? null}
-          recommended_action={state?.recommended_action ?? null}
+          recommended_action={planRecommendedAction(plan)}
           lang={lang}
         />
       </div>

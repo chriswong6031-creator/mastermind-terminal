@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:fixture": "FLOW_FIXTURE=1 next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
