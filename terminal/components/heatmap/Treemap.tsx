@@ -82,9 +82,20 @@ function squarify(
     return squarify(items.map(i => ({ ...i, value: 1 })), x, y, w, h);
   }
 
+  // Canonical precondition: descending by value.
+  const sorted = [...items].sort((a, b) => b.value - a.value);
   const result: TreemapNode[] = [];
-  squarifyRecurse(items, x, y, w, h, totalValue, result);
+  squarifyRecurse(sorted, x, y, w, h, totalValue, result);
   return result;
+}
+
+// Worst aspect ratio of a row: s = row's total scaled area, mx/mn = largest/
+// smallest scaled area in the row, short = length of the side the row spans.
+// (Bruls, Huizing & van Wijk, "Squarified Treemaps", eq. for worst().)
+function worstAspect(s: number, mx: number, mn: number, short: number): number {
+  const s2 = s * s;
+  const short2 = short * short;
+  return Math.max((short2 * mx) / s2, s2 / (short2 * mn));
 }
 
 function squarifyRecurse(
@@ -93,76 +104,55 @@ function squarifyRecurse(
   totalValue: number,
   result: TreemapNode[]
 ): void {
-  if (items.length === 0 || w < 1 || h < 1) return;
+  if (items.length === 0 || w <= 0.5 || h <= 0.5 || totalValue <= 0) return;
   if (items.length === 1) {
     result.push({ x, y, w, h, tile: items[0].tile });
     return;
   }
 
-  const area = w * h;
-  const shorter = Math.min(w, h);
-  const row: { value: number; tile: HeatmapTile }[] = [];
-  let rowValue = 0;
+  // Scale values so they sum to the rect's area.
+  const scale = (w * h) / totalValue;
+  const areas = items.map(i => Math.max(i.value * scale, 1e-9));
+  const short = Math.min(w, h);
 
-  function worstRatio(row: { value: number }[], short: number, rowVal: number): number {
-    const s = short;
-    const rowArea = (rowVal / totalValue) * area;
-    if (rowArea <= 0) return Infinity;
-    let max = -Infinity;
-    let min = Infinity;
-    for (const r of row) {
-      const rArea = (r.value / totalValue) * area;
-      const ratio = rArea > 0 ? Math.max(s * s * rowArea / (rArea * rArea), rArea * rArea / (s * s * rowArea)) : Infinity;
-      // Simplified: use rect aspect ratio
-      const len = s;
-      const a = (r.value / rowVal) * (rowVal / totalValue) * area;
-      const rect = a / len;
-      const asp = rect > len ? rect / len : len / rect;
-      if (asp > max) max = asp;
-      if (asp < min) min = asp;
-    }
-    return max;
-  }
-
-  // Build row greedily while aspect ratio improves
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    const newRow = [...row, item];
-    const newVal = rowValue + item.value;
-    if (row.length === 0 || worstRatio(newRow, shorter, newVal) <= worstRatio(row, shorter, rowValue)) {
-      row.push(item);
-      rowValue += item.value;
+  // Grow the row while the worst aspect ratio keeps improving.
+  let count = 1;
+  let sum = areas[0];
+  let mx = areas[0];
+  let mn = areas[0];
+  let worst = worstAspect(sum, mx, mn, short);
+  for (let i = 1; i < areas.length; i++) {
+    const nSum = sum + areas[i];
+    const nMx = Math.max(mx, areas[i]);
+    const nMn = Math.min(mn, areas[i]);
+    const nWorst = worstAspect(nSum, nMx, nMn, short);
+    if (nWorst <= worst) {
+      count = i + 1; sum = nSum; mx = nMx; mn = nMn; worst = nWorst;
     } else {
       break;
     }
   }
 
-  // Lay out the row
-  const rowArea = (rowValue / totalValue) * area;
-  const rowThick = shorter > 0 ? rowArea / shorter : 0;
-
+  // Lay the row along the shorter side; its thickness fills the longer side.
+  const thick = sum / short;
   const isWide = w >= h;
   let pos = isWide ? y : x;
-  for (const r of row) {
-    const rFrac = rowValue > 0 ? r.value / rowValue : 0;
-    const rLen = rFrac * shorter;
+  for (let i = 0; i < count; i++) {
+    const len = areas[i] / thick;
     if (isWide) {
-      result.push({ x, y: pos, w: rowThick, h: rLen, tile: r.tile });
+      result.push({ x, y: pos, w: thick, h: len, tile: items[i].tile });
     } else {
-      result.push({ x: pos, y, w: rLen, h: rowThick, tile: r.tile });
+      result.push({ x: pos, y, w: len, h: thick, tile: items[i].tile });
     }
-    pos += rLen;
+    pos += len;
   }
 
-  // Recurse on remaining items
-  const remaining = items.slice(row.length);
-  if (remaining.length > 0) {
-    const newTotal = remaining.reduce((s, i) => s + i.value, 0);
-    if (isWide) {
-      squarifyRecurse(remaining, x + rowThick, y, w - rowThick, h, newTotal, result);
-    } else {
-      squarifyRecurse(remaining, x, y + rowThick, w, h - rowThick, newTotal, result);
-    }
+  const rest = items.slice(count);
+  const restTotal = rest.reduce((s, i) => s + i.value, 0);
+  if (isWide) {
+    squarifyRecurse(rest, x + thick, y, w - thick, h, restTotal, result);
+  } else {
+    squarifyRecurse(rest, x, y + thick, w, h - thick, restTotal, result);
   }
 }
 
@@ -452,8 +442,9 @@ function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick, zh: 
   const PAD = 3;
 
   // Label: ticker + value
+  const chg1d = tile.chg1d ?? 0;
   const valueLabel = layer === "price"
-    ? `${tile.chg1d >= 0 ? "+" : ""}${tile.chg1d.toFixed(2)}%`
+    ? `${chg1d >= 0 ? "+" : ""}${chg1d.toFixed(2)}%`
     : tile.netPremiumMn != null
       ? `$${tile.netPremiumMn.toFixed(1)}M`
       : "";
@@ -556,8 +547,9 @@ function HoverTooltip({ tooltip, layer, canvasW, canvasH, zh }: HoverTooltipProp
   const left = Math.min(cx + 12, canvasW - TIP_W - 4);
   const top  = cy + TIP_H > canvasH ? cy - TIP_H - 8 : cy + 16;
 
-  const chgColor = tile.chg1d >= 0 ? "var(--up)" : "var(--down)";
-  const chgStr = `${tile.chg1d >= 0 ? "+" : ""}${tile.chg1d.toFixed(2)}%`;
+  const tipChg = tile.chg1d ?? 0;
+  const chgColor = tipChg >= 0 ? "var(--up)" : "var(--down)";
+  const chgStr = `${tipChg >= 0 ? "+" : ""}${tipChg.toFixed(2)}%`;
 
   // Divergence: price up + tone neg, or price down + tone pos
   const priceUp = tile.chg1d >= 0.05;
@@ -595,7 +587,7 @@ function HoverTooltip({ tooltip, layer, canvasW, canvasH, zh }: HoverTooltipProp
       <div style={{ color: "var(--text-2)", marginBottom: 5, fontSize: 10 }}>{tile.name}</div>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
         <span style={{ color: "var(--muted)" }}>{zh ? "价格" : "Price"}</span>
-        <span style={{ fontVariantNumeric: "tabular-nums" }}>${tile.price.toFixed(2)}</span>
+        <span style={{ fontVariantNumeric: "tabular-nums" }}>${(tile.price ?? 0).toFixed(2)}</span>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
         <span style={{ color: "var(--muted)" }}>{zh ? "涨跌" : "Chg 1D"}</span>
@@ -620,7 +612,7 @@ function HoverTooltip({ tooltip, layer, canvasW, canvasH, zh }: HoverTooltipProp
           {tile.doiPc != null && (
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
               <span style={{ color: "var(--muted)" }}>ΔOI P/C</span>
-              <span style={{ fontVariantNumeric: "tabular-nums" }}>{tile.doiPc.toFixed(2)}</span>
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>{(tile.doiPc ?? 0).toFixed(2)}</span>
             </div>
           )}
           {isDivergent && (

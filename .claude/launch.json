@@ -6,10 +6,7 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "cwd": "terminal",
-      "port": 3000,
-      "env": {
-        "FLOW_FIXTURE": "1"
-      }
+      "port": 3000
     }
   ]
 }
