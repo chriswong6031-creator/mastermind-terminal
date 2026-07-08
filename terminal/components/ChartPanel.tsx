@@ -534,6 +534,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const chart = chartRef.current, priceS = priceSeriesRef.current; if (!chart || !priceS) return;
     const inds = indicatorsRef.current;
     const overlayEntries: Omit<LegendEntry, "hidden">[] = [];
+    // Golden Oracle Confluence: not a plotted series but the flagship signal layer (BUY/SELL marks +
+    // verdict badge). List it FIRST on the price pane so it can be hidden (eye) or removed like any study.
+    if (inds.has("_oracle")) overlayEntries.push({ key: "_oracle", label: "Golden Oracle Confluence", kind: "overlay", isPine: false, noParams: true });
     for (const k of ["ema", "bb", "vwap", "vol"] as const) if (inds.has(k) && indSeriesRef.current.has(k)) overlayEntries.push({ key: k, label: labelOf(k), kind: "overlay", isPine: false });
     // custom scripts: OVERLAY ones (or errored ones) list on the price pane; each SUB-PANE script gets
     // its own pane meta below. An errored script still gets a legend row so the user sees + can remove it.
@@ -985,6 +988,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const tierBadge = (tier?: string | null) => (tier === "aplus" ? "A+" : tier === "quality" ? "Q" : "");
       const SLATE = "#7c8aa0";   // regime_blocked dim slate (no matching CSS token — inline hex)
       while (layer.firstChild) layer.removeChild(layer.firstChild);
+      // Golden Oracle Confluence is a toggleable/removable study: skip ALL signal draws (marks + side
+      // channels) when it's removed from the indicator set or hidden via the legend eye.
+      if (!indicatorsRef.current.has("_oracle") || hiddenRef.current.has("_oracle")) return;
 
       // GC v2: fast-reversal CUT is a caution, NOT an exit — render a small orange "•caution" dot below
       // the bar instead of the old down-pointing CUT pill (the ✕/exit look). Everything else keeps the pill.
@@ -1683,7 +1689,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   }, [pineKey]);
 
   // ── eye toggle / tf-visibility [hidden] → flip series visibility in place (no chart rebuild) ──
-  useEffect(() => { hiddenRef.current = hidden; applyHidden(); measureRef.current(); }, [hidden]); // eslint-disable-line
+  useEffect(() => { hiddenRef.current = hidden; applyHidden(); renderSignalsRef.current(); measureRef.current(); }, [hidden]); // eslint-disable-line
 
   // ────────────────────────────────────────────────────────────────────────────
   // EFFECT 4 — replay [replayIdx]. Slice from fullBarsRef; recompute indicators+sigMarks on the slice.
@@ -1839,19 +1845,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // eslint-disable-next-line
   }, [cmpDep]);
 
+  // Golden Oracle Confluence is a toggleable/removable study now: its verdict badge + detail chip only
+  // show while it's active AND not hidden via the legend eye. (Kept mounted with display:none so the
+  // imperative verdict painter can keep verdictRef current in the background — no remount staleness.)
+  const oracleVisible = indicators.has("_oracle") && !hidden.has("_oracle");
   return (
     <div className="chart-wrap">
       <div className="statusline">
         <span ref={statusRef} />
-        <span className="mm"><i style={{ background: "currentColor" }} /><span ref={verdictRef}>GOLDEN ORACLE</span></span>
+        <span className="mm" style={{ display: oracleVisible ? undefined : "none" }}><i style={{ background: "currentColor" }} /><span ref={verdictRef}>GOLDEN ORACLE</span></span>
         {replayIdx != null && <span className="mm" style={{ background: "rgba(232,179,57,.14)", borderColor: "rgba(232,179,57,.35)", color: "var(--signal)" }}><i style={{ background: "var(--signal)" }} />REPLAY</span>}
         {/* GC v2: toggle the early-dots + arm/confirm warning overlay (side channels) */}
-        <span className="mm" role="button" tabIndex={0} onClick={() => setShowDetail((v) => !v)}
+        {oracleVisible && <span className="mm" role="button" tabIndex={0} onClick={() => setShowDetail((v) => !v)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShowDetail((v) => !v); } }}
           title="Toggle early dots & structure-break warnings"
           style={{ cursor: "pointer", opacity: showDetail ? 1 : 0.5 }}>
           <i style={{ background: "var(--muted)" }} />{showDetail ? "⚠ detail" : "⚠ off"}
-        </span>
+        </span>}
       </div>
       <div ref={ref} style={{ position: "absolute", inset: 0 }} />
       <ChartOverlays
