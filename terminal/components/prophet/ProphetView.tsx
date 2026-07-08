@@ -29,9 +29,10 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flowGet } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
 import { makeProphetT } from "./prophetStrings";
-import { SignalCard } from "./SignalCard";
+import { SignalCard, planAsof, planConfidence, planPhase, planRecommendedAction } from "./SignalCard";
 import type { PlanSummary } from "./SignalCard";
 import { ConfidencePanel } from "./ConfidencePanel";
 import type { ConfidenceComponents } from "./ConfidencePanel";
@@ -41,7 +42,7 @@ import { OptionCard } from "./OptionCard";
 // ── API payload types ─────────────────────────────────────────────────────────
 
 interface ProphetIndexPayload {
-  asof: string;
+  asof?: string | null;
   cadence?: string;
   plans: PlanSummary[];
 }
@@ -55,13 +56,20 @@ function sortPlans(plans: PlanSummary[], mode: SortMode): PlanSummary[] {
   const copy = [...plans];
   switch (mode) {
     case "new":
-      // newest issuance first
-      return copy.sort((a, b) => new Date(b.asof).getTime() - new Date(a.asof).getTime());
-    case "best":
-      // highest management_confidence first
+      // newest issuance first — accepts both _signal_date (flat) and asof (nested)
       return copy.sort((a, b) => {
-        const ca = a.state?.management_confidence ?? 0;
-        const cb = b.state?.management_confidence ?? 0;
+        const ta = new Date(planAsof(a)).getTime();
+        const tb = new Date(planAsof(b)).getTime();
+        // Invalid dates sort to end
+        const fa = Number.isFinite(ta) ? ta : 0;
+        const fb = Number.isFinite(tb) ? tb : 0;
+        return fb - fa;
+      });
+    case "best":
+      // highest management_confidence first — accepts both flat and nested shapes
+      return copy.sort((a, b) => {
+        const ca = planConfidence(a) ?? 0;
+        const cb = planConfidence(b) ?? 0;
         return cb - ca;
       });
     case "gainers":
@@ -94,15 +102,16 @@ export function ProphetView() {
   // ── Fetch ──────────────────────────────────────────────────────────────────
 
   const fetchData = useCallback(async () => {
-    abortRef.current?.abort();
+    if (abortRef.current) { abortRef.current.abort(); }
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/flow?f=prophet_idx", { signal: ctrl.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: ProphetIndexPayload = await res.json();
+      // flowGet provides SWR caching; the AbortController only guards the unmount case.
+      const data = await flowGet("prophet_idx") as ProphetIndexPayload | null;
+      if (ctrl.signal.aborted) return;
+      if (!data) throw new Error("fetch error");
       setPayload(data);
       // Auto-select first plan if none selected
       if (data.plans?.length > 0) {
@@ -112,7 +121,7 @@ export function ProphetView() {
       if ((err as Error).name === "AbortError") return;
       setError((err as Error).message ?? "fetch error");
     } finally {
-      setLoading(false);
+      if (!ctrl.signal.aborted) setLoading(false);
     }
   }, []);
 
@@ -132,12 +141,8 @@ export function ProphetView() {
   function SortButton({ mode, label }: { mode: SortMode; label: string }) {
     return (
       <button
-        style={{
-          ...SORT_BTN,
-          background: sortMode === mode ? "var(--brand)" : "var(--panel-2)",
-          color: sortMode === mode ? "#fff" : "var(--text-2)",
-          borderColor: sortMode === mode ? "var(--brand)" : "var(--line)",
-        }}
+        className={`obs-chip${sortMode === mode ? " on" : ""}`}
+        style={SORT_CHIP_STYLE}
         onClick={() => setSortMode(mode)}
       >
         {label}
@@ -165,13 +170,23 @@ export function ProphetView() {
   return (
     <div style={OUTER}>
       {/* ── LEFT — signal stream ── */}
-      <div style={LEFT_PANE}>
-        {/* Sub-tabs */}
+      <div className="obs-card" style={LEFT_PANE}>
+        {/* Sub-tabs as pill nav */}
         <div style={SUBTAB_ROW}>
-          <SubTabButton tab="signals" label={t("tabSignals")} active={subTab} set={setSubTab} />
-          <SubTabButton tab="perf"    label={t("tabPerf")}    active={subTab} set={setSubTab} />
+          <nav className="obs-pillnav" style={{ padding: "3px", gap: 2 }}>
+            <button
+              className={`obs-pillnav-tab${subTab === "signals" ? " on" : ""}`}
+              style={{ padding: "5px 12px", fontSize: 12 }}
+              onClick={() => setSubTab("signals")}
+            >{t("tabSignals")}</button>
+            <button
+              className={`obs-pillnav-tab${subTab === "perf" ? " on" : ""}`}
+              style={{ padding: "5px 12px", fontSize: 12 }}
+              onClick={() => setSubTab("perf")}
+            >{t("tabPerf")}</button>
+          </nav>
           <div style={{ flex: 1 }} />
-          {/* Cadence + authority chips */}
+          {/* Cadence chip */}
           <span style={INFO_CHIP}>{t("cadenceLabel")}</span>
         </div>
 
@@ -212,7 +227,7 @@ export function ProphetView() {
       </div>
 
       {/* ── RIGHT — selected signal detail ── */}
-      <div style={RIGHT_PANE}>
+      <div className="obs-card" style={RIGHT_PANE}>
         {!selected ? (
           <div style={FULL_CENTER}>{t("noPlans")}</div>
         ) : (
@@ -236,10 +251,13 @@ function SelectedDetail({
 }) {
   const isBear   = plan.direction === "BEAR";
   const dirColor = isBear ? "var(--down)" : "var(--up)";
-  const dirBg    = isBear ? "rgba(240,86,107,.15)" : "rgba(38,194,129,.15)";
+  const dirBg    = isBear
+    ? "color-mix(in srgb, var(--down) 15%, transparent)"
+    : "color-mix(in srgb, var(--up) 15%, transparent)";
 
+  // Support both flat (plan.management_confidence / plan.phase) and nested (plan.state.*) shapes
   const state      = plan.state;
-  const confidence = state?.management_confidence ?? null;
+  const confidence = planConfidence(plan);
   const components = (state as { components?: ConfidenceComponents } | null | undefined)?.components ?? null;
   const geometry   = state?.geometry ?? null;
 
@@ -269,9 +287,9 @@ function SelectedDetail({
         <ConfidencePanel
           confidence={confidence}
           components={components}
-          phase={state?.phase ?? null}
+          phase={planPhase(plan)}
           change_reason={(state as { change_reason?: string | null } | null | undefined)?.change_reason ?? null}
-          recommended_action={state?.recommended_action ?? null}
+          recommended_action={planRecommendedAction(plan)}
           lang={lang}
         />
       </div>
@@ -331,34 +349,6 @@ function SelectedDetail({
   );
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
-
-function SubTabButton({
-  tab,
-  label,
-  active,
-  set,
-}: {
-  tab: SubTab;
-  label: string;
-  active: SubTab;
-  set: (t: SubTab) => void;
-}) {
-  const isActive = tab === active;
-  return (
-    <button
-      style={{
-        ...SUBTAB_BTN,
-        color: isActive ? "var(--text)" : "var(--text-2)",
-        borderBottom: isActive ? "2px solid var(--brand)" : "2px solid transparent",
-      }}
-      onClick={() => set(tab)}
-    >
-      {label}
-    </button>
-  );
-}
-
 // ── Style constants ───────────────────────────────────────────────────────────
 
 const OUTER: React.CSSProperties = {
@@ -370,13 +360,11 @@ const OUTER: React.CSSProperties = {
   overflow: "hidden",
 };
 
+// obs-card provides background/border/radius
 const LEFT_PANE: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
-  background: "var(--panel)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-lg)",
 };
 
 const RIGHT_PANE: React.CSSProperties = {
@@ -389,20 +377,10 @@ const RIGHT_PANE: React.CSSProperties = {
 const SUBTAB_ROW: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  borderBottom: "1px solid var(--line)",
-  padding: "0 10px",
+  borderBottom: "1px solid rgba(255,255,255,0.07)",
+  padding: "7px 10px",
   flexShrink: 0,
-  gap: 4,
-};
-
-const SUBTAB_BTN: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  borderBottom: "2px solid transparent",
-  padding: "9px 8px 7px",
-  font: "600 11px/1 var(--font-ui)",
-  cursor: "pointer",
-  transition: "color var(--t)",
+  gap: 6,
 };
 
 const SORT_ROW: React.CSSProperties = {
@@ -410,16 +388,14 @@ const SORT_ROW: React.CSSProperties = {
   gap: 4,
   padding: "8px 10px",
   flexShrink: 0,
-  borderBottom: "1px solid var(--line-2)",
+  borderBottom: "1px solid rgba(255,255,255,0.07)",
 };
 
-const SORT_BTN: React.CSSProperties = {
-  font: "600 9.5px/1 var(--font-ui)",
-  border: "1px solid",
-  borderRadius: "var(--r-pill)",
-  padding: "4px 9px",
-  cursor: "pointer",
-  transition: "background var(--t), color var(--t)",
+// compact override for obs-chip in sort row
+const SORT_CHIP_STYLE: React.CSSProperties = {
+  padding: "4px 10px",
+  fontSize: 10,
+  borderRadius: 8,
 };
 
 const CARD_LIST: React.CSSProperties = {
@@ -431,11 +407,10 @@ const CARD_LIST: React.CSSProperties = {
 const INFO_CHIP: React.CSSProperties = {
   font: "500 9px/1 var(--font-ui)",
   color: "var(--muted)",
-  border: "1px solid var(--line-2)",
+  border: "1px solid rgba(255,255,255,0.09)",
   borderRadius: "var(--r-pill)",
   padding: "2px 6px",
   whiteSpace: "nowrap",
-  margin: "6px 0",
 };
 
 const EMPTY_STATE: React.CSSProperties = {
@@ -498,7 +473,7 @@ const AUTH_CHIP: React.CSSProperties = {
   marginLeft: "auto",
   font: "500 9.5px/1 var(--font-ui)",
   color: "var(--muted)",
-  border: "1px solid var(--line-2)",
+  border: "1px solid rgba(255,255,255,0.09)",
   borderRadius: "var(--r-pill)",
   padding: "3px 8px",
   whiteSpace: "nowrap",
@@ -510,8 +485,8 @@ const RR_ROW: React.CSSProperties = {
   gap: 10,
   flexWrap: "wrap",
   padding: "8px 12px",
-  background: "var(--panel)",
-  border: "1px solid var(--line)",
+  background: "rgba(255,255,255,0.033)",
+  border: "1px solid rgba(255,255,255,0.09)",
   borderRadius: "var(--r-md)",
   marginBottom: 10,
 };
@@ -532,8 +507,8 @@ const RR_SUB: React.CSSProperties = {
 };
 
 const THESIS_BOX: React.CSSProperties = {
-  background: "var(--panel)",
-  border: "1px solid var(--line)",
+  background: "rgba(255,255,255,0.033)",
+  border: "1px solid rgba(255,255,255,0.09)",
   borderRadius: "var(--r-lg)",
   padding: "10px 12px",
   marginBottom: 10,
@@ -549,10 +524,10 @@ const THESIS_HEADER: React.CSSProperties = {
 };
 
 const SECTION_LABEL: React.CSSProperties = {
-  font: "600 10px/1 var(--font-ui)",
+  font: "600 10.5px/1 var(--font-ui)",
   color: "var(--text-2)",
   textTransform: "uppercase",
-  letterSpacing: ".06em",
+  letterSpacing: ".1em",
 };
 
 const THESIS_CAPTION: React.CSSProperties = {

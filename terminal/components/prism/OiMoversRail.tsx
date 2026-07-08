@@ -135,9 +135,9 @@ export function OiMoversRail({ movers, lang }: OiMoversRailProps) {
 
   if (processed.length === 0) {
     return (
-      <div style={RAIL_OUTER}>
-        <div style={RAIL_HEADER}>
-          <span style={RAIL_TITLE}>{t("oiMoversTitle")}</span>
+      <div className="obs-card" style={RAIL_OUTER}>
+        <div className="obs-card-hd" style={RAIL_HEADER}>
+          <span className="obs-lbl">{t("oiMoversTitle")}</span>
         </div>
         <div style={EMPTY_MSG}>{t("oiMoversEmpty")}</div>
       </div>
@@ -145,9 +145,9 @@ export function OiMoversRail({ movers, lang }: OiMoversRailProps) {
   }
 
   return (
-    <div style={RAIL_OUTER}>
-      <div style={RAIL_HEADER}>
-        <span style={RAIL_TITLE}>{t("oiMoversTitle")}</span>
+    <div className="obs-card" style={RAIL_OUTER}>
+      <div className="obs-card-hd" style={RAIL_HEADER}>
+        <span className="obs-lbl">{t("oiMoversTitle")}</span>
         <span style={RAIL_COUNT}>{processed.length}</span>
       </div>
 
@@ -155,7 +155,7 @@ export function OiMoversRail({ movers, lang }: OiMoversRailProps) {
         {processed.map((m, i) => {
           const isCall = m.right === "C";
           const isUp = m.d_oi >= 0;
-          const dirColor = isUp ? "var(--brand-2)" : "var(--down)";
+          const dirColor = isUp ? "var(--up)" : "var(--down)";
 
           return (
             <div key={`${m.root}-${m.strike}-${m.right}-${i}`} style={MOVER_ROW}>
@@ -208,9 +208,6 @@ export function OiMoversRail({ movers, lang }: OiMoversRailProps) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const RAIL_OUTER: React.CSSProperties = {
-  background: "var(--panel)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-md)",
   overflow: "hidden",
 };
 
@@ -218,17 +215,6 @@ const RAIL_HEADER: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 6,
-  padding: "6px 10px",
-  borderBottom: "1px solid var(--line-2)",
-  background: "var(--panel-2)",
-};
-
-const RAIL_TITLE: React.CSSProperties = {
-  fontSize: 10,
-  fontWeight: 700,
-  color: "var(--text-2)",
-  letterSpacing: "0.06em",
-  textTransform: "uppercase",
 };
 
 const RAIL_COUNT: React.CSSProperties = {

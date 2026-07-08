@@ -1,14 +1,6 @@
 /**
  * RadarStrip — Smart Money Radar.
- *
- * Surfaces top unusual_names from the feed payload, ranked by prem_z (descending).
- * Honest label: "unusual vs 252d baseline". No buy/sell assertion styling.
- *
- * Props:
- *   feed — FeedPayload (unusual_names array)
- *   lang — "en" | "zh"
- *
- * Presentational only — no fetching.
+ * Observatory restyle: obs-card glass panel, obs-lbl micro-labels.
  */
 "use client";
 import { useMemo } from "react";
@@ -49,10 +41,10 @@ function fmtPrem(v: number): string {
   return `$${v.toFixed(0)}`;
 }
 
-/** Map a prem_z into a magnitude-based accent — no buy/sell color. */
+/** z-score → magnitude accent color (no buy/sell). */
 function zAccent(z: number | null): string {
   if (z == null) return "var(--text-2)";
-  if (z >= 3.5) return "var(--signal)";   // amber — notable magnitude
+  if (z >= 3.5) return "var(--signal)";
   if (z >= 2.5) return "var(--text)";
   return "var(--text-2)";
 }
@@ -63,9 +55,9 @@ function zBarWidth(z: number | null): number {
   return Math.min(100, Math.round((z / 5) * 100));
 }
 
-// ─── Component ────────────────────────────────────────────────────────────
-
 const MAX_ROWS = 8;
+
+// ─── Component ────────────────────────────────────────────────────────────
 
 export function RadarStrip({ feed, lang }: RadarStripProps) {
   const zh = lang === "zh";
@@ -73,7 +65,6 @@ export function RadarStrip({ feed, lang }: RadarStripProps) {
   const rows = useMemo(() => {
     return [...feed.unusual_names]
       .sort((a, b) => {
-        // null z goes last
         const az = a.prem_z ?? -Infinity;
         const bz = b.prem_z ?? -Infinity;
         return bz - az;
@@ -86,140 +77,69 @@ export function RadarStrip({ feed, lang }: RadarStripProps) {
     : pick(zh, FD.radarBaseline.en, FD.radarBaseline.zh);
 
   return (
-    <section style={styles.strip} data-tut="flow-radar">
-      {/* ── Header ── */}
-      <div style={styles.header}>
-        <span style={styles.title}>{pick(zh, FD.smartMoneyRadar.en, FD.smartMoneyRadar.zh)}</span>
-        <span style={styles.note}>{note}</span>
+    <section className="obs-card obs-fd-radar" data-tut="flow-radar" style={{ borderRadius: 0, border: "none", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0, maxHeight: 180, overflowY: "auto" }}>
+      {/* Header */}
+      <div className="obs-card-hd">
+        <span className="obs-lbl">{pick(zh, FD.smartMoneyRadar.en, FD.smartMoneyRadar.zh)}</span>
+        <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>{note}</span>
       </div>
 
-      {/* ── Column headers ── */}
-      <div style={styles.colHead}>
-        <span style={{ flex: "0 0 54px" }}>{pick(zh, "Ticker", "标的")}</span>
-        <span style={{ flex: "0 0 40px", textAlign: "right" }}>z</span>
+      {/* Column headers */}
+      <div className="obs-fd-radar-col-head">
+        <span style={{ flex: "0 0 44px" }}>{pick(zh, "Ticker", "标的")}</span>
+        <span style={{ flex: "0 0 38px", textAlign: "right" }}>z</span>
         <span style={{ flex: 1, textAlign: "right" }}>{pick(zh, "Gross Prem", "总权利金")}</span>
-        <span style={{ flex: "0 0 38px", textAlign: "right" }}>{pick(zh, "C%", "认购%")}</span>
+        <span style={{ flex: "0 0 36px", textAlign: "right" }}>{pick(zh, "C%", "认购%")}</span>
       </div>
 
-      {/* ── Rows ── */}
+      {/* Rows */}
       {rows.length === 0 && (
-        <div style={styles.empty}>{pick(zh, "No unusual activity", "暂无异常活动")}</div>
+        <div style={{ padding: "12px", fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
+          {pick(zh, "No unusual activity", "暂无异常活动")}
+        </div>
       )}
 
-      {rows.map((row) => (
-        <RadarRow key={row.root} row={row} zh={zh} />
-      ))}
+      <div className="obs-fd-radar-rows">
+        {rows.map((row) => <RadarRow key={row.root} row={row} zh={zh} />)}
+      </div>
     </section>
   );
 }
 
 // ─── RadarRow ─────────────────────────────────────────────────────────────
 
-interface RadarRowProps {
-  row: UnusualName;
-  zh: boolean;
-}
-
-function RadarRow({ row, zh }: RadarRowProps) {
+function RadarRow({ row, zh }: { row: UnusualName; zh: boolean }) {
   const accent = zAccent(row.prem_z);
   const barW = zBarWidth(row.prem_z);
   const callPct = Math.round(row.call_prem_share * 100);
   const group = pick(zh, row.group, row.group_zh);
 
   return (
-    <div style={styles.row}>
-      {/* Ticker + group + z-bar */}
-      <div style={{ flex: "0 0 54px", minWidth: 0 }}>
-        <div style={{ fontSize: 12, fontWeight: 650, color: "var(--text)" }}>{row.root}</div>
+    <div className="obs-fd-radar-row">
+      {/* Ticker + group */}
+      <div style={{ flex: "0 0 44px", minWidth: 0 }}>
+        <div className="obs-fd-radar-ticker">{row.root}</div>
         <div style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {group}
         </div>
-        {/* magnitude bar */}
-        <div style={styles.barTrack}>
-          <div style={{ ...styles.barFill, width: `${barW}%`, background: accent }} />
+        {/* Magnitude bar */}
+        <div style={{ height: 2, background: "rgba(255,255,255,0.07)", borderRadius: 1, marginTop: 3, overflow: "hidden", width: "100%" }}>
+          <div style={{ height: "100%", borderRadius: 1, background: accent, width: `${barW}%` }} />
         </div>
       </div>
 
       {/* z-score */}
-      <div style={{ flex: "0 0 40px", textAlign: "right", fontSize: 12, fontWeight: 600, color: accent, fontVariantNumeric: "tabular-nums" }}>
+      <div className="obs-fd-radar-z" style={{ color: accent }}>
         {row.prem_z != null ? row.prem_z.toFixed(1) : "—"}
       </div>
 
       {/* Gross premium */}
-      <div style={{ flex: 1, textAlign: "right", fontSize: 12, fontWeight: 600, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
-        {fmtPrem(row.gross_premium_today)}
-      </div>
+      <div className="obs-fd-radar-prem">{fmtPrem(row.gross_premium_today)}</div>
 
       {/* Call share */}
-      <div style={{ flex: "0 0 38px", textAlign: "right", fontSize: 11, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
+      <div style={{ flex: "0 0 36px", textAlign: "right", fontSize: 11, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
         {callPct}%
       </div>
     </div>
   );
 }
-
-// ─── Styles ───────────────────────────────────────────────────────────────
-
-const styles: Record<string, React.CSSProperties> = {
-  strip: {
-    borderBottom: "1px solid var(--line)",
-    paddingBottom: 4,
-  },
-  header: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: 8,
-    padding: "8px 12px 4px",
-    flexWrap: "wrap",
-  },
-  title: {
-    fontSize: 11,
-    fontWeight: 700,
-    color: "var(--text)",
-    letterSpacing: "0.04em",
-    textTransform: "uppercase",
-  },
-  note: {
-    fontSize: 10,
-    color: "var(--muted)",
-    fontStyle: "italic",
-  },
-  colHead: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "2px 12px 4px",
-    fontSize: 10,
-    fontWeight: 600,
-    color: "var(--muted)",
-    fontVariantNumeric: "tabular-nums",
-    borderBottom: "1px solid var(--line-2)",
-  },
-  row: {
-    display: "flex",
-    alignItems: "flex-start",
-    gap: 6,
-    padding: "5px 12px",
-    borderBottom: "1px solid var(--line-2)",
-    transition: "background var(--t)",
-    cursor: "default",
-  },
-  barTrack: {
-    height: 2,
-    background: "var(--panel-3)",
-    borderRadius: 1,
-    marginTop: 4,
-    overflow: "hidden",
-    width: "100%",
-  },
-  barFill: {
-    height: "100%",
-    borderRadius: 1,
-  },
-  empty: {
-    padding: "12px",
-    fontSize: 11,
-    color: "var(--muted)",
-    textAlign: "center",
-  },
-};

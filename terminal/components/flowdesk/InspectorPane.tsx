@@ -1,19 +1,12 @@
 /**
  * InspectorPane — full field breakdown of a selected flow event.
+ * Observatory restyle: obs-card glass shell, lg RingGauge hero, kv-grid,
+ * amber obs-note for direction caveat.
  *
- * Props:
- *   event      — selected FlowEvent | null
- *   tickerCtx  — TickerPayload | null (per-ticker drill: minutes sparkline + top strikes)
- *   lang       — "en" | "zh"
- *
- * Displays:
- *   - All event fields in labelled rows
- *   - Score component bars from computeFlowScore(event).components
- *   - Soft-direction note with tick-rule caveat (honesty doctrine)
- *   - Top contracts from tickerCtx if available
- *   - Empty state: "Select a flow event"
- *
- * Presentational only — no fetching.
+ * HONESTY DOCTRINE (unchanged):
+ *  - Direction shown as soft "lean" chip only
+ *  - Tick-rule caveat in amber obs-note
+ *  - No "validated" claims
  */
 "use client";
 import { useMemo } from "react";
@@ -21,6 +14,7 @@ import { pick, fmtDate } from "../../lib/finFormat";
 import type { Lang } from "../../lib/i18n";
 import { computeFlowScore } from "../../lib/flowScore";
 import { FD, getFlowStr } from "../../lib/flowdeskStrings";
+import { RingGauge } from "../ui/RingGauge";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -79,7 +73,6 @@ function fmtTs(ts: string): string {
 }
 
 function fmtExp(exp: string): string {
-  // "2026-07-18" → "Jul 18"
   return fmtDate(exp, { short: true });
 }
 
@@ -88,16 +81,14 @@ function bool3(v: boolean | null | undefined, zh: boolean): string {
   return v ? pick(zh, "Yes", "是") : pick(zh, "No", "否");
 }
 
-/** Soft direction label — never asserts NBBO-confirmed direction. */
 function sideLean(side: Side, zh: boolean): string {
   if (side === "mixed") return pick(zh, "Mixed", "混合");
   if (side === "~buy")  return pick(zh, "~Buy lean", "~偏多");
   return pick(zh, "~Sell lean", "~偏空");
 }
 
-/** Tick-rule caveat — always shown alongside direction */
-const TICK_CAVEAT_EN = "Tick-rule derived. No NBBO quote confirmed. Treat as soft heuristic only.";
-const TICK_CAVEAT_ZH = "基于逐笔规则推断，未经NBBO报价验证，仅供参考。";
+const TICK_CAVEAT_EN = "Lean is tick-rule derived — magnitude is the reliable read. Display-only; forward ledger accruing.";
+const TICK_CAVEAT_ZH = "方向倾向基于逐笔规则推断——大小才是可靠的读取。仅供参考；前瞻账本累积中。";
 
 // ─── Component ────────────────────────────────────────────────────────────
 
@@ -106,8 +97,8 @@ export function InspectorPane({ event, tickerCtx, lang }: InspectorPaneProps) {
 
   if (!event) {
     return (
-      <div style={styles.pane} data-tut="flow-inspector">
-        <div style={styles.empty}>
+      <div className="obs-card obs-fd-inspector" data-tut="flow-inspector">
+        <div className="obs-insp-empty">
           {pick(zh, FD.inspectorEmpty.en, FD.inspectorEmpty.zh)}
         </div>
       </div>
@@ -115,7 +106,7 @@ export function InspectorPane({ event, tickerCtx, lang }: InspectorPaneProps) {
   }
 
   return (
-    <div style={styles.pane} data-tut="flow-inspector">
+    <div className="obs-card obs-fd-inspector" data-tut="flow-inspector">
       <EventDetail event={event} zh={zh} tickerCtx={tickerCtx} />
     </div>
   );
@@ -124,56 +115,80 @@ export function InspectorPane({ event, tickerCtx, lang }: InspectorPaneProps) {
 // ─── EventDetail ──────────────────────────────────────────────────────────
 
 function EventDetail({ event, zh, tickerCtx }: { event: FlowEvent; zh: boolean; tickerCtx: TickerPayload | null }) {
-  const { score, tier, components } = useMemo(
-    // Cast dte_bucket to the scorer's union type — InspectorPane uses `string`
-    // from its own FlowEvent definition; the scorer requires the narrower union.
+  const rawScore = useMemo(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     () => computeFlowScore(event as any),
     [event],
   );
+  const score = isNaN(rawScore.score) ? 0 : rawScore.score;
+  const { tier, components } = rawScore;
 
   const contractLabel = `${event.root} ${event.strike}${event.right} ${fmtExp(event.exp)}`;
+  const premStr = fmtPrem(event.premium);
 
   return (
     <>
-      {/* ── Contract header ── */}
-      <div style={styles.contractHeader}>
-        <span style={styles.contractLabel}>{contractLabel}</span>
-        <span style={{ ...styles.tierBadge, background: tierBg(tier) }}>{tier}</span>
+      {/* ── Header ── */}
+      <div className="obs-insp-head">
+        <span className="obs-insp-head-ticker">{event.root}</span>
+        <span className="obs-insp-head-ct">{event.strike}{event.right} · {fmtExp(event.exp)} · {premStr}</span>
+        <span
+          className="obs-insp-tier"
+          style={{ background: tierBg(tier), color: "var(--text)" }}
+        >
+          {tier}
+        </span>
       </div>
+      <div className="obs-card-hr" />
 
-      {/* ── Score bar ── */}
-      <div style={styles.scoreBlock}>
-        <div style={styles.scoreRow}>
-          <span style={styles.scoreLabel}>{pick(zh, "Flow Score", "流量评分")}</span>
-          <span style={{ ...styles.scoreVal, color: scoreColor(score) }}>{score}</span>
-        </div>
-        <div style={styles.scoreTrack}>
-          <div style={{ ...styles.scoreFill, width: `${score}%`, background: scoreColor(score) }} />
-        </div>
-
-        {/* Score components */}
-        <div style={styles.componentsBlock}>
+      {/* ── Big ring + component bars ── */}
+      <div className="obs-insp-bigring-row">
+        <RingGauge value={score} size="lg" tone="auto" />
+        <div className="obs-insp-comp-bars">
           {components.map((c) => (
             <ComponentBar key={c.key} component={c} zh={zh} />
           ))}
         </div>
       </div>
+      <div className="obs-card-hr" />
 
-      {/* ── Soft direction note ── */}
-      <div style={styles.dirBlock}>
-        <div style={styles.dirRow}>
-          <span style={styles.fieldKey}>{pick(zh, "Direction lean", "方向倾向")}</span>
-          <span style={styles.dirChip}>{sideLean(event.side, zh)}</span>
-        </div>
-        <div style={styles.dirCaveat}>
-          {pick(zh, TICK_CAVEAT_EN, TICK_CAVEAT_ZH)}
-        </div>
+      {/* ── KV grid (spot / IV / OI / etc) — shown when tickerCtx available ── */}
+      {tickerCtx && (
+        <>
+          <div className="obs-insp-kvgrid">
+            <div>
+              <span className="obs-lbl">{pick(zh, "Gross", "总权利金")}</span>
+              <span className="obs-insp-kv-val num">{fmtPrem(tickerCtx.day.gross)}</span>
+            </div>
+            <div>
+              <span className="obs-lbl">{pick(zh, "Call%", "认购%")}</span>
+              <span className="obs-insp-kv-val num">{Math.round(tickerCtx.day.call_share * 100)}%</span>
+            </div>
+            <div>
+              <span className="obs-lbl">{pick(zh, "Events", "事件数")}</span>
+              <span className="obs-insp-kv-val num">{tickerCtx.day.n_events}</span>
+            </div>
+            {tickerCtx.day.prem_z != null && (
+              <div>
+                <span className="obs-lbl">{pick(zh, "Day Z", "日Z值")}</span>
+                <span className="obs-insp-kv-val num">{tickerCtx.day.prem_z.toFixed(2)}</span>
+              </div>
+            )}
+          </div>
+          <div className="obs-card-hr" />
+        </>
+      )}
+
+      {/* ── Direction lean + amber honesty note ── */}
+      <div className="obs-insp-dir-block">
+        <span className="obs-lbl">{pick(zh, "Direction lean", "方向倾向")}</span>
+        <span className="obs-insp-dir-chip">{sideLean(event.side, zh)}</span>
       </div>
+      <div className="obs-note">{pick(zh, TICK_CAVEAT_EN, TICK_CAVEAT_ZH)}</div>
 
-      {/* ── Field breakdown ── */}
-      <div style={styles.section}>
-        <div style={styles.sectionLabel}>{pick(zh, "Event Fields", "事件字段")}</div>
+      {/* ── Event field breakdown ── */}
+      <div className="obs-insp-section">
+        <div className="obs-insp-section-label">{pick(zh, "Event Fields", "事件字段")}</div>
 
         <FieldRow k={pick(zh, "Time (ET)", "时间(ET)")} v={fmtTs(event.ts)} />
         <FieldRow k={pick(zh, "Ticker", "标的")} v={event.root} />
@@ -209,9 +224,21 @@ function EventDetail({ event, zh, tickerCtx }: { event: FlowEvent; zh: boolean; 
         <FieldRow k={pick(zh, "Signing", "签名来源")} v={event.signing_source} />
       </div>
 
-      {/* ── Ticker context ── */}
-      {tickerCtx && (
-        <TickerContext ctx={tickerCtx} zh={zh} />
+      {/* ── Ticker context (top contracts) ── */}
+      {tickerCtx && tickerCtx.top_contracts.length > 0 && (
+        <div className="obs-insp-section">
+          <div className="obs-insp-section-label">
+            {pick(zh, `${tickerCtx.root} — Top Contracts`, `${tickerCtx.root} — 主要合约`)}
+          </div>
+          {tickerCtx.top_contracts.slice(0, 5).map((c, i) => (
+            <div key={i} className="obs-insp-contract-row">
+              <span className="obs-insp-field-key">
+                {`${c.right} ${c.strike} ${fmtExp(c.exp)}`}
+              </span>
+              <span className="obs-insp-field-val num">{fmtPrem(c.premium)}</span>
+            </div>
+          ))}
+        </div>
       )}
     </>
   );
@@ -220,66 +247,26 @@ function EventDetail({ event, zh, tickerCtx }: { event: FlowEvent; zh: boolean; 
 // ─── ComponentBar ─────────────────────────────────────────────────────────
 
 interface ScoreComponent {
-  // flowScore exports `.key` (not `.name`); accept both for compat
-  key?: string;
-  name?: string;
+  key: string;
   label?: string;
   label_zh?: string;
-  value: number;   // 0-100 contribution
-  weight: number;  // fraction of total score
+  value: number;
+  weight: number;
 }
 
 function ComponentBar({ component, zh }: { component: ScoreComponent; zh: boolean }) {
-  const id = component.key ?? component.name ?? "";
+  const id = component.key ?? "";
   const label = zh
     ? (component.label_zh || id)
     : (component.label || id);
 
   return (
-    <div style={styles.compRow}>
-      <span style={styles.compLabel}>{label}</span>
-      <div style={styles.compTrack}>
-        <div style={{
-          ...styles.compFill,
-          width: `${Math.min(100, component.value)}%`,
-          opacity: 0.8,
-        }} />
+    <div className="obs-insp-crow">
+      <span>{label}</span>
+      <div className="obs-insp-track">
+        <i className="obs-insp-track-fill" style={{ width: `${Math.min(100, component.value)}%` }} />
       </div>
-      <span style={styles.compVal}>{component.value.toFixed(0)}</span>
-    </div>
-  );
-}
-
-// ─── TickerContext ─────────────────────────────────────────────────────────
-
-function TickerContext({ ctx, zh }: { ctx: TickerPayload; zh: boolean }) {
-  return (
-    <div style={styles.section}>
-      <div style={styles.sectionLabel}>
-        {pick(zh, `${ctx.root} — Today`, `${ctx.root} — 今日`)}
-      </div>
-      <FieldRow k={pick(zh, "Gross Premium", "总权利金")} v={fmtPrem(ctx.day.gross)} />
-      <FieldRow k={pick(zh, "Call Share", "认购占比")} v={`${Math.round(ctx.day.call_share * 100)}%`} />
-      <FieldRow k={pick(zh, "Events", "事件数")} v={String(ctx.day.n_events)} />
-      {ctx.day.prem_z != null && (
-        <FieldRow k={pick(zh, "Day Prem Z", "日权利金Z")} v={ctx.day.prem_z.toFixed(2)} />
-      )}
-
-      {ctx.top_contracts.length > 0 && (
-        <>
-          <div style={{ ...styles.sectionLabel, marginTop: 8, marginBottom: 4 }}>
-            {pick(zh, "Top Contracts", "主要合约")}
-          </div>
-          {ctx.top_contracts.slice(0, 5).map((c, i) => (
-            <div key={i} style={styles.contractRow}>
-              <span style={styles.contractRowLabel}>
-                {`${c.right} ${c.strike} ${fmtExp(c.exp)}`}
-              </span>
-              <span style={styles.contractRowVal}>{fmtPrem(c.premium)}</span>
-            </div>
-          ))}
-        </>
-      )}
+      <span className="obs-insp-crow-val num">{isNaN(component.value) ? "—" : component.value.toFixed(0)}</span>
     </div>
   );
 }
@@ -288,225 +275,22 @@ function TickerContext({ ctx, zh }: { ctx: TickerPayload; zh: boolean }) {
 
 function FieldRow({ k, v, note }: { k: string; v: string; note?: string }) {
   return (
-    <div style={styles.fieldRow}>
-      <span style={styles.fieldKey}>{k}</span>
-      <span style={styles.fieldVal}>
+    <div className="obs-insp-field-row">
+      <span className="obs-insp-field-key">{k}</span>
+      <span className="obs-insp-field-val">
         {v}
-        {note && <span style={styles.fieldNote}> ({note})</span>}
+        {note && <span className="obs-insp-field-note"> ({note})</span>}
       </span>
     </div>
   );
 }
 
-// ─── Score color helpers ───────────────────────────────────────────────────
-
-function scoreColor(score: number): string {
-  if (score >= 75) return "var(--signal)";
-  if (score >= 50) return "var(--brand-2)";
-  return "var(--text-2)";
-}
+// ─── Tier background helpers ───────────────────────────────────────────────
 
 function tierBg(tier: string): string {
   if (tier === "ELITE")  return "rgba(157,134,255,0.15)";
   if (tier === "STRONG") return "rgba(232,163,61,0.13)";
   if (tier === "HIGH")   return "rgba(77,130,255,0.13)";
   if (tier === "MEDIUM") return "rgba(134,141,156,0.1)";
-  return "rgba(90,97,111,0.08)"; // LOW or unknown
+  return "rgba(90,97,111,0.08)";
 }
-
-// ─── Styles ───────────────────────────────────────────────────────────────
-
-const styles: Record<string, React.CSSProperties> = {
-  pane: {
-    display: "flex",
-    flexDirection: "column",
-    height: "100%",
-    overflowY: "auto",
-    background: "var(--panel)",
-    borderLeft: "1px solid var(--line)",
-    minWidth: 240,
-    maxWidth: 320,
-    flexShrink: 0,
-  },
-  empty: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    height: "100%",
-    fontSize: 12,
-    color: "var(--muted)",
-    padding: 16,
-    textAlign: "center",
-  },
-  contractHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "10px 12px 6px",
-    borderBottom: "1px solid var(--line-2)",
-    gap: 8,
-  },
-  contractLabel: {
-    fontSize: 13,
-    fontWeight: 700,
-    color: "var(--text)",
-    fontVariantNumeric: "tabular-nums",
-  },
-  tierBadge: {
-    fontSize: 10,
-    fontWeight: 700,
-    color: "var(--text)",
-    borderRadius: "var(--r-pill)",
-    padding: "2px 8px",
-    letterSpacing: "0.05em",
-  },
-  scoreBlock: {
-    padding: "8px 12px",
-    borderBottom: "1px solid var(--line-2)",
-  },
-  scoreRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "baseline",
-    marginBottom: 4,
-  },
-  scoreLabel: {
-    fontSize: 10,
-    fontWeight: 600,
-    color: "var(--text-2)",
-    textTransform: "uppercase",
-    letterSpacing: "0.06em",
-  },
-  scoreVal: {
-    fontSize: 18,
-    fontWeight: 700,
-    fontVariantNumeric: "tabular-nums",
-  },
-  scoreTrack: {
-    height: 4,
-    background: "var(--panel-3)",
-    borderRadius: 2,
-    overflow: "hidden",
-    marginBottom: 8,
-  },
-  scoreFill: {
-    height: "100%",
-    borderRadius: 2,
-    transition: "width 0.3s ease",
-  },
-  componentsBlock: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 4,
-  },
-  compRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-  },
-  compLabel: {
-    fontSize: 10,
-    color: "var(--text-2)",
-    flex: "0 0 90px",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-  compTrack: {
-    flex: 1,
-    height: 3,
-    background: "var(--panel-3)",
-    borderRadius: 2,
-    overflow: "hidden",
-  },
-  compFill: {
-    height: "100%",
-    background: "var(--brand-2)",
-    borderRadius: 2,
-    transition: "width 0.3s ease",
-  },
-  compVal: {
-    fontSize: 10,
-    color: "var(--text-2)",
-    fontVariantNumeric: "tabular-nums",
-    flex: "0 0 24px",
-    textAlign: "right",
-  },
-  dirBlock: {
-    padding: "8px 12px",
-    borderBottom: "1px solid var(--line-2)",
-  },
-  dirRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 4,
-  },
-  dirChip: {
-    fontSize: 11,
-    fontWeight: 650,
-    color: "var(--text-2)",
-    background: "var(--panel-3)",
-    borderRadius: "var(--r-pill)",
-    padding: "2px 8px",
-  },
-  dirCaveat: {
-    fontSize: 10,
-    color: "var(--muted)",
-    fontStyle: "italic",
-    lineHeight: 1.4,
-  },
-  section: {
-    padding: "8px 12px",
-    borderBottom: "1px solid var(--line-2)",
-  },
-  sectionLabel: {
-    fontSize: 10,
-    fontWeight: 600,
-    color: "var(--muted)",
-    letterSpacing: "0.07em",
-    textTransform: "uppercase",
-    marginBottom: 6,
-  },
-  fieldRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "baseline",
-    marginBottom: 3,
-    gap: 6,
-  },
-  fieldKey: {
-    fontSize: 11,
-    color: "var(--text-2)",
-    flexShrink: 0,
-  },
-  fieldVal: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: "var(--text)",
-    fontVariantNumeric: "tabular-nums",
-    textAlign: "right",
-    wordBreak: "break-all",
-  },
-  fieldNote: {
-    fontWeight: 400,
-    color: "var(--muted)",
-    fontSize: 10,
-  },
-  contractRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    marginBottom: 3,
-  },
-  contractRowLabel: {
-    fontSize: 11,
-    color: "var(--text-2)",
-    fontVariantNumeric: "tabular-nums",
-  },
-  contractRowVal: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: "var(--text)",
-    fontVariantNumeric: "tabular-nums",
-  },
-};

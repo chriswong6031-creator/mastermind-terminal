@@ -3,18 +3,38 @@ import {
   memo,
   useCallback, useEffect, useMemo, useRef, useState,
 } from "react";
+import dynamic from "next/dynamic";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { useLang, useT } from "@/lib/i18n";
 import { windowGexRows } from "@/lib/windowGexRows.mjs";
+import { flowPrefetch } from "@/lib/flowClientCache";
 import {
   createChart, LineSeries, AreaSeries,
   type IChartApi, type ISeriesApi,
 } from "lightweight-charts";
-import { FlowDeskView } from "@/components/flowdesk/FlowDeskView";
-import { GexDeskView } from "@/components/gexdesk/GexDeskView";
-import { PrismView } from "@/components/prism/PrismView";
-import { ProphetView } from "@/components/prophet/ProphetView";
+
+// ── Code-split heavy tab sub-views (ssr:false — client-only, chart/canvas heavy) ──
+// Each tab is lazy-loaded on first visit; subsequent switches are instant (keep-alive).
+function TabSkeleton() {
+  return <div className="fin-empty" role="status" style={{ color: "var(--muted)" }}>Loading…</div>;
+}
+const FlowDeskView = dynamic(
+  () => import("@/components/flowdesk/FlowDeskView").then((m) => ({ default: m.FlowDeskView })),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
+const GexDeskView = dynamic(
+  () => import("@/components/gexdesk/GexDeskView").then((m) => ({ default: m.GexDeskView })),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
+const PrismView = dynamic(
+  () => import("@/components/prism/PrismView").then((m) => ({ default: m.PrismView })),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
+const ProphetView = dynamic(
+  () => import("@/components/prophet/ProphetView").then((m) => ({ default: m.ProphetView })),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
@@ -1028,15 +1048,21 @@ export default function OptionsHubView() {
 
   // ── Tab state from URL ?tab= ──────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<TabKey>("tape");
+  // Track which tabs have been visited so they stay mounted (keep-alive pattern).
+  const [visitedTabs, setVisitedTabs] = useState<Set<TabKey>>(() => new Set<TabKey>(["tape"]));
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get("tab") as TabKey | null;
-    if (tab && TABS.some((tb) => tb.key === tab)) setActiveTab(tab);
+    if (tab && TABS.some((tb) => tb.key === tab)) {
+      setActiveTab(tab);
+      setVisitedTabs((prev) => { const next = new Set(prev); next.add(tab); return next; });
+    }
   }, []);
 
   function switchTab(tab: TabKey) {
     setActiveTab(tab);
+    setVisitedTabs((prev) => { const next = new Set(prev); next.add(tab); return next; });
     const u = new URL(window.location.href);
     u.searchParams.set("tab", tab);
     window.history.replaceState({}, "", u.toString());
@@ -1129,6 +1155,10 @@ export default function OptionsHubView() {
         if (fr.ok) { const fj = await fr.json() as FeedPayload; setFeed(fj); setLastFeedTs(fj.asof); setFetchError(false); } else { setFetchError(true); }
         if (hr.ok) { const hj = await hr.json() as HeatPayload; setHeat(hj); }
       } catch { setFetchError(true); }
+      // Warm secondary feeds in the background so first tab switches are fast.
+      flowPrefetch("tide");
+      flowPrefetch("manifest");
+      flowPrefetch("prophet_idx");
     })();
     pollRef.current = setInterval(doFetch, 45_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -1360,12 +1390,19 @@ export default function OptionsHubView() {
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="app2">
+    <div className="app2 obs obs-ambient">
       <header className="topbar">
         <BrandLockup />
         <div className="tdiv" />
         <span className="page-title">{t("flow", "Options")}</span>
         <div className="spacer" />
+        {/* Live status area */}
+        {(activeTab === "tape" || activeTab === "tide") && !feedUnavailable && !feedDelayed && (
+          <span style={{ display: "flex", alignItems: "center", gap: 6, marginRight: 10, fontSize: 12, color: "var(--text-2)" }}>
+            <span className="obs-live-dot" />
+            {lang === "zh" ? "实时" : "Live"}
+          </span>
+        )}
         {lastFeedTs && (
           <span style={{ color: "var(--text-dim)", fontSize: 11, marginRight: 12 }}>
             {t("asOf", "as of")} {fmtAsof(lastFeedTs)}
@@ -1390,19 +1427,21 @@ export default function OptionsHubView() {
 
       <main className="main2" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
 
-        {/* ── Tab bar ── */}
-        <div className="hub-tab-bar">
-          {TABS.map((tb) => (
-            <button
-              key={tb.key}
-              className={`hub-tab${activeTab === tb.key ? " on" : ""}`}
-              onClick={() => switchTab(tb.key)}
-            >
-              {lang === "zh"
-                ? t(tb.zhKey, tb.key)
-                : t(tb.enKey, tb.key)}
-            </button>
-          ))}
+        {/* ── Tab bar (Observatory pill-nav) ── */}
+        <div style={{ display: "flex", alignItems: "center", padding: "8px 14px", borderBottom: "1px solid var(--line)", flexShrink: 0, gap: 8 }}>
+          <nav className="obs-pillnav" aria-label={lang === "zh" ? "期权工具选项卡" : "Options Hub tabs"}>
+            {TABS.map((tb) => (
+              <button
+                key={tb.key}
+                className={`obs-pillnav-tab${activeTab === tb.key ? " on" : ""}`}
+                onClick={() => switchTab(tb.key)}
+              >
+                {lang === "zh"
+                  ? t(tb.zhKey, tb.key)
+                  : t(tb.enKey, tb.key)}
+              </button>
+            ))}
+          </nav>
         </div>
 
         {/* ── Live-feed status banner (Tape + Tide are intraday-live) ── */}
@@ -1438,7 +1477,12 @@ export default function OptionsHubView() {
         <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
 
           {/* ═══ DESK TAB ══════════════════════════════════════════════════ */}
-          {activeTab === "desk" && <FlowDeskView />}
+          {/* Keep-alive: stay mounted once visited so tab switches are instant. */}
+          {visitedTabs.has("desk") && (
+            <div style={{ flex: 1, overflow: "hidden", display: activeTab === "desk" ? "flex" : "none", flexDirection: "column", minHeight: 0 }}>
+              <FlowDeskView />
+            </div>
+          )}
 
           {/* ═══ TAPE TAB ═══════════════════════════════════════════════════ */}
           {activeTab === "tape" && (
@@ -2436,22 +2480,22 @@ export default function OptionsHubView() {
               All those state vars / components are still defined above and remain available
               for any wave that imports or extends this file.
               ──────────────────────────────────────────────────────────────────── */}
-          {activeTab === "gex" && (
-            <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
+          {visitedTabs.has("gex") && (
+            <div style={{ flex: 1, overflow: "hidden", display: activeTab === "gex" ? "flex" : "none", minHeight: 0 }}>
               <GexDeskView />
             </div>
           )}
 
           {/* ═══ PRISM TAB ══════════════════════════════════════════════════ */}
-          {activeTab === "prism" && (
-            <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
+          {visitedTabs.has("prism") && (
+            <div style={{ flex: 1, overflow: "hidden", display: activeTab === "prism" ? "flex" : "none", minHeight: 0 }}>
               <PrismView />
             </div>
           )}
 
           {/* ═══ PROPHET TAB ════════════════════════════════════════════════ */}
-          {activeTab === "prophet" && (
-            <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
+          {visitedTabs.has("prophet") && (
+            <div style={{ flex: 1, overflow: "hidden", display: activeTab === "prophet" ? "flex" : "none", minHeight: 0 }}>
               <ProphetView />
             </div>
           )}

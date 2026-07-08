@@ -42,7 +42,9 @@ export function OptionCard({ contract, lang }: OptionCardProps) {
 
   const isCall = contract.type?.toUpperCase() === "CALL";
   const typeColor = isCall ? "var(--up)" : "var(--down)";
-  const typeBg   = isCall ? "rgba(38,194,129,.15)" : "rgba(240,86,107,.15)";
+  const typeBg   = isCall
+    ? "color-mix(in srgb, var(--up) 15%, transparent)"
+    : "color-mix(in srgb, var(--down) 15%, transparent)";
   const typeLabel = isCall ? t("optionCall") : t("optionPut");
 
   const hasPrem = contract.entry_premium != null;
@@ -53,7 +55,7 @@ export function OptionCard({ contract, lang }: OptionCardProps) {
     : null;
 
   return (
-    <div style={CARD_STYLE}>
+    <div className="obs-card" style={CARD_STYLE}>
       {/* Header row */}
       <div style={HEADER_ROW}>
         <span style={DIAMOND}>◆</span>
@@ -142,12 +144,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 // ── Style constants ───────────────────────────────────────────────────────────
 
+// obs-card provides glass background/border/radius
 const CARD_STYLE: React.CSSProperties = {
   marginTop: 8,
   padding: "9px 11px",
-  background: "var(--panel-2)",
-  border: "1px solid var(--line-2)",
-  borderRadius: "var(--r-md)",
 };
 
 const HEADER_ROW: React.CSSProperties = {

@@ -88,7 +88,7 @@ export function GeometryRail({
   const horizPct = hasGeom ? geometry!.horizon_pct_used : null;
 
   return (
-    <div style={WRAPPER}>
+    <div className="obs-card" style={WRAPPER}>
       <div style={TITLE_ROW}>
         <span style={SECTION_LABEL}>{t("geometryTitle")}</span>
         {/* R/R summary */}
@@ -136,7 +136,9 @@ export function GeometryRail({
                   left: "30%",
                   width: "40%",
                   height: `${filled}%`,
-                  background: isBear ? "rgba(240,86,107,.18)" : "rgba(38,194,129,.18)",
+                  background: isBear
+                    ? "color-mix(in srgb, var(--down) 18%, transparent)"
+                    : "color-mix(in srgb, var(--up) 18%, transparent)",
                   borderRadius: 2,
                   transition: "height .3s",
                 }}
@@ -217,11 +219,9 @@ function StatRow({ label, value, valueColor }: { label: string; value: string; v
 
 const RAIL_HEIGHT = 140;
 
+// obs-card provides glass background/border/radius
 const WRAPPER: React.CSSProperties = {
   padding: "10px 12px",
-  background: "var(--panel)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-lg)",
 };
 
 const TITLE_ROW: React.CSSProperties = {
@@ -258,7 +258,7 @@ const RAIL_BAR: React.CSSProperties = {
 const STAT_ROWS: React.CSSProperties = {
   marginTop: 10,
   paddingTop: 10,
-  borderTop: "1px solid var(--line-2)",
+  borderTop: "1px solid rgba(255,255,255,0.08)",
 };
 
 const EMPTY_STYLE: React.CSSProperties = {

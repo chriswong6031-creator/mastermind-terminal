@@ -157,6 +157,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "10px 12px",
     borderBottom: "1px solid var(--line)",
     background: "var(--panel)",
+    flexShrink: 0,
   },
   header: {
     display: "flex",

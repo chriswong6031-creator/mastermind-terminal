@@ -34,9 +34,19 @@ export interface PlanSummary {
   invalidation: number | null;
   horizon_days: number | null;
   min_hold_days: number | null;
-  asof: string;
+  /**
+   * ISO date string for when the plan was issued.
+   * Nested-shape payloads use `asof`; flat-shape payloads (current prod) use
+   * `_signal_date`. Both are accepted — consumers should call planAsof(plan).
+   */
+  asof?: string | null;
+  _signal_date?: string | null;
   option_contract: OptionContractPayload | null;
-  /** From management state */
+  /**
+   * Nested management state (legacy shape).
+   * Current flat shape hoists management_confidence / phase / recommended_action
+   * to the plan top-level. Both shapes are accepted.
+   */
   state?: {
     phase?: string | null;
     management_confidence?: number | null;
@@ -47,8 +57,34 @@ export interface PlanSummary {
       horizon_pct_used?: number | null;
     } | null;
   } | null;
+  /** Flat-shape: management confidence at top level (0–100) */
+  management_confidence?: number | null;
+  /** Flat-shape: lifecycle phase at top level */
+  phase?: string | null;
+  /** Flat-shape: recommended action at top level */
+  recommended_action?: string | null;
   /** Last price from payload (optional — may be absent) */
   last_price?: number | null;
+}
+
+/** Return ISO date string from either flat (_signal_date) or nested (asof) shape. */
+export function planAsof(plan: PlanSummary): string {
+  return plan._signal_date ?? plan.asof ?? "";
+}
+
+/** Return management_confidence from either flat or nested shape. */
+export function planConfidence(plan: PlanSummary): number | null {
+  return plan.management_confidence ?? plan.state?.management_confidence ?? null;
+}
+
+/** Return lifecycle phase from either flat or nested shape. */
+export function planPhase(plan: PlanSummary): string | null {
+  return plan.phase ?? plan.state?.phase ?? null;
+}
+
+/** Return recommended_action from either flat or nested shape. */
+export function planRecommendedAction(plan: PlanSummary): string | null {
+  return plan.recommended_action ?? plan.state?.recommended_action ?? null;
 }
 
 interface SignalCardProps {
@@ -62,7 +98,10 @@ interface SignalCardProps {
 
 function daysActive(asof: string): number {
   const issued = new Date(asof).getTime();
-  const now    = Date.now();
+  // Math.max(0, NaN) === NaN — guard explicitly so a missing/invalid date
+  // never propagates NaN into the rendered string.
+  if (!Number.isFinite(issued)) return 0;
+  const now = Date.now();
   return Math.max(0, Math.floor((now - issued) / 86_400_000));
 }
 
@@ -105,7 +144,7 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
 
   const isBear  = plan.direction === "BEAR";
   const t1      = plan.targets?.[0] ?? null;
-  const days    = daysActive(plan.asof);
+  const days    = daysActive(planAsof(plan));
   const t1pct   = t1Progress(plan.entry, t1, plan.last_price ?? null, isBear);
 
   // Min-hold bar
@@ -124,8 +163,8 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
     pnlPct = isBear ? -raw : raw;
   }
 
-  // Phase chip
-  const state = plan.state;
+  // Phase chip — supports both flat (plan.phase) and nested (plan.state?.phase) shapes
+  const currentPhase = planPhase(plan);
   const phaseMap: Record<string, string> = {
     pre_trigger:       t("phasePretrigger"),
     triggered_pre_t1:  t("phaseTriggered"),
@@ -135,23 +174,24 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
     overtime:          t("phaseOvertime"),
     invalidated:       t("phaseInvalidated"),
   };
-  const phaseDisplay = state?.phase ? (phaseMap[state.phase] ?? state.phase) : null;
-  const isInvalidated = state?.phase === "invalidated";
+  const phaseDisplay = currentPhase ? (phaseMap[currentPhase] ?? currentPhase) : null;
+  const isInvalidated = currentPhase === "invalidated";
   const phaseColor = isInvalidated
     ? "var(--down)"
-    : state?.phase?.includes("t1") || state?.phase?.includes("t2")
+    : currentPhase?.includes("t1") || currentPhase?.includes("t2")
     ? "var(--up)"
     : "var(--text-2)";
 
   const dirColor = isBear ? "var(--down)" : "var(--up)";
-  const dirBg    = isBear ? "rgba(240,86,107,.15)" : "rgba(38,194,129,.15)";
+  const dirBg    = isBear
+    ? "color-mix(in srgb, var(--down) 15%, transparent)"
+    : "color-mix(in srgb, var(--up) 15%, transparent)";
 
   return (
     <div
+      className={`obs-card${selected ? " sel" : ""}`}
       style={{
         ...CARD_STYLE,
-        border: `1px solid ${selected ? "var(--brand)" : "var(--line)"}`,
-        background: selected ? "var(--panel-2)" : "var(--panel)",
         opacity: isInvalidated ? 0.6 : 1,
       }}
       onClick={() => onSelect(plan)}
@@ -279,11 +319,9 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
 
 const CARD_STYLE: React.CSSProperties = {
   position: "relative",
-  borderRadius: "var(--r-lg)",
   padding: "10px 12px",
   cursor: "pointer",
-  transition: "border-color var(--t), background var(--t)",
-  marginBottom: 4,
+  marginBottom: 6,
 };
 
 const ROW: React.CSSProperties = {

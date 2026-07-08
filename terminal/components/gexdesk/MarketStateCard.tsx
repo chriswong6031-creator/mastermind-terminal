@@ -28,6 +28,7 @@
 import React from "react";
 import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
+import { RingGauge } from "@/components/ui/RingGauge";
 
 // ─── Schema (FUTURE gexstate/v1 — handle gracefully when absent) ─────────────
 
@@ -96,9 +97,9 @@ export function MarketStateCard({
 
   if (!statePayload) {
     return (
-      <div style={CARD_OUTER} data-tut="gex-state-card">
-        <div style={CARD_HEADER}>
-          <span style={CARD_TITLE}>{t("stateTitle")}</span>
+      <div className="obs-card" style={CARD_OUTER} data-tut="gex-state-card">
+        <div className="obs-card-hd" style={CARD_HEADER}>
+          <span className="obs-lbl">{t("stateTitle")}</span>
         </div>
         <div style={PLACEHOLDER}>
           <span style={PLACEHOLDER_TEXT}>{t("stateComputing")}</span>
@@ -159,9 +160,10 @@ export function MarketStateCard({
       : "var(--muted)";
 
   return (
-    <div style={CARD_OUTER} data-tut="gex-state-card">
-      <div style={CARD_HEADER}>
-        <span style={CARD_TITLE}>{t("stateTitle")}</span>
+    <div className="obs-card" style={CARD_OUTER} data-tut="gex-state-card">
+      {/* Header: title + regime chip */}
+      <div className="obs-card-hd" style={CARD_HEADER}>
+        <span className="obs-lbl">{t("stateTitle")}</span>
         <span style={{ ...REGIME_CHIP, color: regimeColor, borderColor: `${regimeColor}55` }}>
           {regimeLabel}
         </span>
@@ -170,57 +172,41 @@ export function MarketStateCard({
       {/* Thesis */}
       <div style={THESIS}>{thesisText}</div>
 
-      {/* Net gamma badge */}
-      <div style={METRIC_ROW}>
-        <span style={METRIC_KEY}>{t("stateNetGamma")}</span>
-        <span style={{ ...METRIC_VAL, color: netGammaColor }}>{netGammaLabel}</span>
-      </div>
-
-      {/* Stability bar */}
-      <div style={METRIC_SECTION}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-          <span style={METRIC_KEY}>{t("stateStability")}</span>
-          <span style={{ fontSize: 10, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
-            {stabilityPct}% · {volPct}% vol
-          </span>
-        </div>
-        <div style={STAB_TRACK}>
-          <div
-            style={{
-              ...STAB_FILL,
-              width: `${stabilityPct}%`,
-              background:
-                statePayload.net_gamma === "POSITIVE"
-                  ? "var(--brand-2)"
-                  : statePayload.net_gamma === "NEGATIVE"
-                  ? "rgba(240,86,107,0.6)"
-                  : "var(--muted)",
-            }}
-          />
+      {/* Stability ring (Observatory signature) */}
+      <div style={STAB_RING_ROW}>
+        <RingGauge
+          value={stabilityPct}
+          size="md"
+          tone={statePayload.net_gamma === "POSITIVE" ? "brand" : statePayload.net_gamma === "NEGATIVE" ? "down" : "muted"}
+          label={t("stateStability")}
+        />
+        <div style={STAB_META}>
+          <div style={METRIC_ROW}>
+            <span className="obs-lbl">{t("stateNetGamma")}</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: netGammaColor }}>{netGammaLabel}</span>
+          </div>
+          <div style={METRIC_ROW}>
+            <span className="obs-lbl">{t("stateGravity")}</span>
+            <span style={{ fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ color: gravColor, fontWeight: 600 }}>{gravDir}</span>
+              {" "}
+              <span className="num" style={{ color: "var(--text-2)", fontSize: 10 }}>
+                +{gravity.up_pct}% / -{gravity.down_pct}%
+              </span>
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Gravity */}
-      <div style={METRIC_ROW}>
-        <span style={METRIC_KEY}>{t("stateGravity")}</span>
-        <span style={{ fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
-          <span style={{ color: gravColor, fontWeight: 600 }}>{gravDir}</span>
-          {" "}
-          <span style={{ color: "var(--text-2)" }}>
-            +{gravity.up_pct}% / -{gravity.down_pct}%
-          </span>
-        </span>
-      </div>
-
-      <div style={SEPARATOR} />
+      <div className="obs-card-hr" />
 
       {/* Pin target */}
-      <div style={METRIC_ROW}>
-        <span style={METRIC_KEY}>{t("statePinTarget")}</span>
+      <div style={METRIC_ROW_PAD}>
+        <span className="obs-lbl">{t("statePinTarget")}</span>
         <span style={{ fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
           {pin ? (
             <>
-              <span style={{ color: "var(--cat-2)", fontWeight: 700 }}>
+              <span className="num" style={{ color: "var(--cat-2)", fontWeight: 700 }}>
                 {pin.strike % 1 === 0 ? pin.strike : pin.strike.toFixed(1)}
               </span>
               {" "}
@@ -234,11 +220,11 @@ export function MarketStateCard({
         </span>
       </div>
 
-      {/* Cascade trigger (only if relevant state + confidence) */}
+      {/* Cascade trigger */}
       {cascade && cascade.confidence >= 0.4 && (
-        <div style={METRIC_ROW}>
-          <span style={METRIC_KEY}>{t("stateCascadeTrigger")}</span>
-          <span style={{ color: "var(--down)", fontWeight: 700, fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
+        <div style={METRIC_ROW_PAD}>
+          <span className="obs-lbl">{t("stateCascadeTrigger")}</span>
+          <span className="num" style={{ color: "var(--down)", fontWeight: 700, fontSize: 11 }}>
             {cascade.strike % 1 === 0 ? cascade.strike : cascade.strike.toFixed(1)}
           </span>
         </div>
@@ -246,9 +232,9 @@ export function MarketStateCard({
 
       {/* Upside trigger */}
       {upside && upside.confidence >= 0.4 && (
-        <div style={METRIC_ROW}>
-          <span style={METRIC_KEY}>{t("stateUpsideTrigger")}</span>
-          <span style={{ color: "var(--up)", fontWeight: 700, fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
+        <div style={METRIC_ROW_PAD}>
+          <span className="obs-lbl">{t("stateUpsideTrigger")}</span>
+          <span className="num" style={{ color: "var(--up)", fontWeight: 700, fontSize: 11 }}>
             {upside.strike % 1 === 0 ? upside.strike : upside.strike.toFixed(1)}
           </span>
         </div>
@@ -256,9 +242,9 @@ export function MarketStateCard({
 
       {/* Structural range */}
       {range && (
-        <div style={METRIC_ROW}>
-          <span style={METRIC_KEY}>{t("stateRange")}</span>
-          <span style={{ fontSize: 11, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
+        <div style={METRIC_ROW_PAD}>
+          <span className="obs-lbl">{t("stateRange")}</span>
+          <span className="num" style={{ fontSize: 11, color: "var(--text-2)" }}>
             {range.low % 1 === 0 ? range.low : range.low.toFixed(1)}
             {" — "}
             {range.high % 1 === 0 ? range.high : range.high.toFixed(1)}
@@ -289,12 +275,13 @@ function PassportBlock({
 }) {
   return (
     <div style={PASSPORT_BLOCK}>
-      <div style={PASSPORT_CHIP}>{passportText}</div>
-      {singleNameNote && (
-        <div style={{ ...PASSPORT_CHIP, marginTop: 3 }}>{singleNameNote}</div>
-      )}
-      <div style={{ ...PASSPORT_CHIP, marginTop: 3, color: "var(--muted)", borderColor: "var(--line)" }}>
-        {gateNote}
+      <div className="obs-note" style={{ margin: "0 0 0 0", padding: "8px 10px", fontSize: 10, lineHeight: 1.5, borderRadius: 8 }}>
+        {passportText}
+        {singleNameNote && (
+          <><br />{singleNameNote}</>
+        )}
+        <br />
+        <span style={{ opacity: 0.7 }}>{gateNote}</span>
       </div>
     </div>
   );
@@ -303,8 +290,8 @@ function PassportBlock({
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const CARD_OUTER: React.CSSProperties = {
-  background: "var(--panel)",
-  borderLeft: "1px solid var(--line)",
+  borderLeft: "1px solid rgba(255,255,255,0.09)",
+  borderRadius: 0,    // flush panel — .obs-card radius is overridden for side panel
   display: "flex",
   flexDirection: "column",
   minWidth: 220,
@@ -317,17 +304,6 @@ const CARD_HEADER: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
-  padding: "10px 12px 6px",
-  borderBottom: "1px solid var(--line-2)",
-};
-
-const CARD_TITLE: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: "var(--text)",
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-  flex: 1,
 };
 
 const REGIME_CHIP: React.CSSProperties = {
@@ -360,69 +336,43 @@ const THESIS: React.CSSProperties = {
   fontSize: 11,
   color: "var(--text-2)",
   lineHeight: 1.5,
-  padding: "8px 12px",
-  borderBottom: "1px solid var(--line-2)",
+  padding: "8px 14px",
   fontStyle: "italic",
 };
 
-const METRIC_SECTION: React.CSSProperties = {
-  padding: "7px 12px",
+/** Ring + meta side by side */
+const STAB_RING_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+  padding: "10px 14px",
+};
+
+const STAB_META: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  flex: 1,
+  minWidth: 0,
 };
 
 const METRIC_ROW: React.CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  padding: "4px 12px",
+  gap: 6,
+};
+
+/** Padded metric row used below the separator */
+const METRIC_ROW_PAD: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  padding: "4px 14px",
   gap: 8,
 };
 
-const METRIC_KEY: React.CSSProperties = {
-  fontSize: 10,
-  color: "var(--muted)",
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-  fontWeight: 600,
-  flexShrink: 0,
-};
-
-const METRIC_VAL: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  letterSpacing: "0.04em",
-};
-
-const STAB_TRACK: React.CSSProperties = {
-  height: 4,
-  background: "var(--panel-3)",
-  borderRadius: 2,
-  overflow: "hidden",
-};
-
-const STAB_FILL: React.CSSProperties = {
-  height: "100%",
-  borderRadius: 2,
-  transition: "width 0.4s ease",
-};
-
-const SEPARATOR: React.CSSProperties = {
-  height: 1,
-  background: "var(--line-2)",
-  margin: "4px 0",
-};
-
 const PASSPORT_BLOCK: React.CSSProperties = {
-  padding: "8px 12px",
-  borderTop: "1px solid var(--line-2)",
+  padding: "8px 10px",
   marginTop: "auto",
-};
-
-const PASSPORT_CHIP: React.CSSProperties = {
-  fontSize: 9,
-  color: "var(--text-2)",
-  fontWeight: 600,
-  border: "1px solid var(--line-3)",
-  borderRadius: "var(--r)",
-  padding: "3px 7px",
-  lineHeight: 1.4,
 };

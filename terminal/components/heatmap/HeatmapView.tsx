@@ -301,18 +301,18 @@ export function HeatmapView() {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div style={OUTER}>
+    <div className="obs obs-ambient" style={OUTER}>
 
       {/* ═══ GEX REGIME CAVEAT BANNER (HONESTY DOCTRINE) ═════════════════════ */}
-      <div style={REGIME_BANNER}>
+      <div className="obs-note" style={REGIME_BANNER}>
         <span style={{ color: "var(--warn)", fontWeight: 600, marginRight: 6 }}>
           {zh ? "注意" : "NOTE"}
         </span>
         {t("regimeCaveat")}
       </div>
 
-      {/* ═══ BREADTH STRIP ════════════════════════════════════════════════════ */}
-      <div style={BREADTH_STRIP}>
+      {/* ═══ BREADTH STRIP — glass header card ════════════════════════════════ */}
+      <div className="obs-card" style={BREADTH_STRIP}>
         {/* Mode label */}
         <div style={BREADTH_MODE}>
           <span style={{
@@ -332,12 +332,12 @@ export function HeatmapView() {
 
         {/* Advancers / decliners */}
         <div style={BREADTH_ITEM}>
-          <span style={{ color: "var(--muted)" }}>{t("advancers")}</span>
-          <span style={{ color: "var(--up)", fontVariantNumeric: "tabular-nums", marginLeft: 4 }}>
+          <span className="obs-lbl" style={{ textTransform: "none", letterSpacing: 0, fontSize: 10 }}>{t("advancers")}</span>
+          <span className="num" style={{ color: "var(--up)", marginLeft: 4 }}>
             {breadth.advancers}
           </span>
           <span style={{ color: "var(--muted)", margin: "0 3px" }}>/</span>
-          <span style={{ color: "var(--down)", fontVariantNumeric: "tabular-nums" }}>
+          <span className="num" style={{ color: "var(--down)" }}>
             {breadth.decliners}
           </span>
           <span style={{ color: "var(--muted)", marginLeft: 3 }}>
@@ -350,8 +350,8 @@ export function HeatmapView() {
           <>
             <div style={BREADTH_SEP} />
             <div style={BREADTH_ITEM}>
-              <span style={{ color: "var(--muted)" }}>{t("totalPremium")}</span>
-              <span style={{ fontVariantNumeric: "tabular-nums", marginLeft: 4 }}>
+              <span className="obs-lbl" style={{ textTransform: "none", letterSpacing: 0, fontSize: 10 }}>{t("totalPremium")}</span>
+              <span className="num" style={{ marginLeft: 4 }}>
                 ${breadth.totalPremiumMn.toFixed(1)}M
               </span>
               <span style={{ fontSize: 9, color: "var(--muted)", fontStyle: "italic", marginLeft: 4 }}>
@@ -366,8 +366,8 @@ export function HeatmapView() {
           <>
             <div style={BREADTH_SEP} />
             <div style={BREADTH_ITEM}>
-              <span style={{ color: "var(--muted)" }}>{t("callShare")}</span>
-              <span style={{ fontVariantNumeric: "tabular-nums", marginLeft: 4 }}>
+              <span className="obs-lbl" style={{ textTransform: "none", letterSpacing: 0, fontSize: 10 }}>{t("callShare")}</span>
+              <span className="num" style={{ marginLeft: 4 }}>
                 {Math.round(breadth.callSharePct * 100)}%
               </span>
               {breadth.callShareClass === "MIXED" && (
@@ -390,65 +390,79 @@ export function HeatmapView() {
       {/* ═══ CONTROLS ROW ════════════════════════════════════════════════════ */}
       <div style={CONTROLS_ROW} data-tut="heatmap-controls">
         {/* Layer toggle */}
-        <ToggleGroup>
-          <ToggleBtn active={layer === "price"} onClick={() => handleLayerChange("price")}>
-            {t("layerPrice")}
-          </ToggleBtn>
-          <ToggleBtn active={layer === "flow"} onClick={() => handleLayerChange("flow")}>
-            {t("layerFlow")}
-          </ToggleBtn>
-        </ToggleGroup>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button
+            className={`obs-chip${layer === "price" ? " on" : ""}`}
+            style={CHIP_COMPACT}
+            onClick={() => handleLayerChange("price")}
+          >{t("layerPrice")}</button>
+          <button
+            className={`obs-chip${layer === "flow" ? " on" : ""}`}
+            style={CHIP_COMPACT}
+            onClick={() => handleLayerChange("flow")}
+          >{t("layerFlow")}</button>
+        </div>
 
         <div style={CTRL_SEP} />
 
         {/* View toggle */}
-        <ToggleGroup>
-          <ToggleBtn active={view === "map"} onClick={() => setView("map")}>
-            {t("viewMap")}
-          </ToggleBtn>
-          <ToggleBtn active={view === "table"} onClick={() => setView("table")}>
-            {t("viewTable")}
-          </ToggleBtn>
-        </ToggleGroup>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button
+            className={`obs-chip${view === "map" ? " on" : ""}`}
+            style={CHIP_COMPACT}
+            onClick={() => setView("map")}
+          >{t("viewMap")}</button>
+          <button
+            className={`obs-chip${view === "table" ? " on" : ""}`}
+            style={CHIP_COMPACT}
+            onClick={() => setView("table")}
+          >{t("viewTable")}</button>
+        </div>
 
         <div style={CTRL_SEP} />
 
         {/* Sizing (map view only) */}
         {view === "map" && (
           <>
-            <ToggleGroup>
-              <ToggleBtn active={sizing === "equal"} onClick={() => setSizing("equal")}>
-                {t("sizeEqual")}
-              </ToggleBtn>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button
+                className={`obs-chip${sizing === "equal" ? " on" : ""}`}
+                style={CHIP_COMPACT}
+                onClick={() => setSizing("equal")}
+              >{t("sizeEqual")}</button>
               {layer === "flow" && (
-                <ToggleBtn active={sizing === "premium"} onClick={() => setSizing("premium")}>
-                  {t("sizePremium")}
-                </ToggleBtn>
+                <button
+                  className={`obs-chip${sizing === "premium" ? " on" : ""}`}
+                  style={CHIP_COMPACT}
+                  onClick={() => setSizing("premium")}
+                >{t("sizePremium")}</button>
               )}
               {/* CAP sizing deferred */}
-              <ToggleBtn active={false} disabled onClick={() => {}}>
-                {t("sizeCapDeferred")}
-              </ToggleBtn>
-            </ToggleGroup>
+              <button
+                className="obs-chip"
+                style={{ ...CHIP_COMPACT, opacity: 0.4, cursor: "not-allowed" }}
+                disabled
+              >{t("sizeCapDeferred")}</button>
+            </div>
             <div style={CTRL_SEP} />
           </>
         )}
 
         {/* Timeframe (1D only; others disabled with accruing note) */}
-        <ToggleGroup>
-          <ToggleBtn active={timeframe === "1D"} onClick={() => {}}>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button className="obs-chip on" style={CHIP_COMPACT} onClick={() => {}}>
             {t("tf1D")}
-          </ToggleBtn>
-          <ToggleBtn active={false} disabled onClick={() => {}} tooltipText={t("tfAccruingTip")}>
-            {t("tf1W")}
-          </ToggleBtn>
-          <ToggleBtn active={false} disabled onClick={() => {}} tooltipText={t("tfAccruingTip")}>
-            {t("tf1M")}
-          </ToggleBtn>
-          <ToggleBtn active={false} disabled onClick={() => {}} tooltipText={t("tfAccruingTip")}>
-            {t("tfYTD")}
-          </ToggleBtn>
-        </ToggleGroup>
+          </button>
+          {(["tf1W", "tf1M", "tfYTD"] as const).map(k => (
+            <button
+              key={k}
+              className="obs-chip"
+              style={{ ...CHIP_COMPACT, opacity: 0.4, cursor: "not-allowed" }}
+              disabled
+              aria-label={t("tfAccruingTip")}
+            >{t(k)}</button>
+          ))}
+        </div>
 
         <div style={{ flex: 1 }} />
 
@@ -484,7 +498,7 @@ export function HeatmapView() {
 
       {/* ═══ FLOW SOFT DISCLAIMER (flow layer only) ══════════════════════════ */}
       {layer === "flow" && !flowError && !loadingFlow && (
-        <div style={FLOW_NOTE_BAR}>
+        <div className="obs-note" style={FLOW_NOTE_BAR}>
           {t("toneSoftNote")}
         </div>
       )}
@@ -537,43 +551,6 @@ export function HeatmapView() {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function ToggleGroup({ children }: { children: React.ReactNode }) {
-  return <div style={{ display: "flex", gap: 2 }}>{children}</div>;
-}
-
-function ToggleBtn({
-  active, disabled, onClick, children, tooltipText,
-}: {
-  active: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-  tooltipText?: string;
-}) {
-  return (
-    <button
-      onClick={disabled ? undefined : onClick}
-      disabled={disabled}
-      style={{
-        padding: "4px 9px",
-        fontSize: 11,
-        fontWeight: 600,
-        borderRadius: 4,
-        background: active ? "var(--brand)" : "var(--panel-3)",
-        color: active ? "#fff" : disabled ? "var(--muted)" : "var(--text-2)",
-        border: "none",
-        cursor: disabled ? "not-allowed" : "pointer",
-        letterSpacing: "0.03em",
-        opacity: disabled ? 0.6 : 1,
-      }}
-      // aria-label is used instead of title= for accessibility and CI compliance
-      aria-label={tooltipText}
-    >
-      {children}
-    </button>
-  );
-}
-
 function SectorChip({
   label, active, avgChg, onClick,
 }: {
@@ -588,25 +565,15 @@ function SectorChip({
   return (
     <button
       onClick={onClick}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
-        padding: "3px 8px",
-        fontSize: 10,
-        fontWeight: 600,
-        borderRadius: 999,
-        background: active ? "var(--brand)" : "var(--panel-3)",
-        color: active ? "#fff" : "var(--text-2)",
-        border: "none",
-        cursor: "pointer",
-        whiteSpace: "nowrap",
-        letterSpacing: "0.04em",
-      }}
+      className={`obs-chip${active ? " on" : ""}`}
+      style={CHIP_COMPACT}
     >
       {label}
       {avgChg != null && (
-        <span style={{ color: active ? "rgba(255,255,255,0.8)" : chgColor, fontVariantNumeric: "tabular-nums" }}>
+        <span className="num" style={{
+          color: active ? "rgba(255,255,255,0.8)" : chgColor,
+          marginLeft: 3,
+        }}>
           {avgChg >= 0 ? "+" : ""}{avgChg.toFixed(1)}%
         </span>
       )}
@@ -641,27 +608,31 @@ const OUTER: React.CSSProperties = {
   fontFamily: "var(--font-ui)",
 };
 
+// obs-note class handles background, border, padding — just add layout overrides
 const REGIME_BANNER: React.CSSProperties = {
-  padding: "5px 14px",
+  margin: 0,
+  borderRadius: 0,
+  borderTop: "none",
+  borderLeft: "none",
+  borderRight: "none",
   fontSize: 10,
-  color: "var(--muted)",
   fontStyle: "italic",
-  borderBottom: "1px solid var(--line-2)",
-  background: "rgba(232,179,57,0.04)",
   lineHeight: 1.5,
   flexShrink: 0,
 };
 
+// obs-card handles background/border — add layout specifics
 const BREADTH_STRIP: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 0,
-  padding: "5px 12px",
-  borderBottom: "1px solid var(--line)",
-  background: "var(--panel)",
+  padding: "6px 14px",
   flexShrink: 0,
   flexWrap: "wrap",
   rowGap: 4,
+  borderRadius: 0,
+  backdropFilter: "none",
+  WebkitBackdropFilter: "none",
 };
 
 const BREADTH_MODE: React.CSSProperties = {
@@ -673,7 +644,7 @@ const BREADTH_MODE: React.CSSProperties = {
 const BREADTH_SEP: React.CSSProperties = {
   width: 1,
   height: 16,
-  background: "var(--line)",
+  background: "rgba(255,255,255,0.1)",
   margin: "0 10px",
   flexShrink: 0,
 };
@@ -690,17 +661,23 @@ const CONTROLS_ROW: React.CSSProperties = {
   alignItems: "center",
   gap: 6,
   padding: "6px 12px",
-  borderBottom: "1px solid var(--line)",
-  background: "var(--panel)",
+  borderBottom: "1px solid rgba(255,255,255,0.06)",
   flexShrink: 0,
   flexWrap: "wrap",
   rowGap: 4,
 };
 
+// compact override for obs-chip — smaller padding than default
+const CHIP_COMPACT: React.CSSProperties = {
+  padding: "4px 10px",
+  fontSize: 11,
+  borderRadius: 8,
+};
+
 const CTRL_SEP: React.CSSProperties = {
   width: 1,
   height: 20,
-  background: "var(--line)",
+  background: "rgba(255,255,255,0.08)",
   flexShrink: 0,
 };
 
@@ -708,18 +685,19 @@ const SECTOR_CHIPS_ROW: React.CSSProperties = {
   display: "flex",
   gap: 4,
   padding: "5px 12px",
-  borderBottom: "1px solid var(--line-2)",
-  background: "var(--panel)",
+  borderBottom: "1px solid rgba(255,255,255,0.06)",
   overflowX: "auto",
   flexShrink: 0,
 };
 
+// obs-note class handles styling; just add layout overrides
 const FLOW_NOTE_BAR: React.CSSProperties = {
-  padding: "4px 14px",
+  margin: 0,
+  borderRadius: 0,
+  borderLeft: "none",
+  borderRight: "none",
+  borderTop: "none",
   fontSize: 9,
-  color: "var(--muted)",
-  fontStyle: "italic",
-  borderBottom: "1px solid var(--line-2)",
   flexShrink: 0,
 };
 
@@ -727,7 +705,7 @@ const FLOW_ERR_BAR: React.CSSProperties = {
   padding: "4px 14px",
   fontSize: 10,
   color: "var(--warn)",
-  borderBottom: "1px solid var(--line-2)",
+  borderBottom: "1px solid rgba(255,255,255,0.06)",
   flexShrink: 0,
 };
 
@@ -741,9 +719,9 @@ const CANVAS_AREA: React.CSSProperties = {
 const SEARCH_INPUT: React.CSSProperties = {
   height: 28,
   padding: "0 10px",
-  borderRadius: 4,
-  background: "var(--inset)",
-  border: "1px solid var(--line)",
+  borderRadius: 8,
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.09)",
   color: "var(--text)",
   fontSize: 11,
   outline: "none",

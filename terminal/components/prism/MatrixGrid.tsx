@@ -86,20 +86,30 @@ function fmtStrike(s: number): string {
 }
 
 function fmtExpShort(exp: string): string {
-  // "2026-07-18" -> "7/18"
+  // "2026-07-18" (or "2026-07-18 00:00:00") -> "7/18"
   try {
-    const parts = exp.split("-");
+    const parts = expDate(exp).split("-");
     return `${parseInt(parts[1])}/${parseInt(parts[2])}`;
   } catch {
     return exp.slice(5);
   }
 }
 
+
+/** Normalize an expiry string to YYYY-MM-DD. The engine emits pandas-style
+ *  "2026-07-06 00:00:00"; older fixtures used plain ISO dates. */
+function expDate(exp: string): string {
+  return (exp || "").split(" ")[0].split("T")[0];
+}
+
 function dteDays(exp: string): number {
   try {
     const now = Date.now();
-    const ms = new Date(exp + "T20:00:00Z").getTime();
-    return Math.max(0, Math.round((ms - now) / 86_400_000));
+    const ms = new Date(expDate(exp) + "T20:00:00Z").getTime();
+    if (!Number.isFinite(ms)) return -1;
+    // True signed DTE — expired contracts go negative and are filtered out of
+    // the column list (the engine's one-shot payloads carried expired rows).
+    return Math.round((ms - now) / 86_400_000);
   } catch {
     return 0;
   }
@@ -267,7 +277,7 @@ export function MatrixGrid({
   // Filter expiries by DTE
   const filteredExpiries = useMemo(() => {
     if (!dteFilter) return expiries;
-    return expiries.filter((e) => dteDays(e) <= dteFilter);
+    return expiries.filter((e) => { const d = dteDays(e); return d >= 0 && d <= dteFilter; });
   }, [expiries, dteFilter]);
 
   // Sort strikes descending (highest at top)

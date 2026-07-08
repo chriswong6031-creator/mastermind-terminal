@@ -1,15 +1,6 @@
 /**
  * WatchlistRail — market-overview block + per-ticker watchlist chips.
- *
- * Props:
- *   feed        — FeedPayload (events + unusual_names)
- *   tide        — TidePayload (session totals for overview block)
- *   lang        — "en" | "zh"
- *   watchlist   — string[] managed by parent (localStorage key 'flowdesk.watchlist')
- *   onToggleTicker — add/remove a ticker from the watchlist
- *   onPickTicker   — select a ticker to drill into
- *
- * Presentational only — no fetching.
+ * Observatory restyle: glass obs-card panels, RingGauge sm for scores.
  */
 "use client";
 import { useMemo } from "react";
@@ -17,8 +8,9 @@ import { pick, fmtNum } from "../../lib/finFormat";
 import type { Lang } from "../../lib/i18n";
 import { computeFlowScore } from "../../lib/flowScore";
 import { FD } from "../../lib/flowdeskStrings";
+import { RingGauge } from "../ui/RingGauge";
 
-// ─── Shared feed/tide shape (mirrors OptionsHubView type defs) ─────────────
+// ─── Shared feed/tide shape ────────────────────────────────────────────────
 
 interface FlowEvent {
   id: string; ts: string; root: string; group: string; group_zh: string;
@@ -70,10 +62,9 @@ function fmtPct(v: number): string {
 export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onPickTicker }: WatchlistRailProps) {
   const zh = lang === "zh";
 
-  // --- Session overview from tide ---
+  // Session overview
   const overview = useMemo(() => {
     if (!tide || !tide.minutes.length) {
-      // Fallback: derive from feed events
       let callPrem = 0; let putPrem = 0;
       for (const ev of feed.events) {
         if (ev.right === "C") callPrem += ev.premium;
@@ -92,7 +83,7 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
     ? (overview.putPrem / overview.callPrem).toFixed(2)
     : "—";
 
-  // --- Best score per ticker (from today's feed events) ---
+  // Best score per ticker
   const tickerBestScore = useMemo(() => {
     const map: Record<string, number> = {};
     for (const ev of feed.events) {
@@ -106,101 +97,107 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
   const watchlistTickers = watchlist.filter((t) => t in tickerBestScore);
 
   return (
-    <aside style={styles.rail}>
-      {/* ── Session overview ── */}
-      <div style={styles.section}>
-        <div style={styles.sectionLabel}>{pick(zh, FD.sessionOverview.en, FD.sessionOverview.zh)}</div>
-
-        <div style={styles.statRow}>
-          <span style={styles.statKey}>{pick(zh, "Total Premium", "总权利金")}</span>
-          <span style={styles.statVal}>{fmtPrem(overview.total)}</span>
-        </div>
-        <div style={styles.statRow}>
-          <span style={styles.statKey}>{pick(zh, "Call / Put", "认购/认沽")}</span>
-          <span style={styles.statVal}>
-            {fmtPrem(overview.callPrem)} / {fmtPrem(overview.putPrem)}
+    <aside style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* ── Session stats card ── */}
+      <div className="obs-card obs-fd-session" data-tut="session-overview">
+        <div className="obs-card-hd">
+          <span className="obs-lbl">{pick(zh, FD.sessionOverview.en, FD.sessionOverview.zh)}</span>
+          <span className="obs-lbl" style={{ color: "var(--muted)" }}>
+            {pick(zh, "nightly + live", "夜盘+实时")}
           </span>
         </div>
-        <div style={styles.statRow}>
-          <span style={styles.statKey}>{pick(zh, "Call Share", "认购占比")}</span>
-          <span style={styles.statVal}>{fmtPct(overview.callShare)}</span>
+        <div className="obs-card-hr" />
+        <div className="obs-fd-stat-grid">
+          <div className="obs-fd-stat-cell">
+            <span className="obs-lbl">{pick(zh, "Premium", "权利金")}</span>
+            <span className="obs-fd-stat-val num">{fmtPrem(overview.total)}</span>
+          </div>
+          <div className="obs-fd-stat-cell">
+            <span className="obs-lbl">{pick(zh, "Calls", "认购")}</span>
+            <span className="obs-fd-stat-val num">{fmtPct(overview.callShare)}</span>
+          </div>
+          <div className="obs-fd-stat-cell">
+            <span className="obs-lbl">P/C</span>
+            <span className="obs-fd-stat-val num">{pc}</span>
+          </div>
         </div>
-        <div style={styles.statRow}>
-          <span style={styles.statKey}>{pick(zh, "P/C Ratio", "认沽认购比")}</span>
-          <span style={styles.statVal}>{pc}</span>
-        </div>
-
-        {/* Call share bar */}
-        <div style={styles.barTrack}>
-          <div
-            style={{
-              ...styles.barFill,
-              width: `${Math.round(overview.callShare * 100)}%`,
-              background: "var(--brand-2)",
-            }}
-          />
-        </div>
-        <div style={styles.barLabels}>
-          <span style={{ color: "var(--brand-2)", fontSize: 10 }}>C</span>
-          <span style={{ color: "var(--text-2)", fontSize: 10 }}>P</span>
+        <div className="obs-fd-bar-wrap">
+          <div className="obs-fd-bar-track">
+            <div
+              className="obs-fd-bar-fill"
+              style={{ width: `${Math.round(overview.callShare * 100)}%` }}
+            />
+          </div>
+          <div className="obs-fd-bar-labels">
+            <span style={{ color: "var(--brand)" }}>C</span>
+            <span>P</span>
+          </div>
         </div>
       </div>
 
-      {/* ── Watchlist ── */}
-      <div style={styles.section}>
-        <div style={styles.sectionLabel}>{pick(zh, FD.watchlist.en, FD.watchlist.zh)}</div>
-
-        {watchlist.length === 0 && (
-          <div style={styles.empty}>{pick(zh, "Click a ticker to watch", "点击标的加入观察")}</div>
-        )}
-
-        {watchlist.map((root) => {
-          const score = tickerBestScore[root] ?? null;
-          const inFeed = root in tickerBestScore;
-          return (
-            <WatchChip
-              key={root}
-              root={root}
-              score={score}
-              inFeed={inFeed}
-              zh={zh}
-              onPick={() => onPickTicker(root)}
-              onRemove={() => onToggleTicker(root)}
-            />
-          );
-        })}
-
-        {/* Suggest unwatched tickers that have feed events today (max 5) */}
-        {watchlistTickers.length === 0 && (
-          <div style={{ marginTop: 8 }}>
-            <div style={{ ...styles.sectionLabel, marginBottom: 4 }}>
-              {pick(zh, "Active today", "今日活跃")}
+      {/* ── Watchlist card ── */}
+      <div className="obs-card obs-fd-wl" data-tut="watchlist">
+        <div className="obs-card-hd">
+          <span className="obs-lbl">{pick(zh, FD.watchlist.en, FD.watchlist.zh)}</span>
+          <span className="obs-lbl" style={{ color: "var(--muted)" }}>score</span>
+        </div>
+        <div className="obs-card-hr" />
+        <div className="obs-fd-wl-rows">
+          {watchlist.length === 0 && (
+            <div className="obs-fd-wl-empty">
+              {pick(zh, "Click a ticker to watch", "点击标的加入观察")}
             </div>
-            {Object.entries(tickerBestScore)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 5)
-              .map(([root, score]) => (
-                <WatchChip
-                  key={root}
-                  root={root}
-                  score={score}
-                  inFeed
-                  zh={zh}
-                  onPick={() => onPickTicker(root)}
-                  onRemove={() => onToggleTicker(root)}
-                  isWatch={false}
-                />
-              ))}
-          </div>
-        )}
+          )}
+
+          {watchlist.map((root) => {
+            const score = tickerBestScore[root] ?? null;
+            const inFeed = root in tickerBestScore;
+            return (
+              <WatchRow
+                key={root}
+                root={root}
+                score={score}
+                inFeed={inFeed}
+                zh={zh}
+                onPick={() => onPickTicker(root)}
+                onRemove={() => onToggleTicker(root)}
+                isWatch
+              />
+            );
+          })}
+
+          {/* Suggest unwatched tickers active today (max 5) */}
+          {watchlistTickers.length === 0 && (
+            <>
+              <div className="obs-fd-wl-sublabel">
+                {pick(zh, "Active today", "今日活跃")}
+              </div>
+              {Object.entries(tickerBestScore)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5)
+                .map(([root, score]) => (
+                  <WatchRow
+                    key={root}
+                    root={root}
+                    score={score}
+                    inFeed
+                    zh={zh}
+                    onPick={() => onPickTicker(root)}
+                    onRemove={() => onToggleTicker(root)}
+                    isWatch={false}
+                  />
+                ))}
+            </>
+          )}
+        </div>
       </div>
     </aside>
   );
 }
 
-// ─── WatchChip ────────────────────────────────────────────────────────────
+// ─── WatchRow ─────────────────────────────────────────────────────────────
 
-interface WatchChipProps {
+interface WatchRowProps {
   root: string;
   score: number | null;
   inFeed: boolean;
@@ -210,163 +207,30 @@ interface WatchChipProps {
   isWatch?: boolean;
 }
 
-function WatchChip({ root, score, inFeed, zh, onPick, onRemove, isWatch = true }: WatchChipProps) {
-  const scoreColor = score == null
-    ? "var(--text-2)"
-    : score >= 75 ? "var(--signal)"
-    : score >= 50 ? "var(--text)"
-    : "var(--text-2)";
-
+function WatchRow({ root, score, inFeed, zh, onPick, onRemove, isWatch = true }: WatchRowProps) {
   return (
-    <div style={styles.chip}>
-      <button style={styles.chipMain} onClick={onPick}>
-        <span style={styles.chipTicker}>{root}</span>
-        {score != null && (
-          <span style={{ ...styles.chipScore, color: scoreColor }}>{score}</span>
-        )}
+    <div className="obs-fd-wl-row">
+      <button
+        style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", minWidth: 0, padding: 0 }}
+        onClick={onPick}
+      >
+        <span className="obs-fd-wl-ticker">{root}</span>
         {!inFeed && (
-          <span style={styles.chipInactive}>{pick(zh, "no events", "无事件")}</span>
+          <span className="obs-fd-wl-inactive">{pick(zh, "no events", "无事件")}</span>
         )}
+        <span style={{ marginLeft: "auto", flexShrink: 0 }}>
+          {score != null
+            ? <RingGauge value={score} size="sm" tone="auto" />
+            : null}
+        </span>
       </button>
-      {isWatch && (
-        <button style={styles.chipRemove} onClick={onRemove} aria-label="Remove">
-          ×
-        </button>
-      )}
-      {!isWatch && (
-        <button style={styles.chipAdd} onClick={onRemove} aria-label="Watch">
-          +
-        </button>
-      )}
+      <div className="obs-fd-wl-btns">
+        {isWatch ? (
+          <button className="obs-fd-wl-btn" onClick={onRemove} aria-label="Remove">×</button>
+        ) : (
+          <button className="obs-fd-wl-btn add" onClick={onRemove} aria-label="Watch">+</button>
+        )}
+      </div>
     </div>
   );
 }
-
-// ─── Styles ───────────────────────────────────────────────────────────────
-
-const styles: Record<string, React.CSSProperties> = {
-  rail: {
-    width: 180,
-    flexShrink: 0,
-    background: "var(--panel)",
-    borderRight: "1px solid var(--line)",
-    overflowY: "auto",
-    display: "flex",
-    flexDirection: "column",
-    gap: 0,
-  },
-  section: {
-    padding: "10px 10px 8px",
-    borderBottom: "1px solid var(--line-2)",
-  },
-  sectionLabel: {
-    fontSize: 10,
-    fontWeight: 600,
-    color: "var(--muted)",
-    letterSpacing: "0.07em",
-    textTransform: "uppercase",
-    marginBottom: 8,
-  },
-  statRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "baseline",
-    marginBottom: 4,
-    gap: 4,
-  },
-  statKey: {
-    fontSize: 11,
-    color: "var(--text-2)",
-    whiteSpace: "nowrap",
-  },
-  statVal: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: "var(--text)",
-    fontVariantNumeric: "tabular-nums",
-    textAlign: "right",
-  },
-  barTrack: {
-    height: 4,
-    background: "var(--panel-3)",
-    borderRadius: 2,
-    marginTop: 8,
-    overflow: "hidden",
-  },
-  barFill: {
-    height: "100%",
-    borderRadius: 2,
-    transition: "width 0.3s ease",
-  },
-  barLabels: {
-    display: "flex",
-    justifyContent: "space-between",
-    marginTop: 2,
-  },
-  chip: {
-    display: "flex",
-    alignItems: "center",
-    marginBottom: 4,
-    borderRadius: "var(--r)",
-    border: "1px solid var(--line-2)",
-    background: "var(--panel-2)",
-    overflow: "hidden",
-  },
-  chipMain: {
-    flex: 1,
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "5px 7px",
-    cursor: "pointer",
-    background: "none",
-    border: "none",
-    minWidth: 0,
-  },
-  chipTicker: {
-    fontSize: 12,
-    fontWeight: 650,
-    color: "var(--text)",
-    flexShrink: 0,
-  },
-  chipScore: {
-    fontSize: 11,
-    fontWeight: 600,
-    fontVariantNumeric: "tabular-nums",
-    marginLeft: "auto",
-  },
-  chipInactive: {
-    fontSize: 10,
-    color: "var(--muted)",
-    marginLeft: "auto",
-  },
-  chipRemove: {
-    padding: "0 7px",
-    fontSize: 14,
-    color: "var(--muted)",
-    cursor: "pointer",
-    background: "none",
-    border: "none",
-    borderLeft: "1px solid var(--line-2)",
-    alignSelf: "stretch",
-    display: "flex",
-    alignItems: "center",
-  },
-  chipAdd: {
-    padding: "0 7px",
-    fontSize: 14,
-    color: "var(--brand-2)",
-    cursor: "pointer",
-    background: "none",
-    border: "none",
-    borderLeft: "1px solid var(--line-2)",
-    alignSelf: "stretch",
-    display: "flex",
-    alignItems: "center",
-  },
-  empty: {
-    fontSize: 11,
-    color: "var(--muted)",
-    padding: "4px 0",
-  },
-};

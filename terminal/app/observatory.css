@@ -1,0 +1,986 @@
+/**
+ * Observatory design layer — scoped under .obs
+ *
+ * All colors derive from the locked v5 design system tokens (globals.css).
+ * NEVER hardcode bull-green or bear-red; use var(--up)/var(--down) so the
+ * East-Asian red-up flip (html[data-updown="east"]) works automatically.
+ *
+ * Import order: globals.css → fin.css → observatory.css
+ * Scope: every selector here is either .obs-* or .obs <descendant>.
+ */
+
+/* ─── Ambient background ─────────────────────────────────────────────────── */
+/*
+ * .obs-ambient goes on the page surface root (e.g. a wrapping <div>).
+ * Two soft radial gradients: brand-tinted top-left, up-tinted top-right.
+ * pointer-events:none so it never blocks clicks.
+ */
+.obs-ambient {
+  position: relative;
+}
+.obs-ambient::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(900px 420px at 18% -8%, color-mix(in srgb, var(--brand) 14%, transparent), transparent 60%),
+    radial-gradient(700px 380px at 92% 0%,   color-mix(in srgb, var(--up)    6%,  transparent), transparent 55%);
+  pointer-events: none;
+  z-index: 0;
+}
+.obs-ambient > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ─── Glass card ─────────────────────────────────────────────────────────── */
+/*
+ * .obs-card  — base glass panel (any surface)
+ * .obs-card:hover — slightly brighter border on hover / keyboard focus-within
+ * .obs-card.sel   — selected state (bright border + brand tint shadow)
+ *
+ * Inner layout: use flex-direction:column or grid as needed — the card itself
+ * is just the shell (background + border + radius + blur).
+ */
+.obs-card {
+  background: rgba(255, 255, 255, 0.033);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 15px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: border-color var(--t, 110ms) var(--ease), box-shadow var(--t, 110ms) var(--ease);
+}
+.obs-card:hover,
+.obs-card:focus-within {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+.obs-card.sel {
+  border-color: color-mix(in srgb, var(--brand) 55%, transparent);
+  background: color-mix(in srgb, var(--brand) 7%, rgba(255, 255, 255, 0.033));
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--brand) 14%, transparent);
+}
+
+/* Card header row — micro-label pattern */
+.obs-card > h3,
+.obs-card .obs-card-hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 14px 16px 10px;
+}
+.obs-card-hr {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.09);
+  margin: 0 16px;
+}
+
+/* ─── Micro-label ────────────────────────────────────────────────────────── */
+/*
+ * .obs-lbl   — 10.5px, 600 weight, .1em letterspacing, uppercase, dim color.
+ *              Use above a value; the value itself uses .num for tabular figures.
+ */
+.obs-lbl {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1;
+}
+
+/* ─── Filter chips ───────────────────────────────────────────────────────── */
+/*
+ * .obs-chip     — inactive state
+ * .obs-chip.on  — active state (brand fill + inset ring)
+ */
+.obs-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: transparent;
+  color: var(--text-2);
+  font: 600 12px/1 var(--font-ui);
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t), color var(--t), box-shadow var(--t);
+  white-space: nowrap;
+}
+.obs-chip:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--text);
+}
+.obs-chip.on {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent),
+              0 4px 14px color-mix(in srgb, var(--brand) 35%, transparent);
+}
+
+/* ─── Pill nav ───────────────────────────────────────────────────────────── */
+/*
+ * .obs-pillnav           — the rounded container (wraps .obs-pillnav-tab items)
+ * .obs-pillnav-tab       — individual tab link / button
+ * .obs-pillnav-tab.on    — active: brand-tinted fill + inset ring
+ */
+.obs-pillnav {
+  display: flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.033);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  padding: 4px;
+  flex-shrink: 0;
+}
+.obs-pillnav-tab {
+  padding: 7px 14px;
+  border-radius: 9px;
+  color: var(--text-2);
+  font: 500 13px/1 var(--font-ui);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--t), color var(--t), box-shadow var(--t);
+  border: none;
+  background: none;
+}
+.obs-pillnav-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+.obs-pillnav-tab.on {
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  color: color-mix(in srgb, var(--brand-2) 100%, #fff 30%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent);
+  font-weight: 600;
+}
+
+/* ─── Amber honesty note ─────────────────────────────────────────────────── */
+/*
+ * .obs-note — soft amber-tinted panel for doctrine microcopy / display-only disclaimers.
+ */
+.obs-note {
+  margin: 4px 16px 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 18%, transparent);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--warn) 80%, var(--text) 20%);
+}
+
+/* ─── Ring gauge shell ───────────────────────────────────────────────────── */
+/*
+ * Used directly by <RingGauge> component. The component renders:
+ *   <span class="obs-ring obs-ring--{size} obs-ring--{tone}" style="--pct:{value}%">
+ *     <span class="obs-ring-inner">
+ *       <span class="obs-ring-value num">{value}</span>
+ *     </span>
+ *   </span>
+ *
+ * Sizes:  sm (34px), md (46px), lg (84px)
+ * Tones:  brand | up | down | muted  (auto-by-value maps to one of these)
+ * Inner disc background matches panel color so the ring "punches through".
+ */
+.obs-ring {
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  /* conic-gradient driven by --pct CSS custom property set inline */
+  background: conic-gradient(var(--obs-ring-color, var(--brand)) 0 var(--pct, 0%), rgba(255,255,255,0.08) var(--pct, 0%) 100%);
+}
+.obs-ring-inner {
+  border-radius: 50%;
+  background: var(--panel, #0d0f13);
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+.obs-ring-value {
+  font-weight: 600;
+}
+
+/* sm: 34px outer, 26px inner */
+.obs-ring--sm {
+  width: 34px;
+  height: 34px;
+}
+.obs-ring--sm .obs-ring-inner {
+  width: 26px;
+  height: 26px;
+}
+.obs-ring--sm .obs-ring-value {
+  font-size: 11px;
+}
+
+/* md: 46px outer, 36px inner */
+.obs-ring--md {
+  width: 46px;
+  height: 46px;
+}
+.obs-ring--md .obs-ring-inner {
+  width: 36px;
+  height: 36px;
+}
+.obs-ring--md .obs-ring-value {
+  font-size: 13px;
+}
+
+/* lg: 84px outer, 66px inner */
+.obs-ring--lg {
+  width: 84px;
+  height: 84px;
+  box-shadow: 0 8px 30px color-mix(in srgb, var(--obs-ring-color, var(--brand)) 25%, transparent);
+}
+.obs-ring--lg .obs-ring-inner {
+  width: 66px;
+  height: 66px;
+}
+.obs-ring--lg .obs-ring-value {
+  font-size: 20px;
+}
+
+/* Tone color mappings — set --obs-ring-color via tone class */
+.obs-ring--brand { --obs-ring-color: var(--brand); }
+.obs-ring--up    { --obs-ring-color: var(--up); }
+.obs-ring--down  { --obs-ring-color: var(--down); }
+.obs-ring--muted { --obs-ring-color: var(--muted); }
+
+/* ─── Numeric utility ────────────────────────────────────────────────────── */
+/*
+ * .num  — already defined in globals.css; re-exported here for documentation.
+ *          font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1
+ *          Combine with var(--font-num) for monospace numerals.
+ */
+
+/* ─── Live dot ───────────────────────────────────────────────────────────── */
+.obs-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--up);
+  box-shadow: 0 0 10px var(--up);
+  flex-shrink: 0;
+}
+
+/* ─── Responsive: scrollable pill nav on narrow viewports ────────────────── */
+@media (max-width: 640px) {
+  .obs-pillnav {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .obs-pillnav::-webkit-scrollbar { display: none; }
+}
+
+/* ─── Flow Desk surface-specific overrides ───────────────────────────────── */
+/*
+ * Scoped under .obs-flowdesk so they don't leak into the chart app.
+ * The three panes use .obs-card with 15px radius. Layout borders replaced by
+ * card shells. Density: 13-16px padding, 10-14px gaps.
+ */
+
+/* Root layout: fill the tab panel, flex row, ambient gradient via obs-ambient */
+.obs-flowdesk {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  overflow: hidden;
+  gap: 10px;
+  padding: 10px;
+  box-sizing: border-box;
+  background: var(--bg);
+}
+
+/* Left rail */
+.obs-fd-left {
+  width: 210px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.obs-fd-left::-webkit-scrollbar { display: none; }
+
+/* Center column */
+.obs-fd-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* Right rail */
+.obs-fd-right {
+  width: 310px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.obs-fd-right::-webkit-scrollbar { display: none; }
+
+/* ── Session stats card (left rail top) ─────────────────────────────────── */
+.obs-fd-session.obs-card {
+  padding: 0;
+  overflow: hidden;
+}
+.obs-fd-session .obs-card-hd {
+  padding: 13px 15px 10px;
+}
+.obs-fd-stat-grid {
+  display: flex;
+  gap: 0;
+  padding: 10px 15px 14px;
+  gap: 16px;
+}
+.obs-fd-stat-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.obs-fd-stat-val {
+  font: 600 15px/1 var(--font-num);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.obs-fd-bar-wrap {
+  padding: 0 15px 12px;
+}
+.obs-fd-bar-track {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.obs-fd-bar-fill {
+  height: 100%;
+  background: var(--brand);
+  border-radius: 2px;
+  transition: width 0.35s ease;
+}
+.obs-fd-bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* ── Watchlist card ─────────────────────────────────────────────────────── */
+.obs-fd-wl.obs-card {
+  padding: 0;
+  overflow: hidden;
+}
+.obs-fd-wl-rows {
+  padding: 6px 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.obs-fd-wl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background var(--t);
+}
+.obs-fd-wl-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.obs-fd-wl-ticker {
+  font: 650 12.5px/1 var(--font-ui);
+  color: var(--text);
+  flex: 0 0 52px;
+}
+.obs-fd-wl-inactive {
+  font-size: 10px;
+  color: var(--muted);
+  flex: 1;
+}
+.obs-fd-wl-btns {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.obs-fd-wl-btn {
+  font-size: 14px;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+}
+.obs-fd-wl-btn.add {
+  color: var(--brand);
+}
+.obs-fd-wl-empty {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 6px 8px;
+}
+.obs-fd-wl-sublabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 4px 8px 2px;
+}
+
+/* ── Radar card ─────────────────────────────────────────────────────────── */
+.obs-fd-radar.obs-card {
+  padding: 0;
+  overflow: hidden;
+}
+.obs-fd-radar-rows {
+  padding: 4px 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.obs-fd-radar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  transition: background var(--t);
+}
+.obs-fd-radar-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.obs-fd-radar-ticker {
+  font: 650 12px/1 var(--font-ui);
+  color: var(--text);
+  flex: 0 0 44px;
+}
+.obs-fd-radar-z {
+  font: 600 12px/1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 40px;
+  text-align: right;
+}
+.obs-fd-radar-prem {
+  font: 600 11.5px/1 var(--font-num);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  text-align: right;
+}
+.obs-fd-radar-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin: 0 0 2px;
+}
+
+/* ── Center feed area ───────────────────────────────────────────────────── */
+.obs-fd-feed-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.obs-fd-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.obs-fd-count {
+  font: 600 11px/1 var(--font-num);
+  color: var(--text-2);
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.obs-fd-search {
+  flex: 1;
+  min-width: 80px;
+  max-width: 130px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  color: var(--text);
+  font: 500 12px/1 var(--font-ui);
+  padding: 5px 9px;
+  outline: none;
+  transition: border-color var(--t);
+}
+.obs-fd-search:focus {
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.obs-fd-search::placeholder {
+  color: var(--muted);
+}
+.obs-fd-preset-bar {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+.obs-fd-preset-bar::-webkit-scrollbar { display: none; }
+
+.obs-fd-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Flow event card ────────────────────────────────────────────────────── */
+/*
+ * obs-card is the shell.  .obs-fc-card handles interior layout.
+ * Selected = .obs-card.sel (inherits brand tint + glow from observatory.css).
+ */
+.obs-fc-card {
+  padding: 13px 15px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.obs-fc-row1 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.obs-fc-ticker {
+  font: 700 14px/1 var(--font-ui);
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+/* C/P chip — uses var(--up)/var(--down) for East-Asian flip */
+.obs-fc-cp {
+  font: 700 10px/1 var(--font-ui);
+  padding: 3px 7px;
+  border-radius: 6px;
+}
+.obs-fc-cp.call {
+  background: color-mix(in srgb, var(--up) 12%, transparent);
+  color: var(--up);
+}
+.obs-fc-cp.put {
+  background: color-mix(in srgb, var(--down) 12%, transparent);
+  color: var(--down);
+}
+/* Lean chip — dashed border per mockup */
+.obs-fc-lean {
+  font: 500 11px/1 var(--font-ui);
+  color: var(--muted);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  padding: 3px 9px;
+  border-radius: 99px;
+  position: relative;
+}
+.obs-fc-time {
+  font: 500 10.5px/1 var(--font-num);
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  margin-left: auto;
+}
+.obs-fc-subtitle {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+/* Row 2 - facts */
+.obs-fc-facts {
+  display: flex;
+  gap: 14px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.obs-fc-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+/* Premium emphasis */
+.obs-fc-prem {
+  font: 600 15px/1 var(--font-num);
+  color: var(--signal);
+  font-variant-numeric: tabular-nums;
+}
+/* Row 3 - size/OI/IV secondary line */
+.obs-fc-meta {
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.obs-fc-meta-sep {
+  color: var(--muted);
+}
+/* Row 4 - badges + ring, right-aligned ring */
+.obs-fc-badges-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.obs-fc-badge {
+  font: 700 9.5px/1 var(--font-ui);
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 7px;
+  cursor: help;
+  position: relative;
+}
+.obs-fc-badge-whale  { color: var(--warn);   background: color-mix(in srgb, var(--warn)   13%, transparent); }
+.obs-fc-badge-cluster{ color: #A5B0FF;        background: rgba(91,108,255,.15); }
+.obs-fc-badge-sweep  { color: var(--text-2);  background: rgba(255,255,255,.07); }
+.obs-fc-badge-unusual{ color: #19c2c2;        background: rgba(25,194,194,.12); }
+.obs-fc-badge-block  { color: var(--text-2);  background: rgba(255,255,255,.07); }
+.obs-fc-ring-wrap {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+/* Expand section */
+.obs-fc-expand-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 10px;
+  font: 600 8px/1 var(--font-ui);
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.obs-fc-detail {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.obs-fc-detail-hd {
+  font: 600 11px/1 var(--font-ui);
+  color: var(--text-2);
+  margin-bottom: 7px;
+}
+.obs-fc-comp-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+.obs-fc-comp-label {
+  color: var(--text-2);
+  flex: 0 0 90px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.obs-fc-comp-track {
+  flex: 1;
+  height: 3px;
+  background: rgba(255,255,255,.07);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.obs-fc-comp-fill {
+  height: 100%;
+  background: var(--brand);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.obs-fc-comp-val {
+  font: 500 10px/1 var(--font-num);
+  color: var(--text-2);
+  flex: 0 0 24px;
+  text-align: right;
+}
+.obs-fc-detail-note {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+/* ── Inspector pane ─────────────────────────────────────────────────────── */
+.obs-fd-inspector.obs-card {
+  padding: 0;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.obs-insp-head {
+  padding: 15px 16px 8px;
+}
+.obs-insp-head-ticker {
+  font: 700 18px/1 var(--font-ui);
+  color: var(--text);
+}
+.obs-insp-head-ct {
+  font: 500 12px/1 var(--font-num);
+  color: var(--muted);
+  margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.obs-insp-tier {
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 99px;
+  padding: 2px 9px;
+  letter-spacing: 0.05em;
+  float: right;
+  margin-top: 3px;
+}
+.obs-insp-bigring-row {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 10px 16px 14px;
+}
+.obs-insp-comp-bars {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.obs-insp-crow {
+  display: grid;
+  grid-template-columns: 68px 1fr 28px;
+  gap: 9px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.obs-insp-track {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+.obs-insp-track-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--brand), color-mix(in srgb, var(--brand) 60%, #8B5CF6));
+  transition: width 0.35s ease;
+}
+.obs-insp-crow-val {
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.obs-insp-kvgrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px 8px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.obs-insp-kv-val {
+  font: 600 13px/1 var(--font-num);
+  color: var(--text);
+  display: block;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+/* Dir block */
+.obs-insp-dir-block {
+  padding: 8px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.obs-insp-dir-chip {
+  font: 650 11px/1 var(--font-ui);
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 99px;
+  padding: 3px 9px;
+}
+/* Field section */
+.obs-insp-section {
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.obs-insp-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  margin-bottom: 7px;
+}
+.obs-insp-field-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+  gap: 6px;
+}
+.obs-insp-field-key {
+  font-size: 11px;
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+.obs-insp-field-val {
+  font: 600 11px/1 var(--font-num);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  word-break: break-all;
+}
+.obs-insp-field-note {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 10px;
+}
+.obs-insp-contract-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+/* Empty state */
+.obs-insp-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ── Chain heat card ────────────────────────────────────────────────────── */
+.obs-fd-chain.obs-card {
+  padding: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+}
+.obs-fd-chain-row {
+  padding: 11px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.obs-fd-chain-row:last-child {
+  border-bottom: none;
+}
+.obs-fd-chain-row1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.obs-fd-chain-ticker {
+  font: 700 13.5px/1 var(--font-ui);
+  color: var(--text);
+}
+.obs-fd-chain-cp {
+  font: 700 10px/1 var(--font-ui);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+.obs-fd-chain-cp.call {
+  background: color-mix(in srgb, var(--up) 12%, transparent);
+  color: var(--up);
+}
+.obs-fd-chain-cp.put {
+  background: color-mix(in srgb, var(--down) 12%, transparent);
+  color: var(--down);
+}
+.obs-fd-chain-strike {
+  font: 500 11px/1 var(--font-num);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  flex: 1;
+}
+.obs-fd-chain-prem {
+  font: 700 13px/1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+.obs-fd-chain-row2 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+.obs-fd-chain-lean {
+  font: 600 10px/1 var(--font-ui);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 99px;
+  padding: 2px 7px;
+  color: var(--text-2);
+}
+.obs-fd-chain-caveat {
+  font-size: 10px;
+  color: var(--muted);
+  font-style: italic;
+}
+.obs-fd-chain-stats {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 5px;
+  font-size: 10.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.obs-fd-chain-stat-key {
+  color: var(--muted);
+}
+.obs-fd-chain-askbar-track {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.obs-fd-chain-askbar-fill {
+  height: 100%;
+  background: var(--brand);
+  border-radius: 2px;
+  transition: width 0.35s ease;
+}
+.obs-fd-chain-note {
+  font-size: 10px;
+  color: var(--muted);
+  font-style: italic;
+  padding: 6px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  line-height: 1.4;
+}
+.obs-fd-chain-empty {
+  padding: 16px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  font-style: italic;
+}

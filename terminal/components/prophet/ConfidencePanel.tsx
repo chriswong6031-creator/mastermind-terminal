@@ -13,6 +13,7 @@
 
 import { useState } from "react";
 import { makeProphetT } from "./prophetStrings";
+import { RingGauge } from "@/components/ui/RingGauge";
 import type { Lang } from "@/lib/i18n";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ export function ConfidencePanel({
     : "var(--text-2)";
 
   return (
-    <div style={PANEL_STYLE}>
+    <div className="obs-card" style={PANEL_STYLE}>
       {/* Header — VERBATIM label required by spec */}
       <div style={HEADER}>
         <span style={HEADER_LABEL}>{t("confidenceHeader")}</span>
@@ -132,77 +133,26 @@ export function ConfidencePanel({
         )}
       </div>
 
-      {/* Arc gauge */}
+      {/* Ring gauge (lg) replaces SVG arc — cap-92 note preserved */}
       <div style={ARC_WRAPPER}>
-        <svg
-          width={ARC_SIZE}
-          height={ARC_SIZE * 0.75}
-          viewBox={`0 0 ${ARC_SIZE} ${ARC_SIZE}`}
-          style={{ overflow: "visible" }}
-          aria-label={`${t("confidenceHeader")}: ${confidence != null ? score.toFixed(1) : "—"}`}
-        >
-          {/* Background arc track */}
-          <circle
-            cx={ARC_SIZE / 2}
-            cy={ARC_SIZE / 2}
-            r={RADIUS}
-            fill="none"
-            stroke="var(--line-2)"
-            strokeWidth={STROKE}
-            strokeDasharray={`${CIRCUMFERENCE * 0.75} ${CIRCUMFERENCE}`}
-            strokeDashoffset={0}
-            strokeLinecap="round"
-            transform={`rotate(135 ${ARC_SIZE / 2} ${ARC_SIZE / 2})`}
-          />
-          {/* Score fill arc */}
-          {confidence != null && (
-            <circle
-              cx={ARC_SIZE / 2}
-              cy={ARC_SIZE / 2}
-              r={RADIUS}
-              fill="none"
-              stroke={arcColor}
-              strokeWidth={STROKE}
-              strokeDasharray={`${CIRCUMFERENCE * 0.75} ${CIRCUMFERENCE}`}
-              strokeDashoffset={CIRCUMFERENCE - (Math.min(score, CEILING) / CEILING) * CIRCUMFERENCE * 0.75}
-              strokeLinecap="round"
-              transform={`rotate(135 ${ARC_SIZE / 2} ${ARC_SIZE / 2})`}
-              style={{ transition: "stroke-dashoffset .4s ease" }}
-            />
-          )}
-          {/* Ceiling marker at 92/100 of arc (=92% fill) */}
-          <circle
-            cx={ARC_SIZE / 2}
-            cy={ARC_SIZE / 2}
-            r={RADIUS}
-            fill="none"
-            stroke="var(--muted)"
-            strokeWidth={STROKE + 2}
-            strokeDasharray={`2 ${CIRCUMFERENCE}`}
-            strokeDashoffset={CIRCUMFERENCE - CIRCUMFERENCE * 0.75 + 2}
-            strokeLinecap="butt"
-            transform={`rotate(135 ${ARC_SIZE / 2} ${ARC_SIZE / 2})`}
-            opacity={0.5}
-          />
-          {/* Score text */}
-          <text
-            x={ARC_SIZE / 2}
-            y={ARC_SIZE / 2 + 5}
-            textAnchor="middle"
-            style={{
-              font: `700 22px/1 var(--font-num)`,
-              fill: confidence != null ? arcColor : "var(--muted)",
-            }}
-          >
-            {confidence != null ? score.toFixed(0) : "—"}
-          </text>
-        </svg>
-
-        {/* Ceiling note below arc */}
+        <RingGauge
+          value={confidence != null ? score : 0}
+          max={CEILING}
+          size="lg"
+          tone="auto"
+        />
+        {/* Ceiling note below ring */}
         <div style={CEIL_NOTE}>
           <span style={{ color: "var(--muted)", fontSize: 9 }}>{t("confidenceCeil")}</span>
-          <span style={{ color: "var(--text-dim)", fontSize: 9, marginLeft: 4 }}>{t("confidenceCeilNote")}</span>
+          <span style={{ color: "var(--muted)", fontSize: 9, marginLeft: 4 }}>{t("confidenceCeilNote")}</span>
         </div>
+        {/* Show raw score alongside scaled ring value */}
+        {confidence != null && (
+          <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 4 }}>
+            <span className="num">{score.toFixed(0)}</span>
+            <span style={{ color: "var(--muted)", fontSize: 9, marginLeft: 2 }}>/ {CEILING}</span>
+          </div>
+        )}
       </div>
 
       {/* Action chip */}
@@ -293,10 +243,8 @@ function ComponentBar({
 
 // ── Style constants ───────────────────────────────────────────────────────────
 
+// obs-card class provides glass background/border/radius
 const PANEL_STYLE: React.CSSProperties = {
-  background: "var(--panel)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-lg)",
   padding: "12px 14px",
 };
 
@@ -349,7 +297,7 @@ const ACTION_CHIP: React.CSSProperties = {
 const BARS_WRAPPER: React.CSSProperties = {
   marginTop: 8,
   paddingTop: 8,
-  borderTop: "1px solid var(--line-2)",
+  borderTop: "1px solid rgba(255,255,255,0.08)",
 };
 
 const BAR_LABEL: React.CSSProperties = {
@@ -389,7 +337,7 @@ const BAR_TIP_STYLE: React.CSSProperties = {
 const REASON_BOX: React.CSSProperties = {
   marginTop: 10,
   paddingTop: 8,
-  borderTop: "1px solid var(--line-2)",
+  borderTop: "1px solid rgba(255,255,255,0.08)",
   font: "500 10px/1.45 var(--font-ui)",
   color: "var(--text-2)",
 };

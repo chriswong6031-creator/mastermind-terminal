@@ -19,6 +19,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flowGet } from "../../lib/flowClientCache";
 import { useLang } from "../../lib/i18n";
 import { makeFlowT } from "../../lib/flowdeskStrings";
 import { WatchlistRail } from "./WatchlistRail";
@@ -109,9 +110,9 @@ function saveWatchlist(list: string[]) {
 
 async function safeFetch<T>(url: string): Promise<T | null> {
   try {
-    const r = await fetch(url, { cache: "no-store" });
-    if (!r.ok) return null;
-    return await r.json() as T;
+    const f = new URL(url, "http://x").searchParams.get("f") ?? url;
+    const data = await flowGet(f);
+    return (data as T) ?? null;
   } catch {
     return null;
   }
@@ -130,11 +131,11 @@ function ChainHeatRail({ data, lang }: ChainHeatRailProps) {
 
   if (!data) {
     return (
-      <div style={CHAIN_RAIL} data-tut="chain-heat">
-        <div style={CHAIN_HEADER}>
-          <span style={CHAIN_TITLE}>{t("chainHeatTitle")}</span>
+      <div className="obs-card obs-fd-chain" data-tut="chain-heat">
+        <div className="obs-card-hd">
+          <span className="obs-lbl">{t("chainHeatTitle")}</span>
         </div>
-        <div style={CHAIN_LOADING}>{t("chainHeatLoading")}</div>
+        <div className="obs-fd-chain-empty">{t("chainHeatLoading")}</div>
       </div>
     );
   }
@@ -147,16 +148,18 @@ function ChainHeatRail({ data, lang }: ChainHeatRailProps) {
   const note = zh ? (data.note_zh ?? "") : (data.note_en ?? "");
 
   return (
-    <div style={CHAIN_RAIL} data-tut="chain-heat">
-      <div style={CHAIN_HEADER}>
-        <span style={CHAIN_TITLE}>{t("chainHeatTitle")}</span>
-        <span style={CHAIN_SUBTITLE}>{zh ? `≥$${threshold}M` : `≥$${threshold}M cumul`}</span>
+    <div className="obs-card obs-fd-chain" data-tut="chain-heat">
+      <div className="obs-card-hd">
+        <span className="obs-lbl">{t("chainHeatTitle")}</span>
+        <span className="obs-lbl" style={{ color: "var(--muted)" }}>
+          {zh ? `≥$${threshold}M` : `≥$${threshold}M cumul`}
+        </span>
       </div>
 
-      {note && <div style={CHAIN_NOTE}>{note}</div>}
+      {note && <div className="obs-fd-chain-note">{note}</div>}
 
       {campaigns.length === 0 && (
-        <div style={CHAIN_EMPTY}>{t("chainHeatEmpty")}</div>
+        <div className="obs-fd-chain-empty">{t("chainHeatEmpty")}</div>
       )}
 
       {campaigns.map((c, idx) => (
@@ -206,59 +209,54 @@ function ChainCampaignRow({
   }
 
   return (
-    <div style={CHAIN_ROW} {...(firstCampaign ? { "data-tut": "chain-heat-campaign" } : {})}>
-      {/* Ticker + contract type */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-        <span style={CHAIN_TICKER}>{campaign.ticker}</span>
-        <span style={{ ...CHAIN_CP_BADGE, color: isCall ? "var(--brand-2)" : "var(--cat-2)" }}>
+    <div className="obs-fd-chain-row" {...(firstCampaign ? { "data-tut": "chain-heat-campaign" } : {})}>
+      {/* Row 1: ticker / type / strike / premium */}
+      <div className="obs-fd-chain-row1">
+        <span className="obs-fd-chain-ticker">{campaign.ticker}</span>
+        <span className={`obs-fd-chain-cp ${isCall ? "call" : "put"}`}>
           {campaign.type}
         </span>
-        <span style={CHAIN_STRIKE}>${campaign.strike} · {campaign.expiry.slice(5)}</span>
-        <span style={{ ...CHAIN_PREM, color: isBig ? "var(--signal)" : "var(--text)" }}>
+        <span className="obs-fd-chain-strike">${campaign.strike} · {campaign.expiry.slice(5)}</span>
+        <span className="obs-fd-chain-prem num" style={{ color: isBig ? "var(--signal)" : "var(--text)" }}>
           {premStr}
         </span>
       </div>
 
-      {/* Lean chip — neutral color, not buy/sell assertion */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+      {/* Row 2: lean chip + caveat */}
+      <div className="obs-fd-chain-row2">
         <span
-          style={{
-            ...CHAIN_LEAN_CHIP,
-            color: isContested ? "var(--muted)" : "var(--text-2)",
-          }}
-          // No title= attribute (CI-guarded: no translated text in title=)
+          className="obs-fd-chain-lean"
+          style={{ color: isContested ? "var(--muted)" : "var(--text-2)" }}
         >
           {leanLabel}
         </span>
-        <span style={CHAIN_CAVEAT}>{t("chainHeatLeanNote")}</span>
+        <span className="obs-fd-chain-caveat">{t("chainHeatLeanNote")}</span>
       </div>
 
-      {/* Stats row */}
-      <div style={CHAIN_STATS}>
-        <span style={CHAIN_STAT_ITEM}>
-          <span style={CHAIN_STAT_KEY}>{t("chainHeatAlertCt")}</span>
+      {/* Row 3: stats */}
+      <div className="obs-fd-chain-stats">
+        <span>
+          <span className="obs-fd-chain-stat-key">{t("chainHeatAlertCt")}</span>
           {" "}{campaign.alert_count}
         </span>
-        <span style={CHAIN_STAT_ITEM}>
-          <span style={CHAIN_STAT_KEY}>{t("chainHeatSpan")}</span>
+        <span>
+          <span className="obs-fd-chain-stat-key">{t("chainHeatSpan")}</span>
           {" "}{campaign.span_minutes}m
         </span>
-        <span style={CHAIN_STAT_ITEM}>
-          <span style={CHAIN_STAT_KEY}>{t("chainHeatFirstSeen")}</span>
+        <span>
+          <span className="obs-fd-chain-stat-key">{t("chainHeatFirstSeen")}</span>
           {" "}{firstSeenStr}
         </span>
       </div>
 
       {/* Ask share bar */}
-      <div style={{ marginTop: 4 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-          <span style={CHAIN_STAT_KEY}>{t("chainHeatAskShare")}</span>
-          <span style={{ fontSize: 10, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
-            {askBarW}%
-          </span>
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+          <span className="obs-fd-chain-stat-key">{t("chainHeatAskShare")}</span>
+          <span className="num" style={{ fontSize: 10, color: "var(--text-2)" }}>{askBarW}%</span>
         </div>
-        <div style={CHAIN_BAR_TRACK}>
-          <div style={{ ...CHAIN_BAR_FILL, width: `${askBarW}%` }} />
+        <div className="obs-fd-chain-askbar-track">
+          <div className="obs-fd-chain-askbar-fill" style={{ width: `${askBarW}%` }} />
         </div>
       </div>
     </div>
@@ -449,10 +447,10 @@ export function FlowDeskView() {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div style={DESK_OUTER}>
+    <div className="obs obs-ambient obs-flowdesk">
 
       {/* ═══ LEFT RAIL (WatchlistRail) ════════════════════════════════════════ */}
-      <div style={LEFT_COL}>
+      <div className="obs-fd-left">
         {feedForWatchlist && (
           <WatchlistRail
             feed={feedForWatchlist}
@@ -467,7 +465,7 @@ export function FlowDeskView() {
       </div>
 
       {/* ═══ CENTER (FlowGauge + RadarStrip + FeedPane) ══════════════════════ */}
-      <div style={CENTER_COL}>
+      <div className="obs-fd-center">
         {/* Tutorial button row */}
         <div style={TUT_HEADER_ROW}>
           <button
@@ -503,7 +501,7 @@ export function FlowDeskView() {
       </div>
 
       {/* ═══ RIGHT RAIL (InspectorPane + ChainHeatRail) ══════════════════════ */}
-      <div style={RIGHT_COL}>
+      <div className="obs-fd-right">
         {/* Inspector — shown whenever an event is selected */}
         <InspectorPane
           event={selectedEvent}
@@ -528,29 +526,6 @@ export function FlowDeskView() {
 }
 
 // ─── Layout styles ────────────────────────────────────────────────────────────
-
-const DESK_OUTER: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "row",
-  height: "100%",
-  overflow: "hidden",
-  background: "var(--bg)",
-};
-
-const LEFT_COL: React.CSSProperties = {
-  width: 184,
-  flexShrink: 0,
-  overflowY: "auto",
-  borderRight: "1px solid var(--line)",
-};
-
-const CENTER_COL: React.CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  display: "flex",
-  flexDirection: "column",
-  overflowY: "hidden",
-};
 
 const TUT_HEADER_ROW: React.CSSProperties = {
   display: "flex",
@@ -582,146 +557,9 @@ const FEED_COL: React.CSSProperties = {
   overflowY: "auto",
 };
 
-const RIGHT_COL: React.CSSProperties = {
-  width: 300,
-  flexShrink: 0,
-  borderLeft: "1px solid var(--line)",
-  overflowY: "auto",
-  display: "flex",
-  flexDirection: "column",
-};
-
 const RAIL_LOADING: React.CSSProperties = {
   height: "100%",
   background: "var(--panel)",
 };
 
-// ─── ChainHeatRail styles ─────────────────────────────────────────────────────
-
-const CHAIN_RAIL: React.CSSProperties = {
-  borderTop: "1px solid var(--line)",
-  background: "var(--panel)",
-  flex: "0 0 auto",
-};
-
-const CHAIN_HEADER: React.CSSProperties = {
-  display: "flex",
-  alignItems: "baseline",
-  gap: 8,
-  padding: "8px 12px 4px",
-  borderBottom: "1px solid var(--line-2)",
-};
-
-const CHAIN_TITLE: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: "var(--text)",
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-};
-
-const CHAIN_SUBTITLE: React.CSSProperties = {
-  fontSize: 10,
-  color: "var(--muted)",
-};
-
-const CHAIN_NOTE: React.CSSProperties = {
-  fontSize: 10,
-  color: "var(--muted)",
-  fontStyle: "italic",
-  padding: "4px 12px",
-  borderBottom: "1px solid var(--line-2)",
-  lineHeight: 1.4,
-};
-
-const CHAIN_LOADING: React.CSSProperties = {
-  padding: "12px",
-  fontSize: 11,
-  color: "var(--muted)",
-  textAlign: "center",
-};
-
-const CHAIN_EMPTY: React.CSSProperties = {
-  padding: "12px",
-  fontSize: 11,
-  color: "var(--muted)",
-  textAlign: "center",
-  fontStyle: "italic",
-};
-
-const CHAIN_ROW: React.CSSProperties = {
-  padding: "8px 12px",
-  borderBottom: "1px solid var(--line-2)",
-};
-
-const CHAIN_TICKER: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 700,
-  color: "var(--text)",
-};
-
-const CHAIN_CP_BADGE: React.CSSProperties = {
-  fontSize: 10,
-  fontWeight: 700,
-  background: "var(--panel-3)",
-  borderRadius: "var(--r-pill)",
-  padding: "1px 5px",
-};
-
-const CHAIN_STRIKE: React.CSSProperties = {
-  fontSize: 11,
-  color: "var(--text-2)",
-  fontVariantNumeric: "tabular-nums",
-  flex: 1,
-};
-
-const CHAIN_PREM: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 700,
-  fontVariantNumeric: "tabular-nums",
-};
-
-const CHAIN_LEAN_CHIP: React.CSSProperties = {
-  fontSize: 10,
-  fontWeight: 600,
-  background: "var(--panel-3)",
-  borderRadius: "var(--r-pill)",
-  padding: "2px 6px",
-};
-
-const CHAIN_CAVEAT: React.CSSProperties = {
-  fontSize: 10,
-  color: "var(--muted)",
-  fontStyle: "italic",
-};
-
-const CHAIN_STATS: React.CSSProperties = {
-  display: "flex",
-  gap: 10,
-  flexWrap: "wrap",
-  marginTop: 4,
-};
-
-const CHAIN_STAT_ITEM: React.CSSProperties = {
-  fontSize: 10,
-  color: "var(--text-2)",
-  fontVariantNumeric: "tabular-nums",
-};
-
-const CHAIN_STAT_KEY: React.CSSProperties = {
-  color: "var(--muted)",
-};
-
-const CHAIN_BAR_TRACK: React.CSSProperties = {
-  height: 3,
-  background: "var(--panel-3)",
-  borderRadius: 2,
-  overflow: "hidden",
-};
-
-const CHAIN_BAR_FILL: React.CSSProperties = {
-  height: "100%",
-  background: "var(--brand-2)",
-  borderRadius: 2,
-  transition: "width 0.3s ease",
-};
+// ChainHeat styles moved to observatory.css (.obs-fd-chain-*)
