@@ -33,10 +33,16 @@ const GEX_LEX = {
   sumPutSupport:  ["Put Support", "看跌墙"],
   sumMagnet:      ["Magnet / HVL", "磁吸 / 高量位"],
   sumMaxPain:     ["Max Pain", "最大痛苦点"],
-  sumPcOi:        ["P/C OI", "认沽/认购持仓"],
+  sumPcOi:        ["P/C Ratio", "认沽/认购比"],
+  sumCallOI:      ["Call OI", "认购持仓"],
+  sumPutOI:       ["Put OI", "认沽持仓"],
   sumIv30:        ["IV30", "30日IV"],
   sumFlip:        ["Gamma Flip", "伽马翻转"],
   sumNotAvail:    ["—", "—"],
+
+  // ── Expiry dropdown ────────────────────────────────────────────────────────
+  expiryDropdownLabel: ["All expirations", "全部到期日"],
+  expiry0Dte:          ["0DTE", "当日到期"],
 
   // ── Strike ladder ──────────────────────────────────────────────────────────
   ladderTitle:      ["Strike Ladder", "行权价梯度"],

@@ -459,6 +459,7 @@ export function FlowDeskView() {
             watchlist={watchlist}
             onToggleTicker={handleToggleTicker}
             onPickTicker={handlePickTicker}
+            onOpenTutorial={() => setTutOpen(true)}
           />
         )}
         {!feedForWatchlist && <div style={RAIL_LOADING} />}
@@ -466,17 +467,6 @@ export function FlowDeskView() {
 
       {/* ═══ CENTER (FlowGauge + RadarStrip + FeedPane) ══════════════════════ */}
       <div className="obs-fd-center">
-        {/* Tutorial button row */}
-        <div style={TUT_HEADER_ROW}>
-          <button
-            style={TUT_BTN}
-            onClick={() => setTutOpen(true)}
-            aria-label={lang === "zh" ? "打开教程" : "Open tutorial"}
-          >
-            {lang === "zh" ? "教程" : "Tutorial"}
-          </button>
-        </div>
-
         {/* FlowGauge strip — always shown; empty feed renders $0 gracefully */}
         <FlowGauge feed={feedForGauge} lang={lang} />
 
@@ -526,30 +516,6 @@ export function FlowDeskView() {
 }
 
 // ─── Layout styles ────────────────────────────────────────────────────────────
-
-const TUT_HEADER_ROW: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  alignItems: "center",
-  padding: "4px 10px",
-  borderBottom: "1px solid var(--line)",
-  flexShrink: 0,
-  background: "var(--panel)",
-};
-
-const TUT_BTN: React.CSSProperties = {
-  height: 24,
-  padding: "0 10px",
-  fontSize: 11,
-  fontWeight: 600,
-  letterSpacing: "0.04em",
-  background: "rgba(77,130,255,0.12)",
-  border: "1px solid rgba(77,130,255,0.35)",
-  borderRadius: "var(--r-pill)",
-  color: "var(--brand-2)",
-  cursor: "pointer",
-  transition: "background 0.15s",
-};
 
 const FEED_COL: React.CSSProperties = {
   flex: 1,

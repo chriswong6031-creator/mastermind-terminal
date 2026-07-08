@@ -124,9 +124,17 @@ const PROPHET_LEX = {
   thesisLabel:      ["Signal Thesis", "信号论点"],
   thesisCaption:    ["Machine-generated from engine fields — display only", "由引擎字段自动生成 — 仅供展示"],
   briefLabel:       ["What To Do Now", "当前操作建议"],
+  briefCaption:     ["Phase-keyed action guide — display only", "阶段动作指南 — 仅供展示"],
+  profitPlanLabel:  ["Profit Taking Plan", "利润获取计划"],
+  profitPlanCaption:["Exit levels from engine geometry — display only", "引擎几何计算的退出位 — 仅供展示"],
+  profitStatusActive:["ACTIVE", "进行中"],
+  profitStatusPending:["PENDING", "待定"],
+  profitStatusDone: ["DONE", "完成"],
   rrLabel:          ["R/R at Entry", "入场风险收益比"],
   rrRisk:           ["Risk", "风险"],
   rrReward:         ["Reward (T1)", "收益(T1)"],
+  analysisTitle:    ["Analysis", "分析"],
+  confidenceTitle:  ["Confidence Index", "置信度指标"],
 
   // ── PERF sub-tab placeholder ───────────────────────────────────────────────
   perfPlaceholderTitle:  ["Outcome Ledger", "结果账本"],

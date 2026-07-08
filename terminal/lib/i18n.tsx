@@ -452,6 +452,28 @@ const LEX: Record<string, [string, string]> = {
   // Tide ETF flow chip
   tideEtfFlowProxy: ["proxy", "代理"],
   tideEtfFlow: ["flow", "资金流向"],
+  // Tickers merged tab (intraday flow + vol surface)
+  tickersIvSurface: ["Vol Surface", "波动率曲面"],
+  tickersIvRankHistory: ["IV Rank History", "IV分位历史"],
+  tickersIvRank: ["IV Rank (252d)", "IV分位（252日）"],
+  tickersAtmIv: ["ATM IV", "平值IV"],
+  tickersVolWarm: ["baseline warming", "基线积累中"],
+  tickersIntraday: ["Intraday Flow", "日内期权流"],
+  // Screener preset views
+  screenerPresetTop: ["Top Premium", "保费最大"],
+  screenerPresetUnusual: ["Unusual (z)", "异常（z值）"],
+  screenerPresetFresh: ["Fresh Positioning", "新建仓位"],
+  screenerPresetDoi: ["ΔOI Builds", "持仓增长"],
+  screenerPreset0dte: ["0DTE Heavy", "高0DTE占比"],
+  screenerPresetHot: ["Hot Contracts", "热门合约"],
+  screenerColNetPrem: ["Net Prem", "净保费"],
+  screenerColPremZ: ["Prem z", "保费z值"],
+  screenerColFresh: ["Fresh", "新建仓"],
+  screenerColDoi: ["ΔOI", "持仓变动"],
+  screenerColZdte: ["0DTE%", "0DTE占比"],
+  screenerColSector: ["Sector", "板块"],
+  screenerColGross: ["Gross", "总保费"],
+  screenerColCallShare: ["Call%", "认购占比"],
 };
 
 const Ctx = createContext<{ lang: Lang; setLang: (l: Lang) => void }>({ lang: "en", setLang: () => {} });

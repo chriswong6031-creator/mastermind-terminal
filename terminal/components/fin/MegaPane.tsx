@@ -84,6 +84,12 @@ export interface MegaPaneProps {
   onClose: () => void;
   /** Company display name for the header + transcript title. */
   name?: string | null;
+  /**
+   * "overlay" (default) — legacy full-screen fixed overlay (used on mobile).
+   * "workspace" — embedded in the chart-pane slot; no scrim, no scroll-lock,
+   *   CSS handles positioning via .fin-pane--workspace.
+   */
+  mode?: "overlay" | "workspace";
 }
 
 export default function MegaPane({
@@ -95,7 +101,9 @@ export default function MegaPane({
   onPage,
   onClose,
   name,
+  mode = "overlay",
 }: MegaPaneProps) {
+  const workspace = mode === "workspace";
   const { lang } = useLang();
   const zh = lang === "zh";
   const [txId, setTxId] = useState<string | null>(null);
@@ -124,14 +132,15 @@ export default function MegaPane({
     return () => window.removeEventListener("keydown", onKey, { capture: true } as any);
   }, [onClose]);
 
-  // ── body scroll lock while open ──
+  // ── body scroll lock while open (overlay mode only — workspace scrolls inside its slot) ──
   useEffect(() => {
+    if (workspace) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev;
     };
-  }, []);
+  }, [workspace]);
 
   // ── ?pane= deep-link sync (shallow, no navigation) ──
   useEffect(() => {
@@ -160,8 +169,8 @@ export default function MegaPane({
 
   return (
     <>
-      <div className="fin-scrim" onClick={onClose} aria-hidden />
-      <div className="fin-pane" role="dialog" aria-modal="true" aria-label={`${displayName} · ${pageTitle}`}>
+      {!workspace && <div className="fin-scrim" onClick={onClose} aria-hidden />}
+      <div className={`fin-pane${workspace ? " fin-pane--workspace" : ""}`} role="dialog" aria-modal="true" aria-label={`${displayName} · ${pageTitle}`}>
         {/* ── header ── */}
         <div className="fin-head">
           <button className="fin-head-back" onClick={onClose}>

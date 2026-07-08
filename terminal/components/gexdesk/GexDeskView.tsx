@@ -293,7 +293,12 @@ export function GexDeskView() {
       </div>
 
       {/* ── Summary bar ──────────────────────────────────────────────────── */}
-      <GexSummaryBar payload={gexPayload} lang={lang} />
+      <GexSummaryBar
+        payload={gexPayload}
+        callOI={(statePayload as unknown as Record<string, number | null | undefined>)?.call_oi ?? null}
+        putOI={(statePayload as unknown as Record<string, number | null | undefined>)?.put_oi ?? null}
+        lang={lang}
+      />
 
       {/* ── Body (two-pane) ──────────────────────────────────────────────── */}
       <div style={BODY_ROW}>
@@ -319,6 +324,7 @@ export function GexDeskView() {
         {/* ── Right pane: Market state ──────────────────────────────────── */}
         <MarketStateCard
           statePayload={statePayload}
+          gexPayload={gexPayload}
           isIndexProduct={isIndex}
           lang={lang}
         />

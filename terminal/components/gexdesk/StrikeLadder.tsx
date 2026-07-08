@@ -2,26 +2,29 @@
 /**
  * StrikeLadder — per-strike horizontal signed GEX bar chart.
  *
- * Layout: [strike label] [negative bar ◀ center ▶ positive bar] [gex value]
- * Strikes rendered descending (highest at top, matching GEX engine sort).
- * Key strike rows get colored badges (WALL / SUPPORT / MAGNET / FLIP).
- * Spot row highlighted amber.
- * Expiry filter chips shown when by-expiry data is present.
- * Hover tooltip with raw values.
+ * Pass 3 (MomoEdge parity):
+ *   - EXPIRY SELECTOR: dropdown (not chips) with DTE captions + inline 0DTE quick chip.
+ *   - AUTO-CENTER: on load and ticker change, spot row scrolls to mid-viewport.
+ *   - BAR: power-curve (^0.7) length, max 46% per side, positive cyan / negative red,
+ *          center axis hairline.
+ *   - LEVEL BADGES: right-edge tags (WALL / SUPPORT / MAGNET / FLIP) only on keyed rows.
+ *   - SPOT ROW: amber highlight + distinct marker line treatment.
+ *   - FLIP LINE: inserted between straddling strikes (purple divider).
+ *   - PERCENT-FROM-SPOT: strike label shows % distance when not at spot.
+ *
+ * Layout: [strike label + %dist] [center-axis bars] [level-tag]  [gex value]
+ * Strikes rendered descending (highest at top).
  *
  * HONESTY DOCTRINE: bar direction (positive/negative) is the dealer-sign convention
- * — an assumption. Magnitude is the reliable read. The passport caveat is surfaced
- * in MarketStateCard (not repeated per-row).
- *
- * Props:
- *   strikes       — from GexPayload.by_strike (sorted descending by caller)
- *   spot          — current spot price for current-price row highlight
- *   levels        — { callWall, putWall, gammaFlip, hvl } for badge logic
- *   byExpiry      — optional expiry breakdown for filter chips
- *   lang          — "en" | "zh"
+ * — an assumption. Magnitude is the reliable read. Passport caveat is in MarketStateCard.
  */
 
-import React, { useCallback, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload } from "./GexDeskView";
@@ -57,6 +60,13 @@ interface StrikeLadderProps {
   lang: Lang;
 }
 
+type BadgeTone = "cyan" | "red" | "amber" | "purple";
+
+interface BadgeInfo {
+  tag: string;
+  tone: BadgeTone;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmtGexVal(v: number): string {
@@ -70,6 +80,12 @@ function fmtGexVal(v: number): string {
 
 function fmtStrike(s: number): string {
   return s % 1 === 0 ? String(s) : s.toFixed(1);
+}
+
+function fmtPctFromSpot(strike: number, spot: number): string {
+  const pct = ((strike - spot) / spot) * 100;
+  const sign = pct >= 0 ? "+" : "";
+  return `${sign}${pct.toFixed(1)}%`;
 }
 
 function dteDays(expStr: string): number {
@@ -87,14 +103,14 @@ function dteLabelStr(exp: string): string {
   return d === 0 ? "0DTE" : `${d}d`;
 }
 
-/** Classify a strike row to a badge type */
+/** Classify a strike row to a badge type — priority: flip > wall > support > magnet */
 function classifyBadge(
   s: StrikeRow,
   levels: Levels,
   step: number
-): { tag: string; tone: "cyan" | "red" | "amber" | "purple" } | null {
+): BadgeInfo | null {
   const { callWall, putWall, gammaFlip, hvl } = levels;
-  const prox = step * 1.5;
+  const prox = step * 1.2;
 
   if (gammaFlip != null && Math.abs(s.strike - gammaFlip) < prox) {
     return { tag: "FLIP", tone: "purple" };
@@ -124,6 +140,25 @@ function estimateStep(strikes: StrikeRow[]): number {
   return diffs[Math.floor(diffs.length / 2)];
 }
 
+/** Badge color by tone */
+function toneColor(tone: BadgeTone): string {
+  switch (tone) {
+    case "cyan":   return "var(--brand-2)";
+    case "red":    return "var(--down)";
+    case "amber":  return "var(--signal)";
+    case "purple": return "var(--cat-2)";
+  }
+}
+
+function toneBorderColor(tone: BadgeTone): string {
+  switch (tone) {
+    case "cyan":   return "rgba(77,130,255,0.35)";
+    case "red":    return "rgba(240,86,107,0.35)";
+    case "amber":  return "rgba(232,179,57,0.35)";
+    case "purple": return "rgba(157,134,255,0.35)";
+  }
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function StrikeLadder({
@@ -137,11 +172,14 @@ export function StrikeLadder({
 }: StrikeLadderProps) {
   const t = makeGexT(lang);
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const spotRowRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Sort descending (highest strike at top)
   const sorted = [...strikes].sort((a, b) => b.strike - a.strike);
-
   const step = estimateStep(strikes);
 
   // Max |gamma_net| for bar scaling
@@ -150,26 +188,16 @@ export function StrikeLadder({
     0.001
   );
 
-  // Current-price row: strike within step*0.6 of spot
-  const spotThresh = step * 0.6;
-  const currentStrike =
-    spot != null
-      ? sorted.reduce(
-          (best, s) =>
-            Math.abs(s.strike - spot) < Math.abs(best.strike - spot)
-              ? s
-              : best,
-          sorted[0] ?? { strike: Infinity }
-        )
-      : null;
-  const currentStrikeVal =
-    currentStrike &&
-    spot != null &&
-    Math.abs(currentStrike.strike - spot) <= spotThresh
-      ? currentStrike.strike
-      : null;
+  // Current-price row: nearest strike to spot
+  const currentStrikeVal: number | null = (() => {
+    if (spot == null || sorted.length === 0) return null;
+    const nearest = sorted.reduce((best, s) =>
+      Math.abs(s.strike - spot) < Math.abs(best.strike - spot) ? s : best
+    );
+    return Math.abs(nearest.strike - spot) <= step * 0.8 ? nearest.strike : null;
+  })();
 
-  // Gamma flip insertion index (between two strikes straddling flip)
+  // Gamma flip insertion index
   const flipStrike = levels.gammaFlip;
   let flipInsertAfter: number | null = null;
   if (flipStrike != null) {
@@ -181,6 +209,67 @@ export function StrikeLadder({
     }
   }
 
+  // AUTO-CENTER: scroll spot row to mid-viewport on load and ticker change.
+  // Uses ResizeObserver to wait until the scroll container has non-zero height
+  // (needed because the parent tab starts as display:none, then switches to flex;
+  // the useEffect fires before the browser has laid out the visible container).
+  useEffect(() => {
+    if (!spotRowRef.current || !scrollRef.current) return;
+
+    let rafId: number | null = null;
+    let observer: ResizeObserver | null = null;
+
+    function doCenter() {
+      const el = spotRowRef.current;
+      const container = scrollRef.current;
+      if (!el || !container) return;
+      const elTop = el.offsetTop;
+      const elHeight = el.offsetHeight;
+      const containerHeight = container.clientHeight;
+      if (containerHeight <= 0) return; // still not visible
+      container.scrollTop = elTop - containerHeight / 2 + elHeight / 2;
+    }
+
+    // Try immediately (works if already visible)
+    rafId = requestAnimationFrame(() => {
+      if (scrollRef.current && scrollRef.current.clientHeight > 0) {
+        doCenter();
+      } else {
+        // Not visible yet — observe for size change (tab becoming visible)
+        observer = new ResizeObserver(() => {
+          if (scrollRef.current && scrollRef.current.clientHeight > 0) {
+            observer?.disconnect();
+            observer = null;
+            doCenter();
+          }
+        });
+        if (scrollRef.current) observer.observe(scrollRef.current);
+      }
+    });
+
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      observer?.disconnect();
+    };
+  // Re-center when strike data changes (proxy: sorted.length and spot)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sorted.length, spot, currentStrikeVal]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    function handler(e: MouseEvent) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      ) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [dropdownOpen]);
+
   const handleMouseEnter = useCallback(
     (s: StrikeRow, badge: string | undefined, e: React.MouseEvent) => {
       const rect = containerRef.current?.getBoundingClientRect();
@@ -190,7 +279,7 @@ export function StrikeLadder({
         gamma_call: s.gamma_call,
         gamma_put: s.gamma_put,
         badge,
-        x: e.clientX - (rect?.left ?? 0) + 10,
+        x: e.clientX - (rect?.left ?? 0) + 14,
         y: e.clientY - (rect?.top ?? 0) - 10,
       });
     },
@@ -198,6 +287,24 @@ export function StrikeLadder({
   );
 
   const handleMouseLeave = useCallback(() => setTooltip(null), []);
+
+  // ── Expiry dropdown: build option list
+  const expiryOptions: { exp: string; label: string; dte: string }[] = byExpiry
+    ? byExpiry.map((e) => ({
+        exp: e.exp,
+        // Show MM-DD (strip year) for compactness
+        label: e.exp.length >= 10 ? e.exp.slice(5) : e.exp,
+        dte: dteLabelStr(e.exp),
+      }))
+    : [];
+
+  const selectedLabel = selectedExpiry
+    ? expiryOptions.find((o) => o.exp === selectedExpiry)?.label ?? selectedExpiry
+    : t("expiryDropdownLabel");
+
+  const has0Dte =
+    expiryOptions.length > 0 &&
+    dteDays(expiryOptions[0].exp) === 0;
 
   if (sorted.length === 0) {
     return (
@@ -209,29 +316,82 @@ export function StrikeLadder({
 
   return (
     <div style={LADDER_OUTER} ref={containerRef} data-tut="gex-ladder">
-      {/* ── Expiry filter chips ─────────────────────────────────────────────── */}
+      {/* ── Expiry selector ───────────────────────────────────────────────────── */}
       {byExpiry && byExpiry.length > 0 && (
-        <div style={EXPIRY_CHIPS_ROW}>
-          <button
-            className={`obs-chip${selectedExpiry === null ? " on" : ""}`}
-            style={EXPIRY_CHIP_BASE}
-            onClick={() => onSelectExpiry(null)}
-          >
-            {t("expiryAll")}
-          </button>
-          {byExpiry.map((e) => (
+        <div style={EXPIRY_BAR}>
+          {/* Dropdown */}
+          <div style={{ position: "relative" }} ref={dropdownRef}>
             <button
-              key={e.exp}
-              className={`obs-chip${selectedExpiry === e.exp ? " on" : ""}`}
-              style={EXPIRY_CHIP_BASE}
-              onClick={() => onSelectExpiry(e.exp)}
+              style={DD_TRIGGER}
+              onClick={() => setDropdownOpen((v) => !v)}
+              aria-haspopup="listbox"
+              aria-expanded={dropdownOpen}
             >
-              {e.exp.slice(5)}{" "}
-              <span style={{ opacity: 0.6, fontSize: 9, marginLeft: 2 }}>
-                {dteLabelStr(e.exp)}
+              <span>{selectedLabel}</span>
+              <span
+                style={{
+                  ...DD_CARET,
+                  transform: dropdownOpen ? "rotate(180deg)" : undefined,
+                }}
+              >
+                ▾
               </span>
             </button>
-          ))}
+            {dropdownOpen && (
+              <div style={DD_MENU} role="listbox">
+                {/* ALL option */}
+                <button
+                  style={{
+                    ...DD_OPT,
+                    ...(selectedExpiry === null ? DD_OPT_ACTIVE : {}),
+                  }}
+                  role="option"
+                  aria-selected={selectedExpiry === null}
+                  onClick={() => {
+                    onSelectExpiry(null);
+                    setDropdownOpen(false);
+                  }}
+                >
+                  <span>{t("expiryDropdownLabel")}</span>
+                  <span style={DD_OPT_DTE}>all</span>
+                </button>
+                {expiryOptions.map((o) => (
+                  <button
+                    key={o.exp}
+                    style={{
+                      ...DD_OPT,
+                      ...(selectedExpiry === o.exp ? DD_OPT_ACTIVE : {}),
+                    }}
+                    role="option"
+                    aria-selected={selectedExpiry === o.exp}
+                    onClick={() => {
+                      onSelectExpiry(o.exp);
+                      setDropdownOpen(false);
+                    }}
+                  >
+                    <span>{o.exp}</span>
+                    <span style={DD_OPT_DTE}>{o.dte}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 0DTE quick chip (only when nearest expiry is today) */}
+          {has0Dte && (
+            <button
+              className={`obs-chip${
+                selectedExpiry === expiryOptions[0].exp ? " on" : ""
+              }`}
+              style={QUICK_CHIP}
+              onClick={() => {
+                const t0 = expiryOptions[0].exp;
+                onSelectExpiry(selectedExpiry === t0 ? null : t0);
+              }}
+            >
+              {t("expiry0Dte")}
+            </button>
+          )}
         </div>
       )}
 
@@ -239,26 +399,39 @@ export function StrikeLadder({
       <div style={COL_HEADER_ROW}>
         <span style={COL_STRIKE_HDR}>{t("ladderStrike")}</span>
         <span style={COL_BAR_HDR}>{t("ladderNetGex")}</span>
+        <span style={COL_TAG_HDR}>{/* level tag column — no header */}</span>
         <span style={COL_VAL_HDR}>{t("ladderNetGex")}</span>
       </div>
 
-      {/* ── Zero-axis center line ────────────────────────────────────────────── */}
-      <div style={CHART_BODY}>
+      {/* ── Scrollable chart body ─────────────────────────────────────────────── */}
+      <div style={CHART_SCROLL} ref={scrollRef}>
+        {/* Center axis hairline (positioned over bar area) */}
         <div style={CENTER_LINE} />
 
-        {/* ── Rows ─────────────────────────────────────────────────────────── */}
         {sorted.map((s, i) => {
           const badge = classifyBadge(s, levels, step);
           const isCurrent = s.strike === currentStrikeVal;
           const isPos = s.gamma_net >= 0;
           const pct = Math.abs(s.gamma_net) / maxAbs;
           const shaped = Math.pow(pct, 0.7);
-          const barW = Math.max(shaped * 46, 2); // max 46% per half
+          const barW = Math.max(shaped * 46, pct > 0 ? 2 : 0); // max 46% per half
           const isBig = pct > 0.35;
+
+          const strikeColor = isCurrent
+            ? "var(--signal)"
+            : badge?.tone === "cyan"
+            ? "var(--brand-2)"
+            : badge?.tone === "red"
+            ? "var(--down)"
+            : badge?.tone === "amber"
+            ? "var(--signal)"
+            : badge?.tone === "purple"
+            ? "var(--cat-2)"
+            : "var(--text-2)";
 
           return (
             <React.Fragment key={s.strike}>
-              {/* Gamma flip divider line (inserted between straddling strikes) */}
+              {/* Gamma flip divider line */}
               {flipInsertAfter === i - 1 && flipStrike != null && (
                 <div style={FLIP_LINE} data-tut="gex-flip">
                   <span style={FLIP_LABEL}>{t("ladderFlipLine")}</span>
@@ -268,84 +441,73 @@ export function StrikeLadder({
               )}
 
               <div
+                ref={isCurrent ? spotRowRef : undefined}
                 style={{
                   ...STRIKE_ROW,
                   ...(isCurrent ? CURRENT_ROW : {}),
+                  ...(badge?.tone === "cyan" ? ZONE_CW : {}),
+                  ...(badge?.tone === "amber" ? ZONE_HVL : {}),
+                  ...(badge?.tone === "red" ? ZONE_PS : {}),
                 }}
-                onMouseEnter={(e) =>
-                  handleMouseEnter(s, badge?.tag, e)
-                }
+                onMouseEnter={(e) => handleMouseEnter(s, badge?.tag, e)}
                 onMouseLeave={handleMouseLeave}
               >
-                {/* Strike price label + badge */}
+                {/* Strike price label + %-from-spot */}
                 <div style={STRIKE_COL}>
                   <span
                     style={{
                       ...STRIKE_PRICE,
-                      color: isCurrent
-                        ? "var(--signal)"
-                        : badge?.tone === "cyan"
-                        ? "var(--brand-2)"
-                        : badge?.tone === "red"
-                        ? "var(--down)"
-                        : badge?.tone === "amber"
-                        ? "var(--signal)"
-                        : badge?.tone === "purple"
-                        ? "var(--cat-2)"
-                        : "var(--text-2)",
+                      color: strikeColor,
                       fontWeight: isCurrent || badge ? 700 : 400,
                     }}
                   >
                     {fmtStrike(s.strike)}
                   </span>
-                  {badge && (
-                    <span
-                      style={{
-                        ...CLS_BADGE,
-                        color:
-                          badge.tone === "cyan"
-                            ? "var(--brand-2)"
-                            : badge.tone === "red"
-                            ? "var(--down)"
-                            : badge.tone === "amber"
-                            ? "var(--signal)"
-                            : "var(--cat-2)",
-                        borderColor:
-                          badge.tone === "cyan"
-                            ? "rgba(77,130,255,0.35)"
-                            : badge.tone === "red"
-                            ? "rgba(240,86,107,0.35)"
-                            : badge.tone === "amber"
-                            ? "rgba(232,179,57,0.35)"
-                            : "rgba(157,134,255,0.35)",
-                      }}
-                    >
-                      {badge.tag}
+                  {spot != null && !isCurrent && (
+                    <span style={PCT_DIST}>
+                      {fmtPctFromSpot(s.strike, spot)}
                     </span>
+                  )}
+                  {isCurrent && (
+                    <span style={SPOT_MARKER}>▶</span>
                   )}
                 </div>
 
-                {/* Bar area (symmetric around center) */}
+                {/* Bar area (symmetric around center axis) */}
                 <div style={BAR_AREA}>
-                  {/* Negative side (right-anchored, grows left from center) */}
-                  {!isPos && (
+                  {!isPos && barW > 0 && (
                     <div
                       style={{
                         ...BAR_NEG,
                         width: `${barW}%`,
-                        opacity: isBig ? 1 : 0.82,
+                        opacity: isBig ? 1 : 0.75,
                       }}
                     />
                   )}
-                  {/* Positive side (left-anchored, grows right from center) */}
-                  {isPos && (
+                  {isPos && barW > 0 && (
                     <div
                       style={{
                         ...BAR_POS,
                         width: `${barW}%`,
-                        opacity: isBig ? 1 : 0.82,
+                        opacity: isBig ? 1 : 0.75,
                       }}
                     />
+                  )}
+                </div>
+
+                {/* Right-edge level tag */}
+                <div style={TAG_COL}>
+                  {badge && (
+                    <span
+                      style={{
+                        ...LEVEL_TAG,
+                        color: toneColor(badge.tone),
+                        borderColor: toneBorderColor(badge.tone),
+                        background: `${toneBorderColor(badge.tone).replace("0.35", "0.08")}`,
+                      }}
+                    >
+                      {badge.tag}
+                    </span>
                   )}
                 </div>
 
@@ -364,7 +526,7 @@ export function StrikeLadder({
           );
         })}
 
-        {/* Gamma flip at the very bottom (if beyond all strikes) */}
+        {/* Gamma flip at the very bottom (if below all strikes) */}
         {flipInsertAfter === null &&
           flipStrike != null &&
           flipStrike < (sorted[sorted.length - 1]?.strike ?? Infinity) && (
@@ -387,9 +549,14 @@ export function StrikeLadder({
         >
           <div style={TOOLTIP_TITLE}>
             ${fmtStrike(tooltip.strike)}
+            {spot != null && (
+              <span style={{ marginLeft: 6, color: "var(--muted)", fontSize: 10 }}>
+                {fmtPctFromSpot(tooltip.strike, spot)}
+              </span>
+            )}
             {tooltip.badge && (
               <span style={{ marginLeft: 6, color: "var(--muted)" }}>
-                {tooltip.badge}
+                · {tooltip.badge}
               </span>
             )}
           </div>
@@ -397,8 +564,7 @@ export function StrikeLadder({
             <span style={TOOLTIP_KEY}>{t("tooltipNetGex")}</span>
             <span
               style={{
-                color:
-                  tooltip.gamma_net >= 0 ? "var(--brand-2)" : "var(--down)",
+                color: tooltip.gamma_net >= 0 ? "var(--brand-2)" : "var(--down)",
                 fontVariantNumeric: "tabular-nums",
               }}
             >
@@ -430,7 +596,9 @@ const LADDER_OUTER: React.CSSProperties = {
   position: "relative",
   flex: 1,
   minHeight: 0,
-  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
   background: "var(--bg)",
 };
 
@@ -441,31 +609,103 @@ const LADDER_EMPTY: React.CSSProperties = {
   textAlign: "center",
 };
 
-const EXPIRY_CHIPS_ROW: React.CSSProperties = {
+// Expiry selector bar
+const EXPIRY_BAR: React.CSSProperties = {
   display: "flex",
-  flexWrap: "wrap",
-  gap: 4,
-  padding: "6px 10px",
+  alignItems: "center",
+  gap: 6,
+  padding: "5px 10px",
   borderBottom: "1px solid var(--line-2)",
   background: "var(--panel)",
+  flexShrink: 0,
+  flexWrap: "wrap",
 };
 
-// Base overrides for .obs-chip in the compact ladder context (smaller than default)
-const EXPIRY_CHIP_BASE: React.CSSProperties = {
+// Dropdown trigger
+const DD_TRIGGER: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "4px 8px",
+  fontSize: 11,
+  fontWeight: 600,
+  color: "var(--text)",
+  background: "var(--inset)",
+  border: "1px solid var(--line)",
+  borderRadius: "var(--r-md)",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  minWidth: 140,
+};
+
+const DD_CARET: React.CSSProperties = {
+  marginLeft: "auto",
+  fontSize: 10,
+  color: "var(--muted)",
+  transition: "transform 0.15s",
+  display: "inline-block",
+};
+
+const DD_MENU: React.CSSProperties = {
+  position: "absolute",
+  top: "calc(100% + 4px)",
+  left: 0,
+  zIndex: 50,
+  background: "var(--panel-2)",
+  border: "1px solid var(--line)",
+  borderRadius: "var(--r-md)",
+  maxHeight: 280,
+  overflowY: "auto",
+  minWidth: 160,
+  boxShadow: "var(--shadow-1)",
+  backdropFilter: "blur(8px)",
+};
+
+const DD_OPT: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  width: "100%",
+  padding: "6px 12px",
+  fontSize: 11,
+  fontWeight: 500,
+  color: "var(--text-2)",
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  textAlign: "left",
+  gap: 8,
+};
+
+const DD_OPT_ACTIVE: React.CSSProperties = {
+  color: "var(--signal)",
+  background: "rgba(232,179,57,0.09)",
+};
+
+const DD_OPT_DTE: React.CSSProperties = {
+  fontSize: 9,
+  color: "var(--muted)",
+  fontVariantNumeric: "tabular-nums",
+  flexShrink: 0,
+};
+
+const QUICK_CHIP: React.CSSProperties = {
   padding: "3px 8px",
   fontSize: 10,
   borderRadius: 8,
 };
 
+// Column headers
 const COL_HEADER_ROW: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "96px 1fr 80px",
+  gridTemplateColumns: "100px 1fr 52px 72px",
   padding: "3px 8px",
   borderBottom: "1px solid var(--line-2)",
   background: "var(--panel)",
   position: "sticky",
   top: 0,
   zIndex: 2,
+  flexShrink: 0,
 };
 
 const COL_STRIKE_HDR: React.CSSProperties = {
@@ -483,6 +723,8 @@ const COL_BAR_HDR: React.CSSProperties = {
   textAlign: "center",
 };
 
+const COL_TAG_HDR: React.CSSProperties = {};
+
 const COL_VAL_HDR: React.CSSProperties = {
   fontSize: 9,
   color: "var(--muted)",
@@ -491,27 +733,34 @@ const COL_VAL_HDR: React.CSSProperties = {
   textAlign: "right",
 };
 
-const CHART_BODY: React.CSSProperties = {
+// Scroll container (fills remaining space)
+const CHART_SCROLL: React.CSSProperties = {
+  flex: 1,
+  overflowY: "auto",
   position: "relative",
 };
 
+// Center-axis hairline — spans full scroll height, pinned at 50% of bar area
+// Bar area is col 2 (1fr) so 100px + 50% of (100% - 100px - 52px - 72px)
 const CENTER_LINE: React.CSSProperties = {
   position: "absolute",
-  left: "calc(96px + 50%)",
+  // Approximate center of bar column (col 2). The grid makes exact px unavailable
+  // but 100px strike col + half of remaining ≈ calc(100px + (100% - 224px)/2)
+  left: "calc(100px + (100% - 224px) / 2)",
   top: 0,
   bottom: 0,
   width: 1,
-  background: "rgba(77,130,255,0.15)",
+  background: "rgba(77,130,255,0.13)",
   pointerEvents: "none",
   zIndex: 1,
 };
 
 const STRIKE_ROW: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "96px 1fr 80px",
+  gridTemplateColumns: "100px 1fr 52px 72px",
   alignItems: "center",
   height: 22,
-  borderBottom: "1px solid var(--line-2)",
+  borderBottom: "1px solid rgba(255,255,255,0.04)",
   cursor: "default",
   position: "relative",
   transition: "background 0.1s",
@@ -523,11 +772,24 @@ const CURRENT_ROW: React.CSSProperties = {
   borderBottom: "1px solid rgba(232,179,57,0.22)",
 };
 
+// Zone tints (only on relevant rows)
+const ZONE_CW: React.CSSProperties = {
+  background: "rgba(77,130,255,0.04)",
+};
+
+const ZONE_HVL: React.CSSProperties = {
+  background: "rgba(232,179,57,0.04)",
+};
+
+const ZONE_PS: React.CSSProperties = {
+  background: "rgba(240,86,107,0.04)",
+};
+
 const STRIKE_COL: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 4,
-  padding: "0 8px",
+  gap: 3,
+  padding: "0 6px",
   overflow: "hidden",
 };
 
@@ -537,13 +799,16 @@ const STRIKE_PRICE: React.CSSProperties = {
   flexShrink: 0,
 };
 
-const CLS_BADGE: React.CSSProperties = {
+const PCT_DIST: React.CSSProperties = {
+  fontSize: 9,
+  color: "var(--muted)",
+  fontVariantNumeric: "tabular-nums",
+  flexShrink: 0,
+};
+
+const SPOT_MARKER: React.CSSProperties = {
   fontSize: 8,
-  fontWeight: 800,
-  letterSpacing: "0.07em",
-  padding: "1px 4px",
-  borderRadius: 3,
-  border: "1px solid",
+  color: "var(--signal)",
   flexShrink: 0,
 };
 
@@ -557,21 +822,40 @@ const BAR_AREA: React.CSSProperties = {
 const BAR_POS: React.CSSProperties = {
   position: "absolute",
   left: "50%",
-  height: 12,
+  height: 11,
   borderRadius: "0 2px 2px 0",
-  background: "linear-gradient(90deg, color-mix(in srgb, var(--brand) 45%, transparent), color-mix(in srgb, var(--brand) 85%, transparent))",
+  background:
+    "linear-gradient(90deg, rgba(77,130,255,0.45), rgba(77,130,255,0.85))",
   transition: "width 0.35s cubic-bezier(.22,1,.36,1)",
-  transformOrigin: "left",
 };
 
 const BAR_NEG: React.CSSProperties = {
   position: "absolute",
   right: "50%",
-  height: 12,
+  height: 11,
   borderRadius: "2px 0 0 2px",
-  background: "linear-gradient(270deg, color-mix(in srgb, var(--down) 45%, transparent), color-mix(in srgb, var(--down) 85%, transparent))",
+  background:
+    "linear-gradient(270deg, rgba(240,86,107,0.45), rgba(240,86,107,0.85))",
   transition: "width 0.35s cubic-bezier(.22,1,.36,1)",
-  transformOrigin: "right",
+};
+
+const TAG_COL: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  paddingRight: 4,
+};
+
+const LEVEL_TAG: React.CSSProperties = {
+  fontSize: 8,
+  fontWeight: 800,
+  letterSpacing: "0.08em",
+  padding: "1px 4px",
+  borderRadius: 3,
+  border: "1px solid",
+  flexShrink: 0,
+  whiteSpace: "nowrap",
+  lineHeight: 1.4,
 };
 
 const GEX_VAL: React.CSSProperties = {
@@ -628,7 +912,7 @@ const TOOLTIP: React.CSSProperties = {
   boxShadow: "var(--shadow-1)",
   pointerEvents: "none",
   zIndex: 100,
-  minWidth: 150,
+  minWidth: 160,
 };
 
 const TOOLTIP_TITLE: React.CSSProperties = {
@@ -636,6 +920,10 @@ const TOOLTIP_TITLE: React.CSSProperties = {
   marginBottom: 5,
   color: "var(--text)",
   fontVariantNumeric: "tabular-nums",
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 2,
 };
 
 const TOOLTIP_ROW: React.CSSProperties = {

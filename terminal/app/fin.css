@@ -793,3 +793,18 @@
 .fin-insider-side.up{color:var(--up);background:color-mix(in srgb,var(--up) 13%,transparent)}
 .fin-insider-side.down{color:var(--down);background:color-mix(in srgb,var(--down) 13%,transparent)}
 .fin-insider-asof{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:9px}
+
+/* ── workspace-slot mode (desktop only): MegaPane rendered inside .workspace instead of as a fixed overlay ──
+ * On desktop (>860px) .fin-pane--workspace overrides fixed positioning so the pane fills the
+ * chart-pane grid cell in-place. The .workspace section is already display:flex; flex-direction:column
+ * so flex:1 + min-height:0 makes the pane fill the available height.
+ * On mobile (≤860px) the override is removed and the element falls back to .fin-pane base
+ * (position:fixed;inset:0) giving the existing full-screen overlay behavior. */
+@media (min-width:861px){
+  .fin-pane--workspace{position:relative;inset:auto;z-index:1;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden}
+  /* suppress the body-level scrim entirely on desktop (no scrim element rendered in workspace mode) */
+}
+/* mobile tab bar: ensure tabs scroll horizontally rather than overflowing on narrow viewports */
+@media (max-width:860px){
+  .fin-tabs{-webkit-overflow-scrolling:touch;padding-right:24px}
+}

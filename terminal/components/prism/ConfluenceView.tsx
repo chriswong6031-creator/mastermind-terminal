@@ -470,7 +470,8 @@ const BUCKET_ROW: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "72px 1fr 1fr 1fr 120px",
   borderBottom: "1px solid var(--line-2)",
-  minHeight: 28,
+  minHeight: 24,
+  height: 24,
 };
 
 const SPOT_BAND: React.CSSProperties = {

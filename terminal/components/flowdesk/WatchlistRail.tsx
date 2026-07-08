@@ -4,6 +4,7 @@
  */
 "use client";
 import { useMemo } from "react";
+import type React from "react";
 import { pick, fmtNum } from "../../lib/finFormat";
 import type { Lang } from "../../lib/i18n";
 import { computeFlowScore } from "../../lib/flowScore";
@@ -42,6 +43,7 @@ export interface WatchlistRailProps {
   watchlist: string[];
   onToggleTicker: (root: string) => void;
   onPickTicker: (root: string) => void;
+  onOpenTutorial?: () => void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -59,7 +61,7 @@ function fmtPct(v: number): string {
 
 // ─── Component ────────────────────────────────────────────────────────────
 
-export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onPickTicker }: WatchlistRailProps) {
+export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onPickTicker, onOpenTutorial }: WatchlistRailProps) {
   const zh = lang === "zh";
 
   // Session overview
@@ -102,8 +104,20 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
       <div className="obs-card obs-fd-session" data-tut="session-overview">
         <div className="obs-card-hd">
           <span className="obs-lbl">{pick(zh, FD.sessionOverview.en, FD.sessionOverview.zh)}</span>
-          <span className="obs-lbl" style={{ color: "var(--muted)" }}>
-            {pick(zh, "nightly + live", "夜盘+实时")}
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span className="obs-lbl" style={{ color: "var(--muted)" }}>
+              {pick(zh, "nightly + live", "夜盘+实时")}
+            </span>
+            {onOpenTutorial && (
+              <button
+                onClick={onOpenTutorial}
+                aria-label={zh ? "打开教程" : "Open tutorial"}
+                style={TUT_ICON_BTN}
+                title={zh ? "教程" : "Tutorial"}
+              >
+                ?
+              </button>
+            )}
           </span>
         </div>
         <div className="obs-card-hr" />
@@ -206,6 +220,22 @@ interface WatchRowProps {
   onRemove: () => void;
   isWatch?: boolean;
 }
+
+const TUT_ICON_BTN: React.CSSProperties = {
+  width: 18,
+  height: 18,
+  borderRadius: "50%",
+  border: "1px solid rgba(77,130,255,0.4)",
+  background: "rgba(77,130,255,0.10)",
+  color: "var(--brand-2)",
+  font: "700 10px/1 var(--font-ui)",
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  flexShrink: 0,
+  padding: 0,
+};
 
 function WatchRow({ root, score, inFeed, zh, onPick, onRemove, isWatch = true }: WatchRowProps) {
   return (
