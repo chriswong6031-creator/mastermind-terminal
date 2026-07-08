@@ -424,15 +424,19 @@ const BODY_ROW: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflow: "hidden",
-  flexWrap: "wrap",  /* responsive: right rail wraps below at ~1100px */
+  flexWrap: "wrap",   /* responsive: right rail wraps below at ~1100px */
+  alignItems: "stretch",
 };
 
 const LEFT_PANE: React.CSSProperties = {
-  flex: 1,
-  minWidth: 480,     /* ladder gets all remaining space above 480px */
+  flex: "1 1 0px",
+  minWidth: 480,       /* ladder gets all remaining space above 480px */
+  minHeight: 0,        /* allow flex shrink past content height */
+  alignSelf: "stretch",/* fill BODY_ROW track height */
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
+  maxHeight: "100%",   /* cap at BODY_ROW cross-axis height in wrapping flex */
 };
 
 const LADDER_LOADING: React.CSSProperties = {

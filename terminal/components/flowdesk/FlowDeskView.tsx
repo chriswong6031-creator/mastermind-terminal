@@ -449,8 +449,12 @@ export function FlowDeskView() {
   return (
     <div className="obs obs-ambient obs-flowdesk">
 
-      {/* ═══ LEFT RAIL (WatchlistRail) ════════════════════════════════════════ */}
+      {/* ═══ LEFT RAIL (FlowGauge strip + WatchlistRail + Smart Money Radar) ═ */}
       <div className="obs-fd-left">
+        {/* FlowGauge — slim strip pinned at top of left rail */}
+        <FlowGauge feed={feedForGauge} lang={lang} />
+
+        {/* WatchlistRail — compacted rings (26px) + tighter rows */}
         {feedForWatchlist && (
           <WatchlistRail
             feed={feedForWatchlist}
@@ -463,44 +467,39 @@ export function FlowDeskView() {
           />
         )}
         {!feedForWatchlist && <div style={RAIL_LOADING} />}
-      </div>
 
-      {/* ═══ CENTER (FlowGauge + RadarStrip + FeedPane) ══════════════════════ */}
-      <div className="obs-fd-center">
-        {/* FlowGauge strip — always shown; empty feed renders $0 gracefully */}
-        <FlowGauge feed={feedForGauge} lang={lang} />
-
-        {/* RadarStrip — show only if unusual_names populated */}
+        {/* Smart Money Radar — fills remaining left-rail height, obs-scroll inside */}
         {feedForRadar.unusual_names.length > 0 && (
           <RadarStrip feed={feedForRadar} lang={lang} />
         )}
-
-        {/* FeedPane — feed + filters + events */}
-        <div style={FEED_COL}>
-          <FeedPane
-            feed={feed}
-            lang={lang}
-            selectedId={selectedEvent?.id ?? null}
-            onSelect={(ev) => setSelectedEvent((prev) =>
-              prev?.id === ev.id ? null : ev
-            )}
-            filters={filters}
-            onFiltersChange={setFilters}
-          />
-        </div>
       </div>
 
-      {/* ═══ RIGHT RAIL (InspectorPane + ChainHeatRail) ══════════════════════ */}
+      {/* ═══ CENTER — feed ONLY (toolbar + card grid) ════════════════════════ */}
+      <div className="obs-fd-center">
+        {/* FeedPane takes full center column height */}
+        <FeedPane
+          feed={feed}
+          lang={lang}
+          selectedId={selectedEvent?.id ?? null}
+          onSelect={(ev) => setSelectedEvent((prev) =>
+            prev?.id === ev.id ? null : ev
+          )}
+          filters={filters}
+          onFiltersChange={setFilters}
+        />
+      </div>
+
+      {/* ═══ RIGHT RAIL — Chain Heat FIRST, then Inspector ═══════════════════ */}
       <div className="obs-fd-right">
-        {/* Inspector — shown whenever an event is selected */}
+        {/* Chain Heat Rail — top of right column, scrollable */}
+        <ChainHeatRail data={chainHeat} lang={lang} />
+
+        {/* Inspector — slim one-line hint when nothing selected; full view on click */}
         <InspectorPane
           event={selectedEvent}
           tickerCtx={tickerCtx}
           lang={lang}
         />
-
-        {/* Chain Heat Rail */}
-        <ChainHeatRail data={chainHeat} lang={lang} />
       </div>
 
       {/* Tutorial overlay (portal-like; renders above everything) */}
@@ -516,10 +515,6 @@ export function FlowDeskView() {
 }
 
 // ─── Layout styles ────────────────────────────────────────────────────────────
-
-const FEED_COL: React.CSSProperties = {
-  flexShrink: 0,    /* don't collapse — take natural height of feed-wrap */
-};
 
 const RAIL_LOADING: React.CSSProperties = {
   height: "100%",

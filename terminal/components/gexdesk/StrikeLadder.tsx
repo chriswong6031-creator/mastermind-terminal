@@ -210,46 +210,86 @@ export function StrikeLadder({
   }
 
   // AUTO-CENTER: scroll spot row to mid-viewport on load and ticker change.
-  // Uses ResizeObserver to wait until the scroll container has non-zero height
-  // (needed because the parent tab starts as display:none, then switches to flex;
-  // the useEffect fires before the browser has laid out the visible container).
+  //
+  // Root-cause history:
+  //   A. HIDDEN MOUNT: parent tab starts display:none → flex when active. The effect
+  //      fires before the scroll container has non-zero height.
+  //   B. UNCONSTRAINED LAYOUT (fixed): flex ancestor lacked minHeight:0, so the scroll
+  //      container was clientHeight=scrollHeight (not scrollable). Fixed in GexDeskView.tsx
+  //      (LEFT_PANE: maxHeight:"100%"). Guard retained: isScrollable() still rejects this.
+  //   C. VISIBILITY FLIP: harness iframe sets visibilityState='hidden'. A visibilitychange
+  //      event unblocks the data fetch. We re-attempt centering on that event.
+  //
+  // Implementation: DOM-query approach avoids the early-return ref problem.
+  // spotRowRef/scrollRef are only valid after the FULL render path (sorted.length>0).
+  // Instead, we query containerRef (always rendered) to find the scroll container
+  // and the spot row directly from the DOM — no ref dependency on sorted.length.
   useEffect(() => {
-    if (!spotRowRef.current || !scrollRef.current) return;
+    if (!containerRef.current) return;
 
     let rafId: number | null = null;
     let observer: ResizeObserver | null = null;
 
+    function isScrollable(container: Element): boolean {
+      return container.clientHeight > 0 && container.scrollHeight > container.clientHeight;
+    }
+
     function doCenter() {
-      const el = spotRowRef.current;
-      const container = scrollRef.current;
-      if (!el || !container) return;
-      const elTop = el.offsetTop;
-      const elHeight = el.offsetHeight;
+      // Re-query from DOM every time — works even after early-return renders
+      const container = containerRef.current?.querySelector<HTMLDivElement>(".obs-scroll") ?? null;
+      if (!container || !isScrollable(container)) return;
+
+      // Find the spot row by the ▶ marker span (always rendered on isCurrent rows)
+      // We look for the row child containing the SPOT_MARKER (▶ text)
+      const rows = container.children;
+      let spotRow: Element | null = null;
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].textContent?.includes("▶")) {
+          spotRow = rows[i];
+          break;
+        }
+      }
+      if (!spotRow) return;
+
+      const elTop = (spotRow as HTMLElement).offsetTop;
+      const elHeight = (spotRow as HTMLElement).offsetHeight;
       const containerHeight = container.clientHeight;
-      if (containerHeight <= 0) return; // still not visible
       container.scrollTop = elTop - containerHeight / 2 + elHeight / 2;
     }
 
-    // Try immediately (works if already visible)
-    rafId = requestAnimationFrame(() => {
-      if (scrollRef.current && scrollRef.current.clientHeight > 0) {
+    function tryCenter() {
+      const container = containerRef.current?.querySelector<HTMLDivElement>(".obs-scroll") ?? null;
+      if (container && isScrollable(container)) {
         doCenter();
-      } else {
-        // Not visible yet — observe for size change (tab becoming visible)
+      } else if (!observer && containerRef.current) {
+        // Not yet scrollable — watch for layout change (hidden→visible OR constrained layout)
+        const target = container ?? containerRef.current;
         observer = new ResizeObserver(() => {
-          if (scrollRef.current && scrollRef.current.clientHeight > 0) {
+          const c = containerRef.current?.querySelector<HTMLDivElement>(".obs-scroll");
+          if (c && isScrollable(c)) {
             observer?.disconnect();
             observer = null;
             doCenter();
           }
         });
-        if (scrollRef.current) observer.observe(scrollRef.current);
+        observer.observe(target);
       }
-    });
+    }
+
+    rafId = requestAnimationFrame(tryCenter);
+
+    // Visibility-change fallback (harness preview late-load path)
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        requestAnimationFrame(tryCenter);
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       if (rafId !== null) cancelAnimationFrame(rafId);
       observer?.disconnect();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   // Re-center when strike data changes (proxy: sorted.length and spot)
   // eslint-disable-next-line react-hooks/exhaustive-deps

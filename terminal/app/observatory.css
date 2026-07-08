@@ -326,60 +326,90 @@
   background: var(--bg);
 }
 
-/* Left rail */
+/* Left rail — widened to host FlowGauge + WatchlistRail + SmartMoneyRadar */
 .obs-fd-left {
-  width: 210px;
+  width: 260px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  overflow-y: auto;
-  scrollbar-width: none;
+  gap: 0;
+  overflow: hidden; /* internal scroll handled per-section */
 }
 .obs-fd-left::-webkit-scrollbar { display: none; }
+/* WatchlistRail aside: allocate up to 55% of rail height; scrollable internally.
+ * This leaves ≥45% for the Smart Money Radar below.
+ * Compacted rings (26px) from WatchlistRail's tighter row CSS means session+watchlist
+ * comfortably fit ~240-280px. Internal scroll handles overflow gracefully. */
+.obs-fd-left > aside {
+  flex: 0 0 auto;
+  max-height: 55%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+.obs-fd-left > aside::-webkit-scrollbar { display: none; }
 
-/* Center column */
+/* Center column — feed only: toolbar + card grid fills all remaining height */
 .obs-fd-center {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
-  overflow-y: auto;    /* allow center to scroll when radar + feed exceed viewport */
-  overflow-x: hidden;
-  scrollbar-width: none; /* hide the center column's own scrollbar; feed list scrolls internally */
+  overflow: hidden;
 }
 .obs-fd-center::-webkit-scrollbar { display: none; }
 
-/* Right rail */
+/* Right rail — narrowed; chain heat first (rendered first in JSX) */
 .obs-fd-right {
   width: 310px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  overflow-y: auto;
-  scrollbar-width: none;
+  gap: 0;
+  overflow: hidden;
 }
 .obs-fd-right::-webkit-scrollbar { display: none; }
+/* Wrap right rail below center at <1000px */
+@media (max-width: 999px) {
+  .obs-fd-right {
+    width: 100%;
+    flex-shrink: 1;
+    max-height: 340px;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-wrap: nowrap;
+  }
+  .obs-fd-right > * {
+    flex: 0 0 300px;
+    min-width: 0;
+  }
+}
 
-/* ── Radar: show all rows at natural height, no inner squeeze ─────────────── */
+/* ── Radar in left rail: fills remaining height after FlowGauge+WatchlistRail ── */
 /*
- * The radar card sits between FlowGauge and FeedPane in obs-fd-center (flex-column).
- * flex-shrink:0 means it takes its natural scrollHeight — all rows visible.
- * The feed section beneath it takes all remaining space; obs-scroll handles
- * scrollbar styling for the rows list inside the card.
+ * FlowGauge (slim strip, ~100px) + WatchlistRail (cards, ~200px) are flex-shrink:0.
+ * Radar takes the rest via flex:1 min-height:0 and obs-scroll for internal scroll.
  */
 
-/* ── Feed area: fills remaining center-column space; 2-row peek scroll ────── */
+/* ── Feed area: fills entire center column; obs-scroll internal grid ─────── */
 /*
- * FEED_COL in FlowDeskView.tsx is a plain div with flex:1 minHeight:0 overflowY:auto.
- * We want obs-fd-list to show ~2 full rows + peek of row 3 (~260px).
- * The outer wrapper fills remaining space; the list constrains with max-height.
+ * FeedPane is now the only child of obs-fd-center (no FlowGauge or RadarStrip above it).
+ * obs-fd-feed-wrap fills flex:1; obs-fd-list is the internal scrollable card grid.
+ * Responsive auto-fit: 3-up at wide / 2-up at mid / 1-up at narrow.
  */
 .obs-fd-list {
-  /* 2 rows (~94px each) + ~65px peek + 10px breathing = ~263px */
-  max-height: 260px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px 20px;
+  /* auto-fit: ≥750px center → 3-up; ≥490px → 2-up; else 1-up */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 6px;
+  align-content: start;
+  max-height: none; /* no cap — obs-scroll handles overflow */
 }
 
 /* ── Session stats card (left rail top) ─────────────────────────────────── */
@@ -494,11 +524,14 @@
   padding: 4px 8px 2px;
 }
 
-/* ── Radar card ─────────────────────────────────────────────────────────── */
+/* ── Radar card — now in left rail, fills remaining height ───────────────── */
 .obs-fd-radar.obs-card {
   padding: 0;
-  flex-shrink: 0;
-  overflow: hidden; /* card clips; the rows container scrolls (obs-scroll) */
+  flex: 1;         /* stretch to fill remaining left-rail height */
+  min-height: 0;
+  overflow: hidden; /* card clips; the rows container scrolls via obs-scroll */
+  border-top: 1px solid rgba(255,255,255,0.06);
+  border-radius: 0; /* flush in rail — no card-level radius */
 }
 .obs-fd-radar-rows {
   padding: 4px 8px 10px;
@@ -506,6 +539,7 @@
   flex-direction: column;
   gap: 0;
   overflow-y: auto; /* radar rows scroll within the card when they overflow */
+  flex: 1;
   min-height: 0;
 }
 .obs-fd-radar-row {
@@ -550,11 +584,13 @@
   margin: 0 0 2px;
 }
 
-/* ── Center feed area ───────────────────────────────────────────────────── */
+/* ── Center feed area — fills obs-fd-center entirely ─────────────────────── */
 .obs-fd-feed-wrap {
   display: flex;
   flex-direction: column;
-  /* height:auto — sized by content; obs-fd-list constrains the cards to peek height */
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 .obs-fd-toolbar {
   display: flex;
@@ -601,23 +637,7 @@
 }
 .obs-fd-preset-bar::-webkit-scrollbar { display: none; }
 
-.obs-fd-list {
-  overflow-y: auto;
-  padding: 8px 10px 20px;
-  /* 3-per-row responsive grid */
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
-  align-content: start;
-  /* Peek: show ~2 full card rows + partial 3rd row for scroll affordance */
-  max-height: 260px;
-}
-/* 2-per-row at narrower center column widths */
-@media (max-width: 900px) {
-  .obs-fd-list {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
+/* obs-fd-list is defined above (near line 389) — single canonical definition */
 
 /* ── Flow event card ────────────────────────────────────────────────────── */
 /*
@@ -822,11 +842,14 @@
   line-height: 1.45;
 }
 
-/* ── Inspector pane ─────────────────────────────────────────────────────── */
+/* ── Inspector pane — sits below Chain Heat in right rail ────────────────── */
+/* Empty state: slim one-line hint. Selected: auto-expand (content drives height).  */
 .obs-fd-inspector.obs-card {
   padding: 0;
   overflow: hidden;
-  flex: 0 0 auto;
+  flex: 0 0 auto;          /* shrink to content; chain heat fills the space above */
+  border-top: 1px solid rgba(255,255,255,0.06);
+  border-radius: 0;
 }
 .obs-insp-head {
   padding: 10px 14px 6px;
@@ -972,11 +995,13 @@
   text-align: center;
 }
 
-/* ── Chain heat card ────────────────────────────────────────────────────── */
+/* ── Chain heat card — top of right rail, fills all space above inspector ── */
 .obs-fd-chain.obs-card {
   padding: 0;
   overflow: auto; /* obs-scroll class takes over scrollbar styling */
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  min-height: 0;
+  border-radius: 0;
 }
 .obs-fd-chain-row {
   padding: 11px 16px;
