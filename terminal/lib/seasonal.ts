@@ -35,7 +35,11 @@ export const YEAR_COLORS: Record<string, string> = {
 export const YEAR_PALETTE = ["#60a5fa", "#a3e635", "#f97316", "#22d3ee", "#eab308", "#ef4444", "#2dd4bf", "#c084fc"];
 
 export function yearColor(year: string, idx: number): string {
-  return YEAR_COLORS[year] ?? YEAR_PALETTE[idx % YEAR_PALETTE.length];
+  if (YEAR_COLORS[year]) return YEAR_COLORS[year];
+  // deep history (decades of years) → a golden-angle hue spread so every year is distinguishable
+  const y = parseInt(year, 10);
+  const hue = ((Number.isFinite(y) ? y : idx) * 137.508) % 360;
+  return `hsl(${Math.round((hue + 360) % 360)} 62% 60%)`;
 }
 
 /* ── calendar mapping (non-leap reference year) ──────────────────────────── */
@@ -85,15 +89,6 @@ export interface YearData {
   coverIdx: number;
 }
 
-/** Approximate how far into the year the last bar sits (0..1 of Jan1→Dec31). */
-function dayOfYearSpan(arr: Bar[]): number {
-  const last = arr[arr.length - 1];
-  const dt = new Date(String(last.time).slice(0, 10) + "T00:00:00Z");
-  const start = Date.UTC(dt.getUTCFullYear(), 0, 1);
-  const end = Date.UTC(dt.getUTCFullYear(), 11, 31);
-  return Math.max(1, Math.round((dt.getTime() - start) / 86400000)) / Math.round((end - start) / 86400000);
-}
-
 function compound(rets: (number | null)[]): number | null {
   let acc = 1;
   let any = false;
@@ -116,25 +111,33 @@ export function buildYears(bars: Bar[]): YearData[] {
     byYear.get(yr)!.push(b);
   }
   const years = Array.from(byYear.keys()).sort();
-  const recent = years.slice(-MAX_YEARS);
+  const recent = years;                       // full history since inception (togglable per-year in the UI)
   const curYear = years[years.length - 1];
 
   return recent.map((yr) => {
     const arr = byYear.get(yr)!.slice().sort((a, b) => String(a.time).localeCompare(String(b.time)));
     const price: (number | null)[] = new Array(HORIZON).fill(null);
     const n = arr.length;
-    // The current (partial) year covers only the elapsed calendar fraction, so its
-    // trading days must occupy positions 0..cover-1 (not the whole Jan→Dec axis) —
-    // otherwise "now" reads as Dec and fuel-left/hot-cold degenerate to zero.
-    const cover = yr === curYear && n > 0
-      ? Math.min(HORIZON, Math.max(1, Math.round(dayOfYearSpan(arr) * HORIZON)))
-      : HORIZON;
-    for (let i = 0; i < cover; i++) {
-      const frac = cover <= 1 ? 0 : i / (cover - 1);
-      const srcIdx = Math.round(frac * (n - 1));
-      if (srcIdx < n) price[i] = arr[srcIdx].c;
+    // Calendar-accurate resample: map each grid position (its calendar day-of-year) to the close
+    // as-of that date within the year. Positions before the first bar (a mid-year IPO's pre-listing
+    // months) or after the last bar of the CURRENT partial year are null — so an IPO year sits on the
+    // real calendar (Sep data at Sep, never smeared across Jan→Dec) and "now" reads correctly.
+    const barF = arr.map((b) => {
+      const m = parseInt(String(b.time).slice(5, 7), 10) - 1;
+      const d = parseInt(String(b.time).slice(8, 10), 10) || 1;
+      const doy = (MONTH_START_DOY[m] ?? 0) + (d - 1);
+      return Math.min(1, doy / (YEAR_DAYS - 1));
+    });
+    for (let i = 0, k = -1; i < HORIZON; i++) {
+      const f = HORIZON <= 1 ? 0 : i / (HORIZON - 1);
+      while (k + 1 < n && barF[k + 1] <= f) k++;
+      if (k < 0) price[i] = n > 0 && barF[0] <= 0.03 ? arr[0].c : null;  // normal year-start vs mid-year IPO
+      else if (f <= barF[n - 1]) price[i] = arr[k].c;                    // within the year's data range
+      else if (yr === curYear) price[i] = null;                         // current year: calendar past today
+      else price[i] = arr[n - 1].c;                                     // completed prior year: hold year-end close
     }
-    const coverIdx = cover - 1;
+    let coverIdx = HORIZON - 1;
+    for (let i = HORIZON - 1; i >= 0; i--) { if (price[i] != null) { coverIdx = i; break; } }
 
     // monthly returns: last close of month vs prior month's last close
     const monthLast: (number | null)[] = new Array(12).fill(null);

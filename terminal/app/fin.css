@@ -522,7 +522,7 @@
 
 /* legend chips */
 .fin-seas-legend{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.fin-seas-legend-years{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.fin-seas-legend-years{display:flex;align-items:center;gap:6px;flex-wrap:wrap;max-height:84px;overflow-y:auto;scrollbar-width:thin}
 .fin-seas-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--panel-2);border-radius:var(--r-pill);padding:3px 9px 3px 7px;font:600 10.5px/1 var(--font-num);color:var(--text);cursor:pointer;transition:opacity var(--t) var(--ease),border-color var(--t) var(--ease)}
 .fin-seas-chip:hover{border-color:var(--brand-2)}
 .fin-seas-chip.off{color:var(--muted);opacity:.5;text-decoration:line-through;text-decoration-thickness:1px}
@@ -675,7 +675,7 @@
 .fin-adv-donutleg-n.down{color:var(--down)}
 
 /* year-agreement matrix */
-.fin-adv-yamx{display:flex;flex-direction:column;gap:2px;overflow-x:auto;scrollbar-width:thin}
+.fin-adv-yamx{display:flex;flex-direction:column;gap:2px;overflow:auto;scrollbar-width:thin;max-height:360px}
 .fin-adv-yamx-head,.fin-adv-yamx-row{display:grid;grid-template-columns:26px repeat(12,1fr);gap:2px;align-items:center;min-width:300px}
 .fin-adv-yamx-mh{font:600 8px/1 var(--font-ui);color:var(--muted);text-align:center}
 .fin-adv-yamx-corner{width:26px}

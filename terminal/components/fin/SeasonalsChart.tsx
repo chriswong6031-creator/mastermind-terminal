@@ -171,6 +171,12 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
     return null;
   };
 
+  // deep history (decades of years): fade the many lines into a cloud, drop the per-year
+  // end-labels + collapse the per-year hover tooltip into a summary so it stays readable.
+  const manyYears = normed.length;
+  const yearLineOp = manyYears <= 10 ? 0.95 : Math.max(0.2, 9 / manyYears);
+  const showEndLabels = manyYears <= 14;
+
   /* ── pointer → grid index ─────────────────────────────────────────────── */
   const idxAt = (clientX: number): number => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -199,6 +205,14 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
           { label: pick(zh, "Win rate", "胜率"), value: rs.wr != null ? `${Math.round(rs.wr * 100)}% (${rs.n})` : "—", color: "var(--text-2)" },
         ]);
       }
+    } else if (manyYears > 14) {
+      // hover: summary (avg · current year · range) — too many years for a per-year list
+      const vs = normed.map((p) => p.values[i]).filter(num) as number[];
+      const cur = normed.find((p) => p.isCurrent);
+      const rows = [{ label: pick(zh, "Average", "平均"), value: num(avg[i]) ? fmtY(avg[i] as number) : "—", color: "var(--brand-2)" }];
+      if (cur) rows.push({ label: cur.year, value: num(cur.values[i]) ? fmtY(cur.values[i] as number) : "—", color: cur.color });
+      if (vs.length) rows.push({ label: pick(zh, `Range · ${vs.length}y`, `区间 · ${vs.length}年`), value: `${fmtY(Math.min(...vs))} … ${fmtY(Math.max(...vs))}`, color: "var(--muted)" });
+      show(e, idxToDateLabel(i, zh), rows);
     } else {
       // hover: per-year value at this position
       show(e, idxToDateLabel(i, zh), [
@@ -290,9 +304,9 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
             const end = lastFinite(p.values);
             return (
               <g key={p.year}>
-                <polyline className={"fin-line" + (p.isCurrent ? " fin-line-emph" : "")} points={line(p.values)} fill="none" stroke={p.color} />
+                <polyline className={"fin-line" + (p.isCurrent ? " fin-line-emph" : "")} points={line(p.values)} fill="none" stroke={p.color} strokeOpacity={p.isCurrent ? 1 : yearLineOp} />
                 {end && p.isCurrent && <circle className="fin-node" cx={x(end[0])} cy={y(end[1])} r={3.2} fill={p.color} />}
-                {end && <text className="fin-yo-endlbl" x={vw - PAD.r + 3} y={y(end[1]) - 3} fill={p.color}>{p.year}</text>}
+                {end && (showEndLabels || p.isCurrent) && <text className="fin-yo-endlbl" x={vw - PAD.r + 3} y={y(end[1]) - 3} fill={p.color}>{p.year}</text>}
               </g>
             );
           })}
