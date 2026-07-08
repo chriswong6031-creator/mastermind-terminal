@@ -331,20 +331,34 @@ export function holdingWindows(years: YearData[], active: ActiveFn): (WindowStat
  * Pick the "best" window. `by` = "mean" (highest avg return) or "sharpe"
  * (best risk-adjusted). Requires n ≥ minN active years with full coverage.
  */
+// "Best window to hold" caps at 6 months — a tight, actionable seasonal span, not the whole year.
+export const HOLD_MAXLEN = 6;
+
+/**
+ * Score a hold window: efficiency (mean return per √month) × consistency (win rate), capped to
+ * HOLD_MAXLEN months. Maximising raw mean return trivially picks Jan→Dec (total return is monotonic
+ * in length for an up-trending stock); dividing by √length rewards concentrated seasonal strength,
+ * and the win-rate factor rewards windows that rise most years — so the pick is short + reliable.
+ */
+export function holdScore(mean: number | null, wr: number | null, len: number): number {
+  if (mean == null || wr == null || len < 1 || len > HOLD_MAXLEN) return -Infinity;
+  return (mean / Math.sqrt(len)) * Math.max(0.05, wr);
+}
+
 export function bestWindow(
   grid: (WindowStat | null)[][],
-  by: "mean" | "sharpe" = "mean",
+  by: "mean" | "sharpe" | "hold" = "hold",
   minN = 2,
 ): WindowStat | null {
   let best: WindowStat | null = null;
+  let bestScore = -Infinity;
   for (let s = 0; s < 12; s++) {
     for (let e = s; e < 12; e++) {
       const w = grid[s][e];
       if (!w || w.n < minN) continue;
-      const key = by === "sharpe" ? w.sharpe : w.mean;
-      if (key == null) continue;
-      const bkey = best ? (by === "sharpe" ? best.sharpe : best.mean) : null;
-      if (bkey == null || key > bkey) best = w;
+      const key = by === "sharpe" ? w.sharpe : by === "hold" ? holdScore(w.mean, w.wr, e - s + 1) : w.mean;
+      if (key == null || !isFinite(key)) continue;
+      if (key > bestScore) { bestScore = key; best = w; }
     }
   }
   return best;
@@ -557,19 +571,25 @@ export function signAgreement(years: YearData[], active: ActiveFn): { score: num
 }
 
 /* ── best-window overfit guard (permutation p on the 66-window search) ───── */
-function bestMeanWindow(mat: number[][]): { val: number; s: number; e: number } {
+// Max hold-window SCORE over all 66 windows (matches the displayed "best window to hold" objective),
+// so the permutation guard tests the significance of what the user actually sees.
+function bestHoldScore(mat: number[][]): { val: number; s: number; e: number } {
   let best = { val: -Infinity, s: 0, e: 0 };
   const n = mat.length;
   for (let s = 0; s < 12; s++) {
     const acc = new Array(n).fill(1);
     for (let e = s; e < 12; e++) {
-      let sum = 0;
+      const L = e - s + 1;
+      let sum = 0, pos = 0;
       for (let k = 0; k < n; k++) {
         acc[k] *= 1 + mat[k][e] / 100;
-        sum += (acc[k] - 1) * 100;
+        const ret = (acc[k] - 1) * 100;
+        sum += ret;
+        if (ret > 0) pos++;
       }
-      const mu = sum / n;
-      if (mu > best.val) best = { val: mu, s, e };
+      if (L > HOLD_MAXLEN) continue;
+      const score = (sum / n / Math.sqrt(L)) * Math.max(0.05, pos / n);
+      if (score > best.val) best = { val: score, s, e };
     }
   }
   return best;
@@ -587,7 +607,7 @@ export function overfitGuard(years: YearData[], active: ActiveFn, R = 200): Over
     .map((y) => y.monthlyRet as number[]);
   const nYears = complete.length;
   if (nYears < 3) return { p: null, observed: null, nYears, window: null, verdict: null };
-  const obs = bestMeanWindow(complete);
+  const obs = bestHoldScore(complete);
   let ge = 0;
   for (let r = 0; r < R; r++) {
     const shuffled = complete.map((v) => {
@@ -598,7 +618,7 @@ export function overfitGuard(years: YearData[], active: ActiveFn, R = 200): Over
       }
       return a;
     });
-    if (bestMeanWindow(shuffled).val >= obs.val) ge++;
+    if (bestHoldScore(shuffled).val >= obs.val) ge++;
   }
   const p = (ge + 1) / (R + 1);
   const verdict = p < 0.05 ? "NOTABLE" : p < 0.2 ? "WEAK" : "NOISE";

@@ -110,7 +110,7 @@ function HeadlineCards({ years, isActive, zh }: { years: YearData[]; isActive: (
   const ms = useMemo(() => monthlyStats(years, isActive), [years, isActive]);
   const edge = ms[curM];
   const grid = useMemo(() => holdingWindows(years, isActive), [years, isActive]);
-  const best = useMemo(() => bestWindow(grid, "mean", 2), [grid]);
+  const best = useMemo(() => bestWindow(grid, "hold", 2), [grid]);
   const rw = useMemo(() => runway(years, isActive), [years, isActive]);
 
   // overfit guard is heavier — compute in an effect so it never blocks paint
@@ -145,7 +145,7 @@ function HeadlineCards({ years, isActive, zh }: { years: YearData[]; isActive: (
         <div className="fin-adv-card-t">{pick(zh, "Best window to hold", "最佳持有区间")}</div>
         {best && best.mean != null ? (
           <>
-            <div className="fin-adv-card-v up">{monthsL[best.start]}→{monthsL[best.end]}</div>
+            <div className="fin-adv-card-v up">{monthsL[best.start]}→{monthsL[best.end]}<span className="fin-adv-holdlen"> · {best.end - best.start + 1}{pick(zh, "mo", "月")}</span></div>
             <div className="fin-adv-card-s">{P(best.mean)} {pick(zh, "avg", "平均")} · {best.wr != null ? WRp(best.wr) : "—"} {pick(zh, "WR", "胜率")}
               {verdictTxt && <span className={"fin-adv-flag " + verdictTone}>{verdictTxt}</span>}
             </div>
@@ -351,7 +351,7 @@ function HoldingMatrixPanel({ years, isActive, zh }: { years: YearData[]; isActi
   const { tip, show, hide } = useFinTip();
   const monthsL = zh ? MONTHS_ZH : MONTHS_EN;
   const grid = useMemo(() => holdingWindows(years, isActive), [years, isActive]);
-  const best = useMemo(() => bestWindow(grid, "mean", 2), [grid]);
+  const best = useMemo(() => bestWindow(grid, "hold", 2), [grid]);
   const bestSharpe = useMemo(() => bestWindow(grid, "sharpe", 2), [grid]);
   const nActive = years.filter((y) => isActive(y.year)).length;
 
@@ -376,7 +376,7 @@ function HoldingMatrixPanel({ years, isActive, zh }: { years: YearData[]; isActi
     <Panel title={pick(zh, "Optimal holding window", "最佳持有窗口")} subtitle={pick(zh, "buy after row → sell after col · avg span return", "行=买入后 → 列=卖出后 · 区间平均收益")}>
       {best && best.mean != null ? (
         <div className="fin-adv-bestcall">
-          <span className="fin-adv-bestcall-w">{monthsL[best.start]} → {monthsL[best.end]}</span>
+          <span className="fin-adv-bestcall-w">{monthsL[best.start]} → {monthsL[best.end]} <span className="fin-adv-holdlen">· {best.end - best.start + 1}{pick(zh, "mo", "月")}</span></span>
           <span className="fin-adv-bestcall-v up">{P(best.mean)}</span>
           <span className="fin-adv-bestcall-s">{best.wr != null ? `${WRp(best.wr)} ${pick(zh, "WR", "胜率")}` : ""} · N={best.n}</span>
         </div>
