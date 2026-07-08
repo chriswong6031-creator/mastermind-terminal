@@ -1,0 +1,277 @@
+/**
+ * Observatory design layer — scoped under .obs
+ *
+ * All colors derive from the locked v5 design system tokens (globals.css).
+ * NEVER hardcode bull-green or bear-red; use var(--up)/var(--down) so the
+ * East-Asian red-up flip (html[data-updown="east"]) works automatically.
+ *
+ * Import order: globals.css → fin.css → observatory.css
+ * Scope: every selector here is either .obs-* or .obs <descendant>.
+ */
+
+/* ─── Ambient background ─────────────────────────────────────────────────── */
+/*
+ * .obs-ambient goes on the page surface root (e.g. a wrapping <div>).
+ * Two soft radial gradients: brand-tinted top-left, up-tinted top-right.
+ * pointer-events:none so it never blocks clicks.
+ */
+.obs-ambient {
+  position: relative;
+}
+.obs-ambient::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(900px 420px at 18% -8%, color-mix(in srgb, var(--brand) 14%, transparent), transparent 60%),
+    radial-gradient(700px 380px at 92% 0%,   color-mix(in srgb, var(--up)    6%,  transparent), transparent 55%);
+  pointer-events: none;
+  z-index: 0;
+}
+.obs-ambient > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ─── Glass card ─────────────────────────────────────────────────────────── */
+/*
+ * .obs-card  — base glass panel (any surface)
+ * .obs-card:hover — slightly brighter border on hover / keyboard focus-within
+ * .obs-card.sel   — selected state (bright border + brand tint shadow)
+ *
+ * Inner layout: use flex-direction:column or grid as needed — the card itself
+ * is just the shell (background + border + radius + blur).
+ */
+.obs-card {
+  background: rgba(255, 255, 255, 0.033);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 15px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: border-color var(--t, 110ms) var(--ease), box-shadow var(--t, 110ms) var(--ease);
+}
+.obs-card:hover,
+.obs-card:focus-within {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+.obs-card.sel {
+  border-color: color-mix(in srgb, var(--brand) 55%, transparent);
+  background: color-mix(in srgb, var(--brand) 7%, rgba(255, 255, 255, 0.033));
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--brand) 14%, transparent);
+}
+
+/* Card header row — micro-label pattern */
+.obs-card > h3,
+.obs-card .obs-card-hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 14px 16px 10px;
+}
+.obs-card-hr {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.09);
+  margin: 0 16px;
+}
+
+/* ─── Micro-label ────────────────────────────────────────────────────────── */
+/*
+ * .obs-lbl   — 10.5px, 600 weight, .1em letterspacing, uppercase, dim color.
+ *              Use above a value; the value itself uses .num for tabular figures.
+ */
+.obs-lbl {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1;
+}
+
+/* ─── Filter chips ───────────────────────────────────────────────────────── */
+/*
+ * .obs-chip     — inactive state
+ * .obs-chip.on  — active state (brand fill + inset ring)
+ */
+.obs-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: transparent;
+  color: var(--text-2);
+  font: 600 12px/1 var(--font-ui);
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t), color var(--t), box-shadow var(--t);
+  white-space: nowrap;
+}
+.obs-chip:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--text);
+}
+.obs-chip.on {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent),
+              0 4px 14px color-mix(in srgb, var(--brand) 35%, transparent);
+}
+
+/* ─── Pill nav ───────────────────────────────────────────────────────────── */
+/*
+ * .obs-pillnav           — the rounded container (wraps .obs-pillnav-tab items)
+ * .obs-pillnav-tab       — individual tab link / button
+ * .obs-pillnav-tab.on    — active: brand-tinted fill + inset ring
+ */
+.obs-pillnav {
+  display: flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.033);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  padding: 4px;
+  flex-shrink: 0;
+}
+.obs-pillnav-tab {
+  padding: 7px 14px;
+  border-radius: 9px;
+  color: var(--text-2);
+  font: 500 13px/1 var(--font-ui);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--t), color var(--t), box-shadow var(--t);
+  border: none;
+  background: none;
+}
+.obs-pillnav-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+.obs-pillnav-tab.on {
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  color: color-mix(in srgb, var(--brand-2) 100%, #fff 30%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent);
+  font-weight: 600;
+}
+
+/* ─── Amber honesty note ─────────────────────────────────────────────────── */
+/*
+ * .obs-note — soft amber-tinted panel for doctrine microcopy / display-only disclaimers.
+ */
+.obs-note {
+  margin: 4px 16px 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 18%, transparent);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--warn) 80%, var(--text) 20%);
+}
+
+/* ─── Ring gauge shell ───────────────────────────────────────────────────── */
+/*
+ * Used directly by <RingGauge> component. The component renders:
+ *   <span class="obs-ring obs-ring--{size} obs-ring--{tone}" style="--pct:{value}%">
+ *     <span class="obs-ring-inner">
+ *       <span class="obs-ring-value num">{value}</span>
+ *     </span>
+ *   </span>
+ *
+ * Sizes:  sm (34px), md (46px), lg (84px)
+ * Tones:  brand | up | down | muted  (auto-by-value maps to one of these)
+ * Inner disc background matches panel color so the ring "punches through".
+ */
+.obs-ring {
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  /* conic-gradient driven by --pct CSS custom property set inline */
+  background: conic-gradient(var(--obs-ring-color, var(--brand)) 0 var(--pct, 0%), rgba(255,255,255,0.08) var(--pct, 0%) 100%);
+}
+.obs-ring-inner {
+  border-radius: 50%;
+  background: var(--panel, #0d0f13);
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+.obs-ring-value {
+  font-weight: 600;
+}
+
+/* sm: 34px outer, 26px inner */
+.obs-ring--sm {
+  width: 34px;
+  height: 34px;
+}
+.obs-ring--sm .obs-ring-inner {
+  width: 26px;
+  height: 26px;
+}
+.obs-ring--sm .obs-ring-value {
+  font-size: 11px;
+}
+
+/* md: 46px outer, 36px inner */
+.obs-ring--md {
+  width: 46px;
+  height: 46px;
+}
+.obs-ring--md .obs-ring-inner {
+  width: 36px;
+  height: 36px;
+}
+.obs-ring--md .obs-ring-value {
+  font-size: 13px;
+}
+
+/* lg: 84px outer, 66px inner */
+.obs-ring--lg {
+  width: 84px;
+  height: 84px;
+  box-shadow: 0 8px 30px color-mix(in srgb, var(--obs-ring-color, var(--brand)) 25%, transparent);
+}
+.obs-ring--lg .obs-ring-inner {
+  width: 66px;
+  height: 66px;
+}
+.obs-ring--lg .obs-ring-value {
+  font-size: 20px;
+}
+
+/* Tone color mappings — set --obs-ring-color via tone class */
+.obs-ring--brand { --obs-ring-color: var(--brand); }
+.obs-ring--up    { --obs-ring-color: var(--up); }
+.obs-ring--down  { --obs-ring-color: var(--down); }
+.obs-ring--muted { --obs-ring-color: var(--muted); }
+
+/* ─── Numeric utility ────────────────────────────────────────────────────── */
+/*
+ * .num  — already defined in globals.css; re-exported here for documentation.
+ *          font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1
+ *          Combine with var(--font-num) for monospace numerals.
+ */
+
+/* ─── Live dot ───────────────────────────────────────────────────────────── */
+.obs-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--up);
+  box-shadow: 0 0 10px var(--up);
+  flex-shrink: 0;
+}
+
+/* ─── Responsive: scrollable pill nav on narrow viewports ────────────────── */
+@media (max-width: 640px) {
+  .obs-pillnav {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .obs-pillnav::-webkit-scrollbar { display: none; }
+}

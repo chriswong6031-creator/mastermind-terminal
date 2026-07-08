@@ -1360,12 +1360,19 @@ export default function OptionsHubView() {
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="app2">
+    <div className="app2 obs obs-ambient">
       <header className="topbar">
         <BrandLockup />
         <div className="tdiv" />
         <span className="page-title">{t("flow", "Options")}</span>
         <div className="spacer" />
+        {/* Live status area */}
+        {(activeTab === "tape" || activeTab === "tide") && !feedUnavailable && !feedDelayed && (
+          <span style={{ display: "flex", alignItems: "center", gap: 6, marginRight: 10, fontSize: 12, color: "var(--text-2)" }}>
+            <span className="obs-live-dot" />
+            {lang === "zh" ? "实时" : "Live"}
+          </span>
+        )}
         {lastFeedTs && (
           <span style={{ color: "var(--text-dim)", fontSize: 11, marginRight: 12 }}>
             {t("asOf", "as of")} {fmtAsof(lastFeedTs)}
@@ -1390,19 +1397,21 @@ export default function OptionsHubView() {
 
       <main className="main2" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
 
-        {/* ── Tab bar ── */}
-        <div className="hub-tab-bar">
-          {TABS.map((tb) => (
-            <button
-              key={tb.key}
-              className={`hub-tab${activeTab === tb.key ? " on" : ""}`}
-              onClick={() => switchTab(tb.key)}
-            >
-              {lang === "zh"
-                ? t(tb.zhKey, tb.key)
-                : t(tb.enKey, tb.key)}
-            </button>
-          ))}
+        {/* ── Tab bar (Observatory pill-nav) ── */}
+        <div style={{ display: "flex", alignItems: "center", padding: "8px 14px", borderBottom: "1px solid var(--line)", flexShrink: 0, gap: 8 }}>
+          <nav className="obs-pillnav" aria-label={lang === "zh" ? "期权工具选项卡" : "Options Hub tabs"}>
+            {TABS.map((tb) => (
+              <button
+                key={tb.key}
+                className={`obs-pillnav-tab${activeTab === tb.key ? " on" : ""}`}
+                onClick={() => switchTab(tb.key)}
+              >
+                {lang === "zh"
+                  ? t(tb.zhKey, tb.key)
+                  : t(tb.enKey, tb.key)}
+              </button>
+            ))}
+          </nav>
         </div>
 
         {/* ── Live-feed status banner (Tape + Tide are intraday-live) ── */}
