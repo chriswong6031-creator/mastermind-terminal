@@ -70,9 +70,9 @@ function functionalSet(sym: string): Set<string> {
   if (intradayCapable(classify(sym))) for (const t of INTRADAY_FUNCTIONAL) s.add(t);
   return s;
 }
-// valid ?pane= deep-link targets (the nine MegaPane pages; "analyst" is an alias for forecast).
+// valid ?pane= deep-link targets (the MegaPane pages; "analyst" is an alias for forecast).
 // "mastermind" was retired — its research read now lives in the OracleDash Research-Desk surface.
-const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends", "earnings", "revenue", "forecast", "analyst", "technicals", "seasonals"]);
+const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends", "earnings", "revenue", "forecast", "analyst", "technicals", "seasonals", "insider"]);
 const normalizePane = (pane: string): FinPage => (pane === "analyst" ? "forecast" : pane) as FinPage;
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 

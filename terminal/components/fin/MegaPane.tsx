@@ -35,6 +35,7 @@ import ForecastPage from "./ForecastPage";
 // Sibling dashboards land from FE2c in parallel; imports resolve at integration.
 import TechnicalsPage from "./TechnicalsPage";
 import SeasonalsPage from "./SeasonalsPage";
+import InsiderPage from "./InsiderPage";
 import TranscriptDrawer from "./TranscriptDrawer";
 import { useState } from "react";
 
@@ -49,10 +50,11 @@ export type FinPage =
   | "revenue"
   | "forecast"
   | "technicals"
-  | "seasonals";
+  | "seasonals"
+  | "insider";
 
-/** The six pages that share the TV "Financials" tab pill bar. */
-const FIN_TABS: FinPage[] = ["overview", "statements", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast"];
+/** The pages that share the TV "Financials" tab pill bar. */
+const FIN_TABS: FinPage[] = ["overview", "statements", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast", "insider"];
 
 const PAGE_LABELS: Record<FinPage, [string, string]> = {
   overview: ["Overview", "概览"],
@@ -64,6 +66,7 @@ const PAGE_LABELS: Record<FinPage, [string, string]> = {
   forecast: ["Analyst", "分析师"],
   technicals: ["Technicals", "技术面"],
   seasonals: ["Seasonal", "季节性"],
+  insider: ["Insider", "内部交易"],
 };
 
 export interface MegaPaneProps {
@@ -203,6 +206,7 @@ export default function MegaPane({
           {page === "forecast" && <ForecastPage sym={sym} fund={fund} bars={bars} zh={zh} />}
           {page === "technicals" && <TechnicalsPage sym={sym} bars={bars} zh={zh} />}
           {page === "seasonals" && <SeasonalsPage sym={sym} bars={bars} zh={zh} />}
+          {page === "insider" && <InsiderPage sym={sym} bars={bars} zh={zh} />}
         </div>
       </div>
 
