@@ -411,11 +411,12 @@ const BODY_ROW: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflow: "hidden",
+  flexWrap: "wrap",  /* responsive: right rail wraps below at ~1100px */
 };
 
 const LEFT_PANE: React.CSSProperties = {
   flex: 1,
-  minWidth: 0,
+  minWidth: 480,     /* ladder gets all remaining space above 480px */
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",

@@ -156,7 +156,7 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
           <span className="obs-lbl" style={{ color: "var(--muted)" }}>score</span>
         </div>
         <div className="obs-card-hr" />
-        <div className="obs-fd-wl-rows">
+        <div className="obs-fd-wl-rows obs-scroll">
           {watchlist.length === 0 && (
             <div className="obs-fd-wl-empty">
               {pick(zh, "Click a ticker to watch", "点击标的加入观察")}

@@ -344,7 +344,7 @@ export function MarketStateCard({
 
   if (!statePayload) {
     return (
-      <div className="obs-card" style={CARD_OUTER} data-tut="gex-state-card">
+      <div className="obs-card obs-scroll" style={CARD_OUTER} data-tut="gex-state-card">
         <div className="obs-card-hd" style={CARD_HEADER}>
           <span className="obs-lbl">{t("stateTitle")}</span>
         </div>
@@ -621,10 +621,12 @@ const CARD_OUTER: React.CSSProperties = {
   borderRadius: 0,
   display: "flex",
   flexDirection: "column",
-  minWidth: 230,
-  width: 270,
+  minWidth: 300,
+  width: 340,
   flexShrink: 0,
   overflowY: "auto",
+  scrollbarWidth: "thin" as const,
+  scrollbarColor: "rgba(255,255,255,0.13) transparent",
 };
 
 const CARD_HEADER: React.CSSProperties = {

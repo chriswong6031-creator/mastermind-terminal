@@ -77,7 +77,7 @@ export function RadarStrip({ feed, lang }: RadarStripProps) {
     : pick(zh, FD.radarBaseline.en, FD.radarBaseline.zh);
 
   return (
-    <section className="obs-card obs-fd-radar" data-tut="flow-radar" style={{ borderRadius: 0, border: "none", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0, maxHeight: 180, overflowY: "auto" }}>
+    <section className="obs-card obs-fd-radar obs-scroll" data-tut="flow-radar" style={{ borderRadius: 0, border: "none", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
       {/* Header */}
       <div className="obs-card-hd">
         <span className="obs-lbl">{pick(zh, FD.smartMoneyRadar.en, FD.smartMoneyRadar.zh)}</span>
@@ -99,7 +99,7 @@ export function RadarStrip({ feed, lang }: RadarStripProps) {
         </div>
       )}
 
-      <div className="obs-fd-radar-rows">
+      <div className="obs-fd-radar-rows obs-scroll">
         {rows.map((row) => <RadarRow key={row.root} row={row} zh={zh} />)}
       </div>
     </section>

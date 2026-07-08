@@ -339,7 +339,7 @@ export function FeedPane({
       )}
 
       {/* ── Feed list ── */}
-      <div className="obs-fd-list" data-tut="flow-feed">
+      <div className="obs-fd-list obs-scroll" data-tut="flow-feed">
         {/* Loading state */}
         {feed === null && <LoadingState zh={zh} />}
 

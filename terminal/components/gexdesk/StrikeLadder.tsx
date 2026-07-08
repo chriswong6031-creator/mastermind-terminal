@@ -404,7 +404,7 @@ export function StrikeLadder({
       </div>
 
       {/* ── Scrollable chart body ─────────────────────────────────────────────── */}
-      <div style={CHART_SCROLL} ref={scrollRef}>
+      <div style={CHART_SCROLL} ref={scrollRef} className="obs-scroll">
         {/* Center axis hairline (positioned over bar area) */}
         <div style={CENTER_LINE} />
 
@@ -733,7 +733,7 @@ const COL_VAL_HDR: React.CSSProperties = {
   textAlign: "right",
 };
 
-// Scroll container (fills remaining space)
+// Scroll container (fills remaining space) — obs-scroll class handles scrollbar styling
 const CHART_SCROLL: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",

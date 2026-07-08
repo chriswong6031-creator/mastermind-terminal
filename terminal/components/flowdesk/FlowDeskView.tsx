@@ -131,7 +131,7 @@ function ChainHeatRail({ data, lang }: ChainHeatRailProps) {
 
   if (!data) {
     return (
-      <div className="obs-card obs-fd-chain" data-tut="chain-heat">
+      <div className="obs-card obs-fd-chain obs-scroll" data-tut="chain-heat">
         <div className="obs-card-hd">
           <span className="obs-lbl">{t("chainHeatTitle")}</span>
         </div>
@@ -148,7 +148,7 @@ function ChainHeatRail({ data, lang }: ChainHeatRailProps) {
   const note = zh ? (data.note_zh ?? "") : (data.note_en ?? "");
 
   return (
-    <div className="obs-card obs-fd-chain" data-tut="chain-heat">
+    <div className="obs-card obs-fd-chain obs-scroll" data-tut="chain-heat">
       <div className="obs-card-hd">
         <span className="obs-lbl">{t("chainHeatTitle")}</span>
         <span className="obs-lbl" style={{ color: "var(--muted)" }}>
@@ -518,9 +518,7 @@ export function FlowDeskView() {
 // ─── Layout styles ────────────────────────────────────────────────────────────
 
 const FEED_COL: React.CSSProperties = {
-  flex: 1,
-  minHeight: 0,
-  overflowY: "auto",
+  flexShrink: 0,    /* don't collapse — take natural height of feed-wrap */
 };
 
 const RAIL_LOADING: React.CSSProperties = {

@@ -276,6 +276,37 @@
   .obs-pillnav::-webkit-scrollbar { display: none; }
 }
 
+/* ─── Modern scroll primitive ────────────────────────────────────────────── */
+/*
+ * .obs-scroll — apply to any internal scroll region across Observatory surfaces
+ * (flow feed, chain heat, radar, watchlist, GEX ladder, PRISM overflow, tickers).
+ * Thin 8px track-transparent thumb from --muted token, hover-brightens.
+ * Firefox: scrollbar-width:thin for the muted color pair.
+ */
+.obs-scroll {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.13) transparent;
+}
+.obs-scroll::-webkit-scrollbar {
+  width: 8px;
+  background: transparent;
+}
+.obs-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.obs-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.13);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background 0.15s;
+}
+.obs-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.26);
+  background-clip: content-box;
+}
+
 /* ─── Flow Desk surface-specific overrides ───────────────────────────────── */
 /*
  * Scoped under .obs-flowdesk so they don't leak into the chart app.
@@ -314,8 +345,11 @@
   display: flex;
   flex-direction: column;
   gap: 0;
-  overflow: hidden;
+  overflow-y: auto;    /* allow center to scroll when radar + feed exceed viewport */
+  overflow-x: hidden;
+  scrollbar-width: none; /* hide the center column's own scrollbar; feed list scrolls internally */
 }
+.obs-fd-center::-webkit-scrollbar { display: none; }
 
 /* Right rail */
 .obs-fd-right {
@@ -328,6 +362,33 @@
   scrollbar-width: none;
 }
 .obs-fd-right::-webkit-scrollbar { display: none; }
+
+/* ── Radar: show all rows at natural height, no inner squeeze ─────────────── */
+/*
+ * The radar card sits between FlowGauge and FeedPane in obs-fd-center (flex-column).
+ * flex-shrink:0 means it takes its natural scrollHeight — all rows visible.
+ * The feed section beneath it takes all remaining space; obs-scroll handles
+ * scrollbar styling for the rows list inside the card.
+ */
+.obs-fd-radar.obs-card {
+  flex-shrink: 0;
+  overflow: visible; /* let the card grow to its natural height */
+}
+.obs-fd-radar-rows {
+  /* rows container is not scroll-constrained — the card itself shows all rows */
+  overflow: visible;
+}
+
+/* ── Feed area: fills remaining center-column space; 2-row peek scroll ────── */
+/*
+ * FEED_COL in FlowDeskView.tsx is a plain div with flex:1 minHeight:0 overflowY:auto.
+ * We want obs-fd-list to show ~2 full rows + peek of row 3 (~260px).
+ * The outer wrapper fills remaining space; the list constrains with max-height.
+ */
+.obs-fd-list {
+  /* 2 rows (~94px each) + ~65px peek + 10px breathing = ~263px */
+  max-height: 260px;
+}
 
 /* ── Session stats card (left rail top) ─────────────────────────────────── */
 .obs-fd-session.obs-card {
@@ -498,8 +559,7 @@
 .obs-fd-feed-wrap {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  overflow: hidden;
+  /* height:auto — sized by content; obs-fd-list constrains the cards to peek height */
 }
 .obs-fd-toolbar {
   display: flex;
@@ -547,16 +607,15 @@
 .obs-fd-preset-bar::-webkit-scrollbar { display: none; }
 
 .obs-fd-list {
-  flex: 1;
   overflow-y: auto;
   padding: 8px 10px 20px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.08) transparent;
   /* 3-per-row responsive grid */
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
   align-content: start;
+  /* Peek: show ~2 full card rows + partial 3rd row for scroll affordance */
+  max-height: 260px;
 }
 /* 2-per-row at narrower center column widths */
 @media (max-width: 900px) {
@@ -921,7 +980,7 @@
 /* ── Chain heat card ────────────────────────────────────────────────────── */
 .obs-fd-chain.obs-card {
   padding: 0;
-  overflow: hidden;
+  overflow: auto; /* obs-scroll class takes over scrollbar styling */
   flex: 1 1 auto;
 }
 .obs-fd-chain-row {

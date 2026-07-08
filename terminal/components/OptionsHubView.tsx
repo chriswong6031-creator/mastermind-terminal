@@ -587,7 +587,7 @@ const StrikeLadder = memo(function StrikeLadder({ strikes, lang }: { strikes: St
   const H = strikes.length * ROW_H + 28;
 
   return (
-    <div style={{ maxHeight: 320, overflowY: "auto" }}>
+    <div className="obs-scroll" style={{ overflowY: "auto" }}>
       <svg viewBox={`0 0 ${BAR_WIDTH * 2 + 80} ${H}`} width="100%" height={H} preserveAspectRatio="xMinYMin meet" style={{ display: "block" }}>
         {/* Column headers */}
         <text x={BAR_WIDTH - 4} y={14} textAnchor="end" fill="var(--up)" fontSize={10} fontWeight={600}>

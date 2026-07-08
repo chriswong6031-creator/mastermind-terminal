@@ -631,24 +631,27 @@ const BODY_ROW: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflow: "hidden",
+  flexWrap: "wrap",  /* responsive: right rail wraps below at ~1100px */
 };
 
 const MATRIX_PANE: React.CSSProperties = {
   flex: 1,
-  minWidth: 0,
+  minWidth: 540,     /* matrix absorbs all space above this threshold */
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
 };
 
 const RIGHT_RAIL: React.CSSProperties = {
-  width: 210,
-  minWidth: 190,
+  width: 320,
+  minWidth: 280,
   display: "flex",
   flexDirection: "column",
   borderLeft: "1px solid var(--line)",
   background: "var(--panel)",
   overflowY: "auto",
+  scrollbarWidth: "thin" as const,
+  scrollbarColor: "rgba(255,255,255,0.13) transparent",
   padding: 8,
 } as React.CSSProperties;
 
