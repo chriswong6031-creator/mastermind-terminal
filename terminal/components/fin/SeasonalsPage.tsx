@@ -16,6 +16,7 @@ import { fmtPct, pick } from "../../lib/finFormat";
 import { buildYears, MONTHS_EN, MONTHS_ZH, type YearData } from "../../lib/seasonal";
 import { SeasonalsChart } from "./SeasonalsChart";
 import { AdvancedSeasonality } from "./AdvancedSeasonality";
+import { RegimeOutlook } from "./RegimeOutlook";
 import { Disclaimer } from "./ForecastPage";
 
 interface SeasonalsPageProps {
@@ -65,6 +66,7 @@ function SeasonalsPage({ sym, bars = [], zh = false }: SeasonalsPageProps) {
               <SeasonalsChart years={years} active={active} onToggleYear={toggleYear} onSetActive={setActive} zh={zh} />
             </div>
             <AdvancedSeasonality years={years} active={active} zh={zh} />
+            <RegimeOutlook sym={sym} zh={zh} />
           </>
         )
       ) : (

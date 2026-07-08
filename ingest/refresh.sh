@@ -19,4 +19,8 @@ echo "[refresh] $(date) — artifact freshness conformance…"
 "$PY" -m ingest.artifact_conformance || echo "[refresh] WARN: stale macro artifacts (see above)"
 echo "[refresh] $(date) — pulling macro intel bridge…"
 "$PY" ingest/pull_macro_intel.py "$@"
+# regime-aware seasonal outlook (display-only). Deep history via yfinance (no Polygon key);
+# non-fatal so a data hiccup never breaks the core refresh.
+echo "[refresh] $(date) — regime-aware seasonal outlooks…"
+"$PY" ingest/gen_seasonal_outlook.py "$@" || echo "[refresh] WARN: seasonal-outlook step failed (see above)"
 echo "[refresh] done."

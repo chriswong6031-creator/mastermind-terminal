@@ -699,3 +699,67 @@
   .fin-seas-selsum-stats{gap:16px}
   .fin-adv-cards{grid-template-columns:repeat(auto-fit,minmax(128px,1fr))}
 }
+
+/* ===========================================================================
+ * === RegimeOutlook (fin-ro-*) — regime-aware forward seasonal outlook panel
+ * ========================================================================== */
+
+/* panel shell — reuses fin-adv-panel but adds its own top margin */
+.fin-ro-panel{margin-top:18px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.028)}
+
+/* header */
+.fin-ro-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.fin-ro-title{font:650 13px/1.2 var(--font-ui);color:var(--text)}
+.fin-ro-pill{display:inline-flex;align-items:center;font:600 9.5px/1 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--warn);background:rgba(232,163,61,.1);border:1px solid rgba(232,163,61,.28);border-radius:var(--r-pill);padding:3px 7px}
+
+/* regime badge row */
+.fin-ro-badge-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.fin-ro-regime-badge{display:inline-flex;align-items:center;gap:0;font:600 11.5px/1 var(--font-ui);color:var(--text-2);background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 12px;flex-wrap:wrap;gap:4px}
+.fin-ro-sep{color:var(--line-3);margin:0 2px}
+.fin-ro-flag-rec{color:var(--down);font-weight:700}
+.fin-ro-provisional{display:inline-flex;margin-left:6px;font:600 9px/1 var(--font-ui);color:var(--warn);background:rgba(232,163,61,.1);border:1px solid rgba(232,163,61,.22);border-radius:var(--r-pill);padding:2px 6px;cursor:help}
+.fin-ro-toggle{flex:none}
+
+/* timeline */
+.fin-ro-timeline-wrap{margin-bottom:14px}
+.fin-ro-timeline-label{font:600 10.5px/1 var(--font-ui);color:var(--text-2);margin-bottom:8px}
+.fin-ro-svg-box{width:100%;position:relative;overflow:hidden}
+.fin-ro-svg{width:100%;display:block}
+.fin-ro-axis-line{stroke:var(--line-2);stroke-width:1;vector-effect:non-scaling-stroke}
+.fin-ro-band{cursor:crosshair;transition:opacity .1s}
+.fin-ro-band:hover{opacity:.9!important}
+.fin-ro-band-pct{font:700 10px/1 var(--font-num);font-feature-settings:"tnum"}
+.fin-ro-band-wr{fill:var(--text-2);font:500 9px/1 var(--font-num)}
+.fin-ro-tick{stroke:var(--line-2);stroke-width:1;vector-effect:non-scaling-stroke}
+.fin-ro-tick-year{stroke:var(--line-3);stroke-width:1.4;vector-effect:non-scaling-stroke}
+.fin-ro-tick-lbl{fill:var(--muted);font:500 8px/1 var(--font-num)}
+.fin-ro-tick-lbl-year{fill:var(--text-2);font:600 8.5px/1 var(--font-num)}
+.fin-ro-now{stroke:var(--brand-2);stroke-width:1.5;vector-effect:non-scaling-stroke}
+.fin-ro-now-lbl{fill:var(--brand-2);font:700 8px/1 var(--font-ui)}
+
+/* validation strip */
+.fin-ro-val{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;padding:9px 11px;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-md);margin-bottom:12px;font:500 11px/1.5 var(--font-ui);color:var(--text-2)}
+.fin-ro-val-label{flex:1;min-width:180px}
+.fin-ro-val strong{color:var(--text);font-weight:700}
+.fin-ro-verdict-chip{display:inline-flex;align-items:center;font:700 10px/1 var(--font-ui);letter-spacing:.06em;padding:3px 8px;border:1px solid;border-radius:var(--r-pill);flex:none}
+.fin-ro-val-gloss{font:500 10px/1.4 var(--font-ui);color:var(--muted);width:100%;flex-basis:100%}
+
+/* analog chips */
+.fin-ro-analogs{margin-bottom:12px}
+.fin-ro-analogs-label{font:600 10.5px/1 var(--font-ui);color:var(--text-2);margin-bottom:7px}
+.fin-ro-analog-chips{display:flex;flex-wrap:wrap;gap:5px}
+.fin-ro-analog-chip{display:inline-flex;align-items:center;gap:4px;font:600 10.5px/1 var(--font-num);color:var(--text-2);background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);padding:4px 8px;cursor:default}
+.fin-ro-analog-chip:hover{border-color:var(--line-3);color:var(--text)}
+.fin-ro-analog-year{font-feature-settings:"tnum"}
+.fin-ro-analog-wbar{display:inline-block;height:4px;background:var(--brand);opacity:.5;border-radius:2px;flex:none}
+.fin-ro-analog-warn{font-size:7px;color:var(--down);line-height:1;cursor:help}
+.fin-ro-relaxed{margin-top:7px;font:500 10px/1.4 var(--font-ui);color:var(--muted)}
+
+/* honest read + disclaimer */
+.fin-ro-honest{font:500 11.5px/1.55 var(--font-ui);color:var(--text-2);margin-bottom:6px;padding:9px 11px;background:var(--inset,var(--panel-2));border-radius:var(--r-md);border:1px solid var(--line)}
+.fin-ro-disclaimer{font:500 10px/1.45 var(--font-ui);color:var(--muted);font-style:italic}
+
+@media (max-width:640px){
+  .fin-ro-badge-row{flex-direction:column;align-items:flex-start}
+  .fin-ro-regime-badge{font-size:10.5px}
+}
