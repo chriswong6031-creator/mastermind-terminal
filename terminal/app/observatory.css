@@ -370,14 +370,6 @@
  * The feed section beneath it takes all remaining space; obs-scroll handles
  * scrollbar styling for the rows list inside the card.
  */
-.obs-fd-radar.obs-card {
-  flex-shrink: 0;
-  overflow: visible; /* let the card grow to its natural height */
-}
-.obs-fd-radar-rows {
-  /* rows container is not scroll-constrained — the card itself shows all rows */
-  overflow: visible;
-}
 
 /* ── Feed area: fills remaining center-column space; 2-row peek scroll ────── */
 /*
@@ -505,13 +497,16 @@
 /* ── Radar card ─────────────────────────────────────────────────────────── */
 .obs-fd-radar.obs-card {
   padding: 0;
-  overflow: hidden;
+  flex-shrink: 0;
+  overflow: hidden; /* card clips; the rows container scrolls (obs-scroll) */
 }
 .obs-fd-radar-rows {
   padding: 4px 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 0;
+  overflow-y: auto; /* radar rows scroll within the card when they overflow */
+  min-height: 0;
 }
 .obs-fd-radar-row {
   display: flex;

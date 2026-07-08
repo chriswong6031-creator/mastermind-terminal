@@ -478,6 +478,7 @@ export function PrismView() {
 const VIEW_OUTER: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  flex: 1,
   height: "100%",
   overflow: "hidden",
   background: "var(--bg)",

@@ -188,8 +188,20 @@ export function GexDeskView() {
       void fetchGexState(ticker);
     }, GEX_POLL_MS);
 
+    // Hidden-tab deferral: fetches skip while document is hidden (harness/
+    // backgrounded mounts). Load immediately when the tab becomes visible so
+    // the ladder never sits empty waiting for the next poll tick.
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        void fetchGex(ticker);
+        void fetchGexState(ticker);
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener("visibilitychange", onVis);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticker]);
@@ -338,6 +350,7 @@ export function GexDeskView() {
 const DESK_OUTER: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  flex: 1,
   height: "100%",
   overflow: "hidden",
   background: "var(--bg)",
