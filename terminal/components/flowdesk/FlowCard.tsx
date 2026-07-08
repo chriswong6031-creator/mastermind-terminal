@@ -85,7 +85,9 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [tipVisible, setTipVisible] = useState(false);
 
-  const { score, components } = computeFlowScore(ev);
+  const raw = computeFlowScore(ev);
+  const score = isNaN(raw.score) ? 0 : raw.score;
+  const components = raw.components;
   const badges = deriveBadges(ev);
   const t = makeFlowT(lang);
 

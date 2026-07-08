@@ -115,11 +115,13 @@ export function InspectorPane({ event, tickerCtx, lang }: InspectorPaneProps) {
 // ─── EventDetail ──────────────────────────────────────────────────────────
 
 function EventDetail({ event, zh, tickerCtx }: { event: FlowEvent; zh: boolean; tickerCtx: TickerPayload | null }) {
-  const { score, tier, components } = useMemo(
+  const rawScore = useMemo(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     () => computeFlowScore(event as any),
     [event],
   );
+  const score = isNaN(rawScore.score) ? 0 : rawScore.score;
+  const { tier, components } = rawScore;
 
   const contractLabel = `${event.root} ${event.strike}${event.right} ${fmtExp(event.exp)}`;
   const premStr = fmtPrem(event.premium);
@@ -264,7 +266,7 @@ function ComponentBar({ component, zh }: { component: ScoreComponent; zh: boolea
       <div className="obs-insp-track">
         <i className="obs-insp-track-fill" style={{ width: `${Math.min(100, component.value)}%` }} />
       </div>
-      <span className="obs-insp-crow-val num">{component.value.toFixed(0)}</span>
+      <span className="obs-insp-crow-val num">{isNaN(component.value) ? "—" : component.value.toFixed(0)}</span>
     </div>
   );
 }
