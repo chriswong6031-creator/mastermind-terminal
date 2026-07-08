@@ -144,14 +144,15 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
     : "var(--text-2)";
 
   const dirColor = isBear ? "var(--down)" : "var(--up)";
-  const dirBg    = isBear ? "rgba(240,86,107,.15)" : "rgba(38,194,129,.15)";
+  const dirBg    = isBear
+    ? "color-mix(in srgb, var(--down) 15%, transparent)"
+    : "color-mix(in srgb, var(--up) 15%, transparent)";
 
   return (
     <div
+      className={`obs-card${selected ? " sel" : ""}`}
       style={{
         ...CARD_STYLE,
-        border: `1px solid ${selected ? "var(--brand)" : "var(--line)"}`,
-        background: selected ? "var(--panel-2)" : "var(--panel)",
         opacity: isInvalidated ? 0.6 : 1,
       }}
       onClick={() => onSelect(plan)}
@@ -279,11 +280,9 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
 
 const CARD_STYLE: React.CSSProperties = {
   position: "relative",
-  borderRadius: "var(--r-lg)",
   padding: "10px 12px",
   cursor: "pointer",
-  transition: "border-color var(--t), background var(--t)",
-  marginBottom: 4,
+  marginBottom: 6,
 };
 
 const ROW: React.CSSProperties = {

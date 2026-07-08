@@ -14,6 +14,7 @@
 
 import React from "react";
 import { makeHeatmapT } from "@/lib/heatmapStrings";
+import { RingGauge } from "@/components/ui/RingGauge";
 import type { HeatmapTile, Layer } from "./types";
 
 interface DetailPanelProps {
@@ -49,15 +50,22 @@ export function DetailPanel({ tile, layer, lang, onClose }: DetailPanelProps) {
     : tile.tone === "neg" ? "var(--down)"
     : "var(--muted)";
 
+  // score ring for chg1d: map +/-4% to 0-100 for visual
+  const chgScore = Math.max(0, Math.min(100, Math.round(50 + tile.chg1d * 10)));
+  const chgTone = tile.chg1d >= 0 ? "up" : "down";
+
   return (
-    <div style={PANEL_WRAP}>
+    <div className="obs-card" style={PANEL_WRAP}>
       {/* Header */}
       <div style={PANEL_HEADER}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={TICKER_LABEL}>{tile.ticker}</span>
-          {isDivergent && (
-            <span style={DIV_CHIP}>{t("detailDivChip")}</span>
-          )}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <RingGauge value={chgScore} size="sm" tone={chgTone} />
+          <div>
+            <span style={TICKER_LABEL}>{tile.ticker}</span>
+            {isDivergent && (
+              <span style={DIV_CHIP}>{t("detailDivChip")}</span>
+            )}
+          </div>
         </div>
         <button
           onClick={onClose}
@@ -139,18 +147,18 @@ export function DetailPanel({ tile, layer, lang, onClose }: DetailPanelProps) {
           )}
 
           {tile.flowAsof && (
-            <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 4, paddingTop: 4, borderTop: "1px solid var(--line-2)" }}>
+            <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 4, paddingTop: 4, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
               {t("detailAsof")}: {tile.flowAsof}
             </div>
           )}
 
           {/* Divergence explanation */}
           {isDivergent && (
-            <div style={DIV_NOTE_BOX}>
-              <span style={{ color: "var(--warn)", fontWeight: 600 }}>
+            <div className="obs-note" style={{ marginTop: 8, marginBottom: 0 }}>
+              <span style={{ fontWeight: 600 }}>
                 {t("detailDivChip")}
               </span>
-              <div style={{ marginTop: 4, color: "var(--text-2)", fontSize: 10, lineHeight: 1.5 }}>
+              <div style={{ marginTop: 4, fontSize: 10, lineHeight: 1.5 }}>
                 {t("detailDivNote")}
               </div>
             </div>
@@ -203,8 +211,12 @@ function Row({
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const PANEL_WRAP: React.CSSProperties = {
-  background: "var(--panel)",
-  borderTop: "1px solid var(--line)",
+  // obs-card class provides background/border/radius
+  borderRadius: 0,
+  borderTop: "1px solid rgba(255,255,255,0.09)",
+  borderLeft: "none",
+  borderRight: "none",
+  borderBottom: "none",
   overflow: "auto",
   flexShrink: 0,
   maxHeight: 380,
@@ -215,7 +227,7 @@ const PANEL_HEADER: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   padding: "10px 14px 6px",
-  borderBottom: "1px solid var(--line-2)",
+  borderBottom: "1px solid rgba(255,255,255,0.07)",
 };
 
 const TICKER_LABEL: React.CSSProperties = {
@@ -230,28 +242,31 @@ const CLOSE_BTN: React.CSSProperties = {
   cursor: "pointer",
   padding: "0 4px",
   lineHeight: 1,
+  background: "none",
+  border: "none",
 };
 
 const DIV_CHIP: React.CSSProperties = {
   fontSize: 10,
   fontWeight: 600,
-  background: "rgba(232,179,57,0.15)",
+  background: "color-mix(in srgb, var(--warn) 15%, transparent)",
   color: "var(--warn)",
-  borderRadius: 4,
+  borderRadius: 6,
   padding: "2px 6px",
+  marginLeft: 6,
 };
 
 const SECTION: React.CSSProperties = {
   padding: "8px 14px",
-  borderBottom: "1px solid var(--line-2)",
+  borderBottom: "1px solid rgba(255,255,255,0.07)",
 };
 
 const SECTION_HEADER: React.CSSProperties = {
-  fontSize: 10,
-  fontWeight: 700,
+  fontSize: 10.5,
+  fontWeight: 600,
   color: "var(--muted)",
   textTransform: "uppercase",
-  letterSpacing: "0.06em",
+  letterSpacing: "0.1em",
   marginBottom: 6,
   display: "flex",
   alignItems: "center",
@@ -279,15 +294,6 @@ const DATA_NOTE: React.CSSProperties = {
   color: "var(--muted)",
   fontStyle: "italic",
   marginTop: 4,
-};
-
-const DIV_NOTE_BOX: React.CSSProperties = {
-  marginTop: 8,
-  padding: "6px 8px",
-  background: "rgba(232,179,57,0.08)",
-  border: "1px solid rgba(232,179,57,0.2)",
-  borderRadius: 4,
-  fontSize: 10,
 };
 
 const HONESTY_FOOTER: React.CSSProperties = {

@@ -53,7 +53,7 @@ function resolveAutoTone(value: number): Exclude<RingTone, "auto"> {
 }
 
 export function RingGauge({ value, size = "sm", tone = "auto", label }: RingGaugeProps) {
-  const clampedPct = Math.max(0, Math.min(100, Math.round(value)));
+  const clampedPct = isNaN(value) ? 0 : Math.max(0, Math.min(100, Math.round(value)));
   const resolvedTone: Exclude<RingTone, "auto"> =
     tone === "auto" ? resolveAutoTone(clampedPct) : tone;
 

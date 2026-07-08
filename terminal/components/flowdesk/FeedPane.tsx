@@ -254,11 +254,11 @@ export function FeedPane({
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div style={PANE_STYLE}>
+    <div className="obs-fd-feed-wrap">
       {/* ── Toolbar ── */}
-      <div style={TOOLBAR_STYLE}>
+      <div className="obs-fd-toolbar">
         {/* N SIGNALS count */}
-        <div style={COUNT_STYLE}>
+        <div className="obs-fd-count">
           <span style={{ color: "var(--signal)", fontWeight: 700 }}>
             {filtered.length}
           </span>{" "}
@@ -276,12 +276,12 @@ export function FeedPane({
           placeholder={zh ? "搜索标的…" : "Search ticker…"}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={SEARCH_STYLE}
+          className="obs-fd-search"
           maxLength={12}
           spellCheck={false}
         />
 
-        {/* Sort toggle */}
+        {/* Sort toggle — reuse fin-toggle (unchanged) */}
         <div className="fin-toggle">
           <button
             className={sort === "NEW" ? "on" : ""}
@@ -299,10 +299,10 @@ export function FeedPane({
 
         {/* Filters toggle */}
         <button
-          className="fin-pill"
+          className="obs-chip"
           onClick={() => setFiltersOpen((v) => !v)}
-          style={{ fontSize: 11 }}
           aria-expanded={filtersOpen}
+          style={{ fontSize: 11, padding: "5px 12px" }}
         >
           {zh ? "筛选" : "Filters"}
           {isFiltersDirty(filters) && (
@@ -312,12 +312,13 @@ export function FeedPane({
       </div>
 
       {/* ── View presets ── */}
-      <div style={PRESET_BAR_STYLE}>
+      <div className="obs-fd-preset-bar">
         {(["ALL", "ELITE", "WHALES", "0DTE", "SWEEPS"] as ViewPreset[]).map((p) => (
           <button
             key={p}
-            style={presetBtnStyle(preset === p)}
+            className={`obs-chip${preset === p ? " on" : ""}`}
             onClick={() => updatePrefs({ preset: p })}
+            style={{ fontSize: 11, padding: "5px 12px" }}
           >
             {p === "ALL"    ? (zh ? "全部" : "ALL")
               : p === "ELITE"  ? (zh ? "精英 90+" : "ELITE 90+")
@@ -338,7 +339,7 @@ export function FeedPane({
       )}
 
       {/* ── Feed list ── */}
-      <div style={LIST_STYLE} data-tut="flow-feed">
+      <div className="obs-fd-list" data-tut="flow-feed">
         {/* Loading state */}
         {feed === null && <LoadingState zh={zh} />}
 
@@ -410,44 +411,7 @@ function isFiltersDirty(f: FlowFilters): boolean {
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-
-const PANE_STYLE: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  height: "100%",
-  overflow: "hidden",
-  background: "var(--bg)",
-};
-
-const TOOLBAR_STYLE: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "8px 12px",
-  borderBottom: "1px solid var(--line)",
-  flexShrink: 0,
-  flexWrap: "wrap",
-};
-
-const COUNT_STYLE: React.CSSProperties = {
-  font: "600 11px/1 var(--font-num)",
-  color: "var(--text-2)",
-  letterSpacing: ".04em",
-  flexShrink: 0,
-};
-
-const SEARCH_STYLE: React.CSSProperties = {
-  flex: 1,
-  minWidth: 80,
-  maxWidth: 140,
-  background: "var(--panel-2)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r)",
-  color: "var(--text)",
-  font: "500 12px/1 var(--font-ui)",
-  padding: "5px 8px",
-  outline: "none",
-};
+// Layout moved to observatory.css (.obs-fd-*)
 
 const FILTER_DOT_STYLE: React.CSSProperties = {
   display: "inline-block",
@@ -457,38 +421,6 @@ const FILTER_DOT_STYLE: React.CSSProperties = {
   background: "var(--brand)",
   marginLeft: 4,
   verticalAlign: "middle",
-};
-
-const PRESET_BAR_STYLE: React.CSSProperties = {
-  display: "flex",
-  gap: 4,
-  padding: "6px 12px",
-  borderBottom: "1px solid var(--line)",
-  overflowX: "auto",
-  scrollbarWidth: "none",
-  flexShrink: 0,
-};
-
-function presetBtnStyle(on: boolean): React.CSSProperties {
-  return {
-    font: "600 10.5px/1 var(--font-ui)",
-    color: on ? "var(--brand)" : "var(--text-2)",
-    background: "none",
-    border: `1px solid ${on ? "var(--brand)" : "var(--line)"}`,
-    borderRadius: "var(--r-pill)",
-    padding: "5px 10px",
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-    transition: "color var(--t), border-color var(--t)",
-    flexShrink: 0,
-  };
-}
-
-const LIST_STYLE: React.CSSProperties = {
-  flex: 1,
-  overflowY: "auto",
-  padding: "8px 10px 24px",
-  scrollbarWidth: "thin",
 };
 
 const EMPTY_STYLE: React.CSSProperties = {
