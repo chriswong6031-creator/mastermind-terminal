@@ -223,10 +223,4 @@ const styles: Record<string, React.CSSProperties> = {
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
   },
-  deadNote: {
-    marginTop: 6,
-    fontSize: 10,
-    color: "var(--muted)",
-    fontStyle: "italic",
-  },
 };

@@ -158,6 +158,11 @@ export function PrismView() {
 
   const loadTicker = useCallback(
     async (root: string) => {
+      // If the tab is hidden at mount time (e.g. cmd-click open, session restore),
+      // fetchMatrix returns null immediately via its own visibility guard — that null
+      // is NOT a real failure. Skip the load silently; the visibilitychange handler
+      // below will retry once the tab is foregrounded.
+      if (document.visibilityState === "hidden") return;
       setLoading(true);
       setMatrix(null);
       setError(false);
@@ -187,8 +192,18 @@ export function PrismView() {
       void fetchGexState(ticker);
     }, POLL_MS);
 
+    // If the tab was hidden at mount, loadTicker returned early without data.
+    // Retry the full load when the tab is foregrounded while matrix is still null.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        setMatrix((prev) => { if (prev === null) void loadTicker(ticker); return prev; });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener("visibilitychange", onVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticker, mode]);

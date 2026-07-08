@@ -2051,7 +2051,7 @@ export default function OptionsHubView() {
                     }}>
                       <div>
                         <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em" }}>
-                          {lang === "zh" ? abbrevSector(tickerData.group) : abbrevSector(tickerData.group)}
+                          {lang === "zh" ? tickerData.group_zh : abbrevSector(tickerData.group)}
                         </div>
                         <div style={{ fontWeight: 700, fontSize: 22, lineHeight: 1.1 }}>{tickerData.root}</div>
                       </div>

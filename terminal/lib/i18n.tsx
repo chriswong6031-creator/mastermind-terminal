@@ -19,6 +19,7 @@ const LEX: Record<string, [string, string]> = {
   scripts: ["Scripts", "脚本"],
   portfolio: ["Portfolio", "投资组合"],
   alerts: ["Alerts", "提醒"],
+  analyst: ["Analyst", "分析师"],
   ai: ["Mastermind AI", "智脑 AI"],
   // chart toolbar
   priceChart: ["Price chart", "价格图表"],
