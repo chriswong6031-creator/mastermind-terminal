@@ -119,7 +119,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // per-market functional TF set: daily-derived always; intraday TFs only for intraday-capable markets (R12)
   const FUNCTIONAL = useMemo(() => functionalSet(active), [active]);
   const [chartType, setChartType] = useState("candles");
-  const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
+  const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi", "_oracle"]));
   const [hidden, setHidden] = useState<Set<string>>(new Set());                       // indicators the eye has hidden
   const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());      // per-indicator params (Settings dialog)
   const [settingsKey, setSettingsKey] = useState<string | null>(null);                 // indicator whose Settings dialog is open
@@ -205,7 +205,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
   useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive && m) setMan(m); }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
-    setInds(new Set(load("mm.inds", ["ema", "rsi", "stochrsi"]))); setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) }); setCompareCfg(load("mm.cmpCfg", {}));
+    { const si = load("mm.inds", ["ema", "rsi", "stochrsi", "_oracle"]) as string[]; if (!localStorage.getItem("mm.oracleMig")) { if (!si.includes("_oracle")) si.push("_oracle"); localStorage.setItem("mm.oracleMig", "1"); } setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) }); setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
