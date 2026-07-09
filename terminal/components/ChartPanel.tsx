@@ -538,6 +538,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // verdict badge). List it FIRST on the price pane so it can be hidden (eye) or removed like any study.
     if (inds.has("_oracle")) overlayEntries.push({ key: "_oracle", label: "Golden Oracle Confluence", kind: "overlay", isPine: false, noParams: true });
     for (const k of ["ema", "bb", "vwap", "vol"] as const) if (inds.has(k) && indSeriesRef.current.has(k)) overlayEntries.push({ key: k, label: labelOf(k), kind: "overlay", isPine: false });
+    // Gaps & Demand: signal-layer overlay (no plotted series, like the oracle) — drawn in renderSignals.
+    // Registry-backed, so it keeps its Settings/Source/eye/remove menu.
+    if (inds.has("gaps")) overlayEntries.push({ key: "gaps", label: labelOf("gaps"), kind: "overlay", isPine: false });
     // custom scripts: OVERLAY ones (or errored ones) list on the price pane; each SUB-PANE script gets
     // its own pane meta below. An errored script still gets a legend row so the user sees + can remove it.
     // On INTRADAY the pine build is skipped entirely (buildAllPine is date-keyed — see buildAllIndicators),
@@ -988,6 +991,39 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const tierBadge = (tier?: string | null) => (tier === "aplus" ? "A+" : tier === "quality" ? "Q" : "");
       const SLATE = "#7c8aa0";   // regime_blocked dim slate (no matching CSS token — inline hex)
       while (layer.firstChild) layer.removeChild(layer.firstChild);
+
+      // ── Gaps & Demand premade indicator ──────────────────────────────────────────
+      // Independent of the oracle (drawn BEFORE the oracle gate below). A TRUE 1-bar gap — an
+      // unfilled break where today's whole range clears yesterday's — is what shows on the chart as a
+      // visible gap, so we mark those (not every up/down open): gap up (low > prevHigh) → yellow ▲ in
+      // the empty space below the bar; gap down (high < prevLow) → red ▼ above. `minGapPct` filters by
+      // gap size (0 = every gap). A centered pivot-low "demand" spot → green ○ below. Pure from barsRef
+      // (respects replay + visible range); on the Daily timeframe this is literal 1-day gapping.
+      if (indicatorsRef.current.has("gaps") && !hiddenRef.current.has("gaps") && tfVisible("gaps")) {
+        const gp = P("gaps"); const gbars = barsRef.current;
+        const thr = Math.max(0, gp.minGapPct ?? 0) / 100;
+        const k = Math.max(1, Math.round(gp.demandStrength ?? 5));
+        for (let i = 0; i < gbars.length; i++) {
+          const b = gbars[i]; const x = xOf(b.time); if (x == null) continue;
+          if (gp.showGaps !== false && i > 0) {
+            const pb = gbars[i - 1];
+            if (pb.h > 0 && b.l > pb.h && (b.l - pb.h) / pb.h >= thr) {
+              const y = yOf(b.l);   // gap up: unfilled space sits below the bar's low
+              if (y != null) { const g = mk("g", { opacity: 0.95 }); g.appendChild(mk("path", { d: `M${x - 4.5} ${y + 13} L${x + 4.5} ${y + 13} L${x} ${y + 5} Z`, fill: gp.gapUpCol })); layer.appendChild(g); }
+            } else if (pb.l > 0 && b.h < pb.l && (pb.l - b.h) / pb.l >= thr) {
+              const y = yOf(b.h);   // gap down: unfilled space sits above the bar's high
+              if (y != null) { const g = mk("g", { opacity: 0.95 }); g.appendChild(mk("path", { d: `M${x - 4.5} ${y - 13} L${x + 4.5} ${y - 13} L${x} ${y - 5} Z`, fill: gp.gapDownCol })); layer.appendChild(g); }
+            }
+          }
+          // demand = centered pivot low: b.l strictly below every neighbor within ±k bars
+          if (gp.showDemand !== false && i >= k && i < gbars.length - k) {
+            let piv = true;
+            for (let j = i - k; j <= i + k; j++) { if (j !== i && gbars[j].l <= b.l) { piv = false; break; } }
+            if (piv) { const y = yOf(b.l); if (y != null) { const g = mk("g", { opacity: 0.95 }); g.appendChild(mk("circle", { cx: x, cy: y + 20, r: 3.4, fill: "none", stroke: gp.demandCol, "stroke-width": 1.6 })); layer.appendChild(g); } }
+          }
+        }
+      }
+
       // Golden Oracle Confluence is a toggleable/removable study: skip ALL signal draws (marks + side
       // channels) when it's removed from the indicator set or hidden via the legend eye.
       if (!indicatorsRef.current.has("_oracle") || hiddenRef.current.has("_oracle")) return;
