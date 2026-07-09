@@ -56,6 +56,59 @@ export interface FlowEvent {
   spot?: number | null;
 }
 
+// ── v2 enrich types ──────────────────────────────────────────────────────────
+
+/** Badge names from flow.enrich/v1 */
+export type EnrichBadge =
+  | "MULTI_LEG"
+  | "LADDER"
+  | "REPEAT_HITTER"
+  | "SIZE_VS_OI"
+  | "WHALE"
+  | "FRESH"
+  | "Z_OUTLIER"
+  | "OI_CONFIRMED";
+
+/** Per-event enrichment record */
+export interface EnrichEvent {
+  badges: EnrichBadge[];
+  q_pctl: number;
+  direction_discounted: boolean;
+  /** why strings keyed as "BADGE_KEY" (EN) and "BADGE_KEY_zh" (ZH) */
+  why: Record<string, string>;
+}
+
+export interface EnrichThresholds {
+  elite_q: number;
+  strong_q: number;
+  high_q: number;
+  medium_q: number;
+}
+
+/** Top-level enrich artifact (flow.enrich/v1) */
+export interface EnrichPayload {
+  schema?: string;
+  asof: string;
+  session_date?: string;
+  thresholds: EnrichThresholds;
+  /** keyed by event id */
+  events: Record<string, EnrichEvent>;
+  confirmed_yesterday?: { id: string; root: string; contract: string; oi_change: number }[];
+}
+
+/** Derive session_tier from q-score + enrich thresholds */
+export function resolveSessionTier(
+  q: number,
+  premium: number,
+  thresholds: EnrichThresholds,
+): "ELITE" | "STRONG" | "HIGH" | "MEDIUM" | "BASE" {
+  if (q >= thresholds.elite_q && premium >= 1_000_000) return "ELITE";
+  if (q >= thresholds.strong_q) return "STRONG";
+  if (q >= thresholds.high_q) return "HIGH";
+  if (q >= thresholds.medium_q) return "MEDIUM";
+  return "BASE";
+}
+
 /** Top-level feed payload */
 export interface FeedPayload {
   schema?: string;
@@ -104,7 +157,10 @@ function savePrefs(p: PersistedPrefs) {
 function presetFilters(preset: ViewPreset): Partial<FlowFilters> {
   switch (preset) {
     case "ELITE":
-      return { minScore: 90 };
+      // v2: ELITE is session_tier-based (top 2% + premium ≥$1M).
+      // Filtering happens in the pipeline via enrich data.
+      // When enrich is absent, fall back to minPremium gate so preset is never vacuous.
+      return {};
     case "WHALES":
       // Whale = premium >= $1M; we use minPremium gate as a proxy
       return { minPremium: 1_000_000 };
@@ -121,6 +177,7 @@ function presetFilters(preset: ViewPreset): Partial<FlowFilters> {
 
 interface FeedPaneProps {
   feed: FeedPayload | null;
+  enrich: EnrichPayload | null;
   lang: "en" | "zh";
   selectedId: string | null;
   onSelect: (ev: FlowEvent) => void;
@@ -132,6 +189,7 @@ interface FeedPaneProps {
 
 export function FeedPane({
   feed,
+  enrich,
   lang,
   selectedId,
   onSelect,
@@ -204,6 +262,9 @@ export function FeedPane({
     if (!feed) return [];
     let events = feed.events;
 
+    const enrichEvents = enrich?.events ?? {};
+    const thresholds = enrich?.thresholds ?? null;
+
     // Ticker search
     const q = search.trim().toUpperCase();
     if (q) {
@@ -245,10 +306,26 @@ export function FeedPane({
       });
     }
 
-    // Badge flags — event must satisfy ALL checked badges
+    // ELITE preset: session_tier filter using enrich thresholds.
+    // Uses session_tier EXCLUSIVELY (per spec §3: "UI uses session_tier exclusively").
+    // Fallback when enrich absent: premium ≥$1M (so preset is never vacuous).
+    if (preset === "ELITE") {
+      if (thresholds) {
+        events = events.filter((ev) => {
+          const enrichEv: EnrichEvent | undefined = enrichEvents[ev.id];
+          if (!enrichEv) return false;
+          const { score } = computeFlowScore(ev);
+          return score >= thresholds.elite_q && ev.premium >= 1_000_000;
+        });
+      } else {
+        // Fallback: v1 behavior (no enrich)
+        events = events.filter((ev) => ev.premium >= 1_000_000);
+      }
+    }
+
+    // Badge flags — event must satisfy ALL checked badges (v1 client-derived)
     if (effectiveFilters.badges.size > 0) {
       events = events.filter((ev) => {
-        const { score } = computeFlowScore(ev);
         for (const flag of effectiveFilters.badges) {
           switch (flag) {
             case "whale":   if (ev.premium < 1_000_000) return false; break;
@@ -256,9 +333,24 @@ export function FeedPane({
             case "sweep":   if (!(ev.n_prints >= 3 && ev.swept)) return false; break;
             case "unusual": if (ev.premium_z == null || ev.premium_z < 2) return false; break;
             case "block":   if (!(ev.n_prints === 1 && ev.size >= 5000)) return false; break;
+            // v2 detection flags used in badges set fall through to detections filter
+            default: break;
           }
         }
         return true;
+      });
+    }
+
+    // Detections filter lens (v2) — show events that have ANY of the selected detections
+    if (effectiveFilters.detections.size > 0 && enrich) {
+      events = events.filter((ev) => {
+        const enrichEv: EnrichEvent | undefined = enrichEvents[ev.id];
+        if (!enrichEv) return false;
+        const badgeSet = new Set(enrichEv.badges);
+        for (const det of effectiveFilters.detections) {
+          if (badgeSet.has(det)) return true;
+        }
+        return false;
       });
     }
 
@@ -277,7 +369,7 @@ export function FeedPane({
     }
 
     return events;
-  }, [feed, search, effectiveFilters, sort]);
+  }, [feed, enrich, search, effectiveFilters, preset, sort]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -349,7 +441,7 @@ export function FeedPane({
             style={{ fontSize: 11, padding: "5px 12px" }}
           >
             {p === "ALL"    ? (zh ? "全部" : "ALL")
-              : p === "ELITE"  ? (zh ? "精英 90+" : "ELITE 90+")
+              : p === "ELITE"  ? (zh ? "精英 — 磁带前2%" : "Elite — top 2% of tape")
               : p === "WHALES" ? (zh ? "巨单" : "WHALES")
               : p === "0DTE"   ? "0DTE"
               : (zh ? "扫单" : "SWEEPS")}
@@ -381,6 +473,7 @@ export function FeedPane({
           <FlowCard
             key={ev.id}
             ev={ev}
+            enrichEv={enrich?.events[ev.id] ?? null}
             lang={lang}
             selected={ev.id === selectedId}
             onSelect={onSelect}
@@ -454,7 +547,8 @@ function isFiltersDirty(f: FlowFilters): boolean {
     f.minPremium !== 0 ||
     f.dteBuckets.length > 0 ||
     f.mnyBuckets.length > 0 ||
-    f.badges.size > 0
+    f.badges.size > 0 ||
+    f.detections.size > 0
   );
 }
 

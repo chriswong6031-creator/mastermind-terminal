@@ -638,6 +638,11 @@ const BODY_ROW: React.CSSProperties = {
 const MATRIX_PANE: React.CSSProperties = {
   flex: 1,
   minWidth: 540,     /* matrix absorbs all space above this threshold */
+  minHeight: 0,      /* flex shrink guard for column-flex parent */
+  /* In the row-flex BODY_ROW, height is determined by the flex line, not the
+     cross-axis constraint. maxHeight:100% caps MATRIX_PANE at BODY_ROW's
+     definite height so the internal scroll container is properly bounded. */
+  maxHeight: "100%",
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",

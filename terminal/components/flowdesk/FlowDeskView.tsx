@@ -25,7 +25,7 @@ import { makeFlowT } from "../../lib/flowdeskStrings";
 import { WatchlistRail } from "./WatchlistRail";
 import { RadarStrip } from "./RadarStrip";
 import { FlowGauge } from "./FlowGauge";
-import { FeedPane, type FlowEvent, type FeedPayload } from "./FeedPane";
+import { FeedPane, type FlowEvent, type FeedPayload, type EnrichPayload } from "./FeedPane";
 import { InspectorPane } from "./InspectorPane";
 import { DEFAULT_FILTERS, type FlowFilters } from "./FiltersPanel";
 import { TutorialOverlay } from "../tutorial/TutorialOverlay";
@@ -272,6 +272,7 @@ export function FlowDeskView() {
   const [feed,      setFeed]      = useState<FeedPayload | null>(null);
   const [tide,      setTide]      = useState<TidePayload | null>(null);
   const [chainHeat, setChainHeat] = useState<ChainHeatPayload | null>(null);
+  const [enrich,    setEnrich]    = useState<EnrichPayload | null>(null);
 
   // ── Selection state ──────────────────────────────────────────────────────────
   const [selectedEvent, setSelectedEvent] = useState<FlowEvent | null>(null);
@@ -291,9 +292,10 @@ export function FlowDeskView() {
   const autoPromptRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Polling refs ─────────────────────────────────────────────────────────────
-  const feedTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
-  const tideTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
-  const chainTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const feedTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tideTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chainTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const enrichTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Fetch functions ──────────────────────────────────────────────────────────
 
@@ -315,6 +317,25 @@ export function FlowDeskView() {
     if (data) setChainHeat(data);
   }, []);
 
+  /** Fetch enrich artifact — fail-soft (absent/stale → null → v1 fallback in UI)
+   *
+   * Stale rule: asof >16h old → treat as absent (v1 fallback, tier chips hidden).
+   * Exception: source === "fixture" → skip stale gate (dev mode fixture data
+   * carries a fixed historical asof but is always current for UI testing).
+   * Live stale artifacts are detected by the route emitting `stale: true`.
+   */
+  const fetchEnrich = useCallback(async () => {
+    if (document.visibilityState === "hidden") return;
+    const data = await safeFetch<EnrichPayload>("/api/flow?f=enrich");
+    if (!data) return;
+    const src = (data as Record<string, unknown>).source as string | undefined;
+    if (src === "fixture") { setEnrich(data); return; }
+    const asof = data.asof ? new Date(data.asof).getTime() : 0;
+    const ageH = asof > 0 ? (Date.now() - asof) / 3_600_000 : 0;
+    if (ageH > 16) { setEnrich(null); return; }
+    setEnrich(data);
+  }, []);
+
   const fetchTickerCtx = useCallback(async (root: string) => {
     setTickerCtx(null);
     const data = await safeFetch<TickerPayload>(`/api/flow?f=ticker:${root}`);
@@ -326,24 +347,39 @@ export function FlowDeskView() {
   useEffect(() => {
     // Initial fetches (bypass visibility guard on mount)
     void (async () => {
-      const [f, ti, ch] = await Promise.all([
+      const [f, ti, ch, en] = await Promise.all([
         safeFetch<FeedPayload>("/api/flow?f=feed"),
         safeFetch<TidePayload>("/api/flow?f=tide"),
         safeFetch<ChainHeatPayload>("/api/flow?f=chainheat"),
+        safeFetch<EnrichPayload>("/api/flow?f=enrich"),
       ]);
       if (f)  setFeed(f);
       if (ti) setTide(ti);
       if (ch) setChainHeat(ch);
+      // Enrich: stale check (same logic as fetchEnrich callback)
+      if (en) {
+        const src = (en as Record<string, unknown>).source as string | undefined;
+        if (src === "fixture") {
+          setEnrich(en);
+        } else {
+          const asof = en.asof ? new Date(en.asof).getTime() : 0;
+          const ageH = asof > 0 ? (Date.now() - asof) / 3_600_000 : 0;
+          if (ageH <= 16) setEnrich(en);
+        }
+      }
     })();
 
-    feedTimerRef.current  = setInterval(fetchFeed,      FEED_POLL_MS);
-    tideTimerRef.current  = setInterval(fetchTide,      TIDE_POLL_MS);
-    chainTimerRef.current = setInterval(fetchChainHeat, CHAIN_POLL_MS);
+    feedTimerRef.current   = setInterval(fetchFeed,      FEED_POLL_MS);
+    tideTimerRef.current   = setInterval(fetchTide,      TIDE_POLL_MS);
+    chainTimerRef.current  = setInterval(fetchChainHeat, CHAIN_POLL_MS);
+    // Enrich polls at 5-min cadence (offset from feed)
+    enrichTimerRef.current = setInterval(fetchEnrich, 5 * 60_000);
 
     return () => {
-      if (feedTimerRef.current)  clearInterval(feedTimerRef.current);
-      if (tideTimerRef.current)  clearInterval(tideTimerRef.current);
-      if (chainTimerRef.current) clearInterval(chainTimerRef.current);
+      if (feedTimerRef.current)   clearInterval(feedTimerRef.current);
+      if (tideTimerRef.current)   clearInterval(tideTimerRef.current);
+      if (chainTimerRef.current)  clearInterval(chainTimerRef.current);
+      if (enrichTimerRef.current) clearInterval(enrichTimerRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -479,6 +515,7 @@ export function FlowDeskView() {
         {/* FeedPane takes full center column height */}
         <FeedPane
           feed={feed}
+          enrich={enrich}
           lang={lang}
           selectedId={selectedEvent?.id ?? null}
           onSelect={(ev) => setSelectedEvent((prev) =>
@@ -498,6 +535,7 @@ export function FlowDeskView() {
         <InspectorPane
           event={selectedEvent}
           tickerCtx={tickerCtx}
+          enrichEv={selectedEvent ? (enrich?.events[selectedEvent.id] ?? null) : null}
           lang={lang}
         />
       </div>

@@ -1,0 +1,94 @@
+{
+  "schema": "flow.enrich/v1",
+  "source": "fixture",
+  "asof": "2026-07-07T19:19:19Z",
+  "session_date": "2026-07-07",
+  "thresholds": {
+    "elite_q": 66,
+    "strong_q": 60,
+    "high_q": 55,
+    "medium_q": 48
+  },
+  "events": {
+    "dbaf11e5b9924ea9": {
+      "badges": ["WHALE", "FRESH", "Z_OUTLIER"],
+      "q_pctl": 0.98,
+      "direction_discounted": false,
+      "why": {
+        "WHALE": "Single-event premium $1.4M — magnitude gate confirmed.",
+        "WHALE_zh": "单笔权利金$1.4M——数量门限已确认。",
+        "FRESH": "Vol > OI: new positioning, not recycled open interest.",
+        "FRESH_zh": "成交量>持仓量：新建仓位，非旧有持仓。",
+        "Z_OUTLIER": "Root-level premium z-score ≥2σ vs 252-day baseline — SNOW running hot.",
+        "Z_OUTLIER_zh": "该标的权利金Z值≥2σ（基于252日基准）——SNOW明显异常。"
+      }
+    },
+    "834498893e62b77c": {
+      "badges": ["WHALE", "REPEAT_HITTER"],
+      "q_pctl": 0.97,
+      "direction_discounted": false,
+      "why": {
+        "WHALE": "Single-event premium $2.7M — magnitude gate confirmed.",
+        "WHALE_zh": "单笔权利金$2.7M——数量门限已确认。",
+        "REPEAT_HITTER": "Same OCC contract hit ≥3 times this session — conviction re-load.",
+        "REPEAT_HITTER_zh": "同一合约本交易日已出现≥3次——显示反复加仓。"
+      }
+    },
+    "5f221fda4cbcd7d5": {
+      "badges": ["WHALE", "MULTI_LEG"],
+      "q_pctl": 0.96,
+      "direction_discounted": true,
+      "why": {
+        "WHALE": "Single-event premium $1.8M — magnitude gate confirmed.",
+        "WHALE_zh": "单笔权利金$1.8M——数量门限已确认。",
+        "MULTI_LEG": "Spread detected: same root, 2+ strikes, prints within 60s, leg ratio ≤1.25×. Direction is DISCOUNTED — this reads as a spread, not naked conviction.",
+        "MULTI_LEG_zh": "检测到价差：同一标的、2+行权价、60秒内成交、腿比≤1.25×。方向信号已折扣——此为价差策略，非裸方向仓位。"
+      }
+    },
+    "01a7bc176c9e0e8e": {
+      "badges": ["FRESH"],
+      "q_pctl": 0.72,
+      "direction_discounted": false,
+      "why": {
+        "FRESH": "Vol > OI: new positioning — this contract had little prior open interest.",
+        "FRESH_zh": "成交量>持仓量：新建仓位——该合约此前持仓量较少。"
+      }
+    },
+    "486f8ff8f833ef0f": {
+      "badges": ["FRESH", "LADDER"],
+      "q_pctl": 0.74,
+      "direction_discounted": false,
+      "why": {
+        "FRESH": "Vol > OI: new positioning.",
+        "FRESH_zh": "成交量>持仓量：新建仓位。",
+        "LADDER": "Same root+right, ≥3 distinct strikes, same lean direction within 30 min — staged accumulation pattern.",
+        "LADDER_zh": "同一标的/方向、≥3个不同行权价、30分钟内同向——梯形布局信号。"
+      }
+    },
+    "c02fa9f6f4292d6e": {
+      "badges": ["REPEAT_HITTER", "SIZE_VS_OI"],
+      "q_pctl": 0.82,
+      "direction_discounted": false,
+      "why": {
+        "REPEAT_HITTER": "Same OCC contract appeared ≥3 times this session.",
+        "REPEAT_HITTER_zh": "同一合约本交易日已出现≥3次。",
+        "SIZE_VS_OI": "Event size ≥ 2× prior-day OI — new positioning that can't hide in existing interest.",
+        "SIZE_VS_OI_zh": "本次交易量≥2倍前日持仓量——新建仓位，无法被现有持仓所掩盖。"
+      }
+    }
+  },
+  "confirmed_yesterday": [
+    {
+      "id": "prev_001",
+      "root": "NVDA",
+      "contract": "NVDA 140C 2026-07-18",
+      "oi_change": 45230
+    },
+    {
+      "id": "prev_002",
+      "root": "SPY",
+      "contract": "SPY 560P 2026-07-11",
+      "oi_change": 12450
+    }
+  ]
+}
