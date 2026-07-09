@@ -101,6 +101,8 @@ interface Analysis {
 }
 interface Intel {
   analysis?: Analysis | null
+  cards?: Record<string, any> | null   // live research-desk schema (ai_judgment · conviction · levels · analyst · smart_money)
+  tape?: Record<string, any> | null    // ai_lean (dir) · regime · sector_pulse
 }
 
 export interface OracleDashProps {
@@ -414,7 +416,7 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
 
   // Derived verdicts using shared helpers
   const ov = oracleVerdict(row?.verdict ?? null)
-  const dv = deskVerdict(intel?.analysis?.decision ?? null, zh)
+  const dv = deskVerdict(intel, zh)
 
   // derived stats: prefer slice.backtest.metrics over row for consistency
   const bt = slice?.backtest
@@ -424,18 +426,18 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
   const cagr = metrics?.cagr ?? row?.cagr ?? null
   const nTrades = metrics?.n_trades ?? bt?.n_trades ?? null
 
-  // intel.analysis sub-shapes (all null-guarded)
-  const analysis = intel?.analysis ?? null
-  const decision = analysis?.decision ?? null
-  const conviction = analysis?.conviction ?? null
-  const factors = analysis?.factors ?? null
+  // Research-desk read from the LIVE intel `cards` + `tape` schema (the old `analysis.decision`
+  // schema is deprecated → only carries confluence/sniper now, hence the previously-empty panel).
+  const cards = intel?.cards ?? null
+  const tape = intel?.tape ?? null
+  const aj = cards?.ai_judgment ?? null            // decision: verdict + gloss + size_pct
+  const conv = cards?.conviction ?? null           // score + band + drivers + cautions
+  const sectorPulse = tape?.sector_pulse ?? null   // theme + heat + reco (supporting read)
 
-  const convScore = conviction?.score ?? decision?.score ?? null
-  const drivers = Array.isArray(conviction?.drivers) ? conviction!.drivers! : []
-  const cautions = Array.isArray(conviction?.cautions) ? conviction!.cautions! : []
-  const cautionsZh = Array.isArray(conviction?.cautions_zh) ? conviction!.cautions_zh! : []
-  const legs = factors?.legs ?? null
-  const legKeys = legs ? Object.keys(legs) : []
+  const convScore = typeof conv?.score === "number" ? conv.score : null
+  const convBand = typeof conv?.band === "string" ? conv.band : null
+  const drivers = Array.isArray(conv?.drivers) ? (conv!.drivers as string[]) : []
+  const cautions = Array.isArray(conv?.cautions) ? (conv!.cautions as string[]) : []
 
   // signals: most-recent first, ALL of them
   const sigs: Signal[] = [...(slice?.indicator?.signals ?? [])].reverse()
@@ -484,27 +486,20 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
           />
           <div className="sd-body">
 
-            {/* Research desk read */}
-            {decision && (decision.verb || decision.headline) && (
+            {/* Research desk read — decision + conviction ring from the live cards schema */}
+            {(aj?.verdict || convScore != null) && (
               <div className="sig-card">
                 <div className="sig-card-h">{pick(zh, "Research desk read", "研究台解读")}</div>
                 <div className="sig-desk">
                   <ConvictionRing score={convScore} zh={zh} />
                   <div className="sig-desk-body">
                     <div className="sig-desk-verb" style={{ color: dv.color }}>
-                      {pick(zh, decision.verb, decision.verb_zh) || "—"}
-                      {decision.band_label && (
-                        <span className="sig-desk-band">{pick(zh, decision.band_label, decision.band_label_zh)}</span>
-                      )}
+                      {aj?.verdict || dv.label}
+                      {convBand && <span className="sig-desk-band">{convBand}</span>}
                     </div>
-                    {(decision.headline || decision.headline_zh) && (
-                      <div className="sig-desk-head">{pick(zh, decision.headline, decision.headline_zh)}</div>
-                    )}
-                    {(decision.gloss || decision.gloss_zh) && (
-                      <div className="sig-desk-gloss">{pick(zh, decision.gloss, decision.gloss_zh)}</div>
-                    )}
-                    {conviction?.rank_pctile != null && (
-                      <div className="sig-desk-rank">{pick(zh, "Rank percentile", "排名分位")}: {Math.round(conviction.rank_pctile)}%</div>
+                    {aj?.gloss && <div className="sig-desk-gloss">{aj.gloss}</div>}
+                    {typeof aj?.size_pct === "number" && aj.size_pct > 0 && (
+                      <div className="sig-desk-rank">{pick(zh, "Suggested size", "建议仓位")}: {Math.round(aj.size_pct * 100)}%</div>
                     )}
                   </div>
                 </div>
@@ -512,7 +507,7 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
               </div>
             )}
 
-            {/* Drivers / Cautions */}
+            {/* Drivers / Cautions — from cards.conviction */}
             {(drivers.length > 0 || cautions.length > 0) && (
               <div className="sig-card">
                 <div className="sig-card-h">{pick(zh, "Drivers & Cautions", "驱动与警示")}</div>
@@ -526,36 +521,27 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
                 {cautions.length > 0 && (
                   <div className="sig-tags">
                     {cautions.slice(0, 6).map((c, i) => (
-                      <span key={"c" + i} className="sa-tag warn">{pick(zh, c, cautionsZh[i] ?? c)}</span>
+                      <span key={"c" + i} className="sa-tag warn">{c}</span>
                     ))}
                   </div>
                 )}
               </div>
             )}
 
-            {/* Factor profile */}
-            {legKeys.length > 0 && (
+            {/* Sector read — supporting context from tape.sector_pulse */}
+            {sectorPulse?.theme_name && (
               <div className="sig-card">
                 <div className="sig-card-h">
-                  {pick(zh, "Factor profile", "因子画像")}
-                  {factors?.z != null && <span className="sig-card-sub">z {factors.z.toFixed(2)}</span>}
+                  {pick(zh, "Sector", "板块")}
+                  {sectorPulse.rank != null && sectorPulse.n_themes != null && (
+                    <span className="sig-card-sub">#{sectorPulse.rank}/{sectorPulse.n_themes}</span>
+                  )}
                 </div>
-                <div className="sig-factors">
-                  {legKeys.map((k) => (
-                    <FactorBar key={k} label={factorLabel(k, zh)} value={legs![k]} zh={zh} />
-                  ))}
+                <div className="sig-desk-gloss">
+                  {sectorPulse.theme_name}
+                  {sectorPulse.label ? ` — ${sectorPulse.label}` : ""}
+                  {sectorPulse.reco ? ` · ${pick(zh, "reco", "建议")} ${sectorPulse.reco}` : ""}
                 </div>
-              </div>
-            )}
-
-            {/* Event edge */}
-            {(decision?.trust_en || decision?.trust_zh) && (
-              <div className="sig-card">
-                <div className="sig-card-h">
-                  {pick(zh, "Event edge", "事件驱动优势")}
-                  {decision?.trust_tier && <span className="sig-card-sub">{decision.trust_tier}</span>}
-                </div>
-                <div className="sig-edge">{pick(zh, decision.trust_en, decision.trust_zh)}</div>
               </div>
             )}
 
@@ -612,8 +598,8 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
                   </div>
                 </div>
               </div>
-              {/* supporting dims from conviction/decision */}
-              {(convScore != null || conviction?.band || conviction?.size_pct != null || decision?.band_label) && (
+              {/* supporting dims from the live cards.conviction + ai_judgment */}
+              {(convScore != null || convBand || (typeof aj?.size_pct === "number" && aj.size_pct > 0)) && (
                 <div className="sig-dims">
                   {convScore != null && (
                     <div className="sig-dim">
@@ -621,28 +607,19 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
                       <span className="sig-dim-v">{Math.round(convScore)}<i>/100</i></span>
                     </div>
                   )}
-                  {(conviction?.band || decision?.band_label) && (
+                  {convBand && (
                     <div className="sig-dim">
                       <span className="sig-dim-k">{pick(zh, "Band", "评级")}</span>
-                      <span className="sig-dim-v">{pick(zh, conviction?.band ?? decision?.band_label, conviction?.band_zh ?? decision?.band_label_zh) || "—"}</span>
+                      <span className="sig-dim-v">{convBand}</span>
                     </div>
                   )}
-                  {conviction?.size_pct != null && (
+                  {typeof aj?.size_pct === "number" && aj.size_pct > 0 && (
                     <div className="sig-dim">
                       <span className="sig-dim-k">{pick(zh, "Size", "仓位")}</span>
-                      <span className="sig-dim-v">{Math.round(conviction.size_pct)}%</span>
-                    </div>
-                  )}
-                  {conviction?.rank_pctile != null && (
-                    <div className="sig-dim">
-                      <span className="sig-dim-k">{pick(zh, "Rank", "排名")}</span>
-                      <span className="sig-dim-v">{Math.round(conviction.rank_pctile)}<i>%ile</i></span>
+                      <span className="sig-dim-v">{Math.round(aj.size_pct * 100)}%</span>
                     </div>
                   )}
                 </div>
-              )}
-              {conviction?.size_note && (
-                <div className="sig-conflict">{conviction.size_note}</div>
               )}
               {/* GC v2: latest signal's keeper quality + recipe tier (BUY|REBUY only) */}
               {latestSig && (latestSig.type === "BUY" || latestSig.type === "REBUY") && latestSig.quality && (
@@ -680,7 +657,7 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
               <MarketRiskChip zh={zh} />
             </div>
 
-            {/* Signal history table */}
+            {/* Signal history — compact date · price rows, scrollable (slim dark scrollbar) */}
             <div className="od-sig-section">
               <div className="od-sec-h">
                 {pick(zh, "Signal history", "信号历史")}
@@ -690,23 +667,19 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
               {sigs.length === 0 ? (
                 <div className="fin-empty">{pick(zh, "No signals", "暂无信号")}</div>
               ) : (
-                <div className="od-sig-scroll">
-                  <table className="od-sig-table">
-                    <thead>
-                      <tr>
-                        <th>{pick(zh, "Type", "类型")}</th>
-                        <th>{pick(zh, "Date", "日期")}</th>
-                        <th>{pick(zh, "Price", "价格")}</th>
-                        <th>{pick(zh, "Strength", "强度")}</th>
-                        <th>{pick(zh, "Reasons", "信号原因")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sigs.map((sig, i) => (
-                        <SignalRow key={i} sig={sig} zh={zh} onJump={handleJump} />
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="sd-siglist">
+                  {sigs.map((sig, i) => {
+                    const isEntry = sig.type === "BUY" || sig.type === "REBUY"
+                    const q = isEntry ? qualityLabel(sig.quality, zh) : ""
+                    return (
+                      <button key={i} className="sd-sigrow" onClick={() => handleJump(sig.ts)} title={pick(zh, "Jump to chart", "跳转到图表")}>
+                        <span className="sd-sig-badge" style={{ background: signalColor(sig.type) }}>{sig.type}</span>
+                        {q && <span className="sd-sig-q" style={{ color: qualityColor(sig.quality) }}>{q}</span>}
+                        <span className="sd-sig-date">{fmtDate(sig.ts)}</span>
+                        <span className="sd-sig-price">{sig.price != null ? sig.price.toFixed(2) : "—"}</span>
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -718,68 +691,5 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
 
       </div>
     </div>
-  )
-}
-
-/* ── SignalRow — individual signal table row with hover jump affordance ── */
-
-function SignalRow({ sig, zh, onJump }: { sig: Signal; zh: boolean; onJump: (ts: string) => void }) {
-  const [hovered, setHovered] = useState(false)
-  const col = signalColor(sig.type)
-  // GC v2: CUT is a caution, not an exit; BUY|REBUY may carry keeper quality + recipe tier.
-  const isCut = (sig.type || "").toUpperCase() === "CUT"
-  const isEntry = sig.type === "BUY" || sig.type === "REBUY"
-  const qLabel = isEntry ? qualityLabel(sig.quality, zh) : ""
-  const tLabel = isEntry ? tierLabel(sig.tier, zh) : ""
-
-  return (
-    <tr
-      className={"od-sig-row" + (hovered ? " od-sig-row-hov" : "")}
-      onClick={() => onJump(sig.ts)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{ cursor: "pointer" }}
-    >
-      <td>
-        <span className="od-badge" style={{ background: col }}>
-          {sig.type}
-        </span>
-        {isCut && (
-          <span style={{ marginLeft: 5, fontSize: 9.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
-            {pick(zh, "caution (not an exit)", "谨慎（非退出）")}
-          </span>
-        )}
-        {qLabel && (
-          <span style={{ marginLeft: 5, fontSize: 9.5, fontWeight: 700, color: qualityColor(sig.quality) }}>
-            {tLabel ? tLabel + " · " : ""}{qLabel}
-          </span>
-        )}
-      </td>
-      <td className="od-sig-date">{fmtDate(sig.ts)}</td>
-      <td className="od-sig-price">
-        {sig.price != null ? sig.price.toFixed(2) : "—"}
-      </td>
-      <td className="od-sig-str">
-        {sig.strength != null ? (sig.strength * 100).toFixed(0) + "%" : "—"}
-      </td>
-      <td>
-        <div className="od-chips">
-          {(sig.reasons ?? []).map((r, ri) => (
-            <span key={ri} className="fin-chip">{r.replace(/_/g, " ")}</span>
-          ))}
-        </div>
-      </td>
-      {hovered && (
-        <td className="od-jump-cell">
-          <button
-            className="od-jump-btn"
-            onClick={() => onJump(sig.ts)}
-            title={pick(zh, "Jump to chart", "跳转到图表")}
-          >
-            {pick(zh, "Jump to chart", "跳转到图表")} →
-          </button>
-        </td>
-      )}
-    </tr>
   )
 }
