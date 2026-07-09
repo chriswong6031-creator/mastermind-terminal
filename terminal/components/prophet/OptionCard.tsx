@@ -17,8 +17,10 @@ import type { Lang } from "@/lib/i18n";
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface OptionContractPayload {
-  /** "CALL" | "PUT" */
-  type: string;
+  /** "CALL" | "PUT" or "C" | "P" — both accepted */
+  type?: string;
+  /** "C" | "P" — alternative to type */
+  right?: string;
   strike: number;
   expiry: string;
   entry_premium: number | null;
@@ -26,21 +28,48 @@ export interface OptionContractPayload {
   eod_mark?: number | null;
 }
 
+/** Live intraday mark sourced from prophet_marks.json */
+export interface LiveMark {
+  bid: number;
+  ask: number;
+  mid: number;
+  last: number;
+  ts_utc: string;
+}
+
 interface OptionCardProps {
   contract: OptionContractPayload | null | undefined;
   lang: Lang;
+  /** When present and fresh (≤20 min RTH), shown tagged LIVE instead of EOD mark. */
+  liveMark?: LiveMark | null;
+  /** Set true in fixture/dev mode to bypass freshness check */
+  liveMarkForced?: boolean;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export function OptionCard({ contract, lang }: OptionCardProps) {
+// ── Live-mark freshness check ─────────────────────────────────────────────────
+
+const LIVE_WINDOW_MS = 20 * 60 * 1000; // 20 min
+
+function isMarkFresh(mark: LiveMark, forced: boolean): boolean {
+  if (forced) return true;
+  try {
+    const age = Date.now() - new Date(mark.ts_utc).getTime();
+    return age >= 0 && age <= LIVE_WINDOW_MS;
+  } catch { return false; }
+}
+
+export function OptionCard({ contract, lang, liveMark, liveMarkForced }: OptionCardProps) {
   const t = makeProphetT(lang);
   const zh = lang === "zh";
   const [tipKey, setTipKey] = useState<string | null>(null);
 
   if (!contract) return null;
 
-  const isCall = contract.type?.toUpperCase() === "CALL";
+  // Accept both "CALL"/"PUT" and "C"/"P" in type; also fall back to "right" field.
+  const typeStr = (contract.type ?? contract.right ?? "").toUpperCase();
+  const isCall = typeStr === "CALL" || typeStr === "C";
   const typeColor = isCall ? "var(--up)" : "var(--down)";
   const typeBg   = isCall
     ? "color-mix(in srgb, var(--up) 15%, transparent)"
@@ -50,8 +79,13 @@ export function OptionCard({ contract, lang }: OptionCardProps) {
   const hasPrem = contract.entry_premium != null;
   const hasEod  = contract.eod_mark != null;
 
-  const pnlPct = hasPrem && hasEod && contract.entry_premium! > 0
-    ? ((contract.eod_mark! - contract.entry_premium!) / contract.entry_premium!) * 100
+  // Live mark: prefer if present and fresh during RTH
+  const isLive = liveMark != null && isMarkFresh(liveMark, liveMarkForced ?? false);
+  const displayMark: number | null = isLive ? liveMark!.mid : (hasEod ? contract.eod_mark! : null);
+  const hasDisplayMark = displayMark != null;
+
+  const pnlPct = hasPrem && hasDisplayMark && contract.entry_premium! > 0
+    ? ((displayMark! - contract.entry_premium!) / contract.entry_premium!) * 100
     : null;
 
   return (
@@ -60,8 +94,25 @@ export function OptionCard({ contract, lang }: OptionCardProps) {
       <div style={HEADER_ROW}>
         <span style={DIAMOND}>◆</span>
         <span style={TITLE_STYLE}>{t("optionCardTitle")}</span>
-        {/* EOD mark freshness chip */}
-        {hasEod && (
+        {/* Freshness chip: LIVE (green) or EOD (muted) */}
+        {isLive && (
+          <span
+            style={LIVE_CHIP}
+            onMouseEnter={() => setTipKey("live")}
+            onMouseLeave={() => setTipKey(null)}
+            aria-label={zh ? "盘中实时报价" : "Intraday live quote"}
+          >
+            {zh ? "实时" : "LIVE"}
+            {tipKey === "live" && (
+              <span style={TIP_STYLE}>
+                {zh
+                  ? "盘中实时中间价 — 20分钟内更新"
+                  : "Intraday mid-price — updated within 20 min"}
+              </span>
+            )}
+          </span>
+        )}
+        {!isLive && hasDisplayMark && (
           <span
             style={EOD_CHIP}
             onMouseEnter={() => setTipKey("eod")}
@@ -106,11 +157,11 @@ export function OptionCard({ contract, lang }: OptionCardProps) {
           </Field>
         )}
 
-        {/* EOD mark + P&L */}
-        {hasEod && (
-          <Field label={t("optionEodMark")}>
+        {/* Current mark (LIVE mid or EOD) + P&L */}
+        {hasDisplayMark && (
+          <Field label={isLive ? (zh ? "实时中间价" : "Live mid") : t("optionEodMark")}>
             <span style={VAL_STYLE}>
-              ${contract.eod_mark!.toFixed(2)}
+              ${displayMark!.toFixed(2)}
               {pnlPct != null && (
                 <span
                   style={{
@@ -123,6 +174,14 @@ export function OptionCard({ contract, lang }: OptionCardProps) {
                   {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%
                 </span>
               )}
+            </span>
+          </Field>
+        )}
+        {/* Bid/ask spread when live mark present */}
+        {isLive && liveMark && (
+          <Field label={zh ? "买/卖" : "Bid/Ask"}>
+            <span style={{ ...VAL_STYLE, color: "var(--text-2)" }}>
+              ${liveMark.bid.toFixed(2)} / ${liveMark.ask.toFixed(2)}
             </span>
           </Field>
         )}
@@ -175,6 +234,19 @@ const EOD_CHIP: React.CSSProperties = {
   font: "500 9.5px/1 var(--font-ui)",
   color: "var(--muted)",
   border: "1px solid var(--line-2)",
+  borderRadius: "var(--r-pill)",
+  padding: "2px 6px",
+  cursor: "help",
+};
+
+const LIVE_CHIP: React.CSSProperties = {
+  position: "relative",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 3,
+  font: "600 9.5px/1 var(--font-ui)",
+  color: "var(--up)",
+  border: "1px solid color-mix(in srgb, var(--up) 40%, transparent)",
   borderRadius: "var(--r-pill)",
   padding: "2px 6px",
   cursor: "help",

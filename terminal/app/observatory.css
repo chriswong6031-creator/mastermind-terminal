@@ -429,6 +429,11 @@
   max-height: none; /* no cap — obs-scroll handles overflow */
 }
 
+/* Load-more sentinel: always spans the full grid width */
+.obs-fd-load-more {
+  grid-column: 1 / -1;
+}
+
 /* ── Session stats card (left rail top) ─────────────────────────────────── */
 .obs-fd-session.obs-card {
   padding: 0;

@@ -12,7 +12,7 @@
  */
 
 import {
-  useCallback, useEffect, useMemo, useState,
+  useCallback, useEffect, useMemo, useRef, useState,
 } from "react";
 import { FlowCard } from "./FlowCard";
 import { FiltersPanel, DEFAULT_FILTERS } from "./FiltersPanel";
@@ -156,6 +156,34 @@ export function FeedPane({
 
   // FiltersPanel open/close
   const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // ── Feed virtualization — cap initial render; auto-load via IntersectionObserver ──
+  const PAGE_SIZE = 200;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // Reset visible count when filters/sort change so users always see newest/top results.
+  // We compare a serialized key of the effective filter state.
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [search, preset, sort, filters]);
+
+  // Wire IntersectionObserver to sentinel so scrolling to the bottom auto-loads
+  // the next page without requiring a button click.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((n) => n + PAGE_SIZE);
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  });
 
   // Merge preset overrides into the base filter set
   const effectiveFilters = useMemo<FlowFilters>(() => {
@@ -348,8 +376,8 @@ export function FeedPane({
           <EmptyState zh={zh} hasFilters={isFiltersDirty(effectiveFilters) || search.length > 0} />
         )}
 
-        {/* Cards */}
-        {filtered.map((ev) => (
+        {/* Cards — capped to visibleCount; sentinel triggers Load-more */}
+        {filtered.slice(0, visibleCount).map((ev) => (
           <FlowCard
             key={ev.id}
             ev={ev}
@@ -358,6 +386,26 @@ export function FeedPane({
             onSelect={onSelect}
           />
         ))}
+
+        {/* Load-more sentinel — only shown when more cards exist beyond the cap */}
+        {filtered.length > visibleCount && (
+          <div
+            ref={sentinelRef}
+            style={LOAD_MORE_STYLE}
+            // Span full grid width so it sits below the card grid, not in a column slot
+            // grid-column: 1/-1 is set via the class in observatory.css
+            className="obs-fd-load-more"
+          >
+            <button
+              style={LOAD_MORE_BTN}
+              onClick={() => setVisibleCount((n) => n + PAGE_SIZE)}
+            >
+              {zh
+                ? `加载更多 — 已显示 ${visibleCount} / ${filtered.length}`
+                : `Load more — showing ${visibleCount} of ${filtered.length}`}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -448,4 +496,23 @@ const EMPTY_BODY: React.CSSProperties = {
   font: "500 11.5px/1.55 var(--font-ui)",
   color: "var(--muted)",
   maxWidth: 320,
+};
+
+// ── Load-more sentinel ────────────────────────────────────────────────────────
+
+const LOAD_MORE_STYLE: React.CSSProperties = {
+  padding: "10px 0 4px",
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+};
+
+const LOAD_MORE_BTN: React.CSSProperties = {
+  padding: "6px 16px",
+  borderRadius: "var(--r-pill)",
+  border: "1px solid var(--line-2)",
+  background: "transparent",
+  color: "var(--text-2)",
+  font: "500 11px/1 var(--font-ui)",
+  cursor: "pointer",
 };

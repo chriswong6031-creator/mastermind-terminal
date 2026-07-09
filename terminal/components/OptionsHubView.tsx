@@ -9,7 +9,7 @@ import { AppNav } from "@/components/AppNav";
 import { useLang, useT } from "@/lib/i18n";
 import { abbrevSector } from "@/lib/sectorAbbrev";
 import { windowGexRows } from "@/lib/windowGexRows.mjs";
-import { flowPrefetch } from "@/lib/flowClientCache";
+import { flowGet, flowInvalidate, flowPrefetch } from "@/lib/flowClientCache";
 import {
   createChart, LineSeries, AreaSeries,
   type IChartApi, type ISeriesApi,
@@ -1082,12 +1082,19 @@ export default function OptionsHubView() {
   const doFetch = useCallback(async () => {
     if (document.visibilityState === "hidden") return;
     try {
-      const [fr, hr] = await Promise.all([
-        fetch("/api/flow?f=feed", { cache: "no-store" }),
-        fetch("/api/flow?f=heat", { cache: "no-store" }),
+      // Invalidate before polling so the recurring 45s interval always fetches
+      // fresh data. flowGet's stale-while-revalidate TTL is 25s — shorter than
+      // the poll interval — so without invalidation every poll hits the stale
+      // branch and returns the previous cycle's data (the background revalidation
+      // updates the cache but never pushes to setFeed/setHeat).
+      flowInvalidate("feed");
+      flowInvalidate("heat");
+      const [fj, hj] = await Promise.all([
+        flowGet("feed"),
+        flowGet("heat"),
       ]);
-      if (fr.ok) { const fj = await fr.json() as FeedPayload; setFeed(fj); setLastFeedTs(fj.asof); setFetchError(false); } else { setFetchError(true); }
-      if (hr.ok) { const hj = await hr.json() as HeatPayload; setHeat(hj); }
+      if (fj) { const d = fj as FeedPayload; setFeed(d); setLastFeedTs(d.asof); setFetchError(false); } else { setFetchError(true); }
+      if (hj) setHeat(hj as HeatPayload);
     } catch { setFetchError(true); }
   }, []);
 
@@ -1100,12 +1107,12 @@ export default function OptionsHubView() {
     if (tideData) return; // already loaded
     setTideLoading(true);
     try {
-      const [tr, dr] = await Promise.all([
-        fetch("/api/flow?f=tide", { cache: "no-store" }),
-        fetch("/api/flow?f=dte", { cache: "no-store" }),
+      const [td, dd] = await Promise.all([
+        flowGet("tide"),
+        flowGet("dte"),
       ]);
-      if (tr.ok) setTideData(await tr.json() as TidePayload);
-      if (dr.ok) setDteTide(await dr.json() as DteTidePayload);
+      if (td) setTideData(td as TidePayload);
+      if (dd) setDteTide(dd as DteTidePayload);
     } catch {}
     setTideLoading(false);
   }, [tideData]);
@@ -1119,8 +1126,8 @@ export default function OptionsHubView() {
   const fetchTicker = useCallback(async (root: string) => {
     setTickerLoading(true); setTickerData(null);
     try {
-      const r = await fetch(`/api/flow?f=ticker:${root}`, { cache: "no-store" });
-      if (r.ok) setTickerData(await r.json() as TickerPayload);
+      const d = await flowGet(`ticker:${root}`);
+      if (d) setTickerData(d as TickerPayload);
     } catch {}
     setTickerLoading(false);
   }, []);
@@ -1152,12 +1159,13 @@ export default function OptionsHubView() {
     // not for the user actively opening the page.
     (async () => {
       try {
-        const [fr, hr] = await Promise.all([
-          fetch("/api/flow?f=feed", { cache: "no-store" }),
-          fetch("/api/flow?f=heat", { cache: "no-store" }),
+        // SWR: flowGet serves cache-first on revisits; blocking on first mount.
+        const [fj, hj] = await Promise.all([
+          flowGet("feed"),
+          flowGet("heat"),
         ]);
-        if (fr.ok) { const fj = await fr.json() as FeedPayload; setFeed(fj); setLastFeedTs(fj.asof); setFetchError(false); } else { setFetchError(true); }
-        if (hr.ok) { const hj = await hr.json() as HeatPayload; setHeat(hj); }
+        if (fj) { const d = fj as FeedPayload; setFeed(d); setLastFeedTs(d.asof); setFetchError(false); } else { setFetchError(true); }
+        if (hj) setHeat(hj as HeatPayload);
       } catch { setFetchError(true); }
       // Warm secondary feeds in the background so first tab switches are fast.
       flowPrefetch("tide");
@@ -1265,12 +1273,12 @@ export default function OptionsHubView() {
     if (oiData && hotData) return;
     setScreenerLoading(true);
     try {
-      const [or, hr] = await Promise.all([
-        fetch("/api/flow?f=oi", { cache: "no-store" }),
-        fetch("/api/flow?f=hot", { cache: "no-store" }),
+      const [od, hd] = await Promise.all([
+        flowGet("oi"),
+        flowGet("hot"),
       ]);
-      if (or.ok) setOiData(await or.json() as OiMoversPayload);
-      if (hr.ok) setHotData(await hr.json() as HotPayload);
+      if (od) setOiData(od as OiMoversPayload);
+      if (hd) setHotData(hd as HotPayload);
     } catch {}
     setScreenerLoading(false);
   }, [oiData, hotData]);
@@ -1313,8 +1321,8 @@ export default function OptionsHubView() {
   const fetchVol = useCallback(async (root: string) => {
     setVolLoading(true); setVolData(null);
     try {
-      const r = await fetch(`/api/flow?f=vol:${root}`, { cache: "no-store" });
-      if (r.ok) setVolData(await r.json() as VolPayload);
+      const d = await flowGet(`vol:${root}`);
+      if (d) setVolData(d as VolPayload);
     } catch {}
     setVolLoading(false);
   }, []);
@@ -1328,8 +1336,8 @@ export default function OptionsHubView() {
   const fetchCtx = useCallback(async () => {
     if (ctxData) return; // already loaded
     try {
-      const r = await fetch("/api/flow?f=ctx", { cache: "no-store" });
-      if (r.ok) setCtxData(await r.json() as CtxPayload);
+      const d = await flowGet("ctx");
+      if (d) setCtxData(d as CtxPayload);
     } catch {}
   }, [ctxData]);
 
@@ -1340,11 +1348,10 @@ export default function OptionsHubView() {
     if (oiConfLoaded.current) return; // already loaded
     oiConfLoaded.current = true;
     try {
-      const r = await fetch("/api/flow?f=oiconf", { cache: "no-store" });
-      if (r.ok) {
-        const raw = await r.json();
+      const raw = await flowGet("oiconf");
+      if (raw) {
         // Payload is either an array directly or wrapped
-        setOiConfData(Array.isArray(raw) ? raw : (raw.confirmed ?? []));
+        setOiConfData(Array.isArray(raw) ? raw as OiConfPayload : ((raw as Record<string, unknown>).confirmed as OiConfPayload ?? []));
       }
     } catch { oiConfLoaded.current = false; }
   }, []);
@@ -1361,8 +1368,8 @@ export default function OptionsHubView() {
     if (tctxRoot === root && tctxData) return;
     setTctxRoot(root); setTctxData(null);
     try {
-      const r = await fetch(`/api/flow?f=tctx:${root}`, { cache: "no-store" });
-      if (r.ok) setTctxData(await r.json() as TctxPayload);
+      const d = await flowGet(`tctx:${root}`);
+      if (d) setTctxData(d as TctxPayload);
     } catch {}
   }, [tctxRoot, tctxData]);
 
@@ -1398,8 +1405,8 @@ export default function OptionsHubView() {
   const fetchGex = useCallback(async (root: string) => {
     setGexLoading(true); setGexData(null);
     try {
-      const r = await fetch(`/api/flow?f=gex:${root}`, { cache: "no-store" });
-      if (r.ok) setGexData(await r.json() as GexPayload);
+      const d = await flowGet(`gex:${root}`);
+      if (d) setGexData(d as GexPayload);
     } catch {}
     setGexLoading(false);
   }, []);
