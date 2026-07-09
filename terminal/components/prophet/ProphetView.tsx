@@ -32,6 +32,7 @@ import { ConfidencePanel } from "./ConfidencePanel";
 import type { ConfidenceComponents } from "./ConfidencePanel";
 import { GeometryRail } from "./GeometryRail";
 import { OptionCard } from "./OptionCard";
+import type { LiveMark } from "./OptionCard";
 
 // ── API payload types ─────────────────────────────────────────────────────────
 
@@ -39,6 +40,54 @@ interface ProphetIndexPayload {
   asof?: string | null;
   cadence?: string;
   plans: PlanSummary[];
+}
+
+interface ProphetMarksPayload {
+  schema?: string;
+  asof_utc?: string;
+  session_date?: string;
+  /** Fixture-mode flag: treat all marks as fresh regardless of ts_utc */
+  _fixture?: boolean;
+  marks?: Record<string, LiveMark>;
+}
+
+// ── OCC symbol derivation ─────────────────────────────────────────────────────
+// Format: {ticker padded to 6 chars}{YYMMDD}{C|P}{strike×1000 padded to 8 digits}
+// e.g. BA + 2026-09-18 + C + 220 → "BA      260918C00220000"
+
+function toOccSymbol(ticker: string, right: string, expiry: string, strike: number): string {
+  const root = ticker.toUpperCase().padEnd(6, " ");
+  // expiry: "YYYY-MM-DD" → "YYMMDD"
+  const yy = expiry.slice(2, 4);
+  const mm = expiry.slice(5, 7);
+  const dd = expiry.slice(8, 10);
+  const cp = right.toUpperCase() === "C" || right.toUpperCase() === "CALL" ? "C" : "P";
+  const sk = String(Math.round(strike * 1000)).padStart(8, "0");
+  return `${root}${yy}${mm}${dd}${cp}${sk}`;
+}
+
+const LIVE_MARK_WINDOW_MS = 20 * 60 * 1000; // 20 min
+
+function resolveliveMark(
+  marks: ProphetMarksPayload | null,
+  ticker: string,
+  right: string,
+  expiry: string,
+  strike: number,
+): { mark: LiveMark | null; forced: boolean } {
+  if (!marks?.marks) return { mark: null, forced: false };
+  const occ = toOccSymbol(ticker, right, expiry, strike);
+  const m = marks.marks[occ] ?? null;
+  if (!m) return { mark: null, forced: false };
+  const forced = marks._fixture === true;
+  if (!forced) {
+    // Must be within 20 min
+    try {
+      const age = Date.now() - new Date(m.ts_utc).getTime();
+      if (age < 0 || age > LIVE_MARK_WINDOW_MS) return { mark: null, forced: false };
+    } catch { return { mark: null, forced: false }; }
+  }
+  return { mark: m, forced };
 }
 
 type SortMode = "new" | "best" | "gainers";
@@ -87,6 +136,7 @@ export function ProphetView() {
   const [selectedId,  setSelectedId]  = useState<string | null>(null);
   const [sortMode,    setSortMode]    = useState<SortMode>("new");
   const [subTab,      setSubTab]      = useState<SubTab>("signals");
+  const [marks,       setMarks]       = useState<ProphetMarksPayload | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
@@ -113,10 +163,21 @@ export function ProphetView() {
     }
   }, []);
 
+  // Fetch live marks (prophet_marks.json) — separate from prophet_idx so it can
+  // refresh independently every ~30s without re-fetching the full plan index.
+  const fetchMarks = useCallback(async () => {
+    try {
+      const d = await flowGet("prophet_marks");
+      if (d) setMarks(d as ProphetMarksPayload);
+    } catch { /* silent — absent marks → EOD fallback */ }
+  }, []);
+
   useEffect(() => {
     fetchData();
-    return () => abortRef.current?.abort();
-  }, [fetchData]);
+    fetchMarks();
+    const poll = setInterval(fetchMarks, 30_000);
+    return () => { abortRef.current?.abort(); clearInterval(poll); };
+  }, [fetchData, fetchMarks]);
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
@@ -224,7 +285,7 @@ export function ProphetView() {
         {!selected ? (
           <div style={FULL_CENTER}>{t("noPlans")}</div>
         ) : (
-          <ConfidenceColumn plan={selected} lang={lang} t={t} />
+          <ConfidenceColumn plan={selected} lang={lang} t={t} marks={marks} />
         )}
       </div>
     </div>
@@ -405,10 +466,12 @@ function ConfidenceColumn({
   plan,
   lang,
   t,
+  marks,
 }: {
   plan: PlanSummary;
   lang: "en" | "zh";
   t: ReturnType<typeof makeProphetT>;
+  marks: ProphetMarksPayload | null;
 }) {
   const state      = plan.state;
   const confidence = planConfidence(plan);
@@ -461,10 +524,24 @@ function ConfidenceColumn({
         </div>
       )}
 
-      {/* Option card */}
+      {/* Option card — with live-mark overlay if fresh */}
       {plan.option_contract && (
         <div style={{ marginBottom: 10 }}>
-          <OptionCard contract={plan.option_contract} lang={lang} />
+          {(() => {
+            const oc = plan.option_contract;
+            const right = oc.right ?? (oc.type?.toUpperCase() === "PUT" ? "P" : "C");
+            const { mark, forced } = resolveliveMark(
+              marks, plan.asset, right, oc.expiry, oc.strike
+            );
+            return (
+              <OptionCard
+                contract={oc}
+                lang={lang}
+                liveMark={mark}
+                liveMarkForced={forced}
+              />
+            );
+          })()}
         </div>
       )}
     </div>
