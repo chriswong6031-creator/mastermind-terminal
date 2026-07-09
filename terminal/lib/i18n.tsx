@@ -162,6 +162,7 @@ const LEX: Record<string, [string, string]> = {
   catMastermind: ["Mastermind", "智脑"],
   catTrend: ["Trend", "趋势"],
   catMomentum: ["Momentum", "动量"],
+  catPriceAction: ["Price Action", "价格行为"],
   catVolume: ["Volume", "成交量"],
   // my custom scripts (Pine) section
   myScripts: ["My Scripts", "我的脚本"],

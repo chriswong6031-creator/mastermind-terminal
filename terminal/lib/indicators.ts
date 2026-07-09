@@ -9,7 +9,7 @@
 // Pine custom scripts are NOT in this registry — they carry their own source/params and are handled
 // directly in TerminalShell/ChartPanel.
 
-export type IndKey = "ema" | "bb" | "vwap" | "vol" | "rsi" | "stochrsi" | "macd";
+export type IndKey = "ema" | "bb" | "vwap" | "vol" | "rsi" | "stochrsi" | "macd" | "gaps";
 export type IndKind = "overlay" | "pane";
 export type FieldType = "number" | "color" | "bool";
 
@@ -34,11 +34,11 @@ export interface IndDef {
 }
 
 // canonical display/draw order — overlays first, then sub-pane indicators top→bottom
-export const IND_ORDER: IndKey[] = ["ema", "bb", "vwap", "vol", "rsi", "stochrsi", "macd"];
+export const IND_ORDER: IndKey[] = ["ema", "bb", "vwap", "vol", "gaps", "rsi", "stochrsi", "macd"];
 
 const COL = {
   warn: "#e8a33d", link: "#4d82ff", faint: "rgba(214,218,227,0.5)",
-  up: "#26c281", down: "#f0566b", gold: "#e8b339",
+  up: "#26c281", down: "#f0566b", gold: "#e8b339", yellow: "#f5c518",
   upFill: "rgba(38,194,129,0.4)", downFill: "rgba(240,86,107,0.4)",
   upHist: "rgba(38,194,129,0.5)", downHist: "rgba(240,86,107,0.5)",
   bbBand: "rgba(77,130,255,0.55)", bbBasis: "rgba(214,218,227,0.45)",
@@ -184,6 +184,37 @@ sig = input.int(9, "Signal length")
 plot(hist, "Histogram", style = plot.style_columns)
 plot(macdLine, "MACD", color.new(#4d82ff, 0))
 plot(signalLine, "Signal", color.new(#e8a33d, 0))`,
+  },
+  gaps: {
+    // signal-style overlay (no plotted series): marks are drawn on the chart's signal layer, so this
+    // rides the same render path as the Golden Oracle marks (see ChartPanel renderSignals). Detects a
+    // true one-bar price gap (this bar's range fully clears the prior bar's) and pivot-low "demand" spots.
+    key: "gaps", label: "Gaps & Demand", tag: "Gaps", kind: "overlay",
+    defaults: {
+      showGaps: true, minGapPct: 0,
+      showDemand: true, demandStrength: 5,
+      gapUpCol: COL.yellow, gapDownCol: COL.down, demandCol: COL.up,
+    },
+    fields: [
+      { key: "showGaps", label: "Show gaps", type: "bool", group: "inputs" },
+      { key: "minGapPct", label: "Min gap size %", type: "number", group: "inputs", min: 0, max: 20, step: 0.1 },
+      { key: "showDemand", label: "Show demand", type: "bool", group: "inputs" },
+      { key: "demandStrength", label: "Demand pivot strength", type: "number", group: "inputs", min: 1, max: 20, step: 1 },
+      { key: "gapUpCol", label: "Gap-up color", type: "color", group: "style" },
+      { key: "gapDownCol", label: "Gap-down color", type: "color", group: "style" },
+      { key: "demandCol", label: "Demand color", type: "color", group: "style" },
+    ],
+    source: `//@version=6
+indicator("Gaps & Demand", overlay = true)
+minGap   = input.float(0.0, "Min gap size %") / 100
+strength = input.int(5, "Demand pivot strength")
+// true 1-bar gaps: an unfilled break where this bar's whole range clears the prior bar's
+gapUp    = low  > high[1] and (low - high[1]) / high[1] >= minGap
+gapDown  = high < low[1]  and (low[1] - high) / low[1]  >= minGap
+demand   = not na(ta.pivotlow(low, strength, strength))   // swing-low where buyers stepped in
+plotshape(gapUp,   "Gap up",   shape.triangleup,   location.belowbar, color.new(#f5c518, 0))
+plotshape(gapDown, "Gap down", shape.triangledown, location.abovebar, color.new(#f0566b, 0))
+plotshape(demand,  "Demand",   shape.circle,       location.belowbar, color.new(#26c281, 0))`,
   },
 };
 

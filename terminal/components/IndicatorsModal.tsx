@@ -8,9 +8,10 @@ const CATS: Record<string, { key: string; label: string; mm?: boolean }[]> = {
   Mastermind: [{ key: "_oracle", label: "Golden Oracle Confluence", mm: true }],
   Trend: [{ key: "ema", label: "Moving Averages (EMA 20/50/200)" }, { key: "bb", label: "Bollinger Bands" }, { key: "vwap", label: "VWAP" }, { key: "macd", label: "MACD" }],
   Momentum: [{ key: "rsi", label: "RSI" }, { key: "stochrsi", label: "Stochastic RSI" }],
+  "Price Action": [{ key: "gaps", label: "Gaps & Demand" }],
   Volume: [{ key: "vol", label: "Volume" }],
 };
-const CAT_TKEY: Record<string, string> = { Mastermind: "catMastermind", Trend: "catTrend", Momentum: "catMomentum", Volume: "catVolume" };
+const CAT_TKEY: Record<string, string> = { Mastermind: "catMastermind", Trend: "catTrend", Momentum: "catMomentum", "Price Action": "catPriceAction", Volume: "catVolume" };
 const MY_SCRIPTS = "__scripts__";   // synthetic category key for the My Scripts section
 
 export default function IndicatorsModal({ open, active, onClose, onToggle, scripts = [], enabled, onToggleScript, onRenameScript, onDeleteScript }:
