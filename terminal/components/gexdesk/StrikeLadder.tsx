@@ -269,38 +269,63 @@ export function StrikeLadder({
       return moved || inView;
     }
 
-    function tryCenter() {
-      if (retries >= MAX_RETRIES) return;
-      retries++;
+    // FALLBACK — the root cause of the "opens at the top of the table" bug:
+    // on some layouts the ladder's inner .obs-scroll never overflows (the
+    // content stretches the hub column instead, and an ANCESTOR — tab column
+    // or page — is the real scroller), so isScrollable() rejects the inner
+    // container forever and centering never runs. When the inner scroller
+    // isn't the one that scrolls, let the browser center the spot row within
+    // whichever ancestor actually does.
+    function centerViaAncestor(): boolean {
       const container = containerRef.current?.querySelector<HTMLDivElement>(".obs-scroll") ?? null;
-      if (container && isScrollable(container)) {
-        const success = doCenter();
-        if (!success) {
-          // scrollTop assignment was clamped (layout not yet final) — retry next frame
-          rafId = requestAnimationFrame(tryCenter);
-        } else {
-          // Success: keep ResizeObserver armed so resize events re-center
-          if (!observer && containerRef.current) {
-            observer = new ResizeObserver(() => {
-              retries = 0;
-              requestAnimationFrame(tryCenter);
-            });
-            observer.observe(container);
-          }
+      if (!container) return false;
+      let spotRow: Element | null = null;
+      const rows = container.children;
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].textContent?.includes("▶")) {
+          spotRow = rows[i];
+          break;
         }
-      } else if (!observer && containerRef.current) {
-        // Not yet scrollable — watch for layout change (hidden→visible OR constrained layout)
-        const target = container ?? containerRef.current;
-        observer = new ResizeObserver(() => {
-          const c = containerRef.current?.querySelector<HTMLDivElement>(".obs-scroll");
-          if (c && isScrollable(c)) {
+      }
+      if (!spotRow) return false;
+      (spotRow as HTMLElement).scrollIntoView({ block: "center", inline: "nearest" });
+      const r = (spotRow as HTMLElement).getBoundingClientRect();
+      // Success = the spot row is actually on screen (non-degenerate rect).
+      return r.height > 0 && r.top >= 0 && r.bottom <= window.innerHeight;
+    }
+
+    function tryCenter() {
+      if (retries >= MAX_RETRIES) {
+        // Exhausted while hidden / zero layout — watch for the pane to get
+        // real dimensions (display:none → flex on tab switch fires this).
+        if (!observer && containerRef.current) {
+          observer = new ResizeObserver(() => {
             observer?.disconnect();
             observer = null;
             retries = 0;
             rafId = requestAnimationFrame(tryCenter);
-          }
-        });
-        observer.observe(target);
+          });
+          observer.observe(containerRef.current);
+        }
+        return;
+      }
+      retries++;
+      const container = containerRef.current?.querySelector<HTMLDivElement>(".obs-scroll") ?? null;
+      const success =
+        container && isScrollable(container) ? doCenter() : centerViaAncestor();
+      if (success) {
+        // Keep a ResizeObserver armed so layout changes re-center
+        if (!observer && containerRef.current) {
+          observer = new ResizeObserver(() => {
+            retries = 0;
+            requestAnimationFrame(tryCenter);
+          });
+          observer.observe(container ?? containerRef.current);
+        }
+      } else {
+        // Layout not final (clamped scroll / zero rects / spot row absent) —
+        // retry next frame
+        rafId = requestAnimationFrame(tryCenter);
       }
     }
 
