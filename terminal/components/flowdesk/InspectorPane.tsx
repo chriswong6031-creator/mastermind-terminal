@@ -203,18 +203,18 @@ function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh:
           <div className="obs-insp-section-label">
             {pick(zh, "Detections", "检测信号")}
           </div>
-          {enrichEv.badges.map((badge) => {
-            const whyKey = zh ? `${badge}_zh` : badge;
-            const whyStr = enrichEv.why?.[whyKey] ?? enrichEv.why?.[badge] ?? "";
-            return (
-              <div key={badge} style={DETECTION_ROW_STYLE}>
-                <span style={DETECTION_BADGE_STYLE}>{badge.replace(/_/g, "-")}</span>
-                {whyStr && (
-                  <span style={DETECTION_WHY_STYLE}>{whyStr}</span>
-                )}
-              </div>
-            );
-          })}
+          {enrichEv.badges.map((badge) => (
+            <div key={badge} style={DETECTION_ROW_STYLE}>
+              <span style={DETECTION_BADGE_STYLE}>{badge.replace(/_/g, "-")}</span>
+            </div>
+          ))}
+          {/* why is a pipe-separated summary string — show once below badge list */}
+          {(() => {
+            const whyStr = zh ? (enrichEv.why_zh ?? enrichEv.why) : enrichEv.why;
+            return whyStr ? (
+              <div style={DETECTION_WHY_STYLE}>{whyStr}</div>
+            ) : null;
+          })()}
         </div>
       )}
 

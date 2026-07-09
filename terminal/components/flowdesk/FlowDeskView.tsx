@@ -25,7 +25,7 @@ import { makeFlowT } from "../../lib/flowdeskStrings";
 import { WatchlistRail } from "./WatchlistRail";
 import { RadarStrip } from "./RadarStrip";
 import { FlowGauge } from "./FlowGauge";
-import { FeedPane, type FlowEvent, type FeedPayload, type EnrichPayload } from "./FeedPane";
+import { FeedPane, type FlowEvent, type FeedPayload, type EnrichPayload, normalizeEnrichPayload } from "./FeedPane";
 import { InspectorPane } from "./InspectorPane";
 import { DEFAULT_FILTERS, type FlowFilters } from "./FiltersPanel";
 import { TutorialOverlay } from "../tutorial/TutorialOverlay";
@@ -326,14 +326,17 @@ export function FlowDeskView() {
    */
   const fetchEnrich = useCallback(async () => {
     if (document.visibilityState === "hidden") return;
-    const data = await safeFetch<EnrichPayload>("/api/flow?f=enrich");
-    if (!data) return;
-    const src = (data as Record<string, unknown>).source as string | undefined;
-    if (src === "fixture") { setEnrich(data); return; }
-    const asof = data.asof ? new Date(data.asof).getTime() : 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = await safeFetch<any>("/api/flow?f=enrich");
+    if (!raw) return;
+    let normalized: EnrichPayload;
+    try { normalized = normalizeEnrichPayload(raw); } catch { return; }
+    const src = (raw as Record<string, unknown>).source as string | undefined;
+    if (src === "fixture") { setEnrich(normalized); return; }
+    const asof = normalized.asof ? new Date(normalized.asof).getTime() : 0;
     const ageH = asof > 0 ? (Date.now() - asof) / 3_600_000 : 0;
     if (ageH > 16) { setEnrich(null); return; }
-    setEnrich(data);
+    setEnrich(normalized);
   }, []);
 
   const fetchTickerCtx = useCallback(async (root: string) => {
@@ -347,24 +350,29 @@ export function FlowDeskView() {
   useEffect(() => {
     // Initial fetches (bypass visibility guard on mount)
     void (async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const [f, ti, ch, en] = await Promise.all([
         safeFetch<FeedPayload>("/api/flow?f=feed"),
         safeFetch<TidePayload>("/api/flow?f=tide"),
         safeFetch<ChainHeatPayload>("/api/flow?f=chainheat"),
-        safeFetch<EnrichPayload>("/api/flow?f=enrich"),
+        safeFetch<any>("/api/flow?f=enrich"),
       ]);
       if (f)  setFeed(f);
       if (ti) setTide(ti);
       if (ch) setChainHeat(ch);
       // Enrich: stale check (same logic as fetchEnrich callback)
       if (en) {
-        const src = (en as Record<string, unknown>).source as string | undefined;
-        if (src === "fixture") {
-          setEnrich(en);
-        } else {
-          const asof = en.asof ? new Date(en.asof).getTime() : 0;
-          const ageH = asof > 0 ? (Date.now() - asof) / 3_600_000 : 0;
-          if (ageH <= 16) setEnrich(en);
+        let normalizedEn: EnrichPayload | null = null;
+        try { normalizedEn = normalizeEnrichPayload(en); } catch { /* ignore */ }
+        if (normalizedEn) {
+          const src = (en as Record<string, unknown>).source as string | undefined;
+          if (src === "fixture") {
+            setEnrich(normalizedEn);
+          } else {
+            const asof = normalizedEn.asof ? new Date(normalizedEn.asof).getTime() : 0;
+            const ageH = asof > 0 ? (Date.now() - asof) / 3_600_000 : 0;
+            if (ageH <= 16) setEnrich(normalizedEn);
+          }
         }
       }
     })();

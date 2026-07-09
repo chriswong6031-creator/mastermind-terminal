@@ -69,44 +69,124 @@ export type EnrichBadge =
   | "Z_OUTLIER"
   | "OI_CONFIRMED";
 
-/** Per-event enrichment record */
+/**
+ * Per-event enrichment record (normalized).
+ * Real artifact ships why/why_zh as plain strings (pipe-separated badge
+ * reasons). After normalization these are ready to display directly.
+ */
 export interface EnrichEvent {
   badges: EnrichBadge[];
-  q_pctl: number;
   direction_discounted: boolean;
-  /** why strings keyed as "BADGE_KEY" (EN) and "BADGE_KEY_zh" (ZH) */
-  why: Record<string, string>;
+  /** Session quality tier from the enrich pipeline (e.g. "elite", "strong", "high", "medium", "below_medium") */
+  session_tier: string;
+  /** Raw Q-score (0-100) from the pipeline */
+  q_score: number;
+  /** EN explanation string (pipe-separated badge reasons, or empty) */
+  why: string;
+  /** ZH explanation string, if available */
+  why_zh?: string;
 }
 
 export interface EnrichThresholds {
-  elite_q: number;
-  strong_q: number;
-  high_q: number;
-  medium_q: number;
+  elite: number;
+  strong: number;
+  high: number;
+  medium: number;
 }
 
-/** Top-level enrich artifact (flow.enrich/v1) */
+/** Top-level enrich artifact (flow.enrich/v1) — normalized shape */
 export interface EnrichPayload {
   schema?: string;
   asof: string;
   session_date?: string;
   thresholds: EnrichThresholds;
-  /** keyed by event id */
+  /** keyed by event id (normalized from list) */
   events: Record<string, EnrichEvent>;
   confirmed_yesterday?: { id: string; root: string; contract: string; oi_change: number }[];
 }
 
-/** Derive session_tier from q-score + enrich thresholds */
-export function resolveSessionTier(
-  q: number,
-  premium: number,
-  thresholds: EnrichThresholds,
-): "ELITE" | "STRONG" | "HIGH" | "MEDIUM" | "BASE" {
-  if (q >= thresholds.elite_q && premium >= 1_000_000) return "ELITE";
-  if (q >= thresholds.strong_q) return "STRONG";
-  if (q >= thresholds.high_q) return "HIGH";
-  if (q >= thresholds.medium_q) return "MEDIUM";
-  return "BASE";
+/**
+ * Normalize the raw enrich artifact from the API into EnrichPayload.
+ *
+ * Handles two schema divergences between the real R2 artifact and the
+ * types the UI expects:
+ *   (a) events may be a LIST [{id,...}] instead of a DICT keyed by id
+ *   (b) threshold keys ship without the "_q" suffix (elite not elite_q)
+ *
+ * Call this immediately after fetching — all downstream code receives the
+ * normalized shape.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeEnrichPayload(raw: any): EnrichPayload {
+  if (!raw || typeof raw !== "object") throw new Error("enrich: null payload");
+
+  // Normalize thresholds — real API: {elite,strong,high,medium}
+  // Old fixture used {elite_q,strong_q,high_q,medium_q} — accept both.
+  const rawT = raw.thresholds ?? {};
+  const thresholds: EnrichThresholds = {
+    elite:  rawT.elite  ?? rawT.elite_q  ?? 69,
+    strong: rawT.strong ?? rawT.strong_q ?? 62,
+    high:   rawT.high   ?? rawT.high_q   ?? 57,
+    medium: rawT.medium ?? rawT.medium_q ?? 52,
+  };
+
+  // Normalize events — real API: list; fixture may be dict
+  let eventsDict: Record<string, EnrichEvent> = {};
+  const rawEvents = raw.events;
+  if (Array.isArray(rawEvents)) {
+    // Real production shape: list of event objects with inline enrichment
+    for (const ev of rawEvents) {
+      if (!ev?.id) continue;
+      eventsDict[ev.id] = {
+        badges: ev.badges ?? [],
+        direction_discounted: ev.direction_discounted ?? false,
+        session_tier: ev.session_tier ?? "",
+        q_score: ev.q_score ?? 0,
+        why: typeof ev.why === "string" ? ev.why : "",
+        why_zh: typeof ev.why_zh === "string" ? ev.why_zh : undefined,
+      };
+    }
+  } else if (rawEvents && typeof rawEvents === "object") {
+    // Legacy fixture shape: dict keyed by id
+    for (const [id, ev] of Object.entries(rawEvents)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const e = ev as any;
+      // fixture why may be a dict (old fixture) or string (new)
+      let why = "";
+      let why_zh: string | undefined;
+      if (typeof e.why === "string") {
+        why = e.why;
+        why_zh = typeof e.why_zh === "string" ? e.why_zh : undefined;
+      } else if (e.why && typeof e.why === "object") {
+        // Old fixture: why is a dict of badge→string; concatenate
+        why = Object.entries(e.why as Record<string, string>)
+          .filter(([k]) => !k.endsWith("_zh"))
+          .map(([, v]) => v)
+          .join(" | ");
+        why_zh = Object.entries(e.why as Record<string, string>)
+          .filter(([k]) => k.endsWith("_zh"))
+          .map(([, v]) => v)
+          .join(" | ") || undefined;
+      }
+      eventsDict[id] = {
+        badges: e.badges ?? [],
+        direction_discounted: e.direction_discounted ?? false,
+        session_tier: e.session_tier ?? "",
+        q_score: e.q_score ?? e.q_pctl ?? 0,
+        why,
+        why_zh,
+      };
+    }
+  }
+
+  return {
+    schema: raw.schema,
+    asof: raw.asof ?? "",
+    session_date: raw.session_date,
+    thresholds,
+    events: eventsDict,
+    confirmed_yesterday: raw.confirmed_yesterday,
+  };
 }
 
 /** Top-level feed payload */
@@ -263,7 +343,6 @@ export function FeedPane({
     let events = feed.events;
 
     const enrichEvents = enrich?.events ?? {};
-    const thresholds = enrich?.thresholds ?? null;
 
     // Ticker search
     const q = search.trim().toUpperCase();
@@ -306,16 +385,15 @@ export function FeedPane({
       });
     }
 
-    // ELITE preset: session_tier filter using enrich thresholds.
-    // Uses session_tier EXCLUSIVELY (per spec §3: "UI uses session_tier exclusively").
+    // ELITE preset: use session_tier EXCLUSIVELY (per spec §3).
+    // The pipeline stamps session_tier="elite" on the top ~2% of the session
+    // (q_score ≥ enrich thresholds.elite, premium ≥$1M).
     // Fallback when enrich absent: premium ≥$1M (so preset is never vacuous).
     if (preset === "ELITE") {
-      if (thresholds) {
+      if (enrich) {
         events = events.filter((ev) => {
           const enrichEv: EnrichEvent | undefined = enrichEvents[ev.id];
-          if (!enrichEv) return false;
-          const { score } = computeFlowScore(ev);
-          return score >= thresholds.elite_q && ev.premium >= 1_000_000;
+          return enrichEv?.session_tier === "elite";
         });
       } else {
         // Fallback: v1 behavior (no enrich)
