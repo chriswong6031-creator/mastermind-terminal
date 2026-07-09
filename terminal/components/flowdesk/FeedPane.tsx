@@ -157,7 +157,7 @@ export function FeedPane({
   // FiltersPanel open/close
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // ── Feed virtualization — cap initial render; "Load more" sentinel ──────────
+  // ── Feed virtualization — cap initial render; auto-load via IntersectionObserver ──
   const PAGE_SIZE = 200;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -167,6 +167,23 @@ export function FeedPane({
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
   }, [search, preset, sort, filters]);
+
+  // Wire IntersectionObserver to sentinel so scrolling to the bottom auto-loads
+  // the next page without requiring a button click.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((n) => n + PAGE_SIZE);
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  });
 
   // Merge preset overrides into the base filter set
   const effectiveFilters = useMemo<FlowFilters>(() => {

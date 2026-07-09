@@ -9,7 +9,7 @@ import { AppNav } from "@/components/AppNav";
 import { useLang, useT } from "@/lib/i18n";
 import { abbrevSector } from "@/lib/sectorAbbrev";
 import { windowGexRows } from "@/lib/windowGexRows.mjs";
-import { flowGet, flowPrefetch } from "@/lib/flowClientCache";
+import { flowGet, flowInvalidate, flowPrefetch } from "@/lib/flowClientCache";
 import {
   createChart, LineSeries, AreaSeries,
   type IChartApi, type ISeriesApi,
@@ -1082,6 +1082,13 @@ export default function OptionsHubView() {
   const doFetch = useCallback(async () => {
     if (document.visibilityState === "hidden") return;
     try {
+      // Invalidate before polling so the recurring 45s interval always fetches
+      // fresh data. flowGet's stale-while-revalidate TTL is 25s — shorter than
+      // the poll interval — so without invalidation every poll hits the stale
+      // branch and returns the previous cycle's data (the background revalidation
+      // updates the cache but never pushes to setFeed/setHeat).
+      flowInvalidate("feed");
+      flowInvalidate("heat");
       const [fj, hj] = await Promise.all([
         flowGet("feed"),
         flowGet("heat"),
