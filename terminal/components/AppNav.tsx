@@ -35,7 +35,15 @@ export const TOP = [
   { k: "portfolio", label: "Portfolio", href: "/portfolio" },
   { k: "alerts", label: "Alerts", href: "/alerts" },
   { k: "flow", label: "Options", href: "/flow" },
-  { k: "heatmap", label: "Heatmap", href: "/heatmap" },
+  {
+    k: "heatmap",
+    label: "Heatmap",
+    // ?v=2: sidesteps a poisoned EdgeOne cache entry for the bare /heatmap URL
+    // (year-long s-maxage shell from before the revalidate=300 fix, referencing
+    // deleted JS chunks). Remove after the operator purges /heatmap in the
+    // EdgeOne console.
+    href: "/heatmap?v=2",
+  },
 ];
 
 // useSearchParams() forces a CSR bailout during static prerender, so the hook lives in an inner
