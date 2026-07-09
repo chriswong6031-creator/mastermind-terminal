@@ -816,6 +816,15 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   html,body{height:auto;overflow-x:hidden}
   .app,.app2{display:flex;flex-direction:column;height:auto;min-height:100dvh}
   .app>.topbar,.app>.appnav,.app>.ticker{display:none}
+  /* .app2 shell pages (heatmap/flow/screener/alerts/portfolio/scripts) keep the AppNav but
+     render NO .mobilebar — so in flex-column the vertical 60px rail ballooned to a full-width
+     ~425px block (its .gap{flex:1} spacer stretched it). Lay it out as a compact, horizontally
+     scrollable sticky top bar instead so it stops eating half the screen. */
+  .app2>.appnav{flex-direction:row;width:100%;height:48px;padding:0 8px;gap:2px;border-right:0;border-bottom:1px solid var(--line);overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;position:sticky;top:0;z-index:30;background:var(--bg);flex:none}
+  .app2>.appnav::-webkit-scrollbar{display:none}
+  .app2>.appnav .gap{flex:0 0 0;width:0}
+  .app2>.appnav .navbtn{flex:0 0 auto}
+  .app2>.appnav .navbtn.on::before{display:none}
   .rail-resizer{display:none}
   .mobilebar{display:flex}
   .m-symbar{display:flex}
