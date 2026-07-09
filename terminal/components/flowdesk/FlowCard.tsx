@@ -11,7 +11,7 @@
  */
 
 import { useState } from "react";
-import type { FlowEvent } from "./FeedPane";
+import type { FlowEvent, EnrichEvent } from "./FeedPane";
 import { fmtNum } from "@/lib/finFormat";
 import { computeFlowScore } from "@/lib/flowScore";
 import { makeFlowT } from "@/lib/flowdeskStrings";
@@ -21,6 +21,8 @@ import { RingGauge } from "../ui/RingGauge";
 
 interface FlowCardProps {
   ev: FlowEvent;
+  /** v2 enrich data for this event (null when artifact absent/stale) */
+  enrichEv: EnrichEvent | null;
   lang: "en" | "zh";
   selected: boolean;
   onSelect: (ev: FlowEvent) => void;
@@ -80,7 +82,7 @@ function fmtTime(iso: string): string {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
+export function FlowCard({ ev, enrichEv, lang, selected, onSelect }: FlowCardProps) {
   const zh = lang === "zh";
   const [expanded, setExpanded] = useState(false);
   const [tipVisible, setTipVisible] = useState(false);
@@ -90,6 +92,11 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
   const components = raw.components;
   const badges = deriveBadges(ev);
   const t = makeFlowT(lang);
+
+  // v2 enrichment — present only when artifact is fresh
+  const hasEnrich = enrichEv !== null;
+  const v2Badges = enrichEv?.badges ?? [];
+  const directionDiscounted = enrichEv?.direction_discounted ?? false;
 
   const isCall = ev.right === "C";
 
@@ -116,22 +123,32 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
           <RingGauge value={score} size="sm" tone="auto" />
         </span>
 
-        {/* Lean chip — dashed border, neutral color */}
-        <span
-          className="obs-fc-lean"
-          onMouseEnter={() => setTipVisible(true)}
-          onMouseLeave={() => setTipVisible(false)}
-          aria-label={t("leanTooltip")}
-        >
-          {ev.side === "~buy"
-            ? (zh ? "~买" : "~buy")
-            : ev.side === "~sell"
-            ? (zh ? "~卖" : "~sell")
-            : (zh ? "混合" : "mixed")}
-          {tipVisible && (
-            <span style={LEAN_TIP_STYLE}>{t("leanTooltip")}</span>
-          )}
-        </span>
+        {/* Lean chip — dashed border, neutral color.
+            direction_discounted=true (spread detected): muted + "spread — direction unreliable" label. */}
+        {directionDiscounted ? (
+          <span
+            className="obs-fc-lean"
+            style={{ opacity: 0.5 }}
+          >
+            {zh ? "价差 — 方向不可靠" : "spread — direction unreliable"}
+          </span>
+        ) : (
+          <span
+            className="obs-fc-lean"
+            onMouseEnter={() => setTipVisible(true)}
+            onMouseLeave={() => setTipVisible(false)}
+            aria-label={t("leanTooltip")}
+          >
+            {ev.side === "~buy"
+              ? (zh ? "~买" : "~buy")
+              : ev.side === "~sell"
+              ? (zh ? "~卖" : "~sell")
+              : (zh ? "混合" : "mixed")}
+            {tipVisible && (
+              <span style={LEAN_TIP_STYLE}>{t("leanTooltip")}</span>
+            )}
+          </span>
+        )}
 
         <span className="obs-fc-time">{fmtTime(ev.ts)}</span>
       </div>
@@ -142,7 +159,7 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
         <span className="obs-fc-prem">{fmtPremium(ev.premium)}</span>
       </div>
 
-      {/* ── Line 3: size / OI + lean badges ── */}
+      {/* ── Line 3: size / OI + badges ── */}
       <div className="obs-fc-line3">
         <span className="obs-fc-meta">
           <span className="num">{zh ? "张" : "Sz"} {ev.size.toLocaleString()}</span>
@@ -160,20 +177,29 @@ export function FlowCard({ ev, lang, selected, onSelect }: FlowCardProps) {
           )}
         </span>
         <span className="obs-fc-badges-row obs-fc-badges-inline">
-          {badges.whale && (
-            <Badge cls="whale" label={zh ? "巨单" : "WHALE"} tip={t("badgeWhaleDesc")} />
-          )}
-          {badges.cluster && (
-            <Badge cls="cluster" label={zh ? "集群" : "CLUSTER"} tip={t("badgeClusterDesc")} />
-          )}
-          {badges.sweep && (
-            <Badge cls="sweep" label={zh ? "扫单≈" : "SWEEP≈"} tip={t("badgeSweepDesc")} />
-          )}
-          {badges.unusual && (
-            <Badge cls="unusual" label={zh ? "异常" : "UNUSUAL"} tip={t("badgeUnusualDesc")} />
-          )}
-          {badges.block && (
-            <Badge cls="block" label={zh ? "大宗" : "BLOCK"} tip={t("badgeBlockDesc")} />
+          {/* v2 detection badges (compact tokens) — only when enrich present */}
+          {hasEnrich && v2Badges.map((b) => (
+            <V2Badge key={b} badge={b} zh={zh} />
+          ))}
+          {/* v1 badges shown when enrich absent (graceful fallback) */}
+          {!hasEnrich && (
+            <>
+              {badges.whale && (
+                <Badge cls="whale" label={zh ? "巨单" : "WHALE"} tip={t("badgeWhaleDesc")} />
+              )}
+              {badges.cluster && (
+                <Badge cls="cluster" label={zh ? "集群" : "CLUSTER"} tip={t("badgeClusterDesc")} />
+              )}
+              {badges.sweep && (
+                <Badge cls="sweep" label={zh ? "扫单≈" : "SWEEP≈"} tip={t("badgeSweepDesc")} />
+              )}
+              {badges.unusual && (
+                <Badge cls="unusual" label={zh ? "异常" : "UNUSUAL"} tip={t("badgeUnusualDesc")} />
+              )}
+              {badges.block && (
+                <Badge cls="block" label={zh ? "大宗" : "BLOCK"} tip={t("badgeBlockDesc")} />
+              )}
+            </>
           )}
         </span>
       </div>
@@ -240,6 +266,47 @@ function Badge({ cls, label, tip }: { cls: string; label: string; tip: string })
     </span>
   );
 }
+
+// ── V2 Badge sub-component (compact token from enrich artifact) ───────────────
+
+const V2_BADGE_LABELS: Record<string, { en: string; zh: string }> = {
+  MULTI_LEG:    { en: "MULTI-LEG", zh: "多腿" },
+  LADDER:       { en: "LADDER",    zh: "梯形" },
+  REPEAT_HITTER:{ en: "REPEAT",    zh: "重复" },
+  SIZE_VS_OI:   { en: "SZ>OI",     zh: "量超OI" },
+  WHALE:        { en: "WHALE",     zh: "巨单" },
+  FRESH:        { en: "FRESH",     zh: "新仓" },
+  Z_OUTLIER:    { en: "Z-OUT",     zh: "Z异常" },
+  OI_CONFIRMED: { en: "OI✓",      zh: "OI确认" },
+};
+
+type EnrichBadgeKey = keyof typeof V2_BADGE_LABELS;
+
+function V2Badge({ badge, zh }: { badge: EnrichBadgeKey; zh: boolean }) {
+  const labels = V2_BADGE_LABELS[badge] ?? { en: badge, zh: badge };
+  return (
+    <span
+      className={`obs-fc-badge obs-fc-badge-v2 obs-fc-badge-${badge.toLowerCase().replace(/_/g, "-")}`}
+      style={V2_BADGE_STYLE}
+    >
+      {zh ? labels.zh : labels.en}
+    </span>
+  );
+}
+
+const V2_BADGE_STYLE: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  fontSize: 8,
+  fontWeight: 800,
+  letterSpacing: "0.06em",
+  padding: "1px 4px",
+  borderRadius: 3,
+  border: "1px solid var(--line-2)",
+  background: "rgba(77,130,255,0.08)",
+  color: "var(--brand-2)",
+  whiteSpace: "nowrap" as const,
+};
 
 // ── Tooltip styles ────────────────────────────────────────────────────────────
 

@@ -21,6 +21,7 @@ const MATRIX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "matrix_f
 const MANIFEST_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "manifest.json");
 const PROPHET_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_fixture.json");
 const PROPHET_MARKS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_marks_fixture.json");
+const ENRICH_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "enrich_fixture.json");
 
 // Bare-minimum in-memory cache so concurrent renders share one fetch.
 type CacheEntry = { data: Record<string, unknown>; ts: number };
@@ -43,6 +44,7 @@ function isValidF(f: FParam): boolean {
   if (f === "flow_idx") return true;
   if (f === "prophet_idx") return true;
   if (f === "prophet_marks") return true;
+  if (f === "enrich") return true;
   return false;
 }
 
@@ -65,6 +67,7 @@ function backendPath(f: string): string {
   if (f === "flow_idx") return "/api/flow/flow_idx";
   if (f === "prophet_idx") return "/api/hub/prophet";
   if (f === "prophet_marks") return "/api/hub/prophet_marks";
+  if (f === "enrich") return "/api/flow/enrich";
   return `/api/flow/${f}`;
 }
 
@@ -87,6 +90,7 @@ function r2Key(f: string): string {
   if (f === "flow_idx") return "live_flow/flow_idx.json";
   if (f === "prophet_idx") return "prophet/index.json";
   if (f === "prophet_marks") return "live_flow/prophet_marks.json";
+  if (f === "enrich") return "live_flow/enrich_current.json";
   return `live_flow/${f}_current.json`;
 }
 
@@ -212,6 +216,19 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       const raw = await fs.readFile(PROPHET_MARKS_FIXTURE_FILE, "utf8");
       return JSON.parse(raw) as Record<string, unknown>;
     } catch { return { schema: "prophet.live_marks/v1", asof_utc: "", session_date: "", marks: {} }; }
+  }
+  // Flow enrich artifact fixture.
+  if (f === "enrich") {
+    try {
+      const raw = await fs.readFile(ENRICH_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return {
+        schema: "flow.enrich/v1", asof: "", session_date: "",
+        thresholds: { elite_q: 66, strong_q: 60, high_q: 55, medium_q: 48 },
+        events: {}, confirmed_yesterday: [],
+      };
+    }
   }
   const raw = await fs.readFile(FIXTURE_FILE, "utf8");
   const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;

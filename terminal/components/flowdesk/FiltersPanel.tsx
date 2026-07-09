@@ -14,12 +14,25 @@ import type { DteBucket, MnyBucket, Side } from "./FeedPane";
 
 // ── Filter shape ─────────────────────────────────────────────────────────────
 
-export type BadgeFlag =
+/** v1 legacy badge flags (client-derived) */
+export type LegacyBadgeFlag =
   | "whale"
   | "cluster"
   | "sweep"
   | "unusual"
   | "block";
+
+/** v2 detection badge flags (from enrich artifact) */
+export type DetectionFlag =
+  | "MULTI_LEG"
+  | "LADDER"
+  | "REPEAT_HITTER"
+  | "SIZE_VS_OI"
+  | "WHALE"
+  | "FRESH"
+  | "Z_OUTLIER";
+
+export type BadgeFlag = LegacyBadgeFlag | DetectionFlag;
 
 export interface FlowFilters {
   /** C / P / "all" */
@@ -34,8 +47,10 @@ export interface FlowFilters {
   dteBuckets: DteBucket[];
   /** moneyness bucket whitelist — empty = all */
   mnyBuckets: MnyBucket[];
-  /** badge presence flags — only show events that have ALL checked badges */
+  /** v1 badge presence flags — only show events that have ALL checked badges */
   badges: Set<BadgeFlag>;
+  /** v2 detection badge filter — show only events with ANY of these detections */
+  detections: Set<DetectionFlag>;
 }
 
 export const DEFAULT_FILTERS: FlowFilters = {
@@ -46,6 +61,7 @@ export const DEFAULT_FILTERS: FlowFilters = {
   dteBuckets: [],
   mnyBuckets: [],
   badges: new Set(),
+  detections: new Set(),
 };
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -123,6 +139,52 @@ const BADGE_OPTIONS: { key: BadgeFlag; label: string; zh: string; tip: string }[
   },
 ];
 
+/** v2 detection badge filter options (from enrich artifact) */
+const DETECTION_OPTIONS: { key: DetectionFlag; label: string; zh: string; tip: string }[] = [
+  {
+    key: "WHALE",
+    label: "Whale",
+    zh: "巨单",
+    tip: "Single-event premium ≥$1M. Magnitude gate — reliable.",
+  },
+  {
+    key: "MULTI_LEG",
+    label: "Multi-leg",
+    zh: "多腿策略",
+    tip: "Spread detected: 2+ strikes, same root, ≤60s. Direction is DISCOUNTED — reads as spread, not naked.",
+  },
+  {
+    key: "LADDER",
+    label: "Ladder",
+    zh: "梯形布局",
+    tip: "Same root+right, ≥3 distinct strikes, same lean within 30 min — staged accumulation.",
+  },
+  {
+    key: "REPEAT_HITTER",
+    label: "Repeat",
+    zh: "反复加仓",
+    tip: "Same OCC contract in ≥3 separate events this session — conviction re-load.",
+  },
+  {
+    key: "SIZE_VS_OI",
+    label: "Size>OI",
+    zh: "量超持仓",
+    tip: "Event size ≥ 2× prior-day OI — new positioning that can't hide in existing interest.",
+  },
+  {
+    key: "FRESH",
+    label: "Fresh",
+    zh: "新建仓",
+    tip: "Vol > OI: new positioning, not recycled open interest.",
+  },
+  {
+    key: "Z_OUTLIER",
+    label: "Z-outlier",
+    zh: "Z值异常",
+    tip: "Root-level premium z-score ≥2σ vs 252-day baseline — ticker running hot.",
+  },
+];
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelProps) {
@@ -150,6 +212,12 @@ export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelPro
     patch({ badges: s });
   }
 
+  function toggleDetection(key: DetectionFlag) {
+    const s = new Set(filters.detections);
+    s.has(key) ? s.delete(key) : s.add(key);
+    patch({ detections: s });
+  }
+
   const isDirty =
     filters.right !== "all" ||
     filters.lean !== "all" ||
@@ -157,7 +225,8 @@ export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelPro
     filters.minPremium !== 0 ||
     filters.dteBuckets.length > 0 ||
     filters.mnyBuckets.length > 0 ||
-    filters.badges.size > 0;
+    filters.badges.size > 0 ||
+    filters.detections.size > 0;
 
   return (
     <div style={PANEL_STYLE} data-tut="flow-filter-panel">
@@ -296,12 +365,37 @@ export function FiltersPanel({ filters, onFiltersChange, lang }: FiltersPanelPro
         </div>
       </FilterRow>
 
+      {/* ── Detections filter lens (v2 enrich badges) ── */}
+      <FilterRow label={zh ? "检测信号" : "Detections"}>
+        <div style={CHIP_ROW_STYLE}>
+          {DETECTION_OPTIONS.map(({ key, label, zh: zl, tip }) => {
+            const on = filters.detections.has(key);
+            return (
+              <button
+                key={key}
+                onClick={() => toggleDetection(key)}
+                style={chipStyle(on)}
+                aria-label={tip}
+                data-tip={tip}
+              >
+                {zh ? zl : label}
+              </button>
+            );
+          })}
+        </div>
+        <div style={CAVEAT_STYLE}>
+          {zh
+            ? "检测信号来自富集数据层；缺失文件时退化为v1行为，徽章隐藏。"
+            : "Detections from enrich artifact; absent/stale → v1 behavior, badges hidden."}
+        </div>
+      </FilterRow>
+
       {/* ── Reset ── */}
       {isDirty && (
         <div style={{ marginTop: 6 }}>
           <button
             className="fin-pill"
-            onClick={() => onFiltersChange({ ...DEFAULT_FILTERS, badges: new Set() })}
+            onClick={() => onFiltersChange({ ...DEFAULT_FILTERS, badges: new Set(), detections: new Set() })}
             style={{ fontSize: 11 }}
           >
             {zh ? "重置筛选" : "Reset filters"}

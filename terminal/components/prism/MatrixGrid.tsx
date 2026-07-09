@@ -38,7 +38,7 @@
  *   lang           — "en" | "zh"
  */
 
-import React, { useMemo, useState, useCallback, useRef } from "react";
+import React, { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { makePrismT } from "./prismStrings";
 import type { ActiveLens } from "./LensBar";
 import type { Lang } from "@/lib/i18n";
@@ -404,6 +404,24 @@ export function MatrixGrid({
 
   const handleMouseLeave = useCallback(() => setTooltip(null), []);
 
+  // Auto-scroll spot row to the center of the matrix pane when strike range changes.
+  // Only fires when the content overflows (40-depth); at 10/20 it's a no-op because
+  // scrollTop clamped to 0 equals the already-visible position.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || spotStrike == null) return;
+    // Find the spot row index in sortedStrikes (descending order)
+    const spotIdx = sortedStrikes.indexOf(spotStrike);
+    if (spotIdx < 0) return;
+    // Row height: 24px data row + 1px border. Header row ~36px. Separator ~2px.
+    const HEADER_H = 36;
+    const ROW_H = 25; // 24px cell + 1px border
+    const spotTop = HEADER_H + spotIdx * ROW_H;
+    const target = spotTop - scroller.clientHeight / 2 + ROW_H / 2;
+    scroller.scrollTop = Math.max(0, target);
+  }, [sortedStrikes, spotStrike, strikeRange]);
+
   if (filteredExpiries.length === 0 || sortedStrikes.length === 0) {
     return (
       <div style={GRID_OUTER}>
@@ -416,7 +434,7 @@ export function MatrixGrid({
 
   return (
     <div style={GRID_OUTER} ref={containerRef}>
-      <div style={{ overflowX: "auto", overflowY: "auto", flex: 1, minHeight: 0 }}>
+      <div ref={scrollRef} style={{ overflowX: "auto", overflowY: "auto", flex: 1, minHeight: 0 }} className="obs-scroll">
         <table style={TABLE}>
           <thead>
             <tr>

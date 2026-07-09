@@ -19,6 +19,19 @@
       "runtimeArgs": ["run", "dev"],
       "cwd": "terminal",
       "port": 3016
+    },
+    {
+      "name": "pass4-i-fixture",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture"],
+      "cwd": "terminal",
+      "port": 3018,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "PORT": "3018",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
     }
   ]
 }

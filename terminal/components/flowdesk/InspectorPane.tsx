@@ -15,6 +15,7 @@ import type { Lang } from "../../lib/i18n";
 import { computeFlowScore } from "../../lib/flowScore";
 import { FD, getFlowStr } from "../../lib/flowdeskStrings";
 import { RingGauge } from "../ui/RingGauge";
+import type { EnrichEvent } from "./FeedPane";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ interface TickerPayload {
 export interface InspectorPaneProps {
   event: FlowEvent | null;
   tickerCtx: TickerPayload | null;
+  enrichEv: EnrichEvent | null;
   lang: Lang;
 }
 
@@ -92,7 +94,7 @@ const TICK_CAVEAT_ZH = "方向倾向基于逐笔规则推断——大小才是�
 
 // ─── Component ────────────────────────────────────────────────────────────
 
-export function InspectorPane({ event, tickerCtx, lang }: InspectorPaneProps) {
+export function InspectorPane({ event, tickerCtx, enrichEv, lang }: InspectorPaneProps) {
   const zh = lang === "zh";
 
   if (!event) {
@@ -110,7 +112,7 @@ export function InspectorPane({ event, tickerCtx, lang }: InspectorPaneProps) {
       {/* obs-insp-body is a capped internal scroller so the inspector never
           starves Chain Heat above it in the right rail */}
       <div className="obs-insp-body obs-scroll">
-        <EventDetail event={event} zh={zh} tickerCtx={tickerCtx} />
+        <EventDetail event={event} zh={zh} tickerCtx={tickerCtx} enrichEv={enrichEv} />
       </div>
     </div>
   );
@@ -118,7 +120,7 @@ export function InspectorPane({ event, tickerCtx, lang }: InspectorPaneProps) {
 
 // ─── EventDetail ──────────────────────────────────────────────────────────
 
-function EventDetail({ event, zh, tickerCtx }: { event: FlowEvent; zh: boolean; tickerCtx: TickerPayload | null }) {
+function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh: boolean; tickerCtx: TickerPayload | null; enrichEv: EnrichEvent | null }) {
   const rawScore = useMemo(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     () => computeFlowScore(event as any),
@@ -187,8 +189,34 @@ function EventDetail({ event, zh, tickerCtx }: { event: FlowEvent; zh: boolean; 
       <div className="obs-insp-dir-block">
         <span className="obs-lbl">{pick(zh, "Direction lean", "方向倾向")}</span>
         <span className="obs-insp-dir-chip">{sideLean(event.side, zh)}</span>
+        {enrichEv?.direction_discounted && (
+          <span style={{ marginLeft: 8, fontSize: 10, color: "var(--muted)" }}>
+            {zh ? "（价差 — 方向不可靠）" : "(spread — direction unreliable)"}
+          </span>
+        )}
       </div>
       <div className="obs-note">{pick(zh, TICK_CAVEAT_EN, TICK_CAVEAT_ZH)}</div>
+
+      {/* ── Detections section (v2 enrich badges with why strings) ── */}
+      {enrichEv && enrichEv.badges.length > 0 && (
+        <div className="obs-insp-section">
+          <div className="obs-insp-section-label">
+            {pick(zh, "Detections", "检测信号")}
+          </div>
+          {enrichEv.badges.map((badge) => (
+            <div key={badge} style={DETECTION_ROW_STYLE}>
+              <span style={DETECTION_BADGE_STYLE}>{badge.replace(/_/g, "-")}</span>
+            </div>
+          ))}
+          {/* why is a pipe-separated summary string — show once below badge list */}
+          {(() => {
+            const whyStr = zh ? (enrichEv.why_zh ?? enrichEv.why) : enrichEv.why;
+            return whyStr ? (
+              <div style={DETECTION_WHY_STYLE}>{whyStr}</div>
+            ) : null;
+          })()}
+        </div>
+      )}
 
       {/* ── Event field breakdown ── */}
       <div className="obs-insp-section">
@@ -298,3 +326,27 @@ function tierBg(tier: string): string {
   if (tier === "MEDIUM") return "rgba(134,141,156,0.1)";
   return "rgba(90,97,111,0.08)";
 }
+
+// ─── Detection row styles ──────────────────────────────────────────────────
+
+const DETECTION_ROW_STYLE: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  padding: "5px 0",
+  borderBottom: "1px solid var(--line-2)",
+};
+
+const DETECTION_BADGE_STYLE: React.CSSProperties = {
+  fontSize: 9,
+  fontWeight: 800,
+  letterSpacing: "0.06em",
+  color: "var(--brand-2)",
+  textTransform: "uppercase" as const,
+};
+
+const DETECTION_WHY_STYLE: React.CSSProperties = {
+  fontSize: 10.5,
+  color: "var(--text-2)",
+  lineHeight: 1.4,
+};
