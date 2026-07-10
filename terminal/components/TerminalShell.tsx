@@ -513,12 +513,30 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const m = activeIsComposite ? undefined : man?.symbols?.[active];
   const liveQuote = activeIsComposite ? null : (quotes[active] ?? null);   // header/badge quote
   // F2: summed quote for composite symbols (legs fetched via expanded quoteSyms batch).
+  // EOD fallback: when live Polygon quotes are absent (weekends / no NEXT_PUBLIC_LIVE key),
+  // reconstruct per-leg {last, prevClose} from the manifest's EOD row (last + chg fields).
+  // prevClose is derived as last / (1 + chg/100) so the summed chg% is meaningful.
   const compositeQ = useMemo(() => {
     if (!activeIsComposite || !activeLegs.length) return null;
     const legQuotes: Record<string, { last?: number; prevClose?: number } | null> = {};
-    for (const leg of activeLegs) legQuotes[leg] = quotes[leg] ?? null;
+    for (const leg of activeLegs) {
+      const live = quotes[leg] ?? null;
+      if (live && live.last != null) {
+        legQuotes[leg] = live;
+      } else {
+        // Fall back to manifest EOD row.
+        const eod = man?.symbols?.[leg];
+        if (eod && eod.last != null) {
+          const chgFrac = (eod.chg ?? 0) / 100;
+          const prevClose = chgFrac !== -1 ? eod.last / (1 + chgFrac) : eod.last;
+          legQuotes[leg] = { last: eod.last, prevClose };
+        } else {
+          legQuotes[leg] = null;
+        }
+      }
+    }
     return calcCompositeQuote(activeLegs, legQuotes);
-  }, [activeIsComposite, activeLegs, quotes]);
+  }, [activeIsComposite, activeLegs, quotes, man]);
   const ov = oracleVerdict(m?.verdict ?? null);
   const dv = deskVerdict(intel, lang === "zh");
   // ── unified signal hierarchy ──────────────────────────────────────────────
@@ -735,14 +753,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     try { localStorage.setItem("mm.lastFlagColor", color); } catch {}
   };
   const removeFlag = (sym: string) => { setFlags((f) => { const n = { ...f }; delete n[sym]; return n; }); };
-  const cycleFlag = (sym: string) => {
-    // If already flagged, pick next color; if unflagged, use lastFlagColor.
-    const cur = flags[sym];
-    if (!cur) { setFlag(sym, lastFlagColor); return; }
-    const idx = FLAG_COLORS.indexOf(cur);
-    const next = FLAG_COLORS[(idx + 1) % FLAG_COLORS.length];
-    setFlag(sym, next);
-  };
 
   const pick = (sym: string) => {
     // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
@@ -751,8 +761,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (existing >= 0 && existing !== activePane) setActivePane(existing);          // shown in a different pane → focus it (don't duplicate)
     else if (panes[activePane] !== sym) setPanes((p) => p.map((s, i) => (i === activePane ? sym : s)));
     setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]);
-    // F3: record navigation in history ring buffer
-    pushHistory(sym);
+    // F3: record navigation in history ring buffer (skip composites — SearchModal filters
+    // history via manifest keys, so composite exprs would silently vanish from the Recent list).
+    if (!isComposite(sym)) pushHistory(sym);
   };
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
 
@@ -1033,12 +1044,26 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                     <div className="wl-sec" style={{ minWidth: wlMinW }}>{sec}</div>
                     {rows.map((sym) => {
                       const isCompSym = isComposite(sym);
-                      // For composite rows, derive summed quote from leg quotes
+                      // For composite rows, derive summed quote from leg quotes with EOD fallback.
                       let r: ReturnType<typeof mergeLive> | undefined;
                       if (isCompSym) {
                         const legs = parseComposite(sym) ?? [];
                         const legQuotes: Record<string, { last?: number; prevClose?: number } | null> = {};
-                        for (const leg of legs) legQuotes[leg] = quotes[leg] ?? null;
+                        for (const leg of legs) {
+                          const live = quotes[leg] ?? null;
+                          if (live && live.last != null) {
+                            legQuotes[leg] = live;
+                          } else {
+                            const eod = man?.symbols?.[leg];
+                            if (eod && eod.last != null) {
+                              const chgFrac = (eod.chg ?? 0) / 100;
+                              const prevClose = chgFrac !== -1 ? eod.last / (1 + chgFrac) : eod.last;
+                              legQuotes[leg] = { last: eod.last, prevClose };
+                            } else {
+                              legQuotes[leg] = null;
+                            }
+                          }
+                        }
                         const cq = calcCompositeQuote(legs, legQuotes);
                         r = cq ? { name: sym, sec: "Composite", col: "#2962ff", mkt: "", zh: "", last: cq.last, chg: cq.chg, open: 0, high: 0, low: 0, vol: 0, hi52: 0, lo52: 0, verdict: null, wr: null, pf: null, cagr: null, regimeBull: null } : undefined;
                       } else {
@@ -1191,13 +1216,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 // Note: useState is already imported at the top of this module — reuse it directly.
 function WlFlagSlot({ color, onSet, onRemove, lastColor }: { sym: string; color?: string; onSet: (c: string) => void; onRemove: () => void; lastColor: string }) {
   const [popOpen, setPopOpen] = useState(false);
+  const t = useT();
   const PAL = FLAG_COLORS;
   if (color) {
     return (
       <span
         className="wl-flag-slot wl-flag-slot--set"
         style={{ background: color }}
-        title="Flag color"
+        title={t("flagSetColor")}
         onClick={(e) => { e.stopPropagation(); setPopOpen((v) => !v); }}
         onMouseLeave={() => setPopOpen(false)}
       >
@@ -1211,7 +1237,7 @@ function WlFlagSlot({ color, onSet, onRemove, lastColor }: { sym: string; color?
                 onClick={(e) => { e.stopPropagation(); onSet(c); setPopOpen(false); }}
               />
             ))}
-            <span className="wl-flag-rm" title="Remove flag" onClick={(e) => { e.stopPropagation(); onRemove(); setPopOpen(false); }}>
+            <span className="wl-flag-rm" title={t("flagRemove")} onClick={(e) => { e.stopPropagation(); onRemove(); setPopOpen(false); }}>
               <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg>
             </span>
           </span>
@@ -1222,7 +1248,7 @@ function WlFlagSlot({ color, onSet, onRemove, lastColor }: { sym: string; color?
   return (
     <span
       className="wl-flag-slot wl-flag-slot--empty"
-      title="Add flag"
+      title={t("flagAdd")}
       onClick={(e) => { e.stopPropagation(); onSet(lastColor); }}
     />
   );
