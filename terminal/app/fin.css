@@ -832,7 +832,9 @@
  * On mobile (≤860px) the override is removed and the element falls back to .fin-pane base
  * (position:fixed;inset:0) giving the existing full-screen overlay behavior. */
 @media (min-width:861px){
-  .fin-pane--workspace{position:relative;inset:auto;z-index:1;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden}
+  /* Override the fixed-overlay base (.fin-pane) so the pane fills the workspace flex slot.
+   * `overflow:hidden` on .fin-pane is reset here; inner .fin-body carries its own scroll. */
+  .fin-pane--workspace{position:relative;inset:auto;z-index:1;flex:1;min-height:0;overflow:hidden}
   /* suppress the body-level scrim entirely on desktop (no scrim element rendered in workspace mode) */
 }
 /* mobile tab bar: ensure tabs scroll horizontally rather than overflowing on narrow viewports */
