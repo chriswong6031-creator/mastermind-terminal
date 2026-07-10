@@ -15,7 +15,7 @@ import SearchModal, { FLAG_DEFAULT, FLAG_COLORS } from "@/components/SearchModal
 import IndicatorsModal from "@/components/IndicatorsModal";
 import IndicatorSettings from "@/components/IndicatorSettings";
 import IndicatorSource from "@/components/IndicatorSource";
-import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS } from "@/lib/indicators";
+import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
 import SeasonalityCard from "@/components/SeasonalityCard";
 // Code-split the conditionally-mounted heavies out of the /terminal first-paint bundle (task 9).
 // TerminalShell is a Client Component, so ssr:false is allowed — none of these render on any SSR
@@ -868,6 +868,18 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     else if (!scriptsLoadedRef.current) return;   // list not loaded yet — keep ?addScript= and retry after load
     try { const u = new URL(window.location.href); u.searchParams.delete("addScript"); window.history.replaceState({}, "", u.toString()); } catch {}
   }, [urlSearch, scripts]);
+
+  // ?ind=key1,key2 → enable those built-in indicators on initial load only (does not fight user toggles).
+  // Reactive on urlSearch (so it fires after window.location.search is read on mount). Unknown keys are
+  // silently ignored. Strips ?ind= from the URL after applying so subsequent user toggles are not reset.
+  useEffect(() => {
+    const raw = new URLSearchParams(urlSearch).get("ind");
+    if (!raw) return;
+    const keys = raw.split(",").map((k) => k.trim()).filter(isIndKey);
+    if (keys.length) setInds((prev) => { const next = new Set(prev); for (const k of keys) next.add(k); return next; });
+    // Strip param so this only fires once (mirrors ?addScript= / ?pane= strip pattern)
+    try { const u = new URL(window.location.href); u.searchParams.delete("ind"); window.history.replaceState({}, "", u.toString()); } catch {}
+  }, [urlSearch]);
 
   // derive the enabled PineScript[] (declared defaults + per-script overrides merged), passed to every pane
   const scriptById = useMemo(() => { const m: Record<string, UserScript> = {}; for (const s of scripts) m[s.id] = s; return m; }, [scripts]);

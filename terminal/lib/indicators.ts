@@ -9,7 +9,9 @@
 // Pine custom scripts are NOT in this registry — they carry their own source/params and are handled
 // directly in TerminalShell/ChartPanel.
 
-export type IndKey = "ema" | "bb" | "vwap" | "vol" | "rsi" | "stochrsi" | "macd" | "gaps";
+export type IndKey = "ema" | "bb" | "vwap" | "vol" | "rsi" | "stochrsi" | "macd" | "gaps"
+  | "ichimoku" | "ribbon" | "supertrend" | "avwap" | "vprofile" | "volbox"
+  | "rsistack" | "accum";
 export type IndKind = "overlay" | "pane";
 export type FieldType = "number" | "color" | "bool";
 
@@ -34,7 +36,11 @@ export interface IndDef {
 }
 
 // canonical display/draw order — overlays first, then sub-pane indicators top→bottom
-export const IND_ORDER: IndKey[] = ["ema", "bb", "vwap", "vol", "gaps", "rsi", "stochrsi", "macd"];
+export const IND_ORDER: IndKey[] = [
+  "ema", "bb", "vwap", "vol", "gaps",
+  "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox",
+  "rsi", "stochrsi", "macd", "rsistack", "accum",
+];
 
 const COL = {
   warn: "#e8a33d", link: "#4d82ff", faint: "rgba(214,218,227,0.5)",
@@ -215,6 +221,216 @@ demand   = not na(ta.pivotlow(low, strength, strength))   // swing-low where buy
 plotshape(gapUp,   "Gap up",   shape.triangleup,   location.belowbar, color.new(#f5c518, 0))
 plotshape(gapDown, "Gap down", shape.triangledown, location.abovebar, color.new(#f0566b, 0))
 plotshape(demand,  "Demand",   shape.circle,       location.belowbar, color.new(#26c281, 0))`,
+  },
+
+  // ── DT Technicals Suite (display-tier descriptive) ──
+
+  ichimoku: {
+    key: "ichimoku", label: "Ichimoku Cloud", tag: "Ichi", kind: "overlay",
+    defaults: {
+      tenkan: 9, kijun: 26, senkouB: 52, displacement: 26,
+      tenkanCol: "#4d82ff", kijunCol: "#e8a33d",
+      spanACol: "rgba(38,194,129,0.18)", spanBCol: "rgba(240,86,107,0.18)",
+      width: 1,
+    },
+    fields: [
+      { key: "tenkan", label: "Tenkan length", type: "number", group: "inputs", min: 1, max: 100, step: 1 },
+      { key: "kijun", label: "Kijun length", type: "number", group: "inputs", min: 1, max: 200, step: 1 },
+      { key: "senkouB", label: "Senkou B length", type: "number", group: "inputs", min: 1, max: 300, step: 1 },
+      { key: "displacement", label: "Displacement", type: "number", group: "inputs", min: 1, max: 100, step: 1 },
+      { key: "tenkanCol", label: "Tenkan color", type: "color", group: "style" },
+      { key: "kijunCol", label: "Kijun color", type: "color", group: "style" },
+      { key: "spanACol", label: "Span A fill", type: "color", group: "style" },
+      { key: "spanBCol", label: "Span B fill", type: "color", group: "style" },
+      { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 1 },
+    ],
+    source: `//@version=6
+indicator("Ichimoku Cloud", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — classic Ichimoku (Goichi Hosoda, 1969 / public domain)
+tenkan = input.int(9, "Tenkan length")
+kijun  = input.int(26, "Kijun length")
+senkouBLen = input.int(52, "Senkou B length")
+disp = input.int(26, "Displacement")
+tenkanLine = (ta.highest(high, tenkan) + ta.lowest(low, tenkan)) / 2
+kijunLine  = (ta.highest(high, kijun)  + ta.lowest(low, kijun))  / 2
+spanA = (tenkanLine + kijunLine) / 2
+spanB = (ta.highest(high, senkouBLen) + ta.lowest(low, senkouBLen)) / 2
+plot(tenkanLine, "Tenkan", color.new(#4d82ff, 0))
+plot(kijunLine,  "Kijun",  color.new(#e8a33d, 0))
+p1 = plot(spanA, "Span A", offset = disp)
+p2 = plot(spanB, "Span B", offset = disp)
+fill(p1, p2, color = spanA >= spanB ? color.new(#26c281, 82) : color.new(#f0566b, 82))`,
+  },
+
+  ribbon: {
+    key: "ribbon", label: "Trend Ribbon", tag: "Ribbon", kind: "overlay",
+    defaults: {
+      fast: 20, slow: 50, slopeWin: 10, colorCandles: true,
+      colUp: "#26c281", colDn: "#f0566b",
+      fillUp: "rgba(38,194,129,0.12)", fillDn: "rgba(240,86,107,0.12)",
+      width: 1.5,
+    },
+    fields: [
+      { key: "fast", label: "Fast EMA", type: "number", group: "inputs", min: 1, max: 200, step: 1 },
+      { key: "slow", label: "Slow EMA", type: "number", group: "inputs", min: 1, max: 500, step: 1 },
+      { key: "slopeWin", label: "Slope window", type: "number", group: "inputs", min: 2, max: 50, step: 1 },
+      { key: "colorCandles", label: "Color candles", type: "bool", group: "inputs" },
+      { key: "colUp", label: "Up line color", type: "color", group: "style" },
+      { key: "colDn", label: "Down line color", type: "color", group: "style" },
+      { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.5 },
+    ],
+    source: `//@version=6
+indicator("Trend Ribbon", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — dual-EMA ribbon with slope filter
+fast = input.int(20, "Fast EMA")
+slow = input.int(50, "Slow EMA")
+slopeWin = input.int(10, "Slope window")
+ef = ta.ema(close, fast)
+es = ta.ema(close, slow)
+ribbonUp = ef > es and es > es[slopeWin] and close > es
+ribbonDn = ef < es and es < es[slopeWin] and close < es
+plot(ef, "Fast EMA", color = ribbonUp ? #26c281 : ribbonDn ? #f0566b : #8b93a3)
+plot(es, "Slow EMA", color = ribbonUp ? #26c281 : ribbonDn ? #f0566b : #8b93a3)`,
+  },
+
+  supertrend: {
+    key: "supertrend", label: "SuperTrend", tag: "ST", kind: "overlay",
+    defaults: { period: 10, mult: 3, colUp: "#26c281", colDn: "#f0566b", width: 2 },
+    fields: [
+      { key: "period", label: "ATR period", type: "number", group: "inputs", min: 1, max: 100, step: 1 },
+      { key: "mult", label: "Multiplier", type: "number", group: "inputs", min: 0.5, max: 10, step: 0.5 },
+      { key: "colUp", label: "Up color", type: "color", group: "style" },
+      { key: "colDn", label: "Down color", type: "color", group: "style" },
+      { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.5 },
+    ],
+    source: `//@version=6
+indicator("SuperTrend", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — classic SuperTrend (Olivier Seban, public domain)
+period = input.int(10, "ATR period")
+mult   = input.float(3.0, "Multiplier")
+hl2    = (high + low) / 2
+atrVal = ta.atr(period)
+up     = hl2 - mult * atrVal
+dn     = hl2 + mult * atrVal
+var float upLine = na
+var float dnLine = na
+var bool  trend  = true
+upLine := close[1] > upLine[1] ? math.max(up, upLine[1]) : up
+dnLine := close[1] < dnLine[1] ? math.min(dn, dnLine[1]) : dn
+trend  := close > dnLine[1] ? true : close < upLine[1] ? false : trend[1]
+plot(trend ? upLine : na, "Up rail",   color.new(#26c281, 0), 2)
+plot(trend ? na : dnLine, "Down rail", color.new(#f0566b, 0), 2)`,
+  },
+
+  avwap: {
+    key: "avwap", label: "Anchored VWAP", tag: "AVWAP", kind: "overlay",
+    defaults: { anchor: 0, lookback: 252, col: "#e8b339", width: 1.4 },
+    fields: [
+      // anchor: 0=swing_low, 1=swing_high, 2=max_history (number field as proxy for select)
+      { key: "anchor", label: "Anchor (0=swing low, 1=swing high, 2=full history)", type: "number", group: "inputs", min: 0, max: 2, step: 1 },
+      { key: "lookback", label: "Lookback bars", type: "number", group: "inputs", min: 20, max: 2000, step: 1 },
+      { key: "col", label: "Line color", type: "color", group: "style" },
+      { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.5 },
+    ],
+    source: `//@version=6
+indicator("Anchored VWAP", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — cumulative Σ(TP×Vol)/Σ(Vol) from anchor bar
+// anchor 0=swing_low, 1=swing_high, 2=max_history (over lookback window)
+lookback = input.int(252, "Lookback bars")
+anchor   = input.int(0, "Anchor (0=low, 1=high, 2=history)")
+// implementation: locate anchor in lookback window, compute cumulative VWAP from there
+typical = (high + low + close) / 3
+// (platform-specific anchor logic omitted from Pine stub)
+plot(ta.cum(typical * volume) / ta.cum(volume), "AVWAP", color.new(#e8b339, 0), 1, plot.style_line, linestyle = plot.style_linebr, trackprice = false)`,
+  },
+
+  vprofile: {
+    key: "vprofile", label: "Volume Profile", tag: "Vol Profile", kind: "overlay",
+    defaults: { window: 126, bins: 24, shelfMode: false, widthFrac: 0.18 },
+    fields: [
+      { key: "window", label: "Window (bars)", type: "number", group: "inputs", min: 20, max: 500, step: 1 },
+      { key: "bins", label: "Price bins", type: "number", group: "inputs", min: 8, max: 64, step: 1 },
+      { key: "shelfMode", label: "Money-flow weighted", type: "bool", group: "inputs" },
+      { key: "widthFrac", label: "Bar width (fraction)", type: "number", group: "style", min: 0.05, max: 0.4, step: 0.01 },
+    ],
+    source: `//@version=6
+indicator("Volume Profile", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — volume-by-price histogram (right-anchored)
+// shelfMode weights each bar's volume by money-flow buy_share = ((c-l)-(h-c))/(h-l) mapped to [0,1]
+// POC = price-bin with highest volume; VAH/VAL = 70% value area (symmetric from POC)
+// Rendered via SVG overlay (not a native LWC series)`,
+  },
+
+  volbox: {
+    key: "volbox", label: "Volatility Box", tag: "VolBox", kind: "overlay",
+    defaults: { bbLen: 20, mult: 2, pctileWin: 126, squeezePct: 25, boxWin: 20 },
+    fields: [
+      { key: "bbLen", label: "BB length", type: "number", group: "inputs", min: 5, max: 100, step: 1 },
+      { key: "mult", label: "BB StdDev", type: "number", group: "inputs", min: 0.5, max: 5, step: 0.5 },
+      { key: "pctileWin", label: "Percentile window", type: "number", group: "inputs", min: 20, max: 500, step: 1 },
+      { key: "squeezePct", label: "Squeeze threshold %", type: "number", group: "inputs", min: 5, max: 50, step: 5 },
+      { key: "boxWin", label: "Box range window", type: "number", group: "inputs", min: 5, max: 100, step: 1 },
+    ],
+    source: `//@version=6
+indicator("Volatility Box", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — Bollinger Band squeeze → consolidation box
+// bandwidth = (upper-lower)/basis; squeeze when rolling percentile <= squeezePct
+// box_hi = rolling max(high, boxWin); box_lo = rolling min(low, boxWin) during squeeze
+// Rendered via SVG overlay; "resolved up/down" = descriptive breakout direction only`,
+  },
+
+  rsistack: {
+    key: "rsistack", label: "RSI Stack", tag: "RSI Stack", kind: "pane",
+    defaults: {
+      len1: 7, len2: 14, len3: 21,
+      ob: 70, os: 30, showLevels: true,
+      col1: "#26c281", col2: "#4d82ff", col3: "#e8a33d", width: 1.4,
+    },
+    fields: [
+      { key: "len1", label: "RSI 1 length", type: "number", group: "inputs", min: 2, max: 100, step: 1 },
+      { key: "len2", label: "RSI 2 length", type: "number", group: "inputs", min: 2, max: 100, step: 1 },
+      { key: "len3", label: "RSI 3 length", type: "number", group: "inputs", min: 2, max: 100, step: 1 },
+      { key: "ob", label: "Overbought", type: "number", group: "inputs", min: 50, max: 100, step: 1 },
+      { key: "os", label: "Oversold", type: "number", group: "inputs", min: 0, max: 50, step: 1 },
+      { key: "showLevels", label: "Show OB/OS lines", type: "bool", group: "inputs" },
+      { key: "col1", label: "RSI 1 color", type: "color", group: "style" },
+      { key: "col2", label: "RSI 2 color", type: "color", group: "style" },
+      { key: "col3", label: "RSI 3 color", type: "color", group: "style" },
+      { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.5 },
+    ],
+    source: `//@version=6
+indicator("RSI Stack")
+// DISPLAY-TIER DESCRIPTIVE — three RSI periods overlaid in one pane
+len1 = input.int(7, "RSI 1 length")
+len2 = input.int(14, "RSI 2 length")
+len3 = input.int(21, "RSI 3 length")
+ob   = input.int(70, "Overbought")
+os   = input.int(30, "Oversold")
+plot(ta.rsi(close, len1), "RSI 7",  color.new(#26c281, 0))
+plot(ta.rsi(close, len2), "RSI 14", color.new(#4d82ff, 0))
+plot(ta.rsi(close, len3), "RSI 21", color.new(#e8a33d, 0))
+hline(ob); hline(os)`,
+  },
+
+  accum: {
+    key: "accum", label: "Accumulation %", tag: "Accum", kind: "pane",
+    defaults: { win: 63, showBands: true },
+    fields: [
+      { key: "win", label: "Window (bars)", type: "number", group: "inputs", min: 10, max: 500, step: 1 },
+      { key: "showBands", label: "Show reference bands", type: "bool", group: "inputs" },
+    ],
+    source: `//@version=6
+indicator("Accumulation %")
+// Descriptive money-flow share (close-in-range). Does not identify institutional vs retail activity.
+// 35/50/75 are public charting reference bands, not signals.
+win = input.int(63, "Window (bars)")
+range_ = high - low
+buy_share = range_ == 0 ? 0.5 : ((close - low) - (high - close)) / range_ * 0.5 + 0.5
+accum = 100 * ta.sum(buy_share * volume, win) / ta.sum(volume, win)
+plot(accum, "Accum %", color.new(#4d82ff, 0))
+hline(75, "ref", color.new(color.gray, 60), linestyle = hline.style_dashed)
+hline(50, "ref", color.new(color.gray, 60), linestyle = hline.style_dashed)
+hline(35, "ref", color.new(color.gray, 60), linestyle = hline.style_dashed)`,
   },
 };
 
