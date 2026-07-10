@@ -10,9 +10,19 @@ would PASS. The reference was a known-wrong oracle, inverting the gate's own pur
 Now the oracle is the dashboard's EXPORTED CORRECTED golden vectors
 (``site/factordata/contracts/golden_signals.json``): per-symbol inputs-hash + the expected
 BUY/SELL/tier sequence from ``engine.canon.confluence_signals``. This gate:
-  * verifies the local ``confluence.compute_signals`` reproduces that sequence EXACTLY on
-    the same close window (a STALE fork now FAILS; the corrected engine PASSES), and
+  * verifies a candidate ``engine_fn`` reproduces that sequence EXACTLY on the same close
+    window (a STALE fork FAILS; a canon-conformant engine PASSES), and
   * checks the ``inputs_hash`` so a sequence is only trusted when the same inputs were fed.
+
+TV-ANCHORED LOCAL ENGINE (post-reconciliation, 2026-07): the production
+``confluence.compute_signals`` is the TradingView-parity engine — IPO-phased session
+grouping, 3D bars labeled by their OPEN date, session-aligned weekly gate — and it
+INTENTIONALLY diverges from the canon vectors (canon labels bars by CLOSE date and keeps
+the shift(1)+ffill weekly gate). Running ``check_symbol`` with the default engine therefore
+reports ``pass=False`` with ``inputs_hash_match=True`` — the gate MEASURES that drift, it
+does not bless it. It certifies canon-conformance only for an explicitly supplied
+``engine_fn``. If the dashboard's canon ever adopts TV anchoring and re-exports, the
+default engine should pass again (re-pin tests/test_golden_gate.py when that happens).
 
 FALLBACK (never silently pass): if the contract file is absent (the macro repo hasn't
 exported yet), the gate SKIPS with a loud warning and ``pass=None`` — it must never return
@@ -169,12 +179,20 @@ def check(
     engine_fn: Callable[[pd.Series], pd.DataFrame] | None = None,
     *,
     bar_quality: str = "unknown",
+    bar_anchor: int = 0,
+    week_parity: int = 0,
 ) -> dict:
     """Diff a candidate engine against the LOCAL engine (e.g. a PineTS sidecar vs the
     Python port). NOTE: this is engine-vs-engine and does NOT anchor to the exported
-    oracle; ``check_symbol`` is the authoritative conformance gate (audit #7)."""
-    engine_fn = engine_fn or engine.compute_signals
-    truth = engine.compute_signals(close.dropna())
+    oracle; ``check_symbol`` is the authoritative conformance gate (audit #7).
+
+    ``bar_anchor`` / ``week_parity`` phase the 3D session grid and the 2-week confirm pairing
+    to the symbol's IPO (see ``confluence.compute_signals``). For a truncated feed pass
+    ``engine.ipo_bar_anchor(close, sym)`` / ``engine.ipo_week_parity(close, sym)`` so the gate
+    certifies the candidate on the SAME bar grid TradingView (and the live terminal) use."""
+    engine_fn = engine_fn or (
+        lambda c: engine.compute_signals(c, bar_anchor=bar_anchor, week_parity=week_parity))
+    truth = engine.compute_signals(close.dropna(), bar_anchor=bar_anchor, week_parity=week_parity)
     cand = engine_fn(close.dropna())
     if truth.empty or cand.empty:
         return {"pass": False, "reason": "insufficient_data", "bar_quality": bar_quality}

@@ -46,16 +46,21 @@ def _contract():
     return c
 
 
-# ── the inversion: corrected engine PASSES, stale fork FAILS ──────────────────
-def test_corrected_engine_passes_all_golden_symbols():
+# ── the reconciled reality (2026-07): the production engine is TV-ANCHORED ────
+# confluence.compute_signals is the TradingView-parity engine (IPO-phased session grid,
+# OPEN-date bar labels, session-aligned weekly gate) and INTENTIONALLY diverges from the
+# canon vectors (CLOSE-date labels, shift(1)+ffill weekly gate). The gate must MEASURE
+# that drift — pass=False with inputs_hash_match=True — never bless it, and never skip.
+# If macro's canon ever adopts TV anchoring and re-exports golden_signals.json, this
+# expectation flips: re-pin these asserts to pass=True / moved_dates==0.
+def test_tv_anchored_engine_reports_canon_divergence():
     contract = _contract()
     for vec in contract["symbols"]:
         sym = vec["symbol"]
         r = golden_gate.check_symbol(sym, _golden_close(sym), contract=contract)
-        assert r["pass"] is True, f"{sym} should PASS: {r}"
-        assert r["sequence_exact"] is True
-        assert r["inputs_hash_match"] is True
-        assert r["moved_dates"] == 0
+        assert r["pass"] is False, f"{sym}: expected measured divergence, got {r}"
+        assert r["inputs_hash_match"] is True   # same inputs — the drift is the engine, not the feed
+        assert r["pass"] is not None            # contract present ⇒ never a silent skip
 
 
 def test_stale_fork_fails_the_gate():
@@ -93,11 +98,13 @@ def test_stale_fork_fails_the_gate():
     assert r["moved_dates"] > 20   # ~106 in practice — the fork's dates barely overlap
 
 
-def test_check_all_passes_for_corrected_engine():
+def test_check_all_reports_canon_divergence_for_tv_engine():
+    """check_all must CHECK every contract symbol (never skip with data present) and report
+    the TV-anchored engine's divergence honestly (all_pass=False, not None)."""
     contract = _contract()
     closes = {s["symbol"]: _golden_close(s["symbol"]) for s in contract["symbols"]}
     r = golden_gate.check_all(closes)
-    assert r["all_pass"] is True
+    assert r["all_pass"] is False
     assert r["n_checked"] == len(contract["symbols"])
 
 

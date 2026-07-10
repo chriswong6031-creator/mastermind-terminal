@@ -28,10 +28,16 @@ SCHEMA_BACKTEST = "backtest_result/v1"
 # The flagship's faithful Pine params (mirrors confluence.py module constants).
 # macd_kind alone is insufficient — two rsi_based MACDs of different lengths still
 # disagree (research doc §4 / D6), so the lengths live in params and are hashed.
+#
+# ``no_cut_exits: True`` is the GC v2 marker (memory: gc-v2-signal-program): revSell is
+# demoted from a scored EXIT to a display caution, so the traded stream is no-cut. It
+# lives in the hashed params so the v2 emission gets a NEW ``source_hash`` — v1 and v2
+# indicator docs are distinct identities even off the same script text.
 FLAGSHIP_PARAMS = {
     "confW": 8, "rsiLen": 14, "useMTF": True, "confirmTF": "1W",
     "macd_on": "rsi", "macd_fast": 14, "macd_slow": 60, "macd_signal": 5,
     "buy_rsi_max": 65, "ext_rsi": 70, "rev_bars": 3,
+    "no_cut_exits": True,
 }
 
 
@@ -50,7 +56,7 @@ def indicator_contract(
     *,
     indicator_id: str = "confluence_rsimacd_stochrsi_mtf",
     title: str = "RSI-MACD × StochRSI MTF Confluence",
-    engine: str = "python:signal_layer.confluence@corrected",
+    engine: str = "python:signal_layer.confluence_v2@v2",
     source_lang: str = "python",
     params: dict | None = None,
     macd_kind: str = "rsi_based",
@@ -59,8 +65,16 @@ def indicator_contract(
     src_text: str = "",
     validation: dict | None = None,
     honest_read: str = "",
+    v2: dict | None = None,
 ) -> dict:
-    """Build a ``mastermind.indicator/v1`` doc from ``confluence.compute_signals`` output."""
+    """Build a ``mastermind.indicator/v1`` doc from ``confluence.compute_signals`` output.
+
+    ``v2`` is the GC v2 emission from ``confluence_v2.build_v2`` (keeper quality + recipe
+    tier per BUY/REBUY, early_dots[], warnings[], score_basis). When present, BUY/REBUY
+    signals gain ``quality``/``tier``, CUT signals get ``scored:false``, and the two side
+    channels ``early_dots``/``warnings`` are attached at the top level (capped to the last
+    40 each). ``v2=None`` yields the plain oracle doc (back-compat for any caller that has
+    not wired the v2 emitter yet)."""
     params = params or FLAGSHIP_PARAMS
     bars = [d.strftime("%Y-%m-%d") for d in sig.index]
 
@@ -71,8 +85,11 @@ def indicator_contract(
     gates = {k: [bool(v) for v in sig[k].to_list()]
              for k in ("w_bull", "above200", "mo_bull", "w2_bull") if k in sig}
 
-    signals = _extract_signals(sig)
+    v2 = v2 or {}
+    signals = _extract_signals(sig, v2)
     state = _state(sig, signals)
+    early = (v2.get("early_dots") or [])[-40:]
+    warns = (v2.get("warnings") or [])[-40:]
 
     return {
         "schema": SCHEMA_INDICATOR,
@@ -92,8 +109,12 @@ def indicator_contract(
         # ── MODEL-FACING SLICE ──
         "signals": signals,
         "state": state,
+        # ── v2 side channels (display; small — kept in the slice) ──
+        "early_dots": early,
+        "warnings": warns,
         "meta": {
             "leakfree": True, "scored": False,
+            "score_basis": v2.get("score_basis", "full"),
             "validated_against": "signal_layer/confluence.py",
             "validation": validation or {},
             "honest_read": honest_read,
@@ -102,22 +123,49 @@ def indicator_contract(
     }
 
 
-def _extract_signals(sig: pd.DataFrame) -> list[dict]:
-    """Discrete events → the Opus-facing surface (mirrors CB/CS/revBuy/revSell)."""
+def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
+    """Discrete events → the Opus-facing surface: the ONE UNIFIED signal stream.
+
+    The stream is ``BUY`` + ``REBUY`` + ``SELL`` only, ordered by ``bar_index``:
+      * BUY   — from CB, exactly as before (keeper ``quality``/``tier``/``score`` stamped).
+      * REBUY — from revBuy, exactly as before.
+      * SELL  — from the v2 warn stream's CONFIRM events (``v2["sell_confirms"]``, the
+                armed-momentum + structure-break event). This REPLACES the old CS-based SELL.
+
+    NOT in this stream anymore (display priority = tops/bottoms readability, not sim purity):
+      * CS-based SELL entries — dropped; CS stays internal to the no-cut sim only.
+      * CUT (revSell) entries — dropped; revSell stays internal to the no-cut sim only.
+    Both remain live inside ``backtest``/``confluence.simulate``; they are simply no longer
+    emitted as user-facing markers. The chart's classic red sell pill renders ``type:"SELL"``
+    with zero frontend work.
+
+    GC v2 (``v2`` = confluence_v2.build_v2 output):
+      * BUY / REBUY gain ``quality`` (keeper take/block/pending) + ``tier`` (recipe
+        aplus/quality/base) + ``score`` (0..100) at their positional ``bar_index`` (the
+        index into the non-NaN signal rows, which is what ``keeper``/``recipe`` key on)."""
+    v2 = v2 or {}
+    keeper = v2.get("keeper", {})       # {positional_bar_index: {verdict, reason, shift}}
+    recipe = v2.get("recipe", {})       # {positional_bar_index: {score, tier}}
+    # bar_index here counts POSITIONAL non-NaN rows (keeper/recipe key on the same index).
+    # Guard the empty/columnless frame (dropna(subset=...) would KeyError otherwise).
+    if len(sig) and {"macd", "sig", "k", "d", "rsi14"}.issubset(sig.columns):
+        valid = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
+        pos_of = {ts: p for p, ts in enumerate(valid.index)}
+    else:
+        pos_of = {}
+
     out = []
     for i, (ts, row) in enumerate(sig.iterrows()):
         kind = None
-        if row.get("CB"):
-            kind, reasons = "BUY", ["macd_bull_cross", "recent_b1", "confirm_bull", "rsi<65"]
-        elif row.get("revBuy"):
+        if row.get("revBuy"):
             kind, reasons = "REBUY", ["fast_reversal_up", "sell_failed"]
-        elif row.get("CS"):
-            kind, reasons = "SELL", ["macd_bear_cross", "recent_s1", "extended"]
-        elif row.get("revSell"):
-            kind, reasons = "CUT", ["fast_reversal_down", "buy_failed"]
+        elif row.get("CB"):
+            kind, reasons = "BUY", ["macd_bull_cross", "recent_b1", "confirm_bull", "rsi<65"]
+        # CS / revSell are NO LONGER emitted here (unified stream: SELL comes from the v2
+        # CONFIRM events below; CS+revSell remain internal to the sim only).
         if not kind:
             continue
-        out.append({
+        ev = {
             "ts": ts.strftime("%Y-%m-%d"),
             "bar_index": i,
             "type": kind,
@@ -127,7 +175,53 @@ def _extract_signals(sig: pd.DataFrame) -> list[dict]:
             "regime": {"weeklyBull": bool(row.get("w_bull")),
                        "above200": bool(row.get("above200")),
                        "monthlyBull": bool(row.get("mo_bull"))},
-        })
+        }
+        p = pos_of.get(ts)
+        if p is not None and p in keeper:
+            ev["quality"] = keeper[p]["verdict"]           # take / block / pending
+            ev["quality_reason"] = keeper[p]["reason"]
+            r = recipe.get(p)
+            if r is not None:
+                ev["tier"] = r["tier"]                     # aplus / quality / base
+                ev["score"] = r["score"]
+        else:
+            # A raw CB/revBuy the v2 entry logic does NOT take: bear_block regime veto
+            # (keeper only grades ``(CB|revBuy) & ~bear_block``). Keep the display marker
+            # but flag it so the model/chart never treats it as an entry. tier=None.
+            ev["quality"] = "regime_blocked"
+            ev["quality_reason"] = "bear_block: monthly-bear & below-200 & 2W-not-bull"
+            ev["tier"] = None
+            ev["score"] = None
+        out.append(ev)
+
+    # ── SELL from the v2 CONFIRM events (distribution armed + structure break) ──
+    # Each confirm event is a DAILY-grid date; map it onto the containing / nearest-preceding
+    # 3D row (open_date <= confirm_ts) so it renders on the 3D chart grid. price/strength/
+    # regime all come from that 3D row. Multiple confirms can fall in one 3D bar's 3-session
+    # window — each stays a distinct SELL at its own confirm date.
+    sell_confirms = v2.get("sell_confirms") or []
+    if sell_confirms and len(sig):
+        sidx = sig.index                                   # 3D open dates, ascending
+        for w in sell_confirms:
+            cts = pd.Timestamp(w["ts"])
+            j = int(sidx.searchsorted(cts, side="right")) - 1
+            if j < 0:                                       # confirm before the first 3D bar
+                continue
+            row = sig.iloc[j]
+            out.append({
+                "ts": w["ts"],                              # the confirm event's date
+                "bar_index": j,                             # nearest-preceding 3D row
+                "type": "SELL",
+                "strength": _strength(row),                 # of the nearest 3D row
+                "price": _num(row.get("close")),            # that 3D row's close
+                "reasons": ["distribution_confirmed", "structure_break"],
+                "regime": {"weeklyBull": bool(row.get("w_bull")),
+                           "above200": bool(row.get("above200")),
+                           "monthlyBull": bool(row.get("mo_bull"))},
+            })
+        # keep the unified stream ordered by bar_index (BUY/REBUY were already in order;
+        # SELLs are appended out of order). Stable sort preserves same-bar ordering.
+        out.sort(key=lambda e: e["bar_index"])
     return out
 
 
@@ -139,15 +233,29 @@ def _strength(row) -> float:
 
 
 def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
+    """Model-facing position state, derived from the UNIFIED signal stream.
+
+    The stream is now BUY/REBUY/SELL only (CUT + CS-SELL are no longer emitted — see
+    ``_extract_signals``). ``position_hint`` walks it in reverse: BUY/REBUY → long, SELL →
+    flat. ``last_signal`` / ``bars_since_signal`` come from the same unified list. Because
+    every emitted marker is now a position event, ``last_scored_signal`` == ``last_signal``
+    (kept for schema stability / OracleDash back-compat)."""
     last = sig.iloc[-1] if len(sig) else None
     last_sig = signals[-1] if signals else None
     bars_since = (len(sig) - 1 - last_sig["bar_index"]) if last_sig else None
+
+    # position hint from the last position event in the unified stream.
     pos = None
-    if last_sig:
-        pos = "long" if last_sig["type"] in ("BUY", "REBUY") else "flat"
+    last_scored = None
+    for s in reversed(signals):
+        if s["type"] in ("BUY", "REBUY", "SELL"):
+            last_scored = s
+            pos = "long" if s["type"] in ("BUY", "REBUY") else "flat"
+            break
     return {
         "position_hint": pos,
         "last_signal": last_sig["type"] if last_sig else None,
+        "last_scored_signal": last_scored["type"] if last_scored else None,
         "bars_since_signal": bars_since,
         "extended": bool(last is not None and last.get("strong_bull")),
         "weeklyBull": bool(last is not None and last.get("w_bull")),
@@ -211,6 +319,10 @@ def model_slice(contract: dict) -> dict:
             "macd_kind": contract["indicator"].get("macd_kind"),
             "signals": contract.get("signals", [])[-12:],   # cap the history sent to the model
             "state": contract.get("state", {}),
+            # v2 side channels (small; safe to send) — cap to the recent window.
+            "early_dots": contract.get("early_dots", [])[-12:],
+            "warnings": contract.get("warnings", [])[-12:],
+            "score_basis": contract.get("meta", {}).get("score_basis", "full"),
             "honest_read": contract.get("meta", {}).get("honest_read", ""),
         }
     if s == SCHEMA_BACKTEST:
