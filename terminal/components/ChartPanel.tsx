@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   createChart, CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries,
   createSeriesMarkers, type ISeriesMarkersPluginApi,
+  createTextWatermark,
   CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi,
 } from "lightweight-charts";
 import { runPine, type RunResult } from "@/lib/pine-engine";
@@ -211,7 +212,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
-    chartSettings?: { mode?: number; invertScale?: boolean; scaleLeft?: boolean; autoScale?: boolean; priceLineVisible?: boolean; lastValueVisible?: boolean };
+    chartSettings?: { mode?: number; invertScale?: boolean; scaleLeft?: boolean; autoScale?: boolean; priceLineVisible?: boolean; lastValueVisible?: boolean;
+      gridHVisible?: boolean; gridVVisible?: boolean;
+      candleUpColor?: string; candleDownColor?: string; candleUpBorder?: string; candleDownBorder?: string; candleUpWick?: string; candleDownWick?: string;
+      showWatermark?: boolean; showOHLC?: boolean; showBarChange?: boolean; showSymbolName?: boolean; };
     onChartApi?: (api: IChartApi | null) => void; extHours?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -301,7 +305,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const sigRef = useRef<SVGSVGElement | null>(null);
   const priceTagRef = useRef<HTMLDivElement | null>(null);  // TradingView-style last-price + countdown tag on the right axis
   const tagTimerRef = useRef<number | null>(null);          // 1s ticker so the bar-close countdown stays live
+  const watermarkPluginRef = useRef<{ applyOptions: (opts: Record<string, any>) => void } | null>(null); // v5 text watermark plugin
   const lastValueVisibleRef = useRef<boolean>(true);        // mirrors chartSettings.lastValueVisible; gates the custom priceTag
+  // status-line visibility knobs (chartSettings.showOHLC/showBarChange/showSymbolName)
+  const showOHLCRef = useRef<boolean>(true);
+  const showBarChangeRef = useRef<boolean>(true);
+  const showSymbolNameRef = useRef<boolean>(true);
   // intraday dead-end empty-state overlay ("Back to Daily") — built in Effect 1, toggled from Effect 2
   const emptyRef = useRef<HTMLDivElement | null>(null);
   const showEmptyRef = useRef<(msg: string) => void>(() => {});
@@ -313,6 +322,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
   chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol;
   lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
+  showOHLCRef.current = chartSettings?.showOHLC !== false;
+  showBarChangeRef.current = chartSettings?.showBarChange !== false;
+  showSymbolNameRef.current = chartSettings?.showSymbolName !== false;
 
   // ────────────────────────────────────────────────────────────────────────────
   // Shared helpers (module-level within the component, referenced from every effect).
@@ -756,7 +768,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const paintStatus = (rows: Bar[], slice: any) => {
     const prec = precRef.current; const t = tokensRef.current;
     const last = rows[rows.length - 1], prev = rows[rows.length - 2] || last;
-    if (statusRef.current && last) { const ch = last.c - prev.c, cp = (ch / prev.c) * 100, u = ch >= 0, f = (x: number) => x.toFixed(prec); statusRef.current.innerHTML = `<span class="mut">O</span><b>${f(last.o)}</b> <span class="mut">H</span><b>${f(last.h)}</b> <span class="mut">L</span><b>${f(last.l)}</b> <span class="mut">C</span><b>${f(last.c)}</b> <b class="${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`; }
+    if (statusRef.current && last) {
+      const showOHLC = showOHLCRef.current;
+      const showBarChange = showBarChangeRef.current;
+      const ch = last.c - prev.c, cp = (ch / prev.c) * 100, u = ch >= 0, f = (x: number) => x.toFixed(prec);
+      let html = "";
+      if (showOHLC) html += `<span class="mut">O</span><b>${f(last.o)}</b> <span class="mut">H</span><b>${f(last.h)}</b> <span class="mut">L</span><b>${f(last.l)}</b> <span class="mut">C</span><b>${f(last.c)}</b>`;
+      if (showBarChange) { if (html) html += " "; html += `<b class="${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`; }
+      statusRef.current.innerHTML = html;
+    }
     if (verdictRef.current) { const v = slice?.indicator?.state?.last_signal || "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
   };
 
@@ -917,6 +937,21 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       timeScale: { borderColor: t.line, rightOffset: 6, barSpacing: 8 },
     });
     chartRef.current = chart;
+
+    // ── v5 text watermark (createTextWatermark plugin — chart.applyOptions({ watermark }) removed in v5) ──
+    // Created once on mount; Effect 7 toggles visibility via applyOptions on the plugin instance.
+    try {
+      const pane = chart.panes()[0];
+      if (pane) {
+        const wm = createTextWatermark(pane, {
+          visible: true,
+          horzAlign: "center",
+          vertAlign: "center",
+          lines: [{ text: "Mastermind Terminal", color: "rgba(214,218,227,0.04)", fontSize: 48, fontStyle: "bold", fontFamily: "var(--font-ui, system-ui, sans-serif)" }],
+        });
+        watermarkPluginRef.current = wm;
+      }
+    } catch {}
 
     const wrap = el.parentElement as HTMLElement;
     wrapElRef.current = wrap;
@@ -1407,6 +1442,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       indSeriesRef.current.clear(); cmpSeriesRef.current.clear(); paneMapRef.current.clear();
       pineSeriesRef.current.clear(); pineMarkersRef.current.clear(); pinePaneMapRef.current.clear(); pineErrRef.current.clear(); pineCacheRef.current.clear();
       priceSeriesRef.current = null; priceFamilyRef.current = null;
+      watermarkPluginRef.current = null;   // plugin is attached to a pane; chart.remove() tears it down
       if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; }   // ONLY chart.remove() in the file
     };
   }, []); // eslint-disable-line
@@ -1855,12 +1891,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ────────────────────────────────────────────────────────────────────────────
   useEffect(() => { if (chartRef.current && priceSeriesRef.current && barsRef.current.length) reRegisterSync(); return () => { }; /* eslint-disable-line */ }, [syncId]);
 
-  // ── EFFECT 7 ─ chart settings (price scale mode, invert, position, labels, price line).
+  // ── EFFECT 7 ─ chart settings (price scale mode, invert, position, labels, price line, grid, colors).
   // Applies whenever the chartSettings prop changes.
   useEffect(() => {
     const chart = chartRef.current; const priceS = priceSeriesRef.current; if (!chart) return;
     if (chartSettings == null) return;
-    const { mode, invertScale, scaleLeft, autoScale, priceLineVisible, lastValueVisible } = chartSettings;
+    const { mode, invertScale, scaleLeft, autoScale, priceLineVisible, lastValueVisible,
+      gridHVisible, gridVVisible, candleUpColor, candleDownColor,
+      candleUpBorder, candleDownBorder, candleUpWick, candleDownWick,
+      showWatermark, showOHLC, showBarChange } = chartSettings;
     try {
       if (scaleLeft != null) {
         chart.applyOptions({ leftPriceScale: { visible: !!scaleLeft }, rightPriceScale: { visible: !scaleLeft } });
@@ -1874,6 +1913,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (autoScale != null) opts.autoScale = autoScale;
         chart.priceScale(scaleId).applyOptions(opts);
       }
+      // Grid visibility
+      if (gridHVisible != null || gridVVisible != null) {
+        const t = tokensRef.current;
+        chart.applyOptions({
+          grid: {
+            horzLines: { color: t?.grid ?? "rgba(255,255,255,.04)", visible: gridHVisible !== false },
+            vertLines: { color: t?.grid ?? "rgba(255,255,255,.04)", visible: gridVVisible !== false },
+          },
+        });
+      }
+      // Watermark visibility — v5 uses the createTextWatermark plugin (chart-level watermark removed in v5).
+      if (showWatermark != null) {
+        try { watermarkPluginRef.current?.applyOptions({ visible: showWatermark }); } catch {}
+      }
       if (priceS) {
         const sOpts: Record<string, any> = {};
         if (priceLineVisible != null) sOpts.priceLineVisible = priceLineVisible;
@@ -1881,11 +1934,24 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // keep the series option in sync for library correctness but also re-render the custom tag
         // immediately so the toggle has instant visible effect.
         if (lastValueVisible != null) sOpts.lastValueVisible = lastValueVisible;
+        // Candle colors — only apply when the user has set an explicit hex (non-empty).
+        // Empty-string means "follow CSS --up/--down tokens" (set by Effect 5 on theme/flip change).
+        // This prevents the settings-load on mount from clobbering Effect 5's token-derived colors.
+        if (candleUpColor) sOpts.upColor = candleUpColor;
+        if (candleDownColor) sOpts.downColor = candleDownColor;
+        if (candleUpBorder) sOpts.borderUpColor = candleUpBorder;
+        if (candleDownBorder) sOpts.borderDownColor = candleDownBorder;
+        if (candleUpWick) sOpts.wickUpColor = candleUpWick;
+        if (candleDownWick) sOpts.wickDownColor = candleDownWick;
         if (Object.keys(sOpts).length) priceS.applyOptions(sOpts as any);
       }
       // Re-render the custom priceTag immediately when lastValueVisible changes so the toggle
       // is visible without waiting for the 1s interval tick.
       if (lastValueVisible != null) renderTagRef.current?.();
+      // Re-paint status line immediately when the status-line toggles change.
+      if (showOHLC != null || showBarChange != null) {
+        if (barsRef.current.length) paintStatus(barsRef.current, sliceRef.current);
+      }
     } catch {}
     // eslint-disable-next-line
   }, [JSON.stringify(chartSettings)]);

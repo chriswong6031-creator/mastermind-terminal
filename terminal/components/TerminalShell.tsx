@@ -31,6 +31,7 @@ import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
 import SettingsMenu from "@/components/SettingsMenu";
+import DrawingSidebar from "@/components/DrawingSidebar";
 import DayRange from "@/components/DayRange";
 import { useT, useLang } from "@/lib/i18n";
 import { useFromMacro, backToMacro } from "@/lib/originNav";
@@ -79,14 +80,9 @@ const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends"
 const normalizePane = (pane: string): FinPage => (pane === "analyst" ? "forecast" : pane) as FinPage;
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 
-// drawing tools for the (previously decorative) left dock
-const TOOLS: [string, string][] = [
-  ["cursor", "M12 2v20M2 12h20"], ["trendline", "M4 20L20 4"], ["arrow", "M5 19L19 5M13 5h6v6"],
-  ["hline", "M3 12h18"], ["rect", "M4 6h16v12H4z"], ["fib", "M3 5h18M3 9h18M3 15h18M3 19h18"],
-  ["text", "M5 5h14M12 5v14"], ["measure", "M3 9h18v6H3zM7 9v6M11 9v6M15 9v6"], ["vline", "M12 3v18"], ["erase", "M7 21l-4.3-4.3a2.4 2.4 0 0 1 0-3.4l9.6-9.6a2.4 2.4 0 0 1 3.4 0l5.6 5.6a2.4 2.4 0 0 1 0 3.4L13 21M22 21H7M5 11l9 9"],
-];
-// drawing tools that accept a pre-draw color/width/dash style (arrow: no dash)
-const STYLEABLE = new Set(["trendline", "arrow", "rect", "hline", "vline"]);
+// drawing tools that accept a pre-draw color/width/dash style — still referenced by ChartPane/ChartPanel
+// for the styleable-tool check; DrawingSidebar owns its own definition of this set now.
+// kept for parity reference; not rendered in this component.
 const DETECTORS: [string, string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
 ];
@@ -94,7 +90,6 @@ const DETECTORS: [string, string][] = [
 const CT_TKEY: Record<string, string> = { candles: "ctCandles", heikin: "ctHeikin", bars: "ctBars", line: "ctLine", area: "ctArea" };
 const TFG_TKEY: Record<string, string> = { Minutes: "tfMinutes", Hours: "tfHours", Days: "tfDays", Weeks: "tfWeeks", Months: "tfMonths" };
 const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "autoFib", sr: "srHeatmap", mtfa: "mtfSR", clear: "clearDetected" };
-const TOOL_TKEY: Record<string, string> = { cursor: "toolCursor", trendline: "toolTrendline", ray: "toolRay", hline: "toolHline", rect: "toolRect", fib: "toolFib", text: "toolText", measure: "toolMeasure", arrow: "toolArrow", vline: "toolVline", erase: "toolErase" };
 
 // watchlist column widths (px). The symbol column + every visible data column is user-resizable.
 const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80 };
@@ -239,13 +234,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // skip the mount-pass write (state is still the pre-load default) — otherwise a reload/discard
   // landing inside the mount→load window can permanently clobber the saved value with the default
   const hidMounted = useRef(false); const ipMounted = useRef(false); const cmpCfgMounted = useRef(false);
+  const favTFMounted = useRef(false); const setMounted = useRef(false);
   useEffect(() => { if (!hidMounted.current) { hidMounted.current = true; return; } localStorage.setItem("mm.indHidden", JSON.stringify([...hidden])); }, [hidden]);
   useEffect(() => { if (!ipMounted.current) { ipMounted.current = true; return; } localStorage.setItem("mm.indParams", JSON.stringify(indParams)); }, [indParams]);
   useEffect(() => { if (!cmpCfgMounted.current) { cmpCfgMounted.current = true; return; } localStorage.setItem("mm.cmpCfg", JSON.stringify(compareCfg)); }, [compareCfg]);
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
-  useEffect(() => { localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
-  useEffect(() => { localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
+  // mount-skip guard: the initial render has the default ["D","3D","W","1M"] loaded before the
+  // useEffect at line ~213 runs setFavTF(load(...)). Without the guard, the first render fires
+  // this effect with the default and clobbers the saved value before the load effect runs.
+  useEffect(() => { if (!favTFMounted.current) { favTFMounted.current = true; return; } localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
+  useEffect(() => { if (!setMounted.current) { setMounted.current = true; return; } localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
   // restore saved named watchlists (falls back to the server-seeded Default list)
   useEffect(() => {
     const saved = load("mm.wls", null);
@@ -845,29 +844,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           />
         ) : view === "price" ? (
           <div className="chart-body">
-            <div className="tooldock">
-              {TOOLS.map(([id, d]) => (
-                <button key={id} className={(tool === id || (id === "cursor" && !tool)) ? "on" : ""} title={t(TOOL_TKEY[id] || id, id)} onClick={() => setTool(id === "cursor" ? null : id)}><svg viewBox="0 0 24 24"><path d={d} /></svg></button>
-              ))}
-              <button className={magnet ? "on" : ""} title={t("magnetTip")} onClick={() => setMagnet((mg) => !mg)}><svg viewBox="0 0 24 24"><path d="M6 4v7a6 6 0 0 0 12 0V4h-4v7a2 2 0 0 1-4 0V4z" /></svg></button>
-              <div className="sp" />
-              <button title={t("clearDrawings")} onClick={() => detect("clearAll")}><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg></button>
-            </div>
-            {tool && STYLEABLE.has(tool) && (
-              <div className="draw-style-pop" onPointerDown={(e) => e.stopPropagation()}>
-                {["#4d82ff", "#26c281", "#f0566b", "#e8b339", "#d6dae3"].map((c) => (
-                  <button key={c} className={`dsp-sw${drawStyle.color === c ? " on" : ""}`} style={{ background: c }} title={c} onClick={() => setDrawStyle((s) => ({ ...s, color: c }))} />
-                ))}
-                <span className="dsp-sep" />
-                {[1.5, 2.5, 4].map((w) => (
-                  <button key={w} className={`dsp-w${drawStyle.width === w ? " on" : ""}`} title={`${w}px`} onClick={() => setDrawStyle((s) => ({ ...s, width: w }))}><i style={{ height: Math.max(1, Math.round(w)) }} /></button>
-                ))}
-                {tool !== "arrow" && <span className="dsp-sep" />}
-                {tool !== "arrow" && (["solid", "dashed", "dotted"] as const).map((dk) => (
-                  <button key={dk} className={`dsp-d${drawStyle.dash === dk ? " on" : ""}`} title={dk} onClick={() => setDrawStyle((s) => ({ ...s, dash: dk }))}><svg viewBox="0 0 20 12"><path d={dk === "solid" ? "M2 6h16" : dk === "dashed" ? "M2 6h4M8 6h4M14 6h4" : "M2 6h.5M6 6h.5M10 6h.5M14 6h.5M18 6h.5"} /></svg></button>
-                ))}
-              </div>
-            )}
+            <DrawingSidebar
+              tool={tool}
+              magnet={magnet}
+              drawStyle={drawStyle}
+              onTool={(id) => setTool(id)}
+              onMagnet={() => setMagnet((mg) => !mg)}
+              onClear={() => detect("clearAll")}
+              onDrawStyle={(patch) => setDrawStyle((s) => ({ ...s, ...patch }))}
+            />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
                 <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} />
