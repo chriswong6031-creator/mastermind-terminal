@@ -282,6 +282,13 @@ export function FlowDeskView() {
   const [selectedEvent, setSelectedEvent] = useState<FlowEvent | null>(null);
   const [tickerCtx,     setTickerCtx]     = useState<TickerPayload | null>(null);
 
+  // Stable reference so React.memo on FlowCard does not re-render all 200 cards
+  // when the selection changes (an inline arrow at the JSX call site creates a new
+  // reference on every render).
+  const handleSelect = useCallback((ev: FlowEvent) => {
+    setSelectedEvent((prev) => prev?.id === ev.id ? null : ev);
+  }, []);
+
   // ── Watchlist ────────────────────────────────────────────────────────────────
   const [watchlist, setWatchlist] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
@@ -309,6 +316,10 @@ export function FlowDeskView() {
     if (data) {
       // Skip re-render if the payload asof is unchanged — avoids forcing all 200
       // FlowCards to reconcile on a poll tick that returns the same data.
+      // Producer contract assumed: asof advances whenever new events are appended.
+      // If the backend ever appends events under a constant asof, those events would
+      // be silently dropped here. Verify at /api/flow that asof is a write-time
+      // timestamp or sequence number that strictly increases with each append.
       if (data.asof && data.asof === lastFeedAsofRef.current) return;
       lastFeedAsofRef.current = data.asof ?? null;
       setFeed(data);
@@ -536,9 +547,7 @@ export function FlowDeskView() {
           enrich={enrich}
           lang={lang}
           selectedId={selectedEvent?.id ?? null}
-          onSelect={(ev) => setSelectedEvent((prev) =>
-            prev?.id === ev.id ? null : ev
-          )}
+          onSelect={handleSelect}
           filters={filters}
           onFiltersChange={setFilters}
         />

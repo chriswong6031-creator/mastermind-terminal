@@ -1100,6 +1100,8 @@ export default function OptionsHubView() {
         const d = fj as FeedPayload;
         setFetchError(false);
         // Skip re-render when asof is unchanged (same payload redelivered on quiet tape).
+        // Producer contract assumed: asof advances with every new event batch; if the
+        // backend returns new events under an unchanged asof they will be silently dropped.
         if (!d.asof || d.asof !== lastTapeAsofRef.current) {
           lastTapeAsofRef.current = d.asof ?? null;
           setFeed(d); setLastFeedTs(d.asof);
