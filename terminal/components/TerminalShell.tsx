@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { AppNav, TOP as NAV_TOP, Glyph as NavGlyph } from "@/components/AppNav";
 import { type DetectCmd } from "@/components/ChartPanel";
@@ -96,6 +96,21 @@ const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, c
 type WLSet = { tableView: boolean; cols: { last: boolean; changePct: boolean; change: boolean; volume: boolean }; disp: string; logo: boolean; colW: Record<string, number> };
 const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true, colW: {} };
 
+// ── Boot-trace helper (?boottrace=1) ────────────────────────────────────────
+// Wraps performance.mark so profiling is zero-cost unless the flag is set.
+// Each mark is also console.log'd with a wall-clock delta from the first mark
+// so a DevTools recording isn't needed — just open the console.
+// Kept in prod intentionally: useful for profiling mount/manifest/chart-paint spans.
+const _btStart = typeof performance !== "undefined" ? performance.now() : 0;
+function btMark(name: string) {
+  if (typeof window === "undefined") return;
+  if (!new URLSearchParams(window.location.search).has("boottrace")) return;
+  const now = performance.now();
+  try { performance.mark("bt:" + name); } catch {}
+  // eslint-disable-next-line no-console
+  console.log(`[boottrace] ${name} +${(now - _btStart).toFixed(1)}ms`);
+}
+
 export default function TerminalShell({ symbols, email, initialSymbol }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string }) {
   const [man, setMan] = useState<Manifest | null>(null);
   // named watchlists — client-side + localStorage-backed so switching / creating lists works for guests
@@ -165,7 +180,28 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const t = useT();
   const { lang } = useLang();
   const navPath = usePathname();
-  const searchParams = useSearchParams();
+  // ── urlSearch: window.location.search alternative to useSearchParams() ──────
+  // TerminalShell is always dynamically-rendered (server-side, on demand) so the
+  // implicit-Suspense prerender path that useSearchParams() triggers on static
+  // routes (screener/alerts/flow) never applies here — AppNav already handles
+  // that case with its own <Suspense> wrapper.  Using window.location.search
+  // directly is simpler for this component: all reads happen inside useEffects
+  // (client-side only) or in one JSX expression for the mobile nav active-key,
+  // so there is no SSR mismatch.  popstate keeps it reactive for back/forward
+  // navigations; same-route pushState/replaceState navigations that change
+  // ?pane= or ?addScript= are handled by the mm:open-pane custom-event and the
+  // cross-route remount respectively, so no popstate gap exists for current callers.
+  // NOTE: future same-route router.push() that changes these params without a
+  // matching custom event will NOT re-trigger this state; see nit in pass6-stall.
+  const [urlSearch, setUrlSearch] = useState<string>("");
+  useEffect(() => {
+    btMark("shell-mount");  // first useEffect: React has committed the component
+    // initialise on mount (no window on server); stay in sync via popstate
+    setUrlSearch(window.location.search);
+    const h = () => setUrlSearch(window.location.search);
+    window.addEventListener("popstate", h);
+    return () => window.removeEventListener("popstate", h);
+  }, []);
   // mobile + fullscreen + expanded-analysis state
   const [fullChart, setFullChart] = useState(false);
   const [drawer, setDrawer] = useState(false);
@@ -203,7 +239,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
   // After the manifest loads, also warm the coverage index so uncovered symbols
   // never fire a network request for intel/fund/opts files.
-  useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive && m) { setMan(m); loadCoverage(Object.keys(m.symbols || {})); } }).catch(() => {}); return () => { alive = false; }; }, []);
+  useEffect(() => { let alive = true; btMark("manifest-fetch-start"); getJSON("/data/manifest.json").then((m) => { if (alive && m) { btMark("manifest-fetch-done"); setMan(m); loadCoverage(Object.keys(m.symbols || {})); } }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
     { const si = load("mm.inds", ["ema", "rsi", "stochrsi", "_oracle"]) as string[]; if (!localStorage.getItem("mm.oracleMig")) { if (!si.includes("_oracle")) si.push("_oracle"); localStorage.setItem("mm.oracleMig", "1"); } setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) }); setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
@@ -367,7 +403,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // shallow deep-link: ?pane=<page> opens the MegaPane on that page (MegaPane keeps the URL in sync
   // and strips ?pane= on close). Reactive so clicking ?pane= links while already on /terminal works.
   // Only OPEN when a valid pane is present — do NOT force-close when absent (MegaPane owns its close).
-  useEffect(() => { const p = searchParams.get("pane"); if (p && VALID_PANES.has(p)) setPaneOpen(normalizePane(p)); }, [searchParams]);
+  useEffect(() => { const p = new URLSearchParams(urlSearch).get("pane"); if (p && VALID_PANES.has(p)) setPaneOpen(normalizePane(p)); }, [urlSearch]);
   // Direct open event — AppNav dispatches this on every click, so re-opening the SAME pane after a close
   // works even though MegaPane's replaceState strip is invisible to Next's router (searchParams stays stale).
   useEffect(() => { const h = (e: Event) => { const p = (e as CustomEvent).detail as string; if (p && VALID_PANES.has(p)) setPaneOpen(normalizePane(p)); }; window.addEventListener("mm:open-pane", h); return () => window.removeEventListener("mm:open-pane", h); }, []);
@@ -600,13 +636,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // valid id that arrived before the async list resolved still gets enabled; once the list has loaded, an
   // id that still doesn't resolve is dropped (param stripped) instead of lingering.
   useEffect(() => {
-    const id = searchParams.get("addScript");
+    const id = new URLSearchParams(urlSearch).get("addScript");
     if (!id) return;
     const resolvable = !!scriptByIdRef.current[id];
     if (resolvable) setEnabledIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
     else if (!scriptsLoadedRef.current) return;   // list not loaded yet — keep ?addScript= and retry after load
     try { const u = new URL(window.location.href); u.searchParams.delete("addScript"); window.history.replaceState({}, "", u.toString()); } catch {}
-  }, [searchParams, scripts]);
+  }, [urlSearch, scripts]);
 
   // derive the enabled PineScript[] (declared defaults + per-script overrides merged), passed to every pane
   const scriptById = useMemo(() => { const m: Record<string, UserScript> = {}; for (const s of scripts) m[s.id] = s; return m; }, [scripts]);
@@ -1012,7 +1048,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           {/* Derived from AppNav's exported TOP so the mobile drawer + desktop rail can't drift (task 6).
               Active-key logic mirrors AppNav (chart vs analyst-pane disambiguated by ?pane=). */}
           {(() => {
-            const pane = searchParams.get("pane");
+            const pane = new URLSearchParams(urlSearch).get("pane");
             const activeKey = navPath.startsWith("/terminal") && (pane === "analyst" || pane === "forecast") ? "analyst"
               : navPath.startsWith("/screener") ? "screener" : navPath.startsWith("/scripts") ? "scripts"
               : navPath.startsWith("/portfolio") ? "portfolio" : navPath.startsWith("/alerts") ? "alerts"
