@@ -26,6 +26,7 @@ import { CMP_PALETTE, type CmpCfg, defaultCmpCfg, cmpKey } from "@/lib/compare";
 import { isIntradayTf, classify, tfMinutes, type Market } from "@/lib/intradaySources";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
+import { listTemplates } from "@/lib/chartTemplates";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
@@ -220,7 +221,8 @@ const SUBPANE_ORDER = ["osc", "macd"] as const;
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
-  indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false }:
+  indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
+  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
@@ -228,7 +230,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       gridHVisible?: boolean; gridVVisible?: boolean;
       candleUpColor?: string; candleDownColor?: string; candleUpBorder?: string; candleDownBorder?: string; candleUpWick?: string; candleDownWick?: string;
       showWatermark?: boolean; showOHLC?: boolean; showBarChange?: boolean; showSymbolName?: boolean; };
-    onChartApi?: (api: IChartApi | null) => void; extHours?: boolean }) {
+    onChartApi?: (api: IChartApi | null) => void; extHours?: boolean;
+    onAddAlert?: (price: number) => void;
+    onTableView?: () => void;
+    onObjectTree?: () => void;
+    onOpenSettingsModal?: (tab?: string) => void;
+    lockedVLine?: string | null;
+    onSetLockedVLine?: (time: string | null) => void;
+  }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
   const verdictRef = useRef<HTMLSpanElement>(null);
@@ -301,6 +310,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const [legendOpen, setLegendOpen] = useState(true);
   const [showDetail, setShowDetail] = useState(true);   // GC v2: early-dots + warnings overlay toggle
   useEffect(() => { showDetailRef.current = showDetail; renderSignalsRef.current(); }, [showDetail]);
+  // ── new D1-D4 callback refs (stable closures so Effect 1 can read latest without re-mounting) ──
+  const onAddAlertRef = useRef(onAddAlert); onAddAlertRef.current = onAddAlert;
+  const onTableViewRef = useRef(onTableView); onTableViewRef.current = onTableView;
+  const onObjectTreeRef = useRef(onObjectTree); onObjectTreeRef.current = onObjectTree;
+  const onOpenSettingsModalRef = useRef(onOpenSettingsModal); onOpenSettingsModalRef.current = onOpenSettingsModal;
+  const onSetLockedVLineRef = useRef(onSetLockedVLine); onSetLockedVLineRef.current = onSetLockedVLine;
+  const lockedVLineRef = useRef(lockedVLine); lockedVLineRef.current = lockedVLine;
   // params for the ACTIVE indicators drive an indicator rebuild (Effect 3b)
   const indParamsKey = JSON.stringify(Array.from(indicators).sort().map((k) => indParams[k]));
   // ── existing DOM / interaction refs (unchanged) ──
@@ -342,6 +358,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Shared helpers (module-level within the component, referenced from every effect).
   // They read *Ref.current so they stay valid across data reloads without re-binding.
   // ────────────────────────────────────────────────────────────────────────────
+
+  // HTML-escape helper for context menu template strings
+  const escH = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
   // price format for the current precision
   const priceFmt = () => { const prec = precRef.current; return { type: "price" as const, precision: prec, minMove: Math.pow(10, -prec) }; };
@@ -1407,17 +1426,94 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); commit(true); } else if (e.key === "Escape") { e.preventDefault(); commit(false); } });
       inp.addEventListener("blur", () => commit(true));
     };
-    // right-click context menu
+    // right-click context menu (D1 — TV-style, rebuilt on every open to reflect current state)
     const ctxm = document.createElement("div"); ctxm.className = "ctx-menu"; ctxm.style.display = "none"; wrap.appendChild(ctxm); ctxRef.current = ctxm;
-    ctxm.innerHTML = `<div data-a="hline">Horizontal line here</div><div data-a="clear">Remove all drawings</div><div class="sep"></div><div data-a="reset">Reset chart view</div>`;
     let ctxPt: { t: string; p: number } = { t: "", p: 0 };
     const hideCtx = () => { if (ctxRef.current) ctxRef.current.style.display = "none"; };
-    onCtx = (e: MouseEvent) => { e.preventDefault(); const r = wrap.getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top; ctxPt = snap(x, y); ctxm.style.left = Math.min(x, el!.clientWidth - 180) + "px"; ctxm.style.top = Math.min(y, el!.clientHeight - 130) + "px"; ctxm.style.display = "block"; };
+    // submenu state for Chart template
+    let tmSubOpen = false;
+    const buildCtxMenu = () => {
+      const sym = symbolRef.current;
+      const prec = precRef.current;
+      const px = ctxPt.p;
+      const pxLabel = px ? px.toFixed(prec) : "—";
+      const locked = !!lockedVLineRef.current;
+      // count visible (non-hidden) indicators from panesMeta
+      const indCount = panesMeta.current.reduce((n, m) => n + m.entries.filter((e) => !hiddenRef.current.has(e.key)).length, 0);
+      const hasInds = indCount > 0;
+      ctxm.innerHTML = `
+        <div data-a="reset" class="ctx-row ctx-icon-row"><span class="ctx-ico">↺</span>${escH("Reset chart view")}<span class="ctx-kbd">⌥R</span></div>
+        <div class="sep"></div>
+        <div data-a="copypx" class="ctx-row">${escH("Copy price")} <b>${pxLabel}</b></div>
+        <div data-a="paste" class="ctx-row ctx-dis" title="Paste">${escH("Paste")}<span class="ctx-kbd">⌘V</span></div>
+        <div class="sep"></div>
+        <div data-a="alert" class="ctx-row">${escH("Add alert on ")} <b>${escH(sym)}</b> ${escH("at ")} ${pxLabel}…<span class="ctx-kbd">⌥A</span></div>
+        <div class="sep"></div>
+        <div data-a="lockv" class="ctx-row${locked ? " ctx-checked" : ""}">${locked ? "✓ " : ""}${escH("Lock vertical cursor line by time")}</div>
+        <div class="sep"></div>
+        <div data-a="tableview" class="ctx-row">${escH("Table view")}</div>
+        <div data-a="objtree" class="ctx-row">${escH("Object tree")}</div>
+        <div data-a="tplmenu" class="ctx-row ctx-has-sub">${escH("Chart template")} <span style="margin-left:auto;opacity:.6">▸</span></div>
+        <div class="sep"></div>
+        ${hasInds ? `<div data-a="removeinds" class="ctx-row ctx-danger">${escH("Remove ")} ${indCount} ${escH("indicator")}${indCount !== 1 ? "s" : ""}</div>` : ""}
+        <div data-a="settings" class="ctx-row ctx-icon-row"><span class="ctx-ico">⚙</span>${escH("Settings…")}</div>
+      `.trim();
+    };
+    onCtx = (e: MouseEvent) => {
+      e.preventDefault();
+      const r = wrap.getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top;
+      ctxPt = snap(x, y);
+      buildCtxMenu();
+      const mw = 220, mh = 340;
+      ctxm.style.left = Math.min(x, el!.clientWidth - mw) + "px";
+      ctxm.style.top = Math.min(y, el!.clientHeight - mh) + "px";
+      ctxm.style.display = "block";
+      tmSubOpen = false;
+    };
     ctxm.addEventListener("pointerdown", (e) => {
-      e.stopPropagation(); const a = (e.target as HTMLElement).getAttribute("data-a"); hideCtx();
-      if (a === "hline") onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "hline", points: [ctxPt] }]);
-      else if (a === "clear") onChangeRef.current?.([]);
-      else if (a === "reset") { try { chart.timeScale().fitContent(); } catch {} }
+      e.stopPropagation();
+      const tgt = e.target as HTMLElement;
+      const row = tgt.closest("[data-a]") as HTMLElement | null;
+      const a = row?.getAttribute("data-a") ?? null;
+      if (a === "tplmenu") {
+        // open template submenu inline (append rows)
+        if (tmSubOpen) return;
+        tmSubOpen = true;
+        try {
+          const tmpl = listTemplates();
+          let subHtml = `<div class="sep"></div><div class="ctx-grp">${escH("Chart templates")}</div>`;
+          for (const tpl of tmpl) {
+            subHtml += `<div data-a="tpl:${escH(tpl.id)}" class="ctx-row ctx-sub">${escH(tpl.name)}</div>`;
+          }
+          subHtml += `<div data-a="savetemplate" class="ctx-row ctx-sub">${escH("Save as template…")}</div>`;
+          ctxm.insertAdjacentHTML("beforeend", subHtml);
+        } catch {}
+        return;
+      }
+      hideCtx();
+      if (!a) return;
+      if (a === "reset") { try { chart.timeScale().fitContent(); } catch {} }
+      else if (a === "copypx") { try { navigator.clipboard.writeText(String(ctxPt.p)); } catch {} }
+      else if (a === "alert") { onAddAlertRef.current?.(ctxPt.p); }
+      else if (a === "lockv") {
+        const newTime = lockedVLineRef.current === ctxPt.t ? null : ctxPt.t;
+        onSetLockedVLineRef.current?.(newTime);
+      }
+      else if (a === "tableview") { onTableViewRef.current?.(); }
+      else if (a === "objtree") { onObjectTreeRef.current?.(); }
+      else if (a === "settings") { onOpenSettingsModalRef.current?.(); }
+      else if (a === "removeinds") {
+        // remove all active indicators via custom event (TerminalShell handles)
+        const cnt = panesMeta.current.reduce((n, m) => n + m.entries.filter((en) => !hiddenRef.current.has(en.key)).length, 0);
+        window.dispatchEvent(new CustomEvent("mm:remove-all-inds", { detail: { count: cnt } }));
+      }
+      else if (a && a.startsWith("tpl:")) {
+        const id = a.slice(4);
+        window.dispatchEvent(new CustomEvent("mm:apply-template", { detail: { id } }));
+      }
+      else if (a === "savetemplate") {
+        window.dispatchEvent(new CustomEvent("mm:save-template", {}));
+      }
     });
     wrap.addEventListener("contextmenu", onCtx);
 
@@ -1438,6 +1534,28 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const svgEl = svgRef.current; if (!svgEl) return;
       while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
       for (const d of drawRef.current) svgEl.appendChild(shape(d));
+      // ── D2 locked vertical line overlay ──
+      const lvt = lockedVLineRef.current;
+      if (lvt) {
+        const lx = xOf(lvt);
+        if (lx != null) {
+          const H = el!.clientHeight;
+          const g = mk("g", { "pointer-events": "none" });
+          g.appendChild(mk("line", { x1: lx, y1: 0, x2: lx, y2: H, stroke: "var(--brand)", "stroke-width": 1.5, "stroke-dasharray": "6 4" }));
+          // lock glyph at bottom near time axis
+          const gy = H - 18, gx = lx - 8;
+          const gb = mk("rect", { x: gx, y: gy, width: 16, height: 14, rx: 2, fill: "var(--brand)", opacity: 0.85 });
+          const gt = mk("text", { x: lx, y: gy + 10, "text-anchor": "middle", fill: "#fff", "font-size": 8, "font-family": "var(--font-ui)", "pointer-events": "none" });
+          gt.textContent = "🔒"; // lock emoji fallback — replaced by path below
+          g.appendChild(gb);
+          // simple lock path (SVG only — no emoji)
+          const lkG = mk("g", { transform: `translate(${lx - 4},${gy + 1})` });
+          lkG.appendChild(mk("rect", { x: 1, y: 5, width: 6, height: 5, rx: 1, fill: "white" }));
+          lkG.appendChild(mk("path", { d: "M2 5V3.5a2 2 0 0 1 4 0V5", stroke: "white", "stroke-width": 1.2, fill: "none" }));
+          g.appendChild(lkG);
+          svgEl.appendChild(g);
+        }
+      }
       positionBar();
       renderPriceTag();   // keep the last-price + countdown tag in step with every data/pan/style render
     };
@@ -1551,6 +1669,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase(); if (tag === "input" || tag === "textarea") return;
       if (e.key === "Escape") { if (sel) { sel = null; renderDraw(); } }
       else if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
+      // D1 shortcuts: ⌥R = reset chart view, ⌥A = add alert at last bar close
+      else if (e.altKey && e.key === "r") { e.preventDefault(); try { chart.timeScale().fitContent(); } catch {} }
+      else if (e.altKey && e.key === "a") { e.preventDefault(); const b = barsRef.current; if (b.length) onAddAlertRef.current?.(b[b.length - 1].c); }
     };
     window.addEventListener("keydown", onKey);
 
@@ -2123,6 +2244,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return () => { onChartApiRef.current?.(null); };
     // eslint-disable-next-line
   }, []);
+
+  // ── D2 locked vline: re-render SVG when the locked time changes ──
+  useEffect(() => { renderRef.current?.(); }, [lockedVLine]);
 
   // ── unchanged: re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild) ──
   useEffect(() => { renderRef.current?.(); const svg = svgRef.current; if (svg) { svg.style.pointerEvents = tool ? "auto" : "none"; svg.style.cursor = tool === "erase" ? "pointer" : tool ? "crosshair" : "default"; } }, [tool, drawings]);

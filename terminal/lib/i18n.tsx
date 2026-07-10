@@ -355,6 +355,31 @@ const LEX: Record<string, [string, string]> = {
   condPriceAbove: ["Price crosses above", "价格上穿"],
   condPriceBelow: ["Price crosses below", "价格下穿"],
   condRsiBelow: ["RSI crosses below", "RSI 下穿"],
+  // misc utility
+  cancel: ["Cancel", "取消"],
+  undo: ["Undo", "撤销"],
+  // ─── D1-D4 TV parity Phase 7 ─────────────────────────────────────────────
+  backToChart: ["Back to chart", "返回图表"],
+  // D3 Table View
+  ctvDownload: ["Download data", "下载数据"],
+  ctvRows: ["rows", "行"],
+  ctvDate: ["Date", "日期"],
+  ctvHigh: ["High", "最高"],
+  ctvLow: ["Low", "最低"],
+  ctvClose: ["Close", "收盘"],
+  // D4 Object Tree
+  objectTree: ["Object tree", "图层树"],
+  ctvMainSeries: ["Main series", "主图序列"],
+  ctvOverlays: ["Overlays", "叠加指标"],
+  ctvSubPanes: ["Sub-pane indicators", "副图指标"],
+  ctvNoIndicators: ["No indicators active.", "暂无活跃指标。"],
+  // D2 Chart Templates
+  tmplSaveAs: ["Save template as", "保存图表模板为"],
+  tmplNamePlaceholder: ["Template name…", "模板名称…"],
+  tmplNameRequired: ["Please enter a name.", "请输入名称。"],
+  tmplOverwriteConfirm: ["A template with this name already exists. Overwrite?", "已存在同名模板，是否覆盖？"],
+  // D1 Remove-all undo
+  allIndicatorsRemoved: ["All indicators removed.", "已移除全部指标。"],
   // strategy tester
   netReturn: ["Net return", "净收益"],
   sharpe: ["Sharpe", "夏普"],
