@@ -27,6 +27,7 @@ const { AnchorCache } = require("./lib/anchor");
 const { Coinbase } = require("./lib/coinbase");
 const { OKX } = require("./lib/okx");
 const { Polygon } = require("./lib/polygon");
+const { ExtFeed } = require("./lib/extfeed");
 
 const HOST = "127.0.0.1";
 const PORT = parseInt(process.env.HUB_PORT || "3100", 10);
@@ -40,6 +41,13 @@ const DATA_DIR =
 
 const DISABLE_US = process.env.HUB_DISABLE_US === "1";
 const DISABLE_CRYPTO = process.env.HUB_DISABLE_CRYPTO === "1";
+// Extended-hours feed (ext fields on US quotes outside RTH).
+// Kill-switch: EXT_FEED_DISABLE=1. Requires ALPACA_API_KEY + ALPACA_API_SECRET for ws leg;
+// falls back to Yahoo unofficial REST polling if keys absent.
+const extFeed = new ExtFeed({
+  alpacaKey: process.env.ALPACA_API_KEY || "",
+  alpacaSecret: process.env.ALPACA_API_SECRET || "",
+});
 
 const MAX_SYMS_PER_REQUEST = 200;
 const FAILOVER_MS = 60 * 1000; // Coinbase down/backoff > 60s → OKX
@@ -128,6 +136,7 @@ function handleHealth(res) {
     coinbase: coinbase ? coinbase.health() : { disabled: DISABLE_CRYPTO },
     okx: okx ? okx.health() : { disabled: DISABLE_CRYPTO },
     polygon: polygon ? polygon.health() : { disabled: DISABLE_US },
+    extFeed: extFeed.health(),
     ts: Math.floor(Date.now() / 1000),
   });
 }
@@ -145,12 +154,15 @@ function handleQuotes(res, url) {
 
   // Ensure US syms are subscribed so a first-time request seeds a placeholder + starts the AM sub.
   // Also kick off async anchor resolution so the next request has a cache hit.
+  // Also demand ext subscriptions so the LRU budget tracks what users are actively watching.
   if (!DISABLE_US && polygon && polygon.isHealthy()) {
     for (const sym of syms) {
       if (classify(sym) === "us") {
         polygon.ensureSubscribed(sym);
         // Fire-and-forget: resolve anchor so the cache is warm for the next request.
         anchorCache.resolve(sym, now).catch(() => {});
+        // Demand ext subscription (LRU tracking, no-op when feed is disabled or RTH).
+        extFeed.demand(sym);
       }
     }
   }
@@ -160,7 +172,7 @@ function handleQuotes(res, url) {
     const m = classify(s);
     return m === "crypto" || m === "us";
   });
-  const out = store.getQuotes(wanted);
+  const out = store.getQuotes(wanted, now, extFeed);
   sendJSON(res, 200, out);
 }
 
@@ -223,6 +235,9 @@ function boot() {
   } else {
     log.warn("HUB_DISABLE_US=1 — US feed off");
   }
+
+  // Extended-hours feed (alpaca overnight ws or yahoo fallback).
+  extFeed.start();
 
   server.listen(PORT, HOST, () => {
     log.info("hub READY", `listening on ${HOST}:${PORT}`);
