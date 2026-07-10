@@ -64,7 +64,11 @@ export default function DividendsPage({ sym, fund, zh }: DividendsPageProps) {
     return (
       <div className="fin-body">
         <div className="fin-empty fin-empty-lg" role="status">
-          <span className="fin-empty-title">{pick(!!zh, "No dividend data", "暂无股息数据")}</span>
+          <span className="fin-empty-title">{pick(!!zh, "Fundamentals not yet covered", "尚未覆盖基本面数据")}</span>
+          <span>{pick(!!zh,
+            `Dividend data for ${sym} hasn't been collected yet.`,
+            `${sym} 的股息数据尚未采集。`
+          )}</span>
         </div>
       </div>
     )

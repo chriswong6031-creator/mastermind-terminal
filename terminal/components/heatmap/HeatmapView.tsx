@@ -39,6 +39,9 @@ import { SECTOR_LABEL, SECTOR_ORDER } from "./sectorMap";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const POLL_MS = 60_000; // 1-minute poll; data is nightly but keeps cache fresh
+const INTRADAY_POLL_MS = 5 * 60_000; // 5-minute re-anchor for live quote overlay
+const INTRADAY_TOP_N = 200;          // top tiles by dollar-vol to refresh
+const QUOTE_CHUNK = 100;             // /api/quote batch cap
 
 // Call-share dead-zone: |doiPc - 0.5| < 0.08 → "MIXED"
 const CALL_SHARE_DEAD = 0.08;
@@ -53,6 +56,29 @@ async function safeFetch<T>(url: string): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Fetch live quotes for up to INTRADAY_TOP_N US tiles via /api/quote.
+ * Returns a map of ticker → live chg% (null entries are skipped so manifest values are kept).
+ * Chunks the request into batches of QUOTE_CHUNK to respect the route's MAX_BATCH cap.
+ */
+async function fetchLiveChg(tickers: string[]): Promise<Record<string, number>> {
+  const result: Record<string, number> = {};
+  for (let i = 0; i < tickers.length; i += QUOTE_CHUNK) {
+    const chunk = tickers.slice(i, i + QUOTE_CHUNK);
+    const symsParam = chunk.join(",");
+    const data = await safeFetch<{ quotes: Record<string, { chg: number | null } | null> }>(
+      `/api/quote?syms=${encodeURIComponent(symsParam)}`
+    );
+    if (!data?.quotes) continue;
+    for (const [sym, q] of Object.entries(data.quotes)) {
+      if (q != null && typeof q.chg === "number" && isFinite(q.chg)) {
+        result[sym] = q.chg;
+      }
+    }
+  }
+  return result;
 }
 
 // ─── Data join: manifest + flow_idx → HeatmapTile[] ──────────────────────────
@@ -243,6 +269,9 @@ export function HeatmapView() {
   const [loadingManifest, setLoadingManifest] = useState(true);
   const [loadingFlow,     setLoadingFlow]     = useState(true);
   const [flowError,       setFlowError]       = useState(false);
+  /** Live chg% values for top-N tiles; keyed by ticker. Null map = not yet loaded. */
+  const [liveChg, setLiveChg] = useState<Record<string, number> | null>(null);
+  const intradayPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── UI state ─────────────────────────────────────────────────────────────────
   const [layer,     setLayer]     = useState<Layer>("price");
@@ -300,9 +329,42 @@ export function HeatmapView() {
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      if (intradayPollRef.current) clearInterval(intradayPollRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Intraday overlay: re-anchor top-N tiles via /api/quote every 5 min ──────
+  // Only US plain-ticker names (no suffix) are passed to the quote hub. The top-N
+  // is ranked by dollar-vol (price × vol) from the manifest — a reasonable mcap proxy.
+  // On null quote → manifest value kept (guard: never blank a tile).
+  const refreshIntraday = useCallback(async (tiles: HeatmapTile[]) => {
+    const isUS = (t: HeatmapTile) => /^[A-Z]+(\.[AB])?$/.test(t.ticker) && !/^\d/.test(t.ticker);
+    const dollarVol = (t: HeatmapTile) => (t.price ?? 0) * (t.vol ?? 0);
+    const topTickers = tiles
+      .filter(isUS)
+      .sort((a, b) => dollarVol(b) - dollarVol(a))
+      .slice(0, INTRADAY_TOP_N)
+      .map((t) => t.ticker);
+    if (topTickers.length === 0) return;
+    const fresh = await fetchLiveChg(topTickers);
+    setLiveChg((prev) => ({ ...(prev ?? {}), ...fresh }));
+  }, []);
+
+  // Kick off intraday refresh once the manifest is loaded (gives us dollar-vol ranks).
+  useEffect(() => {
+    if (!manifest) return;
+    const tiles = buildTiles(manifest, flowIdx);
+    void refreshIntraday(tiles);
+    if (intradayPollRef.current) clearInterval(intradayPollRef.current);
+    intradayPollRef.current = setInterval(() => {
+      void refreshIntraday(buildTiles(manifest, flowIdx));
+    }, INTRADAY_POLL_MS);
+    return () => {
+      if (intradayPollRef.current) { clearInterval(intradayPollRef.current); intradayPollRef.current = null; }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manifest]);
 
   // ── Layer change: auto-select sizing ─────────────────────────────────────────
   const handleLayerChange = useCallback((l: Layer) => {
@@ -312,7 +374,15 @@ export function HeatmapView() {
   }, []);
 
   // ── Build tiles ───────────────────────────────────────────────────────────────
-  const allTiles = buildTiles(manifest, flowIdx);
+  const rawTiles = buildTiles(manifest, flowIdx);
+
+  // Apply live chg% overlay for top-N tickers (guard: null → keep manifest value).
+  const liveSet = liveChg ? new Set(Object.keys(liveChg)) : new Set<string>();
+  const allTiles: HeatmapTile[] = liveChg
+    ? rawTiles.map((t) =>
+        liveSet.has(t.ticker) ? { ...t, chg1d: liveChg[t.ticker] } : t
+      )
+    : rawTiles;
 
   // Filter by sector + search
   const tiles = allTiles.filter(tile => {
@@ -416,6 +486,18 @@ export function HeatmapView() {
         <div style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic", alignSelf: "center" }}>
           {t("dataNote")}
         </div>
+
+        {/* Intraday overlay note — shown once live data has been loaded */}
+        {liveChg && liveSet.size > 0 && (
+          <>
+            <div style={BREADTH_SEP} />
+            <div style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic", alignSelf: "center" }}>
+              {zh
+                ? `实时（延迟15分钟）前${liveSet.size}支 · 其余为昨收`
+                : `live (15m delayed) top ${liveSet.size} · rest EOD`}
+            </div>
+          </>
+        )}
       </div>
 
       {/* ═══ CONTROLS ROW ════════════════════════════════════════════════════ */}

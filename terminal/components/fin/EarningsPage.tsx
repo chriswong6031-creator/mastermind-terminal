@@ -25,6 +25,7 @@ type DumbbellPointWithSurp = DumbbellPoint & { surp_pct?: number | null }
 export interface EarningsPageProps {
   fund: Fund | null
   zh?: boolean
+  sym?: string
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -267,14 +268,18 @@ function RevenueModule({
 
 // ── main component ────────────────────────────────────────────────────────────
 
-export default function EarningsPage({ fund, zh }: EarningsPageProps) {
+export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
   const [epsMode, setEpsMode] = useState<Mode>("quarterly")
 
   if (!fund) {
     return (
       <div className="fin-body">
         <div className="fin-empty fin-empty-lg" role="status">
-          <span className="fin-empty-title">{pick(!!zh, "No earnings data", "暂无盈利数据")}</span>
+          <span className="fin-empty-title">{pick(!!zh, "Fundamentals not yet covered", "尚未覆盖基本面数据")}</span>
+          <span>{pick(!!zh,
+            `Earnings data for ${sym ?? "this symbol"} hasn't been collected yet.`,
+            `${sym ?? "该标的"} 的盈利数据尚未采集。`
+          )}</span>
         </div>
       </div>
     )

@@ -208,10 +208,10 @@ export default function MegaPane({
           {page === "statements" && (
             <StatementsPage sym={sym} fund={fund} name={displayName} onOpenTx={(id) => setTxId(id)} />
           )}
-          {page === "statistics" && <StatisticsPage fund={fund} quote={quote} zh={zh} />}
+          {page === "statistics" && <StatisticsPage fund={fund} quote={quote} zh={zh} sym={sym} />}
           {page === "dividends" && <DividendsPage sym={sym} fund={fund} zh={zh} />}
-          {page === "earnings" && <EarningsPage fund={fund} zh={zh} />}
-          {page === "revenue" && <RevenuePage fund={fund} zh={zh} />}
+          {page === "earnings" && <EarningsPage fund={fund} zh={zh} sym={sym} />}
+          {page === "revenue" && <RevenuePage fund={fund} zh={zh} sym={sym} />}
           {page === "forecast" && <ForecastPage sym={sym} fund={fund} bars={bars} zh={zh} />}
           {page === "technicals" && <TechnicalsPage sym={sym} bars={bars} zh={zh} />}
           {page === "seasonals" && <SeasonalsPage sym={sym} bars={bars} zh={zh} />}
