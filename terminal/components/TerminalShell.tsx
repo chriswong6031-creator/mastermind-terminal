@@ -63,6 +63,12 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
     const v = q[k];
     if (v != null && isFinite(v)) base[k] = v;
   }
+  // Overnight (post-midnight-ET, pre-open): no new session prints exist, so chg
+  // computes to a misleading 0.00%. The hub emits prevSessionChg ONLY in that
+  // window — show the last completed session's move instead (TV semantics).
+  if (q.prevSessionChg != null && isFinite(q.prevSessionChg)) {
+    base.chg = q.prevSessionChg;
+  }
   return base;
 }
 const CHART_TYPES = [["candles", "Candles"], ["heikin", "Heikin Ashi"], ["bars", "Bars"], ["line", "Line"], ["area", "Area"]];
@@ -675,7 +681,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     ? (compositeQ?.chg ?? null)
     : officialClose != null && prevCloseForChg != null && prevCloseForChg !== 0
       ? ((officialClose - prevCloseForChg) / prevCloseForChg) * 100
-      : (liveQuote?.chg ?? m?.chg);
+      : // Overnight: hub emits prevSessionChg only when no new session prints
+        // exist — prefer it over the misleading 0.00% (TV semantics).
+        ((liveQuote?.prevSessionChg as number | undefined) ?? liveQuote?.chg ?? m?.chg);
 
   // ── market-closed chip ──────────────────────────────────────────────────────
   // Recomputes every minute via setInterval (no holiday calendar — see risks).
