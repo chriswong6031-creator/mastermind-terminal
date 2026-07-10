@@ -309,3 +309,152 @@ describe("Store.setQuote uses AnchorCache prevClose", () => {
     assert.ok(Math.abs(q.chg - staleChg) > 2, "chg must differ materially from the stale-manifest value");
   });
 });
+
+// ── Store.getQuotes — serve-time anchor re-derivation (the P1 confirmed bug path) ──
+//
+// Scenario: hub boots, NVDA quote is seeded with a stale prevClose (anchor cache was
+// cold at write time). The daily file is then read and the anchor resolves to 204.12.
+// getQuotes MUST correct prevClose/chg on the next read without requiring a new tape
+// message. This is the exact path that caused NVDA/AAPL to show +0.00% all day.
+
+describe("Store.getQuotes serve-time anchor re-derivation", () => {
+  const { Store } = require("../lib/store");
+
+  let tmpDir;
+  let cache;
+  let store;
+  const SESSION_DATE = "2026-07-09";
+  // 14:00 UTC = 10:00 ET — mid-RTH on 2026-07-09
+  const NOW = Date.UTC(2026, 6, 9, 14, 0);
+
+  before(async () => {
+    tmpDir = makeTmpDir();
+    // Daily file: yesterday's bar is last (file hasn't rolled yet — typical RTH state)
+    writeDailyFile(tmpDir, "NVDA", [
+      bar("2026-07-07", 196.93),
+      bar("2026-07-08", 204.12),
+    ]);
+
+    const manifestPath = path.join(tmpDir, "manifest.json");
+    // Stale manifest: only has data through 2026-07-07, so manifest-derived prevClose
+    // is wrong: 196.93 / (1 + 0.71/100) ≈ 195.54 instead of the correct 204.12.
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      as_of: "2026-07-07",
+      symbols: { NVDA: { last: 196.93, chg: 0.71 } },
+    }));
+
+    cache = new AnchorCache({
+      dataDir: tmpDir,
+      apiKey: "",
+      getManifest: () => store ? store.manifest : null,
+    });
+
+    store = new Store(manifestPath, cache);
+    store.loadManifestIfStale(true);
+
+    // Boot-time: anchor NOT yet warm → setQuote falls to manifest fallback.
+    // This produces the stale prevClose ≈ 195.54, mirroring the P1 confirmed bug
+    // where chg ended up 0 because prevClose==last (here it would be wrong positive).
+    store.setQuote("NVDA", { last: 202.78, market: "us", chg: null }, NOW);
+
+    // Simulate anchor resolution completing async AFTER the first setQuote.
+    await cache.resolve("NVDA", NOW);
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("getQuotes corrects prevClose/chg without a new tape message", () => {
+    const quotes = store.getQuotes(["NVDA"], NOW);
+    const q = quotes["NVDA"];
+    assert.ok(q, "NVDA must be present");
+    // prevClose must now be the daily-file value, not the stale manifest value
+    assert.equal(q.prevClose, 204.12, "prevClose must be corrected to daily-file value");
+    assert.equal(q.anchor_source, "daily_file");
+    // chg = (202.78 - 204.12) / 204.12 * 100 ≈ -0.657% (non-zero)
+    const expectedChg = (202.78 - 204.12) / 204.12 * 100;
+    assert.ok(q.chg != null, "chg must be non-null");
+    assert.ok(Math.abs(q.chg - expectedChg) < 0.001, `chg=${q.chg} expected ≈ ${expectedChg}`);
+    // Crucially: chg must NOT be 0 (the P1 bug symptom)
+    assert.ok(Math.abs(q.chg) > 0.1, `chg must not be ~0; got ${q.chg}`);
+  });
+
+  it("persists the corrected quote so a second getQuotes call is consistent", () => {
+    const q1 = store.getQuotes(["NVDA"], NOW)["NVDA"];
+    const q2 = store.getQuotes(["NVDA"], NOW)["NVDA"];
+    assert.equal(q1.prevClose, q2.prevClose, "prevClose must be stable across consecutive reads");
+    assert.equal(q1.chg, q2.chg, "chg must be stable across consecutive reads");
+  });
+});
+
+// ── Store.getQuotes — daily-file-rolled scenario (post-close, after-hours) ──
+//
+// Scenario: market has closed, daily file has rolled to include today's bar.
+// anchor.close = today's official close; the live AM last differs from close.
+// getQuotes must emit close + afterHours and compute chg vs prevClose (not last).
+
+describe("Store.getQuotes after-hours close/afterHours emission", () => {
+  const { Store } = require("../lib/store");
+
+  let tmpDir;
+  let cache;
+  let store;
+  // 21:00 UTC = 17:00 ET — post-close on 2026-07-09
+  const NOW_AH = Date.UTC(2026, 6, 9, 21, 0);
+
+  before(async () => {
+    tmpDir = makeTmpDir();
+    // Daily file has today's bar — file rolled post-close
+    writeDailyFile(tmpDir, "NVDA", [
+      bar("2026-07-08", 204.12),
+      bar("2026-07-09", 202.78),
+    ]);
+
+    const manifestPath = path.join(tmpDir, "manifest.json");
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      as_of: "2026-07-08",
+      symbols: { NVDA: { last: 204.12, chg: 3.65 } },
+    }));
+
+    cache = new AnchorCache({
+      dataDir: tmpDir,
+      apiKey: "",
+      getManifest: () => store ? store.manifest : null,
+    });
+
+    store = new Store(manifestPath, cache);
+    store.loadManifestIfStale(true);
+
+    // Warm the anchor
+    await cache.resolve("NVDA", NOW_AH);
+
+    // Simulate a delayed AM last that differs from official close (AH move)
+    store.setQuote("NVDA", { last: 205.50, market: "us" }, NOW_AH);
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("emits close=202.78, afterHours=205.50, and chg vs prevClose=204.12", () => {
+    const q = store.getQuotes(["NVDA"], NOW_AH)["NVDA"];
+    assert.ok(q, "NVDA must be present");
+    // anchor: prevClose=204.12 (yesterday), close=202.78 (today's official EOD)
+    assert.equal(q.prevClose, 204.12, "prevClose = yesterday's close");
+    assert.equal(q.close, 202.78, "close = today's official EOD close");
+    // afterHours: delayed print 205.50 differs materially from close 202.78
+    assert.equal(q.afterHours, 205.50, "afterHours = delayed last print");
+    // chg = (close - prevClose) / prevClose * 100 = (202.78 - 204.12) / 204.12 * 100
+    const expectedChg = (202.78 - 204.12) / 204.12 * 100;
+    assert.ok(Math.abs(q.chg - expectedChg) < 0.001, `chg=${q.chg} expected ≈ ${expectedChg}`);
+    assert.equal(q.anchor_source, "daily_file");
+  });
+
+  it("afterHours is absent when live last matches close within $0.01", async () => {
+    // Override: set last = 202.79 (within $0.01 of close 202.78 → no AH line)
+    store.setQuote("NVDA", { last: 202.79, market: "us" }, NOW_AH);
+    const q = store.getQuotes(["NVDA"], NOW_AH)["NVDA"];
+    assert.equal(q.afterHours, undefined, "afterHours must be absent when last ≈ close");
+  });
+});
