@@ -10,7 +10,7 @@
  *  - Sweep badge carries "heuristic" tooltip — aggressor is UNVERIFIED without NBBO.
  */
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { FlowEvent, EnrichEvent } from "./FeedPane";
 import { fmtNum } from "@/lib/finFormat";
 import { computeFlowScore } from "@/lib/flowScore";
@@ -82,7 +82,9 @@ function fmtTime(iso: string): string {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function FlowCard({ ev, enrichEv, lang, selected, onSelect }: FlowCardProps) {
+// Memoized to avoid re-rendering all 200 cards on every poll tick or selection change.
+// Only re-renders when its own event data, selection state, enrich data, or lang changes.
+export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, onSelect }: FlowCardProps) {
   const zh = lang === "zh";
   const [expanded, setExpanded] = useState(false);
   const [tipVisible, setTipVisible] = useState(false);
@@ -246,7 +248,7 @@ export function FlowCard({ ev, enrichEv, lang, selected, onSelect }: FlowCardPro
       )}
     </div>
   );
-}
+});
 
 // ── Badge sub-component ───────────────────────────────────────────────────────
 

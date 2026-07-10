@@ -1078,6 +1078,9 @@ export default function OptionsHubView() {
   const [lastFeedTs, setLastFeedTs] = useState<string>("");
   const [fetchError, setFetchError] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Guard: skip setFeed when asof is unchanged (avoids re-running events useMemo
+  // on poll ticks that return the same payload).
+  const lastTapeAsofRef = useRef<string | null>(null);
 
   const doFetch = useCallback(async () => {
     if (document.visibilityState === "hidden") return;
@@ -1093,7 +1096,17 @@ export default function OptionsHubView() {
         flowGet("feed"),
         flowGet("heat"),
       ]);
-      if (fj) { const d = fj as FeedPayload; setFeed(d); setLastFeedTs(d.asof); setFetchError(false); } else { setFetchError(true); }
+      if (fj) {
+        const d = fj as FeedPayload;
+        setFetchError(false);
+        // Skip re-render when asof is unchanged (same payload redelivered on quiet tape).
+        // Producer contract assumed: asof advances with every new event batch; if the
+        // backend returns new events under an unchanged asof they will be silently dropped.
+        if (!d.asof || d.asof !== lastTapeAsofRef.current) {
+          lastTapeAsofRef.current = d.asof ?? null;
+          setFeed(d); setLastFeedTs(d.asof);
+        }
+      } else { setFetchError(true); }
       if (hj) setHeat(hj as HeatPayload);
     } catch { setFetchError(true); }
   }, []);
@@ -1164,12 +1177,18 @@ export default function OptionsHubView() {
           flowGet("feed"),
           flowGet("heat"),
         ]);
-        if (fj) { const d = fj as FeedPayload; setFeed(d); setLastFeedTs(d.asof); setFetchError(false); } else { setFetchError(true); }
+        if (fj) {
+          const d = fj as FeedPayload;
+          setFetchError(false);
+          lastTapeAsofRef.current = d.asof ?? null;
+          setFeed(d); setLastFeedTs(d.asof);
+        } else { setFetchError(true); }
         if (hj) setHeat(hj as HeatPayload);
       } catch { setFetchError(true); }
       // Warm secondary feeds in the background so first tab switches are fast.
+      // manifest is 1.9MB and only used by ProphetView — skip the eager prefetch here;
+      // it is prefetched lazily when the Prophet tab activates (see prophet useEffect below).
       flowPrefetch("tide");
-      flowPrefetch("manifest");
       flowPrefetch("prophet_idx");
     })();
     pollRef.current = setInterval(doFetch, 45_000);
@@ -1181,6 +1200,12 @@ export default function OptionsHubView() {
   useEffect(() => {
     if (activeTab === "tide") fetchTide();
   }, [activeTab, fetchTide]);
+
+  // Lazy-prefetch manifest only when Prophet tab activates (manifest is ~1.9MB —
+  // prefetching it on every page mount wastes bandwidth for users who never visit Prophet).
+  useEffect(() => {
+    if (activeTab === "prophet") flowPrefetch("manifest");
+  }, [activeTab]);
 
   // Fetch ticker data when selected; also sync vol surface for the merged right column.
   // The existing vol useEffect (below) triggers fetchVol when selectedVolRoot changes.

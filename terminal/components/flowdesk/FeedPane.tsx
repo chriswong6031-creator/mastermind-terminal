@@ -308,6 +308,12 @@ export function FeedPane({
 
   // Wire IntersectionObserver to sentinel so scrolling to the bottom auto-loads
   // the next page without requiring a button click.
+  // deps=[filtered.length, visibleCount]: the sentinel div only exists in the DOM
+  // when filtered.length > visibleCount (line 566). At mount, feed is null so
+  // filtered.length === 0 and the sentinel is absent; sentinelRef.current is null
+  // and a mount-only effect would return early without ever attaching the IO.
+  // Re-running when filtered.length or visibleCount changes ensures the IO is
+  // attached as soon as the sentinel appears.
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
@@ -321,7 +327,7 @@ export function FeedPane({
     );
     io.observe(el);
     return () => io.disconnect();
-  });
+  }, [filtered.length, visibleCount]);
 
   // Merge preset overrides into the base filter set
   const effectiveFilters = useMemo<FlowFilters>(() => {
