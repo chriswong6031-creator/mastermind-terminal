@@ -3,6 +3,15 @@
 Source-of-truth for scripts deployed to the VPS. Orchestrator deploys; never edit files
 in place on the VPS outside of a deploy.
 
+## terminal-build.sh
+
+VPS path: `/opt/terminal/terminal-build.sh` — the git-gated deploy script itself
+(see `DEPLOY.md` for the full path-by-path deploy contract).
+
+Every deploy re-installs this file from master onto the box, so an edit to
+`ops/terminal-build.sh` takes effect on the **next** deploy after it merges.
+Never edit the box copy in place — it is overwritten on every run.
+
 ## terminal-data
 
 VPS path: `/usr/local/bin/terminal-data`
@@ -18,8 +27,5 @@ gen_slices_all, intel bridge, intl OHLC) → final swap at ~03:00 UTC.
 
 Both swaps are guarded by the 80%-count check (≥1000 floor).
 
-Deploy:
-```bash
-scp ops/terminal-data root@146.190.142.17:/usr/local/bin/terminal-data
-ssh root@146.190.142.17 "chmod +x /usr/local/bin/terminal-data"
-```
+Deploy: automatic — every `terminal-build.sh` run installs `ops/terminal-data` to
+`/usr/local/bin/terminal-data` (merge to master → deploy; no scp).
