@@ -209,6 +209,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // After the manifest loads, also warm the coverage index so uncovered symbols
   // never fire a network request for intel/fund/opts files.
   useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive && m) { setMan(m); loadCoverage(Object.keys(m.symbols || {})); } }).catch(() => {}); return () => { alive = false; }; }, []);
+  // Prefetch the active symbol's OHLC + slice as early as possible — before ChartPanel even mounts.
+  // dataCache deduplicates so ChartPanel's own getSliceAndOhlc call collapses onto these inflights.
+  // This shaves the propagation delay between TerminalShell render and ChartPanel Effect 2's await.
+  useEffect(() => { prefetch(`/data/${seed0}.json`); prefetch(`/data/${seed0}.slice.json`); }, []); // eslint-disable-line
   useEffect(() => {
     { const si = load("mm.inds", ["ema", "rsi", "stochrsi", "_oracle"]) as string[]; if (!localStorage.getItem("mm.oracleMig")) { if (!si.includes("_oracle")) si.push("_oracle"); localStorage.setItem("mm.oracleMig", "1"); } setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) }); setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
@@ -280,15 +284,33 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, [panes, flushDrawings]);
   useEffect(() => () => { for (const sym of Object.keys(drawPending.current)) flushDrawings(sym); }, [flushDrawings]);
 
-  // per-symbol intel/slice/fund/bars for the rail (drawings now live per-pane in ChartPane); layouts once.
-  // getFund is negative-cached (long-tail 404s don't storm); getBars shares the chart's OHLC fetch.
-  useEffect(() => { let alive = true; setIntel(null); setLivePx(null); setSlice(null); setFund(null); setOpts(null); setBars([]);
-    getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
+  // per-symbol data for the rail.  Priority split:
+  //   IMMEDIATE  — ohlc + slice share the chart's inflight fetch (dataCache dedup); getBars re-uses
+  //                getOhlc so the chart's Effect 2 and the rail never issue two requests.
+  //   DEFERRED   — intel / fund / opts are below-the-fold (only needed when rail cards or MegaPane
+  //                are visible).  They are deferred via requestIdleCallback (rIC) / setTimeout so
+  //                they never compete with the chart fetch in the network queue on first load.
+  //                On symbol switch after first paint these fire immediately (rIC resolves quickly
+  //                when the page is idle) — the user-visible delay is the same as before.
+  useEffect(() => {
+    let alive = true;
+    setIntel(null); setLivePx(null); setSlice(null); setFund(null); setOpts(null); setBars([]);
+    // immediate: chart-shared OHLC and 6KB slice (signal verdict for the rail badge)
     getJSON(`/data/${active}.slice.json`).then((d) => { if (alive) setSlice(d); });
-    getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {});
-    getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
     getBars(active).then((b) => { if (alive) setBars(b); }).catch(() => {});
-    return () => { alive = false; };   // ignore a stale fetch for the prior symbol
+    // deferred: intel (~30-80KB), fund (~100-200KB), opts (~50-100KB) — not visible until user opens
+    // the rail cards or MegaPane; deferring avoids competing with the chart's OHLC fetch on cold load.
+    const ric = typeof requestIdleCallback !== "undefined" ? requestIdleCallback : (cb: () => void) => setTimeout(cb, 0);
+    const ricId = ric(() => {
+      if (!alive) return;
+      getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
+      getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {});
+      getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
+    });
+    return () => {
+      alive = false;
+      if (typeof cancelIdleCallback !== "undefined" && typeof ricId === "number") cancelIdleCallback(ricId);
+    };
   }, [active]);
 
   // ONE batched live-quote poll for the active symbol + every watchlist row. Symbol-keyed results
