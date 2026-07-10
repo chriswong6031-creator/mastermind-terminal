@@ -834,7 +834,7 @@ export default function StockAnalysis({
                 {fl.own_pct != null && <span className="sa-chip">{pick("Owns", "持股")} {fpct(fl.own_pct, 1, false)} {pick("of float", "流通")}</span>}
                 {fl.chg5_pct != null && <span className={`sa-chip ${fl.chg5_pct >= 0 ? "up" : "down"}`}>{pick("5-day", "5日")} {fpct(fl.chg5_pct, 1)}</span>}
                 {fl.hold_b != null && <span className="sa-chip">HK${fnum(fl.hold_b, 1)}B</span>}
-                {fl.label && <span className="sa-chip">{cap(fl.label)}</span>}
+                {fl.label && fl.label !== "screen" && <span className="sa-chip">{cap(fl.label)}</span>}
               </>
             ) : (
               <>

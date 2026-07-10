@@ -745,6 +745,8 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .detail-hd .px .cg{font:600 13px/1 var(--font-num)}
 /* market-closed chip */
 .detail-hd .mkt-closed{display:inline-flex;align-items:center;font:600 10px/1 var(--font-ui);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--panel-2);border:1px solid var(--line);border-radius:4px;padding:2px 5px;margin-left:4px;white-space:nowrap}
+/* after-hours secondary price token — subtle, no border, tokens only */
+.detail-hd .ah-print{font:500 11px/1 var(--font-mono);color:var(--muted);margin-left:6px;white-space:nowrap;opacity:.8}
 .detail-scroll{flex:1;overflow-y:auto;min-height:0;scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
 .detail-scroll::-webkit-scrollbar{width:8px;background:transparent}
 .detail-scroll::-webkit-scrollbar-track{background:transparent}

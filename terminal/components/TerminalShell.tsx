@@ -426,8 +426,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     };
   }, [intel, m?.verdict]);
   // live quote (China/HK) wins over the WS tick and the manifest EOD row for both price and % change
-  const lastPx = liveQuote?.last ?? livePx ?? m?.last;
-  const chgNow = liveQuote?.chg ?? m?.chg;
+  // AH semantics: when the hub emits `close` (official EOD) use it as the primary display price.
+  // The `last` field may be a delayed AH print; expose it as a secondary line when it differs.
+  const officialClose = liveQuote?.close as number | undefined;
+  const ahPrint = liveQuote?.afterHours as number | undefined;
+  const lastPx = officialClose ?? liveQuote?.last ?? livePx ?? m?.last;
+  // When officialClose is the primary display value, compute chg against the same base so
+  // the price and % refer to the same last-value. liveQuote.chg is AH-print vs prevClose,
+  // which would be inconsistent when the display price is the EOD close (not the AH print).
+  const prevCloseForChg = liveQuote?.prevClose as number | undefined;
+  const chgNow: number | null | undefined =
+    officialClose != null && prevCloseForChg != null && prevCloseForChg !== 0
+      ? ((officialClose - prevCloseForChg) / prevCloseForChg) * 100
+      : (liveQuote?.chg ?? m?.chg);
 
   // ── market-closed chip ──────────────────────────────────────────────────────
   // Recomputes every minute via setInterval (no holiday calendar — see risks).
@@ -906,6 +917,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b>
                 <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
                 {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
+                {/* AH secondary line — subtle, tokens-only; shown when hub signals an after-hours print */}
+                {ahPrint != null && mktClosed && (
+                  <span className="ah-print" title={lang === "zh" ? "盘后价格" : "After-hours print"}>
+                    AH {fmt(ahPrint, ahPrint < 10 ? 4 : 2)}
+                  </span>
+                )}
               </div>
             </div>
             <div className="detail-scroll">

@@ -1,0 +1,17 @@
+{
+  "name": "mastermind-quote-hub",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Localhost-only crypto + delayed-US quote fan-out for the Mastermind Terminal",
+  "main": "hub.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node hub.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
