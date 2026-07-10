@@ -301,6 +301,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const sigRef = useRef<SVGSVGElement | null>(null);
   const priceTagRef = useRef<HTMLDivElement | null>(null);  // TradingView-style last-price + countdown tag on the right axis
   const tagTimerRef = useRef<number | null>(null);          // 1s ticker so the bar-close countdown stays live
+  const lastValueVisibleRef = useRef<boolean>(true);        // mirrors chartSettings.lastValueVisible; gates the custom priceTag
   // intraday dead-end empty-state overlay ("Back to Daily") — built in Effect 1, toggled from Effect 2
   const emptyRef = useRef<HTMLDivElement | null>(null);
   const showEmptyRef = useRef<(msg: string) => void>(() => {});
@@ -311,6 +312,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
   chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol;
+  lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
 
   // ────────────────────────────────────────────────────────────────────────────
   // Shared helpers (module-level within the component, referenced from every effect).
@@ -968,7 +970,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       tagCd.textContent = cd; tagCd.style.display = cd ? "block" : "none";
       tagSym.style.background = col; tagVal.style.background = col;
-      tag.style.top = Math.round(y) + "px"; tag.style.display = "flex";
+      tag.style.top = Math.round(y) + "px"; tag.style.display = lastValueVisibleRef.current ? "flex" : "none";
     };
     renderTagRef.current = renderPriceTag;
     tagTimerRef.current = window.setInterval(() => { if (!dead) renderPriceTag(); }, 1000);
@@ -1875,9 +1877,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (priceS) {
         const sOpts: Record<string, any> = {};
         if (priceLineVisible != null) sOpts.priceLineVisible = priceLineVisible;
+        // The built-in lastValueVisible on the series is always false (we use a custom DOM tag);
+        // keep the series option in sync for library correctness but also re-render the custom tag
+        // immediately so the toggle has instant visible effect.
         if (lastValueVisible != null) sOpts.lastValueVisible = lastValueVisible;
         if (Object.keys(sOpts).length) priceS.applyOptions(sOpts as any);
       }
+      // Re-render the custom priceTag immediately when lastValueVisible changes so the toggle
+      // is visible without waiting for the 1s interval tick.
+      if (lastValueVisible != null) renderTagRef.current?.();
     } catch {}
     // eslint-disable-next-line
   }, [JSON.stringify(chartSettings)]);
