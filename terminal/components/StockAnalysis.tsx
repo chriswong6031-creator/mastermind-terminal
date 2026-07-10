@@ -693,7 +693,7 @@ export default function StockAnalysis({
         const chipVerb = supporting ? (pick(conv?.band, conv?.band_zh) || pick("Confidence", "信心")) : verb;
         const chipColor = supporting ? "var(--brand-2)" : tn.color;
         return (
-          <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenPane?.("mastermind")} title={pick("Open the full research desk", "打开完整研究台")}>
+          <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenPane?.("technicals")} title={pick("Open the research desk", "打开研究台")}>
             <span className="sa-open-k">{pick("Research desk", "研究台")}</span>
             <span className="sa-open-verb" style={{ color: chipColor }}>{chipVerb}</span>
             <span className="sa-open-view">{pick("view", "查看")} ›</span>
