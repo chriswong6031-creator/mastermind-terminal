@@ -20,6 +20,7 @@ export interface StatisticsPageProps {
   fund: Fund | null
   quote?: { last: number | null } | null
   zh?: boolean
+  sym?: string
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -42,14 +43,18 @@ interface StatRow {
 
 // ── main component ──────────────────────────────────────────────────────────
 
-export default function StatisticsPage({ fund, quote, zh }: StatisticsPageProps) {
+export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageProps) {
   const [mode, setMode] = useState<Mode>("annual")
 
   if (!fund) {
     return (
       <div className="fin-body">
         <div className="fin-empty fin-empty-lg" role="status">
-          <span className="fin-empty-title">{pick(!!zh, "No statistics data", "暂无统计数据")}</span>
+          <span className="fin-empty-title">{pick(!!zh, "Fundamentals not yet covered", "尚未覆盖基本面数据")}</span>
+          <span>{pick(!!zh,
+            `Fundamental data for ${sym ?? "this symbol"} hasn't been collected yet. Coverage is extended nightly by dollar volume.`,
+            `${sym ?? "该标的"} 的基本面数据尚未采集。覆盖范围每夜按成交额扩展。`
+          )}</span>
         </div>
       </div>
     )

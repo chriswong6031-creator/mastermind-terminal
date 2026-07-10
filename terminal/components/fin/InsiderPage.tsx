@@ -103,11 +103,30 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
   const d = data;
   const gaugeVal = Math.max(-1, Math.min(1, (d.score - 50) / 50));
 
+  // ── 18-month display window (docket 15: don't present ancient trades as the story) ──
+  const WINDOW_DAYS = 548; // ~18 months
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - WINDOW_DAYS);
+  const cutoffISO = cutoff.toISOString().slice(0, 10);
+
+  // Trades are newest-first; filter to window. Use filing date (t.date) as the
+  // public-disclosure anchor — trade_date can be days earlier.
+  const recentTrades = d.trades.filter((t) => t.date >= cutoffISO);
+  const mostRecentDate = d.trades.length > 0 ? d.trades[0].date : null;
+
+  // Months since most recent trade (for "quiet" note)
+  const monthsSinceMostRecent = mostRecentDate
+    ? Math.floor((Date.now() - new Date(mostRecentDate).getTime()) / (1000 * 60 * 60 * 24 * 30))
+    : null;
+  const isQuiet = recentTrades.length === 0;
+
   // ── buy/sell volume bars (buy up = green, sell down = red) + price line ──
-  const labels = d.series.map((s) => s.month.slice(2).replace("-", "/")); // "24/04"
-  const buyVals = d.series.map((s) => (s.buy_usd > 0 ? s.buy_usd : null));
-  const sellVals = d.series.map((s) => (s.sell_usd > 0 ? -s.sell_usd : null)); // negative → draws below zero
-  const priceVals = d.series.map((s) => monthClose.get(s.month) ?? null);
+  // Limit series to same 18-month window so chart aligns with the trade table.
+  const visibleSeries = d.series.filter((s) => s.month + "-28" >= cutoffISO);
+  const labels = visibleSeries.map((s) => s.month.slice(2).replace("-", "/")); // "24/04"
+  const buyVals = visibleSeries.map((s) => (s.buy_usd > 0 ? s.buy_usd : null));
+  const sellVals = visibleSeries.map((s) => (s.sell_usd > 0 ? -s.sell_usd : null)); // negative → draws below zero
+  const priceVals = visibleSeries.map((s) => monthClose.get(s.month) ?? null);
   const hasAnyVol = buyVals.some((v) => v != null) || sellVals.some((v) => v != null);
   const barSeries: Series[] = [
     { name: pick(zh, "Buy volume", "买入额"), values: buyVals, color: "var(--up)" },
@@ -191,41 +210,60 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
         )}
       </div>
 
-      {/* ── Recent open-market trades ── */}
+      {/* ── Recent open-market trades (18-month window) ── */}
       <div className="fin-sec">
-        <div className="fin-sec-h">{pick(zh, "Recent insider trades", "近期内部交易")}</div>
-        <div className="fin-table-scroll">
-          <table className="fin-table fin-stats-tbl fin-insider-tbl">
-            <thead>
-              <tr>
-                <th className="fin-cell fin-cell-sticky fin-cell-corner" scope="col">{pick(zh, "Date", "日期")}</th>
-                <th className="fin-cell fin-cell-head" scope="col">{pick(zh, "Insider", "内部人")}</th>
-                <th className="fin-cell fin-cell-num fin-cell-head" scope="col">{pick(zh, "Type", "类型")}</th>
-                <th className="fin-cell fin-cell-num fin-cell-head" scope="col">{pick(zh, "Shares", "股数")}</th>
-                <th className="fin-cell fin-cell-num fin-cell-head" scope="col">{pick(zh, "Price", "价格")}</th>
-                <th className="fin-cell fin-cell-num fin-cell-head" scope="col">{pick(zh, "Value", "金额")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {d.trades.map((t, i) => (
-                <tr key={i} className="fin-row">
-                  <th className="fin-cell fin-cell-sticky" scope="row">{fmtDate(t.date, { short: false })}</th>
-                  <td className="fin-cell">
-                    <span className="fin-insider-role">{t.title}</span>
-                  </td>
-                  <td className="fin-cell fin-cell-num">
-                    <span className={`fin-insider-side ${t.side === "buy" ? "up" : "down"}`}>
-                      {t.side === "buy" ? pick(zh, "Buy", "买入") : pick(zh, "Sell", "卖出")}
-                    </span>
-                  </td>
-                  <td className="fin-cell fin-cell-num">{fmtNum(t.shares, { decimals: 0 })}</td>
-                  <td className="fin-cell fin-cell-num">{t.price != null ? fmtCur(t.price, "USD") : "—"}</td>
-                  <td className="fin-cell fin-cell-num">{t.usd != null ? fmtCur(t.usd, "USD") : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="fin-sec-h" style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+          {pick(zh, "Insider trades — last 18 months", "内部交易 — 近18个月")}
+          {mostRecentDate && (
+            <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>
+              {pick(zh, `Most recent: ${fmtDate(mostRecentDate, { short: false })}`, `最近一笔: ${fmtDate(mostRecentDate, { short: false })}`)}
+            </span>
+          )}
         </div>
+        {isQuiet ? (
+          <div className="fin-empty" role="status">
+            {monthsSinceMostRecent != null
+              ? pick(zh,
+                  `No open-market insider trades in the last ${monthsSinceMostRecent} month${monthsSinceMostRecent !== 1 ? "s" : ""}.`,
+                  `过去 ${monthsSinceMostRecent} 个月内无公开市场内部人交易。`
+                )
+              : pick(zh, "No insider trades on record.", "暂无内部交易记录。")
+            }
+          </div>
+        ) : (
+          <div className="fin-table-scroll">
+            <table className="fin-table fin-stats-tbl fin-insider-tbl">
+              <thead>
+                <tr>
+                  <th className="fin-cell fin-cell-sticky fin-cell-corner" scope="col">{pick(zh, "Date", "日期")}</th>
+                  <th className="fin-cell fin-cell-head" scope="col">{pick(zh, "Insider", "内部人")}</th>
+                  <th className="fin-cell fin-cell-num fin-cell-head" scope="col">{pick(zh, "Type", "类型")}</th>
+                  <th className="fin-cell fin-cell-num fin-cell-head" scope="col">{pick(zh, "Shares", "股数")}</th>
+                  <th className="fin-cell fin-cell-num fin-cell-head" scope="col">{pick(zh, "Price", "价格")}</th>
+                  <th className="fin-cell fin-cell-num fin-cell-head" scope="col">{pick(zh, "Value", "金额")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentTrades.map((t, i) => (
+                  <tr key={i} className="fin-row">
+                    <th className="fin-cell fin-cell-sticky" scope="row">{fmtDate(t.date, { short: false })}</th>
+                    <td className="fin-cell">
+                      <span className="fin-insider-role">{t.title}</span>
+                    </td>
+                    <td className="fin-cell fin-cell-num">
+                      <span className={`fin-insider-side ${t.side === "buy" ? "up" : "down"}`}>
+                        {t.side === "buy" ? pick(zh, "Buy", "买入") : pick(zh, "Sell", "卖出")}
+                      </span>
+                    </td>
+                    <td className="fin-cell fin-cell-num">{fmtNum(t.shares, { decimals: 0 })}</td>
+                    <td className="fin-cell fin-cell-num">{t.price != null ? fmtCur(t.price, "USD") : "—"}</td>
+                    <td className="fin-cell fin-cell-num">{t.usd != null ? fmtCur(t.usd, "USD") : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         <div className="fin-insider-asof">
           {pick(zh, `As of ${d.asof} · filing dates (public). Open-market P/S only.`, `截至 ${d.asof} · 申报公开日期。仅公开市场买卖 (P/S)。`)}
         </div>

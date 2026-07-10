@@ -83,6 +83,32 @@ def us_universe() -> list[str]:
     return sorted(out)
 
 
+def top_n_by_dollar_vol(n: int) -> list[str]:
+    """Return the top-N US manifest symbols ranked by dollar volume (last × vol).
+
+    Used by --top-n to prioritise the most liquid names for fund/intel coverage
+    extension.  Symbols not in the manifest or with missing price/vol are ranked
+    last (dollar_vol = 0).  The sort is stable, so alphabetic order breaks ties.
+    """
+    m = load_manifest()
+    syms = m.get("symbols") or {}
+    ranked = []
+    for sym, row in syms.items():
+        if sym.endswith(NON_US_SUFFIX) or sym.endswith("-USD"):
+            continue
+        if not isinstance(row, dict):
+            continue
+        mkt = row.get("mkt")
+        if mkt not in US_MKTS:
+            continue
+        last = row.get("last") or 0
+        vol = row.get("vol") or 0
+        dollar_vol = (last or 0) * (vol or 0)
+        ranked.append((sym, dollar_vol))
+    ranked.sort(key=lambda x: x[1], reverse=True)
+    return [s for s, _ in ranked[:n]]
+
+
 # ───────────────────────────── serialization helpers ─────────────────────────────
 def _iso(v):
     """Timestamp/date → ISO date string; pass everything else through."""
@@ -242,6 +268,7 @@ def is_fresh(path: Path, stale_days: int) -> bool:
 def main(argv: list[str]) -> None:
     only = None
     limit = 0
+    top_n = 0   # --top-n N: collect top-N by dollar-vol; takes priority over alphabetic universe
     stale_days = 3
     workers = 4
     force = "--force" in argv
@@ -251,6 +278,13 @@ def main(argv: list[str]) -> None:
         only = [s.strip().upper() for s in argv[argv.index("--only") + 1].split(",") if s.strip()]
     if "--limit" in argv:
         limit = int(argv[argv.index("--limit") + 1])
+    if "--top-n" in argv:
+        # e.g. --top-n 2000: collect/refresh up to N symbols ranked by manifest dollar-vol.
+        # Bounds cron runtime predictably: at ~1.2s/symbol × workers=4 a --top-n 2000 run
+        # takes ~10 min wall-clock; --top-n 500 ~2.5 min.  The gen step (gen_fund_us.py)
+        # adds ~0.5s/symbol and processes exactly the symbols with a cache file, so it
+        # naturally matches whatever --top-n collected.
+        top_n = int(argv[argv.index("--top-n") + 1])
     if "--stale-days" in argv:
         stale_days = int(argv[argv.index("--stale-days") + 1])
     if "--workers" in argv:
@@ -267,6 +301,9 @@ def main(argv: list[str]) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     if only:
         want = only
+    elif top_n:
+        want = top_n_by_dollar_vol(top_n)
+        print(f"us_fund: --top-n {top_n}: selected {len(want)} symbols ranked by manifest dollar-vol", flush=True)
     else:
         want = us_universe()
     if limit:
