@@ -119,8 +119,11 @@ export interface IchimokuResult {
   spanA: (number | null)[];
   /** Span B displaced +displacement bars forward. */
   spanB: (number | null)[];
-  /** Times for the spanA/spanB arrays (length N + displacement). */
-  futureTimes: string[];
+  /** Times for the spanA/spanB arrays (length N + displacement). Future entries match the
+   *  type of the input bar times — business-day 'YYYY-MM-DD' strings on daily bars, epoch-second
+   *  numbers advanced by the median bar interval on intraday bars — because lightweight-charts
+   *  picks one time converter per setData array and throws on mixed time types. */
+  futureTimes: (string | number)[];
 }
 
 /** Compute Ichimoku components. Returns arrays aligned to `bars` for tenkan/kijun,
@@ -146,24 +149,30 @@ export function ichimoku(bars: Bar[], tenkan = 9, kijun = 26, senkouB = 52, disp
     spanBArr[i + displacement] = sb;
   }
 
-  // Generate future time strings (approx business days — skip Sat/Sun).
+  // Extend the time axis `displacement` slots past the last bar so the displaced cloud can render.
   // bar.time is a 'YYYY-MM-DD' string on daily bars and a numeric epoch-second on intraday bars.
-  // Handle both: if the last time value is numeric treat it as an epoch-second timestamp.
-  const futureTimes: string[] = [...bars.map((b) => b.time)];
-  const lastT = bars.length ? bars[bars.length - 1].time : null;
-  let lastDate: Date;
-  if (lastT == null) {
-    lastDate = new Date();
-  } else if (typeof lastT === "number" || (typeof lastT === "string" && /^\d{6,}$/.test(lastT))) {
-    // Intraday: epoch-second — construct Date directly to avoid the concatenation trap
-    lastDate = new Date((typeof lastT === "number" ? lastT : Number(lastT)) * 1000);
+  // Future entries MUST keep the same time type as the historical bars: lightweight-charts picks
+  // one time converter for the whole setData array from its first element and throws on a mix.
+  const futureTimes: (string | number)[] = [...bars.map((b) => b.time as string | number)];
+  const lastT = bars.length ? (bars[bars.length - 1].time as string | number) : null;
+  const isEpoch = typeof lastT === "number" || (typeof lastT === "string" && /^\d{6,}$/.test(lastT));
+  if (lastT != null && isEpoch) {
+    // Intraday: advance by the median recent bar interval, emitting the same type as the input.
+    const toNum = (t: string | number) => (typeof t === "number" ? t : Number(t));
+    const deltas: number[] = [];
+    for (let i = Math.max(1, n - 20); i < n; i++) deltas.push(toNum(bars[i].time as any) - toNum(bars[i - 1].time as any));
+    deltas.sort((a, b) => a - b);
+    const step = (deltas.length ? deltas[Math.floor(deltas.length / 2)] : 0) || 60;
+    let t = toNum(lastT);
+    for (let k = 0; k < displacement; k++) { t += step; futureTimes.push(typeof lastT === "number" ? t : String(t)); }
   } else {
-    lastDate = new Date((lastT as string) + "T00:00:00Z");
-  }
-  for (let k = 0; k < displacement; k++) {
-    lastDate = new Date(lastDate.getTime() + 86400_000);
-    while (lastDate.getUTCDay() === 0 || lastDate.getUTCDay() === 6) lastDate = new Date(lastDate.getTime() + 86400_000);
-    futureTimes.push(lastDate.toISOString().slice(0, 10));
+    // Daily: approx business days — skip Sat/Sun.
+    let lastDate = lastT == null ? new Date() : new Date((lastT as string) + "T00:00:00Z");
+    for (let k = 0; k < displacement; k++) {
+      lastDate = new Date(lastDate.getTime() + 86400_000);
+      while (lastDate.getUTCDay() === 0 || lastDate.getUTCDay() === 6) lastDate = new Date(lastDate.getTime() + 86400_000);
+      futureTimes.push(lastDate.toISOString().slice(0, 10));
+    }
   }
 
   return { tenkan: tenkanArr, kijun: kijunArr, spanA: spanAArr, spanB: spanBArr, futureTimes };

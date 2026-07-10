@@ -872,7 +872,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const priceS = priceSeriesRef.current;
       if (!priceS) return;
       const p2y = (p: number): number | null => { try { const v = priceS.priceToCoordinate(p); return (v == null || !isFinite(v as number)) ? null : v as number; } catch { return null; } };
-      const t2x = (tm: string): number | null => { try { const v = chart.timeScale().timeToCoordinate(tm as any); return (v == null || !isFinite(v as number)) ? null : v as number; } catch { return null; } };
+      const t2x = (tm: string | number): number | null => { try { const v = chart.timeScale().timeToCoordinate(tm as any); return (v == null || !isFinite(v as number)) ? null : v as number; } catch { return null; } };
 
       // ── Ichimoku cloud fill ──
       if (inds.has("ichimoku") && !hiddenRef.current.has("ichimoku")) {
