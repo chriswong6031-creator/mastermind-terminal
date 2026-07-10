@@ -18,11 +18,17 @@
 //       (pre-market, post-market, true overnight via v1beta1/overnight). Dynamic
 //       subscriptions: subscribe symbols on /quotes demand, LRU cap 30, unsubscribe
 //       evicted symbols.
-//   (b) Keyless Yahoo fallback — batched REST polling of
-//       query2.finance.yahoo.com/v8/finance/chart/<SYM>?interval=1m&range=1d&includePrePost=true
-//       every ~60 s for the demanded symbols. Covers pre-market (04:00–09:30 ET) and
-//       post-market (16:00–20:00 ET) but NOT true overnight (20:00–04:00 ET). Clearly
-//       labelled extSource="yahoo_unofficial". Grey endpoint — ToS-grey risk noted.
+//   (b) R2 relay file — fetches https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev/live_flow/ext_quotes.json
+//       every ~60 s. No credentials required (public R2 object). The Mac residential
+//       IP polls Yahoo and publishes to R2 every 2 min during ext windows; the VPS
+//       reads that relay file. asof_utc older than 5 min → treated as absent (stale).
+//       extSource="yahoo-relay". Covers pre-market (04:00–09:30 ET) and post-market
+//       (16:00–20:00 ET) but NOT true overnight (20:00–04:00 ET).
+//   (c) Keyless Yahoo fallback (legacy, kept for local dev) — direct REST polling of
+//       query1.finance.yahoo.com/v8/finance/chart/<SYM>?interval=1m&range=1d&includePrePost=true
+//       every ~60 s for the demanded symbols. Covers pre-market and post-market only.
+//       Clearly labelled extSource="yahoo_unofficial". Grey endpoint — ToS-grey risk noted.
+//       429s on DigitalOcean VPS IPs; r2file mode exists to bypass this.
 //
 // KILL-SWITCH
 //   EXT_FEED_DISABLE=1 → disables entirely (extPrice fields never emitted).
@@ -173,6 +179,38 @@ function yahooFetchExtPrice(sym, nowMs) {
           } catch {
             resolve(null);
           }
+        });
+      }
+    );
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+  });
+}
+
+// ── R2 relay file poll ────────────────────────────────────────────────────────
+
+const R2_EXT_URL = "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev/live_flow/ext_quotes.json";
+const R2_POLL_INTERVAL_MS = 60 * 1000;   // fetch every 60 s
+const R2_STALE_MS = 5 * 60 * 1000;       // treat file older than 5 min as absent
+const R2_TIMEOUT_MS = 8 * 1000;
+
+/**
+ * Fetch and parse the ext_quotes relay file from R2.
+ * Returns the parsed object, or null on error / timeout.
+ *
+ * @returns {Promise<object|null>}
+ */
+function r2FetchExtFile() {
+  return new Promise((resolve) => {
+    const req = https.get(
+      R2_EXT_URL,
+      { timeout: R2_TIMEOUT_MS },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => { body += c; });
+        res.on("end", () => {
+          try { resolve(JSON.parse(body)); }
+          catch { resolve(null); }
         });
       }
     );
@@ -569,7 +607,38 @@ class ExtFeed {
     const syms = [...this._yahooSubs.keys()];
     if (!syms.length) return;
 
-    log.info("yahoo ext poll", `session=${session}`, `syms=${syms.length}`);
+    // ── R2 relay first (the VPS's own IP is Yahoo-429-blocked) ──────────────
+    // The Mac residential IP publishes live_flow/ext_quotes.json every 2 min
+    // during ext windows; a fresh relay file serves the whole demanded set in
+    // ONE fetch. Direct per-symbol Yahoo below remains only as the local-dev /
+    // relay-outage fallback.
+    const relay = await r2FetchExtFile();
+    const relayAsof = relay && relay.asof_utc ? Date.parse(relay.asof_utc) : NaN;
+    if (
+      relay &&
+      relay.quotes &&
+      Number.isFinite(relayAsof) &&
+      nowMs - relayAsof < R2_STALE_MS
+    ) {
+      let hit = 0;
+      for (const sym of syms) {
+        const e = relay.quotes[sym];
+        if (e && typeof e.extPrice === "number" && Number.isFinite(e.extPrice)) {
+          this._yahooCache.set(sym, {
+            extPrice: e.extPrice,
+            extTs: typeof e.extTs === "number" ? e.extTs : Math.floor(relayAsof / 1000),
+            close: typeof e.close === "number" ? e.close : undefined,
+            session,
+            source: "yahoo-relay",
+          });
+          hit++;
+        }
+      }
+      log.info("ext relay poll", `session=${session}`, `syms=${syms.length}`, `hits=${hit}`);
+      return; // fresh relay consumed — no direct Yahoo calls this cycle
+    }
+
+    log.info("yahoo ext poll (direct)", `session=${session}`, `syms=${syms.length}`);
 
     // Fetch in parallel (each is a separate HTTP call; Yahoo has no batch chart endpoint).
     await Promise.all(
