@@ -106,6 +106,26 @@ describe("close-leak regression — two-session boundary", () => {
       "getQuotes MUST delete stale close from day N when anchor has no close (day N+1 RTH)");
   });
 
+  it("getQuotes: stale close is evicted even when no other field changes (flat close, non-daily anchor)", () => {
+    // Edge: stale q.close == live last == anchor.prevClose, chg already 0, anchor has
+    // no close and no prevSessionChg (e.g. polygon_prev fallback). Nothing else in the
+    // changed-detection differs, so the stale close alone must trip the rebuild.
+    const FLAT = 202.78;
+    const storeN1 = makeStore(new Map([
+      ["NVDA", { prevClose: FLAT, anchor_source: "polygon_prev" }], // no close, no prevSessionChg
+    ]));
+    storeN1.quotes.set("NVDA", {
+      sym: "NVDA", last: FLAT, market: "us",
+      close: FLAT,            // ← stale close from the prior session
+      prevClose: FLAT, chg: 0, ts: Math.floor(NOW_DAY_N1_RTH / 1000) - 10,
+      anchor_source: "polygon_prev",
+    });
+    const result = storeN1.getQuotes(["NVDA"], NOW_DAY_N1_RTH);
+    assert.ok(result.NVDA, "NVDA should be present in result");
+    assert.equal(result.NVDA.close, undefined,
+      "stale close MUST be evicted when the anchor carries no close, even if every other field is unchanged");
+  });
+
   it("getQuotes: fresh.close is set correctly when anchor.close is present (day N AH)", () => {
     const storeAH = makeStore(new Map([
       ["NVDA", { prevClose: DAY_N_PREVCLOSE, close: DAY_N_CLOSE, anchor_source: "daily_file" }],
