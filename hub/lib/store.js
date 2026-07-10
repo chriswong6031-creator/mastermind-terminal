@@ -143,25 +143,46 @@ class Store {
       if (!q) continue;
       const anchor =
         this.anchorCache && q.market === "us" ? this.anchorCache.get(sym, now) : null;
-      if (
-        anchor &&
-        anchor.prevClose != null &&
-        anchor.prevClose > 0 &&
-        anchor.prevClose !== q.prevClose
-      ) {
-        const fresh = { ...q };
-        fresh.prevClose = anchor.prevClose;
-        if (typeof fresh.last === "number") {
-          fresh.chg = ((fresh.last - anchor.prevClose) / anchor.prevClose) * 100;
-        }
-        fresh.anchor_source = anchor.anchor_source;
-        if (anchor.stale_anchor) fresh.stale_anchor = true;
-        else delete fresh.stale_anchor;
-        this.quotes.set(sym, fresh); // persist so /health + later reads agree
-        out[sym] = fresh;
-      } else {
+      if (!anchor || anchor.prevClose == null || anchor.prevClose <= 0) {
         out[sym] = q;
+        continue;
       }
+      // Serve-time derivation (write-time is not enough: after hours no tape
+      // message arrives, so applyPartial never re-runs on boot-built quotes):
+      //   close      — anchor carries today's official close once the daily file rolls
+      //   afterHours — the delayed AM `last` when it differs materially from close
+      //   chg        — the DAY's move: (close ?? last) vs prevClose
+      const close =
+        anchor.close != null && Number.isFinite(anchor.close) ? anchor.close : null;
+      const ah =
+        close != null &&
+        typeof q.last === "number" &&
+        Math.abs(q.last - close) > AH_MATERIALITY_THRESHOLD
+          ? q.last
+          : null;
+      const dayRef = close != null ? close : typeof q.last === "number" ? q.last : null;
+      const chg =
+        dayRef != null ? ((dayRef - anchor.prevClose) / anchor.prevClose) * 100 : q.chg;
+      const changed =
+        anchor.prevClose !== q.prevClose ||
+        q.close !== (close != null ? close : q.close) ||
+        (ah != null ? q.afterHours !== ah : q.afterHours != null) ||
+        chg !== q.chg;
+      if (!changed) {
+        out[sym] = q;
+        continue;
+      }
+      const fresh = { ...q };
+      fresh.prevClose = anchor.prevClose;
+      fresh.chg = chg;
+      if (close != null) fresh.close = close;
+      if (ah != null) fresh.afterHours = ah;
+      else delete fresh.afterHours;
+      fresh.anchor_source = anchor.anchor_source;
+      if (anchor.stale_anchor) fresh.stale_anchor = true;
+      else delete fresh.stale_anchor;
+      this.quotes.set(sym, fresh); // persist so /health + later reads agree
+      out[sym] = fresh;
     }
     return out;
   }
