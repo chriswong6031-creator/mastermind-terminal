@@ -82,6 +82,17 @@ _R2_TIMEOUT  = 30        # seconds per request
 _R2_WORKERS  = 16
 _R2_META     = ".r2_sync.json"   # local stamp: {"etag": "...", "count": N}
 
+# ── factordata (tech lab) ──────────────────────────────────────────────────────
+# tech_lab.json — per-signal descriptive profiles (64 signals; fetched once per run).
+# tech_events/<SYM>.json — per-symbol fire dates (only available for covered symbols).
+# Both are on the public macro site; 404 / timeout → omit the tech block entirely.
+_FACTORDATA_BASE = os.environ.get(
+    "FACTORDATA_BASE", "https://mastermind-x.com/factordata"
+)
+_FACTORDATA_UA      = "mastermind-feed/1.0"
+_FACTORDATA_TIMEOUT = 20   # seconds per request — tech_lab.json is ~20–80KB
+_TECH_LAB_LOG_ONCE: set = set()  # suppress repeated 404/error log per URL
+
 log = logging.getLogger(__name__)
 
 
@@ -521,6 +532,96 @@ def build_intel(sym: str, src: dict, today: date | None = None) -> dict:
     return out
 
 
+# ── tech block helpers ─────────────────────────────────────────────────────────
+
+def _factordata_fetch(path: str) -> dict | None:
+    """GET {_FACTORDATA_BASE}/{path} → parsed JSON dict, or None on 404/error.
+
+    On 404 or network error, logs once per URL and returns None.  Callers treat
+    None as "not available" and omit the block rather than crashing.
+    """
+    url = f"{_FACTORDATA_BASE}/{path}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _FACTORDATA_UA})
+        with urllib.request.urlopen(req, timeout=_FACTORDATA_TIMEOUT) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        if url not in _TECH_LAB_LOG_ONCE:
+            _TECH_LAB_LOG_ONCE.add(url)
+            if e.code == 404:
+                log.debug("factordata 404 (not yet live): %s", url)
+            else:
+                log.warning("factordata HTTP %d: %s", e.code, url)
+        return None
+    except Exception as e:
+        if url not in _TECH_LAB_LOG_ONCE:
+            _TECH_LAB_LOG_ONCE.add(url)
+            log.warning("factordata fetch error for %s: %s", url, e)
+        return None
+
+
+def _fetch_tech_lab_profiles() -> dict | None:
+    """Fetch tech_lab.json once per run.  Returns a dict keyed by signal_id, or None.
+
+    tech_lab.json schema:
+        {"generated_utc": "...", "signals": {<signal_id>: {...}}, ...}
+
+    Returns the inner "signals" dict (keyed by signal_id → profile), or None when
+    the request fails or the expected structure is absent.
+    """
+    raw = _factordata_fetch("tech_lab.json")
+    if not isinstance(raw, dict):
+        return None
+    signals = raw.get("signals")
+    if not isinstance(signals, dict) or not signals:
+        return None
+    return signals
+
+
+def _build_tech_block(sym: str, lab_profiles: dict | None) -> dict | None:
+    """Build intel["tech"] for *sym*.
+
+    Fetches tech_events/<SYM>.json.  Returns None when:
+    - the per-symbol events endpoint returns 404/error (not yet live, or symbol not covered)
+    - the payload is malformed
+
+    When lab_profiles is None (tech_lab.json unavailable), profiles are omitted
+    from the output but the events block is still forwarded if available.
+
+    Output shape:
+        {
+            "events": <raw tech_events payload>,
+            "profiles": {signal_id: <tech_lab.json row>},   # only signals present in events
+            "asof": "<generated_utc>",
+        }
+    The "profiles" key is omitted when lab_profiles is None.
+    Callers must handle a missing "profiles" key.
+
+    House-law invariant (TLT-R3): this function only FETCHES and FORWARDS data
+    produced by the macro Python engine.  No signals, scores, or escalations are
+    derived here.
+    """
+    events_raw = _factordata_fetch(f"tech_events/{sym}.json")
+    if not isinstance(events_raw, dict):
+        return None  # 404 or parse error — omit block silently, rest of intel unaffected
+
+    out: dict = {"events": events_raw}
+
+    # Forward only the signal profiles that appear in this symbol's events payload.
+    if isinstance(lab_profiles, dict):
+        sig_ids = set(events_raw.get("signals", {}).keys())
+        profiles = {sid: lab_profiles[sid] for sid in sig_ids if sid in lab_profiles}
+        if profiles:
+            out["profiles"] = profiles
+
+    # Forward the generated_utc timestamp for display / staleness checks in the UI.
+    asof = events_raw.get("generated_utc")
+    if isinstance(asof, str) and asof:
+        out["asof"] = asof
+
+    return out
+
+
 def main(syms: list[str]) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -552,6 +653,20 @@ def main(syms: list[str]) -> None:
     # Equity-only symbols (skip crypto)
     equity_syms = [s for s in syms if META.get(s, ("", "Equities", ""))[1] == "Equities"]
 
+    # ── tech block: fetch tech_lab.json once per run ─────────────────────────
+    # 404 or timeout → lab_profiles=None; per-symbol tech block is omitted when None.
+    # This is a best-effort enrichment — failure here must never block the core intel write.
+    log.info("fetching tech_lab.json from %s …", _FACTORDATA_BASE)
+    lab_profiles = _fetch_tech_lab_profiles()
+    if lab_profiles is None:
+        log.warning(
+            "tech_lab.json unavailable (404 or timeout) — tech block will be omitted "
+            "from all intel files this run.  This is expected until the macro endpoint "
+            "goes live.  Core intel write is unaffected."
+        )
+    else:
+        log.info("tech_lab.json: %d signals loaded", len(lab_profiles))
+
     ok, skipped, stale_count, failed = [], [], [], []
     for sym in equity_syms:
         src_path = MACRO_STOCKDATA / f"{sym}.json"
@@ -563,6 +678,15 @@ def main(syms: list[str]) -> None:
             with open(src_path) as f:
                 src = json.load(f)
             intel = build_intel(sym, src, today=today)
+
+            # ── tech block (best-effort enrichment) ─────────────────────────
+            # Fetch per-symbol events; 404 = symbol not yet covered = omit quietly.
+            # Any failure here must not affect the core intel write (handled by
+            # the outer try/except on the symbol loop).
+            tech = _build_tech_block(sym, lab_profiles)
+            if tech is not None:
+                intel["tech"] = tech
+
             out_path = OUT / f"{sym}.intel.json"
             out_path.write_text(json.dumps(intel, separators=(",", ":")))
             lean = intel["tape"]["ai_lean"]
@@ -572,7 +696,7 @@ def main(syms: list[str]) -> None:
                 log.info("  %s: STALE (asof=%s) → abstain", sym, intel.get("asof"))
             else:
                 log.info(
-                    "  %s: wrote %s (regime=%s dir=%s band=%s entry=%s score=%s)",
+                    "  %s: wrote %s (regime=%s dir=%s band=%s entry=%s score=%s tech=%s)",
                     sym,
                     out_path.name,
                     intel["tape"].get("regime"),
@@ -580,6 +704,7 @@ def main(syms: list[str]) -> None:
                     lean.get("band"),
                     lean.get("entry"),
                     lean.get("score"),
+                    "yes" if tech is not None else "omitted",
                 )
             ok.append(sym)
         except Exception as exc:
