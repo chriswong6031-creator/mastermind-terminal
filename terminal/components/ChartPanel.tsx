@@ -423,7 +423,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // a prefix during replay; v1 re-runs on the full set, cache-keyed by its length + last time).
   const runPineMemo = (script: PineScript, rows: Bar[]): { result: RunResult | null; error: string | null } => {
     const barSig = rows.length ? `${rows.length}:${rows[rows.length - 1].time}` : "0";
-    const key = `${script.source} ${JSON.stringify(script.params)} ${symbol} ${timeframeRef.current} ${barSig}`;
+    const key = `${script.source}\0${JSON.stringify(script.params)}\0${symbol}\0${timeframeRef.current}\0${barSig}`;
     const cached = pineCacheRef.current.get(script.id);
     if (cached && cached.key === key) return { result: cached.result, error: cached.error };
     let result: RunResult | null = null; let error: string | null = null;
