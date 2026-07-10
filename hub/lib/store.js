@@ -135,9 +135,10 @@ class Store {
   // during boot with the manifest fallback would keep its stale anchor forever.
   // Re-check the AnchorCache on every read and re-derive when a better entry
   // exists — the read path is what must be correct, not the write path.
-  getQuotes(symList) {
+  // nowMs is optional; defaults to Date.now(). Exposed for unit tests.
+  getQuotes(symList, nowMs) {
     const out = {};
-    const now = Date.now();
+    const now = nowMs != null ? nowMs : Date.now();
     for (const sym of symList) {
       const q = this.quotes.get(sym);
       if (!q) continue;
