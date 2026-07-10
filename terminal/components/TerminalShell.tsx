@@ -11,7 +11,7 @@ import { intradayCapable } from "@/components/ChartPanel";
 import { classify } from "@/lib/intradaySources";
 import { type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
-import SearchModal from "@/components/SearchModal";
+import SearchModal, { FLAG_DEFAULT, FLAG_COLORS } from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
 import IndicatorSettings from "@/components/IndicatorSettings";
 import IndicatorSource from "@/components/IndicatorSource";
@@ -37,6 +37,8 @@ import { useT, useLang } from "@/lib/i18n";
 import { useFromMacro, backToMacro } from "@/lib/originNav";
 import { getJSON, prefetch, loadCoverage } from "@/lib/dataCache";
 import { type CmpCfg, type CmpMode, defaultCmpCfg, cmpKey, isCmpKey, cmpSymOf } from "@/lib/compare";
+import { isComposite, parseComposite, compositeQuote as calcCompositeQuote } from "@/lib/composite";
+import { pushHistory } from "@/lib/searchHistory";
 import CompareSettings from "@/components/CompareSettings";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
 import { type PineScript } from "@/components/ChartPanel";
@@ -146,6 +148,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const scriptByIdRef = useRef<Record<string, UserScript>>({});
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
   const [set, setSet] = useState<WLSet>(DEFAULT_SET);
+  // ── F1 flags: symbol → color; persisted inside mm.wls additively (read below) ──
+  const [flags, setFlags] = useState<Record<string, string>>({});
+  const [lastFlagColor, setLastFlagColor] = useState<string>(FLAG_DEFAULT);
+  // ── F3 add-symbol dialog mode (distinct from "go" search) ──
+  const [addSymOpen, setAddSymOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
   const [indOpen, setIndOpen] = useState(false); const [copilot, setCopilot] = useState(false);
   const [wlSetOpen, setWlSetOpen] = useState(false); const [tfOpen, setTfOpen] = useState(false); const [ctOpen, setCtOpen] = useState(false); const [snapOpen, setSnapOpen] = useState(false);
@@ -288,8 +295,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       setLists(saved.lists);
       setActiveList(saved.active && saved.lists[saved.active] ? saved.active : Object.keys(saved.lists)[0]);
     }
+    // F1 flags: stored alongside wls (additive — old saves without flags load fine)
+    const savedFlags = load("mm.flags", {});
+    if (savedFlags && typeof savedFlags === "object") setFlags(savedFlags);
+    const savedLastColor = load("mm.lastFlagColor", FLAG_DEFAULT);
+    if (typeof savedLastColor === "string") setLastFlagColor(savedLastColor);
   }, []);
   useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList })); }, [lists, activeList]);
+  // persist flags separately (not inside mm.wls to avoid shape-breaking old saves)
+  const flagsMounted = useRef(false);
+  useEffect(() => { if (!flagsMounted.current) { flagsMounted.current = true; return; } localStorage.setItem("mm.flags", JSON.stringify(flags)); }, [flags]);
   // paneSync mirrors same-timeframe peers only — disable it entirely when the panes carry mixed timeframes
   // (the Sync button is rendered disabled in that case), so a stale sync=true can't silently half-work.
   useEffect(() => { setPaneSync(sync && panes.length > 1 && new Set(paneTfs.slice(0, panes.length)).size <= 1); }, [sync, panes.length, paneTfs]);
@@ -360,10 +375,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // merge into `quotes`, so switching tickers never bleeds a stale quote and the header + watchlist
   // read the same numbers. A null entry (hub/Tencent down for that symbol) is deleted so its badge
   // reverts to grey and its row falls back to manifest EOD — preserving the old fallback invariant.
-  const quoteSyms = useMemo(
-    () => Array.from(new Set([active, ...wl.map((x) => x.symbol)])).filter(Boolean),
-    [active, wl]
-  );
+  // F2: composite expressions expand their legs into the poll batch so compositeQuote() can sum them.
+  const quoteSyms = useMemo(() => {
+    const all: string[] = [];
+    const activeLegs = parseComposite(active);
+    if (activeLegs) all.push(...activeLegs); else all.push(active);
+    for (const { symbol } of wl) {
+      const legs = parseComposite(symbol);
+      if (legs) all.push(...legs); else all.push(symbol);
+    }
+    return Array.from(new Set(all)).filter(Boolean);
+  }, [active, wl]);
   const quoteSymsKey = quoteSyms.join(",");
   // The polled symbol set lives in a ref so a rapid watchlist edit doesn't tear down + immediately
   // re-fire the interval (which bursts /api/quote). The interval is mounted ONCE and reads the ref;
@@ -486,8 +508,35 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   const sections = useMemo(() => { const o: Record<string, string[]> = {}; wl.forEach((s) => { (o[s.section] ||= []).push(s.symbol); }); return o; }, [wl]);
   const inWl = useMemo(() => new Set(wl.map((s) => s.symbol)), [wl]);
-  const m = man?.symbols?.[active];
-  const liveQuote = quotes[active] ?? null;   // header/badge quote = the active symbol's entry in the shared map
+  const activeIsComposite = isComposite(active);
+  const activeLegs = activeIsComposite ? (parseComposite(active) ?? []) : [];
+  const m = activeIsComposite ? undefined : man?.symbols?.[active];
+  const liveQuote = activeIsComposite ? null : (quotes[active] ?? null);   // header/badge quote
+  // F2: summed quote for composite symbols (legs fetched via expanded quoteSyms batch).
+  // EOD fallback: when live Polygon quotes are absent (weekends / no NEXT_PUBLIC_LIVE key),
+  // reconstruct per-leg {last, prevClose} from the manifest's EOD row (last + chg fields).
+  // prevClose is derived as last / (1 + chg/100) so the summed chg% is meaningful.
+  const compositeQ = useMemo(() => {
+    if (!activeIsComposite || !activeLegs.length) return null;
+    const legQuotes: Record<string, { last?: number; prevClose?: number } | null> = {};
+    for (const leg of activeLegs) {
+      const live = quotes[leg] ?? null;
+      if (live && live.last != null) {
+        legQuotes[leg] = live;
+      } else {
+        // Fall back to manifest EOD row.
+        const eod = man?.symbols?.[leg];
+        if (eod && eod.last != null) {
+          const chgFrac = (eod.chg ?? 0) / 100;
+          const prevClose = chgFrac !== -1 ? eod.last / (1 + chgFrac) : eod.last;
+          legQuotes[leg] = { last: eod.last, prevClose };
+        } else {
+          legQuotes[leg] = null;
+        }
+      }
+    }
+    return calcCompositeQuote(activeLegs, legQuotes);
+  }, [activeIsComposite, activeLegs, quotes, man]);
   const ov = oracleVerdict(m?.verdict ?? null);
   const dv = deskVerdict(intel, lang === "zh");
   // ── unified signal hierarchy ──────────────────────────────────────────────
@@ -516,13 +565,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // The `last` field may be a delayed AH print; expose it as a secondary line when it differs.
   const officialClose = liveQuote?.close as number | undefined;
   const ahPrint = liveQuote?.afterHours as number | undefined;
-  const lastPx = officialClose ?? liveQuote?.last ?? livePx ?? m?.last;
-  // When officialClose is the primary display value, compute chg against the same base so
-  // the price and % refer to the same last-value. liveQuote.chg is AH-print vs prevClose,
-  // which would be inconsistent when the display price is the EOD close (not the AH print).
+  // F2: for composites, use summed composite quote; for singles, use existing logic.
+  const lastPx: number | undefined = activeIsComposite
+    ? (compositeQ?.last ?? undefined)
+    : (officialClose ?? liveQuote?.last ?? livePx ?? m?.last);
   const prevCloseForChg = liveQuote?.prevClose as number | undefined;
-  const chgNow: number | null | undefined =
-    officialClose != null && prevCloseForChg != null && prevCloseForChg !== 0
+  const chgNow: number | null | undefined = activeIsComposite
+    ? (compositeQ?.chg ?? null)
+    : officialClose != null && prevCloseForChg != null && prevCloseForChg !== 0
       ? ((officialClose - prevCloseForChg) / prevCloseForChg) * 100
       : (liveQuote?.chg ?? m?.chg);
 
@@ -696,6 +746,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const setPineParam = useCallback((id: string, patch: Record<string, any>) => setPineParamsState((p) => ({ ...p, [id]: { ...(p[id] || {}), ...patch } })), []);
   // "Source code" on a legend row: a custom script opens the Pine editor (deep-linked); a built-in opens its read-only source view
   const openSource = useCallback((k: string) => { if (scriptById[k]) { window.location.href = `/scripts?id=${encodeURIComponent(k)}`; return; } setSourceKey(k); }, [scriptById]);
+  // F1 flag management
+  const setFlag = (sym: string, color: string) => {
+    setFlags((f) => ({ ...f, [sym]: color }));
+    setLastFlagColor(color);
+    try { localStorage.setItem("mm.lastFlagColor", color); } catch {}
+  };
+  const removeFlag = (sym: string) => { setFlags((f) => { const n = { ...f }; delete n[sym]; return n; }); };
+
   const pick = (sym: string) => {
     // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
     // re-clicking the active symbol is a no-op rather than jumping focus to the first matching pane.
@@ -703,6 +761,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (existing >= 0 && existing !== activePane) setActivePane(existing);          // shown in a different pane → focus it (don't duplicate)
     else if (panes[activePane] !== sym) setPanes((p) => p.map((s, i) => (i === activePane ? sym : s)));
     setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]);
+    // F3: record navigation in history ring buffer (skip composites — SearchModal filters
+    // history via manifest keys, so composite exprs would silently vanish from the Recent list).
+    if (!isComposite(sym)) pushHistory(sym);
   };
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
 
@@ -957,7 +1018,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <div className="menu-row wl-new" onClick={() => newList()}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>{t("newWatchlist")}</div>
               </div>
               <div className="wl-acts">
-                <button title={t("addSymbol")} onClick={(e) => { e.stopPropagation(); setSeed(""); setSearchOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
+                <button title={t("addSymbol")} onClick={(e) => { e.stopPropagation(); setSeed(""); setAddSymOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
                 <button title={t("settings")} onClick={(e) => { e.stopPropagation(); const willOpen = !wlSetOpen; closeAll(); setWlSetOpen(willOpen); }}><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg></button>
               </div>
               <div className={`pop${wlSetOpen ? " show" : ""}`} style={{ top: 40, right: 6 }} onClick={(e) => e.stopPropagation()}>
@@ -981,13 +1042,44 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 {Object.entries(sections).map(([sec, rows]) => (
                   <div key={sec}>
                     <div className="wl-sec" style={{ minWidth: wlMinW }}>{sec}</div>
-                    {rows.map((sym) => { const r = mergeLive(man?.symbols?.[sym], quotes[sym]); const u = (r?.chg ?? 0) >= 0; const nm = nameOf(r);
+                    {rows.map((sym) => {
+                      const isCompSym = isComposite(sym);
+                      // For composite rows, derive summed quote from leg quotes with EOD fallback.
+                      let r: ReturnType<typeof mergeLive> | undefined;
+                      if (isCompSym) {
+                        const legs = parseComposite(sym) ?? [];
+                        const legQuotes: Record<string, { last?: number; prevClose?: number } | null> = {};
+                        for (const leg of legs) {
+                          const live = quotes[leg] ?? null;
+                          if (live && live.last != null) {
+                            legQuotes[leg] = live;
+                          } else {
+                            const eod = man?.symbols?.[leg];
+                            if (eod && eod.last != null) {
+                              const chgFrac = (eod.chg ?? 0) / 100;
+                              const prevClose = chgFrac !== -1 ? eod.last / (1 + chgFrac) : eod.last;
+                              legQuotes[leg] = { last: eod.last, prevClose };
+                            } else {
+                              legQuotes[leg] = null;
+                            }
+                          }
+                        }
+                        const cq = calcCompositeQuote(legs, legQuotes);
+                        r = cq ? { name: sym, sec: "Composite", col: "#2962ff", mkt: "", zh: "", last: cq.last, chg: cq.chg, open: 0, high: 0, low: 0, vol: 0, hi52: 0, lo52: 0, verdict: null, wr: null, pf: null, cagr: null, regimeBull: null } : undefined;
+                      } else {
+                        r = mergeLive(man?.symbols?.[sym], quotes[sym]);
+                      }
+                      const u = (r?.chg ?? 0) >= 0; const nm = nameOf(r);
                       const primary = set.disp === "name" ? (nm || sym) : sym;
                       const secondary = set.disp === "both" ? nm : set.disp === "name" ? sym : (set.tableView ? "" : nm);
+                      const flagColor = flags[sym];
                       return (
-                        <div key={sym} className={`wl-row${sym === active ? " on" : ""}${set.tableView ? " tv" : ""}`} style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW, height: set.tableView ? 32 : 46 }} onClick={() => pick(sym)} onMouseEnter={() => { prefetch(`/data/${sym}.json`); prefetch(`/data/${sym}.slice.json`); prefetch(`/data/${sym}.intel.json`); }}>
-                          <div className="s">{set.logo && <span className="ic" style={{ background: r?.col || "#888", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24 }}>{sym[0]}</span>}
-                            <span className="nm"><span className="tk">{primary}</span>{secondary && <span className={set.tableView ? "tk-sub" : "sub"}>{secondary}</span>}</span></div>
+                        <div key={sym} className={`wl-row${sym === active ? " on" : ""}${set.tableView ? " tv" : ""}`} style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW, height: set.tableView ? 32 : 46 }} onClick={() => pick(sym)} onMouseEnter={() => { if (!isCompSym) { prefetch(`/data/${sym}.json`); prefetch(`/data/${sym}.slice.json`); prefetch(`/data/${sym}.intel.json`); } }}>
+                          {/* F1 flag slot — click to apply lastFlagColor; hover when already set shows palette */}
+                          <WlFlagSlot sym={sym} color={flagColor} onSet={(c) => setFlag(sym, c)} onRemove={() => removeFlag(sym)} lastColor={lastFlagColor} />
+                          <div className="s">{set.logo && !isCompSym && <span className="ic" style={{ background: r?.col || "#888", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24 }}>{sym[0]}</span>}
+                            {set.logo && isCompSym && <span className="ic" style={{ background: "#2962ff", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24, fontSize: 7, fontWeight: 700, color: "#fff" }}>M</span>}
+                            <span className="nm"><span className="tk">{isCompSym ? sym.split("+").slice(0, 2).join("+") + (sym.split("+").length > 2 ? "+…" : "") : primary}</span>{secondary && !isCompSym && <span className={set.tableView ? "tk-sub" : "sub"}>{secondary}</span>}</span></div>
                           {dataCols.map(([k]) => <span key={k} className={`c num ${k === "changePct" || k === "change" ? (u ? "up" : "down") : ""}`}>{colVal(r, k)}</span>)}
                           <span className="rm" title={t("remove")} onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
                         </div>
@@ -1057,7 +1149,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       </div>
 
       <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} compareCfg={compareCfg} active={active}
-        onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol}
+        flags={flags} lastFlagColor={lastFlagColor}
+        onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} onRemove={removeSymbol}
+        onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
+      {/* F3 Add Symbol dialog — mode="add" with trash+crosshair for members */}
+      <SearchModal open={addSymOpen} seed="" manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode="add" active={active}
+        flags={flags} lastFlagColor={lastFlagColor}
+        onClose={() => setAddSymOpen(false)} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
         onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
         scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
@@ -1110,5 +1208,48 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <div className="m-drawer-ft"><SettingsMenu email={email} /></div>
       </div>
     </div>
+  );
+}
+
+// ── F1 watchlist flag slot ─────────────────────────────────────────────────────
+// A 4px wide left-edge band per row. Click unflagged → apply lastColor. Hover flagged → palette pop.
+// Note: useState is already imported at the top of this module — reuse it directly.
+function WlFlagSlot({ color, onSet, onRemove, lastColor }: { sym: string; color?: string; onSet: (c: string) => void; onRemove: () => void; lastColor: string }) {
+  const [popOpen, setPopOpen] = useState(false);
+  const t = useT();
+  const PAL = FLAG_COLORS;
+  if (color) {
+    return (
+      <span
+        className="wl-flag-slot wl-flag-slot--set"
+        style={{ background: color }}
+        title={t("flagSetColor")}
+        onClick={(e) => { e.stopPropagation(); setPopOpen((v) => !v); }}
+        onMouseLeave={() => setPopOpen(false)}
+      >
+        {popOpen && (
+          <span className="wl-flag-pop" onClick={(e) => e.stopPropagation()}>
+            {PAL.map((c) => (
+              <span
+                key={c}
+                className={`wl-flag-dot${c === color ? " wl-flag-dot--sel" : ""}`}
+                style={{ background: c, color: c }}
+                onClick={(e) => { e.stopPropagation(); onSet(c); setPopOpen(false); }}
+              />
+            ))}
+            <span className="wl-flag-rm" title={t("flagRemove")} onClick={(e) => { e.stopPropagation(); onRemove(); setPopOpen(false); }}>
+              <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg>
+            </span>
+          </span>
+        )}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="wl-flag-slot wl-flag-slot--empty"
+      title={t("flagAdd")}
+      onClick={(e) => { e.stopPropagation(); onSet(lastColor); }}
+    />
   );
 }

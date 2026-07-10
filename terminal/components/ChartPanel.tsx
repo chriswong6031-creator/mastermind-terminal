@@ -20,7 +20,8 @@ import {
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
-import { getJSON, getSliceAndOhlc } from "@/lib/dataCache";
+import { getJSON, getSliceAndOhlc, getCompositeOhlc } from "@/lib/dataCache";
+import { parseComposite, alignAndSum } from "@/lib/composite";
 import { CMP_PALETTE, type CmpCfg, defaultCmpCfg, cmpKey } from "@/lib/compare";
 import { isIntradayTf, classify, tfMinutes, type Market } from "@/lib/intradaySources";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
@@ -1671,13 +1672,28 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const symbolChanged = symbol !== prevSymbolRef.current;
       if (symbolChanged) { clearResampleCache(prevSymbolRef.current); prevSymbolRef.current = symbol; }
       cpMark(`ohlc-fetch-start[${symbol}]`);
-      const { ohlc, slice } = await getSliceAndOhlc(symbol);
-      cpMark(`ohlc-fetch-done[${symbol}]`);
-      if (cancelled || epochRef.current !== epoch) return;
-      sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)
-      if (!ohlc?.bars?.length) { if (statusRef.current) statusRef.current.textContent = "No data for this symbol."; return; }
 
-      const daily: Bar[] = ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
+      // ── F2 composite branch: fetch each leg and sum; no slice (no Oracle signal for baskets) ──
+      const compositeLegs = parseComposite(symbol);
+      let daily: Bar[];
+      if (compositeLegs) {
+        const legOhlcs = await getCompositeOhlc(compositeLegs);
+        if (cancelled || epochRef.current !== epoch) return;
+        const legBars = legOhlcs.map((o: any) =>
+          o?.bars?.length ? (o.bars as any[][]).map((b) => ({ time: b[0] as string, o: b[1] as number, h: b[2] as number, l: b[3] as number, c: b[4] as number, v: b[5] as number })) : []
+        );
+        const summed = alignAndSum(legBars);
+        if (!summed.length) { if (statusRef.current) statusRef.current.textContent = "No shared data for composite."; return; }
+        daily = summed;
+        sliceRef.current = null;
+      } else {
+        const { ohlc, slice } = await getSliceAndOhlc(symbol);
+        cpMark(`ohlc-fetch-done[${symbol}]`);
+        if (cancelled || epochRef.current !== epoch) return;
+        sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)
+        if (!ohlc?.bars?.length) { if (statusRef.current) statusRef.current.textContent = "No data for this symbol."; return; }
+        daily = ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
+      }
       dailyBarsRef.current = daily;         // raw daily source — the R11 splice operates on THIS
       // ── PERF-FIX (b): use cached resample; same-symbol TF switches skip the O(N) bucketing pass ──
       let rows: Bar[] = resampleTfCached(daily, timeframe, symbol);
@@ -1730,9 +1746,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (cancelled || epochRef.current !== epoch) return;
 
       // ── signal marks, status, verdict, view ──
-      sigMarksRef.current = resolveSigMarks(slice, onChart);
-      { const sc = resolveSideChannels(slice, onChart); earlyDotsRef.current = sc.dots; warnMarksRef.current = sc.warns; }
-      paintStatus(onChart, slice);
+      // sliceRef.current is null for composites (no Oracle signal) — functions guard on null slice.
+      sigMarksRef.current = resolveSigMarks(sliceRef.current, onChart);
+      { const sc = resolveSideChannels(sliceRef.current, onChart); earlyDotsRef.current = sc.dots; warnMarksRef.current = sc.warns; }
+      paintStatus(onChart, sliceRef.current);
       applyView(onChart, ri);
 
       renderSignalsRef.current(); renderRef.current();
