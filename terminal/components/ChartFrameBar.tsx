@@ -42,12 +42,15 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   gridHVisible: true,
   gridVVisible: true,
   crosshairMode: 0,
-  candleUpColor: "#26c281",
-  candleDownColor: "#f0566b",
-  candleUpBorder: "#26c281",
-  candleDownBorder: "#f0566b",
-  candleUpWick: "#26c281",
-  candleDownWick: "#f0566b",
+  // Empty strings = "use CSS theme tokens (--up/--down)". Non-empty = user-overridden hex.
+  // Effect 7 only applies candle colors when truthy, so the up/down flip in Effect 5 is never
+  // clobbered by a settings-load on mount.
+  candleUpColor: "",
+  candleDownColor: "",
+  candleUpBorder: "",
+  candleDownBorder: "",
+  candleUpWick: "",
+  candleDownWick: "",
   showOHLC: true,
   showBarChange: true,
   showSymbolName: true,

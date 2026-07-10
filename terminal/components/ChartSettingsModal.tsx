@@ -151,17 +151,34 @@ function ToggleRow({ label, value, onChange }: { label: string; value: boolean; 
   );
 }
 
+// Read the resolved CSS token color for a given custom property name.
+// Falls back to the provided fallback if document is not available (SSR) or the property is unset.
+function cssToken(name: string, fallback: string): string {
+  if (typeof document === "undefined") return fallback;
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
 // ── SYMBOL TAB ───────────────────────────────────────────────────────────────
 function SymbolTab({ s, onSettings, t }: { s: ChartSettings; onSettings: (p: Partial<ChartSettings>) => void; t: (k: string) => string }) {
+  // When no custom color is set (empty string = "follow theme tokens"), resolve the current CSS token
+  // so the color picker shows the actual live color rather than an empty/black swatch.
+  const upFb = cssToken("--up", "#26c281");
+  const downFb = cssToken("--down", "#f0566b");
+  const effectiveUpColor = s.candleUpColor || upFb;
+  const effectiveDownColor = s.candleDownColor || downFb;
+  const effectiveUpBorder = s.candleUpBorder || upFb;
+  const effectiveDownBorder = s.candleDownBorder || downFb;
+  const effectiveUpWick = s.candleUpWick || upFb;
+  const effectiveDownWick = s.candleDownWick || downFb;
   return (
     <div className="sm-section-list">
       <div className="sm-section-hd">{t("smCandleColors")}</div>
-      <ColorRow label={t("smBodyUp")} value={s.candleUpColor} onChange={(v) => onSettings({ candleUpColor: v })} />
-      <ColorRow label={t("smBodyDown")} value={s.candleDownColor} onChange={(v) => onSettings({ candleDownColor: v })} />
-      <ColorRow label={t("smBorderUp")} value={s.candleUpBorder} onChange={(v) => onSettings({ candleUpBorder: v })} />
-      <ColorRow label={t("smBorderDown")} value={s.candleDownBorder} onChange={(v) => onSettings({ candleDownBorder: v })} />
-      <ColorRow label={t("smWickUp")} value={s.candleUpWick} onChange={(v) => onSettings({ candleUpWick: v })} />
-      <ColorRow label={t("smWickDown")} value={s.candleDownWick} onChange={(v) => onSettings({ candleDownWick: v })} />
+      <ColorRow label={t("smBodyUp")} value={effectiveUpColor} onChange={(v) => onSettings({ candleUpColor: v })} />
+      <ColorRow label={t("smBodyDown")} value={effectiveDownColor} onChange={(v) => onSettings({ candleDownColor: v })} />
+      <ColorRow label={t("smBorderUp")} value={effectiveUpBorder} onChange={(v) => onSettings({ candleUpBorder: v })} />
+      <ColorRow label={t("smBorderDown")} value={effectiveDownBorder} onChange={(v) => onSettings({ candleDownBorder: v })} />
+      <ColorRow label={t("smWickUp")} value={effectiveUpWick} onChange={(v) => onSettings({ candleUpWick: v })} />
+      <ColorRow label={t("smWickDown")} value={effectiveDownWick} onChange={(v) => onSettings({ candleDownWick: v })} />
       <div className="sm-sep" />
       <ToggleRow label={t("smLastValueLabel")} value={s.lastValueVisible} onChange={(v) => onSettings({ lastValueVisible: v })} />
       <ToggleRow label={t("smPriceLine")} value={s.priceLineVisible} onChange={(v) => onSettings({ priceLineVisible: v })} />

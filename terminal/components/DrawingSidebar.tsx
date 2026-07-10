@@ -38,7 +38,7 @@ const TOOL_GROUPS: ToolGroup[] = [
     iconPath: "M5 5h14M12 5v14",
     tools: [
       { id: "text", path: "M5 5h14M12 5v14", tk: "toolText", kbd: "Alt+X" },
-      { id: "brush", path: "M20 4a2.8 2.8 0 0 0-4 0L6 14l-2 4 4-2L18 6M13 7l4 4", tk: "toolBrush" },
+      // brush removed: no render branch or pointer-creation handler exists for this kind
     ],
   },
   {
