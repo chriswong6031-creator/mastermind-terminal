@@ -447,6 +447,75 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .tfgrid .it .fav{color:var(--text-dim)}.tfgrid .it .fav.on{color:var(--signal)}.tfgrid .it .fav svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.7}.tfgrid .it .fav.on svg{fill:var(--signal);stroke:var(--signal)}
 .wl-row .rm{opacity:0;color:var(--text-dim);width:18px;height:18px;display:grid;place-items:center}.wl-row:hover .rm{opacity:1}.wl-row .rm:hover{color:var(--sell)}.wl-row .rm svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
 
+/* ─── F1 watchlist flags ──────────────────────────────────────────────────── */
+/* The flag slot: a 4px wide full-height band at the LEFT edge of each row.
+   Always present (transparent when unflagged); colored when flagged.
+   Rows position:relative so the absolute band can span the full height. */
+.wl-row{position:relative}
+.wl-flag-slot{position:absolute;left:0;top:0;bottom:0;width:4px;border-radius:2px 0 0 2px;background:transparent;cursor:pointer;transition:background .15s ease,opacity .15s ease;flex:none;z-index:1}
+.wl-row:hover .wl-flag-slot--empty{background:var(--line-3);opacity:.7}
+.wl-flag-slot--set{opacity:1}
+/* Palette popup that appears on hovering a set flag */
+.wl-flag-pop{position:absolute;left:8px;top:50%;transform:translateY(-50%);z-index:50;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:6px 8px;display:flex;align-items:center;gap:6px;box-shadow:0 8px 24px -6px rgba(0,0,0,.6);pointer-events:auto}
+.wl-flag-dot{width:14px;height:14px;border-radius:50%;cursor:pointer;flex:none;transition:transform .12s ease,box-shadow .12s ease}
+.wl-flag-dot:hover{transform:scale(1.2)}
+.wl-flag-dot--sel{box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px currentColor;transform:scale(1.1)}
+.wl-flag-rm{width:20px;height:20px;display:grid;place-items:center;color:var(--text-dim);border-radius:var(--r);cursor:pointer;flex:none}
+.wl-flag-rm:hover{color:var(--sell);background:var(--panel-2)}
+.wl-flag-rm svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2}
+/* Palette row shown INLINE in the watchlist slot when choosing */
+.wl-palette-row{display:flex;align-items:center;gap:4px;padding:0 8px;height:100%;z-index:2;position:absolute;left:0;top:0;bottom:0;background:var(--panel-2);border-radius:var(--r-md);pointer-events:auto}
+
+/* ─── F2 composite basket card (quote pane header) ───────────────────────── */
+.composite-hd{display:flex;align-items:center;gap:10px;padding:12px 15px 10px;border-bottom:1px solid var(--line)}
+.composite-hd .ic-composite{width:30px;height:30px;border-radius:var(--r);background:var(--panel-3);border:1px solid var(--line-3);display:grid;place-items:center;font:700 9px/1 var(--font-ui);color:var(--brand-2);flex:none;letter-spacing:.04em}
+.composite-hd .meta{min-width:0;flex:1}
+.composite-hd .expr{font:600 13.5px/1.3 var(--font-ui);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.composite-hd .sub{font-size:11px;color:var(--muted);margin-top:2px}
+.composite-hd .acts{display:flex;align-items:center;gap:6px;margin-left:auto}
+.composite-hd .acts button{width:28px;height:28px;border-radius:var(--r-md);display:grid;place-items:center;color:var(--text-dim)}
+.composite-hd .acts button:hover{background:var(--panel-3);color:var(--text)}
+.composite-hd .acts button svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8}
+.composite-px{padding:10px 15px 14px;border-bottom:1px solid var(--line-2)}
+.composite-px .big{font:700 28px/1 var(--font-num);color:var(--text);font-variant-numeric:tabular-nums}
+.composite-px .chg{font:600 14px/1 var(--font-num);margin-left:10px;font-variant-numeric:tabular-nums}
+.composite-px .upd{font-size:11px;color:var(--muted);margin-top:6px}
+/* volume pane suppression for composites is handled in ChartPanel by passing hideVolume prop */
+
+/* ─── F3 smart dialog enhancements ───────────────────────────────────────── */
+/* Title bar above the search input */
+.smodal-title-bar{display:flex;align-items:center;justify-content:space-between;padding:12px 16px 0;font:700 12.5px/1 var(--font-ui);color:var(--text-2)}
+.smodal-title-bar .esc{font:600 10px/1 var(--font-ui);color:var(--muted);border:1px solid var(--line);border-radius:var(--r);padding:4px 7px;cursor:pointer}
+/* Keyboard icon in the search input slot */
+.smodal .sh .sh-kbd{display:grid;place-items:center;flex:none;color:var(--text-dim);width:20px;height:20px}
+.smodal .sh .sh-kbd svg{width:17px;height:17px;stroke:currentColor;stroke-width:1.5;fill:none}
+/* Filter chips row */
+.s-chips{display:flex;gap:5px;padding:8px 12px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--line)}
+.s-chips::-webkit-scrollbar{display:none}
+.s-chip{height:24px;padding:0 10px;border-radius:var(--r-pill);border:1px solid var(--line);background:transparent;color:var(--text-2);font:600 11px/1 var(--font-ui);cursor:pointer;white-space:nowrap;flex:none}
+.s-chip:hover{background:var(--panel-2);color:var(--text)}.s-chip.on{background:var(--panel-2);border-color:var(--line-3);color:var(--text)}
+/* Section headers in results (e.g. "Recent") */
+.sres-section-hd{font:600 9.5px/1 var(--font-ui);letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);padding:10px 12px 5px}
+/* Inline warning for invalid composite */
+.sres-warn{padding:10px 12px;font-size:12px;color:var(--sell);background:rgba(240,86,107,.08);border-radius:var(--r-md);margin:6px}
+/* Composite first row */
+.sres .r.r-composite{border:1px solid var(--line-3);background:var(--panel-2);margin-bottom:2px}
+.sres .r.r-composite.sel,.sres .r.r-composite:hover{background:var(--panel-3);border-color:var(--brand)}
+.sres .r.r-composite .ic-composite{width:26px;height:26px;border-radius:var(--r);background:var(--panel-3);border:1px solid var(--line-3);display:grid;place-items:center;font:700 8.5px/1 var(--font-ui);color:var(--brand-2);flex:none;letter-spacing:.03em}
+/* Flag bar inside search results for watchlist members */
+.s-flag-bar{width:3px;height:22px;border-radius:2px;background:var(--line-3);flex:none}
+.s-flag-bar--set{background:currentColor}
+.s-flag-dot{width:8px;height:8px;border-radius:50%;flex:none}
+/* Add Symbol mode — member action buttons */
+.s-wl-acts{display:flex;align-items:center;gap:4px}
+.s-wl-act{width:26px;height:26px;border-radius:var(--r);display:grid;place-items:center;color:var(--muted)}
+.s-wl-act:hover{background:var(--panel-3)}
+.s-wl-remove:hover{color:var(--sell)}
+.s-wl-go:hover{color:var(--brand-2)}
+.s-wl-act svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8}
+/* Footer hint bar (S5) */
+.smodal-hint{padding:10px 16px 12px;font-size:11.5px;color:var(--muted);border-top:1px solid var(--line);text-align:center}
+
 /* ===== alerts + portfolio pages ===== */
 .pg{flex:1;overflow-y:auto;min-height:0;padding:18px 20px}
 .pg-head{display:flex;align-items:center;gap:12px;margin-bottom:16px}.pg-head h2{font:650 17px/1 var(--font-ui)}.pg-head .sub{color:var(--muted);font-size:12.5px}

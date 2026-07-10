@@ -54,6 +54,17 @@
         "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
       }
+    },
+    {
+      "name": "pass6-p6",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3033"],
+      "cwd": "terminal",
+      "port": 3033,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
     }
   ]
 }

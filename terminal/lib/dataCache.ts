@@ -272,3 +272,12 @@ export async function getSliceAndOhlc(sym: string): Promise<{ ohlc: any; slice: 
   const [ohlc, slice] = await Promise.all([getOhlc(sym), getSlice(sym)]);
   return { ohlc, slice };
 }
+
+/**
+ * getCompositeOhlc — fetch multiple leg OHLC files in parallel.
+ * Returns an array aligned with the `legs` input.
+ * Legs with missing data resolve as null.
+ */
+export async function getCompositeOhlc(legs: string[]): Promise<(any | null)[]> {
+  return Promise.all(legs.map((leg) => getOhlc(leg).catch(() => null)));
+}

@@ -544,6 +544,25 @@ const LEX: Record<string, [string, string]> = {
   screenerColSector: ["Sector", "板块"],
   screenerColGross: ["Gross", "总保费"],
   screenerColCallShare: ["Call%", "认购占比"],
+  // ─── F1 watchlist flags ───────────────────────────────────────────────────
+  flagSetColor: ["Set flag color", "设置标记颜色"],
+  flagRemove: ["Remove flag", "移除标记"],
+  flagAdd: ["Flag this symbol", "标记此标的"],
+  // ─── F2 composite baskets ─────────────────────────────────────────────────
+  compositeSymbols: ["Composite Symbols", "组合标的"],
+  compositeType: ["spread", "组合"],
+  compositeInvalid: ["Unknown symbol(s): {syms}. Only supported US equities.", "未知标的: {syms}。仅支持美股。"],
+  compositeLastUpdate: ["Last update at {time}", "最后更新于 {time}"],
+  compositeAddToWl: ["Add basket to watchlist", "添加组合到自选"],
+  // ─── F3 smart dialogs ─────────────────────────────────────────────────────
+  searchTitle: ["Symbol search", "代码搜索"],
+  addSymbolTitle: ["Add symbol", "添加代码"],
+  searchInputPlaceholder: ["Symbol, ISIN, or CUSIP", "代码、ISIN或CUSIP"],
+  searchHistoryEmpty: ["No recent searches", "暂无最近搜索"],
+  searchRecentHeader: ["Recent", "最近"],
+  removeFromWatchlist: ["Remove from Watchlist", "从自选移除"],
+  goToSymbol: ["Go to Symbol", "跳转到标的"],
+  shiftClickHint: ["⇧ + Click  or  ⇧ + Enter  to add symbol and close dialog", "⇧ + 点击  或  ⇧ + Enter  添加标的并关闭对话框"],
 };
 
 const Ctx = createContext<{ lang: Lang; setLang: (l: Lang) => void }>({ lang: "en", setLang: () => {} });
