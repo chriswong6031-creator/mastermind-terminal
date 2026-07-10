@@ -141,7 +141,11 @@ class Store {
   // Re-check the AnchorCache on every read and re-derive when a better entry
   // exists — the read path is what must be correct, not the write path.
   // nowMs is optional; defaults to Date.now(). Exposed for unit tests.
-  getQuotes(symList, nowMs) {
+  //
+  // extFeed is optional; when provided, ext fields (extPrice/extChg/extTs/extSession/
+  // extSource) are merged for US symbols during extended-hours windows. They are
+  // NEVER emitted during RTH. Passed by hub.js; null when ext feed is disabled.
+  getQuotes(symList, nowMs, extFeed) {
     const out = {};
     const now = nowMs != null ? nowMs : Date.now();
     for (const sym of symList) {
@@ -209,6 +213,43 @@ class Store {
       this.quotes.set(sym, fresh); // persist so /health + later reads agree
       out[sym] = fresh;
     }
+
+    // ── Ext fields: merge extPrice/extChg/extTs/extSession/extSource ──────────
+    // Performed after the anchor re-derivation loop so we can use the settled
+    // close value from the anchor (needed for extChg computation).
+    // Only for US symbols; suppressed during RTH; no-op when extFeed is absent.
+    if (extFeed) {
+      // `now` is already bound above (line 150); reuse it instead of redeclaring.
+      for (const sym of symList) {
+        const q = out[sym];
+        if (!q || q.market !== "us") continue;
+        const officialClose = typeof q.close === "number" ? q.close : null;
+        // Pre-market / overnight: today's official close does not exist yet (daily file
+        // has not rolled). Fall back to prevClose (prior session's close) so extChg can
+        // be computed as (extPrice − prevClose) / prevClose × 100.  This is the correct
+        // reference — the same anchor used to compute the primary chg field.
+        const closeRef = officialClose != null
+          ? officialClose
+          : (typeof q.prevClose === "number" ? q.prevClose : null);
+        const ext = extFeed.getExt(sym, now, closeRef);
+        if (ext) {
+          // Shallow-copy so we don't mutate the persisted quote object.
+          out[sym] = { ...q, ...ext };
+        } else {
+          // Remove any stale ext fields that may have been persisted previously.
+          if (q.extPrice != null) {
+            const copy = { ...q };
+            delete copy.extPrice;
+            delete copy.extChg;
+            delete copy.extTs;
+            delete copy.extSession;
+            delete copy.extSource;
+            out[sym] = copy;
+          }
+        }
+      }
+    }
+
     return out;
   }
 
