@@ -103,6 +103,17 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
   const d = data;
   const gaugeVal = Math.max(-1, Math.min(1, (d.score - 50) / 50));
 
+  // ── asof quarter label — SEC publishes bulk Form-4 data one quarter at a time,
+  // roughly 45 days after quarter-end. Show "Q1 2026" rather than just the ISO date
+  // so the user knows this is SEC filing data, not a real-time feed.
+  const asofQLabel = (() => {
+    const d2 = new Date(d.asof);
+    const y = d2.getUTCFullYear();
+    const m = d2.getUTCMonth(); // 0-indexed
+    const q = Math.floor(m / 3) + 1;
+    return `Q${q} ${y}`;
+  })();
+
   // ── 18-month display window (docket 15: don't present ancient trades as the story) ──
   const WINDOW_DAYS = 548; // ~18 months
   const cutoff = new Date();
@@ -267,7 +278,7 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
           </div>
         )}
         <div className="fin-insider-asof">
-          {pick(zh, `As of ${d.asof} · filing dates (public). Open-market P/S only.`, `截至 ${d.asof} · 申报公开日期。仅公开市场买卖 (P/S)。`)}
+          {pick(zh, `${asofQLabel} SEC filing data (as of ${d.asof}) · filing dates (public). Open-market P/S only.`, `${asofQLabel} SEC 申报数据（截至 ${d.asof}）· 申报公开日期。仅公开市场买卖 (P/S)。`)}
         </div>
       </div>
 

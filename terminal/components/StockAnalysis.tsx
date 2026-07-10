@@ -475,6 +475,13 @@ function IvMini({ opts, bars, pick }: { opts: Opts | null; bars: Bar[]; pick: Pi
     const termVals = opts.term.map((t) => t.iv * 100);
     const smile = opts.smile;
     const smileOk = smile && smile.strikes?.length > 1;
+
+    // staleness: opts.json is rebuilt nightly; >1 calendar day old is stale.
+    const optsAsof = opts.asof ?? null;
+    const optsStale = optsAsof
+      ? (Date.now() - new Date(optsAsof).getTime()) > 86_400_000
+      : false;
+
     return (
       <Section title={pick("Implied volatility", "隐含波动率")} sub={smile?.dte != null ? `${smile.dte}${pick("d smile", "天微笑")}` : undefined}>
         <div className="sa-iv-mini">
@@ -485,6 +492,16 @@ function IvMini({ opts, bars, pick }: { opts: Opts | null; bars: Bar[]; pick: Pi
           <div className="sa-iv-mini">
             <div className="sa-iv-lbl">{pick(`Vol curve (${smile.dte}d)`, `波动率曲线 (${smile.dte}天)`)}</div>
             <LineSeries labels={smile.strikes.map((s) => fnum(s, s < 10 ? 1 : 0))} series={[{ name: "IV", values: smile.iv.map((v) => v * 100), color: "var(--brand-2)" }]} noLegend fmtY={(v) => v.toFixed(0) + "%"} vw={300} vh={110} />
+          </div>
+        )}
+        {optsAsof && (
+          <div className="sa-iv-asof" style={{ fontSize: "var(--font-num, 11px)", color: "var(--text-2)", marginTop: 4, display: "flex", gap: 6, alignItems: "center" }}>
+            <span>{pick(`as of ${optsAsof}`, `数据截至 ${optsAsof}`)}</span>
+            {optsStale && (
+              <span style={{ color: "var(--warn, #e6a817)", fontWeight: 600, fontSize: "0.9em" }}>
+                {pick("STALE", "数据过期")}
+              </span>
+            )}
           </div>
         )}
       </Section>
