@@ -1260,9 +1260,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b>
                 <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
                 {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
-                {/* AH secondary line — subtle, tokens-only; shown when hub signals an after-hours print.
-                    Shows ☾ glyph + price + % change vs official close (TV-style AH display). */}
-                {ahPrint != null && mktClosed && (
+                {/* AH secondary line — subtle, tokens-only; shown when hub signals an after-hours print
+                    that DIFFERS from the official close (TV-style AH display). Suppressed when equal
+                    to avoid a redundant '☾ <price> +0.00%' line. No fixture producer exists yet —
+                    this branch requires a hub emitting afterHours to be exercised in live mode. */}
+                {ahPrint != null && mktClosed && ahPrint !== officialClose && (
                   <span className="ah-print" title={lang === "zh" ? "盘后价格" : "After-hours print"}>
                     <span className="ah-moon" aria-hidden="true">☾</span>
                     {fmt(ahPrint, ahPrint < 10 ? 4 : 2)}
