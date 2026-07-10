@@ -437,7 +437,71 @@ def build_intel(sym: str, src: dict, today: date | None = None) -> dict:
         "value_change_pct": _r(sm_trend.get("value_change_pct"), 2),
     }
 
-    return {
+    # ── analysis.confluence / analysis.sniper (new contract blocks) ─────────────
+    # The Macro Dashboard nightly will carry these top-level keys once live.
+    # Until then they are absent from old stockdata JSONs → we silently omit them
+    # (never emit null; the UI must handle missing keys as "not yet available").
+    analysis_extras: dict = {}
+
+    raw_confluence = src.get("confluence")
+    if isinstance(raw_confluence, dict):
+        htf_s2_raw = raw_confluence.get("htf_s2")  # SHADOW — never forward to UI
+        conf_out: dict = {}
+        tier = raw_confluence.get("tier")
+        if tier is not None:
+            conf_out["tier"] = _str(tier)
+        w = raw_confluence.get("weight")
+        if w is not None:
+            conf_out["weight"] = _r(w, 4)
+        sub = raw_confluence.get("sub")
+        if sub is not None:
+            conf_out["sub"] = _str(sub)
+        ticks = raw_confluence.get("ticks")
+        if ticks is not None:
+            try:
+                conf_out["ticks"] = int(ticks)
+            except (TypeError, ValueError):
+                pass
+        btc = raw_confluence.get("bars_to_cross")
+        if btc is not None:
+            conf_out["bars_to_cross"] = _r(btc, 2)
+        for bool_key in ("provisional", "not_topped", "htf_s1"):
+            v = raw_confluence.get(bool_key)
+            if v is not None:
+                conf_out[bool_key] = bool(v)
+        # htf_s2 is SHADOW — deliberately not forwarded (brief contract)
+        _ = htf_s2_raw  # consumed but not emitted
+        asof_conf = _str(raw_confluence.get("asof"))
+        if asof_conf is not None:
+            conf_out["asof"] = asof_conf
+        if conf_out:
+            analysis_extras["confluence"] = conf_out
+
+    raw_sniper = src.get("sniper")
+    if isinstance(raw_sniper, dict):
+        sniper_out: dict = {}
+        w2w = raw_sniper.get("w2_washout")
+        if w2w is not None:
+            sniper_out["w2_washout"] = bool(w2w)
+        w2s = raw_sniper.get("w2_stoch_d")
+        if w2s is not None:
+            sniper_out["w2_stoch_d"] = _r(w2s, 2)
+        d63 = raw_sniper.get("days_since_63d_low")
+        if d63 is not None:
+            try:
+                sniper_out["days_since_63d_low"] = int(d63)
+            except (TypeError, ValueError):
+                pass
+        coiled = raw_sniper.get("coiled")
+        if coiled is not None:
+            sniper_out["coiled"] = bool(coiled)
+        asof_sniper = _str(raw_sniper.get("asof"))
+        if asof_sniper is not None:
+            sniper_out["asof"] = asof_sniper
+        if sniper_out:
+            analysis_extras["sniper"] = sniper_out
+
+    out: dict = {
         "schema": "intel/v1",
         "ticker": sym,
         "asof": asof,
@@ -450,6 +514,11 @@ def build_intel(sym: str, src: dict, today: date | None = None) -> dict:
             "smart_money": smart_money_card,
         },
     }
+    # Only emit the analysis sub-object when there is at least one block to write.
+    # This keeps old-data output identical to pre-contract (no empty {} noise).
+    if analysis_extras:
+        out["analysis"] = analysis_extras
+    return out
 
 
 def main(syms: list[str]) -> None:
