@@ -1425,7 +1425,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 }
 
 // ── F1 watchlist flag slot ─────────────────────────────────────────────────────
-// A 4px wide left-edge band per row. Click unflagged → apply lastColor. Hover flagged → palette pop.
+// A 4px wide left-edge band per row. Click unflagged → apply lastColor. Click flagged → toggle palette pop (click-outside or re-click to close).
 // Note: useState is already imported at the top of this module — reuse it directly.
 function WlFlagSlot({ color, onSet, onRemove, lastColor }: { sym: string; color?: string; onSet: (c: string) => void; onRemove: () => void; lastColor: string }) {
   const [popOpen, setPopOpen] = useState(false);
@@ -1438,7 +1438,6 @@ function WlFlagSlot({ color, onSet, onRemove, lastColor }: { sym: string; color?
         style={{ background: color }}
         title={t("flagSetColor")}
         onClick={(e) => { e.stopPropagation(); setPopOpen((v) => !v); }}
-        onMouseLeave={() => setPopOpen(false)}
       >
         {popOpen && (
           <span className="wl-flag-pop" onClick={(e) => e.stopPropagation()}>

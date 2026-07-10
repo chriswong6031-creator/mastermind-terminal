@@ -93,6 +93,11 @@ class Store {
             // Live matches EOD — no AH divergence to surface.
             delete q.afterHours;
           }
+        } else {
+          // No today-close yet (RTH / overnight). Evict any close that may have leaked
+          // from a prior session via the spread at q = { ...prev, ...partial }.
+          delete q.close;
+          delete q.afterHours;
         }
       }
     }
@@ -193,6 +198,7 @@ class Store {
       fresh.prevClose = anchor.prevClose;
       fresh.chg = chg;
       if (close != null) fresh.close = close;
+      else delete fresh.close;
       if (ah != null) fresh.afterHours = ah;
       else delete fresh.afterHours;
       if (prevSessionChg != null) fresh.prevSessionChg = prevSessionChg;
