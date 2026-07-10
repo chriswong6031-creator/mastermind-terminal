@@ -1,7 +1,7 @@
 /**
  * tools/measure_bg_stall.js
  *
- * Measures hidden-tab vs foreground boot time on /terminal?boottrace=1&symbol=MU.
+ * Boot-time smoke test for /terminal?boottrace=1&symbol=MU.
  *
  * Usage:
  *   node tools/measure_bg_stall.js [--url URL] [--no-screenshot] [--headed]
@@ -13,27 +13,26 @@
  * `npm install --prefix /tmp/pw playwright`).  Falls back to require("playwright").
  *
  * The script:
- *   1. Opens page A (foreground anchor) to ensure page B starts hidden.
- *   2. Navigates page B (background) to /terminal?boottrace=1&symbol=MU.
+ *   1. Opens page A (foreground anchor) so page B is created as a second tab.
+ *   2. Navigates page B to /terminal?boottrace=1&symbol=MU.
  *      - Polls every 2 s for: fetch count, boottrace marks, canvas count.
  *      - Stops polling as soon as first fetch appears OR at BG_DEADLINE_MS.
- *   3. Repeats with page B as FOREGROUND (page A absent) for the fast-path baseline.
- *   4. Prints a before/after summary table and exits:
- *       0  — both scenarios booted within PASS_THRESHOLD_MS (fix confirmed)
- *       1  — background boot took >PASS_THRESHOLD_MS (stall still present / fix incomplete)
+ *   3. Repeats with page B as the only tab (page A absent) for the single-tab baseline.
+ *   4. Prints a summary and exits:
+ *       0  — both scenarios booted within PASS_THRESHOLD_MS
+ *       1  — one or both scenarios did not boot within threshold
  *       2  — unexpected error
  *
- * Why this test passes AFTER the fix:
- *   - The rIC timeout-race in TerminalShell (setTimeout 200 ms) fires within the
- *     browser's minimum background-timer interval (~1-2 s), not the 30-60 s rIC delay.
- *   - The rAF fallback in ChartPanel (setTimeout 200 ms) drives overlay render even when
- *     Chrome freezes rAF at 0 fps in background tabs.
+ * IMPORTANT LIMITATION: Playwright headless Chromium does NOT apply background-tab
+ * throttling (rAF freeze, rIC timeout suppression) that real Chrome applies to hidden
+ * tabs.  Both scenarios in headless mode will report similar boot times regardless of
+ * whether the defensive setTimeout fallbacks are present.  This script therefore:
+ *   - Confirms the FAST PATH (does NOT regress foreground boot) in headless mode.
+ *   - Cannot reproduce or measure a background-throttling stall.
  *
- * NOTE: Playwright headless Chromium does NOT throttle rAF or timers for background pages,
- * so the background scenario always boots fast in headless mode — the test confirms the fix
- * does not regress foreground boot.  To reproduce the original stall you must use headed
- * Chrome with a real background tab (--headed flag) against a production bundle on a
- * machine where Chrome's background throttling is active.
+ * To observe real background throttling you must run with --headed on a machine where
+ * the OS window is genuinely backgrounded/occluded, or use a dedicated browser
+ * automation session that drives Chrome's background tab throttling APIs.
  */
 "use strict";
 
@@ -187,14 +186,16 @@ function summarize(label, snapshots) {
   const browser = await chromium.launch({ headless: !HEADED, args: ["--disable-features=site-per-process", "--no-sandbox"] });
 
   try {
-    const bgSnaps = await runScenario(browser, "background", true);
-    const fgSnaps = await runScenario(browser, "foreground", false);
+    // "second-tab" = page B created while page A is present (closest headless can get to background)
+    // "single-tab" = page B is the only tab (pure foreground baseline)
+    const bgSnaps = await runScenario(browser, "second-tab", true);
+    const fgSnaps = await runScenario(browser, "single-tab", false);
 
     console.log("\n" + "=".repeat(60));
     console.log("SUMMARY");
     console.log("=".repeat(60));
-    const bg = summarize("background", bgSnaps);
-    const fg = summarize("foreground", fgSnaps);
+    const bg = summarize("second-tab", bgSnaps);
+    const fg = summarize("single-tab", fgSnaps);
 
     const bgMs = bg.firstFetchMs;
     const fgMs = fg.firstFetchMs;
@@ -203,24 +204,20 @@ function summarize(label, snapshots) {
     const fgPass = fgMs !== null && fgMs <= PASS_THRESHOLD_MS;
 
     console.log(`\nPass threshold: ${PASS_THRESHOLD_MS / 1000} s`);
-    console.log(`Background first fetch: ${bgMs !== null ? (bgMs / 1000).toFixed(1) + " s" : "TIMED OUT"}  → ${bgPass ? "PASS" : "FAIL"}`);
-    console.log(`Foreground first fetch: ${fgMs !== null ? (fgMs / 1000).toFixed(1) + " s" : "TIMED OUT"}  → ${fgPass ? "PASS" : "FAIL"}`);
+    console.log(`Second-tab first fetch: ${bgMs !== null ? (bgMs / 1000).toFixed(1) + " s" : "TIMED OUT"}  → ${bgPass ? "PASS" : "FAIL"}`);
+    console.log(`Single-tab first fetch: ${fgMs !== null ? (fgMs / 1000).toFixed(1) + " s" : "TIMED OUT"}  → ${fgPass ? "PASS" : "FAIL"}`);
 
     console.log(`\n${"=".repeat(60)}`);
-    console.log("BEFORE / AFTER TABLE");
+    console.log("HEADLESS BOOT TIME (fast-path regression check only)");
     console.log("=".repeat(60));
-    console.log("Scenario        | Before fix     | After fix (this run)");
-    console.log("----------------|----------------|----------------------");
-    console.log(`Background tab  | 30-60 s+       | ${bgMs !== null ? (bgMs / 1000).toFixed(1) + " s" : "TIMED OUT"} (target <5 s)`);
-    console.log(`Foreground tab  | ~0.2 s         | ${fgMs !== null ? (fgMs / 1000).toFixed(1) + " s" : "TIMED OUT"} (target <5 s)`);
-    console.log("");
-    console.log("NOTE: Playwright headless Chromium does not throttle rAF/timers in background");
-    console.log("pages, so background=foreground in this environment. Both measurements confirm");
-    console.log("the fix does not regress the fast boot path. To observe the original stall,");
-    console.log("run with --headed against a full production bundle on a real Chrome session.");
+    console.log("NOTE: headless Chromium does not throttle background tabs.");
+    console.log("Both tabs boot at similar speed. This confirms no foreground regression.");
+    console.log("Background throttling stall cannot be reproduced or measured in this harness.");
+    console.log(`Second-tab first fetch: ${bgMs !== null ? (bgMs / 1000).toFixed(1) + " s" : "TIMED OUT"}  target <${PASS_THRESHOLD_MS / 1000} s`);
+    console.log(`Single-tab first fetch: ${fgMs !== null ? (fgMs / 1000).toFixed(1) + " s" : "TIMED OUT"}  target <${PASS_THRESHOLD_MS / 1000} s`);
 
     if (bgPass && fgPass) {
-      console.log("\nResult: PASS — both scenarios booted within threshold.");
+      console.log("\nResult: PASS — no foreground regression (headless fast-path check only).");
       process.exit(0);
     } else {
       console.log("\nResult: FAIL — one or more scenarios did not boot within threshold.");

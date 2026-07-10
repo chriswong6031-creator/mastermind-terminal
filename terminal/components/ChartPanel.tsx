@@ -866,11 +866,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let onKey: ((e: KeyboardEvent) => void) | null = null;
     let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
     let rafId: number | null = null, measRaf: number | null = null;
-    // Background-tab rAF fallbacks: Chrome freezes requestAnimationFrame at 0 fps in hidden tabs,
-    // so overlays and the pane-layout measurement would never run.  Each scheduleRender /
-    // scheduleMeasure call races the rAF against a setTimeout so background tabs still update
-    // within the browser's minimum timer-throttle window (~1-2 s).  In foreground tabs the rAF
-    // fires first (~16 ms) and the setTimeout is cancelled — zero observable change to the hot path.
+    // Defensive rAF fallbacks: the spec allows browsers to freeze requestAnimationFrame in hidden
+    // tabs.  Each scheduleRender / scheduleMeasure races rAF against a setTimeout(200 ms) so that
+    // pan/zoom overlay rebuilds and pane-layout measurements still run if rAF is throttled.
+    // In foreground tabs the rAF fires first (~16 ms) and the setTimeout is cancelled — no
+    // observable change to the foreground hot path.  Note: scheduleRender is NOT on the first-paint
+    // boot path (line 1462 calls renderSignals/renderDraw directly); it fires only on subsequent
+    // pan/zoom/resize events via subscribeVisibleLogicalRangeChange and ResizeObserver.
     let rafFallbackId: ReturnType<typeof setTimeout> | null = null;
     let measFallbackId: ReturnType<typeof setTimeout> | null = null;
     const RAF_FALLBACK_MS = 200;
@@ -1450,8 +1452,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     renderRef.current = renderDraw;
     // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path.
-    // The setTimeout fallback ensures background tabs (where rAF is frozen at 0 fps) still run the
-    // render within RAF_FALLBACK_MS; the rAF cancels the timer on foreground tabs so it is a no-op.
+    // The setTimeout fallback is a defensive guard for environments where rAF may be throttled;
+    // in foreground tabs the rAF fires first and the timer is cancelled.
     const scheduleRender = () => {
       if (rafId != null) return;
       const runRender = () => { rafId = null; if (rafFallbackId != null) { clearTimeout(rafFallbackId); rafFallbackId = null; } if (!dead) { renderSignals(); renderDraw(); } };

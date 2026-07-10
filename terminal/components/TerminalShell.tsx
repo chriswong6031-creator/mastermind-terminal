@@ -332,11 +332,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // deferred: intel (~30-80KB), fund (~100-200KB), opts (~50-100KB) — not visible until user opens
     // the rail cards or MegaPane; deferring avoids competing with the chart's OHLC fetch on cold load.
     //
-    // Background-tab safety: Chrome throttles requestIdleCallback in hidden tabs and may ignore the
-    // `timeout` option entirely (delaying callbacks by 30-60 s in practice).  We therefore race rIC
-    // against a plain setTimeout so the deferred data always fetches within ~200 ms of idle time
-    // in foreground tabs and within the browser's timer-throttle window (~1-2 s) in background tabs.
-    // The guard `fired` ensures the callback runs exactly once regardless of which timer wins.
+    // Background-tab hypothesis: Chrome may throttle requestIdleCallback in hidden tabs (the spec
+    // allows ignoring the `timeout` option in background contexts).  As a defensive measure we race
+    // rIC against a plain setTimeout(200 ms) so the deferred data fires promptly when truly idle
+    // and also within the browser's background-timer window if rIC is throttled.  This is a
+    // precautionary pattern; the throttling has not been reproduced in our test harness.
+    // The guard `fired` ensures the callback runs exactly once regardless of which fires first.
     let fired = false;
     const fireDeferred = () => {
       if (fired || !alive) return;
