@@ -185,8 +185,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [tableViewOpen, setTableViewOpen] = useState(false);
   // D4: object tree panel
   const [objectTreeOpen, setObjectTreeOpen] = useState(false);
-  // D1: alert prefill (price) — set from context menu, cleared after AlertsView opens
-  const [alertPrefill, setAlertPrefill] = useState<{ symbol: string; price: number } | null>(null);
+  // D1: indicator value lookup by bar time — populated by the active ChartPane after each data load
+  const [indRowsAt, setIndRowsAt] = useState<((barTime: string | number) => Record<string, number | null>) | null>(null);
   // D2: chart templates — save-as modal
   const [tmplSaveOpen, setTmplSaveOpen] = useState(false);
   const [tmplSaveName, setTmplSaveName] = useState("");
@@ -281,6 +281,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             setSplit([1, 2, 4].includes(ws.split) ? ws.split : (pairs.length >= 4 ? 4 : pairs.length >= 2 ? 2 : 1));
             setActivePane(Math.min(ws.activePane || 0, pairs.length - 1));
             if (typeof ws.sync === "boolean") setSync(ws.sync);
+            if (typeof ws.lockedVLine === "string" || ws.lockedVLine === null) setLockedVLine(ws.lockedVLine);
           }
         }
       } catch {}
@@ -290,8 +291,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // deep-link (?sym=) session, so following a Screener/Portfolio row can't clobber the saved layout.
   useEffect(() => {
     if (!wsMounted.current) { wsMounted.current = true; return; }
-    if (!initialSymbol) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane }));
-  }, [panes, paneTfs, split, sync, activePane]);
+    if (!initialSymbol) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane, lockedVLine }));
+  }, [panes, paneTfs, split, sync, activePane, lockedVLine]);
   useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   // skip the mount-pass write (state is still the pre-load default) — otherwise a reload/discard
   // landing inside the mount→load window can permanently clobber the saved value with the default
@@ -728,7 +729,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const removeInd = useCallback((k: string) => {
     if (isCmpKey(k)) { toggleCompare(cmpSymOf(k)); return; }
     // a legend "remove" on a custom-script row disables the script rather than mutating the built-in set
-    if (scriptByIdRef.current[k]) { setEnabledIds((ids) => ids.filter((x) => x !== k)); setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; }); return; }
+    // Object-tree pine entries are keyed as "pine:<id>" — strip the prefix before the ref lookup
+    const pineId = k.startsWith("pine:") ? k.slice(5) : k;
+    if (scriptByIdRef.current[pineId]) { setEnabledIds((ids) => ids.filter((x) => x !== pineId)); setHidden((s) => { const n = new Set(s); n.delete(k); n.delete(pineId); return n.size === s.size ? s : n; }); return; }
     setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
     setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
   }, [toggleCompare]);
@@ -824,8 +827,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   };
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
 
-  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare, compareCfg }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
-  function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (c.compareCfg) setCompareCfg(c.compareCfg);
+  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare, compareCfg, lockedVLine }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
+  function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (c.compareCfg) setCompareCfg(c.compareCfg); if (typeof c.lockedVLine === "string" || c.lockedVLine === null) setLockedVLine(c.lockedVLine);
     if (Array.isArray(c.panes) && c.panes.length) {
       setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); setSplit(c.panes.length >= 4 ? 4 : c.panes.length >= 2 ? 2 : 1);
       setPaneTfs(Array.isArray(c.paneTfs) && c.paneTfs.length === c.panes.length ? c.paneTfs : c.panes.map(() => c.tf || "D"));   // back-compat: older layouts have a single tf
@@ -1043,6 +1046,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               const def = (IND_DEFS as any)[k];
               return { key: k, label: def?.label ?? k, tag: def?.tag ?? k };
             })}
+            indRowsAt={indRowsAt ?? undefined}
             onBack={() => setTableViewOpen(false)}
           />
         ) : view === "price" ? (
@@ -1059,11 +1063,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
                 <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts}
-                  onAddAlert={(price) => { setAlertPrefill({ symbol: active, price }); }}
+                  onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}
                   lockedVLine={lockedVLine}
                   onSetLockedVLine={(t2) => setLockedVLine(t2)}
+                  onIndRowsAt={(fn) => setIndRowsAt(() => fn)}
                 />
               ))}
             </div>

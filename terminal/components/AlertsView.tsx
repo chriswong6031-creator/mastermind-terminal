@@ -39,6 +39,16 @@ export default function AlertsView({ email }: { email: string }) {
     fetch("/api/alerts").then((r) => r.json()).then((d) => { if (alive) setAlerts(d.alerts || []); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); });
     // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
     getJSON("/data/manifest.json").then((m) => { if (alive) setSyms(Object.keys(m?.symbols || {})); }).catch(() => {});
+    // D1: prefill from ?sym= ?price= ?type= query params (set by terminal "Add alert" context menu)
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const qSym = sp.get("sym"); const qPrice = sp.get("price"); const qType = sp.get("type");
+      if (qSym) setSym(qSym);
+      if (qType && COND_TYPES.some((c) => c.v === qType)) setCtype(qType);
+      if (qPrice && parseFloat(qPrice) > 0) setVal(parseFloat(qPrice).toString());
+      // strip the params so a reload doesn't re-prefill
+      if (qSym || qPrice || qType) { const u = new URL(window.location.href); ["sym","price","type"].forEach((k) => u.searchParams.delete(k)); window.history.replaceState({}, "", u.toString()); }
+    } catch {}
     return () => { alive = false; };
   }, []);
 

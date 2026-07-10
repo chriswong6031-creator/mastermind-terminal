@@ -222,7 +222,7 @@ const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
-  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine }:
+  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
@@ -237,6 +237,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     onOpenSettingsModal?: (tab?: string) => void;
     lockedVLine?: string | null;
     onSetLockedVLine?: (time: string | null) => void;
+    /** Called once after each data load with a function that returns per-key indicator values at a bar time. */
+    onIndRowsAt?: (fn: ((barTime: string | number) => Record<string, number | null>) | null) => void;
   }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -291,6 +293,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const symbolRef = useRef(symbol);                          // current symbol (Effect 1 mounts once; symbol changes in Effect 2)
   const renderSignalsRef = useRef<() => void>(() => {});
   const syncCleanupRef = useRef<(() => void) | null>(null);
+  // D3 table-view: stable lookup of per-key indicator values by bar time (built after each data load).
+  const indDataMapRef = useRef<Map<string, Record<string, number | null>>>(new Map());
 
   // ── indicator-legend + pane-management plumbing (grafted onto the persistent-chart model) ──
   // one entry per chart pane (price pane + each sub-pane); pane KEY is the sub-pane store key
@@ -317,6 +321,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const onOpenSettingsModalRef = useRef(onOpenSettingsModal); onOpenSettingsModalRef.current = onOpenSettingsModal;
   const onSetLockedVLineRef = useRef(onSetLockedVLine); onSetLockedVLineRef.current = onSetLockedVLine;
   const lockedVLineRef = useRef(lockedVLine); lockedVLineRef.current = lockedVLine;
+  const onIndRowsAtRef = useRef(onIndRowsAt); onIndRowsAtRef.current = onIndRowsAt;
   // params for the ACTIVE indicators drive an indicator rebuild (Effect 3b)
   const indParamsKey = JSON.stringify(Array.from(indicators).sort().map((k) => indParams[k]));
   // ── existing DOM / interaction refs (unchanged) ──
@@ -727,6 +732,47 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (sArr[1]) sArr[1].setData(toLine(rows, m.line));
       if (sArr[2]) sArr[2].setData(toLine(rows, m.sig));
     }
+  };
+
+  // Build indDataMapRef: time → {indKey: value} for every active built-in indicator.
+  // Keys match the indCols `key` field (same as the indicator id: "ema", "rsi", etc.) so ChartTableView
+  // can look them up directly. Multi-line indicators (EMA, BB) expose their first/primary line value.
+  const buildIndDataMap = (rows: Bar[], closes: number[]) => {
+    const inds = indicatorsRef.current;
+    const m = new Map<string, Record<string, number | null>>();
+    const slot = (t: string | number) => { const k = String(t); if (!m.has(k)) m.set(k, {}); return m.get(k)!; };
+    if (inds.has("ema")) {
+      const p = P("ema");
+      // Expose the first active EMA line under "ema" so the column always has a value
+      const [on1, len1] = [p.ma1On as boolean, p.ma1Len as number];
+      const [on2, len2] = [p.ma2On as boolean, p.ma2Len as number];
+      const [on3, len3] = [p.ma3On as boolean, p.ma3Len as number];
+      const activeLen = on1 ? len1 : on2 ? len2 : on3 ? len3 : null;
+      if (activeLen != null) { const vals = ema(closes, activeLen); rows.forEach((r, i) => { slot(r.time)["ema"] = vals[i] ?? null; }); }
+    }
+    if (inds.has("bb")) {
+      const p = P("bb"); const basis = sma(closes, p.length);
+      rows.forEach((r, i) => { slot(r.time)["bb"] = basis[i] ?? null; });
+    }
+    if (inds.has("vwap")) {
+      let cum = 0, cumv = 0; rows.forEach((r) => { const tp = (r.h + r.l + r.c) / 3; cum += tp * r.v; cumv += r.v; slot(r.time)["vwap"] = cumv ? cum / cumv : null; });
+    }
+    if (inds.has("rsi")) {
+      const p = P("rsi"); const rsiVals = rsi(closes, p.length);
+      rows.forEach((r, i) => { slot(r.time)["rsi"] = rsiVals[i] ?? null; });
+    }
+    if (inds.has("stochrsi")) {
+      const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD);
+      // expose %K under "stochrsi" (the primary line shown in the legend)
+      rows.forEach((r, i) => { slot(r.time)["stochrsi"] = sr.k[i] ?? null; });
+    }
+    if (inds.has("macd")) {
+      const p = P("macd"); const mv = macd(closes, p.fast, p.slow, p.signal);
+      rows.forEach((r, i) => { slot(r.time)["macd"] = mv.line[i] ?? null; });
+    }
+    indDataMapRef.current = m;
+    // Publish the stable getter to the parent (TerminalShell → ChartTableView)
+    onIndRowsAtRef.current?.((barTime) => indDataMapRef.current.get(String(barTime)) ?? {});
   };
 
   // Rebuild ONLY the compare overlays onto `rows` (used by data + replay effects).
@@ -1545,8 +1591,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           // lock glyph at bottom near time axis
           const gy = H - 18, gx = lx - 8;
           const gb = mk("rect", { x: gx, y: gy, width: 16, height: 14, rx: 2, fill: "var(--brand)", opacity: 0.85 });
-          const gt = mk("text", { x: lx, y: gy + 10, "text-anchor": "middle", fill: "#fff", "font-size": 8, "font-family": "var(--font-ui)", "pointer-events": "none" });
-          gt.textContent = "🔒"; // lock emoji fallback — replaced by path below
           g.appendChild(gb);
           // simple lock path (SVG only — no emoji)
           const lkG = mk("g", { transform: `translate(${lx - 4},${gy + 1})` });
@@ -1670,8 +1714,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (e.key === "Escape") { if (sel) { sel = null; renderDraw(); } }
       else if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
       // D1 shortcuts: ⌥R = reset chart view, ⌥A = add alert at last bar close
-      else if (e.altKey && e.key === "r") { e.preventDefault(); try { chart.timeScale().fitContent(); } catch {} }
-      else if (e.altKey && e.key === "a") { e.preventDefault(); const b = barsRef.current; if (b.length) onAddAlertRef.current?.(b[b.length - 1].c); }
+      else if (e.altKey && e.code === "KeyR") { e.preventDefault(); try { chart.timeScale().fitContent(); } catch {} }
+      else if (e.altKey && e.code === "KeyA") { e.preventDefault(); const b = barsRef.current; if (b.length) onAddAlertRef.current?.(b[b.length - 1].c); }
     };
     window.addEventListener("keydown", onKey);
 
@@ -1774,6 +1818,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         priceS!.setData(priceData(onChart) as any);
         clearAllIndicators();
         buildAllIndicators(onChart, closes);
+        buildIndDataMap(onChart, closes);
         // compare overlays are cross-market date-string joins → skip on intraday; drop any stale ones
         for (const s of cmpSeriesRef.current.values()) { try { chart.removeSeries(s); } catch {} }
         cmpSeriesRef.current.clear();
@@ -1861,6 +1906,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         clearAllIndicators();
         buildAllIndicators(onChart, closes);
       }
+      buildIndDataMap(onChart, closes);
 
       // ── compare overlays ──
       await rebuildCompare(onChart, epoch);
