@@ -475,6 +475,31 @@ function IvMini({ opts, bars, pick }: { opts: Opts | null; bars: Bar[]; pick: Pi
     const termVals = opts.term.map((t) => t.iv * 100);
     const smile = opts.smile;
     const smileOk = smile && smile.strikes?.length > 1;
+
+    // staleness: opts.json is rebuilt nightly; >1 trading-day old is stale.
+    // opts.asof is a DATE-ONLY string (e.g. "2026-07-03"). new Date("2026-07-03") parses
+    // as UTC midnight, so a rolling 24h delta would fire any US market hour the next day
+    // (diff 30-37h > 24h), falsely labelling perfectly-fresh EOD data as STALE.
+    // Fix: compare calendar dates at local noon to avoid the UTC-midnight boundary,
+    // and tolerate the weekend gap (Friday data is fresh through Monday, diff≤3).
+    const optsAsof = opts.asof ?? null;
+    const optsStale = optsAsof
+      ? (() => {
+          const m = optsAsof.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (!m) return false;
+          const asofNoon = new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0, 0);
+          const todayNoon = new Date(); todayNoon.setHours(12, 0, 0, 0);
+          const diffDays = Math.round((todayNoon.getTime() - asofNoon.getTime()) / 86_400_000);
+          if (diffDays <= 1) return false;
+          // Weekend tolerance: Friday EOD data is fresh on Saturday (diff=1, already covered),
+          // Sunday (diff=2) and Monday (diff=3).
+          const dow = todayNoon.getDay(); // 0=Sun, 1=Mon
+          if (dow === 0 && diffDays <= 2) return false;
+          if (dow === 1 && diffDays <= 3) return false;
+          return true;
+        })()
+      : false;
+
     return (
       <Section title={pick("Implied volatility", "隐含波动率")} sub={smile?.dte != null ? `${smile.dte}${pick("d smile", "天微笑")}` : undefined}>
         <div className="sa-iv-mini">
@@ -485,6 +510,16 @@ function IvMini({ opts, bars, pick }: { opts: Opts | null; bars: Bar[]; pick: Pi
           <div className="sa-iv-mini">
             <div className="sa-iv-lbl">{pick(`Vol curve (${smile.dte}d)`, `波动率曲线 (${smile.dte}天)`)}</div>
             <LineSeries labels={smile.strikes.map((s) => fnum(s, s < 10 ? 1 : 0))} series={[{ name: "IV", values: smile.iv.map((v) => v * 100), color: "var(--brand-2)" }]} noLegend fmtY={(v) => v.toFixed(0) + "%"} vw={300} vh={110} />
+          </div>
+        )}
+        {optsAsof && (
+          <div className="sa-iv-asof" style={{ fontSize: "var(--font-num, 11px)", color: "var(--text-2)", marginTop: 4, display: "flex", gap: 6, alignItems: "center" }}>
+            <span>{pick(`as of ${optsAsof}`, `数据截至 ${optsAsof}`)}</span>
+            {optsStale && (
+              <span style={{ color: "var(--warn, #e6a817)", fontWeight: 600, fontSize: "0.9em" }}>
+                {pick("STALE", "数据过期")}
+              </span>
+            )}
           </div>
         )}
       </Section>

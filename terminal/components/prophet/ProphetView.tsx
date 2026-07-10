@@ -334,12 +334,17 @@ function AnalysisPanel({
     ? "var(--warn)"
     : "var(--text-2)";
 
-  // What-to-do-now from payload
-  const whatToDo = plan.what_to_do_now;
-  // Profit plan from payload
-  const profitPlan = plan.profit_plan;
-  // Thesis from payload
-  const thesis = (plan as unknown as { thesis?: string | null }).thesis;
+  // What-to-do-now from payload — prefer ZH variant when lang is zh.
+  const whatToDo = (lang === "zh" && plan.what_to_do_now_zh?.length)
+    ? plan.what_to_do_now_zh
+    : plan.what_to_do_now;
+  // Profit plan from payload — prefer ZH variant when lang is zh.
+  const profitPlan = (lang === "zh" && plan.profit_plan_zh?.length)
+    ? plan.profit_plan_zh
+    : plan.profit_plan;
+  // Thesis from payload — prefer ZH variant when lang is zh.
+  const _planAny = plan as unknown as { thesis?: string | null; thesis_zh?: string | null };
+  const thesis = (lang === "zh" && _planAny.thesis_zh) ? _planAny.thesis_zh : _planAny.thesis;
 
   return (
     <div style={ANALYSIS_SCROLL}>
