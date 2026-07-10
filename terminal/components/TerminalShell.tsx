@@ -426,7 +426,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     };
   }, [intel, m?.verdict]);
   // live quote (China/HK) wins over the WS tick and the manifest EOD row for both price and % change
-  const lastPx = liveQuote?.last ?? livePx ?? m?.last;
+  // AH semantics: when the hub emits `close` (official EOD) use it as the primary display price.
+  // The `last` field may be a delayed AH print; expose it as a secondary line when it differs.
+  const officialClose = liveQuote?.close as number | undefined;
+  const ahPrint = liveQuote?.afterHours as number | undefined;
+  const lastPx = officialClose ?? liveQuote?.last ?? livePx ?? m?.last;
   const chgNow = liveQuote?.chg ?? m?.chg;
 
   // ── market-closed chip ──────────────────────────────────────────────────────
@@ -906,6 +910,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b>
                 <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
                 {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
+                {/* AH secondary line — subtle, tokens-only; shown when hub signals an after-hours print */}
+                {ahPrint != null && mktClosed && (
+                  <span className="ah-print" title={lang === "zh" ? "盘后价格" : "After-hours print"}>
+                    AH {fmt(ahPrint, ahPrint < 10 ? 4 : 2)}
+                  </span>
+                )}
               </div>
             </div>
             <div className="detail-scroll">

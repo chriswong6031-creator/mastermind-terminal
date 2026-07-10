@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Nightly Mastermind Terminal universe + price refresh (VPS /usr/local/bin/terminal-data).
+#
+# ── EARLY BASELINE SWAP (2026-07-09 fix) ─────────────────────────────────────
+# The manifest baseline (as_of, per-symbol last/chg) was previously stale all day:
+# the full nightly run takes 4+ hours and only atomic-swapped the manifest at the
+# very end (~03:00 UTC). The quote hub derived prevClose from the stale manifest,
+# producing off-by-one-session errors (NVDA: chg=+3.58% instead of -0.07%).
+#
+# Fix: after build_polygon_universe produces the flagship slice and refresh_ohlc.py
+# runs the fast Polygon grouped-daily call, we immediately build a LIGHT BASELINE
+# manifest — just the as_of date and per-symbol last/chg fields from the freshly
+# updated OHLC files — and atomically swap it. The full marathon (gen_slices_all,
+# expand_universe, etc.) continues AFTER the swap. The quote hub sees a correct
+# same-day prevClose within minutes of 21:30 UTC instead of waiting until ~03:00.
+#
+# The 80%-count guard is applied to BOTH the early baseline swap AND the final swap.
+# ─────────────────────────────────────────────────────────────────────────────────
+#
+# Original comments (preserved):
+#
+# Builds the FULL multi-market manifest into a STAGING file (TERMINAL_MANIFEST) and
+# ATOMICALLY swaps it over the live manifest.json only at the very end — so the live
+# universe is NEVER reduced mid-run. This lets build_polygon_universe run (fresh
+# flagship-37 verdicts + slices) without its 37-symbol baseline ever reaching live.
+#
+# Side benefit: the rebuild starts from build_polygon_universe's fresh manifest, so the
+# universe is the CURRENT top-N each night (no unbounded additive drift; names that drop
+# out are pruned from search — their watchlist rows + OHLC files still persist).
+#
+# FAILURE-GUARDED: if the staged rebuild ends below 80% of the live count, the swap is
+# skipped and live is left untouched. Per-symbol OHLC/slice files write straight to the
+# live dir (atomic per file). Logs to /var/log/terminal-data.log (cron 30 21 * * *).
+
+set -u
+cd /opt/terminal || exit 1
+set -a; [ -f /opt/terminal/.env ] && . /opt/terminal/.env; set +a
+export MACRO_REPO=/opt/macro
+export MACRO_STOCKDATA="${MACRO_STOCKDATA:-/opt/macro/site/stockdata}"
+PY=/opt/macro/.venv/bin/python
+D=/opt/terminal/terminal/public/data
+LIVE="$D/manifest.json"
+STAGE="$D/manifest.staging.json"
+export TERMINAL_MANIFEST="$STAGE"
+ts(){ date -u "+%Y-%m-%d %H:%M:%S"; }
+count(){ "$PY" -c "import json,sys;print(len(json.load(open(sys.argv[1]))['symbols']))" "$1" 2>/dev/null || echo 0; }
+
+# ── flock: prevents concurrent fast_flagship runs from racing the nightly swap ──
+LOCKFILE=/tmp/terminal-data.lock
+exec 9>"$LOCKFILE" || exit 1
+flock -n 9 || { echo "[$(ts)] another terminal-data holds the lock — exit"; exit 0; }
+trap 'rm -f "$LOCKFILE"' EXIT
+
+echo "[$(ts)] === terminal refresh start (staging) ==="
+
+rm -f "$STAGE"
+run(){ echo "[$(ts)] -> $*"; "$@" || echo "[$(ts)] WARN: '$*' exited $?"; }
+
+# ── PHASE 1: flagship + fast price refresh (~5 min) ──
+# flagship 37 -> staging manifest + fresh real-OHLC/slices/verdicts (OHLC/slices go to live dir)
+run "$PY" -m ingest.build_polygon_universe
+[ -s "$STAGE" ] || cp -f "$LIVE" "$STAGE"
+# refresh US OHLC to the latest close via Polygon grouped-daily (1 call/date, whole US
+# market). backfill_ohlc only fetches NEW symbols, so without this existing non-flagship
+# OHLC (and watchlist LAST/CHG) freezes at file-creation date. Runs before hydrate so the
+# fresh close flows into the manifest same night (--days 7 self-corrects any missed day).
+run "$PY" ingest/refresh_ohlc.py --days 7 --write
+
+# ── EARLY BASELINE SWAP ──
+# At this point we have: flagship verdicts in STAGE + today's closes in per-symbol OHLC files.
+# Hydrate the staging manifest prices from the fresh OHLC and immediately swap.
+# This gives the quote hub a correct same-day prevClose anchor within ~5 minutes of cron start.
+run "$PY" ingest/hydrate_prices.py --write   # writes into STAGE (TERMINAL_MANIFEST is set)
+
+NEW_EARLY=$(count "$STAGE"); LIVEN=$(count "$LIVE")
+MIN_EARLY=$(( LIVEN * 80 / 100 )); [ "$MIN_EARLY" -lt 1000 ] && MIN_EARLY=1000
+if [ "${NEW_EARLY:-0}" -ge "$MIN_EARLY" ]; then
+  cp -f "$STAGE" "$LIVE.baseline.tmp" && mv -f "$LIVE.baseline.tmp" "$LIVE"
+  echo "[$(ts)] EARLY BASELINE SWAP: swapped in $NEW_EARLY symbols (was $LIVEN) — hub prevClose now correct"
+else
+  echo "[$(ts)] EARLY BASELINE GUARD: staged $NEW_EARLY < min $MIN_EARLY — skipping early swap, live unchanged"
+fi
+
+# ── PHASE 2: full universe marathon (~3-4 hr) ──
+# expand base multi-market universe + China/HK/US OHLC from the macro deep stores
+run "$PY" ingest/build_universe.py --ohlc all
+# US -> ~3,000 (Polygon ref+snapshot) and HK -> ~500 (akshare turnover)
+run "$PY" ingest/expand_universe.py
+# bilingual Chinese names (china_search name_zh + akshare 名称)
+run "$PY" ingest/enrich_zh.py
+# fill OHLC for any name still missing one (expanded US via Polygon, HK/Canada via yfinance)
+run "$PY" ingest/backfill_ohlc.py --market all
+# broad-universe confluence slices
+run "$PY" ingest/gen_slices_all.py
+# artifact freshness conformance
+run "$PY" -m ingest.artifact_conformance
+# pull macro dashboard intel bridge
+run "$PY" ingest/pull_macro_intel.py
+# refresh non-US OHLC (HK/CN/intl) to latest close via yfinance bulk
+run "$PY" ingest/refresh_ohlc_intl.py --days 10 --write
+# Final hydrate: pick up any OHLC written during Phase 2
+run "$PY" ingest/hydrate_prices.py --write
+
+# ── FINAL SWAP (full universe) ──
+NEW=$(count "$STAGE"); LIVEN=$(count "$LIVE")
+MIN=$(( LIVEN * 80 / 100 )); [ "$MIN" -lt 1000 ] && MIN=1000
+if [ "${NEW:-0}" -ge "$MIN" ]; then
+  mv -f "$STAGE" "$LIVE"
+  echo "[$(ts)] refresh OK: swapped in $NEW symbols (was $LIVEN)"
+  # gc_orphans: DISABLED pending dry-run verification (§0.10 / judge ruling)
+  # run "$PY" ingest/gc_orphans.py
+else
+  echo "[$(ts)] GUARD: staged $NEW < min $MIN (live $LIVEN) — keeping live, discarding staging"
+  rm -f "$STAGE"
+fi
+echo "[$(ts)] === terminal refresh done ==="
