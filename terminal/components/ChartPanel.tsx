@@ -1,5 +1,16 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+
+// ── Boot-trace helper — mirrors the one in TerminalShell (?boottrace=1) ──────
+const _cpStart = typeof performance !== "undefined" ? performance.now() : 0;
+function cpMark(name: string) {
+  if (typeof window === "undefined") return;
+  if (!new URLSearchParams(window.location.search).has("boottrace")) return;
+  const now = performance.now();
+  try { performance.mark("bt:" + name); } catch {}
+  // eslint-disable-next-line no-console
+  console.log(`[boottrace] ${name} +${(now - _cpStart).toFixed(1)}ms`);
+}
 import {
   createChart, CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries,
   createSeriesMarkers, type ISeriesMarkersPluginApi,
@@ -849,6 +860,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // EFFECT 1 — mount once. createChart + ALL listeners/overlays + render closures.
   // ────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
+    cpMark(`chart-effect1-start[${symbol}]`);
     const el = ref.current; if (!el) return;
     let ro: ResizeObserver | null = null, paneRO: ResizeObserver | null = null, dead = false;
     let onKey: ((e: KeyboardEvent) => void) | null = null;
@@ -926,6 +938,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     window.addEventListener("mm:snapshot", snapshot);
 
     // ── create the ONE chart (the hard invariant: exactly one createChart in this file) ──
+    cpMark(`chart-create[${symbol}]`);
     tokensRef.current = readTokens();
     const t = tokensRef.current;
     const chart = createChart(el, {
@@ -1452,6 +1465,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const chart = chartRef.current; if (!chart) return;
+    cpMark(`chart-effect2-start[${symbol}]`);
     const epoch = ++epochRef.current;
     let cancelled = false;
     const intraday = isIntradayTf(timeframe);
@@ -1530,7 +1544,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // ── PERF-FIX (b): clear the resample cache on symbol change so stale entries don't survive ──
       const symbolChanged = symbol !== prevSymbolRef.current;
       if (symbolChanged) { clearResampleCache(prevSymbolRef.current); prevSymbolRef.current = symbol; }
+      cpMark(`ohlc-fetch-start[${symbol}]`);
       const { ohlc, slice } = await getSliceAndOhlc(symbol);
+      cpMark(`ohlc-fetch-done[${symbol}]`);
       if (cancelled || epochRef.current !== epoch) return;
       sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)
       if (!ohlc?.bars?.length) { if (statusRef.current) statusRef.current.textContent = "No data for this symbol."; return; }
@@ -1565,6 +1581,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         priceS.applyOptions({ priceFormat: priceFmt() });
       }
       priceS!.setData(priceData(onChart) as any);
+      cpMark(`chart-painted[${symbol}]`);   // first candle on canvas
 
       // ── PERF-FIX (a): indicators — on same-symbol TF/chartType switch, update series data in-place
       //    (setData only, no removeSeries/addSeries lifecycle). On symbol change, do a full rebuild. ──
