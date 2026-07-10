@@ -16,9 +16,14 @@ const load = (d: ChartSettings): ChartSettings => { try { const v = localStorage
 // store) so multiple panes on the same symbol (an MTF layout) share one set. Auto-DETECTED drawings,
 // by contrast, are computed against THIS pane's timeframe and are transient (never persisted), so they
 // stay pane-local and are merged in only for this pane's own render.
-export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, chartType, inds, tool, drawStyle, detectCmd, compare, compareCfg, magnet, replayIdx, onMeta, drawings, onDrawingsChange, liveQuote, indParams, hidden, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts }:
+export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, chartType, inds, tool, drawStyle, detectCmd, compare, compareCfg, magnet, replayIdx, onMeta, drawings, onDrawingsChange, liveQuote, indParams, hidden, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts,
+  onAddAlert, onTableView, onObjectTree, lockedVLine, onSetLockedVLine, onIndRowsAt }:
   { idx: number; symbol: string; isActive: boolean; onActivate: (i: number) => void; row?: { col?: string; last?: number; chg?: number } | null; tf: string; chartType: string; inds: Set<string>; tool: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; detectCmd: DetectCmd; compare: string[]; compareCfg?: Record<string, CmpCfg>; magnet: boolean; replayIdx: number | null; onMeta: (m: { total: number }) => void; drawings: Drawing[]; onDrawingsChange: (d: Drawing[]) => void; liveQuote?: LiveQuote;
-    indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[] }) {
+    indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
+    onAddAlert?: (price: number) => void; onTableView?: () => void; onObjectTree?: () => void;
+    lockedVLine?: string | null; onSetLockedVLine?: (t: string | null) => void;
+    onIndRowsAt?: (fn: ((barTime: string | number) => Record<string, number | null>) | null) => void;
+  }) {
   const [auto, setAuto] = useState<Drawing[]>([]);
   const [chartSettings, setChartSettings] = useState<ChartSettings>(DEFAULT_CHART_SETTINGS);
   const [chartApi, setChartApi] = useState<IChartApi | null>(null);
@@ -104,6 +109,13 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         onChartApi={setChartApi}
         extHours={chartSettings.extHours}
         key={symbol}
+        onAddAlert={isActive ? onAddAlert : undefined}
+        onTableView={isActive ? onTableView : undefined}
+        onObjectTree={isActive ? onObjectTree : undefined}
+        onOpenSettingsModal={(tab) => { if (tab) setSettingsModalTab(tab as any); setSettingsModalOpen(true); }}
+        lockedVLine={lockedVLine}
+        onSetLockedVLine={onSetLockedVLine}
+        onIndRowsAt={isActive ? onIndRowsAt : undefined}
       />
       <ChartFrameBar
         timeframe={tf}

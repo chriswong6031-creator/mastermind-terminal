@@ -15,7 +15,7 @@ import SearchModal, { FLAG_DEFAULT, FLAG_COLORS } from "@/components/SearchModal
 import IndicatorsModal from "@/components/IndicatorsModal";
 import IndicatorSettings from "@/components/IndicatorSettings";
 import IndicatorSource from "@/components/IndicatorSource";
-import { allDefaults, indDefaults, withDefaults, IND_ORDER } from "@/lib/indicators";
+import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS } from "@/lib/indicators";
 import SeasonalityCard from "@/components/SeasonalityCard";
 // Code-split the conditionally-mounted heavies out of the /terminal first-paint bundle (task 9).
 // TerminalShell is a Client Component, so ssr:false is allowed — none of these render on any SSR
@@ -42,6 +42,9 @@ import { pushHistory } from "@/lib/searchHistory";
 import CompareSettings from "@/components/CompareSettings";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
 import { type PineScript } from "@/components/ChartPanel";
+import ChartTableView from "@/components/ChartTableView";
+import ChartObjectTree, { type OTEntry } from "@/components/ChartObjectTree";
+import { listTemplates, saveTemplate } from "@/lib/chartTemplates";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -177,6 +180,22 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [paneOpen, setPaneOpen] = useState<FinPage | null>(null);
   const [signalsOpen, setSignalsOpen] = useState(false);
   const [magnet, setMagnet] = useState(false);
+  // ── D1-D4: context-menu feature state ──────────────────────────────────────
+  // D3: table view mode (replaces chart body)
+  const [tableViewOpen, setTableViewOpen] = useState(false);
+  // D4: object tree panel
+  const [objectTreeOpen, setObjectTreeOpen] = useState(false);
+  // D1: indicator value lookup by bar time — populated by the active ChartPane after each data load
+  const [indRowsAt, setIndRowsAt] = useState<((barTime: string | number) => Record<string, number | null>) | null>(null);
+  // D2: chart templates — save-as modal
+  const [tmplSaveOpen, setTmplSaveOpen] = useState(false);
+  const [tmplSaveName, setTmplSaveName] = useState("");
+  const [tmplSaveErr, setTmplSaveErr] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<import("@/lib/chartTemplates").ChartTemplate[]>([]);
+  // D2: locked vertical line (bar time string | null); persists with the workspace save
+  const [lockedVLine, setLockedVLine] = useState<string | null>(null);
+  // D1: "remove all indicators" undo toast
+  const [undoInds, setUndoInds] = useState<{ snapshot: Set<string>; timer: any } | null>(null);
   // pre-draw style chosen BEFORE drawing (color/width/dash) — applied to each new line/arrow/box/HV drawing
   const [drawStyle, setDrawStyle] = useState<{ color: string; width: number; dash: "solid" | "dashed" | "dotted" }>({ color: "#4d82ff", width: 1.5, dash: "solid" });
   const [compare, setCompare] = useState<string[]>([]);
@@ -262,6 +281,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             setSplit([1, 2, 4].includes(ws.split) ? ws.split : (pairs.length >= 4 ? 4 : pairs.length >= 2 ? 2 : 1));
             setActivePane(Math.min(ws.activePane || 0, pairs.length - 1));
             if (typeof ws.sync === "boolean") setSync(ws.sync);
+            if (typeof ws.lockedVLine === "string" || ws.lockedVLine === null) setLockedVLine(ws.lockedVLine);
           }
         }
       } catch {}
@@ -271,8 +291,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // deep-link (?sym=) session, so following a Screener/Portfolio row can't clobber the saved layout.
   useEffect(() => {
     if (!wsMounted.current) { wsMounted.current = true; return; }
-    if (!initialSymbol) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane }));
-  }, [panes, paneTfs, split, sync, activePane]);
+    if (!initialSymbol) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane, lockedVLine }));
+  }, [panes, paneTfs, split, sync, activePane, lockedVLine]);
   useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   // skip the mount-pass write (state is still the pre-load default) — otherwise a reload/discard
   // landing inside the mount→load window can permanently clobber the saved value with the default
@@ -436,6 +456,44 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // state (page name on open, null on close). The URL ?pane= is stripped via replaceState on close and
   // is invisible to Next's useSearchParams, so a URL-derived highlight would stay lit after closing.
   useEffect(() => { window.dispatchEvent(new CustomEvent("mm:pane-state", { detail: paneOpen })); }, [paneOpen]);
+
+  // ── D1-D4 event handlers (wired from context menu custom events) ─────────────
+  // Load chart templates on mount
+  useEffect(() => { try { setTemplates(listTemplates()); } catch {} }, []);
+
+  // Remove-all-indicators event (from D1 context menu)
+  useEffect(() => {
+    const h = (e: Event) => {
+      const cnt = (e as CustomEvent).detail?.count as number;
+      // snapshot current inds for undo
+      setUndoInds((prev) => { if (prev?.timer) clearTimeout(prev.timer); const snap = new Set(inds); const timer = setTimeout(() => setUndoInds(null), 5000); return { snapshot: snap, timer }; });
+      setInds(new Set());
+    };
+    window.addEventListener("mm:remove-all-inds", h);
+    return () => window.removeEventListener("mm:remove-all-inds", h);
+  }, [inds]);
+
+  // Apply template event (from D2 context menu)
+  useEffect(() => {
+    const h = (e: Event) => {
+      const id = (e as CustomEvent).detail?.id as string;
+      const tmpl = templates.find((t) => t.id === id);
+      if (!tmpl) return;
+      setInds(new Set(tmpl.indicators));
+      const base = allDefaults();
+      for (const k of IND_ORDER) { if (tmpl.indParams[k]) base[k] = withDefaults(k, tmpl.indParams[k]); }
+      setIndParams(base);
+    };
+    window.addEventListener("mm:apply-template", h);
+    return () => window.removeEventListener("mm:apply-template", h);
+  }, [templates]);
+
+  // Save-template event (from D2 context menu)
+  useEffect(() => {
+    const h = () => { setTmplSaveName(""); setTmplSaveErr(null); setTmplSaveOpen(true); };
+    window.addEventListener("mm:save-template", h);
+    return () => window.removeEventListener("mm:save-template", h);
+  }, []);
 
   const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
   function setGrid(n: number) {
@@ -671,7 +729,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const removeInd = useCallback((k: string) => {
     if (isCmpKey(k)) { toggleCompare(cmpSymOf(k)); return; }
     // a legend "remove" on a custom-script row disables the script rather than mutating the built-in set
-    if (scriptByIdRef.current[k]) { setEnabledIds((ids) => ids.filter((x) => x !== k)); setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; }); return; }
+    // Object-tree pine entries are keyed as "pine:<id>" — strip the prefix before the ref lookup
+    const pineId = k.startsWith("pine:") ? k.slice(5) : k;
+    if (scriptByIdRef.current[pineId]) { setEnabledIds((ids) => ids.filter((x) => x !== pineId)); setHidden((s) => { const n = new Set(s); n.delete(k); n.delete(pineId); return n.size === s.size ? s : n; }); return; }
     setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
     setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
   }, [toggleCompare]);
@@ -767,8 +827,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   };
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
 
-  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare, compareCfg }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
-  function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (c.compareCfg) setCompareCfg(c.compareCfg);
+  function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare, compareCfg, lockedVLine }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
+  function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (c.compareCfg) setCompareCfg(c.compareCfg); if (typeof c.lockedVLine === "string" || c.lockedVLine === null) setLockedVLine(c.lockedVLine);
     if (Array.isArray(c.panes) && c.panes.length) {
       setPanes(c.panes); setActivePane(Math.min(c.activePane || 0, c.panes.length - 1)); setSplit(c.panes.length >= 4 ? 4 : c.panes.length >= 2 ? 2 : 1);
       setPaneTfs(Array.isArray(c.paneTfs) && c.paneTfs.length === c.panes.length ? c.paneTfs : c.panes.map(() => c.tf || "D"));   // back-compat: older layouts have a single tf
@@ -976,6 +1036,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             name={nameOf(m) || active}
             mode="workspace"
           />
+        ) : tableViewOpen && view === "price" ? (
+          /* D3: Table view replaces the chart body */
+          <ChartTableView
+            symbol={active}
+            timeframe={tf}
+            bars={bars}
+            indCols={[...inds].filter((k) => !hidden.has(k)).map((k) => {
+              const def = (IND_DEFS as any)[k];
+              return { key: k, label: def?.label ?? k, tag: def?.tag ?? k };
+            })}
+            indRowsAt={indRowsAt ?? undefined}
+            onBack={() => setTableViewOpen(false)}
+          />
         ) : view === "price" ? (
           <div className="chart-body">
             <DrawingSidebar
@@ -989,9 +1062,47 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} />
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts}
+                  onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
+                  onTableView={() => setTableViewOpen(true)}
+                  onObjectTree={() => setObjectTreeOpen((o) => !o)}
+                  lockedVLine={lockedVLine}
+                  onSetLockedVLine={(t2) => setLockedVLine(t2)}
+                  onIndRowsAt={(fn) => setIndRowsAt(() => fn)}
+                />
               ))}
             </div>
+            {/* D4: Object Tree right-rail panel */}
+            {objectTreeOpen && (
+              <ChartObjectTree
+                symbol={active}
+                entries={[
+                  // overlay indicators (price pane)
+                  ...[...inds].filter((k) => {
+                    const def = (IND_DEFS as any)[k];
+                    return def && def.kind === "overlay";
+                  }).map((k): OTEntry => {
+                    const def = (IND_DEFS as any)[k];
+                    return { key: k, label: def?.label ?? k, tag: def?.tag ?? k, kind: "overlay", hidden: hidden.has(k), noRemove: k === "_oracle" };
+                  }),
+                  // pine scripts (all enabled ones — ChartPanel handles pane vs overlay distinction)
+                  ...pineScripts.map((s): OTEntry => ({
+                    key: "pine:" + s.id, label: s.name, kind: "overlay", hidden: hidden.has("pine:" + s.id),
+                  })),
+                  // sub-pane indicators
+                  ...[...inds].filter((k) => {
+                    const def = (IND_DEFS as any)[k];
+                    return def && def.kind === "pane";
+                  }).map((k): OTEntry => {
+                    const def = (IND_DEFS as any)[k];
+                    return { key: k, label: def?.label ?? k, tag: def?.tag ?? k, kind: "pane", hidden: hidden.has(k) };
+                  }),
+                ]}
+                onEye={toggleHidden}
+                onRemove={removeInd}
+                onClose={() => setObjectTreeOpen(false)}
+              />
+            )}
           </div>
         ) : (
           <StrategyTester symbol={active} key={"strat" + active} />
@@ -1176,6 +1287,56 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       )}
 
       {/* ── mobile nav drawer ── */}
+      {/* ── D2 Save-template-as modal ─── */}
+      {tmplSaveOpen && (
+        <div className="tmpl-modal-bg" onClick={(e) => { if (e.target === e.currentTarget) setTmplSaveOpen(false); }}>
+          <div className="tmpl-modal">
+            <h3>{t("tmplSaveAs")}</h3>
+            <input
+              autoFocus
+              placeholder={t("tmplNamePlaceholder")}
+              value={tmplSaveName}
+              onChange={(e) => { setTmplSaveName(e.target.value); setTmplSaveErr(null); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (!tmplSaveName.trim()) { setTmplSaveErr(t("tmplNameRequired")); return; }
+                  const existing = templates.find((x) => x.name === tmplSaveName.trim());
+                  if (existing && !window.confirm(t("tmplOverwriteConfirm"))) return;
+                  try {
+                    saveTemplate(tmplSaveName.trim(), [...inds], indParams);
+                    setTemplates(listTemplates());
+                  } catch {}
+                  setTmplSaveOpen(false);
+                } else if (e.key === "Escape") setTmplSaveOpen(false);
+              }}
+            />
+            {tmplSaveErr && <div style={{ color: "var(--danger)", fontSize: 12, marginBottom: 10 }}>{tmplSaveErr}</div>}
+            <div className="tmpl-btns">
+              <button className="btn" onClick={() => setTmplSaveOpen(false)}>{t("cancel")}</button>
+              <button className="btn btn-primary" onClick={() => {
+                if (!tmplSaveName.trim()) { setTmplSaveErr(t("tmplNameRequired")); return; }
+                try {
+                  saveTemplate(tmplSaveName.trim(), [...inds], indParams);
+                  setTemplates(listTemplates());
+                } catch {}
+                setTmplSaveOpen(false);
+              }}>{t("save")}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── D1 "remove all indicators" undo toast ─── */}
+      {undoInds && (
+        <div className="undo-toast" style={{ position: "fixed", bottom: 22, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 50, display: "flex", alignItems: "center", gap: 10 }}>
+          {t("allIndicatorsRemoved")}
+          <button className="btn" style={{ height: 26, fontSize: 11.5 }} onClick={() => {
+            if (undoInds) { clearTimeout(undoInds.timer); setInds(undoInds.snapshot); setUndoInds(null); }
+          }}>{t("undo")}</button>
+        </div>
+      )}
+
       <div className={`m-drawer-scrim${drawer ? " open" : ""}`} onClick={() => setDrawer(false)} />
       <div className={`m-drawer${drawer ? " open" : ""}`}>
         <div className="m-drawer-h"><BrandLockup /></div>
