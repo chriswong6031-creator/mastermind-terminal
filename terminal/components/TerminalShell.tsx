@@ -331,25 +331,29 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     getBars(active).then((b) => { if (alive) setBars(b); }).catch(() => {});
     // deferred: intel (~30-80KB), fund (~100-200KB), opts (~50-100KB) — not visible until user opens
     // the rail cards or MegaPane; deferring avoids competing with the chart's OHLC fetch on cold load.
-    const useNativeRic = typeof requestIdleCallback !== "undefined";
-    let cancelDeferred: () => void;
-    if (useNativeRic) {
-      const id = requestIdleCallback(() => {
-        if (!alive) return;
-        getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
-        getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {});
-        getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
-      }, { timeout: 2000 });
-      cancelDeferred = () => cancelIdleCallback(id);
-    } else {
-      const id = setTimeout(() => {
-        if (!alive) return;
-        getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
-        getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {});
-        getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
-      }, 0);
-      cancelDeferred = () => clearTimeout(id);
+    //
+    // Background-tab safety: Chrome throttles requestIdleCallback in hidden tabs and may ignore the
+    // `timeout` option entirely (delaying callbacks by 30-60 s in practice).  We therefore race rIC
+    // against a plain setTimeout so the deferred data always fetches within ~200 ms of idle time
+    // in foreground tabs and within the browser's timer-throttle window (~1-2 s) in background tabs.
+    // The guard `fired` ensures the callback runs exactly once regardless of which timer wins.
+    let fired = false;
+    const fireDeferred = () => {
+      if (fired || !alive) return;
+      fired = true;
+      getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
+      getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {});
+      getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
+    };
+    let ricId: number | undefined;
+    const toId = setTimeout(fireDeferred, 200);   // background-safe fallback: always fires
+    if (typeof requestIdleCallback !== "undefined") {
+      ricId = requestIdleCallback(fireDeferred);   // no `timeout` — fires sooner when truly idle
     }
+    const cancelDeferred = () => {
+      clearTimeout(toId);
+      if (ricId !== undefined) cancelIdleCallback(ricId);
+    };
     return () => {
       alive = false;
       cancelDeferred();

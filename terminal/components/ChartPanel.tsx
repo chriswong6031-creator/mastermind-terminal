@@ -866,6 +866,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let onKey: ((e: KeyboardEvent) => void) | null = null;
     let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
     let rafId: number | null = null, measRaf: number | null = null;
+    // Background-tab rAF fallbacks: Chrome freezes requestAnimationFrame at 0 fps in hidden tabs,
+    // so overlays and the pane-layout measurement would never run.  Each scheduleRender /
+    // scheduleMeasure call races the rAF against a setTimeout so background tabs still update
+    // within the browser's minimum timer-throttle window (~1-2 s).  In foreground tabs the rAF
+    // fires first (~16 ms) and the setTimeout is cancelled — zero observable change to the hot path.
+    let rafFallbackId: ReturnType<typeof setTimeout> | null = null;
+    let measFallbackId: ReturnType<typeof setTimeout> | null = null;
+    const RAF_FALLBACK_MS = 200;
     let onPaneMove: ((e: MouseEvent) => void) | null = null, onPaneLeave: (() => void) | null = null, onPaneDbl: ((e: MouseEvent) => void) | null = null;
     // ── snapshot: composite the chart with per-pane labels + brand logo + timestamp ──
     // action = "download" | "copy" | "share" | "tab" (from event detail; default = "download")
@@ -1441,8 +1449,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       renderPriceTag();   // keep the last-price + countdown tag in step with every data/pan/style render
     };
     renderRef.current = renderDraw;
-    // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path
-    const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderDraw(); } }); };
+    // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path.
+    // The setTimeout fallback ensures background tabs (where rAF is frozen at 0 fps) still run the
+    // render within RAF_FALLBACK_MS; the rAF cancels the timer on foreground tabs so it is a no-op.
+    const scheduleRender = () => {
+      if (rafId != null) return;
+      const runRender = () => { rafId = null; if (rafFallbackId != null) { clearTimeout(rafFallbackId); rafFallbackId = null; } if (!dead) { renderSignals(); renderDraw(); } };
+      rafId = requestAnimationFrame(runRender);
+      rafFallbackId = setTimeout(() => { if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; } rafFallbackId = null; if (!dead) { renderSignals(); renderDraw(); } }, RAF_FALLBACK_MS);
+    };
     chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
     renderSignals(); renderDraw();
 
@@ -1469,7 +1484,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       paneLayoutRef.current = layout; setPaneLayout(layout);
     };
     measureRef.current = measureImpl;
-    const scheduleMeasure = () => { if (measRaf != null) return; measRaf = requestAnimationFrame(() => { measRaf = null; if (!dead) measureImpl(); }); };
+    const scheduleMeasure = () => {
+      if (measRaf != null) return;
+      const runMeasure = () => { measRaf = null; if (measFallbackId != null) { clearTimeout(measFallbackId); measFallbackId = null; } if (!dead) measureImpl(); };
+      measRaf = requestAnimationFrame(runMeasure);
+      measFallbackId = setTimeout(() => { if (measRaf != null) { cancelAnimationFrame(measRaf); measRaf = null; } measFallbackId = null; if (!dead) measureImpl(); }, RAF_FALLBACK_MS);
+    };
 
     // ── pane hover + double-click (collapse-all on the price pane, maximize on a sub-pane) ──
     onPaneMove = (e: MouseEvent) => {
@@ -1558,7 +1578,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
     // ── mount teardown (base line-416 logic + the new refs) ──
     return () => {
-      dead = true; if (rafId != null) cancelAnimationFrame(rafId); if (measRaf != null) cancelAnimationFrame(measRaf);
+      dead = true;
+      if (rafId != null) cancelAnimationFrame(rafId);
+      if (rafFallbackId != null) clearTimeout(rafFallbackId);
+      if (measRaf != null) cancelAnimationFrame(measRaf);
+      if (measFallbackId != null) clearTimeout(measFallbackId);
       if (syncCleanupRef.current) { try { syncCleanupRef.current(); } catch {} syncCleanupRef.current = null; }
       if (dragCleanup) dragCleanup();
       window.removeEventListener("mm:snapshot", snapshot);
