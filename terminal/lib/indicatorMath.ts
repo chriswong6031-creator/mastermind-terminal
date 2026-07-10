@@ -146,9 +146,20 @@ export function ichimoku(bars: Bar[], tenkan = 9, kijun = 26, senkouB = 52, disp
     spanBArr[i + displacement] = sb;
   }
 
-  // Generate future time strings (approx business days — skip Sat/Sun)
+  // Generate future time strings (approx business days — skip Sat/Sun).
+  // bar.time is a 'YYYY-MM-DD' string on daily bars and a numeric epoch-second on intraday bars.
+  // Handle both: if the last time value is numeric treat it as an epoch-second timestamp.
   const futureTimes: string[] = [...bars.map((b) => b.time)];
-  let lastDate = bars.length ? new Date(bars[bars.length - 1].time + "T00:00:00Z") : new Date();
+  const lastT = bars.length ? bars[bars.length - 1].time : null;
+  let lastDate: Date;
+  if (lastT == null) {
+    lastDate = new Date();
+  } else if (typeof lastT === "number" || (typeof lastT === "string" && /^\d{6,}$/.test(lastT))) {
+    // Intraday: epoch-second — construct Date directly to avoid the concatenation trap
+    lastDate = new Date((typeof lastT === "number" ? lastT : Number(lastT)) * 1000);
+  } else {
+    lastDate = new Date((lastT as string) + "T00:00:00Z");
+  }
   for (let k = 0; k < displacement; k++) {
     lastDate = new Date(lastDate.getTime() + 86400_000);
     while (lastDate.getUTCDay() === 0 || lastDate.getUTCDay() === 6) lastDate = new Date(lastDate.getTime() + 86400_000);
@@ -186,18 +197,19 @@ export function supertrend(bars: Bar[], period = 10, mult = 3): SupertrendResult
     const basicUp = hl2 - mult * a;
     const basicDn = hl2 + mult * a;
 
-    // Wilder-style: only tighten the trail, never widen
-    let finalUp = basicUp;
-    let finalDn = basicDn;
-    if (prevUp != null && bars[i].c > prevUp) finalUp = Math.max(basicUp, prevUp);
-    if (prevDn != null && bars[i].c < prevDn) finalDn = Math.min(basicDn, prevDn);
+    // Wilder-style: only tighten the trail, never widen.
+    // Test the flip against the PREVIOUS final rails BEFORE resetting them — matching Pine:
+    //   upLine := close[1] > upLine[1] ? math.max(basicUp, upLine[1]) : basicUp
+    //   trend  := close < upLine[1] ? false : (close > dnLine[1] ? true : trend[1])
+    const finalUp: number = prevUp != null && bars[i].c > prevUp ? Math.max(basicUp, prevUp) : basicUp;
+    const finalDn: number = prevDn != null && bars[i].c < prevDn ? Math.min(basicDn, prevDn) : basicDn;
 
     let trend: boolean;
     if (prevTrend == null) {
       trend = bars[i].c > finalUp;
-    } else if (prevTrend && bars[i].c < finalUp) {
+    } else if (prevTrend && prevUp != null && bars[i].c < prevUp) {
       trend = false;
-    } else if (!prevTrend && bars[i].c > finalDn) {
+    } else if (!prevTrend && prevDn != null && bars[i].c > prevDn) {
       trend = true;
     } else {
       trend = prevTrend;

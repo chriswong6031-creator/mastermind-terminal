@@ -317,8 +317,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     fastS.setData(toLine(rows, rb.emaFast));
     slowS.setData(toLine(rows, rb.emaSlow));
     indOverlayRef.current["ribbon"] = { rb, rows };
-    // Apply candle colors if enabled
+    // Apply candle colors if enabled; restore if toggled off (colorCandles=false) while ribbon stays active
     if (p.colorCandles) applyRibbonCandleColors(rows, rb, p);
+    else restoreNormalCandleColors(rows);
     return [fastS, slowS];
   };
 
@@ -1014,6 +1015,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path
     const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderDraw(); } }); };
     chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
+    // Re-project SVG overlays on vertical price-scale drags (LWC repaints candles but not SVG;
+    // crosshairMove fires on any mouse interaction including Y-axis drag — chart.remove() cleans up).
+    chart.subscribeCrosshairMove(scheduleRender);
     renderSignals(); renderDraw();
 
     // ── pane geometry measurement → drives the legend/pane-menu overlay layer (ChartOverlays) ──
