@@ -11,7 +11,7 @@
 
 export type IndKey = "ema" | "bb" | "vwap" | "vol" | "rsi" | "stochrsi" | "macd" | "gaps"
   | "ichimoku" | "ribbon" | "supertrend" | "avwap" | "vprofile" | "volbox"
-  | "rsistack" | "accum";
+  | "rsistack" | "accum" | "_lab";
 export type IndKind = "overlay" | "pane";
 export type FieldType = "number" | "color" | "bool";
 
@@ -40,6 +40,7 @@ export const IND_ORDER: IndKey[] = [
   "ema", "bb", "vwap", "vol", "gaps",
   "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox",
   "rsi", "stochrsi", "macd", "rsistack", "accum",
+  "_lab",
 ];
 
 const COL = {
@@ -431,6 +432,21 @@ plot(accum, "Accum %", color.new(#4d82ff, 0))
 hline(75, "ref", color.new(color.gray, 60), linestyle = hline.style_dashed)
 hline(50, "ref", color.new(color.gray, 60), linestyle = hline.style_dashed)
 hline(35, "ref", color.new(color.gray, 60), linestyle = hline.style_dashed)`,
+  },
+
+  // ── Tech Lab Signal Markers (TLT-R4, display-tier, default OFF) ──────────────────
+  // Signal-layer overlay: fire-date markers from the Macro Dashboard Technical Lab.
+  // Rendered by ChartPanel renderSignals when active. No buy/sell wording.
+  // Survivor universe — descriptive research surfaces only.
+  _lab: {
+    key: "_lab", label: "Lab Signals", tag: "Lab", kind: "overlay",
+    defaults: {},
+    fields: [],
+    source: `//@version=6
+// Lab Signals — Macro Dashboard Technical Lab fire-date markers.
+// DISPLAY-TIER DESCRIPTIVE. Survivor universe, not a verdict.
+// Data is produced by the macro Python engine and rendered by the Terminal.
+// TLT-R3: fires are computed only by the macro engine — the Terminal only renders them.`,
   },
 };
 

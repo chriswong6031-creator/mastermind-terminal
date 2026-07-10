@@ -498,6 +498,42 @@ export function accumPct(bars: Bar[], win = 63): (number | null)[] {
   return out;
 }
 
+// ─── Bollinger Bands (sample std dev, ddof=1) ─────────────────────────────────
+//
+// NOTE: This implementation uses the *sample* standard deviation (divides by N-1)
+// to match the Python engine's _bb_bands() (numpy ddof=1) and the parity fixtures.
+// The ChartPanel.tsx inline `stddev` function uses *population* std dev (divides by N)
+// — that is a known divergence between the chart display and this math library.
+// See indicatorParity.test.ts for the documented test.todo covering this divergence.
+
+export interface BollingerResult {
+  upper: (number | null)[];
+  mid: (number | null)[];
+  lower: (number | null)[];
+}
+
+/** Bollinger Bands with SMA basis and sample std dev (ddof=1). */
+export function bollingerBands(bars: Bar[], len = 20, mult = 2.0): BollingerResult {
+  const closes = bars.map((r) => r.c);
+  const n = closes.length;
+  const upperArr: (number | null)[] = Array(n).fill(null);
+  const midArr: (number | null)[] = Array(n).fill(null);
+  const lowerArr: (number | null)[] = Array(n).fill(null);
+
+  for (let i = len - 1; i < n; i++) {
+    const window = closes.slice(i - len + 1, i + 1);
+    const mean = window.reduce((a, v) => a + v, 0) / len;
+    // Sample std dev: divide by (N-1) to match Python numpy ddof=1
+    const variance = window.reduce((a, v) => a + (v - mean) ** 2, 0) / (len - 1);
+    const sd = Math.sqrt(variance);
+    midArr[i] = mean;
+    upperArr[i] = mean + mult * sd;
+    lowerArr[i] = mean - mult * sd;
+  }
+
+  return { upper: upperArr, mid: midArr, lower: lowerArr };
+}
+
 // ─── Trend Ribbon ─────────────────────────────────────────────────────────────
 
 export interface RibbonResult {

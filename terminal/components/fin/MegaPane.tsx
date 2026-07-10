@@ -36,10 +36,11 @@ import ForecastPage from "./ForecastPage";
 import TechnicalsPage from "./TechnicalsPage";
 import SeasonalsPage from "./SeasonalsPage";
 import InsiderPage from "./InsiderPage";
+import TechLabPanel from "./TechLabPanel";
 import TranscriptDrawer from "./TranscriptDrawer";
 import { useState } from "react";
 
-/** The nine hostable pages. First six share the Financials tab bar. The former deep-analysis
+/** The ten hostable pages. First six share the Financials tab bar. The former deep-analysis
  *  ("mastermind") page was merged into the OracleDash Research-Desk surface. */
 export type FinPage =
   | "overview"
@@ -51,10 +52,11 @@ export type FinPage =
   | "forecast"
   | "technicals"
   | "seasonals"
-  | "insider";
+  | "insider"
+  | "lab";
 
 /** The pages that share the TV "Financials" tab pill bar. */
-const FIN_TABS: FinPage[] = ["overview", "statements", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast", "insider"];
+const FIN_TABS: FinPage[] = ["overview", "statements", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast", "insider", "lab"];
 
 const PAGE_LABELS: Record<FinPage, [string, string]> = {
   overview: ["Overview", "概览"],
@@ -67,6 +69,7 @@ const PAGE_LABELS: Record<FinPage, [string, string]> = {
   technicals: ["Technicals", "技术面"],
   seasonals: ["Seasonal", "季节性"],
   insider: ["Insider", "内部交易"],
+  lab: ["Lab", "实验室"],
 };
 
 export interface MegaPaneProps {
@@ -90,6 +93,8 @@ export interface MegaPaneProps {
    *   CSS handles positioning via .fin-pane--workspace.
    */
   mode?: "overlay" | "workspace";
+  /** Full intel/v1 payload (for the Lab tab). Optional — Lab shows empty state when absent. */
+  intel?: any | null;
 }
 
 export default function MegaPane({
@@ -102,6 +107,7 @@ export default function MegaPane({
   onClose,
   name,
   mode = "overlay",
+  intel = null,
 }: MegaPaneProps) {
   const workspace = mode === "workspace";
   const { lang } = useLang();
@@ -216,6 +222,7 @@ export default function MegaPane({
           {page === "technicals" && <TechnicalsPage sym={sym} bars={bars} zh={zh} />}
           {page === "seasonals" && <SeasonalsPage sym={sym} bars={bars} zh={zh} />}
           {page === "insider" && <InsiderPage sym={sym} bars={bars} zh={zh} />}
+          {page === "lab" && <TechLabPanel sym={sym} intel={intel} zh={zh} />}
         </div>
       </div>
 

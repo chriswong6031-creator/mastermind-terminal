@@ -87,7 +87,7 @@ function functionalSet(sym: string): Set<string> {
 }
 // valid ?pane= deep-link targets (the MegaPane pages; "analyst" is an alias for forecast).
 // "mastermind" was retired — its research read now lives in the OracleDash Research-Desk surface.
-const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends", "earnings", "revenue", "forecast", "analyst", "technicals", "seasonals", "insider"]);
+const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends", "earnings", "revenue", "forecast", "analyst", "technicals", "seasonals", "insider", "lab"]);
 const normalizePane = (pane: string): FinPage => (pane === "analyst" ? "forecast" : pane) as FinPage;
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 
@@ -1161,6 +1161,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             onClose={() => setPaneOpen(null)}
             name={nameOf(m) || active}
             mode="workspace"
+            intel={intel}
           />
         ) : tableViewOpen && view === "price" ? (
           /* D3: Table view replaces the chart body */

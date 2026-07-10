@@ -270,6 +270,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // dimming/hollow style + the A+/Q badge). CUT is discriminated by `type` (the schema guarantees CUT ⟺
   // scored:false), so `score`/`scored` aren't needed on the chart. All optional — v1 slices omit them.
   const sigMarksRef = useRef<{ t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null }[]>([]);
+  // Lab signal markers (TLT-R4): populated when _lab indicator is active and intel.tech is available.
+  // Shape: Map<date-string, { names: string[]; dir: number }[]> — one entry per date, one item per signal fired that day.
+  // Capped at the most recent LAB_MARKER_CAP fire-days to keep rendering responsive.
+  const LAB_MARKER_CAP = 200;
+  const labMarkersRef = useRef<Map<string, { name: string; dir: number }[]>>(new Map());
   // GC v2 side channels: anticipation dots (dates) + structure-break warnings ({t, kind}), resolved to bar times.
   const earlyDotsRef = useRef<{ t: string }[]>([]);
   const warnMarksRef = useRef<{ t: string; kind: string }[]>([]);
@@ -732,6 +737,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Gaps & Demand: signal-layer overlay (no plotted series, like the oracle) — drawn in renderSignals.
     // Registry-backed, so it keeps its Settings/Source/eye/remove menu.
     if (inds.has("gaps")) overlayEntries.push({ key: "gaps", label: labelOf("gaps"), kind: "overlay", isPine: false });
+    // Lab signals: descriptive research markers (default OFF, drawn in renderSignals).
+    // TLT-R4: default OFF, labeled by signal name + direction glyph. No buy/sell wording.
+    if (inds.has("_lab")) overlayEntries.push({ key: "_lab", label: "Lab Signals", kind: "overlay", isPine: false, noParams: true });
     // custom scripts: OVERLAY ones (or errored ones) list on the price pane; each SUB-PANE script gets
     // its own pane meta below. An errored script still gets a legend row so the user sees + can remove it.
     // On INTRADAY the pine build is skipped entirely (buildAllPine is date-keyed — see buildAllIndicators),
@@ -1421,6 +1429,58 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             for (let j = i - k; j <= i + k; j++) { if (j !== i && gbars[j].l <= b.l) { piv = false; break; } }
             if (piv) { const y = yOf(b.l); if (y != null) { const g = mk("g", { opacity: 0.95 }); g.appendChild(mk("circle", { cx: x, cy: y + 20, r: 3.4, fill: "none", stroke: gp.demandCol, "stroke-width": 1.6 })); layer.appendChild(g); } }
           }
+        }
+      }
+
+      // ── Lab signal markers (TLT-R4) ──────────────────────────────────────────
+      // Descriptive research markers from the Macro Dashboard Technical Lab.
+      // Default OFF (toggle via "Lab Signals" legend entry). No buy/sell wording.
+      // dir +1 → ▲ glyph below the bar; dir -1 → ▼ glyph above; dir 0 → ○ below.
+      // Multiple fires on the same date cluster into one marker with a count badge.
+      if (indicatorsRef.current.has("_lab") && !hiddenRef.current.has("_lab")) {
+        const labMap = labMarkersRef.current;
+        const LAB_UP_COL = "#60a5fa";    // blue-400 — neutral descriptive color
+        const LAB_DN_COL = "#f87171";    // red-400
+        const LAB_NEU_COL = "#94a3b8";   // slate-400
+        for (const [date, items] of labMap) {
+          const x = xOf(date); if (x == null) continue;
+          const b = barsRef.current[barIndex(date)]; if (!b) continue;
+          // Determine dominant direction of this cluster (+1/>0 → up, -1/<0 → down, else neutral)
+          const dirSum = items.reduce((acc, it) => acc + it.dir, 0);
+          const isUp = dirSum > 0;
+          const isDn = dirSum < 0;
+          const col = isUp ? LAB_UP_COL : isDn ? LAB_DN_COL : LAB_NEU_COL;
+          const glyph = isUp ? "▲" : isDn ? "▼" : "○";
+          const y = isUp ? yOf(b.l) : yOf(b.h);
+          if (y == null) continue;
+          const offset = isUp ? 14 : -14;
+          const cy = y + offset;
+          const g = mk("g", { opacity: 0.88 });
+          // Circle background for readability
+          g.appendChild(mk("circle", { cx: x, cy, r: 7.5, fill: col, opacity: 0.15 }));
+          // Glyph
+          const tEl = mk("text", {
+            x,
+            y: cy + (isUp ? 3.5 : isDn ? 3.5 : 4),
+            "font-size": isUp || isDn ? 8 : 9,
+            "text-anchor": "middle",
+            fill: col,
+            "font-family": "var(--font-ui)",
+          });
+          tEl.textContent = glyph;
+          g.appendChild(tEl);
+          // Count badge (when > 1 signal on the same date)
+          if (items.length > 1) {
+            const bEl = mk("text", { x: x + 6, y: cy - 5, "font-size": 7.5, fill: col, "font-weight": 700, "font-family": "var(--font-ui)" });
+            bEl.textContent = String(items.length);
+            g.appendChild(bEl);
+          }
+          // Tooltip: title attribute lists signal names (native hover, no JS needed)
+          const names = items.map((it) => `${it.name} (${it.dir > 0 ? "↑" : it.dir < 0 ? "↓" : "○"})`).join("\n");
+          const titleEl = mk("title", {});
+          titleEl.textContent = `${date}\n${names}`;
+          g.appendChild(titleEl);
+          layer.appendChild(g);
         }
       }
 
@@ -2177,6 +2237,39 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       precRef.current = closes.length && closes[closes.length - 1] < 10 ? 4 : 2;
       tokensRef.current = readTokens();
 
+      // ── Lab signal markers (TLT-R4): fetch tech events from cached intel when _lab active ──
+      // Fire-and-forget: does NOT block chart render. On 404/absent the ref stays empty.
+      // Cap at LAB_MARKER_CAP most-recent fire-days to keep renderSignals responsive.
+      labMarkersRef.current = new Map();   // reset on each symbol/data reload
+      if (indicatorsRef.current.has("_lab")) {
+        getJSON(`/data/${symbol}.intel.json`).then((intelPayload: any) => {
+          if (cancelled || epochRef.current !== epoch) return;
+          const signals = intelPayload?.tech?.events?.signals;
+          if (!signals || typeof signals !== "object") return;
+          const profiles = intelPayload?.tech?.profiles ?? {};
+          // Collect all fire dates across all signals, accumulate per date.
+          const dateMap = new Map<string, { name: string; dir: number }[]>();
+          for (const [sigId, state] of Object.entries(signals) as [string, any][]) {
+            const fires: string[] = Array.isArray(state?.fires) ? state.fires : [];
+            const dir: number = typeof state?.dir === "number" ? state.dir : 0;
+            const displayName: string = profiles?.[sigId]?.display_en ?? sigId;
+            for (const d of fires) {
+              if (typeof d !== "string") continue;
+              const arr = dateMap.get(d) ?? [];
+              arr.push({ name: displayName, dir });
+              dateMap.set(d, arr);
+            }
+          }
+          // Keep only the LAB_MARKER_CAP most recent dates.
+          const sortedDates = Array.from(dateMap.keys()).sort();
+          const capDates = sortedDates.slice(-LAB_MARKER_CAP);
+          const capped = new Map<string, { name: string; dir: number }[]>();
+          for (const d of capDates) capped.set(d, dateMap.get(d)!);
+          labMarkersRef.current = capped;
+          renderSignalsRef.current();   // re-render markers now that data is ready
+        }).catch(() => { /* ignore — lab data unavailable */ });
+      }
+
       // ── price series: incremental setData if the type matches, else remove + re-add ──
       const familyOf = (ct: string) => (ct === "line" ? "line" : ct === "area" ? "area" : ct === "bars" ? "bars" : "candle"); // heikin uses candle series
       const wantFamily = familyOf(chartType);
@@ -2381,6 +2474,43 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (saved) { try { chart.timeScale().setVisibleLogicalRange(saved); } catch {} }
     // eslint-disable-next-line
   }, [indParamsKey]);
+
+  // ── EFFECT 3-lab — reload lab markers when _lab indicator is toggled ON ──────
+  // Effect 2 loads markers on symbol change. When the user enables _lab AFTER data is
+  // already on the chart, this effect fires a one-shot fetch to populate labMarkersRef
+  // without requiring a full symbol reload. Mirrors how gaps/oracle are purely SVG-driven.
+  const hasLab = indicators.has("_lab");
+  useEffect(() => {
+    if (!hasLab) { labMarkersRef.current = new Map(); renderSignalsRef.current(); return; }
+    const sym = symbolRef.current; if (!sym) return;
+    let alive = true;
+    getJSON(`/data/${sym}.intel.json`).then((intelPayload: any) => {
+      if (!alive) return;
+      const signals = intelPayload?.tech?.events?.signals;
+      if (!signals || typeof signals !== "object") return;
+      const profiles = intelPayload?.tech?.profiles ?? {};
+      const dateMap = new Map<string, { name: string; dir: number }[]>();
+      for (const [sigId, state] of Object.entries(signals) as [string, any][]) {
+        const fires: string[] = Array.isArray(state?.fires) ? state.fires : [];
+        const dir: number = typeof state?.dir === "number" ? state.dir : 0;
+        const displayName: string = profiles?.[sigId]?.display_en ?? sigId;
+        for (const d of fires) {
+          if (typeof d !== "string") continue;
+          const arr = dateMap.get(d) ?? [];
+          arr.push({ name: displayName, dir });
+          dateMap.set(d, arr);
+        }
+      }
+      const sortedDates = Array.from(dateMap.keys()).sort();
+      const capDates = sortedDates.slice(-LAB_MARKER_CAP);
+      const capped = new Map<string, { name: string; dir: number }[]>();
+      for (const d of capDates) capped.set(d, dateMap.get(d)!);
+      labMarkersRef.current = capped;
+      renderSignalsRef.current();
+    }).catch(() => { /* lab data unavailable for this symbol */ });
+    return () => { alive = false; };
+    // eslint-disable-next-line
+  }, [hasLab, symbol]);
 
   // ── EFFECT 3c — custom scripts [pineKey]. Add / remove / param-edit a script WITHOUT touching the
   //   built-in indicators (do NOT clearAllIndicators — that would flash + reset every built-in). Only
