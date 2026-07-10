@@ -9,6 +9,7 @@ import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync
 import { getJSON, getSliceAndOhlc } from "@/lib/dataCache";
 import { isIntradayTf, classify, type Market } from "@/lib/intradaySources";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
+import { ichimoku, supertrend, avwap as computeAvwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -115,9 +116,10 @@ type Tokens = { up: string; down: string; grid: string; line: string; p3: string
 const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: css("--grid"), line: css("--line"), p3: css("--panel-3"), link: css("--link"), warn: css("--warn"), buy: css("--buy"), sell: css("--sell"), mut: css("--muted"), brand2: css("--brand-2") });
 
 // ── the canonical sub-pane order (parity with the base's sequential pane assignment) ──
-// overlays (ema/bb/vwap/vol) always live in pane 0; oscillators get their own sub-panes in this fixed order.
+// overlays (ema/bb/vwap/vol + new DT overlays) always live in pane 0.
 // rsi + stochrsi SHARE one sub-pane (the "osc" pane), exactly as the base did.
-const SUBPANE_ORDER = ["osc", "macd"] as const;
+// rsistack and accum each get their own sub-pane.
+const SUBPANE_ORDER = ["osc", "macd", "rsistack", "accum"] as const;
 
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
@@ -193,6 +195,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const ctxRef = useRef<HTMLDivElement | null>(null);
   const textEditRef = useRef<HTMLInputElement | null>(null);
   const sigRef = useRef<SVGSVGElement | null>(null);
+  // SVG layer for indicator overlays (ichimoku cloud, ribbon fill, vprofile, volbox)
+  const indSvgRef = useRef<SVGSVGElement | null>(null);
+  // cached indicator overlay data — rebuilt when indicators/params/bars change, read by render
+  const indOverlayRef = useRef<Record<string, any>>({});
   // rebuild the CHART STYLE (not the chart) when the up/down color scheme flips (Effect 5)
   const [csNonce, setCsNonce] = useState(0);
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
@@ -279,11 +285,143 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return [hs, lS, sS];
   };
 
+  // ── DT Technicals Suite builders ──────────────────────────────────────────
+  // Ichimoku: tenkan + kijun lines in pane 0; cloud filled via SVG overlay in indOverlayRef.
+  const buildIchimoku = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
+    const p = P("ichimoku");
+    const ich = ichimoku(rows, p.tenkan, p.kijun, p.senkouB, p.displacement);
+    const tenS = chart.addSeries(LineSeries, { color: p.tenkanCol, lineWidth: p.width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Tenkan" }, 0);
+    const kijS = chart.addSeries(LineSeries, { color: p.kijunCol, lineWidth: p.width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Kijun" }, 0);
+    tenS.setData(rows.map((r, i) => ich.tenkan[i] != null ? { time: r.time, value: ich.tenkan[i]! } : null).filter(Boolean) as any);
+    kijS.setData(rows.map((r, i) => ich.kijun[i] != null ? { time: r.time, value: ich.kijun[i]! } : null).filter(Boolean) as any);
+    // Span A/B as lines displaced into the future
+    const spAData: any[] = [], spBData: any[] = [];
+    for (let i = 0; i < ich.futureTimes.length; i++) {
+      if (ich.spanA[i] != null) spAData.push({ time: ich.futureTimes[i], value: ich.spanA[i]! });
+      if (ich.spanB[i] != null) spBData.push({ time: ich.futureTimes[i], value: ich.spanB[i]! });
+    }
+    const spAS = chart.addSeries(LineSeries, { color: "rgba(38,194,129,0.6)", lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Span A" }, 0);
+    const spBS = chart.addSeries(LineSeries, { color: "rgba(240,86,107,0.6)", lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Span B" }, 0);
+    spAS.setData(spAData); spBS.setData(spBData);
+    // Store cloud data for SVG polygon rendering
+    indOverlayRef.current["ichimoku"] = { ich, futureTimes: ich.futureTimes };
+    return [tenS, kijS, spAS, spBS];
+  };
+
+  // Ribbon: EMA lines in pane 0; fill + candle coloring via SVG overlay.
+  const buildRibbon = (chart: IChartApi, rows: Bar[], closes: number[]): ISeriesApi<any>[] => {
+    const p = P("ribbon");
+    const rb = trendRibbon(rows, p.fast, p.slow, p.slopeWin);
+    const fastS = chart.addSeries(LineSeries, { color: p.colUp, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: `EMA${p.fast}` }, 0);
+    const slowS = chart.addSeries(LineSeries, { color: p.colDn, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: `EMA${p.slow}` }, 0);
+    fastS.setData(toLine(rows, rb.emaFast));
+    slowS.setData(toLine(rows, rb.emaSlow));
+    indOverlayRef.current["ribbon"] = { rb, rows };
+    // Apply candle colors if enabled
+    if (p.colorCandles) applyRibbonCandleColors(rows, rb, p);
+    return [fastS, slowS];
+  };
+
+  // Apply per-bar candle colors for the ribbon indicator.
+  const applyRibbonCandleColors = (rows: Bar[], rb: ReturnType<typeof trendRibbon>, p: Record<string, any>) => {
+    const priceS = priceSeriesRef.current; if (!priceS) return;
+    const chartTyp = chartTypeRef.current;
+    if (chartTyp === "line" || chartTyp === "area") return;
+    const colored = rows.map((r, i) => {
+      const st = rb.state[i], su = rb.shortUp[i];
+      let col: string;
+      if (st === "ribbonUp") col = su ? "#26c281" : "rgba(38,194,129,0.45)";
+      else if (st === "ribbonDown") col = su === false ? "#f0566b" : "rgba(240,86,107,0.45)";
+      else col = "#8b93a3";
+      return chartTyp === "bars"
+        ? { time: r.time, open: r.o, high: r.h, low: r.l, close: r.c, color: col }
+        : { time: r.time, open: r.o, high: r.h, low: r.l, close: r.c, color: col, borderColor: col, wickColor: col };
+    });
+    try { priceS.setData(colored as any); } catch {}
+  };
+
+  // Restore normal candle colors (called when ribbon removed or colorCandles toggled off).
+  const restoreNormalCandleColors = (rows: Bar[]) => {
+    const priceS = priceSeriesRef.current; if (!priceS) return;
+    const chartTyp = chartTypeRef.current;
+    if (chartTyp === "line" || chartTyp === "area") return;
+    try { priceS.setData(priceData(rows) as any); } catch {}
+  };
+
+  // SuperTrend: two line series (up/down rails with null gaps at flips).
+  const buildSupertrend = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
+    const p = P("supertrend");
+    const st = supertrend(rows, p.period, p.mult);
+    const upS = chart.addSeries(LineSeries, { color: p.colUp, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "ST Up" }, 0);
+    const dnS = chart.addSeries(LineSeries, { color: p.colDn, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "ST Down" }, 0);
+    upS.setData(rows.map((r, i) => st.up[i] != null ? { time: r.time, value: st.up[i]! } : null).filter(Boolean) as any);
+    dnS.setData(rows.map((r, i) => st.down[i] != null ? { time: r.time, value: st.down[i]! } : null).filter(Boolean) as any);
+    return [upS, dnS];
+  };
+
+  // AVWAP: dashed gold line.
+  const buildAvwap = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
+    const p = P("avwap");
+    const anchors = ["swing_low", "swing_high", "max_history"] as const;
+    const anchorKey = anchors[Math.min(2, Math.max(0, Math.round(p.anchor)))] ?? "swing_low";
+    const vals = computeAvwap(rows, anchorKey, p.lookback);
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lineStyle: 1 /* dashed */, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: "AVWAP" }, 0);
+    ln.setData(toLine(rows, vals));
+    return [ln];
+  };
+
+  // Volume Profile: pure SVG overlay, no LWC series; returns empty array.
+  const buildVprofile = (rows: Bar[]): ISeriesApi<any>[] => {
+    const p = P("vprofile");
+    const vp = vprofile(rows, p.window, p.bins, p.shelfMode);
+    indOverlayRef.current["vprofile"] = { vp, rows };
+    return [];
+  };
+
+  // Volatility Box: pure SVG overlay.
+  const buildVolbox = (rows: Bar[]): ISeriesApi<any>[] => {
+    const p = P("volbox");
+    const vb = volbox(rows, p.bbLen, p.mult, p.pctileWin, p.squeezePct, p.boxWin);
+    indOverlayRef.current["volbox"] = { vb, rows };
+    return [];
+  };
+
+  // RSI Stack: three RSI lines in a dedicated sub-pane.
+  const buildRsiStack = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
+    const p = P("rsistack");
+    const rs = rsiStack(rows, p.len1, p.len2, p.len3);
+    const s1 = chart.addSeries(LineSeries, { color: p.col1, lineWidth: p.width as any, lastValueVisible: true, title: `RSI${p.len1}` }, pane);
+    const s2 = chart.addSeries(LineSeries, { color: p.col2, lineWidth: p.width as any, lastValueVisible: true, title: `RSI${p.len2}` }, pane);
+    const s3 = chart.addSeries(LineSeries, { color: p.col3, lineWidth: p.width as any, lastValueVisible: true, title: `RSI${p.len3}` }, pane);
+    s1.setData(toLine(rows, rs.r1)); s2.setData(toLine(rows, rs.r2)); s3.setData(toLine(rows, rs.r3));
+    if (p.showLevels) {
+      try { s2.createPriceLine({ price: p.ob, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
+      try { s2.createPriceLine({ price: p.os, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
+    }
+    return [s1, s2, s3];
+  };
+
+  // Accumulation %: single line pane with reference bands.
+  const buildAccum = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
+    const p = P("accum");
+    const vals = accumPct(rows, p.win);
+    const ln = chart.addSeries(LineSeries, { color: "#4d82ff", lineWidth: 1.4 as any, lastValueVisible: true, title: "Accum%" }, pane);
+    ln.setData(toLine(rows, vals));
+    if (p.showBands) {
+      for (const band of [75, 50, 35]) {
+        try { ln.createPriceLine({ price: band, color: "rgba(214,218,227,.3)", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "ref" } as any); } catch {}
+      }
+    }
+    return [ln];
+  };
+
   // Which sub-pane keys are active given the current indicator set (canonical order).
   const activeSubpanes = (): string[] => {
     const inds = indicatorsRef.current; const out: string[] = [];
     if (inds.has("rsi") || inds.has("stochrsi")) out.push("osc");
     if (inds.has("macd")) out.push("macd");
+    if (inds.has("rsistack")) out.push("rsistack");
+    if (inds.has("accum")) out.push("accum");
     return out;
   };
 
@@ -315,7 +453,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const chart = chartRef.current, priceS = priceSeriesRef.current; if (!chart || !priceS) return;
     const inds = indicatorsRef.current;
     const overlayEntries: Omit<LegendEntry, "hidden">[] = [];
-    for (const k of ["ema", "bb", "vwap", "vol"] as const) if (inds.has(k) && indSeriesRef.current.has(k)) overlayEntries.push({ key: k, label: labelOf(k), kind: "overlay", isPine: false });
+    for (const k of ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox"] as const) if (inds.has(k)) overlayEntries.push({ key: k, label: labelOf(k), kind: "overlay", isPine: false });
     // compare overlays are managed by TerminalShell (the compare bar), NOT the legend — omitted here.
     const metas: { key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[] = [];
     metas.push({ key: "__price__", isPrice: true, entries: overlayEntries, pane: priceS.getPane() });
@@ -369,20 +507,34 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const chart = chartRef.current; if (!chart) return;
     for (const arr of indSeriesRef.current.values()) for (const s of arr) { try { chart.removeSeries(s); } catch {} }
     indSeriesRef.current.clear(); paneMapRef.current.clear();
+    indOverlayRef.current = {};
   };
 
   // Build the full indicator set from scratch in canonical order onto `rows`.
   // Overlays first (pane 0), then sub-panes appended sequentially → assigns paneMapRef.
   const buildAllIndicators = (rows: Bar[], closes: number[]) => {
     const chart = chartRef.current; if (!chart) return; const inds = indicatorsRef.current;
+    // Clear SVG overlay data for overlays being rebuilt
+    indOverlayRef.current = {};
     if (inds.has("ema")) indSeriesRef.current.set("ema", buildEma(chart, rows, closes));
     if (inds.has("bb")) indSeriesRef.current.set("bb", buildBb(chart, rows, closes));
     if (inds.has("vwap")) indSeriesRef.current.set("vwap", buildVwap(chart, rows));
     if (inds.has("vol")) indSeriesRef.current.set("vol", buildVol(chart, rows));
+    // DT overlay indicators
+    if (inds.has("ichimoku")) indSeriesRef.current.set("ichimoku", buildIchimoku(chart, rows));
+    if (inds.has("ribbon")) indSeriesRef.current.set("ribbon", buildRibbon(chart, rows, closes));
+    if (inds.has("supertrend")) indSeriesRef.current.set("supertrend", buildSupertrend(chart, rows));
+    if (inds.has("avwap")) indSeriesRef.current.set("avwap", buildAvwap(chart, rows));
+    if (inds.has("vprofile")) indSeriesRef.current.set("vprofile", buildVprofile(rows));
+    if (inds.has("volbox")) indSeriesRef.current.set("volbox", buildVolbox(rows));
+    // If ribbon is NOT active, ensure normal candle colors
+    if (!inds.has("ribbon")) restoreNormalCandleColors(rows);
     let pane = 1;
     for (const key of activeSubpanes()) {
       if (key === "osc") indSeriesRef.current.set("osc", buildOsc(chart, rows, closes, pane));
       else if (key === "macd") indSeriesRef.current.set("macd", buildMacd(chart, rows, closes, pane));
+      else if (key === "rsistack") indSeriesRef.current.set("rsistack", buildRsiStack(chart, rows, pane));
+      else if (key === "accum") indSeriesRef.current.set("accum", buildAccum(chart, rows, pane));
       paneMapRef.current.set(key, pane); pane++;
     }
     normalizeStretch();
@@ -526,6 +678,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
     const wrap = el.parentElement as HTMLElement;
     wrapElRef.current = wrap;
+    // indicator SVG overlay layer (z-index 2, below signals and drawings)
+    const indSvg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:2;pointer-events:none" }) as SVGSVGElement;
+    wrap.appendChild(indSvg); indSvgRef.current = indSvg;
     // signal-marker layer (below the user-drawing layer); custom TradingView-style badges
     const sigSvg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(sigSvg); sigRef.current = sigSvg;
@@ -707,8 +862,150 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     wrap.addEventListener("contextmenu", onCtx);
     winDown = (e: PointerEvent) => { hideCtx(); if (!toolRef.current && sel) { const tg = e.target as Element; if (tg && !tg.closest?.("g[data-id]") && !tg.closest?.(".draw-bar") && !tg.closest?.(".text-edit")) { sel = null; renderDraw(); } } };
     window.addEventListener("pointerdown", winDown);
+    // ── Indicator SVG overlay renderer (ichimoku cloud, ribbon fill, vprofile, volbox) ──
+    const renderIndOverlays = () => {
+      const svgEl = indSvgRef.current; if (!svgEl) return;
+      while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+      const inds = indicatorsRef.current;
+      const W = el!.clientWidth, H = el!.clientHeight;
+      const priceS = priceSeriesRef.current;
+      if (!priceS) return;
+      const p2y = (p: number): number | null => { try { const v = priceS.priceToCoordinate(p); return (v == null || !isFinite(v as number)) ? null : v as number; } catch { return null; } };
+      const t2x = (tm: string): number | null => { try { const v = chart.timeScale().timeToCoordinate(tm as any); return (v == null || !isFinite(v as number)) ? null : v as number; } catch { return null; } };
+
+      // ── Ichimoku cloud fill ──
+      if (inds.has("ichimoku") && !hiddenRef.current.has("ichimoku")) {
+        const data = indOverlayRef.current["ichimoku"];
+        if (data) {
+          const { ich } = data as { ich: ReturnType<typeof ichimoku> };
+          const times = ich.futureTimes;
+          const aVals = ich.spanA, bVals = ich.spanB;
+          // Build pairs of points where both span A and B are valid
+          const pts: { x: number; yA: number; yB: number }[] = [];
+          for (let i = 0; i < times.length; i++) {
+            const a = aVals[i], b = bVals[i]; if (a == null || b == null) continue;
+            const x = t2x(times[i]); if (x == null || x < -100 || x > W + 100) continue;
+            const yA = p2y(a), yB = p2y(b); if (yA == null || yB == null) continue;
+            pts.push({ x, yA, yB });
+          }
+          if (pts.length >= 2) {
+            // Draw two polygons: one for where spanA > spanB (green), one for spanA < spanB (red)
+            // Approach: walk forward along spanA top, then backward along spanB — split at crossovers
+            const greenPts: string[] = [], redPts: string[] = [];
+            // Simple approach: draw rectangle per segment
+            for (let i = 0; i < pts.length - 1; i++) {
+              const p0 = pts[i], p1 = pts[i + 1];
+              const avgA = (p0.yA + p1.yA) / 2, avgB = (p0.yB + p1.yB) / 2;
+              const isGreen = avgA <= avgB; // yA < yB means spanA price > spanB price (higher price = lower y)
+              const poly = mk("polygon", {
+                points: `${p0.x},${p0.yA} ${p1.x},${p1.yA} ${p1.x},${p1.yB} ${p0.x},${p0.yB}`,
+                fill: isGreen ? "rgba(38,194,129,0.18)" : "rgba(240,86,107,0.18)",
+                stroke: "none",
+              });
+              svgEl.appendChild(poly);
+            }
+          }
+        }
+      }
+
+      // ── Trend Ribbon fill between fast and slow EMA ──
+      if (inds.has("ribbon") && !hiddenRef.current.has("ribbon")) {
+        const data = indOverlayRef.current["ribbon"];
+        if (data) {
+          const { rb, rows: rbRows } = data as { rb: ReturnType<typeof trendRibbon>; rows: Bar[] };
+          const pts: { x: number; yF: number; yS: number; state: string }[] = [];
+          for (let i = 0; i < rbRows.length; i++) {
+            const f = rb.emaFast[i], s = rb.emaSlow[i]; if (f == null || s == null) continue;
+            const x = t2x(rbRows[i].time); if (x == null || x < -50 || x > W + 50) continue;
+            const yF = p2y(f), yS = p2y(s); if (yF == null || yS == null) continue;
+            pts.push({ x, yF, yS, state: rb.state[i] });
+          }
+          for (let i = 0; i < pts.length - 1; i++) {
+            const p0 = pts[i], p1 = pts[i + 1];
+            const fill = p0.state === "ribbonUp" ? "rgba(38,194,129,0.12)" : p0.state === "ribbonDown" ? "rgba(240,86,107,0.12)" : "rgba(139,147,163,0.07)";
+            svgEl.appendChild(mk("polygon", {
+              points: `${p0.x},${p0.yF} ${p1.x},${p1.yF} ${p1.x},${p1.yS} ${p0.x},${p0.yS}`,
+              fill, stroke: "none",
+            }));
+          }
+        }
+      }
+
+      // ── Volume Profile right-anchored bars ──
+      if (inds.has("vprofile") && !hiddenRef.current.has("vprofile")) {
+        const data = indOverlayRef.current["vprofile"];
+        if (data) {
+          const { vp } = data as { vp: ReturnType<typeof vprofile> };
+          if (vp.bins.length) {
+            const p = indParamsRef.current["vprofile"] ? { ...IND_DEFS.vprofile.defaults, ...indParamsRef.current["vprofile"] } : IND_DEFS.vprofile.defaults;
+            const maxVol = Math.max(...vp.bins.map((b) => b.volume));
+            if (maxVol > 0) {
+              const maxBarW = W * (p.widthFrac ?? 0.18);
+              const pocY = p2y(vp.poc);
+              const vahY = p2y(vp.vah);
+              const valY = p2y(vp.val);
+              for (const bin of vp.bins) {
+                const yHi = p2y(bin.priceHi), yLo = p2y(bin.priceLo);
+                if (yHi == null || yLo == null) continue;
+                const barW = (bin.volume / maxVol) * maxBarW;
+                const isPoc = Math.abs(bin.priceMid - vp.poc) < (vp.bins[0]?.priceHi - vp.bins[0]?.priceLo) * 0.6;
+                const barH = Math.max(1, Math.abs(yLo - yHi));
+                const barY = Math.min(yHi, yLo);
+                svgEl.appendChild(mk("rect", {
+                  x: W - barW, y: barY, width: barW, height: barH,
+                  fill: isPoc ? "rgba(232,179,57,0.55)" : "rgba(77,130,255,0.25)",
+                  stroke: "none",
+                }));
+              }
+              // POC gold price line
+              if (pocY != null) svgEl.appendChild(mk("line", { x1: W - maxBarW, y1: pocY, x2: W, y2: pocY, stroke: "#e8b339", "stroke-width": 1.5, "stroke-dasharray": "" }));
+              // VAH/VAL dashed
+              if (vahY != null) svgEl.appendChild(mk("line", { x1: W - maxBarW, y1: vahY, x2: W, y2: vahY, stroke: "rgba(214,218,227,0.5)", "stroke-width": 1, "stroke-dasharray": "4 3" }));
+              if (valY != null) svgEl.appendChild(mk("line", { x1: W - maxBarW, y1: valY, x2: W, y2: valY, stroke: "rgba(214,218,227,0.5)", "stroke-width": 1, "stroke-dasharray": "4 3" }));
+            }
+          }
+        }
+      }
+
+      // ── Volatility Box ──
+      if (inds.has("volbox") && !hiddenRef.current.has("volbox")) {
+        const data = indOverlayRef.current["volbox"];
+        if (data) {
+          const { vb, rows: vbRows } = data as { vb: ReturnType<typeof volbox>; rows: Bar[] };
+          if (vb.squeezeStart != null && vb.boxHi > 0) {
+            const startIdx = vb.squeezeStart;
+            const endIdx = vb.resolutionIdx ?? (vbRows.length - 1);
+            const startTime = vbRows[startIdx]?.time, endTime = vbRows[endIdx]?.time;
+            if (startTime && endTime) {
+              const x1 = t2x(startTime), x2 = t2x(endTime);
+              const yHi = p2y(vb.boxHi), yLo = p2y(vb.boxLo);
+              if (x1 != null && x2 != null && yHi != null && yLo != null) {
+                const rx1 = Math.min(x1, x2), rx2 = Math.max(x1, x2);
+                // Shaded rect
+                svgEl.appendChild(mk("rect", { x: rx1, y: yHi, width: rx2 - rx1, height: yLo - yHi, fill: "rgba(232,179,57,0.09)", stroke: "#e8a33d", "stroke-width": 1, "stroke-dasharray": "" }));
+                // Top/bottom rails
+                svgEl.appendChild(mk("line", { x1: rx1, y1: yHi, x2: rx2, y2: yHi, stroke: "#e8a33d", "stroke-width": 1.5 }));
+                svgEl.appendChild(mk("line", { x1: rx1, y1: yLo, x2: rx2, y2: yLo, stroke: "#e8a33d", "stroke-width": 1.5 }));
+                // Resolution marker
+                if (vb.resolution != null && vb.resolutionIdx != null) {
+                  const rx = t2x(vbRows[vb.resolutionIdx].time);
+                  if (rx != null) {
+                    const ry = vb.resolution === "up" ? yHi - 12 : yLo + 12;
+                    const txt = mk("text", { x: rx, y: ry, fill: "#e8a33d", "font-size": 10, "text-anchor": "middle", "font-family": "var(--font-ui)" });
+                    txt.textContent = vb.resolution === "up" ? "▲" : "▼";
+                    svgEl.appendChild(txt);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    };
+
     const renderDraw = () => {
       const svgEl = svgRef.current; if (!svgEl) return;
+      renderIndOverlays();
       while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
       for (const d of drawRef.current) svgEl.appendChild(shape(d));
       positionBar();
@@ -999,18 +1296,30 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // snapshot the visible range so a view-preserving toggle can restore it after series churn (§0.4)
     viewSavedRef.current = PRESERVE_VIEW_ON_INDICATOR_TOGGLE ? (() => { try { const r = chart.timeScale().getVisibleLogicalRange(); return r ? { from: r.from as number, to: r.to as number } : null; } catch { return null; } })() : null;
 
-    const wantOverlays = new Set<string>(); if (indicators.has("ema")) wantOverlays.add("ema"); if (indicators.has("bb")) wantOverlays.add("bb"); if (indicators.has("vwap")) wantOverlays.add("vwap"); if (indicators.has("vol")) wantOverlays.add("vol");
-    const haveOverlays = new Set<string>(["ema", "bb", "vwap", "vol"].filter((k) => indSeriesRef.current.has(k)));
+    const OVERLAY_KEYS = ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox"] as const;
+    const wantOverlays = new Set<string>(OVERLAY_KEYS.filter((k) => indicators.has(k)));
+    const haveOverlays = new Set<string>(OVERLAY_KEYS.filter((k) => indSeriesRef.current.has(k) || indOverlayRef.current[k]));
     const wantSub = activeSubpanes();                                   // canonical-order sub-pane keys
     const haveSub: string[] = SUBPANE_ORDER.filter((k) => indSeriesRef.current.has(k)); // current sub-panes in canonical order
 
     // ── overlays: always incremental (all live in pane 0, no reindex risk) ──
-    for (const k of haveOverlays) if (!wantOverlays.has(k)) { const arr = indSeriesRef.current.get(k) || []; for (const s of arr) { try { chart.removeSeries(s); } catch {} } indSeriesRef.current.delete(k); }
+    for (const k of haveOverlays) if (!wantOverlays.has(k)) {
+      const arr = indSeriesRef.current.get(k) || []; for (const s of arr) { try { chart.removeSeries(s); } catch {} } indSeriesRef.current.delete(k);
+      delete indOverlayRef.current[k];
+      // Restore candle colors when ribbon is removed
+      if (k === "ribbon") restoreNormalCandleColors(rows);
+    }
     for (const k of wantOverlays) if (!haveOverlays.has(k)) {
       if (k === "ema") indSeriesRef.current.set("ema", buildEma(chart, rows, closes));
       else if (k === "bb") indSeriesRef.current.set("bb", buildBb(chart, rows, closes));
       else if (k === "vwap") indSeriesRef.current.set("vwap", buildVwap(chart, rows));
       else if (k === "vol") indSeriesRef.current.set("vol", buildVol(chart, rows));
+      else if (k === "ichimoku") indSeriesRef.current.set("ichimoku", buildIchimoku(chart, rows));
+      else if (k === "ribbon") indSeriesRef.current.set("ribbon", buildRibbon(chart, rows, closes));
+      else if (k === "supertrend") indSeriesRef.current.set("supertrend", buildSupertrend(chart, rows));
+      else if (k === "avwap") indSeriesRef.current.set("avwap", buildAvwap(chart, rows));
+      else if (k === "vprofile") indSeriesRef.current.set("vprofile", buildVprofile(rows));
+      else if (k === "volbox") indSeriesRef.current.set("volbox", buildVolbox(rows));
     }
 
     // ── the osc pane is a special case: rsi/stochrsi share it. If the pane persists but its
@@ -1056,6 +1365,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const pane = nextFreePane();
         if (a === "osc") indSeriesRef.current.set("osc", buildOsc(chart, rows, closes, pane));
         else if (a === "macd") indSeriesRef.current.set("macd", buildMacd(chart, rows, closes, pane));
+        else if (a === "rsistack") indSeriesRef.current.set("rsistack", buildRsiStack(chart, rows, pane));
+        else if (a === "accum") indSeriesRef.current.set("accum", buildAccum(chart, rows, pane));
         paneMapRef.current.set(a, pane);
       }
     }
