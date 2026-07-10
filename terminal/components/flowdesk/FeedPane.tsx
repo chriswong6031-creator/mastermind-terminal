@@ -306,29 +306,6 @@ export function FeedPane({
     setVisibleCount(PAGE_SIZE);
   }, [search, preset, sort, filters]);
 
-  // Wire IntersectionObserver to sentinel so scrolling to the bottom auto-loads
-  // the next page without requiring a button click.
-  // deps=[filtered.length, visibleCount]: the sentinel div only exists in the DOM
-  // when filtered.length > visibleCount (line 566). At mount, feed is null so
-  // filtered.length === 0 and the sentinel is absent; sentinelRef.current is null
-  // and a mount-only effect would return early without ever attaching the IO.
-  // Re-running when filtered.length or visibleCount changes ensures the IO is
-  // attached as soon as the sentinel appears.
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setVisibleCount((n) => n + PAGE_SIZE);
-        }
-      },
-      { rootMargin: "200px" },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [filtered.length, visibleCount]);
-
   // Merge preset overrides into the base filter set
   const effectiveFilters = useMemo<FlowFilters>(() => {
     const over = presetFilters(preset);
@@ -454,6 +431,32 @@ export function FeedPane({
 
     return events;
   }, [feed, enrich, search, effectiveFilters, preset, sort]);
+
+  // (Placed after `filtered` — the deps array evaluates at render time, so
+  // referencing it above the declaration is a TDZ ReferenceError.)
+  // Wire IntersectionObserver to sentinel so scrolling to the bottom auto-loads
+  // the next page without requiring a button click.
+  // deps=[filtered.length, visibleCount]: the sentinel div only exists in the DOM
+  // when filtered.length > visibleCount (line 566). At mount, feed is null so
+  // filtered.length === 0 and the sentinel is absent; sentinelRef.current is null
+  // and a mount-only effect would return early without ever attaching the IO.
+  // Re-running when filtered.length or visibleCount changes ensures the IO is
+  // attached as soon as the sentinel appears.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((n) => n + PAGE_SIZE);
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [filtered.length, visibleCount]);
+
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
