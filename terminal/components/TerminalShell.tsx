@@ -208,6 +208,21 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [lockedVLine, setLockedVLine] = useState<string | null>(null);
   // D1: "remove all indicators" undo toast
   const [undoInds, setUndoInds] = useState<{ snapshot: Set<string>; timer: any } | null>(null);
+  // ── Day Trade Mode (D lane §5) ────────────────────────────────────────────────
+  const [dtm, setDtm] = useState(false);
+  // Snapshot of pre-mode workspace fields restored on OFF
+  type DtmSnapshot = { inds: string[]; indParams: Record<string, any>; tf: string; favTF: string[]; chartType: string; extHours: boolean };
+  const dtmSnapshotRef = useRef<DtmSnapshot | null>(null);
+  // set when the load effect restores mm.dtm=true, so the ?dtm=1 deep-link effect never races a
+  // second toggleDtm (which would snapshot the already-in-mode workspace and break restore)
+  const dtmBootRef = useRef(false);
+  // set only by explicit user action (button/hotkey) inside toggleDtm — gates the on/off toast so
+  // load-restores never fire a spurious toast (the persist effect burns dtmMounted before the toast
+  // effect runs on mount, so a shared mount-guard cannot work here)
+  const dtmUserRef = useRef(false);
+  // Brief mode-change toast
+  const [dtmToast, setDtmToast] = useState<string | null>(null);
+  const dtmToastTimer = useRef<any>(null);
   // pre-draw style chosen BEFORE drawing (color/width/dash) — applied to each new line/arrow/box/HV drawing
   const [drawStyle, setDrawStyle] = useState<{ color: string; width: number; dash: "solid" | "dashed" | "dotted" }>({ color: "#4d82ff", width: 1.5, dash: "solid" });
   const [compare, setCompare] = useState<string[]>([]);
@@ -298,6 +313,20 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         }
       } catch {}
     }
+    // Re-apply Day Trade Mode after workspace restore (§5 — apply mode on load regardless of deep-link).
+    // Only the FLAG is flipped: the persisted workspace (mm.inds/mm.tf/…) already carries the in-mode
+    // state, so re-applying the preset would be redundant. What MUST be rehydrated is the pre-mode
+    // snapshot — otherwise a toggle-off after reload finds dtmSnapshotRef null and can never restore
+    // the swing workspace (review blocker). dtmBootRef stops the ?dtm=1 effect from double-toggling.
+    if (load("mm.dtm", false)) {
+      dtmBootRef.current = true;
+      const snap = load("mm.dtmSnapshot", null);
+      if (snap && typeof snap === "object" && Array.isArray(snap.inds)) dtmSnapshotRef.current = snap as DtmSnapshot;
+      // ?sym= deep-link sessions skip the workspace restore above, so the persisted in-mode tf never
+      // loads — land such sessions on the mode's 5m instead of the daily default (mode is ON here).
+      if (initialSymbol) setTimeout(() => setTf("5m"), 0);
+      setTimeout(() => setDtm(true), 0);
+    }
   }, []);
   // persist the workspace — but skip the mount-time write (no user intent) and never write during a
   // deep-link (?sym=) session, so following a Screener/Portfolio row can't clobber the saved layout.
@@ -309,7 +338,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // skip the mount-pass write (state is still the pre-load default) — otherwise a reload/discard
   // landing inside the mount→load window can permanently clobber the saved value with the default
   const hidMounted = useRef(false); const ipMounted = useRef(false); const cmpCfgMounted = useRef(false);
-  const favTFMounted = useRef(false); const setMounted = useRef(false);
+  const favTFMounted = useRef(false); const setMounted = useRef(false); const dtmMounted = useRef(false);
   useEffect(() => { if (!hidMounted.current) { hidMounted.current = true; return; } localStorage.setItem("mm.indHidden", JSON.stringify([...hidden])); }, [hidden]);
   useEffect(() => { if (!ipMounted.current) { ipMounted.current = true; return; } localStorage.setItem("mm.indParams", JSON.stringify(indParams)); }, [indParams]);
   useEffect(() => { if (!cmpCfgMounted.current) { cmpCfgMounted.current = true; return; } localStorage.setItem("mm.cmpCfg", JSON.stringify(compareCfg)); }, [compareCfg]);
@@ -320,6 +349,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // this effect with the default and clobbers the saved value before the load effect runs.
   useEffect(() => { if (!favTFMounted.current) { favTFMounted.current = true; return; } localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
   useEffect(() => { if (!setMounted.current) { setMounted.current = true; return; } localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
+  useEffect(() => { if (!dtmMounted.current) { dtmMounted.current = true; return; } localStorage.setItem("mm.dtm", JSON.stringify(dtm)); }, [dtm]);
   // restore saved named watchlists (falls back to the server-seeded Default list)
   useEffect(() => {
     const saved = load("mm.wls", null);
@@ -612,6 +642,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
   }, []);
 
+
   useEffect(() => {
     clearInterval(playRef.current);
     if (replayOn && playing && total) {
@@ -838,6 +869,98 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
   const openSettings = useCallback((k: string) => setSettingsKey(k), []);
 
+  // ── Day Trade Mode toggle (D lane §5) ─────────────────────────────────────────
+  const showDtmToast = useCallback((msg: string) => {
+    clearTimeout(dtmToastTimer.current);
+    setDtmToast(msg);
+    dtmToastTimer.current = setTimeout(() => setDtmToast(null), 2500);
+  }, []);
+
+  const toggleDtm = useCallback(() => {
+    // Guard: don't toggle while an undo-inds op is pending (spec gotcha)
+    if (undoInds) return;
+    dtmUserRef.current = true;
+    // All side effects live OUTSIDE the setDtm updater: setState-in-updater (setTf/setInds/…) and
+    // the mm:set-eth dispatch (whose ChartPane listener patches settings synchronously) fire React's
+    // "cannot update a component while rendering a different component" — updaters must stay pure.
+    const next = !dtm;
+    if (next) {
+      // Snapshot current workspace before applying preset
+      const chartSettings = (() => { try { return JSON.parse(localStorage.getItem("mm.chartSettings") || "{}"); } catch { return {}; } })();
+      const snap: DtmSnapshot = {
+        inds: [...inds],
+        indParams: JSON.parse(JSON.stringify(indParams)),
+        tf,
+        favTF: [...favTF],
+        chartType,
+        extHours: !!(chartSettings?.extHours),
+      };
+      dtmSnapshotRef.current = snap;
+      localStorage.setItem("mm.dtmSnapshot", JSON.stringify(snap));
+
+      // Apply Day Trade Mode preset
+      setTf("5m");
+      setFavTF((prev2) => {
+        const s = new Set(prev2);
+        for (const t2 of ["1m", "5m", "15m", "1h"]) s.add(t2);
+        return [...s].sort((a, b) => tfSortKey(a) - tfSortKey(b));
+      });
+      setInds(new Set(["ema", "svwap", "vol", "orb", "slevels", "rvol"]));
+      setIndParams((p) => ({
+        ...p,
+        ema: { ...withDefaults("ema", p.ema), ma1Len: 9, ma2Len: 20, ma3On: false },
+      }));
+      // Dispatch ext-hours ON event (ChartPane listens for mm:set-eth)
+      window.dispatchEvent(new CustomEvent("mm:set-eth", { detail: { on: true } }));
+    } else {
+      // Restore snapshot verbatim
+      const snap = dtmSnapshotRef.current;
+      if (snap) {
+        setInds(new Set(snap.inds));
+        setIndParams(snap.indParams);
+        setTf(snap.tf);
+        setFavTF(snap.favTF);
+        setChartType(snap.chartType);
+        // Restore ext-hours to snapshotted value
+        window.dispatchEvent(new CustomEvent("mm:set-eth", { detail: { on: snap.extHours } }));
+      }
+      // else: missing snapshot → keep current state, just clear flag (spec: no-op restore)
+    }
+    setDtm(next);
+  }, [undoInds, dtm, inds, indParams, tf, favTF, chartType]);
+
+  // Show toast after dtm state settles — only for explicit user toggles (dtmUserRef), never for
+  // load-restores. NOTE: dtmMounted cannot gate this — the persist effect (earlier in source order)
+  // sets it true on the same mount commit before this effect runs.
+  useEffect(() => {
+    if (!dtmUserRef.current) return;
+    dtmUserRef.current = false;
+    showDtmToast(dtm ? t("dtmOn") : t("dtmOff"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dtm]);
+
+  // ── Day Trade Mode hotkeys (§5): Alt+D toggle; Alt+1/2/3/4 quick-TF while in mode ──
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      const target = e.target as HTMLElement;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea") return;
+      if (target?.isContentEditable) return;
+      if (!e.altKey) return;
+      if (e.code === "KeyD") { e.preventDefault(); toggleDtm(); return; }
+      if (dtm) {
+        // Alt+1/2/3/4 — use e.code to survive keyboard layout differences
+        if (e.code === "Digit1") { e.preventDefault(); setTf("1m"); return; }
+        if (e.code === "Digit2") { e.preventDefault(); setTf("5m"); return; }
+        if (e.code === "Digit3") { e.preventDefault(); setTf("15m"); return; }
+        if (e.code === "Digit4") { e.preventDefault(); setTf("1h"); return; }
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [toggleDtm, dtm]);
+
   // ── custom-script wiring ──────────────────────────────────────────────────────────────────────
   // load scripts + enable-state + param overrides on mount (dual-tier: API for members, LS for guests)
   const scriptsLoadedRef = useRef(false);
@@ -880,6 +1003,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // Strip param so this only fires once (mirrors ?addScript= / ?pane= strip pattern)
     try { const u = new URL(window.location.href); u.searchParams.delete("ind"); window.history.replaceState({}, "", u.toString()); } catch {}
   }, [urlSearch]);
+
+  // ?dtm=1 → activate Day Trade Mode after mount (same urlSearch pattern as ?ind=); strip after consume.
+  // dtmBootRef guard: when mm.dtm=true was restored on load, the mode is already coming up — a second
+  // toggleDtm here would snapshot the in-mode workspace as the "swing" snapshot and break restore.
+  useEffect(() => {
+    const raw = new URLSearchParams(urlSearch).get("dtm");
+    if (raw !== "1") return;
+    if (!dtm && !dtmBootRef.current) toggleDtm();
+    try { const u = new URL(window.location.href); u.searchParams.delete("dtm"); window.history.replaceState({}, "", u.toString()); } catch {}
+  }, [urlSearch, toggleDtm, dtm]);
 
   // derive the enabled PineScript[] (declared defaults + per-script overrides merged), passed to every pane
   const scriptById = useMemo(() => { const m: Record<string, UserScript> = {}; for (const s of scripts) m[s.id] = s; return m; }, [scripts]);
@@ -1089,6 +1222,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
             <div className="seg tool-adv" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
             <button className={`tbtn tool-adv${isMtf ? " on" : ""}`} title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
+            <button className={`tbtn dtm${dtm ? " on" : ""}`} title={t("dtmTip")} onClick={toggleDtm}><svg viewBox="0 0 24 24" style={{ width: 13, height: 13 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>{t("dtmBtn")}</button>
             {panes.length > 1 && <button className={`tbtn tool-adv${sync && !mixedTfs ? " on" : ""}`} disabled={mixedTfs} title={mixedTfs ? t("syncMixedTip") : t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
             <div className="pophost tool-adv">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !detectOpen; closeAll(); setDetectOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
@@ -1189,7 +1323,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts}
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}
@@ -1513,6 +1647,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <button className="btn" style={{ height: 26, fontSize: 11.5 }} onClick={() => {
             if (undoInds) { clearTimeout(undoInds.timer); setInds(undoInds.snapshot); setUndoInds(null); }
           }}>{t("undo")}</button>
+        </div>
+      )}
+
+      {/* ── Day Trade Mode brief toast ── (bottom 56 so a pending undo-toast at 22 never overlaps) */}
+      {dtmToast && (
+        <div className="undo-toast" style={{ position: "fixed", bottom: 56, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 50, display: "flex", alignItems: "center", gap: 10 }}>
+          {dtmToast}
         </div>
       )}
 

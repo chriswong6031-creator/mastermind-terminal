@@ -1,0 +1,123 @@
+/* DayStatsStrip — Observatory micro-label style stats row for Day Trade Mode.
+   Pinned above the chart; scrolls horizontally under 900px per spec §3.
+   CSS Module: all class names are locally scoped. */
+
+.strip {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+  padding: 0 8px;
+  height: 28px;
+  background: var(--panel-2, #1a1d27);
+  border-bottom: 1px solid var(--border, rgba(214,218,227,0.08));
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  flex-shrink: 0;
+  /* hide scrollbar but keep functionality */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  user-select: none;
+}
+
+.strip::-webkit-scrollbar {
+  display: none;
+}
+
+/* Mobile: enable horizontal scroll under 900px */
+@media (max-width: 900px) {
+  .strip {
+    /* ensure scrollable */
+    overflow-x: scroll;
+  }
+}
+
+/* Each label+value pair */
+.cell {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 0 0;
+  flex-shrink: 0;
+}
+
+/* The micro-label (Observatory style) */
+.lbl {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--text-3, #5c6272);
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+/* The value */
+.val {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1, #d6dae3);
+  line-height: 1;
+}
+
+/* Numeric font for prices, HOD/LOD */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Directional colors */
+.up {
+  color: var(--up, #26c281);
+}
+
+.down {
+  color: var(--down, #f0566b);
+}
+
+/* Badge cell: separator before it */
+.cellBadge {
+  margin-left: auto;
+  padding-left: 10px;
+  border-left: 1px solid var(--border, rgba(214,218,227,0.08));
+  gap: 6px;
+}
+
+/* Session badge pill */
+.badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 16px;
+}
+
+.badgeRth {
+  background: rgba(38, 194, 129, 0.15);
+  color: var(--up, #26c281);
+}
+
+.badgePre {
+  background: rgba(232, 179, 57, 0.15);
+  color: var(--signal, #e8b339);
+}
+
+.badgeAh {
+  background: rgba(77, 130, 255, 0.15);
+  color: var(--link, #4d82ff);
+}
+
+.badgeClosed {
+  background: rgba(139, 147, 163, 0.12);
+  color: var(--muted, #8b93a3);
+}
+
+/* Clock */
+.clock {
+  font-size: 11px;
+  color: var(--text-2, #8b93a3);
+  font-weight: 500;
+}
