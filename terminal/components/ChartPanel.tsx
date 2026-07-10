@@ -207,10 +207,12 @@ const SUBPANE_ORDER = ["osc", "macd"] as const;
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
-  indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE }:
+  indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
-    indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[] }) {
+    indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
+    chartSettings?: { mode?: number; invertScale?: boolean; scaleLeft?: boolean; autoScale?: boolean; priceLineVisible?: boolean; lastValueVisible?: boolean };
+    onChartApi?: (api: IChartApi | null) => void; extHours?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
   const verdictRef = useRef<HTMLSpanElement>(null);
@@ -1426,7 +1428,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         let bars: any[] = [];
         let feedErr: string | null = null;       // the route's j.error (route returns {bars:[],error} on an upstream/config failure)
         try {
-          const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(timeframe)}&ext=1`, { cache: "no-store" });
+          const r = await fetch(`/api/intraday?sym=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(timeframe)}${extHours ? "&ext=1" : ""}`, { cache: "no-store" });
           const j = await r.json().catch(() => null);
           bars = Array.isArray(j?.bars) ? j.bars : [];
           if (!r.ok || j?.error) feedErr = String(j?.error || `HTTP ${r.status}`);
@@ -1563,7 +1565,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line
-  }, [symbol, timeframe, chartType]);
+  }, [symbol, timeframe, chartType, extHours]);
 
   // Register (or re-register) this pane with paneSync. Cleans up any prior registration first.
   const reRegisterSync = () => {
@@ -1850,6 +1852,43 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   //   re-register against the live series.
   // ────────────────────────────────────────────────────────────────────────────
   useEffect(() => { if (chartRef.current && priceSeriesRef.current && barsRef.current.length) reRegisterSync(); return () => { }; /* eslint-disable-line */ }, [syncId]);
+
+  // ── EFFECT 7 ─ chart settings (price scale mode, invert, position, labels, price line).
+  // Applies whenever the chartSettings prop changes.
+  useEffect(() => {
+    const chart = chartRef.current; const priceS = priceSeriesRef.current; if (!chart) return;
+    if (chartSettings == null) return;
+    const { mode, invertScale, scaleLeft, autoScale, priceLineVisible, lastValueVisible } = chartSettings;
+    try {
+      if (scaleLeft != null) {
+        chart.applyOptions({ leftPriceScale: { visible: !!scaleLeft }, rightPriceScale: { visible: !scaleLeft } });
+        if (priceS) try { priceS.applyOptions({ priceScaleId: scaleLeft ? "left" : "right" } as any); } catch {}
+      }
+      const scaleId = (chartSettings.scaleLeft) ? "left" : "right";
+      if (mode != null || invertScale != null || autoScale != null) {
+        const opts: Record<string, any> = {};
+        if (mode != null) opts.mode = mode;
+        if (invertScale != null) opts.invertScale = invertScale;
+        if (autoScale != null) opts.autoScale = autoScale;
+        chart.priceScale(scaleId).applyOptions(opts);
+      }
+      if (priceS) {
+        const sOpts: Record<string, any> = {};
+        if (priceLineVisible != null) sOpts.priceLineVisible = priceLineVisible;
+        if (lastValueVisible != null) sOpts.lastValueVisible = lastValueVisible;
+        if (Object.keys(sOpts).length) priceS.applyOptions(sOpts as any);
+      }
+    } catch {}
+    // eslint-disable-next-line
+  }, [JSON.stringify(chartSettings)]);
+
+  // ── EFFECT 8 ─ expose the chart API to the parent (for range navigation from the frame bar).
+  const onChartApiRef = useRef(onChartApi); onChartApiRef.current = onChartApi;
+  useEffect(() => {
+    onChartApiRef.current?.(chartRef.current);
+    return () => { onChartApiRef.current?.(null); };
+    // eslint-disable-next-line
+  }, []);
 
   // ── unchanged: re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild) ──
   useEffect(() => { renderRef.current?.(); const svg = svgRef.current; if (svg) { svg.style.pointerEvents = tool ? "auto" : "none"; svg.style.cursor = tool === "erase" ? "pointer" : tool ? "crosshair" : "default"; } }, [tool, drawings]);

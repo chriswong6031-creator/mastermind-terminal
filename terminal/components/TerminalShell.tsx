@@ -736,9 +736,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className={`ct${view === "strategy" ? " on" : ""}`} onClick={() => setView("strategy")}>{t("strategyTester")}</div>
           <div className="tools">
             <div className="pophost">
-              <div className="seg">
-                {[...favTF].sort((a, b) => tfSortKey(a) - tfSortKey(b)).map((t) => <button key={t} className={tf === t ? "on" : ""} disabled={!FUNCTIONAL.has(t)} style={!FUNCTIONAL.has(t) ? { opacity: .4 } : {}} onClick={() => FUNCTIONAL.has(t) && setTf(t)}>{t}</button>)}
-                <button onClick={(e) => { e.stopPropagation(); const willOpen = !tfOpen; closeAll(); setTfOpen(willOpen); }} style={{ padding: "0 6px" }} aria-label={t("moreTimeframes")} title={t("moreTimeframes")}>▾</button>
+              <div className="tftray">
+                {[...favTF].sort((a, b) => tfSortKey(a) - tfSortKey(b)).map((tfi) => (
+                  <button key={tfi} className={`tfbtn${tf === tfi ? " on" : ""}${!FUNCTIONAL.has(tfi) ? " dis" : ""}`} disabled={!FUNCTIONAL.has(tfi)} onClick={() => FUNCTIONAL.has(tfi) && setTf(tfi)}>{tfi}</button>
+                ))}
+                <button className="tfbtn tfbtn-edit" onClick={(e) => { e.stopPropagation(); const willOpen = !tfOpen; closeAll(); setTfOpen(willOpen); }} title={t("tfCustomize")}>
+                  <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2 10.5V12h1.5l5-5-1.5-1.5-5 5zM11.3 3.7a.9.9 0 0 0 0-1.3l-.7-.7a.9.9 0 0 0-1.3 0L8 3l2 2 1.3-1.3z" /></svg>
+                </button>
               </div>
               <div className={`tfgrid${tfOpen ? " show" : ""}`} onClick={(e) => e.stopPropagation()}>
                 {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{t(TFG_TKEY[g])}</div>{items.map((tfi) => { const fn = FUNCTIONAL.has(tfi); const fav = favTF.includes(tfi);
