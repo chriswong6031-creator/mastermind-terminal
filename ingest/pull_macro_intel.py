@@ -1,5 +1,8 @@
 """Brain/Macro intel bridge (HANDOFF §7.6).
 
+Deployed to /opt/terminal/ingest by terminal-build.sh's runtime sync (see DEPLOY.md) —
+merged changes reach the box on the next deploy, not before.
+
 For each equity symbol in the Mastermind Terminal universe, reads the Macro Dashboard's
 per-stock JSON (site/stockdata/<SYM>.json) and writes a trimmed, versioned
 terminal/public/data/<SYM>.intel.json in the ``intel/v1`` shape.

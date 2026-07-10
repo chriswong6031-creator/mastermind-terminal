@@ -26,7 +26,45 @@ another session's deploy.
 `git fetch && reset --hard origin/master` in `/opt/terminal/.gitsrc` (a read-only-deploy-key checkout)
 → stage master's `terminal/` + overlay the box's gitignored runtime (`node_modules`, `.env*`, `public/data`)
 → `next build` in the stage → verify `BUILD_ID` → **atomic-swap `.next`** (live site stays up throughout;
-auto-rolls-back if health fails) → sync `/opt/terminal/terminal` source back to `master`.
+auto-rolls-back if health fails) → **runtime-code sync** (cron/systemd scripts, below) → sync
+`/opt/terminal/terminal` source back to `master`.
+
+The script's authoring source is **`ops/terminal-build.sh` in this repo** — every deploy re-installs it
+to `/opt/terminal/terminal-build.sh` (a change to it takes effect on the *next* deploy). Never edit the
+box copy in place.
+
+## What a deploy ships — exact paths
+
+One `terminal-build.sh` run deploys **all** of the following from the same `origin/master` SHA.
+If the deploy fails (build error or health check), **nothing** moves — app and runtime code both
+stay on the previous state.
+
+| repo path | deployed to | how |
+|---|---|---|
+| `terminal/` | `/opt/terminal/terminal` + live `.next` | staged `next build` → atomic `.next` swap |
+| `ingest/` | `/opt/terminal/ingest` | overlay (nightly `terminal-data`, 5-min `fast_flagship`, `alerts_engine` crons) |
+| `scripts/` | `/opt/terminal/scripts` | overlay (`build_data_coverage` cron) |
+| `config/`, `contracts/` | `/opt/terminal/{config,contracts}` | overlay |
+| `hub/` | `/opt/terminal/hub` | overlay + `npm ci` if lockfile changed + `systemctl restart quote-hub` **only if changed** |
+| `ops/terminal-data` | `/usr/local/bin/terminal-data` | install (the nightly-cron wrapper) |
+| `ops/terminal-build.sh` | `/opt/terminal/terminal-build.sh` | install — takes effect on the **next** deploy |
+
+**Overlay = `git archive origin/master <dirs> \| tar -x`: tracked files are overwritten; box-only
+untracked files are preserved.** Several cron-run scripts exist *only* on the box (e.g.
+`ingest/fast_flagship.py`, `ingest/refresh_ohlc.py`, plus runtime caches like
+`ingest/hk_universe_cache.json`) — that is why the sync must never become `rsync --delete`.
+Until those are committed, the repo is NOT the full source of truth for them.
+
+### Deliberately NOT deployed
+
+- **`signal_layer/`** — the box copy is the **live GC-v2 engine** and is *ahead of git*:
+  `signal_layer/confluence_v2.py` is untracked, and the box `contracts.py` carries the v2
+  (`no_cut_exits`) params that the 5-min `fast_flagship` cron imports. Overlaying master would
+  regress the live signal engine. Reconcile the box's `signal_layer/` into master **first**, then
+  add `signal_layer` to `RUNTIME_PATHS` in `ops/terminal-build.sh`.
+- `api/`, `docs/`, `indicator_engine/`, `tests/`, `web/`, `supabase/`, `requirements.txt` — not
+  consumed on the box.
+- `terminal/public/data/` (gitignored) — market/intel data, refreshed by crons, preserved across deploys.
 
 ## Notes
 
