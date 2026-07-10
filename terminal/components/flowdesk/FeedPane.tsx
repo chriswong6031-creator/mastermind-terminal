@@ -308,6 +308,10 @@ export function FeedPane({
 
   // Wire IntersectionObserver to sentinel so scrolling to the bottom auto-loads
   // the next page without requiring a button click.
+  // deps=[] intentional: the IO targets sentinelRef which is stable (same div stays
+  // in the DOM as long as filtered.length > visibleCount). The callback uses only
+  // setVisibleCount (stable updater), so a mount-only effect is correct.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
@@ -321,7 +325,7 @@ export function FeedPane({
     );
     io.observe(el);
     return () => io.disconnect();
-  });
+  }, []);
 
   // Merge preset overrides into the base filter set
   const effectiveFilters = useMemo<FlowFilters>(() => {

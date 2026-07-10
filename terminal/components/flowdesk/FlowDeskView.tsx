@@ -274,6 +274,10 @@ export function FlowDeskView() {
   const [chainHeat, setChainHeat] = useState<ChainHeatPayload | null>(null);
   const [enrich,    setEnrich]    = useState<EnrichPayload | null>(null);
 
+  // Track last feed asof to skip re-renders when the poll returns unchanged data.
+  // This avoids a full 200-card re-render on ticks where the feed hasn't updated.
+  const lastFeedAsofRef = useRef<string | null>(null);
+
   // ── Selection state ──────────────────────────────────────────────────────────
   const [selectedEvent, setSelectedEvent] = useState<FlowEvent | null>(null);
   const [tickerCtx,     setTickerCtx]     = useState<TickerPayload | null>(null);
@@ -302,7 +306,13 @@ export function FlowDeskView() {
   const fetchFeed = useCallback(async () => {
     if (document.visibilityState === "hidden") return;
     const data = await safeFetch<FeedPayload>("/api/flow?f=feed");
-    if (data) setFeed(data);
+    if (data) {
+      // Skip re-render if the payload asof is unchanged — avoids forcing all 200
+      // FlowCards to reconcile on a poll tick that returns the same data.
+      if (data.asof && data.asof === lastFeedAsofRef.current) return;
+      lastFeedAsofRef.current = data.asof ?? null;
+      setFeed(data);
+    }
   }, []);
 
   const fetchTide = useCallback(async () => {
@@ -357,7 +367,7 @@ export function FlowDeskView() {
         safeFetch<ChainHeatPayload>("/api/flow?f=chainheat"),
         safeFetch<any>("/api/flow?f=enrich"),
       ]);
-      if (f)  setFeed(f);
+      if (f)  { lastFeedAsofRef.current = f.asof ?? null; setFeed(f); }
       if (ti) setTide(ti);
       if (ch) setChainHeat(ch);
       // Enrich: stale check (same logic as fetchEnrich callback)
