@@ -100,7 +100,7 @@ const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: tru
 // Wraps performance.mark so profiling is zero-cost unless the flag is set.
 // Each mark is also console.log'd with a wall-clock delta from the first mark
 // so a DevTools recording isn't needed — just open the console.
-// Kept in prod intentionally: it is genuinely useful for reproducing the stall.
+// Kept in prod intentionally: useful for profiling mount/manifest/chart-paint spans.
 const _btStart = typeof performance !== "undefined" ? performance.now() : 0;
 function btMark(name: string) {
   if (typeof window === "undefined") return;
@@ -180,15 +180,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const t = useT();
   const { lang } = useLang();
   const navPath = usePathname();
-  // ── urlSearch: SSR-safe replacement for useSearchParams() ───────────────────
-  // useSearchParams() in Next.js 16 requires a Suspense boundary; without one the
-  // router wraps the whole component in an implicit Suspense whose fallback is null
-  // — causing a 30-60s blank stall on prod (no canvas, no fetches) until the
-  // dehydration boundary resolves.  We only ever READ params inside useEffects
-  // (client-side only) and in one JSX expression for the mobile nav active-key;
-  // all of these are fine with a plain window.location.search read.  popstate keeps
-  // it reactive for SPA navigations (pushState/replaceState are handled by the
-  // mm:open-pane / replaceState calls that already dispatch their own effects).
+  // ── urlSearch: window.location.search alternative to useSearchParams() ──────
+  // TerminalShell is always dynamically-rendered (server-side, on demand) so the
+  // implicit-Suspense prerender path that useSearchParams() triggers on static
+  // routes (screener/alerts/flow) never applies here — AppNav already handles
+  // that case with its own <Suspense> wrapper.  Using window.location.search
+  // directly is simpler for this component: all reads happen inside useEffects
+  // (client-side only) or in one JSX expression for the mobile nav active-key,
+  // so there is no SSR mismatch.  popstate keeps it reactive for back/forward
+  // navigations; same-route pushState/replaceState navigations that change
+  // ?pane= or ?addScript= are handled by the mm:open-pane custom-event and the
+  // cross-route remount respectively, so no popstate gap exists for current callers.
+  // NOTE: future same-route router.push() that changes these params without a
+  // matching custom event will NOT re-trigger this state; see nit in pass6-stall.
   const [urlSearch, setUrlSearch] = useState<string>("");
   useEffect(() => {
     btMark("shell-mount");  // first useEffect: React has committed the component
