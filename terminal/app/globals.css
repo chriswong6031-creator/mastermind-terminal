@@ -6,14 +6,14 @@
   --chart-bg:#131722;
   --line:#23262f; --line-2:#1a1d24; --line-3:#33373f; --grid:rgba(255,255,255,.04);
   --pane-sep:#39404d; --pane-sep-h:#626b80;   /* indicator sub-pane divider — visible enough to find the resize handle */
-  --text:#d6dae3; --text-2:#868d9c; --muted:#5a616f; --text-dim:#3c4452;
+  --text:#d6dae3; --text-2:#9ba3b4; --muted:#717a8e; --text-dim:#4a5468;
   --up:#26c281; --down:#f0566b;
   --buy:#26c281; --sell:#f0566b; --signal:#e8b339;
   --rebuy:#b6e94a; --cut:#ff8a3d;
   --brand:#2962ff; --brand-2:#4d82ff; --brand-hov:#1d52ed; --link:#4d82ff;
   --regime-up:#26c281; --warn:#e8a33d; --danger:#f0566b; --code-fn:#9d86ff;
   --font-ui:var(--font-inter),-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-  --font-num:ui-monospace,"SF Mono","Geist Mono",Menlo,monospace;
+  --font-num:var(--font-jetbrains-mono),"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
   --r:4px; --r-md:6px; --r-lg:8px; --r-pill:999px; --t:110ms; --ease:cubic-bezier(.4,0,.2,1);
 }
 /* East-Asian convention: red = up / green = down (CN/HK/TW/MO). Flips the up/down semantics only;

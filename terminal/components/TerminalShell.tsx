@@ -34,7 +34,7 @@ import SettingsMenu from "@/components/SettingsMenu";
 import DayRange from "@/components/DayRange";
 import { useT, useLang } from "@/lib/i18n";
 import { useFromMacro, backToMacro } from "@/lib/originNav";
-import { getJSON, prefetch } from "@/lib/dataCache";
+import { getJSON, prefetch, loadCoverage } from "@/lib/dataCache";
 import { type CmpCfg, type CmpMode, defaultCmpCfg, cmpKey, isCmpKey, cmpSymOf } from "@/lib/compare";
 import CompareSettings from "@/components/CompareSettings";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
@@ -65,6 +65,9 @@ const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]]
 // (us/crypto/cn/hk); .TO (ca) stays daily-only — its picker entries render disabled.
 const DAILY_FUNCTIONAL = new Set(["D", "2D", "3D", "W", "2W", "1M", "3M"]);
 const INTRADAY_FUNCTIONAL = ["1m", "5m", "15m", "30m", "1h", "2h", "4h"];
+// Canonical chronological order for all TFs — used to sort the top-bar favourites list.
+const TF_CANONICAL_ORDER = ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "D", "2D", "3D", "W", "2W", "1M", "3M"];
+const tfSortKey = (tf: string) => { const i = TF_CANONICAL_ORDER.indexOf(tf); return i < 0 ? 999 : i; };
 function functionalSet(sym: string): Set<string> {
   const s = new Set(DAILY_FUNCTIONAL);
   if (intradayCapable(classify(sym))) for (const t of INTRADAY_FUNCTIONAL) s.add(t);
@@ -203,7 +206,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, [drawStore, setSymbolDrawings]);
 
   // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
-  useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive && m) setMan(m); }).catch(() => {}); return () => { alive = false; }; }, []);
+  // After the manifest loads, also warm the coverage index so uncovered symbols
+  // never fire a network request for intel/fund/opts files.
+  useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive && m) { setMan(m); loadCoverage(Object.keys(m.symbols || {})); } }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
     { const si = load("mm.inds", ["ema", "rsi", "stochrsi", "_oracle"]) as string[]; if (!localStorage.getItem("mm.oracleMig")) { if (!si.includes("_oracle")) si.push("_oracle"); localStorage.setItem("mm.oracleMig", "1"); } setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) }); setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
@@ -732,7 +737,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="tools">
             <div className="pophost">
               <div className="seg">
-                {favTF.map((t) => <button key={t} className={tf === t ? "on" : ""} disabled={!FUNCTIONAL.has(t)} style={!FUNCTIONAL.has(t) ? { opacity: .4 } : {}} onClick={() => FUNCTIONAL.has(t) && setTf(t)}>{t}</button>)}
+                {[...favTF].sort((a, b) => tfSortKey(a) - tfSortKey(b)).map((t) => <button key={t} className={tf === t ? "on" : ""} disabled={!FUNCTIONAL.has(t)} style={!FUNCTIONAL.has(t) ? { opacity: .4 } : {}} onClick={() => FUNCTIONAL.has(t) && setTf(t)}>{t}</button>)}
                 <button onClick={(e) => { e.stopPropagation(); const willOpen = !tfOpen; closeAll(); setTfOpen(willOpen); }} style={{ padding: "0 6px" }} aria-label={t("moreTimeframes")} title={t("moreTimeframes")}>▾</button>
               </div>
               <div className={`tfgrid${tfOpen ? " show" : ""}`} onClick={(e) => e.stopPropagation()}>
