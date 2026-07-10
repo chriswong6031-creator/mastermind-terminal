@@ -122,8 +122,13 @@ a secondary subtle "AH <price>" line when present.
 
 | Mode | Condition | Coverage |
 |---|---|---|
-| Alpaca overnight ws | `ALPACA_API_KEY` + `ALPACA_API_SECRET` set | All ext windows; true overnight via `v1beta1/overnight` feed |
-| Yahoo unofficial fallback | No Alpaca keys | Pre-market + post-market only (04:00–09:30, 16:00–20:00 ET); no true overnight |
+| Alpaca overnight ws | `ALPACA_API_KEY` + `ALPACA_API_SECRET` set | All ext windows; true overnight via `v1beta1/overnight` feed (UNCONFIRMED — entitlement depends on Alpaca plan; contact Alpaca support to verify) |
+| Yahoo unofficial fallback | No Alpaca keys (or Alpaca auth fails) | Pre-market + post-market only (04:00–09:30, 16:00–20:00 ET); no true overnight |
+
+> **Note:** The 30-symbol free-plan websocket cap and overnight feed entitlement on Alpaca's
+> Basic (free) plan are not confirmed in Alpaca's primary public documentation. Both may require
+> a paid plan. If `ALPACA_API_KEY` / `ALPACA_API_SECRET` are set but auth returns 402/403, the
+> hub automatically falls back to the keyless Yahoo leg for pre/post windows.
 
 **Multi-user note:** The hub is a singleton. The 30-symbol LRU budget is shared across ALL users. A
 `/quotes` request for symbol X from any user advances X to MRU. The oldest symbol is unsubscribed when
@@ -133,7 +138,7 @@ the cap is exceeded. This is intentional: the hub is a loopback fan-out, not a p
 
 ```
 extPrice     number   — latest ext trade price
-extChg       number|null — (extPrice − officialClose) / officialClose × 100; null pre-market before close known
+extChg       number|null — (extPrice − closeRef) / closeRef × 100; closeRef = officialClose when daily file has rolled, else prevClose (prior-session close); null only when neither is available
 extTs        number   — Unix seconds of the ext bar
 extSession   string   — 'pre' | 'post' | 'overnight'
 extSource    string   — 'alpaca_overnight' | 'yahoo_unofficial'

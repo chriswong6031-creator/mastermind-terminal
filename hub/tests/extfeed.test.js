@@ -111,6 +111,37 @@ describe("ExtFeed LRU subscription management", () => {
       feed2.stop();
     }
   });
+
+  it("re-touching an existing entry updates lastReq (idle-sweep regression)", () => {
+    // Regression: before the fix, lruTouch re-inserted the same value object without
+    // updating lastReq, so _sweepIdle would unsubscribe actively-demanded symbols after
+    // 30 minutes (measured from their FIRST subscribe, not their most recent demand).
+    const feed3 = new ExtFeed({ alpacaKey: "", alpacaSecret: "" });
+    try {
+      const before = Date.now() - 1; // ensure the reference is strictly before
+      feed3.demand("AAPL");
+      const firstLastReq = feed3._yahooSubs.get("AAPL").lastReq;
+
+      // Simulate 50ms passing then re-demand.
+      // We cannot sleep in a sync test, so we patch Date.now temporarily.
+      const origNow = Date.now;
+      const fakeNow = origNow() + 50;
+      Date.now = () => fakeNow;
+      try {
+        feed3.demand("AAPL"); // re-touch
+      } finally {
+        Date.now = origNow;
+      }
+
+      const afterLastReq = feed3._yahooSubs.get("AAPL").lastReq;
+      assert.ok(afterLastReq >= fakeNow,
+        `lastReq must be updated on re-touch; before=${firstLastReq}, after=${afterLastReq}, fakeNow=${fakeNow}`);
+      assert.ok(afterLastReq > firstLastReq,
+        "lastReq must increase on each re-demand (idle-sweep uses this to decide unsub)");
+    } finally {
+      feed3.stop();
+    }
+  });
 });
 
 // ── Keyless Yahoo fallback shape ──────────────────────────────────────────────
@@ -161,15 +192,32 @@ describe("ExtFeed.getExt — field shape and session gating", () => {
     assert.equal(ext, null, "getExt must return null during RTH");
   });
 
-  it("returns ext fields during pre-market with officialClose=null → extChg=null", () => {
+  it("returns ext fields during pre-market with officialClose=null (closeRef=null) → extChg=null", () => {
+    // getExt itself gets null when BOTH officialClose and prevClose are unavailable.
+    // In normal operation store.getQuotes passes prevClose as the reference; this test
+    // covers the case where the caller explicitly passes null (both refs absent).
     const preMktMs = etMs("07:00");
     const ext = feed.getExt("AAPL", preMktMs, null);
     assert.ok(ext != null, "ext must be non-null in pre-market");
     assert.equal(ext.extPrice, 314.50, "extPrice must equal the injected price");
-    assert.equal(ext.extChg, null, "extChg must be null when officialClose is null");
+    assert.equal(ext.extChg, null, "extChg must be null when no close reference is available");
     assert.ok(typeof ext.extTs === "number", "extTs must be a number");
     assert.equal(ext.extSession, "pre", "extSession must be 'pre'");
     assert.equal(ext.extSource, "yahoo_unofficial", "extSource must be 'yahoo_unofficial'");
+  });
+
+  it("computes extChg when officialClose is absent but prevClose is passed (pre-market normal path)", () => {
+    // Regression: before the fix, store.getQuotes passed officialClose (null pre-market)
+    // so extChg was always null in pre-market even though prevClose was available.
+    // store.getQuotes now passes prevClose as the reference when officialClose is absent.
+    const preMktMs = etMs("07:00");
+    const prevClose = 313.39; // prior session close, used as reference pre-market
+    const ext = feed.getExt("AAPL", preMktMs, prevClose);
+    assert.ok(ext != null, "ext must be non-null in pre-market");
+    const expectedChg = (314.50 - prevClose) / prevClose * 100;
+    assert.ok(ext.extChg !== null, "extChg must NOT be null when prevClose is passed as reference");
+    assert.ok(Math.abs(ext.extChg - expectedChg) < 0.001,
+      `extChg=${ext.extChg?.toFixed(4)} expected≈${expectedChg.toFixed(4)} (+0.354%)`);
   });
 
   it("computes extChg correctly when officialClose is provided", () => {
@@ -214,6 +262,64 @@ describe("ExtFeed disabled (EXT_FEED_DISABLE=1)", () => {
     const ext = disabledFeed.getExt("AAPL", preMktMs, null);
     assert.equal(ext, null);
     disabledFeed.stop();
+  });
+});
+
+// ── Alpaca authFailed → Yahoo fallback ───────────────────────────────────────
+
+describe("ExtFeed Alpaca authFailed degrades to Yahoo fallback", () => {
+  it("serves Yahoo cache when alpaca.authFailed=true", () => {
+    // Simulate: Alpaca keys present but auth fails (402/403 — plan not entitled).
+    // Regression: before the fix, _yahooCache was null in alpaca mode so getExt
+    // returned null silently with no fallback.
+    const feed = new ExtFeed({ alpacaKey: "fake-key", alpacaSecret: "fake-secret" });
+    try {
+      // Verify the fallback structures exist in alpaca mode.
+      assert.ok(feed._yahooSubs instanceof Map, "_yahooSubs must be initialised in alpaca mode");
+      assert.ok(feed._yahooCache instanceof Map, "_yahooCache must be initialised in alpaca mode");
+
+      // Inject a Yahoo cache entry directly (as the poller would on a real run).
+      const preMktMs = etMs("07:00");
+      feed._yahooCache.set("AAPL", {
+        price: 314.50,
+        ts: Math.floor(preMktMs / 1000),
+        session: "pre",
+        source: "yahoo_unofficial",
+      });
+
+      // Simulate authFailed.
+      feed.alpaca.authFailed = true;
+
+      const ext = feed.getExt("AAPL", preMktMs, 313.39);
+      assert.ok(ext != null, "getExt must return Yahoo data when Alpaca authFailed");
+      assert.equal(ext.extPrice, 314.50, "extPrice from Yahoo fallback must be correct");
+      assert.ok(ext.extChg !== null, "extChg must be computed from prevClose reference");
+      assert.equal(ext.extSource, "yahoo_unofficial", "extSource must identify Yahoo fallback");
+    } finally {
+      // Stop without starting — alpaca.ws is null so stop() is a no-op.
+      feed.stop();
+    }
+  });
+
+  it("serves Alpaca _extMap when authFailed=false (primary path)", () => {
+    const feed = new ExtFeed({ alpacaKey: "fake-key", alpacaSecret: "fake-secret" });
+    try {
+      const preMktMs = etMs("07:00");
+      feed._extMap.set("AAPL", {
+        price: 315.00,
+        ts: Math.floor(preMktMs / 1000),
+        session: "pre",
+        source: "alpaca_overnight",
+      });
+      feed.alpaca.authFailed = false;
+
+      const ext = feed.getExt("AAPL", preMktMs, 313.39);
+      assert.ok(ext != null, "getExt must return Alpaca data when auth succeeded");
+      assert.equal(ext.extPrice, 315.00, "must serve from Alpaca _extMap, not Yahoo cache");
+      assert.equal(ext.extSource, "alpaca_overnight");
+    } finally {
+      feed.stop();
+    }
   });
 });
 
@@ -316,6 +422,50 @@ describe("Store.getQuotes ext field merge", () => {
     const q = result["AAPL"];
     assert.ok(q, "AAPL must be in result");
     assert.equal(q.extPrice, undefined, "no extPrice when no extFeed passed");
+  });
+
+  it("store passes prevClose as closeRef to getExt when today's close is absent (pre-market regression)", () => {
+    // Regression: store.getQuotes used to pass officialClose (null in pre-market),
+    // making extChg always null even though prevClose was available.
+    // Verified end-to-end: pre-market quote (last=316.22, prevClose=313.39, no close)
+    // + injected ext print 314.50 → getExt must receive 313.39 as the close reference
+    // and return extChg = (314.50 - 313.39) / 313.39 * 100 = +0.354%.
+    const store = makeStore();
+    const prevClose = 313.39;
+    store.quotes.set("AAPL", {
+      sym: "AAPL", last: 316.22, market: "us", chg: 0.90,
+      prevClose,
+      // Deliberately no `close` field — this is the pre-market / overnight condition.
+      ts: Math.floor(preMktMs / 1000),
+      live: false, source: "polygon-delayed",
+    });
+
+    // Capture the closeRef that store passes to getExt.
+    let capturedCloseRef;
+    const capturingStub = {
+      getExt(sym, nowMs, closeRef) {
+        capturedCloseRef = closeRef;
+        // Return a real ext entry with the correct extChg for the captured closeRef.
+        if (closeRef == null) return null;
+        const extPrice = 314.50;
+        return {
+          extPrice,
+          extChg: (extPrice - closeRef) / closeRef * 100,
+          extTs: Math.floor(preMktMs / 1000),
+          extSession: "pre",
+          extSource: "yahoo_unofficial",
+        };
+      },
+    };
+
+    const result = store.getQuotes(["AAPL"], preMktMs, capturingStub);
+    assert.equal(capturedCloseRef, prevClose,
+      `store must pass prevClose=${prevClose} as closeRef when today's close is absent`);
+    const q = result["AAPL"];
+    assert.ok(q.extChg !== null && q.extChg !== undefined, "extChg must be non-null pre-market");
+    const expectedChg = (314.50 - prevClose) / prevClose * 100;
+    assert.ok(Math.abs(q.extChg - expectedChg) < 0.001,
+      `extChg=${q.extChg?.toFixed(4)} expected≈${expectedChg.toFixed(4)} (+0.354%)`);
   });
 });
 

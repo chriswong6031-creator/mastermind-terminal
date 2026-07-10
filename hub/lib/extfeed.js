@@ -79,8 +79,10 @@ function classifySession(nowMs) {
  */
 function lruTouch(map, key, cap, onEvict) {
   if (map.has(key)) {
-    // Re-insert to MRU end.
+    // Re-insert to MRU end and refresh the lastReq timestamp so the idle-sweep
+    // does not unsubscribe symbols that are being actively demanded.
     const val = map.get(key);
+    val.lastReq = Date.now();
     map.delete(key);
     map.set(key, val);
     return;
@@ -422,8 +424,11 @@ class ExtFeed {
         this._extMap.set(sym, { price, ts, session, source: "alpaca_overnight" });
         log.every(`ext-${sym}`, "DEBUG", "ext trade", sym, price, session);
       });
-      this._yahooCache = null;
-      this._yahooSubs = null;
+      // Yahoo fallback structures are initialised unconditionally so that if Alpaca
+      // auth fails (402/403 — plan not entitled) we can degrade gracefully to the
+      // keyless Yahoo leg for pre/post windows rather than silently serving no ext data.
+      this._yahooSubs = new Map();
+      this._yahooCache = new Map();
       this._yahooTimer = null;
     } else {
       // Keyless Yahoo fallback.
@@ -443,6 +448,9 @@ class ExtFeed {
     if (this.disabled) return;
     if (this.mode === "alpaca" && this.alpaca) {
       this.alpaca.start();
+      // Also start the Yahoo poller as a warm fallback in case Alpaca auth fails.
+      // The poller is a no-op during RTH/overnight so it adds negligible overhead.
+      this._scheduleYahooPoll();
     } else if (this.mode === "yahoo_fallback") {
       // Start the Yahoo polling loop.
       this._scheduleYahooPoll();
@@ -464,6 +472,12 @@ class ExtFeed {
     if (this.disabled) return;
     if (this.mode === "alpaca" && this.alpaca) {
       this.alpaca.ensureSubscribed(sym);
+      // Mirror into Yahoo subs so the fallback poller covers this symbol if Alpaca
+      // auth fails.  _yahooSubs is always initialised in alpaca mode (see constructor).
+      lruTouch(this._yahooSubs, sym, ALPACA_LRU_CAP, (old) => {
+        this._yahooCache && this._yahooCache.delete(old);
+        log.info("yahoo fallback LRU-evicted", old);
+      });
     } else if (this.mode === "yahoo_fallback" && this._yahooSubs) {
       lruTouch(this._yahooSubs, sym, ALPACA_LRU_CAP, (old) => {
         this._yahooCache && this._yahooCache.delete(old);
@@ -488,7 +502,20 @@ class ExtFeed {
 
     let entry = null;
     if (this.mode === "alpaca" && this._extMap) {
-      entry = this._extMap.get(sym) || null;
+      // Primary: Alpaca websocket.
+      // Fallback: if Alpaca auth failed (plan not entitled), degrade to Yahoo cache
+      // for pre/post windows so ext fields are not silently absent.
+      const alpacaAuthFailed = this.alpaca && this.alpaca.authFailed;
+      if (!alpacaAuthFailed) {
+        entry = this._extMap.get(sym) || null;
+      }
+      if (!entry && alpacaAuthFailed && this._yahooCache) {
+        entry = this._yahooCache.get(sym) || null;
+        // Yahoo covers only pre/post, not overnight.
+        if (entry && entry.session === "overnight") entry = null;
+        if (entry) log.every("alpaca-yahoo-fallback", "WARN",
+          "alpaca authFailed — serving ext data from Yahoo fallback");
+      }
     } else if (this.mode === "yahoo_fallback" && this._yahooCache) {
       entry = this._yahooCache.get(sym) || null;
       // Yahoo covers only pre/post, not overnight.
@@ -502,9 +529,11 @@ class ExtFeed {
     if (ageMs > 90 * 60 * 1000) return null;
 
     const extPrice = entry.price;
-    // chg vs close: (extPrice - close) / close * 100
-    // If close is unknown (pre-market before daily file rolls, or no close yet), chg is null.
-    // During overnight the ref is the last completed close (officialClose from anchor).
+    // chg vs the best available close reference:
+    //   post-close → officialClose = today's EOD close (daily file has rolled)
+    //   pre-market / overnight → store.getQuotes passes prevClose as the reference
+    //     (today's official close does not exist yet; prevClose is the prior session's
+    //      close — the same anchor used for the primary chg field)
     const closeRef = officialClose != null && Number.isFinite(officialClose) ? officialClose : null;
     const extChg = closeRef != null && closeRef !== 0
       ? ((extPrice - closeRef) / closeRef) * 100
@@ -522,7 +551,7 @@ class ExtFeed {
   // ── Yahoo polling ──
 
   _scheduleYahooPoll() {
-    if (this.disabled || this.mode !== "yahoo_fallback") return;
+    if (this.disabled || (this.mode !== "yahoo_fallback" && this.mode !== "alpaca")) return;
     this._yahooTimer = setTimeout(async () => {
       await this._runYahooPoll();
       this._scheduleYahooPoll();

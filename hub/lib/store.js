@@ -219,12 +219,19 @@ class Store {
     // close value from the anchor (needed for extChg computation).
     // Only for US symbols; suppressed during RTH; no-op when extFeed is absent.
     if (extFeed) {
-      const now = nowMs != null ? nowMs : Date.now();
+      // `now` is already bound above (line 150); reuse it instead of redeclaring.
       for (const sym of symList) {
         const q = out[sym];
         if (!q || q.market !== "us") continue;
         const officialClose = typeof q.close === "number" ? q.close : null;
-        const ext = extFeed.getExt(sym, now, officialClose);
+        // Pre-market / overnight: today's official close does not exist yet (daily file
+        // has not rolled). Fall back to prevClose (prior session's close) so extChg can
+        // be computed as (extPrice − prevClose) / prevClose × 100.  This is the correct
+        // reference — the same anchor used to compute the primary chg field.
+        const closeRef = officialClose != null
+          ? officialClose
+          : (typeof q.prevClose === "number" ? q.prevClose : null);
+        const ext = extFeed.getExt(sym, now, closeRef);
         if (ext) {
           // Shallow-copy so we don't mutate the persisted quote object.
           out[sym] = { ...q, ...ext };
