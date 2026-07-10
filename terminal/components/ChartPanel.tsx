@@ -867,69 +867,160 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
     let rafId: number | null = null, measRaf: number | null = null;
     let onPaneMove: ((e: MouseEvent) => void) | null = null, onPaneLeave: (() => void) | null = null, onPaneDbl: ((e: MouseEvent) => void) | null = null;
-    // ── snapshot: composite the chart under a metadata header band, copy to clipboard + download ──
-    // Reads the LIVE refs (indicatorsRef/timeframeRef/chartTypeRef) so the header matches what's on
-    // screen even though this closure is bound at mount. Clipboard write is best-effort (secure-context
-    // + user-gesture are satisfied by the toolbar click); the download always fires.
-    const snapshot = () => {
+    // ── snapshot: composite the chart with per-pane labels + brand logo + timestamp ──
+    // action = "download" | "copy" | "share" | "tab" (from event detail; default = "download")
+    // Reads live refs so labels match the on-screen state. 2x dpr for crisp output on hi-dpi.
+    const snapshot = (ev?: Event) => {
       if (!activeRef.current) return;
+      const action: string = (ev as CustomEvent)?.detail?.action || "download";
       try {
-        const src = chartRef.current!.takeScreenshot();          // an HTMLCanvasElement of the chart
-        const dpr = window.devicePixelRatio || 1;
-        const HDR = Math.round(56 * dpr);                        // header band, ~56 CSS px scaled to device px
+        const src = chartRef.current!.takeScreenshot();          // HTMLCanvasElement — all panes
+        const dpr = Math.max(2, window.devicePixelRatio || 1);   // at least 2x for crispness
+        const HDR = Math.round(52 * dpr);                        // header band height in device px
         const out = document.createElement("canvas");
         out.width = src.width; out.height = src.height + HDR;
         const g = out.getContext("2d"); if (!g) return;
-        // background band in the chart bg color (falls back to the page --bg)
-        g.fillStyle = css("--bg") || "#0a0b0e";
-        g.fillRect(0, 0, out.width, HDR);
-        g.drawImage(src, 0, HDR);
-        // header text (all sizes scaled by dpr so the band reads crisp on hi-dpi displays)
-        const tf = timeframeRef.current;
-        const ctLabel: Record<string, string> = { candles: "Candles", bars: "Bars", line: "Line", area: "Area", heikin: "Heikin Ashi" };
-        const ct = ctLabel[chartTypeRef.current] || chartTypeRef.current;
-        const inds = Array.from(indicatorsRef.current).map((k) => labelOf(k));
-        const date = new Date().toISOString().slice(0, 10);
-        const pad = Math.round(16 * dpr);
+        const bg = css("--bg") || "#0a0b0e";
         const text = css("--text") || "#d6dae3";
         const mut = tokensRef.current.mut || css("--muted") || "#5a616f";
-        const brand = tokensRef.current.brand2 || css("--brand-2") || "#4d82ff";
-        // canvas `font` can't resolve a CSS var() — resolve the family token to its literal stack first
+        const brand2 = tokensRef.current.brand2 || css("--brand-2") || "#4d82ff";
         const fam = css("--font-ui") || "system-ui, sans-serif";
-        g.textBaseline = "alphabetic";
-        // line 1: bold symbol + timeframe + chart type
+        // ── background ──
+        g.fillStyle = bg;
+        g.fillRect(0, 0, out.width, out.height);
+        g.drawImage(src, 0, HDR);
+        // ── header band ──
+        const tf = timeframeRef.current;
+        const pad = Math.round(14 * dpr);
+        g.textBaseline = "middle";
         g.textAlign = "left";
+        // brand logo: draw the M tile (BrandMark) then MASTERMIND TERMINAL wordmark
+        // Tile: 32×32 CSS px tile → scaled by dpr
+        const tileSize = Math.round(28 * dpr);
+        const tileX = pad, tileY = Math.round((HDR - tileSize) / 2);
+        const rx = tileSize * 0.2;           // rounded corner radius
+        // gradient fill for the tile
+        const grd = g.createLinearGradient(tileX, tileY, tileX + tileSize, tileY + tileSize);
+        grd.addColorStop(0, "#4d82ff"); grd.addColorStop(1, "#2962ff");
+        g.fillStyle = grd;
+        // rounded-rect tile
+        g.beginPath(); g.roundRect(tileX, tileY, tileSize, tileSize, rx); g.fill();
+        // subtle border on tile
+        g.strokeStyle = "rgba(255,255,255,0.22)"; g.lineWidth = Math.round(0.8 * dpr);
+        g.beginPath(); g.roundRect(tileX + g.lineWidth / 2, tileY + g.lineWidth / 2, tileSize - g.lineWidth, tileSize - g.lineWidth, rx - g.lineWidth / 2); g.stroke();
+        // M path inside tile (matches BrandMark SVG: 40×40 viewBox, path d="M13 28 L13 14.5 L20 22 L27 12.5 L27 28")
+        const scl = tileSize / 40;
+        const pts: [number, number][] = [[13, 28], [13, 14.5], [20, 22], [27, 12.5], [27, 28]];
+        g.beginPath();
+        g.moveTo(tileX + pts[0][0] * scl, tileY + pts[0][1] * scl);
+        for (let i = 1; i < pts.length; i++) g.lineTo(tileX + pts[i][0] * scl, tileY + pts[i][1] * scl);
+        g.strokeStyle = "#fff"; g.lineWidth = Math.round(3.2 * scl); g.lineCap = "round"; g.lineJoin = "round"; g.stroke();
+        // wordmark: MASTERMIND (bold) + TERMINAL (small, muted)
+        const logoRight = tileX + tileSize + Math.round(10 * dpr);
+        g.textAlign = "left"; g.textBaseline = "middle";
         g.fillStyle = text;
-        g.font = `800 ${Math.round(17 * dpr)}px ${fam}`;
-        g.fillText(symbol, pad, Math.round(24 * dpr));
-        const symW = g.measureText(symbol).width;
-        g.font = `500 ${Math.round(12 * dpr)}px ${fam}`;
+        g.font = `700 ${Math.round(11 * dpr)}px ${fam}`;
+        g.fillText("MASTERMIND", logoRight, Math.round(HDR / 2 - 5 * dpr));
         g.fillStyle = mut;
-        g.fillText(`${tf}  ·  ${ct}`, pad + symW + Math.round(10 * dpr), Math.round(24 * dpr));
-        // line 2: active indicator labels (or an em dash when none) + date
-        g.font = `500 ${Math.round(11 * dpr)}px ${fam}`;
-        g.fillStyle = mut;
-        g.fillText(`${inds.length ? inds.join("  ·  ") : "—"}     ${date}`, pad, Math.round(44 * dpr));
-        // right-aligned brand
-        g.textAlign = "right";
+        g.font = `500 ${Math.round(9 * dpr)}px ${fam}`;
+        g.fillText("TERMINAL", logoRight, Math.round(HDR / 2 + 6 * dpr));
+        // symbol + tf (right of logo) — full timestamp right-aligned
+        const symX = logoRight + g.measureText("MASTERMIND").width + Math.round(18 * dpr);
+        g.fillStyle = text;
         g.font = `700 ${Math.round(13 * dpr)}px ${fam}`;
-        g.fillStyle = brand;
-        g.fillText("Mastermind Terminal", out.width - pad, Math.round(30 * dpr));
+        g.textBaseline = "middle";
+        g.fillText(symbol, symX, Math.round(HDR / 2 - 4 * dpr));
+        const symW2 = g.measureText(symbol).width;
+        g.fillStyle = mut;
+        g.font = `500 ${Math.round(10 * dpr)}px ${fam}`;
+        g.fillText(`  ${tf}`, symX + symW2, Math.round(HDR / 2 - 4 * dpr));
+        // full timestamp in viewer's local timezone
+        const now = new Date();
+        const tzOffset = -now.getTimezoneOffset() / 60;
+        const tzSign = tzOffset >= 0 ? "+" : "-";
+        const tzStr = `UTC${tzSign}${Math.abs(tzOffset)}`;
+        const pad2 = (n: number) => String(n).padStart(2, "0");
+        const tsStr = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())} ${tzStr}`;
+        g.textAlign = "right";
+        g.fillStyle = mut;
+        g.font = `400 ${Math.round(9 * dpr)}px ${fam}`;
+        g.fillText(tsStr, out.width - pad, Math.round(HDR / 2 + 4 * dpr));
+        // ── per-pane indicator labels (top-left of each pane, matching live view) ──
+        // paneLayoutRef holds the CSS-pixel positions relative to the chart-wrap; src is device-px.
+        // Offset by HDR (the header band we prepended). Labels strip _oracle suffix; skip "Candles".
+        const pLayout = paneLayoutRef.current;
+        if (pLayout.length) {
+          g.textAlign = "left"; g.textBaseline = "top";
+          for (const pane of pLayout) {
+            const visEntries = pane.entries.filter((e) => {
+              // strip _oracle: if label === "Golden Oracle Confluence" (or any _oracle label), keep it (just strip suffix in display)
+              // skip hidden entries
+              if (e.hidden) return false;
+              return true;
+            });
+            if (!visEntries.length) continue;
+            // convert CSS-px pane.top to device-px in the output canvas (src is device-px, header added above)
+            const paneTopDev = Math.round(pane.top * dpr) + HDR;
+            const lPad = Math.round(8 * dpr);
+            const lTop = paneTopDev + Math.round(8 * dpr);
+            let lY = lTop;
+            const lineH = Math.round(14 * dpr);
+            for (const entry of visEntries) {
+              // strip _oracle suffix from any label that ends with it; skip "Candles" or empty entirely
+              let lbl = entry.label.replace(/_oracle$/i, "").trim();
+              if (!lbl || lbl.toLowerCase() === "candles") continue;
+              // color swatch dot
+              const dot = (entry as any).color as string | undefined;
+              if (dot) {
+                g.fillStyle = dot;
+                g.beginPath(); g.arc(lPad + Math.round(4 * dpr), lY + Math.round(5 * dpr), Math.round(3.5 * dpr), 0, 2 * Math.PI); g.fill();
+                g.fillStyle = "rgba(10,11,14,0.55)";
+                g.font = `600 ${Math.round(9.5 * dpr)}px ${fam}`;
+                g.fillStyle = text;
+                g.fillText(lbl, lPad + Math.round(11 * dpr), lY);
+              } else {
+                g.font = `600 ${Math.round(9.5 * dpr)}px ${fam}`;
+                const lw = g.measureText(lbl).width;
+                g.fillStyle = "rgba(10,11,14,0.55)";
+                g.fillRect(lPad - Math.round(2 * dpr), lY - Math.round(1 * dpr), lw + Math.round(6 * dpr), lineH - Math.round(2 * dpr));
+                g.fillStyle = brand2;
+                g.fillText(lbl, lPad, lY);
+              }
+              lY += lineH;
+            }
+          }
+        }
+        const date = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}`;
         const fname = `${symbol}_${tf}_${date}.png`;
+        const statusFeedback = (msg: string) => {
+          const sEl = statusRef.current;
+          if (sEl) { const prev = sEl.innerHTML; sEl.innerHTML = `<b class="up">${msg}</b>`; setTimeout(() => { if (statusRef.current === sEl) paintStatus(barsRef.current, sliceRef.current); else sEl.innerHTML = prev; }, 2500); }
+        };
         out.toBlob((blob) => {
           if (!blob) return;
-          // best-effort clipboard copy, then always download
           (async () => {
-            let copied = false;
-            try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); copied = true; } catch {}
-            const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fname; a.click();
-            try { URL.revokeObjectURL(a.href); } catch {}
-            // transient statusline feedback (restores the OHLC line after ~2s)
-            const sEl = statusRef.current;
-            if (sEl) {
-              const prev = sEl.innerHTML;
-              sEl.innerHTML = `<b class="up">${copied ? "Snapshot copied + downloaded" : "Snapshot downloaded"}</b>`;
-              setTimeout(() => { if (statusRef.current === sEl) paintStatus(barsRef.current, sliceRef.current); else sEl.innerHTML = prev; }, 2000);
+            if (action === "download") {
+              const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+              try { URL.revokeObjectURL(a.href); } catch {}
+              statusFeedback("Snapshot downloaded");
+            } else if (action === "copy") {
+              try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); statusFeedback("Snapshot copied to clipboard"); }
+              catch { statusFeedback("Clipboard copy failed (needs HTTPS/focus)"); }
+            } else if (action === "share") {
+              // Upload to R2 via /api/snapshot, copy the share URL
+              try {
+                const form = new FormData(); form.append("file", blob, fname);
+                const r = await fetch("/api/snapshot", { method: "POST", body: form });
+                if (!r.ok) { const e = await r.json().catch(() => ({})); statusFeedback(e.error || "Upload failed"); return; }
+                const { url } = await r.json();
+                const abs = `${window.location.origin}${url}`;
+                try { await navigator.clipboard.writeText(abs); statusFeedback("Link copied to clipboard"); }
+                catch { statusFeedback(`Share link: ${abs}`); }
+              } catch { statusFeedback("Upload failed"); }
+            } else if (action === "tab") {
+              const url = URL.createObjectURL(blob);
+              window.open(url, "_blank");
+              setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 60_000);
             }
           })();
         }, "image/png");
