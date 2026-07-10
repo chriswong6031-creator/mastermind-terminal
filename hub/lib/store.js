@@ -129,11 +129,39 @@ class Store {
   }
 
   // Present entries only; missing syms are simply absent from the result.
+  //
+  // SERVE-TIME anchor re-derivation: quotes bake prevClose/chg at message time
+  // (applyPartial). After hours NO new tape message arrives, so a quote built
+  // during boot with the manifest fallback would keep its stale anchor forever.
+  // Re-check the AnchorCache on every read and re-derive when a better entry
+  // exists — the read path is what must be correct, not the write path.
   getQuotes(symList) {
     const out = {};
+    const now = Date.now();
     for (const sym of symList) {
       const q = this.quotes.get(sym);
-      if (q) out[sym] = q;
+      if (!q) continue;
+      const anchor =
+        this.anchorCache && q.market === "us" ? this.anchorCache.get(sym, now) : null;
+      if (
+        anchor &&
+        anchor.prevClose != null &&
+        anchor.prevClose > 0 &&
+        anchor.prevClose !== q.prevClose
+      ) {
+        const fresh = { ...q };
+        fresh.prevClose = anchor.prevClose;
+        if (typeof fresh.last === "number") {
+          fresh.chg = ((fresh.last - anchor.prevClose) / anchor.prevClose) * 100;
+        }
+        fresh.anchor_source = anchor.anchor_source;
+        if (anchor.stale_anchor) fresh.stale_anchor = true;
+        else delete fresh.stale_anchor;
+        this.quotes.set(sym, fresh); // persist so /health + later reads agree
+        out[sym] = fresh;
+      } else {
+        out[sym] = q;
+      }
     }
     return out;
   }
