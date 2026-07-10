@@ -458,3 +458,141 @@ describe("Store.getQuotes after-hours close/afterHours emission", () => {
     assert.equal(q.afterHours, undefined, "afterHours must be absent when last ≈ close");
   });
 });
+
+// ── prevSessionChg — three-state test suite ──────────────────────────────────
+//
+// Three states under test:
+//
+//   STATE A — RTH (regular trading hours, file not yet rolled):
+//     Daily file: [2026-07-08 close=204.12, 2026-07-07 close=199.50] (not rolled for today)
+//     nowMs = 14:00 UTC on 2026-07-09 (= 10:00 ET, inside RTH)
+//     live last = 205.80 (differs materially from prevClose=204.12)
+//     Expected: chg = (205.80 − 204.12) / 204.12 × 100 ≈ 0.82%; prevSessionChg absent
+//     (RTH has a live print so chg IS the live day move; overnight shortcut not needed)
+//
+//   STATE B — post-close with daily file rolled (after-hours, live AH print differs):
+//     Daily file: [2026-07-08 close=204.12, 2026-07-09 close=202.78] (today rolled)
+//     nowMs = 21:00 UTC on 2026-07-09 (= 17:00 ET, post-close)
+//     live last = 205.50 (differs from close=202.78 → afterHours emitted)
+//     Expected: chg = (202.78 − 204.12) / 204.12 × 100; prevSessionChg absent
+//     (today-close present so chg reflects the completed session, not overnight)
+//
+//   STATE C — overnight (no today-close, last ≈ prevClose within $0.01):
+//     Daily file: [2026-07-08 close=204.12, 2026-07-07 close=199.50] (not yet rolled)
+//     nowMs = 04:00 UTC on 2026-07-09 (= 00:00 ET, overnight — session is 2026-07-09)
+//     live last = 204.12 (= prevClose exactly — typical overnight stub)
+//     Expected: chg ≈ 0; prevSessionChg = (204.12 − 199.50) / 199.50 × 100 ≈ 2.31%
+
+describe("prevSessionChg — three-state RTH / post-close / overnight", () => {
+  const { AnchorCache } = require("../lib/anchor");
+  const { Store } = require("../lib/store");
+
+  // ── shared fixtures ──
+  const CLOSE_YESTERDAY  = 204.12;   // 2026-07-08
+  const CLOSE_DAY_BEFORE = 199.50;   // 2026-07-07
+  const CLOSE_TODAY      = 202.78;   // 2026-07-09 (only present when file is rolled)
+
+  // ET timestamps:
+  //   RTH:        2026-07-09 14:00 UTC = 10:00 ET (inside 09:30–16:00)
+  //   Post-close: 2026-07-09 21:00 UTC = 17:00 ET
+  //   Overnight:  2026-07-09 04:00 UTC = 00:00 ET (session date = 2026-07-09)
+  const NOW_RTH        = Date.UTC(2026, 6, 9, 14, 0);
+  const NOW_POST_CLOSE = Date.UTC(2026, 6, 9, 21, 0);
+  const NOW_OVERNIGHT  = Date.UTC(2026, 6, 9,  4, 0);
+
+  let tmpDir;
+  after(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // Helper: build a fresh store + cache for the given bars and nowMs.
+  async function makeStore(bars, liveLastPrice, nowMs) {
+    const dir = makeTmpDir();
+    if (!tmpDir) tmpDir = dir; // track first for cleanup; each test makes its own
+    writeDailyFile(dir, "MSFT", bars);
+    const manifestPath = path.join(dir, "manifest.json");
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      as_of: "2026-07-08",
+      symbols: { MSFT: { last: CLOSE_YESTERDAY, chg: 0.0 } },
+    }));
+    let s;
+    const cache = new AnchorCache({
+      dataDir: dir,
+      apiKey: "",
+      getManifest: () => s ? s.manifest : null,
+    });
+    s = new Store(manifestPath, cache);
+    s.loadManifestIfStale(true);
+    await cache.resolve("MSFT", nowMs);
+    s.setQuote("MSFT", { last: liveLastPrice, market: "us" }, nowMs);
+    return { store: s, cache, dir };
+  }
+
+  it("STATE A — RTH: chg reflects live price; prevSessionChg is absent", async () => {
+    // File not rolled for today; live last differs from prevClose.
+    const liveLast = 205.80;
+    const { store } = await makeStore([
+      bar("2026-07-07", CLOSE_DAY_BEFORE),
+      bar("2026-07-08", CLOSE_YESTERDAY),
+    ], liveLast, NOW_RTH);
+
+    const q = store.getQuotes(["MSFT"], NOW_RTH)["MSFT"];
+    assert.ok(q, "MSFT must be present");
+
+    const expectedChg = (liveLast - CLOSE_YESTERDAY) / CLOSE_YESTERDAY * 100;
+    assert.ok(Math.abs(q.chg - expectedChg) < 0.001,
+      `RTH chg=${q.chg?.toFixed(4)} expected≈${expectedChg.toFixed(4)}`);
+    assert.equal(q.prevSessionChg, undefined,
+      "prevSessionChg must be absent during RTH (live print present)");
+    assert.equal(q.close, undefined, "no today-close during RTH");
+  });
+
+  it("STATE B — post-close (file rolled): chg uses official close; prevSessionChg absent", async () => {
+    // File has today's bar; AH print differs from official close.
+    const ahLast = 205.50;
+    const { store } = await makeStore([
+      bar("2026-07-07", CLOSE_DAY_BEFORE),
+      bar("2026-07-08", CLOSE_YESTERDAY),
+      bar("2026-07-09", CLOSE_TODAY),
+    ], ahLast, NOW_POST_CLOSE);
+
+    const q = store.getQuotes(["MSFT"], NOW_POST_CLOSE)["MSFT"];
+    assert.ok(q, "MSFT must be present");
+
+    // chg = (today's official close − yesterday) / yesterday
+    const expectedChg = (CLOSE_TODAY - CLOSE_YESTERDAY) / CLOSE_YESTERDAY * 100;
+    assert.ok(Math.abs(q.chg - expectedChg) < 0.001,
+      `post-close chg=${q.chg?.toFixed(4)} expected≈${expectedChg.toFixed(4)}`);
+    // afterHours is present (AH print differs from official close)
+    assert.equal(q.close, CLOSE_TODAY, "close = official today EOD");
+    assert.equal(q.afterHours, ahLast, "afterHours = delayed AH print");
+    assert.equal(q.prevSessionChg, undefined,
+      "prevSessionChg must be absent post-close (today-close present)");
+  });
+
+  it("STATE C — overnight: prevSessionChg = last completed session move", async () => {
+    // File not yet rolled for today; live stub = prevClose (typical overnight).
+    // prevSessionChg = (yesterday's close − day-before) / day-before
+    const overnightLast = CLOSE_YESTERDAY; // = 204.12 exactly (within $0.01 of prevClose)
+    const { store } = await makeStore([
+      bar("2026-07-07", CLOSE_DAY_BEFORE),
+      bar("2026-07-08", CLOSE_YESTERDAY),
+    ], overnightLast, NOW_OVERNIGHT);
+
+    const q = store.getQuotes(["MSFT"], NOW_OVERNIGHT)["MSFT"];
+    assert.ok(q, "MSFT must be present");
+
+    const expectedPrevSessionChg =
+      (CLOSE_YESTERDAY - CLOSE_DAY_BEFORE) / CLOSE_DAY_BEFORE * 100;
+    assert.ok(q.prevSessionChg != null,
+      "prevSessionChg must be present overnight");
+    assert.ok(Math.abs(q.prevSessionChg - expectedPrevSessionChg) < 0.001,
+      `prevSessionChg=${q.prevSessionChg?.toFixed(4)} expected≈${expectedPrevSessionChg.toFixed(4)}`);
+    assert.equal(q.close, undefined, "no today-close overnight");
+    assert.equal(q.afterHours, undefined, "no afterHours overnight");
+    // chg ≈ 0 (live = prevClose exactly) — this is correct but prevSessionChg carries meaning
+    const expectedChg = (overnightLast - CLOSE_YESTERDAY) / CLOSE_YESTERDAY * 100;
+    assert.ok(Math.abs(q.chg - expectedChg) < 0.001,
+      `chg should be ~0 overnight; got ${q.chg}`);
+  });
+});
