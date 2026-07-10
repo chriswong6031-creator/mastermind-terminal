@@ -579,6 +579,14 @@ const LEX: Record<string, [string, string]> = {
   compositeInvalid: ["Unknown symbol(s): {syms}. Only supported US equities.", "未知标的: {syms}。仅支持美股。"],
   compositeLastUpdate: ["Last update at {time}", "最后更新于 {time}"],
   compositeAddToWl: ["Add basket to watchlist", "添加组合到自选"],
+  // ─── Phase 8: overnight / extended-hours pricing ─────────────────────────
+  colExt: ["Ext", "盘外"],
+  colExtShort: ["Ext", "盘外"],
+  extColumns: ["Extended Hours", "盘后/盘前"],
+  overnight: ["Overnight", "隔夜"],
+  overnightPrice: ["Overnight price", "隔夜价格"],
+  extLastUpdate: ["Last update at {time}", "最后更新于 {time}"],
+  extNoData: ["—", "—"],
   // ─── F3 smart dialogs ─────────────────────────────────────────────────────
   searchTitle: ["Symbol search", "代码搜索"],
   addSymbolTitle: ["Add symbol", "添加代码"],

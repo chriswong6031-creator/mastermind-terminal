@@ -119,6 +119,10 @@ export type Quote = {
   vol: number | null; amount: number | null; ts: number | null;
   live: boolean; source: string; market: Market;
   basis: "LIVE" | "DELAYED_15M" | "EOD";
+  // Extended/overnight fields (item-25/26). Populated by the ext-quote route.
+  // extPrice: the most recent ext print; extChg: % vs close; extTs: epoch-sec of that print.
+  // Absent (undefined) when no ext data is available (keyless or no print).
+  extPrice?: number | null; extChg?: number | null; extTs?: number | null;
 };
 
 function _n(s: string | undefined): number | null {

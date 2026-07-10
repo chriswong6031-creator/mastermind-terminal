@@ -103,9 +103,10 @@ const TFG_TKEY: Record<string, string> = { Minutes: "tfMinutes", Hours: "tfHours
 const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "autoFib", sr: "srHeatmap", mtfa: "mtfSR", clear: "clearDetected" };
 
 // watchlist column widths (px). The symbol column + every visible data column is user-resizable.
-const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80 };
-type WLSet = { tableView: boolean; cols: { last: boolean; changePct: boolean; change: boolean; volume: boolean }; disp: string; logo: boolean; colW: Record<string, number> };
-const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: true, change: false, volume: false }, disp: "symbol", logo: true, colW: {} };
+const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80, ext: 72 };
+// item-26: ext = Extended Hours chg% vs close; dash when no ext print.
+type WLSet = { tableView: boolean; cols: { last: boolean; changePct: boolean; change: boolean; volume: boolean; ext: boolean }; disp: string; logo: boolean; colW: Record<string, number> };
+const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: true, change: false, volume: false, ext: false }, disp: "symbol", logo: true, colW: {} };
 
 // ── Boot-trace helper (?boottrace=1) ────────────────────────────────────────
 // Wraps performance.mark so profiling is zero-cost unless the flag is set.
@@ -143,7 +144,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // per-market functional TF set: daily-derived always; intraday TFs only for intraday-capable markets (R12)
   const FUNCTIONAL = useMemo(() => functionalSet(active), [active]);
   const [chartType, setChartType] = useState("candles");
-  const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi", "_oracle"]));
+  // item-28: Golden Oracle is OFF by default for new users. A user's explicit saved
+  // indicator set (mm.inds) is loaded below and left completely untouched.
+  const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
   const [hidden, setHidden] = useState<Set<string>>(new Set());                       // indicators the eye has hidden
   const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());      // per-indicator params (Settings dialog)
   const [settingsKey, setSettingsKey] = useState<string | null>(null);                 // indicator whose Settings dialog is open
@@ -178,6 +181,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // symbol-keyed live top-of-book — ONE source for the header AND every watchlist row (via a single
   // batched /api/quote?syms= poll), so the detail pane and the watchlist can't disagree on a price.
   const [quotes, setQuotes] = useState<Record<string, any>>({});
+  // item-26/27: symbol-keyed extended/overnight ext prints — polled from /api/ext-quote (separate
+  // from the main quote poll so the Quote Hub lane surface stays clean). Each entry: { extPrice, extChg, extTs } | null.
+  const [extQuotes, setExtQuotes] = useState<Record<string, { extPrice: number; extChg: number; extTs: number } | null>>({});
   const [slice, setSlice] = useState<any>(null);
   const [fund, setFund] = useState<Fund | null>(null);
   const [opts, setOpts] = useState<any>(null);
@@ -273,7 +279,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // never fire a network request for intel/fund/opts files.
   useEffect(() => { let alive = true; btMark("manifest-fetch-start"); getJSON("/data/manifest.json").then((m) => { if (alive && m) { btMark("manifest-fetch-done"); setMan(m); loadCoverage(Object.keys(m.symbols || {})); } }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
-    { const si = load("mm.inds", ["ema", "rsi", "stochrsi", "_oracle"]) as string[]; if (!localStorage.getItem("mm.oracleMig")) { if (!si.includes("_oracle")) si.push("_oracle"); localStorage.setItem("mm.oracleMig", "1"); } setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) }); setCompareCfg(load("mm.cmpCfg", {}));
+    { const si = load("mm.inds", ["ema", "rsi", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) }); setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
@@ -451,6 +457,48 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     const id = setTimeout(pollQuotes, 250);
     return () => clearTimeout(id);
   }, [quoteSymsKey, pollQuotes]);
+
+  // item-26/27: extended/overnight poll — US equities only. Always includes the active symbol
+  // (pane-card secondary block, item-25) plus all watchlist US singles when the Ext column is on.
+  // Runs at 30 s cadence (ext prints move slowly). Separate from main quote poll so the hub
+  // lane surface (/api/quote route) stays untouched.
+  const extSymsKey = useMemo(() => {
+    const syms: string[] = [];
+    // Always poll the active symbol for the pane-card secondary block (item-25)
+    if (!isComposite(active) && classify(active) === "us") syms.push(active);
+    // Add watchlist US singles when Ext column is enabled (item-26)
+    if (set.cols.ext) {
+      for (const { symbol } of wl) {
+        if (!isComposite(symbol) && classify(symbol) === "us") syms.push(symbol);
+      }
+    }
+    return syms.filter((v, i, a) => a.indexOf(v) === i).join(",");
+  }, [wl, active, set.cols.ext]);
+  const extSymsKeyRef = useRef(extSymsKey);
+  extSymsKeyRef.current = extSymsKey;
+  const extAliveRef = useRef(true);
+  const pollExtQuotes = useCallback(() => {
+    const key = extSymsKeyRef.current;
+    if (!key) return;
+    fetch(`/api/ext-quote?syms=${encodeURIComponent(key)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!extAliveRef.current || !d?.quotes) return;
+        setExtQuotes((prev) => ({ ...prev, ...d.quotes }));
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    extAliveRef.current = true;
+    const id = setInterval(pollExtQuotes, 30_000);
+    return () => { extAliveRef.current = false; clearInterval(id); };
+  }, [pollExtQuotes]);
+  useEffect(() => {
+    if (!extSymsKey) return;
+    const id = setTimeout(pollExtQuotes, 500);
+    return () => clearTimeout(id);
+  }, [extSymsKey, pollExtQuotes]);
+
   useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
   useEffect(() => { const open = () => setCopilot(true); window.addEventListener("mm:copilot", open); try { if (new URLSearchParams(window.location.search).get("ai") === "1") setCopilot(true); } catch {} return () => window.removeEventListener("mm:copilot", open); }, []);
   // shallow deep-link: ?pane=<page> opens the MegaPane on that page (MegaPane keeps the URL in sync
@@ -887,8 +935,23 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     setLayoutOpen(false); }
   function delLayout(id: string) { fetch(`/api/layouts?id=${id}`, { method: "DELETE" }).then(() => setLayouts((ls) => ls.filter((x) => x.id !== id))); }
 
-  const colList = (): [string, string][] => { const a: [string, string][] = [["last", t("colLast")]]; if (set.cols.change) a.push(["change", t("colChgShort")]); if (set.cols.changePct) a.push(["changePct", t("colChgPctShort")]); if (set.cols.volume) a.push(["volume", t("colVolShort")]); return a; };
-  const colVal = (r: Row | undefined, key: string) => { if (!r) return "—"; const u = r.chg >= 0; if (key === "last") return fmt(r.last, r.last < 10 ? 4 : 2); if (key === "change") return (u ? "+" : "") + fmt(r.last * r.chg / 100, 2); if (key === "changePct") return (u ? "+" : "") + fmt(r.chg) + "%"; if (key === "volume") return vol(r.vol); return ""; };
+  const colList = (): [string, string][] => { const a: [string, string][] = [["last", t("colLast")]]; if (set.cols.change) a.push(["change", t("colChgShort")]); if (set.cols.changePct) a.push(["changePct", t("colChgPctShort")]); if (set.cols.volume) a.push(["volume", t("colVolShort")]); if (set.cols.ext) a.push(["ext", t("colExtShort")]); return a; };
+  // item-26: ext column reads from extQuotes (separate poll); dash when closed or no ext print.
+  const colVal = (sym: string, r: Row | undefined, key: string) => {
+    if (!r) return "—";
+    const u = r.chg >= 0;
+    if (key === "last") return fmt(r.last, r.last < 10 ? 4 : 2);
+    if (key === "change") return (u ? "+" : "") + fmt(r.last * r.chg / 100, 2);
+    if (key === "changePct") return (u ? "+" : "") + fmt(r.chg) + "%";
+    if (key === "volume") return vol(r.vol);
+    if (key === "ext") {
+      const eq = extQuotes[sym];
+      if (!eq || eq.extChg == null) return "—";
+      const eu = eq.extChg >= 0;
+      return (eu ? "+" : "") + fmt(eq.extChg) + "%";
+    }
+    return "";
+  };
   // resizable columns: symbol track + each visible data track carries an explicit px width
   const colw = (k: string) => set.colW?.[k] ?? DEFAULT_COLW[k] ?? 80;
   const dataCols = colList();
@@ -1189,6 +1252,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 {([["last", t("colLast")], ["change", t("colChange")], ["changePct", t("colChangePct")], ["volume", t("colVolume")]] as [string, string][]).map(([k, l]) => (
                   <div key={k} className={`set-row${(set.cols as any)[k] ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, cols: { ...s.cols, [k]: !(s.cols as any)[k] } }))}><span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>{l}</div>
                 ))}
+                {/* item-26: Extended Hours column — dash for composites/non-US/no print */}
+                <div className="set-grp">{t("extColumns")}</div>
+                <div className={`set-row${set.cols.ext ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, cols: { ...s.cols, ext: !s.cols.ext } }))}><span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>{t("colExt")}</div>
                 <div className="set-grp">{t("symbolDisplay")}</div>
                 <div className={`set-row${set.logo ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, logo: !s.logo }))}><span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>{t("logo")}</div>
                 {([["symbol", t("dispSymbol")], ["name", t("dispName")], ["both", t("dispBoth")]] as [string, string][]).map(([d, l]) => <div key={d} className={`set-row${set.disp === d ? " on" : ""}`} onClick={() => setSet((s) => ({ ...s, disp: d }))}><span className="rdo" />{l}</div>)}
@@ -1242,7 +1308,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                           <div className="s">{set.logo && !isCompSym && <span className="ic" style={{ background: r?.col || "#888", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24 }}>{sym[0]}</span>}
                             {set.logo && isCompSym && <span className="ic" style={{ background: "#2962ff", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24, fontSize: 7, fontWeight: 700, color: "#fff" }}>M</span>}
                             <span className="nm"><span className="tk">{isCompSym ? sym.split("+").slice(0, 2).join("+") + (sym.split("+").length > 2 ? "+…" : "") : primary}</span>{secondary && !isCompSym && <span className={set.tableView ? "tk-sub" : "sub"}>{secondary}</span>}</span></div>
-                          {dataCols.map(([k]) => <span key={k} className={`c num ${k === "changePct" || k === "change" ? (u ? "up" : "down") : ""}`}>{colVal(r, k)}</span>)}
+                          {dataCols.map(([k]) => {
+                            const isChg = k === "changePct" || k === "change";
+                            const isExt = k === "ext";
+                            const eq = isExt ? extQuotes[sym] : null;
+                            const extUp = eq && eq.extChg != null ? eq.extChg >= 0 : null;
+                            const cls = isChg ? (u ? "up" : "down") : isExt && extUp != null ? (extUp ? "up" : "down") : "";
+                            return <span key={k} className={`c num ${cls}`}>{colVal(sym, r, k)}</span>;
+                          })}
                           <span className="rm" title={t("remove")} onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
                         </div>
                       ); })}
@@ -1268,22 +1341,55 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b>
                 <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
                 {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
-                {/* AH secondary line — subtle, tokens-only; shown when hub signals an after-hours print
-                    that DIFFERS from the official close (TV-style AH display). Suppressed when equal
-                    to avoid a redundant '☾ <price> +0.00%' line. No fixture producer exists yet —
-                    this branch requires a hub emitting afterHours to be exercised in live mode. */}
-                {ahPrint != null && mktClosed && ahPrint !== officialClose && (
-                  <span className="ah-print" title={lang === "zh" ? "盘后价格" : "After-hours print"}>
-                    <span className="ah-moon" aria-hidden="true">☾</span>
-                    {fmt(ahPrint, ahPrint < 10 ? 4 : 2)}
-                    {ahChg != null && (
-                      <span className={`ah-chg ${ahChg >= 0 ? "up" : "down"}`}>
-                        {ahChg >= 0 ? "+" : ""}{fmt(ahChg)}%
-                      </span>
-                    )}
-                  </span>
-                )}
               </div>
+              {/* item-25: Overnight / extended-hours secondary price block (TV parity).
+                  Shown ONLY when market is closed and we have an ext print.
+                  Sources in priority order:
+                    1. Hub-emitted afterHours field on the live quote (existing leg).
+                    2. ext-quote poll result from /api/ext-quote (Yahoo grey fallback).
+                  Disappears at market open (mktClosed gate) — TV's "Overnight via BOATS" mechanic.
+                  We label by our actual source, never a borrowed brand. */}
+              {(() => {
+                if (!mktClosed) return null;
+                // Prefer hub afterHours print; fall back to ext-quote poll
+                const hubExt = ahPrint != null && ahPrint !== officialClose ? {
+                  price: ahPrint,
+                  chg: ahChg,
+                  ts: null as number | null,
+                  source: "hub",
+                } : null;
+                const pollExt = !isComposite(active) && classify(active) === "us"
+                  ? extQuotes[active]
+                  : null;
+                const extData = hubExt ?? (pollExt ? {
+                  price: pollExt.extPrice,
+                  chg: pollExt.extChg,
+                  ts: pollExt.extTs,
+                  source: "ext-quote",
+                } : null);
+                if (!extData) return null;
+                const { price, chg, ts } = extData;
+                const eu = (chg ?? 0) >= 0;
+                const tsStr = ts
+                  ? new Date(ts * 1000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
+                  : null;
+                return (
+                  <div className="ah-block">
+                    <div className="ah-primary">
+                      <span className="ah-moon" aria-hidden="true">☾</span>
+                      <span className="num ah-price">{fmt(price, price < 10 ? 4 : 2)}</span>
+                      <span className="ah-currency">USD</span>
+                      {chg != null && (
+                        <span className={`num ah-chg ${eu ? "up" : "down"}`}>{eu ? "+" : ""}{fmt(chg)}%</span>
+                      )}
+                    </div>
+                    <div className="ah-meta">
+                      <span>{t("overnight")}</span>
+                      {tsStr && <span> · {t("extLastUpdate").replace("{time}", tsStr)}</span>}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             <div className="detail-scroll">
               <div style={{ padding: "12px 12px 0" }}>
