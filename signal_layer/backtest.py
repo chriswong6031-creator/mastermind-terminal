@@ -33,17 +33,32 @@ def run_backtest(
     close: pd.Series,
     *,
     fixed: bool = True,
+    use_cut_exit: bool = False,
     cost_bps: float = 3.0,
     slippage_bps: float = 1.0,
     bar_quality: str = "synthetic_open_deepstore",
+    bar_anchor: int = 0,
+    week_parity: int = 0,
 ) -> dict:
-    """Long/flat as the user trades it (enter CB/re-buy, exit CS/cut), fills at the
-    next 3D bar's close. Returns the metrics + trade list that ``contracts`` serialises.
+    """Long/flat as the user trades it (enter CB/re-buy), fills at the next 3D bar's close.
+    Returns the metrics + trade list that ``contracts`` serialises.
 
     ``fixed=True`` applies the two regime gates (bear-block + hold-through-strong-bull),
     matching ``confluence.simulate(fixed=True)``.
+
+    ``use_cut_exit`` (GC v2 default **False** = no-cut): when False, ``revSell`` is NOT a
+    scored exit — the traded exit is ``CS & ~strong_bull`` only (the validated X1 change:
+    WR +5pp, expectancy +48%, shakeouts 11.1→3.9%). Set True to restore the legacy
+    behaviour where a fast-reversal cut also exits (``exit_reason`` then reports
+    ``"rev_cut"``). The signature stays backward-compatible — old callers that relied on
+    cut exits must now pass ``use_cut_exit=True`` explicitly.
+
+    ``bar_anchor`` / ``week_parity`` phase the 3D session grid and the 2-week confirm pairing
+    to the symbol's IPO (see ``confluence.compute_signals``); pass
+    ``confluence.ipo_bar_anchor(close, sym)`` / ``ipo_week_parity(close, sym)`` when
+    backtesting a truncated feed so the trades land on the same bars TradingView shows.
     """
-    sig = oracle.compute_signals(close.dropna())
+    sig = oracle.compute_signals(close.dropna(), bar_anchor=bar_anchor, week_parity=week_parity)
     if sig.empty:
         return {"status": "insufficient_data", "n_trades": 0}
     rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
@@ -53,12 +68,16 @@ def run_backtest(
     dates = rows.index.to_list()
     px = rows["close"].astype(float)
 
+    # exit stream: v2 no-cut is (CS & ~strong_bull) only; use_cut_exit=True re-adds revSell.
+    cs_exit = (rows["CS"] & ~rows["strong_bull"]) if fixed else rows["CS"]
     if fixed:
         enter = ((rows["CB"] | rows["revBuy"]) & ~rows["bear_block"]).to_numpy()
-        exit_ = ((rows["CS"] & ~rows["strong_bull"]) | rows["revSell"]).to_numpy()
     else:
         enter = (rows["CB"] | rows["revBuy"]).to_numpy()
-        exit_ = (rows["CS"] | rows["revSell"]).to_numpy()
+    if use_cut_exit:
+        exit_ = (cs_exit | rows["revSell"]).to_numpy()
+    else:
+        exit_ = cs_exit.to_numpy()
     cs_arr = rows["CS"].to_numpy()
     rev_arr = rows["revSell"].to_numpy()
 

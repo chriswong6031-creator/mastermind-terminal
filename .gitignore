@@ -11,6 +11,13 @@ __pycache__/
 # node (indicator_engine sidecar, Phase 1)
 node_modules/
 
+# box (VPS) runtime caches + in-place backups — live only on the box; never commit
+# (a committed stale copy would clobber the newer box file via the deploy overlay)
+ingest/hk_universe_cache.json
+ingest/zh_cache.json
+ingest/.polygon_*.json
+*.bak-*
+
 # data — caches and generated sidecars are not committed; samples ARE (see below)
 data/cache/
 data/backtests/*.parquet

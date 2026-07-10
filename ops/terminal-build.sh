@@ -16,11 +16,12 @@
 # One deploy ships TWO kinds of code from the same origin/master SHA (see DEPLOY.md):
 #   1. the Next.js app: terminal/ -> staged build -> atomic .next swap
 #   2. runtime code consumed by cron + systemd OUTSIDE the app:
-#        ingest/ scripts/ config/ contracts/ hub/    (overlay, tracked files only)
+#        ingest/ scripts/ config/ contracts/ hub/ signal_layer/
+#                                                 (overlay, tracked files only)
 #        ops/terminal-data     -> /usr/local/bin/terminal-data     (nightly cron)
 #        ops/terminal-build.sh -> /opt/terminal/terminal-build.sh  (next deploy)
-#      signal_layer/ is deliberately NOT synced — box is ahead of git (live GC-v2
-#      engine, incl. untracked confluence_v2.py). See DEPLOY.md before adding it.
+#      signal_layer/ synced since the 2026-07-10 reconciliation (box GC-v2 engine
+#      committed, incl. confluence_v2.py) — master is canonical. See DEPLOY.md.
 #
 # Zero-downtime: builds into a staging tree, atomic-swaps `.next` only after the
 # build verifies (BUILD_ID present); the live server keeps serving until the swap.
@@ -109,13 +110,13 @@ fi
 #    NOT part of the Next.js app; without this step, merged changes to those files
 #    silently never reach the box (bit on 2026-07-10: PR #74's pull_macro_intel.py).
 #    OVERLAY semantics (git archive | tar -x): tracked files are overwritten with
-#    master; box-only untracked files (several cron-run ingest scripts + runtime
-#    caches like ingest/hk_universe_cache.json) are left alone. NEVER convert this
-#    to rsync --delete — e.g. ingest/fast_flagship.py and signal_layer/confluence_v2.py
-#    exist ONLY on the box.
-#    signal_layer/ EXCLUDED on purpose: the box copy is the live GC-v2 engine, AHEAD
-#    of git — reconcile it into master first (DEPLOY.md), then add it here.
-RUNTIME_PATHS="ingest scripts config contracts hub"
+#    master; box-only untracked files (runtime caches like ingest/hk_universe_cache.json,
+#    zh_cache.json, .polygon_*.json and *.bak-* backups) are left alone. NEVER convert
+#    this to rsync --delete — those caches exist ONLY on the box.
+#    signal_layer/ synced since 2026-07-10: the box↔master divergence was reconciled
+#    (box GC-v2 engine incl. confluence_v2.py committed; master's inverted golden_gate
+#    kept) — origin/master is now canonical for it, like ingest/.
+RUNTIME_PATHS="ingest scripts config contracts hub signal_layer"
 hub_state(){ find /opt/terminal/hub -type f -not -path '*/node_modules/*' -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum || true; }
 HUB_BEFORE=$(hub_state)
 LOCK_BEFORE=$(sha256sum /opt/terminal/hub/package-lock.json 2>/dev/null | cut -d' ' -f1 || true)
