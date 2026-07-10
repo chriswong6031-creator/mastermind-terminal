@@ -431,7 +431,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const officialClose = liveQuote?.close as number | undefined;
   const ahPrint = liveQuote?.afterHours as number | undefined;
   const lastPx = officialClose ?? liveQuote?.last ?? livePx ?? m?.last;
-  const chgNow = liveQuote?.chg ?? m?.chg;
+  // When officialClose is the primary display value, compute chg against the same base so
+  // the price and % refer to the same last-value. liveQuote.chg is AH-print vs prevClose,
+  // which would be inconsistent when the display price is the EOD close (not the AH print).
+  const prevCloseForChg = liveQuote?.prevClose as number | undefined;
+  const chgNow: number | null | undefined =
+    officialClose != null && prevCloseForChg != null && prevCloseForChg !== 0
+      ? ((officialClose - prevCloseForChg) / prevCloseForChg) * 100
+      : (liveQuote?.chg ?? m?.chg);
 
   // ── market-closed chip ──────────────────────────────────────────────────────
   // Recomputes every minute via setInterval (no holiday calendar — see risks).

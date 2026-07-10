@@ -1,24 +1,6 @@
 #!/usr/bin/env bash
 # Nightly Mastermind Terminal universe + price refresh (VPS /usr/local/bin/terminal-data).
 #
-# ── EARLY BASELINE SWAP (2026-07-09 fix) ─────────────────────────────────────
-# The manifest baseline (as_of, per-symbol last/chg) was previously stale all day:
-# the full nightly run takes 4+ hours and only atomic-swapped the manifest at the
-# very end (~03:00 UTC). The quote hub derived prevClose from the stale manifest,
-# producing off-by-one-session errors (NVDA: chg=+3.58% instead of -0.07%).
-#
-# Fix: after build_polygon_universe produces the flagship slice and refresh_ohlc.py
-# runs the fast Polygon grouped-daily call, we immediately build a LIGHT BASELINE
-# manifest — just the as_of date and per-symbol last/chg fields from the freshly
-# updated OHLC files — and atomically swap it. The full marathon (gen_slices_all,
-# expand_universe, etc.) continues AFTER the swap. The quote hub sees a correct
-# same-day prevClose within minutes of 21:30 UTC instead of waiting until ~03:00.
-#
-# The 80%-count guard is applied to BOTH the early baseline swap AND the final swap.
-# ─────────────────────────────────────────────────────────────────────────────────
-#
-# Original comments (preserved):
-#
 # Builds the FULL multi-market manifest into a STAGING file (TERMINAL_MANIFEST) and
 # ATOMICALLY swaps it over the live manifest.json only at the very end — so the live
 # universe is NEVER reduced mid-run. This lets build_polygon_universe run (fresh
@@ -65,21 +47,10 @@ run "$PY" -m ingest.build_polygon_universe
 # OHLC (and watchlist LAST/CHG) freezes at file-creation date. Runs before hydrate so the
 # fresh close flows into the manifest same night (--days 7 self-corrects any missed day).
 run "$PY" ingest/refresh_ohlc.py --days 7 --write
-
-# ── EARLY BASELINE SWAP ──
-# At this point we have: flagship verdicts in STAGE + today's closes in per-symbol OHLC files.
-# Hydrate the staging manifest prices from the fresh OHLC and immediately swap.
-# This gives the quote hub a correct same-day prevClose anchor within ~5 minutes of cron start.
-run "$PY" ingest/hydrate_prices.py --write   # writes into STAGE (TERMINAL_MANIFEST is set)
-
-NEW_EARLY=$(count "$STAGE"); LIVEN=$(count "$LIVE")
-MIN_EARLY=$(( LIVEN * 80 / 100 )); [ "$MIN_EARLY" -lt 1000 ] && MIN_EARLY=1000
-if [ "${NEW_EARLY:-0}" -ge "$MIN_EARLY" ]; then
-  cp -f "$STAGE" "$LIVE.baseline.tmp" && mv -f "$LIVE.baseline.tmp" "$LIVE"
-  echo "[$(ts)] EARLY BASELINE SWAP: swapped in $NEW_EARLY symbols (was $LIVEN) — hub prevClose now correct"
-else
-  echo "[$(ts)] EARLY BASELINE GUARD: staged $NEW_EARLY < min $MIN_EARLY — skipping early swap, live unchanged"
-fi
+# Note: the quote hub resolves prevClose from the per-symbol OHLC daily file (anchor.js
+# resolution order: daily_file → polygon_prev → manifest fallback). refresh_ohlc.py above
+# writes today's close into each SYM.json in the live data dir, so the hub sees the correct
+# same-day prevClose immediately — no manifest swap is required at Phase 1.
 
 # ── PHASE 2: full universe marathon (~3-4 hr) ──
 # expand base multi-market universe + China/HK/US OHLC from the macro deep stores
