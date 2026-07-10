@@ -163,7 +163,7 @@ class AnchorCache {
     const last = parsedBars[parsedBars.length - 1];
     const prev = parsedBars[parsedBars.length - 2];
 
-    let prevClose, todayClose, afterHours;
+    let prevClose, todayClose, afterHours, prevSessionChg;
 
     if (last.date === sessionDate) {
       // Today's bar is present in the file — post-close / after-hours scenario.
@@ -174,11 +174,22 @@ class AnchorCache {
       // daily file itself (it only carries EOD close); callers inject the AM-feed last.
       // Emit close field so the caller can set afterHours from the live quote.
       afterHours = null; // will be overlaid by polygon.js AM last
+      // prevSessionChg: today's bar is already the reference; compute vs yesterday.
+      // (today's official close − yesterday's close) / yesterday's close × 100
+      if (prevClose && Number.isFinite(prevClose) && prevClose !== 0) {
+        prevSessionChg = (todayClose - prevClose) / prevClose * 100;
+      }
     } else {
-      // Daily file hasn't rolled for today yet (typical during RTH).
+      // Daily file hasn't rolled for today yet (typical during RTH or overnight).
       // prevClose = last bar's close (= yesterday's close).
       prevClose = last.close;
       todayClose = null;
+      // prevSessionChg: yesterday's move = (last bar − second-to-last bar) / second-to-last.
+      // This is used by getQuotes overnight (no live session print) to show the last
+      // completed session's change instead of a flat 0.00%.
+      if (prev.close && Number.isFinite(prev.close) && prev.close !== 0) {
+        prevSessionChg = (last.close - prev.close) / prev.close * 100;
+      }
     }
 
     if (!prevClose || !Number.isFinite(prevClose)) return null;
@@ -186,6 +197,9 @@ class AnchorCache {
     const anchor = { prevClose, anchor_source: "daily_file" };
     if (todayClose != null) { anchor.close = todayClose; }
     if (afterHours != null) { anchor.afterHours = afterHours; }
+    if (prevSessionChg != null && Number.isFinite(prevSessionChg)) {
+      anchor.prevSessionChg = prevSessionChg;
+    }
     log.every(`anchor-${sym}`, "DEBUG", "anchor from daily_file", sym, `prevClose=${prevClose}`, `sessionDate=${sessionDate}`);
     return anchor;
   }

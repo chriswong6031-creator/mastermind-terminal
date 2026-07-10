@@ -150,9 +150,11 @@ class Store {
       }
       // Serve-time derivation (write-time is not enough: after hours no tape
       // message arrives, so applyPartial never re-runs on boot-built quotes):
-      //   close      — anchor carries today's official close once the daily file rolls
-      //   afterHours — the delayed AM `last` when it differs materially from close
-      //   chg        — the DAY's move: (close ?? last) vs prevClose
+      //   close          — anchor carries today's official close once the daily file rolls
+      //   afterHours     — the delayed AM `last` when it differs materially from close
+      //   chg            — the DAY's move: (close ?? last) vs prevClose
+      //   prevSessionChg — last completed session's chg, shown when live session is absent
+      //                    (overnight: no today-close, last ≈ prevClose within $0.01)
       const close =
         anchor.close != null && Number.isFinite(anchor.close) ? anchor.close : null;
       const ah =
@@ -164,11 +166,25 @@ class Store {
       const dayRef = close != null ? close : typeof q.last === "number" ? q.last : null;
       const chg =
         dayRef != null ? ((dayRef - anchor.prevClose) / anchor.prevClose) * 100 : q.chg;
+
+      // Overnight detection: no today-close yet AND live last is within $0.01 of prevClose.
+      // In this window, chg computes to ~0.00% which is misleading. Surface prevSessionChg
+      // (the last completed session's move) instead of the flat overnight placeholder.
+      const isOvernight =
+        close == null &&
+        typeof q.last === "number" &&
+        Math.abs(q.last - anchor.prevClose) <= AH_MATERIALITY_THRESHOLD;
+      const prevSessionChg =
+        isOvernight && anchor.prevSessionChg != null && Number.isFinite(anchor.prevSessionChg)
+          ? anchor.prevSessionChg
+          : null;
+
       const changed =
         anchor.prevClose !== q.prevClose ||
         q.close !== (close != null ? close : q.close) ||
         (ah != null ? q.afterHours !== ah : q.afterHours != null) ||
-        chg !== q.chg;
+        chg !== q.chg ||
+        (prevSessionChg != null ? q.prevSessionChg !== prevSessionChg : q.prevSessionChg != null);
       if (!changed) {
         out[sym] = q;
         continue;
@@ -179,6 +195,8 @@ class Store {
       if (close != null) fresh.close = close;
       if (ah != null) fresh.afterHours = ah;
       else delete fresh.afterHours;
+      if (prevSessionChg != null) fresh.prevSessionChg = prevSessionChg;
+      else delete fresh.prevSessionChg;
       fresh.anchor_source = anchor.anchor_source;
       if (anchor.stale_anchor) fresh.stale_anchor = true;
       else delete fresh.stale_anchor;
