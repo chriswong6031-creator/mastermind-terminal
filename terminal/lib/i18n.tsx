@@ -596,7 +596,44 @@ const LEX: Record<string, [string, string]> = {
   removeFromWatchlist: ["Remove from Watchlist", "从自选移除"],
   goToSymbol: ["Go to Symbol", "跳转到标的"],
   shiftClickHint: ["⇧ + Click  or  ⇧ + Enter  to add symbol and close dialog", "⇧ + 点击  或  ⇧ + Enter  添加标的并关闭对话框"],
+  // Day Trade suite
+  dtmBtn: ["Day", "日内"],
+  dtmTip: ["Day Trade Mode (Alt+D)", "日内交易模式 (Alt+D)"],
+  dtmOn: ["Day Trade mode on", "已开启日内模式"],
+  dtmOff: ["Day Trade mode off", "已退出日内模式"],
+  catDaytrade: ["Day Trading", "日内交易"],
+  indSvwap: ["Session VWAP", "日内均价 VWAP"],
+  indOrb: ["Opening Range", "开盘区间"],
+  indSlevels: ["Session Levels", "关键价位"],
+  indPivots: ["Pivot Points", "枢轴点"],
+  indRvol: ["Relative Volume", "相对成交量"],
+  indTtmsq: ["TTM Squeeze", "挤压动能"],
+  indAdx: ["ADX", "趋势强度 ADX"],
+  indCvd: ["Est. CVD (approx)", "估算累计成交量差(近似)"],
+  dsGap: ["Gap", "跳空"],
+  dsRvol: ["RVOL", "相对量"],
+  dsRange: ["Range used", "振幅消耗"],
+  dsVwapD: ["Δ VWAP", "偏离VWAP"],
+  dsHod: ["HOD", "日高"],
+  dsLod: ["LOD", "日低"],
+  dsPre: ["PRE", "盘前"],
+  dsRth: ["RTH", "盘中"],
+  dsAh: ["AH", "盘后"],
+  dsClosed: ["CLOSED", "休市"],
+  dsLunch: ["LUNCH", "午休"],
+  intradayOnly: ["Intraday timeframes only", "仅限日内周期"],
+  rvolNoBase: ["insufficient history (n<3)", "历史数据不足 (n<3)"],
 };
+
+// Non-hook LEX lookup for imperative contexts (e.g. chart legend meta assembled outside React render).
+// Reads the live <html data-lang> attribute; callers refresh on their own rebuild paths, so a language
+// toggle updates these strings on the next legend rebuild rather than instantly (acceptable for notes).
+export function tPlain(key: string, fallback?: string): string {
+  const e = LEX[key];
+  if (!e) return fallback ?? key;
+  const zh = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh";
+  return zh ? e[1] : e[0];
+}
 
 const Ctx = createContext<{ lang: Lang; setLang: (l: Lang) => void }>({ lang: "en", setLang: () => {} });
 

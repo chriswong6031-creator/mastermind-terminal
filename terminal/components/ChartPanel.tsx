@@ -12,21 +12,25 @@ function cpMark(name: string) {
   console.log(`[boottrace] ${name} +${(now - _cpStart).toFixed(1)}ms`);
 }
 import {
-  createChart, CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries,
+  createChart, CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries, BaselineSeries,
   createSeriesMarkers, type ISeriesMarkersPluginApi,
   createTextWatermark,
-  CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi,
+  CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
-import { getJSON, getSliceAndOhlc, getCompositeOhlc } from "@/lib/dataCache";
+import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
 import { parseComposite, alignAndSum } from "@/lib/composite";
 import { CMP_PALETTE, type CmpCfg, defaultCmpCfg, cmpKey } from "@/lib/compare";
 import { isIntradayTf, classify, tfMinutes, type Market } from "@/lib/intradaySources";
+import { sessionVwap, openingRange, sessionLevels, pivotLevels, rvolSeries, ttmSqueeze, adx as calcAdx, cvdApprox, type Bar as IMBar, type DailyBar } from "@/lib/intradayMath";
+import { attachSessionShading, detachSessionShading, type SessionShadingPrimitive } from "@/lib/sessionShading";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
 import { ichimoku, supertrend, avwap as computeAvwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
+import DayStatsStrip from "@/components/DayStatsStrip";
+import { tPlain } from "@/lib/i18n";
 import { listTemplates } from "@/lib/chartTemplates";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -217,14 +221,14 @@ const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: 
 // overlays (ema/bb/vwap/vol + new DT overlays) always live in pane 0.
 // rsi + stochrsi SHARE one sub-pane (the "osc" pane), exactly as the base did.
 // rsistack and accum each get their own sub-pane.
-const SUBPANE_ORDER = ["osc", "macd", "rsistack", "accum"] as const;
+const SUBPANE_ORDER = ["osc", "macd", "rsistack", "accum", "rvol", "ttmsq", "adx", "cvd"] as const;
 
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
-  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt }:
+  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
@@ -241,6 +245,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     onSetLockedVLine?: (time: string | null) => void;
     /** Called once after each data load with a function that returns per-key indicator values at a bar time. */
     onIndRowsAt?: (fn: ((barTime: string | number) => Record<string, number | null>) | null) => void;
+    /** Day Trade Mode — enables session shading + countdown chip + stats strip. */
+    dayMode?: boolean;
   }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -255,6 +261,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ── custom-script (Pine) render state (parallels the built-in indicator refs) ──
   const pineSeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());   // scriptId → its series (all panes)
   const pineMarkersRef = useRef<Map<string, ISeriesMarkersPluginApi<any>>>(new Map()); // scriptId → its markers plugin
+  const ttmsqMarkersRef = useRef<ISeriesMarkersPluginApi<any> | null>(null); // ttmsq squeeze-tier dots plugin
   const pinePaneMapRef = useRef<Map<string, number>>(new Map());             // sub-pane scriptId → pane index (overlay scripts absent)
   const pineErrRef = useRef<Map<string, string>>(new Map());                 // scriptId → error text (surfaced in the legend)
   const pineCacheRef = useRef<Map<string, { key: string; result: RunResult | null; error: string | null }>>(new Map()); // memo: scriptId → last run
@@ -320,6 +327,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [legendOpen, setLegendOpen] = useState(true);
   const [showDetail, setShowDetail] = useState(true);   // GC v2: early-dots + warnings overlay toggle
+  // DayStatsStrip: snapshot of bars + dailyBars for the strip (updated when intraday data loads)
+  // Using state so React re-renders the strip when data changes; refs are not enough.
+  const [stripBars, setStripBars] = useState<Bar[]>([]);
+  const [stripDailyBars, setStripDailyBars] = useState<{ time: string; h: number; l: number; c: number }[]>([]);
   useEffect(() => { showDetailRef.current = showDetail; renderSignalsRef.current(); }, [showDetail]);
   // ── new D1-D4 callback refs (stable closures so Effect 1 can read latest without re-mounting) ──
   const onAddAlertRef = useRef(onAddAlert); onAddAlertRef.current = onAddAlert;
@@ -359,6 +370,33 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const indSvgRef = useRef<SVGSVGElement | null>(null);
   // cached indicator overlay data — rebuilt when indicators/params/bars change, read by render
   const indOverlayRef = useRef<Record<string, any>>({});
+  // ── Day Trade Mode refs ───────────────────────────────────────────────────────────────────────
+  const dayModeRef = useRef<boolean>(dayMode); dayModeRef.current = dayMode;
+  // Price lines created on the price series for slevels / pivots — must be removed explicitly on clear.
+  // Keyed per indicator so removing ONE of slevels/pivots doesn't clear the survivor's lines.
+  const indPriceLinesRef = useRef<Map<string, IPriceLine[]>>(new Map());
+  const pushIndPriceLine = (key: string, pl: IPriceLine) => {
+    const m = indPriceLinesRef.current;
+    if (!m.has(key)) m.set(key, []);
+    m.get(key)!.push(pl);
+  };
+  const removeIndPriceLines = (key?: string) => {
+    const priceS = priceSeriesRef.current;
+    const m = indPriceLinesRef.current;
+    const keys = key ? [key] : [...m.keys()];
+    for (const k of keys) {
+      for (const pl of m.get(k) ?? []) { try { priceS?.removePriceLine(pl); } catch {} }
+      m.delete(k);
+    }
+  };
+  // Session shading primitive attached to the candle series (intraday + market has sessions + dayMode).
+  const shadingPrimRef = useRef<SessionShadingPrimitive | null>(null);
+  // Countdown chip DOM element + its 1s timer (mounted in Effect 1, driven by dayMode effect).
+  const countdownChipRef = useRef<HTMLDivElement | null>(null);
+  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Daily OHLC bars cached for slevels/pivots (fetched async during intraday builds; keyed by symbol).
+  const dailyCacheRef = useRef<{ sym: string; bars: DailyBar[] } | null>(null);
+
   // rebuild the CHART STYLE (not the chart) when the up/down color scheme flips (Effect 5)
   const [csNonce, setCsNonce] = useState(0);
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
@@ -680,6 +718,272 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return [ln];
   };
 
+  // ── Day Trade overlay builders ─────────────────────────────────────────────────────────────────
+  // Helper: cast ChartPanel's Bar[] (time:string at type level, number at runtime for intraday) to IMBar[].
+  const toIMBars = (rows: Bar[]): IMBar[] => rows as unknown as IMBar[];
+
+  // buildSvwap: Session VWAP with volume-weighted σ bands and optional ±1σ SVG fill.
+  // Intraday-only — returns [] on daily (caller gates, but builder also checks).
+  const buildSvwap = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
+    if (!isIntradayRef.current) return [];
+    const p = P("svwap");
+    const market = classify(symbolRef.current);
+    const imBars = toIMBars(rows);
+    const mults = [p.m1 as number, p.m2 as number, p.m3 as number];
+    const result = sessionVwap(imBars, market, p.includePm as boolean, mults);
+    const out: ISeriesApi<any>[] = [];
+    // Main VWAP line — participates in autoscale
+    const vwapS = chart.addSeries(LineSeries, {
+      color: p.col as string, lineWidth: p.width as any,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    }, 0);
+    vwapS.setData(toLine(rows, result.vwap));
+    out.push(vwapS);
+    // Band pairs (±1σ, ±2σ, ±3σ) — do NOT participate in autoscale
+    const bandDefs = [
+      { on: p.showB1 as boolean, col: p.b1Col as string, style: 2 /* dashed */ },
+      { on: p.showB2 as boolean, col: p.b2Col as string, style: 2 },
+      { on: p.showB3 as boolean, col: p.b3Col as string, style: 1 /* dotted */ },
+    ];
+    for (let k = 0; k < 3; k++) {
+      const { on, col, style } = bandDefs[k];
+      if (!on || !result.bands[k]) continue;
+      const upS = chart.addSeries(LineSeries, {
+        color: col, lineWidth: 1 as any, lineStyle: style,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null,
+      }, 0);
+      upS.setData(toLine(rows, result.bands[k].up));
+      out.push(upS);
+      const dnS = chart.addSeries(LineSeries, {
+        color: col, lineWidth: 1 as any, lineStyle: style,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null,
+      }, 0);
+      dnS.setData(toLine(rows, result.bands[k].dn));
+      out.push(dnS);
+    }
+    // Stash the result in indOverlayRef for the SVG fill pass in renderIndOverlays.
+    indOverlayRef.current["svwap"] = { result, rows: [...rows], mults };
+    return out;
+  };
+
+  // buildOrb: Opening Range box + rays — SVG-only (returns []).
+  const buildOrb = (rows: Bar[]): ISeriesApi<any>[] => {
+    if (!isIntradayRef.current) return [];
+    const p = P("orb");
+    const market = classify(symbolRef.current);
+    const imBars = toIMBars(rows);
+    const exts: number[] = [];
+    if (p.ext1On) exts.push(p.ext1 as number);
+    if (p.ext2On) exts.push(p.ext2 as number);
+    const sessions = openingRange(imBars, market, p.rangeMin as number, exts);
+    indOverlayRef.current["orb"] = { sessions, rows: [...rows] };
+    return [];
+  };
+
+  // buildSlevels: Session Levels as createPriceLine on the price series.
+  // Daily bars fetched from dailyCacheRef (populated async before this call in the intraday flow).
+  const buildSlevels = (rows: Bar[]): ISeriesApi<any>[] => {
+    removeIndPriceLines("slevels");   // defensive: never double-draw this key's lines
+    if (!isIntradayRef.current) return [];
+    const priceS = priceSeriesRef.current; if (!priceS) return [];
+    const p = P("slevels");
+    const market = classify(symbolRef.current);
+    const imBars = toIMBars(rows);
+    const daily = dailyCacheRef.current?.sym === symbolRef.current ? dailyCacheRef.current.bars : [];
+    const levels = sessionLevels(imBars, market, daily);
+    const styleFor = (key: string): { color: string; lineStyle: number; lineWidth: number } => {
+      if (key === "PDH" || key === "PDL") return { color: p.pdCol as string, lineStyle: 0, lineWidth: 1 };
+      if (key === "PDC") return { color: p.pdcCol as string, lineStyle: 2, lineWidth: 1 };
+      if (key === "PMH" || key === "PML") return { color: p.pmCol as string, lineStyle: 2, lineWidth: 1 };
+      if (key === "Open") return { color: p.openCol as string, lineStyle: 1 /* dotted */, lineWidth: 1 };
+      if (key === "PWH" || key === "PWL") return { color: p.pwCol as string, lineStyle: 1, lineWidth: 1 };
+      return { color: p.pdCol as string, lineStyle: 0, lineWidth: 1 };
+    };
+    for (const lv of levels) {
+      const st = styleFor(lv.key);
+      const on = {
+        PDH: p.pdh, PDL: p.pdl, PDC: p.pdc, Open: p.open,
+        PMH: p.pmh, PML: p.pml, PWH: p.pwh, PWL: p.pwl,
+      }[lv.key] ?? true;
+      if (!on) continue;
+      try {
+        const pl = priceS.createPriceLine({
+          price: lv.value, color: st.color, lineWidth: st.lineWidth,
+          lineStyle: st.lineStyle, axisLabelVisible: true, title: lv.label,
+        } as any);
+        pushIndPriceLine("slevels", pl);
+      } catch {}
+    }
+    // slevels has no LWC series — store a sentinel so indSeriesRef has an entry (for OVERLAY_KEYS / Effect 3 tracking)
+    return [];
+  };
+
+  // buildPivots: Pivot levels as createPriceLine on the price series.
+  const buildPivots = (rows: Bar[]): ISeriesApi<any>[] => {
+    removeIndPriceLines("pivots");    // defensive: never double-draw this key's lines
+    if (!isIntradayRef.current) return [];
+    const priceS = priceSeriesRef.current; if (!priceS) return [];
+    const p = P("pivots");
+    const daily = dailyCacheRef.current?.sym === symbolRef.current ? dailyCacheRef.current.bars : [];
+    if (!daily.length) return [];
+    // Prior completed daily bar = last bar whose date is strictly before today's intraday date
+    const imBars = toIMBars(rows);
+    if (!imBars.length) return [];
+    // Derive today's session date from the last intraday bar (display-epoch → UTC date)
+    const lastBarMs = (imBars[imBars.length - 1].time) * 1000;
+    const todayStr = new Date(lastBarMs).toISOString().slice(0, 10);
+    const priorDaily = daily.filter((d) => d.time < todayStr);
+    if (!priorDaily.length) return [];
+    const pd = priorDaily[priorDaily.length - 1];
+    const modeMap = ["classic", "camarilla", "fib"] as const;
+    const mode = modeMap[Math.max(0, Math.min(2, p.mode as number))] ?? "classic";
+    const levels = pivotLevels({ h: pd.h, l: pd.l, c: pd.c }, mode);
+    // Resolve up/down CSS vars at build time for East-Asian flip compliance.
+    const resolvedUp = getComputedStyle(document.documentElement).getPropertyValue("--up").trim() || "rgba(38,194,129,0.65)";
+    const resolvedDn = getComputedStyle(document.documentElement).getPropertyValue("--down").trim() || "rgba(240,86,107,0.65)";
+    const extra = p.extra as boolean;
+    for (const lv of levels) {
+      const isR = lv.key.startsWith("R");
+      const isS = lv.key.startsWith("S");
+      const isPP = lv.key === "PP";
+      // Skip R3/S3 and R4/S4 when extra is off
+      if (!extra && (lv.key === "R3" || lv.key === "S3" || lv.key === "R4" || lv.key === "S4")) continue;
+      const color = isPP ? (p.ppCol as string) : isR ? resolvedDn : isS ? resolvedUp : (p.ppCol as string);
+      const lineWidth = isPP ? 2 : 1;
+      try {
+        const pl = priceS.createPriceLine({
+          price: lv.value, color, lineWidth, lineStyle: 2 /* dashed */,
+          axisLabelVisible: true, title: lv.label,
+        } as any);
+        pushIndPriceLine("pivots", pl);
+      } catch {}
+    }
+    return [];
+  };
+
+  // buildRvol: Relative Volume — histogram (slot) + line (cum) + 1.0 reference line.
+  const buildRvol = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
+    if (!isIntradayRef.current) return [];
+    const p = P("rvol");
+    const market = classify(symbolRef.current);
+    const imBars = toIMBars(rows);
+    const rv = rvolSeries(imBars, market, p.baseline as number);
+    const out: ISeriesApi<any>[] = [];
+    if (rv.sessionsUsed < 3) {
+      // Insufficient history — return a dummy LineSeries with empty data so the pane renders
+      const dummy = chart.addSeries(LineSeries, { lastValueVisible: true, title: "RVOL" }, pane);
+      dummy.setData([]);
+      out.push(dummy);
+      indOverlayRef.current["rvol_nobase"] = true;
+      return out;
+    }
+    indOverlayRef.current["rvol_nobase"] = false;
+    const histS = chart.addSeries(HistogramSeries, {
+      color: p.histCol as string,
+      priceLineVisible: false, lastValueVisible: false,
+    }, pane);
+    histS.setData(rows.map((r, i) => rv.slot[i] != null ? { time: r.time, value: rv.slot[i]!, color: p.histCol as string } : null).filter(Boolean) as any);
+    out.push(histS);
+    const lineS = chart.addSeries(LineSeries, {
+      color: p.lineCol as string, lineWidth: p.width as any,
+      lastValueVisible: true, title: "RVOL",
+    }, pane);
+    lineS.setData(toLine(rows, rv.cum));
+    out.push(lineS);
+    // 1.0 reference priceLine
+    try { lineS.createPriceLine({ price: 1, color: "var(--muted)", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "1.0" } as any); } catch {}
+    // Stash for legend value
+    indOverlayRef.current["rvol_last"] = rv.cum[rv.cum.length - 1] ?? null;
+    return out;
+  };
+
+  // buildTtmsq: TTM Squeeze — momentum histogram + squeeze dots (SVG).
+  const buildTtmsq = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
+    const p = P("ttmsq");
+    const imBars = toIMBars(rows);
+    const sq = ttmSqueeze(imBars, p.len as number, p.bbMult as number, [1, 1.5, 2], p.momLen as number);
+    // Resolve up/dn colors from CSS vars for 4-shade coloring
+    const upC = getComputedStyle(document.documentElement).getPropertyValue("--up").trim() || "#26c281";
+    const dnC = getComputedStyle(document.documentElement).getPropertyValue("--down").trim() || "#f0566b";
+    // 4 shade function: rising-above-0 = up, falling-above-0 = up alpha, below-0 mirror with dn
+    const momColor = (val: number, prev: number | null): string => {
+      const rising = prev == null || val >= prev;
+      if (val >= 0) return rising ? upC : upC + "99";
+      return rising ? dnC + "99" : dnC;
+    };
+    const histData: any[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const v = sq.mom[i]; if (v == null) continue;
+      const prev = i > 0 ? sq.mom[i - 1] : null;
+      histData.push({ time: rows[i].time, value: v, color: momColor(v, prev) });
+    }
+    const histS = chart.addSeries(HistogramSeries, { lastValueVisible: false, priceLineVisible: false }, pane);
+    histS.setData(histData);
+    // Squeeze-tier dots as series markers on the histogram (dots ONLY while squeezed — tier>0).
+    // Non-directional intensity ramp (never --up/--down): tier 1 amber → tier 3 red.
+    if (ttmsqMarkersRef.current) { try { ttmsqMarkersRef.current.detach(); } catch {} ttmsqMarkersRef.current = null; }
+    if (p.showDots) {
+      const TIER_COL: Record<number, string> = { 1: "#e8a33d", 2: "#e8734d", 3: "#f0566b" };
+      const markers: any[] = [];
+      for (let i = 0; i < rows.length; i++) {
+        const t = sq.squeeze[i];
+        if (t == null || t === 0) continue;
+        markers.push({ time: rows[i].time, position: "inBar", shape: "circle", color: TIER_COL[t], size: 1 });
+      }
+      try {
+        const plugin = createSeriesMarkers(histS, markers as any);
+        ttmsqMarkersRef.current = plugin;
+      } catch {}
+    }
+    return [histS];
+  };
+
+  // buildAdx: ADX with optional +DI/-DI lines and 20/25 hlines.
+  const buildAdx = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
+    const p = P("adx");
+    const imBars = toIMBars(rows);
+    const res = calcAdx(imBars, p.len as number);
+    const out: ISeriesApi<any>[] = [];
+    const adxS = chart.addSeries(LineSeries, {
+      color: p.col as string, lineWidth: p.width as any,
+      lastValueVisible: true, title: "ADX",
+    }, pane);
+    adxS.setData(toLine(rows, res.adx));
+    // 20 / 25 hlines
+    try { adxS.createPriceLine({ price: 25, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "25" } as any); } catch {}
+    try { adxS.createPriceLine({ price: 20, color: "rgba(214,218,227,.20)", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "20" } as any); } catch {}
+    out.push(adxS);
+    if (p.showDi as boolean) {
+      const upC = getComputedStyle(document.documentElement).getPropertyValue("--up").trim() || "#26c281";
+      const dnC = getComputedStyle(document.documentElement).getPropertyValue("--down").trim() || "#f0566b";
+      const diPlusS = chart.addSeries(LineSeries, { color: upC, lineWidth: 1 as any, lastValueVisible: true, title: "+DI" }, pane);
+      diPlusS.setData(toLine(rows, res.diPlus));
+      const diMinusS = chart.addSeries(LineSeries, { color: dnC, lineWidth: 1 as any, lastValueVisible: true, title: "-DI" }, pane);
+      diMinusS.setData(toLine(rows, res.diMinus));
+      out.push(diPlusS, diMinusS);
+    }
+    return out;
+  };
+
+  // buildCvd: Session CVD (approximate) as BaselineSeries at 0. Intraday-only.
+  const buildCvd = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
+    if (!isIntradayRef.current) return [];
+    const upC = getComputedStyle(document.documentElement).getPropertyValue("--up").trim() || "#26c281";
+    const dnC = getComputedStyle(document.documentElement).getPropertyValue("--down").trim() || "#f0566b";
+    const imBars = toIMBars(rows);
+    const vals = cvdApprox(imBars);
+    const cvdS = chart.addSeries(BaselineSeries, {
+      baseValue: { type: "price", price: 0 },
+      topLineColor: upC, topFillColor1: upC + "33", topFillColor2: upC + "11",
+      bottomLineColor: dnC, bottomFillColor1: dnC + "11", bottomFillColor2: dnC + "33",
+      lastValueVisible: true, title: "Est. CVD",
+    } as any, pane);
+    cvdS.setData(toLine(rows, vals));
+    return [cvdS];
+  };
+
   // Which sub-pane keys are active given the current indicator set (canonical order).
   const activeSubpanes = (): string[] => {
     const inds = indicatorsRef.current; const out: string[] = [];
@@ -687,6 +991,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (inds.has("macd")) out.push("macd");
     if (inds.has("rsistack")) out.push("rsistack");
     if (inds.has("accum")) out.push("accum");
+    // DT sub-panes (intraday-only gating at build time, not here)
+    if (inds.has("rvol")) out.push("rvol");
+    if (inds.has("ttmsq")) out.push("ttmsq");
+    if (inds.has("adx")) out.push("adx");
+    if (inds.has("cvd")) out.push("cvd");
     return out;
   };
 
@@ -733,11 +1042,30 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Golden Oracle Confluence: not a plotted series but the flagship signal layer (BUY/SELL marks +
     // verdict badge). List it FIRST on the price pane so it can be hidden (eye) or removed like any study.
     if (inds.has("_oracle")) overlayEntries.push({ key: "_oracle", label: "Golden Oracle Confluence", kind: "overlay", isPine: false, noParams: true });
-    for (const k of ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox"] as const) if (inds.has(k) && (indSeriesRef.current.has(k) || k === "vprofile" || k === "volbox")) overlayEntries.push({ key: k, label: labelOf(k), kind: "overlay", isPine: false });
+    for (const k of ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox", "svwap", "orb", "slevels", "pivots"] as const) {
+      if (!inds.has(k)) continue;
+      const hasEntry = indSeriesRef.current.has(k) || k === "vprofile" || k === "volbox" || k === "orb" || k === "slevels" || k === "pivots";
+      if (!hasEntry) continue;
+      // Intraday-only indicators: show amber "Intraday timeframes only" note on daily instead of hiding
+      const intradayOnlyKeys = new Set(["svwap", "orb", "slevels", "pivots"]);
+      if (intradayOnlyKeys.has(k) && !isIntradayRef.current) {
+        overlayEntries.push({ key: k, label: `${labelOf(k)} — ${tPlain("intradayOnly")}`, kind: "overlay", isPine: false });
+        continue;
+      }
+      overlayEntries.push({ key: k, label: labelOf(k), kind: "overlay", isPine: false });
+    }
     // Gaps & Demand: signal-layer overlay (no plotted series, like the oracle) — drawn in renderSignals.
     // Registry-backed, so it keeps its Settings/Source/eye/remove menu.
     if (inds.has("gaps")) overlayEntries.push({ key: "gaps", label: labelOf("gaps"), kind: "overlay", isPine: false });
     // Lab signals: descriptive research markers (default OFF, drawn in renderSignals).
+    // Intraday-only SUB-PANE indicators (rvol/cvd) on daily TFs: their builders return [] so the
+    // sub-pane meta loop below has no pane to anchor a row to — surface them here in the price-pane
+    // legend with the same amber note instead of silently vanishing (spec §4 discoverability law).
+    if (!isIntradayRef.current) {
+      for (const k of ["rvol", "cvd"] as const) {
+        if (inds.has(k)) overlayEntries.push({ key: k, label: `${labelOf(k)} — ${tPlain("intradayOnly")}`, kind: "overlay", isPine: false });
+      }
+    }
     // TLT-R4: default OFF, labeled by signal name + direction glyph. No buy/sell wording.
     if (inds.has("_lab")) overlayEntries.push({ key: "_lab", label: "Lab Signals", kind: "overlay", isPine: false, noParams: true });
     // custom scripts: OVERLAY ones (or errored ones) list on the price pane; each SUB-PANE script gets
@@ -761,7 +1089,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const arr = indSeriesRef.current.get(key); if (!arr || !arr.length) continue;
       const entries: Omit<LegendEntry, "hidden">[] = key === "osc"
         ? (["stochrsi", "rsi"] as const).filter((k) => inds.has(k)).map((k) => ({ key: k, label: labelOf(k), kind: "pane", isPine: false }))
-        : [{ key, label: labelOf(key), kind: "pane", isPine: false }];
+        : [{
+            key,
+            // rvol with an insufficient baseline (<3 prior sessions) carries the honest-null note
+            label: key === "rvol" && indOverlayRef.current["rvol_nobase"]
+              ? `${labelOf(key)} — ${tPlain("rvolNoBase")}`
+              : labelOf(key),
+            kind: "pane", isPine: false,
+          }];
       metas.push({ key, isPrice: false, entries, pane: arr[0].getPane() });
     }
     // pine SUB-PANE scripts, in their assigned-pane order
@@ -815,9 +1150,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Remove EVERY tracked indicator series (price/compare/drawings survive). Used by the bounded rebuild.
   const clearAllIndicators = () => {
     const chart = chartRef.current; if (!chart) return;
+    // Detach the ttmsq squeeze-dot markers BEFORE removing its host series.
+    if (ttmsqMarkersRef.current) { try { ttmsqMarkersRef.current.detach(); } catch {} ttmsqMarkersRef.current = null; }
     for (const arr of indSeriesRef.current.values()) for (const s of arr) { try { chart.removeSeries(s); } catch {} }
     indSeriesRef.current.clear(); paneMapRef.current.clear();
     indOverlayRef.current = {};
+    // Remove price lines set on the price series by slevels / pivots (they survive removeSeries of other series).
+    removeIndPriceLines();
   };
 
   // Build the full indicator set from scratch in canonical order onto `rows`.
@@ -837,6 +1176,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (inds.has("avwap")) indSeriesRef.current.set("avwap", buildAvwap(chart, rows));
     if (inds.has("vprofile")) indSeriesRef.current.set("vprofile", buildVprofile(rows));
     if (inds.has("volbox")) indSeriesRef.current.set("volbox", buildVolbox(rows));
+    // DT price-pane overlays (intraday-only; builders return [] on daily)
+    if (inds.has("svwap")) indSeriesRef.current.set("svwap", buildSvwap(chart, rows));
+    if (inds.has("orb")) indSeriesRef.current.set("orb", buildOrb(rows));
+    if (inds.has("slevels")) indSeriesRef.current.set("slevels", buildSlevels(rows));
+    if (inds.has("pivots")) indSeriesRef.current.set("pivots", buildPivots(rows));
     // If ribbon is NOT active, ensure normal candle colors
     if (!inds.has("ribbon")) restoreNormalCandleColors(rows);
     let pane = 1;
@@ -845,6 +1189,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (key === "macd") indSeriesRef.current.set("macd", buildMacd(chart, rows, closes, pane));
       else if (key === "rsistack") indSeriesRef.current.set("rsistack", buildRsiStack(chart, rows, pane));
       else if (key === "accum") indSeriesRef.current.set("accum", buildAccum(chart, rows, pane));
+      else if (key === "rvol") indSeriesRef.current.set("rvol", buildRvol(chart, rows, pane));
+      else if (key === "ttmsq") indSeriesRef.current.set("ttmsq", buildTtmsq(chart, rows, pane));
+      else if (key === "adx") indSeriesRef.current.set("adx", buildAdx(chart, rows, pane));
+      else if (key === "cvd") indSeriesRef.current.set("cvd", buildCvd(chart, rows, pane));
       paneMapRef.current.set(key, pane); pane++;
     }
     // custom scripts always ride along a full indicator rebuild (bars/indicator/replay change): rebuild
@@ -1790,6 +2138,57 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     showEmptyRef.current = (msg: string) => { const e2 = emptyRef.current; if (!e2) return; const m = e2.querySelector(".ce-msg"); if (m) m.textContent = msg; e2.style.display = "flex"; };
     hideEmptyRef.current = () => { const e2 = emptyRef.current; if (e2) e2.style.display = "none"; };
 
+    // ── Countdown-to-bar-close chip (Day Trade Mode feature) ──
+    // Small absolutely-positioned HTML div top-right of price pane; 1s interval; MM:SS to bar close.
+    // dayMode is checked at runtime via dayModeRef (no re-mount needed on prop change).
+    const cdChip = document.createElement("div");
+    cdChip.style.cssText = "position:absolute;top:6px;right:8px;z-index:5;font:600 11px/1 var(--font-ui,system-ui);color:var(--text-2);background:rgba(0,0,0,0.45);border-radius:4px;padding:3px 6px;pointer-events:none;display:none;letter-spacing:0.02em";
+    wrap.appendChild(cdChip);
+    countdownChipRef.current = cdChip;
+    const updateCdChip = () => {
+      const chip = countdownChipRef.current; if (!chip) return;
+      const isIntraday = isIntradayRef.current;
+      const inDayMode = dayModeRef.current;
+      if (!inDayMode || !isIntraday) { chip.style.display = "none"; return; }
+      const bars = barsRef.current; if (!bars.length) { chip.style.display = "none"; return; }
+      const lastBar = bars[bars.length - 1];
+      const lastBarTime = lastBar.time as unknown as number; // numeric epoch for intraday
+      const tf = timeframeRef.current;
+      const intervalSec = tfMinutes(tf) * 60;
+      // Market-local "now" via Intl API
+      const market = classify(symbolRef.current);
+      const tz = market === "cn" || market === "hk" ? "Asia/Shanghai" : market === "us" ? "America/New_York" : "UTC";
+      const nowMs = Date.now();
+      const nowLocalSec = (() => {
+        const parts: Record<string, string> = {};
+        for (const p of new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).formatToParts(nowMs)) parts[p.type] = p.value;
+        return (parseInt(parts.hour || "0") * 3600 + parseInt(parts.minute || "0") * 60 + parseInt(parts.second || "0")) + (Math.floor(nowMs / 86400000) * 86400);
+      })();
+      const barCloseEpoch = lastBarTime + intervalSec;
+      const rem = barCloseEpoch - nowLocalSec;
+      if (rem <= 0 || rem > intervalSec) { chip.style.display = "none"; return; }
+      const mm = Math.floor(rem / 60).toString().padStart(2, "0");
+      const ss = Math.floor(rem % 60).toString().padStart(2, "0");
+      chip.textContent = `${mm}:${ss}`;
+      chip.style.color = rem <= 30 ? "var(--warn)" : "var(--text-2)";
+      chip.style.display = "block";
+    };
+    // Tick every second; started/stopped by the dayMode effect below
+    const startCdTimer = () => {
+      if (countdownTimerRef.current) return; // already running
+      updateCdChip();
+      countdownTimerRef.current = setInterval(updateCdChip, 1000);
+    };
+    const stopCdTimer = () => {
+      if (countdownTimerRef.current) { clearInterval(countdownTimerRef.current); countdownTimerRef.current = null; }
+      if (countdownChipRef.current) countdownChipRef.current.style.display = "none";
+    };
+    // Expose startCd/stopCd so the dayMode effect (later) can call them without a stale closure.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (wrap as any).__dtm_startCd = startCdTimer;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (wrap as any).__dtm_stopCd = stopCdTimer;
+
     winDown = (e: PointerEvent) => { hideCtx(); if (!toolRef.current && sel) { const tg = e.target as Element; if (tg && !tg.closest?.("g[data-id]") && !tg.closest?.(".draw-bar") && !tg.closest?.(".text-edit")) { sel = null; renderDraw(); } } };
     window.addEventListener("pointerdown", winDown);
     // ── Indicator SVG overlay renderer (ichimoku cloud, ribbon fill, vprofile, volbox) ──
@@ -1893,6 +2292,88 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
               if (vahY != null) svgEl.appendChild(mk("line", { x1: W - maxBarW, y1: vahY, x2: W, y2: vahY, stroke: "rgba(214,218,227,0.5)", "stroke-width": 1, "stroke-dasharray": "4 3" }));
               if (valY != null) svgEl.appendChild(mk("line", { x1: W - maxBarW, y1: valY, x2: W, y2: valY, stroke: "rgba(214,218,227,0.5)", "stroke-width": 1, "stroke-dasharray": "4 3" }));
             }
+          }
+        }
+      }
+
+      // ── Session VWAP ±1σ fill (SVG translucent polygon) ──
+      if (inds.has("svwap") && !hiddenRef.current.has("svwap")) {
+        const data = indOverlayRef.current["svwap"];
+        if (data) {
+          const { result, rows: svRows, mults } = data as { result: ReturnType<typeof sessionVwap>; rows: Bar[]; mults: number[] };
+          const p = P("svwap");
+          if (p.fill && result.bands[0]) {
+            // ±1σ fill polygon: upper band points forward, lower band points backward
+            const upPts: { x: number; y: number }[] = [];
+            const dnPts: { x: number; y: number }[] = [];
+            for (let i = 0; i < svRows.length; i++) {
+              const uv = result.bands[0].up[i], dv = result.bands[0].dn[i];
+              if (uv == null || dv == null) { if (upPts.length > 1 && dnPts.length > 1) { /* flush current segment */ } continue; }
+              const x = t2x(svRows[i].time as any); if (x == null || x < -50 || x > W + 50) continue;
+              const yu = p2y(uv), yd = p2y(dv); if (yu == null || yd == null) continue;
+              upPts.push({ x, y: yu });
+              dnPts.push({ x, y: yd });
+            }
+            if (upPts.length >= 2) {
+              const pts = [...upPts, ...[...dnPts].reverse()].map((p) => `${p.x},${p.y}`).join(" ");
+              svgEl.appendChild(mk("polygon", { points: pts, fill: p.fillCol as string, stroke: "none" }));
+            }
+          }
+        }
+      }
+
+      // (TTM Squeeze dots render as LWC series markers on the histogram itself — see buildTtmsq.)
+
+      // ── Opening Range box + rays ──
+      if (inds.has("orb") && !hiddenRef.current.has("orb")) {
+        const data = indOverlayRef.current["orb"];
+        if (data) {
+          const { sessions, rows: orbRows } = data as { sessions: ReturnType<typeof openingRange>; rows: Bar[] };
+          const p = P("orb");
+          const textColor = getComputedStyle(document.documentElement).getPropertyValue("--text-2").trim() || "#8b93a3";
+          for (const sess of sessions) {
+            // Box: from startIdx to endIdx
+            const boxStart = orbRows[sess.startIdx]?.time, boxEnd = orbRows[sess.endIdx]?.time;
+            const sessEnd = orbRows[sess.sessionEndIdx]?.time;
+            if (!boxStart || !boxEnd || !sessEnd) continue;
+            const x1 = t2x(boxStart as any), x2 = t2x(boxEnd as any);
+            const xEnd = t2x(sessEnd as any);
+            const yHi = p2y(sess.hi), yLo = p2y(sess.lo);
+            if (x1 == null || x2 == null || yHi == null || yLo == null) continue;
+            const rxEnd = xEnd ?? W;
+            // Shaded box over the opening range window
+            svgEl.appendChild(mk("rect", { x: x1, y: yHi, width: Math.max(0, x2 - x1), height: yLo - yHi, fill: p.boxCol as string, stroke: "none" }));
+            // ORH solid ray to session end
+            svgEl.appendChild(mk("line", { x1: x1, y1: yHi, x2: rxEnd, y2: yHi, stroke: p.lineCol as string, "stroke-width": p.width, "stroke-dasharray": "" }));
+            // ORL solid ray to session end
+            svgEl.appendChild(mk("line", { x1: x1, y1: yLo, x2: rxEnd, y2: yLo, stroke: p.lineCol as string, "stroke-width": p.width, "stroke-dasharray": "" }));
+            // Mid dashed ray
+            if (p.showMid) {
+              const yMid = p2y(sess.mid); if (yMid != null) {
+                svgEl.appendChild(mk("line", { x1: x1, y1: yMid, x2: rxEnd, y2: yMid, stroke: p.lineCol as string, "stroke-width": 1, "stroke-dasharray": "4 3" }));
+              }
+            }
+            // Extension rays
+            for (const ext of sess.exts) {
+              const yUp = p2y(ext.up), yDn = p2y(ext.dn);
+              if (yUp != null) {
+                svgEl.appendChild(mk("line", { x1: x1, y1: yUp, x2: rxEnd, y2: yUp, stroke: p.lineCol as string, "stroke-width": 1, "stroke-dasharray": "4 3" }));
+                // Label at right end
+                const lbl = mk("text", { x: rxEnd - 4, y: yUp - 3, fill: textColor, "font-size": 9, "text-anchor": "end", "font-family": "var(--font-ui)" });
+                lbl.textContent = `+${ext.k}x`;
+                svgEl.appendChild(lbl);
+              }
+              if (yDn != null) {
+                svgEl.appendChild(mk("line", { x1: x1, y1: yDn, x2: rxEnd, y2: yDn, stroke: p.lineCol as string, "stroke-width": 1, "stroke-dasharray": "4 3" }));
+                const lbl2 = mk("text", { x: rxEnd - 4, y: yDn + 10, fill: textColor, "font-size": 9, "text-anchor": "end", "font-family": "var(--font-ui)" });
+                lbl2.textContent = `-${ext.k}x`;
+                svgEl.appendChild(lbl2);
+              }
+            }
+            // ORH / ORL labels
+            const orbLabelX = Math.min(x2 + 4, rxEnd - 4);
+            if (yHi != null) { const lh = mk("text", { x: orbLabelX, y: yHi - 3, fill: textColor, "font-size": 9, "text-anchor": "start", "font-family": "var(--font-ui)" }); lh.textContent = `ORH ${sess.hi.toFixed(2)}`; svgEl.appendChild(lh); }
+            if (yLo != null) { const ll = mk("text", { x: orbLabelX, y: yLo + 10, fill: textColor, "font-size": 9, "text-anchor": "start", "font-family": "var(--font-ui)" }); ll.textContent = `ORL ${sess.lo.toFixed(2)}`; svgEl.appendChild(ll); }
           }
         }
       }
@@ -2105,6 +2586,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (tagTimerRef.current != null) { clearInterval(tagTimerRef.current); tagTimerRef.current = null; }
       if (priceTagRef.current) { try { priceTagRef.current.remove(); } catch {} priceTagRef.current = null; }
       renderTagRef.current = null;
+      // DT teardown: countdown chip + shading primitive
+      if (countdownTimerRef.current) { clearInterval(countdownTimerRef.current); countdownTimerRef.current = null; }
+      if (countdownChipRef.current) { try { countdownChipRef.current.remove(); } catch {} countdownChipRef.current = null; }
+      if (shadingPrimRef.current && priceSeriesRef.current) { try { detachSessionShading(priceSeriesRef.current, shadingPrimRef.current); } catch {} shadingPrimRef.current = null; }
+      indPriceLinesRef.current = new Map();
       indSeriesRef.current.clear(); cmpSeriesRef.current.clear(); paneMapRef.current.clear();
       pineSeriesRef.current.clear(); pineMarkersRef.current.clear(); pinePaneMapRef.current.clear(); pineErrRef.current.clear(); pineCacheRef.current.clear();
       priceSeriesRef.current = null; priceFamilyRef.current = null;
@@ -2122,6 +2608,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const epoch = ++epochRef.current;
     let cancelled = false;
     const intraday = isIntradayTf(timeframe);
+    // crossing the intraday↔daily boundary changes the TIME TYPE of every series (numeric epoch vs
+    // 'YYYY-MM-DD') — in-place setData updates across it are unsound (LWC one-time-type law) and the
+    // DT intraday-only indicators + legend notes need a full rebuild. Force the rebuild path then.
+    const crossedIntradayBoundary = isIntradayRef.current !== intraday;
     isIntradayRef.current = intraday;
     // any in-flight pulse belongs to the prior symbol/TF — cancel it (R14 timer cleanup guard)
     if (highlightTimerRef.current) { clearTimeout(highlightTimerRef.current); highlightTimerRef.current = null; }
@@ -2167,6 +2657,27 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         closesRef.current = closes;
         precRef.current = closes.length && closes[closes.length - 1] < 10 ? 4 : 2;
         tokensRef.current = readTokens();
+        // Prefetch daily OHLC for slevels/pivots (fire-and-forget; miss is graceful — empty daily = no lines).
+        // Also used by DayStatsStrip for gap% and range-used% computations.
+        // Only re-fetch when the symbol changed or cache is empty. Uses the same getOhlc cache path as daily branch.
+        if (dailyCacheRef.current?.sym !== symbol) {
+          getOhlc(symbol).then((ohlc: any) => {
+            if (cancelled || epochRef.current !== epoch) return;
+            const rawBars: DailyBar[] = Array.isArray(ohlc?.bars)
+              ? ohlc.bars.map((b: any[]) => ({ time: b[0] as string, h: b[2] as number, l: b[3] as number, c: b[4] as number }))
+              : [];
+            dailyCacheRef.current = { sym: symbol, bars: rawBars };
+            // Update strip daily bars now that cache is available
+            if (dayModeRef.current) setStripDailyBars(rawBars);
+            // First-load race: buildAllIndicators already ran with an EMPTY daily cache, so slevels/
+            // pivots drew nothing. Both builders are idempotent (each clears its own price-line pool
+            // and creates no LWC series) — re-run them directly now that daily bars exist.
+            if (rawBars.length && isIntradayRef.current) {
+              try { if (indicatorsRef.current.has("slevels")) buildSlevels(onChart); } catch {}
+              try { if (indicatorsRef.current.has("pivots")) buildPivots(onChart); } catch {}
+            }
+          }).catch(() => { /* silent — slevels/pivots will render with empty history */ });
+        }
         const familyOf = (ct: string) => (ct === "line" ? "line" : ct === "area" ? "area" : ct === "bars" ? "bars" : "candle");
         const wantFamily = familyOf(chartType);
         let priceS = priceSeriesRef.current;
@@ -2185,6 +2696,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         cmpSeriesRef.current.clear();
         paintStatus(onChart, null);
         applyView(onChart, ri);
+        // DayStatsStrip: update bar state so the strip re-renders with current data
+        if (dayModeRef.current) {
+          setStripBars([...onChart]);
+          setStripDailyBars(dailyCacheRef.current?.sym === symbol ? [...dailyCacheRef.current.bars] : []);
+        }
         renderSignalsRef.current(); renderRef.current();
         reRegisterSync();
         return;
@@ -2287,7 +2803,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       // ── PERF-FIX (a): indicators — on same-symbol TF/chartType switch, update series data in-place
       //    (setData only, no removeSeries/addSeries lifecycle). On symbol change, do a full rebuild. ──
-      const canUpdateInPlace = !symbolChanged && indSeriesRef.current.size > 0;
+      const canUpdateInPlace = !symbolChanged && !crossedIntradayBoundary && indSeriesRef.current.size > 0;
       if (canUpdateInPlace) {
         updateAllIndicators(onChart, closes);
         // updateAllIndicators only touches the built-in series registry (indSeriesRef); Pine scripts are
@@ -2356,7 +2872,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // snapshot the visible range so a view-preserving toggle can restore it after series churn (§0.4)
     viewSavedRef.current = PRESERVE_VIEW_ON_INDICATOR_TOGGLE ? (() => { try { const r = chart.timeScale().getVisibleLogicalRange(); return r ? { from: r.from as number, to: r.to as number } : null; } catch { return null; } })() : null;
 
-    const OVERLAY_KEYS = ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox"] as const;
+    const OVERLAY_KEYS = ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox", "svwap", "orb", "slevels", "pivots"] as const;
     const wantOverlays = new Set<string>(OVERLAY_KEYS.filter((k) => indicators.has(k)));
     const haveOverlays = new Set<string>(OVERLAY_KEYS.filter((k) => indSeriesRef.current.has(k) || indOverlayRef.current[k]));
     const wantSub = activeSubpanes();                                   // canonical-order sub-pane keys
@@ -2368,6 +2884,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       delete indOverlayRef.current[k];
       // Restore candle colors when ribbon is removed
       if (k === "ribbon") restoreNormalCandleColors(rows);
+      // Remove ONLY this indicator's price lines (keyed pool — the other of slevels/pivots keeps its lines).
+      if (k === "slevels" || k === "pivots") removeIndPriceLines(k);
     }
     for (const k of wantOverlays) if (!haveOverlays.has(k)) {
       if (k === "ema") indSeriesRef.current.set("ema", buildEma(chart, rows, closes));
@@ -2380,6 +2898,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (k === "avwap") indSeriesRef.current.set("avwap", buildAvwap(chart, rows));
       else if (k === "vprofile") indSeriesRef.current.set("vprofile", buildVprofile(rows));
       else if (k === "volbox") indSeriesRef.current.set("volbox", buildVolbox(rows));
+      else if (k === "svwap") indSeriesRef.current.set("svwap", buildSvwap(chart, rows));
+      else if (k === "orb") indSeriesRef.current.set("orb", buildOrb(rows));
+      else if (k === "slevels") indSeriesRef.current.set("slevels", buildSlevels(rows));
+      else if (k === "pivots") indSeriesRef.current.set("pivots", buildPivots(rows));
     }
 
     // ── the osc pane is a special case: rsi/stochrsi share it. If the pane persists but its
@@ -2419,7 +2941,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         indSeriesRef.current.set("osc", buildOsc(chart, rows, closes, pane)); paneMapRef.current.set("osc", pane);
       }
       // removals (highest sub-pane only, by the guard above)
-      for (const r of removed) { const arr = indSeriesRef.current.get(r) || []; for (const s of arr) { try { chart.removeSeries(s); } catch {} } indSeriesRef.current.delete(r); paneMapRef.current.delete(r); }
+      for (const r of removed) {
+        if (r === "ttmsq" && ttmsqMarkersRef.current) { try { ttmsqMarkersRef.current.detach(); } catch {} ttmsqMarkersRef.current = null; }
+        const arr = indSeriesRef.current.get(r) || []; for (const s of arr) { try { chart.removeSeries(s); } catch {} } indSeriesRef.current.delete(r); paneMapRef.current.delete(r);
+      }
       // additions (tail append, by the guard above) — assign the next free pane index
       for (const a of added) {
         const pane = nextFreePane();
@@ -2427,6 +2952,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         else if (a === "macd") indSeriesRef.current.set("macd", buildMacd(chart, rows, closes, pane));
         else if (a === "rsistack") indSeriesRef.current.set("rsistack", buildRsiStack(chart, rows, pane));
         else if (a === "accum") indSeriesRef.current.set("accum", buildAccum(chart, rows, pane));
+        else if (a === "rvol") indSeriesRef.current.set("rvol", buildRvol(chart, rows, pane));
+        else if (a === "ttmsq") indSeriesRef.current.set("ttmsq", buildTtmsq(chart, rows, pane));
+        else if (a === "adx") indSeriesRef.current.set("adx", buildAdx(chart, rows, pane));
+        else if (a === "cvd") indSeriesRef.current.set("cvd", buildCvd(chart, rows, pane));
         paneMapRef.current.set(a, pane);
       }
       // ONLY when a built-in SUB-PANE was added/removed → re-seat pine sub-panes ABOVE the new built-in
@@ -2652,6 +3181,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     }
     // recolor the volume histogram by re-setData with token-derived up/down fills (no series churn)
     const vol = indSeriesRef.current.get("vol"); if (vol && vol[0]) { try { vol[0].setData(volData(barsRef.current)); } catch {} }
+    // DT indicators that resolve --up/--down (or derived colors) at BUILD time need a rebuild on flip:
+    // cvd baseline colors, ttmsq momentum shades, adx ±DI, pivots R/S price lines. Flips are rare —
+    // the full rebuild path is the sanctioned fix (skip on mount: csNonce 0 = initial run).
+    if (csNonce > 0 && barsRef.current.length) {
+      const dtDirectional = ["cvd", "ttmsq", "adx", "pivots"];
+      if (dtDirectional.some((k) => indicatorsRef.current.has(k))) { try { rebuildIndicators(); } catch {} }
+    }
     renderSignalsRef.current(); renderRef.current();
     // eslint-disable-next-line
   }, [csNonce]);
@@ -2736,6 +3272,47 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // eslint-disable-next-line
   }, []);
 
+  // ── DT-D1: session shading + countdown chip (dayMode × intraday × market) ──
+  // Runs whenever dayMode, timeframe, or symbol changes. Attaches / detaches the
+  // SessionShadingPrimitive on the candle series, and starts/stops the 1s countdown timer.
+  useEffect(() => {
+    const priceS = priceSeriesRef.current;
+    const market = classify(symbol);
+    const isIntraday = isIntradayTf(timeframe);
+    const canShade = dayMode && isIntraday && market !== "crypto";
+
+    // Detach any existing shading primitive first
+    if (shadingPrimRef.current && priceS) {
+      try { detachSessionShading(priceS, shadingPrimRef.current); } catch {}
+      shadingPrimRef.current = null;
+    }
+
+    if (canShade && priceS) {
+      const imBars = barsRef.current as unknown as import("@/lib/sessionShading").ShadingBar[];
+      const prim = attachSessionShading(priceS, imBars);
+      shadingPrimRef.current = prim;
+    }
+
+    // Countdown chip
+    const wrap = wrapElRef.current as any;
+    if (dayMode && isIntraday) {
+      wrap?.__dtm_startCd?.();
+    } else {
+      wrap?.__dtm_stopCd?.();
+    }
+
+    // DayStatsStrip: propagate current bars/daily to strip state when mode toggles or TF/symbol changes
+    if (dayMode && isIntraday && barsRef.current.length) {
+      setStripBars([...barsRef.current]);
+      setStripDailyBars(dailyCacheRef.current?.sym === symbol ? [...dailyCacheRef.current.bars] : []);
+    } else {
+      // Clear strip data when mode is off so the strip is hidden clean
+      setStripBars([]);
+      setStripDailyBars([]);
+    }
+    // eslint-disable-next-line
+  }, [dayMode, timeframe, symbol]);
+
   // ── D2 locked vline: re-render SVG when the locked time changes ──
   useEffect(() => { renderRef.current?.(); }, [lockedVLine]);
 
@@ -2773,8 +3350,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // show while it's active AND not hidden via the legend eye. (Kept mounted with display:none so the
   // imperative verdict painter can keep verdictRef current in the background — no remount staleness.)
   const oracleVisible = indicators.has("_oracle") && !hidden.has("_oracle");
+  const isIntraday = isIntradayTf(timeframe);
   return (
     <div className="chart-wrap">
+      {/* DayStatsStrip: slim row pinned above chart when Day Trade Mode is on and TF is intraday */}
+      {dayMode && isIntraday && stripBars.length > 0 && (
+        <DayStatsStrip
+          bars={stripBars}
+          market={classify(symbol)}
+          dailyBars={stripDailyBars}
+        />
+      )}
       <div className="statusline">
         <span ref={statusRef} />
         <span className="mm" style={{ display: oracleVisible ? undefined : "none" }}><i style={{ background: "currentColor" }} /><span ref={verdictRef}>GOLDEN ORACLE</span></span>

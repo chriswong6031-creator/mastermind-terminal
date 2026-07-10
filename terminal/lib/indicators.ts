@@ -11,7 +11,9 @@
 
 export type IndKey = "ema" | "bb" | "vwap" | "vol" | "rsi" | "stochrsi" | "macd" | "gaps"
   | "ichimoku" | "ribbon" | "supertrend" | "avwap" | "vprofile" | "volbox"
-  | "rsistack" | "accum" | "_lab";
+  | "rsistack" | "accum" | "_lab"
+  // Day Trade suite
+  | "svwap" | "orb" | "slevels" | "pivots" | "rvol" | "ttmsq" | "adx" | "cvd";
 export type IndKind = "overlay" | "pane";
 export type FieldType = "number" | "color" | "bool";
 
@@ -39,7 +41,11 @@ export interface IndDef {
 export const IND_ORDER: IndKey[] = [
   "ema", "bb", "vwap", "vol", "gaps",
   "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox",
+  // Day Trade suite overlays (price pane)
+  "svwap", "orb", "slevels", "pivots",
   "rsi", "stochrsi", "macd", "rsistack", "accum",
+  // Day Trade suite sub-panes
+  "rvol", "ttmsq", "adx", "cvd",
   "_lab",
 ];
 
@@ -447,6 +453,246 @@ hline(35, "ref", color.new(color.gray, 60), linestyle = hline.style_dashed)`,
 // DISPLAY-TIER DESCRIPTIVE. Survivor universe, not a verdict.
 // Data is produced by the macro Python engine and rendered by the Terminal.
 // TLT-R3: fires are computed only by the macro engine — the Terminal only renders them.`,
+  },
+
+  // ── Day Trade Suite (display-tier descriptive, intraday-only where noted) ─────────
+
+  svwap: {
+    key: "svwap", label: "Session VWAP", tag: "sVWAP", kind: "overlay",
+    defaults: {
+      includePm: false,
+      showB1: true, showB2: true, showB3: false,
+      m1: 1, m2: 2, m3: 3,
+      col: "#e8b339",
+      b1Col: "rgba(77,130,255,0.55)",
+      b2Col: "rgba(232,163,61,0.5)",
+      b3Col: "rgba(240,86,107,0.45)",
+      width: 1.6,
+      fill: true,
+      fillCol: "rgba(77,130,255,0.06)",
+    },
+    fields: [
+      { key: "includePm", label: "Include premarket in VWAP", type: "bool", group: "inputs" },
+      { key: "showB1", label: "Show ±1σ bands", type: "bool", group: "inputs" },
+      { key: "showB2", label: "Show ±2σ bands", type: "bool", group: "inputs" },
+      { key: "showB3", label: "Show ±3σ bands", type: "bool", group: "inputs" },
+      // band multipliers modeled as bounded number fields (1=m1×σ label)
+      { key: "m1", label: "Band 1 multiplier (σ)", type: "number", group: "inputs", min: 0.5, max: 5, step: 0.5 },
+      { key: "m2", label: "Band 2 multiplier (σ)", type: "number", group: "inputs", min: 0.5, max: 5, step: 0.5 },
+      { key: "m3", label: "Band 3 multiplier (σ)", type: "number", group: "inputs", min: 0.5, max: 5, step: 0.5 },
+      { key: "fill", label: "Fill ±1σ zone", type: "bool", group: "inputs" },
+      { key: "col", label: "VWAP color", type: "color", group: "style" },
+      { key: "b1Col", label: "Band 1 color", type: "color", group: "style" },
+      { key: "b2Col", label: "Band 2 color", type: "color", group: "style" },
+      { key: "b3Col", label: "Band 3 color", type: "color", group: "style" },
+      { key: "fillCol", label: "Fill color", type: "color", group: "style" },
+      { key: "width", label: "VWAP line width", type: "number", group: "style", min: 1, max: 4, step: 0.1 },
+    ],
+    source: `//@version=6
+indicator("Session VWAP", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — session-reset VWAP with σ bands.
+// Intraday only. Resets at session open (09:30 ET for US). Premarket bars
+// optionally included in cumulative. σ² = Σ(v·tp²)/Σv − vwap²; clamped ≥ 0.
+// Band series use autoscaleInfoProvider: () => null (excluded from autoscale).
+// v≤0 bars contribute 0 to cumulative sums.
+includePm = input.bool(false, "Include premarket")
+m1 = input.float(1.0, "Band 1 σ")
+m2 = input.float(2.0, "Band 2 σ")
+m3 = input.float(3.0, "Band 3 σ")
+// session reset on each new day; typical = (h+l+c)/3
+// Implementation: intradayMath.sessionVwap()`,
+  },
+
+  orb: {
+    key: "orb", label: "Opening Range", tag: "OR", kind: "overlay",
+    defaults: {
+      rangeMin: 15,
+      showMid: true,
+      ext1On: true, ext1: 1,
+      ext2On: true, ext2: 2,
+      boxCol: "rgba(232,179,57,0.10)",
+      lineCol: "#e8a33d",
+      width: 1,
+    },
+    fields: [
+      { key: "rangeMin", label: "Range window (minutes)", type: "number", group: "inputs", min: 1, max: 60, step: 1 },
+      { key: "showMid", label: "Show midpoint", type: "bool", group: "inputs" },
+      { key: "ext1On", label: "Show extension 1", type: "bool", group: "inputs" },
+      { key: "ext1", label: "Extension 1 multiplier", type: "number", group: "inputs", min: 0.5, max: 5, step: 0.5 },
+      { key: "ext2On", label: "Show extension 2", type: "bool", group: "inputs" },
+      { key: "ext2", label: "Extension 2 multiplier", type: "number", group: "inputs", min: 0.5, max: 5, step: 0.5 },
+      { key: "boxCol", label: "Box fill color", type: "color", group: "style" },
+      { key: "lineCol", label: "Line color", type: "color", group: "style" },
+      { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.5 },
+    ],
+    source: `//@version=6
+indicator("Opening Range", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — opening range breakout levels (intraday only).
+// Window: bars with minOfDay ∈ [openMin, openMin+rangeMin). Locked after window.
+// Shaded box over range window; ORH/ORL rays to session end; dashed mid; dashed extensions.
+// One set of levels per session in view. SVG text labels at ray right ends.
+// Implementation: intradayMath.openingRange()
+rangeMin = input.int(15, "Range window (minutes)")`,
+  },
+
+  slevels: {
+    key: "slevels", label: "Session Levels", tag: "Levels", kind: "overlay",
+    defaults: {
+      pdh: true, pdl: true, pdc: true,
+      open: true, pmh: true, pml: true,
+      pwh: false, pwl: false,
+      pdCol: "#4d82ff",
+      pdcCol: "#e8a33d",
+      pmCol: "#e8b339",
+      pwCol: "#8b93a3",
+      openCol: "#d6dae3",
+    },
+    fields: [
+      { key: "pdh", label: "Show PDH", type: "bool", group: "inputs" },
+      { key: "pdl", label: "Show PDL", type: "bool", group: "inputs" },
+      { key: "pdc", label: "Show PDC", type: "bool", group: "inputs" },
+      { key: "open", label: "Show Session Open", type: "bool", group: "inputs" },
+      { key: "pmh", label: "Show PMH (US)", type: "bool", group: "inputs" },
+      { key: "pml", label: "Show PML (US)", type: "bool", group: "inputs" },
+      { key: "pwh", label: "Show PWH", type: "bool", group: "inputs" },
+      { key: "pwl", label: "Show PWL", type: "bool", group: "inputs" },
+      { key: "pdCol", label: "PDH/PDL color", type: "color", group: "style" },
+      { key: "pdcCol", label: "PDC color", type: "color", group: "style" },
+      { key: "pmCol", label: "PMH/PML color", type: "color", group: "style" },
+      { key: "pwCol", label: "PWH/PWL color", type: "color", group: "style" },
+      { key: "openCol", label: "Open color", type: "color", group: "style" },
+    ],
+    source: `//@version=6
+indicator("Session Levels", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — key intraday reference levels (intraday only).
+// PDH/PDL: prior day high/low (solid w1). PDC: prior day close (dashed).
+// PMH/PML: today's premarket high/low (US only; omitted when no premarket bars).
+// Open: first bar at or after session open today (dotted).
+// PWH/PWL: prior ISO week high/low from daily bars (dotted, faint).
+// Implemented as createPriceLine() on the price series. PriceLines excluded from autoscale.
+// Daily bars via dataCache.getOhlc(sym). Implementation: intradayMath.sessionLevels()`,
+  },
+
+  pivots: {
+    key: "pivots", label: "Pivot Points", tag: "Pivots", kind: "overlay",
+    defaults: {
+      // 0=classic, 1=camarilla, 2=fib (bounded number field as select proxy)
+      mode: 0,
+      extra: false,
+      ppCol: "#d6dae3",
+      // R/S line colors are NOT user-editable: they resolve from var(--down)/var(--up) at build time
+      // so the East-Asian red-up flip stays correct (directional-color law).
+    },
+    fields: [
+      // mode: 0=classic, 1=camarilla, 2=fib
+      { key: "mode", label: "Mode (0=classic, 1=camarilla, 2=fibonacci)", type: "number", group: "inputs", min: 0, max: 2, step: 1 },
+      { key: "extra", label: "Show R3/S3 (+ R4/S4 camarilla)", type: "bool", group: "inputs" },
+      { key: "ppCol", label: "Pivot color", type: "color", group: "style" },
+    ],
+    source: `//@version=6
+indicator("Pivot Points", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — classic / camarilla / fibonacci pivots (intraday only).
+// Classic: PP=(H+L+C)/3; R1=2PP−L; S1=2PP−H; R2=PP+(H−L); S2=PP−(H−L); R3/S3 optional.
+// Camarilla: R1..R4=C+(H−L)×1.1/{12,6,4,2}; S1..S4=C−(H−L)×1.1/{12,6,4,2}.
+// Fibonacci: PP=(H+L+C)/3; R/S = PP ± {0.382,0.618,1.0}×(H−L).
+// R/S colors resolve from var(--down)/var(--up) via getComputedStyle at render time.
+// Implemented as createPriceLine() set; PP heavier, all dashed.
+// Implementation: intradayMath.pivotLevels()`,
+  },
+
+  rvol: {
+    key: "rvol", label: "Relative Volume", tag: "RVOL", kind: "pane",
+    defaults: {
+      baseline: 10,
+      lineCol: "#e8b339",
+      histCol: "rgba(139,147,163,0.45)",
+      width: 1.6,
+    },
+    fields: [
+      { key: "baseline", label: "Baseline sessions", type: "number", group: "inputs", min: 3, max: 30, step: 1 },
+      { key: "lineCol", label: "Cumulative RVOL color", type: "color", group: "style" },
+      { key: "histCol", label: "Slot RVOL color", type: "color", group: "style" },
+      { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.1 },
+    ],
+    source: `//@version=6
+indicator("Relative Volume", overlay = false)
+// DISPLAY-TIER DESCRIPTIVE — relative volume vs same time-of-day baseline (intraday only).
+// Slot RVOL: current bar volume / mean bar volume at same minOfDay over prior baseline sessions.
+// Cumulative RVOL: current session cumulative / mean cumulative at same point in prior sessions.
+// Baseline excludes the current session. If sessionsUsed < 3: all null + amber note shown.
+// Legend tier coloring: <1 muted, 1–1.5 text, 1.5–2 warn, ≥2 up (legend only; pane is calm).
+// priceLine at 1.0 (dashed, --muted). Time-of-day baseline method — honest null law.
+// Implementation: intradayMath.rvolSeries()`,
+  },
+
+  ttmsq: {
+    key: "ttmsq", label: "TTM Squeeze", tag: "Squeeze", kind: "pane",
+    defaults: {
+      len: 20,
+      bbMult: 2,
+      momLen: 20,
+      showDots: true,
+    },
+    fields: [
+      { key: "len", label: "Length", type: "number", group: "inputs", min: 5, max: 100, step: 1 },
+      { key: "bbMult", label: "BB StdDev multiplier", type: "number", group: "inputs", min: 0.5, max: 5, step: 0.5 },
+      { key: "momLen", label: "Momentum length", type: "number", group: "inputs", min: 5, max: 100, step: 1 },
+      { key: "showDots", label: "Show squeeze dots", type: "bool", group: "inputs" },
+    ],
+    source: `//@version=6
+indicator("TTM Squeeze", overlay = false)
+// DISPLAY-TIER DESCRIPTIVE — TTM Squeeze momentum + squeeze state. All timeframes.
+// BB = SMA ± bbMult·stdev(pop, ÷N — matches ChartPanel inline convention).
+// KC = SMA ± mult·RMA(TR,len) for each KC multiplier tier.
+// Squeeze tier = highest k where BBwidth < KCwidth(k): 3=tightest (1.0×KC), 0=none.
+// Momentum = linreg slope-fit of: close − ((highest(len)+lowest(len))/2 + sma(close,len))/2
+// Histogram: rising-above-0 var(--up); falling-above-0 lighter alpha; below-0 mirror var(--down).
+// Squeeze dots: SVG circles at y(0) per bar — tier0 --muted; tier1 #e8a33d; tier2 #e8734d; tier3 #f0566b.
+// Implementation: intradayMath.ttmSqueeze()`,
+  },
+
+  adx: {
+    key: "adx", label: "ADX", tag: "ADX", kind: "pane",
+    defaults: {
+      len: 10,
+      showDi: false,
+      col: "#4d82ff",
+      width: 1.4,
+    },
+    fields: [
+      { key: "len", label: "Length", type: "number", group: "inputs", min: 2, max: 50, step: 1 },
+      { key: "showDi", label: "Show +DI / −DI", type: "bool", group: "inputs" },
+      { key: "col", label: "ADX color", type: "color", group: "style" },
+      { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.1 },
+    ],
+    source: `//@version=6
+indicator("ADX", overlay = false)
+// DISPLAY-TIER DESCRIPTIVE — Average Directional Index (Wilder DMI). All timeframes.
+// Wilder RMA for smoothing (1/len decay — same as indicatorMath.ts rma()).
+// +DI = RMA(max(high−high[1],0), len) / RMA(TR, len) × 100
+// −DI = RMA(max(low[1]−low,0), len) / RMA(TR, len) × 100
+// DX = |+DI−−DI| / (+DI+−DI) × 100; ADX = RMA(DX, len)
+// hlines at 20 and 25 (dashed priceLines). Optional +DI/−DI: var(--up) / var(--down).
+// Implementation: intradayMath.adx()`,
+  },
+
+  cvd: {
+    key: "cvd", label: "Est. CVD (approx)", tag: "Est. CVD", kind: "pane",
+    // No user-editable colors: baseline up/down resolve from var(--up)/var(--down) at build time
+    // (directional-color law — a picker here would be a silent no-op).
+    defaults: {},
+    fields: [],
+    source: `//@version=6
+indicator("Est. CVD (OHLCV approx)", overlay = false)
+// DISPLAY-TIER DESCRIPTIVE — session-reset cumulative volume delta (intraday only).
+// ⚠️  APPROXIMATION: true CVD requires tick-level or bid/ask data.
+// This is a close-position-in-range proxy:
+//   delta = v × ((c−l) − (h−c)) / (h−l)
+//   if h === l: use sign(c − prevClose) × v (0 for first bar of session).
+// Cumulative sum resets at each session open.
+// Rendered as LWC BaselineSeries at 0. Legend MUST read "Est. CVD (OHLCV approx)".
+// Default OFF — not in day-mode preset.
+// Implementation: intradayMath.cvdApprox()`,
   },
 };
 

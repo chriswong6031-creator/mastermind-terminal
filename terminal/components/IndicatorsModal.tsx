@@ -4,14 +4,25 @@ import Link from "next/link";
 import { useT } from "@/lib/i18n";
 import { type UserScript } from "@/lib/userScripts";
 
-const CATS: Record<string, { key: string; label: string; mm?: boolean }[]> = {
+const CATS: Record<string, { key: string; label: string; mm?: boolean; tkey?: string }[]> = {
   Mastermind: [{ key: "_oracle", label: "Golden Oracle Confluence", mm: true }],
   Trend: [{ key: "ema", label: "Moving Averages (EMA 20/50/200)" }, { key: "bb", label: "Bollinger Bands" }, { key: "vwap", label: "VWAP" }, { key: "macd", label: "MACD" }],
   Momentum: [{ key: "rsi", label: "RSI" }, { key: "stochrsi", label: "Stochastic RSI" }],
   "Price Action": [{ key: "gaps", label: "Gaps & Demand" }],
   Volume: [{ key: "vol", label: "Volume" }],
+  // Day Trade suite — spec §2 order: overlays then panes
+  daytrade: [
+    { key: "svwap", label: "Session VWAP", tkey: "indSvwap" },
+    { key: "orb", label: "Opening Range", tkey: "indOrb" },
+    { key: "slevels", label: "Session Levels", tkey: "indSlevels" },
+    { key: "pivots", label: "Pivot Points", tkey: "indPivots" },
+    { key: "rvol", label: "Relative Volume", tkey: "indRvol" },
+    { key: "ttmsq", label: "TTM Squeeze", tkey: "indTtmsq" },
+    { key: "adx", label: "ADX", tkey: "indAdx" },
+    { key: "cvd", label: "Est. CVD (approx)", tkey: "indCvd" },
+  ],
 };
-const CAT_TKEY: Record<string, string> = { Mastermind: "catMastermind", Trend: "catTrend", Momentum: "catMomentum", "Price Action": "catPriceAction", Volume: "catVolume" };
+const CAT_TKEY: Record<string, string> = { Mastermind: "catMastermind", Trend: "catTrend", Momentum: "catMomentum", "Price Action": "catPriceAction", Volume: "catVolume", daytrade: "catDaytrade" };
 const MY_SCRIPTS = "__scripts__";   // synthetic category key for the My Scripts section
 
 export default function IndicatorsModal({ open, active, onClose, onToggle, scripts = [], enabled, onToggleScript, onRenameScript, onDeleteScript }:
@@ -74,7 +85,7 @@ export default function IndicatorsModal({ open, active, onClose, onToggle, scrip
             ) : CATS[cat].map((it) => { const on = active.has(it.key);
               return (
                 <div key={it.key} className={`li${on ? " on" : ""}`} onClick={() => onToggle(it.key)}>
-                  {it.mm && <span className="mmdot" />}{it.label}
+                  {it.mm && <span className="mmdot" />}{it.tkey ? t(it.tkey, it.label) : it.label}
                   <span className="chk"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>
                 </div>
               ); })}
