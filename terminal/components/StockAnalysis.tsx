@@ -476,10 +476,28 @@ function IvMini({ opts, bars, pick }: { opts: Opts | null; bars: Bar[]; pick: Pi
     const smile = opts.smile;
     const smileOk = smile && smile.strikes?.length > 1;
 
-    // staleness: opts.json is rebuilt nightly; >1 calendar day old is stale.
+    // staleness: opts.json is rebuilt nightly; >1 trading-day old is stale.
+    // opts.asof is a DATE-ONLY string (e.g. "2026-07-03"). new Date("2026-07-03") parses
+    // as UTC midnight, so a rolling 24h delta would fire any US market hour the next day
+    // (diff 30-37h > 24h), falsely labelling perfectly-fresh EOD data as STALE.
+    // Fix: compare calendar dates at local noon to avoid the UTC-midnight boundary,
+    // and tolerate the weekend gap (Friday data is fresh through Monday, diff≤3).
     const optsAsof = opts.asof ?? null;
     const optsStale = optsAsof
-      ? (Date.now() - new Date(optsAsof).getTime()) > 86_400_000
+      ? (() => {
+          const m = optsAsof.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (!m) return false;
+          const asofNoon = new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0, 0);
+          const todayNoon = new Date(); todayNoon.setHours(12, 0, 0, 0);
+          const diffDays = Math.round((todayNoon.getTime() - asofNoon.getTime()) / 86_400_000);
+          if (diffDays <= 1) return false;
+          // Weekend tolerance: Friday EOD data is fresh on Saturday (diff=1, already covered),
+          // Sunday (diff=2) and Monday (diff=3).
+          const dow = todayNoon.getDay(); // 0=Sun, 1=Mon
+          if (dow === 0 && diffDays <= 2) return false;
+          if (dow === 1 && diffDays <= 3) return false;
+          return true;
+        })()
       : false;
 
     return (
