@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:fixture": "FLOW_FIXTURE=1 next dev",
+    "prebuild": "python3 ../scripts/build_data_coverage.py",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

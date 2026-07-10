@@ -46,7 +46,14 @@ function touch(url: string, entry: Entry): void {
 // ── Core fetch: issues the request, writes/evicts on settle ──
 function doFetch(url: string, entry: Entry): Promise<any> {
   const inflight: Promise<any> = fetch(url)
-    .then((r) => { if (r.ok) return r.json(); neg404.add(url); return null; })
+    .then((r) => {
+      if (r.ok) return r.json();
+      // Only permanently suppress on true 404/410 (resource does not exist).
+      // 5xx / 429 / network errors are transient — let the entry evict so the
+      // next call retries, which is strictly better than the pre-D2 behaviour.
+      if (r.status === 404 || r.status === 410) neg404.add(url);
+      return null;
+    })
     .catch(() => null)
     .then((data) => {
       // Only commit if this specific inflight is still the one registered.
@@ -209,12 +216,25 @@ export function loadCoverage(manifestSymbols: string[]): void {
     opts:  ".opts.json",
   };
 
+  // Maximum age (ms) we trust coverage.json for pre-seeding.
+  // If coverage is stale we fall back to runtime-only neg404, which is safe.
+  const COVERAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
   coverageInflight = fetch("/data/coverage.json")
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null)
     .then((cov) => {
       coverageLoaded = true;
       if (!cov || typeof cov !== "object") return;   // absent or malformed → no-op
+
+      // Freshness gate (MAJOR-2): stale coverage.json can permanently suppress URLs
+      // whose files were added after the last ingest run.  Only pre-seed neg404 when
+      // coverage.as_of is recent enough to be trusted.
+      if (typeof cov.as_of === "string") {
+        const covAge = Date.now() - new Date(cov.as_of).getTime();
+        if (covAge > COVERAGE_MAX_AGE_MS) return;  // stale → skip pre-seeding; runtime neg404 still works
+      }
+
       for (const [key, suffix] of Object.entries(SUFFIXES)) {
         const covered = new Set<string>(Array.isArray(cov[key]) ? cov[key] : []);
         // Pre-seed neg404 for every manifest symbol NOT in this coverage list.
