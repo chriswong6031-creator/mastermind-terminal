@@ -190,7 +190,7 @@ class Store {
 
       const changed =
         anchor.prevClose !== q.prevClose ||
-        q.close !== (close != null ? close : q.close) ||
+        (close != null ? q.close !== close : q.close != null) ||
         (ah != null ? q.afterHours !== ah : q.afterHours != null) ||
         chg !== q.chg ||
         (prevSessionChg != null ? q.prevSessionChg !== prevSessionChg : q.prevSessionChg != null);
