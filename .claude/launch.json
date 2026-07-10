@@ -76,6 +76,17 @@
         "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
       }
+    },
+    {
+      "name": "pass6-p4a",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3036"],
+      "cwd": "terminal",
+      "port": 3036,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
     }
   ]
 }

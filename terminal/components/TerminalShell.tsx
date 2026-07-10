@@ -404,8 +404,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       const legs = parseComposite(symbol);
       if (legs) all.push(...legs); else all.push(symbol);
     }
+    // Movers bar shows the first 16 manifest symbols — include them in the batch so
+    // mergeLive() can apply live quotes and the strip matches the watchlist numbers.
+    // Bounded to 16 singles: negligible batch size impact.
+    const moversSyms = Object.keys(man?.symbols || {}).slice(0, 16);
+    all.push(...moversSyms);
     return Array.from(new Set(all)).filter(Boolean);
-  }, [active, wl]);
+  }, [active, wl, man]);
   const quoteSymsKey = quoteSyms.join(",");
   // The polled symbol set lives in a ref so a rapid watchlist edit doesn't tear down + immediately
   // re-fire the interval (which bursts /api/quote). The interval is mounted ONCE and reads the ref;
@@ -595,6 +600,39 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     }
     return calcCompositeQuote(activeLegs, legQuotes);
   }, [activeIsComposite, activeLegs, quotes, man]);
+
+  // ── per-pane row fallback for composite symbols (docket punch item 3) ──────
+  // ChartPane renders a pane-hd with price+chg derived from `row` (manifest row).
+  // For composite syms, man?.symbols?.[sym] is always undefined → shows "—".
+  // This array provides a minimal { col, last, chg } row for every pane: manifest
+  // for singles, summed EOD/live composite quote for composites.
+  const paneRows = useMemo(() => {
+    return panes.map((sym) => {
+      if (!isComposite(sym)) return man?.symbols?.[sym] as { col?: string; last?: number; chg?: number } | undefined;
+      const legs = parseComposite(sym) ?? [];
+      if (!legs.length) return undefined;
+      const legQuotes: Record<string, { last?: number; prevClose?: number } | null> = {};
+      for (const leg of legs) {
+        const live = quotes[leg] ?? null;
+        if (live && live.last != null) {
+          legQuotes[leg] = live;
+        } else {
+          const eod = man?.symbols?.[leg];
+          if (eod && eod.last != null) {
+            const chgFrac = (eod.chg ?? 0) / 100;
+            const prevClose = chgFrac !== -1 ? eod.last / (1 + chgFrac) : eod.last;
+            legQuotes[leg] = { last: eod.last, prevClose };
+          } else {
+            legQuotes[leg] = null;
+          }
+        }
+      }
+      const cq = calcCompositeQuote(legs, legQuotes);
+      if (!cq) return undefined;
+      return { col: "#2962ff", last: cq.last, chg: cq.chg };
+    });
+  }, [panes, man, quotes]);
+
   const ov = oracleVerdict(m?.verdict ?? null);
   const dv = deskVerdict(intel, lang === "zh");
   // ── unified signal hierarchy ──────────────────────────────────────────────
@@ -623,6 +661,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // The `last` field may be a delayed AH print; expose it as a secondary line when it differs.
   const officialClose = liveQuote?.close as number | undefined;
   const ahPrint = liveQuote?.afterHours as number | undefined;
+  // AH % change vs the official close (shown alongside ahPrint in the secondary line).
+  const ahChg: number | null =
+    ahPrint != null && officialClose != null && officialClose !== 0
+      ? ((ahPrint - officialClose) / officialClose) * 100
+      : null;
   // F2: for composites, use summed composite quote; for singles, use existing logic.
   const lastPx: number | undefined = activeIsComposite
     ? (compositeQ?.last ?? undefined)
@@ -1062,7 +1105,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={man?.symbols?.[sym]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts}
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}
@@ -1217,10 +1260,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b>
                 <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
                 {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
-                {/* AH secondary line — subtle, tokens-only; shown when hub signals an after-hours print */}
+                {/* AH secondary line — subtle, tokens-only; shown when hub signals an after-hours print.
+                    Shows ☾ glyph + price + % change vs official close (TV-style AH display). */}
                 {ahPrint != null && mktClosed && (
                   <span className="ah-print" title={lang === "zh" ? "盘后价格" : "After-hours print"}>
-                    AH {fmt(ahPrint, ahPrint < 10 ? 4 : 2)}
+                    <span className="ah-moon" aria-hidden="true">☾</span>
+                    {fmt(ahPrint, ahPrint < 10 ? 4 : 2)}
+                    {ahChg != null && (
+                      <span className={`ah-chg ${ahChg >= 0 ? "up" : "down"}`}>
+                        {ahChg >= 0 ? "+" : ""}{fmt(ahChg)}%
+                      </span>
+                    )}
                   </span>
                 )}
               </div>
