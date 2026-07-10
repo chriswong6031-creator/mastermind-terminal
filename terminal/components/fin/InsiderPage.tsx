@@ -122,7 +122,9 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
 
   // ── buy/sell volume bars (buy up = green, sell down = red) + price line ──
   // Limit series to same 18-month window so chart aligns with the trade table.
-  const visibleSeries = d.series.filter((s) => s.month + "-28" >= cutoffISO);
+  // Compare YYYY-MM month strings directly against the cutoff's YYYY-MM prefix.
+  const cutoffMonth = cutoffISO.slice(0, 7); // "YYYY-MM"
+  const visibleSeries = d.series.filter((s) => s.month >= cutoffMonth);
   const labels = visibleSeries.map((s) => s.month.slice(2).replace("-", "/")); // "24/04"
   const buyVals = visibleSeries.map((s) => (s.buy_usd > 0 ? s.buy_usd : null));
   const sellVals = visibleSeries.map((s) => (s.sell_usd > 0 ? -s.sell_usd : null)); // negative → draws below zero
