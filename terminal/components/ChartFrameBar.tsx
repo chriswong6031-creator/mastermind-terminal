@@ -1,0 +1,351 @@
+"use client";
+import { useEffect, useRef, useState } from "react";
+import { type IChartApi, PriceScaleMode } from "lightweight-charts";
+import { isIntradayTf } from "@/lib/intradaySources";
+import { useT } from "@/lib/i18n";
+
+// Chart scale/display settings persisted alongside user prefs (key: mm.chartSettings).
+export type ChartSettings = {
+  mode: PriceScaleMode;        // Normal=0, Log=1, Percent=2, IndexedTo100=3
+  invertScale: boolean;
+  scaleLeft: boolean;          // move price scale to left
+  autoScale: boolean;
+  priceLineVisible: boolean;
+  lastValueVisible: boolean;
+  extHours: boolean;           // extended-hours toggle (intraday only)
+};
+export const DEFAULT_CHART_SETTINGS: ChartSettings = {
+  mode: PriceScaleMode.Normal,
+  invertScale: false,
+  scaleLeft: false,
+  autoScale: true,
+  priceLineVisible: true,
+  lastValueVisible: true,
+  extHours: false,
+};
+
+// Range presets — the button click scrolls the chart time axis to show this window.
+export type RangeKey = "1D" | "5D" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "5Y" | "All";
+const RANGE_KEYS: RangeKey[] = ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "All"];
+
+// Date arithmetic helpers — ISO yyyy-mm-dd string manipulation.
+function isoDate(d: Date): string { return d.toISOString().slice(0, 10); }
+function addDays(base: Date, n: number): Date { const d = new Date(base); d.setDate(d.getDate() + n); return d; }
+function addMonths(base: Date, n: number): Date { const d = new Date(base); d.setMonth(d.getMonth() + n); return d; }
+function addYears(base: Date, n: number): Date { const d = new Date(base); d.setFullYear(d.getFullYear() + n); return d; }
+
+// Navigate the chart to a given range key using the lightweight-charts time scale API.
+function applyRange(key: RangeKey, chartApi: IChartApi, isIntraday: boolean): void {
+  const ts = chartApi.timeScale();
+  try {
+    if (key === "All") { ts.fitContent(); return; }
+    const now = new Date();
+    // For intraday charts: use logical range (bar counts approximate; intraday has hundreds of bars/day).
+    // For daily charts: use the "from/to" date-string setVisibleRange API.
+    if (isIntraday) {
+      // approximate bar counts for intraday: 390 bars/day for 1m US equity
+      const barsPerDay = 390;
+      const logRange = ts.getVisibleLogicalRange();
+      const to = (logRange?.to ?? 0) as number;
+      const barCount = key === "1D" ? barsPerDay : key === "5D" ? barsPerDay * 5 : barsPerDay * 20;
+      ts.setVisibleLogicalRange({ from: to - barCount, to });
+    } else {
+      let fromDate: Date;
+      switch (key) {
+        case "1D": fromDate = addDays(now, -1); break;
+        case "5D": fromDate = addDays(now, -5); break;
+        case "1M": fromDate = addMonths(now, -1); break;
+        case "3M": fromDate = addMonths(now, -3); break;
+        case "6M": fromDate = addMonths(now, -6); break;
+        case "YTD": fromDate = new Date(now.getFullYear(), 0, 1); break;
+        case "1Y": fromDate = addYears(now, -1); break;
+        case "5Y": fromDate = addYears(now, -5); break;
+        default: ts.fitContent(); return;
+      }
+      ts.setVisibleRange({ from: isoDate(fromDate) as any, to: isoDate(now) as any });
+    }
+  } catch {}
+}
+
+// Derive the UTC timezone offset label, e.g. "UTC+5:30" or "UTC-8".
+function utcOffsetLabel(): string {
+  const off = -new Date().getTimezoneOffset(); // minutes
+  const sign = off >= 0 ? "+" : "-";
+  const abs = Math.abs(off);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  return `UTC${sign}${h}${m ? ":" + String(m).padStart(2, "0") : ""}`;
+}
+
+function fmtHHMMSS(d: Date): string {
+  return (
+    String(d.getHours()).padStart(2, "0") + ":" +
+    String(d.getMinutes()).padStart(2, "0") + ":" +
+    String(d.getSeconds()).padStart(2, "0")
+  );
+}
+
+type SubMenu = "labels" | "lines" | null;
+
+export default function ChartFrameBar({
+  timeframe,
+  chartApi,
+  settings,
+  onSettings,
+}: {
+  timeframe: string;
+  chartApi: IChartApi | null;
+  settings: ChartSettings;
+  onSettings: (patch: Partial<ChartSettings>) => void;
+}) {
+  const t = useT();
+  const [clock, setClock] = useState(() => fmtHHMMSS(new Date()));
+  const tzLabel = useRef(utcOffsetLabel());
+  const [gearOpen, setGearOpen] = useState(false);
+  const [subMenu, setSubMenu] = useState<SubMenu>(null);
+  const [gotoOpen, setGotoOpen] = useState(false);
+  const [gotoDate, setGotoDate] = useState("");
+  const gearRef = useRef<HTMLDivElement>(null);
+  const gotoRef = useRef<HTMLInputElement>(null);
+
+  const isIntraday = isIntradayTf(timeframe);
+
+  // Live clock tick (1s)
+  useEffect(() => {
+    const id = setInterval(() => {
+      setClock(fmtHHMMSS(new Date()));
+      tzLabel.current = utcOffsetLabel();
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Close gear popup when clicking outside
+  useEffect(() => {
+    if (!gearOpen) return;
+    const h = (e: MouseEvent) => {
+      if (gearRef.current && !gearRef.current.contains(e.target as Node)) {
+        setGearOpen(false);
+        setSubMenu(null);
+      }
+    };
+    window.addEventListener("mousedown", h);
+    return () => window.removeEventListener("mousedown", h);
+  }, [gearOpen]);
+
+  // Keyboard shortcuts: ⌥I invert, ⌥P percent, ⌥L log — guard against typing contexts
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.isComposing) return;
+      if (!e.altKey) return;
+      if (e.key === "i" || e.key === "I") {
+        e.preventDefault();
+        onSettings({ invertScale: !settings.invertScale });
+      } else if (e.key === "p" || e.key === "P") {
+        e.preventDefault();
+        onSettings({ mode: settings.mode === PriceScaleMode.Percentage ? PriceScaleMode.Normal : PriceScaleMode.Percentage });
+      } else if (e.key === "l" || e.key === "L") {
+        e.preventDefault();
+        onSettings({ mode: settings.mode === PriceScaleMode.Logarithmic ? PriceScaleMode.Normal : PriceScaleMode.Logarithmic });
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [settings, onSettings]);
+
+  // Go-to-date: focus the input when it opens
+  useEffect(() => {
+    if (gotoOpen) setTimeout(() => gotoRef.current?.focus(), 50);
+  }, [gotoOpen]);
+
+  function applyGotoDate() {
+    if (!chartApi || !gotoDate) return;
+    try {
+      const ts = chartApi.timeScale();
+      const logRange = ts.getVisibleLogicalRange();
+      const width = logRange ? logRange.to - logRange.from : 120;
+      const coord = ts.timeToCoordinate(gotoDate as any);
+      if (coord != null) {
+        const bar = ts.coordinateToLogical(coord);
+        if (bar != null) ts.setVisibleLogicalRange({ from: bar - width / 2, to: bar + width / 2 });
+      } else {
+        // date not visible — use setVisibleRange to scroll there
+        const from = isoDate(addDays(new Date(gotoDate), -30));
+        const to = isoDate(addDays(new Date(gotoDate), 30));
+        ts.setVisibleRange({ from: from as any, to: to as any });
+      }
+    } catch {}
+    setGotoOpen(false);
+  }
+
+  const s = settings;
+
+  return (
+    <div className="chart-frame-bar">
+      {/* LEFT: range buttons + go-to-date */}
+      <div className="cfb-left">
+        {RANGE_KEYS.map((rk) => (
+          <button
+            key={rk}
+            className="cfb-range"
+            onClick={() => chartApi && applyRange(rk, chartApi, isIntraday)}
+          >{rk}</button>
+        ))}
+        <div style={{ position: "relative" }}>
+          <button className="cfb-cal" title={t("gotoDate")} onClick={(e) => { e.stopPropagation(); setGotoOpen((o) => !o); }}>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <rect x="1.5" y="2.5" width="13" height="12" rx="1.5" />
+              <path d="M1.5 6h13M5 1.5v2M11 1.5v2" />
+            </svg>
+          </button>
+          {gotoOpen && (
+            <div className="cfb-goto-pop" onClick={(e) => e.stopPropagation()}>
+              <input
+                ref={gotoRef}
+                type="date"
+                className="cfb-date-input"
+                value={gotoDate}
+                onChange={(e) => setGotoDate(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") applyGotoDate(); if (e.key === "Escape") setGotoOpen(false); }}
+              />
+              <button className="cfb-goto-go" onClick={applyGotoDate}>{t("go")}</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* RIGHT: clock + ETH + ADJ + gear */}
+      <div className="cfb-right">
+        <span className="cfb-clock num">
+          {clock} <span className="cfb-tz">{tzLabel.current}</span>
+        </span>
+        {/* ETH chip — active when on; muted+non-interactive on daily TFs (no tooltip per spec) */}
+        <button
+          className={`cfb-chip${s.extHours ? " on" : ""}${!isIntraday ? " dis" : ""}`}
+          disabled={!isIntraday}
+          onClick={() => isIntraday && onSettings({ extHours: !s.extHours })}
+          title={isIntraday ? (s.extHours ? t("ethOff") : t("ethOn")) : undefined}
+        >ETH</button>
+        {/* ADJ chip — always passive (display-only; we only serve adjusted data) */}
+        <span className="cfb-chip cfb-chip-adj" title={t("adjTip")}>ADJ</span>
+        {/* Gear: quick settings */}
+        <div className="cfb-gear-host" ref={gearRef}>
+          <button
+            className={`cfb-gear${gearOpen ? " on" : ""}`}
+            title={t("quickSettings")}
+            onClick={(e) => { e.stopPropagation(); setGearOpen((o) => !o); if (gearOpen) setSubMenu(null); }}
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+              <circle cx="8" cy="8" r="2.2" />
+              <path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.2 3.2l.9.9M11.9 11.9l.9.9M3.2 12.8l.9-.9M11.9 4.1l.9-.9" strokeLinecap="round" />
+            </svg>
+          </button>
+
+          {gearOpen && (
+            <div className="qsg-menu" onClick={(e) => e.stopPropagation()}>
+              {/* Auto-scale */}
+              <div className={`qsg-item${s.autoScale ? " checked" : ""}`} onClick={() => {
+                const next = !s.autoScale;
+                onSettings({ autoScale: next });
+                try { if (chartApi) chartApi.priceScale(s.scaleLeft ? "left" : "right").setAutoScale(next); } catch {}
+              }}>
+                <span className="qsg-check">{s.autoScale ? "✓" : ""}</span>
+                <span>{t("qsgAuto")}</span>
+              </div>
+
+              {/* Lock price to bar ratio */}
+              <div className={`qsg-item${!s.autoScale ? " checked" : ""}`} onClick={() => {
+                const next = s.autoScale; // toggling: if auto→lock (autoScale=false); if locked→auto (autoScale=true)
+                onSettings({ autoScale: !next });
+                try { if (chartApi) chartApi.priceScale(s.scaleLeft ? "left" : "right").setAutoScale(!next); } catch {}
+              }}>
+                <span className="qsg-check">{!s.autoScale ? "✓" : ""}</span>
+                <span>{t("qsgLockRatio")}</span>
+              </div>
+
+              {/* Scale price chart only — passive affordance (single-pane; full in Phase 2) */}
+              <div className="qsg-item qsg-disabled">
+                <span className="qsg-check" />
+                <span>{t("qsgScaleChartOnly")}</span>
+              </div>
+
+              {/* Invert scale ⌥I */}
+              <div className={`qsg-item${s.invertScale ? " checked" : ""}`} onClick={() => onSettings({ invertScale: !s.invertScale })}>
+                <span className="qsg-check">{s.invertScale ? "✓" : ""}</span>
+                <span>{t("qsgInvert")}<kbd className="qsg-kbd">⌥I</kbd></span>
+              </div>
+
+              <div className="qsg-sep" />
+
+              {/* Scale mode radio group */}
+              {([
+                [PriceScaleMode.Normal, t("qsgRegular"), ""],
+                [PriceScaleMode.Percentage, t("qsgPercent"), "⌥P"],
+                [PriceScaleMode.IndexedTo100, t("qsgIndexed"), ""],
+                [PriceScaleMode.Logarithmic, t("qsgLog"), "⌥L"],
+              ] as [PriceScaleMode, string, string][]).map(([m, label, kbd]) => (
+                <div key={m} className={`qsg-item qsg-radio${s.mode === m ? " checked" : ""}`} onClick={() => onSettings({ mode: m })}>
+                  <span className="qsg-radio-dot">{s.mode === m ? "●" : "○"}</span>
+                  <span>{label}{kbd && <kbd className="qsg-kbd">{kbd}</kbd>}</span>
+                </div>
+              ))}
+
+              <div className="qsg-sep" />
+
+              {/* Move scale to left */}
+              <div className={`qsg-item${s.scaleLeft ? " checked" : ""}`} onClick={() => onSettings({ scaleLeft: !s.scaleLeft })}>
+                <span className="qsg-check">{s.scaleLeft ? "✓" : ""}</span>
+                <span>{t("qsgScaleLeft")}</span>
+              </div>
+
+              <div className="qsg-sep" />
+
+              {/* Labels submenu */}
+              <div className="qsg-item qsg-has-sub" onClick={(e) => { e.stopPropagation(); setSubMenu(subMenu === "labels" ? null : "labels"); }}>
+                <span className="qsg-check" />
+                <span className="qsg-sub-trigger">{t("qsgLabels")}<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 2l4 3-4 3" /></svg></span>
+                {subMenu === "labels" && (
+                  <div className="qsg-submenu" onClick={(e) => e.stopPropagation()}>
+                    <div className={`qsg-item${s.lastValueVisible ? " checked" : ""}`} onClick={() => onSettings({ lastValueVisible: !s.lastValueVisible })}>
+                      <span className="qsg-check">{s.lastValueVisible ? "✓" : ""}</span>
+                      <span>{t("qsgLastValueLabel")}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Lines submenu */}
+              <div className="qsg-item qsg-has-sub" onClick={(e) => { e.stopPropagation(); setSubMenu(subMenu === "lines" ? null : "lines"); }}>
+                <span className="qsg-check" />
+                <span className="qsg-sub-trigger">{t("qsgLines")}<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 2l4 3-4 3" /></svg></span>
+                {subMenu === "lines" && (
+                  <div className="qsg-submenu" onClick={(e) => e.stopPropagation()}>
+                    <div className={`qsg-item${s.priceLineVisible ? " checked" : ""}`} onClick={() => onSettings({ priceLineVisible: !s.priceLineVisible })}>
+                      <span className="qsg-check">{s.priceLineVisible ? "✓" : ""}</span>
+                      <span>{t("qsgPriceLine")}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Plus button toggle */}
+              <div className="qsg-item" onClick={() => { window.dispatchEvent(new CustomEvent("mm:plus-btn")); setGearOpen(false); }}>
+                <span className="qsg-check">✓</span>
+                <span>{t("qsgPlusBtn")}</span>
+              </div>
+
+              <div className="qsg-sep" />
+
+              {/* More settings — disabled, Phase 2 */}
+              <div className="qsg-item qsg-disabled" title={t("qsgMoreSoon")}>
+                <span className="qsg-check" />
+                <span>{t("qsgMoreSettings")}<span className="qsg-soon">{t("qsgSoon")}</span></span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
