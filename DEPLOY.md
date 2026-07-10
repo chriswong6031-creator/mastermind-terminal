@@ -43,6 +43,7 @@ stay on the previous state.
 |---|---|---|
 | `terminal/` | `/opt/terminal/terminal` + live `.next` | staged `next build` → atomic `.next` swap |
 | `ingest/` | `/opt/terminal/ingest` | overlay (nightly `terminal-data`, 5-min `fast_flagship`, `alerts_engine` crons) |
+| `signal_layer/` | `/opt/terminal/signal_layer` | overlay (GC-v2 engine imported by `fast_flagship` — reconciled 2026-07-10) |
 | `scripts/` | `/opt/terminal/scripts` | overlay (`build_data_coverage` cron) |
 | `config/`, `contracts/` | `/opt/terminal/{config,contracts}` | overlay |
 | `hub/` | `/opt/terminal/hub` | overlay + `npm ci` if lockfile changed + `systemctl restart quote-hub` **only if changed** |
@@ -50,18 +51,15 @@ stay on the previous state.
 | `ops/terminal-build.sh` | `/opt/terminal/terminal-build.sh` | install — takes effect on the **next** deploy |
 
 **Overlay = `git archive origin/master <dirs> \| tar -x`: tracked files are overwritten; box-only
-untracked files are preserved.** Several cron-run scripts exist *only* on the box (e.g.
-`ingest/fast_flagship.py`, `ingest/refresh_ohlc.py`, plus runtime caches like
-`ingest/hk_universe_cache.json`) — that is why the sync must never become `rsync --delete`.
-Until those are committed, the repo is NOT the full source of truth for them.
+untracked files are preserved.** As of 2026-07-10 every cron-run script in `ingest/` and the whole
+`signal_layer/` (incl. the GC-v2 `confluence_v2.py`) are committed — **origin/master is the source
+of truth for all deployed code**. The only box-only files left are runtime caches
+(`ingest/hk_universe_cache.json`, `ingest/zh_cache.json`, `ingest/.polygon_*.json`) and `*.bak-*`
+backups (all gitignored so a stale copy can't be committed and clobber the box) — that is why the
+sync must never become `rsync --delete`.
 
 ### Deliberately NOT deployed
 
-- **`signal_layer/`** — the box copy is the **live GC-v2 engine** and is *ahead of git*:
-  `signal_layer/confluence_v2.py` is untracked, and the box `contracts.py` carries the v2
-  (`no_cut_exits`) params that the 5-min `fast_flagship` cron imports. Overlaying master would
-  regress the live signal engine. Reconcile the box's `signal_layer/` into master **first**, then
-  add `signal_layer` to `RUNTIME_PATHS` in `ops/terminal-build.sh`.
 - `api/`, `docs/`, `indicator_engine/`, `tests/`, `web/`, `supabase/`, `requirements.txt` — not
   consumed on the box.
 - `terminal/public/data/` (gitignored) — market/intel data, refreshed by crons, preserved across deploys.
