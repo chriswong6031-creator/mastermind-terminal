@@ -6,13 +6,31 @@ import { useT } from "@/lib/i18n";
 
 // Chart scale/display settings persisted alongside user prefs (key: mm.chartSettings).
 export type ChartSettings = {
+  // Scales and lines
   mode: PriceScaleMode;        // Normal=0, Log=1, Percent=2, IndexedTo100=3
   invertScale: boolean;
   scaleLeft: boolean;          // move price scale to left
   autoScale: boolean;
   priceLineVisible: boolean;
   lastValueVisible: boolean;
-  extHours: boolean;           // extended-hours toggle (intraday only)
+  gridHVisible: boolean;       // horizontal grid lines
+  gridVVisible: boolean;       // vertical grid lines
+  crosshairMode: number;       // 0=Normal, 1=Magnet (reserved for crosshair API)
+  // Symbol (candle body/wick/border colors)
+  candleUpColor: string;
+  candleDownColor: string;
+  candleUpBorder: string;
+  candleDownBorder: string;
+  candleUpWick: string;
+  candleDownWick: string;
+  // Status line
+  showOHLC: boolean;           // status line bar change display
+  showBarChange: boolean;      // show % change on status line
+  showSymbolName: boolean;     // show symbol name on status line
+  // Canvas
+  showWatermark: boolean;
+  // Extended hours (intraday only)
+  extHours: boolean;
 };
 export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   mode: PriceScaleMode.Normal,
@@ -21,6 +39,19 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   autoScale: true,
   priceLineVisible: true,
   lastValueVisible: true,
+  gridHVisible: true,
+  gridVVisible: true,
+  crosshairMode: 0,
+  candleUpColor: "#26c281",
+  candleDownColor: "#f0566b",
+  candleUpBorder: "#26c281",
+  candleDownBorder: "#f0566b",
+  candleUpWick: "#26c281",
+  candleDownWick: "#f0566b",
+  showOHLC: true,
+  showBarChange: true,
+  showSymbolName: true,
+  showWatermark: true,
   extHours: false,
 };
 
@@ -92,15 +123,20 @@ export default function ChartFrameBar({
   chartApi,
   settings,
   onSettings,
+  onOpenSettingsModal,
 }: {
   timeframe: string;
   chartApi: IChartApi | null;
   settings: ChartSettings;
   onSettings: (patch: Partial<ChartSettings>) => void;
+  onOpenSettingsModal?: (tab?: string) => void;
 }) {
   const t = useT();
-  const [clock, setClock] = useState(() => fmtHHMMSS(new Date()));
-  const tzLabel = useRef(utcOffsetLabel());
+  // Client-only clock: render nothing until mounted to avoid SSR/hydration mismatch.
+  // The server renders at server-local time; the client's timezone may differ completely.
+  const [mounted, setMounted] = useState(false);
+  const [clock, setClock] = useState("");
+  const [tzLabel, setTzLabel] = useState("");
   const [gearOpen, setGearOpen] = useState(false);
   const [subMenu, setSubMenu] = useState<SubMenu>(null);
   const [gotoOpen, setGotoOpen] = useState(false);
@@ -110,11 +146,15 @@ export default function ChartFrameBar({
 
   const isIntraday = isIntradayTf(timeframe);
 
-  // Live clock tick (1s)
+  // Client-only mount gate: set initial clock + tz label, then tick every second.
+  // Nothing is rendered until mounted=true, preventing SSR time from leaking in.
   useEffect(() => {
+    setClock(fmtHHMMSS(new Date()));
+    setTzLabel(utcOffsetLabel());
+    setMounted(true);
     const id = setInterval(() => {
       setClock(fmtHHMMSS(new Date()));
-      tzLabel.current = utcOffsetLabel();
+      setTzLabel(utcOffsetLabel());
     }, 1000);
     return () => clearInterval(id);
   }, []);
@@ -217,9 +257,11 @@ export default function ChartFrameBar({
 
       {/* RIGHT: clock + ETH + ADJ + gear */}
       <div className="cfb-right">
-        <span className="cfb-clock num">
-          {clock} <span className="cfb-tz">{tzLabel.current}</span>
-        </span>
+        {mounted && (
+          <span className="cfb-clock num">
+            {clock} <span className="cfb-tz">{tzLabel}</span>
+          </span>
+        )}
         {/* ETH chip — active when on; muted+non-interactive on daily TFs (no tooltip per spec) */}
         <button
           className={`cfb-chip${s.extHours ? " on" : ""}${!isIntraday ? " dis" : ""}`}
@@ -244,7 +286,10 @@ export default function ChartFrameBar({
 
           {gearOpen && (
             <div className="qsg-menu" onClick={(e) => e.stopPropagation()}>
-              {/* Auto-scale */}
+              {/* Auto-scale: fits price data to the visible bar range.
+                  lightweight-charts only exposes a boolean toggle — no ratio-lock API exists.
+                  We expose a single honest "Auto-scale" checkbox; when unchecked the axis
+                  keeps its last manual zoom (the only alternative the library supports). */}
               <div className={`qsg-item${s.autoScale ? " checked" : ""}`} onClick={() => {
                 const next = !s.autoScale;
                 onSettings({ autoScale: next });
@@ -252,16 +297,6 @@ export default function ChartFrameBar({
               }}>
                 <span className="qsg-check">{s.autoScale ? "✓" : ""}</span>
                 <span>{t("qsgAuto")}</span>
-              </div>
-
-              {/* Lock price to bar ratio */}
-              <div className={`qsg-item${!s.autoScale ? " checked" : ""}`} onClick={() => {
-                const next = s.autoScale; // toggling: if auto→lock (autoScale=false); if locked→auto (autoScale=true)
-                onSettings({ autoScale: !next });
-                try { if (chartApi) chartApi.priceScale(s.scaleLeft ? "left" : "right").setAutoScale(!next); } catch {}
-              }}>
-                <span className="qsg-check">{!s.autoScale ? "✓" : ""}</span>
-                <span>{t("qsgLockRatio")}</span>
               </div>
 
               {/* Scale price chart only — passive affordance (single-pane; full in Phase 2) */}
@@ -337,10 +372,10 @@ export default function ChartFrameBar({
 
               <div className="qsg-sep" />
 
-              {/* More settings — disabled, Phase 2 */}
-              <div className="qsg-item qsg-disabled" title={t("qsgMoreSoon")}>
+              {/* More settings — opens the full settings modal on the Scales and lines tab */}
+              <div className="qsg-item" onClick={() => { setGearOpen(false); onOpenSettingsModal?.("scales"); }}>
                 <span className="qsg-check" />
-                <span>{t("qsgMoreSettings")}<span className="qsg-soon">{t("qsgSoon")}</span></span>
+                <span>{t("qsgMoreSettings")}</span>
               </div>
             </div>
           )}

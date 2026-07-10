@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChartPanel, { type DetectCmd, type LiveQuote, type PineScript } from "@/components/ChartPanel";
 import ChartFrameBar, { DEFAULT_CHART_SETTINGS, type ChartSettings } from "@/components/ChartFrameBar";
+import ChartSettingsModal from "@/components/ChartSettingsModal";
 import { type Drawing } from "@/lib/drawings";
 import { type CmpCfg } from "@/lib/compare";
 import { type IChartApi } from "lightweight-charts";
@@ -21,9 +22,22 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
   const [auto, setAuto] = useState<Drawing[]>([]);
   const [chartSettings, setChartSettings] = useState<ChartSettings>(DEFAULT_CHART_SETTINGS);
   const [chartApi, setChartApi] = useState<IChartApi | null>(null);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [settingsModalTab, setSettingsModalTab] = useState<"symbol" | "status" | "scales" | "canvas" | "trading">("scales");
 
   // Load persisted chart settings on mount
   useEffect(() => { setChartSettings(load(DEFAULT_CHART_SETTINGS)); }, []);
+  // Listen for tab-switch events dispatched by ChartSettingsModal tab buttons
+  useEffect(() => {
+    const h = (e: Event) => {
+      const tab = (e as CustomEvent).detail as string;
+      if (["symbol", "status", "scales", "canvas", "trading"].includes(tab)) {
+        setSettingsModalTab(tab as any);
+      }
+    };
+    window.addEventListener("mm:settings-tab", h);
+    return () => window.removeEventListener("mm:settings-tab", h);
+  }, []);
   // Persist chart settings on change (skip initial mount)
   const settingsMounted = useRef(false);
   useEffect(() => {
@@ -55,6 +69,15 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
     autoScale: chartSettings.autoScale,
     priceLineVisible: chartSettings.priceLineVisible,
     lastValueVisible: chartSettings.lastValueVisible,
+    gridHVisible: chartSettings.gridHVisible,
+    gridVVisible: chartSettings.gridVVisible,
+    candleUpColor: chartSettings.candleUpColor,
+    candleDownColor: chartSettings.candleDownColor,
+    candleUpBorder: chartSettings.candleUpBorder,
+    candleDownBorder: chartSettings.candleDownBorder,
+    candleUpWick: chartSettings.candleUpWick,
+    candleDownWick: chartSettings.candleDownWick,
+    showWatermark: chartSettings.showWatermark,
   }), [chartSettings]);
 
   return (
@@ -87,6 +110,18 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         chartApi={chartApi}
         settings={chartSettings}
         onSettings={patchSettings}
+        onOpenSettingsModal={(tab) => {
+          if (tab) setSettingsModalTab(tab as any);
+          setSettingsModalOpen(true);
+        }}
+      />
+      <ChartSettingsModal
+        open={settingsModalOpen}
+        tab={settingsModalTab}
+        settings={chartSettings}
+        onSettings={patchSettings}
+        onClose={() => setSettingsModalOpen(false)}
+        chartApi={chartApi}
       />
     </div>
   );

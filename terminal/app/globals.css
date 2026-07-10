@@ -127,6 +127,36 @@ svg{display:block}
 .tooldock button{width:32px;height:32px;border-radius:var(--r);display:grid;place-items:center;color:var(--muted)}
 .tooldock button:hover{background:var(--panel-2);color:var(--text)}.tooldock button.on{background:rgba(41,98,255,.14);color:var(--brand-2)}
 .tooldock button svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.6}.tooldock .sp{height:1px;width:20px;background:var(--line);margin:5px 0}
+/* ── Drawing Sidebar (item 10) ── TV-grade icons, grouped tools, flyout submenus ── */
+.ds-dock{width:44px;border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:6px 0;gap:1px;background:var(--bg);flex:none;position:relative;z-index:10}
+.ds-btn{width:34px;height:34px;border-radius:var(--r-md);display:flex;align-items:center;justify-content:center;color:var(--muted);position:relative;transition:background var(--t),color var(--t);flex-direction:column}
+.ds-btn:hover{background:var(--panel-2);color:var(--text)}.ds-btn.on{background:rgba(41,98,255,.14);color:var(--brand-2)}
+.ds-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6;flex:none}
+.ds-btn-dim{opacity:.35;cursor:not-allowed}
+/* small flyout triangle on group buttons that have sub-tools */
+.ds-fly-arrow{position:absolute;bottom:3px;right:3px;width:4px;height:4px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;opacity:.5}
+.ds-sep{height:1px;width:22px;background:var(--line);margin:4px 0;flex:none}
+.ds-spacer{flex:1}
+/* group host positions the flyout */
+.ds-group-host{position:relative}
+/* flyout submenu — opens to the right of the dock */
+.ds-flyout{position:absolute;left:calc(100% + 6px);top:0;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:4px;min-width:180px;box-shadow:0 12px 32px -8px rgba(0,0,0,.8);z-index:50;display:flex;flex-direction:column;gap:1px}
+.ds-fly-item{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:var(--r);font:500 12.5px/1 var(--font-ui);color:var(--text-2);cursor:pointer;transition:background var(--t),color var(--t)}
+.ds-fly-item:hover{background:var(--panel-2);color:var(--text)}.ds-fly-item.on{color:var(--brand-2);background:rgba(41,98,255,.1)}
+.ds-fly-item svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.6;flex:none}
+.ds-kbd{font:600 9.5px/1 var(--font-num);color:var(--text-dim);background:var(--panel-2);border:1px solid var(--line-3);border-radius:3px;padding:1px 4px;margin-left:auto;white-space:nowrap}
+/* draw-style strip (embedded in dock when tool is styleable) */
+.ds-style{width:34px;display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px 0;border-top:1px solid var(--line-2);border-bottom:1px solid var(--line-2);margin:3px 0}
+.ds-sw{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--bg);cursor:pointer;transition:transform var(--t);flex:none}
+.ds-sw:hover{transform:scale(1.15)}.ds-sw.on{outline:1.5px solid var(--text);outline-offset:1.5px}
+.ds-sty-sep{height:1px;width:20px;background:var(--line-3);margin:1px 0;flex:none}
+.ds-w{width:28px;height:22px;border-radius:var(--r);display:grid;place-items:center;color:var(--text-2);cursor:pointer;transition:background var(--t),color var(--t)}
+.ds-w:hover{background:var(--panel-2);color:var(--text)}.ds-w.on{background:rgba(41,98,255,.16);color:var(--brand-2)}
+.ds-w i{display:block;width:15px;background:currentColor;border-radius:2px}
+.ds-d{width:28px;height:22px;border-radius:var(--r);display:grid;place-items:center;color:var(--text-2);cursor:pointer;transition:background var(--t),color var(--t)}
+.ds-d:hover{background:var(--panel-2);color:var(--text)}.ds-d.on{background:rgba(41,98,255,.16);color:var(--brand-2)}
+.ds-d svg{width:20px;height:12px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round}
+
 /* pre-draw style chooser — appears next to the dock the moment a line/arrow/box/HV tool is picked */
 .draw-style-pop{position:absolute;top:10px;left:52px;z-index:9;display:flex;align-items:center;gap:5px;padding:6px 8px;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);box-shadow:0 12px 28px -10px rgba(0,0,0,.72)}
 .draw-style-pop .dsp-sep{width:1px;height:17px;background:var(--line-3);margin:0 2px}
@@ -623,8 +653,52 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .qsg-kbd{font:600 9.5px/1 var(--font-num);color:var(--text-dim);background:var(--panel-2);border:1px solid var(--line-3);border-radius:3px;padding:1px 4px;margin-left:auto;white-space:nowrap}
 .qsg-soon{font-size:10px;color:var(--text-dim);margin-left:6px;font-style:italic}
 
-/* fullscreen: hide frame bar to save space */
-.app.fs .chart-frame-bar{display:none}
+/* fullscreen: frame bar stays visible (TV parity — rider 3) */
+
+/* ============================================================
+   Chart Settings Modal (item 9) — TV-style large popup
+   ============================================================ */
+.sm-backdrop{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+.sm-modal{background:var(--panel);border:1px solid var(--line-3);border-radius:var(--r-lg);width:680px;max-width:94vw;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 24px 72px -12px rgba(0,0,0,.88);overflow:hidden}
+.sm-header{display:flex;align-items:center;padding:0 16px;height:46px;border-bottom:1px solid var(--line-2);flex:none}
+.sm-title{font:600 14px/1 var(--font-ui);color:var(--text);flex:1}
+.sm-close{width:28px;height:28px;display:grid;place-items:center;border-radius:var(--r);color:var(--muted);transition:background var(--t),color var(--t)}
+.sm-close:hover{background:var(--panel-2);color:var(--text)}.sm-close svg{width:14px;height:14px}
+.sm-body{display:flex;flex:1;overflow:hidden}
+/* left tab rail */
+.sm-tabs{width:148px;flex:none;border-right:1px solid var(--line-2);padding:8px 6px;display:flex;flex-direction:column;gap:1px;overflow-y:auto}
+.sm-tab{width:100%;height:32px;padding:0 10px;text-align:left;border-radius:var(--r);font:500 12.5px/1 var(--font-ui);color:var(--text-2);cursor:pointer;transition:background var(--t),color var(--t)}
+.sm-tab:hover{background:var(--panel-2);color:var(--text)}.sm-tab.on{background:rgba(41,98,255,.14);color:var(--brand-2);font-weight:600}
+/* content */
+.sm-content{flex:1;overflow-y:auto;padding:0;display:flex;flex-direction:column}
+.sm-section-list{flex:1;padding:12px 18px;display:flex;flex-direction:column;gap:0}
+.sm-section-hd{font:600 11px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:6px 0 8px;margin-top:4px}
+.sm-sep{height:1px;background:var(--line-2);margin:8px 0}
+/* row: label + control */
+.sm-row{display:flex;align-items:center;gap:10px;padding:7px 0;min-height:36px}
+.sm-row-label{flex:1;font:500 13px/1.35 var(--font-ui);color:var(--text-2)}
+.sm-row.sm-row-col{flex-direction:column;align-items:flex-start;gap:6px}
+/* color swatch */
+.sm-color-wrap{display:flex;align-items:center;gap:8px;cursor:pointer;position:relative}
+.sm-color-wrap input[type=color]{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+.sm-color-swatch{width:28px;height:22px;border-radius:var(--r);border:1px solid var(--line-3);cursor:pointer;flex:none;transition:transform var(--t)}
+.sm-color-swatch:hover{transform:scale(1.1)}
+/* scale mode radio group */
+.sm-radio-group{display:flex;flex-wrap:wrap;gap:6px}
+.sm-radio{display:flex;align-items:center;gap:5px;font:500 12.5px/1 var(--font-ui);color:var(--text-2);cursor:pointer;padding:5px 10px;border-radius:var(--r);border:1px solid var(--line-2);transition:background var(--t),color var(--t),border-color var(--t)}
+.sm-radio:hover{background:var(--panel-2);color:var(--text)}.sm-radio input{accent-color:var(--brand)}
+/* position seg */
+.sm-seg{display:flex;gap:0;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden}
+.sm-seg button{height:28px;padding:0 12px;font:500 12px/1 var(--font-ui);color:var(--text-2);transition:background var(--t),color var(--t)}
+.sm-seg button:hover{background:var(--panel-2);color:var(--text)}.sm-seg button.on{background:rgba(41,98,255,.18);color:var(--brand-2)}
+/* coming soon */
+.sm-coming{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;flex:1;padding:40px;color:var(--muted)}
+.sm-coming svg{width:36px;height:36px;stroke:var(--text-dim);fill:none;stroke-width:1.4}
+.sm-coming span{font:500 13px/1.4 var(--font-ui);color:var(--text-dim)}
+/* footer */
+.sm-footer{padding:10px 18px;border-top:1px solid var(--line-2);display:flex;justify-content:flex-end}
+.sm-reset{height:30px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-3);font:500 12px/1 var(--font-ui);color:var(--text-2);cursor:pointer;transition:background var(--t),color var(--t),border-color var(--t)}
+.sm-reset:hover{background:var(--panel-2);color:var(--text);border-color:var(--line-3)}
 
 /* ============================================================
    Stock Analysis panel — mobile scroll · desktop rail · modal
@@ -894,7 +968,7 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   .tool-adv{display:none!important}
   .chart-fs-btn{display:none}
   .chart-fs-float{display:grid}
-  .tooldock{display:none}
+  .tooldock{display:none}.ds-dock{display:none}
   .chart-body{height:48vh;flex:none}
   .chart-body .pane-grid{grid-template-columns:1fr!important;grid-template-rows:1fr!important}
   .chart-body .pane-grid>.pane~.pane{display:none}

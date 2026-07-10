@@ -211,7 +211,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
-    chartSettings?: { mode?: number; invertScale?: boolean; scaleLeft?: boolean; autoScale?: boolean; priceLineVisible?: boolean; lastValueVisible?: boolean };
+    chartSettings?: { mode?: number; invertScale?: boolean; scaleLeft?: boolean; autoScale?: boolean; priceLineVisible?: boolean; lastValueVisible?: boolean;
+      gridHVisible?: boolean; gridVVisible?: boolean;
+      candleUpColor?: string; candleDownColor?: string; candleUpBorder?: string; candleDownBorder?: string; candleUpWick?: string; candleDownWick?: string;
+      showWatermark?: boolean; };
     onChartApi?: (api: IChartApi | null) => void; extHours?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -1855,12 +1858,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ────────────────────────────────────────────────────────────────────────────
   useEffect(() => { if (chartRef.current && priceSeriesRef.current && barsRef.current.length) reRegisterSync(); return () => { }; /* eslint-disable-line */ }, [syncId]);
 
-  // ── EFFECT 7 ─ chart settings (price scale mode, invert, position, labels, price line).
+  // ── EFFECT 7 ─ chart settings (price scale mode, invert, position, labels, price line, grid, colors).
   // Applies whenever the chartSettings prop changes.
   useEffect(() => {
     const chart = chartRef.current; const priceS = priceSeriesRef.current; if (!chart) return;
     if (chartSettings == null) return;
-    const { mode, invertScale, scaleLeft, autoScale, priceLineVisible, lastValueVisible } = chartSettings;
+    const { mode, invertScale, scaleLeft, autoScale, priceLineVisible, lastValueVisible,
+      gridHVisible, gridVVisible, candleUpColor, candleDownColor,
+      candleUpBorder, candleDownBorder, candleUpWick, candleDownWick,
+      showWatermark } = chartSettings;
     try {
       if (scaleLeft != null) {
         chart.applyOptions({ leftPriceScale: { visible: !!scaleLeft }, rightPriceScale: { visible: !scaleLeft } });
@@ -1874,6 +1880,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (autoScale != null) opts.autoScale = autoScale;
         chart.priceScale(scaleId).applyOptions(opts);
       }
+      // Grid visibility
+      if (gridHVisible != null || gridVVisible != null) {
+        const t = tokensRef.current;
+        chart.applyOptions({
+          grid: {
+            horzLines: { color: t?.grid ?? "rgba(255,255,255,.04)", visible: gridHVisible !== false },
+            vertLines: { color: t?.grid ?? "rgba(255,255,255,.04)", visible: gridVVisible !== false },
+          },
+        });
+      }
+      // Watermark visibility
+      if (showWatermark != null) {
+        try { chart.applyOptions({ watermark: { visible: showWatermark } } as any); } catch {}
+      }
       if (priceS) {
         const sOpts: Record<string, any> = {};
         if (priceLineVisible != null) sOpts.priceLineVisible = priceLineVisible;
@@ -1881,6 +1901,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // keep the series option in sync for library correctness but also re-render the custom tag
         // immediately so the toggle has instant visible effect.
         if (lastValueVisible != null) sOpts.lastValueVisible = lastValueVisible;
+        // Candle colors (candlestick / heikin-ashi only)
+        if (candleUpColor != null) sOpts.upColor = candleUpColor;
+        if (candleDownColor != null) sOpts.downColor = candleDownColor;
+        if (candleUpBorder != null) sOpts.borderUpColor = candleUpBorder;
+        if (candleDownBorder != null) sOpts.borderDownColor = candleDownBorder;
+        if (candleUpWick != null) sOpts.wickUpColor = candleUpWick;
+        if (candleDownWick != null) sOpts.wickDownColor = candleDownWick;
         if (Object.keys(sOpts).length) priceS.applyOptions(sOpts as any);
       }
       // Re-render the custom priceTag immediately when lastValueVisible changes so the toggle
