@@ -647,6 +647,28 @@ export function HeatmapView() {
             lang={lang}
           />
         )}
+
+        {/* Color legend */}
+        {!isLoading && tiles.length > 0 && (
+          <div style={{
+            position: "absolute", right: 12, bottom: 12, zIndex: 5, pointerEvents: "none",
+            display: "flex", flexDirection: "column", gap: 4, padding: "7px 10px",
+            background: "rgba(10,12,16,0.72)", backdropFilter: "blur(8px)",
+            border: "1px solid var(--line)", borderRadius: 9,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 14, fontSize: 9, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--muted)" }}>
+              <span style={{ color: "var(--down)" }}>{layer === "flow" ? (lang === "zh" ? "净认沽" : "net put") : (lang === "zh" ? "下跌" : "down")}</span>
+              <span style={{ color: "var(--text-2)" }}>{layer === "flow" ? (lang === "zh" ? "权利金规模" : "premium size") : (lang === "zh" ? "1日涨跌" : "1D %chg")}</span>
+              <span style={{ color: "var(--up)" }}>{layer === "flow" ? (lang === "zh" ? "净认购" : "net call") : (lang === "zh" ? "上涨" : "up")}</span>
+            </div>
+            <div style={{
+              width: 168, height: 8, borderRadius: 4,
+              background: layer === "flow"
+                ? "linear-gradient(90deg, rgb(240,86,107) 0%, rgb(92,108,136) 50%, rgb(38,194,129) 100%)"
+                : "linear-gradient(90deg, rgb(240,86,107) 0%, rgb(24,28,36) 50%, rgb(38,194,129) 100%)",
+            }} />
+          </div>
+        )}
       </div>
 
       {/* ═══ DETAIL PANEL ════════════════════════════════════════════════════ */}

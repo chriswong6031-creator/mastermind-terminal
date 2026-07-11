@@ -44,26 +44,40 @@ function priceColor(chg: number): { top: string; bot: string } {
   };
 }
 
+// Theme-aligned palette (matches --up #26c281 / --down #f0566b) so the heatmap,
+// terminal, and light-mode inversion all share ONE green/red — no more three ramps.
+const HM_UP: readonly [number, number, number] = [38, 194, 129];
+const HM_DN: readonly [number, number, number] = [240, 86, 107];
+const HM_SLATE: readonly [number, number, number] = [92, 108, 136];
+const HM_TILE_BASE: readonly [number, number, number] = [21, 25, 32];
+// No-flow padding tile — distinct dim graphite so "no data" ≠ "flat flow".
+const HM_NODATA = { top: "rgb(18,21,27)", bot: "rgb(13,15,20)" } as const;
+
+function hmMix(a: number, b: number, f: number): number { return Math.round(a + (b - a) * f); }
+/** Ramp a dark tile base toward `target` by intensity t (0..1); bot is a darker twin for the glassy gradient. */
+function hmRamp(target: readonly [number, number, number], t: number): { top: string; bot: string } {
+  const top = target.map((c, i) => hmMix(HM_TILE_BASE[i], c, t));
+  const bot = target.map((c, i) => hmMix(HM_TILE_BASE[i], c, t * 0.6));
+  return { top: `rgb(${top.join(",")})`, bot: `rgb(${bot.join(",")})` };
+}
+
+const HM_PREM_CAP = 250; // $M — log ceiling for premium intensity
+
 /**
- * Flow tile color using tone. Dead-zone = "neutral".
- * Saturation from netPremiumMn magnitude for visual density.
- * HONESTY: we never assert call/put direction from net_premium_mn magnitude.
+ * Flow tile color by SIGNED net premium (the number shown on the tile).
+ *   sign  → hue: + = net-call/bullish (up color), − = net-put/bearish (down color)
+ *   |$M|  → intensity via log10 so the median ~$0.4M name is a visible dim tone,
+ *           not the near-black the old tone-only ramp produced for ~84% of names.
+ * HONESTY: net-premium SIGN is a soft tape signal (see the "direction is soft"
+ * caption); MAGNITUDE is reliable and always drives brightness.
  */
-function flowColor(tone: "neg" | "neutral" | "pos" | undefined, premMn: number | undefined): { top: string; bot: string } {
-  if (!tone || tone === "neutral") {
-    return { top: "rgb(30,35,42)", bot: "rgb(22,26,32)" };
-  }
-  const t = Math.min(0.3 + Math.min((premMn ?? 0) / 50, 1) * 0.7, 1);
-  if (tone === "pos") {
-    return {
-      top: `rgb(${Math.round(5 + t * 5)},${Math.round(35 + t * 156)},${Math.round(30 + t * 135)})`,
-      bot: `rgb(${Math.round(3 + t * 3)},${Math.round(18 + t * 65)},${Math.round(16 + t * 55)})`,
-    };
-  }
-  return {
-    top: `rgb(${Math.round(40 + t * 215)},${Math.round(18 + t * 89)},${Math.round(18 + t * 89)})`,
-    bot: `rgb(${Math.round(22 + t * 85)},${Math.round(10 + t * 35)},${Math.round(10 + t * 35)})`,
-  };
+function flowColor(tile: HeatmapTile): { top: string; bot: string } {
+  if (!tile.hasFlow) return HM_NODATA;
+  const v = tile.netPremiumMn ?? 0;
+  const mag = Math.abs(v);
+  if (mag < 0.3) return hmRamp(HM_SLATE, 0.24); // effectively flat → dim neutral slate
+  const t = Math.max(0.22, Math.min(Math.log10(1 + mag) / Math.log10(1 + HM_PREM_CAP), 1));
+  return hmRamp(v > 0 ? HM_UP : HM_DN, t);
 }
 
 // ─── Squarified treemap algorithm ─────────────────────────────────────────────
@@ -328,13 +342,22 @@ export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }
   return (
     <div ref={containerRef} style={TREEMAP_CONTAINER} onMouseLeave={handleMouseLeave}>
       <svg width={dims.w} height={dims.h} style={{ display: "block" }}>
+        <style>{`
+          .hm-tile { transition: filter .14s ease; }
+          .hm-tile:hover { filter: brightness(1.16) saturate(1.08); }
+        `}</style>
         <defs>
+          {/* Shared top "glass" highlight for larger tiles */}
+          <linearGradient id="hm-gloss" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(255,255,255,0.14)" />
+            <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+          </linearGradient>
           {blocks.flatMap(block =>
             block.nodes.map(node => {
               const tile = node.tile;
               const colors = layer === "price"
                 ? priceColor(tile.chg1d)
-                : flowColor(tile.tone, tile.netPremiumMn);
+                : flowColor(tile);
               return (
                 <linearGradient
                   key={`grad-${tile.ticker}`}
@@ -401,9 +424,9 @@ function SectorBlockGroup({
         width={block.w}
         height={block.h}
         fill="rgba(255,255,255,0.003)"
-        stroke={`rgba(${avg > 0 ? "0,200,83" : avg < 0 ? "255,23,68" : "148,163,184"},0.18)`}
+        stroke={`rgba(${avg > 0 ? "38,194,129" : avg < 0 ? "240,86,107" : "148,163,184"},0.22)`}
         strokeWidth={1.2}
-        rx={3}
+        rx={4}
       />
 
       {/* Sector header band */}
@@ -553,8 +576,12 @@ function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick }: Ti
       ? `$${tile.netPremiumMn.toFixed(1)}M`
       : "";
 
+  const rx = w > 26 && h > 20 ? 4 : 2;
+  const glass = w > 46 && h > 30;
+
   return (
     <g
+      className="hm-tile"
       onClick={() => onClick(tile)}
       onMouseEnter={(e) => {
         const svgEl = (e.target as SVGElement).closest("svg");
@@ -565,15 +592,27 @@ function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick }: Ti
       style={{ cursor: "pointer" }}
     >
       <rect
-        x={x + 0.3}
-        y={y + 0.3}
-        width={Math.max(0, w - 0.6)}
-        height={Math.max(0, h - 0.6)}
+        x={x + 0.9}
+        y={y + 0.9}
+        width={Math.max(0, w - 1.8)}
+        height={Math.max(0, h - 1.8)}
         fill={`url(#${gradId})`}
-        stroke={isSelected ? "var(--brand, #00e5ff)" : "rgba(255,255,255,0.02)"}
-        strokeWidth={isSelected ? 2 : 0.2}
-        rx={1.5}
+        stroke={isSelected ? "var(--brand, #00e5ff)" : "rgba(255,255,255,0.05)"}
+        strokeWidth={isSelected ? 2 : 0.4}
+        rx={rx}
       />
+      {/* Glass top-edge highlight */}
+      {glass && (
+        <rect
+          x={x + 1.4}
+          y={y + 1.4}
+          width={Math.max(0, w - 2.8)}
+          height={Math.min(h * 0.42, 12)}
+          fill="url(#hm-gloss)"
+          rx={rx}
+          style={{ pointerEvents: "none" }}
+        />
+      )}
 
       {showTicker && (
         <text
@@ -583,8 +622,8 @@ function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick }: Ti
           dominantBaseline="middle"
           fontSize={tFs}
           fontWeight={700}
-          fill="#f1f5f9"
-          style={{ userSelect: "none", fontFamily: "var(--font-num, monospace)", pointerEvents: "none" }}
+          fill="#f8fafc"
+          style={{ userSelect: "none", fontFamily: "var(--font-ui, sans-serif)", letterSpacing: "0.01em", pointerEvents: "none" }}
         >
           {tile.ticker}
         </text>
