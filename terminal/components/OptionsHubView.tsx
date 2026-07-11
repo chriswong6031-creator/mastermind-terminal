@@ -265,6 +265,7 @@ interface LeaderRow {
 
 interface LeadersColdStart {
   message?: string;
+  required_for_recurrence?: number;
 }
 
 interface LeadersPayload {
@@ -3096,7 +3097,7 @@ export default function OptionsHubView() {
               {leadersError && !leadersData && (
                 <div style={{ padding: "40px 20px", textAlign: "center" }}>
                   <div style={{ fontSize: 14, color: "var(--text-2)", marginBottom: 8 }}>
-                    {lang === "zh" ? t("leadersAbsentZh", "今晚构建后发布") : t("leadersAbsent", "Flow Leaders publishes after tonight's build")}
+                    {t("leadersAbsent", "Flow Leaders publishes after tonight's build")}
                   </div>
                   <div style={{ fontSize: 12, color: "var(--muted)" }}>
                     {lang === "zh" ? "数据每晚收盘后构建" : "Data builds nightly after market close"}
@@ -3106,16 +3107,11 @@ export default function OptionsHubView() {
 
               {leadersData && (() => {
                 const cov = leadersData.coverage;
-                // Board A: rows with fire_a=true or K_a >= 1, sorted by K_a desc
-                const boardARows = [...leadersData.board_a]
-                  .filter((r) => r.fire_a || r.K_a >= 1)
-                  .sort((a, b) => b.K_a - a.K_a)
-                  .slice(0, 25);
-                // Board B: rows with fire_b=true or K_b >= 1, sorted by K_b desc
-                const boardBRows = [...leadersData.board_b]
-                  .filter((r) => r.fire_b || r.K_b >= 1)
-                  .sort((a, b) => b.K_b - a.K_b)
-                  .slice(0, 25);
+                // Render all rows as delivered — server already caps at 25 per board.
+                // No client-side qualification filter: accruing rows (all legs null) render so the
+                // board shows honestly. Chips/badges convey state. Sorted by K desc for signal rows.
+                const boardARows = [...leadersData.board_a].sort((a, b) => b.K_a - a.K_a);
+                const boardBRows = [...leadersData.board_b].sort((a, b) => b.K_b - a.K_b);
                 const displayRows = leadersBoard === "a" ? boardARows : boardBRows;
 
                 return (
@@ -3130,9 +3126,12 @@ export default function OptionsHubView() {
                           ? `前 ${displayRows.length} / 共 ${cov.n_universe}`
                           : `top ${displayRows.length} of ${cov.n_universe}`}
                         {" · "}
-                        {lang === "zh"
-                          ? `会话 ${cov.n_flow_sessions}/5`
-                          : `sessions ${cov.n_flow_sessions}/5`}
+                        {(() => {
+                          const reqSessions = leadersData.cold_start_detail?.required_for_recurrence ?? 5;
+                          return lang === "zh"
+                            ? `会话 ${cov.n_flow_sessions}/${reqSessions}`
+                            : `sessions ${cov.n_flow_sessions}/${reqSessions}`;
+                        })()}
                       </span>
                       {leadersData.stale && (
                         <span style={{ fontSize: 11, color: "var(--warn)", fontWeight: 600 }}>
@@ -3170,23 +3169,21 @@ export default function OptionsHubView() {
                         style={{ height: 26, fontSize: 11 }}
                         onClick={() => setLeadersBoard("a")}
                       >
-                        {lang === "zh" ? "资金领先" : "Flow Leadership"}
+                        {t("leadersBoardALbl", "Flow Leadership")}
                       </button>
                       <button
                         className={`chip${leadersBoard === "b" ? " on" : ""}`}
                         style={{ height: 26, fontSize: 11 }}
                         onClick={() => setLeadersBoard("b")}
                       >
-                        {lang === "zh" ? "洗盘转机" : "Washout Turn"}
+                        {t("leadersBoardBLbl", "Washout Turn")}
                       </button>
                     </div>
 
                     {/* ── Table ── */}
                     {displayRows.length === 0 ? (
                       <div style={{ padding: "30px 0", textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
-                        {lang === "zh"
-                          ? "暂无满足条件的标的 — 今晚构建后更新"
-                          : "No qualifying names yet — updates after tonight's build"}
+                        {t("leadersNoQualifying", "No qualifying names yet — updates after tonight's build")}
                       </div>
                     ) : (
                       <div className="obs-scroll" style={{ overflowX: "auto" }}>
@@ -3194,36 +3191,34 @@ export default function OptionsHubView() {
                           <thead>
                             <tr>
                               <th style={{ textAlign: "left", minWidth: 60 }}>
-                                {lang === "zh" ? "代码" : "Ticker"}
+                                {t("leadersColTicker", "Ticker")}
                               </th>
                               <th style={{ textAlign: "center", minWidth: 56 }}>
-                                {lang === "zh"
-                                  ? (leadersBoard === "a" ? "重复次数" : "距拐点天数")
-                                  : (leadersBoard === "a" ? "Recur" : "Days")}
+                                {leadersBoard === "a" ? t("leadersColRecur", "Recur") : t("leadersColDays", "Days")}
                               </th>
                               {leadersBoard === "a" && (
                                 <th style={{ textAlign: "right", minWidth: 80 }}>
-                                  {lang === "zh" ? "净保费(~软)" : "Net Prem (~)"}
+                                  {t("leadersNetPremNorm", "Net Prem / $bn cap (~)")}
                                 </th>
                               )}
                               {leadersBoard === "a" && (
                                 <th style={{ textAlign: "right", minWidth: 56 }}>
-                                  {lang === "zh" ? "流量z" : "Flow z"}
+                                  {t("leadersFlowZ", "flow z")}
                                 </th>
                               )}
                               <th style={{ textAlign: "center", minWidth: 80 }}>
-                                {lang === "zh" ? "K/N腿" : "K/N legs"}
+                                {t("leadersKN", "K/N legs")}
                               </th>
                               {leadersBoard === "b" && (
                                 <th style={{ textAlign: "left", minWidth: 120 }}>
-                                  {lang === "zh" ? "振荡器" : "Oscillators"}
+                                  {t("leadersColOsc", "Oscillators")}
                                 </th>
                               )}
                               <th style={{ textAlign: "left", minWidth: 140 }}>
-                                {lang === "zh" ? "标记" : "Flags"}
+                                {t("leadersColFlags", "Flags")}
                               </th>
                               <th style={{ textAlign: "left", minWidth: 80 }}>
-                                {lang === "zh" ? "来源" : "Source"}
+                                {t("leadersColSource", "Source")}
                               </th>
                             </tr>
                           </thead>
@@ -3269,8 +3264,8 @@ export default function OptionsHubView() {
                                   key={row.ticker}
                                   style={{ cursor: "pointer" }}
                                   onClick={() => {
-                                    setSelectedTicker(row.ticker);
                                     switchTab("tickers");
+                                    setSelectedTicker(row.ticker);
                                   }}
                                 >
                                   {/* Ticker */}
@@ -3284,16 +3279,16 @@ export default function OptionsHubView() {
                                       ? recur
                                       : (
                                         <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>
-                                          {lang === "zh" ? "累积中" : "accruing"}
+                                          {t("leadersAccruing", "accruing")}
                                         </span>
                                       )}
                                   </td>
 
-                                  {/* Net prem (Board A only) */}
+                                  {/* Net prem norm (Board A only) — normalized ratio abs(net_premium_mn / mktcap_bn) */}
                                   {isA && (
                                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>
                                       {row.net_prem_norm_abs !== null && row.net_prem_norm_abs !== undefined
-                                        ? `~${fmtPremium(row.net_prem_norm_abs)}`
+                                        ? `~${row.net_prem_norm_abs.toFixed(2)}`
                                         : <span style={{ color: "var(--muted)" }}>—</span>}
                                     </td>
                                   )}
@@ -3355,13 +3350,13 @@ export default function OptionsHubView() {
                                             color: row.macd_2w_state === "crossed" ? "var(--up)" : "var(--warn)",
                                           }}>
                                             {row.macd_2w_state === "crossed"
-                                              ? (lang === "zh" ? "MACD穿越" : `MACD ×${row.macd_2w_bars_since ?? ""}`)
-                                              : (lang === "zh" ? "MACD临近" : `MACD ~${row.macd_2w_bars_to_cross != null ? row.macd_2w_bars_to_cross.toFixed(1) + "b" : "?"}`)}
+                                              ? t("leadersMacdCrossed", `MACD ×${row.macd_2w_bars_since ?? ""}`).replace("{n}", String(row.macd_2w_bars_since ?? ""))
+                                              : t("leadersMacdApproach", `MACD ~${row.macd_2w_bars_to_cross != null ? row.macd_2w_bars_to_cross.toFixed(1) + "b" : "?"}`).replace("{b}", row.macd_2w_bars_to_cross != null ? row.macd_2w_bars_to_cross.toFixed(1) + "b" : "?")}
                                           </span>
                                         )}
                                         {row.stochrsi_2w_oversold === true && (
                                           <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(38,194,129,.15)", color: "var(--up)" }}>
-                                            {lang === "zh" ? "超卖" : "oversold"}
+                                            {t("leadersOversoldChip", "oversold")}
                                           </span>
                                         )}
                                         {row.htf_coverage && row.stochrsi_2w_k !== null && (
@@ -3378,22 +3373,22 @@ export default function OptionsHubView() {
                                     <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                                       {warnEarnings && (
                                         <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.15)", color: "var(--down)" }}>
-                                          {lang === "zh" ? "临近财报" : "earns"}
+                                          {t("leadersWarnEarningsShort", "earns")}
                                         </span>
                                       )}
                                       {warnVol && (
                                         <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(232,163,61,.15)", color: "var(--warn)" }}>
-                                          {lang === "zh" ? "波动交易" : "vol"}
+                                          {t("leadersWarnVolShort", "vol")}
                                         </span>
                                       )}
                                       {warnPut && (
                                         <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.12)", color: "var(--down)" }}>
-                                          {lang === "zh" ? "防护沽" : "put hedge"}
+                                          {t("leadersWarnPutShort", "put hedge")}
                                         </span>
                                       )}
                                       {warnGamma && (
                                         <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(232,163,61,.12)", color: "var(--warn)" }}>
-                                          {lang === "zh" ? "伽马" : "gamma"}
+                                          {t("leadersWarnGammaShort", "gamma")}
                                         </span>
                                       )}
                                       {row.zerodte_dominated && (
@@ -3420,9 +3415,7 @@ export default function OptionsHubView() {
 
                     {/* Per-source footnote */}
                     <div style={{ marginTop: 14, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.6 }}>
-                      {lang === "zh"
-                        ? `方向标注为 ~软性（近似值）。来源：${leadersData.coverage.tape_names.join(", ")}。所有读数仅供展示，不构成投资建议。`
-                        : `Direction ~-soft (approximate). Sources: ${leadersData.coverage.tape_names.join(", ")}. All readings display-only — not investment advice.`}
+                      {t("leadersFootnote", "Direction ~-soft (approximate). Sources: {sources}. All readings display-only — not investment advice.").replace("{sources}", leadersData.coverage.tape_names.join(", "))}
                     </div>
                   </>
                 );
