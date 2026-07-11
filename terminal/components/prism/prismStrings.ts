@@ -194,6 +194,8 @@ const PRISM_LEX = {
   tickerLabel:       ["Ticker", "代码"],
   tickerPlaceholder: ["SPY", "SPY"],
   asOf:              ["as of", "更新于"],
+  lastSession:       ["last session", "上一交易日"],
+  daysOld:           ["{n}d old", "{n}天前"],
 } as const;
 
 type PrismKey = keyof typeof PRISM_LEX;
