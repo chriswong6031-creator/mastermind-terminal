@@ -150,8 +150,12 @@ export function PrismView() {
   }, []);
 
   const fetchOi = useCallback(async () => {
-    const data = await safeFetch<{ oi: OiPayload }>("/api/flow?f=oi");
-    if (data?.oi) setOiPayload(data.oi);
+    // /api/flow?f=oi returns the OiPayload FLAT (has `movers`) — both the fixture
+    // (screener_fixture.oi) and prod (R2 options_hub/oi_movers.json). The old
+    // `{ oi: ... }` wrapper never existed, so the rail rendered empty forever.
+    const data = await safeFetch<OiPayload & { oi?: OiPayload }>("/api/flow?f=oi");
+    const payload = data?.oi ?? data;
+    if (payload?.movers) setOiPayload(payload);
   }, []);
 
   // ── Load on ticker change ─────────────────────────────────────────────────────

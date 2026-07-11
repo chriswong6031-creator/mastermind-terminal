@@ -72,6 +72,12 @@ export interface GexStatePayload {
   put_wall?: number | null;
   magnet?: number | null;
   spot?: number | null;
+  // LIVE-schema aliases (options_structure.gex_state/v1 as published) — the card
+  // was written against the fixture's field names; these are the real ones.
+  gamma_regime?: GexStatePayload["state"];
+  pin_probability?: number | null;      // 0..1 fraction (fixture pin_target.probability is 0-100)
+  gravity_direction?: "up" | "down" | "neutral";
+  gravity_up_pct?: number | null;
 }
 
 // ─── Regime colors ────────────────────────────────────────────────────────────
@@ -360,7 +366,12 @@ export function MarketStateCard({
     );
   }
 
-  const state = statePayload.state;
+  // Normalize live schema → the fields this card renders. Live gexstate publishes
+  // gamma_regime / net_gex_bn-sign / magnet+pin_probability; the card was written
+  // against the fixture's state / net_gamma / pin_target{} (blank hero otherwise).
+  const state = statePayload.state ?? statePayload.gamma_regime ?? "UNKNOWN";
+  const netGamma: "POSITIVE" | "NEGATIVE" | "UNKNOWN" =
+    statePayload.net_gamma ?? (netGexBn != null ? (netGexBn >= 0 ? "POSITIVE" : "NEGATIVE") : "UNKNOWN");
   const regimeColor = REGIME_COLORS[state] ?? "var(--muted)";
   const thesisKey = (`thesis${state}` as Parameters<typeof t>[0]);
   const thesisText = t(thesisKey) || t("thesisUNKNOWN");
@@ -368,7 +379,9 @@ export function MarketStateCard({
 
   const stabilityPct = Math.round(statePayload.stability_pct ?? 0);
 
-  const pin = statePayload.pin_target;
+  const pin = statePayload.pin_target ?? (statePayload.magnet != null
+    ? { strike: statePayload.magnet, probability: statePayload.pin_probability != null ? Math.round(statePayload.pin_probability * 100) : 0 }
+    : null);
 
   const range = statePayload.structural_range ?? (
     callWall != null && putWall != null
@@ -404,9 +417,9 @@ export function MarketStateCard({
           value={stabilityPct}
           size="md"
           tone={
-            statePayload.net_gamma === "POSITIVE"
+            netGamma === "POSITIVE"
               ? "brand"
-              : statePayload.net_gamma === "NEGATIVE"
+              : netGamma === "NEGATIVE"
               ? "down"
               : "muted"
           }
@@ -420,16 +433,16 @@ export function MarketStateCard({
                 fontSize: 11,
                 fontWeight: 700,
                 color:
-                  statePayload.net_gamma === "POSITIVE"
+                  netGamma === "POSITIVE"
                     ? "var(--brand-2)"
-                    : statePayload.net_gamma === "NEGATIVE"
+                    : netGamma === "NEGATIVE"
                     ? "var(--down)"
                     : "var(--muted)",
               }}
             >
-              {statePayload.net_gamma === "POSITIVE"
+              {netGamma === "POSITIVE"
                 ? t("stateGammaPos")
-                : statePayload.net_gamma === "NEGATIVE"
+                : netGamma === "NEGATIVE"
                 ? t("stateGammaNeg")
                 : "—"}
             </span>
