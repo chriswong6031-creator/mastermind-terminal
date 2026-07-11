@@ -238,18 +238,31 @@ export function PrismView() {
     max_pain:    matrix?.levels?.max_pain    ?? null,
   };
 
-  // Format asof
+  // Format asof — show the DATE (not just the time) plus a staleness hint, so a
+  // Friday snapshot viewed on Saturday reads honestly as last-session data rather
+  // than a bare "as of 16:59" that silently drops the day.
   let asofStr = "";
+  let asofStale = false;   // asof is on a prior ET calendar day
+  let asofAgeStr = "";     // "last session" / "{n}d old"
   if (matrix?.asof) {
     try {
-      asofStr = new Date(String(matrix.asof).replace(" ", "T")).toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
+      const d = new Date(String(matrix.asof).replace(" ", "T"));
+      asofStr = d.toLocaleString("en-US", {
+        weekday: "short", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit", hour12: false,
         timeZone: "America/New_York",
       }) + " ET";
+      // ET calendar-day age (days between the asof date and today, in ET).
+      const etDay = (dt: Date) => dt.toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // YYYY-MM-DD
+      const asofDay = etDay(d);
+      const todayDay = etDay(new Date());
+      const ageDays = Math.round((Date.parse(todayDay) - Date.parse(asofDay)) / 86_400_000);
+      if (ageDays > 0) {
+        asofStale = true;
+        asofAgeStr = ageDays <= 1 ? t("lastSession") : t("daysOld").replace("{n}", String(ageDays));
+      }
     } catch {
-      asofStr = matrix.asof.slice(11, 16);
+      asofStr = matrix.asof.slice(0, 16).replace("T", " ");
     }
   }
 
@@ -328,7 +341,10 @@ export function PrismView() {
         {/* Right: asof + status */}
         <div style={CONTROLS_RIGHT}>
           {asofStr && mode === "single" && (
-            <span style={ASOF_BADGE}>{t("asOf")} {asofStr}</span>
+            <span style={asofStale ? ASOF_BADGE_STALE : ASOF_BADGE}>
+              {t("asOf")} {asofStr}
+              {asofStale && <span style={{ marginLeft: 5, fontWeight: 600 }}>· {asofAgeStr}</span>}
+            </span>
           )}
           {loading && <span style={STATUS_LOADING}>{t("loading")}</span>}
           {error && !loading && <span style={STATUS_ERROR}>{t("errorMatrix")}</span>}
@@ -560,6 +576,14 @@ const CONTROLS_RIGHT: React.CSSProperties = {
 const ASOF_BADGE: React.CSSProperties = {
   fontSize: 9,
   color: "var(--muted)",
+  fontVariantNumeric: "tabular-nums",
+};
+
+// Amber when the snapshot is from a prior session (weekend / >1 day old) — makes
+// "not today" explicit instead of silently dropping the date.
+const ASOF_BADGE_STALE: React.CSSProperties = {
+  fontSize: 9,
+  color: "var(--warn)",
   fontVariantNumeric: "tabular-nums",
 };
 
