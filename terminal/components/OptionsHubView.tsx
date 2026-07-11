@@ -304,12 +304,8 @@ interface RadarTf2dState {
   macd_bars_to_cross: number | null;
   stoch_cross_up: boolean;
   stoch_cross_dn: boolean;
-  rsi14: number | null;
-  rsi5: number | null;
-  stoch: number | null;
-  spark_rsi: number[];
-  spark_stoch: number[];
-  spark_hist: number[];
+  // rsi14, rsi5, stoch, spark_rsi, spark_stoch, spark_hist are transported in the
+  // artifact but not rendered — reserved for a future sparkline pass.
 }
 
 interface RadarContext {
@@ -381,7 +377,9 @@ interface RadarPayload {
   schema: string;
   as_of: string;
   stale: boolean;
-  elapsed_s: number;
+  cold_start?: boolean;
+  cold_start_detail?: { message?: string } | null;
+  elapsed_s?: number;
   coverage: RadarCoverage;
   regime: RadarRegime;
   rows: RadarRow[];
@@ -3724,12 +3722,25 @@ export default function OptionsHubView() {
                     {t("radarAbsent", "Leader Radar publishes after tonight's build")}
                   </div>
                   <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                    {lang === "zh" ? "数据每晚收盘后构建" : "Data builds nightly after market close"}
+                    {t("radarAbsentSub", "Data builds nightly after market close")}
                   </div>
                 </div>
               )}
 
-              {radarData && (() => {
+              {/* Cold-start banner — shown when cold_start flag is set OR rows is empty */}
+              {radarData && (radarData.cold_start === true || radarData.rows.length === 0) && (
+                <div style={{
+                  padding: "8px 12px", borderRadius: "var(--r-md)",
+                  background: "color-mix(in srgb, var(--warn) 10%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--warn) 30%, transparent)",
+                  fontSize: 12, color: "var(--warn)", marginBottom: 10,
+                }}>
+                  {radarData.cold_start_detail?.message
+                    ?? t("radarColdStart", "Baseline building — publishes after tonight's nightly run")}
+                </div>
+              )}
+
+              {radarData && !radarData.cold_start && radarData.rows.length > 0 && (() => {
                 const cov = radarData.coverage;
                 const reg = radarData.regime;
 
@@ -3817,18 +3828,23 @@ export default function OptionsHubView() {
 
                     {/* Coverage line */}
                     <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
-                      {cov.n_universe} {lang === "zh" ? "个标的" : "names"}{" · "}
-                      <span
-                        title={cov.revisions_uncovered.join(", ")}
-                        style={{ cursor: "help", borderBottom: "1px dashed var(--line-3)" }}
-                      >
-                        {cov.revisions_uncovered.length}{" "}
-                        {t("radarRevUncovered", "revision-uncovered")}
-                      </span>
+                      {cov.n_universe} {t("radarNames", "names")}{" · "}
+                      {(() => {
+                        const uncovered = cov?.revisions_uncovered ?? [];
+                        return (
+                          <span
+                            title={uncovered.length > 0 ? uncovered.join(", ") : undefined}
+                            style={uncovered.length > 0 ? { cursor: "help", borderBottom: "1px dashed var(--line-3)" } : undefined}
+                          >
+                            {uncovered.length}{" "}
+                            {t("radarRevUncovered", "revision-uncovered")}
+                          </span>
+                        );
+                      })()}
                     </div>
 
                     {/* ── Regime banner ── */}
-                    {reg && (
+                    {reg && reg.label && (
                       <div style={{
                         padding: "8px 12px", borderRadius: "var(--r-md)",
                         background: "color-mix(in srgb, var(--accent, #5b9cf6) 8%, transparent)",
@@ -3843,7 +3859,7 @@ export default function OptionsHubView() {
                             — {reg.conditions}
                           </span>
                         )}
-                        {Object.entries(reg.chips).map(([k, v]) => v === true && (
+                        {(reg.chips ? Object.entries(reg.chips) : []).map(([k, v]) => v === true && (
                           <span key={k} style={{
                             fontSize: 10, padding: "1px 6px", borderRadius: 3,
                             background: "color-mix(in srgb, var(--accent, #5b9cf6) 15%, transparent)",
@@ -3985,9 +4001,7 @@ export default function OptionsHubView() {
                                             )}
                                             {tf.macd_approaching_up && tf.macd_bars_to_cross !== null && (
                                               <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(232,163,61,.15)", color: "var(--warn)" }}>
-                                                {lang === "zh"
-                                                  ? `MACD接近上穿 ${tf.macd_bars_to_cross.toFixed(1)}b`
-                                                  : `MACD ~${tf.macd_bars_to_cross.toFixed(1)}b`}
+                                                {t("radarOscMacdApproachUp", "MACD approaching up {b}").replace("{b}", `${tf.macd_bars_to_cross.toFixed(1)}b`)}
                                               </span>
                                             )}
                                             {tf.stoch_cross_up && (
@@ -4022,9 +4036,7 @@ export default function OptionsHubView() {
                       >
                         {showNone
                           ? t("radarHideNone", "Hide NONE")
-                          : (lang === "zh"
-                            ? `显示 NONE (${noneCount})`
-                            : `Show NONE (${noneCount})`)}
+                          : t("radarNoneToggle", "Show NONE ({n})").replace("{n}", String(noneCount))}
                       </button>
                     </div>
 
@@ -4050,7 +4062,7 @@ export default function OptionsHubView() {
                               </span>
                               <span style={{ fontSize: 11, color: "var(--text-dim)" }}>→</span>
                               <span style={{ fontSize: 11, color: "var(--text-2)" }}>
-                                {pair.basing_leg_names.join(", ")}
+                                {(pair.basing_leg_names ?? []).join(", ")}
                               </span>
                             </div>
                           ))}
@@ -4112,7 +4124,7 @@ export default function OptionsHubView() {
                                   <td style={{ textAlign: "center" }}>
                                     {rr.chips.earnings_within_14d === true ? (
                                       <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.15)", color: "var(--down)" }}>
-                                        {lang === "zh" ? "财报临近" : "caution"}
+                                        {t("radarReratingEarningsCaution", "caution")}
                                       </span>
                                     ) : (
                                       <span style={{ color: "var(--muted)" }}>—</span>
@@ -4129,7 +4141,7 @@ export default function OptionsHubView() {
                     {/* Footnote */}
                     <div style={{ marginTop: 14, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.6 }}>
                       {t("radarFootnote", "4H data for select names only; null-honest elsewhere. Display-only — not investment advice.")}
-                      {cov.tape_note && (
+                      {cov?.tape_note && (
                         <span style={{ marginLeft: 4 }}>{cov.tape_note}</span>
                       )}
                     </div>

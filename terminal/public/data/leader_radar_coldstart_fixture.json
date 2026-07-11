@@ -1,0 +1,14 @@
+{
+  "schema": "leader_radar.v1",
+  "as_of": "2026-07-11T00:00:00.000000+00:00",
+  "stale": false,
+  "cold_start": true,
+  "cold_start_detail": {
+    "message": "Baseline building — publishes after tonight's nightly run"
+  },
+  "rows": [],
+  "regime": {},
+  "coverage": {},
+  "handoff_pairs": [],
+  "rerating_watch": []
+}
