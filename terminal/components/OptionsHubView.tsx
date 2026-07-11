@@ -579,47 +579,199 @@ function MethodNotePopover({ lang, t }: { lang: string; t: (k: string, fb?: stri
 
 // ─── Strike ladder SVG ───────────────────────────────────────────────────────
 
-const StrikeLadder = memo(function StrikeLadder({ strikes, lang }: { strikes: StrikeRow[]; lang: string }) {
-  if (!strikes.length) return null;
-  const maxVal = Math.max(...strikes.flatMap((s) => [s.call_prem, s.put_prem])) || 1;
-  const BAR_WIDTH = 120;
-  const ROW_H = 28;
-  const H = strikes.length * ROW_H + 28;
+const StrikeLadder = memo(function StrikeLadder({ strikes, lang, spotRef }: { strikes: StrikeRow[]; lang: string; spotRef: number | null }) {
+  const zh = lang === "zh";
+  const ROW_H = 24;
+  const LADDER_COLS = "52px 1fr 60px 1fr 52px";
+  const [wide, setWide] = useState(false);
+  const [hover, setHover] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const sorted = useMemo(() => [...strikes].sort((a, b) => a.strike - b.strike), [strikes]);
+
+  // ATM: exact spot when available, else premium-weighted mean strike.
+  const spotExact = !!(spotRef && spotRef > 0);
+  const atm = useMemo(() => {
+    if (spotExact) return spotRef as number;
+    if (!sorted.length) return 0;
+    let num = 0, den = 0;
+    for (const s of sorted) { const w = s.call_prem + s.put_prem; num += s.strike * w; den += w; }
+    return den > 0 ? num / den : sorted[Math.floor(sorted.length / 2)].strike;
+  }, [sorted, spotExact, spotRef]);
+
+  // Global markers over ALL strikes.
+  const callWall = useMemo(() => sorted.length ? sorted.reduce((m, s) => s.call_prem > m.call_prem ? s : m).strike : null, [sorted]);
+  const putWall = useMemo(() => sorted.length ? sorted.reduce((m, s) => s.put_prem > m.put_prem ? s : m).strike : null, [sorted]);
+  const totalCall = useMemo(() => sorted.reduce((a, s) => a + s.call_prem, 0), [sorted]);
+  const totalPut = useMemo(() => sorted.reduce((a, s) => a + s.put_prem, 0), [sorted]);
+  // Premium-weighted "max pain": strike minimising aggregate holder loss (premium as notional proxy).
+  const maxPain = useMemo(() => {
+    if (sorted.length < 3) return null;
+    let best = sorted[0].strike, bestPain = Infinity;
+    for (const cand of sorted) {
+      let pain = 0;
+      for (const s of sorted) {
+        if (s.strike < cand.strike) pain += s.call_prem * (cand.strike - s.strike);
+        else if (s.strike > cand.strike) pain += s.put_prem * (s.strike - cand.strike);
+      }
+      if (pain < bestPain) { bestPain = pain; best = cand.strike; }
+    }
+    return best;
+  }, [sorted]);
+
+  // Near window ±18% of ATM (fall back to full list if too sparse).
+  const rows = useMemo(() => {
+    if (wide || !atm) return sorted;
+    const lo = atm * 0.82, hi = atm * 1.18;
+    const w = sorted.filter((s) => s.strike >= lo && s.strike <= hi);
+    return w.length >= 5 ? w : sorted;
+  }, [sorted, wide, atm]);
+
+  const maxVal = useMemo(() => Math.max(...rows.flatMap((s) => [s.call_prem, s.put_prem]), 1), [rows]);
+  // Power-curve width so mid strikes stay visible next to the single premium wall.
+  const barPct = (v: number) => (v <= 0 ? 0 : Math.max(2, Math.pow(v / maxVal, 0.6) * 100));
+  const raw = (v: number) => (v <= 0 ? 0 : v / maxVal);
+
+  const spotStrike = useMemo(() => (
+    rows.length ? rows.reduce((c, s) => Math.abs(s.strike - atm) < Math.abs(c.strike - atm) ? s : c).strike : null
+  ), [rows, atm]);
+
+  // Auto-centre the ATM row on load / window change.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || spotStrike == null) return;
+    const idx = rows.findIndex((s) => s.strike === spotStrike);
+    if (idx < 0) return;
+    el.scrollTop = Math.max(0, idx * ROW_H - el.clientHeight / 2 + ROW_H / 2);
+  }, [rows, spotStrike]);
+
+  if (!sorted.length) return null;
+
+  const inspect = sorted.find((s) => s.strike === (hover ?? spotStrike)) ?? null;
+  const moneyness = (k: number) => (atm ? ((k - atm) / atm) * 100 : 0);
+  const fmtMoney = (k: number) => { const m = moneyness(k); return `${m >= 0 ? "+" : ""}${m.toFixed(1)}%`; };
+
+  const Chip = ({ label, val, color }: { label: string; val: string; color: string }) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+      <span style={{ fontSize: 8.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
+      <span style={{ fontSize: 12, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{val}</span>
+    </div>
+  );
 
   return (
-    <div className="obs-scroll" style={{ overflowY: "auto" }}>
-      <svg viewBox={`0 0 ${BAR_WIDTH * 2 + 80} ${H}`} width="100%" height={H} preserveAspectRatio="xMinYMin meet" style={{ display: "block" }}>
-        {/* Column headers */}
-        <text x={BAR_WIDTH - 4} y={14} textAnchor="end" fill="var(--up)" fontSize={10} fontWeight={600}>
-          {lang === "zh" ? "认购" : "Call"}
-        </text>
-        <text x={BAR_WIDTH + 80 + 4} y={14} textAnchor="start" fill="var(--down)" fontSize={10} fontWeight={600}>
-          {lang === "zh" ? "认沽" : "Put"}
-        </text>
-        <text x={BAR_WIDTH + 40} y={14} textAnchor="middle" fill="var(--muted)" fontSize={10}>
-          {lang === "zh" ? "行权价" : "Strike"}
-        </text>
-        {strikes.map((s, i) => {
-          const y = 24 + i * ROW_H;
-          const callW = (s.call_prem / maxVal) * BAR_WIDTH;
-          const putW = (s.put_prem / maxVal) * BAR_WIDTH;
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Summary chips */}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap" }}>
+        <Chip label={spotExact ? (zh ? "现价" : "Spot") : (zh ? "约平值" : "ATM≈")} val={atm ? `$${atm.toFixed(atm < 50 ? 2 : 0)}` : "—"} color="var(--warn)" />
+        {callWall != null && <Chip label={zh ? "认购墙" : "Call Wall"} val={`$${callWall}`} color="var(--up)" />}
+        {putWall != null && <Chip label={zh ? "认沽墙" : "Put Wall"} val={`$${putWall}`} color="var(--down)" />}
+        {maxPain != null && <Chip label={zh ? "最大痛点" : "Max Pain"} val={`$${maxPain}`} color="var(--text-2)" />}
+        <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+          <span style={{ fontSize: 10, color: "var(--muted)" }}>{rows.length}{rows.length !== sorted.length ? `/${sorted.length}` : ""}</span>
+          <button className={`chip${!wide ? " on" : ""}`} style={{ height: 22, fontSize: 10 }} onClick={() => setWide(false)}>{zh ? "近档" : "Near"}</button>
+          <button className={`chip${wide ? " on" : ""}`} style={{ height: 22, fontSize: 10 }} onClick={() => setWide(true)}>{zh ? "全档" : "All"}</button>
+        </div>
+      </div>
+
+      {/* Inspector strip — hovered row, or spot when idle */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11, minHeight: 18, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
+        {inspect ? (
+          <>
+            <span style={{ fontWeight: 700, color: "var(--text)" }}>${inspect.strike}</span>
+            <span style={{ color: "var(--muted)" }}>{fmtMoney(inspect.strike)}</span>
+            <span style={{ color: "var(--up)" }}>{zh ? "认购" : "C"} {fmtPremium(inspect.call_prem)}</span>
+            <span style={{ color: "var(--down)" }}>{zh ? "认沽" : "P"} {fmtPremium(inspect.put_prem)}</span>
+            <span style={{ color: "var(--muted)" }}>{zh ? "量" : "Vol"} {inspect.vol.toLocaleString("en-US")}</span>
+          </>
+        ) : <span style={{ color: "var(--muted)" }}>{zh ? "悬停查看行权价明细" : "Hover a strike for detail"}</span>}
+      </div>
+
+      {/* Column header — 5-col montage: [call $] [call bar] [strike] [put bar] [put $] */}
+      <div style={{ display: "grid", gridTemplateColumns: LADDER_COLS, fontSize: 9.5, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--muted)", padding: "0 2px", alignItems: "center" }}>
+        <span />
+        <span style={{ textAlign: "right", color: "var(--up)", fontWeight: 600, paddingRight: 4 }}>{zh ? "认购$" : "Call $"}</span>
+        <span style={{ textAlign: "center" }}>{zh ? "行权价" : "Strike"}</span>
+        <span style={{ textAlign: "left", color: "var(--down)", fontWeight: 600, paddingLeft: 4 }}>{zh ? "认沽$" : "Put $"}</span>
+        <span />
+      </div>
+
+      {/* Ladder */}
+      <div ref={scrollRef} className="obs-scroll" style={{ maxHeight: 440, overflowY: "auto", position: "relative" }}
+        onMouseLeave={() => setHover(null)}>
+        {rows.map((s) => {
+          const isSpot = s.strike === spotStrike;
+          const isCallWall = s.strike === callWall;
+          const isPutWall = s.strike === putWall;
+          const isPain = s.strike === maxPain;
+          const cRaw = raw(s.call_prem), pRaw = raw(s.put_prem);
+          const isHover = hover === s.strike;
           return (
-            <g key={s.strike}>
-              {/* Call bar (grows left) */}
-              <rect x={BAR_WIDTH - callW} y={y + 4} width={callW} height={ROW_H - 8}
-                fill="rgba(38,194,129,.25)" rx={2} />
-              {/* Put bar (grows right) */}
-              <rect x={BAR_WIDTH + 80} y={y + 4} width={putW} height={ROW_H - 8}
-                fill="rgba(240,86,107,.2)" rx={2} />
-              {/* Strike label */}
-              <text x={BAR_WIDTH + 40} y={y + ROW_H / 2 + 4} textAnchor="middle"
-                fill="var(--text-2)" fontSize={11}>
-                {s.strike}
-              </text>
-            </g>
+            <div key={s.strike}
+              onMouseEnter={() => setHover(s.strike)}
+              style={{
+                display: "grid", gridTemplateColumns: LADDER_COLS, alignItems: "center",
+                height: ROW_H,
+                background: isHover ? "var(--panel-2)" : isSpot ? "rgba(245,177,63,.07)" : "transparent",
+                borderTop: isSpot ? "1px solid rgba(245,177,63,.35)" : "1px solid transparent",
+                borderBottom: isSpot ? "1px solid rgba(245,177,63,.35)" : "1px solid transparent",
+                transition: "background .12s ease",
+              }}>
+              {/* Call premium value */}
+              <span style={{ fontSize: 9, color: "var(--up)", opacity: .85, textAlign: "right", paddingRight: 5, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden" }}>
+                {s.call_prem > 0 ? fmtPremium(s.call_prem) : ""}
+              </span>
+              {/* Call bar track (grows left toward strike) */}
+              <div style={{ display: "flex", justifyContent: "flex-end", overflow: "hidden" }}>
+                <div style={{
+                  width: `${barPct(s.call_prem)}%`, height: 12, borderRadius: "3px 0 0 3px", flexShrink: 0,
+                  background: `linear-gradient(90deg, rgba(38,194,129,${(0.10 + 0.28 * cRaw).toFixed(3)}) 0%, rgba(38,194,129,${(0.4 + 0.5 * cRaw).toFixed(3)}) 100%)`,
+                  boxShadow: isCallWall ? "inset 0 0 0 1px var(--up)" : "none",
+                }} />
+              </div>
+              {/* Strike */}
+              <div style={{ textAlign: "center", position: "relative" }}>
+                <span style={{
+                  fontSize: 11, fontWeight: isSpot ? 700 : 500,
+                  color: isSpot ? "var(--warn)" : "var(--text-2)", fontVariantNumeric: "tabular-nums",
+                }}>{s.strike}</span>
+                {(isCallWall || isPutWall || isPain) && (
+                  <span style={{
+                    position: "absolute", top: "50%", left: "calc(100% - 3px)", transform: "translateY(-50%)",
+                    width: 5, height: 5, borderRadius: "50%",
+                    background: isPain ? "var(--text-2)" : isCallWall ? "var(--up)" : "var(--down)",
+                  }} />
+                )}
+              </div>
+              {/* Put bar track (grows right from strike) */}
+              <div style={{ display: "flex", justifyContent: "flex-start", overflow: "hidden" }}>
+                <div style={{
+                  width: `${barPct(s.put_prem)}%`, height: 12, borderRadius: "0 3px 3px 0", flexShrink: 0,
+                  background: `linear-gradient(90deg, rgba(240,86,107,${(0.4 + 0.5 * pRaw).toFixed(3)}) 0%, rgba(240,86,107,${(0.10 + 0.28 * pRaw).toFixed(3)}) 100%)`,
+                  boxShadow: isPutWall ? "inset 0 0 0 1px var(--down)" : "none",
+                }} />
+              </div>
+              {/* Put premium value */}
+              <span style={{ fontSize: 9, color: "var(--down)", opacity: .85, textAlign: "left", paddingLeft: 5, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden" }}>
+                {s.put_prem > 0 ? fmtPremium(s.put_prem) : ""}
+              </span>
+            </div>
           );
         })}
-      </svg>
+      </div>
+
+      {/* Totals footer — call/put premium share */}
+      {(totalCall + totalPut) > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "var(--panel-2)" }}>
+            <div style={{ width: `${(totalCall / (totalCall + totalPut)) * 100}%`, background: "var(--up)" }} />
+            <div style={{ width: `${(totalPut / (totalCall + totalPut)) * 100}%`, background: "var(--down)" }} />
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontVariantNumeric: "tabular-nums" }}>
+            <span style={{ color: "var(--up)" }}>{zh ? "认购" : "Calls"} {fmtPremium(totalCall)} · {((totalCall / (totalCall + totalPut)) * 100).toFixed(0)}%</span>
+            <span style={{ color: "var(--down)" }}>{((totalPut / (totalCall + totalPut)) * 100).toFixed(0)}% · {fmtPremium(totalPut)} {zh ? "认沽" : "Puts"}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 });
@@ -2226,7 +2378,11 @@ export default function OptionsHubView() {
                         {/* Strike ladder — fills full column width */}
                         {tickerData.strikes.length > 0 && (
                           <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
-                            <StrikeLadder strikes={tickerData.strikes} lang={lang} />
+                            <StrikeLadder
+                              strikes={tickerData.strikes}
+                              lang={lang}
+                              spotRef={volData && volData.root === selectedTicker ? (volData.spot_ref ?? null) : null}
+                            />
                           </div>
                         )}
 
