@@ -39,7 +39,7 @@ const ProphetView = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism";
+type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism" | "leaders";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
@@ -51,6 +51,7 @@ const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   // "vol" tab removed from bar — vol surface now lives in the Tickers tab right column
   { key: "gex",      enKey: "tabGex",      zhKey: "tabGex" },
   { key: "prism",    enKey: "tabPrism",    zhKey: "tabPrism" },
+  { key: "leaders",  enKey: "tabLeaders",  zhKey: "tabLeaders" },
 ];
 
 // ─── Types from feed contract ────────────────────────────────────────────────
@@ -194,6 +195,96 @@ interface GexPayload {
   by_strike_full_n?: number;
   /** Last 30 sessions of GEX summary — optional, absent on old payloads */
   history?: GexHistRow[];
+}
+
+// ─── Leaders types ────────────────────────────────────────────────────────────
+interface LeaderDeEscalation {
+  earnings_window: boolean | null;
+  vol_trade: boolean | null;
+  protective_put: boolean | null;
+  gamma_caution: boolean;
+}
+
+interface LeaderRow {
+  ticker: string;
+  as_of: string;
+  signing_source: string;
+  signing_note: string;
+  recurrence_count: number | null;
+  net_prem_norm_abs: number | null;
+  days_since_inflection: number | null;
+  flow_z: number | null;
+  ts_breadth_count: number | null;
+  zerodte_dominated: boolean;
+  oi_confirmed: boolean;
+  // Board A legs (tri-state: true=pass, false=fail, null=not scored)
+  A1_flow_recur: boolean | null;
+  A2_flow_z_hot: boolean | null;
+  A3_oi_confirmed: boolean;
+  A4_ts_breadth: boolean | null;
+  A5_price_leader: boolean | null;
+  A6_near_high: boolean | null;
+  A7_vol_confirm: boolean | null;
+  A8_not_trap: boolean | null;
+  K_a: number;
+  n_avail_a: number;
+  // Board B legs
+  B1_washout_recent: boolean | null;
+  B2_oversold_osc: boolean | null;
+  B3_turn_organ: boolean | null;
+  B4_htf_cross_near: boolean | null;
+  B5_flow_inflect: boolean | null;
+  B6_oi_confirmed: boolean;
+  B7_vol_confirm: boolean | null;
+  B8_not_trap: boolean | null;
+  K_b: number;
+  n_avail_b: number;
+  fire_a: boolean;
+  fire_b: boolean;
+  // Extra context
+  stair_step_leader: boolean | null;
+  failed_breakout_trap: boolean | null;
+  mtf_upturn_state: string | null;
+  gamma_regime: string;
+  days_to_earnings: number | null;
+  trailing_pe: number | null;
+  mktcap_bn: number | null;
+  rs_1m: number | null;
+  high52w_prox: number | null;
+  rel_volume: number | null;
+  de_escalation: LeaderDeEscalation;
+  // HTF oscillators
+  stochrsi_2w_k: number | null;
+  stochrsi_2w_d: number | null;
+  stochrsi_2w_oversold: boolean | null;
+  macd_2w_state: string | null;
+  macd_2w_bars_to_cross: number | null;
+  macd_2w_bars_since: number | null;
+  htf_coverage: boolean;
+}
+
+interface LeadersColdStart {
+  message?: string;
+  required_for_recurrence?: number;
+}
+
+interface LeadersPayload {
+  schema: string;
+  as_of: string;
+  stale: boolean;
+  cold_start: boolean;
+  cold_start_detail?: LeadersColdStart;
+  direction_note?: string;
+  coverage: {
+    n_universe: number;
+    n_flow_sessions: number;
+    flow_z_live: boolean;
+    tape_names: string[];
+    n_etfs: number;
+  };
+  board_a: LeaderRow[];
+  board_b: LeaderRow[];
+  board_a_total: number;
 }
 
 // ─── Hub context types ────────────────────────────────────────────────────────
@@ -1439,6 +1530,27 @@ export default function OptionsHubView() {
   useEffect(() => {
     if (selectedGexRoot) fetchGex(selectedGexRoot);
   }, [selectedGexRoot, fetchGex]);
+
+  // ── Leaders fetch ─────────────────────────────────────────────────────────
+  const [leadersData, setLeadersData] = useState<LeadersPayload | null>(null);
+  const [leadersLoading, setLeadersLoading] = useState(false);
+  const [leadersError, setLeadersError] = useState(false);
+  const [leadersBoard, setLeadersBoard] = useState<"a" | "b">("a");
+
+  const fetchLeaders = useCallback(async () => {
+    if (leadersData) return;
+    setLeadersLoading(true); setLeadersError(false);
+    try {
+      const d = await flowGet("leaders");
+      if (d) setLeadersData(d as unknown as LeadersPayload);
+      else setLeadersError(true);
+    } catch { setLeadersError(true); }
+    setLeadersLoading(false);
+  }, [leadersData]);
+
+  useEffect(() => {
+    if (activeTab === "leaders") fetchLeaders();
+  }, [activeTab, fetchLeaders]);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -2968,6 +3080,346 @@ export default function OptionsHubView() {
           {visitedTabs.has("prophet") && (
             <div style={{ flex: 1, overflow: "hidden", display: activeTab === "prophet" ? "flex" : "none", minHeight: 0 }}>
               <ProphetView />
+            </div>
+          )}
+
+          {/* ═══ LEADERS TAB ════════════════════════════════════════════════ */}
+          {activeTab === "leaders" && (
+            <div style={{ flex: 1, overflow: "auto", padding: "14px 16px" }}>
+              {/* Loading */}
+              {leadersLoading && !leadersData && (
+                <div className="fin-empty" role="status" style={{ color: "var(--muted)" }}>
+                  {t("loading", "Loading…")}
+                </div>
+              )}
+
+              {/* Error / absent */}
+              {leadersError && !leadersData && (
+                <div style={{ padding: "40px 20px", textAlign: "center" }}>
+                  <div style={{ fontSize: 14, color: "var(--text-2)", marginBottom: 8 }}>
+                    {t("leadersAbsent", "Flow Leaders publishes after tonight's build")}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                    {lang === "zh" ? "数据每晚收盘后构建" : "Data builds nightly after market close"}
+                  </div>
+                </div>
+              )}
+
+              {leadersData && (() => {
+                const cov = leadersData.coverage;
+                // Render all rows as delivered — server already caps at 25 per board.
+                // No client-side qualification filter: accruing rows (all legs null) render so the
+                // board shows honestly. Chips/badges convey state. Sorted by K desc for signal rows.
+                const boardARows = [...leadersData.board_a].sort((a, b) => b.K_a - a.K_a);
+                const boardBRows = [...leadersData.board_b].sort((a, b) => b.K_b - a.K_b);
+                const displayRows = leadersBoard === "a" ? boardARows : boardBRows;
+
+                return (
+                  <>
+                    {/* ── Header strip ── */}
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                      <span style={{ fontSize: 11, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
+                        {t("asOf", "as of")} {fmtAsof(leadersData.as_of)}
+                      </span>
+                      <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                        {lang === "zh"
+                          ? `前 ${displayRows.length} / 共 ${cov.n_universe}`
+                          : `top ${displayRows.length} of ${cov.n_universe}`}
+                        {" · "}
+                        {(() => {
+                          const reqSessions = leadersData.cold_start_detail?.required_for_recurrence ?? 5;
+                          return lang === "zh"
+                            ? `会话 ${cov.n_flow_sessions}/${reqSessions}`
+                            : `sessions ${cov.n_flow_sessions}/${reqSessions}`;
+                        })()}
+                      </span>
+                      {leadersData.stale && (
+                        <span style={{ fontSize: 11, color: "var(--warn)", fontWeight: 600 }}>
+                          {t("leadersStale", "Snapshot from prior session")}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Cold-start banner */}
+                    {leadersData.cold_start && (
+                      <div style={{
+                        padding: "8px 12px", borderRadius: "var(--r-md)",
+                        background: "color-mix(in srgb, var(--warn) 10%, transparent)",
+                        border: "1px solid color-mix(in srgb, var(--warn) 30%, transparent)",
+                        fontSize: 12, color: "var(--warn)", marginBottom: 10,
+                      }}>
+                        {leadersData.cold_start_detail?.message
+                          ?? (lang === "zh"
+                            ? "基线建立中 — 今晚构建后发布"
+                            : "Baseline building — publishes after tonight's nightly run")}
+                      </div>
+                    )}
+
+                    {/* Direction note */}
+                    {leadersData.direction_note && (
+                      <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 10, fontStyle: "italic" }}>
+                        {leadersData.direction_note}
+                      </div>
+                    )}
+
+                    {/* ── Board toggle ── */}
+                    <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center" }}>
+                      <button
+                        className={`chip${leadersBoard === "a" ? " on" : ""}`}
+                        style={{ height: 26, fontSize: 11 }}
+                        onClick={() => setLeadersBoard("a")}
+                      >
+                        {t("leadersBoardALbl", "Flow Leadership")}
+                      </button>
+                      <button
+                        className={`chip${leadersBoard === "b" ? " on" : ""}`}
+                        style={{ height: 26, fontSize: 11 }}
+                        onClick={() => setLeadersBoard("b")}
+                      >
+                        {t("leadersBoardBLbl", "Washout Turn")}
+                      </button>
+                    </div>
+
+                    {/* ── Table ── */}
+                    {displayRows.length === 0 ? (
+                      <div style={{ padding: "30px 0", textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
+                        {t("leadersNoQualifying", "No qualifying names yet — updates after tonight's build")}
+                      </div>
+                    ) : (
+                      <div className="obs-scroll" style={{ overflowX: "auto" }}>
+                        <table className="scr" style={{ fontSize: 12, minWidth: 680 }}>
+                          <thead>
+                            <tr>
+                              <th style={{ textAlign: "left", minWidth: 60 }}>
+                                {t("leadersColTicker", "Ticker")}
+                              </th>
+                              <th style={{ textAlign: "center", minWidth: 56 }}>
+                                {leadersBoard === "a" ? t("leadersColRecur", "Recur") : t("leadersColDays", "Days")}
+                              </th>
+                              {leadersBoard === "a" && (
+                                <th style={{ textAlign: "right", minWidth: 80 }}>
+                                  {t("leadersNetPremNorm", "Net Prem / $bn cap (~)")}
+                                </th>
+                              )}
+                              {leadersBoard === "a" && (
+                                <th style={{ textAlign: "right", minWidth: 56 }}>
+                                  {t("leadersFlowZ", "flow z")}
+                                </th>
+                              )}
+                              <th style={{ textAlign: "center", minWidth: 80 }}>
+                                {t("leadersKN", "K/N legs")}
+                              </th>
+                              {leadersBoard === "b" && (
+                                <th style={{ textAlign: "left", minWidth: 120 }}>
+                                  {t("leadersColOsc", "Oscillators")}
+                                </th>
+                              )}
+                              <th style={{ textAlign: "left", minWidth: 140 }}>
+                                {t("leadersColFlags", "Flags")}
+                              </th>
+                              <th style={{ textAlign: "left", minWidth: 80 }}>
+                                {t("leadersColSource", "Source")}
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {displayRows.map((row) => {
+                              const isA = leadersBoard === "a";
+                              const K = isA ? row.K_a : row.K_b;
+                              const nAvail = isA ? row.n_avail_a : row.n_avail_b;
+                              const recur = isA ? row.recurrence_count : row.days_since_inflection;
+                              // Leg definitions for Board A
+                              const aLegs: [string, boolean | null][] = [
+                                ["A1 flow recur", row.A1_flow_recur],
+                                ["A2 flow z hot", row.A2_flow_z_hot],
+                                ["A3 OI conf", row.A3_oi_confirmed as boolean | null],
+                                ["A4 breadth", row.A4_ts_breadth],
+                                ["A5 price lead", row.A5_price_leader],
+                                ["A6 near high", row.A6_near_high],
+                                ["A7 vol conf", row.A7_vol_confirm],
+                                ["A8 not trap", row.A8_not_trap],
+                              ];
+                              const bLegs: [string, boolean | null][] = [
+                                ["B1 washout", row.B1_washout_recent],
+                                ["B2 oversold", row.B2_oversold_osc],
+                                ["B3 turn", row.B3_turn_organ],
+                                ["B4 HTF cross", row.B4_htf_cross_near],
+                                ["B5 flow inflect", row.B5_flow_inflect],
+                                ["B6 OI conf", row.B6_oi_confirmed as boolean | null],
+                                ["B7 vol conf", row.B7_vol_confirm],
+                                ["B8 not trap", row.B8_not_trap],
+                              ];
+                              const legs = isA ? aLegs : bLegs;
+                              // Only legs that scored (not null)
+                              const scoredLegs = legs.filter(([, v]) => v !== null);
+
+                              const de = row.de_escalation;
+                              const warnEarnings = de.earnings_window === true;
+                              const warnVol = de.vol_trade === true;
+                              const warnPut = de.protective_put === true;
+                              const warnGamma = de.gamma_caution;
+
+                              return (
+                                <tr
+                                  key={row.ticker}
+                                  style={{ cursor: "pointer" }}
+                                  onClick={() => {
+                                    switchTab("tickers");
+                                    setSelectedTicker(row.ticker);
+                                  }}
+                                >
+                                  {/* Ticker */}
+                                  <td style={{ fontWeight: 700, color: "var(--text)" }}>
+                                    {row.ticker}
+                                  </td>
+
+                                  {/* Recur / Days */}
+                                  <td style={{ textAlign: "center" }}>
+                                    {recur !== null && recur !== undefined
+                                      ? recur
+                                      : (
+                                        <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>
+                                          {t("leadersAccruing", "accruing")}
+                                        </span>
+                                      )}
+                                  </td>
+
+                                  {/* Net prem norm (Board A only) — normalized ratio abs(net_premium_mn / mktcap_bn) */}
+                                  {isA && (
+                                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-2)" }}>
+                                      {row.net_prem_norm_abs !== null && row.net_prem_norm_abs !== undefined
+                                        ? `~${row.net_prem_norm_abs.toFixed(2)}`
+                                        : <span style={{ color: "var(--muted)" }}>—</span>}
+                                    </td>
+                                  )}
+
+                                  {/* Flow z (Board A only) */}
+                                  {isA && (
+                                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                                      {row.flow_z !== null && row.flow_z !== undefined
+                                        ? (
+                                          <span style={{
+                                            display: "inline-block", padding: "1px 5px", borderRadius: 3,
+                                            background: "var(--panel-3)", fontSize: 11,
+                                            color: Math.abs(row.flow_z) >= 2 ? "var(--warn)" : "var(--text-2)",
+                                          }}>
+                                            {row.flow_z.toFixed(1)}
+                                          </span>
+                                        )
+                                        : <span style={{ color: "var(--muted)" }}>—</span>}
+                                    </td>
+                                  )}
+
+                                  {/* K/N chip cluster */}
+                                  <td style={{ textAlign: "center" }}>
+                                    <div style={{ display: "flex", gap: 2, justifyContent: "center", flexWrap: "wrap" }}>
+                                      <span style={{
+                                        fontSize: 11, fontWeight: 700,
+                                        color: K >= 2 ? "var(--up)" : K >= 1 ? "var(--warn)" : "var(--muted)",
+                                        marginRight: 3,
+                                      }}>
+                                        {K}/{nAvail}
+                                      </span>
+                                      {scoredLegs.map(([label, val]) => (
+                                        <span
+                                          key={label}
+                                          title={label}
+                                          style={{
+                                            display: "inline-block", width: 8, height: 8,
+                                            borderRadius: 2,
+                                            background: val === true
+                                              ? "var(--up)"
+                                              : val === false
+                                              ? "rgba(240,86,107,.4)"
+                                              : "var(--panel-3)",
+                                            border: "1px solid var(--line-3)",
+                                          }}
+                                        />
+                                      ))}
+                                    </div>
+                                  </td>
+
+                                  {/* Board B oscillators */}
+                                  {!isA && (
+                                    <td>
+                                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                                        {row.macd_2w_state && row.macd_2w_state !== "none" && (
+                                          <span style={{
+                                            fontSize: 10, padding: "1px 5px", borderRadius: 3,
+                                            background: row.macd_2w_state === "crossed" ? "rgba(38,194,129,.2)" : "rgba(232,163,61,.15)",
+                                            color: row.macd_2w_state === "crossed" ? "var(--up)" : "var(--warn)",
+                                          }}>
+                                            {row.macd_2w_state === "crossed"
+                                              ? t("leadersMacdCrossed", `MACD ×${row.macd_2w_bars_since ?? ""}`).replace("{n}", String(row.macd_2w_bars_since ?? ""))
+                                              : t("leadersMacdApproach", `MACD ~${row.macd_2w_bars_to_cross != null ? row.macd_2w_bars_to_cross.toFixed(1) + "b" : "?"}`).replace("{b}", row.macd_2w_bars_to_cross != null ? row.macd_2w_bars_to_cross.toFixed(1) + "b" : "?")}
+                                          </span>
+                                        )}
+                                        {row.stochrsi_2w_oversold === true && (
+                                          <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(38,194,129,.15)", color: "var(--up)" }}>
+                                            {t("leadersOversoldChip", "oversold")}
+                                          </span>
+                                        )}
+                                        {row.htf_coverage && row.stochrsi_2w_k !== null && (
+                                          <span style={{ fontSize: 10, color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>
+                                            K{row.stochrsi_2w_k.toFixed(0)}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+                                  )}
+
+                                  {/* Warn chips + 0DTE */}
+                                  <td>
+                                    <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                                      {warnEarnings && (
+                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.15)", color: "var(--down)" }}>
+                                          {t("leadersWarnEarningsShort", "earns")}
+                                        </span>
+                                      )}
+                                      {warnVol && (
+                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(232,163,61,.15)", color: "var(--warn)" }}>
+                                          {t("leadersWarnVolShort", "vol")}
+                                        </span>
+                                      )}
+                                      {warnPut && (
+                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.12)", color: "var(--down)" }}>
+                                          {t("leadersWarnPutShort", "put hedge")}
+                                        </span>
+                                      )}
+                                      {warnGamma && (
+                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(232,163,61,.12)", color: "var(--warn)" }}>
+                                          {t("leadersWarnGammaShort", "gamma")}
+                                        </span>
+                                      )}
+                                      {row.zerodte_dominated && (
+                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "var(--panel-3)", color: "var(--text-dim)" }}>
+                                          0DTE
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+
+                                  {/* Source tag */}
+                                  <td>
+                                    <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>
+                                      {row.signing_source === "minute_tick" ? "min" : row.signing_source}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Per-source footnote */}
+                    <div style={{ marginTop: 14, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.6 }}>
+                      {t("leadersFootnote", "Direction ~-soft (approximate). Sources: {sources}. All readings display-only — not investment advice.").replace("{sources}", leadersData.coverage.tape_names.join(", "))}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
 
