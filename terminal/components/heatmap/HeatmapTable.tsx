@@ -233,16 +233,21 @@ function TableRow({ tile, layer, isSelected, onClick, zh, universeAvgChg }: Tabl
   const rs = tile.chg1d - universeAvgChg;
   const rsStr = `${rs >= 0 ? "+" : ""}${rs.toFixed(2)}`;
 
-  // Sentiment % for flow (tone mapped to score ×100)
+  // Sentiment % for flow (tone mapped to score ×100) — drives the tone column.
   const toneScore = tile.tone === "pos" ? 100 : tile.tone === "neg" ? -100 : 0;
 
+  // Row tint: FLOW → signed net premium (log magnitude, matches the treemap);
+  // PRICE → 1D %chg. Theme palette (38,194,129 / 240,86,107) + higher ceiling so
+  // rows are actually visible instead of a near-transparent wall.
+  const flowMag = Math.abs(tile.netPremiumMn ?? 0);
+  const flowUp = (tile.netPremiumMn ?? 0) >= 0;
   const ci = layer === "flow"
-    ? Math.min(Math.abs(toneScore) / 100, 1)
+    ? (tile.hasFlow ? Math.min(Math.log10(1 + flowMag) / Math.log10(1 + 250), 1) : 0)
     : Math.min(Math.abs(tile.chg1d) / 6, 1);
-  const bgAlpha = (ci * 0.06).toFixed(3);
+  const bgAlpha = (ci * 0.24).toFixed(3);
   const bgColor = layer === "flow"
-    ? (tile.tone === "pos" ? `rgba(0,200,83,${bgAlpha})` : tile.tone === "neg" ? `rgba(255,23,68,${bgAlpha})` : "transparent")
-    : (tile.chg1d >= 0 ? `rgba(0,200,83,${bgAlpha})` : `rgba(255,23,68,${bgAlpha})`);
+    ? (!tile.hasFlow || flowMag < 0.3 ? "transparent" : (flowUp ? `rgba(38,194,129,${bgAlpha})` : `rgba(240,86,107,${bgAlpha})`))
+    : (tile.chg1d >= 0 ? `rgba(38,194,129,${bgAlpha})` : `rgba(240,86,107,${bgAlpha})`);
 
   return (
     <tr

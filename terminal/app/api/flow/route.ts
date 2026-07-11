@@ -22,6 +22,7 @@ const MANIFEST_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "manife
 const PROPHET_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_fixture.json");
 const PROPHET_MARKS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_marks_fixture.json");
 const ENRICH_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "enrich_fixture.json");
+const FLOW_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_idx_fixture.json");
 
 // Bare-minimum in-memory cache so concurrent renders share one fetch.
 type CacheEntry = { data: Record<string, unknown>; ts: number };
@@ -199,9 +200,13 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       return JSON.parse(raw) as Record<string, unknown>;
     } catch { return { symbols: {}, as_of: "", source: "fixture" }; }
   }
-  // Flow index fixture — fall back gracefully; HeatmapView degrades to price-only.
+  // Flow index fixture — serve public/data/flow_idx_fixture.json when present so the
+  // Heatmap FLOW layer is testable in dev; otherwise degrade gracefully to price-only.
   if (f === "flow_idx") {
-    return { rows: [], as_of: "", source: "fixture-empty" };
+    try {
+      const raw = await fs.readFile(FLOW_IDX_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch { return { rows: [], as_of: "", source: "fixture-empty" }; }
   }
   // Prophet index fixture.
   if (f === "prophet_idx") {
