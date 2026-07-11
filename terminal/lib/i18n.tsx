@@ -623,6 +623,13 @@ const LEX: Record<string, [string, string]> = {
   dsLunch: ["LUNCH", "午休"],
   intradayOnly: ["Intraday timeframes only", "仅限日内周期"],
   rvolNoBase: ["insufficient history (n<3)", "历史数据不足 (n<3)"],
+  // Neural Web macro strip (market_plane feed — display-only context)
+  nwTip: ["Neural Web macro read — display-only context, not advice. Click to open the Macro Dashboard.", "神经网宏观解读 —— 仅供参考，非投资建议。点击打开宏观仪表盘。"],
+  nwVol: ["Vol", "波动"],
+  nwLiq: ["Liq", "流动性"],
+  nwStale: ["Stale", "已过期"],
+  nwConfidence: ["confidence", "置信度"],
+  nwCycle: ["cycle", "周期"],
 };
 
 // Non-hook LEX lookup for imperative contexts (e.g. chart legend meta assembled outside React render).
