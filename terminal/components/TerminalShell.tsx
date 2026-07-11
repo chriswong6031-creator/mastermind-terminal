@@ -1,5 +1,9 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
+import { CSS as DndCSS } from "@dnd-kit/utilities";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -64,6 +68,19 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
     const v = q[k];
     if (v != null && isFinite(v)) base[k] = v;
   }
+  // After-hours: when the hub emits an official EOD `close`, the row's LAST/CHG%
+  // should reflect the completed session (the after-hours delta belongs in the
+  // EXT column), NOT the raw AH-influenced `last`/`chg`. Mirrors the detail-pane
+  // rule (officialClose ?? last; chg = (close - prevClose)/prevClose) so the
+  // sidebar, header, and detail pane all agree.
+  const officialClose = q.close;
+  if (officialClose != null && isFinite(officialClose)) {
+    base.last = officialClose;
+    const prevClose = q.prevClose;
+    if (prevClose != null && isFinite(prevClose) && prevClose !== 0) {
+      base.chg = ((officialClose - prevClose) / prevClose) * 100;
+    }
+  }
   // Overnight (post-midnight-ET, pre-open): no new session prints exist, so chg
   // computes to a misleading 0.00%. The hub emits prevSessionChg ONLY in that
   // window — show the last completed session's move instead (TV semantics).
@@ -71,6 +88,45 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
     base.chg = q.prevSessionChg;
   }
   return base;
+}
+
+// Drag-sortable wrapper for a watchlist row. Whole-row draggable with a distance
+// activation constraint so a plain click still selects (pick) and only a >6px drag
+// starts a reorder. Lifted-row polish (opacity/shadow/scale) via isDragging.
+function SortableWlRow({ sym, className, style, onClick, onMouseEnter, children }: {
+  sym: string;
+  className: string;
+  style: React.CSSProperties;
+  onClick: () => void;
+  onMouseEnter: () => void;
+  children: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: sym });
+  return (
+    <div
+      ref={setNodeRef}
+      // dnd-kit derives aria-describedby from a module counter that differs
+      // between SSR and client — a benign, dev-only hydration mismatch.
+      suppressHydrationWarning
+      className={className}
+      style={{
+        ...style,
+        transform: DndCSS.Transform.toString(transform),
+        transition: transition ?? undefined,
+        cursor: "grab",
+        ...(isDragging
+          ? { opacity: 0.96, zIndex: 30, position: "relative", background: "var(--panel-2)", boxShadow: "0 10px 28px rgba(0,0,0,.5)", cursor: "grabbing" }
+          : {}),
+      }}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      {...attributes}
+      tabIndex={-1}
+      {...listeners}
+    >
+      {children}
+    </div>
+  );
 }
 const CHART_TYPES = [["candles", "Candles"], ["heikin", "Heikin Ashi"], ["bars", "Bars"], ["line", "Line"], ["area", "Area"]];
 const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "2D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
@@ -107,7 +163,7 @@ const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "a
 const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80, ext: 72 };
 // item-26: ext = Extended Hours chg% vs close; dash when no ext print.
 type WLSet = { tableView: boolean; cols: { last: boolean; changePct: boolean; change: boolean; volume: boolean; ext: boolean }; disp: string; logo: boolean; colW: Record<string, number> };
-const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: true, change: false, volume: false, ext: false }, disp: "symbol", logo: true, colW: {} };
+const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: true, change: false, volume: false, ext: true }, disp: "symbol", logo: true, colW: {} };
 
 // ── Boot-trace helper (?boottrace=1) ────────────────────────────────────────
 // Wraps performance.mark so profiling is zero-cost unless the flag is set.
@@ -133,6 +189,23 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [wlMenuOpen, setWlMenuOpen] = useState(false);
   const wl = lists[activeList] || [];
   const setWl = (updater: any) => setLists((l) => ({ ...l, [activeList]: typeof updater === "function" ? updater(l[activeList] || []) : updater }));
+  // Drag-to-reorder sensors: 6px activation distance so clicks still select rows.
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  // Reorder within a section only (Crypto rows stay with Crypto, etc). Order is the
+  // wl array, which auto-persists to localStorage (mm.wls) via the existing effect.
+  const onWlDragEnd = useCallback((e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    setWl((prev: { symbol: string; section: string }[]) => {
+      const from = prev.findIndex((x) => x.symbol === active.id);
+      const to = prev.findIndex((x) => x.symbol === over.id);
+      if (from < 0 || to < 0 || prev[from].section !== prev[to].section) return prev;
+      return arrayMove(prev, from, to);
+    });
+  }, [activeList]);
   const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
   const [panes, setPanes] = useState<string[]>([seed0]);
   const [activePane, setActivePane] = useState(0);
@@ -1416,9 +1489,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <span />
               </div>
               <div className="wl-list">
+                <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onWlDragEnd} modifiers={[restrictToVerticalAxis, restrictToParentElement]}>
                 {Object.entries(sections).map(([sec, rows]) => (
                   <div key={sec}>
                     <div className="wl-sec" style={{ minWidth: wlMinW }}>{sec}</div>
+                    <SortableContext items={rows} strategy={verticalListSortingStrategy}>
                     {rows.map((sym) => {
                       const isCompSym = isComposite(sym);
                       // For composite rows, derive summed quote from leg quotes with EOD fallback.
@@ -1451,7 +1526,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                       const secondary = set.disp === "both" ? nm : set.disp === "name" ? sym : (set.tableView ? "" : nm);
                       const flagColor = flags[sym];
                       return (
-                        <div key={sym} className={`wl-row${sym === active ? " on" : ""}${set.tableView ? " tv" : ""}`} style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW, height: set.tableView ? 32 : 46 }} onClick={() => pick(sym)} onMouseEnter={() => { if (!isCompSym) { prefetch(`/data/${sym}.json`); prefetch(`/data/${sym}.slice.json`); prefetch(`/data/${sym}.intel.json`); } }}>
+                        <SortableWlRow key={sym} sym={sym} className={`wl-row${sym === active ? " on" : ""}${set.tableView ? " tv" : ""}`} style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW, height: set.tableView ? 32 : 46 }} onClick={() => pick(sym)} onMouseEnter={() => { if (!isCompSym) { prefetch(`/data/${sym}.json`); prefetch(`/data/${sym}.slice.json`); prefetch(`/data/${sym}.intel.json`); } }}>
                           {/* F1 flag slot — click to apply lastFlagColor; hover when already set shows palette */}
                           <WlFlagSlot sym={sym} color={flagColor} onSet={(c) => setFlag(sym, c)} onRemove={() => removeFlag(sym)} lastColor={lastFlagColor} />
                           <div className="s">{set.logo && !isCompSym && <span className="ic" style={{ background: r?.col || "#888", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24 }}>{sym[0]}</span>}
@@ -1465,11 +1540,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                             const cls = isChg ? (u ? "up" : "down") : isExt && extUp != null ? (extUp ? "up" : "down") : "";
                             return <span key={k} className={`c num ${cls}`}>{colVal(sym, r, k)}</span>;
                           })}
-                          <span className="rm" title={t("remove")} onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
-                        </div>
+                          <span className="rm" title={t("remove")} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
+                        </SortableWlRow>
                       ); })}
+                    </SortableContext>
                   </div>
                 ))}
+                </DndContext>
               </div>
             </div>
           </div>
