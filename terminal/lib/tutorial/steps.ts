@@ -28,7 +28,8 @@ import type { TutorialKey } from "./tutorialStrings";
 
 export interface TutorialStep {
   id: string;
-  module: 1 | 2 | 3 | 4 | 5 | 6;
+  /** 1–6 = the Options Desk modules (module picker). 7 = standalone Market Tide walkthrough. */
+  module: 1 | 2 | 3 | 4 | 5 | 6 | 7;
   /** CSS selector for the spotlight target. null = centered modal (no spotlight). */
   targetSelector: string | null;
   /** Preferred tooltip placement relative to the target (auto-flips on overflow). */
@@ -263,6 +264,57 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     titleKey: "m6s5Title",
     bodyKey: "m6s5Body",
   },
+
+  // ── Module 7 — Market Tide (standalone; launched from the Tide tab) ─────────
+
+  {
+    id: "m7s1",
+    module: 7,
+    targetSelector: null,
+    placement: "center",
+    titleKey: "m7s1Title",
+    bodyKey: "m7s1Body",
+  },
+  {
+    id: "m7s2",
+    module: 7,
+    targetSelector: '[data-tut="tide-chart"]',
+    placement: "bottom",
+    titleKey: "m7s2Title",
+    bodyKey: "m7s2Body",
+  },
+  {
+    id: "m7s3",
+    module: 7,
+    targetSelector: '[data-tut="tide-sector"]',
+    placement: "top",
+    titleKey: "m7s3Title",
+    bodyKey: "m7s3Body",
+  },
+  {
+    id: "m7s4",
+    module: 7,
+    targetSelector: '[data-tut="tide-impact"]',
+    placement: "top",
+    titleKey: "m7s4Title",
+    bodyKey: "m7s4Body",
+  },
+  {
+    id: "m7s5",
+    module: 7,
+    targetSelector: '[data-tut="tide-dte"]',
+    placement: "top",
+    titleKey: "m7s5Title",
+    bodyKey: "m7s5Body",
+  },
+  {
+    id: "m7s6",
+    module: 7,
+    targetSelector: null,
+    placement: "center",
+    titleKey: "m7s6Title",
+    bodyKey: "m7s6Body",
+  },
 ];
 
 // ── Module metadata ──────────────────────────────────────────────────────────
@@ -330,6 +382,10 @@ export const MODULES: ModuleMeta[] = [
  *   data-tut="gex-state-card"    — outermost div of MarketStateCard
  *   data-tut="heatmap-canvas"    — the CANVAS_AREA div in HeatmapView (the tile grid)
  *   data-tut="heatmap-controls"  — the CONTROLS_ROW div in HeatmapView (the layer picker)
+ *   data-tut="tide-chart"        — the Market Tide NCP/NPP/SPY chart wrapper (OptionsHubView)
+ *   data-tut="tide-sector"       — the Sector Tide grid (OptionsHubView)
+ *   data-tut="tide-impact"       — the Top Net Impact list (OptionsHubView)
+ *   data-tut="tide-dte"          — the DTE Buckets grid (OptionsHubView)
  *
  * Steps with targetSelector: null already use centered modal — no attribute needed.
  * These are: m1s5, m3s4, m5s4, m6s1–m6s5 (all 5 risk/discipline steps).
@@ -349,6 +405,10 @@ export const DATA_TUT_ATTRIBUTES = [
   "gex-state-card",
   "heatmap-canvas",
   "heatmap-controls",
+  "tide-chart",
+  "tide-sector",
+  "tide-impact",
+  "tide-dte",
 ] as const;
 
 export type DataTutValue = (typeof DATA_TUT_ATTRIBUTES)[number];
