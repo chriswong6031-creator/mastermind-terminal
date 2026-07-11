@@ -7,6 +7,9 @@ import dynamic from "next/dynamic";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { useLang, useT } from "@/lib/i18n";
+import type { Lang } from "@/lib/i18n";
+import { CoachProvider, useCoach } from "@/lib/tutorial/coach";
+import { getTutStr } from "@/lib/tutorial/tutorialStrings";
 import { abbrevSector } from "@/lib/sectorAbbrev";
 import { windowGexRows } from "@/lib/windowGexRows.mjs";
 import { flowGet, flowInvalidate, flowPrefetch } from "@/lib/flowClientCache";
@@ -540,40 +543,26 @@ const Sparkline = memo(function Sparkline({ data, color, width = 80, height = 30
   );
 });
 
-// ─── Method note popover ─────────────────────────────────────────────────────
+// ─── Market Tide tutorial launcher ───────────────────────────────────────────
+// Replaces the old off-screen Method-note popover: launches the standalone
+// Market Tide walkthrough (module 7) on the existing spotlight coach engine,
+// which viewport-clamps its own tooltips (so it can't overflow like the popover).
 
-function MethodNotePopover({ lang, t }: { lang: string; t: (k: string, fb?: string) => string }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
+const TIDE_TUTORIAL_MODULE = 7;
+
+function TideTutorialButton({ lang }: { lang: Lang }) {
+  const { startModule } = useCoach();
   return (
-    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
-      <button
-        className="chip"
-        style={{ height: 24, fontSize: 11, gap: 4 }}
-        onClick={() => setOpen((v) => !v)}
-      >
-        ℹ {t("tideMethodNote", "Method note")}
-      </button>
-      {open && (
-        <div
-          className="pop show"
-          style={{
-            top: "calc(100% + 6px)", left: 0, minWidth: 320, maxWidth: 400,
-            padding: "12px 14px", fontSize: 12, lineHeight: 1.6, color: "var(--text-2)",
-          }}
-        >
-          {t("tideMethodText", "")}
-        </div>
-      )}
-    </div>
+    <button
+      className="chip"
+      style={{ height: 24, fontSize: 11, gap: 5, display: "inline-flex", alignItems: "center" }}
+      onClick={() => startModule(TIDE_TUTORIAL_MODULE, lang)}
+    >
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="12" cy="12" r="9" /><path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
+      </svg>
+      {getTutStr(lang, "tideTutorialBtn")}
+    </button>
   );
 }
 
@@ -1595,6 +1584,7 @@ export default function OptionsHubView() {
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
+    <CoachProvider>
     <div className="app2 obs obs-ambient">
       <header className="topbar">
         <BrandLockup />
@@ -1994,17 +1984,17 @@ export default function OptionsHubView() {
                       )}
                     </div>
                     <div style={{ marginLeft: "auto" }}>
-                      <MethodNotePopover lang={lang} t={t} />
+                      <TideTutorialButton lang={lang} />
                     </div>
                   </div>
 
                   {/* Main tide chart — explicit height so LWC canvas isn't clipped */}
-                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 4px 4px", height: 240, boxSizing: "border-box" }}>
+                  <div data-tut="tide-chart" style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 4px 4px", height: 240, boxSizing: "border-box" }}>
                     <TideChart minutes={tideData.minutes} spy={tideData.spy} height={216} sessionDate={tideData.session_date} />
                   </div>
 
                   {/* Sector tide grid */}
-                  <div>
+                  <div data-tut="tide-sector">
                     <div style={{ fontWeight: 650, fontSize: 13, marginBottom: 12 }}>{t("tideSectorTitle", "Sector Tide")}</div>
                     <div
                       style={{
@@ -2063,8 +2053,24 @@ export default function OptionsHubView() {
                   </div>
 
                   {/* Top net impact */}
-                  <div>
-                    <div style={{ fontWeight: 650, fontSize: 13, marginBottom: 12 }}>{t("tideImpactTitle", "Top Net Impact")}</div>
+                  <div data-tut="tide-impact">
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 650, fontSize: 13 }}>{t("tideImpactTitle", "Top Net Impact")}</span>
+                      {/* Legend — resolves the "why is the #1 name red?" confusion (semantic, honors theme up/down swap) */}
+                      <span style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "var(--muted)" }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ display: "inline-block", width: 12, height: 8, borderRadius: 2, background: "var(--up)" }} />
+                          {lang === "zh" ? "净认购 · 偏多" : "net call · bullish"}
+                        </span>
+                        <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ display: "inline-block", width: 12, height: 8, borderRadius: 2, background: "var(--down)" }} />
+                          {lang === "zh" ? "净认沽 · 偏空" : "net put · bearish"}
+                        </span>
+                        <span style={{ color: "var(--text-dim)" }}>
+                          {lang === "zh" ? "条形长度 = 净方向权利金规模" : "bar length = size of net directional premium"}
+                        </span>
+                      </span>
+                    </div>
                     <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
                       {(() => {
                         // Hoisted once — bar scale is the max |net_prem_soft| across the set.
@@ -2107,7 +2113,7 @@ export default function OptionsHubView() {
 
                   {/* DTE Tide */}
                   {dteTide && (
-                    <div>
+                    <div data-tut="tide-dte">
                       <div style={{ fontWeight: 650, fontSize: 13, marginBottom: 12 }}>{t("tideDteTitle", "DTE Buckets")}</div>
                       <div
                         style={{
@@ -3137,5 +3143,6 @@ export default function OptionsHubView() {
         </div>
       </main>
     </div>
+    </CoachProvider>
   );
 }

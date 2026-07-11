@@ -258,6 +258,48 @@ const TUT_LEX = {
     "Some features are labeled \"accruing\" or \"experimental — deferred\". These are surfaces that display observations but whose predictive value is not yet established. We label them because honest uncertainty is more useful than false confidence. When a feature graduates from accruing to gauntleted, we'll say so explicitly.",
     "某些功能标记为\"积累中\"或\"实验性 — 已推迟\"。这些功能显示观察结果，但其预测价值尚未确立。我们标注它们，因为诚实的不确定性比虚假的信心更有用。当一个功能从积累阶段进入验证阶段时，我们会明确说明。",
   ],
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MODULE 7 — Market Tide (standalone walkthrough, launched from the Tide tab)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  tideTutorialBtn: ["How to read this", "如何解读"],
+
+  m7s1Title:   ["Market Tide", "市场潮汐"],
+  m7s1Body:    [
+    "Market Tide tracks the WHOLE market's options premium through the day as one running total. Instead of individual prints, you see the net tug-of-war between call buying and put buying across every name, minute by minute. It answers one question: is today's options tape leaning bullish or bearish, and how hard?",
+    "市场潮汐将整个市场当日的期权权利金汇总为一条累计曲线。你看到的不是单笔成交，而是全市场认购买入与认沽买入之间的净拉锯 — 逐分钟呈现。它回答一个问题：今天的期权盘口是偏多还是偏空，力度多大？",
+  ],
+
+  m7s2Title:   ["The two curves + SPY", "两条曲线 + SPY"],
+  m7s2Body:    [
+    "The up-color line is NCP — cumulative net CALL premium (a bullish lean). The down-color line is NPP — cumulative net PUT premium (a bearish lean). The amber line overlays SPY price. Watch whether the tape tide CONFIRMS price (both rising) or DIVERGES from it (price up while put premium builds). Direction here is ~soft — tick-rule derived, not NBBO-confirmed; magnitude is the reliable read.",
+    "上行色曲线是 NCP — 累计净认购权利金（偏多）。下行色曲线是 NPP — 累计净认沽权利金（偏空）。琥珀色线叠加 SPY 价格。关注盘口潮汐是印证价格（同步上行）还是背离价格（价格上涨而认沽权利金累积）。此处方向为~软性 — 基于 tick 规则推算，非 NBBO 确认；规模才是可靠读数。",
+  ],
+
+  m7s3Title:   ["Sector Tide", "板块潮汐"],
+  m7s3Body:    [
+    "The same net-premium read, broken out by sector. Each tile is one sector's net (call premium minus put premium) — up-color = net-call lean, down-color = net-put lean. Use it to see WHERE the day's options conviction is concentrated. Click a tile to filter the Tape to that sector.",
+    "同样的净权利金读数，按板块拆分。每块代表一个板块的净值（认购权利金减认沽权利金）— 上行色=偏认购，下行色=偏认沽。用它查看当日期权信心集中在哪里。点击色块可将交易记录筛选至该板块。",
+  ],
+
+  m7s4Title:   ["Top Net Impact — why a #1 name can be red", "净影响榜 — 为何榜首会是红色"],
+  m7s4Body:    [
+    "This ranks names by the SIZE of their net directional premium — the bar length is magnitude (|net premium|), and the COLOR is which side won. So the #1 name can be the DOWN color: it just means that name had the single largest net options premium today AND it leaned net-put (bearish). Big + red = the loudest bearish options bet, not a small one. Length tells you how big; color tells you which way.",
+    "此处按名称的净方向权利金规模排序 — 条形长度是量级（|净权利金|），颜色表示哪一方占优。所以榜首可能是下行色：这仅表示该名称当日的净期权权利金最大，且偏向净认沽（看空）。大 + 红 = 最响亮的看空期权押注，而非小额。长度告诉你多大，颜色告诉你方向。",
+  ],
+
+  m7s5Title:   ["DTE Buckets", "到期日分桶"],
+  m7s5Body:    [
+    "The same tide split by days-to-expiry. Near-dated (0DTE / weekly) flow is fast, reactive positioning — often hedging or same-day speculation. Longer-dated flow reflects slower, higher-conviction structural bets. Comparing the buckets tells you whether today's lean is a quick reaction or a durable position.",
+    "同样的潮汐，按到期天数拆分。近月（当日/周期权）资金流是快速、反应式的仓位 — 通常是对冲或当日投机。远月资金流反映更慢、更高信心的结构性押注。对比各分桶可判断当日倾向是快速反应还是持久仓位。",
+  ],
+
+  m7s6Title:   ["Reading it well", "如何用好它"],
+  m7s6Body:    [
+    "Market Tide is a DESCRIPTION of the options tape, not a signal. Magnitude (how much premium) is reliable; direction (call vs put lean) is a soft tick-rule estimate. Use it for context — is the crowd leaning, where, and how hard — then confirm with price and your own thesis. It is display-only and not investment advice.",
+    "市场潮汐是对期权盘口的描述，而非信号。规模（权利金多少）可靠；方向（偏认购或认沽）为软性 tick 规则估计。用它建立背景 — 人群是否倾斜、在哪里、力度多大 — 再用价格和你自己的判断加以印证。仅供展示，不构成投资建议。",
+  ],
 } as const;
 
 type TutorialKey = keyof typeof TUT_LEX;
