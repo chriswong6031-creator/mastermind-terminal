@@ -126,6 +126,13 @@ function fmt2(v: number | null | undefined): string {
   return v.toFixed(2)
 }
 
+// size_pct arrives in percent form (e.g. 7.5 = 7.5%) on live data, but older/other
+// emitters may send a 0..1 fraction. Treat <=1 as a fraction, >1 as already-percent
+// so we never render "7500%". Returns a rounded whole-percent number.
+function sizePctDisplay(v: number): number {
+  return Math.round(v <= 1 ? v * 100 : v)
+}
+
 function fmtPctLocal(v: number | null | undefined, scale = false): string {
   if (v == null || !isFinite(v)) return "—"
   const pct = scale ? v * 100 : v
@@ -499,7 +506,7 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
                     </div>
                     {aj?.gloss && <div className="sig-desk-gloss">{aj.gloss}</div>}
                     {typeof aj?.size_pct === "number" && aj.size_pct > 0 && (
-                      <div className="sig-desk-rank">{pick(zh, "Suggested size", "建议仓位")}: {Math.round(aj.size_pct * 100)}%</div>
+                      <div className="sig-desk-rank">{pick(zh, "Suggested size", "建议仓位")}: {sizePctDisplay(aj.size_pct)}%</div>
                     )}
                   </div>
                 </div>
@@ -616,7 +623,7 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
                   {typeof aj?.size_pct === "number" && aj.size_pct > 0 && (
                     <div className="sig-dim">
                       <span className="sig-dim-k">{pick(zh, "Size", "仓位")}</span>
-                      <span className="sig-dim-v">{Math.round(aj.size_pct * 100)}%</span>
+                      <span className="sig-dim-v">{sizePctDisplay(aj.size_pct)}%</span>
                     </div>
                   )}
                 </div>

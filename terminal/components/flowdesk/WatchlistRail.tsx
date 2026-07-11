@@ -75,8 +75,12 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
       const total = callPrem + putPrem;
       return { total, callPrem, putPrem, callShare: total > 0 ? callPrem / total : 0.5 };
     }
-    let callPrem = 0; let putPrem = 0;
-    for (const m of tide.minutes) { callPrem += m.ncp; putPrem += m.npp; }
+    // ncp/npp are CUMULATIVE signed nets — the last minute IS the session total.
+    // (Summing every minute double-counts the running total → billions.) npp is
+    // stored negative (net put premium); take magnitudes for the call/put split.
+    const last = tide.minutes[tide.minutes.length - 1];
+    const callPrem = Math.abs(last.ncp);
+    const putPrem = Math.abs(last.npp);
     const total = callPrem + putPrem;
     return { total, callPrem, putPrem, callShare: total > 0 ? callPrem / total : 0.5 };
   }, [feed.events, tide]);

@@ -36,6 +36,25 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
   const [stmt, setStmt] = useState<Stmt>("income");
   const [aq, setAQ] = useState<AQ>("annual");
 
+  // period-end → tx id. Quarterly columns match a quarter's end-date exactly.
+  // Annual columns carry the fiscal-YEAR end (e.g. "2026-07-31") which need not
+  // string-equal any quarter's end; we map the FY to the LAST quarter that ends
+  // in that fiscal year (its Q4 transcript) rather than requiring exact equality.
+  // NOTE: these hooks MUST run before any early return — `fund` flips null↔loaded
+  // while this pane stays mounted across symbol switches (MegaPane has no key),
+  // and a conditional-hook order change would crash the whole route.
+  const txQuarters = useMemo(() => {
+    // quarters carrying a tx, sorted oldest→newest by end-date
+    return (fund?.earnings?.q ?? [])
+      .filter((q): q is typeof q & { end: string; tx: string } => !!q.end && !!q.tx)
+      .sort((a, b) => a.end.localeCompare(b.end));
+  }, [fund?.earnings]);
+  const txByEnd = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const q of txQuarters) m.set(q.end, q.tx);
+    return m;
+  }, [txQuarters]);
+
   if (!fund) {
     return (
       <div className="fin-empty fin-empty-lg" role="status">
@@ -47,22 +66,6 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
 
   const set: StatementPeriodSet | undefined = aq === "annual" ? fund.statements?.annual : fund.statements?.quarterly;
   const periods = set?.periods ?? [];
-
-  // period-end → tx id. Quarterly columns match a quarter's end-date exactly.
-  // Annual columns carry the fiscal-YEAR end (e.g. "2026-07-31") which need not
-  // string-equal any quarter's end; we map the FY to the LAST quarter that ends
-  // in that fiscal year (its Q4 transcript) rather than requiring exact equality.
-  const txQuarters = useMemo(() => {
-    // quarters carrying a tx, sorted oldest→newest by end-date
-    return (fund.earnings?.q ?? [])
-      .filter((q): q is typeof q & { end: string; tx: string } => !!q.end && !!q.tx)
-      .sort((a, b) => a.end.localeCompare(b.end));
-  }, [fund.earnings]);
-  const txByEnd = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const q of txQuarters) m.set(q.end, q.tx);
-    return m;
-  }, [txQuarters]);
   const txForPeriod = (i: number): string | null => {
     const end = set?.period_end?.[i];
     if (!end) return null;
