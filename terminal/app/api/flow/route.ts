@@ -13,6 +13,7 @@ const VOL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "vol_fixture
 const GEX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gex_fixture.json");
 const SCREENER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "screener_fixture.json");
 const CTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ctx_fixture.json");
+const LEADERS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_leaders.fixture.json");
 const TCTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "tctx_fixture.json");
 const OICONF_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oiconf_fixture.json");
 const CHAINHEAT_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "chain_heat_fixture.json");
@@ -45,6 +46,7 @@ function isValidF(f: FParam): boolean {
   if (f === "prophet_idx") return true;
   if (f === "prophet_marks") return true;
   if (f === "enrich") return true;
+  if (f === "leaders") return true;
   return false;
 }
 
@@ -68,6 +70,7 @@ function backendPath(f: string): string {
   if (f === "prophet_idx") return "/api/hub/prophet";
   if (f === "prophet_marks") return "/api/hub/prophet_marks";
   if (f === "enrich") return "/api/flow/enrich";
+  if (f === "leaders") return "/api/flow/leaders";
   return `/api/flow/${f}`;
 }
 
@@ -91,6 +94,7 @@ function r2Key(f: string): string {
   if (f === "prophet_idx") return "prophet/index.json";
   if (f === "prophet_marks") return "live_flow/prophet_marks.json";
   if (f === "enrich") return "live_flow/enrich_current.json";
+  if (f === "leaders") return "flowleaders/leaders.json";
   return `live_flow/${f}_current.json`;
 }
 
@@ -216,6 +220,13 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       const raw = await fs.readFile(PROPHET_MARKS_FIXTURE_FILE, "utf8");
       return JSON.parse(raw) as Record<string, unknown>;
     } catch { return { schema: "prophet.live_marks/v1", asof_utc: "", session_date: "", marks: {} }; }
+  }
+  // Flow leaders fixture.
+  if (f === "leaders") {
+    try {
+      const raw = await fs.readFile(LEADERS_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch { return { schema: "flow_leaders.v1", cold_start: true, board_a: [], board_b: [], board_a_total: 0 }; }
   }
   // Flow enrich artifact fixture.
   if (f === "enrich") {
