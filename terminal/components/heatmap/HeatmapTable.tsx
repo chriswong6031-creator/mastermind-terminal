@@ -20,6 +20,7 @@
 import React, { useMemo, useState } from "react";
 import { makeHeatmapT } from "@/lib/heatmapStrings";
 import { SECTOR_LABEL } from "./sectorMap";
+import { heatPalette } from "./Treemap";
 import type { HeatmapTile, Layer } from "./types";
 
 type SortKey =
@@ -237,17 +238,19 @@ function TableRow({ tile, layer, isSelected, onClick, zh, universeAvgChg }: Tabl
   const toneScore = tile.tone === "pos" ? 100 : tile.tone === "neg" ? -100 : 0;
 
   // Row tint: FLOW → signed net premium (log magnitude, matches the treemap);
-  // PRICE → 1D %chg. Theme palette (38,194,129 / 240,86,107) + higher ceiling so
-  // rows are actually visible instead of a near-transparent wall.
+  // PRICE → 1D %chg. Theme palette from --up-rgb/--down-rgb (flips under red-up)
+  // + higher ceiling so rows are visible instead of a near-transparent wall.
+  const pal = heatPalette();
   const flowMag = Math.abs(tile.netPremiumMn ?? 0);
   const flowUp = (tile.netPremiumMn ?? 0) >= 0;
   const ci = layer === "flow"
     ? (tile.hasFlow ? Math.min(Math.log10(1 + flowMag) / Math.log10(1 + 250), 1) : 0)
     : Math.min(Math.abs(tile.chg1d) / 6, 1);
   const bgAlpha = (ci * 0.24).toFixed(3);
+  const upRgb = pal.up.join(","), dnRgb = pal.down.join(",");
   const bgColor = layer === "flow"
-    ? (!tile.hasFlow || flowMag < 0.3 ? "transparent" : (flowUp ? `rgba(38,194,129,${bgAlpha})` : `rgba(240,86,107,${bgAlpha})`))
-    : (tile.chg1d >= 0 ? `rgba(38,194,129,${bgAlpha})` : `rgba(240,86,107,${bgAlpha})`);
+    ? (!tile.hasFlow || flowMag < 0.3 ? "transparent" : (flowUp ? `rgba(${upRgb},${bgAlpha})` : `rgba(${dnRgb},${bgAlpha})`))
+    : (tile.chg1d >= 0 ? `rgba(${upRgb},${bgAlpha})` : `rgba(${dnRgb},${bgAlpha})`);
 
   return (
     <tr

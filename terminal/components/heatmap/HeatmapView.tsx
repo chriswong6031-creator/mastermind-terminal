@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLang } from "@/lib/i18n";
 import { makeHeatmapT } from "@/lib/heatmapStrings";
-import { Treemap } from "./Treemap";
+import { Treemap, heatPalette } from "./Treemap";
 import { HeatmapTable } from "./HeatmapTable";
 import { DetailPanel } from "./DetailPanel";
 import { getSector } from "./sectorMap";
@@ -663,9 +663,11 @@ export function HeatmapView() {
             </div>
             <div style={{
               width: 168, height: 8, borderRadius: 4,
-              background: layer === "flow"
-                ? "linear-gradient(90deg, rgb(240,86,107) 0%, rgb(92,108,136) 50%, rgb(38,194,129) 100%)"
-                : "linear-gradient(90deg, rgb(240,86,107) 0%, rgb(24,28,36) 50%, rgb(38,194,129) 100%)",
+              background: (() => {
+                const p = heatPalette();
+                const mid = layer === "flow" ? "92,108,136" : "24,28,36";
+                return `linear-gradient(90deg, rgb(${p.down.join(",")}) 0%, rgb(${mid}) 50%, rgb(${p.up.join(",")}) 100%)`;
+              })(),
             }} />
           </div>
         )}

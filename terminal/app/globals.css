@@ -8,6 +8,9 @@
   --pane-sep:#39404d; --pane-sep-h:#626b80;   /* indicator sub-pane divider — visible enough to find the resize handle */
   --text:#d6dae3; --text-2:#9ba3b4; --muted:#717a8e; --text-dim:#4a5468;
   --up:#26c281; --down:#f0566b;
+  /* RGB triplets for canvases that do color math (heatmap tiles/legend/table) —
+     kept in sync with --up/--down and flipped by the East-Asian theme below. */
+  --up-rgb:38,194,129; --down-rgb:240,86,107;
   --buy:#26c281; --sell:#f0566b; --signal:#e8b339;
   --rebuy:#b6e94a; --cut:#ff8a3d;
   --brand:#2962ff; --brand-2:#4d82ff; --brand-hov:#1d52ed; --link:#4d82ff;
@@ -20,12 +23,14 @@
    accent colors (brand/signal/warn) are unchanged. Set on <html data-updown="east"> pre-paint. */
 html[data-updown="east"]{
   --up:#f0566b; --down:#26c281; --buy:#f0566b; --sell:#26c281; --regime-up:#f0566b;
+  --up-rgb:240,86,107; --down-rgb:38,194,129;
   /* bullish↔bearish swap: rebuy (a BUY variant) → reddish, cut (a SELL variant) → greenish */
   --rebuy:#ff8a5c; --cut:#7fd4a0;
 }
 /* alias for spec parity: East-Asian red-up convention also selectable via [data-red-up=true] */
 [data-red-up=true]{
   --up:#f0566b; --down:#26c281; --buy:#f0566b; --sell:#26c281; --regime-up:#f0566b;
+  --up-rgb:240,86,107; --down-rgb:38,194,129;
   --rebuy:#ff8a5c; --cut:#7fd4a0;
 }
 *{box-sizing:border-box}

@@ -1525,9 +1525,18 @@ export default function OptionsHubView() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch tide when tab is activated
+  // Fetch tide when tab is activated, then keep it fresh while the tab is open —
+  // the header shows a "Live" indicator, so the data must actually refresh (it
+  // previously fetched once and went stale). Poll stops when leaving the tab.
   useEffect(() => {
-    if (activeTab === "tide") fetchTide();
+    if (activeTab !== "tide") return;
+    fetchTide();
+    const id = setInterval(() => {
+      flowInvalidate("tide");
+      flowInvalidate("dte");
+      fetchTide();
+    }, 45_000);
+    return () => clearInterval(id);
   }, [activeTab, fetchTide]);
 
   // Lazy-prefetch manifest only when Prophet tab activates (manifest is ~1.9MB —
