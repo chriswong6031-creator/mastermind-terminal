@@ -14,6 +14,7 @@ const GEX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gex_fixture
 const SCREENER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "screener_fixture.json");
 const CTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ctx_fixture.json");
 const LEADERS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_leaders_fixture.json");
+const LEADER_RADAR_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "leader_radar_fixture.json");
 const TCTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "tctx_fixture.json");
 const OICONF_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oiconf_fixture.json");
 const CHAINHEAT_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "chain_heat_fixture.json");
@@ -48,6 +49,7 @@ function isValidF(f: FParam): boolean {
   if (f === "prophet_marks") return true;
   if (f === "enrich") return true;
   if (f === "leaders") return true;
+  if (f === "radar") return true;
   return false;
 }
 
@@ -72,6 +74,7 @@ function backendPath(f: string): string {
   if (f === "prophet_marks") return "/api/hub/prophet_marks";
   if (f === "enrich") return "/api/flow/enrich";
   if (f === "leaders") return "/api/flow/leaders";
+  if (f === "radar") return "/api/flow/radar";
   return `/api/flow/${f}`;
 }
 
@@ -96,6 +99,7 @@ function r2Key(f: string): string {
   if (f === "prophet_marks") return "live_flow/prophet_marks.json";
   if (f === "enrich") return "live_flow/enrich_current.json";
   if (f === "leaders") return "flowleaders/leaders.json";
+  if (f === "radar") return "leaderradar/radar.json";
   return `live_flow/${f}_current.json`;
 }
 
@@ -227,6 +231,13 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       const raw = await fs.readFile(PROPHET_MARKS_FIXTURE_FILE, "utf8");
       return JSON.parse(raw) as Record<string, unknown>;
     } catch { return { schema: "prophet.live_marks/v1", asof_utc: "", session_date: "", marks: {} }; }
+  }
+  // Leader Radar fixture.
+  if (f === "radar") {
+    try {
+      const raw = await fs.readFile(LEADER_RADAR_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch { return { schema: "leader_radar.v1", cold_start: true, rows: [], regime: {}, coverage: {} }; }
   }
   // Flow leaders fixture.
   if (f === "leaders") {

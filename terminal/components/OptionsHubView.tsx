@@ -42,7 +42,7 @@ const ProphetView = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism" | "leaders";
+type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism" | "leaders" | "radar";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
@@ -55,6 +55,7 @@ const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "gex",      enKey: "tabGex",      zhKey: "tabGex" },
   { key: "prism",    enKey: "tabPrism",    zhKey: "tabPrism" },
   { key: "leaders",  enKey: "tabLeaders",  zhKey: "tabLeaders" },
+  { key: "radar",    enKey: "tabRadar",    zhKey: "tabRadar" },
 ];
 
 // ─── Types from feed contract ────────────────────────────────────────────────
@@ -288,6 +289,104 @@ interface LeadersPayload {
   board_a: LeaderRow[];
   board_b: LeaderRow[];
   board_a_total: number;
+}
+
+// ─── Leader Radar types ───────────────────────────────────────────────────────
+
+interface RadarTf2dState {
+  macd_pos: boolean;
+  macd_cross_up: boolean;
+  macd_cross_dn: boolean;
+  macd_approaching_up: boolean;
+  macd_approaching_dn: boolean;
+  macd_curl_up: boolean;
+  macd_curl_dn: boolean;
+  macd_bars_to_cross: number | null;
+  stoch_cross_up: boolean;
+  stoch_cross_dn: boolean;
+  rsi14: number | null;
+  rsi5: number | null;
+  stoch: number | null;
+  spark_rsi: number[];
+  spark_stoch: number[];
+  spark_hist: number[];
+}
+
+interface RadarContext {
+  pe: number | null;
+  fwd_pe: number | null;
+  mktcap_bn: number | null;
+  personality_labels: string[];
+  days_to_earnings: number | null;
+  valuation_pctile_5y: number | null;
+  tf2d_state: RadarTf2dState;
+}
+
+interface RadarRow {
+  ticker: string;
+  raw_state: string;
+  state: string;
+  days_in_state: number | null;
+  chips: Record<string, boolean | null>;
+  de_escalations: Record<string, boolean | null>;
+  fire_precipice: boolean;
+  fire_onset: boolean;
+  context: RadarContext;
+  breakaway_watch_state: string;
+}
+
+interface RadarRegimeChips {
+  dispersion_high: boolean | null;
+  corr_low: boolean | null;
+  pct_above_200_low: boolean | null;
+  top5_share_low: boolean | null;
+  zweig_thrust: boolean | null;
+  pct_above_200_high: boolean | null;
+  [key: string]: boolean | null;
+}
+
+interface RadarRegime {
+  label: string;
+  chips: RadarRegimeChips;
+  conditions: string;
+  mktcap_n_covered: number;
+  top5_weighting: string;
+}
+
+interface RadarCoverage {
+  n_universe: number;
+  revisions_uncovered: string[];
+  mktcap_n_covered: number;
+  tape_note: string;
+  rs_depth_note: string;
+}
+
+interface RadarHandoffPair {
+  extended_leg: string;
+  basing_leg_names: string[];
+}
+
+interface RadarReratingRow {
+  ticker: string;
+  state: string;
+  chips: {
+    revision_positive: boolean | null;
+    revision_breadth_60: boolean | null;
+    multiple_compressed: boolean | null;
+    earnings_within_14d: boolean | null;
+  };
+}
+
+interface RadarPayload {
+  schema: string;
+  as_of: string;
+  stale: boolean;
+  elapsed_s: number;
+  coverage: RadarCoverage;
+  regime: RadarRegime;
+  rows: RadarRow[];
+  handoff_pairs: RadarHandoffPair[];
+  rerating_watch: RadarReratingRow[];
 }
 
 // ─── Hub context types ────────────────────────────────────────────────────────
@@ -1692,6 +1791,27 @@ export default function OptionsHubView() {
   useEffect(() => {
     if (activeTab === "leaders") fetchLeaders();
   }, [activeTab, fetchLeaders]);
+
+  // ── Leader Radar fetch ────────────────────────────────────────────────────
+  const [radarData, setRadarData] = useState<RadarPayload | null>(null);
+  const [radarLoading, setRadarLoading] = useState(false);
+  const [radarError, setRadarError] = useState(false);
+  const [showNone, setShowNone] = useState(false);
+
+  const fetchRadar = useCallback(async () => {
+    if (radarData) return;
+    setRadarLoading(true); setRadarError(false);
+    try {
+      const d = await flowGet("radar");
+      if (d) setRadarData(d as unknown as RadarPayload);
+      else setRadarError(true);
+    } catch { setRadarError(true); }
+    setRadarLoading(false);
+  }, [radarData]);
+
+  useEffect(() => {
+    if (activeTab === "radar") fetchRadar();
+  }, [activeTab, fetchRadar]);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -3578,6 +3698,440 @@ export default function OptionsHubView() {
                     {/* Per-source footnote */}
                     <div style={{ marginTop: 14, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.6 }}>
                       {t("leadersFootnote", "Direction ~-soft (approximate). Sources: {sources}. All readings display-only — not investment advice.").replace("{sources}", leadersData.coverage.tape_names.join(", "))}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════════════
+              Leader Radar tab
+          ══════════════════════════════════════════════════════════════════ */}
+          {activeTab === "radar" && (
+            <div style={{ flex: 1, overflow: "auto", padding: "14px 16px" }}>
+              {/* Loading */}
+              {radarLoading && !radarData && (
+                <div className="fin-empty" role="status" style={{ color: "var(--muted)" }}>
+                  {t("radarLoading", "Loading Leader Radar…")}
+                </div>
+              )}
+
+              {/* Error / absent */}
+              {radarError && !radarData && (
+                <div style={{ padding: "40px 20px", textAlign: "center" }}>
+                  <div style={{ fontSize: 14, color: "var(--text-2)", marginBottom: 8 }}>
+                    {t("radarAbsent", "Leader Radar publishes after tonight's build")}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                    {lang === "zh" ? "数据每晚收盘后构建" : "Data builds nightly after market close"}
+                  </div>
+                </div>
+              )}
+
+              {radarData && (() => {
+                const cov = radarData.coverage;
+                const reg = radarData.regime;
+
+                // State display order per spec
+                const STATE_ORDER = [
+                  "CROWDED", "LEADERSHIP", "BREAKAWAY", "CATALYST_WINDOW",
+                  "QUIET_ACCUMULATION", "SUPPRESSED", "FAILED", "NONE",
+                ];
+
+                // State color map via CSS vars (all via inline style, no new class names)
+                const stateColor: Record<string, string> = {
+                  CROWDED:              "var(--up)",
+                  LEADERSHIP:           "var(--up)",
+                  BREAKAWAY:            "var(--up)",
+                  CATALYST_WINDOW:      "var(--warn)",
+                  QUIET_ACCUMULATION:   "var(--accent, #5b9cf6)",
+                  SUPPRESSED:           "var(--text-dim)",
+                  FAILED:               "var(--down)",
+                  NONE:                 "var(--muted)",
+                };
+                const stateBg: Record<string, string> = {
+                  CROWDED:              "rgba(38,194,129,.25)",
+                  LEADERSHIP:           "rgba(38,194,129,.18)",
+                  BREAKAWAY:            "rgba(38,194,129,.12)",
+                  CATALYST_WINDOW:      "rgba(232,163,61,.18)",
+                  QUIET_ACCUMULATION:   "rgba(91,156,246,.12)",
+                  SUPPRESSED:           "rgba(120,120,120,.12)",
+                  FAILED:               "rgba(240,86,107,.15)",
+                  NONE:                 "rgba(120,120,120,.07)",
+                };
+
+                // Group rows by state
+                const grouped: Record<string, RadarRow[]> = {};
+                for (const s of STATE_ORDER) grouped[s] = [];
+                for (const row of radarData.rows) {
+                  const s = row.state in grouped ? row.state : "NONE";
+                  grouped[s].push(row);
+                }
+
+                const noneCount = grouped["NONE"].length;
+
+                // Chip tri-state renderer
+                const ChipDot = ({ label, val }: { label: string; val: boolean | null }) => (
+                  <span
+                    title={label}
+                    style={{
+                      display: "inline-block", width: 8, height: 8, borderRadius: 2,
+                      background: val === true
+                        ? "var(--up)"
+                        : val === false
+                        ? "rgba(240,86,107,.4)"
+                        : "var(--panel-3)",
+                      border: "1px solid var(--line-3)",
+                      flexShrink: 0,
+                    }}
+                  />
+                );
+
+                // Regime chip labels (EN only — these are condition identifiers, not UI prose)
+                const regimeChipLabel: Record<string, [string, string]> = {
+                  dispersion_high:    ["dispersion high", "高离散度"],
+                  corr_low:           ["corr low", "低相关"],
+                  pct_above_200_low:  ["<200d% low", "<200d%低"],
+                  top5_share_low:     ["top5 wt low", "前5权重低"],
+                  zweig_thrust:       ["Zweig thrust", "Zweig冲击"],
+                  pct_above_200_high: ["<200d% high", "<200d%高"],
+                };
+
+                return (
+                  <>
+                    {/* ── Header strip ── */}
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
+                        {t("radarTitle", "Leader Radar")}
+                      </span>
+                      <span style={{ fontSize: 11, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
+                        {t("asOf", "as of")} {radarData.as_of.replace("T", " ").slice(0, 16)} UTC
+                      </span>
+                      {radarData.stale && (
+                        <span style={{ fontSize: 11, color: "var(--warn)", fontWeight: 600 }}>
+                          {t("radarStale", "Snapshot from prior session")}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Coverage line */}
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
+                      {cov.n_universe} {lang === "zh" ? "个标的" : "names"}{" · "}
+                      <span
+                        title={cov.revisions_uncovered.join(", ")}
+                        style={{ cursor: "help", borderBottom: "1px dashed var(--line-3)" }}
+                      >
+                        {cov.revisions_uncovered.length}{" "}
+                        {t("radarRevUncovered", "revision-uncovered")}
+                      </span>
+                    </div>
+
+                    {/* ── Regime banner ── */}
+                    {reg && (
+                      <div style={{
+                        padding: "8px 12px", borderRadius: "var(--r-md)",
+                        background: "color-mix(in srgb, var(--accent, #5b9cf6) 8%, transparent)",
+                        border: "1px solid color-mix(in srgb, var(--accent, #5b9cf6) 20%, transparent)",
+                        marginBottom: 12, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6,
+                      }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+                          {reg.label.replace(/_/g, " ")}
+                        </span>
+                        {reg.conditions && (
+                          <span style={{ fontSize: 11, color: "var(--text-2)", fontStyle: "italic" }}>
+                            — {reg.conditions}
+                          </span>
+                        )}
+                        {Object.entries(reg.chips).map(([k, v]) => v === true && (
+                          <span key={k} style={{
+                            fontSize: 10, padding: "1px 6px", borderRadius: 3,
+                            background: "color-mix(in srgb, var(--accent, #5b9cf6) 15%, transparent)",
+                            color: "var(--text-2)",
+                          }}>
+                            {lang === "zh" ? (regimeChipLabel[k]?.[1] ?? k) : (regimeChipLabel[k]?.[0] ?? k)}
+                          </span>
+                        ))}
+                        {reg.top5_weighting && reg.top5_weighting !== "equal_fallback" && (
+                          <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: "auto" }}>
+                            {t("radarRegimeWeighting", "weighting")}: {reg.top5_weighting}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── Lifecycle board grouped by state ── */}
+                    {STATE_ORDER.filter((s) => s !== "NONE" || showNone).map((stateName) => {
+                      const rows = grouped[stateName];
+                      if (rows.length === 0) return null;
+                      return (
+                        <div key={stateName} style={{ marginBottom: 18 }}>
+                          {/* State group header */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                            <span style={{
+                              fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 3,
+                              background: stateBg[stateName] ?? "var(--panel-3)",
+                              color: stateColor[stateName] ?? "var(--text)",
+                              textTransform: "uppercase", letterSpacing: ".05em",
+                            }}>
+                              {stateName.replace(/_/g, " ")}
+                            </span>
+                            <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                              {rows.length}
+                            </span>
+                          </div>
+
+                          {/* Rows */}
+                          <div className="obs-scroll" style={{ overflowX: "auto" }}>
+                            <table className="scr" style={{ fontSize: 12, minWidth: 560 }}>
+                              <tbody>
+                                {rows.map((row) => {
+                                  // Chips: collect all boolean entries for tri-state display
+                                  const chipEntries = Object.entries(row.chips).filter(
+                                    ([, v]) => v !== undefined
+                                  ) as [string, boolean | null][];
+                                  const trueCount = chipEntries.filter(([, v]) => v === true).length;
+                                  const availCount = chipEntries.filter(([, v]) => v !== null).length;
+
+                                  const tf = row.context.tf2d_state;
+                                  const hasOscSignal =
+                                    tf.macd_cross_up || tf.macd_approaching_up ||
+                                    tf.stoch_cross_up || tf.stoch_cross_dn;
+
+                                  const deEntries = Object.entries(row.de_escalations).filter(
+                                    ([, v]) => v === true
+                                  );
+
+                                  return (
+                                    <tr
+                                      key={row.ticker}
+                                      style={{ cursor: "pointer" }}
+                                      onClick={() => {
+                                        switchTab("tickers");
+                                        setSelectedTicker(row.ticker);
+                                      }}
+                                    >
+                                      {/* Ticker + state chip */}
+                                      <td style={{ minWidth: 68, fontWeight: 700, color: "var(--text)" }}>
+                                        {row.ticker}
+                                      </td>
+
+                                      {/* Days in state */}
+                                      <td style={{ textAlign: "center", minWidth: 52, color: "var(--text-dim)", fontSize: 11 }}>
+                                        {row.days_in_state !== null && row.days_in_state !== undefined
+                                          ? `${row.days_in_state}d`
+                                          : <span style={{ fontStyle: "italic", color: "var(--muted)" }}>{t("radarSeeding", "seeding")}</span>}
+                                      </td>
+
+                                      {/* Evidence chip cluster (tri-state) */}
+                                      <td style={{ minWidth: 100 }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+                                          <span style={{
+                                            fontSize: 11, fontWeight: 700, marginRight: 3,
+                                            color: trueCount >= 3 ? "var(--up)" : trueCount >= 1 ? "var(--warn)" : "var(--muted)",
+                                          }}>
+                                            {trueCount}/{availCount}
+                                          </span>
+                                          {chipEntries.map(([k, v]) => (
+                                            <ChipDot key={k} label={k.replace(/_/g, " ")} val={v} />
+                                          ))}
+                                        </div>
+                                      </td>
+
+                                      {/* De-escalation warn chips */}
+                                      <td style={{ minWidth: 80 }}>
+                                        <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                                          {deEntries.map(([k]) => (
+                                            <span key={k} style={{
+                                              fontSize: 10, padding: "1px 5px", borderRadius: 3,
+                                              background: "rgba(240,86,107,.15)", color: "var(--down)",
+                                            }}>
+                                              {k.replace(/_/g, " ")}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </td>
+
+                                      {/* Fire badges */}
+                                      <td style={{ minWidth: 90 }}>
+                                        <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                                          {row.fire_precipice && (
+                                            <span style={{
+                                              fontSize: 10, padding: "1px 5px", borderRadius: 3,
+                                              background: "rgba(232,163,61,.2)", color: "var(--warn)", fontWeight: 600,
+                                            }}>
+                                              {t("radarFireWatch", "watch-window entry")}
+                                            </span>
+                                          )}
+                                          {row.fire_onset && (
+                                            <span style={{
+                                              fontSize: 10, padding: "1px 5px", borderRadius: 3,
+                                              background: "rgba(38,194,129,.2)", color: "var(--up)", fontWeight: 600,
+                                            }}>
+                                              {t("radarFireOnset", "onset entry")}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+
+                                      {/* 2W/2D oscillator chips */}
+                                      <td style={{ minWidth: 110 }}>
+                                        {hasOscSignal && (
+                                          <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                                            {tf.macd_cross_up && (
+                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(38,194,129,.15)", color: "var(--up)" }}>
+                                                {t("radarOscMacdCrossUp", "MACD cross up")}
+                                              </span>
+                                            )}
+                                            {tf.macd_approaching_up && tf.macd_bars_to_cross !== null && (
+                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(232,163,61,.15)", color: "var(--warn)" }}>
+                                                {lang === "zh"
+                                                  ? `MACD接近上穿 ${tf.macd_bars_to_cross.toFixed(1)}b`
+                                                  : `MACD ~${tf.macd_bars_to_cross.toFixed(1)}b`}
+                                              </span>
+                                            )}
+                                            {tf.stoch_cross_up && (
+                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(38,194,129,.12)", color: "var(--up)" }}>
+                                                {t("radarOscStochCrossUp", "Stoch cross up")}
+                                              </span>
+                                            )}
+                                            {tf.stoch_cross_dn && (
+                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.12)", color: "var(--down)" }}>
+                                                {t("radarOscStochCrossDn", "Stoch cross dn")}
+                                              </span>
+                                            )}
+                                          </div>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* NONE toggle */}
+                    <div style={{ marginBottom: 16 }}>
+                      <button
+                        className="chip"
+                        style={{ height: 24, fontSize: 11 }}
+                        onClick={() => setShowNone((v) => !v)}
+                      >
+                        {showNone
+                          ? t("radarHideNone", "Hide NONE")
+                          : (lang === "zh"
+                            ? `显示 NONE (${noneCount})`
+                            : `Show NONE (${noneCount})`)}
+                      </button>
+                    </div>
+
+                    {/* ── Handoff Watch ── */}
+                    <div style={{ marginTop: 4, marginBottom: 18 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-2)", marginBottom: 8, textTransform: "uppercase", letterSpacing: ".04em" }}>
+                        {t("radarHandoffTitle", "Handoff Watch")}
+                      </div>
+                      {radarData.handoff_pairs.length === 0 ? (
+                        <div style={{ fontSize: 12, color: "var(--muted)", fontStyle: "italic" }}>
+                          {t("radarHandoffEmpty", "No extended-leg baskets currently")}
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          {radarData.handoff_pairs.map((pair, i) => (
+                            <div key={i} style={{
+                              padding: "8px 12px", borderRadius: "var(--r-md)",
+                              background: "var(--panel-2)", border: "1px solid var(--line-3)",
+                              display: "flex", alignItems: "flex-start", gap: 10, flexWrap: "wrap",
+                            }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--up)" }}>
+                                {pair.extended_leg}
+                              </span>
+                              <span style={{ fontSize: 11, color: "var(--text-dim)" }}>→</span>
+                              <span style={{ fontSize: 11, color: "var(--text-2)" }}>
+                                {pair.basing_leg_names.join(", ")}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ── Re-rating Watch ── */}
+                    {radarData.rerating_watch.length > 0 && (
+                      <div style={{ marginBottom: 18 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-2)", marginBottom: 8, textTransform: "uppercase", letterSpacing: ".04em" }}>
+                          {t("radarReratingTitle", "Re-rating Watch")}
+                        </div>
+                        <div className="obs-scroll" style={{ overflowX: "auto" }}>
+                          <table className="scr" style={{ fontSize: 12, minWidth: 400 }}>
+                            <thead>
+                              <tr>
+                                <th style={{ textAlign: "left", minWidth: 68 }}>{t("leadersColTicker", "Ticker")}</th>
+                                <th style={{ textAlign: "left", minWidth: 80 }}>{t("radarStateGroup", "State")}</th>
+                                <th style={{ textAlign: "center", minWidth: 60 }}>{t("radarReratingRevPos", "revision +")}</th>
+                                <th style={{ textAlign: "center", minWidth: 70 }}>{t("radarReratingRevBreadth", "breadth 60d")}</th>
+                                <th style={{ textAlign: "center", minWidth: 80 }}>{t("radarReratingMultComp", "multiple compressed")}</th>
+                                <th style={{ textAlign: "center", minWidth: 80 }}>{t("radarReratingEarnings", "earnings caution")}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {radarData.rerating_watch.map((rr) => (
+                                <tr
+                                  key={rr.ticker}
+                                  style={{ cursor: "pointer" }}
+                                  onClick={() => {
+                                    switchTab("tickers");
+                                    setSelectedTicker(rr.ticker);
+                                  }}
+                                >
+                                  <td style={{ fontWeight: 700 }}>{rr.ticker}</td>
+                                  <td>
+                                    <span style={{
+                                      fontSize: 10, padding: "1px 5px", borderRadius: 3,
+                                      background: stateBg[rr.state] ?? "var(--panel-3)",
+                                      color: stateColor[rr.state] ?? "var(--text)",
+                                    }}>
+                                      {rr.state.replace(/_/g, " ")}
+                                    </span>
+                                  </td>
+                                  {/* revision_positive */}
+                                  <td style={{ textAlign: "center" }}>
+                                    <ChipDot label="revision positive" val={rr.chips.revision_positive} />
+                                  </td>
+                                  {/* revision_breadth_60 */}
+                                  <td style={{ textAlign: "center" }}>
+                                    <ChipDot label="revision breadth 60d" val={rr.chips.revision_breadth_60} />
+                                  </td>
+                                  {/* multiple_compressed */}
+                                  <td style={{ textAlign: "center" }}>
+                                    <ChipDot label="multiple compressed" val={rr.chips.multiple_compressed} />
+                                  </td>
+                                  {/* earnings_within_14d — CAUTION style only when true */}
+                                  <td style={{ textAlign: "center" }}>
+                                    {rr.chips.earnings_within_14d === true ? (
+                                      <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.15)", color: "var(--down)" }}>
+                                        {lang === "zh" ? "财报临近" : "caution"}
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: "var(--muted)" }}>—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Footnote */}
+                    <div style={{ marginTop: 14, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.6 }}>
+                      {t("radarFootnote", "4H data for select names only; null-honest elsewhere. Display-only — not investment advice.")}
+                      {cov.tape_note && (
+                        <span style={{ marginLeft: 4 }}>{cov.tape_note}</span>
+                      )}
                     </div>
                   </>
                 );
