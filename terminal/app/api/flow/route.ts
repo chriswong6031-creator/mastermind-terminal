@@ -138,12 +138,14 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     return all[root] ?? all[Object.keys(all)[0]] ?? {};
   }
-  // GEX fixtures keyed by root.
+  // GEX fixtures keyed by root. Unknown roots return {} (empty payload) rather
+  // than falling back to SPY — so dev matches prod, where uncovered single names
+  // return an empty by_strike and the desk shows its honest "no GEX yet" state.
   if (f.startsWith("gex:")) {
     const root = f.slice(4).toUpperCase();
     const raw = await fs.readFile(GEX_FIXTURE_FILE, "utf8");
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-    return all[root] ?? all[Object.keys(all)[0]] ?? {};
+    return all[root] ?? {};
   }
   // Screener fixtures: "oi" and "hot" are sub-keys in screener_fixture.json.
   if (f === "oi" || f === "hot") {

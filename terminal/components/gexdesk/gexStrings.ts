@@ -56,7 +56,7 @@ const GEX_LEX = {
   ladderPutGex:     ["Put GEX", "认沽GEX"],
   ladderStrike:     ["Strike", "行权价"],
   ladderFlipLine:   ["Γ FLIP", "Γ翻转"],
-  ladderNoData:     ["No strike data — select a ticker to load", "暂无行权价数据 — 请选择品种加载"],
+  ladderNoData:     ["No GEX for this ticker yet — indices + liquid single names build nightly", "该品种暂无GEX — 指数与高流动性个股每日夜间构建"],
   ladderLoading:    ["Loading strike ladder…", "加载行权价梯度中…"],
 
   // ── Market state card ──────────────────────────────────────────────────────

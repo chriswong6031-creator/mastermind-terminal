@@ -99,6 +99,17 @@ function isIndexProduct(root: string): boolean {
   return INDEX_ETFS.has(root.toUpperCase());
 }
 
+// One-click quick picks next to the ticker box (indices first, then the most
+// liquid single names). The full autocomplete list backs the native <datalist>
+// dropdown — a zero-dependency "instant search" without loading the 1.9MB manifest.
+const GEX_QUICK_ROOTS = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "META", "AAPL"];
+const GEX_AUTOCOMPLETE_ROOTS = [
+  "SPY", "QQQ", "IWM", "DIA", "SPX", "NDX", "RUT",
+  "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "GOOG", "AMD", "NFLX",
+  "AVGO", "MU", "PLTR", "COIN", "SMCI", "MSTR", "BABA", "INTC", "CRM", "ORCL",
+  "QCOM", "ARM", "MARA", "SOFI", "UBER", "DIS", "BA", "JPM", "XLF", "XLE", "GLD",
+];
+
 // ─── Polling ──────────────────────────────────────────────────────────────────
 
 const GEX_POLL_MS = 60_000;
@@ -269,17 +280,40 @@ export function GexDeskView() {
       {/* ── Controls bar ──────────────────────────────────────────────────── */}
       <div style={CONTROLS_BAR}>
         <div style={TICKER_GROUP}>
-          <input
-            style={TICKER_INPUT}
-            value={inputVal}
-            onChange={(e) => setInputVal(e.target.value.toUpperCase())}
-            onBlur={commitTicker}
-            onKeyDown={handleKeyDown}
-            placeholder={t("tickerPlaceholder")}
-            aria-label={t("tickerInputLabel")}
-            spellCheck={false}
-            maxLength={12}
-          />
+          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="var(--muted)" strokeWidth="2"
+              style={{ position: "absolute", left: 8, pointerEvents: "none" }}>
+              <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" strokeLinecap="round" />
+            </svg>
+            <input
+              style={TICKER_INPUT}
+              list="gex-roots"
+              value={inputVal}
+              onChange={(e) => setInputVal(e.target.value.toUpperCase())}
+              onBlur={commitTicker}
+              onKeyDown={handleKeyDown}
+              placeholder={t("tickerPlaceholder")}
+              aria-label={t("tickerInputLabel")}
+              spellCheck={false}
+              maxLength={12}
+            />
+            <datalist id="gex-roots">
+              {GEX_AUTOCOMPLETE_ROOTS.map((r) => <option key={r} value={r} />)}
+            </datalist>
+          </div>
+          {/* Quick picks — the "dropdown options" the desk was missing */}
+          <div style={{ display: "flex", gap: 4 }}>
+            {GEX_QUICK_ROOTS.map((r) => (
+              <button
+                key={r}
+                className={`chip${ticker === r ? " on" : ""}`}
+                style={{ height: 24, fontSize: 11, fontWeight: 700, letterSpacing: "0.03em" }}
+                onClick={() => { setInputVal(r); setTicker(r); }}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
           {spot != null && (
             <span style={SPOT_DISPLAY}>
               {spotStr}
@@ -373,16 +407,16 @@ const TICKER_GROUP: React.CSSProperties = {
 };
 
 const TICKER_INPUT: React.CSSProperties = {
-  width: 88,
+  width: 118,
   height: 30,
-  padding: "0 10px",
+  padding: "0 10px 0 26px",
   background: "var(--inset)",
   border: "1px solid var(--line)",
   borderRadius: "var(--r-md)",
   color: "var(--text)",
   fontSize: 13,
   fontWeight: 700,
-  textAlign: "center",
+  textAlign: "left",
   textTransform: "uppercase",
   letterSpacing: "0.06em",
   outline: "none",
