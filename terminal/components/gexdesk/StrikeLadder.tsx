@@ -486,6 +486,11 @@ export function StrikeLadder({
               {t("expiry0Dte")}
             </button>
           )}
+          {/* Honesty: the feed carries per-expiry net-γ but not per-expiry strikes,
+              so the ladder below is always the all-expiry aggregate. Say so. */}
+          <span style={{ fontSize: 9.5, color: "var(--muted)", marginLeft: 2 }}>
+            {t("expiryAggregateNote")}
+          </span>
         </div>
       )}
 

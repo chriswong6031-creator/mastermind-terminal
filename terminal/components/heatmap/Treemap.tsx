@@ -25,30 +25,50 @@ import type { GicsSector } from "./types";
 
 // ─── Color scales (ported from MomoEdge heatmap-widget.js priceTileColor / flowTileColor) ──
 
-/** Price tile gradient. Dead-zone = |chg| < 0.10. Exact MomoEdge port. */
+/** Price tile gradient. Dead-zone = |chg| < 0.10. MomoEdge ramp, theme-flippable. */
 function priceColor(chg: number): { top: string; bot: string } {
   if (Math.abs(chg) < 0.10) {
     return { top: "rgb(24,28,36)", bot: "rgb(16,20,26)" };
   }
   const t = Math.min(Math.abs(chg) / 4, 1);
   const t2 = t * t;
-  if (chg > 0) {
-    return {
-      top: `rgb(${Math.round(5 + t * 3)},${Math.round(25 + t2 * 175)},${Math.round(15 + t2 * 68)})`,
-      bot: `rgb(${Math.round(3 + t * 2)},${Math.round(12 + t2 * 80)},${Math.round(8 + t2 * 30)})`,
-    };
-  }
-  return {
+  const greenC = {
+    top: `rgb(${Math.round(5 + t * 3)},${Math.round(25 + t2 * 175)},${Math.round(15 + t2 * 68)})`,
+    bot: `rgb(${Math.round(3 + t * 2)},${Math.round(12 + t2 * 80)},${Math.round(8 + t2 * 30)})`,
+  };
+  const redC = {
     top: `rgb(${Math.round(40 + t2 * 215)},${Math.round(8 + t * 15)},${Math.round(12 + t2 * 56)})`,
     bot: `rgb(${Math.round(20 + t2 * 95)},${Math.round(5 + t * 8)},${Math.round(8 + t2 * 24)})`,
   };
+  // Up-moves use the "up" hue; the East-Asian theme makes that red, not green.
+  const upIsGreen = !HM_EAST;
+  return (chg > 0) === upIsGreen ? greenC : redC;
 }
 
-// Theme-aligned palette (matches --up #26c281 / --down #f0566b) so the heatmap,
-// terminal, and light-mode inversion all share ONE green/red — no more three ramps.
-const HM_UP: readonly [number, number, number] = [38, 194, 129];
-const HM_DN: readonly [number, number, number] = [240, 86, 107];
-const HM_SLATE: readonly [number, number, number] = [92, 108, 136];
+// Theme-aligned palette. Defaults match --up #26c281 / --down #f0566b, but the
+// live values are read from CSS (--up-rgb / --down-rgb) so the East-Asian red-up
+// theme flips tiles, legend, and table tints together instead of contradicting.
+type Triplet = readonly [number, number, number];
+const HM_UP_DEFAULT: Triplet = [38, 194, 129];
+const HM_DN_DEFAULT: Triplet = [240, 86, 107];
+const HM_SLATE: Triplet = [92, 108, 136];
+
+function readTriplet(name: string, fallback: Triplet): Triplet {
+  if (typeof window === "undefined") return fallback;
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const parts = raw.split(",").map((s) => parseInt(s, 10));
+  return parts.length === 3 && parts.every((n) => Number.isFinite(n)) ? (parts as unknown as Triplet) : fallback;
+}
+/** Current up/down RGB from the active theme (call once per render). */
+export function heatPalette(): { up: Triplet; down: Triplet } {
+  return { up: readTriplet("--up-rgb", HM_UP_DEFAULT), down: readTriplet("--down-rgb", HM_DN_DEFAULT) };
+}
+// Mutable module palette — refreshed at the top of each Treemap render so the
+// module-level color helpers below flip with the theme without threading params.
+let HM_UP: Triplet = HM_UP_DEFAULT;
+let HM_DN: Triplet = HM_DN_DEFAULT;
+let HM_EAST = false; // red-up (East-Asian) theme active → price/flow hue flips
+const rgbStr = (t: Triplet) => t.join(",");
 const HM_TILE_BASE: readonly [number, number, number] = [21, 25, 32];
 // No-flow padding tile — distinct dim graphite so "no data" ≠ "flat flow".
 const HM_NODATA = { top: "rgb(18,21,27)", bot: "rgb(13,15,20)" } as const;
@@ -303,6 +323,10 @@ export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }
   const [dims, setDims] = useState<{ w: number; h: number }>({ w: 900, h: 500 });
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
+  // Refresh the module palette from the active theme before any tile color is
+  // computed this render (flowColor/priceColor/sector stroke read these).
+  { const p = heatPalette(); HM_UP = p.up; HM_DN = p.down; HM_EAST = p.up[0] > p.up[1]; }
+
   useEffect(() => {
     if (!containerRef.current) return;
     let timer: ReturnType<typeof setTimeout>;
@@ -424,7 +448,7 @@ function SectorBlockGroup({
         width={block.w}
         height={block.h}
         fill="rgba(255,255,255,0.003)"
-        stroke={`rgba(${avg > 0 ? "38,194,129" : avg < 0 ? "240,86,107" : "148,163,184"},0.22)`}
+        stroke={`rgba(${avg > 0 ? rgbStr(HM_UP) : avg < 0 ? rgbStr(HM_DN) : "148,163,184"},0.22)`}
         strokeWidth={1.2}
         rx={4}
       />
@@ -728,7 +752,7 @@ function HoverTooltip({ tooltip, layer, canvasW, canvasH, zh }: HoverTooltipProp
         )}
         {layer === "price" && (
           <span style={{ fontSize: 8, fontWeight: 600, padding: "1px 4px", borderRadius: 2,
-            background: tipChg >= 0 ? "rgba(0,200,83,0.08)" : "rgba(255,23,68,0.08)",
+            background: `rgba(${tipChg >= 0 ? rgbStr(HM_UP) : rgbStr(HM_DN)},0.10)`,
             color: chgColor }}>
             {chgStr}
           </span>

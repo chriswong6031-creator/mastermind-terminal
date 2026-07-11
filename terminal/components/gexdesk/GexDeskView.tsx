@@ -240,10 +240,17 @@ export function GexDeskView() {
 
   const isIndex = isIndexProduct(ticker);
 
+  // Guard a nonsense gamma_flip: the builder's zero-crossing detection sometimes
+  // returns a strike far from spot (e.g. 285 vs spot 748). If the flip is outside
+  // ±20% of spot it isn't a real dealer flip — drop it rather than draw a bogus line.
+  const rawFlip = gexPayload?.gamma_flip ?? null;
+  const gammaFlip = rawFlip != null && spot != null && spot > 0 && Math.abs(rawFlip - spot) / spot <= 0.20
+    ? rawFlip
+    : null;
   const levels = {
     callWall: gexPayload?.call_wall ?? null,
     putWall: gexPayload?.put_wall ?? null,
-    gammaFlip: gexPayload?.gamma_flip ?? null,
+    gammaFlip,
     hvl: gexPayload?.hvl ?? null,
   };
 
@@ -257,18 +264,27 @@ export function GexDeskView() {
         : spot.toFixed(2)
       : "—";
 
-  // Format asof for display
+  // Format asof — show the DATE + a staleness chip, not just the time, so a stale
+  // GEX snapshot (options-hub is EOD-nightly) reads honestly instead of looking live.
   let asofStr = "";
+  let asofStale = false;
+  let asofAgeStr = "";
   if (asof) {
     try {
-      asofStr = new Date(asof).toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
+      const d = new Date(asof);
+      asofStr = d.toLocaleString("en-US", {
+        weekday: "short", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit", hour12: false,
         timeZone: "America/New_York",
       }) + " ET";
+      const etDay = (dt: Date) => dt.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+      const ageDays = Math.round((Date.parse(etDay(new Date())) - Date.parse(etDay(d))) / 86_400_000);
+      if (ageDays > 0) {
+        asofStale = true;
+        asofAgeStr = ageDays <= 1 ? t("lastSession") : t("daysOld").replace("{n}", String(ageDays));
+      }
     } catch {
-      asofStr = asof.slice(11, 16);
+      asofStr = asof.slice(0, 16).replace("T", " ");
     }
   }
 
@@ -323,8 +339,9 @@ export function GexDeskView() {
 
         <div style={CONTROLS_RIGHT}>
           {asofStr && (
-            <span style={ASOF_BADGE}>
+            <span style={asofStale ? { ...ASOF_BADGE, color: "var(--warn)" } : ASOF_BADGE}>
               {t("asOf")} {asofStr}
+              {asofStale && <span style={{ marginLeft: 5, fontWeight: 600 }}>· {asofAgeStr}</span>}
             </span>
           )}
           {loading && (

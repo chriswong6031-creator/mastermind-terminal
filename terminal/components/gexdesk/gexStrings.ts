@@ -43,6 +43,7 @@ const GEX_LEX = {
   // ── Expiry dropdown ────────────────────────────────────────────────────────
   expiryDropdownLabel: ["All expirations", "全部到期日"],
   expiry0Dte:          ["0DTE", "当日到期"],
+  expiryAggregateNote: ["net-γ by expiry — ladder is all-expiry aggregate", "按到期日净伽马 — 梯图为全到期日合计"],
 
   // ── Strike ladder ──────────────────────────────────────────────────────────
   ladderTitle:      ["Strike Ladder", "行权价梯度"],
@@ -191,6 +192,8 @@ const GEX_LEX = {
 
   // ── Data freshness ─────────────────────────────────────────────────────────
   asOf:            ["as of", "更新于"],
+  lastSession:     ["last session", "上一交易日"],
+  daysOld:         ["{n}d old", "{n}天前"],
   dataEod:         ["EOD", "收盘数据"],
   dataIntraday:    ["intraday", "盘中"],
 } as const;
