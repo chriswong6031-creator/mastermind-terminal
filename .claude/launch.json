@@ -9,6 +9,7 @@
       "port": 3000,
       "env": {
         "FLOW_FIXTURE": "1",
+        "NW_FIXTURE": "1",
         "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
       }

@@ -604,6 +604,17 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .livebadge{display:inline-flex;align-items:center;gap:5px;font:600 9.5px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);padding:3px 7px;border:1px solid var(--line);border-radius:var(--r-pill)}
 .livebadge.live{color:var(--up);border-color:rgba(38,194,129,.35)} .livebadge i{width:5px;height:5px;border-radius:50%;background:currentColor}
 
+/* ── Neural Web macro strip (market_plane.json — display-only context, links to the Macro Dashboard) ── */
+.nw-strip{display:inline-flex;align-items:center;gap:6px;margin-right:12px;flex:none;cursor:pointer}
+.nw-strip .nw-chip{display:inline-flex;align-items:center;gap:5px;font:600 9.5px/1 var(--font-ui);letter-spacing:.05em;text-transform:uppercase;color:var(--text-2);padding:3px 8px;border:1px solid var(--line);border-radius:var(--r-pill);white-space:nowrap;transition:border-color var(--t)}
+.nw-strip .nw-chip i{width:5px;height:5px;border-radius:50%;background:currentColor;flex:none}
+.nw-strip .nw-score{font-size:10px;margin-left:1px}
+.nw-strip .nw-dot{width:7px;height:7px;border-radius:50%;flex:none;margin-left:1px}
+.nw-strip:hover .nw-chip{border-color:var(--line-3)}
+.nw-strip.stale{opacity:.42;filter:saturate(.35)}
+@media (max-width:1500px){.nw-strip .nw-sec{display:none}}
+@media (max-width:1220px){.nw-strip{display:none}}
+
 /* ===== polish: markdown chat, signals log ===== */
 .cmsg .bub.md{padding:2px 2px 2px 0;background:none;border:0}
 .cmsg .bub.md p{margin:0 0 8px}.cmsg .bub.md p:last-child{margin:0}
