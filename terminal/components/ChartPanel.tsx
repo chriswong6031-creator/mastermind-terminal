@@ -2052,6 +2052,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const hideCtx = () => { if (ctxRef.current) ctxRef.current.style.display = "none"; };
     // submenu state for Chart template
     let tmSubOpen = false;
+    // inline SVG helpers — 14×14, stroke only, currentColor
+    const icoReset = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 7A5.5 5.5 0 1 0 3.2 3.2"/><polyline points="1.5,2.5 1.5,7 6,7"/></svg>`;
+    const icoCopy  = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="4.5" width="8" height="8" rx="1.5"/><path d="M9.5 4.5V2.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>`;
+    const icoPaste = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3.5" width="10" height="9.5" rx="1.5"/><path d="M5 3.5V2.5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1"/></svg>`;
+    const icoBell  = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1v1M7 12v1M2.5 4.5a5 5 0 0 1 9 0v3.5l1 1v.5H1.5V9l1-1V4.5"/><path d="M5.5 12.5a1.5 1.5 0 0 0 3 0"/></svg>`;
+    const icoLock  = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="1" x2="7" y2="13"/><path d="M4 4h6a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></svg>`;
+    const icoTable = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><line x1="1" y1="5.5" x2="13" y2="5.5"/><line x1="5.5" y1="5.5" x2="5.5" y2="12"/></svg>`;
+    const icoTree  = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="4" height="3" rx="1"/><rect x="9" y="5" width="4" height="3" rx="1"/><rect x="9" y="10" width="4" height="3" rx="1"/><line x1="5" y1="2.5" x2="7" y2="2.5"/><line x1="7" y1="2.5" x2="7" y2="11.5"/><line x1="7" y1="6.5" x2="9" y2="6.5"/><line x1="7" y1="11.5" x2="9" y2="11.5"/></svg>`;
+    const icoTmpl  = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="12" height="12" rx="2"/><line x1="1" y1="5" x2="13" y2="5"/><line x1="7" y1="5" x2="7" y2="13"/></svg>`;
+    const icoTrash = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 3,12.5 11,12.5 12,4"/><line x1="1" y1="4" x2="13" y2="4"/><path d="M5 4V2.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 .5.5V4"/><line x1="5.5" y1="6.5" x2="5.5" y2="10.5"/><line x1="8.5" y1="6.5" x2="8.5" y2="10.5"/></svg>`;
+    const icoGear  = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2"/><path d="M7 1v1.5M7 11.5V13M1 7h1.5M11.5 7H13M2.4 2.4l1.1 1.1M10.5 10.5l1.1 1.1M2.4 11.6l1.1-1.1M10.5 3.5l1.1-1.1"/></svg>`;
+    const icoArrow = `<svg width="6" height="10" viewBox="0 0 6 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1,1 5,5 1,9"/></svg>`;
+    // helper to build a standard ctx row
+    const ctxRow = (action: string, icon: string, label: string, kbd = "", extra = "") =>
+      `<div data-a="${action}" class="ctx-row${extra}"><span class="ctx-ico">${icon}</span><span class="ctx-lbl">${label}</span>${kbd ? `<span class="ctx-kbd">${kbd}</span>` : ""}</div>`;
+
     const buildCtxMenu = () => {
       const sym = symbolRef.current;
       const prec = precRef.current;
@@ -2061,22 +2077,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // count visible (non-hidden) indicators from panesMeta
       const indCount = panesMeta.current.reduce((n, m) => n + m.entries.filter((e) => !hiddenRef.current.has(e.key)).length, 0);
       const hasInds = indCount > 0;
+      // alert label: single-line with ellipsis so it never overflows
       ctxm.innerHTML = `
-        <div data-a="reset" class="ctx-row ctx-icon-row"><span class="ctx-ico">↺</span>${escH("Reset chart view")}<span class="ctx-kbd">⌥R</span></div>
+        ${ctxRow("reset", icoReset, escH("Reset chart view"), "⌥R")}
         <div class="sep"></div>
-        <div data-a="copypx" class="ctx-row">${escH("Copy price")} <b>${pxLabel}</b></div>
-        <div data-a="paste" class="ctx-row ctx-dis" title="Paste">${escH("Paste")}<span class="ctx-kbd">⌘V</span></div>
+        <div data-a="copypx" class="ctx-row"><span class="ctx-ico">${icoCopy}</span><span class="ctx-lbl">${escH("Copy price")} <strong>${pxLabel}</strong></span></div>
+        <div data-a="paste" class="ctx-row ctx-dis"><span class="ctx-ico">${icoPaste}</span><span class="ctx-lbl">${escH("Paste")}</span><span class="ctx-kbd">⌘V</span></div>
         <div class="sep"></div>
-        <div data-a="alert" class="ctx-row">${escH("Add alert on ")} <b>${escH(sym)}</b> ${escH("at ")} ${pxLabel}…<span class="ctx-kbd">⌥A</span></div>
+        <div data-a="alert" class="ctx-row"><span class="ctx-ico">${icoBell}</span><span class="ctx-lbl">Add alert on <b>${escH(sym)}</b> at ${pxLabel}&hellip;</span><span class="ctx-kbd">⌥A</span></div>
         <div class="sep"></div>
-        <div data-a="lockv" class="ctx-row${locked ? " ctx-checked" : ""}">${locked ? "✓ " : ""}${escH("Lock vertical cursor line by time")}</div>
+        ${ctxRow("lockv", icoLock, escH("Lock vertical cursor line by time"), "", locked ? " ctx-checked" : "")}
         <div class="sep"></div>
-        <div data-a="tableview" class="ctx-row">${escH("Table view")}</div>
-        <div data-a="objtree" class="ctx-row">${escH("Object tree")}</div>
-        <div data-a="tplmenu" class="ctx-row ctx-has-sub">${escH("Chart template")} <span style="margin-left:auto;opacity:.6">▸</span></div>
+        ${ctxRow("tableview", icoTable, escH("Table view"))}
+        ${ctxRow("objtree", icoTree, escH("Object tree"))}
+        <div data-a="tplmenu" class="ctx-row ctx-has-sub"><span class="ctx-ico">${icoTmpl}</span><span class="ctx-lbl">${escH("Chart template")}</span><span style="flex:0 0 auto;margin-left:auto;color:var(--text-dim);display:flex;align-items:center">${icoArrow}</span></div>
         <div class="sep"></div>
-        ${hasInds ? `<div data-a="removeinds" class="ctx-row ctx-danger">${escH("Remove ")} ${indCount} ${escH("indicator")}${indCount !== 1 ? "s" : ""}</div>` : ""}
-        <div data-a="settings" class="ctx-row ctx-icon-row"><span class="ctx-ico">⚙</span>${escH("Settings…")}</div>
+        ${hasInds ? `<div data-a="removeinds" class="ctx-row ctx-danger"><span class="ctx-ico">${icoTrash}</span><span class="ctx-lbl">${escH("Remove")} ${indCount} ${escH("indicator")}${indCount !== 1 ? "s" : ""}</span></div>` : ""}
+        ${ctxRow("settings", icoGear, escH("Settings…"))}
       `.trim();
     };
     onCtx = (e: MouseEvent) => {
@@ -2084,10 +2101,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const r = wrap.getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top;
       ctxPt = snap(x, y);
       buildCtxMenu();
-      const mw = 220, mh = 340;
-      ctxm.style.left = Math.min(x, el!.clientWidth - mw) + "px";
-      ctxm.style.top = Math.min(y, el!.clientHeight - mh) + "px";
+      // measure after building (display:block first so offsetWidth/Height are real)
       ctxm.style.display = "block";
+      ctxm.style.left = "0px"; ctxm.style.top = "0px";
+      const mw = ctxm.offsetWidth || 260;
+      const mh = ctxm.offsetHeight || 360;
+      const margin = 8;
+      const cw = el!.clientWidth, ch = el!.clientHeight;
+      ctxm.style.left = Math.min(x, Math.max(0, cw - mw - margin)) + "px";
+      ctxm.style.top  = Math.min(y, Math.max(0, ch - mh - margin)) + "px";
       tmSubOpen = false;
     };
     ctxm.addEventListener("pointerdown", (e) => {
@@ -2103,10 +2125,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           const tmpl = listTemplates();
           let subHtml = `<div class="sep"></div><div class="ctx-grp">${escH("Chart templates")}</div>`;
           for (const tpl of tmpl) {
-            subHtml += `<div data-a="tpl:${escH(tpl.id)}" class="ctx-row ctx-sub">${escH(tpl.name)}</div>`;
+            subHtml += `<div data-a="tpl:${escH(tpl.id)}" class="ctx-row ctx-sub"><span class="ctx-lbl">${escH(tpl.name)}</span></div>`;
           }
-          subHtml += `<div data-a="savetemplate" class="ctx-row ctx-sub">${escH("Save as template…")}</div>`;
+          subHtml += `<div data-a="savetemplate" class="ctx-row ctx-sub"><span class="ctx-lbl">${escH("Save as template…")}</span></div>`;
           ctxm.insertAdjacentHTML("beforeend", subHtml);
+          // re-clamp: after appending rows, re-measure and re-position so menu bottom stays in view
+          const mh2 = ctxm.offsetHeight;
+          const ch2 = el!.clientHeight;
+          const curTop = parseFloat(ctxm.style.top) || 0;
+          if (curTop + mh2 > ch2 - 8) {
+            ctxm.style.top = Math.max(0, ch2 - mh2 - 8) + "px";
+          }
         } catch {}
         return;
       }
