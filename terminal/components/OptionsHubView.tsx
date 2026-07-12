@@ -1,7 +1,7 @@
 "use client";
 import {
   memo,
-  useCallback, useEffect, useMemo, useRef, useState,
+  useCallback, useDeferredValue, useEffect, useMemo, useRef, useState,
 } from "react";
 import dynamic from "next/dynamic";
 import { BrandLockup } from "@/components/BrandMark";
@@ -1557,6 +1557,8 @@ export default function OptionsHubView() {
   }, [selectedTicker]);
 
   // ── Filtered events (Tape) ────────────────────────────────────────────────
+  // Deferred so typing in the ticker filter doesn't block on re-filtering ~2k events.
+  const deferredTapeSearch = useDeferredValue(tapeTickerSearch);
   const events = useMemo<FlowEvent[]>(() => {
     const all = feed?.events ?? [];
     return all.filter((e) => {
@@ -1566,7 +1568,7 @@ export default function OptionsHubView() {
       const ag = drillTicker ? "" : groupFilter;
       if (ag && e.group !== ag) return false;
       if (drillTicker && e.root !== drillTicker) return false;
-      const q = tapeTickerSearch.trim().toUpperCase();
+      const q = deferredTapeSearch.trim().toUpperCase();
       if (q && !e.root.includes(q)) return false;
       if (sideFilter && e.side !== sideFilter) return false;
       if (flagFilter === "repeated" && !e.repeated) return false;
@@ -1578,7 +1580,25 @@ export default function OptionsHubView() {
       const vb = sortKey === "ts" ? new Date(b.ts).getTime() : b.premium;
       return (va > vb ? 1 : va < vb ? -1 : 0) * sortDir;
     });
-  }, [feed, minPrem, dteBuckets, mnyBuckets, groupFilter, drillTicker, tapeTickerSearch, sideFilter, flagFilter, sortKey, sortDir]);
+  }, [feed, minPrem, dteBuckets, mnyBuckets, groupFilter, drillTicker, deferredTapeSearch, sideFilter, flagFilter, sortKey, sortDir]);
+
+  // Windowed rendering: only ~150 rows in the DOM at once (was all ~2k). An
+  // IntersectionObserver sentinel grows the window on scroll; changing filters
+  // resets it (but a 45s feed poll does NOT, so scroll position is kept).
+  const TAPE_PAGE = 150;
+  const [tapeLimit, setTapeLimit] = useState(TAPE_PAGE);
+  const tapeSentinelRef = useRef<HTMLTableRowElement | null>(null);
+  useEffect(() => { setTapeLimit(TAPE_PAGE); }, [minPrem, dteBuckets, mnyBuckets, groupFilter, drillTicker, deferredTapeSearch, sideFilter, flagFilter, sortKey, sortDir]);
+  useEffect(() => {
+    const el = tapeSentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver((ents) => {
+      if (ents.some((x) => x.isIntersecting)) setTapeLimit((l) => l + TAPE_PAGE);
+    }, { rootMargin: "600px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [events, tapeLimit]);
+  const tapeRows = useMemo(() => events.slice(0, tapeLimit), [events, tapeLimit]);
 
   const drillUnusual = useMemo<UnusualName | null>(() => {
     if (!drillTicker) return null;
@@ -2120,7 +2140,7 @@ export default function OptionsHubView() {
                             </td>
                           </tr>
                         )}
-                        {events.map((e) => {
+                        {tapeRows.map((e) => {
                           const isBuy = e.side === "~buy"; const isSell = e.side === "~sell";
                           return (
                             <tr key={e.id} style={{ cursor: "pointer" }} onClick={() => setDrillTicker((d) => (d === e.root ? null : e.root))}>
@@ -2164,6 +2184,13 @@ export default function OptionsHubView() {
                             </tr>
                           );
                         })}
+                        {events.length > tapeLimit && (
+                          <tr ref={tapeSentinelRef}>
+                            <td colSpan={10} style={{ textAlign: "center", padding: "8px", color: "var(--muted)", fontSize: 11 }}>
+                              {lang === "zh" ? `显示 ${tapeLimit} / ${events.length} 条 · 向下滚动加载更多` : `showing ${tapeLimit} of ${events.length} · scroll for more`}
+                            </td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
                   )}
