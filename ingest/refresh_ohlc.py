@@ -52,7 +52,12 @@ for i in range(DAYS, -1, -1):
         by_tkr.setdefault(t, {})[ds] = bar
 print(f"grouped days with data: {dates_ok}  |  tickers: {len(by_tkr)}")
 
-man = json.load(open(os.environ.get("TERMINAL_MANIFEST") or os.path.join(D, "manifest.json")))
+# Universe = the LIVE manifest, deliberately NOT $TERMINAL_MANIFEST: during the nightly
+# this runs in Phase 1 when the staging manifest holds only the ~37 flagship rows, so
+# reading staging silently reduced the refresh to a no-op (0 of ~3,100 US symbols
+# updated, 2026-07-10/11). The live manifest is last night's full universe — exactly
+# the set of existing OHLC files this script appends to.
+man = json.load(open(os.path.join(D, "manifest.json")))
 updated = appended = 0
 sample = {}
 for sym, row in man["symbols"].items():

@@ -38,10 +38,38 @@ echo "[$(ts)] === terminal refresh start (staging) ==="
 rm -f "$STAGE"
 run(){ echo "[$(ts)] -> $*"; "$@" || echo "[$(ts)] WARN: '$*' exited $?"; }
 
+# Snapshot the live manifest at run start: recovery artifact + shrink-guard baseline.
+BAK="$D/manifest.json.bak-nightly"
+START_N=$(count "$LIVE")
+[ "$START_N" -gt 0 ] && cp -f "$LIVE" "$BAK"
+
 # ── PHASE 1: flagship + fast price refresh (~5 min) ──
 # flagship 37 -> staging manifest + fresh real-OHLC/slices/verdicts (OHLC/slices go to live dir)
 run "$PY" -m ingest.build_polygon_universe
 [ -s "$STAGE" ] || cp -f "$LIVE" "$STAGE"
+# Rewrite the flagship slices with the full-basis GC-v2 emission (quality/tier/score +
+# SELL confirms). The builder's indicator_contract call predates v2 — without this pass
+# every flagship BUY renders "regime_blocked" and SELL pills vanish until the first RTH
+# fast_flagship tick. Preserves slice.backtest verbatim; reuses/builds the cohort cache
+# that gen_slices_all reuses later tonight (single build per night).
+run "$PY" ingest/regen_flagship_slices.py
+# Defense-in-depth: Phase 1 must NEVER touch the live manifest (only TERMINAL_MANIFEST
+# staging). On 2026-07-10/11 a regressed builder that ignored TERMINAL_MANIFEST wrote its
+# flagship-37 manifest straight to live, shrinking the site to 34 symbols until the final
+# swap ~2h later. If live shrank during Phase 1, restore the run-start snapshot now —
+# but only if tonight's snapshot is verifiably the run-start universe (guards against a
+# failed snapshot cp leaving a stale/smaller bak from a prior night), and atomically
+# (tmp + mv) so readers never see a half-written manifest and a concurrent atomic writer
+# can't orphan the restore mid-copy.
+P1_N=$(count "$LIVE")
+if [ "$START_N" -gt 0 ] && [ "$P1_N" -lt "$START_N" ]; then
+  if [ "$(count "$BAK")" -ge "$START_N" ]; then
+    echo "[$(ts)] GUARD: live shrank $START_N -> $P1_N during phase 1 — restoring run-start snapshot"
+    cp -f "$BAK" "$LIVE.restore.tmp" && mv -f "$LIVE.restore.tmp" "$LIVE"
+  else
+    echo "[$(ts)] GUARD: live shrank $START_N -> $P1_N but snapshot is unusable ($(count "$BAK") rows) — NOT restoring"
+  fi
+fi
 # refresh US OHLC to the latest close via Polygon grouped-daily (1 call/date, whole US
 # market). backfill_ohlc only fetches NEW symbols, so without this existing non-flagship
 # OHLC (and watchlist LAST/CHG) freezes at file-creation date. Runs before hydrate so the

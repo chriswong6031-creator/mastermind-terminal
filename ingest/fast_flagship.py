@@ -488,6 +488,12 @@ def _main_locked(limit: int, syms_override: list[str] | None, dry_run: bool) -> 
         n_ok += 1
 
     # ── 6. Atomic manifest merge ──────────────────────────────────────────────
+    # Re-check the nightly lock: the startup check (step 2) covers the cron window,
+    # but a manual off-window terminal-data run may have started while we worked.
+    # Merging now could RMW a mid-restore manifest — skip; the next tick catches up.
+    if os.path.exists(NIGHTLY_LOCK):
+        print("[fast_flagship] nightly lock appeared mid-run — skip manifest merge", flush=True)
+        return
     _merge_manifest(patched, dry_run)
 
     elapsed = time.time() - t0

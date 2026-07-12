@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -32,6 +33,11 @@ HK_TOP_CACHE = Path(__file__).resolve().parent / "hk_universe_cache.json"
 # Schema sentinel: the cache must carry BOTH CS and ADRC records.
 # Strip this key on read; refetch if absent or mismatched (auto-heals old CS-only cache).
 _US_REF_SCHEMA = "cs+adrc-v1"
+
+# Refetch the Polygon reference once the cache is older than this. Without a TTL the
+# cache was permanent, so brand-new listings (IPOs, new ADRs) could never enter the
+# universe. A failed refetch falls back to the stale cache — never shrinks.
+_US_REF_TTL_S = 20 * 3600
 
 
 # ---------------------------------------------------------------- US: Polygon reference (name + exchange)
@@ -60,6 +66,10 @@ def _fetch_ref_by_type(key: str, tk_type: str) -> dict[str, dict]:
         nxt = payload.get("next_url")
         url = f"{nxt}&apiKey={key}" if nxt else None
         pages += 1
+    if url:
+        # Hitting the page cap with next_url pending means a silently truncated result;
+        # raise so us_reference() falls back to the stale cache instead of trusting it.
+        raise RuntimeError(f"{tk_type} pagination truncated at {pages} pages")
     print(f"  [us-ref/{tk_type}] {len(out)} tickers ({pages} pages)")
     return out
 
@@ -71,12 +81,18 @@ def us_reference() -> dict[str, dict]:
     or mismatched (old CS-only cache) the cache is discarded and both passes are re-run.
     Both passes must succeed before the cache is written (all-or-nothing).
     """
+    cached: dict[str, dict] | None = None
     if US_REF_CACHE.exists():
         try:
             raw = json.loads(US_REF_CACHE.read_text())
             if raw.get("__schema__") == _US_REF_SCHEMA:
-                # Strip the sentinel key before returning
-                return {k: v for k, v in raw.items() if k != "__schema__"}
+                # Strip the sentinel key; an empty payload is not a usable cache.
+                cached = {k: v for k, v in raw.items() if k != "__schema__"} or None
+                age = time.time() - US_REF_CACHE.stat().st_mtime
+                if cached and age < _US_REF_TTL_S:
+                    return cached
+                if cached:
+                    print(f"  [us-ref] cache is {age / 3600:.0f}h old — refetching for new listings")
             else:
                 print(f"  [us-ref] cache schema mismatch ({raw.get('__schema__')!r} != {_US_REF_SCHEMA!r}) — refetch")
         except Exception:
@@ -84,24 +100,39 @@ def us_reference() -> dict[str, dict]:
 
     key = _polygon_key()
     if not key:
+        if cached:
+            print("  [us-ref] no POLYGON_API_KEY — using stale cache")
+            return cached
         print("  [us-ref] no POLYGON_API_KEY — cannot expand US")
         return {}
 
     # Two sequential passes; write cache only after BOTH succeed (all-or-nothing).
-    # A network failure on either pass must NOT propagate — return {} so us_union()
-    # skips US expansion cleanly (mirrors build_universe.us_exchange_map()).
+    # A network failure on either pass must NOT propagate — fall back to the stale
+    # cache when we have one, else return {} so us_union() skips US expansion cleanly
+    # (mirrors build_universe.us_exchange_map()).
     out: dict[str, dict] = {}
     try:
         for tk_type in ("CS", "ADRC"):
             out.update(_fetch_ref_by_type(key, tk_type))
     except Exception as exc:
+        if cached:
+            print(f"  [us-ref] polygon refetch failed ({exc}) — using stale cache")
+            return cached
         print(f"  [us-ref] polygon fetch failed ({exc}) — cannot expand US")
         return {}
 
-    # Write cache with schema sentinel
+    # A well-formed but degraded response (empty results, partial outage) must not
+    # replace a known-good cache: treat a big shrink as a failed fetch.
+    if cached and len(out) < 0.8 * len(cached):
+        print(f"  [us-ref] refetch returned {len(out)} < 80% of cached {len(cached)} — keeping stale cache")
+        return cached
+
+    # Write cache with schema sentinel (atomic: tmp + replace, this now runs nightly)
     to_write = dict(out)
     to_write["__schema__"] = _US_REF_SCHEMA
-    US_REF_CACHE.write_text(json.dumps(to_write))
+    tmp = US_REF_CACHE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(to_write))
+    os.replace(tmp, US_REF_CACHE)
     print(f"  [us-ref] {len(out)} total US tickers cached (CS+ADRC)")
     return out
 
@@ -133,16 +164,29 @@ def sp1500_current() -> set[str]:
     return set(cur["ticker"].astype(str)) if "ticker" in cur else set()
 
 
+# Curated must-include names: guaranteed in the universe from day one even when the
+# Polygon reference hasn't picked them up yet (e.g. an ADR that starts trading this
+# week). The reference record wins once it appears — this is only the bootstrap row.
+ENSURE_US: dict[str, dict] = {
+    # Regular-way trading starts 2026-07-13 (Nasdaq Global Select; when-issued SKHYV
+    # traded 2026-07-10 only). 1 ADS = 1/10 KRX 000660 share. HXSCL is the old,
+    # separate GDR line — do not alias.
+    "SKHY": {"name": "SK hynix", "mkt": "NASDAQ", "adr": True},
+}
+
+
 def us_union(target: int) -> dict[str, dict]:
     ref = us_reference()
     if not ref:
-        return {}
+        return dict(ENSURE_US)
+    for tk, rec in ENSURE_US.items():
+        ref.setdefault(tk, rec)
     dvol = us_dollar_vol()
     sp = sp1500_current() & set(ref)
     ranked = sorted(ref, key=lambda t: dvol.get(t, 0.0), reverse=True)
     # ADR force-include: all ADRC tickers always enter chosen regardless of $vol rank
     adr = {t for t in ref if ref[t].get("adr")}
-    chosen = set(ranked[:target]) | sp | adr
+    chosen = set(ranked[:target]) | sp | adr | set(ENSURE_US)
     print(f"  [us-union] S&P1500∩ref={len(sp)} | top-{target}-by-$vol | ADR={len(adr)} | total={len(chosen)}")
     return {t: ref[t] for t in chosen}
 
