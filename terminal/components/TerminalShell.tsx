@@ -11,7 +11,6 @@ import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { AppNav, TOP as NAV_TOP, Glyph as NavGlyph } from "@/components/AppNav";
 import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
-import NeuralWebStrip from "@/components/NeuralWebStrip";
 import { intradayCapable } from "@/components/ChartPanel";
 import { classify } from "@/lib/intradaySources";
 import { type FinPage } from "@/components/fin/MegaPane";
@@ -1249,7 +1248,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           return <span className={badgeCls} style={{ marginLeft: 16 }} title={t("liveTip")}><i />{badgeLbl}</span>;
         })()}
         <div className="spacer" />
-        <NeuralWebStrip />
         <button className="ai" onClick={() => setCopilot(true)}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
         <SettingsMenu email={email} />
       </header>
