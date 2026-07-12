@@ -427,6 +427,20 @@ function fmtPremium(n: number): string {
   return `$${n.toFixed(0)}`;
 }
 
+// GICS sector name → its SPDR ETF ticker. sector_etf_flows (ctx) is keyed by ETF
+// ticker, but the Tide sector cards key by group NAME — so the proxy chip never
+// matched. Covers the live GICS names + the fixture/abbrev variants.
+const SECTOR_ETF: Record<string, string> = {
+  "Information Technology": "XLK", "Technology": "XLK", "Info Tech": "XLK",
+  "Communication Services": "XLC", "Comm Svcs": "XLC",
+  "Consumer Discretionary": "XLY", "Cons Disc": "XLY",
+  "Consumer Staples": "XLP", "Staples": "XLP",
+  "Financials": "XLF", "Financial": "XLF",
+  "Health Care": "XLV", "Health": "XLV", "Healthcare": "XLV",
+  "Energy": "XLE", "Industrials": "XLI", "Materials": "XLB",
+  "Real Estate": "XLRE", "Real Est": "XLRE", "Utilities": "XLU",
+};
+
 // Signed premium: "+$8.3M" / "-$8.3M". fmtPremium already emits the $ + K/M/B suffix,
 // so callers must pass the RAW dollar amount (not pre-scaled) and NOT append their own
 // sign/suffix. (Previously dropped the minus sign for negatives.)
@@ -2299,15 +2313,16 @@ export default function OptionsHubView() {
                               </span>
                             </div>
                             <Sparkline data={ncpVals} color={color} width={120} height={28} />
-                            {/* ETF flow chip from ctx — d1 creation/redemption proxy */}
-                            {ctxData?.sector_etf_flows && ctxData.sector_etf_flows[s.group] != null && (() => {
-                              const fl = ctxData.sector_etf_flows![s.group];
+                            {/* ETF flow chip from ctx — d1 creation/redemption proxy (keyed by the
+                                sector's ETF ticker, not the GICS name; d1 is in $millions) */}
+                            {ctxData?.sector_etf_flows && SECTOR_ETF[s.group] && ctxData.sector_etf_flows[SECTOR_ETF[s.group]] != null && (() => {
+                              const fl = ctxData.sector_etf_flows![SECTOR_ETF[s.group]];
                               const pos = fl.d1 >= 0;
                               return (
                                 <div style={{ fontSize: 10, color: pos ? "var(--up)" : "var(--down)", marginTop: 3, display: "flex", alignItems: "center", gap: 3 }}>
                                   <span style={{ color: "var(--text-dim)" }}>{t("tideEtfFlowProxy", "proxy")}</span>
                                   <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
-                                    {fmtPremSigned(fl.d1)}
+                                    {fmtPremSigned(fl.d1 * 1_000_000)}
                                   </span>
                                 </div>
                               );
