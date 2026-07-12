@@ -25,7 +25,17 @@ CRYPTO = {"BTC-USD": "X:BTCUSD", "ETH-USD": "X:ETHUSD", "SOL-USD": "X:SOLUSD", "
 # only since the FB→META rename on 2022-06-09; before that the ticker was the Roundhill
 # Ball Metaverse ETF (~$12-15), whose bars poisoned the 2022 seasonality path (a fake
 # +1395% Jan→Jun jump) and the confluence/backtest close series.
-HISTORY_START = {"META": "2022-06-09"}
+# The same applies to the yfinance/Tencent feeds (keyed the same way):
+#   SPCX    — The SPAC and New Issue ETF until its 2026-04 delisting; Space Exploration
+#             Technologies (SpaceX) Class A since its 2026-06-12 Nasdaq listing
+#             (Polygon reference list_date; splits endpoint empty — reuse, not a split).
+#   0300.HK — HKEX reissued the code to Midea Group H-shares (listed 2024-09-17); a
+#             stray prior-holder bar (2024-07-05 close 2.49) poisoned the backfill.
+HISTORY_START = {
+    "META": "2022-06-09",
+    "SPCX": "2026-06-12",
+    "0300.HK": "2024-09-17",
+}
 
 # Generic guard for the same failure shape anywhere else in the universe: a months-long
 # trading gap combined with an extreme price jump across it means the ticker changed
@@ -60,6 +70,24 @@ def drop_stale_ticker_history(sym: str, bars: list) -> list:
         print(f"  {sym}: dropped {cut} pre-{bars[cut][0]} bars (ticker-reuse discontinuity)")
         bars = bars[cut:]
     return bars
+
+
+def append_recent_bars(sym: str, bars: list, new_rows: list) -> tuple[list, int]:
+    """Merge freshly fetched rows into an existing OHLC series, guarding ticker reuse.
+
+    Appends only rows strictly newer than the last existing bar (the idempotence rule
+    the refresh scripts already used), then re-runs drop_stale_ticker_history over the
+    stitched series: when a ticker changes hands, the first refresh after the new
+    holder's debut stitches its bars onto the old holder's file (SPCX 2026-06: SPAC ETF
+    file + SpaceX bars) — the discontinuity guard then keeps only the new segment.
+    Returns (bars, n_appended); n_appended == 0 means nothing new arrived, so callers
+    skip the write.
+    """
+    last = bars[-1][0] if bars else ""
+    fresh = sorted((r for r in new_rows if r and r[0] > last), key=lambda r: r[0])
+    if not fresh:
+        return bars, 0
+    return drop_stale_ticker_history(sym, bars + fresh), len(fresh)
 
 
 def poly_ticker(sym: str) -> str:

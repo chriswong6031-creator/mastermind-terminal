@@ -23,6 +23,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+try:
+    from ingest.polygon_bars import drop_stale_ticker_history  # package context (tests)
+except ImportError:  # run as `python ingest/backfill_ohlc.py` — same-dir import
+    from polygon_bars import drop_stale_ticker_history
+
 ROOT = Path(__file__).resolve().parents[1]
 # OUT is env-overridable so a full-history backfill can stage into a scratch dir
 # (e.g. /tmp/ohlc-full) and rsync only the deepened files up, without dirtying the
@@ -62,7 +67,10 @@ def _round(x, nd=4):
 
 def write_json(ticker: str, rows: list[list], src: str) -> int:
     """rows: [[date,o,h,l,c,v], ...] ascending. Returns bar count (0 = nothing written)."""
-    rows = [r for r in rows if r[4] is not None][-MAX_BARS:]
+    rows = [r for r in rows if r[4] is not None]
+    # yfinance/Tencent series are keyed by ticker string just like Polygon aggs, so a
+    # reused ticker (SPCX, 0300.HK) merges the previous holder's bars into the feed.
+    rows = drop_stale_ticker_history(ticker, rows)[-MAX_BARS:]
     if len(rows) < 30:
         return 0
     doc = {"t": ticker, "o": 1, "src": src, "bar_quality": "real_ohlc", "bars": rows}
