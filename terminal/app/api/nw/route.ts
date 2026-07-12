@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
+import { rateLimit, tooMany } from "@/lib/rateLimit";
 
 // Neural Web display feeds (macro repo → mastermind-x.com/neuralwebdata/). The producer
 // serves static JSON with no CORS header, so the browser can't fetch it cross-origin from
@@ -36,6 +37,8 @@ async function fetchFeed(file: string): Promise<Record<string, unknown>> {
 }
 
 export async function GET(req: Request): Promise<Response> {
+  const rl = rateLimit(req, { name: "nw" });
+  if (!rl.ok) return tooMany(rl);
   const url = new URL(req.url);
   const f = url.searchParams.get("f") ?? "market_plane";
   const file = FEEDS[f];

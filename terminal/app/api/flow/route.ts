@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
+import { rateLimit, tooMany } from "@/lib/rateLimit";
 
 // Upstream base (Python server); falls back to R2 public CDN.
 const BACKEND = process.env.FLOW_API_BASE || "http://127.0.0.1:8000";
@@ -265,6 +266,8 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
 }
 
 export async function GET(req: Request): Promise<Response> {
+  const rl = rateLimit(req, { name: "flow" });
+  if (!rl.ok) return tooMany(rl);
   const url = new URL(req.url);
   const f = url.searchParams.get("f") ?? "feed";
   if (!isValidF(f)) {

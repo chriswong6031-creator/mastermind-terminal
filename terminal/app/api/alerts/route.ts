@@ -10,7 +10,7 @@ async function uid() {
 export async function GET() {
   const { supabase, user } = await uid();
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  const { data } = await supabase.from("alerts").select("*").order("created_at", { ascending: false });
+  const { data } = await supabase.from("alerts").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
   return NextResponse.json({ alerts: data || [] });
 }
 
@@ -45,6 +45,6 @@ export async function DELETE(req: Request) {
   const { supabase, user } = await uid();
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const id = new URL(req.url).searchParams.get("id");
-  if (id) await supabase.from("alerts").delete().eq("id", id);
+  if (id) await supabase.from("alerts").delete().eq("user_id", user.id).eq("id", id);
   return NextResponse.json({ ok: true });
 }

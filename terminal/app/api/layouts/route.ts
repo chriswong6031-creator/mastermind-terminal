@@ -10,7 +10,7 @@ async function ctx() {
 export async function GET() {
   const { supabase, user } = await ctx();
   if (!user) return NextResponse.json({ layouts: [] });
-  const { data } = await supabase.from("chart_layouts").select("id,name,config,updated_at").order("updated_at", { ascending: false });
+  const { data } = await supabase.from("chart_layouts").select("id,name,config,updated_at").eq("user_id", user.id).order("updated_at", { ascending: false });
   return NextResponse.json({ layouts: data || [] });
 }
 
@@ -34,6 +34,6 @@ export async function DELETE(req: Request) {
   const { supabase, user } = await ctx();
   if (!user) return NextResponse.json({ ok: false }, { status: 401 });
   const id = new URL(req.url).searchParams.get("id");
-  if (id) await supabase.from("chart_layouts").delete().eq("id", id);
+  if (id) await supabase.from("chart_layouts").delete().eq("user_id", user.id).eq("id", id);
   return NextResponse.json({ ok: true });
 }
