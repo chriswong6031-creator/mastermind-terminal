@@ -18,6 +18,17 @@ import { NA, NS_CONST, toCss, fmtNum, tfSeconds } from "./builtins";
 
 export interface Bar { time: string; o: number; h: number; l: number; c: number; v: number; }
 
+// Thrown when a script blows the global run budget (wall-clock or total loop iterations).
+// runPine() in index.ts catches it like any runtime error → errors[], so a runaway script
+// surfaces as a visible script error instead of freezing the UI thread.
+export class PineRuntimeError extends Error {}
+
+// ── global per-run budget — ONE deadline + run-level counters shared by the chart pass and
+// every request.security HTF re-run, so nesting/recursion can't multiply past the caps ──
+const DEFAULT_BUDGET_MS = 3000;          // wall-clock cap for a whole run() call
+const MAX_TOTAL_LOOP_ITERS = 4_000_000;  // for-loop iterations, totalled across loops, nesting AND bars
+const STMT_DEADLINE_INTERVAL = 10_000;   // poll Date.now() every N executed statements
+
 export type PlotKind = "line" | "histogram" | "columns" | "area" | "circles" | "cross" | "stepline";
 export interface PinePlot { id: number; title: string; kind: PlotKind; overlay: boolean; linewidth: number; color: string; data: { time: string; value: number; color?: string }[]; }
 export interface PineShape { time: string; position: "aboveBar" | "belowBar" | "inBar"; shape: "arrowUp" | "arrowDown" | "circle" | "square"; color: string; text?: string; overlay: boolean; }
@@ -85,7 +96,14 @@ interface Ctx { i: number; frame: Frame | null; scalars: Map<string, number> | n
 // what an exec() pass exposes to a parent run so request.security can read its resampled series
 interface ExecOut { result: RunResult; globals: Map<string, any[]>; localStore: Map<string, any[]>; }
 
-export function run(source: string, bars: Bar[], opts: { timeframe?: string; symbol?: string; params?: Record<string, any> } = {}): RunResult {
+export function run(source: string, bars: Bar[], opts: { timeframe?: string; symbol?: string; params?: Record<string, any>; budgetMs?: number } = {}): RunResult {
+  // capture the deadline the moment the run starts — checked between statements and inside loops
+  const budgetMs = opts.budgetMs ?? DEFAULT_BUDGET_MS;
+  const deadline = Date.now() + budgetMs;
+  let totalStmts = 0;      // every executed statement, across ALL exec() passes (chart + HTF)
+  let totalLoopIters = 0;  // every for-loop iteration, across ALL loops/nesting/bars
+  const checkDeadline = () => { if (Date.now() > deadline) throw new PineRuntimeError(`script exceeded ${budgetMs} ms`); };
+
   const { body } = parse(source);
 
   // ── hoist user function definitions (shared across the chart run and every HTF re-run) ──
@@ -284,9 +302,10 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
         const { bars: htfBars, groupOf } = resampleBars(bars, tf);
         if (htfBars.length >= 1) {
           const child = exec(htfBars, tf, symbol, params, htfDepth + 1);
+          child.result.warnings.forEach(warn);   // HTF-pass warnings must reach the parent run's result
           built = { globals: child.globals, localStore: child.localStore, bars: htfBars, groupOf };
         }
-      } catch { built = null; }
+      } catch (e) { if (e instanceof PineRuntimeError) throw e; built = null; }   // budget aborts must not degrade into a silent fallback
       htfCache.set(key, built);
       return built;
     }
@@ -321,7 +340,7 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
           if (method === "new") return toCss(pos[0], num(pos[1]));
           if (method === "rgb") return `rgba(${num(pos[0]) | 0}, ${num(pos[1]) | 0}, ${num(pos[2]) | 0}, ${pos[3] != null ? (100 - num(pos[3])) / 100 : 1})`;
           if (method === "from_gradient") return toCss(pos[3] ?? pos[4]);
-          return NA;
+          warn(`unsupported color.${method}() (na)`); return NA;
         case "str":
           if (method === "tostring") return fmtNum(num(pos[0]), pos[1]);
           if (method === "format") { let s = String(pos[0] ?? ""); for (let k = 1; k < pos.length; k++) s = s.replace(`{${k - 1}}`, isNa(pos[k]) ? "na" : String(pos[k])); return s; }
@@ -330,12 +349,12 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
           if (method === "contains") return String(pos[0]).includes(String(pos[1]));
           if (method === "upper") return String(pos[0]).toUpperCase();
           if (method === "lower") return String(pos[0]).toLowerCase();
-          return "";
+          warn(`unsupported str.${method}() ("")`); return "";
         case "input": return inputDispatch(method, pos, named);
         case "timeframe":
           if (method === "in_seconds") return tfSeconds(pos[0] != null ? String(pos[0]) : chartTf);
           if (method === "change") return false;
-          return NA;
+          warn(`unsupported timeframe.${method}() (na)`); return NA;
         case "plot": return NA;
         default:
           if (NOOP_NS.has(ns)) return NA;
@@ -469,6 +488,9 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
       return last;
     }
     function execStmt(s: Stmt, ctx: Ctx): any {
+      // budget check between statements — catches statement-heavy runaways (deep recursion,
+      // pathological bar counts) that never enter a for-loop
+      if (++totalStmts % STMT_DEADLINE_INTERVAL === 0) checkDeadline();
       if (s.t === "func") return NA; // hoisted already
       if (s.t === "seq") return execBlock(s.items, ctx);
       if (s.t === "expr") return evalNode(s.e, ctx);
@@ -497,9 +519,14 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
       const step = n.step ? Math.round(num(evalNode(n.step, ctx))) : (to >= from ? 1 : -1);
       const scalars = ctx.scalars ? new Map(ctx.scalars) : new Map<string, number>();
       const sub: Ctx = { i: ctx.i, frame: ctx.frame, scalars, depth: ctx.depth, htf: ctx.htf };
-      let last: any = NA, guard = 0;
+      let last: any = NA;
       if (step === 0) return NA;
-      for (let v = from; step > 0 ? v <= to : v >= to; v += step) { if (++guard > 100000) { warn("for-loop iteration cap hit"); break; } scalars.set(n.vn, v); last = execBlock(n.body, sub); }
+      for (let v = from; step > 0 ? v <= to : v >= to; v += step) {
+        // run-level totals (NOT per-invocation) so nested loops can't escape the cap by resetting it
+        if (++totalLoopIters > MAX_TOTAL_LOOP_ITERS) throw new PineRuntimeError(`script exceeded ${MAX_TOTAL_LOOP_ITERS.toLocaleString("en-US")} total loop iterations`);
+        if ((totalLoopIters & 1023) === 0) checkDeadline();   // wall-clock poll inside tight loops, every 1024 iters
+        scalars.set(n.vn, v); last = execBlock(n.body, sub);
+      }
       return last;
     }
 

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
-import { compilePine, type PineError } from "@/lib/pine-engine";
+import { compilePine, runPine, type Bar, type PineError } from "@/lib/pine-engine";
 
 type Script = { id: string; name: string; source: string; lang: string; params: Record<string, any>; updated_at: string; locked?: boolean };
 
@@ -31,6 +31,32 @@ function hl(line: string) {
   return out;
 }
 
+// Deterministic synthetic OHLC (~130 daily bars of a sine-on-drift walk) for the diagnostics
+// dry-run below: enough history for typical ta.* lengths (14/20/50) to warm up, and grouping up
+// to weekly/monthly still leaves bars for request.security. Deterministic so warnings don't
+// flicker between recompiles.
+const SYNTH_BARS: Bar[] = (() => {
+  const out: Bar[] = []; let c = 100;
+  const d0 = Date.UTC(2025, 0, 1);
+  for (let i = 0; i < 130; i++) {
+    const o = c; c = Math.max(5, c + Math.sin(i / 9) * 2 + Math.sin(i / 23) * 3 + 0.15);
+    out.push({ time: new Date(d0 + i * 86400000).toISOString().slice(0, 10), o, h: Math.max(o, c) + 1.2, l: Math.min(o, c) - 1.2, c, v: 1_000_000 + (i % 7) * 50_000 });
+  }
+  return out;
+})();
+
+// Full diagnostics pass: real parse errors first; if the script parses, dry-run it over the
+// synthetic series to surface what a parse can't see — unsupported builtins land in warnings[]
+// (previously collected by the engine but never shown: the script dead-charted while the editor
+// said "Compiled"), and runaway loops abort via the engine's run budget into errors[]. The tight
+// budgetMs keeps a hostile script's cost on the editor's UI thread to ~1s instead of the default 3s.
+function diagnose(src: string, params: Record<string, any>): { errors: PineError[]; warnings: string[] } {
+  const c = compilePine(src);
+  if (!c.ok) return { errors: c.errors, warnings: [] };
+  const r = runPine(src, SYNTH_BARS, { timeframe: "1D", symbol: "SYNTH", params, budgetMs: 1000 });
+  return { errors: r.ok ? [] : r.errors, warnings: r.result?.warnings ?? [] };
+}
+
 export default function PineEditor({ scripts, isPro, email }: { scripts: Script[]; isPro: boolean; email: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -55,17 +81,18 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
   const isLocked = !!active?.locked;   // proprietary indicator — viewable + runnable, never editable
   const dirty = !isLocked && !!active && (src !== active.source || JSON.stringify(params) !== JSON.stringify(active.params));
 
-  // Real compile diagnostics via the Pine engine's parse-only pass (line/col/message), debounced ~300ms
-  // so we don't re-parse on every keystroke. `null` while the debounce is pending on a fresh edit.
+  // Real compile diagnostics via the Pine engine (parse errors + dry-run runtime warnings, see
+  // diagnose() above), debounced ~300ms so we don't re-run on every keystroke.
   const [diag, setDiag] = useState<PineError[]>([]);
+  const [warns, setWarns] = useState<string[]>([]);
   useEffect(() => {
-    const id = window.setTimeout(() => { const r = compilePine(src); setDiag(r.ok ? [] : r.errors); }, 300);
+    const id = window.setTimeout(() => { const d = diagnose(src, params); setDiag(d.errors); setWarns(d.warnings); }, 300);
     return () => window.clearTimeout(id);
-  }, [src]);
+  }, [src, params]);
   const hasErrors = diag.length > 0;
 
   // Run/compile button: kick an immediate (non-debounced) recompile with brief "Compiling…" feedback.
-  function compile() { setStatus("compiling"); const r = compilePine(src); setDiag(r.ok ? [] : r.errors); window.setTimeout(() => setStatus("idle"), 300); }
+  function compile() { setStatus("compiling"); const d = diagnose(src, params); setDiag(d.errors); setWarns(d.warnings); window.setTimeout(() => setStatus("idle"), 300); }
 
   // Save the current buffer. Returns the saved id (existing id on success, null on failure). Locked
   // scripts and non-Pro users can't save — but the proprietary/locked script is still addable to the
@@ -201,7 +228,17 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
               </>
             ) : (
               <>
-                <div><span className="ok">✓ Compiled successfully</span> <span className="k">· {lines.length} lines, 0 errors{dirty ? " · unsaved changes" : ""}</span></div>
+                {warns.length > 0 ? (
+                  // engine warnings (unsupported builtins etc.) — the script runs but affected series are na
+                  <>
+                    <div><span style={{ color: "var(--warn)" }}>✓ Compiled with {warns.length} warning{warns.length === 1 ? "" : "s"}</span> <span className="k">· {lines.length} lines, 0 errors{dirty ? " · unsaved changes" : ""}</span></div>
+                    {warns.map((w, i) => (
+                      <div key={i}><span style={{ color: "var(--warn)" }}>warn</span> <span className="k">· {w}</span></div>
+                    ))}
+                  </>
+                ) : (
+                  <div><span className="ok">✓ Compiled successfully</span> <span className="k">· {lines.length} lines, 0 errors{dirty ? " · unsaved changes" : ""}</span></div>
+                )}
                 <div><span className="k">{active.name} · {inputs.length} input{inputs.length === 1 ? "" : "s"} · ready to add to chart</span></div>
               </>
             )}
