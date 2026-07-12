@@ -1729,7 +1729,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
     // ── coordinate helpers (read *Ref.current so they stay valid across reloads) ──
     const dcol = (d: Drawing) => d.color?.startsWith("var(") ? css(d.color.slice(4, -1)) : (d.color || tokensRef.current.brand2);
-    const snapT = (tm: string) => { const b = barsRef.current; if (!b.length) return tm; for (let k = 0; k < b.length; k++) if (b[k].time === tm) return tm; const x = +new Date(tm + "T00:00:00Z"); let best = b[0].time, bd = Infinity; for (const r of b) { const dd = Math.abs(+new Date(r.time + "T00:00:00Z") - x); if (dd < bd) { bd = dd; best = r.time; } } return best; };
+    // Bar/drawing times span two families: daily bars are "YYYY-MM-DD" strings, intraday
+    // bars are numeric epoch-seconds. Reduce EITHER to ms so a daily-anchored drawing snaps
+    // to the right intraday bar (and vice versa) instead of NaN-collapsing onto bar 0.
+    // Dates anchor at NOON UTC so a US-session intraday time (13:30–20:00 UTC) maps to the
+    // same calendar day rather than the next.
+    const toMs = (t: string | number): number => {
+      if (typeof t === "number") return t * 1000;
+      if (/^\d+$/.test(t)) return Number(t) * 1000;
+      return +new Date(t + "T12:00:00Z");
+    };
+    const snapT = (tm: string) => { const b = barsRef.current; if (!b.length) return tm; for (let k = 0; k < b.length; k++) if (String(b[k].time) === String(tm)) return b[k].time; const x = toMs(tm); if (!Number.isFinite(x)) return b[0].time; let best = b[0].time, bd = Infinity; for (const r of b) { const dd = Math.abs(toMs(r.time) - x); if (dd < bd) { bd = dd; best = r.time; } } return best; };
     const xOf = (tm: string) => chart.timeScale().timeToCoordinate(snapT(tm) as any) as number | null;
     const yOf = (p: number) => { const s = priceSeriesRef.current; return s ? (s.priceToCoordinate(p) as number | null) : null; };
     const barIndex = (tm: string) => { const tt = snapT(tm); const b = barsRef.current; for (let k = 0; k < b.length; k++) if (b[k].time === tt) return k; return -1; };
@@ -2803,7 +2813,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       // ── PERF-FIX (a): indicators — on same-symbol TF/chartType switch, update series data in-place
       //    (setData only, no removeSeries/addSeries lifecycle). On symbol change, do a full rebuild. ──
-      const canUpdateInPlace = !symbolChanged && !crossedIntradayBoundary && indSeriesRef.current.size > 0;
+      // updateAllIndicators() only re-setData's these keys; every other DT-suite indicator
+      // (ichimoku/ribbon/supertrend/avwap/vprofile/volbox/rsistack/accum/rvol/ttmsq/adx/cvd)
+      // would strand on the PREVIOUS timeframe's data if we took the in-place path. So only
+      // take it when EVERY active indicator is in-place-updatable; otherwise full rebuild.
+      const INPLACE_KEYS = new Set(["ema", "bb", "vwap", "vol", "stochrsi", "rsi", "macd"]);
+      const allInPlaceable = [...indicatorsRef.current].every((k) => INPLACE_KEYS.has(k));
+      const canUpdateInPlace = !symbolChanged && !crossedIntradayBoundary && indSeriesRef.current.size > 0 && allInPlaceable;
       if (canUpdateInPlace) {
         updateAllIndicators(onChart, closes);
         // updateAllIndicators only touches the built-in series registry (indSeriesRef); Pine scripts are
