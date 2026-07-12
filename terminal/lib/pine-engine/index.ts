@@ -21,6 +21,7 @@ import { PineSyntaxError } from "./lexer";
 import { run, type Bar, type RunResult } from "./runtime";
 
 export type { Bar, RunResult, PinePlot, PineShape, PineHline, PineInput, PineMeta } from "./runtime";
+export { PineRuntimeError } from "./runtime";
 
 export interface PineError { line: number; col: number; message: string; phase: "parse" | "runtime"; }
 export interface CompileResult { ok: boolean; errors: PineError[]; }
@@ -31,7 +32,9 @@ export function compilePine(source: string): CompileResult {
   catch (e) { return { ok: false, errors: [toError(e, "parse")] }; }
 }
 
-export function runPine(source: string, bars: Bar[], opts: { timeframe?: string; symbol?: string; params?: Record<string, any> } = {}): PineRunOutput {
+// opts.budgetMs caps the WHOLE run (wall-clock, default 3000ms in runtime.ts) — a runaway script
+// throws PineRuntimeError, caught below and returned as a normal runtime error in errors[].
+export function runPine(source: string, bars: Bar[], opts: { timeframe?: string; symbol?: string; params?: Record<string, any>; budgetMs?: number } = {}): PineRunOutput {
   let parsed = false;
   try {
     parse(source); parsed = true;
