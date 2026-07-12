@@ -427,8 +427,11 @@ function fmtPremium(n: number): string {
   return `$${n.toFixed(0)}`;
 }
 
+// Signed premium: "+$8.3M" / "-$8.3M". fmtPremium already emits the $ + K/M/B suffix,
+// so callers must pass the RAW dollar amount (not pre-scaled) and NOT append their own
+// sign/suffix. (Previously dropped the minus sign for negatives.)
 function fmtPremSigned(n: number): string {
-  const s = n >= 0 ? "+" : "";
+  const s = n >= 0 ? "+" : "-";
   return `${s}${fmtPremium(Math.abs(n))}`;
 }
 
@@ -2292,7 +2295,7 @@ export default function OptionsHubView() {
                                 {lang === "zh" ? s.group_zh : abbrevSector(s.group)}
                               </span>
                               <span style={{ marginLeft: "auto", color, fontSize: 12, fontWeight: 700 }}>
-                                {fmtPremSigned(net / 1_000_000)}M
+                                {fmtPremSigned(net)}
                               </span>
                             </div>
                             <Sparkline data={ncpVals} color={color} width={120} height={28} />
@@ -2304,7 +2307,7 @@ export default function OptionsHubView() {
                                 <div style={{ fontSize: 10, color: pos ? "var(--up)" : "var(--down)", marginTop: 3, display: "flex", alignItems: "center", gap: 3 }}>
                                   <span style={{ color: "var(--text-dim)" }}>{t("tideEtfFlowProxy", "proxy")}</span>
                                   <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
-                                    {pos ? "+" : ""}{fmtPremSigned(fl.d1)}
+                                    {fmtPremSigned(fl.d1)}
                                   </span>
                                 </div>
                               );
@@ -2405,7 +2408,7 @@ export default function OptionsHubView() {
                               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
                                 <span style={{ fontWeight: 600, fontSize: 12 }}>{lbl}</span>
                                 <span style={{ color, fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
-                                  {fmtPremSigned(last)}M
+                                  {fmtPremSigned(last * 1_000_000)}
                                 </span>
                               </div>
                               <Sparkline data={vals} color={color} width={120} height={28} />
