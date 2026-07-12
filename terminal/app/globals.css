@@ -42,6 +42,9 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 a{color:inherit;text-decoration:none}
 svg{display:block}
 ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--panel-3);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+/* a11y: visible keyboard-focus ring (mouse focus unaffected). Sits with the resets so
+   component-level outline rules later in the cascade keep overriding it. */
+:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
 
 /* shared controls */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:38px;padding:0 18px;border-radius:var(--r-md);font:600 13px/1 var(--font-ui);cursor:pointer;transition:background var(--t),border-color var(--t)}

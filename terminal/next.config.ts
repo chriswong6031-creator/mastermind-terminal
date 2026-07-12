@@ -2,14 +2,11 @@ import type { NextConfig } from "next";
 import path from "path";
 
 const nextConfig: NextConfig = {
-  // Re-enabled 2026-07-07: two cross-lineage union-type nits (StockAnalysis mastermind
-  // FinPage; TerminalShell/StockAnalysis props) block builds after concurrent deploys;
-  // panes are runtime-verified. Remove once the FinPage union is reconciled.
-  typescript: { ignoreBuildErrors: true },
   // pin the workspace root (sibling lockfiles exist) so Turbopack stops warning
   turbopack: { root: path.resolve(__dirname) },
-  // tsc --noEmit is clean as of 2026-07-06, so builds enforce types again (was
-  // ignoreBuildErrors while lightweight-charts LineWidth nits lingered).
+  // tsc --noEmit is clean as of 2026-07-11, so builds enforce types again — the
+  // 2026-07-07 `typescript.ignoreBuildErrors` escape hatch (FinPage union nits)
+  // is removed; CI (.github/workflows/ci.yml) also gates PRs on tsc + vitest.
   // Note: `eslint` key was removed in Next.js 16 — ESLint is no longer built-in.
   // Cache static market-data JSON served from /data/* for 5 min, stale for 1 hour.
   async headers() {
