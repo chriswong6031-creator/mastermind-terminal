@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { rateLimit, tooMany } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,8 @@ const HUB_PORT = process.env.HUB_PORT ?? "3100";
 const MAX_SYMS = 100;
 
 export async function GET(req: Request) {
+  const rl = rateLimit(req, { name: "ext-quote" });
+  if (!rl.ok) return tooMany(rl);
   const { searchParams } = new URL(req.url);
   const syms = (searchParams.get("syms") || "")
     .split(",")

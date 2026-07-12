@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchIntraday, isIntradayTf } from "@/lib/intradaySources";
 import { withStoredHistory } from "@/lib/intradayStore";
 import type { Bar6 } from "@/lib/intradayShared";
+import { rateLimit, tooMany } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,6 +19,8 @@ const CACHE = new Map<string, Entry>();
 const TTL = 45_000; // delayed data doesn't move faster than this; also bounds upstream call volume
 
 export async function GET(req: Request) {
+  const rl = rateLimit(req, { name: "intraday" });
+  if (!rl.ok) return tooMany(rl);
   const { searchParams } = new URL(req.url);
   const sym = (searchParams.get("sym") || "").trim();
   const tf = (searchParams.get("tf") || "").trim();
