@@ -14,7 +14,9 @@ terminal/public/data/<SYM>.intel.json in the ``intel/v1`` shape.
   3. MACRO_STOCKDATA is read from MACRO_STOCKDATA env var (falls back to a sane
      path-relative default); a missing directory is logged loudly rather than silently
      producing empty output.
-  4. This script is wired into ingest/terminal-refresh.sh (see that file).
+  4. This script is wired into the nightly VPS refresh /usr/local/bin/terminal-data,
+     whose canonical source is the macro repo's app/deploy/terminal-refresh.sh
+     (ingest/terminal-refresh.sh here is a pointer stub only).
 
 sector_pulse pass-through (feat/sector-pulse-intel):
   5. When the source stockdata JSON contains a top-level ``sector_pulse`` block, a
