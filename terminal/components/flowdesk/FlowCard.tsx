@@ -13,7 +13,6 @@
 import { memo, useState } from "react";
 import type { FlowEvent, EnrichEvent } from "./FeedPane";
 import { fmtNum } from "@/lib/finFormat";
-import { computeFlowScore } from "@/lib/flowScore";
 import { makeFlowT } from "@/lib/flowdeskStrings";
 import { RingGauge } from "../ui/RingGauge";
 
@@ -89,9 +88,10 @@ export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, o
   const [expanded, setExpanded] = useState(false);
   const [tipVisible, setTipVisible] = useState(false);
 
-  const raw = computeFlowScore(ev);
-  const score = isNaN(raw.score) ? 0 : raw.score;
-  const components = raw.components;
+  // Score is precomputed server-side and attached to the event (ev.flowScore).
+  const fs = ev.flowScore;
+  const score = fs && !isNaN(fs.score) ? fs.score : 0;
+  const components = fs?.components ?? [];
   const badges = deriveBadges(ev);
   const t = makeFlowT(lang);
 

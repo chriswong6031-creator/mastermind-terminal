@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
 import { rateLimit, tooMany } from "@/lib/rateLimit";
+// SERVER-ONLY import. The proprietary flow_score_v1 model (weights + curves) lives
+// in this module and must never reach the client bundle — see attachFlowScores below
+// and SECURITY.md. Do not re-export computeFlowScore to any 'use client' component.
+import { computeFlowScore, type ScorerInput } from "@/lib/flowScore";
 
 // Upstream base (Python server); falls back to R2 public CDN.
 const BACKEND = process.env.FLOW_API_BASE || "http://127.0.0.1:8000";
@@ -117,6 +121,45 @@ async function fetchWithUA(url: string): Promise<Record<string, unknown>> {
     return (await res.json()) as Record<string, unknown>;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Attach the proprietary flow_score_v1 result to each event of the main feed
+ * payload, SERVER-SIDE, so the browser receives only the computed
+ * {score, tier, components:[{key,label,value}]} — never the model weights/curves.
+ *
+ * `weight` is intentionally dropped from every component: it echoes the raw model
+ * weights (0.30/0.20/…) and is not rendered by any client component, so omitting it
+ * closes the last weight leak without removing any UI detail.
+ *
+ * No-op for any f that isn't the main feed — per-ticker / hub payloads carry
+ * aggregates (top_contracts, strikes, minutes…), not scorable FlowEvents.
+ *
+ * Mutates events in place (data is a freshly parsed JSON object). Any single
+ * malformed event fails soft to a zero score rather than breaking the whole feed.
+ */
+function attachFlowScores(f: string, data: Record<string, unknown>): void {
+  if (f !== "feed") return;
+  const events = (data as { events?: unknown }).events;
+  if (!Array.isArray(events)) return;
+  for (const ev of events) {
+    if (!ev || typeof ev !== "object") continue;
+    const rec = ev as Record<string, unknown>;
+    try {
+      const { score, tier, components } = computeFlowScore(ev as unknown as ScorerInput);
+      rec.flowScore = {
+        score: Number.isFinite(score) ? score : 0,
+        tier,
+        components: components.map((c) => ({
+          key: c.key,
+          label: c.label,
+          value: Number.isFinite(c.value) ? c.value : 0,
+        })),
+      };
+    } catch {
+      rec.flowScore = { score: 0, tier: "LOW", components: [] };
+    }
   }
 }
 
@@ -278,6 +321,7 @@ export async function GET(req: Request): Promise<Response> {
   if (process.env.FLOW_FIXTURE === "1") {
     try {
       const data = await fixtureFor(f);
+      attachFlowScores(f, data);
       return NextResponse.json(data, {
         headers: { "Cache-Control": "no-store", "X-Flow-Source": "fixture" },
       });
@@ -335,6 +379,8 @@ export async function GET(req: Request): Promise<Response> {
         { status: 503, headers: { "Cache-Control": "no-store" } }
       );
     }
+    // Score once here (before caching) so cache hits reuse the scored payload.
+    attachFlowScores(f, data);
     CACHE[f] = { data, ts: now };
     return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } });
   }
@@ -346,7 +392,10 @@ export async function GET(req: Request): Promise<Response> {
 
   const stale = { ...cached.data, stale: true };
   tryFetch().then((data) => {
-    if (data) CACHE[f] = { data, ts: Date.now() };
+    if (data) {
+      attachFlowScores(f, data);
+      CACHE[f] = { data, ts: Date.now() };
+    }
   });
   return NextResponse.json(stale, { headers: { "Cache-Control": "no-store" } });
 }

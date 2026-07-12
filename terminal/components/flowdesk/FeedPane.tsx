@@ -17,13 +17,28 @@ import {
 import { FlowCard } from "./FlowCard";
 import { FiltersPanel, DEFAULT_FILTERS } from "./FiltersPanel";
 import type { FlowFilters } from "./FiltersPanel";
-import { computeFlowScore } from "@/lib/flowScore";
 
 // ── Re-export shared types so FlowCard / FiltersPanel import from one place ──
 
 export type DteBucket = "0d" | "1_7d" | "8_30d" | "31_90d" | "90p";
 export type MnyBucket = "itm" | "atm" | "near_otm" | "far_otm";
 export type Side = "~buy" | "~sell" | "mixed";
+
+// ── Public flow-score shape (attached server-side by /api/flow) ───────────────
+// The scoring MODEL (weights/curves) lives in lib/flowScore.ts and runs only on
+// the server; the client receives just this computed result per event. `weight`
+// is deliberately absent — the server omits it (see route.ts attachFlowScores).
+export type ScoreTier = "ELITE" | "STRONG" | "HIGH" | "MEDIUM" | "LOW";
+export interface FlowScoreComponent {
+  key: string;
+  label: string;
+  value: number;
+}
+export interface FlowScore {
+  score: number;
+  tier: ScoreTier;
+  components: FlowScoreComponent[];
+}
 
 /** Single flow event from feed_current.json `events[]` */
 export interface FlowEvent {
@@ -54,6 +69,9 @@ export interface FlowEvent {
   oi?: number | null;
   iv?: number | null;
   spot?: number | null;
+  /** Precomputed flow_score_v1 result, attached server-side by /api/flow.
+   *  Optional so the UI degrades gracefully if a payload predates scoring. */
+  flowScore?: FlowScore;
 }
 
 // ── v2 enrich types ──────────────────────────────────────────────────────────
@@ -360,12 +378,9 @@ export function FeedPane({
       events = events.filter((ev) => s.has(ev.mny_bucket));
     }
 
-    // Min score — compute on the fly; not expensive (computeFlowScore is pure/cheap)
+    // Min score — read the server-precomputed score (missing → 0, filtered out)
     if (effectiveFilters.minScore > 0) {
-      events = events.filter((ev) => {
-        const { score } = computeFlowScore(ev);
-        return score >= effectiveFilters.minScore;
-      });
+      events = events.filter((ev) => (ev.flowScore?.score ?? 0) >= effectiveFilters.minScore);
     }
 
     // ELITE preset: use session_tier EXCLUSIVELY (per spec §3).
@@ -417,11 +432,9 @@ export function FeedPane({
 
     // Sort
     if (sort === "SCORE") {
-      events = [...events].sort((a, b) => {
-        const sa = computeFlowScore(a).score;
-        const sb = computeFlowScore(b).score;
-        return sb - sa;
-      });
+      events = [...events].sort(
+        (a, b) => (b.flowScore?.score ?? 0) - (a.flowScore?.score ?? 0)
+      );
     } else {
       // NEW: newest-first (feed is already newest-first from the poller, but re-sort for safety)
       events = [...events].sort(
