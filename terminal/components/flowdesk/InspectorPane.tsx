@@ -9,13 +9,12 @@
  *  - No "validated" claims
  */
 "use client";
-import { useMemo } from "react";
+import type React from "react";
 import { pick, fmtDate } from "../../lib/finFormat";
 import type { Lang } from "../../lib/i18n";
-import { computeFlowScore } from "../../lib/flowScore";
 import { FD, getFlowStr } from "../../lib/flowdeskStrings";
 import { RingGauge } from "../ui/RingGauge";
-import type { EnrichEvent } from "./FeedPane";
+import type { EnrichEvent, FlowScore } from "./FeedPane";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -28,6 +27,7 @@ interface FlowEvent {
   n_prints: number; size: number; avg_price: number; premium: number;
   premium_z: number | null; baseline_source: string; vol_gt_oi: boolean | null;
   repeated: boolean; zerodte: boolean; signing_source: string; swept?: boolean;
+  flowScore?: FlowScore;
 }
 
 interface TopContract {
@@ -121,13 +121,11 @@ export function InspectorPane({ event, tickerCtx, enrichEv, lang }: InspectorPan
 // ─── EventDetail ──────────────────────────────────────────────────────────
 
 function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh: boolean; tickerCtx: TickerPayload | null; enrichEv: EnrichEvent | null }) {
-  const rawScore = useMemo(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    () => computeFlowScore(event as any),
-    [event],
-  );
-  const score = isNaN(rawScore.score) ? 0 : rawScore.score;
-  const { tier, components } = rawScore;
+  // Score is precomputed server-side and attached to the event (event.flowScore).
+  const fs = event.flowScore;
+  const score = fs && !isNaN(fs.score) ? fs.score : 0;
+  const tier = fs?.tier ?? "LOW";
+  const components = fs?.components ?? [];
 
   const contractLabel = `${event.root} ${event.strike}${event.right} ${fmtExp(event.exp)}`;
   const premStr = fmtPrem(event.premium);
@@ -283,7 +281,6 @@ interface ScoreComponent {
   label?: string;
   label_zh?: string;
   value: number;
-  weight: number;
 }
 
 function ComponentBar({ component, zh }: { component: ScoreComponent; zh: boolean }) {

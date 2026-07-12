@@ -7,7 +7,7 @@ import { useMemo } from "react";
 import type React from "react";
 import { pick, fmtNum } from "../../lib/finFormat";
 import type { Lang } from "../../lib/i18n";
-import { computeFlowScore } from "../../lib/flowScore";
+import type { FlowScore } from "./FeedPane";
 import { FD } from "../../lib/flowdeskStrings";
 import { RingGauge } from "../ui/RingGauge";
 
@@ -20,6 +20,7 @@ interface FlowEvent {
   n_prints: number; size: number; avg_price: number; premium: number;
   premium_z: number | null; baseline_source: string; vol_gt_oi: boolean | null;
   repeated: boolean; zerodte: boolean; signing_source: string; swept?: boolean;
+  flowScore?: FlowScore;
 }
 interface TideMinute { t: string; ncp: number; npp: number; gross: number; vol: number }
 interface TidePayload {
@@ -93,8 +94,7 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
   const tickerBestScore = useMemo(() => {
     const map: Record<string, number> = {};
     for (const ev of feed.events) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { score } = computeFlowScore(ev as any);
+      const score = ev.flowScore?.score ?? 0;
       if (!(ev.root in map) || score > map[ev.root]) map[ev.root] = score;
     }
     return map;
