@@ -375,7 +375,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // never fire a network request for intel/fund/opts files.
   useEffect(() => { let alive = true; btMark("manifest-fetch-start"); getJSON("/data/manifest.json").then((m) => { if (alive && m) { btMark("manifest-fetch-done"); setMan(m); loadCoverage(Object.keys(m.symbols || {})); } }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
-    { const si = load("mm.inds", ["ema", "rsi", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); setSet({ ...DEFAULT_SET, ...load("mm.set", DEFAULT_SET) }); setCompareCfg(load("mm.cmpCfg", {}));
+    { const si = load("mm.inds", ["ema", "rsi", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); { const sv = load("mm.set", {}); setSet({ ...DEFAULT_SET, ...sv, cols: { ...DEFAULT_SET.cols, ...(sv.cols || {}) }, colW: { ...(sv.colW || {}) } }); } setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
@@ -1172,7 +1172,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (!r) return "—";
     const u = r.chg >= 0;
     if (key === "last") return fmt(r.last, r.last < 10 ? 4 : 2);
-    if (key === "change") return (u ? "+" : "") + fmt(r.last * r.chg / 100, 2);
+    // $ change = last − prevClose. prevClose = last / (1 + chg%). The old
+    // `last * chg/100` used the CURRENT price as the base, overstating the move
+    // by a factor of (1 + chg%).
+    if (key === "change") { const prev = r.chg > -100 ? r.last / (1 + r.chg / 100) : r.last; const d = r.last - prev; return (d >= 0 ? "+" : "") + fmt(d, 2); }
     if (key === "changePct") return (u ? "+" : "") + fmt(r.chg) + "%";
     if (key === "volume") return vol(r.vol);
     if (key === "ext") {
