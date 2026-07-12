@@ -132,8 +132,16 @@
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 12px;
   padding: 4px;
-  flex-shrink: 0;
+  /* Scroll, never clip: whenever the strip doesn't fit its flex row (any viewport,
+     not just ≤640px) it shrinks and pans horizontally so the last tabs stay
+     reachable. When everything fits, none of this changes the layout. */
+  min-width: 0;
+  flex-shrink: 1;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.obs-pillnav::-webkit-scrollbar { display: none; }
 .obs-pillnav-tab {
   padding: 7px 14px;
   border-radius: 9px;
@@ -265,15 +273,6 @@
   background: var(--up);
   box-shadow: 0 0 10px var(--up);
   flex-shrink: 0;
-}
-
-/* ─── Responsive: scrollable pill nav on narrow viewports ────────────────── */
-@media (max-width: 640px) {
-  .obs-pillnav {
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .obs-pillnav::-webkit-scrollbar { display: none; }
 }
 
 /* ─── Modern scroll primitive ────────────────────────────────────────────── */
