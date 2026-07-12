@@ -300,19 +300,20 @@ export default function ChartFrameBar({
                 try { if (chartApi) chartApi.priceScale(s.scaleLeft ? "left" : "right").setAutoScale(next); } catch {}
               }}>
                 <span className="qsg-check">{s.autoScale ? "✓" : ""}</span>
-                <span>{t("qsgAuto")}</span>
+                <span className="qsg-lbl">{t("qsgAuto")}</span>
               </div>
 
               {/* Scale price chart only — passive affordance (single-pane; full in Phase 2) */}
               <div className="qsg-item qsg-disabled">
                 <span className="qsg-check" />
-                <span>{t("qsgScaleChartOnly")}</span>
+                <span className="qsg-lbl">{t("qsgScaleChartOnly")}</span>
               </div>
 
               {/* Invert scale ⌥I */}
               <div className={`qsg-item${s.invertScale ? " checked" : ""}`} onClick={() => onSettings({ invertScale: !s.invertScale })}>
                 <span className="qsg-check">{s.invertScale ? "✓" : ""}</span>
-                <span>{t("qsgInvert")}<kbd className="qsg-kbd">⌥I</kbd></span>
+                <span className="qsg-lbl">{t("qsgInvert")}</span>
+                <kbd className="qsg-kbd">⌥I</kbd>
               </div>
 
               <div className="qsg-sep" />
@@ -326,7 +327,8 @@ export default function ChartFrameBar({
               ] as [PriceScaleMode, string, string][]).map(([m, label, kbd]) => (
                 <div key={m} className={`qsg-item qsg-radio${s.mode === m ? " checked" : ""}`} onClick={() => onSettings({ mode: m })}>
                   <span className="qsg-radio-dot">{s.mode === m ? "●" : "○"}</span>
-                  <span>{label}{kbd && <kbd className="qsg-kbd">{kbd}</kbd>}</span>
+                  <span className="qsg-lbl">{label}</span>
+                  {kbd && <kbd className="qsg-kbd">{kbd}</kbd>}
                 </div>
               ))}
 
@@ -335,7 +337,7 @@ export default function ChartFrameBar({
               {/* Move scale to left */}
               <div className={`qsg-item${s.scaleLeft ? " checked" : ""}`} onClick={() => onSettings({ scaleLeft: !s.scaleLeft })}>
                 <span className="qsg-check">{s.scaleLeft ? "✓" : ""}</span>
-                <span>{t("qsgScaleLeft")}</span>
+                <span className="qsg-lbl">{t("qsgScaleLeft")}</span>
               </div>
 
               <div className="qsg-sep" />
@@ -343,12 +345,12 @@ export default function ChartFrameBar({
               {/* Labels submenu */}
               <div className="qsg-item qsg-has-sub" onClick={(e) => { e.stopPropagation(); setSubMenu(subMenu === "labels" ? null : "labels"); }}>
                 <span className="qsg-check" />
-                <span className="qsg-sub-trigger">{t("qsgLabels")}<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 2l4 3-4 3" /></svg></span>
+                <span className="qsg-sub-trigger"><span className="qsg-lbl">{t("qsgLabels")}</span><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 2l4 3-4 3" /></svg></span>
                 {subMenu === "labels" && (
                   <div className="qsg-submenu" onClick={(e) => e.stopPropagation()}>
                     <div className={`qsg-item${s.lastValueVisible ? " checked" : ""}`} onClick={() => onSettings({ lastValueVisible: !s.lastValueVisible })}>
                       <span className="qsg-check">{s.lastValueVisible ? "✓" : ""}</span>
-                      <span>{t("qsgLastValueLabel")}</span>
+                      <span className="qsg-lbl">{t("qsgLastValueLabel")}</span>
                     </div>
                   </div>
                 )}
@@ -357,12 +359,12 @@ export default function ChartFrameBar({
               {/* Lines submenu */}
               <div className="qsg-item qsg-has-sub" onClick={(e) => { e.stopPropagation(); setSubMenu(subMenu === "lines" ? null : "lines"); }}>
                 <span className="qsg-check" />
-                <span className="qsg-sub-trigger">{t("qsgLines")}<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 2l4 3-4 3" /></svg></span>
+                <span className="qsg-sub-trigger"><span className="qsg-lbl">{t("qsgLines")}</span><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 2l4 3-4 3" /></svg></span>
                 {subMenu === "lines" && (
                   <div className="qsg-submenu" onClick={(e) => e.stopPropagation()}>
                     <div className={`qsg-item${s.priceLineVisible ? " checked" : ""}`} onClick={() => onSettings({ priceLineVisible: !s.priceLineVisible })}>
                       <span className="qsg-check">{s.priceLineVisible ? "✓" : ""}</span>
-                      <span>{t("qsgPriceLine")}</span>
+                      <span className="qsg-lbl">{t("qsgPriceLine")}</span>
                     </div>
                   </div>
                 )}
@@ -371,7 +373,7 @@ export default function ChartFrameBar({
               {/* Plus button toggle */}
               <div className="qsg-item" onClick={() => { window.dispatchEvent(new CustomEvent("mm:plus-btn")); setGearOpen(false); }}>
                 <span className="qsg-check">✓</span>
-                <span>{t("qsgPlusBtn")}</span>
+                <span className="qsg-lbl">{t("qsgPlusBtn")}</span>
               </div>
 
               <div className="qsg-sep" />
@@ -379,7 +381,7 @@ export default function ChartFrameBar({
               {/* More settings — opens the full settings modal on the Scales and lines tab */}
               <div className="qsg-item" onClick={() => { setGearOpen(false); onOpenSettingsModal?.("scales"); }}>
                 <span className="qsg-check" />
-                <span>{t("qsgMoreSettings")}</span>
+                <span className="qsg-lbl">{t("qsgMoreSettings")}</span>
               </div>
             </div>
           )}

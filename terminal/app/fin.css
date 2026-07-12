@@ -342,7 +342,7 @@
 .od-note{font:500 10px/1.45 var(--font-ui);color:var(--muted);padding-top:4px}
 
 /* ── EventEdgePop popover ── */
-.eep-pop{position:fixed;z-index:97;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:14px 15px;box-shadow:var(--shadow-2);display:flex;flex-direction:column;gap:11px;animation:fin-tip-in .12s ease;max-height:min(420px,80vh);overflow-y:auto;scrollbar-width:thin}
+.eep-pop{position:fixed;z-index:97;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid var(--pop-edge);border-radius:var(--pop-r);padding:14px 15px;box-shadow:var(--pop-shadow),var(--pop-sheen);display:flex;flex-direction:column;gap:11px;animation:fin-tip-in .12s ease;max-height:min(420px,80vh);overflow-y:auto;scrollbar-width:thin}
 .eep-tier-row{display:flex;align-items:center;gap:8px}
 .eep-tier-pill{display:inline-flex;align-items:center;padding:5px 11px;border-radius:var(--r-pill);border:1.5px solid;font:700 11px/1 var(--font-ui);letter-spacing:.02em;background:transparent}
 .eep-prose{font:500 12px/1.6 var(--font-ui);color:var(--text);margin:0;white-space:pre-wrap;word-break:break-word}
