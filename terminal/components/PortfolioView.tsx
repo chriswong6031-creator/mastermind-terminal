@@ -10,15 +10,35 @@ type Row = { name: string; zh?: string; col: string; last: number; chg: number; 
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 
+const GUEST_SEED = ["BTC-USD", "ETH-USD", "NVDA", "AAPL", "MSFT", "QQQ"];
+
 export default function PortfolioView({ symbols, email }: { symbols: string[]; email: string }) {
   const router = useRouter();
   const t = useT();
   const [man, setMan] = useState<Record<string, Row>>({});
   const [loaded, setLoaded] = useState(false);
+  // The whole prod base is guest right now (login disabled), so the server watchlist
+  // is empty. Fall back to the client-side watchlist (mm.wls, written by TerminalShell)
+  // and then the same seed the Terminal opens with — so Portfolio isn't blank for guests.
+  const [effSymbols, setEffSymbols] = useState<string[]>(symbols);
+  useEffect(() => {
+    if (symbols.length) { setEffSymbols(symbols); return; }
+    try {
+      const raw = localStorage.getItem("mm.wls");
+      if (raw) {
+        const w = JSON.parse(raw);
+        const list = w?.lists?.[w?.active] ?? w?.lists?.Default;
+        const syms = Array.isArray(list) ? list.map((x: { symbol: string }) => x.symbol).filter(Boolean) : [];
+        setEffSymbols(syms.length ? syms : GUEST_SEED);
+        return;
+      }
+    } catch {}
+    setEffSymbols(GUEST_SEED);
+  }, [symbols]);
   // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
   useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive) setMan(m?.symbols || {}); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); }); return () => { alive = false; }; }, []);
 
-  const rows = symbols.map((s) => ({ sym: s, ...(man[s] || {} as Row) })).filter((r) => r.name);
+  const rows = effSymbols.map((s) => ({ sym: s, ...(man[s] || {} as Row) })).filter((r) => r.name);
   const buys = rows.filter((r) => isBuy(r.verdict));
   // a display-only "conviction tilt": weight bullish names by win-rate, normalize
   const tiltBase = buys.map((r) => ({ sym: r.sym, w: (r.wr || 0.5) }));

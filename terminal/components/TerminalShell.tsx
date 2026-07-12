@@ -148,6 +148,13 @@ const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends"
 const normalizePane = (pane: string): FinPage => (pane === "analyst" ? "forecast" : pane) as FinPage;
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 
+// Guest drawings tier: login is disabled site-wide, so /api/drawings is a no-op for
+// everyone and chart drawings were destroyed on symbol switch / reload. Persist them
+// per-symbol in localStorage for guests instead.
+const GUEST_DRAW_KEY = "mm.draw";
+const readGuestDraw = (sym: string): Drawing[] => { try { const m = JSON.parse(localStorage.getItem(GUEST_DRAW_KEY) || "{}"); return Array.isArray(m[sym]) ? m[sym] : []; } catch { return []; } };
+const writeGuestDraw = (sym: string, d: Drawing[]) => { try { const m = JSON.parse(localStorage.getItem(GUEST_DRAW_KEY) || "{}"); if (d && d.length) m[sym] = d; else delete m[sym]; localStorage.setItem(GUEST_DRAW_KEY, JSON.stringify(m)); } catch {} };
+
 // drawing tools that accept a pre-draw color/width/dash style — still referenced by ChartPane/ChartPanel
 // for the styleable-tool check; DrawingSidebar owns its own definition of this set now.
 // kept for parity reference; not rendered in this component.
@@ -346,7 +353,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const drawPending = useRef<Record<string, Drawing[]>>({});
   const drawTimers = useRef<Record<string, any>>({});
   const prevPaneSyms = useRef<Set<string>>(new Set());
-  const flushDrawings = useCallback((sym: string) => { clearTimeout(drawTimers.current[sym]); const d = drawPending.current[sym]; if (d) { delete drawPending.current[sym]; fetch("/api/drawings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym, drawings: d }) }).catch(() => {}); } }, []);
+  const flushDrawings = useCallback((sym: string) => { clearTimeout(drawTimers.current[sym]); const d = drawPending.current[sym]; if (d) { delete drawPending.current[sym]; if (loggedIn) { fetch("/api/drawings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym, drawings: d }) }).catch(() => {}); } else { writeGuestDraw(sym, d); } } }, [loggedIn]);
   const setSymbolDrawings = useCallback((sym: string, d: Drawing[]) => { setDrawStore((s) => ({ ...s, [sym]: d })); drawPending.current[sym] = d; clearTimeout(drawTimers.current[sym]); drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 600); }, [flushDrawings]);
   // copilot → chart: convert AI-suggested price levels into drawings appended to the symbol's store
   const annotateChart = useCallback((sym: string, anns: any[]) => {
@@ -450,9 +457,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     for (const sym of now) {
       if (drawLoaded.current.has(sym)) continue;
       drawLoaded.current.add(sym);
-      fetch(`/api/drawings?symbol=${sym}`).then((r) => r.json()).then((d) => {
-        if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: d.drawings || [] }));
-      }).catch(() => { drawLoaded.current.delete(sym); });
+      if (loggedIn) {
+        fetch(`/api/drawings?symbol=${sym}`).then((r) => r.json()).then((d) => {
+          if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: d.drawings || [] }));
+        }).catch(() => { drawLoaded.current.delete(sym); });
+      } else {
+        const gd = readGuestDraw(sym);
+        if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: gd }));
+      }
     }
     // a symbol that left every pane: flush its pending save, then evict its cache + load-guard so a
     // later re-visit re-fetches fresh server state (restores the old per-mount refetch behavior)
@@ -463,7 +475,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       setDrawStore((s) => { if (s[sym] === undefined) return s; const n = { ...s }; delete n[sym]; return n; });
     }
     prevPaneSyms.current = now;
-  }, [panes, flushDrawings]);
+  }, [panes, flushDrawings, loggedIn]);
   useEffect(() => () => { for (const sym of Object.keys(drawPending.current)) flushDrawings(sym); }, [flushDrawings]);
 
   // per-symbol data for the rail.  Priority split:
