@@ -7,6 +7,7 @@
       "runtimeArgs": ["run", "dev:fixture"],
       "cwd": "terminal",
       "port": 3000,
+      "autoPort": true,
       "env": {
         "FLOW_FIXTURE": "1",
         "NW_FIXTURE": "1",
