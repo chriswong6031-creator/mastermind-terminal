@@ -1285,15 +1285,24 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   /* drawer safe-area bottom */
   .m-drawer{padding-bottom:env(safe-area-inset-bottom,0px)}
   .workspace{grid-column:auto;grid-row:auto;border-right:0;flex:none}
-  .chart-tabs{height:44px;padding:0 6px;gap:4px;overflow-x:auto;scrollbar-width:none}
+  .chart-tabs{height:48px;padding:0 6px;gap:4px;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;touch-action:pan-x;-webkit-overflow-scrolling:touch;scrollbar-width:none}
   .chart-tabs::-webkit-scrollbar{display:none}
-  .chart-tabs .ct{margin-right:10px;font-size:12.5px}
+  .chart-tabs .ct{height:48px;margin-right:10px;font-size:12.5px;flex:none}
+  /* make all toolbar children non-shrinking so the row scrolls horizontally */
+  .chart-tabs>*,.chart-tabs .tools,.chart-tabs .tools>*,.chart-tabs .pophost{flex:none}
+  .tbtn{height:34px;padding:0 11px}
+  .tfbtn{height:34px;padding:0 9px;font-size:12.5px}
+  .tools{gap:8px}
+  /* hide desktop popovers — sheets render instead */
+  .chart-tabs .pop,.chart-tabs .tfgrid{display:none!important}
   .tool-adv{display:none!important}
   .chart-fs-btn{display:none}
   .chart-fs-float{display:grid}
   .tooldock{display:none}.ds-dock{display:none}
-  /* chart: 48vh tall, pan without hijacking page scroll */
-  .chart-body{height:48vh;flex:none;overscroll-behavior-y:contain}
+  /* B3: chart-body grows with sub-pane count (--subpanes set by TerminalShell via inline style);
+     pans without hijacking page scroll. vh line first = fallback for engines without dvh. */
+  .chart-body{height:min(calc(46vh + var(--subpanes,0)*10vh), 80vh);flex:none;overscroll-behavior-y:contain}
+  .chart-body{height:min(calc(46dvh + var(--subpanes,0)*10dvh), 80dvh)}
   .chart-body .pane-grid{grid-template-columns:1fr!important;grid-template-rows:1fr!important}
   .chart-body .pane-grid>.pane~.pane{display:none}
   /* chart canvas wrapper: block touch pan events so LWC gets them, not the page */
@@ -1322,8 +1331,9 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   .m-ic{min-width:40px;min-height:40px}
   /* floating fullscreen button */
   .chart-fs-float{min-width:40px;min-height:40px}
-  /* legend collapse & icon buttons in chart overlay */
-  .lg-collapse,.lg-ic{min-width:40px;min-height:40px}
+  /* legend icon buttons in chart overlay (lg-collapse chip + hidden-row eye set their own
+     compact sizes in the legend mobile block further down — TradingView-compact by design) */
+  .lg-ic{min-width:40px;min-height:40px}
   /* pane ops icons */
   .po-ic{min-width:40px;min-height:40px}
   /* drawer nav links */
@@ -1344,7 +1354,21 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   /* ── Fix 6: chip tap heights (override inline height on flow filter chips) ── */
   .chip{min-height:36px!important;height:auto!important}
   .flow-flag-chip,.flow-dte-chip,.flow-mny-chip{min-height:30px;display:inline-flex;align-items:center}
+  /* A4: modal dialogs become bottom sheets on mobile */
+  /* IndicatorSettings (.scrim > .ind-set) and IndicatorsModal (.scrim > .imodal) ONLY —
+     .scrim is shared by SearchModal/.smodal and IndicatorSource/.ind-src, which keep their
+     default centering (scoping via :has so they aren't shoved to the bottom edge). */
+  .scrim:has(> .ind-set),.scrim:has(> .imodal){align-items:flex-end!important;padding:0!important}
+  .ind-set,.imodal{width:100%!important;max-width:100%!important;margin:0!important;border-radius:var(--pop-r) var(--pop-r) 0 0!important;max-height:86dvh!important;padding-bottom:env(safe-area-inset-bottom)!important;animation:msheet-up 260ms cubic-bezier(.32,.72,.24,1) forwards}
+  /* ChartSettingsModal (.sm-backdrop > .sm-modal) */
+  .sm-backdrop{align-items:flex-end!important;padding:0!important}
+  .sm-modal{width:100%!important;max-width:100%!important;margin:0!important;border-radius:var(--pop-r) var(--pop-r) 0 0!important;max-height:86dvh!important;padding-bottom:env(safe-area-inset-bottom)!important;animation:msheet-up 260ms cubic-bezier(.32,.72,.24,1) forwards}
+  /* safe-area top bar and drawer */
+  .mobilebar{padding-top:env(safe-area-inset-top)}
+  .m-drawer{padding-top:env(safe-area-inset-top)}
 }
+/* NOTE: legend/pane-ops mobile overrides live in the ≤860px block AFTER the legend base styles
+   (further down this file) — equal-specificity rules here would lose to the later base rules. */
 @media (max-width:420px){
   .sa-grid3{grid-template-columns:1fr 1fr}
   .sa-levels{grid-template-columns:1fr 1fr}
@@ -1412,23 +1436,20 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .lg-name{color:var(--text);font-size:12px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px rgba(0,0,0,.55)}
 .lg-row.is-hidden .lg-name{color:var(--text-dim);font-weight:500}
 .lg-menu{display:inline-flex;align-items:center;gap:1px;border-radius:4px;padding:0 1px;transition:background var(--t)}
-.lg-row:hover .lg-menu{background:rgba(0,0,0,.82);box-shadow:0 1px 6px rgba(0,0,0,.4)}
+/* hover-reveal rules live in @media (hover:hover) below so they never fire on touch */
 .lg-ic{display:none;align-items:center;justify-content:center;width:19px;height:18px;border-radius:3px;color:var(--text-2);cursor:pointer;position:relative;background:none;border:none;padding:0}
-.lg-ic:hover{color:var(--text);background:rgba(255,255,255,.09)}
 .lg-row.is-hidden .lg-ic.eye{display:inline-flex;color:var(--text-dim)}
-.lg-row.is-hidden .lg-ic.eye:hover{color:var(--text-2)}
-.lg-row:hover .lg-ic{display:inline-flex}
 .lg-collapse{pointer-events:auto;display:inline-flex;align-items:center;justify-content:center;width:22px;height:16px;margin-top:1px;border-radius:3px;color:var(--text-2);cursor:pointer;background:rgba(0,0,0,.35);border:none}
 .lg-collapse:hover{color:var(--text);background:rgba(0,0,0,.6)}
 /* per-pane top-right ops menu */
 .pane-ops{position:absolute;pointer-events:auto;display:inline-flex;gap:1px;padding:2px;background:rgba(13,15,19,.9);border:1px solid var(--line-3);border-radius:var(--r-md);box-shadow:0 6px 18px -8px rgba(0,0,0,.7)}
 .po-ic{display:inline-flex;align-items:center;justify-content:center;width:24px;height:22px;border-radius:var(--r);color:var(--text-2);cursor:pointer;position:relative;background:none;border:none;padding:0}
-.po-ic:hover{color:var(--text);background:var(--panel-2)}
+/* .po-ic:hover in @media (hover:hover) */
 .po-ic.on{color:var(--text);background:rgba(77,130,255,.2)}
 .po-ic:disabled{opacity:.28;pointer-events:none;cursor:default}
 /* 0.5s-delay tooltips for legend icons + pane ops */
 .lg-ic[data-tip]::after,.po-ic[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 5px);left:50%;transform:translateX(-50%);background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid var(--pop-edge);color:var(--text);font:500 10.5px/1 var(--font-ui);padding:4px 7px;border-radius:var(--r-md);white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .1s ease;z-index:30;box-shadow:0 8px 20px -6px rgba(0,0,0,.6)}
-.lg-ic[data-tip]:hover::after,.po-ic[data-tip]:hover::after{opacity:1;transition-delay:.5s}
+/* :hover::after reveal in @media (hover:hover) */
 .pane-ops .po-ic[data-tip]:first-child::after{left:0;transform:none}
 /* pane move up/down flip animation (TradingView-style) */
 .po-flip{display:inline-flex;animation:po-flip .42s ease}
@@ -1442,11 +1463,73 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 /* "More" dropdown */
 .lg-more{position:fixed;z-index:80;min-width:188px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid var(--pop-edge);border-radius:var(--pop-r);padding:5px;box-shadow:var(--pop-shadow),var(--pop-sheen);pointer-events:auto}
 .lg-more-row{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:var(--r);font-size:12.5px;color:var(--text-2);cursor:pointer;white-space:nowrap}
-.lg-more-row:hover{background:var(--panel-2);color:var(--text)}
-.lg-more-row.danger:hover{color:var(--sell)}
+/* hover reveals in @media (hover:hover) */
 .lg-more-row.dis{opacity:.38;pointer-events:none}
 .lg-more-row .mi{display:inline-flex;align-items:center;justify-content:center;width:15px;color:inherit}
 .lg-more-sep{height:1px;background:var(--line);margin:4px 4px}
+/* B5 icon sizing — controlled via CSS so media queries / pill context can override */
+.lgsvg{width:15px;height:15px;display:block;flex:none}
+.lg-ic svg,.lg-ic .lgsvg{width:15px;height:15px}
+.po-ic svg,.po-ic .lgsvg{width:15px;height:15px}
+/* B5 count chip on the collapse button */
+.lg-cnt{font:600 11.5px/1 var(--font-num);color:var(--text-2);padding:0 3px}
+/* B5 tap-to-activate floating pill (coarse) */
+/* B5 coarse action pill: the ACTIVE ROW itself becomes the TradingView-style pill (title + big
+   buttons inline on a dark rounded rect) — buttons must override the base .lg-ic{display:none}. */
+.lg-pill{display:inline-flex;align-items:center;gap:2px}
+.lg-row.is-live{height:auto;background:rgba(8,10,14,.95);border:1px solid var(--pop-edge);border-radius:11px;padding:3px 5px 3px 10px;box-shadow:var(--pop-shadow);position:relative;z-index:5;opacity:1}
+.lg-row.is-live .lg-name{color:var(--text)}
+.lg-pill .lgsvg,.lg-pill svg{width:18px;height:18px}
+.lg-pill .lg-ic{display:inline-flex;width:42px;height:38px;border-radius:8px}
+.lg-pill .lg-ic:active{background:rgba(255,255,255,.12)}
+/* B5: hover-only affordances gated so they never half-fire on touch */
+@media (hover:hover){
+  .lg-row:hover .lg-menu{background:rgba(0,0,0,.82);box-shadow:0 1px 6px rgba(0,0,0,.4)}
+  .lg-row:hover .lg-ic{display:inline-flex}
+  .lg-ic:hover{color:var(--text);background:rgba(255,255,255,.09)}
+  .lg-row.is-hidden .lg-ic.eye:hover{color:var(--text-2)}
+  .po-ic:hover{color:var(--text);background:var(--panel-2)}
+  .lg-ic[data-tip]:hover::after,.po-ic[data-tip]:hover::after{opacity:1;transition-delay:.5s}
+  .lg-more-row:hover{background:var(--panel-2);color:var(--text)}
+  .lg-more-row.danger:hover{color:var(--sell)}
+}
+
+/* ── Mobile bottom sheet (msheet) ── */
+@keyframes msheet-up{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes msheet-scrim-in{from{opacity:0}to{opacity:1}}
+.msheet-scrim{position:fixed;inset:0;background:var(--pop-scrim);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:220;animation:msheet-scrim-in 200ms ease forwards}
+.msheet{position:fixed;left:0;right:0;bottom:0;border-radius:var(--pop-r) var(--pop-r) 0 0;background:var(--pop-bg-modal);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border-top:1px solid var(--pop-edge);box-shadow:var(--pop-shadow);padding-bottom:env(safe-area-inset-bottom);max-height:min(72dvh,620px);z-index:221;animation:msheet-up 260ms cubic-bezier(.32,.72,.24,1) forwards;display:flex;flex-direction:column}
+.msheet-handle-wrap{padding:10px 0 4px;display:flex;justify-content:center;flex:none;touch-action:none}
+.msheet-handle{width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,.22)}
+.msheet-title{font:600 13px/1 var(--font-ui);color:var(--text-2);padding:2px 16px 8px;flex:none}
+.msheet-body{overflow-y:auto;overscroll-behavior:contain;flex:1;padding-bottom:12px}
+/* msheet row helpers */
+.msheet-row{display:flex;align-items:center;min-height:46px;padding:0 16px;gap:12px;font-size:14px;color:var(--text-2);border-radius:var(--pop-item-r);cursor:pointer}
+.msheet-row:active{background:var(--pop-hover)}
+.msheet-row.on{color:var(--brand-2)}
+.msheet-row.danger:active{color:var(--sell)}
+.msheet-sep{height:1px;background:var(--line);margin:6px 12px}
+/* Group header inside TF sheet */
+.msheet-ghd{font:600 10px/1 var(--font-ui);letter-spacing:.09em;text-transform:uppercase;color:var(--text-dim);padding:10px 16px 4px}
+
+/* ── legend / pane-ops mobile overrides — MUST sit after the legend base styles above,
+     or the later equal-specificity base rules win and these go dead ── */
+@media (max-width:860px){
+  /* B6 typography; C2: tight ellipsis cap so long names never obstruct the chart */
+  .lg-name{font-size:13px;max-width:150px}
+  .lg-row{height:24px;gap:8px}
+  .lg-block{gap:3px}
+  /* C3: hidden indicators read as muted — grey name (base rule) + whole-row fade */
+  .lg-row.is-hidden{opacity:.66}
+  .lg-row.is-live{height:auto}
+  /* C1: the persistent crossed-eye on hidden rows is a real touch target (fits the 24px row;
+     min-* zeroed so the generic 40px .lg-ic floor doesn't inflate it out of the row) */
+  .lg-row.is-hidden .lg-ic.eye{width:36px;height:24px;min-width:0;min-height:0}
+  /* B5: count chip — the collapse control becomes a tappable "⌄ N" pill */
+  .lg-collapse{width:auto;min-width:34px;height:28px;padding:0 10px;gap:5px;border-radius:14px;background:rgba(0,0,0,.5)}
+  /* B5: pane-ops sizing on coarse — only restore affordance shown */
+  .po-ic{width:40px;height:36px}
+}
 
 /* ═══ indicator settings dialog (IndicatorSettings) ═══ */
 .ind-set{width:344px;max-width:92vw;max-height:78vh;display:flex;flex-direction:column;background:var(--pop-bg-modal);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid var(--pop-edge);border-radius:var(--pop-r);overflow:hidden;box-shadow:var(--pop-shadow),var(--pop-sheen)}
