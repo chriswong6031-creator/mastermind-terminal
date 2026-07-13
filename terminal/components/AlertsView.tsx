@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import MobileNav from "@/components/MobileNav";
 import { useLang, useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
 
@@ -105,6 +106,7 @@ export default function AlertsView({ email }: { email: string }) {
 
   return (
     <div className="app2">
+      <MobileNav email={email} />
       <header className="topbar">
         <BrandLockup /><div className="tdiv" /><span className="page-title">{t("pageAlerts")}</span>
         <div className="spacer" />

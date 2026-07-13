@@ -53,7 +53,17 @@
   .fin-pane>.fin-body>.fin-sec,.fin-pane>.fin-body>.fin-grid2,.fin-pane>.fin-body>.fin-grid3,.fin-pane>.fin-body>.fin-grid4,.fin-pane>.fin-body>.fin-body,.fin-seas>.fin-table-scroll{max-width:1440px;margin-left:auto;margin-right:auto}
   .fin-seas>.fin-sec{max-width:1320px;margin-left:0;margin-right:0}
 }
-@media (max-width:640px){.fin-grid2,.fin-grid3,.fin-grid4{grid-template-columns:1fr}.fin-body{padding:14px 12px 60px}}
+@media (max-width:640px){
+  .fin-grid2,.fin-grid3,.fin-grid4{grid-template-columns:1fr}
+  .fin-body{padding:14px 12px 60px}
+  /* ensure cards never bleed past viewport */
+  .fin-card{max-width:100%;box-sizing:border-box;overflow:hidden}
+  /* inner overflow scrolling for wide tables/charts inside cards */
+  .fin-card .fin-table-scroll,.fin-card .fin-svg-box,.fin-card table{overflow-x:auto;max-width:100%}
+  /* x-axis font floors */
+  .fin-xaxis-sm{font-size:9px}
+  .fin-xaxis-xs{font-size:9px}
+}
 
 /* ── card ── */
 .fin-card{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:var(--sp-3);box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
@@ -852,6 +862,12 @@
 .fin-row-older:hover{opacity:1}
 .fin-insider-show-older{display:flex;align-items:center;gap:5px;font:500 12px/1 var(--font-ui);color:var(--brand);background:none;border:none;cursor:pointer;padding:8px 0;margin-top:2px}
 .fin-insider-show-older:hover{color:var(--brand-2)}
+
+/* ── fin-xlbl font floor at mobile ── */
+@media (max-width:860px){
+  .fin-xlbl{font-size:10px}
+  .fin-xaxis-xs .fin-xlbl,.fin-xaxis-sm .fin-xlbl{font-size:10px}
+}
 
 /* ── workspace-slot mode (desktop only): MegaPane rendered inside .workspace instead of as a fixed overlay ──
  * On desktop (>860px) .fin-pane--workspace overrides fixed positioning so the pane fills the

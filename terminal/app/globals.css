@@ -416,6 +416,21 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .imodal .li .chk{margin-left:auto;width:16px;height:16px;border-radius:var(--r);border:1.5px solid var(--line-3);display:grid;place-items:center}.imodal .li.on .chk{background:var(--brand);border-color:var(--brand)}.imodal .li .chk svg{width:11px;height:11px;stroke:#fff;fill:none;stroke-width:3;opacity:0}.imodal .li.on .chk svg{opacity:1}
 .imodal .li .lk{margin-left:auto;color:var(--signal)}
 
+/* Indicators modal — single-column layout on narrow screens */
+@media (max-width:640px){
+  .imodal{width:calc(100vw - 32px);max-width:none;max-height:calc(100dvh - 80px)}
+  /* .mh close button gets a larger hit area */
+  .imodal .mh .x{font-size:22px;width:44px;height:44px;display:grid;place-items:center;margin-right:-8px}
+  /* collapse the two-column layout: category nav becomes a horizontal chip row on top */
+  .imodal .ib{display:flex;flex-direction:column;max-height:calc(100dvh - 140px)}
+  .imodal .inav{border-right:0;border-bottom:1px solid var(--line);padding:8px;display:flex;flex-direction:row;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:6px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .imodal .inav::-webkit-scrollbar{display:none}
+  .imodal .inav .grp{display:none}
+  .imodal .inav a{display:inline-flex;align-items:center;white-space:nowrap;padding:7px 12px;border-radius:var(--r-pill);border:1px solid var(--line);font-size:12px;flex:none}
+  .imodal .inav a.on{border-color:var(--brand);background:rgba(41,98,255,.13)}
+  .imodal .ilist{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+}
+
 /* Mastermind AI — a floating, non-modal panel that "drops in" from beneath the AI button (top-right) */
 .copilot{position:fixed;top:64px;right:16px;bottom:auto;width:400px;max-width:calc(100vw - 32px);max-height:min(72vh,680px);
   background:linear-gradient(180deg,rgba(21,23,29,.97),rgba(12,14,18,.97));border:1px solid var(--line-3);border-radius:var(--r-lg);
@@ -553,6 +568,8 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .pg{flex:1;overflow-y:auto;min-height:0;padding:18px 20px}
 .pg-head{display:flex;align-items:center;gap:12px;margin-bottom:16px}.pg-head h2{font:650 17px/1 var(--font-ui)}.pg-head .sub{color:var(--muted);font-size:12.5px}
 .panel{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);overflow:hidden;margin-bottom:16px}
+/* allow table scroll inside panels without clipping */
+.panel:has(.tbl-scroll){overflow-x:visible;overflow-y:hidden}
 .panel .ph{display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line);font:600 13px/1 var(--font-ui)}
 .panel .ph .sub{margin-left:auto;color:var(--muted);font-size:11.5px;font-weight:400}
 .alert-form{display:flex;gap:10px;align-items:center;padding:13px 15px;flex-wrap:wrap}
@@ -568,8 +585,11 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .ptable tbody tr{cursor:pointer;transition:background var(--t)}.ptable tbody tr:hover{background:var(--panel-2)}
 .ptable tbody tr.empty-row,table.scr tbody tr.empty-row{cursor:default}
 .ptable tbody tr.empty-row:hover,table.scr tbody tr.empty-row:hover{background:transparent}
+/* portfolio table scroll container — mirrors .scr-table */
+.tbl-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
 .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
 .kpi{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:14px 16px}.kpi small{font:600 10px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.kpi b{display:block;font:700 22px/1.1 var(--font-ui);margin-top:7px;font-variant-numeric:tabular-nums}
+@media(max-width:500px){.kpis{grid-template-columns:repeat(2,1fr);gap:8px}.kpi{padding:11px 12px}.kpi b{font-size:18px}}
 
 /* landing + login */
 .center{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;padding:24px}
@@ -1250,19 +1270,20 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 @media (max-width:860px){
   html,body{height:auto;overflow-x:hidden}
   .app,.app2{display:flex;flex-direction:column;height:auto;min-height:100dvh}
+  /* hide desktop chrome on .app (TerminalShell) */
   .app>.topbar,.app>.appnav,.app>.ticker{display:none}
-  /* .app2 shell pages (heatmap/flow/screener/alerts/portfolio/scripts) keep the AppNav but
-     render NO .mobilebar — so in flex-column the vertical 60px rail ballooned to a full-width
-     ~425px block (its .gap{flex:1} spacer stretched it). Lay it out as a compact, horizontally
-     scrollable sticky top bar instead so it stops eating half the screen. */
-  .app2>.appnav{flex-direction:row;width:100%;height:48px;padding:0 8px;gap:2px;border-right:0;border-bottom:1px solid var(--line);overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;position:sticky;top:0;z-index:30;background:var(--bg);flex:none}
-  .app2>.appnav::-webkit-scrollbar{display:none}
-  .app2>.appnav .gap{flex:0 0 0;width:0}
-  .app2>.appnav .navbtn{flex:0 0 auto}
-  .app2>.appnav .navbtn.on::before{display:none}
+  /* hide desktop chrome on .app2 routes — MobileNav replaces them */
+  .app2>.topbar,.app2>.appnav,.app2>.ticker{display:none}
+  /* ensure .app2 content area fills full width under the mobilebar */
+  .app2>.main2{flex:1;min-height:0;width:100%}
   .rail-resizer{display:none}
+  /* mobilebar + symbar: reveal for all mobile views */
   .mobilebar{display:flex}
   .m-symbar{display:flex}
+  /* mobilebar safe-area (notch / home bar) */
+  .mobilebar{padding-top:env(safe-area-inset-top,0px)}
+  /* drawer safe-area bottom */
+  .m-drawer{padding-bottom:env(safe-area-inset-bottom,0px)}
   .workspace{grid-column:auto;grid-row:auto;border-right:0;flex:none}
   .chart-tabs{height:44px;padding:0 6px;gap:4px;overflow-x:auto;scrollbar-width:none}
   .chart-tabs::-webkit-scrollbar{display:none}
@@ -1271,9 +1292,12 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   .chart-fs-btn{display:none}
   .chart-fs-float{display:grid}
   .tooldock{display:none}.ds-dock{display:none}
-  .chart-body{height:48vh;flex:none}
+  /* chart: 48vh tall, pan without hijacking page scroll */
+  .chart-body{height:48vh;flex:none;overscroll-behavior-y:contain}
   .chart-body .pane-grid{grid-template-columns:1fr!important;grid-template-rows:1fr!important}
   .chart-body .pane-grid>.pane~.pane{display:none}
+  /* chart canvas wrapper: block touch pan events so LWC gets them, not the page */
+  .pane .chart-wrap{touch-action:none}
   .rail{grid-column:auto;grid-row:auto;overflow:visible;border-top:1px solid var(--line)}
   .rail-body{flex:none;overflow:visible;padding:0;gap:0}
   .rail .wl-board{display:none}
@@ -1289,6 +1313,37 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   .sa-modal{max-height:92vh;border-radius:var(--r-lg) var(--r-lg) 0 0}
   .sa-modal-body .sa{column-count:1}
   .sa-modal-scrim{padding:0;align-items:flex-end}
+  /* ── tap targets: min 40×40 CSS px ── */
+  /* timeframe seg buttons */
+  .tfbtn{min-height:40px;min-width:40px}
+  /* chart toolbar buttons */
+  .tbtn{min-height:40px;padding-top:6px;padding-bottom:6px}
+  /* mobile icon buttons */
+  .m-ic{min-width:40px;min-height:40px}
+  /* floating fullscreen button */
+  .chart-fs-float{min-width:40px;min-height:40px}
+  /* legend collapse & icon buttons in chart overlay */
+  .lg-collapse,.lg-ic{min-width:40px;min-height:40px}
+  /* pane ops icons */
+  .po-ic{min-width:40px;min-height:40px}
+  /* drawer nav links */
+  .m-nav a,.m-nav button{min-height:44px}
+  /* ── Fix 7: scripts / Pine editor — contain wide pre-formatted code inside viewport ── */
+  .pine-main{grid-column:auto;grid-row:auto;flex:1;flex-direction:column;min-height:0;height:auto;max-height:70dvh}
+  .editor-pane{border-right:0;border-bottom:1px solid var(--line);flex:none;height:60dvh}
+  .pine-side{width:100%;height:auto;max-height:36dvh;border-top:1px solid var(--line);flex:none}
+  .editor-head{flex-wrap:wrap;height:auto;padding:6px 10px;gap:6px}
+  .editor-head .badge{font-size:9px}
+  /* ── Fix 5: font floors (prevent sub-11px text at ≤860px) ── */
+  .flow-flag-chip,.flow-dte-chip,.flow-mny-chip{font-size:11px}
+  .pill{font-size:11px}
+  table.scr thead th,.ptable th{font-size:11px}
+  .sa-stat .k{font-size:11px}
+  .sa-kstat .k{font-size:11px}
+  .sym-cell .ic,.wl-row .ic,.m-sym .ic,.sres .r .ic{font-size:10px}
+  /* ── Fix 6: chip tap heights (override inline height on flow filter chips) ── */
+  .chip{min-height:36px!important;height:auto!important}
+  .flow-flag-chip,.flow-dte-chip,.flow-mny-chip{min-height:30px;display:inline-flex;align-items:center}
 }
 @media (max-width:420px){
   .sa-grid3{grid-template-columns:1fr 1fr}
@@ -1478,8 +1533,35 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
   .flow-unusual-rail{display:none}
   .flow-filter-bar{gap:6px;padding:6px 10px}
   .flow-heat-strip{padding:7px 10px;gap:4px}
-  .main2 table.scr td:nth-child(3),.main2 table.scr th:nth-child(3){display:none}
-  .main2 table.scr td:nth-child(7),.main2 table.scr th:nth-child(7),
-  .main2 table.scr td:nth-child(8),.main2 table.scr th:nth-child(8){display:none}
+  /* portfolio table: reduced padding at narrow widths */
+  .ptable th,.ptable td{padding:8px 10px}
+  /* screener standalone route: hide LAST(2), CHG(3), REGIME(5), WIN-RATE(6), PF(7), CAGR(8) — SYMBOL + SIGNAL + VOL visible */
+  .screener-main table.scr td:nth-child(2),.screener-main table.scr th:nth-child(2){display:none}
+  .screener-main table.scr td:nth-child(3),.screener-main table.scr th:nth-child(3){display:none}
+  .screener-main table.scr td:nth-child(5),.screener-main table.scr th:nth-child(5){display:none}
+  .screener-main table.scr td:nth-child(6),.screener-main table.scr th:nth-child(6){display:none}
+  .screener-main table.scr td:nth-child(7),.screener-main table.scr th:nth-child(7),
+  .screener-main table.scr td:nth-child(8),.screener-main table.scr th:nth-child(8){display:none}
+  /* portfolio: hide DAY%(3), REGIME(5), WIN-RATE(6), PF(7), CAGR(8), TILT(9) — SYMBOL + LAST + SIGNAL visible */
+  .tbl-scroll td:nth-child(3),.tbl-scroll th:nth-child(3){display:none}
+  .tbl-scroll td:nth-child(5),.tbl-scroll th:nth-child(5){display:none}
+  .tbl-scroll td:nth-child(6),.tbl-scroll th:nth-child(6){display:none}
+  .tbl-scroll td:nth-child(7),.tbl-scroll th:nth-child(7){display:none}
+  .tbl-scroll td:nth-child(8),.tbl-scroll th:nth-child(8){display:none}
+  .tbl-scroll td:nth-child(9),.tbl-scroll th:nth-child(9){display:none}
+  /* flow feed table (inside .scr-table / OptionsHubView) — 11 cols: Time(1) Ticker(2) Sector(3) Side(4) CP(5) Contract(6) DTE(7) Mny(8) Size(9) Prem(10) Flags(11)
+     keep: Time(1) + Ticker(2) + Side(4) + Prem(10) + Flags(11); hide: Sector(3), CP(5), Contract(6), DTE(7), Mny(8), Size(9) */
+  .scr-table table.scr td:nth-child(3),.scr-table table.scr th:nth-child(3){display:none}
+  .scr-table table.scr td:nth-child(5),.scr-table table.scr th:nth-child(5){display:none}
+  .scr-table table.scr td:nth-child(6),.scr-table table.scr th:nth-child(6){display:none}
+  .scr-table table.scr td:nth-child(7),.scr-table table.scr th:nth-child(7){display:none}
+  .scr-table table.scr td:nth-child(8),.scr-table table.scr th:nth-child(8){display:none}
+  .scr-table table.scr td:nth-child(9),.scr-table table.scr th:nth-child(9){display:none}
   .hub-tab{padding:0 10px;font-size:12px}
+  /* scr-stat in topbar: wrap counts to a second line and reduce gap */
+  .topbar .scr-stat{flex-wrap:wrap;gap:8px 14px;font-size:11px;max-width:240px;justify-content:flex-end}
+  /* chip filter tap-target enlargement */
+  .chip{min-height:36px;padding:0 11px}
+  /* flow chip tap height */
+  .flow-dte-chip,.flow-mny-chip,.flow-flag-chip{padding:4px 8px}
 }

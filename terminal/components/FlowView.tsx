@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import MobileNav from "@/components/MobileNav";
 import { useLang, useT } from "@/lib/i18n";
 
 // ─── Types from feed contract ────────────────────────────────────────────────
@@ -263,6 +264,7 @@ export default function FlowView() {
 
   return (
     <div className="app2">
+      <MobileNav email="" />
       <header className="topbar">
         <BrandLockup />
         <div className="tdiv" />
@@ -290,7 +292,7 @@ export default function FlowView() {
 
       <AppNav />
 
-      <main className="main2" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <main className="main2 flow-view" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
 
         {/* ── Heat strip ── */}
         <div className="flow-heat-strip">

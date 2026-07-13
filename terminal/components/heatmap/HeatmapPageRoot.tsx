@@ -11,6 +11,7 @@
 import { useLang } from "@/lib/i18n";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import MobileNav from "@/components/MobileNav";
 import { HeatmapView } from "./HeatmapView";
 
 export default function HeatmapPageRoot() {
@@ -18,6 +19,7 @@ export default function HeatmapPageRoot() {
 
   return (
     <div className="app2 obs obs-ambient">
+      <MobileNav email="" />
       <header className="topbar">
         <BrandLockup />
         <div className="tdiv" />
