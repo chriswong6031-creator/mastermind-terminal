@@ -17,6 +17,7 @@ import {
 import { FlowCard } from "./FlowCard";
 import { FiltersPanel, DEFAULT_FILTERS } from "./FiltersPanel";
 import type { FlowFilters } from "./FiltersPanel";
+import { trackSearch } from "@/lib/searchTrack";
 
 // ── Re-export shared types so FlowCard / FiltersPanel import from one place ──
 
@@ -309,6 +310,15 @@ export function FeedPane({
 
   // Ticker search
   const [search, setSearch] = useState("");
+
+  // Settle-tracking for the ticker filter — a live filter has no discrete
+  // commit point, so log once the typed value sits unchanged for 1.2s.
+  useEffect(() => {
+    const v = search.trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(v)) return;
+    const id = setTimeout(() => trackSearch(v, "flow-desk", v), 1200);
+    return () => clearTimeout(id);
+  }, [search]);
 
   // FiltersPanel open/close
   const [filtersOpen, setFiltersOpen] = useState(false);

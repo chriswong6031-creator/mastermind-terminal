@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLang } from "@/lib/i18n";
+import { trackSearch } from "@/lib/searchTrack";
 import { makeHeatmapT } from "@/lib/heatmapStrings";
 import { Treemap, heatPalette } from "./Treemap";
 import { HeatmapTable } from "./HeatmapTable";
@@ -281,6 +282,13 @@ export function HeatmapView() {
   const [sectorFilt, setSectorFilt] = useState<GicsSector | null>(null);
   const [search,    setSearch]    = useState("");
   const [selected,  setSelected]  = useState<HeatmapTile | null>(null);
+
+  // Shared selection commit for tile + table-row clicks; a select while the
+  // search filter is active counts as a committed ticker search.
+  const selectTile = useCallback((tile: HeatmapTile) => {
+    if (search.trim()) trackSearch(tile.ticker, "heatmap", search.trim());
+    setSelected(tile);
+  }, [search]);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -635,7 +643,7 @@ export function HeatmapView() {
             layer={layer}
             sizing={sizing}
             selectedTicker={selected?.ticker ?? null}
-            onSelect={setSelected}
+            onSelect={selectTile}
             lang={lang}
           />
         ) : (
@@ -643,7 +651,7 @@ export function HeatmapView() {
             tiles={tiles}
             layer={layer}
             selectedTicker={selected?.ticker ?? null}
-            onSelect={setSelected}
+            onSelect={selectTile}
             lang={lang}
           />
         )}

@@ -5,6 +5,7 @@ import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
+import { trackSearch } from "@/lib/searchTrack";
 
 // ── types ──────────────────────────────────────────────────────────────────
 type Row = {
@@ -315,7 +316,7 @@ export default function ScreenerView({ email }: { email: string }) {
                 const chgCls = r.chg == null ? "" : r.chg >= 0 ? "up" : "down";
                 const buy = isBuy(r.verdict);
                 return (
-                  <tr key={r.sym} onClick={() => router.push(`/terminal?sym=${r.sym}`)}>
+                  <tr key={r.sym} onClick={() => { if (searchRaw.trim()) trackSearch(r.sym, "screener", searchRaw.trim()); router.push(`/terminal?sym=${r.sym}`); }}>
                     <td>
                       <div className="sym-cell">
                         <span className="ic" style={{ background: r.col }}>{r.sym[0]}</span>
