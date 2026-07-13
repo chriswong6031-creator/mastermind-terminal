@@ -1469,3 +1469,29 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
   .main2 table.scr td:nth-child(8),.main2 table.scr th:nth-child(8){display:none}
   .hub-tab{padding:0 10px;font-size:12px}
 }
+
+/* ===== admin (owner) ===== */
+.adm-body{flex:1;display:flex;min-height:0;overflow:hidden}
+.adm-side{width:190px;flex:none;border-right:1px solid var(--line);padding:14px 8px;display:flex;flex-direction:column;gap:1px;overflow-y:auto}
+.adm-side .grp{font:600 9px/1 var(--font-ui);letter-spacing:.11em;color:var(--text-dim);text-transform:uppercase;padding:10px 8px 5px}
+.adm-tab{width:100%;height:32px;padding:0 10px;text-align:left;border:0;background:none;border-radius:var(--r);font:500 12.5px/1 var(--font-ui);color:var(--text-2);cursor:pointer;transition:background var(--t) var(--ease),color var(--t) var(--ease)}
+.adm-tab:hover{background:var(--panel-2);color:var(--text)}
+.adm-tab.on{background:rgba(41,98,255,.14);color:var(--brand-2);font-weight:600}
+.adm-filters select,.adm-filters input{height:34px;padding:0 10px;border-radius:var(--r-md);background:var(--inset);border:1px solid var(--line);color:var(--text);font:13px var(--font-ui);outline:none}
+.adm-filters select:focus,.adm-filters input:focus{border-color:var(--brand)}
+.adm-body .pg{min-width:0}
+/* Fixed layout so an attacker-controlled 128-char query can't blow out the table width and clip
+   the Visitor/IP columns. Only the Query column flexes (auto) + ellipsises; the rest are sized. */
+.adm-log{table-layout:fixed;width:100%}
+.adm-log th,.adm-log td{text-align:left}
+.adm-log td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.adm-log col.c-time{width:192px}
+.adm-log col.c-sym{width:80px}
+.adm-log col.c-src{width:130px}
+.adm-log col.c-vis{width:140px}
+.adm-log col.c-ip{width:120px}
+.adm-log tbody tr{cursor:default}
+.adm-top-row{display:grid;grid-template-columns:26px 90px 56px 1fr;gap:10px;align-items:center;padding:9px 15px;border-bottom:1px solid var(--line-2);font-size:13px}
+.adm-top-row:last-child{border-bottom:0}
+.adm-top-row .bar{width:100%;max-width:240px;margin-left:0}
+@media(max-width:860px){.adm-body{flex-direction:column}.adm-side{width:100%;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line)}.adm-body .kpis{grid-template-columns:repeat(2,1fr)}}
