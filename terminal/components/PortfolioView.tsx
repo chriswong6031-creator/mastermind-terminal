@@ -4,19 +4,41 @@ import { useRouter } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import { useT } from "@/lib/i18n";
+import { getJSON } from "@/lib/dataCache";
 
 type Row = { name: string; zh?: string; col: string; last: number; chg: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
+
+const GUEST_SEED = ["BTC-USD", "ETH-USD", "NVDA", "AAPL", "MSFT", "QQQ"];
 
 export default function PortfolioView({ symbols, email }: { symbols: string[]; email: string }) {
   const router = useRouter();
   const t = useT();
   const [man, setMan] = useState<Record<string, Row>>({});
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { fetch("/data/manifest.json").then((r) => r.json()).then((m) => setMan(m.symbols || {})).catch(() => {}).finally(() => setLoaded(true)); }, []);
+  // The whole prod base is guest right now (login disabled), so the server watchlist
+  // is empty. Fall back to the client-side watchlist (mm.wls, written by TerminalShell)
+  // and then the same seed the Terminal opens with — so Portfolio isn't blank for guests.
+  const [effSymbols, setEffSymbols] = useState<string[]>(symbols);
+  useEffect(() => {
+    if (symbols.length) { setEffSymbols(symbols); return; }
+    try {
+      const raw = localStorage.getItem("mm.wls");
+      if (raw) {
+        const w = JSON.parse(raw);
+        const list = w?.lists?.[w?.active] ?? w?.lists?.Default;
+        const syms = Array.isArray(list) ? list.map((x: { symbol: string }) => x.symbol).filter(Boolean) : [];
+        setEffSymbols(syms.length ? syms : GUEST_SEED);
+        return;
+      }
+    } catch {}
+    setEffSymbols(GUEST_SEED);
+  }, [symbols]);
+  // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
+  useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive) setMan(m?.symbols || {}); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); }); return () => { alive = false; }; }, []);
 
-  const rows = symbols.map((s) => ({ sym: s, ...(man[s] || {} as Row) })).filter((r) => r.name);
+  const rows = effSymbols.map((s) => ({ sym: s, ...(man[s] || {} as Row) })).filter((r) => r.name);
   const buys = rows.filter((r) => isBuy(r.verdict));
   // a display-only "conviction tilt": weight bullish names by win-rate, normalize
   const tiltBase = buys.map((r) => ({ sym: r.sym, w: (r.wr || 0.5) }));
@@ -46,6 +68,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
         </div>
         <div className="panel">
           <div className="ph">{t("positions")}<span className="sub">{t("clickRowOpen")}</span></div>
+          <div className="tbl-scroll">
           <table className="ptable">
             <thead><tr><th>{t("symbol")}</th><th>{t("colLast")}</th><th>{t("day")}</th><th>{t("signalCol")}</th><th>{t("regime")}</th><th>{t("winRate")}</th><th>{t("profitFactor")}</th><th>{t("cagr")}</th><th>{t("suggestedTilt")}</th></tr></thead>
             <tbody>
@@ -70,6 +93,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
                 ); })}
             </tbody>
           </table>
+          </div>
         </div>
       </div></main>
       <div className="ticker"><span className="lbl">{t("convictionBook")}</span><span style={{ color: "var(--text-2)" }}>{t("convictionFoot").replace("{n}", String(buys.length))}</span></div>

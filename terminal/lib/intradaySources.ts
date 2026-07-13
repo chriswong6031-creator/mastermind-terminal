@@ -1,7 +1,7 @@
 // Server-side intraday OHLC sources for the Terminal chart.
 //   US / crypto      → Polygon aggregates (intraday + full extended hours, on the current plan)
-//   China .SS/.SZ    → Tencent kline (free, no auth)
-//   Hong Kong .HK    → Tencent kline (free, no auth)
+//   China .SS/.SZ    → Tencent mkline (free, no auth)
+//   Hong Kong .HK    → Tencent 1-min tick feeds, OHLC synthesized (free, no auth; see fetchTencentHK)
 //
 // Bars are returned as [epochSec, o, h, l, c, v] to match the daily /data/<SYM>.json contract.
 // Intraday uses epoch SECONDS; the daily files use "YYYY-MM-DD" strings — never mix the two on one
@@ -10,44 +10,12 @@
 // wall-clock components (ET for US, UTC+8 for CN/HK), not the true UTC instant. Cross-market compare
 // is disabled on intraday in the chart, so this local-time shift has no alignment cost.
 
-export type Bar6 = [number, number, number, number, number, number];
-
-export const INTRADAY_TFS = ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "3h", "4h"];
-const INTRADAY_SET = new Set(INTRADAY_TFS);
-export const isIntradayTf = (tf: string) => INTRADAY_SET.has(tf);
-
-export function tfMinutes(tf: string): number {
-  const m = /^(\d+)(m|h)$/.exec(tf);
-  if (!m) return 0;
-  const n = parseInt(m[1], 10) || 1;
-  return m[2] === "h" ? n * 60 : n;
-}
-
-export type Market = "cn" | "hk" | "crypto" | "us" | "ca";
-export function classify(sym: string): Market {
-  if (/\.(SS|SZ)$/i.test(sym)) return "cn";
-  if (/\.HK$/i.test(sym)) return "hk";
-  if (/\.TO$/i.test(sym)) return "ca";
-  if (/-USD$/i.test(sym)) return "crypto";
-  return "us";
-}
-
-// Aggregate base bars into coarser `minutes` buckets, keyed by absolute (display-)epoch so buckets
-// align to local clock boundaries. Bar6 layout: [epoch, open, high, low, close, vol].
-export function resample(bars: Bar6[], minutes: number): Bar6[] {
-  if (minutes <= 0 || bars.length === 0) return bars;
-  const span = minutes * 60;
-  const out: Bar6[] = [];
-  let cur: Bar6 | null = null;
-  let key = NaN;
-  for (const b of bars) {
-    const k = Math.floor(b[0] / span);
-    if (k !== key) { if (cur) out.push(cur); key = k; cur = [k * span, b[1], b[2], b[3], b[4], b[5]]; }
-    else { cur![2] = Math.max(cur![2], b[2]); cur![3] = Math.min(cur![3], b[3]); cur![4] = b[4]; cur![5] += b[5]; }
-  }
-  if (cur) out.push(cur);
-  return out;
-}
+// Pure helpers (Bar6, tfMinutes, classify, resample, isIntradayTf) live in intradayShared so they
+// can be imported by both this module (client-shared) and intradayStore (server-only, node:fs).
+export type { Bar6, Market } from "./intradayShared";
+export { INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
+import type { Bar6, Market } from "./intradayShared";
+import { isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
 
 // ── US / crypto → Polygon ──
 const ET_FMT = new Intl.DateTimeFormat("en-US", {
@@ -76,7 +44,10 @@ async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolea
   const ticker = market === "crypto" ? "X:" + sym.replace(/-/g, "").toUpperCase() : sym.toUpperCase();
   const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(ticker)}/range/${mult}/${unit}/${iso(from)}/${iso(to)}?adjusted=true&sort=asc&limit=50000&apiKey=${key}`;
   const r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) throw new Error("polygon " + r.status);
+  if (!r.ok) {
+    if (r.status === 429) throw new Error("polygon rate-limited");
+    throw new Error("polygon " + r.status);
+  }
   const j: any = await r.json();
   const res: any[] = j?.results || [];
   const out: Bar6[] = [];
@@ -90,7 +61,10 @@ async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolea
 }
 
 // ── China / Hong Kong → Tencent (free) ──
-// Native minute scales: m1/m5/m15/m30/m60. Non-native tfs resample from the largest native divisor.
+// CN minute OHLC comes from mkline (native scales m1/m5/m15/m30/m60; non-native tfs resample from
+// the largest native divisor). HK lost mkline upstream (~2026-07: "param error" for every hk code
+// while CN codes still work, and Tencent's own HK web chart no longer requests it) — see
+// fetchTencentHK for the tick-feed replacement. tencentCode itself is shared with the quote leg.
 function tencentCode(sym: string, market: Market): string | null {
   if (market === "cn") { const m = /^(\d+)\.(SS|SZ)$/i.exec(sym); return m ? (m[2].toUpperCase() === "SS" ? "sh" : "sz") + m[1] : null; }
   if (market === "hk") { const m = /^(\d+)\.HK$/i.exec(sym); return m ? "hk" + m[1].padStart(5, "0") : null; }
@@ -121,13 +95,70 @@ async function fetchTencent(sym: string, market: Market, tf: string): Promise<Ba
   return base === minutes ? baseBars : resample(baseBars, minutes);
 }
 
+// ── Hong Kong → Tencent 1-min tick feeds ──
+// What Tencent's own HK web chart (gu.qq.com, bundle zxgweb-chart) ships since mkline dropped hk:
+//   day/query?code=hk00700&days=5  → up to 5 sessions of 1-min rows (upstream-capped at 5)
+//   hkMinute/query?code=hk00700    → the live current session (overlaid when it has fresher rows)
+// Rows are "HHMM price cumVol cumAmount" in HK wall-clock (UTC+8) — a last-price series, not OHLC.
+// 1m bars are synthesized (open = previous minute's close within the session, h/l = max/min(o, c),
+// volume = cumulative-counter diff) and coarser tfs resample from that base. Depth is ~5 sessions
+// (≈1,660 1m bars → ~28 clock-hour 1h bars) — thinner than mkline's 640-per-scale, but it is all
+// the free feed carries now. Closing-auction prints (16:01–16:08) come through as ordinary rows.
+function hkSessionBars(date: string, rows: unknown[]): Bar6[] {
+  if (!/^\d{8}$/.test(date)) return [];
+  const y = +date.slice(0, 4), mo = +date.slice(4, 6) - 1, d = +date.slice(6, 8);
+  const out: Bar6[] = [];
+  let prevClose = NaN, prevCum = 0;
+  for (const raw of rows) {
+    const f = String(raw).trim().split(/\s+/);
+    if (f.length < 3 || f[0].length !== 4) continue;
+    const c = +f[1], cum = +f[2];
+    if (!Number.isFinite(c) || c <= 0) continue;
+    const epoch = Date.UTC(y, mo, d, +f[0].slice(0, 2), +f[0].slice(2, 4)) / 1000;
+    const o = Number.isFinite(prevClose) ? prevClose : c;
+    const v = Number.isFinite(cum) ? Math.max(0, cum - prevCum) : 0;
+    out.push([epoch, o, Math.max(o, c), Math.min(o, c), c, v]);
+    prevClose = c;
+    if (Number.isFinite(cum)) prevCum = cum;
+  }
+  return out;
+}
+
+async function fetchTencentHK(sym: string, tf: string): Promise<Bar6[]> {
+  const code = tencentCode(sym, "hk");
+  if (!code) return [];
+  const get = (path: string) =>
+    fetch(`https://web.ifzq.gtimg.cn/appstock/app/${path}`, {
+      headers: { "User-Agent": "Mozilla/5.0", Referer: "https://gu.qq.com/" },
+      cache: "no-store", signal: AbortSignal.timeout(8000),
+    }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const [multi, live] = await Promise.all([
+    get(`day/query?code=${code}&days=5`),
+    get(`hkMinute/query?code=${code}`),
+  ]);
+  if (!multi && !live) throw new Error("tencent hk unreachable"); // let the route serve its stale copy
+  const byDate = new Map<string, unknown[]>();
+  for (const day of (multi?.data?.[code]?.data ?? []) as any[])
+    if (day?.date && Array.isArray(day.data)) byDate.set(String(day.date), day.data);
+  const ln: any = live?.data?.[code]?.data;
+  const liveDate = String(ln?.date ?? "");
+  if (/^\d{8}$/.test(liveDate) && Array.isArray(ln?.data) && ln.data.length >= (byDate.get(liveDate)?.length ?? 0))
+    byDate.set(liveDate, ln.data);
+  const base: Bar6[] = [];
+  for (const date of [...byDate.keys()].sort()) base.push(...hkSessionBars(date, byDate.get(date)!));
+  const minutes = tfMinutes(tf);
+  return minutes <= 1 ? base : resample(base, minutes);
+}
+
 export async function fetchIntraday(sym: string, tf: string, ext: boolean): Promise<Bar6[]> {
   if (!isIntradayTf(tf)) return [];
   const market = classify(sym);
   if (market === "ca") return []; // .TO has no Polygon intraday leg on this plan — avoid garbage
   const bars = (market === "us" || market === "crypto")
     ? await fetchPolygon(sym, market, tf, ext)
-    : await fetchTencent(sym, market, tf);
+    : market === "hk"
+      ? await fetchTencentHK(sym, tf)
+      : await fetchTencent(sym, market, tf);
   bars.sort((a, b) => a[0] - b[0]);
   const out: Bar6[] = [];
   let last = -1;
@@ -148,6 +179,10 @@ export type Quote = {
   vol: number | null; amount: number | null; ts: number | null;
   live: boolean; source: string; market: Market;
   basis: "LIVE" | "DELAYED_15M" | "EOD";
+  // Extended/overnight fields (item-25/26). Populated by the ext-quote route.
+  // extPrice: the most recent ext print; extChg: % vs close; extTs: epoch-sec of that print.
+  // Absent (undefined) when no ext data is available (keyless or no print).
+  extPrice?: number | null; extChg?: number | null; extTs?: number | null;
 };
 
 function _n(s: string | undefined): number | null {

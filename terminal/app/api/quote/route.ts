@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { fetchQuotes } from "@/lib/intradaySources";
+import { rateLimit, tooMany } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,6 +55,8 @@ async function gate(): Promise<NextResponse | null> {
 }
 
 export async function GET(req: Request) {
+  const rl = rateLimit(req, { name: "quote" });
+  if (!rl.ok) return tooMany(rl);
   const { searchParams } = new URL(req.url);
   const symsParam = (searchParams.get("syms") || "").trim();
   const sym = (searchParams.get("sym") || "").trim();

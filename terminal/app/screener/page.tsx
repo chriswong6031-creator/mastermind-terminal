@@ -1,10 +1,10 @@
-import { createClient } from "@/lib/supabase/server";
 import ScreenerView from "@/components/ScreenerView";
 
-export const dynamic = "force-dynamic";
+// No server-side auth read needed — email is cosmetic only, guest workspace is always open.
+// Cap the CDN cache at 5 min: without this the static prerender emits s-maxage=31536000 (1yr) and
+// EdgeOne serves the OLD build after a deploy until an owner purges it. See app/heatmap/page.tsx.
+export const revalidate = 300;
 
-export default async function ScreenerPage() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  return <ScreenerView email={user?.email || ""} />;
+export default function ScreenerPage() {
+  return <ScreenerView email="" />;
 }

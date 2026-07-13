@@ -1,10 +1,6 @@
-import { createClient } from "@/lib/supabase/server";
 import AlertsView from "@/components/AlertsView";
 
-export const dynamic = "force-dynamic";
-
-export default async function AlertsPage() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  return <AlertsView email={user?.email || ""} />;
+// No server-side auth read needed — email is cosmetic only, guest workspace is always open.
+export default function AlertsPage() {
+  return <AlertsView email="" />;
 }

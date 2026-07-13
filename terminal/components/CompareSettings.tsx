@@ -1,35 +1,74 @@
 "use client";
-// Settings dialog for a compare symbol (opened from its legend row). Edits its line color and scale
-// mode, and can remove it from the chart. Reuses the indicator-settings dialog styling.
 import { useEffect } from "react";
-import { type CompareItem, CMP_MODES, CMP_PALETTE } from "@/lib/compare";
+import { CmpCfg, CMP_LINE_STYLES } from "@/lib/compare";
+import { useT } from "@/lib/i18n";
 
-export default function CompareSettings({ item, onChange, onClose, onRemove }:
-  { item: CompareItem; onChange: (patch: Partial<CompareItem>) => void; onClose: () => void; onRemove: () => void }) {
-  useEffect(() => { const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [onClose]);
-  const hex = /^#([0-9a-f]{6})$/i.test(item.color) ? item.color : "#888888";
+const SWATCHES = ["#4d82ff", "#26c281", "#f0566b", "#e8b339", "#e8a33d", "#9d86ff", "#19c2c2", "#d6dae3", "#868d9c", "#ff8a3d"];
+const hexOf = (c: string) => (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c) ? c : "#888888");
+const alphaOf = (c: string) => { const m = /rgba?\([^)]*,\s*([\d.]+)\s*\)/i.exec(c); return m ? parseFloat(m[1]) : 1; };
+const hexToRgba = (hex: string, a: number) => { let h = hex.replace("#", ""); if (h.length === 3) h = h.split("").map((x) => x + x).join(""); const n = parseInt(h, 16); const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255; return a >= 1 ? `#${h}` : `rgba(${r}, ${g}, ${b}, ${a})`; };
+
+function ColorField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const apply = (hex: string) => onChange(hexToRgba(hex, alphaOf(value)));
+  return (
+    <span className="is-color">
+      <span className="is-sw-cur" style={{ background: value }} />
+      {SWATCHES.map((s) => <button key={s} className={`is-sw${value === s ? " on" : ""}`} style={{ background: s }} title={s} onClick={() => apply(s)} />)}
+      <input type="color" value={hexOf(value)} onChange={(e) => apply(e.target.value)} aria-label="custom color" />
+    </span>
+  );
+}
+
+function NumberField({ value, min, max, step = 1, onChange }: { value: number; min?: number; max?: number; step?: number; onChange: (v: number) => void }) {
+  const clamp = (v: number) => Math.max(min ?? -Infinity, Math.min(max ?? Infinity, Math.round(v)));
+  return (
+    <span className="is-stepper">
+      <button onClick={() => onChange(clamp(value - step))} aria-label="decrease">−</button>
+      <input type="number" value={value} step={step} min={min} max={max} onChange={(e) => { const v = parseInt(e.target.value); if (!isNaN(v)) onChange(clamp(v)); }} />
+      <button onClick={() => onChange(clamp(value + step))} aria-label="increase">+</button>
+    </span>
+  );
+}
+
+export default function CompareSettings({ sym, cfg, onChange, onClose }: { sym: string; cfg: CmpCfg; onChange: (patch: Partial<CmpCfg>) => void; onClose: () => void }) {
+  const t = useT();
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="ind-set" onClick={(e) => e.stopPropagation()}>
-        <div className="is-head"><b>{item.sym}<span style={{ color: "var(--text-dim)", fontWeight: 500 }}> · compare</span></b><span className="x" onClick={onClose} aria-label="Close">✕</span></div>
+        <div className="is-head"><b>{sym}</b><span className="x" onClick={onClose} aria-label="Close">✕</span></div>
         <div className="is-body">
           <div className="is-row">
-            <span className="is-label">Line color</span>
-            <span className="is-color">
-              <span className="is-sw-cur" style={{ background: item.color }} />
-              {CMP_PALETTE.map((s) => <button key={s} className={`is-sw${item.color === s ? " on" : ""}`} style={{ background: s }} title={s} onClick={() => onChange({ color: s })} />)}
-              <input type="color" value={hex} onChange={(e) => onChange({ color: e.target.value })} aria-label="custom color" />
+            <span className="is-label">{t("cmpColor")}</span>
+            <ColorField value={cfg.color} onChange={(color) => onChange({ color })} />
+          </div>
+          <div className="is-row">
+            <span className="is-label">{t("cmpLineStyle")}</span>
+            <span className="cmp-set-seg">
+              {CMP_LINE_STYLES.map(({ v, label }) => (
+                <button key={v} className={`cmp-set-opt${cfg.lineStyle === v ? " on" : ""}`} onClick={() => onChange({ lineStyle: v })}>{label}</button>
+              ))}
             </span>
           </div>
-          <div className="is-sec-h">Scale</div>
-          {CMP_MODES.map((m) => (
-            <div key={m.key} className={`set-row${item.mode === m.key ? " on" : ""}`} style={{ padding: "8px 0" }} onClick={() => onChange({ mode: m.key })}>
-              <span className="rdo" /><span><b style={{ color: "var(--text)", fontWeight: 550 }}>{m.label}</b><div style={{ color: "var(--text-dim)", fontSize: 11, marginTop: 2 }}>{m.hint}</div></span>
-            </div>
-          ))}
+          <div className="is-row">
+            <span className="is-label">{t("cmpThickness")}</span>
+            <NumberField value={cfg.lineWidth} min={1} max={4} step={1} onChange={(lineWidth) => onChange({ lineWidth })} />
+          </div>
+          <div className="is-row">
+            <span className="is-label">{t("cmpScaleMode")}</span>
+            <span className="cmp-set-seg">
+              <button className={`cmp-set-opt${cfg.mode === "price" ? " on" : ""}`} onClick={() => onChange({ mode: "price" })}>{t("cmpModePrice")}</button>
+              <button className={`cmp-set-opt${cfg.mode === "percent" ? " on" : ""}`} onClick={() => onChange({ mode: "percent" })}>{t("cmpModePercent")}</button>
+            </span>
+          </div>
         </div>
         <div className="is-foot">
-          <button className="btn btn-ghost" onClick={onRemove}>Remove from chart</button>
           <div className="spacer" />
           <button className="ai" onClick={onClose}>Ok</button>
         </div>

@@ -19,6 +19,7 @@ import { StackedBars, type Series } from "./FinCharts"
 export interface RevenuePageProps {
   fund: Fund | null
   zh?: boolean
+  sym?: string
 }
 
 // ── color palette for segments (cycles) ──────────────────────────────────────
@@ -218,12 +219,16 @@ function EstimatesSection({
 
 // ── main component ────────────────────────────────────────────────────────────
 
-export default function RevenuePage({ fund, zh }: RevenuePageProps) {
+export default function RevenuePage({ fund, zh, sym }: RevenuePageProps) {
   if (!fund) {
     return (
       <div className="fin-body">
         <div className="fin-empty fin-empty-lg" role="status">
-          <span className="fin-empty-title">{pick(!!zh, "No revenue data", "暂无营收数据")}</span>
+          <span className="fin-empty-title">{pick(!!zh, "Fundamentals not yet covered", "尚未覆盖基本面数据")}</span>
+          <span>{pick(!!zh,
+            `Revenue data for ${sym ?? "this symbol"} hasn't been collected yet.`,
+            `${sym ?? "该标的"} 的营收数据尚未采集。`
+          )}</span>
         </div>
       </div>
     )

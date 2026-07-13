@@ -475,6 +475,31 @@ function IvMini({ opts, bars, pick }: { opts: Opts | null; bars: Bar[]; pick: Pi
     const termVals = opts.term.map((t) => t.iv * 100);
     const smile = opts.smile;
     const smileOk = smile && smile.strikes?.length > 1;
+
+    // staleness: opts.json is rebuilt nightly; >1 trading-day old is stale.
+    // opts.asof is a DATE-ONLY string (e.g. "2026-07-03"). new Date("2026-07-03") parses
+    // as UTC midnight, so a rolling 24h delta would fire any US market hour the next day
+    // (diff 30-37h > 24h), falsely labelling perfectly-fresh EOD data as STALE.
+    // Fix: compare calendar dates at local noon to avoid the UTC-midnight boundary,
+    // and tolerate the weekend gap (Friday data is fresh through Monday, diff≤3).
+    const optsAsof = opts.asof ?? null;
+    const optsStale = optsAsof
+      ? (() => {
+          const m = optsAsof.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (!m) return false;
+          const asofNoon = new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0, 0);
+          const todayNoon = new Date(); todayNoon.setHours(12, 0, 0, 0);
+          const diffDays = Math.round((todayNoon.getTime() - asofNoon.getTime()) / 86_400_000);
+          if (diffDays <= 1) return false;
+          // Weekend tolerance: Friday EOD data is fresh on Saturday (diff=1, already covered),
+          // Sunday (diff=2) and Monday (diff=3).
+          const dow = todayNoon.getDay(); // 0=Sun, 1=Mon
+          if (dow === 0 && diffDays <= 2) return false;
+          if (dow === 1 && diffDays <= 3) return false;
+          return true;
+        })()
+      : false;
+
     return (
       <Section title={pick("Implied volatility", "隐含波动率")} sub={smile?.dte != null ? `${smile.dte}${pick("d smile", "天微笑")}` : undefined}>
         <div className="sa-iv-mini">
@@ -485,6 +510,16 @@ function IvMini({ opts, bars, pick }: { opts: Opts | null; bars: Bar[]; pick: Pi
           <div className="sa-iv-mini">
             <div className="sa-iv-lbl">{pick(`Vol curve (${smile.dte}d)`, `波动率曲线 (${smile.dte}天)`)}</div>
             <LineSeries labels={smile.strikes.map((s) => fnum(s, s < 10 ? 1 : 0))} series={[{ name: "IV", values: smile.iv.map((v) => v * 100), color: "var(--brand-2)" }]} noLegend fmtY={(v) => v.toFixed(0) + "%"} vw={300} vh={110} />
+          </div>
+        )}
+        {optsAsof && (
+          <div className="sa-iv-asof" style={{ fontSize: "var(--font-num, 11px)", color: "var(--text-2)", marginTop: 4, display: "flex", gap: 6, alignItems: "center" }}>
+            <span>{pick(`as of ${optsAsof}`, `数据截至 ${optsAsof}`)}</span>
+            {optsStale && (
+              <span style={{ color: "var(--warn, #e6a817)", fontWeight: 600, fontSize: "0.9em" }}>
+                {pick("STALE", "数据过期")}
+              </span>
+            )}
           </div>
         )}
       </Section>
@@ -548,10 +583,11 @@ function verdictBi(v: string): [string, string] {
 
 /* ── main component ─────────────────────────────────────────────────── */
 export default function StockAnalysis({
-  intel, row, slice, deep = false, onExpand, fund = null, opts = null, bars = [], onOpenPane, onOpenSignals,
+  intel, row, slice, deep = false, onExpand, fund = null, opts = null, bars = [], onOpenPane, onOpenSignals, beforeIv,
 }: {
   intel: any; row?: any; slice?: any; deep?: boolean; onExpand?: () => void;
   fund?: Fund | null; opts?: Opts | null; bars?: Bar[]; onOpenPane?: (page: FinPage) => void; onOpenSignals?: () => void;
+  beforeIv?: React.ReactNode;
 }) {
   const { lang } = useLang();
   const zh = lang === "zh";
@@ -657,7 +693,7 @@ export default function StockAnalysis({
         const chipVerb = supporting ? (pick(conv?.band, conv?.band_zh) || pick("Confidence", "信心")) : verb;
         const chipColor = supporting ? "var(--brand-2)" : tn.color;
         return (
-          <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenPane?.("mastermind")} title={pick("Open the full research desk", "打开完整研究台")}>
+          <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenPane?.("technicals")} title={pick("Open the research desk", "打开研究台")}>
             <span className="sa-open-k">{pick("Research desk", "研究台")}</span>
             <span className="sa-open-verb" style={{ color: chipColor }}>{chipVerb}</span>
             <span className="sa-open-view">{pick("view", "查看")} ›</span>
@@ -849,7 +885,7 @@ export default function StockAnalysis({
                 {fl.own_pct != null && <span className="sa-chip">{pick("Owns", "持股")} {fpct(fl.own_pct, 1, false)} {pick("of float", "流通")}</span>}
                 {fl.chg5_pct != null && <span className={`sa-chip ${fl.chg5_pct >= 0 ? "up" : "down"}`}>{pick("5-day", "5日")} {fpct(fl.chg5_pct, 1)}</span>}
                 {fl.hold_b != null && <span className="sa-chip">HK${fnum(fl.hold_b, 1)}B</span>}
-                {fl.label && <span className="sa-chip">{cap(fl.label)}</span>}
+                {fl.label && fl.label !== "screen" && <span className="sa-chip">{cap(fl.label)}</span>}
               </>
             ) : (
               <>
@@ -924,6 +960,8 @@ export default function StockAnalysis({
 
       {/* ── PROFILE (fund-sourced: website / employees / sector / industry) ── */}
       {profileWidget}
+      {/* Seasonality card injected by the shell (order kept at the tail of the analysis rail). */}
+      {beforeIv}
       {/* inline "Open full analysis" button removed — moved to the shell bottom button group (Lane C). */}
     </div>
   );

@@ -169,7 +169,11 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
   const valSet = valAQ === "annual" ? ann : qtr;
   const psLabels = valSet?.periods ?? [];
   const psSeries: Series[] = [
-    { name: "P/S", values: computePS(valSet, s?.mktcap ?? null), color: "var(--brand)" },
+    {
+      name: pick(zh, "P/S (at current mkt cap)", "市销率（按当前市值）"),
+      values: computePS(valSet, s?.mktcap ?? null),
+      color: "var(--brand)",
+    },
   ];
 
   // ── Performance combo (revenue bars + net income bars + net margin line) ──
@@ -326,7 +330,16 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
           {crossCur ? (
             <div className="fin-empty">{crossCurMsg}</div>
           ) : (
-            <LineSeries labels={psLabels} series={psSeries} fmtY={(v) => fmtNum(v)} markers zh={zh} height={190} />
+            <>
+              <LineSeries labels={psLabels} series={psSeries} fmtY={(v) => fmtNum(v)} markers zh={zh} height={190} />
+              <div className="fin-chart-note">
+                {pick(
+                  zh,
+                  "Uses today's market cap against each period's revenue — not a historical valuation (past market caps aren't available).",
+                  "以当前市值除以各期营收计算，并非历史估值（无历史市值数据）。",
+                )}
+              </div>
+            </>
           )}
         </div>
       </section>
@@ -561,7 +574,11 @@ function latestEps(set?: StatementPeriodSet): number | null {
   return latestFinite(set?.income?.eps_basic);
 }
 
-/** P/S per period: mktcap held constant (only current mktcap known) / revenue[i]. */
+/**
+ * "P/S (at current mkt cap)" per period: CURRENT mktcap / revenue[i]. This is NOT
+ * a historical valuation — past market caps aren't in the contract, so mktcap is
+ * held constant. The series name + chart note make that basis explicit to the user.
+ */
 function computePS(set: StatementPeriodSet | undefined, mktcap: number | null): (number | null)[] {
   if (!set || mktcap == null) return set?.periods.map(() => null) ?? [];
   return set.income.revenue.map((rev) => (rev && rev > 0 ? mktcap / rev : null));

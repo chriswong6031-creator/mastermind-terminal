@@ -1,9 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import TerminalShell from "@/components/TerminalShell";
 
-export const dynamic = "force-dynamic";
+// dynamic='auto': supabase reads cookies → Next auto-detects dynamic; no need to force it.
 
-export default async function Terminal({ searchParams }: { searchParams: Promise<{ sym?: string }> }) {
+export default async function Terminal({ searchParams }: { searchParams: Promise<{ sym?: string; symbol?: string }> }) {
   const sp = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -11,7 +11,7 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
   // login disabled for now — render an open guest workspace (no server-side persistence)
   if (!user) {
     const seed: [string, string][] = [["Crypto", "BTC-USD"], ["Crypto", "ETH-USD"], ["Equities", "NVDA"], ["Equities", "AAPL"], ["Equities", "MSFT"], ["Equities", "QQQ"]];
-    return <TerminalShell symbols={seed.map(([section, symbol]) => ({ symbol, section }))} email="" initialSymbol={sp?.sym} />;
+    return <TerminalShell symbols={seed.map(([section, symbol]) => ({ symbol, section }))} email="" initialSymbol={sp?.symbol ?? sp?.sym} />;
   }
 
   // load or seed the user's first watchlist (idempotent via unique (user_id,name))
@@ -33,5 +33,5 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
   const { data: syms } = await supabase
     .from("watchlist_symbols").select("symbol,section").eq("watchlist_id", active.id).order("position");
 
-  return <TerminalShell symbols={(syms as any) || []} email={user?.email || ""} initialSymbol={sp?.sym} />;
+  return <TerminalShell symbols={(syms as any) || []} email={user?.email || ""} initialSymbol={sp?.symbol ?? sp?.sym} />;
 }

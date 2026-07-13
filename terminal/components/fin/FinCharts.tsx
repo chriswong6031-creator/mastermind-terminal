@@ -274,7 +274,7 @@ export function Bars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, noLege
         })}
       </svg>
       </div>
-      <XAxis labels={labels} />
+      <XAxis labels={labels} boxW={box.w} />
       {!noLegend && <Legend series={series} />}
       <FinTip tip={tip} />
     </div>
@@ -339,7 +339,7 @@ export function StackedBars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180,
         })}
       </svg>
       </div>
-      <XAxis labels={labels} />
+      <XAxis labels={labels} boxW={box.w} />
       {!noLegend && <Legend series={series} />}
       <FinTip tip={tip} />
     </div>
@@ -419,7 +419,7 @@ export function LineSeries({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, 
         ))}
       </svg>
       </div>
-      <XAxis labels={labels} />
+      <XAxis labels={labels} boxW={box.w} />
       {!noLegend && <Legend series={series} />}
       <FinTip tip={tip} />
     </div>
@@ -506,7 +506,7 @@ export function ComboChart({ labels, bars, line, fmtBar = fmtNum, fmtLine = (v) 
         {line.values.map((v, i) => num(v) ? <circle key={i} className="fin-node" cx={PAD.l + slot * i + slot / 2} cy={yl(v as number)} r={2.4} fill={lcol} /> : null)}
       </svg>
       </div>
-      <XAxis labels={labels} />
+      <XAxis labels={labels} boxW={box.w} />
       {!noLegend && <Legend series={[...bars, { name: line.name, values: [], color: lcol }]} />}
       <FinTip tip={tip} />
     </div>
@@ -606,7 +606,7 @@ export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFr
         })}
       </svg>
       </div>
-      <XAxis labels={labels} />
+      <XAxis labels={labels} boxW={box.w} />
       {!noLegend && (
         <div className="fin-legend">
           <span className="fin-leg"><i className="fin-leg-dot" style={{ background: actualColor }} />{pick(!!zh, "Actual", "实际")}</span>
@@ -858,7 +858,7 @@ export function Waterfall({ steps, fmtY = fmtNum, vw = 340, vh = 200, zh, height
         })}
       </svg>
       </div>
-      <XAxis labels={labels} small />
+      <XAxis labels={labels} small boxW={box.w} />
       <FinTip tip={tip} />
     </div>
   );
@@ -1181,13 +1181,46 @@ export function MiniTable({ periods, rows, fmt = fmtNum, showChange, pageSize = 
  * shared sub-components: XAxis + Legend
  * ───────────────────────────────────────────────────────────────────────── */
 
-function XAxis({ labels, small }: { labels: string[]; small?: boolean }) {
+/**
+ * Shared x-axis label row. Two crowding mitigations stack:
+ *   1. Width-aware THINNING — given the measured box width (`boxW`), only as many
+ *      labels as physically fit (≈`MIN_LABEL_PX` apart) are shown; the rest render
+ *      as empty spans so the flex geometry (and thus label centering under each
+ *      category slot) is preserved. First + last are ALWAYS kept.
+ *   2. Font-shrink — the surviving labels still shrink at higher densities.
+ * When thinning alone would leave the axis very sparse (≤4 visible on a dense set),
+ * we switch to a rotated variant so more labels fit legibly instead of dropping them.
+ */
+const MIN_LABEL_PX = 44;   // horizontal budget per straight (centered, non-rotated) label
+const MIN_LABEL_PX_ROT = 26;   // rotated labels pack tighter
+function XAxis({ labels, small, boxW }: { labels: string[]; small?: boolean; boxW?: number }) {
+  const n = labels.length;
+  // usable width ≈ box minus the y-axis gutter the .fin-xaxis padding reserves (~56px).
+  const usable = Math.max(0, (boxW ?? 0) - 56);
+  const maxTicks = boxW ? Math.max(2, Math.floor(usable / MIN_LABEL_PX)) : n;
+  const needsThin = n > maxTicks;
+  // How many labels survive straight thinning — if too few on a dense axis, rotate.
+  const straightVisible = needsThin ? Math.floor((n - 1) / Math.ceil(n / maxTicks)) + 1 : n;
+  const maxTicksRot = boxW ? Math.max(2, Math.floor(usable / MIN_LABEL_PX_ROT)) : n;
+  const rotate = boxW != null && n > 8 && straightVisible < 4 && n <= maxTicksRot;
+
+  // In rotated mode every label is shown (they fit at ~-35°); otherwise thin.
+  const keep = (i: number): boolean => {
+    if (rotate || !needsThin) return true;
+    if (i === 0 || i === n - 1) return true;   // always anchor first + last
+    const stride = Math.ceil(n / maxTicks);
+    return i % stride === 0;
+  };
+
   // Auto-shrink the font as labels get crowded so period labels (e.g. "Q2 '26")
   // stay whole instead of being clipped to "Q2 '.." on narrow containers.
-  const size = small || labels.length > 8 ? " fin-xaxis-xs" : labels.length > 5 ? " fin-xaxis-sm" : "";
+  const visibleCount = rotate ? n : labels.filter((_, i) => keep(i)).length;
+  const size = small || visibleCount > 8 ? " fin-xaxis-xs" : visibleCount > 5 ? " fin-xaxis-sm" : "";
   return (
-    <div className={"fin-xaxis" + size}>
-      {labels.map((l, i) => <span key={i} className="fin-xlbl">{l}</span>)}
+    <div className={"fin-xaxis" + size + (rotate ? " fin-xaxis-rot" : "")}>
+      {labels.map((l, i) => (
+        <span key={i} className="fin-xlbl">{keep(i) ? l : ""}</span>
+      ))}
     </div>
   );
 }

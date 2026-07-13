@@ -119,7 +119,7 @@ export interface FundRatios {
 export interface EarningsQuarter {
   period: string; // "Q3 2026"
   end: string;
-  report_date: string;
+  report_date: string | null; // null on synthesized tx-carrier rows (transcript with no earnings_dates row)
   eps_a: number | null;
   eps_e: number | null;
   rev_a: number | null; // null for US/HK (yfinance carries no per-quarter revenue)
@@ -285,6 +285,64 @@ export interface Opts {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// §1.2b  insider power — public/data/<SYM>.insider.json
+// Quality-weighted Form-4 Insider Power score (0..100, 50 = neutral) + the
+// buy/sell-volume series and recent open-market trades. The SCORING is owned by
+// the Macro pipeline (engine/insider_power.py) and exported per-ticker — the
+// Terminal is display-only and never re-derives it. Display / informational,
+// not investment advice.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One month of aggregated open-market insider dollar/share volume. */
+export interface InsiderMonth {
+  month: string; // "YYYY-MM"
+  buy_usd: number;
+  sell_usd: number;
+  buy_shares: number;
+  sell_shares: number;
+  net_usd: number;
+}
+
+/** One recent open-market Form-4 transaction (newest-first in `trades`). */
+export interface InsiderTrade {
+  date: string; // filing date "YYYY-MM-DD" (the date it became public)
+  trade_date: string | null;
+  code: "P" | "S"; // P = open-market purchase, S = sale
+  side: "buy" | "sell";
+  role: string; // "Top exec" | "Officer" | "Director" | "10% owner" | "Insider"
+  title: string; // raw Form-4 reporter title
+  shares: number | null;
+  price: number | null;
+  usd: number | null;
+  weight: number; // role conviction weight applied by the engine
+}
+
+export interface Insider {
+  ticker: string;
+  asof: string; // "YYYY-MM-DD"
+  window_days: number;
+  /** Insider Power score 0..100 (50 = neutral, ≥60 buy tilt, ≤40 sell tilt). */
+  score: number;
+  /** Display signal from net-dollar flow: "BUY" | "SELL" | "NEUTRAL". */
+  signal: "BUY" | "SELL" | "NEUTRAL";
+  /** Confidence from flow-vs-score agreement: "High" | "Medium" | "Low" | "None". */
+  confidence: string;
+  /** Human breakdown (e.g. "SELL SIGNAL — Low Confidence: contradicted by …"). */
+  analysis: string;
+  insider_buy: boolean; // score ≥ 60
+  insider_sell: boolean; // score ≤ 40
+  buyers: number; // distinct insiders buying in the window
+  sellers: number; // distinct insiders selling in the window
+  buy_usd: number;
+  sell_usd: number;
+  net_usd: number;
+  buy_shares: number;
+  sell_shares: number;
+  series: InsiderMonth[]; // oldest→newest, trailing ~24 months
+  trades: InsiderTrade[]; // newest→oldest, capped
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // §1.3  transcripts — public/data/tx/<SYM>/<ID>.json.gz
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -356,6 +414,18 @@ export async function getOpts(sym: string): Promise<Opts | null> {
   const key = "opts:" + sym;
   if (negHit(key)) return null;
   const data = (await getJSON("/data/" + sym + ".opts.json")) as Opts | null;
+  if (!data) {
+    negMark(key);
+    return null;
+  }
+  return data;
+}
+
+/** getInsider — <SYM>.insider.json, negative-cached (most names lack recent Form-4 activity). */
+export async function getInsider(sym: string): Promise<Insider | null> {
+  const key = "insider:" + sym;
+  if (negHit(key)) return null;
+  const data = (await getJSON("/data/" + sym + ".insider.json")) as Insider | null;
   if (!data) {
     negMark(key);
     return null;

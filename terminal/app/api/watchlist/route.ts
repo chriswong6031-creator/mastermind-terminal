@@ -10,7 +10,7 @@ export async function POST(req: Request) {
   const { action, symbol, section = "Watchlist" } = await req.json();
   if (!symbol) return NextResponse.json({ error: "symbol required" }, { status: 400 });
 
-  const { data: wl } = await supabase.from("watchlists").select("id").order("position").limit(1).single();
+  const { data: wl } = await supabase.from("watchlists").select("id").eq("user_id", user.id).order("position").limit(1).single();
   if (!wl) return NextResponse.json({ error: "no watchlist" }, { status: 400 });
 
   if (action === "remove") {
