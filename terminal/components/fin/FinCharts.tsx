@@ -398,7 +398,11 @@ export function LineSeries({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, 
   const iw = vw - PAD.l - PR;
   const ih = vh - PAD.t - PAD.b;
   const n = labels.length;
-  const x = (i: number) => PAD.l + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
+  // Place points in slots so the first/last point are inset by half-slot,
+  // matching how bar charts centre bars — this keeps the last point clear of
+  // the right y-label gutter.  For n=1 the single point sits at mid-plot.
+  const slot = iw / Math.max(1, n);
+  const x = (i: number) => PAD.l + slot * i + slot / 2;
   const y = (v: number) => PAD.t + ih - ((v - dom[0]) / (dom[1] - dom[0])) * ih;
   const isDotted = (s: Series, si: number) => (dotted as any[])?.some((d) => (typeof d === "number" ? d === si : d === s.name)) ?? false;
   const SVGH = height ?? 190;
@@ -426,7 +430,7 @@ export function LineSeries({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, 
           );
         })}
         {labels.map((lb, i) => (
-          <rect key={i} className="fin-hitcol" x={x(i) - iw / (2 * Math.max(1, n))} y={PAD.t} width={iw / Math.max(1, n)} height={ih} fill="transparent"
+          <rect key={i} className="fin-hitcol" x={PAD.l + slot * i} y={PAD.t} width={slot} height={ih} fill="transparent"
             onMouseMove={(e) => show(e, lb, series.map((s, si) => ({ label: s.name, value: num(s.values[i]) ? fmtY(s.values[i] as number) : "—", color: s.color ?? PALETTE[si % PALETTE.length] })))}
             onMouseLeave={hide} />
         ))}
@@ -874,7 +878,7 @@ export function Waterfall({ steps, fmtY = fmtNum, vw = 340, vh = 200, zh, height
         })}
       </svg>
       </div>
-      <XAxis labels={labels} small boxW={box.w} rpad={PR} />
+      <WaterfallXAxis labels={labels} boxW={box.w} rpad={PR} />
       <FinTip tip={tip} />
     </div>
   );
@@ -1252,6 +1256,55 @@ function Legend({ series }: { series: Series[] }) {
       {series.filter((s) => s.name && !s.name.startsWith("__")).map((s, i) => (
         <span className="fin-leg" key={s.name + i}><i className="fin-leg-dot" style={{ background: s.color ?? PALETTE[i % PALETTE.length] }} />{s.name}</span>
       ))}
+    </div>
+  );
+}
+
+/**
+ * WaterfallXAxis — label row for Waterfall charts that avoids overlapping text.
+ * Each label is placed under its bar slot centre.  When two adjacent labels
+ * would collide (estimated by char-count × approx font width), the even-indexed
+ * label is pushed down to a second row, creating a stagger layout.  At very
+ * narrow widths where even staggering cannot prevent overlap, long labels are
+ * wrapped at a space to reduce their rendered width.
+ */
+function WaterfallXAxis({ labels, boxW, rpad }: { labels: string[]; boxW?: number; rpad?: number }) {
+  const n = labels.length;
+  const gutterPx = rpad != null ? rpad + 8 : 56;
+  const usable = Math.max(1, (boxW ?? 320) - gutterPx);
+  const slotPx = usable / Math.max(1, n);
+  // Approximate rendered label width: ~6px per character at 7.5px font
+  const labelPx = (lbl: string) => lbl.length * 6;
+  // Detect collision between adjacent pair assuming each is centred in its slot
+  const collides = (a: string, b: string) => (labelPx(a) + labelPx(b)) / 2 > slotPx * 0.95;
+  // Check if ANY adjacent pair collides → need stagger
+  const needsStagger = labels.some((lbl, i) => i > 0 && collides(labels[i - 1], lbl));
+  // Wrap a label at its last space before the midpoint if it's too wide for a slot
+  const wrap = (lbl: string): string[] => {
+    if (!needsStagger || labelPx(lbl) <= slotPx * 1.1) return [lbl];
+    const mid = Math.floor(lbl.length / 2);
+    const sp = lbl.lastIndexOf(" ", mid);
+    const sp2 = lbl.indexOf(" ", mid);
+    const cut = sp > 0 ? sp : sp2 > 0 ? sp2 : -1;
+    if (cut < 0) return [lbl];
+    return [lbl.slice(0, cut), lbl.slice(cut + 1)];
+  };
+  return (
+    <div className={"fin-wf-xaxis fin-xaxis-xs"} style={{ paddingRight: gutterPx + "px" }}>
+      {labels.map((lbl, i) => {
+        const staggerDown = needsStagger && i % 2 === 1;
+        const lines = wrap(lbl);
+        return (
+          <span
+            key={i}
+            className={"fin-xlbl fin-wf-xlbl" + (staggerDown ? " fin-wf-xlbl-lo" : "")}
+          >
+            {lines.length === 1
+              ? lines[0]
+              : lines.map((ln, li) => <span key={li} className="fin-wf-lline">{ln}</span>)}
+          </span>
+        );
+      })}
     </div>
   );
 }

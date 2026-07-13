@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
-import { useT } from "@/lib/i18n";
+import { useLang, useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
 
 type Alert = { id: string; symbol: string; condition: any; active: boolean; created_at: string };
@@ -18,6 +18,14 @@ const COND_TYPES = [
 
 export default function AlertsView({ email }: { email: string }) {
   const t = useT();
+  const { lang } = useLang();
+  const fmtDate = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US");
+    } catch {
+      return iso.slice(0, 10);
+    }
+  };
   const condText = (c: any) => {
     if (c?.type === "signal") return c.target === "BUY" ? t("condSignalBuy") : t("condSignalSell");
     if (c?.type === "regime") return t("condRegimeUp");
@@ -126,10 +134,10 @@ export default function AlertsView({ email }: { email: string }) {
                 <span className={`dot${a.active ? "" : " off"}`} style={trig ? { background: "var(--signal)" } : undefined} />
                 <span><span className="tk">{a.symbol}</span> <span className="cond">· {condText(a.condition)}</span></span>
                 {trig ? <button className="btn" style={{ height: 26, fontSize: 11.5, justifySelf: "end" }} onClick={() => rearm(a.id)}>{t("rearm")}</button> : <span />}
-                <span style={{ color: "var(--muted)", fontSize: 11.5 }}>{new Date(a.created_at).toLocaleDateString()}</span>
+                <span style={{ color: "var(--muted)", fontSize: 11.5 }}>{fmtDate(a.created_at)}</span>
                 {trig ? (
                   <span style={{ color: "var(--signal)", fontSize: 11.5 }} title={`${a.condition.triggered.note ?? ""}${a.condition.triggered.value != null ? ` · ${a.condition.triggered.value}` : ""}`}>
-                    {t("triggeredAt")} {new Date(a.condition.triggered.at).toLocaleDateString()}
+                    {t("triggeredAt")} {fmtDate(a.condition.triggered.at)}
                   </span>
                 ) : (
                   <span style={{ color: a.active ? "var(--up)" : "var(--muted)", fontSize: 11.5 }}>{a.active ? t("armed") : t("paused")}</span>

@@ -581,6 +581,16 @@ function verdictBi(v: string): [string, string] {
   }
 }
 
+/* ── staleness helper (shared by D1 in chip + OracleDash) ──────────── */
+function intelStaleDays(intelAsof?: string | null): number {
+  if (!intelAsof) return 0;
+  const m = intelAsof.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return 0;
+  const asofNoon = new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0, 0);
+  const todayNoon = new Date(); todayNoon.setHours(12, 0, 0, 0);
+  return Math.max(0, Math.round((todayNoon.getTime() - asofNoon.getTime()) / 86_400_000));
+}
+
 /* ── main component ─────────────────────────────────────────────────── */
 export default function StockAnalysis({
   intel, row, slice, deep = false, onExpand, fund = null, opts = null, bars = [], onOpenPane, onOpenSignals, beforeIv,
@@ -633,11 +643,64 @@ export default function StockAnalysis({
   // new AnalystGauge must NOT show its "no consensus" empty state (CN dual-surface contradiction).
   const hasIntelAnalyst = !!(ae && (ae.next_date || ae.surprises || ae.target != null || ae.rating || ae.buy != null));
 
-  const tn = useMemo(() => toneOf(dec?.verb, dec?.tone), [dec?.verb, dec?.tone]);
+  // ── D5: tone-null sign recovery ──
+  // ONLY when dec.tone is null/undefined (not just amber/wait), derive color from entry.status.
+  // entry.status in {blocked, exit, topping, extended} → bearish; buy_now/buy_soon/partial → keep amber.
+  const tn = useMemo(() => {
+    const base = toneOf(dec?.verb, dec?.tone);
+    // Only recover from ambiguity when the tone field is genuinely absent (not set to "wait" etc.)
+    const toneAbsent = dec?.tone == null || dec.tone === "";
+    if (!toneAbsent || base.cls !== "wait") return base;   // tone was set → honor it
+    const st = (entry?.status || "").toLowerCase();
+    // D5 spec: bearish when entry.status ∈ {blocked,exit,topping,extended} OR horizon.d21 < 0
+    const horizonBearish = (entry?.horizon?.d21 ?? 0) < 0;
+    if (["blocked", "exit", "topping", "extended"].includes(st) || horizonBearish) return { cls: "stop", color: "var(--sell)" };
+    return base;
+  }, [dec?.verb, dec?.tone, entry?.status, entry?.horizon?.d21]);
+
   const verb = (zh && dec?.verb_zh) ? dec.verb_zh : (dec?.verb || "—");
   const score = conv?.score ?? dec?.score ?? null;
   // the compact-schema hero has no research verdict of its own — it's a supporting confidence read
   const supporting = !!a?._fromCards && !dec;
+
+  // ── Live tech rating (D1/D2): computed from bars (always fresher than intel.analysis) ──
+  const techRatings = useMemo(() => (bars.length >= 30 ? computeRatings(bars) : null), [bars]);
+  const techOverall = techRatings?.summary[2].score ?? null;   // [-1, 1]
+
+  // ── D1: Freshness discount ──
+  const staleDays = intelStaleDays(intel?.asof);
+  const freshnessW = Math.min(0.5, Math.max(0, (staleDays - 2) / 10));  // 0 when ≤2 days old
+  const rawConvScore = conv?.score ?? dec?.score ?? null;
+  // Blended score: (1-w)*desk + w*tech. HOUSE LAW: tech may only DE-ESCALATE — never raise the
+  // displayed score above the raw desk reading. Take min(rawConvScore, blend) to enforce this.
+  const _blend = (rawConvScore != null && techOverall != null && freshnessW > 0)
+    ? Math.round((1 - freshnessW) * rawConvScore + freshnessW * ((techOverall + 1) / 2) * 100)
+    : rawConvScore;
+  // One-directional: tech can only pull score down, never up.
+  const displayedScore: number | null = (_blend == null || rawConvScore == null)
+    ? _blend
+    : Math.min(rawConvScore, _blend);
+
+  // ── D2: Disagreement haircut ──
+  // deskLean: +1 = bullish read, -1 = bearish read, 0 = neutral/unclear
+  const deskLean: number = (() => {
+    const t = (dec?.tone || "").toLowerCase();
+    const v = (dec?.verb || "").toUpperCase();
+    if (t === "go" || ["BUY", "REBUY", "ADD", "ACCUMULATE"].includes(v)) return 1;
+    if (["stop", "sell", "avoid"].includes(t) || ["SELL", "TRIM", "CUT", "AVOID", "REDUCE"].includes(v)) return -1;
+    return 0;
+  })();
+  // Cap at 55 when bull desk + bearish tech (de-escalation only)
+  const d2Cap = deskLean === 1 && techOverall != null && techOverall <= -0.3;
+  const d2Improve = deskLean === -1 && techOverall != null && techOverall >= 0.3;
+  // Color-coherence gate: when the desk is NOT bullish (deskLean<=0), the ring must never enter
+  // buy-green (≥66). convScore is a CONVICTION MAGNITUDE, not a direction — blending with a
+  // directional tech score can collapse a high-conviction WAIT toward green despite a red verb.
+  // Cap at 65 to keep the ring in amber/red territory for non-bullish reads.
+  const _afterD2 = (displayedScore != null && d2Cap) ? Math.min(55, displayedScore) : displayedScore;
+  const finalScore = (freshnessW > 0 && _afterD2 != null && deskLean <= 0)
+    ? Math.min(65, _afterD2)
+    : _afterD2;
 
   // spot for the analyst upside / IV context: prefer the live opts spot, then the last daily bar.
   const spot = opts?.spot ?? (bars.length ? bars[bars.length - 1].c : (typeof row?.last === "number" ? row.last : null));
@@ -693,11 +756,35 @@ export default function StockAnalysis({
         const chipVerb = supporting ? (pick(conv?.band, conv?.band_zh) || pick("Confidence", "信心")) : verb;
         const chipColor = supporting ? "var(--brand-2)" : tn.color;
         return (
-          <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenPane?.("technicals")} title={pick("Open the research desk", "打开研究台")}>
-            <span className="sa-open-k">{pick("Research desk", "研究台")}</span>
-            <span className="sa-open-verb" style={{ color: chipColor }}>{chipVerb}</span>
-            <span className="sa-open-view">{pick("view", "查看")} ›</span>
-          </button>
+          <div className="sa-open-wrap">
+            <button className="sa-open-chip" style={{ borderLeftColor: chipColor }} onClick={() => onOpenPane?.("technicals")} title={pick("Open the research desk", "打开研究台")}>
+              <span className="sa-open-k">{pick("Research desk", "研究台")}</span>
+              <span className="sa-open-sep" aria-hidden="true"> · </span>
+              <span className="sa-open-verb" style={{ color: chipColor }}>{chipVerb}</span>
+              <span className="sa-open-sep" aria-hidden="true"> · </span>
+              <span className="sa-open-view">{pick("view", "查看")} ›</span>
+            </button>
+            {/* D1: staleness blend note */}
+            {freshnessW > 0 && (
+              <div className="sa-desk-note">
+                {pick(
+                  `Read blended with live price action — desk data ${staleDays} days old`,
+                  `已结合最新价格走势 — 研究数据 ${staleDays} 天前`
+                )}
+              </div>
+            )}
+            {/* D2: caution/context chips */}
+            {d2Cap && (
+              <div className="sa-desk-caution">
+                {pick("Technical tape disagrees", "技术面不支持")}
+              </div>
+            )}
+            {d2Improve && (
+              <div className="sa-desk-context">
+                {pick("Technical tape improving", "技术面转强")}
+              </div>
+            )}
+          </div>
         );
       })()}
       {/* ── MASTERMIND CONFLUENCE + SNIPER CHIPS ──

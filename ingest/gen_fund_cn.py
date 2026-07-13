@@ -797,19 +797,23 @@ def _next_earnings_info(ts_code: str, disclosure_map: dict) -> tuple[str | None,
 def _compute_beta(sym: str, ohlc_dir: "Path") -> float | None:
     """Compute beta from 250-day daily returns vs 000001.SS benchmark.
 
-    ohlc_dir must be the directory that holds the pre-built OHLC .json files
-    (i.e. DEFAULT_OUT / terminal/public/data), NOT the --out target directory.
-    The two are decoupled so that --out <tempdir> runs do not silently null beta.
+    Benchmark source priority:
+      1. MACRO/data/tushare/benchmark_000001SS.json  (pre-built Tushare index_daily bars)
+      2. ohlc_dir / '000001.SS.json'                (fallback: app OHLC file if present)
 
-    Returns None if benchmark file missing or insufficient data.
-    bench_file = ohlc_dir / '000001.SS.json'
-    sym_file   = ohlc_dir / f'{sym}.json'
+    ohlc_dir must be terminal/public/data so sym_path resolves correctly;
+    the benchmark is loaded from the data dir regardless of --out target.
 
     Bars format: [date, open, high, low, close, volume]
     """
-    bench_path = ohlc_dir / "000001.SS.json"
+    # Benchmark: prefer the dedicated Tushare index file; fall back to app OHLC
+    _bench_candidates = [
+        MACRO / "data" / "tushare" / "benchmark_000001SS.json",
+        ohlc_dir / "000001.SS.json",
+    ]
+    bench_path = next((p for p in _bench_candidates if p.exists()), None)
     sym_path = ohlc_dir / f"{sym}.json"
-    if not bench_path.exists() or not sym_path.exists():
+    if bench_path is None or not sym_path.exists():
         return None
     try:
         bench_bars = json.loads(bench_path.read_text()).get("bars") or []
@@ -966,10 +970,238 @@ def atomic_write(dest: Path, text: str) -> None:
     os.replace(tmp, dest)
 
 
+# ─────────────────────────────── merge-mode helpers ───────────────────────────────
+
+def _nonempty(v) -> bool:
+    """True when a JSON value is meaningfully non-null/non-empty."""
+    if v is None:
+        return False
+    if isinstance(v, list):
+        return len(v) > 0
+    if isinstance(v, dict):
+        return bool(v)
+    return True
+
+
+def _load_existing(dest: Path) -> dict | None:
+    """Load an existing fund.json if present; return None on any failure."""
+    if not dest.exists():
+        return None
+    try:
+        return json.loads(dest.read_text())
+    except Exception:
+        return None
+
+
+def _earnings_from_existing_stmts(existing: dict, disclosure_map: dict, ts_code: str) -> tuple[list, list, str | None, str | None]:
+    """Derive earnings.q and earnings.fy from the existing fund.json's statements block.
+
+    Used when stmt parquets are absent on this machine (fresh parquet-derived values are empty).
+    Returns (q_rows, fy_rows, next_date, next_period).
+
+    earnings.q: discrete single-quarter EPS via within-fiscal-year differencing of
+    the quarterly income.eps_basic + revenue series from the existing statements block.
+    The existing periods list carries labels like 'Q1 2023', 'Q2 2023', …, 'Q4 2024'.
+    Algorithm mirrors build_earnings_q (same differencing logic, same 8-quarter cap).
+
+    earnings.fy: last 5 annual EPS from statements.annual income.eps_basic.
+    """
+    stmts = (existing or {}).get("statements") or {}
+    q_rows: list[dict] = []
+    fy_rows: list[dict] = []
+
+    # ── quarterly earnings ────────────────────────────────────────────────────
+    qstmt = stmts.get("quarterly")
+    if qstmt:
+        periods = qstmt.get("periods") or []
+        period_ends = qstmt.get("period_end") or []
+        inc = qstmt.get("income") or {}
+        eps_list = inc.get("eps_basic") or []
+        rev_list = inc.get("revenue") or []
+        # Pad to same length
+        n = len(periods)
+        eps_list = (eps_list + [None] * n)[:n]
+        rev_list = (rev_list + [None] * n)[:n]
+
+        # Parse period label → (fiscal_year, quarter_num)
+        def _parse_period(label: str):
+            parts = label.strip().split()
+            if len(parts) == 2 and parts[0].startswith("Q") and parts[1].isdigit():
+                try:
+                    return parts[1], int(parts[0][1:])
+                except ValueError:
+                    pass
+            return None, None
+
+        # Group by fiscal year, preserving index order
+        from collections import defaultdict
+        by_year: dict = defaultdict(list)
+        for i, p in enumerate(periods):
+            yr, qn = _parse_period(p)
+            if yr and qn:
+                by_year[yr].append((i, qn))
+
+        for yr in sorted(by_year):
+            yr_items = sorted(by_year[yr], key=lambda x: x[1])
+            for rank, (i, qn) in enumerate(yr_items):
+                cum_eps = _f(eps_list[i]) if i < len(eps_list) else None
+                cum_rev = _f(rev_list[i]) if i < len(rev_list) else None
+                end_str = period_ends[i] if i < len(period_ends) else None
+
+                if rank == 0:
+                    disc_eps = cum_eps
+                    disc_rev = cum_rev
+                else:
+                    prev_i = yr_items[rank - 1][0]
+                    prev_eps = _f(eps_list[prev_i]) if prev_i < len(eps_list) else None
+                    prev_rev = _f(rev_list[prev_i]) if prev_i < len(rev_list) else None
+                    disc_eps = (cum_eps - prev_eps) if (cum_eps is not None and prev_eps is not None) else None
+                    disc_rev = (cum_rev - prev_rev) if (cum_rev is not None and prev_rev is not None) else None
+
+                q_rows.append({
+                    "period": periods[i],
+                    "end": end_str,
+                    "report_date": None,
+                    "eps_a": round(disc_eps, 4) if disc_eps is not None else None,
+                    "rev_a": round(disc_rev) if disc_rev is not None else None,
+                    "eps_e": None,
+                    "rev_e": None,
+                    "surp_pct": None,
+                })
+        q_rows = q_rows[-8:]
+
+    # ── annual earnings ───────────────────────────────────────────────────────
+    astmt = stmts.get("annual")
+    if astmt:
+        a_periods = astmt.get("periods") or []
+        a_inc = astmt.get("income") or {}
+        a_eps = a_inc.get("eps_basic") or []
+        a_rev = a_inc.get("revenue") or []
+        n = len(a_periods)
+        a_eps = (a_eps + [None] * n)[:n]
+        a_rev = (a_rev + [None] * n)[:n]
+        for i, yr_label in enumerate(a_periods[-5:]):
+            real_i = i + max(0, n - 5)
+            eps_v = _f(a_eps[real_i]) if real_i < len(a_eps) else None
+            rev_v = _f(a_rev[real_i]) if real_i < len(a_rev) else None
+            fy_rows.append({
+                "period": yr_label,
+                "eps_a": round(eps_v, 4) if eps_v is not None else None,
+                "rev_a": round(rev_v) if rev_v is not None else None,
+                "eps_e": None,
+                "rev_e": None,
+                "surp_pct": None,
+            })
+
+    # ── next earnings date from disclosure_map (live source; preserve from existing as fallback) ──
+    next_date, next_period = _next_earnings_info(ts_code, disclosure_map)
+    if not next_date:
+        existing_earn = (existing or {}).get("earnings") or {}
+        next_date = existing_earn.get("next_date")
+        next_period = existing_earn.get("next_period")
+
+    return q_rows, fy_rows, next_date, next_period
+
+
+def _merge_fund(fresh: dict, existing: dict) -> dict:
+    """Apply merge-mode rules: preserve canonical blocks from existing when fresh is null/empty.
+
+    PRESERVE from existing (when fresh value is null/empty):
+      statements, ratios series (pe/ps/pb/pcf/ev/ev_ebitda + periods),
+      dividends (events + splits), ownership, guidance, segments,
+      and per-field stats/profile values where fresh is null.
+
+    REPLACE always:
+      estimates, analyst, earnings (all sub-fields), asof=today,
+      src.estimates, ratios.current (live snapshot), stats.num_holders, stats.beta,
+      profile fields where fresh non-null (website/employees/founded/hq).
+    """
+    merged = dict(fresh)
+    merged["asof"] = ASOF
+
+    # ── statements ──────────────────────────────────────────────────────────
+    if not _nonempty(fresh.get("statements", {}).get("annual")) \
+            and not _nonempty(fresh.get("statements", {}).get("quarterly")):
+        merged["statements"] = existing.get("statements", {"annual": None, "quarterly": None})
+
+    # ── ratios: preserve period series AND current fields where fresh is null ──
+    fresh_ratios = fresh.get("ratios") or {}
+    exist_ratios = existing.get("ratios") or {}
+    merged_ratios = dict(fresh_ratios)
+    # Period series: preserve from existing when fresh has none
+    if not _nonempty(fresh_ratios.get("periods")):
+        for key in ("periods", "pe", "ps", "pb", "pcf", "ev", "ev_ebitda"):
+            if _nonempty(exist_ratios.get(key)):
+                merged_ratios[key] = exist_ratios[key]
+    # Current snapshot: merge field-by-field — keep existing non-null for fields fresh nulled
+    # (fresh pe_ttm/ps/pb/div_yield come from valuation.parquet; gross_margin/net_margin/roe
+    # come from financials.parquet; current_ratio/debt_to_equity derived from balance stmts —
+    # preserve existing values when the parquet source is absent on this machine)
+    fresh_cur = fresh_ratios.get("current") or {}
+    exist_cur = exist_ratios.get("current") or {}
+    merged_cur = dict(exist_cur)    # start from existing
+    for field, val in fresh_cur.items():
+        if val is not None:
+            merged_cur[field] = val  # fresh overrides
+        # else: keep existing value
+    merged_ratios["current"] = merged_cur
+    merged["ratios"] = merged_ratios
+
+    # ── dividends: preserve when fresh has no events ────────────────────────
+    fresh_div = fresh.get("dividends") or {}
+    if not _nonempty(fresh_div.get("events")):
+        exist_div = existing.get("dividends")
+        if _nonempty((exist_div or {}).get("events")):
+            merged["dividends"] = exist_div
+
+    # ── ownership: preserve when fresh top_inst is empty ────────────────────
+    fresh_own = fresh.get("ownership") or {}
+    if not _nonempty(fresh_own.get("top_inst")):
+        exist_own = existing.get("ownership")
+        if _nonempty((exist_own or {}).get("top_inst")):
+            merged["ownership"] = exist_own
+
+    # ── guidance / segments: preserve when fresh is null ────────────────────
+    if fresh.get("guidance") is None and existing.get("guidance") is not None:
+        merged["guidance"] = existing["guidance"]
+    if fresh.get("segments") is None and existing.get("segments") is not None:
+        merged["segments"] = existing["segments"]
+
+    # ── stats: keep existing non-null fields where fresh is null ────────────
+    fresh_stats = fresh.get("stats") or {}
+    exist_stats = existing.get("stats") or {}
+    merged_stats = dict(fresh_stats)
+    for field in ("mktcap", "shares_out", "float_shares", "inst_pct", "insider_pct"):
+        if merged_stats.get(field) is None and exist_stats.get(field) is not None:
+            merged_stats[field] = exist_stats[field]
+    # num_holders and beta are REPLACE (fresh overrides even if null — they come from live parquets)
+    merged["stats"] = merged_stats
+
+    # ── profile: fill-in non-null fresh fields; preserve existing for nulls ─
+    fresh_prof = fresh.get("profile") or {}
+    exist_prof = existing.get("profile") or {}
+    merged_prof = dict(exist_prof)   # start from existing
+    for field in ("website", "employees", "sector", "industry", "description", "founded", "hq"):
+        if fresh_prof.get(field) is not None:
+            merged_prof[field] = fresh_prof[field]
+        # else: keep existing value (already present from exist_prof copy)
+    merged["profile"] = merged_prof
+
+    # ── src: update estimates source ─────────────────────────────────────────
+    fresh_src = fresh.get("src") or {}
+    merged_src = dict((existing.get("src") or {}))
+    merged_src.update(fresh_src)
+    merged["src"] = merged_src
+
+    # estimates / analyst / earnings are ALWAYS from fresh (already in merged)
+    return merged
+
+
 def main(argv: list[str]) -> None:
     only = _arg(argv, "--only")
     limit = int(_arg(argv, "--limit", 0) or 0)
     out_dir = Path(_arg(argv, "--out", str(DEFAULT_OUT)))
+    no_merge = "--no-merge" in argv
     out_dir.mkdir(parents=True, exist_ok=True)
 
     syms = ([s.strip() for s in only.split(",")] if only else cn_universe())
@@ -995,6 +1227,8 @@ def main(argv: list[str]) -> None:
           f"consensus {len(consensus_map)}, reports {len(reports_map)}, "
           f"company {len(company_map)}, holdernum {len(holdernum_map)}, disclosure {len(disclosure_map)}",
           flush=True)
+    merge_mode = not no_merge
+    print(f"merge-mode: {'ON (default)' if merge_mode else 'OFF (--no-merge)'}", flush=True)
 
     ok = err = 0
     for sym in syms:
@@ -1013,6 +1247,26 @@ def main(argv: list[str]) -> None:
                               holdernum_map=holdernum_map,
                               disclosure_map=disclosure_map,
                               data_dir=out_dir)
+
+            if merge_mode:
+                existing = _load_existing(out_dir / f"{sym}.fund.json")
+                if existing is not None:
+                    ts_code = term_to_ts(sym)
+                    # If fresh earnings.q/fy are empty (stmt parquets absent), derive from existing stmts
+                    fresh_earn = fund.get("earnings") or {}
+                    if not _nonempty(fresh_earn.get("q")) and not _nonempty(fresh_earn.get("fy")):
+                        q_rows, fy_rows, nd, np_ = _earnings_from_existing_stmts(
+                            existing, disclosure_map, ts_code)
+                        fund["earnings"] = {
+                            "next_date": fresh_earn.get("next_date") or nd,
+                            "next_period": fresh_earn.get("next_period") or np_,
+                            "next_eps_est": fresh_earn.get("next_eps_est"),
+                            "next_rev_est": fresh_earn.get("next_rev_est"),
+                            "q": q_rows,
+                            "fy": fy_rows,
+                        }
+                    fund = _merge_fund(fund, existing)
+
             atomic_write(out_dir / f"{sym}.fund.json",
                          json.dumps(fund, separators=(",", ":"), ensure_ascii=False, sort_keys=False))
             ok += 1

@@ -141,6 +141,14 @@
 .fin-leg-ring{background:transparent!important;border:1.4px solid var(--text-2);box-sizing:border-box}
 .fin-leg-dotted{background:linear-gradient(90deg,var(--muted) 55%,transparent 0) 0/4px 2px repeat-x!important;border-radius:0;height:2px;width:12px}
 
+/* ── waterfall x-axis (staggered collision-avoidance) ── */
+.fin-wf-xaxis{display:flex;justify-content:space-between;padding:6px 0 0 8px;font:500 7.5px/1 var(--font-num);color:var(--muted)}
+/* low-row label: pushed down by one row height + a connector gap */
+.fin-wf-xlbl{white-space:nowrap;text-align:center;flex:1 1 0;min-width:0;display:inline-flex;flex-direction:column;align-items:center}
+.fin-wf-xlbl-lo{margin-top:12px}
+/* two-line wrap: each line is its own block */
+.fin-wf-lline{display:block;line-height:1.2}
+
 /* ── donut ── */
 .fin-donut{display:flex;flex-direction:column;align-items:center;gap:12px}
 .fin-donut-svg{flex:none}
@@ -518,6 +526,13 @@
 .sig-desk-head{font:650 12.5px/1.4 var(--font-ui);color:var(--text);margin-top:5px}
 .sig-desk-gloss{font:500 11.5px/1.5 var(--font-ui);color:var(--text-2);margin-top:3px}
 .sig-desk-rank{font:600 10.5px/1 var(--font-num);color:var(--muted);margin-top:6px}
+.sig-desk-tech{display:flex;align-items:baseline;gap:6px;margin-top:6px;font:600 10.5px/1 var(--font-ui)}
+.sig-desk-tech-k{color:var(--muted);flex:none}
+.sig-desk-tech-v{font-weight:700}
+.sig-desk-tech-score{font:600 10px/1 var(--font-num);opacity:.8}
+.sig-stale-note{margin-top:7px;font:500 10px/1.4 var(--font-ui);color:var(--muted)}
+.sig-caution-chip{margin-top:6px;font:600 10.5px/1 var(--font-ui);color:var(--warn);background:rgba(232,163,61,.08);border:1px solid rgba(232,163,61,.22);border-radius:var(--r);padding:4px 9px}
+.sig-context-chip{margin-top:6px;font:600 10.5px/1 var(--font-ui);color:var(--up);background:rgba(38,194,129,.06);border:1px solid rgba(38,194,129,.2);border-radius:var(--r);padding:4px 9px}
 .sig-caveat{margin-top:10px;font:500 10.5px/1.4 var(--font-ui);color:var(--muted);font-style:italic}
 /* drivers / cautions */
 .sig-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}

@@ -274,11 +274,14 @@ svg{display:block}
 .sig-btn{display:flex;flex-direction:column;width:100%;border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel-2);overflow:hidden;cursor:pointer;text-align:left;transition:border-color var(--t)}
 .sig-btn:hover{border-color:var(--line-3)}
 .sig-btn-half{display:flex;align-items:center;gap:8px;padding:9px 11px;border-left:3px solid var(--vc);background:color-mix(in srgb, var(--vc) 8%, transparent)}
+.sig-btn-go{padding-bottom:9px}
+.sig-btn-rd{padding-top:9px}
 .sig-btn-half>svg{width:14px;height:14px;flex:none}
 .sig-btn-lbl{font:600 10px/1.2 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--text-2)}
 .sig-btn-vd{margin-left:auto;font:700 12.5px/1 var(--font-ui);color:var(--vc);flex:none}
-.sig-btn-seam{position:relative;height:0;display:flex;align-items:center;justify-content:center}
-.sig-btn-view{position:relative;z-index:1;display:inline-flex;align-items:center;font:600 10.5px/1 var(--font-ui);color:var(--text);background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-pill);padding:3px 12px}
+/* seam: give it natural height so it sits between the two halves without overlap */
+.sig-btn-seam{display:flex;align-items:center;justify-content:center;padding:6px 0;background:var(--panel-2)}
+.sig-btn-view{display:inline-flex;align-items:center;font:600 10.5px/1 var(--font-ui);color:var(--text);background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-pill);padding:3px 12px}
 /* bottom rail button group (after Seasonality) */
 .sa-btn-group{display:flex;flex-direction:column;gap:8px;padding:12px}
 .ticker{grid-column:1/4;grid-row:3;display:flex;align-items:center;gap:22px;padding:0 16px;border-top:1px solid var(--line);overflow:hidden;font-size:11.5px}
@@ -1003,6 +1006,17 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .sa-ring{display:block}.sa-ring-n{font:700 16px/1 var(--font-num)}
 .sa-ring-lbl{font:600 9px/1 var(--font-ui);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
 .sa-rank{font:600 9.5px/1 var(--font-ui);color:var(--text-dim)}
+/* research-desk compact chip (rail top) — label · verb · view link with separators */
+.sa-open-wrap{display:flex;flex-direction:column;gap:3px;margin-bottom:4px}
+.sa-open-chip{display:flex;align-items:center;width:100%;border:1px solid var(--line);border-left:3px solid var(--line);border-radius:var(--r-md);background:var(--panel-2);padding:9px 11px;cursor:pointer;gap:4px;text-align:left;transition:border-color var(--t)}
+.sa-open-chip:hover{border-color:var(--line-3)}
+.sa-open-k{font:600 10px/1.2 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--text-2);flex:none}
+.sa-open-sep{color:var(--muted);font-size:11px;flex:none}
+.sa-open-verb{font:700 12px/1 var(--font-ui);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sa-open-view{margin-left:auto;font:600 10.5px/1 var(--font-ui);color:var(--text-2);flex:none;white-space:nowrap}
+.sa-desk-note{font:500 10px/1.4 var(--font-ui);color:var(--muted);padding:0 11px}
+.sa-desk-caution{font:600 10.5px/1 var(--font-ui);color:var(--warn);background:rgba(232,163,61,.08);border:1px solid rgba(232,163,61,.22);border-radius:var(--r);padding:4px 9px}
+.sa-desk-context{font:600 10.5px/1 var(--font-ui);color:var(--up);background:rgba(38,194,129,.06);border:1px solid rgba(38,194,129,.2);border-radius:var(--r);padding:4px 9px}
 /* trust tier: compact badge; full rationale lives in a hover/focus popup */
 .sa-trust{position:relative;display:inline-flex;align-items:center;gap:6px;cursor:help;outline:none;align-self:flex-start}
 .sa-trust-tier{display:inline-block;font:700 9px/1 var(--font-ui);letter-spacing:.05em;text-transform:uppercase;color:var(--brand-2);background:rgba(41,98,255,.12);border:1px solid rgba(41,98,255,.28);padding:4px 7px;border-radius:var(--r)}
