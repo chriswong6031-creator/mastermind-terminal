@@ -17,7 +17,7 @@ const load = (d: ChartSettings): ChartSettings => { try { const v = localStorage
 // by contrast, are computed against THIS pane's timeframe and are transient (never persisted), so they
 // stay pane-local and are merged in only for this pane's own render.
 export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, chartType, inds, tool, drawStyle, detectCmd, compare, compareCfg, magnet, replayIdx, onMeta, drawings, onDrawingsChange, liveQuote, indParams, hidden, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts,
-  onAddAlert, onTableView, onObjectTree, lockedVLine, onSetLockedVLine, onIndRowsAt, dayMode: _dayMode }:
+  onAddAlert, onTableView, onObjectTree, lockedVLine, onSetLockedVLine, onIndRowsAt, dayMode: _dayMode, onPaneCount }:
   { idx: number; symbol: string; isActive: boolean; onActivate: (i: number) => void; row?: { col?: string; last?: number; chg?: number } | null; tf: string; chartType: string; inds: Set<string>; tool: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; detectCmd: DetectCmd; compare: string[]; compareCfg?: Record<string, CmpCfg>; magnet: boolean; replayIdx: number | null; onMeta: (m: { total: number }) => void; drawings: Drawing[]; onDrawingsChange: (d: Drawing[]) => void; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
     onAddAlert?: (price: number) => void; onTableView?: () => void; onObjectTree?: () => void;
@@ -25,6 +25,8 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
     onIndRowsAt?: (fn: ((barTime: string | number) => Record<string, number | null>) | null) => void;
     /** Day Trade Mode — enables session shading, countdown, and stats strip (C lane wires the impl). */
     dayMode?: boolean;
+    /** B3: forwarded to ChartPanel to notify TerminalShell of sub-pane count changes. */
+    onPaneCount?: (n: number) => void;
   }) {
   const [auto, setAuto] = useState<Drawing[]>([]);
   const [chartSettings, setChartSettings] = useState<ChartSettings>(DEFAULT_CHART_SETTINGS);
@@ -129,6 +131,7 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         onSetLockedVLine={onSetLockedVLine}
         onIndRowsAt={isActive ? onIndRowsAt : undefined}
         dayMode={_dayMode}
+        onPaneCount={onPaneCount}
       />
       <ChartFrameBar
         timeframe={tf}
