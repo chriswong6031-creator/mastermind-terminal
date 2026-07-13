@@ -32,6 +32,7 @@ import { HeatSeekerCard, type HeatSeekerPick } from "./HeatSeekerCard";
 import { OiMoversRail, type OiMoverRow } from "./OiMoversRail";
 import { ConfluenceView } from "./ConfluenceView";
 import { flowGet } from "@/lib/flowClientCache";
+import { trackSearch } from "@/lib/searchTrack";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -222,7 +223,7 @@ export function PrismView() {
 
   const commitTicker = useCallback(() => {
     const root = inputVal.trim().toUpperCase();
-    if (root && root !== ticker) setTicker(root);
+    if (root && root !== ticker) { trackSearch(root, "prism-desk", inputVal.trim() || undefined); setTicker(root); }
   }, [inputVal, ticker]);
 
   const handleKeyDown = useCallback(

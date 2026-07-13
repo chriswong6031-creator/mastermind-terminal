@@ -36,6 +36,7 @@ import React, {
 } from "react";
 import { flowGet } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
+import { trackSearch } from "@/lib/searchTrack";
 import { makeGexT } from "./gexStrings";
 import { GexSummaryBar } from "./GexSummaryBar";
 import { StrikeLadder } from "./StrikeLadder";
@@ -222,6 +223,7 @@ export function GexDeskView() {
   const commitTicker = useCallback(() => {
     const root = inputVal.trim().toUpperCase();
     if (root && root !== ticker) {
+      trackSearch(root, "gex-desk", inputVal.trim() || undefined);
       setTicker(root);
     }
   }, [inputVal, ticker]);
@@ -324,7 +326,7 @@ export function GexDeskView() {
                 key={r}
                 className={`chip${ticker === r ? " on" : ""}`}
                 style={{ height: 24, fontSize: 11, fontWeight: 700, letterSpacing: "0.03em" }}
-                onClick={() => { setInputVal(r); setTicker(r); }}
+                onClick={() => { if (r !== ticker) trackSearch(r, "gex-desk"); setInputVal(r); setTicker(r); }}
               >
                 {r}
               </button>
