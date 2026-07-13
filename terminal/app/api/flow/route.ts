@@ -36,6 +36,11 @@ type CacheEntry = { data: Record<string, unknown>; ts: number };
 const CACHE: Record<string, CacheEntry> = {};
 const TTL_MS = 30_000;
 
+// Inflight dedup: a single background revalidation promise per cache key.
+// Without this, N concurrent stale requests each fire a separate upstream fetch.
+// The promise resolves/rejects and is cleared from the map in both paths.
+const INFLIGHT: Record<string, Promise<Record<string, unknown> | null>> = {};
+
 // Valid f-param values: existing feed|heat|meta, plus new hub params.
 // Parameterized sub-types: tide, dte, ticker:{ROOT}, vol:{ROOT}, gex:{ROOT}, oi, hot
 type FParam = string;
@@ -391,11 +396,23 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const stale = { ...cached.data, stale: true };
-  tryFetch().then((data) => {
-    if (data) {
-      attachFlowScores(f, data);
-      CACHE[f] = { data, ts: Date.now() };
-    }
-  });
+  // Inflight dedup: only start one background revalidation per cache key.
+  // Concurrent stale requests reuse the same promise instead of fanning out N upstream fetches.
+  if (!INFLIGHT[f]) {
+    INFLIGHT[f] = tryFetch().then(
+      (data) => {
+        delete INFLIGHT[f];
+        if (data) {
+          attachFlowScores(f, data);
+          CACHE[f] = { data, ts: Date.now() };
+        }
+        return data;
+      },
+      () => {
+        delete INFLIGHT[f];
+        return null;
+      }
+    );
+  }
   return NextResponse.json(stale, { headers: { "Cache-Control": "no-store" } });
 }

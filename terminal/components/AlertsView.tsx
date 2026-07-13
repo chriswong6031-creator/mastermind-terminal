@@ -36,7 +36,8 @@ export default function AlertsView({ email }: { email: string }) {
 
   useEffect(() => {
     let alive = true;
-    fetch("/api/alerts").then((r) => r.json()).then((d) => { if (alive) setAlerts(d.alerts || []); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); });
+    // 401 = no session — treat as empty list (calm, no console error).
+    fetch("/api/alerts").then((r) => r.status === 401 ? { alerts: [] } : r.json()).then((d) => { if (alive) setAlerts(d.alerts || []); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); });
     // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
     getJSON("/data/manifest.json").then((m) => { if (alive) setSyms(Object.keys(m?.symbols || {})); }).catch(() => {});
     // D1: prefill from ?sym= ?price= ?type= query params (set by terminal "Add alert" context menu)
@@ -139,7 +140,7 @@ export default function AlertsView({ email }: { email: string }) {
           })}
         </div>
       </div></main>
-      <div className="ticker"><span className="lbl">{t("pageAlerts")}</span><span style={{ color: "var(--text-2)" }}>{t("alertsSub")}</span></div>
+      <div className="ticker"><span className="lbl">{t("pageAlerts")}</span></div>
     </div>
   );
 }

@@ -111,7 +111,7 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
 
   // ── Key facts ──
   const facts: { k: string; v: string; ext?: string }[] = [
-    { k: pick(zh, "Market capitalization", "市值"), v: fmtNum(s?.mktcap) },
+    { k: pick(zh, "Market capitalization", "市值"), v: s?.mktcap != null ? fmtNum(s.mktcap) + " " + quoteCur : "—" },
     {
       k: pick(zh, "Dividend yield (indicated)", "股息率（指示）"),
       v: fund.dividends?.yield_ttm != null ? fmtPct(fund.dividends.yield_ttm) : "—",
@@ -127,7 +127,7 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
     { k: pick(zh, "Founded", "成立"), v: p?.founded || "—" },
     {
       k: pick(zh, "Employees", "员工人数"),
-      v: s == null || p?.employees == null ? "—" : Math.round(p.employees).toLocaleString("en-US"),
+      v: p?.employees == null ? "—" : Math.round(p.employees).toLocaleString("en-US"),
     },
     { k: pick(zh, "Sector", "板块"), v: p?.sector || "—" },
     {
@@ -307,7 +307,7 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
                 marketCap={s?.mktcap ?? null}
                 debt={latestFinite(ann?.balance?.debt) ?? latestFinite(qtr?.balance?.debt)}
                 cash={latestFinite(ann?.balance?.cash) ?? latestFinite(qtr?.balance?.cash)}
-                fmtV={fmtV}
+                fmtV={fmtNum}
                 zh={zh}
               />
             )}

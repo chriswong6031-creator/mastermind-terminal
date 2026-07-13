@@ -1432,7 +1432,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                     return def && def.kind === "overlay";
                   }).map((k): OTEntry => {
                     const def = (IND_DEFS as any)[k];
-                    return { key: k, label: def?.label ?? k, tag: def?.tag ?? k, kind: "overlay", hidden: hidden.has(k), noRemove: k === "_oracle" };
+                    return { key: k, label: def?.label ?? k, tag: def?.tag ?? k, kind: "overlay", hidden: hidden.has(k) };
                   }),
                   // pine scripts (all enabled ones — ChartPanel handles pane vs overlay distinction)
                   ...pineScripts.map((s): OTEntry => ({

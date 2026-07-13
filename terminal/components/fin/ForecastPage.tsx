@@ -71,6 +71,7 @@ function ForecastPage({ sym, fund, bars = [], zh = false }: ForecastPageProps) {
   const [stmt, setStmt] = useState<"income" | "balance" | "cashflow">("income");
 
   const ccy = fund?.quote_currency ?? "USD";
+  const stmtCcy = fund?.stmt_currency ?? ccy;
   const est = fund?.estimates ?? null;
   const analyst = fund?.analyst ?? null;
 
@@ -99,6 +100,7 @@ function ForecastPage({ sym, fund, bars = [], zh = false }: ForecastPageProps) {
           bars={bars}
           lastPrice={lastPrice}
           ccy={ccy}
+          stmtCcy={stmtCcy}
           analyst={analyst}
           est={est}
           epsFreq={epsFreq}
@@ -108,7 +110,7 @@ function ForecastPage({ sym, fund, bars = [], zh = false }: ForecastPageProps) {
           zh={zh}
         />
       ) : (
-        <ActualsTab fund={fund} est={est} stmt={stmt} setStmt={setStmt} ccy={ccy} zh={zh} />
+        <ActualsTab fund={fund} est={est} stmt={stmt} setStmt={setStmt} ccy={stmtCcy} zh={zh} />
       )}
 
       <Disclaimer zh={zh} />
@@ -125,6 +127,7 @@ function PriceTargetTab({
   bars,
   lastPrice,
   ccy,
+  stmtCcy,
   analyst,
   est,
   epsFreq,
@@ -138,6 +141,7 @@ function PriceTargetTab({
   bars: Bar[];
   lastPrice: number | null;
   ccy: string;
+  stmtCcy: string;
   analyst: Fund["analyst"];
   est: Fund["estimates"];
   epsFreq: "A" | "Q";
@@ -215,7 +219,7 @@ function PriceTargetTab({
         zh={zh}
       />
 
-      {/* Revenue section */}
+      {/* Revenue section — labeled with stmt_currency as revenue comes from statements */}
       <EstimateBarSection
         title="Revenue"
         titleZh="营收"
@@ -224,7 +228,7 @@ function PriceTargetTab({
         est={est}
         freq={revFreq}
         setFreq={setRevFreq}
-        ccy={ccy}
+        ccy={stmtCcy}
         zh={zh}
       />
     </>
@@ -281,7 +285,11 @@ function PriceFan({
   const n = hist.values.length;
   const anchor = cur ?? hist.values[n - 1] ?? mean;
   const pad: (number | null)[] = new Array(n - 1).fill(null);
-  const labels = [...hist.labels, pick(zh, "1Y FORECAST", "1年预测"), ""];
+  // Keep "1Y FORECAST" out of the XAxis tick array — it collides with the last
+  // date tick when both occupy the same slot. The brackets panel on the right
+  // already communicates the 1-year target; a chart-top annotation band is
+  // added below the chart instead.
+  const labels = [...hist.labels, "", ""];
 
   const histSeries: Series = {
     name: pick(zh, "Price", "价格"),
@@ -295,16 +303,22 @@ function PriceFan({
 
   return (
     <div className="fin-fc-fanwrap">
-      <LineSeries
-        labels={labels}
-        series={[histSeries, ...fan]}
-        fmtY={(v) => fmtNum(v)}
-        vw={420}
-        vh={220}
-        zh={zh}
-        height={230}
-        noLegend
-      />
+      <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
+        <LineSeries
+          labels={labels}
+          series={[histSeries, ...fan]}
+          fmtY={(v) => fmtNum(v)}
+          vw={420}
+          vh={220}
+          zh={zh}
+          height={230}
+          noLegend
+        />
+        {/* Forecast band annotation — rendered as an HTML overlay over the rightmost ~16% of the chart */}
+        <div className="fin-fc-forecast-ann" aria-hidden>
+          {pick(zh, "1Y FORECAST", "1年预测")}
+        </div>
+      </div>
       {/* end brackets: Max / Avg / Current / Min */}
       <div className="fin-fc-brackets">
         {high != null && <Bracket label={pick(zh, "Max", "最高")} pct={upsidePct(high, cur)} price={high} tone="up" zh={zh} />}

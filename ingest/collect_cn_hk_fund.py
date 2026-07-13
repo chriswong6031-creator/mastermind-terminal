@@ -8,6 +8,13 @@ CN (Tushare, all endpoints entitled/$0):
     (oper_cost) row the judge's gross-margin ruling depends on.
     pro.dividend per-ticker over the CN universe → dividends.parquet (resumable per-ticker).
 
+EastMoney bulk:
+    cn_consensus.parquet  — EastMoney datacenter consensus EPS/revenue/PE by predict_year (2026-2028)
+    cn_reports.parquet    — per-ticker research report list (rating + per-report EPS + target price)
+    cn_company.parquet    — stock_company from Tushare (website/employees/setup_date/province/city)
+    cn_holdernum.parquet  — stk_holdernumber snapshot (latest filed holder count)
+    cn_disclosure.parquet — disclosure_date for next quarter-end (pre_date / actual_date)
+
 HK (akshare + yfinance):
     stock_financial_hk_report_em per ticker for 利润表 / 资产负债表 / 现金流量表, indicator="报告期"
     (annual AND quarterly — 95 report dates for 00700, judge-verified). Long-format rows keyed by
@@ -26,12 +33,19 @@ Writes into  <Macro Dashboard>/data/ :
     tushare/stmt_cashflow.parquet  (ts_code, end_date, <cashflow fields>)
     tushare/dividends.parquet      (ts_code, events_json)                    resumable per-ticker
     tushare/daily_basic.parquet    (ts_code, close, total_share, ...)        stats snapshot (one call)
+    tushare/cn_consensus.parquet   (SECUCODE, PREDICT_YEAR, EPS, PE, ...)    consensus by year
+    tushare/cn_reports.parquet     (ts_code, publishDate, emRatingName, ...) per-report ratings/EPS
+    tushare/cn_company.parquet     (ts_code, website, employees, ...)        company profile
+    tushare/cn_holdernum.parquet   (ts_code, holder_nums, end_date)          latest holder count
+    tushare/cn_disclosure.parquet  (ts_code, end_date, pre_date, actual_date) next earnings date
     hk_fund/<SYM>.json             {financials{income,balance,cashflow}, yf{...}}  resumable per-ticker
 
 Run with the macro venv (pandas + TUSHARE_TOKEN in <Macro Dashboard>/.env):
     "<Macro Dashboard>/.venv/bin/python" ingest/collect_cn_hk_fund.py \
         [--market cn|hk|all] [--only 600519.SH,0700.HK] [--limit N] \
         [--periods 28] [--stale-days 7] [--skip-stmt] [--skip-div] [--force]
+        [--skip-consensus] [--skip-reports] [--skip-company] [--skip-holders]
+        [--skip-disclosure]
 """
 from __future__ import annotations
 
@@ -446,6 +460,286 @@ def collect_hk_fund(syms: list[str], force: bool, stale_days: int = 7) -> None:
     print(f"hk_fund: {ok} names newly cached into {HK_OUT}", flush=True)
 
 
+# ─────────────────────────────── EastMoney consensus (cn_consensus.parquet) ───────────────────────────────
+_EM_HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://data.eastmoney.com/"}
+_EM_BASE = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+
+
+def _em_get(url: str, retries: int = 4) -> dict:
+    """GET → parsed JSON dict.  Returns {} on failure."""
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=_EM_HEADERS)
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.loads(r.read())
+        except Exception:
+            time.sleep(1.5 * (attempt + 1))
+    return {}
+
+
+def collect_cn_consensus(force: bool = False) -> None:
+    """EastMoney datacenter bulk consensus → cn_consensus.parquet.
+
+    Pulls RPT_RES_PROFITPREDICT for PREDICT_YEAR in {2026,2027,2028}, 500 rows/page,
+    ~6 pages per year.  Resumable: years already in the cache are skipped unless --force.
+    Fields retained: SECUCODE, PREDICT_YEAR, EPS, PE, PARENT_NETPROFIT, TOTAL_OPERATE_INCOME.
+    """
+    OUT.mkdir(parents=True, exist_ok=True)
+    path = OUT / "cn_consensus.parquet"
+    YEARS = [2026, 2027, 2028]
+    have_years: set = set()
+    existing = None
+    if path.exists() and not force:
+        try:
+            existing = pd.read_parquet(path)
+            have_years = set(existing["PREDICT_YEAR"].unique())
+        except Exception:
+            existing = None
+
+    frames = [existing] if existing is not None else []
+    for yr in YEARS:
+        if yr in have_years:
+            print(f"  cn_consensus {yr}: cached — skip", flush=True)
+            continue
+        year_rows: list[dict] = []
+        page = 1
+        while True:
+            url = (f"{_EM_BASE}?reportName=RPT_RES_PROFITPREDICT&columns=ALL"
+                   f"&pageSize=500&pageNumber={page}"
+                   f"&filter=(PREDICT_YEAR%3D{yr})")
+            d = _em_get(url)
+            result = d.get("result") or {}
+            rows = result.get("data") or []
+            if not rows:
+                break
+            for r in rows:
+                year_rows.append({
+                    "SECUCODE": r.get("SECUCODE"),
+                    "PREDICT_YEAR": yr,
+                    "EPS": _f(r.get("EPS")),
+                    "PE": _f(r.get("PE")),
+                    "PARENT_NETPROFIT": _f(r.get("PARENT_NETPROFIT")),
+                    "TOTAL_OPERATE_INCOME": _f(r.get("TOTAL_OPERATE_INCOME")),
+                })
+            total = result.get("count") or 0
+            print(f"  cn_consensus {yr} page {page}: {len(rows)} rows (total {total})", flush=True)
+            if len(year_rows) >= (total or 1) or len(rows) < 500:
+                break
+            page += 1
+            time.sleep(0.3)
+        if year_rows:
+            frames.append(pd.DataFrame(year_rows))
+        time.sleep(0.5)
+
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if not df.empty:
+        df = df.drop_duplicates(subset=["SECUCODE", "PREDICT_YEAR"], keep="last")
+        df.to_parquet(path, index=False)
+    print(f"cn_consensus.parquet: {len(df)} rows, {df['SECUCODE'].nunique() if not df.empty else 0} tickers",
+          flush=True)
+
+
+# ─────────────────────────────── EastMoney per-ticker reports (cn_reports.parquet) ────────────────────────
+_EM_REPORT_BASE = "https://reportapi.eastmoney.com/report/list"
+
+
+def _em_reports_one(code6: str) -> list[dict]:
+    """Fetch last 365d research reports for a 6-digit code.  Returns [] on any error."""
+    today = dt.date.today()
+    begin = (today - dt.timedelta(days=365)).strftime("%Y-%m-%d")
+    end = today.strftime("%Y-%m-%d")
+    url = (f"{_EM_REPORT_BASE}?pageSize=100&pageNo=1&code={code6}"
+           f"&beginTime={begin}&endTime={end}&qType=0")
+    d = _em_get(url)
+    items = d.get("data") or []
+    out = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        out.append({
+            "orgSName": row.get("orgSName"),
+            "publishDate": str(row.get("publishDate") or "")[:10],
+            "emRatingName": row.get("emRatingName"),
+            "emRatingValue": _f(row.get("emRatingValue")),
+            "predictThisYearEps": _f(row.get("predictThisYearEps")),
+            "predictNextYearEps": _f(row.get("predictNextYearEps")),
+            "indvAimPriceT": _f(row.get("indvAimPriceT")),
+        })
+    return out
+
+
+def collect_cn_reports(codes: list[str], force: bool = False, stale_days: int = 7) -> None:
+    """Per-ticker EastMoney research reports → cn_reports.parquet.
+
+    Resumable per-ticker (skip if already fresh).  Tolerant of empty/malformed rows —
+    zero-coverage small caps emit an honest empty list in reports_json.
+    codes should be Tushare .SH/.SZ; we strip to 6-digit for the EastMoney endpoint.
+    """
+    OUT.mkdir(parents=True, exist_ok=True)
+    path = OUT / "cn_reports.parquet"
+    have: dict[str, str] = {}
+    stale = False
+    if path.exists() and not force:
+        age_days = (time.time() - path.stat().st_mtime) / 86400
+        stale = stale_days > 0 and age_days >= stale_days
+        if not stale:
+            try:
+                for r in pd.read_parquet(path).to_dict("records"):
+                    have[str(r["ts_code"])] = r["reports_json"]
+            except Exception:
+                pass
+    todo = list(codes) if stale else [c for c in codes if c not in have]
+    print(f"cn_reports: {len(codes)} names, {len(todo)} to fetch", flush=True)
+    done = ok = 0
+    try:
+        for c in todo:
+            code6 = c[:6]
+            rows = _em_reports_one(code6)
+            have[c] = json.dumps(rows, ensure_ascii=False)
+            done += 1
+            if rows:
+                ok += 1
+            if done % 100 == 0 or done == len(todo):
+                print(f"  cn_reports: {done}/{len(todo)} done, {ok} with data", flush=True)
+                _flush_reports(path, have)
+            time.sleep(0.4)
+    except KeyboardInterrupt:
+        print("  interrupted — flushing cn_reports checkpoint", flush=True)
+    _flush_reports(path, have)
+    print(f"cn_reports.parquet: {len(have)} tickers, {ok} with coverage", flush=True)
+
+
+def _flush_reports(path: Path, have: dict) -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame([{"ts_code": k, "reports_json": v} for k, v in sorted(have.items())])
+    df.to_parquet(path, index=False)
+
+
+# ─────────────────────────────── Tushare bulk singles ───────────────────────────────
+def collect_cn_company(force: bool = False) -> None:
+    """Tushare stock_company (SSE+SZSE) → cn_company.parquet.
+
+    Fields: ts_code, website, employees, setup_date, province, city, introduction.
+    One-shot (whole market per exchange), resumable by checking file age.
+    """
+    OUT.mkdir(parents=True, exist_ok=True)
+    path = OUT / "cn_company.parquet"
+    if path.exists() and not force:
+        age_days = (time.time() - path.stat().st_mtime) / 86400
+        if age_days < 30:
+            print(f"cn_company.parquet: fresh ({age_days:.1f}d old) — skip", flush=True)
+            return
+    fields = "ts_code,website,employees,setup_date,province,city,introduction"
+    frames = []
+    for exchange in ("SSE", "SZSE"):
+        f, items = ts_call("stock_company", {"exchange": exchange}, fields)
+        if items:
+            idx = {n: i for i, n in enumerate(f)}
+            rows = []
+            for it in items:
+                row = {"ts_code": it[idx["ts_code"]] if "ts_code" in idx else None}
+                for col in ("website", "employees", "setup_date", "province", "city", "introduction"):
+                    if col in idx:
+                        v = it[idx[col]]
+                        row[col] = (_f(v) if col == "employees" else (v if v else None))
+                rows.append(row)
+            frames.append(pd.DataFrame(rows))
+            print(f"  cn_company {exchange}: {len(rows)} rows", flush=True)
+        time.sleep(0.6)
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if not df.empty:
+        df = df.drop_duplicates(subset=["ts_code"], keep="last")
+        df.to_parquet(path, index=False)
+    print(f"cn_company.parquet: {len(df)} rows", flush=True)
+
+
+def collect_cn_holdernum(force: bool = False) -> None:
+    """Tushare stk_holdernumber (latest well-filed quarter-end, whole market) → cn_holdernum.parquet.
+
+    Walks back through recent quarter-ends and picks the one with the most rows (>= 2000 threshold
+    distinguishes well-filed from in-progress periods; Q1 2026 = 5040 rows, Q2 2026 partial at ~984).
+    """
+    OUT.mkdir(parents=True, exist_ok=True)
+    path = OUT / "cn_holdernum.parquet"
+    if path.exists() and not force:
+        age_days = (time.time() - path.stat().st_mtime) / 86400
+        if age_days < 30:
+            print(f"cn_holdernum.parquet: fresh ({age_days:.1f}d old) — skip", flush=True)
+            return
+    today = dt.date.today()
+    candidate_ends = []
+    for y in (today.year, today.year - 1):
+        for m, d in reversed([(3, 31), (6, 30), (9, 30), (12, 31)]):
+            qe = dt.date(y, m, d)
+            if qe <= today:
+                candidate_ends.append(qe.strftime("%Y%m%d"))
+    best_f, best_items, best_qdate = [], [], None
+    for qdate in candidate_ends[:6]:
+        f, items = ts_call("stk_holdernumber", {"enddate": qdate}, "ts_code,holder_nums,end_date")
+        print(f"  cn_holdernum: {len(items)} rows for {qdate}", flush=True)
+        if len(items) > len(best_items):
+            best_f, best_items, best_qdate = f, items, qdate
+        if len(best_items) >= 2000:
+            break   # good enough — stop walking back
+        time.sleep(0.55)
+    if not best_items:
+        print("cn_holdernum: no data found", flush=True)
+        return
+    idx = {n: i for i, n in enumerate(best_f)}
+    rows = [{"ts_code": it[idx["ts_code"]],
+             "holder_nums": _f(it[idx["holder_nums"]]) if "holder_nums" in idx else None,
+             "end_date": it[idx["end_date"]] if "end_date" in idx else None}
+            for it in best_items]
+    df = pd.DataFrame(rows)
+    df.to_parquet(path, index=False)
+    print(f"cn_holdernum.parquet: {len(df)} rows (from {best_qdate})", flush=True)
+
+
+def collect_cn_disclosure(force: bool = False) -> None:
+    """Tushare disclosure_date (current/latest quarter-end) → cn_disclosure.parquet.
+
+    Pulls for the most recent quarter-end that has data (~5537 rows as per brief).
+    Fields: ts_code, end_date, pre_date, actual_date.
+    """
+    OUT.mkdir(parents=True, exist_ok=True)
+    path = OUT / "cn_disclosure.parquet"
+    if path.exists() and not force:
+        age_days = (time.time() - path.stat().st_mtime) / 86400
+        if age_days < 14:
+            print(f"cn_disclosure.parquet: fresh ({age_days:.1f}d old) — skip", flush=True)
+            return
+    today = dt.date.today()
+    # Try current quarter-end first (already-past quarters have better coverage),
+    # then previous ones as fallback
+    candidate_ends = []
+    for y in (today.year, today.year - 1):
+        for m, d in reversed([(3, 31), (6, 30), (9, 30), (12, 31)]):
+            qe = dt.date(y, m, d)
+            if qe <= today:
+                candidate_ends.append(qe.strftime("%Y%m%d"))
+    fields = "ts_code,ann_date,end_date,pre_date,actual_date"
+    f, items = [], []
+    for qdate in candidate_ends[:3]:
+        f, items = ts_call("disclosure_date", {"end_date": qdate}, fields)
+        if items:
+            print(f"  cn_disclosure: {len(items)} rows for {qdate}", flush=True)
+            break
+        time.sleep(0.55)
+    if not items:
+        print("cn_disclosure: no data found", flush=True)
+        return
+    idx = {n: i for i, n in enumerate(f)}
+    rows = []
+    for it in items:
+        row = {"ts_code": it[idx["ts_code"]] if "ts_code" in idx else None}
+        for col in ("ann_date", "end_date", "pre_date", "actual_date"):
+            row[col] = it[idx[col]] if col in idx else None
+        rows.append(row)
+    df = pd.DataFrame(rows)
+    df.to_parquet(path, index=False)
+    print(f"cn_disclosure.parquet: {len(df)} rows", flush=True)
+
+
 # ─────────────────────────────── driver ───────────────────────────────
 def _arg(argv, flag, default=None):
     return argv[argv.index(flag) + 1] if flag in argv else default
@@ -459,6 +753,11 @@ def main(argv: list[str]) -> None:
     stale_days = int(_arg(argv, "--stale-days", 7) or 7)
     skip_stmt = "--skip-stmt" in argv
     skip_div = "--skip-div" in argv
+    skip_consensus = "--skip-consensus" in argv
+    skip_reports = "--skip-reports" in argv
+    skip_company = "--skip-company" in argv
+    skip_holders = "--skip-holders" in argv
+    skip_disclosure = "--skip-disclosure" in argv
     force = "--force" in argv
 
     only_set = set(s.strip() for s in only.split(",")) if only else None
@@ -485,6 +784,24 @@ def main(argv: list[str]) -> None:
                   "(run without --only to refresh stmt parquets)", flush=True)
         if not skip_div:
             collect_cn_dividends(cn, force, stale_days)
+
+        # Bulk singles: company/holders/disclosure are whole-market one-shots (not name-scoped)
+        if not only_set:
+            if not skip_consensus:
+                collect_cn_consensus(force)
+            if not skip_company:
+                collect_cn_company(force)
+            if not skip_holders:
+                collect_cn_holdernum(force)
+            if not skip_disclosure:
+                collect_cn_disclosure(force)
+        else:
+            print("  --only set: skipping whole-market consensus/company/holders/disclosure "
+                  "(run without --only to refresh them)", flush=True)
+
+        # Per-ticker reports: run for requested universe (resumable)
+        if not skip_reports:
+            collect_cn_reports(cn, force, stale_days)
 
     if market in ("hk", "all"):
         hk = hk_universe()

@@ -8,14 +8,26 @@ Joins the parquets collect_cn_hk_fund.py + collect_cn_deep.py write:
     dividends.parquet                      per-ticker cash-dividend history
     forecast.parquet                       forecast_vip guidance (预增/预减 …) — §1.1 guidance field
     holders.parquet                        top10 float holders → ownership
+    cn_consensus.parquet                   EastMoney bulk consensus EPS/revenue by predict_year
+    cn_reports.parquet                     per-ticker research reports (rating + EPS + target price)
+    cn_company.parquet                     stock_company profile (website/employees/province/city)
+    cn_holdernum.parquet                   stk_holdernumber snapshot (latest filed holder count)
+    cn_disclosure.parquet                  disclosure_date → upcoming earnings pre_date/actual_date
 
 CRITICAL judge rulings honoured:
   - gross_profit = total_revenue − oper_cost (营业成本), NOT total_cogs (营业总成本 bundles selling/
     admin/finance and differs by ~40B for Moutai). opex = total_cogs − oper_cost best-effort.
   - quote_currency = stmt_currency = "CNY".
-  - analyst = null, estimates = null (no A-share street consensus — R5). guidance carries company
-    forecast_vip guidance instead.
   - Annual periods come from Dec-31 (mmdd == 1231) statement rows; quarterly from the four quarter-ends.
+  - estimates.eps_q: null (A-share consensus is annual-only — no quarterly estimates available).
+  - analyst rating mapping (FINAL ruling): 买入→strongBuy, 增持→buy, 中性/持有→hold,
+    减持→sell, 卖出→strongSell; anything else/blank → uncounted.
+  - earnings.q: discrete quarter EPS derived by within-fiscal-year differencing of cumulative rows
+    (Q1 as-is, Qn = cum_n − cum_{n-1}); guard nulls.
+  - next_date/next_period: from cn_disclosure pre_date or actual_date.
+  - beta: computed from OHLC daily returns vs 000001.SS benchmark (250 trading days).
+  - profile.founded/hq/website/employees: from cn_company.
+  - No inst_pct / insider_pct (no clean source).
 
 Terminal ↔ Tushare symbol mapping: terminal uses .SS (Shanghai); Tushare uses .SH. Handled both ways.
 
@@ -25,9 +37,11 @@ Usage:
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 
 import pandas as pd
@@ -150,6 +164,92 @@ def load_holders() -> dict:
             out[code] = json.loads(r.get("holders_json") or "[]")
         except Exception:
             out[code] = []
+    return out
+
+
+def load_consensus() -> dict:
+    """cn_consensus.parquet → {SECUCODE: {year: row}}.
+    SECUCODE is in '000651.SZ' form (exchange-suffixed 6-digit code).
+    """
+    df = _read("cn_consensus.parquet")
+    out: dict = {}
+    if df is None:
+        return out
+    for r in df.to_dict("records"):
+        code = str(r.get("SECUCODE") or "")
+        yr = r.get("PREDICT_YEAR")
+        if not code or yr is None:
+            continue
+        out.setdefault(code, {})[int(yr)] = r
+    return out
+
+
+def load_reports() -> dict:
+    """cn_reports.parquet → {ts_code: [report_row, ...]}."""
+    df = _read("cn_reports.parquet")
+    out: dict = {}
+    if df is None:
+        return out
+    for r in df.to_dict("records"):
+        code = str(r.get("ts_code") or "")
+        if not code:
+            continue
+        try:
+            out[code] = json.loads(r.get("reports_json") or "[]")
+        except Exception:
+            out[code] = []
+    return out
+
+
+def load_company() -> dict:
+    """cn_company.parquet → {ts_code: row}."""
+    df = _read("cn_company.parquet")
+    out: dict = {}
+    if df is None:
+        return out
+    for r in df.to_dict("records"):
+        code = str(r.get("ts_code") or "")
+        if code:
+            out[code] = r
+    return out
+
+
+def load_holdernum() -> dict:
+    """cn_holdernum.parquet → {ts_code: holder_nums (int)}."""
+    df = _read("cn_holdernum.parquet")
+    out: dict = {}
+    if df is None:
+        return out
+    for r in df.to_dict("records"):
+        code = str(r.get("ts_code") or "")
+        n = r.get("holder_nums")
+        if code and n is not None:
+            try:
+                out[code] = int(float(n))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def load_disclosure() -> dict:
+    """cn_disclosure.parquet → {ts_code: {end_date, pre_date, actual_date}}."""
+    df = _read("cn_disclosure.parquet")
+    out: dict = {}
+    if df is None:
+        return out
+    for r in df.to_dict("records"):
+        code = str(r.get("ts_code") or "")
+        if not code:
+            continue
+        # Keep latest end_date per ticker (the parquet may have multiple periods)
+        existing = out.get(code)
+        this_end = str(r.get("end_date") or "")
+        if existing is None or this_end > str(existing.get("end_date") or ""):
+            out[code] = {
+                "end_date": this_end,
+                "pre_date": str(r.get("pre_date") or ""),
+                "actual_date": str(r.get("actual_date") or ""),
+            }
     return out
 
 
@@ -321,18 +421,30 @@ def build_ratios(vrow, frow, annual) -> dict:
             "ev": list(empty), "ev_ebitda": list(empty), "current": cur}
 
 
-def build_stats(vrow, dbrow) -> dict:
+def build_stats(vrow, dbrow, holdernum_map: dict | None = None,
+                sym: str | None = None, data_dir: "Path | None" = None) -> dict:
     def yi_to_raw(v):   # valuation.parquet mktcap is in 亿元 (1e8)
         return round(v * 1e8) if v is not None else None
-    mktcap = shares = flt = beta = None
+    mktcap = shares = flt = None
     if dbrow:   # daily_basic: total_mv/circ_mv in 万元 (1e4); total_share/float_share in 万股 (1e4)
         mktcap = round(_num(dbrow, "total_mv") * 1e4) if _num(dbrow, "total_mv") else None
         shares = round(_num(dbrow, "total_share") * 1e4) if _num(dbrow, "total_share") else None
         flt = round(_num(dbrow, "float_share") * 1e4) if _num(dbrow, "float_share") else None
     if mktcap is None and vrow:
         mktcap = yi_to_raw(_num(vrow, "total_mv_yi"))
+    # num_holders from cn_holdernum (latest filed quarter-end)
+    num_holders = None
+    if holdernum_map and sym:
+        ts = term_to_ts(sym)
+        num_holders = holdernum_map.get(ts)
+    # beta: computed from OHLC JSON vs 000001.SS benchmark (250 trading days).
+    # Always read OHLC from DEFAULT_OUT (terminal/public/data) regardless of the
+    # --out target dir, so that staging/temp-dir runs do not silently null beta.
+    beta = None
+    if sym:
+        beta = _compute_beta(sym, DEFAULT_OUT)
     return {"mktcap": mktcap, "shares_out": shares, "float_shares": flt, "inst_pct": None,
-            "insider_pct": None, "beta": beta, "num_holders": None}
+            "insider_pct": None, "beta": beta, "num_holders": num_holders}
 
 
 def build_dividends(events: list) -> dict:
@@ -365,16 +477,404 @@ def build_ownership(holders: list) -> dict:
     return {"free_float_pct": None, "closely_held_pct": None, "top_inst": top}
 
 
-def build_profile(src: dict) -> dict:
+# ─── EastMoney analyst rating mapping (FINAL ruling) ───────────────────────
+_RATING_MAP: dict[str, str] = {
+    "买入": "strongBuy",
+    "强烈推荐": "strongBuy",
+    "强推": "strongBuy",
+    "增持": "buy",
+    "推荐": "buy",
+    "中性": "hold",
+    "持有": "hold",
+    "审慎推荐": "hold",
+    "减持": "sell",
+    "卖出": "strongSell",
+    "回避": "strongSell",
+}
+_RATING_LABEL: dict[str, str] = {
+    "strongBuy": "Strong buy",
+    "buy": "Buy",
+    "hold": "Hold",
+    "sell": "Sell",
+    "strongSell": "Strong sell",
+}
+_RATING_WEIGHT: dict[str, int] = {
+    "strongBuy": 5, "buy": 4, "hold": 3, "sell": 2, "strongSell": 1,
+}
+
+
+def _secucode_to_ts(secucode: str) -> str:
+    """'000651.SZ' → '000651.SZ'; '600519.SH' → '600519.SH' (Tushare form)."""
+    return secucode  # already in Tushare form from EastMoney datacenter
+
+
+def build_estimates(ts_code: str, consensus_map: dict, reports_map: dict,
+                    stmts: dict, sym: str) -> dict | None:
+    """Build estimates block from EastMoney consensus + per-report EPS aggregation.
+
+    consensus_map: {SECUCODE → {year → row}}  (SECUCODE uses Tushare exchange suffix)
+    reports_map:   {ts_code → [report_row, ...]}
+
+    Revenue unit: CNY raw (TOTAL_OPERATE_INCOME from EastMoney is already in CNY units).
+    Sanity: Moutai 2026 rev consensus ~1.8e11.
+
+    Returns None when no consensus data is available for this ticker.
+    """
+    # EastMoney SECUCODE is ts_code form (e.g. '600519.SH') — map directly
+    cdata = consensus_map.get(ts_code) or {}
+    reports = reports_map.get(ts_code) or []
+
+    years = sorted(yr for yr in (2026, 2027, 2028) if yr in cdata)
+    if not years:
+        return None
+
+    eps_avg, rev_avg = [], []
+    eps_high, eps_low, eps_n = [], [], []
+    rev_high, rev_low, rev_n = [], [], []
+
+    # Per-report EPS aggregation per fiscal year (reports carry this-year / next-year EPS)
+    # Determine which year is "this year" from today
+    today_year = dt.date.today().year
+
+    def _report_eps_for_year(yr: int) -> list:
+        """Extract per-report EPS estimates for a given fiscal year.
+
+        EastMoney semantics: predictThisYearEps is the estimate for the fiscal
+        year that was current AT TIME OF PUBLICATION; predictNextYearEps is for
+        the following fiscal year.  Therefore, for target fiscal year `yr`:
+          - take predictThisYearEps  when pub_year == yr   (report published in yr)
+          - take predictNextYearEps  when pub_year == yr-1 (report published a year earlier)
+          - skip all other reports
+        Using today_year for the slot (the previous bug) contaminated the 2026
+        pool with 2025-published nextYear values and gave wrong n/high/low.
+        """
+        result = []
+        for r in reports:
+            pub = str(r.get("publishDate") or "")[:4]
+            if not pub.isdigit():
+                continue
+            pub_year = int(pub)
+            if pub_year == yr:
+                v = _f(r.get("predictThisYearEps"))
+            elif pub_year == yr - 1:
+                v = _f(r.get("predictNextYearEps"))
+            else:
+                v = None
+            if v is not None:
+                result.append(v)
+        return result
+
+    for yr in years:
+        row = cdata[yr]
+        avg = _f(row.get("EPS"))
+        rev = _f(row.get("TOTAL_OPERATE_INCOME"))
+        eps_avg.append(avg)
+        rev_avg.append(rev)
+
+        per_report = _report_eps_for_year(yr)
+        if per_report:
+            eps_high.append(max(per_report))
+            eps_low.append(min(per_report))
+            eps_n.append(len(per_report))
+            rev_high.append(None)
+            rev_low.append(None)
+            rev_n.append(None)
+        else:
+            eps_high.append(None)
+            eps_low.append(None)
+            eps_n.append(None)
+            rev_high.append(None)
+            rev_low.append(None)
+            rev_n.append(None)
+
+    # Growth: FY1 consensus EPS vs latest annual actual EPS
+    eps_yoy = rev_yoy = None
+    inc = stmts["income"].get(ts_code, {})
+    annual_eps = [(e, _f(r.get("basic_eps"))) for e, r in sorted(inc.items())
+                  if e[4:8] == "1231" and _f(r.get("basic_eps")) is not None]
+    if annual_eps and eps_avg:
+        last_actual_eps = annual_eps[-1][1]
+        fy1_eps = eps_avg[0]
+        if last_actual_eps and last_actual_eps != 0 and fy1_eps is not None:
+            eps_yoy = round((fy1_eps - last_actual_eps) / abs(last_actual_eps), 6)
+
+    annual_rev = [(e, _f(r.get("total_revenue"))) for e, r in sorted(inc.items())
+                  if e[4:8] == "1231" and _f(r.get("total_revenue")) is not None]
+    if annual_rev and rev_avg:
+        last_actual_rev = annual_rev[-1][1]
+        fy1_rev = rev_avg[0]
+        if last_actual_rev and last_actual_rev != 0 and fy1_rev is not None:
+            rev_yoy = round((fy1_rev - last_actual_rev) / abs(last_actual_rev), 6)
+
+    return {
+        "eps_fy": {
+            "periods": [str(yr) for yr in years],
+            "avg": eps_avg,
+            "high": eps_high,
+            "low": eps_low,
+            "n": eps_n,
+        },
+        "rev_fy": {
+            "periods": [str(yr) for yr in years],
+            "avg": rev_avg,
+            "high": rev_high,
+            "low": rev_low,
+            "n": rev_n,
+        },
+        "eps_q": None,   # A-share consensus is annual-only — honest null
+        "growth": {"eps_yoy": eps_yoy, "rev_yoy": rev_yoy},
+    }
+
+
+def build_analyst(ts_code: str, reports_map: dict) -> dict | None:
+    """Build analyst block from per-ticker EastMoney reports.
+
+    Rating mapping (FINAL ruling): 买入→strongBuy, 增持→buy, 中性/持有→hold,
+    减持→sell, 卖出→strongSell; blank/other → uncounted.
+    rating_label: plain-word label of the weighted-mode bucket.
+    target: {mean, high, low, n} from indvAimPriceT when present; null if n=0.
+    """
+    reports = reports_map.get(ts_code) or []
+    if not reports:
+        return None
+
+    dist: dict[str, int] = {"strongBuy": 0, "buy": 0, "hold": 0, "sell": 0, "strongSell": 0}
+    total_weight = 0
+    weighted_sum = 0
+    targets = []
+
+    for r in reports:
+        name = str(r.get("emRatingName") or "").strip()
+        bucket = _RATING_MAP.get(name)
+        if bucket:
+            dist[bucket] += 1
+            w = _RATING_WEIGHT[bucket]
+            total_weight += w
+            weighted_sum += w
+        aim = _f(r.get("indvAimPriceT"))
+        if aim is not None and aim > 0:
+            targets.append(aim)
+
+    total = sum(dist.values())
+    if total == 0:
+        return None
+
+    # Weighted mode: bucket with highest weight score
+    mode_bucket = max(
+        (b for b in dist if dist[b] > 0),
+        key=lambda b: dist[b] * _RATING_WEIGHT[b],
+        default="hold"
+    )
+    rating_label = _RATING_LABEL.get(mode_bucket, "Hold")
+
+    target = None
+    if targets:
+        target = {
+            "mean": round(sum(targets) / len(targets), 4),
+            "high": max(targets),
+            "low": min(targets),
+            "n": len(targets),
+        }
+
+    return {
+        "dist": dist,
+        "rating_label": rating_label,
+        "target": target,
+    }
+
+
+def build_earnings_q(ts_code: str, stmts: dict, disclosure_map: dict) -> list[dict]:
+    """Build earnings.q from last 8 quarters of cumulative income statement rows.
+
+    Discrete quarter EPS = within-fiscal-year differencing:
+      Q1: use cumulative as-is; Qn (n>1): cum_n − cum_{n-1} within same fiscal year.
+    Guards nulls throughout. Returns list of up to 8 rows oldest→newest.
+    """
+    inc = stmts["income"].get(ts_code, {})
+    if not inc:
+        return []
+
+    # All quarter-end rows sorted oldest→newest
+    q_ends = sorted(e for e in inc if e[4:8] in ("0331", "0630", "0930", "1231"))
+
+    # Build discrete EPS/revenue by fiscal year
+    rows: list[dict] = []
+    by_year: dict[str, list] = {}
+    for e in q_ends:
+        yr = e[:4]
+        by_year.setdefault(yr, []).append(e)
+
+    for yr in sorted(by_year):
+        yr_ends = sorted(by_year[yr])
+        for i, e in enumerate(yr_ends):
+            r = inc.get(e, {})
+            cum_eps = _f(r.get("basic_eps"))
+            cum_rev = _f(r.get("total_revenue"))
+            ann_date = r.get("ann_date")
+
+            if i == 0:
+                disc_eps = cum_eps
+                disc_rev = cum_rev
+            else:
+                prev = inc.get(yr_ends[i - 1], {})
+                prev_eps = _f(prev.get("basic_eps"))
+                prev_rev = _f(prev.get("total_revenue"))
+                disc_eps = (cum_eps - prev_eps) if (cum_eps is not None and prev_eps is not None) else None
+                disc_rev = (cum_rev - prev_rev) if (cum_rev is not None and prev_rev is not None) else None
+
+            q_num = {"0331": 1, "0630": 2, "0930": 3, "1231": 4}.get(e[4:8], 0)
+            period_label = f"Q{q_num} {yr}" if q_num else yr
+            end_str = f"{e[:4]}-{e[4:6]}-{e[6:8]}"
+            report_date = None
+            if ann_date:
+                s = str(ann_date)
+                if len(s) == 8 and s.isdigit():
+                    report_date = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+                else:
+                    report_date = s[:10]
+
+            rows.append({
+                "period": period_label,
+                "end": end_str,
+                "report_date": report_date,
+                "eps_a": round(disc_eps, 4) if disc_eps is not None else None,
+                "rev_a": round(disc_rev) if disc_rev is not None else None,
+                "eps_e": None,
+                "rev_e": None,
+                "surp_pct": None,
+            })
+
+    # Return last 8 quarters
+    return rows[-8:]
+
+
+def build_earnings_fy(ts_code: str, stmts: dict) -> list[dict]:
+    """Last 5 annual EPS from Dec-31 rows."""
+    inc = stmts["income"].get(ts_code, {})
+    annual_ends = sorted(e for e in inc if e[4:8] == "1231")[-5:]
+    rows = []
+    for e in annual_ends:
+        r = inc.get(e, {})
+        eps = _f(r.get("basic_eps"))
+        rev = _f(r.get("total_revenue"))
+        rows.append({
+            "period": e[:4],
+            "eps_a": round(eps, 4) if eps is not None else None,
+            "rev_a": round(rev) if rev is not None else None,
+            "eps_e": None,
+            "rev_e": None,
+            "surp_pct": None,
+        })
+    return rows
+
+
+def _next_earnings_info(ts_code: str, disclosure_map: dict) -> tuple[str | None, str | None]:
+    """Return (next_date YYYY-MM-DD, next_period label) from disclosure_map."""
+    rec = disclosure_map.get(ts_code)
+    if not rec:
+        return None, None
+    end_date = rec.get("end_date") or ""
+    pre = rec.get("pre_date") or ""
+    actual = rec.get("actual_date") or ""
+    # Prefer actual_date if available, else pre_date
+    date_str = actual.strip() if actual.strip() else pre.strip()
+    if not date_str:
+        return None, None
+    # Format date
+    if len(date_str) == 8 and date_str.isdigit():
+        date_fmt = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+    else:
+        date_fmt = date_str[:10]
+    # Build period label from end_date
+    period = None
+    if len(end_date) >= 8 and end_date[:8].isdigit():
+        yr, mmdd = end_date[:4], end_date[4:8]
+        q = {"0331": 1, "0630": 2, "0930": 3, "1231": 4}.get(mmdd)
+        period = f"Q{q} {yr}" if q else yr
+    return date_fmt, period
+
+
+def _compute_beta(sym: str, ohlc_dir: "Path") -> float | None:
+    """Compute beta from 250-day daily returns vs 000001.SS benchmark.
+
+    ohlc_dir must be the directory that holds the pre-built OHLC .json files
+    (i.e. DEFAULT_OUT / terminal/public/data), NOT the --out target directory.
+    The two are decoupled so that --out <tempdir> runs do not silently null beta.
+
+    Returns None if benchmark file missing or insufficient data.
+    bench_file = ohlc_dir / '000001.SS.json'
+    sym_file   = ohlc_dir / f'{sym}.json'
+
+    Bars format: [date, open, high, low, close, volume]
+    """
+    bench_path = ohlc_dir / "000001.SS.json"
+    sym_path = ohlc_dir / f"{sym}.json"
+    if not bench_path.exists() or not sym_path.exists():
+        return None
+    try:
+        bench_bars = json.loads(bench_path.read_text()).get("bars") or []
+        sym_bars = json.loads(sym_path.read_text()).get("bars") or []
+    except Exception:
+        return None
+    if not bench_bars or not sym_bars:
+        return None
+    # Build date→close dicts; bars[4] is close
+    def _close_map(bars):
+        m = {}
+        for b in bars:
+            if len(b) >= 5:
+                try:
+                    m[b[0]] = float(b[4])
+                except (TypeError, ValueError):
+                    pass
+        return m
+
+    bmap = _close_map(bench_bars)
+    smap = _close_map(sym_bars)
+    dates = sorted(set(bmap) & set(smap))[-251:]   # last 251 common dates → 250 returns
+    if len(dates) < 50:
+        return None
+    brets = [(bmap[dates[i]] / bmap[dates[i - 1]]) - 1 for i in range(1, len(dates))]
+    srets = [(smap[dates[i]] / smap[dates[i - 1]]) - 1 for i in range(1, len(dates))]
+    n = len(brets)
+    if n < 20:
+        return None
+    mean_b = sum(brets) / n
+    mean_s = sum(srets) / n
+    cov = sum((srets[i] - mean_s) * (brets[i] - mean_b) for i in range(n)) / n
+    var_b = sum((b - mean_b) ** 2 for b in brets) / n
+    if var_b == 0:
+        return None
+    return round(cov / var_b, 3)
+
+
+def build_profile(src: dict, company_row: dict | None = None) -> dict:
     fu = src.get("fundamentals") or {}
     d = fu.get("description")
     desc = d.get("main_business") if isinstance(d, dict) else d
-    return {"website": None, "employees": None, "sector": src.get("sector"),
-            "industry": None, "description": desc, "founded": None, "hq": None}
+    website = employees = founded = hq = None
+    if company_row:
+        website = company_row.get("website") or None
+        emp = company_row.get("employees")
+        employees = int(emp) if emp is not None and emp == emp else None  # NaN guard
+        sd = str(company_row.get("setup_date") or "")
+        if len(sd) == 8 and sd.isdigit():
+            founded = f"{sd[:4]}-{sd[4:6]}-{sd[6:8]}"
+        prov = str(company_row.get("province") or "").strip()
+        city = str(company_row.get("city") or "").strip()
+        hq = f"{prov} {city}".strip() if prov or city else None
+        # Use introduction as fallback description if we have no main_business
+        if not desc:
+            intro = company_row.get("introduction")
+            desc = intro if intro else None
+    return {"website": website, "employees": employees, "sector": src.get("sector"),
+            "industry": None, "description": desc, "founded": founded, "hq": hq}
 
 
 # ─────────────────────────────── emitter ───────────────────────────────
-def build_fund(sym: str, src: dict, stmts, vmap, dbmap, fmap, divmap, fcmap, hmap) -> dict:
+def build_fund(sym: str, src: dict, stmts, vmap, dbmap, fmap, divmap, fcmap, hmap,
+               consensus_map=None, reports_map=None, company_map=None,
+               holdernum_map=None, disclosure_map=None, data_dir=None) -> dict:
     code = term_to_ts(sym)          # tushare code (.SH/.SZ)
     statements = build_statements(stmts, code)
     annual = statements.get("annual")
@@ -384,25 +884,50 @@ def build_fund(sym: str, src: dict, stmts, vmap, dbmap, fmap, divmap, fcmap, hma
     events = divmap.get(code, [])
     fcrow = fcmap.get(sym) or fcmap.get(ts_to_term(code))
     holders = hmap.get(code, [])
+    company_row = (company_map or {}).get(code)
 
     dividends = build_dividends(events)
     ttm = dividends.pop("_ttm_amount", None)
+
+    # Earnings block: discrete quarterly EPS + annual EPS + next date from disclosure
+    earnings_q = build_earnings_q(code, stmts, disclosure_map or {})
+    earnings_fy = build_earnings_fy(code, stmts)
+    next_date, next_period = _next_earnings_info(code, disclosure_map or {})
+
+    # Estimates from EastMoney consensus + reports
+    estimates = None
+    estimates_src = None
+    if consensus_map is not None and reports_map is not None:
+        estimates = build_estimates(code, consensus_map, reports_map, stmts, sym)
+        if estimates is not None:
+            estimates_src = "eastmoney"
+
+    # Analyst from per-ticker reports
+    analyst = None
+    if reports_map is not None:
+        analyst = build_analyst(code, reports_map)
 
     fund = {
         "schema": "mastermind.fund/v1",
         "ticker": sym, "asof": src.get("asof") or ASOF,
         "quote_currency": "CNY", "stmt_currency": "CNY",
         "src": {"statements": "tushare",
-                "estimates": None,
+                "estimates": estimates_src,
                 "dividends": "tushare" if events else None},
-        "profile": build_profile(src),
-        "stats": build_stats(vrow, dbrow),
+        "profile": build_profile(src, company_row),
+        "stats": build_stats(vrow, dbrow, holdernum_map=holdernum_map, sym=sym, data_dir=data_dir),
         "statements": {"annual": annual, "quarterly": statements.get("quarterly")},
         "ratios": build_ratios(vrow, frow, annual),
-        "earnings": {"next_date": None, "next_period": None, "next_eps_est": None, "next_rev_est": None,
-                     "q": [], "fy": []},
-        "estimates": None,        # R5: no A-share street consensus
-        "analyst": None,          # R5
+        "earnings": {
+            "next_date": next_date,
+            "next_period": next_period,
+            "next_eps_est": None,
+            "next_rev_est": None,
+            "q": earnings_q,
+            "fy": earnings_fy,
+        },
+        "estimates": estimates,
+        "analyst": analyst,
         "dividends": dividends,
         "ownership": build_ownership(holders),
         "guidance": build_guidance(fcrow),
@@ -460,8 +985,15 @@ def main(argv: list[str]) -> None:
     divmap = load_dividends()
     fcmap = load_forecast()
     hmap = load_holders()
+    consensus_map = load_consensus()
+    reports_map = load_reports()
+    company_map = load_company()
+    holdernum_map = load_holdernum()
+    disclosure_map = load_disclosure()
     print(f"joins — stmt_income {len(stmts['income'])}, valuation {len(vmap)}, daily_basic {len(dbmap)}, "
-          f"financials {len(fmap)}, dividends {len(divmap)}, forecast {len(fcmap)}, holders {len(hmap)}",
+          f"financials {len(fmap)}, dividends {len(divmap)}, forecast {len(fcmap)}, holders {len(hmap)}, "
+          f"consensus {len(consensus_map)}, reports {len(reports_map)}, "
+          f"company {len(company_map)}, holdernum {len(holdernum_map)}, disclosure {len(disclosure_map)}",
           flush=True)
 
     ok = err = 0
@@ -474,7 +1006,13 @@ def main(argv: list[str]) -> None:
             except Exception:
                 src = {}
         try:
-            fund = build_fund(sym, src, stmts, vmap, dbmap, fmap, divmap, fcmap, hmap)
+            fund = build_fund(sym, src, stmts, vmap, dbmap, fmap, divmap, fcmap, hmap,
+                              consensus_map=consensus_map,
+                              reports_map=reports_map,
+                              company_map=company_map,
+                              holdernum_map=holdernum_map,
+                              disclosure_map=disclosure_map,
+                              data_dir=out_dir)
             atomic_write(out_dir / f"{sym}.fund.json",
                          json.dumps(fund, separators=(",", ":"), ensure_ascii=False, sort_keys=False))
             ok += 1
@@ -482,6 +1020,8 @@ def main(argv: list[str]) -> None:
             err += 1
             if err <= 20:
                 print(f"  ERR {sym}: {exc}", flush=True)
+                if err <= 5:
+                    traceback.print_exc()
     print(f"gen_fund_cn: {ok} written, {err} errors → {out_dir}", flush=True)
 
 

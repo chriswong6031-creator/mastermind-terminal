@@ -90,6 +90,14 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
         { name: pick(!!zh, "Price to sales ratio", "市销率"), values: [], color: "var(--up)" },
       ]
 
+  // Whether ALL historical ratio series are null (common for CN / newly covered names).
+  // In that case: collapse the top chart, hide historical year columns (show only Current).
+  const hasHistoricalRatios = isAnnual && (
+    (fund.ratios?.pe ?? []).some((v) => v != null && isFinite(v as number)) ||
+    (fund.ratios?.ps ?? []).some((v) => v != null && isFinite(v as number)) ||
+    (fund.ratios?.pb ?? []).some((v) => v != null && isFinite(v as number))
+  )
+
   // ── Key stats rows ──
   // These come from fund.stats (not period-indexed by annual/quarterly in v1)
   // We show them as single current-value rows (no period array per §1.1 — stats.shares_out is a scalar)
@@ -145,16 +153,28 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
         </div>
       </div>
 
-      {/* ── Top bar chart: P/E + P/S ── */}
-      <div className="fin-sec">
-        <Bars
-          labels={chartPeriods}
-          series={chartSeries}
-          fmtY={(v) => v.toFixed(2)}
-          height={160}
-          zh={zh}
-        />
-      </div>
+      {/* ── Top bar chart: P/E + P/S — hidden when all historical series null ── */}
+      {hasHistoricalRatios && (
+        <div className="fin-sec">
+          <Bars
+            labels={chartPeriods}
+            series={chartSeries}
+            fmtY={(v) => v.toFixed(2)}
+            height={160}
+            zh={zh}
+          />
+        </div>
+      )}
+      {!hasHistoricalRatios && isAnnual && (
+        <div className="fin-sec">
+          <div className="fin-chart-note" style={{ marginTop: 0 }}>
+            {pick(!!zh,
+              "Historical ratio series (P/E, P/S, P/B) are not yet available for this security.",
+              "该证券历史估值比率（市盈率、市销率、市净率）数据暂不可用。"
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Key stats ── */}
       <div className="fin-sec">
@@ -225,7 +245,8 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
                   <th className="fin-cell fin-cell-sticky fin-cell-corner" scope="col">
                     {pick(!!zh, "Metrics", "指标")}
                   </th>
-                  {annualPeriods.slice(-6).map((p, i) => (
+                  {/* Hide historical period columns when all ratio series are null */}
+                  {hasHistoricalRatios && annualPeriods.slice(-6).map((p, i) => (
                     <th key={i} className="fin-cell fin-cell-num fin-cell-head" scope="col">{p}</th>
                   ))}
                   <th className="fin-cell fin-cell-num fin-cell-head fin-cell-current" scope="col">
@@ -235,8 +256,13 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
               </thead>
               <tbody>
                 <tr className="fin-row fin-stats-grp-hdr">
-                  <th colSpan={annualPeriods.slice(-6).length + 2} className="fin-cell fin-cell-grp" scope="rowgroup">
+                  <th colSpan={(hasHistoricalRatios ? annualPeriods.slice(-6).length : 0) + 2} className="fin-cell fin-cell-grp" scope="rowgroup">
                     {pick(!!zh, "Valuation ratios", "估值比率")}
+                    {!hasHistoricalRatios && (
+                      <span style={{ fontWeight: 500, fontSize: "10px", color: "var(--muted)", marginLeft: "8px" }}>
+                        {pick(!!zh, "— historical series not yet available", "— 历史数据暂不可用")}
+                      </span>
+                    )}
                   </th>
                 </tr>
                 {valRows.map((row, ri) => {
@@ -244,7 +270,7 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
                   return (
                     <tr key={ri} className="fin-row">
                       <th className="fin-cell fin-cell-sticky" scope="row">{row.label}</th>
-                      {annualPeriods.slice(-6).map((_, ci) => (
+                      {hasHistoricalRatios && annualPeriods.slice(-6).map((_, ci) => (
                         <td key={ci} className="fin-cell fin-cell-num">
                           {periodSlice[ci] != null && isFinite(periodSlice[ci] as number)
                             ? (periodSlice[ci] as number).toFixed(2)

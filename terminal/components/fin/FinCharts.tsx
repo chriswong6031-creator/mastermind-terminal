@@ -202,8 +202,18 @@ export function useFinTip() {
  * chart frame — shared axis/grid scaffold
  * ───────────────────────────────────────────────────────────────────────── */
 
-/* padding inside the viewBox (right gutter holds the y-axis tick labels) */
+/* padding inside the viewBox (right gutter holds the y-axis tick labels).
+ * r is now computed dynamically per-chart from the longest formatted tick
+ * label — call `rPad(ticks, fmtY)` to get the right gutter in viewBox px.
+ * The estimate is 6.2px per character (matches the 9.5px font at 1:1 scale),
+ * plus 8px inset gap, clamped to [36, 90]. The static PAD.r fallback is kept
+ * for components that don't call rPad (YearOverlay has its own RPAD). */
 const PAD = { t: 8, r: 46, b: 20, l: 6 };
+const CHAR_W = 6.2;   // px per character at fin-axis-y 9.5px font, 1:1 viewBox scale
+function rPad(tk: number[], fmtY: (v: number) => string): number {
+  const longest = tk.reduce((max, t) => Math.max(max, fmtY(t).length), 0);
+  return Math.min(90, Math.max(36, Math.ceil(longest * CHAR_W) + 8));
+}
 
 /* ─────────────────────────────────────────────────────────────────────────
  * <Bars> — grouped, signed vertical bars
@@ -237,7 +247,8 @@ export function Bars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, noLege
   vw = box.w; vh = height ?? 170;   // viewBox = real px box size → 1:1 scale, no text distortion
   const dom = domain(series, true);
   const tk = ticks(dom, 4);
-  const iw = vw - PAD.l - PAD.r;
+  const PR = rPad(tk, fmtY);
+  const iw = vw - PAD.l - PR;
   const ih = vh - PAD.t - PAD.b;
   const y = (v: number) => PAD.t + ih - ((v - dom[0]) / (dom[1] - dom[0])) * ih;
   const y0 = y(0);
@@ -251,8 +262,8 @@ export function Bars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, noLege
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         {tk.map((t) => (
           <g key={t}>
-            <line className={t === 0 ? "fin-grid fin-grid-0" : "fin-grid"} x1={PAD.l} x2={vw - PAD.r} y1={y(t)} y2={y(t)} />
-            <text className="fin-axis-y" x={vw - PAD.r + 4} y={y(t) + 3}>{fmtY(t)}</text>
+            <line className={t === 0 ? "fin-grid fin-grid-0" : "fin-grid"} x1={PAD.l} x2={vw - PR} y1={y(t)} y2={y(t)} />
+            <text className="fin-axis-y" x={vw - PR + 4} y={y(t) + 3}>{fmtY(t)}</text>
           </g>
         ))}
         {labels.map((lb, i) => {
@@ -274,7 +285,7 @@ export function Bars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, noLege
         })}
       </svg>
       </div>
-      <XAxis labels={labels} boxW={box.w} />
+      <XAxis labels={labels} boxW={box.w} rpad={PR} />
       {!noLegend && <Legend series={series} />}
       <FinTip tip={tip} />
     </div>
@@ -302,7 +313,8 @@ export function StackedBars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180,
   const totals = labels.map((_, i) => series.reduce((a, s) => a + Math.max(0, num(s.values[i]) ? (s.values[i] as number) : 0), 0));
   const hi = Math.max(...totals, 1);
   const tk = ticks([0, hi], 4);
-  const iw = vw - PAD.l - PAD.r;
+  const PR = rPad(tk, fmtY);
+  const iw = vw - PAD.l - PR;
   const ih = vh - PAD.t - PAD.b;
   const y = (v: number) => PAD.t + ih - (v / hi) * ih;
   const slot = iw / Math.max(1, labels.length);
@@ -314,8 +326,8 @@ export function StackedBars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180,
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         {tk.map((t) => (
           <g key={t}>
-            <line className="fin-grid" x1={PAD.l} x2={vw - PAD.r} y1={y(t)} y2={y(t)} />
-            <text className="fin-axis-y" x={vw - PAD.r + 4} y={y(t) + 3}>{fmtY(t)}</text>
+            <line className="fin-grid" x1={PAD.l} x2={vw - PR} y1={y(t)} y2={y(t)} />
+            <text className="fin-axis-y" x={vw - PR + 4} y={y(t) + 3}>{fmtY(t)}</text>
           </g>
         ))}
         {labels.map((lb, i) => {
@@ -339,7 +351,7 @@ export function StackedBars({ labels, series, fmtY = fmtNum, vw = 320, vh = 180,
         })}
       </svg>
       </div>
-      <XAxis labels={labels} boxW={box.w} />
+      <XAxis labels={labels} boxW={box.w} rpad={PR} />
       {!noLegend && <Legend series={series} />}
       <FinTip tip={tip} />
     </div>
@@ -382,7 +394,8 @@ export function LineSeries({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, 
   const withRef = refLine != null ? [...series, { name: "__ref", values: [refLine] }] : series;
   const dom = domain(withRef, includeZero);
   const tk = ticks(dom, 4);
-  const iw = vw - PAD.l - PAD.r;
+  const PR = rPad(tk, fmtY);
+  const iw = vw - PAD.l - PR;
   const ih = vh - PAD.t - PAD.b;
   const n = labels.length;
   const x = (i: number) => PAD.l + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
@@ -395,11 +408,11 @@ export function LineSeries({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, 
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         {tk.map((t) => (
           <g key={t}>
-            <line className="fin-grid" x1={PAD.l} x2={vw - PAD.r} y1={y(t)} y2={y(t)} />
-            <text className="fin-axis-y" x={vw - PAD.r + 4} y={y(t) + 3}>{fmtY(t)}</text>
+            <line className="fin-grid" x1={PAD.l} x2={vw - PR} y1={y(t)} y2={y(t)} />
+            <text className="fin-axis-y" x={vw - PR + 4} y={y(t) + 3}>{fmtY(t)}</text>
           </g>
         ))}
-        {refLine != null && <line className="fin-refline" x1={PAD.l} x2={vw - PAD.r} y1={y(refLine)} y2={y(refLine)} />}
+        {refLine != null && <line className="fin-refline" x1={PAD.l} x2={vw - PR} y1={y(refLine)} y2={y(refLine)} />}
         {series.map((s, si) => {
           const col = s.color ?? PALETTE[si % PALETTE.length];
           const pts: string[] = [];
@@ -419,7 +432,7 @@ export function LineSeries({ labels, series, fmtY = fmtNum, vw = 320, vh = 180, 
         ))}
       </svg>
       </div>
-      <XAxis labels={labels} boxW={box.w} />
+      <XAxis labels={labels} boxW={box.w} rpad={PR} />
       {!noLegend && <Legend series={series} />}
       <FinTip tip={tip} />
     </div>
@@ -461,7 +474,8 @@ export function ComboChart({ labels, bars, line, fmtBar = fmtNum, fmtLine = (v) 
   const bdom = domain(bars, true);
   const btk = ticks(bdom, 4);
   const ldom = domain([line], false);
-  const iw = vw - PAD.l - PAD.r;
+  const PR = rPad(btk, fmtBar);
+  const iw = vw - PAD.l - PR;
   const ih = vh - PAD.t - PAD.b;
   const yb = (v: number) => PAD.t + ih - ((v - bdom[0]) / (bdom[1] - bdom[0])) * ih;
   const yl = (v: number) => PAD.t + ih - ((v - ldom[0]) / (ldom[1] - ldom[0])) * ih;
@@ -481,8 +495,8 @@ export function ComboChart({ labels, bars, line, fmtBar = fmtNum, fmtLine = (v) 
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         {btk.map((t) => (
           <g key={t}>
-            <line className={t === 0 ? "fin-grid fin-grid-0" : "fin-grid"} x1={PAD.l} x2={vw - PAD.r} y1={yb(t)} y2={yb(t)} />
-            <text className="fin-axis-y" x={vw - PAD.r + 4} y={yb(t) + 3}>{fmtBar(t)}</text>
+            <line className={t === 0 ? "fin-grid fin-grid-0" : "fin-grid"} x1={PAD.l} x2={vw - PR} y1={yb(t)} y2={yb(t)} />
+            <text className="fin-axis-y" x={vw - PR + 4} y={yb(t) + 3}>{fmtBar(t)}</text>
           </g>
         ))}
         {labels.map((lb, i) => {
@@ -506,7 +520,7 @@ export function ComboChart({ labels, bars, line, fmtBar = fmtNum, fmtLine = (v) 
         {line.values.map((v, i) => num(v) ? <circle key={i} className="fin-node" cx={PAD.l + slot * i + slot / 2} cy={yl(v as number)} r={2.4} fill={lcol} /> : null)}
       </svg>
       </div>
-      <XAxis labels={labels} boxW={box.w} />
+      <XAxis labels={labels} boxW={box.w} rpad={PR} />
       {!noLegend && <Legend series={[...bars, { name: line.name, values: [], color: lcol }]} />}
       <FinTip tip={tip} />
     </div>
@@ -561,7 +575,8 @@ export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFr
   points.forEach((p) => { if (num(p.actual)) vals.push(p.actual as number); if (num(p.estimate)) vals.push(p.estimate as number); });
   const dom = domain([{ name: "", values: vals }], true);
   const tk = ticks(dom, 4);
-  const iw = vw - PAD.l - PAD.r;
+  const PR = rPad(tk, fmtY);
+  const iw = vw - PAD.l - PR;
   const ih = vh - PAD.t - PAD.b;
   const y = (v: number) => PAD.t + ih - ((v - dom[0]) / (dom[1] - dom[0])) * ih;
   const slot = iw / Math.max(1, points.length);
@@ -582,8 +597,8 @@ export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFr
         )}
         {tk.map((t) => (
           <g key={t}>
-            <line className="fin-grid" x1={PAD.l} x2={vw - PAD.r} y1={y(t)} y2={y(t)} />
-            <text className="fin-axis-y" x={vw - PAD.r + 4} y={y(t) + 3}>{fmtY(t)}</text>
+            <line className="fin-grid" x1={PAD.l} x2={vw - PR} y1={y(t)} y2={y(t)} />
+            <text className="fin-axis-y" x={vw - PR + 4} y={y(t) + 3}>{fmtY(t)}</text>
           </g>
         ))}
         {points.map((p, i) => {
@@ -606,7 +621,7 @@ export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFr
         })}
       </svg>
       </div>
-      <XAxis labels={labels} boxW={box.w} />
+      <XAxis labels={labels} boxW={box.w} rpad={PR} />
       {!noLegend && (
         <div className="fin-legend">
           <span className="fin-leg"><i className="fin-leg-dot" style={{ background: actualColor }} />{pick(!!zh, "Actual", "实际")}</span>
@@ -822,7 +837,8 @@ export function Waterfall({ steps, fmtY = fmtNum, vw = 340, vh = 200, zh, height
   const hi = Math.max(0, ...bars.map((b) => b.hi));
   const dom: [number, number] = [lo - (hi - lo) * 0.06, hi + (hi - lo) * 0.06];
   const tk = ticks(dom, 4);
-  const iw = vw - PAD.l - PAD.r;
+  const PR = rPad(tk, fmtY);
+  const iw = vw - PAD.l - PR;
   const ih = vh - PAD.t - PAD.b;
   const y = (v: number) => PAD.t + ih - ((v - dom[0]) / (dom[1] - dom[0])) * ih;
   const slot = iw / Math.max(1, bars.length);
@@ -835,8 +851,8 @@ export function Waterfall({ steps, fmtY = fmtNum, vw = 340, vh = 200, zh, height
       <svg viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg" aria-hidden>
         {tk.map((t) => (
           <g key={t}>
-            <line className={t === 0 ? "fin-grid fin-grid-0" : "fin-grid"} x1={PAD.l} x2={vw - PAD.r} y1={y(t)} y2={y(t)} />
-            <text className="fin-axis-y" x={vw - PAD.r + 4} y={y(t) + 3}>{fmtY(t)}</text>
+            <line className={t === 0 ? "fin-grid fin-grid-0" : "fin-grid"} x1={PAD.l} x2={vw - PR} y1={y(t)} y2={y(t)} />
+            <text className="fin-axis-y" x={vw - PR + 4} y={y(t) + 3}>{fmtY(t)}</text>
           </g>
         ))}
         {bars.map((b, i) => {
@@ -858,7 +874,7 @@ export function Waterfall({ steps, fmtY = fmtNum, vw = 340, vh = 200, zh, height
         })}
       </svg>
       </div>
-      <XAxis labels={labels} small boxW={box.w} />
+      <XAxis labels={labels} small boxW={box.w} rpad={PR} />
       <FinTip tip={tip} />
     </div>
   );
@@ -1193,10 +1209,11 @@ export function MiniTable({ periods, rows, fmt = fmtNum, showChange, pageSize = 
  */
 const MIN_LABEL_PX = 44;   // horizontal budget per straight (centered, non-rotated) label
 const MIN_LABEL_PX_ROT = 26;   // rotated labels pack tighter
-function XAxis({ labels, small, boxW }: { labels: string[]; small?: boolean; boxW?: number }) {
+function XAxis({ labels, small, boxW, rpad }: { labels: string[]; small?: boolean; boxW?: number; rpad?: number }) {
   const n = labels.length;
-  // usable width ≈ box minus the y-axis gutter the .fin-xaxis padding reserves (~56px).
-  const usable = Math.max(0, (boxW ?? 0) - 56);
+  // usable width ≈ box minus the y-axis gutter (dynamic rpad when supplied, else ~56px default).
+  const gutterPx = rpad != null ? rpad + 8 : 56;
+  const usable = Math.max(0, (boxW ?? 0) - gutterPx);
   const maxTicks = boxW ? Math.max(2, Math.floor(usable / MIN_LABEL_PX)) : n;
   const needsThin = n > maxTicks;
   // How many labels survive straight thinning — if too few on a dense axis, rotate.
@@ -1216,8 +1233,12 @@ function XAxis({ labels, small, boxW }: { labels: string[]; small?: boolean; box
   // stay whole instead of being clipped to "Q2 '.." on narrow containers.
   const visibleCount = rotate ? n : labels.filter((_, i) => keep(i)).length;
   const size = small || visibleCount > 8 ? " fin-xaxis-xs" : visibleCount > 5 ? " fin-xaxis-sm" : "";
+  // Sync the HTML x-axis right padding to the SVG's right gutter so labels
+  // sit under their bars/points. The base CSS rule has 50px; override when rpad
+  // is supplied (rpad + 8px breathing room to match the SVG text inset).
+  const xAxisStyle = rpad != null ? { paddingRight: rpad + 8 + "px" } : undefined;
   return (
-    <div className={"fin-xaxis" + size + (rotate ? " fin-xaxis-rot" : "")}>
+    <div className={"fin-xaxis" + size + (rotate ? " fin-xaxis-rot" : "")} style={xAxisStyle}>
       {labels.map((l, i) => (
         <span key={i} className="fin-xlbl">{keep(i) ? l : ""}</span>
       ))}
