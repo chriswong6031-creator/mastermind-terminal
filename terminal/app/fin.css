@@ -41,7 +41,7 @@
 .fin-sec-h.link:hover .chev{color:var(--brand-2)}
 .fin-sec-cap{font:500 11.5px/1.45 var(--font-ui);color:var(--text-2);margin-bottom:13px}
 /* muted one-liner under a chart clarifying a basis/caveat (e.g. constant-mktcap P/S) */
-.fin-chart-note{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:7px}
+.fin-chart-note{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:7px;padding-bottom:6px}
 
 /* ── responsive grids ── */
 .fin-grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -53,7 +53,17 @@
   .fin-pane>.fin-body>.fin-sec,.fin-pane>.fin-body>.fin-grid2,.fin-pane>.fin-body>.fin-grid3,.fin-pane>.fin-body>.fin-grid4,.fin-pane>.fin-body>.fin-body,.fin-seas>.fin-table-scroll{max-width:1440px;margin-left:auto;margin-right:auto}
   .fin-seas>.fin-sec{max-width:1320px;margin-left:0;margin-right:0}
 }
-@media (max-width:640px){.fin-grid2,.fin-grid3,.fin-grid4{grid-template-columns:1fr}.fin-body{padding:14px 12px 60px}}
+@media (max-width:640px){
+  .fin-grid2,.fin-grid3,.fin-grid4{grid-template-columns:1fr}
+  .fin-body{padding:14px 12px 60px}
+  /* ensure cards never bleed past viewport */
+  .fin-card{max-width:100%;box-sizing:border-box;overflow:hidden}
+  /* inner overflow scrolling for wide tables/charts inside cards */
+  .fin-card .fin-table-scroll,.fin-card .fin-svg-box,.fin-card table{overflow-x:auto;max-width:100%}
+  /* x-axis font floors */
+  .fin-xaxis-sm{font-size:9px}
+  .fin-xaxis-xs{font-size:9px}
+}
 
 /* ── card ── */
 .fin-card{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:var(--sp-3);box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
@@ -140,6 +150,14 @@
 .fin-leg-dot{width:8px;height:8px;border-radius:50%;flex:none}
 .fin-leg-ring{background:transparent!important;border:1.4px solid var(--text-2);box-sizing:border-box}
 .fin-leg-dotted{background:linear-gradient(90deg,var(--muted) 55%,transparent 0) 0/4px 2px repeat-x!important;border-radius:0;height:2px;width:12px}
+
+/* ── waterfall x-axis (staggered collision-avoidance) ── */
+.fin-wf-xaxis{display:flex;justify-content:space-between;padding:6px 0 0 8px;font:500 7.5px/1 var(--font-num);color:var(--muted)}
+/* low-row label: pushed down by one row height + a connector gap */
+.fin-wf-xlbl{white-space:nowrap;text-align:center;flex:1 1 0;min-width:0;display:inline-flex;flex-direction:column;align-items:center}
+.fin-wf-xlbl-lo{margin-top:12px}
+/* two-line wrap: each line is its own block */
+.fin-wf-lline{display:block;line-height:1.2}
 
 /* ── donut ── */
 .fin-donut{display:flex;flex-direction:column;align-items:center;gap:12px}
@@ -383,6 +401,9 @@
 .fin-fc-bracket.t-cur .lbl{background:var(--brand)}
 .fin-fc-bracket.t-down .lbl{background:var(--down)}
 
+/* Forecast band annotation: positioned at the right ~16% of the chart area */
+.fin-fc-forecast-ann{position:absolute;top:6px;right:0;width:16%;text-align:center;font:600 9px/1 var(--font-ui);color:var(--muted);letter-spacing:.04em;text-transform:uppercase;pointer-events:none;border-left:1px dashed var(--line-3);padding-left:4px}
+
 /* ── Forecast: analyst rating distribution ── */
 .fin-fc-dist{display:flex;flex-direction:column;gap:7px;margin-top:14px}
 .fin-fc-dist-row{display:flex;align-items:center;gap:10px;font:500 12px/1 var(--font-ui)}
@@ -515,6 +536,13 @@
 .sig-desk-head{font:650 12.5px/1.4 var(--font-ui);color:var(--text);margin-top:5px}
 .sig-desk-gloss{font:500 11.5px/1.5 var(--font-ui);color:var(--text-2);margin-top:3px}
 .sig-desk-rank{font:600 10.5px/1 var(--font-num);color:var(--muted);margin-top:6px}
+.sig-desk-tech{display:flex;align-items:baseline;gap:6px;margin-top:6px;font:600 10.5px/1 var(--font-ui)}
+.sig-desk-tech-k{color:var(--muted);flex:none}
+.sig-desk-tech-v{font-weight:700}
+.sig-desk-tech-score{font:600 10px/1 var(--font-num);opacity:.8}
+.sig-stale-note{margin-top:7px;font:500 10px/1.4 var(--font-ui);color:var(--muted)}
+.sig-caution-chip{margin-top:6px;font:600 10.5px/1 var(--font-ui);color:var(--warn);background:rgba(232,163,61,.08);border:1px solid rgba(232,163,61,.22);border-radius:var(--r);padding:4px 9px}
+.sig-context-chip{margin-top:6px;font:600 10.5px/1 var(--font-ui);color:var(--up);background:rgba(38,194,129,.06);border:1px solid rgba(38,194,129,.2);border-radius:var(--r);padding:4px 9px}
 .sig-caveat{margin-top:10px;font:500 10.5px/1.4 var(--font-ui);color:var(--muted);font-style:italic}
 /* drivers / cautions */
 .sig-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
@@ -834,6 +862,12 @@
 .fin-row-older:hover{opacity:1}
 .fin-insider-show-older{display:flex;align-items:center;gap:5px;font:500 12px/1 var(--font-ui);color:var(--brand);background:none;border:none;cursor:pointer;padding:8px 0;margin-top:2px}
 .fin-insider-show-older:hover{color:var(--brand-2)}
+
+/* ── fin-xlbl font floor at mobile ── */
+@media (max-width:860px){
+  .fin-xlbl{font-size:10px}
+  .fin-xaxis-xs .fin-xlbl,.fin-xaxis-sm .fin-xlbl{font-size:10px}
+}
 
 /* ── workspace-slot mode (desktop only): MegaPane rendered inside .workspace instead of as a fixed overlay ──
  * On desktop (>860px) .fin-pane--workspace overrides fixed positioning so the pane fills the

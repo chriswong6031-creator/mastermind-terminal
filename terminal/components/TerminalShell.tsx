@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useIsMobile } from "@/lib/useMediaQuery";
+import MobileSheet from "@/components/ui/MobileSheet";
 import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
@@ -8,7 +10,8 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
-import { AppNav, TOP as NAV_TOP, Glyph as NavGlyph } from "@/components/AppNav";
+import { AppNav } from "@/components/AppNav";
+import MobileNav from "@/components/MobileNav";
 import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
 import { intradayCapable } from "@/components/ChartPanel";
@@ -279,6 +282,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [objectTreeOpen, setObjectTreeOpen] = useState(false);
   // D1: indicator value lookup by bar time — populated by the active ChartPane after each data load
   const [indRowsAt, setIndRowsAt] = useState<((barTime: string | number) => Record<string, number | null>) | null>(null);
+  // B3: sub-pane count for mobile chart-body height formula (--subpanes CSS var)
+  const [subPanes, setSubPanes] = useState(0);
+  const onPaneCount = useCallback((n: number) => setSubPanes(n), []);
   // D2: chart templates — save-as modal
   const [tmplSaveOpen, setTmplSaveOpen] = useState(false);
   const [tmplSaveName, setTmplSaveName] = useState("");
@@ -312,6 +318,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const wsMounted = useRef(false);
   const t = useT();
   const { lang } = useLang();
+  const isMobile = useIsMobile();
   const navPath = usePathname();
   // ── urlSearch: window.location.search alternative to useSearchParams() ──────
   // TerminalShell is always dynamically-rendered (server-side, on demand) so the
@@ -337,7 +344,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, []);
   // mobile + fullscreen + expanded-analysis state
   const [fullChart, setFullChart] = useState(false);
-  const [drawer, setDrawer] = useState(false);
   // SSR-consistent default; the persisted width is read after mount (below) so the server- and
   // client-rendered `--rail-w` style always agree on the first paint (no hydration mismatch).
   const [railW, setRailW] = useState<number>(360);
@@ -1252,20 +1258,18 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <SettingsMenu email={email} />
       </header>
 
-      {/* ── mobile top bar — left slot: a prominent "Back to Dashboard" button when the user came from the
-           Macro Dashboard, otherwise the menu button. When Back claims the left, the menu moves into the
-           right cluster so the hamburger always has a home. ── */}
-      <div className={`mobilebar${fromMacro ? " from-macro" : ""}`}>
-        {fromMacro
-          ? <button className="m-back-prom breathe" onClick={onBack} aria-label={t("backToDashboard")}><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg><span>{t("dashboard")}</span></button>
-          : <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg></button>}
-        <span className="m-brand"><BrandMark size={22} /><b>MASTERMIND</b></span>
-        <div className="m-right">
-          {fromMacro && <button className="m-ic" onClick={() => setDrawer(true)} aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" /></svg></button>}
-          <button className="m-ic" onClick={() => setCopilot(true)} aria-label="Mastermind AI"><svg viewBox="0 0 24 24" style={{ fill: "var(--brand-2)", stroke: "none" }}><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg></button>
-          <SettingsMenu email={email} />
-        </div>
-      </div>
+      {/* ── mobile top bar + drawer (shared component) ── */}
+      <MobileNav
+        email={email}
+        fromMacro={fromMacro}
+        onBack={onBack}
+        onOpenCopilot={() => setCopilot(true)}
+        isTerminal
+        activeKey={(() => {
+          const pane = new URLSearchParams(urlSearch).get("pane");
+          return (pane === "analyst" || pane === "forecast") ? "analyst" : "chart";
+        })()}
+      />
       {/* ── mobile symbol bar (tap → search) ── */}
       <div className="m-symbar" onClick={() => { setSeed(""); setSearchOpen(true); }}>
         <span className="m-sym"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span><b>{active}</b><svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></span>
@@ -1293,6 +1297,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                   <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2 10.5V12h1.5l5-5-1.5-1.5-5 5zM11.3 3.7a.9.9 0 0 0 0-1.3l-.7-.7a.9.9 0 0 0-1.3 0L8 3l2 2 1.3-1.3z" /></svg>
                 </button>
               </div>
+              {/* desktop TF grid (hidden on mobile via CSS) */}
               <div className={`tfgrid${tfOpen ? " show" : ""}`} onClick={(e) => e.stopPropagation()}>
                 {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{t(TFG_TKEY[g])}</div>{items.map((tfi) => { const fn = FUNCTIONAL.has(tfi); const fav = favTF.includes(tfi);
                   return <div key={tfi} className={`it${tf === tfi ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
@@ -1300,12 +1305,44 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                     <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
                   </div>; })}</div>))}
               </div>
+              {/* mobile TF bottom sheet */}
+              {isMobile && (
+                <MobileSheet open={tfOpen} onClose={() => setTfOpen(false)} title={t("tfSheetTitle")}>
+                  {TF_GROUPS.map(([g, items]) => (
+                    <div key={g}>
+                      <div className="msheet-ghd">{t(TFG_TKEY[g])}</div>
+                      {items.map((tfi) => {
+                        const fn = FUNCTIONAL.has(tfi);
+                        const fav = favTF.includes(tfi);
+                        return (
+                          <div key={tfi} className={`msheet-row${tf === tfi ? " on" : ""}${fn ? "" : ""}`} style={fn ? {} : { opacity: 0.45 }} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
+                            <span style={{ flex: 1 }}>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 8, fontSize: 11 }}>{t("liveFeed")}</span>}</span>
+                            <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }} style={{ padding: "0 4px" }}><svg viewBox="0 0 24 24" width={16} height={16}><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </MobileSheet>
+              )}
             </div>
             <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !ctOpen; closeAll(); setCtOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h3M14 4v16M14 9h3" /></svg>{t(CT_TKEY[chartType])}<span style={{ color: "var(--muted)" }}>▾</span></button>
+              {/* desktop popover (hidden on mobile via CSS) */}
               <div className={`pop${ctOpen ? " show" : ""}`} style={{ top: 32, left: 0 }} onClick={(e) => e.stopPropagation()}>
                 {CHART_TYPES.map(([k]) => <div key={k} className="set-row" style={chartType === k ? { color: "var(--brand-2)" } : {}} onClick={() => { setChartType(k); setCtOpen(false); }}>{t(CT_TKEY[k])}</div>)}
               </div>
+              {/* mobile bottom sheet */}
+              {isMobile && (
+                <MobileSheet open={ctOpen} onClose={() => setCtOpen(false)} title={t("ctSheetTitle")}>
+                  {CHART_TYPES.map(([k]) => (
+                    <div key={k} className={`msheet-row${chartType === k ? " on" : ""}`} onClick={() => { setChartType(k); setCtOpen(false); }}>
+                      {t(CT_TKEY[k])}
+                      {chartType === k && <span style={{ marginLeft: "auto" }}>✓</span>}
+                    </div>
+                  ))}
+                </MobileSheet>
+              )}
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
             <div className="seg tool-adv" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
@@ -1399,7 +1436,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             onBack={() => setTableViewOpen(false)}
           />
         ) : view === "price" ? (
-          <div className="chart-body">
+          <div className="chart-body" style={{ "--subpanes": subPanes } as React.CSSProperties}>
             <DrawingSidebar
               tool={tool}
               magnet={magnet}
@@ -1418,6 +1455,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                   lockedVLine={lockedVLine}
                   onSetLockedVLine={(t2) => setLockedVLine(t2)}
                   onIndRowsAt={(fn) => setIndRowsAt(() => fn)}
+                  onPaneCount={i === 0 ? onPaneCount : undefined}
                 />
               ))}
             </div>
@@ -1432,7 +1470,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                     return def && def.kind === "overlay";
                   }).map((k): OTEntry => {
                     const def = (IND_DEFS as any)[k];
-                    return { key: k, label: def?.label ?? k, tag: def?.tag ?? k, kind: "overlay", hidden: hidden.has(k), noRemove: k === "_oracle" };
+                    return { key: k, label: def?.label ?? k, tag: def?.tag ?? k, kind: "overlay", hidden: hidden.has(k) };
                   }),
                   // pine scripts (all enabled ones — ChartPanel handles pane vs overlay distinction)
                   ...pineScripts.map((s): OTEntry => ({
@@ -1691,7 +1729,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <OracleDash sym={active} row={m} slice={slice} intel={intel} bars={bars} zh={lang === "zh"} onClose={() => setSignalsOpen(false)} onJump={(ts: string) => { window.dispatchEvent(new CustomEvent("mm:chart-jump", { detail: { ts } })); setSignalsOpen(false); }} onOpenFull={() => { setSignalsOpen(false); setPaneOpen("overview"); }} />
       )}
 
-      {/* ── mobile nav drawer ── */}
       {/* ── D2 Save-template-as modal ─── */}
       {tmplSaveOpen && (
         <div className="tmpl-modal-bg" onClick={(e) => { if (e.target === e.currentTarget) setTmplSaveOpen(false); }}>
@@ -1749,37 +1786,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         </div>
       )}
 
-      <div className={`m-drawer-scrim${drawer ? " open" : ""}`} onClick={() => setDrawer(false)} />
-      <div className={`m-drawer${drawer ? " open" : ""}`}>
-        <div className="m-drawer-h"><BrandLockup /></div>
-        <nav className="m-nav">
-          {/* Derived from AppNav's exported TOP so the mobile drawer + desktop rail can't drift (task 6).
-              Active-key logic mirrors AppNav (chart vs analyst-pane disambiguated by ?pane=). */}
-          {(() => {
-            const pane = new URLSearchParams(urlSearch).get("pane");
-            const activeKey = navPath.startsWith("/terminal") && (pane === "analyst" || pane === "forecast") ? "analyst"
-              : navPath.startsWith("/screener") ? "screener" : navPath.startsWith("/scripts") ? "scripts"
-              : navPath.startsWith("/portfolio") ? "portfolio" : navPath.startsWith("/alerts") ? "alerts"
-              : navPath.startsWith("/flow") ? "flow" : "chart";
-            return NAV_TOP.map((it) => {
-              // "analyst" opens the in-shell pane rather than navigating — mirror AppNav's dispatch.
-              const isAnalyst = it.k === "analyst";
-              const onNav = () => { setDrawer(false); if (isAnalyst && navPath.startsWith("/terminal")) window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "analyst" })); };
-              return (
-                <Link key={it.k} href={it.href} className={it.k === activeKey ? "on" : ""} onClick={onNav}>
-                  <NavGlyph k={it.k} />
-                  {t(it.k, it.label)}
-                </Link>
-              );
-            });
-          })()}
-          <button onClick={() => { setDrawer(false); setCopilot(true); }}>
-            <svg viewBox="0 0 24 24" style={{ fill: "var(--brand-2)", stroke: "none" }}><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>
-            {t("ai")}
-          </button>
-        </nav>
-        <div className="m-drawer-ft"><SettingsMenu email={email} /></div>
-      </div>
     </div>
   );
 }

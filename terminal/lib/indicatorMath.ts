@@ -6,21 +6,33 @@ export type Bar = { time: string; o: number; h: number; l: number; c: number; v:
 
 // ─── Basic helpers ─────────────────────────────────────────────────────────────
 
-/** Wilder RMA (same as techRating.ts — matches LWC RSI/ATR). */
+/** Wilder RMA (standard Wilder smoothing — SMA seed over first `len` finite values,
+ *  then recursive α=1/len smoothing).  Matches techRating.ts and standard TV/Pine behaviour.
+ *  Null/non-finite inputs carry the last value forward (no output produced until seeded). */
 export function rma(src: (number | null)[], len: number): (number | null)[] {
   const out: (number | null)[] = Array(src.length).fill(null);
   const a = 1 / len;
   let prev: number | null = null;
+  // Collect indices of finite values for seed window tracking.
+  let finiteCount = 0;
+  let seedSum = 0;
   for (let i = 0; i < src.length; i++) {
     const v = src[i];
-    if (v == null || !isFinite(v)) { out[i] = prev; continue; }
+    if (v == null || !isFinite(v)) {
+      // carry forward without advancing the seed count
+      out[i] = prev;
+      continue;
+    }
     if (prev == null) {
-      if (i >= len - 1) {
-        let s = 0, cnt = 0;
-        for (let j = i - len + 1; j <= i; j++) { const x = src[j]; if (x != null && isFinite(x)) { s += x; cnt++; } }
-        prev = cnt ? s / cnt : null;
+      // accumulate seed window
+      seedSum += v;
+      finiteCount++;
+      if (finiteCount === len) {
+        // Standard Wilder: seed = SMA of first `len` finite values
+        prev = seedSum / len;
         out[i] = prev;
       }
+      // Before seed is complete, output stays null
     } else {
       prev = a * v + (1 - a) * prev;
       out[i] = prev;
@@ -207,11 +219,14 @@ export function supertrend(bars: Bar[], period = 10, mult = 3): SupertrendResult
     const basicDn = hl2 + mult * a;
 
     // Wilder-style: only tighten the trail, never widen.
-    // Test the flip against the PREVIOUS final rails BEFORE resetting them — matching Pine:
+    // Band-carry comparison uses PRIOR bar close (close[1] in Pine), not current close.
+    // Pine reference:
     //   upLine := close[1] > upLine[1] ? math.max(basicUp, upLine[1]) : basicUp
+    //   dnLine := close[1] < dnLine[1] ? math.min(basicDn, dnLine[1]) : basicDn
     //   trend  := close < upLine[1] ? false : (close > dnLine[1] ? true : trend[1])
-    const finalUp: number = prevUp != null && bars[i].c > prevUp ? Math.max(basicUp, prevUp) : basicUp;
-    const finalDn: number = prevDn != null && bars[i].c < prevDn ? Math.min(basicDn, prevDn) : basicDn;
+    const priorClose = i > 0 ? bars[i - 1].c : bars[i].c;
+    const finalUp: number = prevUp != null && priorClose > prevUp ? Math.max(basicUp, prevUp) : basicUp;
+    const finalDn: number = prevDn != null && priorClose < prevDn ? Math.min(basicDn, prevDn) : basicDn;
 
     let trend: boolean;
     if (prevTrend == null) {

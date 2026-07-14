@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, startTransition, useDeferredValue
 import { useRouter } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import MobileNav from "@/components/MobileNav";
 import { useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
 import { trackSearch } from "@/lib/searchTrack";
@@ -197,6 +198,7 @@ export default function ScreenerView({ email }: { email: string }) {
 
   return (
     <div className="app2">
+      <MobileNav email={email} />
       <header className="topbar">
         <BrandLockup /><div className="tdiv" /><span className="page-title">{t("pageScreener")}</span>
         <div className="spacer" />
@@ -211,7 +213,7 @@ export default function ScreenerView({ email }: { email: string }) {
         </form>
       </header>
       <AppNav />
-      <main className="main2">
+      <main className="main2 screener-main">
         <div className="scr-filters">
           {/* branding chip */}
           <span className="chip on" style={{ cursor: "default" }} title={t("scanByOracle")}>

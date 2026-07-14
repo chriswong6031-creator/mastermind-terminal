@@ -6,6 +6,7 @@ import {
 import dynamic from "next/dynamic";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import MobileNav from "@/components/MobileNav";
 import { useLang, useT } from "@/lib/i18n";
 import type { Lang } from "@/lib/i18n";
 import { CoachProvider, useCoach } from "@/lib/tutorial/coach";
@@ -1872,6 +1873,7 @@ export default function OptionsHubView() {
   return (
     <CoachProvider>
     <div className="app2 obs obs-ambient">
+      <MobileNav email="" />
       <header className="topbar">
         <BrandLockup />
         <div className="tdiv" />

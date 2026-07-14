@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { IND_DEFS, withDefaults, isIndKey, defaultVis, VIS_UNITS, type IndField, type VisUnit, type VisRange } from "@/lib/indicators";
+import { useT } from "@/lib/i18n";
 
 const SWATCHES = ["#4d82ff", "#26c281", "#f0566b", "#e8b339", "#e8a33d", "#9d86ff", "#19c2c2", "#d6dae3", "#868d9c", "#ff8a3d"];
 const hexOf = (c: string) => (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c) ? c : "#888888");
@@ -73,6 +74,7 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
     onClose: () => void;
     onReset?: () => void;
   }) {
+  const t = useT();
   const [tab, setTab] = useState<"inputs" | "style" | "visibility">("inputs");
   const [defOpen, setDefOpen] = useState(false);
   // snapshot the params at open so Cancel can revert this editing session (changes otherwise auto-save live)
@@ -103,7 +105,7 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
     onClose();
   };
 
-  const TABS: ["inputs" | "style" | "visibility", string][] = [["inputs", "Inputs"], ["style", "Style"], ["visibility", "Visibility"]];
+  const TABS: ["inputs" | "style" | "visibility", string][] = [["inputs", t("isTabInputs", "Inputs")], ["style", t("isTabStyle", "Style")], ["visibility", t("isTabVisibility", "Visibility")]];
 
   return (
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -115,7 +117,7 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
         <div className="is-body">
           {tab === "inputs" && (isPine ? (
             pineEntries.length === 0
-              ? <div className="is-empty">This script declares no inputs.</div>
+              ? <div className="is-empty">{t("isEmptyNoInputsPine", "This script declares no inputs.")}</div>
               : pineEntries.map(([k, v]) => (
                 <div key={k} className="is-row">
                   <span className="is-label">{k}</span>
@@ -127,30 +129,30 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
                 </div>
               ))
           ) : def ? (
-            inputs.length ? inputs.map((f) => <Row key={f.key} f={f} val={P[f.key]} onChange={(v) => onChange({ [f.key]: v })} />) : <div className="is-empty">No inputs for this indicator.</div>
-          ) : <div className="is-empty">No settings for this item.</div>)}
+            inputs.length ? inputs.map((f) => <Row key={f.key} f={f} val={P[f.key]} onChange={(v) => onChange({ [f.key]: v })} />) : <div className="is-empty">{t("isEmptyNoInputs", "No inputs for this indicator.")}</div>
+          ) : <div className="is-empty">{t("isEmptyNoSettings", "No settings for this item.")}</div>)}
 
           {tab === "style" && (def && styles.length
             ? styles.map((f) => <Row key={f.key} f={f} val={P[f.key]} onChange={(v) => onChange({ [f.key]: v })} />)
-            : <div className="is-empty">No style options.</div>)}
+            : <div className="is-empty">{t("isEmptyNoStyle", "No style options.")}</div>)}
 
           {tab === "visibility" && (
             <div className="vis-list">
-              <div className="vis-head">Show this indicator on these timeframes (daily-EOD data — minutes/hours are unavailable).</div>
+              <div className="vis-head">{t("isVisHead", "Show this indicator on these timeframes (daily-EOD data — minutes/hours are unavailable).")}</div>
               {VIS_UNITS.map((u) => <VisRow key={u.key} label={u.label} unitMax={u.max} val={vis[u.key]} onChange={(patch) => setVis(u.key, patch)} />)}
             </div>
           )}
         </div>
         <div className="is-foot">
           <div className="is-def pophost" onClick={(e) => e.stopPropagation()}>
-            <button className="is-def-btn" onClick={() => setDefOpen((o) => !o)}>Defaults <svg viewBox="0 0 24 24" style={{ width: 12, height: 12, stroke: "currentColor", fill: "none", strokeWidth: 2, transform: defOpen ? "rotate(180deg)" : "none" }}><path d="M6 15l6-6 6 6" /></svg></button>
+            <button className="is-def-btn" onClick={() => setDefOpen((o) => !o)}>{t("isDefaults", "Defaults")} <svg viewBox="0 0 24 24" style={{ width: 12, height: 12, stroke: "currentColor", fill: "none", strokeWidth: 2, transform: defOpen ? "rotate(180deg)" : "none" }}><path d="M6 15l6-6 6 6" /></svg></button>
             {defOpen && <div className="is-def-menu">
-              <div className="is-def-row" onClick={() => { setDefOpen(false); if (isPine) cancel(); else onReset?.(); }}>Reset settings</div>
+              <div className="is-def-row" onClick={() => { setDefOpen(false); if (isPine) cancel(); else onReset?.(); }}>{t("isResetSettings", "Reset settings")}</div>
             </div>}
           </div>
           <div className="spacer" />
-          <button className="btn btn-ghost" onClick={cancel}>Cancel</button>
-          <button className="ai" onClick={onClose}>Ok</button>
+          <button className="btn btn-ghost" onClick={cancel}>{t("cancel", "Cancel")}</button>
+          <button className="ai" onClick={onClose}>{t("isOk", "Ok")}</button>
         </div>
       </div>
     </div>

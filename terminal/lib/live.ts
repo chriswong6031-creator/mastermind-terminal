@@ -29,7 +29,7 @@ export function useLive(symbol: string, onTick: (price: number) => void) {
           }
         } catch {}
       };
-      ws.onerror = () => setStatus("error");
+      ws.onerror = () => { if (!dead) setStatus("error"); };
       ws.onclose = () => { if (!dead) setStatus((s) => (s === "live" ? "off" : s)); };
     } catch { setStatus("error"); }
     return () => { dead = true; try { ws?.close(); } catch {} };

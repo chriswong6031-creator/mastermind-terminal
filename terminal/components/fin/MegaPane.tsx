@@ -56,7 +56,7 @@ export type FinPage =
   | "lab";
 
 /** The pages that share the TV "Financials" tab pill bar. */
-const FIN_TABS: FinPage[] = ["overview", "statements", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast", "insider", "lab"];
+const FIN_TABS: FinPage[] = ["overview", "statements", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast", "technicals", "insider", "lab"];
 
 const PAGE_LABELS: Record<FinPage, [string, string]> = {
   overview: ["Overview", "概览"],

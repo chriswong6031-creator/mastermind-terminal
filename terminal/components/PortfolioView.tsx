@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import MobileNav from "@/components/MobileNav";
 import { useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
 
@@ -52,6 +53,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
 
   return (
     <div className="app2">
+      <MobileNav email={email} />
       <header className="topbar">
         <BrandLockup /><div className="tdiv" /><span className="page-title">{t("pagePortfolio")}</span>
         <div className="spacer" />

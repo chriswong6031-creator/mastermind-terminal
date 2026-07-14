@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import MobileNav from "@/components/MobileNav";
 import { compilePine, runPine, type Bar, type PineError } from "@/lib/pine-engine";
 
 type Script = { id: string; name: string; source: string; lang: string; params: Record<string, any>; updated_at: string; locked?: boolean };
@@ -142,6 +143,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
 
   const head = (
     <>
+      <MobileNav email={email} />
       <header className="topbar">
         <BrandLockup /><div className="tdiv" /><span className="page-title">Pine Editor</span>
         {active && (

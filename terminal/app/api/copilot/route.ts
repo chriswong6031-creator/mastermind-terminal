@@ -14,11 +14,21 @@ const TOOLS = [
   { type: "function", function: { name: "annotate_chart", description: "Draw price levels onto the user's active chart. Use this when the user asks you to mark/draw/annotate/show support, resistance, targets or notes. Derive prices from real data you fetched (e.g. day/52-week highs & lows from get_quote, gamma walls from get_intel) — never invent levels.", parameters: { type: "object", properties: { annotations: { type: "array", items: { type: "object", properties: { type: { type: "string", enum: ["support", "resistance", "target", "level", "note"] }, price: { type: "number" }, label: { type: "string" } }, required: ["type", "price"] } } }, required: ["annotations"] } } },
 ];
 
+// Strict allowlist for symbol values sourced from AI tool-call arguments.
+// Prevents path-traversal: only A-Z, 0-9, dot, and hyphen; 1–15 chars.
+const SYMBOL_RE = /^[A-Z0-9.\-]{1,15}$/i;
+
 async function runTool(name: string, args: any): Promise<any> {
-  const sym = (args?.symbol || "").toUpperCase();
-  if (name === "get_quote") { const m = await readJson("manifest.json"); const r = m?.symbols?.[sym]; return r ? { symbol: sym, ...r } : { error: "unknown symbol" }; }
-  if (name === "get_intel") { const i = await readJson(`${sym}.intel.json`); return i || { error: "no intel for symbol" }; }
-  if (name === "get_backtest") { const b = await readJson(`${sym}.backtest.json`); return b ? { symbol: sym, metrics: b.metrics, n_trades: (b.trades || []).length, equity_mult: b.equity?.v?.slice(-1)[0], bh_total_return: b.equity?.bh_total_return } : { error: "no backtest" }; }
+  // Symbol validation: only for tools that consume a symbol (prevents path-traversal).
+  // screen/annotate_chart take no symbol argument — guard must NOT run for them.
+  if (["get_quote", "get_intel", "get_backtest"].includes(name)) {
+    const rawSym = (args?.symbol || "");
+    if (!SYMBOL_RE.test(rawSym)) return { error: "invalid symbol" };
+    const sym = rawSym.toUpperCase();
+    if (name === "get_quote") { const m = await readJson("manifest.json"); const r = m?.symbols?.[sym]; return r ? { symbol: sym, ...r } : { error: "unknown symbol" }; }
+    if (name === "get_intel") { const i = await readJson(`${sym}.intel.json`); return i || { error: "no intel for symbol" }; }
+    if (name === "get_backtest") { const b = await readJson(`${sym}.backtest.json`); return b ? { symbol: sym, metrics: b.metrics, n_trades: (b.trades || []).length, equity_mult: b.equity?.v?.slice(-1)[0], bh_total_return: b.equity?.bh_total_return } : { error: "no backtest" }; }
+  }
   if (name === "screen") {
     const m = await readJson("manifest.json"); const syms = m?.symbols || {};
     let rows = Object.entries<any>(syms).map(([s, r]) => ({ symbol: s, ...r }));

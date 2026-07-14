@@ -9,11 +9,34 @@
  * Props (FROZEN + new onOpenFull?):
  *   {sym, row, slice, intel, bars, zh?, onClose?, onJump?, onOpenFull?}
  */
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { pick, fmtPct, fmtDate } from "../../lib/finFormat"
 import { LineSeries } from "./FinCharts"
 import { getJSON } from "../../lib/dataCache"
 import { oracleVerdict, deskVerdict } from "../../lib/signalVerdict"
+import { computeRatings, verdictFromScore } from "../../lib/techRating"
+import type { Bar } from "../../lib/fund"
+
+/* ── staleness helper: days since intel.asof (returns 0 when missing/unparseable) ── */
+function intelStaleDays(asof?: string | null): number {
+  if (!asof) return 0
+  const m = asof.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!m) return 0
+  const asofNoon = new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0, 0)
+  const todayNoon = new Date(); todayNoon.setHours(12, 0, 0, 0)
+  return Math.max(0, Math.round((todayNoon.getTime() - asofNoon.getTime()) / 86_400_000))
+}
+
+/* ── tech verdict → bilingual plain-word label ──────────────────────── */
+function techVerdictLabel(v: string, zh: boolean): string {
+  switch (v) {
+    case "Strong buy": return zh ? "强烈买入" : "Strong buy"
+    case "Buy": return zh ? "买入" : "Buy"
+    case "Sell": return zh ? "卖出" : "Sell"
+    case "Strong sell": return zh ? "强烈卖出" : "Strong sell"
+    default: return zh ? "中性" : "Neutral"
+  }
+}
 
 /* ── types (narrow; only what we consume) ────────────────────────────── */
 
@@ -103,6 +126,7 @@ interface Intel {
   analysis?: Analysis | null
   cards?: Record<string, any> | null   // live research-desk schema (ai_judgment · conviction · levels · analyst · smart_money)
   tape?: Record<string, any> | null    // ai_lean (dir) · regime · sector_pulse
+  asof?: string | null                 // "YYYY-MM-DD" — date the research desk last ran for this name
 }
 
 export interface OracleDashProps {
@@ -365,7 +389,7 @@ function MarketRiskChip({ zh }: { zh: boolean }) {
 
 /* ── main component ───────────────────────────────────────────────────── */
 
-export default function OracleDash({ sym, row, slice, intel, zh = false, onClose, onJump, onOpenFull }: OracleDashProps) {
+export default function OracleDash({ sym, row, slice, intel, bars, zh = false, onClose, onJump, onOpenFull }: OracleDashProps) {
   const dockRef = useRef<HTMLDivElement>(null)
 
   // Rail-left measurement for web positioning
@@ -446,6 +470,39 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
   const drivers = Array.isArray(conv?.drivers) ? (conv!.drivers as string[]) : []
   const cautions = Array.isArray(conv?.cautions) ? (conv!.cautions as string[]) : []
 
+  // ── Live tech rating (D1/D2) ──
+  const barsArr: Bar[] = Array.isArray(bars) ? (bars as Bar[]) : []
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const techRatings = useMemo(() => (barsArr.length >= 30 ? computeRatings(barsArr) : null), [bars])
+  const techOverall = techRatings?.summary[2].score ?? null   // [-1, 1]
+  const techVerdict = techRatings?.summary[2].verdict ?? null // Verdict string
+
+  // ── D1: Freshness discount ──
+  const staleDays = intelStaleDays(intel?.asof)
+  const freshnessW = Math.min(0.5, Math.max(0, (staleDays - 2) / 10))
+  // Blended score. HOUSE LAW: tech may only DE-ESCALATE — take min(convScore, blend) so tech
+  // can only pull the score down, never up a bearish/low-conviction desk read into buy colors.
+  const _blend = (convScore != null && techOverall != null && freshnessW > 0)
+    ? Math.round((1 - freshnessW) * convScore + freshnessW * ((techOverall + 1) / 2) * 100)
+    : convScore
+  const displayedScore: number | null = (_blend == null || convScore == null)
+    ? _blend
+    : Math.min(convScore, _blend)
+
+  // ── D2: Disagreement haircut ──
+  // deskLean: derive from tape.ai_lean.dir (BULL/BEAR)
+  const deskLeanDir = String(intel?.tape?.ai_lean?.dir || "").toUpperCase()
+  const deskLean = deskLeanDir === "BULL" ? 1 : deskLeanDir === "BEAR" ? -1 : 0
+  const d2Cap = deskLean === 1 && techOverall != null && techOverall <= -0.3
+  const d2Improve = deskLean === -1 && techOverall != null && techOverall >= 0.3
+  // Color-coherence gate: when desk is NOT bullish (deskLean<=0), cap at 65 so the ring never
+  // enters buy-green (≥66) — convScore is conviction magnitude, not direction; blending with
+  // directional tech can collapse a high-conviction WAIT toward green despite a non-buy read.
+  const _afterD2 = (displayedScore != null && d2Cap) ? Math.min(55, displayedScore) : displayedScore
+  const finalScore = (freshnessW > 0 && _afterD2 != null && deskLean <= 0)
+    ? Math.min(65, _afterD2)
+    : _afterD2
+
   // signals: most-recent first, ALL of them
   const sigs: Signal[] = [...(slice?.indicator?.signals ?? [])].reverse()
   const latestSig = sigs[0] ?? null   // freshest signal (already reversed → index 0)
@@ -498,7 +555,8 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
               <div className="sig-card">
                 <div className="sig-card-h">{pick(zh, "Research desk read", "研究台解读")}</div>
                 <div className="sig-desk">
-                  <ConvictionRing score={convScore} zh={zh} />
+                  {/* D1: ring shows blended score when desk data is stale */}
+                  <ConvictionRing score={finalScore} zh={zh} />
                   <div className="sig-desk-body">
                     <div className="sig-desk-verb" style={{ color: dv.color }}>
                       {aj?.verdict || dv.label}
@@ -508,8 +566,39 @@ export default function OracleDash({ sym, row, slice, intel, zh = false, onClose
                     {typeof aj?.size_pct === "number" && aj.size_pct > 0 && (
                       <div className="sig-desk-rank">{pick(zh, "Suggested size", "建议仓位")}: {sizePctDisplay(aj.size_pct)}%</div>
                     )}
+                    {/* Technical rating line — reconciles desk read with live price action */}
+                    {techVerdict != null && techOverall != null && (
+                      <div className="sig-desk-tech">
+                        <span className="sig-desk-tech-k">{pick(zh, "Technical rating", "技术评级")}</span>
+                        <span className="sig-desk-tech-v" style={{ color: techOverall >= 0.1 ? "var(--up)" : techOverall <= -0.1 ? "var(--down)" : "var(--text-2)" }}>
+                          {techVerdictLabel(techVerdict, zh)}
+                          {" "}
+                          <span className="sig-desk-tech-score">({techOverall >= 0 ? "+" : ""}{techOverall.toFixed(2)})</span>
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
+                {/* D1: staleness blend note */}
+                {freshnessW > 0 && (
+                  <div className="sig-stale-note">
+                    {pick(zh,
+                      `Read blended with live price action — desk data ${staleDays} days old`,
+                      `已结合最新价格走势 — 研究数据 ${staleDays} 天前`
+                    )}
+                  </div>
+                )}
+                {/* D2: disagreement caution/context chips */}
+                {d2Cap && (
+                  <div className="sig-caution-chip">
+                    {pick(zh, "Technical tape disagrees", "技术面不支持")}
+                  </div>
+                )}
+                {d2Improve && (
+                  <div className="sig-context-chip">
+                    {pick(zh, "Technical tape improving", "技术面转强")}
+                  </div>
+                )}
                 <div className="sig-caveat">{pick(zh, "Context for the Oracle verdict — not a trade signal.", "作为神谕结论的背景参考——非交易信号。")}</div>
               </div>
             )}

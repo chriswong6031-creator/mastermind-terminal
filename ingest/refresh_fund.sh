@@ -147,6 +147,11 @@ if [ "$SKIP_COLLECT" = "0" ]; then
     echo "[$(ts)] === collect CN+HK fund (Tushare vip-pulls + akshare + yfinance HK) ==="
     run "$PY" "$INGEST/collect_cn_hk_fund.py" $LIMIT_ARG \
       || echo "[$(ts)] WARN: collect_cn_hk_fund exited $?"
+    # NOTE: collect_cn_hk_fund.py now includes the CN backfill collectors (EastMoney consensus,
+    # per-ticker research reports, Tushare stock_company, stk_holdernumber, disclosure_date).
+    # They run automatically on a full CN pass (no --only flag).  Pass --skip-consensus /
+    # --skip-reports / --skip-company / --skip-holders / --skip-disclosure to the collector
+    # to suppress individual steps during a partial run.
   fi
 
 fi

@@ -79,6 +79,30 @@ function sma(src: number[], len: number): number[] {
   return out;
 }
 
+// NaN-aware SMA: only begins accumulating once it encounters the first non-NaN value;
+// NaN inputs are treated as gaps (not zeros) — the window slides over real values only.
+// Used for %K/%D smoothing in Stochastic and StochRSI to prevent fake-zero seed bias.
+function smaN(src: number[], len: number): number[] {
+  const out: number[] = new Array(src.length).fill(NaN);
+  // Track a sliding window of only the finite values that appeared after the first
+  // non-NaN entry, preserving positional alignment for the output.
+  const buf: number[] = [];
+  let started = false;
+  let sum = 0;
+  for (let i = 0; i < src.length; i++) {
+    if (!isFinite(src[i])) {
+      // NaN/Inf gap — don't advance the window; output stays NaN
+      continue;
+    }
+    if (!started) started = true;
+    buf.push(src[i]);
+    sum += src[i];
+    if (buf.length > len) sum -= buf.shift()!;
+    if (buf.length === len) out[i] = sum / len;
+  }
+  return out;
+}
+
 function ema(src: number[], len: number): number[] {
   const out: number[] = new Array(src.length).fill(NaN);
   const k = 2 / (len + 1);
@@ -99,28 +123,28 @@ function ema(src: number[], len: number): number[] {
 }
 
 // Wilder's RMA (used by RSI/ADX).
+// Standard Wilder seeding: accumulate exactly `len` finite values for the SMA seed,
+// then apply α=1/len recursive smoothing.  NaN inputs carry the last value forward.
 function rma(src: number[], len: number): number[] {
   const out: number[] = new Array(src.length).fill(NaN);
   const a = 1 / len;
   let prev = NaN;
+  let finiteCount = 0;
+  let seedSum = 0;
   for (let i = 0; i < src.length; i++) {
     if (isNaN(src[i])) {
       out[i] = prev;
       continue;
     }
     if (isNaN(prev)) {
-      if (i >= len - 1) {
-        let s = 0;
-        let cnt = 0;
-        for (let j = i - len + 1; j <= i; j++) {
-          if (!isNaN(src[j])) {
-            s += src[j];
-            cnt++;
-          }
-        }
-        prev = cnt ? s / cnt : NaN;
+      // accumulate seed window
+      seedSum += src[i];
+      finiteCount++;
+      if (finiteCount === len) {
+        prev = seedSum / len;
         out[i] = prev;
       }
+      // before seed complete, output stays NaN
     } else {
       prev = a * src[i] + (1 - a) * prev;
       out[i] = prev;
@@ -158,8 +182,11 @@ function falling(arr: number[]): boolean {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function rsi(src: number[], len = 14): number[] {
-  const gains: number[] = new Array(src.length).fill(0);
-  const losses: number[] = new Array(src.length).fill(0);
+  // Standard Wilder RSI seeding: index 0 has no prior close, so gains[0]/losses[0]
+  // are NaN (excluded from the SMA seed).  First real change is at index 1.
+  // rma() seeds with the first `len` finite values then applies α=1/len recursion.
+  const gains: number[] = new Array(src.length).fill(NaN);
+  const losses: number[] = new Array(src.length).fill(NaN);
   for (let i = 1; i < src.length; i++) {
     const ch = src[i] - src[i - 1];
     gains[i] = ch > 0 ? ch : 0;
@@ -176,6 +203,8 @@ export function rsi(src: number[], len = 14): number[] {
 }
 
 // Stochastic %K = 100*(close-lowestLow)/(highestHigh-lowestLow), smoothed; %D = SMA(%K, d).
+// %K and %D smoothing use smaN() (NaN-aware SMA) to avoid fake-zero warmup bias:
+// only real rawK/k values enter the SMA window; NaN warmup slots are skipped.
 function stoch(b: Bar[], kLen = 14, kSmooth = 3, dSmooth = 3) {
   const h = highs(b);
   const l = lows(b);
@@ -190,8 +219,8 @@ function stoch(b: Bar[], kLen = 14, kSmooth = 3, dSmooth = 3) {
     }
     rawK[i] = hh === ll ? 50 : (100 * (c[i] - ll)) / (hh - ll);
   }
-  const k = sma(rawK.map((x) => (isNaN(x) ? 0 : x)), kSmooth).map((v, i) => (i >= kLen - 1 + kSmooth - 1 ? v : NaN));
-  const d = sma(k.map((x) => (isNaN(x) ? 0 : x)), dSmooth).map((v, i) => (isNaN(k[i]) ? NaN : v));
+  const k = smaN(rawK, kSmooth);
+  const d = smaN(k, dSmooth);
   return { k, d };
 }
 
@@ -258,22 +287,28 @@ function macd(src: number[], fast = 12, slow = 26, sig = 9) {
 }
 
 // Stochastic RSI Fast: %K = smooth(stoch of RSI), %D = SMA(%K).
+// %K and %D smoothing use smaN() (NaN-aware SMA) to avoid fake-zero warmup bias:
+// only real rawK/k values enter the SMA window; NaN warmup slots are skipped.
 function stochRsi(src: number[], rsiLen = 14, stochLen = 14, kSm = 3, dSm = 3) {
   const r = rsi(src, rsiLen);
   const rawK: number[] = new Array(src.length).fill(NaN);
   for (let i = 0; i < src.length; i++) {
-    if (i < rsiLen + stochLen - 1) continue;
+    // Need stochLen real RSI values ending at i; RSI has NaN prefix of length rsiLen.
+    // First real rawK: when r[i-stochLen+1..i] are all non-NaN.
     let hh = -Infinity;
     let ll = Infinity;
+    let realCount = 0;
     for (let j = i - stochLen + 1; j <= i; j++) {
-      if (isNaN(r[j])) continue;
+      if (j < 0 || isNaN(r[j])) continue;
       if (r[j] > hh) hh = r[j];
       if (r[j] < ll) ll = r[j];
+      realCount++;
     }
+    if (realCount < stochLen) continue; // warmup: not enough real RSI values yet
     rawK[i] = hh === ll ? 50 : (100 * (r[i] - ll)) / (hh - ll);
   }
-  const k = sma(rawK.map((x) => (isNaN(x) ? 0 : x)), kSm).map((v, i) => (isNaN(rawK[i]) ? NaN : v));
-  const d = sma(k.map((x) => (isNaN(x) ? 0 : x)), dSm).map((v, i) => (isNaN(k[i]) ? NaN : v));
+  const k = smaN(rawK, kSm);
+  const d = smaN(k, dSm);
   return { k, d };
 }
 
@@ -729,14 +764,34 @@ function ultimateVote(s: number[]): Vote {
   return "Neutral";
 }
 
-// Ichimoku Base rating (TV cloud rule, simplified to price vs conversion/base + cloud):
-//   Buy when Base<Conversion and price>cloud and price>Base;
-//   Sell when Base>Conversion and price<cloud and price<Base; else Neutral.
+// Ichimoku cloud vote (TV-standard displaced cloud rule).
+//
+// TradingView compares price to the cloud UNDER THE CURRENT BAR — which is Senkou Span A/B
+// displaced +26 bars forward.  At bar n, the visible cloud was computed from bar n-26:
+//   spanA_displayed = (tenkan[n-26] + kijun[n-26]) / 2
+//   spanB_displayed = ichimokuLine(52)[n-26]
+//
+// The original implementation used the undisplaced current values (what would be projected
+// at n+26), giving the wrong cloud reference for the vote.
+//
+// Vote rules (TV cloud rule):
+//   Buy  when base < conv AND price > cloudTop AND price > base
+//   Sell when base > conv AND price < cloudBot AND price < base
+//   else Neutral
 function ichimokuVote(bars: Bar[], price: number): Vote {
-  const conv = last(ichimokuLine(bars, 9)); // Tenkan
-  const base = last(ichimokuLine(bars, 26)); // Kijun
-  const spanA = (conv + base) / 2;
-  const spanBLine = ichimokuLine(bars, 52);
+  const disp = 26;
+  const n = bars.length;
+  // Current bar's conversion/base lines (for the base < conv cross test)
+  const conv = last(ichimokuLine(bars, 9));  // Tenkan at current bar
+  const base = last(ichimokuLine(bars, 26)); // Kijun at current bar
+  // Cloud under today's price: computed from bar n-1-disp (the "displayed" cloud)
+  const cloudBarIdx = n - 1 - disp;
+  if (cloudBarIdx < 0) return "Neutral";
+  const barsForCloud = bars.slice(0, cloudBarIdx + 1);
+  const convCloud = last(ichimokuLine(barsForCloud, 9));
+  const baseCloud = last(ichimokuLine(barsForCloud, 26));
+  const spanA = (convCloud + baseCloud) / 2;
+  const spanBLine = ichimokuLine(barsForCloud, 52);
   const spanB = last(spanBLine);
   if (![conv, base, spanA, spanB, price].every(isFinite)) return "Neutral";
   const cloudTop = Math.max(spanA, spanB);

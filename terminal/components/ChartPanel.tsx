@@ -228,7 +228,7 @@ const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
-  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false }:
+  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount }:
   { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
@@ -247,6 +247,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     onIndRowsAt?: (fn: ((barTime: string | number) => Record<string, number | null>) | null) => void;
     /** Day Trade Mode — enables session shading + countdown chip + stats strip. */
     dayMode?: boolean;
+    /** B3: fires whenever the number of non-price sub-panes changes, so TerminalShell can grow the container. */
+    onPaneCount?: (n: number) => void;
   }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -325,7 +327,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const paneRORef = useRef<ResizeObserver | null>(null);
   const [paneLayout, setPaneLayout] = useState<PaneInfo[]>([]);
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
-  const [legendOpen, setLegendOpen] = useState(true);
+  // B4: collapsed by default on mobile (≤860px) — coarse devices don't need the legend open
+  const [legendOpen, setLegendOpen] = useState(() =>
+    typeof window === "undefined" ? true : !window.matchMedia("(max-width:860px)").matches
+  );
   const [showDetail, setShowDetail] = useState(true);   // GC v2: early-dots + warnings overlay toggle
   // DayStatsStrip: snapshot of bars + dailyBars for the strip (updated when intraday data loads)
   // Using state so React re-renders the strip when data changes; refs are not enough.
@@ -340,6 +345,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const onSetLockedVLineRef = useRef(onSetLockedVLine); onSetLockedVLineRef.current = onSetLockedVLine;
   const lockedVLineRef = useRef(lockedVLine); lockedVLineRef.current = lockedVLine;
   const onIndRowsAtRef = useRef(onIndRowsAt); onIndRowsAtRef.current = onIndRowsAt;
+  // B2/B3/B5: mobile breakpoint ref (drives applyStretch) + reactive state (drives ChartOverlays coarse prop)
+  const isMobileRef = useRef<boolean>(typeof window !== "undefined" && window.matchMedia("(max-width:860px)").matches);
+  const [isMobile, setIsMobile] = useState<boolean>(() =>
+    typeof window !== "undefined" ? window.matchMedia("(max-width:860px)").matches : false
+  );
+  const onPaneCountRef = useRef(onPaneCount); onPaneCountRef.current = onPaneCount;
+  const lastPaneCountRef = useRef<number>(-1);   // last reported count to avoid redundant calls
+  // B1: double-tap + synthetic-hover suppression refs
+  const lastDblHandledRef = useRef<number>(0);   // performance.now() of last touch-driven double-tap
+  const lastTouchTsRef = useRef<number>(0);       // performance.now() of last touch pointerdown
+  const lastTapRef = useRef<{ t: number; x: number; y: number } | null>(null);   // first tap of a potential double-tap
   // params for the ACTIVE indicators drive an indicator rebuild (Effect 3b)
   const indParamsKey = JSON.stringify(Array.from(indicators).sort().map((k) => indParams[k]));
   // ── existing DOM / interaction refs (unchanged) ──
@@ -1004,10 +1020,35 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // also honors the collapsed set + the maximized pane (via paneCtl) and any user-dragged normal sizes.
   const applyStretch = () => {
     const ctl = paneCtl.current;
+    // B2: on mobile, compute a minimum sub-pane floor so indicator panes are usable (~72-112px)
+    const mobile = isMobileRef.current;
+    const wH = wrapElRef.current?.clientHeight ?? 0;
+    let mobileSubPx = 0;
+    if (mobile && !ctl.maximized && wH > 50) {
+      const n = panesMeta.current.filter((m) => !m.isPrice && !ctl.collapsed.has(m.key)).length;
+      if (n > 0) {
+        let subPx = Math.max(72, Math.min(112, wH * 0.16));
+        if (wH - n * subPx < 2 * subPx) subPx = wH / (n + 2);
+        mobileSubPx = subPx;
+      }
+    }
     for (const m of panesMeta.current) {
       let s: number;
-      if (ctl.maximized) s = m.key === ctl.maximized ? 1000 : 0.0001;
-      else s = ctl.collapsed.has(m.key) ? 0.06 : (ctl.normal.get(m.key) ?? (m.isPrice ? 3.4 : 1));
+      if (ctl.maximized) {
+        s = m.key === ctl.maximized ? 1000 : 0.0001;
+      } else if (ctl.collapsed.has(m.key)) {
+        s = 0.06;
+      } else if (mobile && !m.isPrice && mobileSubPx > 0) {
+        // sub-pane gets equal share; price pane gets the remainder proportionally
+        s = 1;
+      } else {
+        s = ctl.normal.get(m.key) ?? (m.isPrice ? 3.4 : 1);
+      }
+      // on mobile: override price pane factor to fill remaining space above sub-panes
+      if (mobile && !ctl.maximized && m.isPrice && mobileSubPx > 0 && wH > 50) {
+        const n = panesMeta.current.filter((x) => !x.isPrice && !ctl.collapsed.has(x.key)).length;
+        s = Math.max(1.2, (wH - n * mobileSubPx) / mobileSubPx);
+      }
       try { m.pane.setStretchFactor(s); } catch {}
     }
   };
@@ -1114,6 +1155,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // re-observe pane elements so separator drags / collapses reposition the overlay + rebaseline
     const pRO = paneRORef.current; if (pRO) { try { pRO.disconnect(); } catch {} for (const m of metas) { try { const pe = m.pane.getHTMLElement(); if (pe) pRO.observe(pe); } catch {} } }
     measureRef.current();
+    // B3: notify parent of sub-pane count changes so TerminalShell can grow the chart container
+    const subPaneCount = metas.filter((m) => !m.isPrice).length;
+    if (subPaneCount !== lastPaneCountRef.current) { lastPaneCountRef.current = subPaneCount; onPaneCountRef.current?.(subPaneCount); }
   };
 
   // ── pane-control operations (read chart refs; safe to recreate every render) ──
@@ -1363,7 +1407,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (showBarChange) { if (html) html += " "; html += `<b class="${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`; }
       statusRef.current.innerHTML = html;
     }
-    if (verdictRef.current) { const v = slice?.indicator?.state?.last_signal || "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
+    // Gate oracle verdict text on whether the _oracle indicator is active. The chip's display:none
+    // is controlled by oracleVisible in JSX; this guard prevents stale text from painting in the
+    // background when the user has toggled the oracle OFF.
+    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) { const v = slice?.indicator?.state?.last_signal || "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
   };
 
   // ── R11 live-bar splice ───────────────────────────────────────────────────
@@ -2516,19 +2563,72 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const scheduleMeasure = () => { if (measRaf != null) return; measRaf = requestAnimationFrame(() => { measRaf = null; if (!dead) measureImpl(); }); };
 
     // ── pane hover + double-click (collapse-all on the price pane, maximize on a sub-pane) ──
+    // B1: synthetic-hover suppression — touch pointerdown records the timestamp; onPaneMove
+    // ignores synthetic mousemove events fired ≤700ms after a touch (iOS sends them after lift).
     onPaneMove = (e: MouseEvent) => {
+      if (performance.now() - lastTouchTsRef.current < 700) return;   // B1: skip synthetic mousemove after touch
       const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect(); const y = e.clientY - wr.top;
       let hk: string | null = null; for (const p of paneLayoutRef.current) { if (y >= p.top && y <= p.top + p.height) { hk = p.key; break; } }
       if (hk !== hoveredKeyRef.current) { hoveredKeyRef.current = hk; setHoveredKey(hk); }
     };
     onPaneLeave = () => { if (hoveredKeyRef.current !== null) { hoveredKeyRef.current = null; setHoveredKey(null); } };
     onPaneDbl = (e: MouseEvent) => {
+      // B1: guard against iOS-synthesized dblclick double-fire after a touch double-tap
+      if (performance.now() - lastDblHandledRef.current < 600) return;
       if ((e.target as Element)?.closest?.(".chart-overlays")) return; if (toolRef.current) return;
       const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect(); const y = e.clientY - wr.top;
       const p = paneLayoutRef.current.find((q) => y >= q.top && y <= q.top + q.height); if (!p) return;
       if (p.isPrice) collapseAllPanes(); else doMaximize(p.paneIndex);
     };
+    // B1: touch double-tap handler — two qualifying taps (down→up <300ms, <12px displacement) within
+    // 350ms and <40px of each other → trigger the same pane collapse/maximize as dblclick.
+    const onTouchDown = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      lastTouchTsRef.current = performance.now();   // for synthetic-hover suppression
+      const now = performance.now();
+      const x = e.clientX, y = e.clientY;
+      // track up to detect a qualifying single tap; pointercancel (pinch/scroll takeover) must
+      // also detach — pointerIds get reused on touch, so a stale onUp would eat a later tap
+      const onCancel = (ec: PointerEvent) => {
+        if (ec.pointerId !== e.pointerId) return;
+        wrap.removeEventListener("pointerup", onUp); wrap.removeEventListener("pointercancel", onCancel);
+        lastTapRef.current = null;
+      };
+      const onUp = (eu: PointerEvent) => {
+        if (eu.pointerId !== e.pointerId) return;
+        wrap.removeEventListener("pointerup", onUp); wrap.removeEventListener("pointercancel", onCancel);
+        const dt = performance.now() - now;
+        const dx = eu.clientX - x, dy = eu.clientY - y;
+        if (dt > 300 || Math.hypot(dx, dy) > 12) { lastTapRef.current = null; return; }  // not a tap
+        const prev = lastTapRef.current;
+        if (prev && performance.now() - prev.t < 350 && Math.hypot(eu.clientX - prev.x, eu.clientY - prev.y) < 40) {
+          // double-tap confirmed
+          lastTapRef.current = null;
+          if ((e.target as Element)?.closest?.(".chart-overlays")) return;
+          if (toolRef.current) return;
+          const w = wrapElRef.current; if (!w) return;
+          const wr = w.getBoundingClientRect(); const py = eu.clientY - wr.top;
+          const p = paneLayoutRef.current.find((q) => py >= q.top && py <= q.top + q.height); if (!p) return;
+          lastDblHandledRef.current = performance.now();
+          if (p.isPrice) collapseAllPanes(); else doMaximize(p.paneIndex);
+        } else {
+          lastTapRef.current = { t: performance.now(), x: eu.clientX, y: eu.clientY };
+        }
+      };
+      wrap.addEventListener("pointerup", onUp); wrap.addEventListener("pointercancel", onCancel);
+    };
+    // B2: isMobileRef stays current via matchMedia change listener; triggers applyStretch re-run
+    const mqlMobile = typeof window !== "undefined" ? window.matchMedia("(max-width:860px)") : null;
+    const onMqlChange = () => {
+      const m = mqlMobile?.matches ?? false;
+      isMobileRef.current = m;
+      setIsMobile(m);
+      applyStretch();
+      scheduleMeasure();
+    };
+    mqlMobile?.addEventListener("change", onMqlChange);
     wrap.addEventListener("mousemove", onPaneMove); wrap.addEventListener("mouseleave", onPaneLeave); wrap.addEventListener("dblclick", onPaneDbl);
+    wrap.addEventListener("pointerdown", onTouchDown);
 
     // observe each pane element so separator drags / collapses reposition the overlay + rebaseline sizes.
     // scheduleRender() re-lays the signal-marker + drawing SVG overlays: a pane collapse/maximize/drag
@@ -2613,7 +2713,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (winDown) window.removeEventListener("pointerdown", winDown);
       const wEl = wrapElRef.current;
       if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx);
-      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); }
+      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onTouchDown); }
+      mqlMobile?.removeEventListener("change", onMqlChange);
       paneRO?.disconnect(); paneRORef.current = null; wrapElRef.current = null;
       ro?.disconnect();
       if (textEditRef.current) { try { textEditRef.current.remove(); } catch {} textEditRef.current = null; }
@@ -3424,6 +3525,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         onEye={(k) => onToggleHidden?.(k)} onSettings={(k) => onOpenSettings?.(k)} onSource={(k) => onOpenSource?.(k)} onRemove={(k) => onRemoveInd?.(k)}
         onMoveUp={(pi) => doMove(pi, -1)} onMoveDown={(pi) => doMove(pi, 1)} onCollapse={doCollapse} onMaximize={doMaximize}
         canMoveUp={canMoveUp} canMoveDown={canMoveDown}
+        coarse={isMobile}
       />
     </div>
   );
