@@ -91,6 +91,11 @@ META = {
     "BABA": ("Alibaba Group", "Equities", "#ff6a00"),
     "JD": ("JD.com", "Equities", "#d92332"),
     "PDD": ("PDD Holdings", "Equities", "#e60012"),
+    # ── ETFs ──────────────────────────────────────────────────────────────────
+    # Polygon types ETFs as "ETF", not CS/ADRC, so expand_universe/build_universe's
+    # type=CS+ADRC fetch never adds them — carry the curated liquid set here so they get
+    # flagship OHLC/slice/verdict and stay searchable through the nightly manifest rebuild.
+    # (Fundamentals/intel/insider gracefully absent for funds — the UI already handles that.)
     "SPY": ("SPDR S&P 500 ETF", "Equities", "#1f8a4c"),
     "QQQ": ("Invesco QQQ Trust", "Equities", "#4d82ff"),
     "IWM": ("iShares Russell 2000", "Equities", "#6f42c1"),
@@ -98,6 +103,32 @@ META = {
     "SOXL": ("Direxion Semis 3x", "Equities", "#ff6d00"),
     "GLD": ("SPDR Gold Shares", "Equities", "#d4af37"),
     "TLT": ("iShares 20+ Treasury", "Equities", "#5c6bc0"),
+    # Sector SPDRs (the 11 GICS sectors) — the gap that hid XLU
+    "XLK": ("Technology Select Sector SPDR", "Equities", "#4d82ff"),
+    "XLF": ("Financial Select Sector SPDR", "Equities", "#2a9d8f"),
+    "XLE": ("Energy Select Sector SPDR", "Equities", "#e63946"),
+    "XLV": ("Health Care Select Sector SPDR", "Equities", "#06d6a0"),
+    "XLI": ("Industrial Select Sector SPDR", "Equities", "#8d99ae"),
+    "XLY": ("Consumer Discretionary Select Sector SPDR", "Equities", "#f4a261"),
+    "XLP": ("Consumer Staples Select Sector SPDR", "Equities", "#b5838d"),
+    "XLU": ("Utilities Select Sector SPDR", "Equities", "#ffd166"),
+    "XLB": ("Materials Select Sector SPDR", "Equities", "#a68a64"),
+    "XLRE": ("Real Estate Select Sector SPDR", "Equities", "#118ab2"),
+    "XLC": ("Communication Services Select Sector SPDR", "Equities", "#9b5de5"),
+    # Industry / thematic
+    "SMH": ("VanEck Semiconductor ETF", "Equities", "#ff8500"),
+    "XBI": ("SPDR S&P Biotech ETF", "Equities", "#00b4d8"),
+    "KRE": ("SPDR S&P Regional Banking ETF", "Equities", "#6a994e"),
+    "ARKK": ("ARK Innovation ETF", "Equities", "#ef476f"),
+    # Macro / asset
+    "SLV": ("iShares Silver Trust", "Equities", "#9aa5b1"),
+    "USO": ("United States Oil Fund", "Equities", "#8c6d46"),
+    "HYG": ("iShares iBoxx High Yield Corp Bond", "Equities", "#e07a5f"),
+    "UUP": ("Invesco DB US Dollar Bullish", "Equities", "#386641"),
+    "VXX": ("iPath Series B S&P 500 VIX Short-Term", "Equities", "#d00000"),
+    # International
+    "EEM": ("iShares MSCI Emerging Markets", "Equities", "#f77f00"),
+    "FXI": ("iShares China Large-Cap", "Equities", "#d62828"),
     "BTC-USD": ("Bitcoin", "Crypto", "#f7931a"),
     "ETH-USD": ("Ethereum", "Crypto", "#627eea"),
     "SOL-USD": ("Solana", "Crypto", "#14f195"),
