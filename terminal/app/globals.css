@@ -282,6 +282,13 @@ svg{display:block}
 .sig-btn-half>svg{width:14px;height:14px;flex:none}
 .sig-btn-lbl{font:600 10px/1.2 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--text-2)}
 .sig-btn-vd{margin-left:auto;font:700 12.5px/1 var(--font-ui);color:var(--vc);flex:none}
+.sig-btn-vwrap{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex:none}
+.sig-btn-vwrap .sig-btn-vd{margin-left:0}
+.sig-btn-sub{font:500 9.5px/1 var(--font-ui);color:var(--muted);font-variant-numeric:tabular-nums}
+/* stale verdict — signal too old (or undated) to be a live opinion: visible, but stripped of authority */
+.sig-btn-half.sig-btn-stale{background:transparent;border-left-color:color-mix(in srgb, var(--vc) 35%, transparent)}
+.sig-btn-half.sig-btn-stale .sig-btn-vd{color:var(--text-2);font-weight:600}
+.sig-btn-half.sig-btn-stale>svg{opacity:.45}
 /* View: absolutely centered on the button → straddles the boundary of the two halves, on top */
 .sig-btn-seam{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;display:inline-flex;align-items:center;justify-content:center;pointer-events:none}
 .sig-btn-view{display:inline-flex;align-items:center;font:600 10.5px/1 var(--font-ui);color:var(--text);background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-pill);padding:4px 14px;box-shadow:0 2px 10px -3px rgba(0,0,0,.6)}

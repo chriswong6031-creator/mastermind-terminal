@@ -446,7 +446,7 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
   }
 
   // Derived verdicts using shared helpers
-  const ov = oracleVerdict(row?.verdict ?? null)
+  const ov = oracleVerdict(row?.verdict ?? null, slice, zh)
   const dv = deskVerdict(intel, zh)
 
   // derived stats: prefer slice.backtest.metrics over row for consistency
