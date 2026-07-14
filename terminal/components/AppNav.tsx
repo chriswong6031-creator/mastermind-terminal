@@ -83,7 +83,7 @@ function AppNavInner() {
       {TOP.map((it) => {
         const on = it.k === activeKey;
         return (
-          <Link key={it.k} href={it.href} onClick={it.k === "analyst" && path.startsWith("/terminal") ? () => window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "overview" })) : undefined} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={t(it.k, it.label)} data-tip={t(it.k, it.label)}><Glyph k={it.k} /></Link>
+          <Link key={it.k} href={it.href} onClick={path.startsWith("/terminal") ? (it.k === "analyst" ? () => window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "overview" })) : it.k === "chart" ? () => window.dispatchEvent(new CustomEvent("mm:close-pane")) : undefined) : undefined} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={t(it.k, it.label)} data-tip={t(it.k, it.label)}><Glyph k={it.k} /></Link>
         );
       })}
       <div className="gap" />

@@ -636,6 +636,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Direct open event — AppNav dispatches this on every click, so re-opening the SAME pane after a close
   // works even though MegaPane's replaceState strip is invisible to Next's router (searchParams stays stale).
   useEffect(() => { const h = (e: Event) => { const p = (e as CustomEvent).detail as string; if (p && VALID_PANES.has(p)) setPaneOpen(normalizePane(p)); }; window.addEventListener("mm:open-pane", h); return () => window.removeEventListener("mm:open-pane", h); }, []);
+  // Direct close event — the left-rail "Chart" button dispatches this so it dismisses the research
+  // MegaPane (routing to /terminal alone can't: effect above only OPENs on a valid ?pane=, and the
+  // deep-link effect deliberately never force-closes). Mirrors MegaPane's own onClose.
+  useEffect(() => { const h = () => setPaneOpen(null); window.addEventListener("mm:close-pane", h); return () => window.removeEventListener("mm:close-pane", h); }, []);
   // ChartPanel's intraday empty-state overlay dispatches mm:set-tf {tf} ("Back to Daily" → "D"). Mirror
   // the open-pane pattern: switch the ACTIVE pane's timeframe, guarded on its functional TF set.
   useEffect(() => { const h = (e: Event) => { const nt = (e as CustomEvent).detail?.tf as string | undefined; if (nt && FUNCTIONAL.has(nt)) setTf(nt); }; window.addEventListener("mm:set-tf", h); return () => window.removeEventListener("mm:set-tf", h); }, [FUNCTIONAL, activePane]);
