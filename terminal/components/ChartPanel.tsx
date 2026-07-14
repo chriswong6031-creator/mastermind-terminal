@@ -18,6 +18,7 @@ import {
   CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
 import { runPine, type RunResult } from "@/lib/pine-engine";
+import { ORACLE_V1_PINE } from "@/lib/pine";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
@@ -279,6 +280,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // dimming/hollow style + the A+/Q badge). CUT is discriminated by `type` (the schema guarantees CUT ⟺
   // scored:false), so `score`/`scored` aren't needed on the chart. All optional — v1 slices omit them.
   const sigMarksRef = useRef<{ t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null }[]>([]);
+  // Golden Oracle v1: the confluence signals now come from ORACLE_V1_PINE run CLIENT-SIDE on the
+  // daily bars (no per-ticker backfill), memoized per (symbol · daily length · last daily date) so
+  // the flagship Pine runs once per load and replay just re-snaps the cached signal dates.
+  const oracleMemoRef = useRef<{ key: string; sig: { ts: string; type: string }[] }>({ key: "", sig: [] });
   // Lab signal markers (TLT-R4): populated when _lab indicator is active and intel.tech is available.
   // Shape: Map<date-string, { names: string[]; dir: number }[]> — one entry per date, one item per signal fired that day.
   // Capped at the most recent LAB_MARKER_CAP fire-days to keep rendering responsive.
@@ -1363,36 +1368,47 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     }
   };
 
-  // Resolve BUY/SELL/CUT/REBUY marks against the CURRENT bar set (base's `sigMarks` logic).
-  const resolveSigMarks = (slice: any, rows: Bar[]) => {
+  // Golden Oracle v1: run the flagship confluence Pine (ORACLE_V1_PINE) on the DAILY bars and map its
+  // ★ / CUT / RE-BUY plotshapes to signal dates. Memoized per (symbol · daily length · last daily
+  // date) so the Pine runs once per symbol load and replay just re-snaps the cached signals.
+  const oracleSignals = (daily: Bar[]) => {
+    const key = `${symbolRef.current}|${daily.length}|${daily[daily.length - 1]?.time ?? ""}`;
+    if (oracleMemoRef.current.key === key) return oracleMemoRef.current.sig;
+    const sig: { ts: string; type: string }[] = [];
+    try {
+      const out = runPine(ORACLE_V1_PINE, daily as any, { timeframe: "D", symbol: symbolRef.current });
+      if (out.ok && out.result) {
+        for (const sh of out.result.shapes) {
+          // ★ discriminates BUY (below the bar) vs SELL (above); CUT / RE-BUY carry their own label.
+          const type = sh.text === "★" ? (sh.position === "aboveBar" ? "SELL" : "BUY")
+            : sh.text === "CUT" ? "CUT" : sh.text === "RE-BUY" ? "REBUY" : null;
+          if (type) sig.push({ ts: String(sh.time), type });
+        }
+      }
+    } catch { /* engine error → no marks */ }
+    oracleMemoRef.current = { key, sig };
+    return sig;
+  };
+  // Resolve BUY/SELL/CUT/REBUY marks against the CURRENT bar set. Signals are computed CLIENT-SIDE from
+  // the v1 confluence Pine (no per-ticker backfill) — the `slice` arg is ignored, kept for call-site
+  // compatibility. Daily signal dates snap to the current bars exactly as the v2 path did, so intraday
+  // / replay / resampled views line up.
+  const resolveSigMarks = (_slice: any, rows: Bar[]) => {
+    const daily = dailyBarsRef.current.length ? dailyBarsRef.current : rows;
+    if (!daily.length || !rows.length) return [] as { t: string; type: string; price: number }[];
     const times = rows.map((r) => r.time);
     const lastDate = times[times.length - 1];
-    const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(y + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y; } }); return bd < 9e8 ? b : null; };
-    return (slice?.indicator?.signals || [])
-      .filter((s: any) => s.ts <= lastDate)
-      // GC v2: carry quality/tier so renderSignals can style keeper take/block/pending + regime_blocked
-      // entries and draw the A+/Q tier badge. All optional — v1 slices leave them undefined.
-      .map((s: any) => ({ t: near(s.ts), type: s.type as string, price: s.price as number, quality: s.quality, tier: s.tier }))
-      .filter((m: any) => m.t && m.price != null) as { t: string; type: string; price: number; quality?: string; tier?: string | null }[];
+    const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(String(y) + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y as any; } }); return bd < 9e8 ? b : null; };
+    const byTime = new Map(rows.map((r) => [r.time, r]));
+    return oracleSignals(daily)
+      .filter((s) => s.ts <= (lastDate as string))
+      .map((s) => { const t = near(s.ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) return null; const price = (s.type === "BUY" || s.type === "REBUY") ? bar.l : bar.h; return { t, type: s.type, price }; })
+      .filter(Boolean) as { t: string; type: string; price: number }[];
   };
 
-  // GC v2 side channels → bar-snapped marks. early_dots is a list of date strings (anticipation
-  // pre-cross); warnings is a list of {ts, kind:"arm"|"confirm"} (structure-break). Both live on the
-  // slice indicator parallel to signals (emitter: ingest/gen_slices_all.py writes {"indicator": ind}).
-  const resolveSideChannels = (slice: any, rows: Bar[]) => {
-    const times = rows.map((r) => r.time);
-    const lastDate = times[times.length - 1];
-    const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(y + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y; } }); return bd < 9e8 ? b : null; };
-    const dots = ((slice?.indicator?.early_dots || []) as string[])
-      .filter((ts) => ts <= lastDate)
-      .map((ts) => ({ t: near(ts) as string | null }))
-      .filter((m) => m.t) as { t: string }[];
-    const warns = ((slice?.indicator?.warnings || []) as { ts: string; kind: string }[])
-      .filter((w) => w?.ts <= lastDate)
-      .map((w) => ({ t: near(w.ts) as string | null, kind: w.kind }))
-      .filter((m) => m.t) as { t: string; kind: string }[];
-    return { dots, warns };
-  };
+  // The v1 Golden Oracle has NO side channels (the early_dots + arm/confirm warnings were a GC v2
+  // display extra). Return empty so renderSignals draws none. Kept for call-site compatibility.
+  const resolveSideChannels = (_slice: any, _rows: Bar[]) => ({ dots: [] as { t: string }[], warns: [] as { t: string; kind: string }[] });
 
   // Status line + verdict badge from the current bars + slice.
   const paintStatus = (rows: Bar[], slice: any) => {
@@ -1410,7 +1426,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Gate oracle verdict text on whether the _oracle indicator is active. The chip's display:none
     // is controlled by oracleVisible in JSX; this guard prevents stale text from painting in the
     // background when the user has toggled the oracle OFF.
-    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) { const v = slice?.indicator?.state?.last_signal || "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
+    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) { const sm = sigMarksRef.current; const v = sm.length ? sm[sm.length - 1].type : "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
   };
 
   // ── R11 live-bar splice ───────────────────────────────────────────────────
@@ -1805,34 +1821,53 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const SLATE = "#7c8aa0";   // regime_blocked dim slate (no matching CSS token — inline hex)
       while (layer.firstChild) layer.removeChild(layer.firstChild);
 
-      // ── Gaps & Demand premade indicator ──────────────────────────────────────────
-      // Independent of the oracle (drawn BEFORE the oracle gate below). A TRUE 1-bar gap — an
-      // unfilled break where today's whole range clears yesterday's — is what shows on the chart as a
-      // visible gap, so we mark those (not every up/down open): gap up (low > prevHigh) → yellow ▲ in
-      // the empty space below the bar; gap down (high < prevLow) → red ▼ above. `minGapPct` filters by
-      // gap size (0 = every gap). A centered pivot-low "demand" spot → green ○ below. Pure from barsRef
-      // (respects replay + visible range); on the Daily timeframe this is literal 1-day gapping.
+      // ── Gap Zones premade indicator ──────────────────────────────────────────────
+      // Independent of the oracle (drawn BEFORE the oracle gate below). Detects TRUE DAILY gaps — a day
+      // whose whole range clears the prior day's — on the DAILY bars (so they show on ANY timeframe),
+      // and draws each as a shaded supply/demand ZONE: a gap up (low > prevHigh) leaves the empty band
+      // [prevHigh, low] that acts as support; a gap down (high < prevLow) leaves [high, prevLow] as
+      // resistance. Each zone extends right until a later daily bar trades back into it (fills it):
+      // unfilled zones are solid & reach the last bar; filled zones fade back and stop at the fill bar.
+      // `minGapPct` filters by size; `maxGaps` caps the recent FILLED zones (unfilled always shown).
       if (indicatorsRef.current.has("gaps") && !hiddenRef.current.has("gaps") && tfVisible("gaps")) {
-        const gp = P("gaps"); const gbars = barsRef.current;
-        const thr = Math.max(0, gp.minGapPct ?? 0) / 100;
-        const k = Math.max(1, Math.round(gp.demandStrength ?? 5));
-        for (let i = 0; i < gbars.length; i++) {
-          const b = gbars[i]; const x = xOf(b.time); if (x == null) continue;
-          if (gp.showGaps !== false && i > 0) {
-            const pb = gbars[i - 1];
-            if (pb.h > 0 && b.l > pb.h && (b.l - pb.h) / pb.h >= thr) {
-              const y = yOf(b.l);   // gap up: unfilled space sits below the bar's low
-              if (y != null) { const g = mk("g", { opacity: 0.95 }); g.appendChild(mk("path", { d: `M${x - 4.5} ${y + 13} L${x + 4.5} ${y + 13} L${x} ${y + 5} Z`, fill: gp.gapUpCol })); layer.appendChild(g); }
-            } else if (pb.l > 0 && b.h < pb.l && (pb.l - b.h) / pb.l >= thr) {
-              const y = yOf(b.h);   // gap down: unfilled space sits above the bar's high
-              if (y != null) { const g = mk("g", { opacity: 0.95 }); g.appendChild(mk("path", { d: `M${x - 4.5} ${y - 13} L${x + 4.5} ${y - 13} L${x} ${y - 5} Z`, fill: gp.gapDownCol })); layer.appendChild(g); }
-            }
+        const gp = P("gaps");
+        if (gp.showGaps !== false) {
+          const thr = Math.max(0, gp.minGapPct ?? 0) / 100;
+          const maxGaps = Math.max(1, Math.round(gp.maxGaps ?? 40));
+          const hideFilled = gp.hideFilled === true;
+          const cur = barsRef.current;
+          const daily = dailyBarsRef.current.length ? dailyBarsRef.current : cur;
+          // current bars may be daily (YYYY-MM-DD strings) or intraday (numeric epoch secs) → a calendar date
+          const dstr = (t: string | number) => (typeof t === "string" ? t : new Date((t as number) * 1000).toISOString().slice(0, 10));
+          // calendar date → first current-TF bar time of that day (identity on the daily TF)
+          const dayToBar = new Map<string, Bar["time"]>();
+          for (const b of cur) { const d = dstr(b.time); if (!dayToBar.has(d)) dayToBar.set(d, b.time); }
+          const lastX = cur.length ? xOf(cur[cur.length - 1].time) : null;
+          type Gap = { date: string; type: "up" | "down"; lo: number; hi: number; fill: string | null };
+          const gaps: Gap[] = [];
+          for (let i = 1; i < daily.length; i++) {
+            const b = daily[i], pb = daily[i - 1];
+            let g: Gap | null = null;
+            if (pb.h > 0 && b.l > pb.h && (b.l - pb.h) / pb.h >= thr) g = { date: dstr(b.time), type: "up", lo: pb.h, hi: b.l, fill: null };
+            else if (pb.l > 0 && b.h < pb.l && (pb.l - b.h) / pb.l >= thr) g = { date: dstr(b.time), type: "down", lo: b.h, hi: pb.l, fill: null };
+            if (!g) continue;
+            for (let j = i + 1; j < daily.length; j++) { if (g.type === "up" ? daily[j].l <= g.lo : daily[j].h >= g.hi) { g.fill = dstr(daily[j].time); break; } }
+            gaps.push(g);
           }
-          // demand = centered pivot low: b.l strictly below every neighbor within ±k bars
-          if (gp.showDemand !== false && i >= k && i < gbars.length - k) {
-            let piv = true;
-            for (let j = i - k; j <= i + k; j++) { if (j !== i && gbars[j].l <= b.l) { piv = false; break; } }
-            if (piv) { const y = yOf(b.l); if (y != null) { const g = mk("g", { opacity: 0.95 }); g.appendChild(mk("circle", { cx: x, cy: y + 20, r: 3.4, fill: "none", stroke: gp.demandCol, "stroke-width": 1.6 })); layer.appendChild(g); } }
+          // unfilled zones are the actionable ones → always drawn; filled ones are context → recent-capped.
+          const shown = [...(hideFilled ? [] : gaps.filter((g) => g.fill).slice(-maxGaps)), ...gaps.filter((g) => !g.fill)];
+          for (const g of shown) {
+            const t1 = dayToBar.get(g.date); if (t1 == null) continue;
+            const x1 = xOf(t1); if (x1 == null) continue;
+            const t2 = g.fill ? dayToBar.get(g.fill) : null;
+            const x2 = (t2 != null ? xOf(t2) : null) ?? lastX; if (x2 == null) continue;
+            const yHi = yOf(g.hi), yLo = yOf(g.lo); if (yHi == null || yLo == null) continue;
+            const col = (g.type === "up" ? gp.gapUpCol : gp.gapDownCol) as string;
+            const filled = !!g.fill;
+            const x = Math.min(x1, x2), w = Math.max(1, Math.abs(x2 - x1)), y = Math.min(yHi, yLo), h = Math.max(1, Math.abs(yLo - yHi));
+            const grp = mk("g", {});
+            grp.appendChild(mk("rect", { x, y, width: w, height: h, fill: col, "fill-opacity": filled ? 0.05 : 0.15, stroke: col, "stroke-opacity": filled ? 0.18 : 0.55, "stroke-width": 1 }));
+            layer.appendChild(grp);
           }
         }
       }
@@ -2427,6 +2462,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             const yHi = p2y(sess.hi), yLo = p2y(sess.lo);
             if (x1 == null || x2 == null || yHi == null || yLo == null) continue;
             const rxEnd = xEnd ?? W;
+            // Viewport cull + density declutter: drawing the box, rays, and (worst of all) the ORH/ORL
+            // + ±Nx TEXT labels for EVERY session across ALL loaded history is what froze the chart for
+            // 3-4s and flooded it with white text on the "Day" toggle. Skip sessions that are entirely
+            // off-screen or too compressed to read, and only draw the extension rays + text labels when
+            // the session is wide enough on screen (so a zoomed-out view shows clean boxes, not a wall
+            // of overlapping labels).
+            if (rxEnd < -60 || x1 > W + 60) continue;      // entirely off the visible viewport
+            const sw = rxEnd - x1;                          // session's on-screen width in px
+            if (sw < 3) continue;                           // too compressed to be legible — skip whole session
+            const showDetail = sw > 40;                     // wide enough for extension rays + text labels
             // Shaded box over the opening range window
             svgEl.appendChild(mk("rect", { x: x1, y: yHi, width: Math.max(0, x2 - x1), height: yLo - yHi, fill: p.boxCol as string, stroke: "none" }));
             // ORH solid ray to session end
@@ -2439,8 +2484,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
                 svgEl.appendChild(mk("line", { x1: x1, y1: yMid, x2: rxEnd, y2: yMid, stroke: p.lineCol as string, "stroke-width": 1, "stroke-dasharray": "4 3" }));
               }
             }
-            // Extension rays
-            for (const ext of sess.exts) {
+            // Extension rays + ±Nx labels — only when the session is wide enough on screen (declutter)
+            if (showDetail) for (const ext of sess.exts) {
               const yUp = p2y(ext.up), yDn = p2y(ext.dn);
               if (yUp != null) {
                 svgEl.appendChild(mk("line", { x1: x1, y1: yUp, x2: rxEnd, y2: yUp, stroke: p.lineCol as string, "stroke-width": 1, "stroke-dasharray": "4 3" }));
@@ -2456,10 +2501,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
                 svgEl.appendChild(lbl2);
               }
             }
-            // ORH / ORL labels
-            const orbLabelX = Math.min(x2 + 4, rxEnd - 4);
-            if (yHi != null) { const lh = mk("text", { x: orbLabelX, y: yHi - 3, fill: textColor, "font-size": 9, "text-anchor": "start", "font-family": "var(--font-ui)" }); lh.textContent = `ORH ${sess.hi.toFixed(2)}`; svgEl.appendChild(lh); }
-            if (yLo != null) { const ll = mk("text", { x: orbLabelX, y: yLo + 10, fill: textColor, "font-size": 9, "text-anchor": "start", "font-family": "var(--font-ui)" }); ll.textContent = `ORL ${sess.lo.toFixed(2)}`; svgEl.appendChild(ll); }
+            // ORH / ORL price labels — only when the session is wide enough (declutter)
+            if (showDetail) {
+              const orbLabelX = Math.min(x2 + 4, rxEnd - 4);
+              if (yHi != null) { const lh = mk("text", { x: orbLabelX, y: yHi - 3, fill: textColor, "font-size": 9, "text-anchor": "start", "font-family": "var(--font-ui)" }); lh.textContent = `ORH ${sess.hi.toFixed(2)}`; svgEl.appendChild(lh); }
+              if (yLo != null) { const ll = mk("text", { x: orbLabelX, y: yLo + 10, fill: textColor, "font-size": 9, "text-anchor": "start", "font-family": "var(--font-ui)" }); ll.textContent = `ORL ${sess.lo.toFixed(2)}`; svgEl.appendChild(ll); }
+            }
           }
         }
       }

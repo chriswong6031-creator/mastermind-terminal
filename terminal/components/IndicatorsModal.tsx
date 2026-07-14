@@ -8,7 +8,7 @@ const CATS: Record<string, { key: string; label: string; mm?: boolean; tkey?: st
   Mastermind: [{ key: "_oracle", label: "Golden Oracle Confluence", mm: true }],
   Trend: [{ key: "ema", label: "Moving Averages (EMA 20/50/200)" }, { key: "bb", label: "Bollinger Bands" }, { key: "vwap", label: "VWAP" }, { key: "macd", label: "MACD" }],
   Momentum: [{ key: "rsi", label: "RSI" }, { key: "stochrsi", label: "Stochastic RSI" }],
-  "Price Action": [{ key: "gaps", label: "Gaps & Demand" }],
+  "Price Action": [{ key: "gaps", label: "Gap Zones" }],
   Volume: [{ key: "vol", label: "Volume" }],
   // Day Trade suite — spec §2 order: overlays then panes
   daytrade: [
