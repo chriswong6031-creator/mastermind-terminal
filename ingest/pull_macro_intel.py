@@ -41,9 +41,10 @@ file are silently skipped (no source file in stockdata/).
      ``--all`` was consumed as a literal ticker (META.get default = Equities), matched
      no source file, and the run ended "0 written, 1 skipped". Every full-universe US
      intel refresh had silently no-opped since 2026-07-03. ``--all`` now expands to
-     every ``<SYM>.json`` in MACRO_STOCKDATA (the buildable universe, post R2 sync);
-     ``--limit N`` caps it; bare symbols / ``--only SYM ...`` select explicitly; no
-     args still falls back to the curated DEFAULT list (VPS nightly behavior unchanged).
+     the stockdata catalog (index.json, ~1,700 names; ticker-shaped glob fallback),
+     resolved after the R2 sync so a fresh lane mirror works. ``--limit N`` caps it;
+     bare symbols / ``--only SYM ...`` select explicitly; no args still falls back to
+     the curated DEFAULT list (VPS nightly behavior unchanged).
 
 Usage:
     python ingest/pull_macro_intel.py [SYM ...]        # explicit symbols (default: DEFAULT list)
@@ -56,6 +57,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -640,6 +642,31 @@ def _build_tech_block(sym: str, lab_profiles: dict | None) -> dict | None:
     return out
 
 
+# Ticker-shaped stems only: uppercase start, then uppercase/digits/dot/hyphen.
+# Excludes the non-symbol artifacts sharing the stockdata dir (index, calibration,
+# fund_flows, mag7_regime — lowercase) and futures snapshots (BZ_F — underscore).
+_TICKER_RE = re.compile(r"[A-Z][A-Z0-9.\-]*")
+
+
+def _stockdata_universe() -> list[str]:
+    """The --all universe: every buildable symbol in MACRO_STOCKDATA.
+
+    Prefer the dashboard's own catalog (index.json: [{"t": "AAPL", ...}, ...]) —
+    it lists exactly the per-symbol snapshots and nothing else.  Fall back to a
+    ticker-shaped glob of the directory when the catalog is missing or malformed
+    (an older mirror, or a partial sync).
+    """
+    try:
+        entries = json.loads((MACRO_STOCKDATA / "index.json").read_text())
+        tickers = sorted({str(e["t"]) for e in entries if isinstance(e, dict) and e.get("t")})
+        if tickers:
+            return tickers
+    except Exception:
+        pass
+    return sorted(p.stem for p in MACRO_STOCKDATA.glob("*.json")
+                  if _TICKER_RE.fullmatch(p.stem))
+
+
 def main(syms: list[str], *, all_syms: bool = False, limit: int | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -668,16 +695,13 @@ def main(syms: list[str], *, all_syms: bool = False, limit: int | None = None) -
     OUT.mkdir(parents=True, exist_ok=True)
     today = date.today()
 
-    # ── --all: the buildable universe = every source file in MACRO_STOCKDATA ────
+    # ── --all: the buildable universe = the stockdata catalog ───────────────────
     # Resolved AFTER the R2 sync (the mirror may be empty on a fresh lane) and
     # never from DEFAULT/manifest — DEFAULT is the ~37-name curated seed list,
     # while stockdata carries the full ~1,700-name US universe.
     if all_syms:
-        syms = sorted(
-            p.stem for p in MACRO_STOCKDATA.glob("*.json")
-            if not p.name.startswith(("_", "."))
-        )
-        log.info("--all: %d source files in %s", len(syms), MACRO_STOCKDATA)
+        syms = _stockdata_universe()
+        log.info("--all: %d symbols from %s", len(syms), MACRO_STOCKDATA)
 
     # Equity-only symbols (skip crypto)
     equity_syms = [s for s in syms if META.get(s, ("", "Equities", ""))[1] == "Equities"]
