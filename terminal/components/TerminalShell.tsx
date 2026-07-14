@@ -820,7 +820,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     });
   }, [panes, man, quotes]);
 
-  const ov = oracleVerdict(m?.verdict ?? null);
+  const ov = oracleVerdict(m?.verdict ?? null, slice, lang === "zh");
   const dv = deskVerdict(intel, lang === "zh");
   // ── unified signal hierarchy ──────────────────────────────────────────────
   // Every ticker used to show three competing verdicts (Oracle · conviction · timing).
