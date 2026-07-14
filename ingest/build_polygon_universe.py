@@ -129,6 +129,48 @@ META = {
     # International
     "EEM": ("iShares MSCI Emerging Markets", "Equities", "#f77f00"),
     "FXI": ("iShares China Large-Cap", "Equities", "#d62828"),
+    # ── ETFs, batch 2 ─────────────────────────────────────────────────────────
+    # Broad market / style
+    "VOO": ("Vanguard S&P 500 ETF", "Equities", "#8e1f2f"),
+    "VTI": ("Vanguard Total Stock Market", "Equities", "#96172a"),
+    "QQQM": ("Invesco NASDAQ 100 ETF", "Equities", "#5a8dee"),
+    "RSP": ("Invesco S&P 500 Equal Weight", "Equities", "#4c9f70"),
+    "IWF": ("iShares Russell 1000 Growth", "Equities", "#7048e8"),
+    "IWD": ("iShares Russell 1000 Value", "Equities", "#495057"),
+    # Dividend / income
+    "SCHD": ("Schwab US Dividend Equity", "Equities", "#1e88e5"),
+    "VIG": ("Vanguard Dividend Appreciation", "Equities", "#00897b"),
+    "JEPI": ("JPMorgan Equity Premium Income", "Equities", "#5c6bc0"),
+    # Tech / semis
+    "SOXX": ("iShares Semiconductor ETF", "Equities", "#fb8c00"),
+    "IGV": ("iShares Expanded Tech-Software", "Equities", "#26c6da"),
+    "VGT": ("Vanguard Information Technology", "Equities", "#3949ab"),
+    # Leveraged / inverse
+    "TQQQ": ("ProShares UltraPro QQQ 3x", "Equities", "#00c853"),
+    "SQQQ": ("ProShares UltraPro Short QQQ 3x", "Equities", "#d50000"),
+    "SPXL": ("Direxion S&P 500 Bull 3x", "Equities", "#2e7d32"),
+    "SOXS": ("Direxion Semiconductor Bear 3x", "Equities", "#c62828"),
+    # Bonds / rates
+    "IEF": ("iShares 7-10 Year Treasury", "Equities", "#7986cb"),
+    "SHY": ("iShares 1-3 Year Treasury", "Equities", "#9fa8da"),
+    "LQD": ("iShares Investment Grade Corp Bond", "Equities", "#4dd0e1"),
+    "AGG": ("iShares Core US Aggregate Bond", "Equities", "#4db6ac"),
+    # Commodities
+    "GDX": ("VanEck Gold Miners ETF", "Equities", "#c9a227"),
+    "GDXJ": ("VanEck Junior Gold Miners", "Equities", "#b8860b"),
+    # International / country
+    "EFA": ("iShares MSCI EAFE", "Equities", "#ff8f00"),
+    "VEA": ("Vanguard Developed Markets", "Equities", "#fb8c00"),
+    "VWO": ("Vanguard Emerging Markets", "Equities", "#f4511e"),
+    "EWZ": ("iShares MSCI Brazil", "Equities", "#43a047"),
+    "KWEB": ("KraneShares China Internet", "Equities", "#e53935"),
+    # Crypto-linked ETFs
+    "IBIT": ("iShares Bitcoin Trust", "Equities", "#f7931a"),
+    "BITO": ("ProShares Bitcoin Strategy", "Equities", "#f2a900"),
+    # Thematic / industry
+    "IBB": ("iShares Biotechnology ETF", "Equities", "#0097a7"),
+    "JETS": ("US Global Jets ETF", "Equities", "#1565c0"),
+    "IYR": ("iShares US Real Estate", "Equities", "#00838f"),
     "BTC-USD": ("Bitcoin", "Crypto", "#f7931a"),
     "ETH-USD": ("Ethereum", "Crypto", "#627eea"),
     "SOL-USD": ("Solana", "Crypto", "#14f195"),
