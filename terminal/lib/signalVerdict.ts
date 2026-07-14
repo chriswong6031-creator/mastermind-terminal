@@ -32,7 +32,7 @@ function fmtDate(ts: string, zh: boolean): string {
 interface OracleSlice {
   indicator?: {
     state?: { last_signal?: string | null } | null;
-    signals?: Array<{ ts: string; type?: string; price?: number | null }> | null;
+    signals?: Array<{ ts: string; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null }> | null;
   } | null;
 }
 
@@ -45,8 +45,17 @@ interface OracleSlice {
 // horizon rides along in `note` so the button tooltip says so.
 export function oracleVerdict(v?: string | null, slice?: OracleSlice | null, zh = false, now: number = Date.now()): Verdict {
   const st = slice?.indicator?.state;
-  const sigs = slice?.indicator?.signals;
-  const last = Array.isArray(sigs) && sigs.length ? sigs[sigs.length - 1] : null;
+  const sigsRaw = slice?.indicator?.signals;
+  const sigs = Array.isArray(sigsRaw) ? sigsRaw : [];
+  // the dated marker for the verdict = the newest signals[] entry of the SAME type as
+  // state.last_signal — the tail can carry pending/blocked markers of another type
+  let last: (typeof sigs)[number] | null = null;
+  if (st?.last_signal) {
+    const want = String(st.last_signal).toUpperCase();
+    for (let i = sigs.length - 1; i >= 0; i--) {
+      if (String(sigs[i]?.type || "").toUpperCase() === want) { last = sigs[i]; break; }
+    }
+  }
   const raw0 = (st?.last_signal ?? v ?? null) as string | null;
   if (!raw0) return { label: "—", color: "var(--muted)", raw: null, sub: null, dim: false, note: null };
   const u = String(raw0).toUpperCase();
@@ -55,13 +64,16 @@ export function oracleVerdict(v?: string | null, slice?: OracleSlice | null, zh 
     : ["SELL", "CUT", "TRIM"].includes(u)
       ? "var(--sell)"
       : "var(--signal)";
-  const age = st?.last_signal && last ? ageDays(last.ts, now) : null;
+  const age = last ? ageDays(last.ts, now) : null;
   const sub =
     age != null && last
       ? `${fmtDate(last.ts, zh)} · ${zh ? `${age}天前` : `${age}d ago`}`
       : zh ? "无日期" : "undated";
   const notes: string[] = [zh ? "3日K线摆动择时信号 — 非投资观点" : "swing-timing overlay on 3D bars — not an investment view"];
   if (age != null && last?.price != null) notes.push(`@ ${last.price}`);
+  // engine-flagged soft signals (observed vocabulary: pending / block) lose tooltip authority too
+  const q = String(last?.quality || "").toLowerCase();
+  if (q === "pending" || q === "block") notes.push(String(last?.quality_reason || q));
   const mv = v ? String(v).toUpperCase() : null;
   if (mv && st?.last_signal && mv !== String(st.last_signal).toUpperCase())
     notes.push(zh ? `数据通道不一致（清单通道：${mv}）` : `data lanes disagree (screener lane: ${mv})`);
@@ -96,12 +108,14 @@ export function deskVerdict(intel: any, zh = false, now: number = Date.now()): V
     ? `${zh ? "数据截至" : "as of"} ${fmtDate(asof, zh)}${age != null ? ` · ${age}${zh ? "天" : "d"}` : ""}`
     : null;
   const score = typeof lean?.score === "number" ? lean.score : null;
+  // symmetric staleness guard: a desk read older than the display threshold loses authority too
+  const dim = age != null && age > ORACLE_STALE_DAYS;
   const notes: string[] = [];
   if (score != null) notes.push(zh ? `信心 ${score}/100` : `conviction ${score}/100`);
 
-  if (dir === "BEAR" && band === "low" && !!entry && !EXIT_ENTRIES.has(entry)) {
+  if (dir === "BEAR" && band === "low" && !EXIT_ENTRIES.has(entry)) {
     notes.unshift(zh ? "低买点评分（band=low）— 非做空观点" : "weak buy-readiness read (band=low) — not a short call");
-    return { label: zh ? "无买点" : "No setup", color: "var(--muted)", raw: "NO_SETUP", sub, dim: false, note: notes.join(" · ") };
+    return { label: zh ? "无买点" : "No setup", color: "var(--muted)", raw: "NO_SETUP", sub, dim, note: notes.join(" · ") };
   }
 
   const aj = intel?.cards?.ai_judgment;
@@ -113,5 +127,5 @@ export function deskVerdict(intel: any, zh = false, now: number = Date.now()): V
     dir === "BULL" ? (zh ? "看多" : "Bullish")
       : dir === "BEAR" ? (zh ? "看空" : "Bearish")
         : (zh ? "中性" : "Neutral");
-  return { label, color, raw: dir || null, sub, dim: false, note: notes.length ? notes.join(" · ") : null };
+  return { label, color, raw: dir || null, sub, dim, note: notes.length ? notes.join(" · ") : null };
 }

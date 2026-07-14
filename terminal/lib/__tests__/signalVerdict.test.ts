@@ -4,8 +4,13 @@ import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS } from "../signalVerdict"
 // Frozen "today" so ages are deterministic: 2026-07-14 (the NVDA/GOOGL stale-Sell incident date).
 const NOW = Date.parse("2026-07-14T21:00:00Z");
 
+type Sig = { ts: string; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null };
+
+function sliceOf(lastSignal: string, signals: Sig[]) {
+  return { indicator: { signals, state: { last_signal: lastSignal } } };
+}
 function slice(lastSignal: string, ts: string, price = 100) {
-  return { indicator: { signals: [{ ts, type: lastSignal, price }], state: { last_signal: lastSignal } } };
+  return sliceOf(lastSignal, [{ ts, type: lastSignal, price }]);
 }
 
 describe("oracleVerdict — age, dimming, provenance", () => {
@@ -50,6 +55,34 @@ describe("oracleVerdict — age, dimming, provenance", () => {
     expect(v.note).toContain("SELL");
   });
 
+  it("dates the verdict from the newest marker of the MATCHING type, not the raw tail", () => {
+    // Tail carries a soft marker of another type (AAPL live shape: pending BUY after SELLs).
+    const v = oracleVerdict(
+      "SELL",
+      sliceOf("SELL", [
+        { ts: "2026-06-03", type: "SELL", price: 205.1 },
+        { ts: "2026-07-13", type: "BUY", price: 314.86, quality: "pending" },
+      ]),
+      false,
+      NOW,
+    );
+    expect(v.raw).toBe("SELL");
+    expect(v.sub).toBe("Jun 3 · 41d ago"); // NOT Jul 13
+    expect(v.note).toContain("@ 205.1"); // NOT 314.86
+  });
+
+  it("annotates engine-flagged soft signals (quality pending/block) in the tooltip", () => {
+    const v = oracleVerdict(
+      "BUY",
+      sliceOf("BUY", [{ ts: "2026-07-13", type: "BUY", price: 314.86, quality: "pending", quality_reason: "pending confirmation" }]),
+      false,
+      NOW,
+    );
+    expect(v.label).toBe("Buy");
+    expect(v.dim).toBe(false); // fresh — dimming stays age-driven; quality rides the note
+    expect(v.note).toContain("pending confirmation");
+  });
+
   it("no verdict anywhere → em-dash, not dimmed styling noise", () => {
     const v = oracleVerdict(null, null, false, NOW);
     expect(v.label).toBe("—");
@@ -84,6 +117,12 @@ describe("deskVerdict — entry-timing honesty mapping", () => {
     expect(v.note).toContain("conviction 9/100");
   });
 
+  it('band=low BEAR with a MISSING entry also renders "No setup" (upstream emits BEAR on band alone)', () => {
+    const v = deskVerdict(intel({ dir: "BEAR", band: "low", score: 12 }), false, NOW);
+    expect(v.label).toBe("No setup");
+    expect(v.raw).toBe("NO_SETUP");
+  });
+
   it("entry=exit / entry=topping keep the real Bearish label", () => {
     for (const entry of ["exit", "topping"]) {
       const v = deskVerdict(intel({ dir: "BEAR", band: "low", entry }), false, NOW);
@@ -96,6 +135,15 @@ describe("deskVerdict — entry-timing honesty mapping", () => {
     const v = deskVerdict(intel({ dir: "BEAR" }), false, NOW);
     expect(v.label).toBe("Bearish");
     expect(v.raw).toBe("BEAR");
+  });
+
+  it("a stale tape as-of dims the desk half too (symmetric with the oracle threshold)", () => {
+    // 43 days old — would only ship if the intel cron stalled; must not render full-strength.
+    const stale = deskVerdict(intel({ dir: "BEAR", band: "low", entry: "bounce_wait" }, "2026-06-01"), false, NOW);
+    expect(stale.label).toBe("No setup");
+    expect(stale.dim).toBe(true);
+    const fresh = deskVerdict(intel({ dir: "BULL", band: "high", entry: "buy_now" }, "2026-07-13"), false, NOW);
+    expect(fresh.dim).toBe(false);
   });
 
   it("BULL and missing-lean behavior unchanged", () => {

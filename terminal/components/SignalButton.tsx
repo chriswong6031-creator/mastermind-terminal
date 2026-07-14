@@ -27,9 +27,11 @@ export default function SignalButton({ oracle, desk, oracleLabel, deskLabel, vie
           <path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" fill="var(--vc)" />
         </svg>
         <span className="sig-btn-lbl">{oracleLabel}</span>
+        {/* sub always renders (nbsp placeholder) so the two halves stay height-symmetric
+            and the absolutely-centered View pill sits exactly on their boundary */}
         <span className="sig-btn-vwrap">
           <span className="sig-btn-vd">{oracle.label}</span>
-          {oracle.sub && <span className="sig-btn-sub">{oracle.sub}</span>}
+          <span className="sig-btn-sub">{oracle.sub || " "}</span>
         </span>
       </span>
       <span className="sig-btn-seam">
@@ -42,7 +44,7 @@ export default function SignalButton({ oracle, desk, oracleLabel, deskLabel, vie
         <span className="sig-btn-lbl">{deskLabel}</span>
         <span className="sig-btn-vwrap">
           <span className="sig-btn-vd">{desk.label}</span>
-          {desk.sub && <span className="sig-btn-sub">{desk.sub}</span>}
+          <span className="sig-btn-sub">{desk.sub || " "}</span>
         </span>
       </span>
     </button>
