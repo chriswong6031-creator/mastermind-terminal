@@ -2462,6 +2462,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             const yHi = p2y(sess.hi), yLo = p2y(sess.lo);
             if (x1 == null || x2 == null || yHi == null || yLo == null) continue;
             const rxEnd = xEnd ?? W;
+            // Viewport cull + density declutter: drawing the box, rays, and (worst of all) the ORH/ORL
+            // + ±Nx TEXT labels for EVERY session across ALL loaded history is what froze the chart for
+            // 3-4s and flooded it with white text on the "Day" toggle. Skip sessions that are entirely
+            // off-screen or too compressed to read, and only draw the extension rays + text labels when
+            // the session is wide enough on screen (so a zoomed-out view shows clean boxes, not a wall
+            // of overlapping labels).
+            if (rxEnd < -60 || x1 > W + 60) continue;      // entirely off the visible viewport
+            const sw = rxEnd - x1;                          // session's on-screen width in px
+            if (sw < 3) continue;                           // too compressed to be legible — skip whole session
+            const showDetail = sw > 40;                     // wide enough for extension rays + text labels
             // Shaded box over the opening range window
             svgEl.appendChild(mk("rect", { x: x1, y: yHi, width: Math.max(0, x2 - x1), height: yLo - yHi, fill: p.boxCol as string, stroke: "none" }));
             // ORH solid ray to session end
@@ -2474,8 +2484,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
                 svgEl.appendChild(mk("line", { x1: x1, y1: yMid, x2: rxEnd, y2: yMid, stroke: p.lineCol as string, "stroke-width": 1, "stroke-dasharray": "4 3" }));
               }
             }
-            // Extension rays
-            for (const ext of sess.exts) {
+            // Extension rays + ±Nx labels — only when the session is wide enough on screen (declutter)
+            if (showDetail) for (const ext of sess.exts) {
               const yUp = p2y(ext.up), yDn = p2y(ext.dn);
               if (yUp != null) {
                 svgEl.appendChild(mk("line", { x1: x1, y1: yUp, x2: rxEnd, y2: yUp, stroke: p.lineCol as string, "stroke-width": 1, "stroke-dasharray": "4 3" }));
@@ -2491,10 +2501,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
                 svgEl.appendChild(lbl2);
               }
             }
-            // ORH / ORL labels
-            const orbLabelX = Math.min(x2 + 4, rxEnd - 4);
-            if (yHi != null) { const lh = mk("text", { x: orbLabelX, y: yHi - 3, fill: textColor, "font-size": 9, "text-anchor": "start", "font-family": "var(--font-ui)" }); lh.textContent = `ORH ${sess.hi.toFixed(2)}`; svgEl.appendChild(lh); }
-            if (yLo != null) { const ll = mk("text", { x: orbLabelX, y: yLo + 10, fill: textColor, "font-size": 9, "text-anchor": "start", "font-family": "var(--font-ui)" }); ll.textContent = `ORL ${sess.lo.toFixed(2)}`; svgEl.appendChild(ll); }
+            // ORH / ORL price labels — only when the session is wide enough (declutter)
+            if (showDetail) {
+              const orbLabelX = Math.min(x2 + 4, rxEnd - 4);
+              if (yHi != null) { const lh = mk("text", { x: orbLabelX, y: yHi - 3, fill: textColor, "font-size": 9, "text-anchor": "start", "font-family": "var(--font-ui)" }); lh.textContent = `ORH ${sess.hi.toFixed(2)}`; svgEl.appendChild(lh); }
+              if (yLo != null) { const ll = mk("text", { x: orbLabelX, y: yLo + 10, fill: textColor, "font-size": 9, "text-anchor": "start", "font-family": "var(--font-ui)" }); ll.textContent = `ORL ${sess.lo.toFixed(2)}`; svgEl.appendChild(ll); }
+            }
           }
         }
       }
