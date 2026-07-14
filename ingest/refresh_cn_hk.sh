@@ -3,6 +3,14 @@
 #
 # Runs on the Mac (needs the Macro Dashboard venv + TUSHARE_TOKEN in its .env, and the
 # nightly-built site data at Macro Dashboard/site/{chinastockdata,hkstockdata}). It:
+#
+# Lane overrides (used by the launchd nightly — ops/nightly_cnhk.sh — which must run
+# entirely OUTSIDE ~/Documents because macOS TCC denies launchd reads there):
+#   MACRO_REPO     alternate Macro-surface root (site/*stockdata + data/* + collectors code)
+#   MM_REFRESH_PY  alternate python interpreter (defaults to $MACRO/.venv/bin/python)
+#   TUSHARE_TOKEN  taken from the environment when set (no $MACRO/.env needed)
+# CA (the charting-app root) self-resolves from this script's own location, so a
+# worktree/clone run uses its own ingest/ + terminal/public/data.
 #   1. collects the deep Tushare/akshare parquets (financials, holders, 龙虎榜/block, HK deep)
 #   2. rebuilds every CN/HK <SYM>.intel.json via the bridge
 #   3. rsyncs the intel to the production VPS (content updates serve per-request — no restart)
@@ -17,9 +25,11 @@
 # own build — run that first if you want fresh decision/conviction for the engine-covered names.
 set -uo pipefail
 
-CA="/Users/chriswong/Documents/Cluade/charting-app"
-MACRO="/Users/chriswong/Documents/Cluade/Macro Dashboard"
-PY="$MACRO/.venv/bin/python"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CA="$(cd "$SCRIPT_DIR/.." && pwd)"
+MACRO="${MACRO_REPO:-/Users/chriswong/Documents/Cluade/Macro Dashboard}"
+PY="${MM_REFRESH_PY:-$MACRO/.venv/bin/python}"
+export MACRO_REPO="$MACRO" CA_ROOT="$CA"   # the ingest/*.py children resolve their roots from these
 KEY="$HOME/.ssh/macro_dashboard_deploy_v2"
 VPS="root@146.190.142.17"
 DATA="$CA/terminal/public/data"
@@ -35,9 +45,9 @@ for a in "$@"; do
   esac
 done
 
-cd "$MACRO" || { echo "no Macro Dashboard dir"; exit 1; }
+cd "$MACRO" || { echo "no Macro-surface dir at $MACRO"; exit 1; }
 set -a; [ -f "$MACRO/.env" ] && . "$MACRO/.env"; set +a
-if [ -z "${TUSHARE_TOKEN:-}" ]; then echo "[$(ts)] ERROR: TUSHARE_TOKEN missing in $MACRO/.env"; exit 1; fi
+if [ -z "${TUSHARE_TOKEN:-}" ]; then echo "[$(ts)] ERROR: TUSHARE_TOKEN missing (env or $MACRO/.env)"; exit 1; fi
 
 if [ "$SKIP_COLLECT" = "0" ]; then
   # Refresh the authoritative HKEX universe floor (Tushare hk_basic ~2.8k listed names) and

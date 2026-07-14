@@ -22,9 +22,14 @@ akshare HK taxonomy (STD_ITEM_CODE → contract field), verified against 00700:
             debt = 004011010(短期贷款)+004020001(长期贷款)
   cashflow: cfo=003999; cfi=005999; cff=007999; capex=005005(购建固定资产)
 
+Merge-mode (default ON, --no-merge to disable): when the output <SYM>.fund.json already exists,
+populated blocks in it survive a fresh run that would null them (statements when akshare returned
+nothing, estimates/analyst/profile/stats fields when yfinance was rate-limited, dividend events).
+Fresh non-null values always win. Mirrors gen_fund_cn.py's merge-mode (CN backfill pattern).
+
 Usage:
     "<Macro Dashboard>/.venv/bin/python" ingest/gen_fund_hk.py [--only 0700.HK,0005.HK] [--limit N] \
-        [--out <dir>]        # default out = terminal/public/data
+        [--out <dir>] [--no-merge]        # default out = terminal/public/data
 """
 from __future__ import annotations
 
@@ -35,7 +40,7 @@ import sys
 from pathlib import Path
 
 CA_ROOT = Path(__file__).resolve().parents[1]
-MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+MACRO = Path(os.environ.get("MACRO_REPO") or "/Users/chriswong/Documents/Cluade/Macro Dashboard")
 HK_FUND = MACRO / "data" / "hk_fund"
 DEFAULT_OUT = CA_ROOT / "terminal" / "public" / "data"
 
@@ -347,10 +352,41 @@ def build_profile(yf: dict) -> dict:
             "description": yf.get("description"), "founded": None, "hq": None}
 
 
-def build_earnings(yf: dict) -> dict:
+def build_earnings(yf: dict, annual: dict | None = None) -> dict:
+    """fy actuals from the akshare annual statements (last 5 FY eps_basic/revenue — same shape as
+    gen_fund_cn). q stays empty: HK filers report semi-annually, so quarterly differencing would
+    mislabel H1/H2 as quarters."""
+    fy = []
+    if annual:
+        periods = annual.get("periods") or []
+        inc = annual.get("income") or {}
+        eps_l = inc.get("eps_basic") or []
+        rev_l = inc.get("revenue") or []
+        n = len(periods)
+        eps_l = (eps_l + [None] * n)[:n]
+        rev_l = (rev_l + [None] * n)[:n]
+        for i in range(max(0, n - 5), n):
+            eps_v, rev_v = _f(eps_l[i]), _f(rev_l[i])
+            if eps_v is None and rev_v is None:
+                continue
+            fy.append({"period": periods[i],
+                       "eps_a": round(eps_v, 4) if eps_v is not None else None,
+                       "rev_a": round(rev_v) if rev_v is not None else None,
+                       "eps_e": None, "rev_e": None, "surp_pct": None})
     return {"next_date": yf.get("next_earnings"), "next_period": None,
             "next_eps_est": yf.get("eps_next_avg"), "next_rev_est": yf.get("rev_next_avg"),
-            "q": [], "fy": []}
+            "q": [], "fy": fy}
+
+
+def build_ownership(yf: dict) -> dict:
+    """free_float_pct = floatShares/sharesOutstanding as a 0..1 fraction (same derivation and
+    units as gen_fund_us.build_ownership); closely_held_pct = yf heldPercentInsiders (already a
+    fraction). No HK 13F-equivalent → top_inst stays an honest empty list."""
+    fs = _f(yf.get("float_shares"))
+    so = _f(yf.get("shares_out"))
+    free_float = round(fs / so, 4) if (fs and so) else None
+    return {"free_float_pct": free_float, "closely_held_pct": _f(yf.get("held_insider_pct")),
+            "top_inst": []}
 
 
 # ─────────────────────────────── emitter ───────────────────────────────
@@ -372,14 +408,78 @@ def build_fund(sym: str, rec: dict) -> dict:
         "stats": build_stats(yf),
         "statements": {"annual": annual, "quarterly": statements.get("quarterly")},
         "ratios": build_ratios(yf, annual),
-        "earnings": build_earnings(yf),
+        "earnings": build_earnings(yf, annual),
         "estimates": build_estimates(yf, fin),
         "analyst": build_analyst(yf),
         "dividends": build_dividends(fin, yf),
-        "ownership": {"free_float_pct": None, "closely_held_pct": None, "top_inst": []},
+        "ownership": build_ownership(yf),
         "guidance": None,
         "segments": None,
     }
+
+
+# ─────────────────────────────── merge-mode (mirrors gen_fund_cn.py) ───────────────────────────────
+def _nonempty(v) -> bool:
+    """True when a JSON value is meaningfully non-null/non-empty."""
+    if v is None:
+        return False
+    if isinstance(v, (list, dict)):
+        return len(v) > 0
+    return True
+
+
+def _merge_fund(fresh: dict, existing: dict) -> dict:
+    """Preserve populated blocks from the existing fund.json when the fresh run nulls them
+    (akshare returned nothing → keep statements; yfinance rate-limited → keep estimates/analyst
+    and per-field profile/stats/ratios.current/earnings/ownership). Fresh non-null always wins;
+    asof is always today."""
+    merged = dict(fresh)
+    merged["asof"] = ASOF
+
+    fresh_stmts = fresh.get("statements") or {}
+    if not _nonempty(fresh_stmts.get("annual")) and not _nonempty(fresh_stmts.get("quarterly")):
+        if _nonempty(existing.get("statements")):
+            merged["statements"] = existing["statements"]
+
+    # whole-block: fresh wins when present, else preserve existing
+    for key in ("estimates", "analyst", "guidance", "segments"):
+        if merged.get(key) is None and existing.get(key) is not None:
+            merged[key] = existing[key]
+
+    # field-level: fresh non-null overrides, existing fills the nulls
+    for blk in ("profile", "stats", "earnings", "ownership"):
+        f = fresh.get(blk) or {}
+        e = existing.get(blk) or {}
+        m = dict(e)
+        for k, v in f.items():
+            if _nonempty(v):
+                m[k] = v
+        merged[blk] = m or (fresh.get(blk) if fresh.get(blk) is not None else existing.get(blk))
+
+    # ratios: preserve period series when fresh has none; merge the current snapshot per-field
+    fr = fresh.get("ratios") or {}
+    er = existing.get("ratios") or {}
+    mr = dict(fr)
+    if not _nonempty(fr.get("periods")):
+        for k in ("periods", "pe", "ps", "pb", "pcf", "ev", "ev_ebitda"):
+            if _nonempty(er.get(k)):
+                mr[k] = er[k]
+    mc = dict(er.get("current") or {})
+    for k, v in (fr.get("current") or {}).items():
+        if v is not None:
+            mc[k] = v
+    mr["current"] = mc
+    merged["ratios"] = mr
+
+    # dividends: preserve existing when it has events and fresh does not
+    fresh_div = fresh.get("dividends") or {}
+    if not _nonempty(fresh_div.get("events")) and _nonempty((existing.get("dividends") or {}).get("events")):
+        merged["dividends"] = existing["dividends"]
+
+    src = dict(existing.get("src") or {})
+    src.update({k: v for k, v in (fresh.get("src") or {}).items() if v is not None})
+    merged["src"] = src
+    return merged
 
 
 def hk_universe() -> list[str]:
@@ -401,6 +501,7 @@ def main(argv: list[str]) -> None:
     only = _arg(argv, "--only")
     limit = int(_arg(argv, "--limit", 0) or 0)
     out_dir = Path(_arg(argv, "--out", str(DEFAULT_OUT)))
+    no_merge = "--no-merge" in argv
     out_dir.mkdir(parents=True, exist_ok=True)
 
     syms = ([s.strip() for s in only.split(",")] if only else hk_universe())
@@ -408,7 +509,7 @@ def main(argv: list[str]) -> None:
     if limit:
         syms = syms[:limit]
 
-    ok = err = miss = 0
+    ok = err = miss = merged_n = 0
     for sym in syms:
         cache = HK_FUND / f"{sym}.json"
         if not cache.exists():
@@ -417,14 +518,22 @@ def main(argv: list[str]) -> None:
         try:
             rec = json.loads(cache.read_text())
             fund = build_fund(sym, rec)
-            atomic_write(out_dir / f"{sym}.fund.json",
+            dest = out_dir / f"{sym}.fund.json"
+            if not no_merge and dest.exists():
+                try:
+                    fund = _merge_fund(fund, json.loads(dest.read_text()))
+                    merged_n += 1
+                except Exception:
+                    pass   # unreadable existing → plain fresh write
+            atomic_write(dest,
                          json.dumps(fund, separators=(",", ":"), ensure_ascii=False, sort_keys=False))
             ok += 1
         except Exception as exc:   # noqa: BLE001
             err += 1
             if err <= 20:
                 print(f"  ERR {sym}: {exc}", flush=True)
-    print(f"gen_fund_hk: {ok} written, {err} errors, {miss} missing cache → {out_dir}", flush=True)
+    print(f"gen_fund_hk: {ok} written ({merged_n} merge-mode), {err} errors, {miss} missing cache → {out_dir}",
+          flush=True)
 
 
 if __name__ == "__main__":

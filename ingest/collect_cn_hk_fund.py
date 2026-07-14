@@ -25,7 +25,10 @@ HK (akshare + yfinance):
 
 Universe:
     CN = site/chinastockdata/*.{SS,SZ}.json  (→ Tushare .SH/.SZ codes; .SS→.SH mapping handled)
-    HK = site/hkstockdata/*.HK.json ∪ data/tushare/hk_deep.parquet tickers  (~500 covered names)
+    HK = ingest/hk_universe_cache.json (full HKEX listing, ~2,798 names — the terminal manifest
+         floor) ∪ site/hkstockdata/*.HK.json ∪ data/tushare/hk_deep.parquet tickers.
+         (The old site∪hk_deep-only universe was the ~500-name top-turnover slice — that is what
+         stalled fund.json coverage at 470/2798, 2026-07-13 census.)
 
 Writes into  <Macro Dashboard>/data/ :
     tushare/stmt_income.parquet    (ts_code, end_date, <income fields>)      resumable by period
@@ -45,7 +48,10 @@ Run with the macro venv (pandas + TUSHARE_TOKEN in <Macro Dashboard>/.env):
         [--market cn|hk|all] [--only 600519.SH,0700.HK] [--limit N] \
         [--periods 28] [--stale-days 7] [--skip-stmt] [--skip-div] [--force]
         [--skip-consensus] [--skip-reports] [--skip-company] [--skip-holders]
-        [--skip-disclosure]
+        [--skip-disclosure] [--shard i/N]
+
+--shard i/N (1-based) takes every N-th name of the sorted HK universe so N processes can run the
+per-ticker HK collection in parallel against one shared cache dir (writes are per-ticker atomic).
 """
 from __future__ import annotations
 
@@ -60,7 +66,7 @@ from pathlib import Path
 
 import pandas as pd
 
-MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+MACRO = Path(os.environ.get("MACRO_REPO") or "/Users/chriswong/Documents/Cluade/Macro Dashboard")
 OUT = MACRO / "data" / "tushare"
 HK_OUT = MACRO / "data" / "hk_fund"
 CN_SITE = MACRO / "site" / "chinastockdata"
@@ -137,9 +143,19 @@ def cn_universe() -> list[str]:
     return sorted(set(out))
 
 
+HK_UNIVERSE_CACHE = Path(__file__).resolve().parent / "hk_universe_cache.json"
+
+
 def hk_universe() -> list[str]:
-    """HK names (site/hkstockdata ∪ hk_deep.parquet) as terminal 4-digit .HK symbols."""
+    """HK names as terminal 4-digit .HK symbols. Floor = ingest/hk_universe_cache.json (the full
+    HKEX listing from Tushare hk_basic that also floors the terminal manifest, ~2,798 names),
+    unioned with the legacy site/hkstockdata ∪ hk_deep.parquet sources."""
     out: set[str] = set()
+    if HK_UNIVERSE_CACHE.exists():
+        try:
+            out.update(k for k in json.loads(HK_UNIVERSE_CACHE.read_text()) if k.endswith(".HK"))
+        except Exception:
+            pass
     for f in glob.glob(str(HK_SITE / "*.HK.json")):
         n = os.path.basename(f)[:-5]
         if not n.startswith("_"):   # skip _HSI / _HSCE index files
@@ -437,7 +453,7 @@ def _fetch_hk(sym: str) -> dict | None:
 
 def collect_hk_fund(syms: list[str], force: bool, stale_days: int = 7) -> None:
     HK_OUT.mkdir(parents=True, exist_ok=True)
-    done = ok = 0
+    done = ok = healed = 0
     try:
         for sym in syms:
             cache = HK_OUT / f"{sym}.json"
@@ -446,18 +462,36 @@ def collect_hk_fund(syms: list[str], force: bool, stale_days: int = 7) -> None:
             if cache.exists() and not force:
                 age_days = (time.time() - cache.stat().st_mtime) / 86400
                 if stale_days <= 0 or age_days < stale_days:
-                    done += 1
-                    continue
+                    # SELF-HEAL a fresh cache with a hollow block: a yfinance rate-limit episode
+                    # caches yf={} (the 2026-07-03 run left 89% of HK names that way) and an
+                    # akshare outage caches empty financials — both would otherwise never be
+                    # revisited while the cache stays fresh.
+                    try:
+                        rec = json.loads(cache.read_text())
+                    except Exception:
+                        rec = None
+                    if rec and any((rec.get("financials") or {}).values()) and not rec.get("yf"):
+                        yf = _hk_yf(sym)
+                        if yf:
+                            rec["yf"] = yf
+                            _atomic_write(cache, json.dumps(rec, ensure_ascii=False, default=str))
+                            healed += 1
+                        done += 1
+                        continue
+                    if rec is not None and (any((rec.get("financials") or {}).values()) or rec.get("yf")):
+                        done += 1
+                        continue
+                    # corrupt cache or both blocks hollow → fall through to a full re-fetch
             rec = _fetch_hk(sym)
             done += 1
             if rec:
                 _atomic_write(cache, json.dumps(rec, ensure_ascii=False, default=str))
                 ok += 1
             if done % 25 == 0 or done == len(syms):
-                print(f"  hk_fund: {done}/{len(syms)} done, {ok} newly cached", flush=True)
+                print(f"  hk_fund: {done}/{len(syms)} done, {ok} newly cached, {healed} yf-healed", flush=True)
     except KeyboardInterrupt:
         print("  interrupted — per-ticker caches already on disk (resumable)", flush=True)
-    print(f"hk_fund: {ok} names newly cached into {HK_OUT}", flush=True)
+    print(f"hk_fund: {ok} names newly cached, {healed} yf-healed into {HK_OUT}", flush=True)
 
 
 # ─────────────────────────────── EastMoney consensus (cn_consensus.parquet) ───────────────────────────────
@@ -810,6 +844,11 @@ def main(argv: list[str]) -> None:
                   {x.split(".")[0].zfill(5) for x in only_set}]
         if limit:
             hk = hk[:limit]
+        shard = _arg(argv, "--shard")
+        if shard:
+            i, n = (int(x) for x in shard.split("/"))
+            hk = hk[i - 1::n]
+            print(f"=== HK shard {i}/{n} ===", flush=True)
         print(f"=== HK ({len(hk)} names) ===", flush=True)
         collect_hk_fund(hk, force, stale_days)
 

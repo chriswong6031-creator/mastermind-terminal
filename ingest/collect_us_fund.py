@@ -17,7 +17,11 @@ file newer than N days is skipped. Threaded (≤4, yfinance-etiquette) with ~1s 
 
 Run with the macro venv:
     "<Macro Dashboard>/.venv/bin/python" ingest/collect_us_fund.py \
-        [--only AAPL,ZS,NVDA] [--limit N] [--stale-days 3] [--workers 4] [--force]
+        [--only AAPL,ZS,NVDA] [--limit N] [--stale-days 3] [--workers 4] [--force] [--foreign]
+
+--foreign swaps the universe to the manifest's .TO/intl names (Yahoo-native suffixes, ~1.2k) —
+same fetch set and the same gen_fund_us.py emitter apply unchanged (it already separates
+quote_currency from stmt_currency, so CAD/JPY/INR/... names come out honest).
 """
 from __future__ import annotations
 
@@ -58,6 +62,19 @@ def load_manifest() -> dict:
         if MANIFEST_CACHE.exists():
             return json.loads(MANIFEST_CACHE.read_text())
         sys.exit("no manifest (fetch failed and no cache)")
+
+
+def foreign_universe() -> list[str]:
+    """--foreign universe: manifest names on non-US exchanges with Yahoo-native suffixes —
+    .TO (TSX) plus the intl set (.L/.T/.NS/.KS/.TW/.AX/.PA/.DE/.SW/.MI/.AS/.MC/...). Excludes
+    .SS/.SZ/.HK (own Tushare/akshare pipelines) and -USD crypto. Same collector + gen_fund_us
+    emitter work unchanged: yfinance serves statements/estimates/analyst for these and the
+    emitter already carries quote vs stmt currency separately (ADR handling)."""
+    m = load_manifest()
+    syms = m.get("symbols") or {}
+    return sorted(sym for sym, row in syms.items()
+                  if not sym.endswith((".SS", ".SZ", ".HK", "-USD"))
+                  and (row or {}).get("mkt") not in US_MKTS)
 
 
 def us_universe() -> list[str]:
@@ -301,6 +318,9 @@ def main(argv: list[str]) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     if only:
         want = only
+    elif "--foreign" in argv:
+        want = foreign_universe()
+        print(f"us_fund: --foreign: {len(want)} .TO/intl manifest symbols (Yahoo-native)", flush=True)
     elif top_n:
         want = top_n_by_dollar_vol(top_n)
         print(f"us_fund: --top-n {top_n}: selected {len(want)} symbols ranked by manifest dollar-vol", flush=True)
