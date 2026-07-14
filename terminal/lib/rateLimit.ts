@@ -20,10 +20,16 @@ function mapFor(name: string): Map<string, Bucket> {
   return m;
 }
 
-// Best-effort client IP. Behind Caddy/EdgeOne the real visitor is the first X-Forwarded-For hop
-// (Caddy is configured with trusted_proxies so it forwards the true client IP). Falls back to a
-// single "unknown" bucket, which is acceptable: a proxy that hides the IP just shares one budget.
+// Real VISITOR IP, not the CDN edge. app.mastermind-x.com is behind Cloudflare, which carries the
+// client IP in CF-Connecting-IP; Caddy's trusted_proxies=private_ranges does NOT trust the public CDN,
+// so X-Forwarded-For is the CDN EDGE IP, not the person. Prefer the CDN real-client header (CF- for
+// Cloudflare, EO-Connecting-IP for the EdgeOne case too), then fall back to XFF/x-real-ip — a proxy
+// that hides the IP just shares one "unknown" rate-limit bucket, which is acceptable.
 export function clientIp(req: Request): string {
+  for (const k of ["cf-connecting-ip", "eo-connecting-ip", "true-client-ip"]) {
+    const v = req.headers.get(k)?.trim();
+    if (v) return v;
+  }
   const xff = req.headers.get("x-forwarded-for");
   if (xff) return xff.split(",")[0].trim();
   return req.headers.get("x-real-ip")?.trim() || "unknown";
