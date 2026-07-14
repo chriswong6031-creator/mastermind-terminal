@@ -35,8 +35,11 @@ set -uo pipefail
 # the worktree's scripts (and the crontab keeps working after the worktree is discarded).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CA="$(cd "$SCRIPT_DIR/.." && pwd)"
-MACRO="/Users/chriswong/Documents/Cluade/Macro Dashboard"
-PY="$MACRO/.venv/bin/python"
+# MACRO_REPO / MM_REFRESH_PY: lane overrides for the launchd nightly (ops/nightly_cnhk.sh),
+# which must run entirely outside ~/Documents (macOS TCC denies launchd reads there).
+MACRO="${MACRO_REPO:-/Users/chriswong/Documents/Cluade/Macro Dashboard}"
+PY="${MM_REFRESH_PY:-$MACRO/.venv/bin/python}"
+export MACRO_REPO="$MACRO" CA_ROOT="$CA"   # the ingest/*.py children resolve their roots from these
 INGEST="$SCRIPT_DIR"
 DATA="$CA/terminal/public/data"
 KEY="$HOME/.ssh/macro_dashboard_deploy_v2"
