@@ -6,8 +6,13 @@ import { parseComposite, compositeExpr, validateLegs } from "@/lib/composite";
 import { getHistory } from "@/lib/searchHistory";
 import { trackSearch } from "@/lib/searchTrack";
 
-type Row = { name: string; col: string; verdict: string | null; mkt?: string; zh?: string };
+type Row = { name: string; col: string; verdict: string | null; mkt?: string; zh?: string; sec?: string };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
+
+// Asset-class → search-tab mapping. `sec` in the manifest is the asset class
+// (Equities / Funds / Crypto / …); anything unmapped (incl. stocks) falls under "Stocks".
+const CAT_OF: Record<string, string> = { Funds: "Funds", Crypto: "Crypto", Indices: "Indices", Bonds: "Bonds", Futures: "Futures", Forex: "Forex", Economy: "Economy", Options: "Options" };
+const tabOf = (sec?: string): string => (sec && CAT_OF[sec]) || "Stocks";
 
 // TV flag palette — 6 fixed hex colors matching the spec.
 export const FLAG_COLORS = [
@@ -44,6 +49,7 @@ export default function SearchModal({
   const [sel, setSel] = useState(0);
   const [choosing, setChoosing] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
+  const [cat, setCat] = useState("All");   // selected asset-class tab
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -51,6 +57,7 @@ export default function SearchModal({
       setQ(seed || "");
       setSel(0);
       setChoosing(null);
+      setCat("All");
       setHistory(getHistory());
       setTimeout(() => inputRef.current?.focus(), 10);
     }
@@ -72,18 +79,21 @@ export default function SearchModal({
     const ql = deferredQ.trim().toLowerCase();
     if (!ql) return [];
     return Object.entries(manifest)
-      .filter(([s, r]) => (!cmp || s !== active) && (s.toLowerCase().includes(ql) || r.name.toLowerCase().includes(ql) || (!!r.zh && r.zh.toLowerCase().includes(ql))))
+      .filter(([s, r]) => (!cmp || s !== active) && (cat === "All" || tabOf(r.sec) === cat) && (s.toLowerCase().includes(ql) || r.name.toLowerCase().includes(ql) || (!!r.zh && r.zh.toLowerCase().includes(ql))))
       .slice(0, 30);
-  }, [deferredQ, manifest, cmp, active]);
+  }, [deferredQ, manifest, cmp, active, cat]);
 
   // History rows when no query (most recent first, filtered against manifest).
   const historyResults = useMemo((): [string, Row][] => {
     if (deferredQ.trim()) return [];
     return history
-      .filter((s) => manifest[s])
+      .filter((s) => manifest[s] && (cat === "All" || tabOf(manifest[s].sec) === cat))
       .map((s) => [s, manifest[s]] as [string, Row])
       .slice(0, 30);
-  }, [deferredQ, history, manifest]);
+  }, [deferredQ, history, manifest, cat]);
+
+  // Which asset-class tabs actually have symbols in the universe (others render disabled).
+  const availCats = useMemo(() => { const s = new Set<string>(); for (const r of Object.values(manifest)) s.add(tabOf(r.sec)); return s; }, [manifest]);
 
   const showHistory = !deferredQ.trim();
   const displayRows: [string, Row][] = showHistory ? historyResults : results;
@@ -220,12 +230,18 @@ export default function SearchModal({
           </div>
         )}
 
-        {/* Filter chips (structural, non-functional in v1) */}
+        {/* Asset-class filter chips — filter results by the manifest `sec`. Tabs with no symbols
+            in the universe render disabled/dimmed. */}
         {!cmp && (
           <div className="s-chips">
-            {["All","Stocks","Funds","Futures","Forex","Crypto","Indices","Bonds","Economy","Options"].map((label, i) => (
-              <button key={label} className={`s-chip${i === 0 ? " on" : ""}`}>{label}</button>
-            ))}
+            {["All","Stocks","Funds","Futures","Forex","Crypto","Indices","Bonds","Economy","Options"].map((label) => {
+              const enabled = label === "All" || availCats.has(label);
+              return (
+                <button key={label} className={`s-chip${label === cat ? " on" : ""}`} disabled={!enabled}
+                  style={enabled ? undefined : { opacity: 0.35, cursor: "default" }}
+                  onClick={() => { if (enabled) { setCat(label); setSel(0); } }}>{label}</button>
+              );
+            })}
           </div>
         )}
 
