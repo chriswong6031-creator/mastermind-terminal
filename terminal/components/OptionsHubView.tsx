@@ -14,6 +14,7 @@ import { getTutStr } from "@/lib/tutorial/tutorialStrings";
 import { abbrevSector } from "@/lib/sectorAbbrev";
 import { windowGexRows } from "@/lib/windowGexRows.mjs";
 import { flowGet, flowInvalidate, flowPrefetch } from "@/lib/flowClientCache";
+import { trackSearch } from "@/lib/searchTrack";
 import {
   createChart, LineSeries, AreaSeries,
   type IChartApi, type ISeriesApi,
@@ -1513,6 +1514,15 @@ export default function OptionsHubView() {
     return () => document.removeEventListener("mousedown", h);
   }, [showPresets]);
 
+  // Settle-tracking for the tape ticker filter — a live filter has no discrete
+  // commit point, so log once the typed value sits unchanged for 1.2s.
+  useEffect(() => {
+    const v = tapeTickerSearch.trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(v)) return;
+    const id = setTimeout(() => trackSearch(v, "flow-tape", v), 1200);
+    return () => clearTimeout(id);
+  }, [tapeTickerSearch]);
+
   // Initial fetch (unconditional — visibility guard applies only to polling).
   useEffect(() => {
     // Bypass visibility check on mount: the guard is relevant for background-tab polling,
@@ -2477,7 +2487,7 @@ export default function OptionsHubView() {
                     return (
                       <button
                         key={root}
-                        onClick={() => setSelectedTicker(root)}
+                        onClick={() => { if (tickerSearch.trim()) trackSearch(root, "flow-tickers", tickerSearch.trim()); setSelectedTicker(root); }}
                         style={{
                           display: "flex", alignItems: "center", gap: 8,
                           width: "100%", padding: "8px 12px", textAlign: "left",

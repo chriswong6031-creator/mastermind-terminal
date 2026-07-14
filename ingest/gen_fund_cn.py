@@ -47,7 +47,7 @@ from pathlib import Path
 import pandas as pd
 
 CA_ROOT = Path(__file__).resolve().parents[1]
-MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+MACRO = Path(os.environ.get("MACRO_REPO") or "/Users/chriswong/Documents/Cluade/Macro Dashboard")
 CA = Path(__file__).resolve().parents[1]  # charting-app root (worktree-safe)
 TU = MACRO / "data" / "tushare"
 CN_SITE = MACRO / "site" / "chinastockdata"

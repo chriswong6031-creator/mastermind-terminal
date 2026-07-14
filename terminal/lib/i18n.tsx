@@ -43,6 +43,9 @@ const LEX: Record<string, [string, string]> = {
   tfWeeks: ["Weeks", "周线"],
   tfMonths: ["Months", "月线"],
   liveFeed: ["live feed", "实时行情"],
+  // mobile bottom sheet titles
+  ctSheetTitle: ["Chart type", "图表类型"],
+  tfSheetTitle: ["Timeframe", "时间周期"],
   // detectors
   autoTrendlines: ["Auto trendlines", "自动趋势线"],
   autoFib: ["Auto Fibonacci", "自动斐波那契"],

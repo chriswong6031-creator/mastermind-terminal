@@ -4,11 +4,101 @@
     {
       "name": "terminal-flow",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": ["run", "dev:fixture"],
       "cwd": "terminal",
       "port": 3000,
+      "autoPort": true,
       "env": {
-        "FLOW_FIXTURE": "1"
+        "FLOW_FIXTURE": "1",
+        "NW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "terminal-revamp",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "terminal",
+      "port": 3016
+    },
+    {
+      "name": "pass4-i-fixture",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture"],
+      "cwd": "terminal",
+      "port": 3018,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "PORT": "3018",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-p1",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3023"],
+      "cwd": "terminal",
+      "port": 3023,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-p2",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3026"],
+      "cwd": "terminal",
+      "port": 3026,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-p6",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3033"],
+      "cwd": "terminal",
+      "port": 3033,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-p7",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3034"],
+      "cwd": "terminal",
+      "port": 3034,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "pass6-p4a",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3036"],
+      "cwd": "terminal",
+      "port": 3036,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "techlab-w5",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3002"],
+      "cwd": "terminal",
+      "port": 3002,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
       }
     }
   ]

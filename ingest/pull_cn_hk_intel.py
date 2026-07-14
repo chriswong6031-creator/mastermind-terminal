@@ -29,11 +29,12 @@ Usage:  python ingest/pull_cn_hk_intel.py [SYM ...]         # default: every CN/
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 CA_ROOT = Path(__file__).resolve().parents[1]
-MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+MACRO = Path(os.environ.get("MACRO_REPO") or "/Users/chriswong/Documents/Cluade/Macro Dashboard")
 CN_DIR = MACRO / "site" / "chinastockdata"
 HK_DIR = MACRO / "site" / "hkstockdata"
 OUT = CA_ROOT / "terminal" / "public" / "data"

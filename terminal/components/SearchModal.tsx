@@ -4,6 +4,7 @@ import { useT } from "@/lib/i18n";
 import { CMP_PALETTE, CmpMode, CmpCfg } from "@/lib/compare";
 import { parseComposite, compositeExpr, validateLegs } from "@/lib/composite";
 import { getHistory } from "@/lib/searchHistory";
+import { trackSearch } from "@/lib/searchTrack";
 
 type Row = { name: string; col: string; verdict: string | null; mkt?: string; zh?: string };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
@@ -108,7 +109,13 @@ export default function SearchModal({
   const showCompositeRow = !cmp && !isAdd && compositeLegs !== null && compositeLegs.valid;
   const compositeExprStr = compositeLegs ? compositeExpr(compositeLegs.legs) : null;
 
+  const track = (sym: string) => trackSearch(sym, cmp ? "chart-compare" : isAdd ? "watchlist-add" : "chart-search", q.trim() || undefined);
+
   function choose(sym: string, shiftKey = false) {
+    // Compare mode isn't committed here — a row click only opens the price/% chooser (or removes
+    // an existing overlay). The actual commit is the segment button, which tracks itself. So only
+    // log go/add commits here; compare logging lives on the cmp-seg-half handlers.
+    if (!cmp) track(sym);
     if (cmp) {
       if (compare.includes(sym)) { onToggleCompare?.(sym); }
       else { setChoosing(sym); }
@@ -147,6 +154,7 @@ export default function SearchModal({
         const row = displayRows[idx];
         if (row) choose(row[0], shift);
         else if (isAdd && !inWatchlist.has(active)) {
+          track(active);
           onAdd(active);
           if (shift) onClose();
         }
@@ -245,7 +253,7 @@ export default function SearchModal({
                   ? <WlMemberActions sym={compositeExprStr} t={t} onRemove={onRemove} onGo={() => { onPick(compositeExprStr); onClose(); }} />
                   : !isAdd && <button className={`add${inWatchlist.has(compositeExprStr) ? " added" : ""}`}
                       title={inWatchlist.has(compositeExprStr) ? t("inWatchlist") : t("addToWatchlist")}
-                      onClick={(e) => { e.stopPropagation(); onAdd(compositeExprStr); }}>
+                      onClick={(e) => { e.stopPropagation(); track(compositeExprStr); onAdd(compositeExprStr); }}>
                       {inWatchlist.has(compositeExprStr)
                         ? <svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg>
                         : <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>}
@@ -313,9 +321,9 @@ export default function SearchModal({
                           <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>{t("addToCompare")}
                         </button>
                         <div className="cmp-seg">
-                          <button className="cmp-seg-half" onClick={(e) => { e.stopPropagation(); onToggleCompare?.(s, "price"); setChoosing(null); }}>{t("cmpPrice")}</button>
+                          <button className="cmp-seg-half" onClick={(e) => { e.stopPropagation(); track(s); onToggleCompare?.(s, "price"); setChoosing(null); }}>{t("cmpPrice")}</button>
                           <span className="cmp-seg-div" />
-                          <button className="cmp-seg-half" onClick={(e) => { e.stopPropagation(); onToggleCompare?.(s, "percent"); setChoosing(null); }}>{t("cmpPercent")}</button>
+                          <button className="cmp-seg-half" onClick={(e) => { e.stopPropagation(); track(s); onToggleCompare?.(s, "percent"); setChoosing(null); }}>{t("cmpPercent")}</button>
                         </div>
                         <button className="cmp-add-done add cmp added" title={t("comparing")} onClick={(e) => { e.stopPropagation(); onToggleCompare?.(s); }}>
                           <svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg>{t("comparingNow")}
@@ -324,13 +332,13 @@ export default function SearchModal({
                     : isAdd
                       ? inWl
                         ? <WlMemberActions sym={s} t={t} onRemove={onRemove} onGo={() => { onPick(s); onClose(); }} />
-                        : <button className="add" title={t("addToWatchlist")} onClick={(e) => { e.stopPropagation(); onAdd(s); if (e.shiftKey) onClose(); }}>
+                        : <button className="add" title={t("addToWatchlist")} onClick={(e) => { e.stopPropagation(); track(s); onAdd(s); if (e.shiftKey) onClose(); }}>
                             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
                           </button>
                       : <button
                           className={`add${inWl ? " added" : ""}`}
                           title={inWl ? t("inWatchlist") : t("addToWatchlist")}
-                          onClick={(e) => { e.stopPropagation(); onAdd(s); }}>
+                          onClick={(e) => { e.stopPropagation(); track(s); onAdd(s); }}>
                           {inWl
                             ? <svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg>
                             : <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>}

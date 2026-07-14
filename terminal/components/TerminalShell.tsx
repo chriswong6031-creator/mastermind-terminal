@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useIsMobile } from "@/lib/useMediaQuery";
+import MobileSheet from "@/components/ui/MobileSheet";
 import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
@@ -280,6 +282,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [objectTreeOpen, setObjectTreeOpen] = useState(false);
   // D1: indicator value lookup by bar time — populated by the active ChartPane after each data load
   const [indRowsAt, setIndRowsAt] = useState<((barTime: string | number) => Record<string, number | null>) | null>(null);
+  // B3: sub-pane count for mobile chart-body height formula (--subpanes CSS var)
+  const [subPanes, setSubPanes] = useState(0);
+  const onPaneCount = useCallback((n: number) => setSubPanes(n), []);
   // D2: chart templates — save-as modal
   const [tmplSaveOpen, setTmplSaveOpen] = useState(false);
   const [tmplSaveName, setTmplSaveName] = useState("");
@@ -313,6 +318,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const wsMounted = useRef(false);
   const t = useT();
   const { lang } = useLang();
+  const isMobile = useIsMobile();
   const navPath = usePathname();
   // ── urlSearch: window.location.search alternative to useSearchParams() ──────
   // TerminalShell is always dynamically-rendered (server-side, on demand) so the
@@ -1291,6 +1297,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                   <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2 10.5V12h1.5l5-5-1.5-1.5-5 5zM11.3 3.7a.9.9 0 0 0 0-1.3l-.7-.7a.9.9 0 0 0-1.3 0L8 3l2 2 1.3-1.3z" /></svg>
                 </button>
               </div>
+              {/* desktop TF grid (hidden on mobile via CSS) */}
               <div className={`tfgrid${tfOpen ? " show" : ""}`} onClick={(e) => e.stopPropagation()}>
                 {TF_GROUPS.map(([g, items]) => (<div key={g}><div className="g">{t(TFG_TKEY[g])}</div>{items.map((tfi) => { const fn = FUNCTIONAL.has(tfi); const fav = favTF.includes(tfi);
                   return <div key={tfi} className={`it${tf === tfi ? " on" : ""}${fn ? "" : " dis"}`} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
@@ -1298,12 +1305,44 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                     <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }}><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
                   </div>; })}</div>))}
               </div>
+              {/* mobile TF bottom sheet */}
+              {isMobile && (
+                <MobileSheet open={tfOpen} onClose={() => setTfOpen(false)} title={t("tfSheetTitle")}>
+                  {TF_GROUPS.map(([g, items]) => (
+                    <div key={g}>
+                      <div className="msheet-ghd">{t(TFG_TKEY[g])}</div>
+                      {items.map((tfi) => {
+                        const fn = FUNCTIONAL.has(tfi);
+                        const fav = favTF.includes(tfi);
+                        return (
+                          <div key={tfi} className={`msheet-row${tf === tfi ? " on" : ""}${fn ? "" : ""}`} style={fn ? {} : { opacity: 0.45 }} onClick={() => { if (fn) { setTf(tfi); setTfOpen(false); } }}>
+                            <span style={{ flex: 1 }}>{tfi}{!fn && <span style={{ color: "var(--text-dim)", marginLeft: 8, fontSize: 11 }}>{t("liveFeed")}</span>}</span>
+                            <span className={`fav${fav ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); setFavTF((f) => f.includes(tfi) ? f.filter((x) => x !== tfi) : [...f, tfi]); }} style={{ padding: "0 4px" }}><svg viewBox="0 0 24 24" width={16} height={16}><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" /></svg></span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </MobileSheet>
+              )}
             </div>
             <div className="pophost">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !ctOpen; closeAll(); setCtOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h3M14 4v16M14 9h3" /></svg>{t(CT_TKEY[chartType])}<span style={{ color: "var(--muted)" }}>▾</span></button>
+              {/* desktop popover (hidden on mobile via CSS) */}
               <div className={`pop${ctOpen ? " show" : ""}`} style={{ top: 32, left: 0 }} onClick={(e) => e.stopPropagation()}>
                 {CHART_TYPES.map(([k]) => <div key={k} className="set-row" style={chartType === k ? { color: "var(--brand-2)" } : {}} onClick={() => { setChartType(k); setCtOpen(false); }}>{t(CT_TKEY[k])}</div>)}
               </div>
+              {/* mobile bottom sheet */}
+              {isMobile && (
+                <MobileSheet open={ctOpen} onClose={() => setCtOpen(false)} title={t("ctSheetTitle")}>
+                  {CHART_TYPES.map(([k]) => (
+                    <div key={k} className={`msheet-row${chartType === k ? " on" : ""}`} onClick={() => { setChartType(k); setCtOpen(false); }}>
+                      {t(CT_TKEY[k])}
+                      {chartType === k && <span style={{ marginLeft: "auto" }}>✓</span>}
+                    </div>
+                  ))}
+                </MobileSheet>
+              )}
             </div>
             <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
             <div className="seg tool-adv" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
@@ -1397,7 +1436,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             onBack={() => setTableViewOpen(false)}
           />
         ) : view === "price" ? (
-          <div className="chart-body">
+          <div className="chart-body" style={{ "--subpanes": subPanes } as React.CSSProperties}>
             <DrawingSidebar
               tool={tool}
               magnet={magnet}
@@ -1416,6 +1455,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                   lockedVLine={lockedVLine}
                   onSetLockedVLine={(t2) => setLockedVLine(t2)}
                   onIndRowsAt={(fn) => setIndRowsAt(() => fn)}
+                  onPaneCount={i === 0 ? onPaneCount : undefined}
                 />
               ))}
             </div>

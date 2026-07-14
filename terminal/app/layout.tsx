@@ -8,15 +8,18 @@ import { LangProvider } from "@/lib/i18n";
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 const jetbrainsMono = JetBrains_Mono({ variable: "--font-jetbrains-mono", subsets: ["latin"], display: "swap" });
 
-export const metadata: Metadata = {
-  title: "Mastermind Terminal",
-  description: "Institutional charting — proprietary confluence signals, macro regime, and an AI copilot.",
-};
-
+// Viewport config: device-width, no zoom (full-bleed chart UX), safe-area insets via viewportFit.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
   viewportFit: "cover",
+};
+
+export const metadata: Metadata = {
+  title: "Mastermind Terminal",
+  description: "Institutional charting — proprietary confluence signals, macro regime, and an AI copilot.",
 };
 
 // Runs before first paint (no flash): pick the up/down color scheme + language from a saved

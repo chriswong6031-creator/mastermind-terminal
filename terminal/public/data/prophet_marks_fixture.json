@@ -1,0 +1,15 @@
+{
+  "schema": "prophet.live_marks/v1",
+  "asof_utc": "2026-07-09T14:00:00Z",
+  "session_date": "2026-07-09",
+  "_fixture": true,
+  "marks": {
+    "BA    260918C00220000": {
+      "bid": 18.10,
+      "ask": 18.55,
+      "mid": 18.325,
+      "last": 18.30,
+      "ts_utc": "2026-07-09T14:00:00Z"
+    }
+  }
+}
