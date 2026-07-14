@@ -22,7 +22,11 @@ VPS="root@146.190.142.17"; VPS_DATA="/opt/terminal/terminal/public/data"
 LOG="/tmp/mm_cnhk_watch.log"
 MAX_STAMP_AGE_H=30   # daily lane + slack
 MAX_VPS_AGE_H=48     # served files must be rewritten at least every other day
-SENTINELS="600519.SS.intel.json 0700.HK.fund.json"
+# JNJ.intel.json watches the US-intel leg (refresh_fund step 10, pull_macro_intel --all).
+# It MUST be a name outside build_polygon_universe.DEFAULT: the VPS's own nightly
+# refreshes the 37 DEFAULT names and would mask a lane failure (the 2026-07-03→14
+# no-op was invisible because only DEFAULT names kept advancing).
+SENTINELS="600519.SS.intel.json 0700.HK.fund.json JNJ.intel.json"
 ts(){ date "+%Y-%m-%dT%H:%M:%S%z"; }
 
 FAILS=""
