@@ -221,6 +221,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [sync, setSync] = useState(true);
   const [split, setSplit] = useState(1);   // the split the user requested (panes.length may be smaller after dedup)
   const active = panes[activePane] ?? panes[0] ?? seed0;
+  // Analytics: emit a ticker_view whenever the active chart symbol changes. The symbol is client
+  // state (not a route), so the route tracker never sees it — fire a decoupled window event that
+  // components/Tracker.tsx picks up. Fire-and-forget; never blocks the UI.
+  useEffect(() => {
+    if (!active) return;
+    try { window.dispatchEvent(new CustomEvent("mm:track", { detail: { type: "ticker_view", ticker: active } })); } catch {}
+  }, [active]);
   const [paneTfs, setPaneTfs] = useState<string[]>(["3D"]);   // one timeframe per pane — Terminal opens on 3D by default
   const tf = paneTfs[activePane] ?? paneTfs[0] ?? "D";        // the active pane's timeframe drives the toolbar
   const setTf = (t: string) => setPaneTfs((a) => { const n = [...a]; n[activePane] = t; return n; });
