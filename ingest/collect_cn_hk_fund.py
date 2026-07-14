@@ -60,7 +60,7 @@ from pathlib import Path
 
 import pandas as pd
 
-MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+MACRO = Path(os.environ.get("MACRO_REPO") or "/Users/chriswong/Documents/Cluade/Macro Dashboard")
 OUT = MACRO / "data" / "tushare"
 HK_OUT = MACRO / "data" / "hk_fund"
 CN_SITE = MACRO / "site" / "chinastockdata"

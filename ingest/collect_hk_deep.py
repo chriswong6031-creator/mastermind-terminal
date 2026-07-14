@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pandas as pd
 
-MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
-CA = Path("/Users/chriswong/Documents/Cluade/charting-app")
+MACRO = Path(os.environ.get("MACRO_REPO") or "/Users/chriswong/Documents/Cluade/Macro Dashboard")
+CA = Path(os.environ.get("CA_ROOT") or "/Users/chriswong/Documents/Cluade/charting-app")
 sys.path.insert(0, str(MACRO))
 
 from collectors.hk_fundamentals import fetch_one, ak_symbol  # noqa: E402  (financials + profile + analyst forecast)

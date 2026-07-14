@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.mastermind.cnhk.plist — nightly Terminal CN/HK deep-data refresh
+  (<SYM>.intel.json + CN/HK <SYM>.fund.json + US intel).
+
+  Runs ops/nightly_cnhk.sh from the fund ops clone once per day. The script mirrors
+  the CI-built CN/HK site stockdata from R2, runs the Tushare/akshare collectors,
+  rebuilds intel + fund JSONs, and rsyncs them to the VPS (data-only; never touches
+  the app).
+
+  ── TCC LAW — script MUST live OUTSIDE ~/Documents/ ────────────────────────
+  launchd (Aqua) is denied open-for-read on anything under ~/Documents/ by
+  macOS TCC (exec=126 / "Operation not permitted"). The whole lane (script,
+  clones, data, venv) lives in $HOME — see the header of ops/nightly_cnhk.sh
+  for the lane layout + recreate instructions. Same failure class previously
+  hit com.mastermind.fund, com.mastermind.liveflow, com.macro.thetadata-backfill.
+
+  SCHEDULE: 18:30 America/Vancouver = 01:30 UTC (summer/PDT) — after the ~22:40 UTC
+  macro CI site build and the 16:30 local US fund lane (nightly_cnhk additionally
+  waits on nightly_fund via pgrep before doing heavy work). NOTE: launchd uses local
+  wall-clock — in winter (PST) 18:30 local is 02:30 UTC.
+
+  INSTALL (as the mac user — not root):
+    cp /Users/chriswong/fund-ops-wt/ops/launchd/com.mastermind.cnhk.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mastermind.cnhk.plist
+
+  UNINSTALL:
+    launchctl bootout gui/$(id -u)/com.mastermind.cnhk
+    rm ~/Library/LaunchAgents/com.mastermind.cnhk.plist
+
+  MANUAL RUN (skips the self-update exec hop):
+    /bin/bash /Users/chriswong/fund-ops-wt/ops/nightly_cnhk.sh --post-update
+
+  LOG:
+    tail -f /tmp/mm_cnhk_refresh.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mastermind.cnhk</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <!-- MUST be outside ~/Documents/ — see TCC LAW above. -->
+    <string>/Users/chriswong/fund-ops-wt/ops/nightly_cnhk.sh</string>
+  </array>
+
+  <!-- MUST be outside ~/Documents/ too: launchd chdir into a TCC-denied
+       directory breaks getcwd in the child. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/chriswong/fund-ops-wt</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>18</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- Only run in the user's GUI session — never as a system daemon. -->
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/mm_cnhk_refresh.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/mm_cnhk_refresh.log</string>
+
+  <!-- Throttle: if the job exits in under 10s (crash), wait 60s before retrying. -->
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+</dict>
+</plist>
