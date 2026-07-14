@@ -4,6 +4,7 @@ import "./globals.css";
 import "./fin.css";
 import "./observatory.css";
 import { LangProvider } from "@/lib/i18n";
+import Tracker from "@/components/Tracker";
 
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 const jetbrainsMono = JetBrains_Mono({ variable: "--font-jetbrains-mono", subsets: ["latin"], display: "swap" });
@@ -36,7 +37,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en" data-theme="dark" className={`${inter.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <head><script dangerouslySetInnerHTML={{ __html: LOCALE_INIT }} /></head>
-      <body><LangProvider>{children}</LangProvider></body>
+      <body><LangProvider>{children}</LangProvider><Tracker /></body>
     </html>
   );
 }

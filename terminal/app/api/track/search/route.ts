@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { recordSearchEvent } from "@/lib/searchEvents";
 import { clientIp, rateLimit, tooMany } from "@/lib/rateLimit";
+import { readVisitor, setVisitorCookie } from "@/lib/visitor";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,9 +10,8 @@ export const dynamic = "force-dynamic";
 // Open write path for committed ticker searches (see lib/searchTrack.ts for the client
 // beacon contract). Unauthenticated by design — guests are the audience being measured;
 // identity is best-effort (user id if logged in, else the mm_aid anon cookie, else IP).
-
-const ANON_COOKIE = "mm_aid";
-const TWO_YEARS = 63_072_000; // seconds
+// The mm_aid cookie is minted/read via lib/visitor so its (domain) attributes stay identical
+// to /api/collect — a single visitor id shared across the mastermind-x.com family.
 
 // Codepoint-safe truncation: a plain .slice() by UTF-16 unit can split an astral char (emoji)
 // into a lone surrogate, which Postgres rejects on insert — silently dropping the event, the
@@ -47,11 +47,9 @@ export async function POST(req: NextRequest) {
   } catch {}
 
   // Clamp attacker-controlled fields to the DB check constraints (≤64) so a hostile
-  // cookie/XFF can't make the insert fail and silently drop the event.
-  let anon_id = req.cookies.get(ANON_COOKIE)?.value;
-  anon_id = anon_id ? clamp(anon_id, 64) : undefined;
-  const mint = !anon_id;
-  if (!anon_id) anon_id = crypto.randomUUID();
+  // cookie/XFF can't make the insert fail and silently drop the event. readVisitor already
+  // clamps the incoming cookie to 64 and mints a fresh uuid when absent.
+  const { anonId: anon_id, mint } = readVisitor(req);
 
   await recordSearchEvent({
     symbol,
@@ -64,14 +62,6 @@ export async function POST(req: NextRequest) {
   });
 
   const res = NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
-  if (mint) {
-    res.cookies.set(ANON_COOKIE, anon_id, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: TWO_YEARS,
-    });
-  }
+  if (mint) setVisitorCookie(res, anon_id);
   return res;
 }
