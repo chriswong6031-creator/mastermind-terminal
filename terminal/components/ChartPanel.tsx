@@ -1821,34 +1821,53 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const SLATE = "#7c8aa0";   // regime_blocked dim slate (no matching CSS token — inline hex)
       while (layer.firstChild) layer.removeChild(layer.firstChild);
 
-      // ── Gaps & Demand premade indicator ──────────────────────────────────────────
-      // Independent of the oracle (drawn BEFORE the oracle gate below). A TRUE 1-bar gap — an
-      // unfilled break where today's whole range clears yesterday's — is what shows on the chart as a
-      // visible gap, so we mark those (not every up/down open): gap up (low > prevHigh) → yellow ▲ in
-      // the empty space below the bar; gap down (high < prevLow) → red ▼ above. `minGapPct` filters by
-      // gap size (0 = every gap). A centered pivot-low "demand" spot → green ○ below. Pure from barsRef
-      // (respects replay + visible range); on the Daily timeframe this is literal 1-day gapping.
+      // ── Gap Zones premade indicator ──────────────────────────────────────────────
+      // Independent of the oracle (drawn BEFORE the oracle gate below). Detects TRUE DAILY gaps — a day
+      // whose whole range clears the prior day's — on the DAILY bars (so they show on ANY timeframe),
+      // and draws each as a shaded supply/demand ZONE: a gap up (low > prevHigh) leaves the empty band
+      // [prevHigh, low] that acts as support; a gap down (high < prevLow) leaves [high, prevLow] as
+      // resistance. Each zone extends right until a later daily bar trades back into it (fills it):
+      // unfilled zones are solid & reach the last bar; filled zones fade back and stop at the fill bar.
+      // `minGapPct` filters by size; `maxGaps` caps the recent FILLED zones (unfilled always shown).
       if (indicatorsRef.current.has("gaps") && !hiddenRef.current.has("gaps") && tfVisible("gaps")) {
-        const gp = P("gaps"); const gbars = barsRef.current;
-        const thr = Math.max(0, gp.minGapPct ?? 0) / 100;
-        const k = Math.max(1, Math.round(gp.demandStrength ?? 5));
-        for (let i = 0; i < gbars.length; i++) {
-          const b = gbars[i]; const x = xOf(b.time); if (x == null) continue;
-          if (gp.showGaps !== false && i > 0) {
-            const pb = gbars[i - 1];
-            if (pb.h > 0 && b.l > pb.h && (b.l - pb.h) / pb.h >= thr) {
-              const y = yOf(b.l);   // gap up: unfilled space sits below the bar's low
-              if (y != null) { const g = mk("g", { opacity: 0.95 }); g.appendChild(mk("path", { d: `M${x - 4.5} ${y + 13} L${x + 4.5} ${y + 13} L${x} ${y + 5} Z`, fill: gp.gapUpCol })); layer.appendChild(g); }
-            } else if (pb.l > 0 && b.h < pb.l && (pb.l - b.h) / pb.l >= thr) {
-              const y = yOf(b.h);   // gap down: unfilled space sits above the bar's high
-              if (y != null) { const g = mk("g", { opacity: 0.95 }); g.appendChild(mk("path", { d: `M${x - 4.5} ${y - 13} L${x + 4.5} ${y - 13} L${x} ${y - 5} Z`, fill: gp.gapDownCol })); layer.appendChild(g); }
-            }
+        const gp = P("gaps");
+        if (gp.showGaps !== false) {
+          const thr = Math.max(0, gp.minGapPct ?? 0) / 100;
+          const maxGaps = Math.max(1, Math.round(gp.maxGaps ?? 40));
+          const hideFilled = gp.hideFilled === true;
+          const cur = barsRef.current;
+          const daily = dailyBarsRef.current.length ? dailyBarsRef.current : cur;
+          // current bars may be daily (YYYY-MM-DD strings) or intraday (numeric epoch secs) → a calendar date
+          const dstr = (t: string | number) => (typeof t === "string" ? t : new Date((t as number) * 1000).toISOString().slice(0, 10));
+          // calendar date → first current-TF bar time of that day (identity on the daily TF)
+          const dayToBar = new Map<string, Bar["time"]>();
+          for (const b of cur) { const d = dstr(b.time); if (!dayToBar.has(d)) dayToBar.set(d, b.time); }
+          const lastX = cur.length ? xOf(cur[cur.length - 1].time) : null;
+          type Gap = { date: string; type: "up" | "down"; lo: number; hi: number; fill: string | null };
+          const gaps: Gap[] = [];
+          for (let i = 1; i < daily.length; i++) {
+            const b = daily[i], pb = daily[i - 1];
+            let g: Gap | null = null;
+            if (pb.h > 0 && b.l > pb.h && (b.l - pb.h) / pb.h >= thr) g = { date: dstr(b.time), type: "up", lo: pb.h, hi: b.l, fill: null };
+            else if (pb.l > 0 && b.h < pb.l && (pb.l - b.h) / pb.l >= thr) g = { date: dstr(b.time), type: "down", lo: b.h, hi: pb.l, fill: null };
+            if (!g) continue;
+            for (let j = i + 1; j < daily.length; j++) { if (g.type === "up" ? daily[j].l <= g.lo : daily[j].h >= g.hi) { g.fill = dstr(daily[j].time); break; } }
+            gaps.push(g);
           }
-          // demand = centered pivot low: b.l strictly below every neighbor within ±k bars
-          if (gp.showDemand !== false && i >= k && i < gbars.length - k) {
-            let piv = true;
-            for (let j = i - k; j <= i + k; j++) { if (j !== i && gbars[j].l <= b.l) { piv = false; break; } }
-            if (piv) { const y = yOf(b.l); if (y != null) { const g = mk("g", { opacity: 0.95 }); g.appendChild(mk("circle", { cx: x, cy: y + 20, r: 3.4, fill: "none", stroke: gp.demandCol, "stroke-width": 1.6 })); layer.appendChild(g); } }
+          // unfilled zones are the actionable ones → always drawn; filled ones are context → recent-capped.
+          const shown = [...(hideFilled ? [] : gaps.filter((g) => g.fill).slice(-maxGaps)), ...gaps.filter((g) => !g.fill)];
+          for (const g of shown) {
+            const t1 = dayToBar.get(g.date); if (t1 == null) continue;
+            const x1 = xOf(t1); if (x1 == null) continue;
+            const t2 = g.fill ? dayToBar.get(g.fill) : null;
+            const x2 = (t2 != null ? xOf(t2) : null) ?? lastX; if (x2 == null) continue;
+            const yHi = yOf(g.hi), yLo = yOf(g.lo); if (yHi == null || yLo == null) continue;
+            const col = (g.type === "up" ? gp.gapUpCol : gp.gapDownCol) as string;
+            const filled = !!g.fill;
+            const x = Math.min(x1, x2), w = Math.max(1, Math.abs(x2 - x1)), y = Math.min(yHi, yLo), h = Math.max(1, Math.abs(yLo - yHi));
+            const grp = mk("g", {});
+            grp.appendChild(mk("rect", { x, y, width: w, height: h, fill: col, "fill-opacity": filled ? 0.05 : 0.15, stroke: col, "stroke-opacity": filled ? 0.18 : 0.55, "stroke-width": 1 }));
+            layer.appendChild(grp);
           }
         }
       }

@@ -199,35 +199,34 @@ plot(macdLine, "MACD", color.new(#4d82ff, 0))
 plot(signalLine, "Signal", color.new(#e8a33d, 0))`,
   },
   gaps: {
-    // signal-style overlay (no plotted series): marks are drawn on the chart's signal layer, so this
-    // rides the same render path as the Golden Oracle marks (see ChartPanel renderSignals). Detects a
-    // true one-bar price gap (this bar's range fully clears the prior bar's) and pivot-low "demand" spots.
-    key: "gaps", label: "Gaps & Demand", tag: "Gaps", kind: "overlay",
+    // signal-style overlay (no plotted series): zones are drawn on the chart's signal layer, so this
+    // rides the same render path as the Golden Oracle marks (see ChartPanel renderSignals). Detects
+    // true DAILY gaps (a day whose whole range clears the prior day's) — computed on the daily bars so
+    // they show on ANY timeframe — and draws each as a shaded supply/demand ZONE that extends right
+    // until price trades back into it (fills it). Unfilled gaps are solid; filled gaps fade back.
+    key: "gaps", label: "Gap Zones", tag: "Gaps", kind: "overlay",
     defaults: {
-      showGaps: true, minGapPct: 0,
-      showDemand: true, demandStrength: 5,
-      gapUpCol: COL.yellow, gapDownCol: COL.down, demandCol: COL.up,
+      showGaps: true, minGapPct: 0.3, hideFilled: false, maxGaps: 40,
+      gapUpCol: COL.up, gapDownCol: COL.down,
     },
     fields: [
-      { key: "showGaps", label: "Show gaps", type: "bool", group: "inputs" },
+      { key: "showGaps", label: "Show gap zones", type: "bool", group: "inputs" },
       { key: "minGapPct", label: "Min gap size %", type: "number", group: "inputs", min: 0, max: 20, step: 0.1 },
-      { key: "showDemand", label: "Show demand", type: "bool", group: "inputs" },
-      { key: "demandStrength", label: "Demand pivot strength", type: "number", group: "inputs", min: 1, max: 20, step: 1 },
-      { key: "gapUpCol", label: "Gap-up color", type: "color", group: "style" },
-      { key: "gapDownCol", label: "Gap-down color", type: "color", group: "style" },
-      { key: "demandCol", label: "Demand color", type: "color", group: "style" },
+      { key: "hideFilled", label: "Hide filled gaps", type: "bool", group: "inputs" },
+      { key: "maxGaps", label: "Max gaps shown", type: "number", group: "inputs", min: 1, max: 200, step: 1 },
+      { key: "gapUpCol", label: "Gap-up (support) color", type: "color", group: "style" },
+      { key: "gapDownCol", label: "Gap-down (resistance) color", type: "color", group: "style" },
     ],
     source: `//@version=6
-indicator("Gaps & Demand", overlay = true)
-minGap   = input.float(0.0, "Min gap size %") / 100
-strength = input.int(5, "Demand pivot strength")
-// true 1-bar gaps: an unfilled break where this bar's whole range clears the prior bar's
-gapUp    = low  > high[1] and (low - high[1]) / high[1] >= minGap
-gapDown  = high < low[1]  and (low[1] - high) / low[1]  >= minGap
-demand   = not na(ta.pivotlow(low, strength, strength))   // swing-low where buyers stepped in
-plotshape(gapUp,   "Gap up",   shape.triangleup,   location.belowbar, color.new(#f5c518, 0))
-plotshape(gapDown, "Gap down", shape.triangledown, location.abovebar, color.new(#f0566b, 0))
-plotshape(demand,  "Demand",   shape.circle,       location.belowbar, color.new(#26c281, 0))`,
+indicator("Gap Zones", overlay = true, max_boxes_count = 200)
+minGap  = input.float(0.3, "Min gap size %") / 100
+hideFil = input.bool(false, "Hide filled gaps")
+// A true daily gap: today's whole range clears yesterday's, leaving an unfilled price band.
+gapUp   = low  > high[1] and (low  - high[1]) / high[1] >= minGap   // band [high[1], low]  → support
+gapDown = high < low[1]  and (low[1] - high)  / low[1]  >= minGap   // band [high, low[1]]  → resistance
+// The empty band is drawn as a zone (box) that extends right until a later bar trades back into it
+// (up-gap fills when a low re-touches high[1]; down-gap fills when a high re-touches low[1]).
+// Rendering is handled by the terminal's gap-zone renderer.`,
   },
 
   // ── DT Technicals Suite (display-tier descriptive) ──
