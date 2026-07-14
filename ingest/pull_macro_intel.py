@@ -35,8 +35,21 @@ sector_pulse pass-through (feat/sector-pulse-intel):
 Crypto symbols (BTC-USD, ETH-USD, SOL-USD, XRP-USD) and any symbol missing a source
 file are silently skipped (no source file in stockdata/).
 
+--all universe fix (2026-07-14):
+  8. Real argument parsing. refresh_fund.sh step 10 has always invoked this script as
+     ``pull_macro_intel.py --all [--limit N]``, but there was no flag handling —
+     ``--all`` was consumed as a literal ticker (META.get default = Equities), matched
+     no source file, and the run ended "0 written, 1 skipped". Every full-universe US
+     intel refresh had silently no-opped since 2026-07-03. ``--all`` now expands to
+     every ``<SYM>.json`` in MACRO_STOCKDATA (the buildable universe, post R2 sync);
+     ``--limit N`` caps it; bare symbols / ``--only SYM ...`` select explicitly; no
+     args still falls back to the curated DEFAULT list (VPS nightly behavior unchanged).
+
 Usage:
-    python ingest/pull_macro_intel.py [SYM ...]
+    python ingest/pull_macro_intel.py [SYM ...]        # explicit symbols (default: DEFAULT list)
+    python ingest/pull_macro_intel.py --only AAPL      # same as positional
+    python ingest/pull_macro_intel.py --all            # every symbol with a stockdata source
+    python ingest/pull_macro_intel.py --all --limit 20
 """
 from __future__ import annotations
 
@@ -627,7 +640,7 @@ def _build_tech_block(sym: str, lab_profiles: dict | None) -> dict | None:
     return out
 
 
-def main(syms: list[str]) -> None:
+def main(syms: list[str], *, all_syms: bool = False, limit: int | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     # ── R2 sync leg ─────────────────────────────────────────────────────────
@@ -655,8 +668,21 @@ def main(syms: list[str]) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     today = date.today()
 
+    # ── --all: the buildable universe = every source file in MACRO_STOCKDATA ────
+    # Resolved AFTER the R2 sync (the mirror may be empty on a fresh lane) and
+    # never from DEFAULT/manifest — DEFAULT is the ~37-name curated seed list,
+    # while stockdata carries the full ~1,700-name US universe.
+    if all_syms:
+        syms = sorted(
+            p.stem for p in MACRO_STOCKDATA.glob("*.json")
+            if not p.name.startswith(("_", "."))
+        )
+        log.info("--all: %d source files in %s", len(syms), MACRO_STOCKDATA)
+
     # Equity-only symbols (skip crypto)
     equity_syms = [s for s in syms if META.get(s, ("", "Equities", ""))[1] == "Equities"]
+    if limit is not None and limit >= 0:
+        equity_syms = equity_syms[:limit]
 
     # ── tech block: fetch tech_lab.json once per run ─────────────────────────
     # 404 or timeout → lab_profiles=None; per-symbol tech block is omitted when None.
@@ -672,8 +698,16 @@ def main(syms: list[str]) -> None:
     else:
         log.info("tech_lab.json: %d signals loaded", len(lab_profiles))
 
+    # Per-symbol lines at INFO are fine for curated runs but would append ~1,700
+    # lines per night to the refresh log on an --all run — demote to DEBUG there
+    # and emit a periodic progress line instead.
+    per_sym_level = logging.INFO if len(equity_syms) <= 50 else logging.DEBUG
+
     ok, skipped, stale_count, failed = [], [], [], []
-    for sym in equity_syms:
+    for i, sym in enumerate(equity_syms):
+        if per_sym_level == logging.DEBUG and i and i % 250 == 0:
+            log.info("  progress: %d/%d (%d written, %d skipped, %d failed)",
+                     i, len(equity_syms), len(ok), len(skipped), len(failed))
         src_path = MACRO_STOCKDATA / f"{sym}.json"
         if not src_path.exists():
             log.debug("skip %s: no source file", sym)
@@ -698,9 +732,10 @@ def main(syms: list[str]) -> None:
             is_stale = intel["tape"].get("stale", False)
             if is_stale:
                 stale_count.append(sym)
-                log.info("  %s: STALE (asof=%s) → abstain", sym, intel.get("asof"))
+                log.log(per_sym_level, "  %s: STALE (asof=%s) → abstain", sym, intel.get("asof"))
             else:
-                log.info(
+                log.log(
+                    per_sym_level,
                     "  %s: wrote %s (regime=%s dir=%s band=%s entry=%s score=%s tech=%s)",
                     sym,
                     out_path.name,
@@ -723,8 +758,24 @@ def main(syms: list[str]) -> None:
     if stale_count:
         print(f"  Stale (abstained): {stale_count[:10]}{'...' if len(stale_count)>10 else ''}")
     if failed:
-        print(f"  Failed: {failed}")
+        print(f"  Failed: {failed[:10]}{'...' if len(failed)>10 else ''}")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:] or DEFAULT)
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="Macro Dashboard → Terminal intel bridge (stockdata → <SYM>.intel.json)"
+    )
+    ap.add_argument("syms", nargs="*", metavar="SYM",
+                    help="explicit symbols (default: curated DEFAULT list)")
+    ap.add_argument("--only", nargs="+", default=[], metavar="SYM",
+                    help="alias for positional symbols")
+    ap.add_argument("--all", action="store_true", dest="all_syms",
+                    help="build every symbol with a source file in MACRO_STOCKDATA "
+                         "(the full ~1,700-name US universe; overrides SYM/--only)")
+    ap.add_argument("--limit", type=int, default=None, metavar="N",
+                    help="cap the number of symbols processed (applied after universe resolution)")
+    args = ap.parse_args()
+
+    main(args.syms + args.only or DEFAULT, all_syms=args.all_syms, limit=args.limit)
