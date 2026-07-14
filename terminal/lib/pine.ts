@@ -16,3 +16,33 @@ export const PROPRIETARY_SCRIPT = {
   updated_at: "2026-06-28T00:00:00.000Z",
   locked: true,
 };
+
+// ── Golden Oracle (v1), overlay-only ────────────────────────────────────────────────────────
+// The on-chart Golden Oracle marks (BUY★ / SELL★ / CUT / RE-BUY / B1·B2 / S1·S2 / TOP) computed
+// CLIENT-SIDE from the flagship v1 confluence — no per-ticker backfill. Derived from FLAGSHIP_PINE
+// (the single source of truth) by dropping the oscillator sub-pane block (levels / background /
+// %K·%D + RSI-MACD plots + in-pane cross dots) and flipping the indicator to overlay=true, so it
+// draws ONLY the price-chart signal markers. Anchored on the flagship's own section comments so it
+// survives edits to the flagship body; the removed block's locals (pK/pD/pM/pS/stochOB/stochOS)
+// are not referenced anywhere after it.
+function deriveOracleOverlay(src: string): string {
+  const lines = src.split("\n");
+  const start = lines.findIndex((l) => l.includes("PLOTS: levels & background"));
+  const end = lines.findIndex((l) => l.includes("SIGNALS ON PRICE"));
+  const trimmed = start >= 0 && end > start ? [...lines.slice(0, start), ...lines.slice(end)] : lines;
+  return trimmed.join("\n").replace(/overlay\s*=\s*false/, "overlay=true");
+}
+export const ORACLE_V1_PINE = deriveOracleOverlay(FLAGSHIP_PINE);
+
+// The client-side Golden Oracle preset — injected (locked) into the chart's script list when the
+// "Golden Oracle" indicator toggle is on, so the branded on-chart signals come from the v1 Pine
+// running live instead of precomputed backend data.
+export const ORACLE_V1_SCRIPT = {
+  id: "mm-golden-oracle-v1",
+  name: "Golden Oracle",
+  lang: "pine",
+  source: ORACLE_V1_PINE,
+  params: {} as Record<string, number>,
+  updated_at: "2026-07-14T00:00:00.000Z",
+  locked: true,
+};
