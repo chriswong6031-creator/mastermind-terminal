@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  terminal:
+    name: Terminal typecheck + tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terminal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: terminal/package-lock.json
+      - run: npm ci
+      # next-env.d.ts and .next/ route types are gitignored; generate them first
+      # so tsc checks the same project a `next build` would.
+      - run: npx next typegen
+      - run: npx tsc --noEmit
+      - run: npm test

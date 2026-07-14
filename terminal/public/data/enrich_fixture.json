@@ -1,0 +1,71 @@
+{
+  "schema": "flow.enrich/v1",
+  "source": "fixture",
+  "asof": "2026-07-09T16:00:00Z",
+  "session_date": "2026-07-09",
+  "thresholds": {
+    "elite": 69,
+    "strong": 62,
+    "high": 57,
+    "medium": 52,
+    "n": 2000,
+    "bootstrap": false
+  },
+  "events": [
+    {
+      "id": "dbaf11e5b9924ea9",
+      "badges": ["WHALE", "FRESH", "Z_OUTLIER"],
+      "direction_discounted": false,
+      "session_tier": "elite",
+      "q_score": 84,
+      "why": "Single-event premium $1.4M — magnitude gate confirmed. | Vol > OI: new positioning, not recycled open interest. | Root-level premium z-score ≥2σ vs 252-day baseline — running hot.",
+      "why_zh": "单笔权利金$1.4M——数量门限已确认。 | 成交量>持仓量：新建仓位，非旧有持仓。 | 该标的权利金Z值≥2σ（基于252日基准）——明显异常。"
+    },
+    {
+      "id": "834498893e62b77c",
+      "badges": ["WHALE", "REPEAT_HITTER"],
+      "direction_discounted": false,
+      "session_tier": "strong",
+      "q_score": 75,
+      "why": "Single-event premium $2.7M — magnitude gate confirmed. | Same OCC contract hit ≥3 times this session — conviction re-load.",
+      "why_zh": "单笔权利金$2.7M——数量门限已确认。 | 同一合约本交易日已出现≥3次——显示反复加仓。"
+    },
+    {
+      "id": "5f221fda4cbcd7d5",
+      "badges": ["WHALE", "MULTI_LEG"],
+      "direction_discounted": true,
+      "session_tier": "strong",
+      "q_score": 70,
+      "why": "Single-event premium $1.8M — magnitude gate confirmed. | Spread detected: same root, 2+ strikes, prints within 60s, leg ratio ≤1.25×. Direction is DISCOUNTED — this reads as a spread, not naked conviction.",
+      "why_zh": "单笔权利金$1.8M——数量门限已确认。 | 检测到价差：同一标的、2+行权价、60秒内成交、腿比≤1.25×。方向信号已折扣——此为价差策略，非裸方向仓位。"
+    },
+    {
+      "id": "01a7bc176c9e0e8e",
+      "badges": ["FRESH"],
+      "direction_discounted": false,
+      "session_tier": "high",
+      "q_score": 59,
+      "why": "Vol > OI: new positioning — this contract had little prior open interest.",
+      "why_zh": "成交量>持仓量：新建仓位——该合约此前持仓量较少。"
+    },
+    {
+      "id": "486f8ff8f833ef0f",
+      "badges": ["FRESH", "LADDER"],
+      "direction_discounted": false,
+      "session_tier": "high",
+      "q_score": 61,
+      "why": "Vol > OI: new positioning — this contract had little prior open interest. | Same expiry appears across 3+ distinct strikes — possible staged accumulation.",
+      "why_zh": "成交量>持仓量：新建仓位——该合约此前持仓量较少。 | 同一到期日出现3个以上不同行权价——可能为梯形建仓。"
+    },
+    {
+      "id": "c02fa9f6f4292d6e",
+      "badges": [],
+      "direction_discounted": false,
+      "session_tier": "medium",
+      "q_score": 53,
+      "why": "No detection badges active.",
+      "why_zh": "无检测徽章激活。"
+    }
+  ],
+  "confirmed_yesterday": []
+}

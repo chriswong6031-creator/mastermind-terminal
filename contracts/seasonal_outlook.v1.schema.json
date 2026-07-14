@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "mastermind.seasonal_outlook/v1",
+  "title": "Regime-aware forward seasonal outlook (display-only)",
+  "description": "Per-symbol speculative seasonal outlook: pre-registered semi-monthly forward buckets flagged bullish/bearish, computed from regime-analog years with leave-one-year-out validation. DISPLAY ONLY — never a forecast, never model-facing trade input.",
+  "type": "object",
+  "required": ["schema", "symbol", "as_of", "is_display_only", "mode", "current_year", "history", "disclaimer", "honest_read"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": { "const": "mastermind.seasonal_outlook/v1" },
+    "engine_version": { "type": "string" },
+    "regime_table_version": { "type": "string" },
+    "symbol": { "type": "string" },
+    "as_of": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "is_display_only": { "const": true },
+    "mode": { "enum": ["regime_weighted", "baseline_fallback", "insufficient", "unavailable"] },
+    "default_view": { "enum": ["baseline", "regime"] },
+    "n_eff": { "type": "number" },
+    "n_eff_note": { "type": "string" },
+    "relaxed_filters": { "type": "array", "items": { "type": "string" } },
+    "disclaimer": { "type": "string" },
+    "honest_read": { "type": "string" },
+    "current_year": {
+      "type": "object",
+      "required": ["year", "cycle_pos", "rate_dir", "is_recession", "provisional"],
+      "properties": {
+        "year": { "type": "integer" },
+        "cycle_pos": { "enum": ["election", "post_election", "midterm", "pre_election"] },
+        "rate_dir": { "enum": ["hiking", "cutting", "holding", "whipsaw", "unknown"] },
+        "is_recession": { "type": "boolean" },
+        "whipsaw": { "type": "boolean" },
+        "flags": { "type": "array", "items": { "type": "string" } },
+        "anomaly_flags": { "type": "array", "items": { "type": "string" } },
+        "provisional": { "type": "boolean" }
+      }
+    },
+    "history": {
+      "type": "object",
+      "required": ["complete_years", "coverage"],
+      "properties": {
+        "first_year": { "type": ["integer", "null"] },
+        "last_date": { "type": ["string", "null"] },
+        "complete_years": { "type": "integer", "minimum": 0 },
+        "coverage": { "enum": ["deep", "medium", "thin"] }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "required": ["loyo_years", "verdict"],
+      "properties": {
+        "loyo_years": { "type": "integer" },
+        "n_predictions": { "type": "integer" },
+        "regime_hit": { "type": ["number", "null"] },
+        "baseline_hit": { "type": ["number", "null"] },
+        "skill": { "type": ["number", "null"] },
+        "verdict": { "enum": ["edge", "no_edge", "anti", "untested"] }
+      }
+    },
+    "analogs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["year", "weight", "cycle_pos", "rate_dir"],
+        "properties": {
+          "year": { "type": "integer" },
+          "weight": { "type": "number", "minimum": 0, "maximum": 1 },
+          "cycle_pos": { "type": "string" },
+          "rate_dir": { "type": "string" },
+          "is_recession": { "type": "boolean" },
+          "whipsaw": { "type": "boolean" },
+          "flags": { "type": "array", "items": { "type": "string" } },
+          "provisional": { "type": "boolean" }
+        }
+      }
+    },
+    "forward_buckets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["start", "end", "label", "baseline", "regime"],
+        "properties": {
+          "start": { "type": "string" },
+          "end": { "type": "string" },
+          "label": { "type": "string" },
+          "baseline": { "$ref": "#/definitions/view" },
+          "regime": { "$ref": "#/definitions/view" }
+        }
+      }
+    },
+    "intervals_baseline": { "type": "array", "items": { "$ref": "#/definitions/interval" } },
+    "intervals_regime": { "type": "array", "items": { "$ref": "#/definitions/interval" } }
+  },
+  "definitions": {
+    "view": {
+      "type": "object",
+      "required": ["dir", "confidence"],
+      "properties": {
+        "dir": { "enum": ["bull", "bear", "neutral"] },
+        "mean": { "type": ["number", "null"] },
+        "median": { "type": ["number", "null"] },
+        "win_rate": { "type": ["number", "null"] },
+        "n": { "type": "integer" },
+        "lo": { "type": ["number", "null"] },
+        "hi": { "type": ["number", "null"] },
+        "confidence": { "enum": ["low", "medium", "high"] }
+      }
+    },
+    "interval": {
+      "type": "object",
+      "required": ["dir", "start", "end", "expected_move"],
+      "properties": {
+        "dir": { "enum": ["bull", "bear"] },
+        "start": { "type": "string" },
+        "end": { "type": "string" },
+        "expected_move": { "type": "number" },
+        "win_rate": { "type": ["number", "null"] },
+        "n": { "type": "integer" },
+        "buckets": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
