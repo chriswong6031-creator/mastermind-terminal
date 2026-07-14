@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 CA_ROOT = Path(__file__).resolve().parents[1]
-MACRO = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+MACRO = Path(os.environ.get("MACRO_REPO") or "/Users/chriswong/Documents/Cluade/Macro Dashboard")
 HK_FUND = MACRO / "data" / "hk_fund"
 DEFAULT_OUT = CA_ROOT / "terminal" / "public" / "data"
 

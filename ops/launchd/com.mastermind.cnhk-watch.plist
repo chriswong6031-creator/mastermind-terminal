@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.mastermind.cnhk-watch.plist — dead-man watcher for the nightly CN/HK refresh.
+
+  Runs ops/check_cnhk_fresh.sh daily at 10:00 local (well after the 18:30 lane
+  finished). Alerts via /tmp/mm_cnhk_watch.log + macOS notification (+ optional
+  Telegram when TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are in ~/.mm-fund.env) when
+  the lane stamp or the served VPS files go stale.
+
+  TCC LAW: everything outside ~/Documents/ — see ops/nightly_cnhk.sh header.
+
+  INSTALL:
+    cp /Users/chriswong/fund-ops-wt/ops/launchd/com.mastermind.cnhk-watch.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mastermind.cnhk-watch.plist
+
+  UNINSTALL:
+    launchctl bootout gui/$(id -u)/com.mastermind.cnhk-watch
+    rm ~/Library/LaunchAgents/com.mastermind.cnhk-watch.plist
+
+  MANUAL RUN:
+    /bin/bash /Users/chriswong/fund-ops-wt/ops/check_cnhk_fresh.sh
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mastermind.cnhk-watch</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/chriswong/fund-ops-wt/ops/check_cnhk_fresh.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/chriswong/fund-ops-wt</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>10</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/mm_cnhk_watch.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/mm_cnhk_watch.log</string>
+</dict>
+</plist>
