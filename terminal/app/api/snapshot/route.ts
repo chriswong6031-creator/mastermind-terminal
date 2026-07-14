@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { clientIp } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -113,8 +114,9 @@ async function deriveSigningKey(secret: string, date: string, region: string, se
 // Returns { url: "/x/<slug>" } on success.
 // When R2 env vars are absent, returns 503 with a clear error.
 export async function POST(req: Request) {
-  // Rate limit by IP
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  // Rate limit by IP — use the shared helper so we key on the real visitor behind the CDN
+  // (CF-/EO-Connecting-IP), not the CDN edge PoP IP that a raw X-Forwarded-For read returns.
+  const ip = clientIp(req);
   if (!checkRate(ip)) return NextResponse.json({ error: "Rate limit exceeded (10/min)" }, { status: 429 });
 
   // Check R2 config early — 503 before we read the body
