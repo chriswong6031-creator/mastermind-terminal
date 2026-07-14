@@ -18,6 +18,7 @@ import {
   CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
 import { runPine, type RunResult } from "@/lib/pine-engine";
+import { ORACLE_V1_PINE } from "@/lib/pine";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
@@ -279,6 +280,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // dimming/hollow style + the A+/Q badge). CUT is discriminated by `type` (the schema guarantees CUT ⟺
   // scored:false), so `score`/`scored` aren't needed on the chart. All optional — v1 slices omit them.
   const sigMarksRef = useRef<{ t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null }[]>([]);
+  // Golden Oracle v1: the confluence signals now come from ORACLE_V1_PINE run CLIENT-SIDE on the
+  // daily bars (no per-ticker backfill), memoized per (symbol · daily length · last daily date) so
+  // the flagship Pine runs once per load and replay just re-snaps the cached signal dates.
+  const oracleMemoRef = useRef<{ key: string; sig: { ts: string; type: string }[] }>({ key: "", sig: [] });
   // Lab signal markers (TLT-R4): populated when _lab indicator is active and intel.tech is available.
   // Shape: Map<date-string, { names: string[]; dir: number }[]> — one entry per date, one item per signal fired that day.
   // Capped at the most recent LAB_MARKER_CAP fire-days to keep rendering responsive.
@@ -1363,36 +1368,47 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     }
   };
 
-  // Resolve BUY/SELL/CUT/REBUY marks against the CURRENT bar set (base's `sigMarks` logic).
-  const resolveSigMarks = (slice: any, rows: Bar[]) => {
+  // Golden Oracle v1: run the flagship confluence Pine (ORACLE_V1_PINE) on the DAILY bars and map its
+  // ★ / CUT / RE-BUY plotshapes to signal dates. Memoized per (symbol · daily length · last daily
+  // date) so the Pine runs once per symbol load and replay just re-snaps the cached signals.
+  const oracleSignals = (daily: Bar[]) => {
+    const key = `${symbolRef.current}|${daily.length}|${daily[daily.length - 1]?.time ?? ""}`;
+    if (oracleMemoRef.current.key === key) return oracleMemoRef.current.sig;
+    const sig: { ts: string; type: string }[] = [];
+    try {
+      const out = runPine(ORACLE_V1_PINE, daily as any, { timeframe: "D", symbol: symbolRef.current });
+      if (out.ok && out.result) {
+        for (const sh of out.result.shapes) {
+          // ★ discriminates BUY (below the bar) vs SELL (above); CUT / RE-BUY carry their own label.
+          const type = sh.text === "★" ? (sh.position === "aboveBar" ? "SELL" : "BUY")
+            : sh.text === "CUT" ? "CUT" : sh.text === "RE-BUY" ? "REBUY" : null;
+          if (type) sig.push({ ts: String(sh.time), type });
+        }
+      }
+    } catch { /* engine error → no marks */ }
+    oracleMemoRef.current = { key, sig };
+    return sig;
+  };
+  // Resolve BUY/SELL/CUT/REBUY marks against the CURRENT bar set. Signals are computed CLIENT-SIDE from
+  // the v1 confluence Pine (no per-ticker backfill) — the `slice` arg is ignored, kept for call-site
+  // compatibility. Daily signal dates snap to the current bars exactly as the v2 path did, so intraday
+  // / replay / resampled views line up.
+  const resolveSigMarks = (_slice: any, rows: Bar[]) => {
+    const daily = dailyBarsRef.current.length ? dailyBarsRef.current : rows;
+    if (!daily.length || !rows.length) return [] as { t: string; type: string; price: number }[];
     const times = rows.map((r) => r.time);
     const lastDate = times[times.length - 1];
-    const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(y + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y; } }); return bd < 9e8 ? b : null; };
-    return (slice?.indicator?.signals || [])
-      .filter((s: any) => s.ts <= lastDate)
-      // GC v2: carry quality/tier so renderSignals can style keeper take/block/pending + regime_blocked
-      // entries and draw the A+/Q tier badge. All optional — v1 slices leave them undefined.
-      .map((s: any) => ({ t: near(s.ts), type: s.type as string, price: s.price as number, quality: s.quality, tier: s.tier }))
-      .filter((m: any) => m.t && m.price != null) as { t: string; type: string; price: number; quality?: string; tier?: string | null }[];
+    const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(String(y) + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y as any; } }); return bd < 9e8 ? b : null; };
+    const byTime = new Map(rows.map((r) => [r.time, r]));
+    return oracleSignals(daily)
+      .filter((s) => s.ts <= (lastDate as string))
+      .map((s) => { const t = near(s.ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) return null; const price = (s.type === "BUY" || s.type === "REBUY") ? bar.l : bar.h; return { t, type: s.type, price }; })
+      .filter(Boolean) as { t: string; type: string; price: number }[];
   };
 
-  // GC v2 side channels → bar-snapped marks. early_dots is a list of date strings (anticipation
-  // pre-cross); warnings is a list of {ts, kind:"arm"|"confirm"} (structure-break). Both live on the
-  // slice indicator parallel to signals (emitter: ingest/gen_slices_all.py writes {"indicator": ind}).
-  const resolveSideChannels = (slice: any, rows: Bar[]) => {
-    const times = rows.map((r) => r.time);
-    const lastDate = times[times.length - 1];
-    const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(y + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y; } }); return bd < 9e8 ? b : null; };
-    const dots = ((slice?.indicator?.early_dots || []) as string[])
-      .filter((ts) => ts <= lastDate)
-      .map((ts) => ({ t: near(ts) as string | null }))
-      .filter((m) => m.t) as { t: string }[];
-    const warns = ((slice?.indicator?.warnings || []) as { ts: string; kind: string }[])
-      .filter((w) => w?.ts <= lastDate)
-      .map((w) => ({ t: near(w.ts) as string | null, kind: w.kind }))
-      .filter((m) => m.t) as { t: string; kind: string }[];
-    return { dots, warns };
-  };
+  // The v1 Golden Oracle has NO side channels (the early_dots + arm/confirm warnings were a GC v2
+  // display extra). Return empty so renderSignals draws none. Kept for call-site compatibility.
+  const resolveSideChannels = (_slice: any, _rows: Bar[]) => ({ dots: [] as { t: string }[], warns: [] as { t: string; kind: string }[] });
 
   // Status line + verdict badge from the current bars + slice.
   const paintStatus = (rows: Bar[], slice: any) => {
@@ -1410,7 +1426,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Gate oracle verdict text on whether the _oracle indicator is active. The chip's display:none
     // is controlled by oracleVisible in JSX; this guard prevents stale text from painting in the
     // background when the user has toggled the oracle OFF.
-    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) { const v = slice?.indicator?.state?.last_signal || "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
+    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) { const sm = sigMarksRef.current; const v = sm.length ? sm[sm.length - 1].type : "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
   };
 
   // ── R11 live-bar splice ───────────────────────────────────────────────────
