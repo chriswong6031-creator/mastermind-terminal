@@ -145,12 +145,12 @@ def sync_r2_stockdata(dest: Path) -> int | None:
         except Exception:
             return None
         tag, meta_path = got[1], dest / _R2_META
-        try:  # ETag fast-path: same manifest + local count matches → nothing to do
-            if tag and json.loads(meta_path.read_text()).get("etag") == tag \
-                    and sum(1 for _ in dest.glob("*.json")) >= len(names):
-                return 0
-        except Exception:
-            pass
+        # NOTE: there is deliberately NO manifest-ETag fast-path. `_manifest.json` is only a
+        # filename LIST — its ETag changes when the universe adds/removes a name, NOT when the
+        # per-ticker payloads are republished (which happens every build). Gating the sync on that
+        # ETag froze the local mirror for days while NVDA.json et al. advanced on R2 (the Research
+        # Desk stale-intel incident, 2026-07-10→13). The macro build republishes the whole set daily,
+        # so we always pull current content; the retry passes below absorb the rate-limit cost.
         dest.mkdir(parents=True, exist_ok=True)
 
         def _pull(name: str) -> bool:
@@ -677,8 +677,7 @@ def main(syms: list[str], *, all_syms: bool = False, limit: int | None = None) -
     if n is None:
         log.warning("R2 sync failed — reading last-good local mirror at %s", MACRO_STOCKDATA)
     elif n == 0:
-        log.info("R2 stockdata fresh (ETag match) — %d files in %s",
-                 sum(1 for _ in MACRO_STOCKDATA.glob("*.json")), MACRO_STOCKDATA)
+        log.warning("R2 sync wrote 0 files (empty manifest?) — reading local mirror at %s", MACRO_STOCKDATA)
     else:
         log.info("R2 stockdata synced: %d files written to %s", n, MACRO_STOCKDATA)
 
