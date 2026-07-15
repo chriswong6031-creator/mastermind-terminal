@@ -33,6 +33,7 @@ const StrategyTester = dynamic(() => import("@/components/StrategyTester"), { ss
 const CopilotPanel = dynamic(() => import("@/components/CopilotPanel"), { ssr: false });
 import StockAnalysis from "@/components/StockAnalysis";
 import SignalButton from "@/components/SignalButton";
+import TrendRow from "@/components/TrendRow";
 import { oracleVerdict, deskVerdict } from "@/lib/signalVerdict";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
@@ -1682,6 +1683,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             <div className="detail-scroll">
               <div style={{ padding: "12px 12px 0" }}>
                 <SignalButton oracle={ov} desk={dv} oracleLabel={t("goldenOracleLbl")} deskLabel={t("researchDeskLbl")} viewLabel={t("signalView")} onView={() => setSignalsOpen(true)} />
+                <TrendRow bars={bars} />
               </div>
               {/* Seasonality is injected via beforeIv so it renders BETWEEN the Analyst gauge and Implied
                   Volatility (order: analysis → Seasonality → IV) rather than after the whole card. */}
