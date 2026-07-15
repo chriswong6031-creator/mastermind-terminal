@@ -66,22 +66,33 @@ class TestSyncR2Stockdata:
             result = sync_r2_stockdata(tmp_path / "stockdata")
         assert result is None
 
-    def test_etag_fastpath_skips_download(self, tmp_path):
-        """Same ETag + local file count matching → return 0 without pulling files."""
+    def test_pulls_current_content_even_when_manifest_etag_unchanged(self, tmp_path):
+        """Regression — Research Desk stale-intel incident (2026-07-10→13). `_manifest.json` is only a
+        filename LIST, so its ETag does NOT change when the per-ticker payloads are republished. The
+        sync must therefore re-pull current content even when the stored manifest ETag matches — a
+        manifest-ETag fast-path would freeze the local mirror (the bug this fix removes)."""
         dest = tmp_path / "stockdata"
         dest.mkdir()
-        names = ["SPY.json", "AAPL.json"]
-        tag = "abc123"
-        # Pre-populate: stamp + two files
+        names = ["NVDA.json", "GOOGL.json"]
+        tag = "same-manifest-etag"
+        # Frozen state: the stored stamp matches the manifest ETag and stale local files exist.
         (dest / _R2_META).write_text(json.dumps({"etag": tag, "count": 2}))
         for n in names:
-            (dest / n).write_bytes(b"{}")
+            (dest / n).write_bytes(b'{"asof":"2026-07-10"}')  # stale
 
-        manifest_resp = (_manifest_body(names), tag)
-        with patch("ingest.pull_macro_intel._r2_fetch", return_value=manifest_resp):
+        fresh = b'{"asof":"2026-07-13"}'  # R2 advanced; SAME file list → SAME manifest ETag
+
+        def fake_fetch(url: str):
+            if url.endswith("_manifest.json"):
+                return _manifest_body(names), tag  # identical to the stored stamp
+            return fresh, ""
+
+        with patch("ingest.pull_macro_intel._r2_fetch", side_effect=fake_fetch):
             result = sync_r2_stockdata(dest)
 
-        assert result == 0
+        assert result == 2  # pulled — did NOT take any fast-path
+        for n in names:
+            assert (dest / n).read_bytes() == fresh  # stale content overwritten with fresh
 
     def test_etag_mismatch_triggers_download(self, tmp_path):
         """Stale ETag → pulls all files, returns count."""
