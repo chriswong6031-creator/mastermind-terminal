@@ -200,6 +200,50 @@ def us_exchange_map() -> dict[str, str]:
     return out
 
 
+# ------------------------------------------------------ flagship verdict reconcile
+def reconcile_flagship_verdicts(symbols: dict[str, dict], out_dir: Path) -> dict[str, int]:
+    """Make every rich manifest row's verdict agree with the v2 slice the card actually reads.
+
+    build_polygon_universe stages flagship verdicts from a v2-LESS emission — contracts.py drops the
+    CS-based SELL/CUT events, so the builder's stream is BUY/REBUY-only and its verdict can never be
+    SELL. regen_flagship_slices then rewrites the live-dir <SYM>.slice.json with the full v2 stream
+    (incl. distribution_confirmed/structure_break SELL confirms). Without this pass the published
+    manifest verdict contradicts its own slice — on 2026-07-14 the manifest read NVDA=REBUY / GOOGL=BUY
+    while both slices' indicator.state.last_signal was SELL, and the value even oscillated daily as the
+    RTH fast_flagship lane (v2-aware) re-patched it. In the nightly, regen (Phase 1) runs before this
+    builder (Phase 2), so the slices on disk here are already the v2 truth.
+
+    For each row carrying a `verdict` (the rich/flagship set — plain search rows have no verdict key):
+      * slice present -> overwrite verdict with slice.indicator.state.last_signal (what the card reads);
+      * slice absent  -> the row is a dead inherited record (build_universe preserves old rows verbatim
+                         and never recomputes wr/pf), so null verdict/wr/pf/cagr instead of letting a
+                         dead run masquerade as a live call.
+    Pure file+dict work: no pandas, no network. Returns {'rederived','nulled','matched'}.
+    """
+    counts = {"rederived": 0, "nulled": 0, "matched": 0}
+    for sym, rec in symbols.items():
+        if rec.get("verdict") is None:
+            continue  # non-flagship search rows + too-short flagship (verdict None) — nothing to reconcile
+        sp = out_dir / f"{sym}.slice.json"
+        if not sp.exists():
+            rec.update(verdict=None, wr=None, pf=None, cagr=None)  # drop dead inherited row
+            counts["nulled"] += 1
+            continue
+        try:
+            state = json.loads(sp.read_text()).get("indicator", {}).get("state", {})
+        except Exception:
+            continue  # transient/corrupt read: leave the row rather than blank a live name
+        ls = state.get("last_signal")
+        if not ls:
+            continue
+        if ls != rec.get("verdict"):
+            rec["verdict"] = ls
+            counts["rederived"] += 1
+        else:
+            counts["matched"] += 1
+    return counts
+
+
 # ---------------------------------------------------------------- main
 def main(argv: list[str]) -> None:
     # parse args
@@ -295,6 +339,12 @@ def main(argv: list[str]) -> None:
                         print(f"    skip OHLC {tk}: {e}")
 
         print(f"  [{key}] {len(tickers)} names | +{added[key]} new search rows | {ohlc_written[key]} OHLC written")
+
+    # 2.5) reconcile flagship verdicts against the published v2 slices (single source of truth), so the
+    #      manifest can never contradict the slice the card reads, and dead inherited rows are dropped.
+    rc = reconcile_flagship_verdicts(symbols, OUT)
+    print(f"  verdict reconcile: {rc['rederived']} re-derived from slices, "
+          f"{rc['nulled']} dead rows nulled, {rc['matched']} already consistent")
 
     # 3) write manifest
     manifest["symbols"] = symbols
