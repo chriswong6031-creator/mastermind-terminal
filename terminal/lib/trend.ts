@@ -70,12 +70,21 @@ export interface StateStat {
   fwd20Win: number | null;   // fraction of forward-20d windows that were positive, 0..1
   fwd60Mean: number | null;
   fwd60Win: number | null;
+  // EXCESS = the state's mean forward return minus the symbol's OWN unconditional mean (baseline).
+  // This is the honest headline: a name that lives mostly in uptrends has bullish raw returns in every
+  // state (NVDA's "downtrend" bars were still followed by +20% because it rose for 25 years), so raw
+  // returns overstate every state. Excess strips the name's own drift out — a value near 0 means the
+  // trend state carries no forward edge (the house prior: leader-anticipation is a coin flip).
+  fwd20Excess: number | null;
+  fwd60Excess: number | null;
 }
 
 export interface TrendBacktest {
   current: TrendState | null;
   stats: Record<TrendState, StateStat>;
   bars: number;              // total bars available
+  baseline20: number | null; // the symbol's unconditional mean forward-20d return (all states pooled)
+  baseline60: number | null;
 }
 
 function pctMean(xs: number[]): number | null {
@@ -104,14 +113,20 @@ export function computeTrendBacktest(bars: Bar[]): TrendBacktest {
       acc[st].r60.push((close[i + FWD_LONG] / c0 - 1) * 100);
     }
   }
+  // Pooled baseline = the symbol's unconditional mean forward return across every classifiable bar.
+  const baseline20 = pctMean(TREND_STATES.flatMap((s) => acc[s].r20));
+  const baseline60 = pctMean(TREND_STATES.flatMap((s) => acc[s].r60));
   const stats = {} as Record<TrendState, StateStat>;
   for (const st of TREND_STATES) {
     const { r20, r60 } = acc[st];
+    const m20 = pctMean(r20), m60 = pctMean(r60);
     stats[st] = {
       state: st, n: r60.length,
-      fwd20Mean: pctMean(r20), fwd20Win: winRate(r20),
-      fwd60Mean: pctMean(r60), fwd60Win: winRate(r60),
+      fwd20Mean: m20, fwd20Win: winRate(r20),
+      fwd60Mean: m60, fwd60Win: winRate(r60),
+      fwd20Excess: m20 != null && baseline20 != null ? m20 - baseline20 : null,
+      fwd60Excess: m60 != null && baseline60 != null ? m60 - baseline60 : null,
     };
   }
-  return { current, stats, bars: close.length };
+  return { current, stats, bars: close.length, baseline20, baseline60 };
 }

@@ -80,6 +80,33 @@ describe("computeTrendBacktest — forward-return base rates", () => {
     }
   });
 
+  it("excess = state mean minus the pooled baseline, and is weighted-zero-sum across states", () => {
+    const bt = computeTrendBacktest(makeBars([...ramp(100, 400, 400), ...ramp(400, 300, 120).slice(1)]));
+    expect(bt.baseline60).not.toBeNull();
+    let weighted = 0, totalN = 0;
+    for (const s of TREND_STATES) {
+      const st = bt.stats[s];
+      if (st.n > 0) {
+        // excess must equal mean - baseline
+        expect(st.fwd60Excess!).toBeCloseTo(st.fwd60Mean! - bt.baseline60!, 6);
+        weighted += st.fwd60Excess! * st.n;
+        totalN += st.n;
+      } else {
+        expect(st.fwd60Excess).toBeNull();
+      }
+    }
+    // sum of n*excess is ~0 by construction (excess strips the symbol's own drift)
+    expect(weighted / totalN).toBeCloseTo(0, 6);
+  });
+
+  it("megacap-style monotone rise: raw returns are all positive but excess is near zero (no edge)", () => {
+    // A pure rise is almost entirely UPTREND, so UPTREND ~ baseline -> its excess ~ 0 even though the
+    // raw fwd60 is strongly positive. This is the honesty the excess metric buys.
+    const bt = computeTrendBacktest(makeBars(ramp(100, 500, 400)));
+    expect(bt.stats.UPTREND.fwd60Mean!).toBeGreaterThan(0);
+    expect(Math.abs(bt.stats.UPTREND.fwd60Excess!)).toBeLessThan(bt.stats.UPTREND.fwd60Mean!);
+  });
+
   it("all four states are always present in stats", () => {
     const bt = computeTrendBacktest(makeBars(ramp(100, 400, 300)));
     expect(Object.keys(bt.stats).sort()).toEqual([...TREND_STATES].sort());

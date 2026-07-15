@@ -19,8 +19,11 @@ function pct1(x: number | null): string {
   if (x == null) return "—";
   return `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(1)}%`;
 }
-function winPct(x: number | null): string {
-  return x == null ? "—" : `${Math.round(x * 100)}%`;
+// Edge is a small signed deviation; only paint it green/red when it's meaningful, else keep it muted
+// so a ~0 edge reads honestly as "no edge" rather than a strong call.
+function edgeColor(x: number | null): string {
+  if (x == null || Math.abs(x) < 1) return "var(--text-2)";
+  return x > 0 ? "var(--buy)" : "var(--sell)";
 }
 
 export default function TrendRow({ bars }: { bars: Bar[] }) {
@@ -59,17 +62,15 @@ export default function TrendRow({ bars }: { bars: Bar[] }) {
         <div className="trend-tbl" role="tooltip">
           <span className="trend-th">{t("trendColState")}</span>
           <span className="trend-th trend-num">n</span>
-          <span className="trend-th trend-num">{t("trendColFwd60")}</span>
-          <span className="trend-th trend-num">{t("trendColWin")}</span>
+          <span className="trend-th trend-num">{t("trendColEdge60")}</span>
           {TREND_STATES.map((s) => {
             const st = bt.stats[s];
             const isCur = s === cur;
-            const fwd = st.fwd60Mean;
-            const fwdColor = fwd == null ? "var(--text-2)" : fwd >= 0 ? "var(--buy)" : "var(--sell)";
             return (
               <TrendStatRow key={s}
-                label={t(STATE_LABEL_KEY[s])} n={st.n} fwd={pct1(fwd)} fwdColor={fwdColor}
-                win={winPct(st.fwd60Win)} isCur={isCur} curColor={stateColor(s)} />
+                label={t(STATE_LABEL_KEY[s])} n={st.n}
+                edge={pct1(st.fwd60Excess)} edgeColor={edgeColor(st.fwd60Excess)}
+                isCur={isCur} curColor={stateColor(s)} />
             );
           })}
         </div>
@@ -78,8 +79,8 @@ export default function TrendRow({ bars }: { bars: Bar[] }) {
   );
 }
 
-function TrendStatRow({ label, n, fwd, fwdColor, win, isCur, curColor }: {
-  label: string; n: number; fwd: string; fwdColor: string; win: string; isCur: boolean; curColor: string;
+function TrendStatRow({ label, n, edge, edgeColor, isCur, curColor }: {
+  label: string; n: number; edge: string; edgeColor: string; isCur: boolean; curColor: string;
 }) {
   const cls = "trend-td" + (isCur ? " trend-td--cur" : "");
   const labelStyle = isCur ? { color: curColor, fontWeight: 500 } : undefined;
@@ -87,8 +88,7 @@ function TrendStatRow({ label, n, fwd, fwdColor, win, isCur, curColor }: {
     <>
       <span className={cls} style={labelStyle}>{label}</span>
       <span className={cls + " trend-num"}>{n || "—"}</span>
-      <span className={cls + " trend-num"} style={{ color: n ? fwdColor : "var(--text-2)" }}>{n ? fwd : "—"}</span>
-      <span className={cls + " trend-num"}>{n ? win : "—"}</span>
+      <span className={cls + " trend-num"} style={{ color: n ? edgeColor : "var(--text-2)" }}>{n ? edge : "—"}</span>
     </>
   );
 }
