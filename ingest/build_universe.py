@@ -43,7 +43,7 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]                       # charting-app/
-OUT = ROOT / "terminal" / "public" / "data"
+OUT = Path(os.environ.get("TERMINAL_DATA_DIR") or (ROOT / "terminal" / "public" / "data"))
 # manifest path override — the nightly refresh stages the manifest then atomically swaps it
 MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
 MACRO = Path(os.environ.get("MACRO_REPO", "/Users/chriswong/Documents/Cluade/Macro Dashboard"))
@@ -216,18 +216,23 @@ def reconcile_flagship_verdicts(symbols: dict[str, dict], out_dir: Path) -> dict
     For each row carrying a `verdict` (the rich/flagship set — plain search rows have no verdict key):
       * slice present -> overwrite verdict with slice.indicator.state.last_signal (what the card reads);
       * slice absent  -> the row is a dead inherited record (build_universe preserves old rows verbatim
-                         and never recomputes wr/pf), so null verdict/wr/pf/cagr instead of letting a
-                         dead run masquerade as a live call.
-    Pure file+dict work: no pandas, no network. Returns {'rederived','nulled','matched'}.
+                         and never recomputes wr/pf). DELETE its signal-derived keys so it demotes to a
+                         plain search row rather than masquerading as a live call — deleting (not
+                         nulling) matters because the downstream price lanes (hydrate_prices /
+                         refresh_ohlc_intl) branch on the PRESENCE of the 'verdict' key, so a demoted
+                         row falls back into the priced-search population and still gets last/chg/OHLC.
+                         Recoverable: it rebuilds as a rich row if a slice returns next run.
+    Pure file+dict work: no pandas, no network. Returns {'rederived','demoted','matched'}.
     """
-    counts = {"rederived": 0, "nulled": 0, "matched": 0}
+    counts = {"rederived": 0, "demoted": 0, "matched": 0}
     for sym, rec in symbols.items():
         if rec.get("verdict") is None:
             continue  # non-flagship search rows + too-short flagship (verdict None) — nothing to reconcile
         sp = out_dir / f"{sym}.slice.json"
         if not sp.exists():
-            rec.update(verdict=None, wr=None, pf=None, cagr=None)  # drop dead inherited row
-            counts["nulled"] += 1
+            for k in ("verdict", "wr", "pf", "cagr", "regimeBull"):
+                rec.pop(k, None)  # demote dead inherited row to a plain (priceable) search row
+            counts["demoted"] += 1
             continue
         try:
             state = json.loads(sp.read_text()).get("indicator", {}).get("state", {})
@@ -344,7 +349,7 @@ def main(argv: list[str]) -> None:
     #      manifest can never contradict the slice the card reads, and dead inherited rows are dropped.
     rc = reconcile_flagship_verdicts(symbols, OUT)
     print(f"  verdict reconcile: {rc['rederived']} re-derived from slices, "
-          f"{rc['nulled']} dead rows nulled, {rc['matched']} already consistent")
+          f"{rc['demoted']} dead rows demoted, {rc['matched']} already consistent")
 
     # 3) write manifest
     manifest["symbols"] = symbols
