@@ -72,129 +72,6 @@ function Spark({ data, color = "var(--brand-2)" }: { data: (number | null)[]; co
   );
 }
 
-/* ── ConfluenceChip — display-only chip for the Mastermind Confluence Score ──
- * Reads intel.analysis.confluence (precomputed state — no chart math here).
- * Contract fields: tier, weight, sub, ticks, bars_to_cross, provisional, not_topped, htf_s1, asof.
- * Null-guarded: renders a dimmed "—" when the block is absent or tier is null. */
-function ConfluenceChip({ confluence }: { confluence: any }) {
-  const [open, setOpen] = useState(false);
-  if (!confluence || confluence.tier == null) {
-    return (
-      <div className="sa-mm-chip sa-mm-chip--absent" title="Confluence Score — not yet available">
-        <span className="sa-mm-chip-k">CONFLUENCE</span>
-        <span className="sa-mm-chip-v">—</span>
-      </div>
-    );
-  }
-  const tier: string = confluence.tier;
-  const weight: number | null = typeof confluence.weight === "number" ? confluence.weight : null;
-  const htfS1: boolean = !!confluence.htf_s1;
-  const provisional: boolean = !!confluence.provisional;
-  // Tier colour: T1 = buy, T2 = signal (watch), T3/T4 = muted (bars-to-cross still needed)
-  const tierColor = tier === "T1" ? "var(--buy)" : tier === "T2" ? "var(--signal)" : "var(--muted)";
-
-  // Tier definition one-liners (display-only — descriptive, no performance claims)
-  const TIER_DEF: Record<string, string> = {
-    T1: "3D MACD-RSI × 3D StochRSI confirmed cross — the master signal",
-    T2: "2D MACD-RSI cross + 3D StochRSI crossed — confirmed bar, fills nearest the trough",
-    T3: "2D MACD-RSI projected to cross ≤1–2 bars + 3D StochRSI crossed — anticipation (provisional)",
-    T4: "2D MACD-RSI projected + 2D StochRSI crossed + above 200MA — earliest scout",
-  };
-
-  return (
-    <div
-      className={"sa-mm-chip" + (open ? " sa-mm-chip--open" : "")}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      tabIndex={0}
-      onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
-      role="button"
-      aria-haspopup="true"
-      aria-expanded={open}
-      title="Confluence Score — display-only, precomputed state"
-    >
-      <span className="sa-mm-chip-k">CONFLUENCE</span>
-      <span className="sa-mm-chip-v" style={{ color: tierColor }}>
-        {tier}{weight != null ? ` · ${weight.toFixed(1)}` : ""}
-      </span>
-      {htfS1 && <span className="sa-mm-chip-accent" title="2W+3D higher-timeframe confluence — display-only">S1</span>}
-      {provisional && <span className="sa-mm-chip-prov" title="Provisional — threshold recently crossed">~</span>}
-      {open && (
-        <div className="sa-mm-chip-pop" role="tooltip">
-          <div className="sa-mm-pop-tier" style={{ color: tierColor }}>{tier}</div>
-          <div className="sa-mm-pop-def">{TIER_DEF[tier] ?? tier}</div>
-          {confluence.sub && <div className="sa-mm-pop-row"><span>Sub</span><span>{confluence.sub}</span></div>}
-          {typeof confluence.ticks === "number" && <div className="sa-mm-pop-row"><span>Ticks (freshness)</span><span>{confluence.ticks}</span></div>}
-          {(tier === "T3" || tier === "T4") && confluence.bars_to_cross != null && (
-            <div className="sa-mm-pop-row"><span>Bars to cross</span><span>{confluence.bars_to_cross}</span></div>
-          )}
-          {confluence.not_topped != null && (
-            <div className="sa-mm-pop-row"><span>Not topped</span><span>{confluence.not_topped ? "yes" : "no"}</span></div>
-          )}
-          {provisional && <div className="sa-mm-pop-note">Provisional — T3 semantics: threshold recently crossed</div>}
-          {htfS1 && <div className="sa-mm-pop-note">S1: 2W+3D higher-timeframe confluence — display-only</div>}
-          {confluence.asof && <div className="sa-mm-pop-asof">as of {confluence.asof}</div>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ── SniperChip — display-only chip for the Mastermind Sniper Regime ──
- * Reads intel.analysis.sniper (precomputed state — no chart math here).
- * Contract fields: w2_washout, w2_stoch_d, days_since_63d_low, coiled, asof.
- * Null-guarded: renders a dimmed "—" when the block is absent. */
-function SniperChip({ sniper }: { sniper: any }) {
-  const [open, setOpen] = useState(false);
-  if (!sniper) {
-    return (
-      <div className="sa-mm-chip sa-mm-chip--absent" title="Sniper Regime — not yet available">
-        <span className="sa-mm-chip-k">SNIPER</span>
-        <span className="sa-mm-chip-v">—</span>
-      </div>
-    );
-  }
-  const washout: boolean = !!sniper.w2_washout;
-  const coiled: boolean | null = sniper.coiled != null ? !!sniper.coiled : null;
-  // State label: WASHOUT overrides; else show QUIET + optional +COILED accent
-  const stateLabel = washout ? "WASHOUT" : "QUIET";
-  const stateColor = washout ? "var(--buy)" : "var(--muted)";
-
-  return (
-    <div
-      className={"sa-mm-chip" + (open ? " sa-mm-chip--open" : "")}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      tabIndex={0}
-      onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
-      role="button"
-      aria-haspopup="true"
-      aria-expanded={open}
-      title="Sniper Regime — display-only, precomputed state"
-    >
-      <span className="sa-mm-chip-k">SNIPER</span>
-      <span className="sa-mm-chip-v" style={{ color: stateColor }}>{stateLabel}</span>
-      {coiled && <span className="sa-mm-chip-accent" style={{ color: "var(--signal)" }}>+COILED</span>}
-      {open && (
-        <div className="sa-mm-chip-pop" role="tooltip">
-          <div className="sa-mm-pop-tier" style={{ color: stateColor }}>{stateLabel}</div>
-          {coiled != null && <div className="sa-mm-pop-row"><span>Coiled</span><span>{coiled ? "yes" : "no"}</span></div>}
-          {typeof sniper.w2_stoch_d === "number" && (
-            <div className="sa-mm-pop-row"><span>W2 Stoch-D</span><span>{sniper.w2_stoch_d.toFixed(1)}</span></div>
-          )}
-          {typeof sniper.days_since_63d_low === "number" && (
-            <div className="sa-mm-pop-row"><span>Days since 63d low</span><span>{sniper.days_since_63d_low}</span></div>
-          )}
-          {sniper.asof && <div className="sa-mm-pop-asof">as of {sniper.asof}</div>}
-          <div className="sa-mm-pop-note">Display-only — precomputed by the Macro nightly</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function Section({ title, sub, children, accent }: { title: string; sub?: string; children: React.ReactNode; accent?: string }) {
   return (
     <div className="sa-sec">
@@ -625,11 +502,6 @@ export default function StockAnalysis({
   const dec = a?.decision, conv = a?.conviction, entry = a?.entry, fac = a?.factors,
     tech = a?.tech, val = a?.valuation, fin = a?.financials, prof = a?.profile,
     sm = a?.smart_money, ae = a?.analyst, gex = a?.gex, macro = a?.macro, fl = a?.flows;
-  // New Mastermind suite blocks (null when not yet produced by the Macro nightly).
-  // These live at intel.analysis.confluence / intel.analysis.sniper regardless of whether
-  // `a` was constructed from intel.analysis directly or synthesised from intel.cards.
-  const confluence = intel?.analysis?.confluence ?? null;
-  const sniper = intel?.analysis?.sniper ?? null;
   // Does the pre-existing intel analyst section render? (mirrors its gate below.) When it does, the
   // new AnalystGauge must NOT show its "no consensus" empty state (CN dual-surface contradiction).
   const hasIntelAnalyst = !!(ae && (ae.next_date || ae.surprises || ae.target != null || ae.rating || ae.buy != null));
@@ -721,13 +593,6 @@ export default function StockAnalysis({
 
   return (
     <div className="sa">
-      {/* ── MASTERMIND CONFLUENCE + SNIPER CHIPS ──
-          Display-only — precomputed by the Macro nightly. Null-guard: shows dimmed "—" when
-          intel.analysis.confluence / .sniper is absent (today's state for most names). */}
-      <div className="sa-mm-chips">
-        <ConfluenceChip confluence={confluence} />
-        <SniperChip sniper={sniper} />
-      </div>
       {pick(dec?.trust_en, dec?.trust_zh) && (
         /* Trust tier = compact badge. Hover keeps the tooltip; CLICK (R15) opens the anchored
            EventEdgePop dashboard (trust prose + structured earnings/edge context chips). */
