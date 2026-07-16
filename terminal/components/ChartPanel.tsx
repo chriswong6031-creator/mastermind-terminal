@@ -1423,7 +1423,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const marks = oracleSignals(daily)
       .filter((s) => s.ts <= (lastDate as string))
       .map((s) => { const t = near(s.ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) return null; const price = (s.type === "BUY" || s.type === "REBUY") ? bar.l : bar.h; return { t, type: s.type, price }; })
-      .filter(Boolean) as { t: string; type: string; price: number }[];
+      .filter(Boolean) as { t: string; type: string; price: number; quality?: string }[];
     // RECLAIM re-entry marks come from the SLICE (the reclaim lane has no Pine analog):
     // snap each to its bar like the Pine marks, then keep the stream chronological so
     // paintStatus's "latest mark" verdict chip stays honest.
@@ -1432,7 +1432,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       for (const s of reclaims) {
         if (s?.type !== "RECLAIM" || typeof s?.ts !== "string" || s.ts > (lastDate as string)) continue;
         const t = near(s.ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) continue;
-        marks.push({ t, type: "RECLAIM", price: bar.l });
+        marks.push({ t, type: "RECLAIM", price: bar.l, quality: s.quality as string | undefined });
       }
       const idxOf = new Map(times.map((t, i) => [t, i]));
       marks.sort((a, b) => (idxOf.get(a.t as any) ?? 0) - (idxOf.get(b.t as any) ?? 0));
@@ -2005,11 +2005,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           g.appendChild(ring);
         }
         // block → hollow (fill:none + colored stroke); take/pending/regime_blocked → solid (possibly dimmed) fill.
-        g.appendChild(mk("rect", { x: x - w / 2, y: top, width: w, height: h, rx: r, ry: r, fill: hollow ? "none" : fill, stroke: hollow ? fill : "none", "stroke-width": hollow ? 1.4 : 0 }));
+        // RECLAIM additionally DASHES the outline so a re-entry pill never reads as a keeper-blocked entry.
+        const dash = m.type === "RECLAIM" ? "3 2" : undefined;
+        g.appendChild(mk("rect", { x: x - w / 2, y: top, width: w, height: h, rx: r, ry: r, fill: hollow ? "none" : fill, stroke: hollow ? fill : "none", "stroke-width": hollow ? 1.4 : 0, ...(dash ? { "stroke-dasharray": dash } : {}) }));
         g.appendChild(mk("path", { d: up ? `M${x - ptr} ${top} L${x + ptr} ${top} L${x} ${top - ptr} Z` : `M${x - ptr} ${top + h} L${x + ptr} ${top + h} L${x} ${top + h + ptr} Z`, fill: hollow ? "none" : fill, stroke: hollow ? fill : "none", "stroke-width": hollow ? 1.4 : 0 }));
         const tEl = mk("text", { x, y: top + h / 2 + (star ? 4.3 : 3.4), fill: hollow ? fill : cfg.tc, "font-size": star ? 11.5 : 9, "font-weight": 800, "text-anchor": "middle", "font-family": star ? "Georgia,serif" : "var(--font-ui)", "letter-spacing": star ? "0" : ".02em" });
         tEl.textContent = cfg.txt;
         g.appendChild(tEl);
+        // native tooltip for re-entry pills: date + kind (the marker text alone can't carry it)
+        if (m.type === "RECLAIM") {
+          const title = mk("title", {});
+          title.textContent = `${m.t} · re-entry (${m.quality === "block_repair" ? "bear-block repaired" : "trend reclaim"}) — scored reclaim lane`;
+          g.appendChild(title);
+        }
         // tier badge ("A+"/"Q") as a small superscript pill to the top-right of the marker (taken entries only).
         if (badge) {
           const bx = x + w / 2 + 1, by = top - 1;

@@ -80,8 +80,10 @@ _ULTRA = _re.compile(r"\bultra(?:pro|short)?\b", _re.I)              # ProShares
 # "strategy" on a fund-like name = a 40-Act futures wrapper (Bitcoin Strategy, Managed
 # Futures Strategy…) — contango decay, same class as VIX products.
 _FUTURES = _re.compile(r"\bfutures?\b|\bstrategy\b|\bvix\b", _re.I)
-# metadata backstop: VIX-family tickers whose manifest rows ship no name to classify
-_TICKER_BACKSTOP = {"UVXY", "SVXY", "VIXY", "VXX", "TVIX", "VIXM"}
+# metadata backstop: decay-class tickers the NAME rule cannot see — VIX-family rows that
+# ship no name to classify, plus futures-roll commodity wrappers whose names carry no
+# decay marker ("United States Oil Fund" holds WTI futures; contango drag, same class).
+_TICKER_BACKSTOP = {"UVXY", "SVXY", "VIXY", "VXX", "TVIX", "VIXM", "USO", "UNG"}
 
 
 def reclaim_eligible(name: str | None, sym: str | None = None) -> bool:

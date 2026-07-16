@@ -57,6 +57,16 @@ def source_hash(source_text: str, params: dict) -> str:
     return "sha256:" + hashlib.sha256(blob.encode()).hexdigest()
 
 
+def strategy_spec_hash(strategy_id: str = "rsimacd_stochrsi_mtf", params: dict | None = None) -> str:
+    """The backtest contract's strategy identity — {id, params} hashed, 8 hex chars.
+    Exposed so ingest can detect a LANE-STALE artifact (e.g. a pre-reclaim-promotion
+    backtest under current params) without re-deriving the formula."""
+    return hashlib.sha256(
+        json.dumps({"id": strategy_id, "params": params or FLAGSHIP_PARAMS},
+                   sort_keys=True).encode()
+    ).hexdigest()[:8]
+
+
 # ---------------------------------------------------------------- indicator --
 def indicator_contract(
     symbol: str,
@@ -341,9 +351,7 @@ def backtest_contract(
 ) -> dict:
     """Build a ``backtest_result/v1`` doc from ``backtest.run_backtest`` output."""
     params = params or FLAGSHIP_PARAMS
-    spec_hash = hashlib.sha256(
-        json.dumps({"id": strategy_id, "params": params}, sort_keys=True).encode()
-    ).hexdigest()[:8]
+    spec_hash = strategy_spec_hash(strategy_id, params)
     m = bt.get("metrics", {})
     return {
         "schema": SCHEMA_BACKTEST,

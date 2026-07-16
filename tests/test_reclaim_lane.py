@@ -179,6 +179,8 @@ def test_reclaim_eligible_symbol_class_rule():
         ("SSO", "ProShares Ultra S&P500"), ("SH", "ProShares Short S&P500"),
         ("BITO", "ProShares Bitcoin Strategy"), ("VXX", "iPath Series B S&P 500 VIX Short-Term"),
         ("UVXY", None),                                  # ticker backstop (no manifest name)
+        ("USO", "United States Oil Fund"),               # futures-roll wrapper, marker-less name → backstop
+        ("UNG", "United States Natural Gas Fund"),       # same family
     ]
     eligible = [
         ("AAPL", "Apple Inc"), ("SPY", "SPDR S&P 500 ETF"), ("GLD", "SPDR Gold Shares"),
@@ -191,6 +193,14 @@ def test_reclaim_eligible_symbol_class_rule():
         assert reclaim_eligible(n, s) is False, (s, n)
     for s, n in eligible:
         assert reclaim_eligible(n, s) is True, (s, n)
+
+
+def test_promotion_minted_new_strategy_identity():
+    from signal_layer.contracts import FLAGSHIP_PARAMS, strategy_spec_hash
+    assert FLAGSHIP_PARAMS.get("reclaim_lane"), "scored promotion requires the reclaim_lane params key"
+    pre = {k: v for k, v in FLAGSHIP_PARAMS.items() if k != "reclaim_lane"}
+    assert strategy_spec_hash() != strategy_spec_hash(params=pre), \
+        "reclaim_lane must mint a NEW spec_hash (published wr/pf lanes must never mix)"
 
 
 def test_build_v2_reclaims_enabled_false_emits_none():
