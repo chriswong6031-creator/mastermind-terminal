@@ -1,4 +1,4 @@
-# RECLAIM re-entry lane — panel evidence (2026-07-15)
+# RECLAIM re-entry lane — panel evidence (2026-07-15) + scored promotion (2026-07-16)
 
 ## Why this lane exists
 
@@ -48,13 +48,58 @@ Median per-name WR 56.1% → 58.6%. 90/91 names produced reclaim trades (median 
 
 **Verdict: PROMOTE-CANDIDATE** — the lane is eligible for scored promotion.
 
-## Scored promotion (NOT in this PR — follow-up)
+## Scored promotion — SHIPPED 2026-07-16
 
-Promotion means: `FLAGSHIP_PARAMS` gains a `reclaim_lane` key (new `source_hash`
-identity), the scored sim adopts `use_reclaim_entry=True`, manifest verdict/wr/pf and the
-track record regenerate, and chart markers get the hollow re-entry glyph. Before doing it:
+### Decay-instrument exclusion (precondition)
 
-- **Exclude inverse/leveraged ETFs** — the worst per-name expectancies are structurally
-  hostile to trend-reclaim semantics (SOXS −25%, SQQQ −21%, BITO −12%; decay instruments).
-- Re-run the panel with the exclusion and re-adjudicate G1–G5.
-- One PR train: params + regen + verify_publish + release note (public wr/pf will move).
+Trend-reclaim semantics assume a spot asset. On decay instruments the price path is
+dominated by structural drift (daily-rebalance leverage/inverse compounding, futures
+roll), so "close back above the sell level" is a statement about the decay schedule, not
+the trend. The exclusion is a symbol **class**, not a loser list — leveraged long is
+excluded alongside inverse (same rebalance arithmetic), futures rollers alongside both:
+
+- Rule: `confluence_v2.reclaim_excluded` (curated flagship set + fund-name pattern for
+  future additions; the name rule never applies to equities).
+- Manifest classification field: `build_polygon_universe` stamps `cls: "decay"` on the
+  row, so downstream consumers read a field instead of keeping private lists.
+- Excluded (panel): BITO, SOXL, SOXS, SPXL, SQQQ, TQQQ, USO, VXX (n=8). Note this
+  removes positive-expectancy names too (TQQQ/SOXL) — class honesty over cherry-picking.
+- One exclusion for the WHOLE lane: display events (`build_v2` emits no reclaims) and
+  the scored sim (`use_reclaim_entry=False`) alike.
+
+### Panel re-run with the exclusion (2026-07-16, n=91, same fixed gates)
+
+`python3 -m signal_layer.reclaim_lab` — same protocol as above; the variant arm is the
+promoted config (reclaim entries everywhere except the 8 decay-class names, which run
+baseline and stay in the panel denominators).
+
+| Gate | Threshold | Result | Pass |
+|---|---|---|---|
+| G1 expectancy | pooled > 0 AND median per-name ≥ 0 | **+10.6%** pooled / **+6.3%** median (n=1,156) | ✅ |
+| G2 non-inferiority | median variant/baseline ratio ≥ 0.95× | **1.30×** | ✅ |
+| G3 2022 bull-trap falsifier | 2022-entered exp > −2% | **−1.07%** (n=73; was −1.5%) | ✅ |
+| G4 breadth + drawdown | ≥55% names improved; median dd delta ≤ +2pp | **83.5%** (was 80.2%); dd **0.0pp** | ✅ |
+| G5 sample | ≥150 reclaim trades | **1,156** | ✅ |
+
+Median per-name WR 56.1% → 58.6%. **Verdict: PROMOTE-CANDIDATE → PROMOTED.**
+
+### What promotion changed (one PR train)
+
+- `FLAGSHIP_PARAMS` gained `reclaim_lane` → **new `source_hash`/`spec_hash` identity**
+  (pre/post docs are distinct; published wr/pf never mix lanes).
+- Scored sim: `run_backtest(use_reclaim_entry=True)` at every production emission
+  (`build_polygon_universe`, plus a lane guard in `regen_flagship_slices` that recomputes
+  any lane-stale backtest artifact and patches manifest wr/pf/cagr in lockstep).
+  Trades carry `entry_kind` for per-lane attribution.
+- Chart: RECLAIM markers render from the SLICE (the client Pine has no repair lane) as a
+  hollow dashed "RE-ENTRY" pill — never the solid BUY star.
+- UNCHANGED by design: the verdict lane. RECLAIM markers stay `scored:false` — no
+  position-walk / manifest-verdict authority; `confluence.py`, `BUY_RSI_MAX`,
+  `bear_block`, `REV_BARS`, `CONF_W` and the no-cut exit stream are untouched.
+
+### Release note
+
+Public backtest metrics (manifest `wr`/`pf`/`cagr`, `<SYM>.backtest.json`, the track
+record) MOVE with the first post-merge regeneration: the traded sim now takes reclaim /
+block-repair re-entries (panel medians: WR +2.5pp, total-return ratio 1.30×). Verdicts
+do not move — the stance lane is unchanged.

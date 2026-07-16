@@ -59,13 +59,16 @@ def run_backtest(
     ``confluence.ipo_bar_anchor(close, sym)`` / ``ipo_week_parity(close, sym)`` when
     backtesting a truncated feed so the trades land on the same bars TradingView shows.
 
-    ``use_reclaim_entry`` (default **False** — evaluation only, NOT promoted): adds the
-    2026-07-15 repair-grammar entries to the sim so the panel can price them against the
-    baseline before any scored promotion: (a) TREND-RECLAIM — while flat, close back above
-    the last exit's fill after RECLAIM_DEBOUNCE_BARS with weekly-bull + above-200; (b)
-    BLOCK-REPAIR — a bear-blocked raw buy whose block clears within REPAIR_WINDOW_BARS
-    while macd>=signal. Reclaim trades carry ``entry_kind`` for per-lane attribution.
-    The exit stream is byte-identical to the baseline in both modes.
+    ``use_reclaim_entry`` (default **False** for back-compat; the production emission
+    passes **True** since the 2026-07-16 scored promotion — docs/RECLAIM_LANE_EVIDENCE.md,
+    FLAGSHIP_PARAMS["reclaim_lane"]): adds the repair-grammar entries to the sim:
+    (a) TREND-RECLAIM — while flat, close back above the last exit's fill after
+    RECLAIM_DEBOUNCE_BARS with weekly-bull + above-200; (b) BLOCK-REPAIR — a bear-blocked
+    raw buy whose block clears within REPAIR_WINDOW_BARS while macd>=signal. Reclaim
+    trades carry ``entry_kind`` for per-lane attribution. The exit stream is
+    byte-identical to the baseline in both modes. CALLERS gate the lane per symbol:
+    decay-class instruments (``confluence_v2.reclaim_excluded``) must pass False — this
+    module is symbol-agnostic by design (it sees only a close series).
     """
     sig = oracle.compute_signals(close.dropna(), bar_anchor=bar_anchor, week_parity=week_parity)
     if sig.empty:
@@ -145,8 +148,8 @@ def run_backtest(
             t = _trade(len(trades) + 1, entry_dt, dates[i + 1],
                        entry_close, exit_close, net, gross,
                        i + 1 - entry_i, reason, bar_quality)
-            if use_reclaim_entry:                 # per-lane attribution (lab only; the
-                t["entry_kind"] = entry_kind      # production emission stays byte-stable)
+            if use_reclaim_entry:                 # per-lane attribution (published in the
+                t["entry_kind"] = entry_kind      # promoted emission; schema is open)
             trades.append(t)
             pos = 0
             sell_anchor = (i + 1, exit_close)     # re-anchor the reclaim on this exit's fill

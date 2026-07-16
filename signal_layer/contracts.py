@@ -33,11 +33,23 @@ SCHEMA_BACKTEST = "backtest_result/v1"
 # demoted from a scored EXIT to a display caution, so the traded stream is no-cut. It
 # lives in the hashed params so the v2 emission gets a NEW ``source_hash`` — v1 and v2
 # indicator docs are distinct identities even off the same script text.
+#
+# ``reclaim_lane`` is the 2026-07-16 scored PROMOTION of the RE-ENTRY repair grammar
+# (docs/RECLAIM_LANE_EVIDENCE.md: full-panel gates G1-G5 pass, re-adjudicated with the
+# decay-instrument exclusion): the traded sim now enters on reclaim/block_repair events
+# — run_backtest(use_reclaim_entry=True) at every production emission — EXCEPT on
+# decay-class instruments (confluence_v2.reclaim_excluded). Values mirror the
+# confluence_v2 module constants, same discipline as the Pine params above. Because the
+# key is hashed, the promoted emission mints a NEW source_hash/spec_hash: pre- and
+# post-promotion docs are distinct identities, so published wr/pf never mix lanes.
+# The VERDICT lane is untouched: RECLAIM markers stay scored:false (no position-walk
+# authority) — promotion is of the traded sim, not of the marker's stance authority.
 FLAGSHIP_PARAMS = {
     "confW": 8, "rsiLen": 14, "useMTF": True, "confirmTF": "1W",
     "macd_on": "rsi", "macd_fast": 14, "macd_slow": 60, "macd_signal": 5,
     "buy_rsi_max": 65, "ext_rsi": 70, "rev_bars": 3,
     "no_cut_exits": True,
+    "reclaim_lane": {"debounce_bars": 4, "repair_window_bars": 8, "exclude_class": "decay"},
 }
 
 
@@ -46,6 +58,16 @@ def source_hash(source_text: str, params: dict) -> str:
     identity). Matches the loop's spec_hash discipline."""
     blob = source_text + "\x00" + json.dumps(params, sort_keys=True, default=str)
     return "sha256:" + hashlib.sha256(blob.encode()).hexdigest()
+
+
+def strategy_spec_hash(strategy_id: str = "rsimacd_stochrsi_mtf", params: dict | None = None) -> str:
+    """The backtest contract's strategy identity — {id, params} hashed, 8 hex chars.
+    Exposed so ingest can detect a LANE-STALE artifact (e.g. a pre-reclaim-promotion
+    backtest under a current-params indicator) without re-deriving the formula."""
+    return hashlib.sha256(
+        json.dumps({"id": strategy_id, "params": params or FLAGSHIP_PARAMS},
+                   sort_keys=True).encode()
+    ).hexdigest()[:8]
 
 
 # ---------------------------------------------------------------- indicator --
@@ -219,10 +241,14 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
                            "above200": bool(row.get("above200")),
                            "monthlyBull": bool(row.get("mo_bull"))},
             })
-    # ── RECLAIM from the v2 repair lane (display re-entry; NEVER a scored event) ──
+    # ── RECLAIM from the v2 repair lane (hollow re-entry; NEVER verdict authority) ──
     # Two kinds ride the same marker type: "reclaim" (post-SELL trend reclaim) and
     # "block_repair" (a bear-blocked entry whose block legs cleared). scored:false and
-    # the non-(BUY|REBUY|SELL) type keep them out of the position walk and the sim.
+    # the non-(BUY|REBUY|SELL) type keep them out of the VERDICT position walk — the
+    # manifest stance never flips on a re-entry. The traded SIM is a separate lane:
+    # since the 2026-07-16 promotion (FLAGSHIP_PARAMS["reclaim_lane"]) run_backtest
+    # enters on these events too, so published wr/pf include them (trades carry
+    # entry_kind); the markers themselves stay display-hollow.
     reclaims = v2.get("reclaims") or []
     if reclaims and len(sig):
         sidx = sig.index
@@ -325,9 +351,7 @@ def backtest_contract(
 ) -> dict:
     """Build a ``backtest_result/v1`` doc from ``backtest.run_backtest`` output."""
     params = params or FLAGSHIP_PARAMS
-    spec_hash = hashlib.sha256(
-        json.dumps({"id": strategy_id, "params": params}, sort_keys=True).encode()
-    ).hexdigest()[:8]
+    spec_hash = strategy_spec_hash(strategy_id, params)
     m = bt.get("metrics", {})
     return {
         "schema": SCHEMA_BACKTEST,

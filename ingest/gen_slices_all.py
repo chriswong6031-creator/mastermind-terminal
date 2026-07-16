@@ -67,7 +67,8 @@ def main() -> None:
     # ── build the sector-cohort cache ONCE for the whole run (not per symbol) ──
     # Resolves GICS sectors from fund.json + industry_map; reads every <SYM>.json close a
     # SINGLE time. Per-symbol lookups are then O(1). Nightly overhead bounded (no O(n²)).
-    cohort_cache = build_cohort_cache(OUT, _load_manifest())
+    manifest_rows = _load_manifest().get("symbols") or {}
+    cohort_cache = build_cohort_cache(OUT, {"symbols": manifest_rows})
     print(f"  cohort cache built ({time.time() - t0:.0f}s)", flush=True)
     for jf in files:
         name = jf.name
@@ -112,10 +113,12 @@ def main() -> None:
                 n_skip += 1
                 continue
             sec_basket, panel_basket, cohort = cohort_cache.for_symbol(sym)
+            mrow = manifest_rows.get(sym) or {}
             v2 = confluence_v2.build_v2(
                 sig, close, high=high, low=low, volume=volume,
                 sector_basket=sec_basket, panel_basket=panel_basket,
-                cohort_frac_daily=cohort)
+                cohort_frac_daily=cohort,
+                symbol=sym, display_name=mrow.get("name"), sec=mrow.get("sec"))
             ind = contracts.indicator_contract(
                 sym, "3D", sig, bar_quality="real_ohlc", src_text="", honest_read=HONEST, v2=v2)
             # the chart only consumes indicator.signals + indicator.state — drop the heavy arrays

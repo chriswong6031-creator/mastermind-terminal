@@ -21,9 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from signal_layer.confluence_v2 import (  # noqa: E402
-    RECLAIM_DEBOUNCE_BARS, REPAIR_WINDOW_BARS, reclaim_events,
+    RECLAIM_DEBOUNCE_BARS, RECLAIM_EXCLUDE_CLASS, REPAIR_WINDOW_BARS,
+    build_v2, reclaim_events, reclaim_excluded,
 )
-from signal_layer.contracts import _extract_signals, _state  # noqa: E402
+from signal_layer.contracts import (  # noqa: E402
+    FLAGSHIP_PARAMS, _extract_signals, _state, strategy_spec_hash,
+)
 
 
 def _frame(n=30, **cols):
@@ -133,6 +136,50 @@ def test_block_repair_needs_live_macd_cross_and_window():
     macd = np.ones(n); macd[6:] = -1.0          # below signal from bar 6 on
     sig2 = _frame(n, CB=cb, bear_block=bblk2, macd=macd)
     assert reclaim_events(sig2, []) == []
+
+
+def test_decay_class_exclusion_rule():
+    # curated flagship truth: leveraged + inverse + futures-roll, long AND short alike
+    for s in ("TQQQ", "SQQQ", "SPXL", "SOXL", "SOXS", "BITO", "VXX", "USO"):
+        assert reclaim_excluded(s), s
+    # spot assets / plain funds stay in the lane
+    for s in ("AAPL", "SPY", "QQQ", "GLD", "IBIT", "BTC-USD"):
+        assert not reclaim_excluded(s), s
+    # name rule classifies future additions (fund names only)
+    assert reclaim_excluded("XXXX", "Direxion Daily Semiconductor Bear 2x", "Funds")
+    assert reclaim_excluded("UVXY", "ProShares Ultra VIX Short-Term Futures", "Funds")
+    # "Short-Term" bond funds and directional-but-unleveraged names must NOT trip it
+    assert not reclaim_excluded("VGSH", "Vanguard Short-Term Treasury", "Funds")
+    assert not reclaim_excluded("UUP", "Invesco DB US Dollar Bullish", "Funds")
+    # the name rule never applies to equities (an unlucky company name is not a class)
+    assert not reclaim_excluded("BRCM", "Bear Creek Mining", "Equities")
+
+
+def test_build_v2_suppresses_reclaims_for_decay_class():
+    # block_repair fixture (needs no sell confirms): blocked on its own bar, clear after.
+    n = 30
+    cb = np.zeros(n, bool); cb[12] = True
+    bblk = np.zeros(n, bool); bblk[12] = True
+    sig = _frame(n, CB=cb, bear_block=bblk)
+    close = pd.Series(np.asarray(sig["close"], dtype=float), index=sig.index)
+    included = build_v2(sig, close, symbol="AAPL")
+    excluded = build_v2(sig, close, symbol="SQQQ")
+    assert [e["kind"] for e in included["reclaims"]] == ["block_repair"]
+    assert excluded["reclaims"] == []
+    # everything OUTSIDE the reclaim lane is untouched by the exclusion
+    for k in ("keeper", "recipe", "sell_confirms", "early_dots", "warnings"):
+        assert included[k] == excluded[k], k
+
+
+def test_promotion_minted_new_strategy_identity():
+    lane = FLAGSHIP_PARAMS.get("reclaim_lane")
+    assert lane is not None, "scored promotion requires the reclaim_lane params key"
+    assert lane["debounce_bars"] == RECLAIM_DEBOUNCE_BARS
+    assert lane["repair_window_bars"] == REPAIR_WINDOW_BARS
+    assert lane["exclude_class"] == RECLAIM_EXCLUDE_CLASS
+    pre = {k: v for k, v in FLAGSHIP_PARAMS.items() if k != "reclaim_lane"}
+    assert strategy_spec_hash() != strategy_spec_hash(params=pre), \
+        "reclaim_lane must mint a NEW spec_hash (wr/pf lanes must never mix)"
 
 
 def test_contract_reclaim_markers_never_move_scored_state():

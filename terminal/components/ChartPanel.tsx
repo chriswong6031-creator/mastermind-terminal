@@ -1396,10 +1396,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     oracleMemoRef.current = { key, sig };
     return sig;
   };
-  // Resolve BUY/SELL/CUT/REBUY marks against the CURRENT bar set. Signals are computed CLIENT-SIDE from
-  // the v1 confluence Pine (no per-ticker backfill) — the `slice` arg is ignored, kept for call-site
-  // compatibility. Daily signal dates snap to the current bars exactly as the v2 path did, so intraday
-  // / replay / resampled views line up.
+  // Resolve BUY/SELL/CUT/REBUY marks against the CURRENT bar set. Those signals are computed
+  // CLIENT-SIDE from the v1 confluence Pine (no per-ticker backfill). RECLAIM re-entry marks are the
+  // exception: the repair lane lives in signal_layer (server), the client Pine knows nothing about it,
+  // so they are sourced from the SLICE's signal stream — the chart then matches the rail's re-entry
+  // read. Daily signal dates snap to the current bars exactly as the v2 path did, so intraday /
+  // replay / resampled views line up (replay: both streams share the `ts <= lastDate` cut).
   const resolveSigMarks = (_slice: any, rows: Bar[]) => {
     const daily = dailyBarsRef.current.length ? dailyBarsRef.current : rows;
     if (!daily.length || !rows.length) return [] as { t: string; type: string; price: number }[];
@@ -1407,10 +1409,21 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const lastDate = times[times.length - 1];
     const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(String(y) + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y as any; } }); return bd < 9e8 ? b : null; };
     const byTime = new Map(rows.map((r) => [r.time, r]));
-    return oracleSignals(daily)
+    const marks = oracleSignals(daily)
       .filter((s) => s.ts <= (lastDate as string))
       .map((s) => { const t = near(s.ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) return null; const price = (s.type === "BUY" || s.type === "REBUY") ? bar.l : bar.h; return { t, type: s.type, price }; })
-      .filter(Boolean) as { t: string; type: string; price: number }[];
+      .filter(Boolean) as { t: string; type: string; price: number; quality?: string }[];
+    // RECLAIM from the slice: hollow re-entry tier — NEVER the solid BUY star, never verdict
+    // authority. Decay-class names ship no reclaim events (excluded server-side), so nothing
+    // to filter here. `quality` carries the kind (reclaim | block_repair) for the tooltip.
+    const reclaims = ((_slice?.indicator?.signals ?? []) as any[])
+      .filter((s) => s?.type === "RECLAIM" && typeof s.ts === "string" && s.ts <= (lastDate as string))
+      .map((s) => { const t = near(s.ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) return null; return { t, type: "RECLAIM", price: bar.l, quality: s.quality as string | undefined }; })
+      .filter(Boolean) as { t: string; type: string; price: number; quality?: string }[];
+    if (!reclaims.length) return marks;
+    // merge chronologically (stable: same-bar reclaim stays after its oracle mark) so the
+    // verdict chip's "last mark" read stays honest.
+    return [...marks, ...reclaims].sort((a, b) => (String(a.t) < String(b.t) ? -1 : String(a.t) > String(b.t) ? 1 : 0));
   };
 
   // The v1 Golden Oracle has NO side channels (the early_dots + arm/confirm warnings were a GC v2
@@ -1433,7 +1446,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Gate oracle verdict text on whether the _oracle indicator is active. The chip's display:none
     // is controlled by oracleVisible in JSX; this guard prevents stale text from painting in the
     // background when the user has toggled the oracle OFF.
-    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) { const sm = sigMarksRef.current; const v = sm.length ? sm[sm.length - 1].type : "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
+    // RECLAIM tail → soft "RE-ENTRY" read (buy-toned but weaker chrome): a re-entry marker has no
+    // full verdict authority, so the chip must not paint it with the solid BUY/SELL treatment.
+    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) { const sm = sigMarksRef.current; const v = sm.length ? sm[sm.length - 1].type : "—"; const reclaim = v === "RECLAIM"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${reclaim ? "RE-ENTRY" : v}`; verdictRef.current.style.color = buy || reclaim ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : reclaim ? "rgba(38,194,129,.06)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : reclaim ? "rgba(38,194,129,.18)" : "rgba(240,86,107,.3)"; } }
   };
 
   // ── R11 live-bar splice ───────────────────────────────────────────────────
@@ -1938,6 +1953,32 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // GC v2: fast-reversal CUT is a caution, NOT an exit — render a small orange "•caution" dot below
       // the bar instead of the old down-pointing CUT pill (the ✕/exit look). Everything else keeps the pill.
       for (const m of sigMarksRef.current) {
+        if (m.type === "RECLAIM") {
+          // Repair-lane re-entry (slice-sourced): HOLLOW pill below the bar — by contract never
+          // the solid BUY star and never verdict authority (the sim trades the lane; the marker
+          // stays display-hollow). Dashed outline separates it from a keeper-blocked hollow BUY.
+          const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
+          const fill = t2.buy, label = "RE-ENTRY";
+          const w = 9 + label.length * 5.6, h = 14, r = 4, ptr = 5, gap = 9;
+          const top = y + gap + ptr;
+          const g = mk("g", { opacity: 0.88 });
+          if ((m as any).highlight) {
+            const ring = mk("circle", { cx: x, cy: top + h / 2, r: w, fill: "none", stroke: fill, "stroke-width": 2, opacity: 0.9 });
+            ring.appendChild(mk("animate", { attributeName: "r", values: `${w};${w * 2.4}`, dur: "0.9s", repeatCount: "indefinite" }));
+            ring.appendChild(mk("animate", { attributeName: "opacity", values: "0.9;0", dur: "0.9s", repeatCount: "indefinite" }));
+            g.appendChild(ring);
+          }
+          g.appendChild(mk("rect", { x: x - w / 2, y: top, width: w, height: h, rx: r, ry: r, fill: "none", stroke: fill, "stroke-width": 1.3, "stroke-dasharray": "3 2" }));
+          g.appendChild(mk("path", { d: `M${x - ptr} ${top} L${x + ptr} ${top} L${x} ${top - ptr} Z`, fill: "none", stroke: fill, "stroke-width": 1.3 }));
+          const tEl = mk("text", { x, y: top + h / 2 + 3.2, fill, "font-size": 7.5, "font-weight": 800, "text-anchor": "middle", "font-family": "var(--font-ui)", "letter-spacing": ".02em" });
+          tEl.textContent = label;
+          g.appendChild(tEl);
+          const title = mk("title", {});
+          title.textContent = `${m.t} · re-entry (${m.quality === "block_repair" ? "bear-block repaired" : "trend reclaim"}) — hollow lane, no verdict authority`;
+          g.appendChild(title);
+          layer.appendChild(g);
+          continue;
+        }
         if (m.type === "CUT") {
           const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
           const cy = y + 16;

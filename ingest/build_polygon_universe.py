@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from ingest.polygon_bars import fetch_daily, ohlc_json   # noqa: E402
 from signal_layer import confluence, contracts, backtest  # noqa: E402
+from signal_layer.confluence_v2 import RECLAIM_EXCLUDE_CLASS, reclaim_excluded  # noqa: E402
 
 OUT = Path(os.environ.get("TERMINAL_DATA_DIR") or (ROOT / "terminal" / "public" / "data"))
 MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
@@ -184,6 +185,31 @@ DEFAULT = list(META.keys())
 MKT = {"BABA": "NYSE", "JD": "NASDAQ", "PDD": "NASDAQ"}
 
 
+def write_backtest_artifact(sym: str, bt: dict, btc: dict, out_dir: Path) -> bool:
+    """Write the full <SYM>.backtest.json (contract + cumulative equity curve, HANDOFF §7.3)
+    from a run_backtest result + its contract. Returns False (no file) when the run has no
+    trades. Shared with regen_flagship_slices' lane-stale recompute path."""
+    if bt.get("status") != "ok" or not bt.get("trades"):
+        return False
+    _rets = bt.get("_returns", [])
+    _idx = bt.get("_returns_index", [])
+    # Build cumulative equity curve: start 1.0, compound each bar return
+    eq_v = [1.0]
+    for r in _rets:
+        eq_v.append(round(eq_v[-1] * (1.0 + r), 8))
+    bh_tr = bt.get("metrics", {}).get("vs_buy_hold", {}).get("bh_total_return")
+    equity_obj = {
+        "t": [bt["first"]] + _idx,
+        "v": eq_v,
+        "bh_total_return": bh_tr,
+    }
+    # backtest_contract dict + "equity" key; strip raw _returns/_returns_index
+    full_bt = {k: v for k, v in btc.items() if k not in ("_returns", "_returns_index")}
+    full_bt["equity"] = equity_obj
+    (out_dir / f"{sym}.backtest.json").write_text(json.dumps(full_bt, separators=(",", ":")))
+    return True
+
+
 def main(syms: list[str]) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     src = (ROOT / "signal_layer" / "confluence.py").read_text()
@@ -213,6 +239,12 @@ def main(syms: list[str]) -> None:
                "verdict": None, "wr": None, "pf": None, "cagr": None, "regimeBull": None}
         if sym in MKT:
             row["mkt"] = MKT[sym]
+        # instrument classification: decay-class (leveraged/inverse/futures-roll) names
+        # carry cls:"decay" so downstream consumers (reclaim lane, labs) get a real
+        # manifest field instead of each keeping a private symbol list.
+        excl_reclaim = reclaim_excluded(sym, name, sec)
+        if excl_reclaim:
+            row["cls"] = RECLAIM_EXCLUDE_CLASS
 
         # ── chart signal history runs over the DEEP (full-IPO) display series ──────────────────
         # gen_slices_all computes every non-flagship symbol's confluence over its deep <SYM>.json,
@@ -244,8 +276,11 @@ def main(syms: list[str]) -> None:
             # gen_slices_all strips them for the same reason).
             for heavy in ("series", "gates", "bars"):
                 ind.pop(heavy, None)
+            # SCORED SIM = the promoted reclaim lane (FLAGSHIP_PARAMS["reclaim_lane"],
+            # gates G1-G5 in docs/RECLAIM_LANE_EVIDENCE.md) — decay-class names excluded.
             bt = backtest.run_backtest(close, fixed=True, bar_quality="real_ohlc",
-                                       bar_anchor=bt_anchor, week_parity=bt_wparity)
+                                       bar_anchor=bt_anchor, week_parity=bt_wparity,
+                                       use_reclaim_entry=not excl_reclaim)
             btc = contracts.backtest_contract(
                 sym, "3D", bt,
                 honest_read="As-traded Polygon backtest after costs; significance verdict delegated to loop/harness.")
@@ -253,25 +288,7 @@ def main(syms: list[str]) -> None:
             (OUT / f"{sym}.slice.json").write_text(json.dumps(slim, indent=2))
 
             # Write full backtest contract + equity curve (HANDOFF §7.3)
-            if bt.get("status") == "ok" and bt.get("trades"):
-                _rets = bt.get("_returns", [])
-                _idx = bt.get("_returns_index", [])
-                # Build cumulative equity curve: start 1.0, compound each bar return
-                eq_v = [1.0]
-                for r in _rets:
-                    eq_v.append(round(eq_v[-1] * (1.0 + r), 8))
-                bh_tr = bt.get("metrics", {}).get("vs_buy_hold", {}).get("bh_total_return")
-                equity_obj = {
-                    "t": [bt["first"]] + _idx,
-                    "v": eq_v,
-                    "bh_total_return": bh_tr,
-                }
-                # backtest_contract dict + "equity" key; strip raw _returns/_returns_index
-                full_bt = {k: v for k, v in btc.items() if k not in ("_returns", "_returns_index")}
-                full_bt["equity"] = equity_obj
-                (OUT / f"{sym}.backtest.json").write_text(
-                    json.dumps(full_bt, separators=(",", ":"))
-                )
+            write_backtest_artifact(sym, bt, btc, OUT)
             st = slim["indicator"]["state"]
             m = slim["backtest"]["metrics"]
             # scored-first: blocked markers never become the public verdict; the fallback
