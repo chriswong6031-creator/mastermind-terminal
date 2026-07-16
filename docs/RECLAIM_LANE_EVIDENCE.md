@@ -48,13 +48,37 @@ Median per-name WR 56.1% → 58.6%. 90/91 names produced reclaim trades (median 
 
 **Verdict: PROMOTE-CANDIDATE** — the lane is eligible for scored promotion.
 
-## Scored promotion (NOT in this PR — follow-up)
+## Post-exclusion re-run (2026-07-16) — the promotion panel
 
-Promotion means: `FLAGSHIP_PARAMS` gains a `reclaim_lane` key (new `source_hash`
-identity), the scored sim adopts `use_reclaim_entry=True`, manifest verdict/wr/pf and the
-track record regenerate, and chart markers get the hollow re-entry glyph. Before doing it:
+The `reclaim_eligible` symbol-class rule (leveraged/inverse/VIX/futures-strategy wrappers;
+name-based with a VIX-ticker backstop for metadata-less rows) excluded
+BITO, SOXL, SOXS, SPXL, SQQQ, TQQQ, VXX from the lane. Re-run on the remaining n=84:
 
-- **Exclude inverse/leveraged ETFs** — the worst per-name expectancies are structurally
-  hostile to trend-reclaim semantics (SOXS −25%, SQQQ −21%, BITO −12%; decay instruments).
-- Re-run the panel with the exclusion and re-adjudicate G1–G5.
-- One PR train: params + regen + verify_publish + release note (public wr/pf will move).
+| Gate | Threshold | Result | Pass |
+|---|---|---|---|
+| G1 expectancy | pooled > 0 AND median per-name ≥ 0 | **+10.5%** pooled / **+6.3%** median (n=1,169) | ✅ |
+| G2 non-inferiority | median ratio ≥ 0.95× | **1.33×** | ✅ |
+| G3 2022 falsifier | > −2% | **−1.07%** (n=73) — tightened from −1.5% | ✅ |
+| G4 breadth + dd | ≥55%; dd ≤ +2pp | **81.0%**; dd **−0.36pp** (shallower) | ✅ |
+| G5 sample | ≥150 trades | **1,169** | ✅ |
+
+## Scored promotion — SHIPPED 2026-07-16 (owner "go")
+
+- `FLAGSHIP_PARAMS["reclaim_lane"] = True` — new `source_hash`/`spec_hash` identity.
+- RECLAIM markers emit `scored: true`; the position walk counts them (long); the manifest
+  verdict can now read `RECLAIM` (AAPL @2026-07-13, META @2026-07-09 on first regen).
+  Legacy `scored:false` markers from the display-tier interregnum stay display-only.
+- The published backtest (`build_polygon_universe`) runs `use_reclaim_entry=True` for
+  eligible names — **public wr/pf move on the next nightly** (panel medians: WR
+  56.2→58.8, total-return ratio 1.33×).
+- Emission excludes the decay class at every producer (`regen_flagship_slices`,
+  `fast_flagship`, `gen_slices_all`) via `reclaims_enabled=reclaim_eligible(name, sym)`.
+- Chart: RECLAIM markers merge from the slice into the marker stream and render as a
+  HOLLOW "RE-ENTRY" pill — the solid ★ stays reserved for the classic confluence entries
+  (glyph law), as does the "unscored" tag for legacy markers only.
+- Verified: pytest 178 / vitest 221 / tsc clean; rail + dock verified in preview with a
+  scored RECLAIM ("re-entry signal — scored reclaim lane"). The chart overlay itself does
+  not mount in the local dev fixture (pre-existing), so the glyph is verified at the
+  code/type level on the shared marker path.
+
+Reproduce: `python3 -m signal_layer.reclaim_lab` (prints the exclusion list + gates).

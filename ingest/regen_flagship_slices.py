@@ -39,11 +39,18 @@ except Exception:
     SRC = ""
 
 
+_MANIFEST_MEMO: dict | None = None
+
+
 def _load_manifest() -> dict:
-    try:
-        return json.loads((OUT / "manifest.json").read_text())
-    except Exception:
-        return {"symbols": {}}
+    # memoized: the manifest is multi-MB and regen() consults it once per flagship name
+    global _MANIFEST_MEMO
+    if _MANIFEST_MEMO is None:
+        try:
+            _MANIFEST_MEMO = json.loads((OUT / "manifest.json").read_text())
+        except Exception:
+            _MANIFEST_MEMO = {"symbols": {}}
+    return _MANIFEST_MEMO
 
 
 def regen(sym: str, write: bool = True, cache=None) -> str:
@@ -74,9 +81,13 @@ def regen(sym: str, write: bool = True, cache=None) -> str:
     if cache is None:
         cache = build_cohort_cache(OUT, _load_manifest())
     sec_basket, panel_basket, cohort = cache.for_symbol(sym)
+    # symbol-class exclusion: decay instruments (leveraged/inverse/VIX/futures wrappers)
+    # never emit RE-ENTRY reclaims — the name comes from the manifest row.
+    mrow = _load_manifest().get("symbols", {}).get(sym) or {}
     v2 = confluence_v2.build_v2(sig, close, high=high, low=low, volume=volume,
                                 sector_basket=sec_basket, panel_basket=panel_basket,
-                                cohort_frac_daily=cohort)
+                                cohort_frac_daily=cohort,
+                                reclaims_enabled=confluence_v2.reclaim_eligible(mrow.get("name"), sym))
     ind = contracts.indicator_contract(
         sym, "3D", sig, bar_quality="real_ohlc", src_text=SRC, honest_read=HONEST, v2=v2)
     for heavy in ("series", "gates", "bars"):

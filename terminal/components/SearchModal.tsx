@@ -8,7 +8,7 @@ import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
 
 type Row = { name: string; col: string; verdict: string | null; vts?: string | null; mkt?: string; zh?: string; sec?: string };
-const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
+const isBuy = (v: string | null) => v === "BUY" || v === "REBUY" || v === "RECLAIM";
 
 // Asset-class → search-tab mapping. `sec` in the manifest is the asset class
 // (Equities / Funds / Crypto / …); anything unmapped (incl. stocks) falls under "Stocks".

@@ -29,6 +29,7 @@ from pathlib import Path
 import pandas as pd
 
 from .backtest import run_backtest
+from .confluence_v2 import reclaim_eligible
 
 BASE = os.environ.get("RECLAIM_LAB_BASE", "https://app.mastermind-x.com/data")
 LOCAL = os.environ.get("TERMINAL_DATA_DIR")
@@ -58,9 +59,15 @@ def _close_series(doc) -> pd.Series | None:
 
 def run_panel(limit: int = 0) -> dict:
     man = _fetch("manifest.json") or {}
-    syms = [s for s, r in (man.get("symbols") or {}).items()
-            if isinstance(r, dict) and r.get("verdict") is not None]
-    syms.sort()
+    rich = {s: r for s, r in (man.get("symbols") or {}).items()
+            if isinstance(r, dict) and r.get("verdict") is not None}
+    # symbol-class exclusion (reclaim_eligible): decay instruments never take reclaim
+    # entries, so they carry no information for the gates — dropped from the panel and
+    # reported, never silently.
+    excluded = sorted(s for s, r in rich.items() if not reclaim_eligible(r.get("name"), s))
+    syms = sorted(s for s in rich if s not in set(excluded))
+    if excluded:
+        print(f"  excluded (reclaim_eligible=False): {', '.join(excluded)}", flush=True)
     if limit:
         syms = syms[:limit]
 
@@ -114,6 +121,7 @@ def run_panel(limit: int = 0) -> dict:
                else "PROMOTE-CANDIDATE" if all(gates.values())
                else "DISPLAY-ONLY")
     return {
+        "excluded": excluded,
         "panel_n": n,
         "n_reclaim_trades": len(pooled_reclaim),
         "pooled_reclaim_expectancy": pooled_exp,

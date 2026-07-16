@@ -1396,10 +1396,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     oracleMemoRef.current = { key, sig };
     return sig;
   };
-  // Resolve BUY/SELL/CUT/REBUY marks against the CURRENT bar set. Signals are computed CLIENT-SIDE from
-  // the v1 confluence Pine (no per-ticker backfill) — the `slice` arg is ignored, kept for call-site
-  // compatibility. Daily signal dates snap to the current bars exactly as the v2 path did, so intraday
-  // / replay / resampled views line up.
+  // Resolve BUY/SELL/CUT/REBUY marks against the CURRENT bar set. Those are computed CLIENT-SIDE from
+  // the v1 confluence Pine (no per-ticker backfill); RECLAIM re-entry marks additionally merge in from
+  // the slice's signal stream (the reclaim lane exists only server-side). Daily signal dates snap to
+  // the current bars exactly as the v2 path did, so intraday / replay / resampled views line up.
   const resolveSigMarks = (_slice: any, rows: Bar[]) => {
     const daily = dailyBarsRef.current.length ? dailyBarsRef.current : rows;
     if (!daily.length || !rows.length) return [] as { t: string; type: string; price: number }[];
@@ -1407,10 +1407,24 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const lastDate = times[times.length - 1];
     const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(String(y) + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y as any; } }); return bd < 9e8 ? b : null; };
     const byTime = new Map(rows.map((r) => [r.time, r]));
-    return oracleSignals(daily)
+    const marks = oracleSignals(daily)
       .filter((s) => s.ts <= (lastDate as string))
       .map((s) => { const t = near(s.ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) return null; const price = (s.type === "BUY" || s.type === "REBUY") ? bar.l : bar.h; return { t, type: s.type, price }; })
       .filter(Boolean) as { t: string; type: string; price: number }[];
+    // RECLAIM re-entry marks come from the SLICE (the reclaim lane has no Pine analog):
+    // snap each to its bar like the Pine marks, then keep the stream chronological so
+    // paintStatus's "latest mark" verdict chip stays honest.
+    const reclaims = _slice?.indicator?.signals;
+    if (Array.isArray(reclaims)) {
+      for (const s of reclaims) {
+        if (s?.type !== "RECLAIM" || typeof s?.ts !== "string" || s.ts > (lastDate as string)) continue;
+        const t = near(s.ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) continue;
+        marks.push({ t, type: "RECLAIM", price: bar.l });
+      }
+      const idxOf = new Map(times.map((t, i) => [t, i]));
+      marks.sort((a, b) => (idxOf.get(a.t as any) ?? 0) - (idxOf.get(b.t as any) ?? 0));
+    }
+    return marks;
   };
 
   // The v1 Golden Oracle has NO side channels (the early_dots + arm/confirm warnings were a GC v2
@@ -1433,7 +1447,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Gate oracle verdict text on whether the _oracle indicator is active. The chip's display:none
     // is controlled by oracleVisible in JSX; this guard prevents stale text from painting in the
     // background when the user has toggled the oracle OFF.
-    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) { const sm = sigMarksRef.current; const v = sm.length ? sm[sm.length - 1].type : "—"; const buy = v === "BUY" || v === "REBUY"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
+    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) { const sm = sigMarksRef.current; const v = sm.length ? sm[sm.length - 1].type : "—"; const buy = v === "BUY" || v === "REBUY" || v === "RECLAIM"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v === "RECLAIM" ? "RE-ENTRY" : v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
   };
 
   // ── R11 live-bar splice ───────────────────────────────────────────────────
@@ -1817,11 +1831,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // ── signal badges: BUY/SELL (★) + RE-BUY pill; GC v2 keeper quality/tier styling + CUT caution ──
     const renderSignals = () => {
       const layer = sigRef.current; if (!layer) return; const t2 = tokensRef.current;
-      const SIGCFG: Record<string, { dir: "up" | "down"; fill: string; tc: string; txt: string; star?: boolean }> = {
+      const SIGCFG: Record<string, { dir: "up" | "down"; fill: string; tc: string; txt: string; star?: boolean; hollow?: boolean }> = {
         BUY:   { dir: "up",   fill: t2.buy,    tc: "#fff",     txt: "★",      star: true },
         SELL:  { dir: "down", fill: t2.sell,   tc: "#fff",     txt: "★",      star: true },
         REBUY: { dir: "up",   fill: "#b6e94a", tc: "#16310a",  txt: "RE-BUY" },
         CUT:   { dir: "down", fill: "#ff8a3d", tc: "#2a1400",  txt: "CUT" },
+        // reclaim-lane re-entry (slice-sourced): ALWAYS hollow — the glyph law reserves the
+        // solid star for the classic confluence entries even now that the lane is scored.
+        RECLAIM: { dir: "up", fill: t2.buy,    tc: t2.buy,     txt: "RE-ENTRY", hollow: true },
       };
       // GC v2 tier → marker badge glyph (aplus="A+", quality="Q", base/none → no badge).
       const tierBadge = (tier?: string | null) => (tier === "aplus" ? "A+" : tier === "quality" ? "Q" : "");
@@ -1956,7 +1973,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // (This SVG overlay has full shape control — the prompt's "○ glyph" fallback for shape-limited
         //  lightweight-charts markers is unnecessary here; we draw a true hollow badge for `block`.)
         const q = (m.type === "BUY" || m.type === "REBUY") ? m.quality : undefined;
-        const hollow = q === "block";
+        const hollow = q === "block" || !!cfg.hollow;
         const dim = q === "pending" || q === "regime_blocked";
         const fill = q === "regime_blocked" ? SLATE : (q === "pending" ? t2.mut : cfg.fill);
         const groupOp = dim ? 0.5 : 0.97;
