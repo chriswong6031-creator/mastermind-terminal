@@ -167,11 +167,18 @@ export function oracleVerdict(
 
   // ── fresh effective event: it IS the verdict (today's full-authority path) ──
   if (eff && effU && !stale) {
+    // RECLAIM keeps the hollow (soft) glyph regardless of scoring — the glyph law says a
+    // re-entry never wears the solid backtested star. The NOTE tells the scoring truth:
+    // scored (reclaim_lane promoted 2026-07-16) vs legacy display-tier scored:false.
     const soft = effU === "RECLAIM";
     const notes: string[] = [horizon];
     if (eff.price != null) notes.push(`@ ${eff.price}`);
     const q = String(eff.quality || "").toLowerCase();
-    if (soft) notes.push(zh ? "未计分再入场信号（不计入战绩）" : "unscored re-entry signal (not in the track record)");
+    if (soft) {
+      notes.push(eff.scored === false
+        ? (zh ? "未计分再入场信号（不计入战绩）" : "unscored re-entry signal (not in the track record)")
+        : (zh ? "再入场信号 — 计分回收通道" : "re-entry signal — scored reclaim lane"));
+    }
     if (SOFT_Q.has(q) && !soft) notes.push(String(eff.quality_reason || q));
     else if (soft && eff.quality_reason) notes.push(String(eff.quality_reason));
     // lane-disagreement note only between the two SCORED lanes (a RECLAIM primary is

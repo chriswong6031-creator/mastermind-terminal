@@ -43,7 +43,7 @@ async function runTool(name: string, args: any): Promise<any> {
   if (name === "screen") {
     const m = await readJson("manifest.json"); const syms = m?.symbols || {};
     let rows = Object.entries<any>(syms).map(([s, r]) => ({ symbol: s, ...r }));
-    if (args?.verdict) rows = rows.filter((r) => (r.verdict || "").toUpperCase() === args.verdict.toUpperCase() || (args.verdict.toUpperCase() === "BUY" && ["BUY", "REBUY"].includes((r.verdict || "").toUpperCase())));
+    if (args?.verdict) rows = rows.filter((r) => (r.verdict || "").toUpperCase() === args.verdict.toUpperCase() || (args.verdict.toUpperCase() === "BUY" && ["BUY", "REBUY", "RECLAIM"].includes((r.verdict || "").toUpperCase())));
     if (args?.regime) rows = rows.filter((r) => (args.regime.toLowerCase().startsWith("bull") ? r.regimeBull : !r.regimeBull));
     rows.sort((a, b) => (b.wr ?? 0) - (a.wr ?? 0));
     return { count: rows.length, results: rows.slice(0, 12).map((r) => ({ symbol: r.symbol, last: r.last, chg: r.chg, verdict: r.verdict, verdict_date: r.vts ?? undefined, wr: r.wr, pf: r.pf, cagr: r.cagr, regimeBull: r.regimeBull })) };

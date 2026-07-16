@@ -292,6 +292,14 @@ def _main_locked(limit: int, syms_override: list[str] | None, dry_run: bool) -> 
 
     print(f"[fast_flagship] work set: {len(work)} syms, rth={rth}, dry_run={dry_run}", flush=True)
 
+    # security names for the reclaim symbol-class rule (read-only manifest peek; the
+    # RMW merge later re-reads it fresh — this copy is only consulted for names)
+    try:
+        _names = {s: (r or {}).get("name")
+                  for s, r in json.loads(LIVE.read_text()).get("symbols", {}).items()}
+    except Exception:
+        _names = {}
+
     # ── 4. Single batched hub call ────────────────────────────────────────────
     quotes = _fetch_quotes(work)
     if quotes is None:
@@ -366,7 +374,9 @@ def _main_locked(limit: int, syms_override: list[str] | None, dry_run: bool) -> 
         # unified SELL markers (from v2 CONFIRM events) survive the 5-min refresh — without
         # it, indicator_contract emits BUY/REBUY but NO SELL.
         try:
-            v2 = confluence_v2.build_v2(sig, close)
+            v2 = confluence_v2.build_v2(
+                sig, close,
+                reclaims_enabled=confluence_v2.reclaim_eligible(_names.get(sym), sym))
         except Exception as exc:
             print(f"[fast_flagship] {sym}: build_v2 failed: {exc}", flush=True)
             v2 = None

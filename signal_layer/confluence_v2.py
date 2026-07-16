@@ -59,10 +59,57 @@ SIDE_CHANNEL_CAP = 40
 
 # ── repair grammar (RE-ENTRY lane, 2026-07-15 Mag7 rotation-miss directive) ──
 # A gate verdict is evaluated once, on its own bar; these two event forms answer
-# "the engine said no / said exit — and the market then repaired it". DISPLAY lane
-# only (scored:false) until the panel backtest promotes them.
+# "the engine said no / said exit — and the market then repaired it".
 RECLAIM_DEBOUNCE_BARS = 4   # 3D bars flat after a SELL before a reclaim may fire (~12 sessions)
 REPAIR_WINDOW_BARS = 8      # a blocked entry may re-fire while its cross is live, within this window
+
+# Symbol-class eligibility: trend-reclaim semantics require an asset that can HOLD a
+# reclaimed price level. Leveraged/inverse products and futures-roll wrappers decay by
+# construction, so "price back above the old sell level" carries no information there —
+# the 2026-07-15 panel's only structural losers were exactly this class (SOXS −25%,
+# SQQQ −21%, BITO −12% per-name reclaim expectancy vs +6.3% panel median).
+# Name-based (works across the full universe without a new metadata field) and
+# conservative: only unambiguous decay markers on fund-like names disqualify.
+import re as _re
+
+_FUNDISH = (" etf", " etn", " shares", " fund", " trust",
+            "proshares", "direxion", "graniteshares", "ipath")
+_SHORT_TERM = _re.compile(r"short[\s-]term", _re.I)
+_LEVERED = _re.compile(r"\b\d(?:\.\d+)?x\b", _re.I)                  # 2x / 3X / 1.5x
+_ULTRA = _re.compile(r"\bultra(?:pro|short)?\b", _re.I)              # ProShares Ultra family
+# "strategy" on a fund-like name = a 40-Act futures wrapper (Bitcoin Strategy, Managed
+# Futures Strategy…) — contango decay, same class as VIX products.
+_FUTURES = _re.compile(r"\bfutures?\b|\bstrategy\b|\bvix\b", _re.I)
+# metadata backstop: VIX-family tickers whose manifest rows ship no name to classify
+_TICKER_BACKSTOP = {"UVXY", "SVXY", "VIXY", "VXX", "TVIX", "VIXM"}
+
+
+def reclaim_eligible(name: str | None, sym: str | None = None) -> bool:
+    """True when the RE-ENTRY repair lane may fire for this security."""
+    if sym and sym.upper() in _TICKER_BACKSTOP:
+        return False
+    if not name:
+        return True                       # unknown names stay eligible (conservative default)
+    n = f" {name.lower()} "
+    if _re.search(r"\bvix\b", n):
+        return False                      # VIX products decay regardless of wrapper branding
+    if not any(k in n for k in _FUNDISH):
+        return True                       # operating companies are always eligible
+    if _LEVERED.search(n):
+        return False
+    if "inverse" in n or _re.search(r"\bbear\b", n):
+        return False
+    # fixed-income names use "short"/"ultra-short" as MATURITY words (iShares Short
+    # Treasury Bond, JPMorgan Ultra-Short Income) — not a short position; keep eligible.
+    if _re.search(r"\b(treasur|bond|income|duration|bill)\w*\b", n):
+        return True
+    if _ULTRA.search(n):
+        return False
+    if _re.search(r"\bshort\b", n) and not _SHORT_TERM.search(n):
+        return False
+    if _FUTURES.search(n):
+        return False
+    return True
 
 
 # ════════════════════════════════════════════════ v2 exit / entry streams ═══
@@ -573,7 +620,8 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
              volume: pd.Series | None = None,
              sector_basket: pd.Series | None = None,
              panel_basket: pd.Series | None = None,
-             cohort_frac_daily: pd.Series | None = None) -> dict:
+             cohort_frac_daily: pd.Series | None = None,
+             reclaims_enabled: bool = True) -> dict:
     """Compute the full v2 emission for one symbol from its oracle ``sig`` frame + close.
 
     ``high``/``low``/``volume`` optional (CN/HK close-only names pass none): the recipe
@@ -639,7 +687,8 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
         "early_dots": early_dots(sig, close)[-SIDE_CHANNEL_CAP:],
         "warnings": warns_all[-SIDE_CHANNEL_CAP:],
         "sell_confirms": sell_confirms,
-        # RE-ENTRY repair lane (display, scored:false — see reclaim_events). Uncapped like
-        # sell_confirms: contracts folds them into the stream, model_slice caps the tail.
-        "reclaims": reclaim_events(sig, sell_confirms),
+        # RE-ENTRY repair lane (see reclaim_events). Uncapped like sell_confirms: contracts
+        # folds them into the stream, model_slice caps the tail. ``reclaims_enabled=False``
+        # = the symbol-class exclusion (reclaim_eligible): decay instruments emit none.
+        "reclaims": reclaim_events(sig, sell_confirms) if reclaims_enabled else [],
     }

@@ -33,11 +33,20 @@ SCHEMA_BACKTEST = "backtest_result/v1"
 # demoted from a scored EXIT to a display caution, so the traded stream is no-cut. It
 # lives in the hashed params so the v2 emission gets a NEW ``source_hash`` — v1 and v2
 # indicator docs are distinct identities even off the same script text.
+#
+# ``reclaim_lane: True`` is the 2026-07-16 scored promotion of the RE-ENTRY repair
+# grammar (confluence_v2.reclaim_events): TREND-RECLAIM + BLOCK-REPAIR entries join the
+# scored stream (position walk, manifest verdict, wr/pf via use_reclaim_entry=True),
+# gated by the reclaim_eligible symbol-class rule. Panel evidence (post-exclusion,
+# docs/RECLAIM_LANE_EVIDENCE.md): n=84 names / 1,169 trades, all five gates pass —
+# pooled expectancy +10.5%, portfolio ratio 1.33x, WR 56.2→58.8, 2022 falsifier −1.1%.
+# In the hashed params so the promoted emission is a NEW source_hash/spec_hash identity.
 FLAGSHIP_PARAMS = {
     "confW": 8, "rsiLen": 14, "useMTF": True, "confirmTF": "1W",
     "macd_on": "rsi", "macd_fast": 14, "macd_slow": 60, "macd_signal": 5,
     "buy_rsi_max": 65, "ext_rsi": 70, "rev_bars": 3,
     "no_cut_exits": True,
+    "reclaim_lane": True,
 }
 
 
@@ -219,10 +228,13 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
                            "above200": bool(row.get("above200")),
                            "monthlyBull": bool(row.get("mo_bull"))},
             })
-    # ── RECLAIM from the v2 repair lane (display re-entry; NEVER a scored event) ──
+    # ── RECLAIM from the v2 repair lane (scored re-entry since reclaim_lane promotion) ──
     # Two kinds ride the same marker type: "reclaim" (post-SELL trend reclaim) and
-    # "block_repair" (a bear-blocked entry whose block legs cleared). scored:false and
-    # the non-(BUY|REBUY|SELL) type keep them out of the position walk and the sim.
+    # "block_repair" (a bear-blocked entry whose block legs cleared). ``scored`` mirrors
+    # FLAGSHIP_PARAMS["reclaim_lane"]: True since the 2026-07-16 promotion (panel gates
+    # G1–G5 passed post-exclusion), so these flip the position walk / manifest verdict and
+    # the sim prices them (backtest.use_reclaim_entry). Pre-promotion slices in the wild
+    # carry scored:false — every consumer treats those as display-only.
     reclaims = v2.get("reclaims") or []
     if reclaims and len(sig):
         sidx = sig.index
@@ -238,7 +250,7 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
                 "type": "RECLAIM",
                 "strength": _strength(row),
                 "price": _num(row.get("close")),
-                "scored": False,
+                "scored": bool(FLAGSHIP_PARAMS.get("reclaim_lane")),
                 "quality": kind,                        # reclaim | block_repair
                 "quality_reason": (
                     f"trend reclaimed the {r.get('anchor_ts')} sell level"
@@ -280,13 +292,17 @@ def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
     last_sig = signals[-1] if signals else None
     bars_since = (len(sig) - 1 - last_sig["bar_index"]) if last_sig else None
 
-    # position hint from the last SCORED position event (blocked markers don't trade).
+    # position hint from the last SCORED position event (blocked markers don't trade;
+    # RECLAIM counts only when its emission was scored — pre-promotion display-tier
+    # markers carry scored:false and stay out of the walk).
     pos = None
     last_scored = None
     for s in reversed(signals):
-        if s["type"] in ("BUY", "REBUY", "SELL") and s.get("quality") != "regime_blocked":
+        if s["type"] == "RECLAIM" and not s.get("scored"):
+            continue
+        if s["type"] in ("BUY", "REBUY", "SELL", "RECLAIM") and s.get("quality") != "regime_blocked":
             last_scored = s
-            pos = "long" if s["type"] in ("BUY", "REBUY") else "flat"
+            pos = "long" if s["type"] in ("BUY", "REBUY", "RECLAIM") else "flat"
             break
     strong_bull = bool(last is not None and last.get("strong_bull"))
     return {
