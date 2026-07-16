@@ -1234,15 +1234,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (!inds.has("ribbon")) restoreNormalCandleColors(rows);
     let pane = 1;
     for (const key of activeSubpanes()) {
-      if (key === "osc") indSeriesRef.current.set("osc", buildOsc(chart, rows, closes, pane));
-      else if (key === "macd") indSeriesRef.current.set("macd", buildMacd(chart, rows, closes, pane));
-      else if (key === "rsistack") indSeriesRef.current.set("rsistack", buildRsiStack(chart, rows, pane));
-      else if (key === "accum") indSeriesRef.current.set("accum", buildAccum(chart, rows, pane));
-      else if (key === "rvol") indSeriesRef.current.set("rvol", buildRvol(chart, rows, pane));
-      else if (key === "ttmsq") indSeriesRef.current.set("ttmsq", buildTtmsq(chart, rows, pane));
-      else if (key === "adx") indSeriesRef.current.set("adx", buildAdx(chart, rows, pane));
-      else if (key === "cvd") indSeriesRef.current.set("cvd", buildCvd(chart, rows, pane));
-      paneMapRef.current.set(key, pane); pane++;
+      let series: ISeriesApi<any>[] = [];
+      if (key === "osc") series = buildOsc(chart, rows, closes, pane);
+      else if (key === "macd") series = buildMacd(chart, rows, closes, pane);
+      else if (key === "rsistack") series = buildRsiStack(chart, rows, pane);
+      else if (key === "accum") series = buildAccum(chart, rows, pane);
+      else if (key === "rvol") series = buildRvol(chart, rows, pane);
+      else if (key === "ttmsq") series = buildTtmsq(chart, rows, pane);
+      else if (key === "adx") series = buildAdx(chart, rows, pane);
+      else if (key === "cvd") series = buildCvd(chart, rows, pane);
+      indSeriesRef.current.set(key, series);
+      // Claim the pane index (and advance the counter) ONLY when the builder actually rendered ≥1 series.
+      // rvol/cvd return [] on daily (intraday-only). Setting paneMapRef + incrementing `pane` for an empty
+      // builder desyncs the requested-pane counter from the real pane count, so a LATER multi-series builder
+      // (e.g. ADX with +DI/−DI) splits across two panes: getOrCreatePane clamps an out-of-range index to
+      // panes.length, creating a phantom pane that has no panesMeta entry. Mirrors buildPineScript's usedPane.
+      if (series.length > 0) { paneMapRef.current.set(key, pane); pane++; }
     }
     // custom scripts always ride along a full indicator rebuild (bars/indicator/replay change): rebuild
     // them on the SAME on-chart `rows` so their series align with the visible bars. runPineMemo caches
@@ -3141,15 +3148,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // additions (tail append, by the guard above) — assign the next free pane index
       for (const a of added) {
         const pane = nextFreePane();
-        if (a === "osc") indSeriesRef.current.set("osc", buildOsc(chart, rows, closes, pane));
-        else if (a === "macd") indSeriesRef.current.set("macd", buildMacd(chart, rows, closes, pane));
-        else if (a === "rsistack") indSeriesRef.current.set("rsistack", buildRsiStack(chart, rows, pane));
-        else if (a === "accum") indSeriesRef.current.set("accum", buildAccum(chart, rows, pane));
-        else if (a === "rvol") indSeriesRef.current.set("rvol", buildRvol(chart, rows, pane));
-        else if (a === "ttmsq") indSeriesRef.current.set("ttmsq", buildTtmsq(chart, rows, pane));
-        else if (a === "adx") indSeriesRef.current.set("adx", buildAdx(chart, rows, pane));
-        else if (a === "cvd") indSeriesRef.current.set("cvd", buildCvd(chart, rows, pane));
-        paneMapRef.current.set(a, pane);
+        let series: ISeriesApi<any>[] = [];
+        if (a === "osc") series = buildOsc(chart, rows, closes, pane);
+        else if (a === "macd") series = buildMacd(chart, rows, closes, pane);
+        else if (a === "rsistack") series = buildRsiStack(chart, rows, pane);
+        else if (a === "accum") series = buildAccum(chart, rows, pane);
+        else if (a === "rvol") series = buildRvol(chart, rows, pane);
+        else if (a === "ttmsq") series = buildTtmsq(chart, rows, pane);
+        else if (a === "adx") series = buildAdx(chart, rows, pane);
+        else if (a === "cvd") series = buildCvd(chart, rows, pane);
+        indSeriesRef.current.set(a, series);
+        // Claim the pane ONLY when the builder rendered ≥1 series: rvol/cvd return [] on daily, and a phantom
+        // paneMapRef entry would both desync the next add's nextFreePane() index (splitting a later builder,
+        // as in buildAllIndicators) and mis-seat pine sub-panes below (buildAllPine reads paneMapRef).
+        if (series.length > 0) paneMapRef.current.set(a, pane);
       }
       // ONLY when a built-in SUB-PANE was added/removed → re-seat pine sub-panes ABOVE the new built-in
       // panes so a pine pane index can't collide with a freshly-added built-in one. A pure overlay toggle
