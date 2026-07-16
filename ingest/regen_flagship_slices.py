@@ -10,12 +10,12 @@ slice['indicator']; the existing slice['backtest'] (Polygon-fed WR/PF/CAGR) is p
 WHEN it is the current strategy identity. LANE GUARD (2026-07-16 reclaim promotion): when the
 on-disk <SYM>.backtest.json carries a stale strategy.spec_hash (e.g. a pre-promotion no-reclaim
 backtest under current FLAGSHIP_PARAMS), the backtest is RECOMPUTED here from the deep close
-(use_reclaim_entry per the decay-class exclusion) and the manifest row's wr/pf/cagr are patched in
-lockstep — a slice must never pair a current-identity indicator with an old-lane backtest, and the
-manifest must never disagree with the slice (verify_publish is the post-condition). In the nightly
-this guard is a no-op: build_polygon_universe wrote a fresh current-identity backtest minutes
-earlier. Idempotent — safe to re-run. The build_polygon_universe.py fix keeps the nightly cron
-correct going forward; this script fixes the live slices immediately without waiting for the cron.
+(use_reclaim_entry per reclaim_eligible) and the manifest row (wr/pf/cagr + verdict/vts) patched in
+lockstep — a slice must never pair a current-identity indicator with an old-lane backtest, and a
+standalone regen must leave verify_publish green without waiting for the nightly reconcile. In the
+nightly this guard is a no-op: build_polygon_universe wrote a fresh current-identity backtest
+minutes earlier. Idempotent — safe to re-run. The build_polygon_universe.py fix keeps the nightly
+cron correct going forward; this script fixes the live slices immediately without waiting for it.
 
 Run on the VPS (deep <SYM>.json + /opt/macro deep store present):
   MACRO_REPO=/opt/macro /opt/macro/.venv/bin/python ingest/regen_flagship_slices.py           # rewrite all
@@ -50,15 +50,21 @@ except Exception:
     SRC = ""
 
 
+_MANIFEST_MEMO: dict | None = None
+
+
 def _load_manifest() -> dict:
-    try:
-        return json.loads((OUT / "manifest.json").read_text())
-    except Exception:
-        return {"symbols": {}}
+    # memoized: the manifest is multi-MB and regen() consults it once per flagship name
+    global _MANIFEST_MEMO
+    if _MANIFEST_MEMO is None:
+        try:
+            _MANIFEST_MEMO = json.loads((OUT / "manifest.json").read_text())
+        except Exception:
+            _MANIFEST_MEMO = {"symbols": {}}
+    return _MANIFEST_MEMO
 
 
-def regen(sym: str, write: bool = True, cache=None, manifest: dict | None = None,
-          patches: dict | None = None) -> str:
+def regen(sym: str, write: bool = True, cache=None, patches: dict | None = None) -> str:
     jf = OUT / f"{sym}.json"
     sf = OUT / f"{sym}.slice.json"
     if not jf.exists():
@@ -81,17 +87,17 @@ def regen(sym: str, write: bool = True, cache=None, manifest: dict | None = None
     if sig.empty:
         return f"{sym}: empty sig ({len(bars)}b)"
     # cohort cache built once by main(); for --check a single symbol, build lazily.
-    if manifest is None:
-        manifest = _load_manifest()
     if cache is None:
-        cache = build_cohort_cache(OUT, manifest)
+        cache = build_cohort_cache(OUT, _load_manifest())
     sec_basket, panel_basket, cohort = cache.for_symbol(sym)
-    row = (manifest.get("symbols") or {}).get(sym) or {}
-    excl_reclaim = confluence_v2.reclaim_excluded(sym, row.get("name"), row.get("sec"))
+    # symbol-class exclusion: decay instruments (leveraged/inverse/VIX/futures wrappers)
+    # never emit RE-ENTRY reclaims — the name comes from the manifest row.
+    mrow = _load_manifest().get("symbols", {}).get(sym) or {}
+    eligible = confluence_v2.reclaim_eligible(mrow.get("name"), sym)
     v2 = confluence_v2.build_v2(sig, close, high=high, low=low, volume=volume,
                                 sector_basket=sec_basket, panel_basket=panel_basket,
                                 cohort_frac_daily=cohort,
-                                symbol=sym, display_name=row.get("name"), sec=row.get("sec"))
+                                reclaims_enabled=eligible)
     ind = contracts.indicator_contract(
         sym, "3D", sig, bar_quality="real_ohlc", src_text=SRC, honest_read=HONEST, v2=v2)
     for heavy in ("series", "gates", "bars"):
@@ -123,28 +129,24 @@ def regen(sym: str, write: bool = True, cache=None, manifest: dict | None = None
         # asserts manifest == slice); the next nightly Polygon rebuild supersedes both.
         bt = backtest.run_backtest(close, fixed=True, bar_quality="real_ohlc",
                                    bar_anchor=anchor, week_parity=wparity,
-                                   use_reclaim_entry=not excl_reclaim)
+                                   use_reclaim_entry=eligible)
         btc = contracts.backtest_contract(sym, "3D", bt, honest_read=HONEST_BT)
         out["backtest"] = contracts.model_slice(btc)
-        bt_state = f"RECOMPUTED[{'base' if excl_reclaim else 'reclaim'}-lane]"
+        bt_state = f"RECOMPUTED[{'reclaim' if eligible else 'base'}-lane]"
         if write:
             write_backtest_artifact(sym, bt, btc, OUT)
         m = bt.get("metrics") or {}
-        if patches is not None and row and m:
+        if patches is not None and mrow and m:
             patches[sym] = {"wr": m.get("win_rate"), "pf": m.get("profit_factor"),
                             "cagr": m.get("cagr")}
-    # decay-class stamp for the manifest row (build_polygon_universe stamps it nightly;
-    # this keeps a standalone regen's manifest classification-complete immediately).
-    if patches is not None and row and excl_reclaim and row.get("cls") != confluence_v2.RECLAIM_EXCLUDE_CLASS:
-        patches.setdefault(sym, {})["cls"] = confluence_v2.RECLAIM_EXCLUDE_CLASS
     # verdict/vts sync — the SAME scored-first rule as build_universe.reconcile_flagship_verdicts
     # (which remains the authoritative nightly sweep): a standalone regen must leave the manifest
     # agreeing with the slices it just wrote, or a strict verify_publish between regens would red.
-    if patches is not None and row.get("verdict") is not None:
+    if patches is not None and mrow.get("verdict") is not None:
         st = ind.get("state", {})
         ls = st.get("last_scored_signal") or st.get("last_signal")
         vts = st.get("last_scored_ts")
-        if ls and (row.get("verdict") != ls or row.get("vts") != vts):
+        if ls and (mrow.get("verdict") != ls or mrow.get("vts") != vts):
             patches.setdefault(sym, {}).update(verdict=ls, vts=vts)
     if write:
         sf.write_text(json.dumps(out, separators=(",", ":")))
@@ -158,21 +160,19 @@ def main() -> None:
         return
     t0 = time.time()
     ok = 0
-    manifest = _load_manifest()
     # build the sector-cohort cache ONCE, reuse across all flagship names (bounded overhead).
-    cache = build_cohort_cache(OUT, manifest)
+    cache = build_cohort_cache(OUT, _load_manifest())
     patches: dict[str, dict] = {}
     for sym in FLAGSHIP:
         try:
-            print(" ", regen(sym, write=True, cache=cache, manifest=manifest, patches=patches),
-                  flush=True)
+            print(" ", regen(sym, write=True, cache=cache, patches=patches), flush=True)
             ok += 1
         except Exception as e:  # noqa: BLE001
             print(f"  ERR {sym}: {e}", flush=True)
-    # lane-guard manifest patch: keep the published wr/pf/cagr (+ decay-class stamp) in
-    # lockstep with any recomputed slice backtests. Read-modify-write of the EXISTING rows
-    # only — never adds/removes symbols (the 2026-07-11 clobber lesson: this script must be
-    # structurally incapable of shrinking the universe).
+    # lane-guard manifest patch: keep the published wr/pf/cagr + verdict/vts in lockstep with
+    # any recomputed slice backtests. Read-modify-write of the EXISTING rows only — never
+    # adds/removes symbols (the 2026-07-11 clobber lesson: this script must be structurally
+    # incapable of shrinking the universe).
     if patches:
         try:
             man = json.loads(MANIFEST.read_text())

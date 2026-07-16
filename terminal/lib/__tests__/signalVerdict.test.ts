@@ -4,7 +4,7 @@ import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS } from "../signalVerdict"
 // Frozen "today" so ages are deterministic: 2026-07-14 (the NVDA/GOOGL stale-Sell incident date).
 const NOW = Date.parse("2026-07-14T21:00:00Z");
 
-type Sig = { ts: string; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null };
+type Sig = { ts: string; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null; scored?: boolean | null };
 
 function sliceOf(lastSignal: string, signals: Sig[]) {
   return { indicator: { signals, state: { last_signal: lastSignal } } };
@@ -91,12 +91,14 @@ describe("oracleVerdict — age, dimming, provenance", () => {
     expect(v.label).not.toBe("Buy");
   });
 
-  it("a fresh RECLAIM renders as a soft (unscored) Re-entry verdict", () => {
+  it("a fresh scored RECLAIM renders as a hollow Re-entry verdict (reclaim lane)", () => {
+    // reclaim_lane promoted 2026-07-16: the marker is scored, but the glyph stays hollow
+    // (the solid star is reserved for the classic confluence entries).
     const v = oracleVerdict(
-      "SELL", // scored manifest lane still says SELL — expected, must NOT note lane disagreement
+      "RECLAIM",
       sliceOf("RECLAIM", [
         { ts: "2026-06-08", type: "SELL", price: 290.55 },
-        { ts: "2026-07-13", type: "RECLAIM", price: 327.5, quality: "reclaim", quality_reason: "trend reclaimed the 2026-06-08 sell level" },
+        { ts: "2026-07-13", type: "RECLAIM", price: 327.5, scored: true, quality: "reclaim", quality_reason: "trend reclaimed the 2026-06-08 sell level" },
       ]),
       false,
       NOW,
@@ -104,10 +106,27 @@ describe("oracleVerdict — age, dimming, provenance", () => {
     expect(v.label).toBe("Re-entry");
     expect(v.raw).toBe("RECLAIM");
     expect(v.color).toBe("var(--buy)");
-    expect(v.soft).toBe(true);
+    expect(v.soft).toBe(true);                     // hollow glyph law, scored or not
     expect(v.sub).toBe("Jul 13 · 1d ago");
-    expect(v.note).toContain("unscored");
+    expect(v.note).toContain("scored reclaim lane");
+    expect(v.note).not.toContain("unscored");
     expect(v.note).toContain("reclaimed");
+  });
+
+  it("a legacy pre-promotion RECLAIM (scored:false) keeps the unscored annotation", () => {
+    const v = oracleVerdict(
+      "SELL", // the scored manifest lane still says SELL — expected, must NOT note lane disagreement
+      sliceOf("RECLAIM", [
+        { ts: "2026-06-08", type: "SELL", price: 290.55 },
+        { ts: "2026-07-13", type: "RECLAIM", price: 327.5, scored: false, quality: "reclaim" },
+      ]),
+      false,
+      NOW,
+    );
+    expect(v.label).toBe("Re-entry");
+    expect(v.soft).toBe(true);
+    expect(v.note).toContain("unscored");
+    expect(v.note).toContain("not in the track record");
     expect(v.note).not.toContain("lanes disagree");
   });
 

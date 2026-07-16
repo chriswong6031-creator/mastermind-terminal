@@ -786,7 +786,9 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                         >
                           {isReclaim ? pick(zh, "RE-ENTRY", "再入场") : sig.type}
                         </span>
-                        {isReclaim && <span className="sd-sig-q" style={{ color: "var(--text-2)" }}>{pick(zh, "unscored", "未计分")}</span>}
+                        {/* pre-promotion display-tier markers (scored:false) carry the unscored tag;
+                            scored reclaim-lane events are normal position events and need none */}
+                        {isReclaim && sig.scored === false && <span className="sd-sig-q" style={{ color: "var(--text-2)" }}>{pick(zh, "unscored", "未计分")}</span>}
                         {q && <span className="sd-sig-q" style={{ color: qualityColor(sig.quality) }}>{q}</span>}
                         <span className="sd-sig-date">{fmtDate(sig.ts)}</span>
                         <span className="sd-sig-price">{sig.price != null ? sig.price.toFixed(2) : "—"}</span>

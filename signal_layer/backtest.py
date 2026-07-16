@@ -67,8 +67,8 @@ def run_backtest(
     raw buy whose block clears within REPAIR_WINDOW_BARS while macd>=signal. Reclaim
     trades carry ``entry_kind`` for per-lane attribution. The exit stream is
     byte-identical to the baseline in both modes. CALLERS gate the lane per symbol:
-    decay-class instruments (``confluence_v2.reclaim_excluded``) must pass False — this
-    module is symbol-agnostic by design (it sees only a close series).
+    decay-class instruments (``confluence_v2.reclaim_eligible`` False) must pass False —
+    this module is symbol-agnostic by design (it sees only a close series).
     """
     sig = oracle.compute_signals(close.dropna(), bar_anchor=bar_anchor, week_parity=week_parity)
     if sig.empty:

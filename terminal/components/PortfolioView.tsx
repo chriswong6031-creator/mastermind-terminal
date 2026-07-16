@@ -10,7 +10,7 @@ import { verdictIsStale } from "@/lib/signalVerdict";
 
 type Row = { name: string; zh?: string; col: string; last: number; chg: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
-const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
+const isBuy = (v: string | null) => v === "BUY" || v === "REBUY" || v === "RECLAIM";
 
 const GUEST_SEED = ["BTC-USD", "ETH-USD", "NVDA", "AAPL", "MSFT", "QQQ"];
 

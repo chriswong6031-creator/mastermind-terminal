@@ -67,8 +67,10 @@ def main() -> None:
     # ── build the sector-cohort cache ONCE for the whole run (not per symbol) ──
     # Resolves GICS sectors from fund.json + industry_map; reads every <SYM>.json close a
     # SINGLE time. Per-symbol lookups are then O(1). Nightly overhead bounded (no O(n²)).
-    manifest_rows = _load_manifest().get("symbols") or {}
-    cohort_cache = build_cohort_cache(OUT, {"symbols": manifest_rows})
+    _man = _load_manifest()
+    cohort_cache = build_cohort_cache(OUT, _man)
+    # security names for the reclaim symbol-class rule (decay instruments emit no reclaims)
+    _names = {s: (r or {}).get("name") for s, r in _man.get("symbols", {}).items()}
     print(f"  cohort cache built ({time.time() - t0:.0f}s)", flush=True)
     for jf in files:
         name = jf.name
@@ -113,12 +115,11 @@ def main() -> None:
                 n_skip += 1
                 continue
             sec_basket, panel_basket, cohort = cohort_cache.for_symbol(sym)
-            mrow = manifest_rows.get(sym) or {}
             v2 = confluence_v2.build_v2(
                 sig, close, high=high, low=low, volume=volume,
                 sector_basket=sec_basket, panel_basket=panel_basket,
                 cohort_frac_daily=cohort,
-                symbol=sym, display_name=mrow.get("name"), sec=mrow.get("sec"))
+                reclaims_enabled=confluence_v2.reclaim_eligible(_names.get(sym), sym))
             ind = contracts.indicator_contract(
                 sym, "3D", sig, bar_quality="real_ohlc", src_text="", honest_read=HONEST, v2=v2)
             # the chart only consumes indicator.signals + indicator.state — drop the heavy arrays

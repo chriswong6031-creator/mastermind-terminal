@@ -1,4 +1,4 @@
-# RECLAIM re-entry lane — panel evidence (2026-07-15) + scored promotion (2026-07-16)
+# RECLAIM re-entry lane — panel evidence (2026-07-15)
 
 ## Why this lane exists
 
@@ -48,58 +48,56 @@ Median per-name WR 56.1% → 58.6%. 90/91 names produced reclaim trades (median 
 
 **Verdict: PROMOTE-CANDIDATE** — the lane is eligible for scored promotion.
 
-## Scored promotion — SHIPPED 2026-07-16
+## Post-exclusion re-run (2026-07-16) — the promotion panel
 
-### Decay-instrument exclusion (precondition)
-
-Trend-reclaim semantics assume a spot asset. On decay instruments the price path is
-dominated by structural drift (daily-rebalance leverage/inverse compounding, futures
-roll), so "close back above the sell level" is a statement about the decay schedule, not
-the trend. The exclusion is a symbol **class**, not a loser list — leveraged long is
-excluded alongside inverse (same rebalance arithmetic), futures rollers alongside both:
-
-- Rule: `confluence_v2.reclaim_excluded` (curated flagship set + fund-name pattern for
-  future additions; the name rule never applies to equities).
-- Manifest classification field: `build_polygon_universe` stamps `cls: "decay"` on the
-  row, so downstream consumers read a field instead of keeping private lists.
-- Excluded (panel): BITO, SOXL, SOXS, SPXL, SQQQ, TQQQ, USO, VXX (n=8). Note this
-  removes positive-expectancy names too (TQQQ/SOXL) — class honesty over cherry-picking.
-- One exclusion for the WHOLE lane: display events (`build_v2` emits no reclaims) and
-  the scored sim (`use_reclaim_entry=False`) alike.
-
-### Panel re-run with the exclusion (2026-07-16, n=91, same fixed gates)
-
-`python3 -m signal_layer.reclaim_lab` — same protocol as above; the variant arm is the
-promoted config (reclaim entries everywhere except the 8 decay-class names, which run
-baseline and stay in the panel denominators).
+The `reclaim_eligible` symbol-class rule (leveraged/inverse/VIX/futures-strategy wrappers;
+name-based with a ticker backstop for rows the name rule cannot see: the VIX family plus
+marker-less futures-roll commodity wrappers USO/UNG) excludes
+BITO, SOXL, SOXS, SPXL, SQQQ, TQQQ, USO, VXX from the lane. The class is structural, not
+a loser list — leveraged LONG (TQQQ/SOXL/SPXL) is excluded alongside inverse (same
+rebalance arithmetic). Final-config re-run on the remaining n=83:
 
 | Gate | Threshold | Result | Pass |
 |---|---|---|---|
 | G1 expectancy | pooled > 0 AND median per-name ≥ 0 | **+10.6%** pooled / **+6.3%** median (n=1,156) | ✅ |
-| G2 non-inferiority | median variant/baseline ratio ≥ 0.95× | **1.30×** | ✅ |
-| G3 2022 bull-trap falsifier | 2022-entered exp > −2% | **−1.07%** (n=73; was −1.5%) | ✅ |
-| G4 breadth + drawdown | ≥55% names improved; median dd delta ≤ +2pp | **83.5%** (was 80.2%); dd **0.0pp** | ✅ |
-| G5 sample | ≥150 reclaim trades | **1,156** | ✅ |
+| G2 non-inferiority | median ratio ≥ 0.95× | **1.34×** | ✅ |
+| G3 2022 falsifier | > −2% | **−1.07%** (n=73) — tightened from −1.5% | ✅ |
+| G4 breadth + dd | ≥55%; dd ≤ +2pp | **81.9%**; dd **−0.35pp** (shallower) | ✅ |
+| G5 sample | ≥150 trades | **1,156** | ✅ |
 
-Median per-name WR 56.1% → 58.6%. **Verdict: PROMOTE-CANDIDATE → PROMOTED.**
+(An earlier pass of the same protocol without the USO backstop — n=84 / 1,169 trades —
+passed all five gates with near-identical numbers; the backstop removes USO's 13 trades.)
 
-### What promotion changed (one PR train)
+## Scored promotion — SHIPPED 2026-07-16 (owner "go")
 
-- `FLAGSHIP_PARAMS` gained `reclaim_lane` → **new `source_hash`/`spec_hash` identity**
-  (pre/post docs are distinct; published wr/pf never mix lanes).
-- Scored sim: `run_backtest(use_reclaim_entry=True)` at every production emission
-  (`build_polygon_universe`, plus a lane guard in `regen_flagship_slices` that recomputes
-  any lane-stale backtest artifact and patches manifest wr/pf/cagr in lockstep).
-  Trades carry `entry_kind` for per-lane attribution.
-- Chart: RECLAIM markers render from the SLICE (the client Pine has no repair lane) as a
-  hollow dashed "RE-ENTRY" pill — never the solid BUY star.
-- UNCHANGED by design: the verdict lane. RECLAIM markers stay `scored:false` — no
-  position-walk / manifest-verdict authority; `confluence.py`, `BUY_RSI_MAX`,
-  `bear_block`, `REV_BARS`, `CONF_W` and the no-cut exit stream are untouched.
+- `FLAGSHIP_PARAMS["reclaim_lane"] = True` — new `source_hash`/`spec_hash` identity.
+- RECLAIM markers emit `scored: true`; the position walk counts them (long); the manifest
+  verdict can now read `RECLAIM` (AAPL @2026-07-13, META @2026-07-09 on first regen).
+  Legacy `scored:false` markers from the display-tier interregnum stay display-only.
+- The published backtest (`build_polygon_universe`) runs `use_reclaim_entry=True` for
+  eligible names — **public wr/pf move on the next nightly** (panel medians: WR
+  56.3→59.0, total-return ratio 1.34×).
+- Emission excludes the decay class at every producer (`regen_flagship_slices`,
+  `fast_flagship`, `gen_slices_all`) via `reclaims_enabled=reclaim_eligible(name, sym)`.
+- **Lane guard** (`regen_flagship_slices`): a `<SYM>.backtest.json` whose
+  `strategy.spec_hash` ≠ `contracts.strategy_spec_hash()` is lane-stale — regen RECOMPUTES
+  it from the deep on-disk close (`use_reclaim_entry` per eligibility) and patches the
+  manifest row (wr/pf/cagr + verdict/vts, same scored-first rule as the nightly reconcile)
+  in lockstep, so a standalone regen leaves `verify_publish` green and no slice ever pairs
+  a current-identity indicator with an old-lane backtest. Nightly path: no-op (`kept`).
+- Chart: RECLAIM markers merge from the slice into the marker stream and render as a
+  HOLLOW, DASHED "RE-ENTRY" pill with a kind tooltip (trend reclaim / bear-block
+  repaired) — the solid ★ stays reserved for the classic confluence entries (glyph law),
+  as does the "unscored" tag for legacy markers only.
+- Verified: pytest 179 / vitest 221 / tsc clean. Chart glyph verified VISUALLY in the
+  local preview (AAPL deep fixture: 65 hollow RE-ENTRY pills incl. the marquee 2026-07-13
+  reclaim; chip `GOLDEN ORACLE · RE-ENTRY`; rail "Re-entry · Jul 13" matches) — the
+  overlay mounts once the Golden Oracle study is enabled (`localStorage mm.inds`) and the
+  first Turbopack compile completes, though the mount is flaky on a cold `.next` (the
+  visual pass ran on the equivalent pre-merge implementation of the same pill; the merged
+  shared-path implementation is type/test-verified). Lane guard verified against a
+  prod-snapshot sandbox: stale `c2296dd5` → recomputed to the promoted identity
+  (`d83cf0de`), manifest patched 3/3 (AAPL/META verdict→`RECLAIM` with vts), scoped
+  verify_publish zero mismatches, `kept` on re-run.
 
-### Release note
-
-Public backtest metrics (manifest `wr`/`pf`/`cagr`, `<SYM>.backtest.json`, the track
-record) MOVE with the first post-merge regeneration: the traded sim now takes reclaim /
-block-repair re-entries (panel medians: WR +2.5pp, total-return ratio 1.30×). Verdicts
-do not move — the stance lane is unchanged.
+Reproduce: `python3 -m signal_layer.reclaim_lab` (prints the exclusion list + gates).

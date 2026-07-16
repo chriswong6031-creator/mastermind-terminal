@@ -5,10 +5,6 @@ flagship panel, per-lane attributed, so scored promotion is an evidenced decisio
 lane ships display-tier regardless; THIS run decides whether it may ever touch the
 scored stream (manifest verdict / wr / pf).
 
-The variant arm is the PROMOTED config: ``use_reclaim_entry=True`` everywhere EXCEPT
-decay-class instruments (``confluence_v2.reclaim_excluded`` — leveraged/inverse/futures-
-roll funds), whose variant is the baseline. Excluded names stay in the panel denominators.
-
 Gates (fixed before the run; the RC-R9 precedent):
   G1  reclaim-lane trade expectancy > 0 pooled AND median per-name >= 0
   G2  portfolio non-inferiority: variant total return >= 0.95x baseline on the panel median
@@ -33,7 +29,7 @@ from pathlib import Path
 import pandas as pd
 
 from .backtest import run_backtest
-from .confluence_v2 import reclaim_excluded
+from .confluence_v2 import reclaim_eligible
 
 BASE = os.environ.get("RECLAIM_LAB_BASE", "https://app.mastermind-x.com/data")
 LOCAL = os.environ.get("TERMINAL_DATA_DIR")
@@ -63,9 +59,15 @@ def _close_series(doc) -> pd.Series | None:
 
 def run_panel(limit: int = 0) -> dict:
     man = _fetch("manifest.json") or {}
-    meta = {s: r for s, r in (man.get("symbols") or {}).items() if isinstance(r, dict)}
-    syms = [s for s, r in meta.items() if r.get("verdict") is not None]
-    syms.sort()
+    rich = {s: r for s, r in (man.get("symbols") or {}).items()
+            if isinstance(r, dict) and r.get("verdict") is not None}
+    # symbol-class exclusion (reclaim_eligible): decay instruments never take reclaim
+    # entries, so they carry no information for the gates — dropped from the panel and
+    # reported, never silently.
+    excluded = sorted(s for s, r in rich.items() if not reclaim_eligible(r.get("name"), s))
+    syms = sorted(s for s in rich if s not in set(excluded))
+    if excluded:
+        print(f"  excluded (reclaim_eligible=False): {', '.join(excluded)}", flush=True)
     if limit:
         syms = syms[:limit]
 
@@ -75,15 +77,9 @@ def run_panel(limit: int = 0) -> dict:
         close = _close_series(doc) if doc else None
         if close is None or len(close) < 300:
             continue
-        # decay-class exclusion (scored-promotion precondition): the variant arm for an
-        # excluded name IS the baseline — the promoted config takes no reclaim entries
-        # there, and the name still counts in the panel denominators (breadth/ratio).
-        # Class from the manifest row's cls field when stamped, else the shared rule.
-        r = meta.get(sym) or {}
-        excl = (r.get("cls") == "decay") or reclaim_excluded(sym, r.get("name"), r.get("sec"))
         try:
             base = run_backtest(close)
-            var = base if excl else run_backtest(close, use_reclaim_entry=True)
+            var = run_backtest(close, use_reclaim_entry=True)
         except Exception as e:  # noqa: BLE001 — a lab must survive one bad name
             print(f"  {sym}: FAILED {e}", flush=True)
             continue
@@ -95,7 +91,6 @@ def run_panel(limit: int = 0) -> dict:
         pooled_2022 += [t["ret"] for t in rtr if str(t["entry_date"]).startswith("2022")]
         rows.append({
             "sym": sym,
-            "excluded": excl,
             "base_total": mb["strat_total_return"], "var_total": mv["strat_total_return"],
             "base_dd": mb["max_dd"], "var_dd": mv["max_dd"],
             "base_wr": mb["win_rate"], "var_wr": mv["win_rate"],
@@ -125,11 +120,9 @@ def run_panel(limit: int = 0) -> dict:
     verdict = ("ACCRUE" if not gates["G5_n"]
                else "PROMOTE-CANDIDATE" if all(gates.values())
                else "DISPLAY-ONLY")
-    excluded = [r["sym"] for r in rows if r["excluded"]]
     return {
+        "excluded": excluded,
         "panel_n": n,
-        "n_excluded": len(excluded),
-        "excluded_syms": excluded,
         "n_reclaim_trades": len(pooled_reclaim),
         "pooled_reclaim_expectancy": pooled_exp,
         "median_per_name_expectancy": med(per_name_exp),

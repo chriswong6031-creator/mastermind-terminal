@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from ingest.polygon_bars import fetch_daily, ohlc_json   # noqa: E402
 from signal_layer import confluence, contracts, backtest  # noqa: E402
-from signal_layer.confluence_v2 import RECLAIM_EXCLUDE_CLASS, reclaim_excluded  # noqa: E402
+from signal_layer.confluence_v2 import reclaim_eligible  # noqa: E402
 
 OUT = Path(os.environ.get("TERMINAL_DATA_DIR") or (ROOT / "terminal" / "public" / "data"))
 MANIFEST = Path(os.environ.get("TERMINAL_MANIFEST") or (OUT / "manifest.json"))
@@ -239,12 +239,6 @@ def main(syms: list[str]) -> None:
                "verdict": None, "wr": None, "pf": None, "cagr": None, "regimeBull": None}
         if sym in MKT:
             row["mkt"] = MKT[sym]
-        # instrument classification: decay-class (leveraged/inverse/futures-roll) names
-        # carry cls:"decay" so downstream consumers (reclaim lane, labs) get a real
-        # manifest field instead of each keeping a private symbol list.
-        excl_reclaim = reclaim_excluded(sym, name, sec)
-        if excl_reclaim:
-            row["cls"] = RECLAIM_EXCLUDE_CLASS
 
         # ── chart signal history runs over the DEEP (full-IPO) display series ──────────────────
         # gen_slices_all computes every non-flagship symbol's confluence over its deep <SYM>.json,
@@ -276,11 +270,14 @@ def main(syms: list[str]) -> None:
             # gen_slices_all strips them for the same reason).
             for heavy in ("series", "gates", "bars"):
                 ind.pop(heavy, None)
-            # SCORED SIM = the promoted reclaim lane (FLAGSHIP_PARAMS["reclaim_lane"],
-            # gates G1-G5 in docs/RECLAIM_LANE_EVIDENCE.md) — decay-class names excluded.
+            # reclaim_lane (FLAGSHIP_PARAMS): the scored sim prices the RE-ENTRY repair
+            # entries — except for decay instruments (reclaim_eligible symbol-class rule),
+            # which trade the plain baseline.
             bt = backtest.run_backtest(close, fixed=True, bar_quality="real_ohlc",
                                        bar_anchor=bt_anchor, week_parity=bt_wparity,
-                                       use_reclaim_entry=not excl_reclaim)
+                                       use_reclaim_entry=bool(
+                                           contracts.FLAGSHIP_PARAMS.get("reclaim_lane")
+                                           and reclaim_eligible(name, sym)))
             btc = contracts.backtest_contract(
                 sym, "3D", bt,
                 honest_read="As-traded Polygon backtest after costs; significance verdict delegated to loop/harness.")

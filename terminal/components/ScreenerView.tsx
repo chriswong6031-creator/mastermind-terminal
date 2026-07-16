@@ -27,7 +27,7 @@ const vol = (v: number | null | undefined): string => {
   return v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v);
 };
 
-const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
+const isBuy = (v: string | null) => v === "BUY" || v === "REBUY" || v === "RECLAIM";
 
 // ── virtualization constants ───────────────────────────────────────────────
 // CSS: table.scr tbody td { padding: 11px 16px } + 13px font + 1px border ≈ 44px/row

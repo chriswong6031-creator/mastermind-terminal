@@ -20,7 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLang } from "@/lib/i18n";
 import { trackSearch } from "@/lib/searchTrack";
 import { makeHeatmapT } from "@/lib/heatmapStrings";
-import { Treemap, heatPalette } from "./Treemap";
+import { Treemap, heatSwatches } from "./Treemap";
 import { HeatmapTable } from "./HeatmapTable";
 import { DetailPanel } from "./DetailPanel";
 import { getSector } from "./sectorMap";
@@ -669,14 +669,27 @@ export function HeatmapView() {
               <span style={{ color: "var(--text-2)" }}>{layer === "flow" ? (lang === "zh" ? "权利金规模" : "premium size") : (lang === "zh" ? "1日涨跌" : "1D %chg")}</span>
               <span style={{ color: "var(--up)" }}>{layer === "flow" ? (lang === "zh" ? "净认购" : "net call") : (lang === "zh" ? "上涨" : "up")}</span>
             </div>
-            <div style={{
-              width: 168, height: 8, borderRadius: 4,
-              background: (() => {
-                const p = heatPalette();
-                const mid = layer === "flow" ? "92,108,136" : "24,28,36";
-                return `linear-gradient(90deg, rgb(${p.down.join(",")}) 0%, rgb(${mid}) 50%, rgb(${p.up.join(",")}) 100%)`;
-              })(),
-            }} />
+            {(() => {
+              const sw = heatSwatches();
+              // PRICE tiles are binned → discrete swatches (−3…−½, neutral, +½…+3, matching the tiles).
+              // FLOW tiles use a continuous log-magnitude ramp → a continuous gradient bar.
+              if (layer === "flow") {
+                return (
+                  <div style={{
+                    width: 168, height: 8, borderRadius: 4,
+                    background: `linear-gradient(90deg, ${sw.flowDown} 0%, ${sw.neutral} 50%, ${sw.flowUp} 100%)`,
+                  }} />
+                );
+              }
+              const cells = [...[...sw.down].reverse(), sw.neutral, ...sw.up];
+              return (
+                <div style={{ display: "flex", width: 168, height: 8, borderRadius: 4, overflow: "hidden" }}>
+                  {cells.map((c, i) => (
+                    <div key={i} style={{ flex: 1, background: c }} />
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>

@@ -32,8 +32,6 @@ Reference implementations reproduced (see the pre-reg lab, /tmp/gc-lab):
 """
 from __future__ import annotations
 
-import re
-
 import numpy as np
 import pandas as pd
 
@@ -61,48 +59,59 @@ SIDE_CHANNEL_CAP = 40
 
 # ── repair grammar (RE-ENTRY lane, 2026-07-15 Mag7 rotation-miss directive) ──
 # A gate verdict is evaluated once, on its own bar; these two event forms answer
-# "the engine said no / said exit — and the market then repaired it". Promoted to the
-# SCORED sim 2026-07-16 (docs/RECLAIM_LANE_EVIDENCE.md, gates G1-G5) — the markers stay
-# display-hollow (scored:false = no verdict-lane authority; the verdict walk is unchanged).
+# "the engine said no / said exit — and the market then repaired it".
 RECLAIM_DEBOUNCE_BARS = 4   # 3D bars flat after a SELL before a reclaim may fire (~12 sessions)
 REPAIR_WINDOW_BARS = 8      # a blocked entry may re-fire while its cross is live, within this window
 
-# ── reclaim-lane instrument-class exclusion (scored-promotion precondition) ──
-# Trend-reclaim semantics assume a spot asset: "price back above the sell level" is a
-# trend statement. On DECAY instruments — daily-rebalance leveraged/inverse funds and
-# futures-roll products — the price path is dominated by structural drift, so a reclaim
-# of a prior level is a statement about the decay schedule, not the trend (panel: SOXS
-# −25% / SQQQ −21% / BITO −12% per-trade reclaim expectancy). The rule is a symbol
-# CLASS, not a loser list: leveraged long is excluded alongside inverse (same rebalance
-# arithmetic), futures rollers alongside both. build_polygon_universe stamps the class
-# into the manifest row as ``cls: "decay"`` so downstream consumers get a real field.
-RECLAIM_EXCLUDE_CLASS = "decay"
-_DECAY_SYMBOLS = frozenset({
-    "TQQQ", "SQQQ", "SPXL", "SOXL", "SOXS",   # daily-rebalance leveraged / inverse
-    "BITO", "VXX", "USO",                      # futures-roll (contango / roll drag)
-})
-_DECAY_NAME_RE = re.compile(
-    r"\b\d+(?:\.\d+)?x\b"            # explicit leverage multiple: "3x", "2x", "1.5x"
-    r"|ultra\s?pro|\bultra\b"        # ProShares Ultra / UltraPro family
-    r"|\bshort\b(?!\s*-?\s*term)"    # inverse funds — NOT "Short-Term" bond funds
-    r"|\binverse\b|\bbear\b"
-    r"|\bvix\b",                     # VIX futures rollers (VXX/UVXY/SVXY)
-    re.IGNORECASE)
+# Symbol-class eligibility: trend-reclaim semantics require an asset that can HOLD a
+# reclaimed price level. Leveraged/inverse products and futures-roll wrappers decay by
+# construction, so "price back above the old sell level" carries no information there —
+# the 2026-07-15 panel's only structural losers were exactly this class (SOXS −25%,
+# SQQQ −21%, BITO −12% per-name reclaim expectancy vs +6.3% panel median).
+# Name-based (works across the full universe without a new metadata field) and
+# conservative: only unambiguous decay markers on fund-like names disqualify.
+import re as _re
+
+_FUNDISH = (" etf", " etn", " shares", " fund", " trust",
+            "proshares", "direxion", "graniteshares", "ipath")
+_SHORT_TERM = _re.compile(r"short[\s-]term", _re.I)
+_LEVERED = _re.compile(r"\b\d(?:\.\d+)?x\b", _re.I)                  # 2x / 3X / 1.5x
+_ULTRA = _re.compile(r"\bultra(?:pro|short)?\b", _re.I)              # ProShares Ultra family
+# "strategy" on a fund-like name = a 40-Act futures wrapper (Bitcoin Strategy, Managed
+# Futures Strategy…) — contango decay, same class as VIX products.
+_FUTURES = _re.compile(r"\bfutures?\b|\bstrategy\b|\bvix\b", _re.I)
+# metadata backstop: decay-class tickers the NAME rule cannot see — VIX-family rows that
+# ship no name to classify, plus futures-roll commodity wrappers whose names carry no
+# decay marker ("United States Oil Fund" holds WTI futures; contango drag, same class).
+_TICKER_BACKSTOP = {"UVXY", "SVXY", "VIXY", "VXX", "TVIX", "VIXM", "USO", "UNG"}
 
 
-def reclaim_excluded(symbol: str | None, name: str | None = None, sec: str | None = None) -> bool:
-    """True when ``symbol`` is a decay-class instrument the reclaim lane must skip.
-
-    Class rule, applied everywhere the lane emits (display events AND the scored sim):
-    the curated symbol set covers the flagship truth (incl. marker-less names like USO),
-    the name pattern classifies future additions from the manifest row's fund name. The
-    name check is gated to funds (``sec`` unknown ⇒ trusted) so an equity named "Bear
-    Creek" can never trip it."""
-    if symbol and symbol.upper() in _DECAY_SYMBOLS:
+def reclaim_eligible(name: str | None, sym: str | None = None) -> bool:
+    """True when the RE-ENTRY repair lane may fire for this security."""
+    if sym and sym.upper() in _TICKER_BACKSTOP:
+        return False
+    if not name:
+        return True                       # unknown names stay eligible (conservative default)
+    n = f" {name.lower()} "
+    if _re.search(r"\bvix\b", n):
+        return False                      # VIX products decay regardless of wrapper branding
+    if not any(k in n for k in _FUNDISH):
+        return True                       # operating companies are always eligible
+    if _LEVERED.search(n):
+        return False
+    if "inverse" in n or _re.search(r"\bbear\b", n):
+        return False
+    # fixed-income names use "short"/"ultra-short" as MATURITY words (iShares Short
+    # Treasury Bond, JPMorgan Ultra-Short Income) — not a short position; keep eligible.
+    if _re.search(r"\b(treasur|bond|income|duration|bill)\w*\b", n):
         return True
-    if name and sec in (None, "Funds") and _DECAY_NAME_RE.search(name):
-        return True
-    return False
+    if _ULTRA.search(n):
+        return False
+    if _re.search(r"\bshort\b", n) and not _SHORT_TERM.search(n):
+        return False
+    if _FUTURES.search(n):
+        return False
+    return True
 
 
 # ════════════════════════════════════════════════ v2 exit / entry streams ═══
@@ -614,17 +623,13 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
              sector_basket: pd.Series | None = None,
              panel_basket: pd.Series | None = None,
              cohort_frac_daily: pd.Series | None = None,
-             symbol: str | None = None,
-             display_name: str | None = None, sec: str | None = None) -> dict:
+             reclaims_enabled: bool = True) -> dict:
     """Compute the full v2 emission for one symbol from its oracle ``sig`` frame + close.
 
     ``high``/``low``/``volume`` optional (CN/HK close-only names pass none): the recipe
     substitutes close for high/low and marks volume-missing → score_basis "partial".
     ``sector_basket``/``panel_basket``/``cohort_frac_daily`` are the sector-cohort inputs
     the ingest layer precomputes once per nightly run (None ⇒ cohort legs 0, partial).
-    ``symbol``/``display_name``/``sec`` feed ``reclaim_excluded``: decay-class instruments
-    get NO reclaim events (display or sim — the lane is structurally wrong there, not just
-    unprofitable). Omitting them skips the exclusion (back-compat callers keep old output).
 
     Returns a dict the contracts layer folds into the indicator doc:
       { keeper: {bar_index:{verdict,reason,shift}}, recipe: {bar_index:{score,tier}},
@@ -685,8 +690,7 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
         "warnings": warns_all[-SIDE_CHANNEL_CAP:],
         "sell_confirms": sell_confirms,
         # RE-ENTRY repair lane (see reclaim_events). Uncapped like sell_confirms: contracts
-        # folds them into the stream, model_slice caps the tail. Decay-class instruments
-        # emit NONE — one exclusion for the display stream and the scored sim alike.
-        "reclaims": ([] if reclaim_excluded(symbol, display_name, sec)
-                     else reclaim_events(sig, sell_confirms)),
+        # folds them into the stream, model_slice caps the tail. ``reclaims_enabled=False``
+        # = the symbol-class exclusion (reclaim_eligible): decay instruments emit none.
+        "reclaims": reclaim_events(sig, sell_confirms) if reclaims_enabled else [],
     }

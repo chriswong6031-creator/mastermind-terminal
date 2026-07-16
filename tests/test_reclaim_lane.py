@@ -21,12 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from signal_layer.confluence_v2 import (  # noqa: E402
-    RECLAIM_DEBOUNCE_BARS, RECLAIM_EXCLUDE_CLASS, REPAIR_WINDOW_BARS,
-    build_v2, reclaim_events, reclaim_excluded,
+    RECLAIM_DEBOUNCE_BARS, REPAIR_WINDOW_BARS, reclaim_eligible, reclaim_events,
 )
-from signal_layer.contracts import (  # noqa: E402
-    FLAGSHIP_PARAMS, _extract_signals, _state, strategy_spec_hash,
-)
+from signal_layer.contracts import FLAGSHIP_PARAMS, _extract_signals, _state  # noqa: E402
 
 
 def _frame(n=30, **cols):
@@ -138,51 +135,10 @@ def test_block_repair_needs_live_macd_cross_and_window():
     assert reclaim_events(sig2, []) == []
 
 
-def test_decay_class_exclusion_rule():
-    # curated flagship truth: leveraged + inverse + futures-roll, long AND short alike
-    for s in ("TQQQ", "SQQQ", "SPXL", "SOXL", "SOXS", "BITO", "VXX", "USO"):
-        assert reclaim_excluded(s), s
-    # spot assets / plain funds stay in the lane
-    for s in ("AAPL", "SPY", "QQQ", "GLD", "IBIT", "BTC-USD"):
-        assert not reclaim_excluded(s), s
-    # name rule classifies future additions (fund names only)
-    assert reclaim_excluded("XXXX", "Direxion Daily Semiconductor Bear 2x", "Funds")
-    assert reclaim_excluded("UVXY", "ProShares Ultra VIX Short-Term Futures", "Funds")
-    # "Short-Term" bond funds and directional-but-unleveraged names must NOT trip it
-    assert not reclaim_excluded("VGSH", "Vanguard Short-Term Treasury", "Funds")
-    assert not reclaim_excluded("UUP", "Invesco DB US Dollar Bullish", "Funds")
-    # the name rule never applies to equities (an unlucky company name is not a class)
-    assert not reclaim_excluded("BRCM", "Bear Creek Mining", "Equities")
-
-
-def test_build_v2_suppresses_reclaims_for_decay_class():
-    # block_repair fixture (needs no sell confirms): blocked on its own bar, clear after.
-    n = 30
-    cb = np.zeros(n, bool); cb[12] = True
-    bblk = np.zeros(n, bool); bblk[12] = True
-    sig = _frame(n, CB=cb, bear_block=bblk)
-    close = pd.Series(np.asarray(sig["close"], dtype=float), index=sig.index)
-    included = build_v2(sig, close, symbol="AAPL")
-    excluded = build_v2(sig, close, symbol="SQQQ")
-    assert [e["kind"] for e in included["reclaims"]] == ["block_repair"]
-    assert excluded["reclaims"] == []
-    # everything OUTSIDE the reclaim lane is untouched by the exclusion
-    for k in ("keeper", "recipe", "sell_confirms", "early_dots", "warnings"):
-        assert included[k] == excluded[k], k
-
-
-def test_promotion_minted_new_strategy_identity():
-    lane = FLAGSHIP_PARAMS.get("reclaim_lane")
-    assert lane is not None, "scored promotion requires the reclaim_lane params key"
-    assert lane["debounce_bars"] == RECLAIM_DEBOUNCE_BARS
-    assert lane["repair_window_bars"] == REPAIR_WINDOW_BARS
-    assert lane["exclude_class"] == RECLAIM_EXCLUDE_CLASS
-    pre = {k: v for k, v in FLAGSHIP_PARAMS.items() if k != "reclaim_lane"}
-    assert strategy_spec_hash() != strategy_spec_hash(params=pre), \
-        "reclaim_lane must mint a NEW spec_hash (wr/pf lanes must never mix)"
-
-
-def test_contract_reclaim_markers_never_move_scored_state():
+def test_contract_scored_reclaim_flips_position_since_promotion():
+    # reclaim_lane promoted 2026-07-16 (all five panel gates passed post-exclusion):
+    # a fresh RECLAIM emission is scored and IS the position/verdict truth.
+    assert FLAGSHIP_PARAMS.get("reclaim_lane") is True
     n = 30
     close = np.full(n, 90.0)
     close[10] = 100.0
@@ -193,10 +149,70 @@ def test_contract_reclaim_markers_never_move_scored_state():
           "reclaims": reclaim_events(sig, sells)}
     signals = _extract_signals(sig, v2)
     tail = signals[-1]
-    assert tail["type"] == "RECLAIM" and tail["scored"] is False
+    assert tail["type"] == "RECLAIM" and tail["scored"] is True
     assert tail["quality"] == "reclaim"
     st = _state(sig, signals)
-    assert st["last_signal"] == "RECLAIM"          # raw tail: the card may render it
-    assert st["last_scored_signal"] == "SELL"      # scored lane: untouched
+    assert st["last_signal"] == "RECLAIM"
+    assert st["last_scored_signal"] == "RECLAIM"   # scored lane: the re-entry is the verdict
+    assert st["position_hint"] == "long"
+    assert st["last_scored_ts"] == tail["ts"]
+
+
+def test_legacy_unscored_reclaim_markers_stay_display_only():
+    # Pre-promotion slices in the wild carry scored:false RECLAIMs — those must never
+    # move the position walk (back-compat with the display-tier emission).
+    sig = _frame(30)
+    signals = [
+        {"ts": "2026-06-08", "type": "SELL", "bar_index": 10, "price": 100.0},
+        {"ts": "2026-07-13", "type": "RECLAIM", "bar_index": 22, "price": 104.0,
+         "scored": False, "quality": "reclaim"},
+    ]
+    st = _state(sig, signals)
+    assert st["last_signal"] == "RECLAIM"
+    assert st["last_scored_signal"] == "SELL"
     assert st["position_hint"] == "flat"
-    assert st["last_scored_ts"] == sells[0]["ts"]
+
+
+def test_reclaim_eligible_symbol_class_rule():
+    ineligible = [
+        ("SOXS", "Direxion Semiconductor Bear 3x"), ("TQQQ", "ProShares UltraPro QQQ 3x"),
+        ("SSO", "ProShares Ultra S&P500"), ("SH", "ProShares Short S&P500"),
+        ("BITO", "ProShares Bitcoin Strategy"), ("VXX", "iPath Series B S&P 500 VIX Short-Term"),
+        ("UVXY", None),                                  # ticker backstop (no manifest name)
+        ("USO", "United States Oil Fund"),               # futures-roll wrapper, marker-less name → backstop
+        ("UNG", "United States Natural Gas Fund"),       # same family
+    ]
+    eligible = [
+        ("AAPL", "Apple Inc"), ("SPY", "SPDR S&P 500 ETF"), ("GLD", "SPDR Gold Shares"),
+        ("SHV", "iShares Short Treasury Bond ETF"),      # maturity "short", not inverse
+        ("JPST", "JPMorgan Ultra-Short Income ETF"),     # maturity "ultra-short"
+        ("RARE", "Ultragenyx Pharmaceutical"),           # operating company, not a fund
+        ("XYZ", None),                                   # unknown names stay eligible
+    ]
+    for s, n in ineligible:
+        assert reclaim_eligible(n, s) is False, (s, n)
+    for s, n in eligible:
+        assert reclaim_eligible(n, s) is True, (s, n)
+
+
+def test_promotion_minted_new_strategy_identity():
+    from signal_layer.contracts import FLAGSHIP_PARAMS, strategy_spec_hash
+    assert FLAGSHIP_PARAMS.get("reclaim_lane"), "scored promotion requires the reclaim_lane params key"
+    pre = {k: v for k, v in FLAGSHIP_PARAMS.items() if k != "reclaim_lane"}
+    assert strategy_spec_hash() != strategy_spec_hash(params=pre), \
+        "reclaim_lane must mint a NEW spec_hash (published wr/pf lanes must never mix)"
+
+
+def test_build_v2_reclaims_enabled_false_emits_none():
+    from signal_layer.confluence_v2 import build_v2
+    n = 30
+    close = np.full(n, 90.0)
+    close[10] = 100.0
+    close[18:] = 104.0
+    sig = _frame(n, close=close)
+    cs = pd.Series(close, index=sig.index)
+    on = build_v2(sig, cs)
+    off = build_v2(sig, cs, reclaims_enabled=False)
+    assert off["reclaims"] == []
+    # everything else identical — the switch only gates the reclaim channel
+    assert {k: v for k, v in on.items() if k != "reclaims"} == {k: v for k, v in off.items() if k != "reclaims"}
