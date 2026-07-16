@@ -321,9 +321,13 @@
   .sd-grab{display:block;width:38px;height:4px;border-radius:2px;background:var(--line-3);margin:7px auto 0}
 }
 
-/* verdict hero */
+/* verdict hero — a stance is a descriptive posture (smaller, 600); a dim event keeps its
+   date but loses saturation; the sub-line dates the hero so it is never an undated call */
 .od-hero{display:flex;flex-direction:column;gap:14px}
 .od-verdict{font:800 32px/1 var(--font-num);letter-spacing:.04em}
+.od-verdict.stance{font:600 19px/1.25 var(--font-ui);letter-spacing:.01em}
+.od-verdict.dim{opacity:.55}
+.od-vsub{font:500 11px/1 var(--font-ui);color:var(--text-2);font-variant-numeric:tabular-nums;margin-top:-8px}
 .od-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .od-stat{display:flex;flex-direction:column;gap:4px;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-md);padding:10px 12px}
 .od-stat-k{font:500 10.5px/1.2 var(--font-ui);color:var(--text-2)}

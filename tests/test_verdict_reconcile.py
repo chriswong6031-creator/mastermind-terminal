@@ -106,3 +106,38 @@ def test_crypto_flagship_reconciles_like_equities(tmp_path):
     counts = reconcile_flagship_verdicts(symbols, tmp_path)
     assert symbols["BTC-USD"]["verdict"] == "BUY"
     assert counts["rederived"] == 1
+
+
+# ── scored-first lane (META 2026-07-15: blocked BUY in the tail must not be the verdict) ─────────
+def _scored_slice(tmp: Path, sym: str, last_signal, last_scored, ts) -> None:
+    (tmp / f"{sym}.slice.json").write_text(json.dumps({
+        "indicator": {"signals": [], "state": {"last_signal": last_signal,
+                                               "last_scored_signal": last_scored,
+                                               "last_scored_ts": ts}},
+        "backtest": {"metrics": {}},
+    }))
+
+
+def test_scored_signal_and_vts_reconcile_over_blocked_tail(tmp_path):
+    # META shape: raw stream tail is a regime_blocked BUY; the scored truth is the May SELL.
+    _scored_slice(tmp_path, "META", "BUY", "SELL", "2026-05-04")
+    symbols = {"META": _rich("BUY")}
+    counts = reconcile_flagship_verdicts(symbols, tmp_path)
+    assert symbols["META"]["verdict"] == "SELL"
+    assert symbols["META"]["vts"] == "2026-05-04"
+    assert counts["rederived"] == 1
+
+
+def test_vts_refresh_alone_counts_as_rederive(tmp_path):
+    _scored_slice(tmp_path, "AAPL", "SELL", "SELL", "2026-06-08")
+    row = _rich("SELL"); row["vts"] = "2026-01-01"  # verdict right, date stale
+    counts = reconcile_flagship_verdicts({"AAPL": row}, tmp_path)
+    assert row["vts"] == "2026-06-08"
+    assert counts["rederived"] == 1
+
+
+def test_slice_without_scored_ts_drops_stale_manifest_vts(tmp_path):
+    _slice(tmp_path, "NVDA", "SELL")  # pre-scored slice: no last_scored_ts
+    row = _rich("SELL"); row["vts"] = "2026-01-01"
+    reconcile_flagship_verdicts({"NVDA": row}, tmp_path)
+    assert "vts" not in row  # never publish a date the slice can't back

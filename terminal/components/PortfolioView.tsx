@@ -6,6 +6,7 @@ import { AppNav } from "@/components/AppNav";
 import MobileNav from "@/components/MobileNav";
 import { useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
+import { verdictIsStale } from "@/lib/signalVerdict";
 
 type Row = { name: string; zh?: string; col: string; last: number; chg: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
@@ -85,7 +86,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
                     <td><div className="sym-cell"><span className="ic" style={{ background: r.col }}>{r.sym[0]}</span><div><div className="tk">{r.sym}</div><div className="nm">{r.zh || r.name}</div></div></div></td>
                     <td>{fmt(r.last, r.last < 10 ? 4 : 2)}</td>
                     <td className={u ? "up" : "down"}>{u ? "+" : ""}{fmt(r.chg)}%</td>
-                    <td>{r.verdict ? <span className={`pill ${buy ? "buy" : "sell"}`}>{r.verdict}</span> : "—"}</td>
+                    <td>{r.verdict ? <span className={`pill ${buy ? "buy" : "sell"}${verdictIsStale((r as any).vts) ? " stale" : ""}`} title={(r as any).vts ? `${r.verdict} · ${(r as any).vts}` : undefined}>{r.verdict}</span> : "—"}</td>
                     <td><span className={`regchip ${r.regimeBull ? "up" : "warn"}`}>{r.regimeBull ? t("uptrend") : t("mixed")}</span></td>
                     <td>{r.wr != null ? (r.wr * 100).toFixed(0) + "%" : "—"}</td>
                     <td>{r.pf != null ? r.pf.toFixed(2) : "—"}</td>

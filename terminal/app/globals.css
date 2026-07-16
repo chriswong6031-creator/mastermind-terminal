@@ -289,6 +289,15 @@ svg{display:block}
 .sig-btn-half.sig-btn-stale{background:transparent;border-left-color:color-mix(in srgb, var(--vc) 35%, transparent)}
 .sig-btn-half.sig-btn-stale .sig-btn-vd{color:var(--text-2);font-weight:600}
 .sig-btn-half.sig-btn-stale>svg{opacity:.45}
+
+/* STANCE: a posture read from current state, not a signal event — no tint, hollow star,
+   600-weight (vs the event's 700). The color is the stance's own (--up/--warn/…). */
+.sig-btn-half.sig-btn-stance{background:transparent;border-left-color:color-mix(in srgb, var(--vc) 45%, transparent)}
+.sig-btn-half.sig-btn-stance .sig-btn-vd{font:600 11px/1.2 var(--font-ui);letter-spacing:0;text-align:right;max-width:170px;white-space:normal}
+.sig-btn-half.sig-btn-stance>svg path{fill:transparent;stroke:var(--vc);stroke-width:1.6;opacity:.7}
+/* SOFT: a real dated engine event outside the scored lane (RECLAIM re-entry) — colored and
+   dated but hollow, so it can never be mistaken for the backtested solid-star signal. */
+.sig-btn-half.sig-btn-soft>svg path{fill:transparent;stroke:var(--vc);stroke-width:1.6}
 /* View: absolutely centered on the button → straddles the boundary of the two halves, on top */
 .sig-btn-seam{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;display:inline-flex;align-items:center;justify-content:center;pointer-events:none}
 .sig-btn-view{display:inline-flex;align-items:center;font:600 10.5px/1 var(--font-ui);color:var(--text);background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-pill);padding:4px 14px;box-shadow:0 2px 10px -3px rgba(0,0,0,.6)}
@@ -334,7 +343,10 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .sym-cell .ic{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font:800 9px/1 var(--font-ui);color:#04130a;flex:none}
 .sym-cell .tk{font-weight:600;white-space:nowrap} .sym-cell .nm{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
 .pill{display:inline-block;padding:3px 9px;border-radius:var(--r);font:700 10.5px/1.4 var(--font-ui);letter-spacing:.03em}
-.pill.buy{color:var(--buy);background:rgba(38,194,129,.13)} .pill.sell{color:var(--sell);background:rgba(240,86,107,.13)}
+/* color-mix on the tokens (not hardcoded rgba) so tints follow the flipped --buy/--sell in zh east mode */
+.pill.buy{color:var(--buy);background:color-mix(in srgb, var(--buy) 13%, transparent)} .pill.sell{color:var(--sell);background:color-mix(in srgb, var(--sell) 13%, transparent)}
+/* a dated-stale verdict (manifest vts past the 21d law) keeps its word but loses authority */
+.pill.stale,.verd.stale{color:var(--text-2) !important;background:transparent !important;box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--text-2) 35%, transparent)}
 .regchip.up{color:var(--up)} .regchip.warn{color:var(--warn)}
 .bar{display:inline-block;width:48px;height:6px;border-radius:3px;background:var(--panel-3);overflow:hidden;vertical-align:middle;margin-left:7px}
 .bar i{display:block;height:100%;background:var(--brand)}

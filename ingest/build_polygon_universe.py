@@ -274,7 +274,11 @@ def main(syms: list[str]) -> None:
                 )
             st = slim["indicator"]["state"]
             m = slim["backtest"]["metrics"]
-            row.update(verdict=st.get("last_signal"),
+            # scored-first: blocked markers never become the public verdict; the fallback
+            # keeps this v2-less staging emission (empty keeper) behaving as before, and
+            # reconcile_flagship_verdicts re-derives from the published v2 slice downstream.
+            row.update(verdict=st.get("last_scored_signal") or st.get("last_signal"),
+                       vts=st.get("last_scored_ts"),
                        regimeBull=bool(st.get("above200") and st.get("weeklyBull")),
                        wr=m.get("win_rate"), pf=m.get("profit_factor"), cagr=m.get("cagr"))
             print(f"  {sym}: {len(bars)}b last={last:.2f} {chg:+.2f}% | {st.get('last_signal')} "

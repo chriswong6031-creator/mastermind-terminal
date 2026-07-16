@@ -59,6 +59,37 @@ def test_row_with_verdict_but_no_slice_is_flagged(tmp_path):
     assert len(ms) == 1 and ms[0]["kind"] == "no_slice"
 
 
+# ── scored-first lane (META 2026-07-15: blocked BUY in the tail must not be the verdict) ─────────
+def _scored_slice(tmp: Path, sym: str, last_signal, last_scored, ts, *, wr=0.75, pf=100.0) -> None:
+    (tmp / f"{sym}.slice.json").write_text(json.dumps({
+        "indicator": {"state": {"last_signal": last_signal,
+                                "last_scored_signal": last_scored,
+                                "last_scored_ts": ts}},
+        "backtest": {"metrics": {"win_rate": wr, "profit_factor": pf}},
+    }))
+
+
+def test_scored_signal_wins_over_blocked_tail(tmp_path):
+    # META shape: raw tail is a regime_blocked BUY; scored truth is the May SELL.
+    _scored_slice(tmp_path, "META", "BUY", "SELL", "2026-05-04")
+    good = _rich("SELL"); good["vts"] = "2026-05-04"
+    assert vp.check_manifest({"META": good}, tmp_path) == []
+    ms = vp.check_manifest({"META": _rich("BUY")}, tmp_path)  # published the blocked tail
+    kinds = {m["kind"] for m in ms}
+    assert "verdict" in kinds and "vts" in kinds
+
+
+def test_vts_mismatch_is_flagged_but_absent_slice_ts_is_not(tmp_path):
+    _scored_slice(tmp_path, "A", "SELL", "SELL", "2026-06-08")
+    stale = _rich("SELL"); stale["vts"] = "2026-01-01"
+    ms = vp.check_manifest({"A": stale}, tmp_path)
+    assert [m["kind"] for m in ms] == ["vts"]
+    # pre-scored slice (no last_scored_ts): the vts check must not fire at all
+    _slice(tmp_path, "B", "SELL")
+    old = _rich("SELL"); old["vts"] = "2026-01-01"
+    assert vp.check_manifest({"B": old}, tmp_path) == []
+
+
 def test_search_rows_and_null_verdicts_are_not_checked(tmp_path):
     symbols = {
         "SEARCH": {"name": "s", "sec": "Equities", "col": "#888", "mkt": "SSE"},

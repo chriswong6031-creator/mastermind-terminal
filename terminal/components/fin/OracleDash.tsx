@@ -14,6 +14,7 @@ import { pick, fmtPct, fmtDate } from "../../lib/finFormat"
 import { LineSeries } from "./FinCharts"
 import { getJSON } from "../../lib/dataCache"
 import { oracleVerdict, deskVerdict } from "../../lib/signalVerdict"
+import { computeTrendState } from "../../lib/trend"
 import { computeRatings, verdictFromScore } from "../../lib/techRating"
 import type { Bar } from "../../lib/fund"
 
@@ -445,8 +446,9 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
     }
   }
 
-  // Derived verdicts using shared helpers
-  const ov = oracleVerdict(row?.verdict ?? null, slice, zh)
+  // Derived verdicts using shared helpers (trend powers the stance ladder on stale events)
+  const trendState = Array.isArray(bars) && (bars as Bar[]).length >= 200 ? computeTrendState(bars as Bar[]) : null
+  const ov = oracleVerdict(row?.verdict ?? null, slice, zh, Date.now(), trendState)
   const dv = deskVerdict(intel, zh)
 
   // derived stats: prefer slice.backtest.metrics over row for consistency
@@ -669,12 +671,17 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
           />
           <div className="sd-body">
 
-            {/* Golden Oracle scorecard */}
+            {/* Golden Oracle scorecard — the hero always carries its date; a stance renders
+                smaller (descriptive posture) and a dim/undated event loses full saturation */}
             <div className="sig-card">
               <div className="od-hero">
-                <div className="od-verdict" style={{ color: ov.color }}>
+                <div
+                  className={"od-verdict" + (ov.stance ? " stance" : "") + (ov.dim && !ov.stance ? " dim" : "")}
+                  style={{ color: ov.color }}
+                >
                   {ov.label !== "—" ? ov.label : (row?.verdict ?? "—")}
                 </div>
+                {ov.sub && <div className="od-vsub">{ov.sub}</div>}
                 <div className="od-stats">
                   <div className="od-stat">
                     <span className="od-stat-k">{pick(zh, "Win rate", "胜率")}</span>
@@ -766,10 +773,20 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                 <div className="sd-siglist">
                   {sigs.map((sig, i) => {
                     const isEntry = sig.type === "BUY" || sig.type === "REBUY"
+                    const isReclaim = sig.type === "RECLAIM"
                     const q = isEntry ? qualityLabel(sig.quality, zh) : ""
                     return (
-                      <button key={i} className="sd-sigrow" onClick={() => handleJump(sig.ts)} title={pick(zh, "Jump to chart", "跳转到图表")}>
-                        <span className="sd-sig-badge" style={{ background: signalColor(sig.type) }}>{sig.type}</span>
+                      <button key={i} className="sd-sigrow" onClick={() => handleJump(sig.ts)} title={isReclaim ? (sig.quality_reason || "") : pick(zh, "Jump to chart", "跳转到图表")}>
+                        {/* RECLAIM = unscored re-entry: hollow badge (glyph law — never the solid entry pill) */}
+                        <span
+                          className="sd-sig-badge"
+                          style={isReclaim
+                            ? { background: "transparent", boxShadow: "inset 0 0 0 1px var(--buy)", color: "var(--buy)" }
+                            : { background: signalColor(sig.type) }}
+                        >
+                          {isReclaim ? pick(zh, "RE-ENTRY", "再入场") : sig.type}
+                        </span>
+                        {isReclaim && <span className="sd-sig-q" style={{ color: "var(--text-2)" }}>{pick(zh, "unscored", "未计分")}</span>}
                         {q && <span className="sd-sig-q" style={{ color: qualityColor(sig.quality) }}>{q}</span>}
                         <span className="sd-sig-date">{fmtDate(sig.ts)}</span>
                         <span className="sd-sig-price">{sig.price != null ? sig.price.toFixed(2) : "—"}</span>
