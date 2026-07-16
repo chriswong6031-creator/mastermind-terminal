@@ -120,7 +120,10 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
         const primaryKey = p.entries[0]?.key;
         const showOps = !p.isPrice && primaryKey != null;
         // B5: on coarse, pane-ops only visible when collapsed or maximized (restore affordance)
-        const showPaneOps = showOps && (coarse ? (p.collapsed || p.maximized) : (props.hoveredKey === p.key || p.collapsed || p.maximized));
+        // a maximized PRICE pane renders a restore-only ops strip (it is reachable via double-click/tap,
+        // and without this there is no visible way back — the flattened sub-panes show no ops of their own)
+        const priceRestoreOnly = p.isPrice && p.maximized;
+        const showPaneOps = priceRestoreOnly || (showOps && (coarse ? (p.collapsed || p.maximized) : (props.hoveredKey === p.key || p.collapsed || p.maximized)));
         // B5: entry row visibility — price pane gated by legendOpen; sub-pane gated by legendOpen on coarse only
         const entriesVisible = p.isPrice ? props.legendOpen : (coarse ? props.legendOpen : true);
         // B5: render the price-pane lg-block even on coarse when it has no entries (so the count chip always shows)
@@ -188,12 +191,12 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
             {showPaneOps && (
               <div className="pane-ops" style={{ top: p.top + 3, right: 10 }}>
                 {/* on coarse, hide move/remove — only restore affordance (collapse/maximize) */}
-                {!coarse && <>
+                {!coarse && !priceRestoreOnly && <>
                   <button className="po-ic" data-tip="Move pane up" disabled={!props.canMoveUp(p.paneIndex)} onClick={stop(() => { props.onMoveUp(p.paneIndex); doFlip(p.paneIndex + ":up"); })} aria-label="Move pane up">{flip?.key === p.paneIndex + ":up" ? <span key={flip.n} className="po-flip">{I(ICONS.up)}</span> : I(ICONS.up)}</button>
                   <button className="po-ic" data-tip="Move pane down" disabled={!props.canMoveDown(p.paneIndex)} onClick={stop(() => { props.onMoveDown(p.paneIndex); doFlip(p.paneIndex + ":down"); })} aria-label="Move pane down">{flip?.key === p.paneIndex + ":down" ? <span key={flip.n} className="po-flip">{I(ICONS.down)}</span> : I(ICONS.down)}</button>
                   <button className="po-ic" data-tip="Remove" onClick={stop(() => props.onRemove(primaryKey!))} aria-label="Remove">{I(ICONS.remove)}</button>
                 </>}
-                <button className={`po-ic${p.collapsed ? " on" : ""}`} data-tip={p.collapsed ? "Restore pane" : "Collapse pane"} onClick={stop(() => props.onCollapse(p.paneIndex))} aria-label="Collapse pane">{I(ICONS.collapse)}</button>
+                {!priceRestoreOnly && <button className={`po-ic${p.collapsed ? " on" : ""}`} data-tip={p.collapsed ? "Restore pane" : "Collapse pane"} onClick={stop(() => props.onCollapse(p.paneIndex))} aria-label="Collapse pane">{I(ICONS.collapse)}</button>}
                 <button className={`po-ic${p.maximized ? " on" : ""}`} data-tip={p.maximized ? "Restore pane" : "Maximize pane"} onClick={stop(() => props.onMaximize(p.paneIndex))} aria-label="Maximize pane">{I(ICONS.maximize)}</button>
               </div>
             )}
