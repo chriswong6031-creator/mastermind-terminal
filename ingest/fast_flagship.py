@@ -476,7 +476,11 @@ def _main_locked(limit: int, syms_override: list[str] | None, dry_run: bool) -> 
         mrow: dict = {
             "last":        q["last"],
             "chg":         q.get("chg"),
-            "verdict":     state.get("last_signal"),
+            # scored-first: a regime_blocked marker in the stream tail must not become the
+            # public verdict (META 2026-07-15: blocked BUY published as manifest BUY).
+            # Fallback keeps v2-less emissions (empty keeper -> everything blocked) working.
+            "verdict":     state.get("last_scored_signal") or state.get("last_signal"),
+            "vts":         state.get("last_scored_ts"),
             "regimeBull":  bool(state.get("above200") and state.get("weeklyBull")),
         }
         # Optional fields (only patch if hub provided them)

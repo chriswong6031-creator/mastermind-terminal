@@ -4,7 +4,9 @@ Runs between hydrate_prices and the atomic staging->live manifest swap in ops/te
 post-condition check on build_universe.reconcile_flagship_verdicts(): for every flagship row that
 carries a verdict, assert it still agrees with the v2 slice the card reads.
 
-  * manifest.verdict == slice.indicator.state.last_signal   (verdict lane == what the card renders)
+  * manifest.verdict == slice state.last_scored_signal (or last_signal for pre-scored slices)
+                                                             (verdict lane == the scored truth)
+  * manifest.vts     == slice state.last_scored_ts           (the verdict's date, when the slice has one)
   * manifest.wr/pf   ~= slice.backtest.metrics.win_rate/profit_factor  (metrics == the slice's backtest)
   * a row with a verdict but NO slice on disk                (reconcile should have demoted it)
 
@@ -61,9 +63,14 @@ def check_manifest(symbols: dict[str, dict], out_dir: Path) -> list[dict]:
         ind = slice_doc.get("indicator", {}) or {}
         state = ind.get("state", {}) or {}
         metrics = (slice_doc.get("backtest", {}) or {}).get("metrics", {}) or {}
-        ls = state.get("last_signal")
+        # scored-first, in lockstep with reconcile_flagship_verdicts: the published verdict is
+        # last_scored_signal (blocked markers never trade), falling back for pre-scored slices.
+        ls = state.get("last_scored_signal") or state.get("last_signal")
         if rec.get("verdict") != ls:
             out.append({"sym": sym, "kind": "verdict", "manifest": rec.get("verdict"), "slice": ls})
+        svts = state.get("last_scored_ts")
+        if svts is not None and rec.get("vts") != svts:
+            out.append({"sym": sym, "kind": "vts", "manifest": rec.get("vts"), "slice": svts})
         if not _num_match(rec.get("wr"), metrics.get("win_rate")):
             out.append({"sym": sym, "kind": "wr", "manifest": rec.get("wr"), "slice": metrics.get("win_rate")})
         if not _num_match(rec.get("pf"), metrics.get("profit_factor")):

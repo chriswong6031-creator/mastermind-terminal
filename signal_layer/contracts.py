@@ -219,9 +219,43 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
                            "above200": bool(row.get("above200")),
                            "monthlyBull": bool(row.get("mo_bull"))},
             })
-        # keep the unified stream ordered by bar_index (BUY/REBUY were already in order;
-        # SELLs are appended out of order). Stable sort preserves same-bar ordering.
-        out.sort(key=lambda e: e["bar_index"])
+    # ── RECLAIM from the v2 repair lane (display re-entry; NEVER a scored event) ──
+    # Two kinds ride the same marker type: "reclaim" (post-SELL trend reclaim) and
+    # "block_repair" (a bear-blocked entry whose block legs cleared). scored:false and
+    # the non-(BUY|REBUY|SELL) type keep them out of the position walk and the sim.
+    reclaims = v2.get("reclaims") or []
+    if reclaims and len(sig):
+        sidx = sig.index
+        for r in reclaims:
+            j = int(sidx.searchsorted(pd.Timestamp(r["ts"]), side="right")) - 1
+            if j < 0:
+                continue
+            row = sig.iloc[j]
+            kind = r.get("kind", "reclaim")
+            out.append({
+                "ts": r["ts"],
+                "bar_index": j,
+                "type": "RECLAIM",
+                "strength": _strength(row),
+                "price": _num(row.get("close")),
+                "scored": False,
+                "quality": kind,                        # reclaim | block_repair
+                "quality_reason": (
+                    f"trend reclaimed the {r.get('anchor_ts')} sell level"
+                    if kind == "reclaim"
+                    else f"bear-block legs repaired after the {r.get('anchor_ts')} blocked entry"
+                ),
+                "reasons": (["close>sell_price", "weekly_bull", "above200", "debounced"]
+                            if kind == "reclaim"
+                            else ["bear_block_cleared", "macd_cross_still_live"]),
+                "regime": {"weeklyBull": bool(row.get("w_bull")),
+                           "above200": bool(row.get("above200")),
+                           "monthlyBull": bool(row.get("mo_bull"))},
+            })
+
+    # keep the unified stream ordered by bar_index (BUY/REBUY were already in order;
+    # SELLs/RECLAIMs are appended out of order). Stable sort preserves same-bar ordering.
+    out.sort(key=lambda e: e["bar_index"])
     return out
 
 
@@ -235,29 +269,42 @@ def _strength(row) -> float:
 def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
     """Model-facing position state, derived from the UNIFIED signal stream.
 
-    The stream is now BUY/REBUY/SELL only (CUT + CS-SELL are no longer emitted — see
-    ``_extract_signals``). ``position_hint`` walks it in reverse: BUY/REBUY → long, SELL →
-    flat. ``last_signal`` / ``bars_since_signal`` come from the same unified list. Because
-    every emitted marker is now a position event, ``last_scored_signal`` == ``last_signal``
-    (kept for schema stability / OracleDash back-compat)."""
+    The stream is BUY/REBUY/SELL only (CUT + CS-SELL are no longer emitted — see
+    ``_extract_signals``). ``last_signal`` / ``bars_since_signal`` echo the raw stream tail.
+    ``position_hint`` / ``last_scored_signal`` / ``last_scored_ts`` walk the SCORED lane
+    only: markers stamped ``quality='regime_blocked'`` are display artifacts the v2 entry
+    logic refused ("never treat as an entry") and must not flip the position — a blocked
+    BUY after a SELL leaves the hint flat and the scored verdict SELL. The two fields
+    diverge from ``last_signal`` exactly when the stream tail is a blocked marker."""
     last = sig.iloc[-1] if len(sig) else None
     last_sig = signals[-1] if signals else None
     bars_since = (len(sig) - 1 - last_sig["bar_index"]) if last_sig else None
 
-    # position hint from the last position event in the unified stream.
+    # position hint from the last SCORED position event (blocked markers don't trade).
     pos = None
     last_scored = None
     for s in reversed(signals):
-        if s["type"] in ("BUY", "REBUY", "SELL"):
+        if s["type"] in ("BUY", "REBUY", "SELL") and s.get("quality") != "regime_blocked":
             last_scored = s
             pos = "long" if s["type"] in ("BUY", "REBUY") else "flat"
             break
+    strong_bull = bool(last is not None and last.get("strong_bull"))
     return {
         "position_hint": pos,
         "last_signal": last_sig["type"] if last_sig else None,
         "last_scored_signal": last_scored["type"] if last_scored else None,
+        "last_scored_ts": last_scored["ts"] if last_scored else None,
         "bars_since_signal": bars_since,
-        "extended": bool(last is not None and last.get("strong_bull")),
+        # DEPRECATED misnomer: carries strong_bull (weekly+monthly bull & above 200d), NOT the
+        # Pine "extended" (overbought). Kept verbatim for old readers; use the honest names.
+        "extended": strong_bull,
+        "strong_bull": strong_bull,
+        # the true Pine extendedNow — overbought on the last 3D row (RSI>=70 or %K>=80)
+        "overbought": bool(
+            last is not None
+            and ((last.get("rsi14") or 0) >= FLAGSHIP_PARAMS["ext_rsi"]
+                 or (last.get("k") or 0) >= 80)
+        ),
         "weeklyBull": bool(last is not None and last.get("w_bull")),
         "above200": bool(last is not None and last.get("above200")),
     }

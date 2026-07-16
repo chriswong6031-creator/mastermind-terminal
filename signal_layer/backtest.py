@@ -34,6 +34,7 @@ def run_backtest(
     *,
     fixed: bool = True,
     use_cut_exit: bool = False,
+    use_reclaim_entry: bool = False,
     cost_bps: float = 3.0,
     slippage_bps: float = 1.0,
     bar_quality: str = "synthetic_open_deepstore",
@@ -57,6 +58,14 @@ def run_backtest(
     to the symbol's IPO (see ``confluence.compute_signals``); pass
     ``confluence.ipo_bar_anchor(close, sym)`` / ``ipo_week_parity(close, sym)`` when
     backtesting a truncated feed so the trades land on the same bars TradingView shows.
+
+    ``use_reclaim_entry`` (default **False** — evaluation only, NOT promoted): adds the
+    2026-07-15 repair-grammar entries to the sim so the panel can price them against the
+    baseline before any scored promotion: (a) TREND-RECLAIM — while flat, close back above
+    the last exit's fill after RECLAIM_DEBOUNCE_BARS with weekly-bull + above-200; (b)
+    BLOCK-REPAIR — a bear-blocked raw buy whose block clears within REPAIR_WINDOW_BARS
+    while macd>=signal. Reclaim trades carry ``entry_kind`` for per-lane attribution.
+    The exit stream is byte-identical to the baseline in both modes.
     """
     sig = oracle.compute_signals(close.dropna(), bar_anchor=bar_anchor, week_parity=week_parity)
     if sig.empty:
@@ -81,24 +90,51 @@ def run_backtest(
     cs_arr = rows["CS"].to_numpy()
     rev_arr = rows["revSell"].to_numpy()
 
+    # repair-grammar inputs (only consulted when use_reclaim_entry)
+    from .confluence_v2 import RECLAIM_DEBOUNCE_BARS, REPAIR_WINDOW_BARS
+    close_arr = px.to_numpy()
+    wb_arr = rows["w_bull"].to_numpy(dtype=bool)
+    a200_arr = rows["above200"].to_numpy(dtype=bool)
+    bblk_arr = rows["bear_block"].to_numpy(dtype=bool)
+    macd_live = (rows["macd"] >= rows["sig"]).to_numpy(dtype=bool)
+    blocked_arr = ((rows["CB"] | rows["revBuy"]) & rows["bear_block"]).to_numpy(dtype=bool)
+
     side_cost = (cost_bps + slippage_bps) / 1e4   # charged per side (entry, exit)
 
     pos = 0
     entry_close = entry_dt = None
     entry_i = -1
+    entry_kind = "signal"
     trades: list[dict] = []
     equity = [1.0]
     eq = 1.0
+    sell_anchor: tuple[int, float] | None = None  # (fill row, fill px) of the last sim exit
+    block_anchor: int | None = None               # row of the last bear-blocked raw buy
 
     for i in range(len(rows) - 1):
         if pos == 1:                              # mark-to-market the open position
             eq *= float(px.iloc[i + 1]) / float(px.iloc[i])
         equity.append(eq)
-        if pos == 0 and enter[i]:
+        reclaim_now = None
+        if use_reclaim_entry and pos == 0:
+            if blocked_arr[i]:                    # newest blocked buy owns the repair window
+                block_anchor = i
+            if block_anchor is not None and i > block_anchor:
+                if i - block_anchor > REPAIR_WINDOW_BARS or not macd_live[i]:
+                    block_anchor = None           # window lapsed or the cross died
+                elif not bblk_arr[i]:
+                    reclaim_now = "block_repair"
+            if (reclaim_now is None and sell_anchor is not None
+                    and i - sell_anchor[0] >= RECLAIM_DEBOUNCE_BARS
+                    and close_arr[i] > sell_anchor[1] and wb_arr[i] and a200_arr[i]):
+                reclaim_now = "reclaim"
+        if pos == 0 and (enter[i] or reclaim_now):
             pos = 1
             entry_close = float(px.iloc[i + 1])
             entry_dt = dates[i + 1]
             entry_i = i + 1
+            entry_kind = reclaim_now if (reclaim_now and not enter[i]) else "signal"
+            sell_anchor = block_anchor = None
             eq *= (1 - side_cost)                 # entry cost
         elif pos == 1 and exit_[i]:
             exit_close = float(px.iloc[i + 1])
@@ -106,18 +142,25 @@ def run_backtest(
             net = gross - 2 * side_cost
             eq *= (1 - side_cost)                 # exit cost
             reason = "CS" if cs_arr[i] else ("rev_cut" if rev_arr[i] else "exit")
-            trades.append(_trade(len(trades) + 1, entry_dt, dates[i + 1],
-                                 entry_close, exit_close, net, gross,
-                                 i + 1 - entry_i, reason, bar_quality))
+            t = _trade(len(trades) + 1, entry_dt, dates[i + 1],
+                       entry_close, exit_close, net, gross,
+                       i + 1 - entry_i, reason, bar_quality)
+            if use_reclaim_entry:                 # per-lane attribution (lab only; the
+                t["entry_kind"] = entry_kind      # production emission stays byte-stable)
+            trades.append(t)
             pos = 0
+            sell_anchor = (i + 1, exit_close)     # re-anchor the reclaim on this exit's fill
 
     if pos == 1:                                  # close any open trade at the last bar
         exit_close = float(px.iloc[-1])
         gross = exit_close / entry_close - 1
         net = gross - 2 * side_cost
-        trades.append(_trade(len(trades) + 1, entry_dt, dates[-1],
-                             entry_close, exit_close, net, gross,
-                             len(rows) - 1 - entry_i, "eod", bar_quality))
+        t = _trade(len(trades) + 1, entry_dt, dates[-1],
+                   entry_close, exit_close, net, gross,
+                   len(rows) - 1 - entry_i, "eod", bar_quality)
+        if use_reclaim_entry:
+            t["entry_kind"] = entry_kind
+        trades.append(t)
 
     if not trades:
         return {"status": "ok", "n_trades": 0, "bar_quality": bar_quality,

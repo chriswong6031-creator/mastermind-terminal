@@ -7,12 +7,13 @@ import MobileNav from "@/components/MobileNav";
 import { useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
 import { trackSearch } from "@/lib/searchTrack";
+import { verdictIsStale } from "@/lib/signalVerdict";
 
 // ── types ──────────────────────────────────────────────────────────────────
 type Row = {
   sym: string; name: string; zh?: string; sec: string; col: string; mkt?: string;
   last: number | null; chg: number | null; vol: number | null;
-  verdict: string | null; wr: number | null; pf: number | null;
+  verdict: string | null; vts?: string | null; wr: number | null; pf: number | null;
   cagr: number | null; regimeBull: boolean | null;
 };
 
@@ -97,6 +98,7 @@ export default function ScreenerView({ email }: { email: string }) {
             chg: r.chg ?? null,
             vol: r.vol ?? null,
             verdict: r.verdict ?? null,
+            vts: r.vts ?? null,
             wr: r.wr ?? null,
             pf: r.pf ?? null,
             cagr: r.cagr ?? null,
@@ -330,7 +332,7 @@ export default function ScreenerView({ email }: { email: string }) {
                     </td>
                     <td>{thin ? "—" : fmt(r.last, r.last != null && r.last < 10 ? 4 : 2)}</td>
                     <td className={chgCls}>{r.chg == null ? "—" : `${r.chg >= 0 ? "+" : ""}${fmt(r.chg)}%`}</td>
-                    <td>{r.verdict ? <span className={`pill ${buy ? "buy" : "sell"}`}>{r.verdict}</span> : "—"}</td>
+                    <td>{r.verdict ? <span className={`pill ${buy ? "buy" : "sell"}${verdictIsStale(r.vts) ? " stale" : ""}`} title={r.vts ? `${r.verdict} · ${r.vts}` : undefined}>{r.verdict}</span> : "—"}</td>
                     <td>
                       {r.regimeBull == null
                         ? "—"

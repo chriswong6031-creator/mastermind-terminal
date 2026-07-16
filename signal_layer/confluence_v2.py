@@ -57,6 +57,13 @@ PIVOT_RADIUS = 3         # CONFIRM swing low: local close min, radius 3
 # ── keep the side-channel arrays bounded (spec: last 40 each) ──
 SIDE_CHANNEL_CAP = 40
 
+# ── repair grammar (RE-ENTRY lane, 2026-07-15 Mag7 rotation-miss directive) ──
+# A gate verdict is evaluated once, on its own bar; these two event forms answer
+# "the engine said no / said exit — and the market then repaired it". DISPLAY lane
+# only (scored:false) until the panel backtest promotes them.
+RECLAIM_DEBOUNCE_BARS = 4   # 3D bars flat after a SELL before a reclaim may fire (~12 sessions)
+REPAIR_WINDOW_BARS = 8      # a blocked entry may re-fire while its cross is live, within this window
+
 
 # ════════════════════════════════════════════════ v2 exit / entry streams ═══
 def v2_streams(sig: pd.DataFrame) -> dict:
@@ -487,6 +494,79 @@ def warn_events(close: pd.Series) -> list[dict]:
     return events
 
 
+# ════════════════════════════════════════════════ repair grammar (re-entry) ═
+def reclaim_events(sig: pd.DataFrame, sell_confirms: list[dict]) -> list[dict]:
+    """The RE-ENTRY repair lane: display events (scored:false) for the two structural
+    holes the 2026-07-15 Mag7 diagnosis verified in the entry grammar.
+
+    TREND-RECLAIM — after a scored SELL, the first 3D close back ABOVE the sell row's
+      close with weekly-bull + above-200 support, once RECLAIM_DEBOUNCE_BARS have
+      passed. The debounce is load-bearing: without it AAPL re-fires 2026-06-10, one
+      bar after the Jun-8 SELL, and rides the whole −9% drawdown the SELL dodged.
+
+    BLOCK-REPAIR — a bear-blocked CB/revBuy re-fires when its block legs clear within
+      REPAIR_WINDOW_BARS while the RSI-MACD cross is still live (macd>=sig). The gate
+      was factually right on its bar; the flaw was never re-checking it (META: BUY
+      blocked 2026-07-06 @603 — all three legs true — legs repaired 2026-07-09 @657
+      and the engine had no way to say so).
+
+    One event per anchor; any scored entry/exit resets the anchors. Emits
+    ``[{ts, kind: "reclaim"|"block_repair", anchor_ts, price}]`` on the 3D-row grid,
+    chronological. Close-only-safe; composes the oracle frame, never edits it."""
+    need = {"macd", "sig", "k", "d", "rsi14"}
+    if not len(sig) or not need.issubset(sig.columns):
+        return []
+    rows = sig.dropna(subset=list(need))
+    n = len(rows)
+    if n < RECLAIM_DEBOUNCE_BARS + 2:
+        return []
+    close = rows["close"].to_numpy(dtype=float)
+    macd = rows["macd"].to_numpy(dtype=float)
+    sigl = rows["sig"].to_numpy(dtype=float)
+    wb = rows["w_bull"].to_numpy(dtype=bool)
+    a200 = rows["above200"].to_numpy(dtype=bool)
+    bblk = rows["bear_block"].to_numpy(dtype=bool)
+    raw_buy = (rows["CB"] | rows["revBuy"]).to_numpy(dtype=bool)
+    entry = raw_buy & ~bblk
+    blocked = raw_buy & bblk
+
+    # each SELL confirm (a daily-grid date) → its containing/nearest-preceding 3D row;
+    # keep the confirm's own date so the reclaim reason cites the SELL marker users see
+    sell_pos: dict[int, str] = {}
+    for w in sell_confirms or []:
+        j = int(rows.index.searchsorted(pd.Timestamp(w["ts"]), side="right")) - 1
+        if j >= 0:
+            sell_pos[j] = str(w["ts"])
+
+    out: list[dict] = []
+    long_ = False
+    sell_anchor: tuple[int, float, str] | None = None  # (row, row close, confirm ts) of the live SELL
+    block_anchor: int | None = None                    # row of the live blocked entry
+    for t in range(n):
+        if entry[t]:                               # scored entry: anchors are moot
+            long_, sell_anchor, block_anchor = True, None, None
+        if t in sell_pos:                          # scored exit: (re-)anchor the reclaim
+            long_, sell_anchor, block_anchor = False, (t, close[t], sell_pos[t]), None
+        if blocked[t]:                             # newest blocked entry owns the window
+            block_anchor = t
+        if block_anchor is not None and t > block_anchor:
+            if t - block_anchor > REPAIR_WINDOW_BARS or macd[t] < sigl[t]:
+                block_anchor = None                # window lapsed or the cross died
+            elif not bblk[t]:
+                out.append({"ts": rows.index[t].strftime("%Y-%m-%d"), "kind": "block_repair",
+                            "anchor_ts": rows.index[block_anchor].strftime("%Y-%m-%d"),
+                            "price": float(close[t])})
+                sell_anchor = block_anchor = None  # one re-entry mark per episode
+        if (not long_ and sell_anchor is not None
+                and t - sell_anchor[0] >= RECLAIM_DEBOUNCE_BARS
+                and close[t] > sell_anchor[1] and wb[t] and a200[t]):
+            out.append({"ts": rows.index[t].strftime("%Y-%m-%d"), "kind": "reclaim",
+                        "anchor_ts": sell_anchor[2],
+                        "price": float(close[t])})
+            sell_anchor = None
+    return out
+
+
 # ════════════════════════════════════════════════ the public emitter ════════
 def build_v2(sig: pd.DataFrame, close: pd.Series, *,
              high: pd.Series | None = None, low: pd.Series | None = None,
@@ -513,11 +593,11 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
     OracleDash reads. Both derive from the SAME ``warn_events`` pass (computed once)."""
     if not len(sig) or not {"macd", "sig", "k", "d", "rsi14"}.issubset(sig.columns):
         return {"keeper": {}, "recipe": {}, "score_basis": "partial",
-                "early_dots": [], "warnings": [], "sell_confirms": []}
+                "early_dots": [], "warnings": [], "sell_confirms": [], "reclaims": []}
     rows = sig.dropna(subset=["macd", "sig", "k", "d", "rsi14"])
     if len(rows) < 20:
         return {"keeper": {}, "recipe": {}, "score_basis": "partial",
-                "early_dots": [], "warnings": [], "sell_confirms": []}
+                "early_dots": [], "warnings": [], "sell_confirms": [], "reclaims": []}
 
     have_volume = volume is not None and volume.notna().any()
     hi = high if high is not None else close
@@ -559,4 +639,7 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
         "early_dots": early_dots(sig, close)[-SIDE_CHANNEL_CAP:],
         "warnings": warns_all[-SIDE_CHANNEL_CAP:],
         "sell_confirms": sell_confirms,
+        # RE-ENTRY repair lane (display, scored:false — see reclaim_events). Uncapped like
+        # sell_confirms: contracts folds them into the stream, model_slice caps the tail.
+        "reclaims": reclaim_events(sig, sell_confirms),
     }

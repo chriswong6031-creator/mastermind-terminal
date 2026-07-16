@@ -5,8 +5,9 @@ import { CMP_PALETTE, CmpMode, CmpCfg } from "@/lib/compare";
 import { parseComposite, compositeExpr, validateLegs } from "@/lib/composite";
 import { getHistory } from "@/lib/searchHistory";
 import { trackSearch } from "@/lib/searchTrack";
+import { verdictIsStale } from "@/lib/signalVerdict";
 
-type Row = { name: string; col: string; verdict: string | null; mkt?: string; zh?: string; sec?: string };
+type Row = { name: string; col: string; verdict: string | null; vts?: string | null; mkt?: string; zh?: string; sec?: string };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 
 // Asset-class → search-tab mapping. `sec` in the manifest is the asset class
@@ -327,7 +328,13 @@ export default function SearchModal({
                 <div className="vr">
                   {r.mkt && <span className="mkt">{r.mkt}</span>}
                   {r.verdict && (
-                    <span className="verd" style={{ color: buy ? "var(--buy)" : "var(--sell)", background: buy ? "rgba(38,194,129,.13)" : "rgba(240,86,107,.13)" }}>
+                    <span
+                      className={"verd" + (verdictIsStale(r.vts) ? " stale" : "")}
+                      title={r.vts ? `${r.verdict} · ${r.vts}` : undefined}
+                      // color-mix on the tokens (not hardcoded rgba) so the tint follows the
+                      // flipped --buy/--sell under zh east mode
+                      style={{ color: buy ? "var(--buy)" : "var(--sell)", background: `color-mix(in srgb, ${buy ? "var(--buy)" : "var(--sell)"} 13%, transparent)` }}
+                    >
                       {r.verdict}
                     </span>
                   )}

@@ -35,6 +35,7 @@ import StockAnalysis from "@/components/StockAnalysis";
 import SignalButton from "@/components/SignalButton";
 import TrendRow from "@/components/TrendRow";
 import { oracleVerdict, deskVerdict } from "@/lib/signalVerdict";
+import { computeTrendState } from "@/lib/trend";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
@@ -821,7 +822,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     });
   }, [panes, man, quotes]);
 
-  const ov = oracleVerdict(m?.verdict ?? null, slice, lang === "zh");
+  // client-side trend state (same input TrendRow reads) powers the stance ladder when the
+  // engine's last event is history — see signalVerdict.computeStance
+  const trendState = useMemo(() => (bars.length >= 200 ? computeTrendState(bars) : null), [bars]);
+  const ov = oracleVerdict(m?.verdict ?? null, slice, lang === "zh", Date.now(), trendState);
   const dv = deskVerdict(intel, lang === "zh");
   // ── unified signal hierarchy ──────────────────────────────────────────────
   // Every ticker used to show three competing verdicts (Oracle · conviction · timing).

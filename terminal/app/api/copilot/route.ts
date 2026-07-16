@@ -25,7 +25,18 @@ async function runTool(name: string, args: any): Promise<any> {
     const rawSym = (args?.symbol || "");
     if (!SYMBOL_RE.test(rawSym)) return { error: "invalid symbol" };
     const sym = rawSym.toUpperCase();
-    if (name === "get_quote") { const m = await readJson("manifest.json"); const r = m?.symbols?.[sym]; return r ? { symbol: sym, ...r } : { error: "unknown symbol" }; }
+    if (name === "get_quote") {
+      const m = await readJson("manifest.json"); const r = m?.symbols?.[sym];
+      if (!r) return { error: "unknown symbol" };
+      const out: any = { symbol: sym, ...r };
+      // date the verdict so the copilot never asserts an old call as current
+      if (r.vts) {
+        out.verdict_date = r.vts;
+        const age = Math.floor((Date.now() - Date.parse(r.vts)) / 86_400_000);
+        if (Number.isFinite(age) && age > 21) out.verdict_note = `signal is ${age} days old — historical, not a current call`;
+      }
+      return out;
+    }
     if (name === "get_intel") { const i = await readJson(`${sym}.intel.json`); return i || { error: "no intel for symbol" }; }
     if (name === "get_backtest") { const b = await readJson(`${sym}.backtest.json`); return b ? { symbol: sym, metrics: b.metrics, n_trades: (b.trades || []).length, equity_mult: b.equity?.v?.slice(-1)[0], bh_total_return: b.equity?.bh_total_return } : { error: "no backtest" }; }
   }
@@ -35,7 +46,7 @@ async function runTool(name: string, args: any): Promise<any> {
     if (args?.verdict) rows = rows.filter((r) => (r.verdict || "").toUpperCase() === args.verdict.toUpperCase() || (args.verdict.toUpperCase() === "BUY" && ["BUY", "REBUY"].includes((r.verdict || "").toUpperCase())));
     if (args?.regime) rows = rows.filter((r) => (args.regime.toLowerCase().startsWith("bull") ? r.regimeBull : !r.regimeBull));
     rows.sort((a, b) => (b.wr ?? 0) - (a.wr ?? 0));
-    return { count: rows.length, results: rows.slice(0, 12).map((r) => ({ symbol: r.symbol, last: r.last, chg: r.chg, verdict: r.verdict, wr: r.wr, pf: r.pf, cagr: r.cagr, regimeBull: r.regimeBull })) };
+    return { count: rows.length, results: rows.slice(0, 12).map((r) => ({ symbol: r.symbol, last: r.last, chg: r.chg, verdict: r.verdict, verdict_date: r.vts ?? undefined, wr: r.wr, pf: r.pf, cagr: r.cagr, regimeBull: r.regimeBull })) };
   }
   return { error: "unknown tool" };
 }

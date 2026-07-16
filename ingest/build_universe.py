@@ -214,7 +214,11 @@ def reconcile_flagship_verdicts(symbols: dict[str, dict], out_dir: Path) -> dict
     builder (Phase 2), so the slices on disk here are already the v2 truth.
 
     For each row carrying a `verdict` (the rich/flagship set — plain search rows have no verdict key):
-      * slice present -> overwrite verdict with slice.indicator.state.last_signal (what the card reads);
+      * slice present -> overwrite verdict with the slice's SCORED verdict (last_scored_signal,
+                         falling back to last_signal for pre-scored-lane slices) + stamp `vts`
+                         (the scored marker's date) so downstream surfaces can age the call —
+                         a regime_blocked marker in the stream tail must never be published
+                         as the verdict (META 2026-07-15: blocked BUY became manifest BUY);
       * slice absent  -> the row is a dead inherited record (build_universe preserves old rows verbatim
                          and never recomputes wr/pf). DELETE its signal-derived keys so it demotes to a
                          plain search row rather than masquerading as a live call — deleting (not
@@ -230,7 +234,7 @@ def reconcile_flagship_verdicts(symbols: dict[str, dict], out_dir: Path) -> dict
             continue  # non-flagship search rows + too-short flagship (verdict None) — nothing to reconcile
         sp = out_dir / f"{sym}.slice.json"
         if not sp.exists():
-            for k in ("verdict", "wr", "pf", "cagr", "regimeBull"):
+            for k in ("verdict", "vts", "wr", "pf", "cagr", "regimeBull"):
                 rec.pop(k, None)  # demote dead inherited row to a plain (priceable) search row
             counts["demoted"] += 1
             continue
@@ -238,11 +242,16 @@ def reconcile_flagship_verdicts(symbols: dict[str, dict], out_dir: Path) -> dict
             state = json.loads(sp.read_text()).get("indicator", {}).get("state", {})
         except Exception:
             continue  # transient/corrupt read: leave the row rather than blank a live name
-        ls = state.get("last_signal")
+        ls = state.get("last_scored_signal") or state.get("last_signal")
         if not ls:
             continue
-        if ls != rec.get("verdict"):
+        vts = state.get("last_scored_ts")
+        if ls != rec.get("verdict") or vts != rec.get("vts"):
             rec["verdict"] = ls
+            if vts is not None:
+                rec["vts"] = vts
+            else:
+                rec.pop("vts", None)  # slice lost its scored date — don't publish a stale one
             counts["rederived"] += 1
         else:
             counts["matched"] += 1

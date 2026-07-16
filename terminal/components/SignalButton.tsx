@@ -4,6 +4,10 @@ interface Half {
   sub?: string | null;
   dim?: boolean;
   note?: string | null;
+  /** primary line is a stance (posture), not a signal event — renders in the stance style */
+  stance?: boolean;
+  /** a real dated event outside the scored lane (RECLAIM) — hollow, no full authority */
+  soft?: boolean;
 }
 
 interface Props {
@@ -20,9 +24,12 @@ export default function SignalButton({ oracle, desk, oracleLabel, deskLabel, vie
     oracleLabel + (oracle.note ? ` — ${oracle.note}` : "") +
     " · " +
     deskLabel + (desk.note ? ` — ${desk.note}` : "");
+  const oracleCls =
+    "sig-btn-half sig-btn-go" +
+    (oracle.stance ? " sig-btn-stance" : oracle.soft ? " sig-btn-soft" : oracle.dim ? " sig-btn-stale" : "");
   return (
     <button className="sig-btn" onClick={onView} title={title}>
-      <span className={"sig-btn-half sig-btn-go" + (oracle.dim ? " sig-btn-stale" : "")} style={{ ["--vc" as any]: oracle.color }}>
+      <span className={oracleCls} style={{ ["--vc" as any]: oracle.color }}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" fill="var(--vc)" />
         </svg>
@@ -31,7 +38,7 @@ export default function SignalButton({ oracle, desk, oracleLabel, deskLabel, vie
             and the absolutely-centered View pill sits exactly on their boundary */}
         <span className="sig-btn-vwrap">
           <span className="sig-btn-vd">{oracle.label}</span>
-          <span className="sig-btn-sub">{oracle.sub || " "}</span>
+          <span className="sig-btn-sub">{oracle.sub || " "}</span>
         </span>
       </span>
       <span className="sig-btn-seam">
@@ -44,7 +51,7 @@ export default function SignalButton({ oracle, desk, oracleLabel, deskLabel, vie
         <span className="sig-btn-lbl">{deskLabel}</span>
         <span className="sig-btn-vwrap">
           <span className="sig-btn-vd">{desk.label}</span>
-          <span className="sig-btn-sub">{desk.sub || " "}</span>
+          <span className="sig-btn-sub">{desk.sub || " "}</span>
         </span>
       </span>
     </button>
