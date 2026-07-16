@@ -3134,11 +3134,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       rebuildIndicators();
     } else {
       // ── incremental sub-pane edits ──
-      // osc membership change without add/remove of the pane itself → rebuild the osc pane in place
+      // osc membership change without add/remove of the pane itself → rebuild the osc pane in place.
+      // Add the fresh series BEFORE removing the stale ones so the shared pane never momentarily
+      // empties: an emptied pane is auto-removed by lightweight-charts, which slides every HIGHER
+      // sub-pane (macd, and any pine sub-pane) down one and would land the rebuilt osc series on top
+      // of whatever took its slot. Record the ACTUAL landed index, not the requested one.
       if (oscWanted && oscHave && !added.includes("osc") && !removed.includes("osc")) {
-        const arr = indSeriesRef.current.get("osc") || []; for (const s of arr) { try { chart.removeSeries(s); } catch {} }
+        const stale = indSeriesRef.current.get("osc") || [];
         const pane = paneMapRef.current.get("osc") ?? nextFreePane();
-        indSeriesRef.current.set("osc", buildOsc(chart, rows, closes, pane)); paneMapRef.current.set("osc", pane);
+        const fresh = buildOsc(chart, rows, closes, pane);
+        for (const s of stale) { try { chart.removeSeries(s); } catch {} }
+        indSeriesRef.current.set("osc", fresh); paneMapRef.current.set("osc", livePaneIndex(fresh) ?? pane);
       }
       // removals (highest sub-pane only, by the guard above)
       for (const r of removed) {
@@ -3160,14 +3166,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         indSeriesRef.current.set(a, series);
         // Claim the pane ONLY when the builder rendered ≥1 series: rvol/cvd return [] on daily, and a phantom
         // paneMapRef entry would both desync the next add's nextFreePane() index (splitting a later builder,
-        // as in buildAllIndicators) and mis-seat pine sub-panes below (buildAllPine reads paneMapRef).
-        if (series.length > 0) paneMapRef.current.set(a, pane);
+        // as in buildAllIndicators) and mis-seat pine sub-panes below (buildAllPine reads paneMapRef). Record
+        // the ACTUAL landed index (lightweight-charts clamps the requested one on creation), not `pane`.
+        if (series.length > 0) paneMapRef.current.set(a, livePaneIndex(series) ?? pane);
       }
       // ONLY when a built-in SUB-PANE was added/removed → re-seat pine sub-panes ABOVE the new built-in
       // panes so a pine pane index can't collide with a freshly-added built-in one. A pure overlay toggle
       // (ema/bb/vwap/vol on pane 0) leaves sub-pane indices untouched, so pine is left alone. (The
       // bounded-rebuild branch already rebuilt pine via buildAllIndicators.)
-      if ((added.length || removed.length) && pineScriptsRef.current.length && !isIntradayRef.current) { clearAllPine(); buildAllPine(rows); }
+      // clearAllPine() removes the pine pane(s), so a built-in appended ABOVE pine slides back down —
+      // re-derive paneMapRef from the LIVE indices BEFORE buildAllPine so it seeds pine at the true top
+      // (a stale-high seed clamp-splits a multi-plot pine script across two panes), then re-derive again
+      // AFTER so pinePaneMapRef holds the actual, not the requested, pane indices. Without this the
+      // requested-vs-actual drift compounds +1 per add/re-seat cycle and eventually splits a multi-series
+      // builder (e.g. macd: histogram in one pane, line+signal in the next).
+      if ((added.length || removed.length) && pineScriptsRef.current.length && !isIntradayRef.current) {
+        clearAllPine(); reindexSubPanesFromLive(); buildAllPine(rows); reindexSubPanesFromLive();
+      }
     }
 
     normalizeStretch();
@@ -3184,6 +3199,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     for (const idx of paneMapRef.current.values()) mx = Math.max(mx, idx);
     for (const idx of pinePaneMapRef.current.values()) mx = Math.max(mx, idx);
     return mx ? mx + 1 : 1;
+  };
+
+  // Actual (post-clamp / post-auto-remove) pane index of a tracked series array, or null if it has no
+  // live series. lightweight-charts clamps a requested pane index to panes.length on creation and
+  // auto-removes an emptied pane (sliding higher panes down), so a REQUESTED index we stored can drift
+  // from where the series actually sits — read it back off the series instead of trusting the map.
+  const livePaneIndex = (arr?: ISeriesApi<any>[] | null): number | null => {
+    const s = arr && arr[0]; if (!s) return null;
+    try { return s.getPane().paneIndex(); } catch { return null; }
+  };
+  // Collapse BOTH sub-pane maps (built-in indKey → pane, pine scriptId → pane) onto their live pane
+  // indices. Only touches keys already tracked as sub-panes (pane-0 overlays / overlay scripts are
+  // absent from these maps, so they're skipped). Used on the incremental path around the pine re-seat,
+  // where requested-vs-actual drift would otherwise compound each add cycle (see Effect 3).
+  const reindexSubPanesFromLive = () => {
+    for (const [k, arr] of indSeriesRef.current) { if (!paneMapRef.current.has(k)) continue; const p = livePaneIndex(arr); if (p != null) paneMapRef.current.set(k, p); }
+    for (const id of [...pinePaneMapRef.current.keys()]) { const p = livePaneIndex(pineSeriesRef.current.get(id)); if (p != null) pinePaneMapRef.current.set(id, p); }
   };
 
   // Bounded rebuild: drop every indicator series and re-add the full requested set in canonical order.
