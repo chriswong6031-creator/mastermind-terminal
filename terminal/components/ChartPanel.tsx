@@ -220,9 +220,8 @@ const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: 
 
 // ── the canonical sub-pane order (parity with the base's sequential pane assignment) ──
 // overlays (ema/bb/vwap/vol + new DT overlays) always live in pane 0.
-// rsi + stochrsi SHARE one sub-pane (the "osc" pane), exactly as the base did.
-// rsistack and accum each get their own sub-pane.
-const SUBPANE_ORDER = ["osc", "macd", "rsistack", "accum", "rvol", "ttmsq", "adx", "cvd"] as const;
+// every sub-pane indicator gets its OWN pane (rsi and stochrsi were formerly a shared "osc" pane).
+const SUBPANE_ORDER = ["rsi", "stochrsi", "macd", "rsistack", "accum", "rvol", "ttmsq", "adx", "cvd"] as const;
 
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
@@ -319,7 +318,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
   // ── indicator-legend + pane-management plumbing (grafted onto the persistent-chart model) ──
   // one entry per chart pane (price pane + each sub-pane); pane KEY is the sub-pane store key
-  // ("__price__" | "vol" | "osc" | "macd") so it survives an incremental sub-pane rebuild / reorder.
+  // ("__price__" | "rsi" | "macd" | …) so it survives an incremental sub-pane rebuild / reorder.
   const panesMeta = useRef<{ key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[]>([]);
   // collapse/maximize/resize state, keyed by pane key — survives reorder + indicator churn
   const paneCtl = useRef<{ collapsed: Set<string>; maximized: string | null; normal: Map<string, number> }>({ collapsed: new Set(), maximized: null, normal: new Map() });
@@ -496,12 +495,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     vs.setData(volData(rows));
     return [vs];
   };
-  // osc = the shared rsi+stochrsi pane (this build combines them into one pane)
-  const buildOsc = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
-    const out: ISeriesApi<any>[] = []; const inds = indicatorsRef.current;
-    if (inds.has("stochrsi")) { const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD); const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: "%K" }, pane); const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: "%D" }, pane); kS.setData(toLine(rows, sr.k)); dS.setData(toLine(rows, sr.d)); out.push(kS, dS); }
-    if (inds.has("rsi")) { const p = P("rsi"); const rS = chart.addSeries(LineSeries, { color: inds.has("stochrsi") ? "rgba(214,218,227,.5)" : p.col, lineWidth: p.width as any, lastValueVisible: true, title: "RSI" }, pane); rS.setData(toLine(rows, rsi(closes, p.length))); if (p.showLevels) { try { rS.createPriceLine({ price: p.obLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); rS.createPriceLine({ price: p.osLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {} } out.push(rS); }
-    return out;
+  // rsi and stochrsi each get their own pane (formerly combined into one shared "osc" pane)
+  const buildRsiPane = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
+    const p = P("rsi"); const rS = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lastValueVisible: true, title: "RSI" }, pane);
+    rS.setData(toLine(rows, rsi(closes, p.length)));
+    if (p.showLevels) { try { rS.createPriceLine({ price: p.obLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); rS.createPriceLine({ price: p.osLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {} }
+    return [rS];
+  };
+  const buildStochRsiPane = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
+    const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD);
+    const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: "%K" }, pane);
+    const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: "%D" }, pane);
+    kS.setData(toLine(rows, sr.k)); dS.setData(toLine(rows, sr.d));
+    return [kS, dS];
   };
   const buildMacd = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
     const p = P("macd"); const m = macd(closes, p.fast, p.slow, p.signal);
@@ -595,7 +601,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   };
 
   // Build ALL enabled scripts onto `rows`. Non-overlay scripts append sub-panes AFTER any built-in
-  // sub-panes (osc/macd) in the scripts' array order. Errors are captured per-script (legend), never thrown.
+  // sub-panes (rsi/macd/…) in the scripts' array order. Errors are captured per-script (legend), never thrown.
   const buildAllPine = (rows: Bar[]) => {
     const chart = chartRef.current; if (!chart) return;
     const scripts = pineScriptsRef.current; if (!scripts.length) return;
@@ -1008,7 +1014,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Which sub-pane keys are active given the current indicator set (canonical order).
   const activeSubpanes = (): string[] => {
     const inds = indicatorsRef.current; const out: string[] = [];
-    if (inds.has("rsi") || inds.has("stochrsi")) out.push("osc");
+    if (inds.has("rsi")) out.push("rsi");
+    if (inds.has("stochrsi")) out.push("stochrsi");
     if (inds.has("macd")) out.push("macd");
     if (inds.has("rsistack")) out.push("rsistack");
     if (inds.has("accum")) out.push("accum");
@@ -1079,8 +1086,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
   // Rebuild the per-pane legend registry from the CURRENT indicator series + paneMapRef. The price pane
   // carries the active overlay entries (ema/bb/vwap/vol + overlay scripts); each sub-pane carries its own
-  // indicator(s) / script, with the shared osc pane listing rsi and/or stochrsi separately. Any stale
-  // collapse/normal entries for panes that no longer exist are pruned so the sizing map can't leak.
+  // indicator / script. Any stale collapse/normal entries for panes that no longer exist are pruned so
+  // the sizing map can't leak.
   const rebuildPaneMeta = () => {
     const chart = chartRef.current, priceS = priceSeriesRef.current; if (!chart || !priceS) return;
     const inds = indicatorsRef.current;
@@ -1133,16 +1140,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     metas.push({ key: "__price__", isPrice: true, entries: overlayEntries, pane: priceS.getPane() });
     for (const key of SUBPANE_ORDER) {
       const arr = indSeriesRef.current.get(key); if (!arr || !arr.length) continue;
-      const entries: Omit<LegendEntry, "hidden">[] = key === "osc"
-        ? (["stochrsi", "rsi"] as const).filter((k) => inds.has(k)).map((k) => ({ key: k, label: labelOf(k), kind: "pane", isPine: false }))
-        : [{
-            key,
-            // rvol with an insufficient baseline (<3 prior sessions) carries the honest-null note
-            label: key === "rvol" && indOverlayRef.current["rvol_nobase"]
-              ? `${labelOf(key)} — ${tPlain("rvolNoBase")}`
-              : labelOf(key),
-            kind: "pane", isPine: false,
-          }];
+      const entries: Omit<LegendEntry, "hidden">[] = [{
+        key,
+        // rvol with an insufficient baseline (<3 prior sessions) carries the honest-null note
+        label: key === "rvol" && indOverlayRef.current["rvol_nobase"]
+          ? `${labelOf(key)} — ${tPlain("rvolNoBase")}`
+          : labelOf(key),
+        kind: "pane", isPine: false,
+      }];
       metas.push({ key, isPrice: false, entries, pane: arr[0].getPane() });
     }
     // pine SUB-PANE scripts, in their assigned-pane order
@@ -1151,12 +1156,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const arr = pineSeriesRef.current.get(s.id); if (!arr || !arr.length) continue;
       metas.push({ key: pineKeyOf(s.id), isPrice: false, entries: [pineLegendEntry(s, "pane", arr, pineErrRef.current.get(s.id))], pane: arr[0].getPane() });
     }
+    const prevKeys = new Set(panesMeta.current.map((m) => m.key));
     panesMeta.current = metas;
     // prune sizing/collapse state for panes that no longer exist
     const surv = new Set(metas.map((m) => m.key)); const ctl = paneCtl.current;
     for (const k of Array.from(ctl.collapsed)) if (!surv.has(k)) ctl.collapsed.delete(k);
     for (const k of Array.from(ctl.normal.keys())) if (!surv.has(k)) ctl.normal.delete(k);
     if (ctl.maximized && !surv.has(ctl.maximized)) ctl.maximized = null;
+    // a brand-new pane appearing (indicator/script just added) exits maximize — otherwise the
+    // new pane would be born flattened to ~2px behind the maximized one and look silently broken
+    if (ctl.maximized && metas.some((m) => !prevKeys.has(m.key))) ctl.maximized = null;
     // re-observe pane elements so separator drags / collapses reposition the overlay + rebaseline
     const pRO = paneRORef.current; if (pRO) { try { pRO.disconnect(); } catch {} for (const m of metas) { try { const pe = m.pane.getHTMLElement(); if (pe) pRO.observe(pe); } catch {} } }
     measureRef.current();
@@ -1168,9 +1177,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ── pane-control operations (read chart refs; safe to recreate every render) ──
   const keyOfPaneIndex = (pi: number) => { const m = panesMeta.current.find((x) => { try { return x.pane.paneIndex() === pi; } catch { return false; } }); return m?.key ?? null; };
   const measure = () => measureRef.current();
-  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); requestAnimationFrame(measure); };
+  // toggle-off is always allowed; toggle-ON is a no-op when there is no other pane to hide (a lone
+  // price pane already fills the chart — setting invisible sticky state would flatten panes added later)
+  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { if (panesMeta.current.length <= 1) return; ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); requestAnimationFrame(measure); };
   const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); requestAnimationFrame(measure); };
-  const collapseAllPanes = () => { const ctl = paneCtl.current; ctl.maximized = null; const subs = panesMeta.current.filter((m) => !m.isPrice).map((m) => m.key); if (!subs.length) return; const all = subs.every((k) => ctl.collapsed.has(k)); if (all) subs.forEach((k) => ctl.collapsed.delete(k)); else subs.forEach((k) => ctl.collapsed.add(k)); applyStretch(); requestAnimationFrame(measure); };
   const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {} requestAnimationFrame(measure); };
   const canMoveUp = (pi: number) => pi > 0;
   const canMoveDown = (pi: number) => pi < paneLayoutRef.current.length - 1;
@@ -1185,9 +1195,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // flip series visibility (eye toggle + tf-visibility) WITHOUT a chart/series rebuild
   const applyHidden = () => {
     const h = hiddenRef.current; const SB = indSeriesRef.current;
-    // rsi + stochrsi share the osc series list; toggle each series by which indicator it belongs to via its title
     for (const [k, arr] of SB) {
-      if (k === "osc") { for (const s of arr) { try { const ttl = ((s.options() as any)?.title || "").toUpperCase(); const own = ttl.includes("RSI") && !ttl.includes("%") ? "rsi" : "stochrsi"; s.applyOptions({ visible: !h.has(own) && tfVisible(own) } as any); } catch {} } continue; }
       const vis = !h.has(k) && tfVisible(k); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} }
     }
     // custom scripts: eye toggle by scriptId (no tf-visibility gating — scripts don't declare _vis)
@@ -1235,7 +1243,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let pane = 1;
     for (const key of activeSubpanes()) {
       let series: ISeriesApi<any>[] = [];
-      if (key === "osc") series = buildOsc(chart, rows, closes, pane);
+      if (key === "rsi") series = buildRsiPane(chart, rows, closes, pane);
+      else if (key === "stochrsi") series = buildStochRsiPane(chart, rows, closes, pane);
       else if (key === "macd") series = buildMacd(chart, rows, closes, pane);
       else if (key === "rsistack") series = buildRsiStack(chart, rows, pane);
       else if (key === "accum") series = buildAccum(chart, rows, pane);
@@ -1286,10 +1295,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const sArr = SB.get("vol"); if (sArr?.[0]) sArr[0].setData(volData(rows));
     }
     // sub-pane oscillators
-    if (SB.has("osc")) {
-      const sArr = SB.get("osc")!; let si = 0;
-      if (inds.has("stochrsi")) { const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD); if (sArr[si]) sArr[si].setData(toLine(rows, sr.k)); si++; if (sArr[si]) sArr[si].setData(toLine(rows, sr.d)); si++; }
-      if (inds.has("rsi")) { const p = P("rsi"); if (sArr[si]) sArr[si].setData(toLine(rows, rsi(closes, p.length))); }
+    if (SB.has("rsi")) {
+      const sArr = SB.get("rsi")!; const p = P("rsi");
+      if (sArr[0]) sArr[0].setData(toLine(rows, rsi(closes, p.length)));
+    }
+    if (SB.has("stochrsi")) {
+      const sArr = SB.get("stochrsi")!; const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD);
+      if (sArr[0]) sArr[0].setData(toLine(rows, sr.k));
+      if (sArr[1]) sArr[1].setData(toLine(rows, sr.d));
     }
     if (SB.has("macd")) {
       const sArr = SB.get("macd")!; const p = P("macd"); const m = macd(closes, p.fast, p.slow, p.signal);
@@ -2633,7 +2646,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     measureRef.current = measureImpl;
     const scheduleMeasure = () => { if (measRaf != null) return; measRaf = requestAnimationFrame(() => { measRaf = null; if (!dead) measureImpl(); }); };
 
-    // ── pane hover + double-click (collapse-all on the price pane, maximize on a sub-pane) ──
+    // ── pane hover + double-click (maximize-toggle on ANY pane: the tapped pane becomes the only
+    //    visible one; a second double-click/tap restores the previous layout) ──
     // B1: synthetic-hover suppression — touch pointerdown records the timestamp; onPaneMove
     // ignores synthetic mousemove events fired ≤700ms after a touch (iOS sends them after lift).
     onPaneMove = (e: MouseEvent) => {
@@ -2643,16 +2657,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (hk !== hoveredKeyRef.current) { hoveredKeyRef.current = hk; setHoveredKey(hk); }
     };
     onPaneLeave = () => { if (hoveredKeyRef.current !== null) { hoveredKeyRef.current = null; setHoveredKey(null); } };
+    // double-click on the price-axis band is the library's scale auto-fit gesture — exclude that
+    // X band from the pane maximize hit-test so axis-reset doesn't also flip the layout
+    const inAxisBand = (clientX: number, wr: DOMRect) => {
+      let axW = 0; try { axW = chartRef.current?.priceScale("right")?.width() ?? 0; } catch {}
+      return axW > 0 && clientX - wr.left > wr.width - axW;
+    };
     onPaneDbl = (e: MouseEvent) => {
       // B1: guard against iOS-synthesized dblclick double-fire after a touch double-tap
       if (performance.now() - lastDblHandledRef.current < 600) return;
       if ((e.target as Element)?.closest?.(".chart-overlays")) return; if (toolRef.current) return;
       const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect(); const y = e.clientY - wr.top;
+      if (inAxisBand(e.clientX, wr)) return;
       const p = paneLayoutRef.current.find((q) => y >= q.top && y <= q.top + q.height); if (!p) return;
-      if (p.isPrice) collapseAllPanes(); else doMaximize(p.paneIndex);
+      doMaximize(p.paneIndex);
     };
     // B1: touch double-tap handler — two qualifying taps (down→up <300ms, <12px displacement) within
-    // 350ms and <40px of each other → trigger the same pane collapse/maximize as dblclick.
+    // 350ms and <40px of each other → trigger the same pane maximize-toggle as dblclick.
     const onTouchDown = (e: PointerEvent) => {
       if (e.pointerType !== "touch") return;
       lastTouchTsRef.current = performance.now();   // for synthetic-hover suppression
@@ -2679,9 +2700,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           if (toolRef.current) return;
           const w = wrapElRef.current; if (!w) return;
           const wr = w.getBoundingClientRect(); const py = eu.clientY - wr.top;
+          if (inAxisBand(eu.clientX, wr)) return;
           const p = paneLayoutRef.current.find((q) => py >= q.top && py <= q.top + q.height); if (!p) return;
           lastDblHandledRef.current = performance.now();
-          if (p.isPrice) collapseAllPanes(); else doMaximize(p.paneIndex);
+          doMaximize(p.paneIndex);
         } else {
           lastTapRef.current = { t: performance.now(), x: eu.clientX, y: eu.clientY };
         }
@@ -3121,11 +3143,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (k === "pivots") indSeriesRef.current.set("pivots", buildPivots(rows));
     }
 
-    // ── the osc pane is a special case: rsi/stochrsi share it. If the pane persists but its
-    //    membership changed (added rsi to a stochrsi-only pane, etc.), rebuild JUST the osc pane
-    //    in place (its pane index is unchanged, so no higher-pane reindex). ──
-    const oscWanted = wantSub.includes("osc"), oscHave = haveSub.includes("osc");
-
     // ── sub-pane topology decision (§pane-topology decision table) ──
     // Compute whether the sub-pane change is a pure tail-append / highest-removal (incremental)
     // or forces reindexing a higher pane / inserting between (→ bounded rebuild).
@@ -3151,18 +3168,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       rebuildIndicators();
     } else {
       // ── incremental sub-pane edits ──
-      // osc membership change without add/remove of the pane itself → rebuild the osc pane in place.
-      // Add the fresh series BEFORE removing the stale ones so the shared pane never momentarily
-      // empties: an emptied pane is auto-removed by lightweight-charts, which slides every HIGHER
-      // sub-pane (macd, and any pine sub-pane) down one and would land the rebuilt osc series on top
-      // of whatever took its slot. Record the ACTUAL landed index, not the requested one.
-      if (oscWanted && oscHave && !added.includes("osc") && !removed.includes("osc")) {
-        const stale = indSeriesRef.current.get("osc") || [];
-        const pane = paneMapRef.current.get("osc") ?? nextFreePane();
-        const fresh = buildOsc(chart, rows, closes, pane);
-        for (const s of stale) { try { chart.removeSeries(s); } catch {} }
-        indSeriesRef.current.set("osc", fresh); paneMapRef.current.set("osc", livePaneIndex(fresh) ?? pane);
-      }
       // removals (highest sub-pane only, by the guard above)
       for (const r of removed) {
         if (r === "ttmsq" && ttmsqMarkersRef.current) { try { ttmsqMarkersRef.current.detach(); } catch {} ttmsqMarkersRef.current = null; }
@@ -3172,7 +3177,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       for (const a of added) {
         const pane = nextFreePane();
         let series: ISeriesApi<any>[] = [];
-        if (a === "osc") series = buildOsc(chart, rows, closes, pane);
+        if (a === "rsi") series = buildRsiPane(chart, rows, closes, pane);
+        else if (a === "stochrsi") series = buildStochRsiPane(chart, rows, closes, pane);
         else if (a === "macd") series = buildMacd(chart, rows, closes, pane);
         else if (a === "rsistack") series = buildRsiStack(chart, rows, pane);
         else if (a === "accum") series = buildAccum(chart, rows, pane);
