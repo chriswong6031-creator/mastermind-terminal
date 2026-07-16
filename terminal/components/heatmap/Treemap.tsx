@@ -3,19 +3,20 @@
  * Treemap.tsx — squarified treemap in pure SVG/React (zero new npm deps).
  *
  * HONESTY DOCTRINE:
- *   - PRICE layer: color = %chg (1D real). Dead-zone |chg| < 0.10 → flat dark.
- *   - FLOW layer: color = tone field (pos/neg/neutral). Dead-zone = "neutral".
- *     Call-share dead-zone ±0.08 → "MIXED" gray (not used for color here —
- *     we use the `tone` field which is ΔOI-based and reliability-labeled).
+ *   - PRICE layer: color = %chg (1D real). Flat neutral dead-zone |chg| < 0.05.
+ *   - FLOW layer: color = SIGNED net premium. Sign → hue (a SOFT tape signal),
+ *     |$M| → brightness (reliable). Near-flat (|$M| < 0.3) → dim neutral slate;
+ *     no-flow → dim graphite. No confident directional read from a dim tile.
  *   - Size = EQUAL / CAP (dollar-volume proxy, manifest has price×vol) / PREMIUM.
  *   - No directional buy/sell assertions anywhere in this component.
  *
- * DESIGN: Matches MomoEdge visual fidelity:
+ * DESIGN: flat Finviz/TradingView tiles, matching the Macro Dashboard heatmap.
  *   - Sector blocks with dark header bands, abbrev label + avg chg.
- *   - Tiles: ticker bold centered, %chg below. Font scales with tile size.
- *   - Labels hidden below min size (same threshold as MomoEdge ~20×10).
- *   - Color ramp: stepped intensity gradient (t = min(|chg|/4, 1) — exact port).
- *   - Dead-zone: |chg| < 0.10 → near-black (no color bleed at flatline).
+ *   - Tiles: ONE solid fill (no per-tile gradient, no gloss), ticker bold
+ *     centered, %chg below; white ink + a dark text-shadow so labels stay legible
+ *     on the brightest bins. Labels hidden below min size (~20×10).
+ *   - Binned price color: edges 1/2/3% + a sub-1% half-step, each hue mixed toward
+ *     a dark neutral slate (mirrors the Macro Dashboard bin palette).
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -23,27 +24,9 @@ import type { HeatmapTile, Layer, SizingMode, SectorBlock, TreemapNode, LayoutRe
 import { SECTOR_LABEL, SECTOR_ORDER } from "./sectorMap";
 import type { GicsSector } from "./types";
 
-// ─── Color scales (ported from MomoEdge heatmap-widget.js priceTileColor / flowTileColor) ──
-
-/** Price tile gradient. Dead-zone = |chg| < 0.10. MomoEdge ramp, theme-flippable. */
-function priceColor(chg: number): { top: string; bot: string } {
-  if (Math.abs(chg) < 0.10) {
-    return { top: "rgb(24,28,36)", bot: "rgb(16,20,26)" };
-  }
-  const t = Math.min(Math.abs(chg) / 4, 1);
-  const t2 = t * t;
-  const greenC = {
-    top: `rgb(${Math.round(5 + t * 3)},${Math.round(25 + t2 * 175)},${Math.round(15 + t2 * 68)})`,
-    bot: `rgb(${Math.round(3 + t * 2)},${Math.round(12 + t2 * 80)},${Math.round(8 + t2 * 30)})`,
-  };
-  const redC = {
-    top: `rgb(${Math.round(40 + t2 * 215)},${Math.round(8 + t * 15)},${Math.round(12 + t2 * 56)})`,
-    bot: `rgb(${Math.round(20 + t2 * 95)},${Math.round(5 + t * 8)},${Math.round(8 + t2 * 24)})`,
-  };
-  // Up-moves use the "up" hue; the East-Asian theme makes that red, not green.
-  const upIsGreen = !HM_EAST;
-  return (chg > 0) === upIsGreen ? greenC : redC;
-}
+// ─── Flat binned color scale (Finviz / TradingView style — matches the Macro
+//     Dashboard S&P heatmap). Each tile is ONE solid color; brightness steps with
+//     the move's bin. No per-tile top→bot gradient and no gloss overlay. ──
 
 // Theme-aligned palette. Defaults match --up #26c281 / --down #f0566b, but the
 // live values are read from CSS (--up-rgb / --down-rgb) so the East-Asian red-up
@@ -52,6 +35,19 @@ type Triplet = readonly [number, number, number];
 const HM_UP_DEFAULT: Triplet = [38, 194, 129];
 const HM_DN_DEFAULT: Triplet = [240, 86, 107];
 const HM_SLATE: Triplet = [92, 108, 136];
+// Flat ~0% tile: dark slate so the white label stays legible (macro-dashboard neutral).
+const HM_NEUTRAL: Triplet = [41, 46, 57];
+// No-flow padding tile — distinct dim graphite so "no data" ≠ "flat flow".
+const HM_NODATA: Triplet = [24, 27, 34];
+
+// 1D bin edges (%) — mirror the Macro Dashboard BASE_EDGES and the "bins ±1/2/3" legend.
+const HM_EDGES: readonly [number, number, number] = [1, 2, 3];
+// Fraction of the full up/down hue per bin level (the remainder is the neutral slate).
+// lvl 0 = sub-1% half-step, 1 = ≥1%, 2 = ≥2%, 3 = ≥3%. Matches macro P[0.5/1/2/3].
+const HM_BIN_FRAC = [0.26, 0.46, 0.82, 1] as const;
+// Moves smaller than this read as flat neutral, never a faint tint.
+const HM_FLAT_DZ = 0.05;
+const HM_PREM_CAP = 250; // $M — log ceiling for flow premium intensity
 
 function readTriplet(name: string, fallback: Triplet): Triplet {
   if (typeof window === "undefined") return fallback;
@@ -67,37 +63,64 @@ export function heatPalette(): { up: Triplet; down: Triplet } {
 // module-level color helpers below flip with the theme without threading params.
 let HM_UP: Triplet = HM_UP_DEFAULT;
 let HM_DN: Triplet = HM_DN_DEFAULT;
-let HM_EAST = false; // red-up (East-Asian) theme active → price/flow hue flips
-const rgbStr = (t: Triplet) => t.join(",");
-const HM_TILE_BASE: readonly [number, number, number] = [21, 25, 32];
-// No-flow padding tile — distinct dim graphite so "no data" ≠ "flat flow".
-const HM_NODATA = { top: "rgb(18,21,27)", bot: "rgb(13,15,20)" } as const;
+const rgbStr = (t: Triplet) => t.join(",");            // bare "r,g,b" for rgba(...) interpolation
+const rgbCss = (t: Triplet) => `rgb(${t.join(",")})`;  // full rgb(...) for solid fills
 
-function hmMix(a: number, b: number, f: number): number { return Math.round(a + (b - a) * f); }
-/** Ramp a dark tile base toward `target` by intensity t (0..1); bot is a darker twin for the glassy gradient. */
-function hmRamp(target: readonly [number, number, number], t: number): { top: string; bot: string } {
-  const top = target.map((c, i) => hmMix(HM_TILE_BASE[i], c, t));
-  const bot = target.map((c, i) => hmMix(HM_TILE_BASE[i], c, t * 0.6));
-  return { top: `rgb(${top.join(",")})`, bot: `rgb(${bot.join(",")})` };
+// Blend `target` over `base` by fraction f (f=1 → full target, f=0 → base).
+function mixTriplet(target: Triplet, base: Triplet, f: number): Triplet {
+  return [
+    Math.round(target[0] * f + base[0] * (1 - f)),
+    Math.round(target[1] * f + base[1] * (1 - f)),
+    Math.round(target[2] * f + base[2] * (1 - f)),
+  ] as unknown as Triplet;
 }
 
-const HM_PREM_CAP = 250; // $M — log ceiling for premium intensity
+/**
+ * Flat price tile color. up/dn hues already carry the active theme — the
+ * East-Asian red-up mode flips --up-rgb/--down-rgb, so HM_UP is red there and no
+ * manual hue swap is needed. Sub-dead-zone moves read as the flat neutral slate.
+ */
+function priceColor(chg: number): string {
+  if (chg == null || Number.isNaN(chg)) return rgbCss(HM_NEUTRAL);
+  const a = Math.abs(chg);
+  if (a < HM_FLAT_DZ) return rgbCss(HM_NEUTRAL);
+  const lvl = a >= HM_EDGES[2] ? 3 : a >= HM_EDGES[1] ? 2 : a >= HM_EDGES[0] ? 1 : 0;
+  return rgbCss(mixTriplet(chg > 0 ? HM_UP : HM_DN, HM_NEUTRAL, HM_BIN_FRAC[lvl]));
+}
 
 /**
- * Flow tile color by SIGNED net premium (the number shown on the tile).
+ * Flat flow tile color by SIGNED net premium (the number shown on the tile).
  *   sign  → hue: + = net-call/bullish (up color), − = net-put/bearish (down color)
- *   |$M|  → intensity via log10 so the median ~$0.4M name is a visible dim tone,
- *           not the near-black the old tone-only ramp produced for ~84% of names.
+ *   |$M|  → intensity via log10 so the median ~$0.4M name is a visible dim tone.
  * HONESTY: net-premium SIGN is a soft tape signal (see the "direction is soft"
  * caption); MAGNITUDE is reliable and always drives brightness.
  */
-function flowColor(tile: HeatmapTile): { top: string; bot: string } {
-  if (!tile.hasFlow) return HM_NODATA;
+function flowColor(tile: HeatmapTile): string {
+  if (!tile.hasFlow) return rgbCss(HM_NODATA);
   const v = tile.netPremiumMn ?? 0;
   const mag = Math.abs(v);
-  if (mag < 0.3) return hmRamp(HM_SLATE, 0.24); // effectively flat → dim neutral slate
-  const t = Math.max(0.22, Math.min(Math.log10(1 + mag) / Math.log10(1 + HM_PREM_CAP), 1));
-  return hmRamp(v > 0 ? HM_UP : HM_DN, t);
+  if (mag < 0.3) return rgbCss(mixTriplet(HM_SLATE, HM_NEUTRAL, 0.4)); // ~flat → dim slate
+  const t = Math.max(0.3, Math.min(Math.log10(1 + mag) / Math.log10(1 + HM_PREM_CAP), 1));
+  return rgbCss(mixTriplet(v > 0 ? HM_UP : HM_DN, HM_NEUTRAL, t));
+}
+
+/**
+ * Legend colors for the live theme.
+ *   swatches: discrete PRICE bins in ascending intensity (½/1/2/3) for each side,
+ *             so every price tile color — including the sub-1% half-step — is keyed.
+ *   flowGrad: endpoint hues for a CONTINUOUS flow-layer bar (flow tiles use a
+ *             continuous log-magnitude ramp, not bins).
+ */
+export function heatSwatches(): { down: string[]; neutral: string; up: string[]; flowDown: string; flowUp: string } {
+  const p = heatPalette();
+  const mk = (target: Triplet, f: number) => rgbCss(mixTriplet(target, HM_NEUTRAL, f));
+  return {
+    down: HM_BIN_FRAC.map((f) => mk(p.down, f)),   // ½,1,2,3
+    neutral: rgbCss(HM_NEUTRAL),
+    up: HM_BIN_FRAC.map((f) => mk(p.up, f)),        // ½,1,2,3
+    flowDown: rgbCss(p.down),
+    flowUp: rgbCss(p.up),
+  };
 }
 
 // ─── Squarified treemap algorithm ─────────────────────────────────────────────
@@ -325,7 +348,7 @@ export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }
 
   // Refresh the module palette from the active theme before any tile color is
   // computed this render (flowColor/priceColor/sector stroke read these).
-  { const p = heatPalette(); HM_UP = p.up; HM_DN = p.down; HM_EAST = p.up[0] > p.up[1]; }
+  { const p = heatPalette(); HM_UP = p.up; HM_DN = p.down; }
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -358,43 +381,13 @@ export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }
 
   const zh = lang === "zh";
 
-  // Pre-generate gradient ids for all tiles
-  const gradId = useCallback((ticker: string) => {
-    return `hm-g-${ticker.replace(/[^a-zA-Z0-9]/g, "_")}`;
-  }, []);
-
   return (
     <div ref={containerRef} style={TREEMAP_CONTAINER} onMouseLeave={handleMouseLeave}>
       <svg width={dims.w} height={dims.h} style={{ display: "block" }}>
         <style>{`
-          .hm-tile { transition: filter .14s ease; }
-          .hm-tile:hover { filter: brightness(1.16) saturate(1.08); }
+          .hm-tile { transition: filter .12s ease; }
+          .hm-tile:hover { filter: brightness(1.1); }
         `}</style>
-        <defs>
-          {/* Shared top "glass" highlight for larger tiles */}
-          <linearGradient id="hm-gloss" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(255,255,255,0.14)" />
-            <stop offset="100%" stopColor="rgba(255,255,255,0)" />
-          </linearGradient>
-          {blocks.flatMap(block =>
-            block.nodes.map(node => {
-              const tile = node.tile;
-              const colors = layer === "price"
-                ? priceColor(tile.chg1d)
-                : flowColor(tile);
-              return (
-                <linearGradient
-                  key={`grad-${tile.ticker}`}
-                  id={gradId(tile.ticker)}
-                  x1="0" y1="0" x2="0" y2="1"
-                >
-                  <stop offset="0%" stopColor={colors.top} />
-                  <stop offset="100%" stopColor={colors.bot} />
-                </linearGradient>
-              );
-            })
-          )}
-        </defs>
 
         {blocks.map(block => (
           <SectorBlockGroup
@@ -402,7 +395,6 @@ export function Treemap({ tiles, layer, sizing, selectedTicker, onSelect, lang }
             block={block}
             layer={layer}
             selectedTicker={selectedTicker}
-            gradId={gradId}
             onTileMouseEnter={handleTileMouseEnter}
             onTileClick={handleTileClick}
             zh={zh}
@@ -423,14 +415,13 @@ interface SectorBlockGroupProps {
   block: SectorBlock;
   layer: Layer;
   selectedTicker: string | null;
-  gradId: (ticker: string) => string;
   onTileMouseEnter: (tile: HeatmapTile, cx: number, cy: number) => void;
   onTileClick: (tile: HeatmapTile) => void;
   zh: boolean;
 }
 
 function SectorBlockGroup({
-  block, layer, selectedTicker, gradId, onTileMouseEnter, onTileClick,
+  block, layer, selectedTicker, onTileMouseEnter, onTileClick,
 }: SectorBlockGroupProps) {
   const abbrev = SECTOR_LABEL[block.sector] ?? block.sector;
   const hH = getHeaderH(block.h);
@@ -554,13 +545,14 @@ function SectorBlockGroup({
       {block.nodes.map(node => {
         const area = node.w * node.h;
         if (area < MIN_TILE_AREA) return null;
+        const fill = layer === "price" ? priceColor(node.tile.chg1d) : flowColor(node.tile);
         return (
           <TileRect
             key={node.tile.ticker}
             node={node}
             layer={layer}
             isSelected={selectedTicker === node.tile.ticker}
-            gradId={gradId(node.tile.ticker)}
+            fill={fill}
             onMouseEnter={onTileMouseEnter}
             onClick={onTileClick}
           />
@@ -576,12 +568,12 @@ interface TileRectProps {
   node: TreemapNode;
   layer: Layer;
   isSelected: boolean;
-  gradId: string;
+  fill: string;
   onMouseEnter: (tile: HeatmapTile, cx: number, cy: number) => void;
   onClick: (tile: HeatmapTile) => void;
 }
 
-function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick }: TileRectProps) {
+function TileRect({ node, layer, isSelected, fill, onMouseEnter, onClick }: TileRectProps) {
   const { x, y, w, h, tile } = node;
 
   // Font sizing — mirrors MomoEdge: tFs = min(w/4.5, h/2.2, 16), cFs = min(w/6, h/3.5, 12)
@@ -600,8 +592,7 @@ function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick }: Ti
       ? `$${tile.netPremiumMn.toFixed(1)}M`
       : "";
 
-  const rx = w > 26 && h > 20 ? 4 : 2;
-  const glass = w > 46 && h > 30;
+  const rx = w > 26 && h > 20 ? 3 : 2;
 
   return (
     <g
@@ -620,23 +611,11 @@ function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick }: Ti
         y={y + 0.9}
         width={Math.max(0, w - 1.8)}
         height={Math.max(0, h - 1.8)}
-        fill={`url(#${gradId})`}
+        fill={fill}
         stroke={isSelected ? "var(--brand, #00e5ff)" : "rgba(255,255,255,0.05)"}
         strokeWidth={isSelected ? 2 : 0.4}
         rx={rx}
       />
-      {/* Glass top-edge highlight */}
-      {glass && (
-        <rect
-          x={x + 1.4}
-          y={y + 1.4}
-          width={Math.max(0, w - 2.8)}
-          height={Math.min(h * 0.42, 12)}
-          fill="url(#hm-gloss)"
-          rx={rx}
-          style={{ pointerEvents: "none" }}
-        />
-      )}
 
       {showTicker && (
         <text
@@ -647,7 +626,7 @@ function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick }: Ti
           fontSize={tFs}
           fontWeight={700}
           fill="#f8fafc"
-          style={{ userSelect: "none", fontFamily: "var(--font-ui, sans-serif)", letterSpacing: "0.01em", pointerEvents: "none" }}
+          style={{ userSelect: "none", fontFamily: "var(--font-ui, sans-serif)", letterSpacing: "0.01em", pointerEvents: "none", textShadow: "0 1px 2px rgba(0,0,0,0.55)" }}
         >
           {tile.ticker}
         </text>
@@ -661,12 +640,13 @@ function TileRect({ node, layer, isSelected, gradId, onMouseEnter, onClick }: Ti
           dominantBaseline="middle"
           fontSize={cFs}
           fontWeight={600}
-          fill="rgba(255,255,255,0.85)"
+          fill="rgba(255,255,255,0.92)"
           style={{
             userSelect: "none",
             fontFamily: "var(--font-num, monospace)",
             fontVariantNumeric: "tabular-nums",
             pointerEvents: "none",
+            textShadow: "0 1px 2px rgba(0,0,0,0.55)",
           }}
         >
           {valueLabel}
