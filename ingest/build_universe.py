@@ -9,6 +9,10 @@ and writes two things the Next app serves out of terminal/public/data/:
                              HKEX / TSX / Crypto — rendered on the right of each
                              search row (TradingView-style). The existing rich
                              records (price / verdict / backtest) are preserved.
+                             US names are additionally enriched with real GICS
+                             sector (`gics`) and USD market cap (`mcap`) from the
+                             macro repo's Polygon reference cache — null-honest:
+                             names without reference data carry no gics/mcap keys.
   * <SYMBOL>.json          — chart OHLC (same contract as sample_from_macro.py,
                              so chart.js renders it unchanged) for every name we
                              have a price store for. Symbols with no OHLC stay
@@ -20,6 +24,10 @@ Markets & sources (relative to MACRO_REPO):
     HK      data/hk_breadth/constituents.parquet  +  data/hk_stocks/<T>.parquet
     Canada  data/canada_search/members.parquet    +  (no OHLC store yet)
     Intl    data/intl_search/members.parquet      +  data/intl_stocks/<T>.parquet (OHLC via backfill_ohlc.py)
+
+GICS sector + market cap (US only): MACRO_REPO/data/polygon_universe/reference.parquet,
+built by the macro repo's scripts/build_polygon_universe.py (S&P-500-scale coverage,
+~500 names of the ~8.7k universe — everything else stays sector-less by design).
 
 Usage:
     MACRO_REPO=/path/to/macro python ingest/build_universe.py            # manifest only
@@ -53,6 +61,10 @@ EXCH_CACHE = ROOT / "ingest" / ".polygon_exchanges.json"
 # Schema sentinel for the exchange cache: must cover CS + ADRC to give ADRs NYSE/NASDAQ labels.
 # Absent or mismatched sentinel triggers a fresh two-type fetch (auto-heals old CS-only cache).
 _EXCH_SCHEMA = "cs+adrc-v1"
+
+# Polygon reference-universe cache (GICS sector + market cap), built by the macro
+# repo's scripts/build_polygon_universe.py. Optional input: absent → no enrichment.
+_REF_PARQUET = MACRO / "data" / "polygon_universe" / "reference.parquet"
 
 
 # ---------------------------------------------------------------- market labels
@@ -200,6 +212,35 @@ def us_exchange_map() -> dict[str, str]:
     return out
 
 
+# ------------------------------------------------ polygon reference (GICS + mcap)
+def _load_polygon_reference() -> tuple[dict[str, str], dict[str, float]]:
+    """Load GICS sector + market cap from the macro repo's Polygon reference cache.
+
+    Returns ({ticker: gics_sector}, {ticker: market_cap_usd}).
+    Null-honest: returns empty dicts if the cache is absent (graceful degradation).
+    """
+    if not _REF_PARQUET.exists():
+        print(f"  [ref] Polygon reference cache not found: {_REF_PARQUET} — skipping GICS/mcap enrichment")
+        return {}, {}
+    try:
+        df = pd.read_parquet(_REF_PARQUET)
+        gics: dict[str, str] = {}
+        mcap: dict[str, float] = {}
+        for t, row in df.iterrows():
+            t = str(t)
+            sec = row.get("gics_sector")
+            if sec and not pd.isna(sec):
+                gics[t] = str(sec)
+            mc = row.get("market_cap_usd")
+            if mc and not pd.isna(mc) and float(mc) > 0:
+                mcap[t] = float(mc)
+        print(f"  [ref] loaded {len(gics)} GICS + {len(mcap)} mcap from {_REF_PARQUET.name}")
+        return gics, mcap
+    except Exception as e:
+        print(f"  [ref] Polygon reference load failed: {e} — skipping enrichment")
+        return {}, {}
+
+
 # ------------------------------------------------------ flagship verdict reconcile
 def reconcile_flagship_verdicts(symbols: dict[str, dict], out_dir: Path) -> dict[str, int]:
     """Make every rich manifest row's verdict agree with the v2 slice the card actually reads.
@@ -293,6 +334,19 @@ def main(argv: list[str]) -> None:
         else:
             rec["mkt"] = exch.get(sym, "US")
 
+    # 1b) enrich existing rich records with GICS sector + market cap (null-honest;
+    #     order-safe vs the verdict reconcile at 2.5 — demotion only pops verdict-family keys)
+    gics_map, mcap_map = _load_polygon_reference()
+    before_gics = sum(1 for r in symbols.values() if r.get("gics"))
+    for sym, rec in symbols.items():
+        if gics_map.get(sym) and not rec.get("gics"):
+            rec["gics"] = gics_map[sym]
+        if mcap_map.get(sym) and rec.get("mcap") is None:
+            rec["mcap"] = mcap_map[sym]
+    after_gics = sum(1 for r in symbols.values() if r.get("gics"))
+    if gics_map:
+        print(f"  [ref] GICS enriched: {before_gics} → {after_gics} existing records")
+
     # 2) fold in every per-market universe (search rows + colour + market tag)
     added = {k: 0 for k, *_ in STORES}
     ohlc_written = {k: 0 for k, *_ in STORES}
@@ -325,7 +379,15 @@ def main(argv: list[str]) -> None:
                     mkt = _clean_name(meta.at[tk, "market"], None) or exch.get(tk, "US")
                 else:
                     mkt = exch.get(tk, "US")
-                symbols[tk] = {"name": name, "sec": "Equities", "col": color_for(tk), "mkt": mkt}
+                new_rec: dict = {"name": name, "sec": "Equities", "col": color_for(tk), "mkt": mkt}
+                if key == "US":  # GICS/mcap enrichment (null-honest — only US has reference data)
+                    g = gics_map.get(tk)
+                    if g:
+                        new_rec["gics"] = g
+                    mc = mcap_map.get(tk)
+                    if mc:
+                        new_rec["mcap"] = mc
+                symbols[tk] = new_rec
                 added[key] += 1
 
             if do_ohlc and (sample_left is None or sample_left > 0):
@@ -368,10 +430,21 @@ def main(argv: list[str]) -> None:
     man_path.write_text(json.dumps(manifest, separators=(",", ":")))
 
     by_mkt: dict[str, int] = {}
+    by_gics: dict[str, int] = {}
     for r in symbols.values():
         by_mkt[r.get("mkt", "?")] = by_mkt.get(r.get("mkt", "?"), 0) + 1
-    print(f"\nmanifest: {len(symbols)} searchable symbols, as_of {manifest.get('as_of')}")
+        if r.get("gics"):
+            by_gics[r["gics"]] = by_gics.get(r["gics"], 0) + 1
+    total = len(symbols)
+    with_gics = sum(1 for r in symbols.values() if r.get("gics"))
+    with_mcap = sum(1 for r in symbols.values() if r.get("mcap"))
+    print(f"\nmanifest: {total} searchable symbols, as_of {manifest.get('as_of')}")
+    print(f"  GICS sector  : {with_gics}/{total} ({100*with_gics/total:.1f}%)")
+    print(f"  market cap   : {with_mcap}/{total} ({100*with_mcap/total:.1f}%)")
     print("  by market:", dict(sorted(by_mkt.items(), key=lambda kv: -kv[1])))
+    if by_gics:
+        print("  by GICS sector (top 5):",
+              dict(sorted(by_gics.items(), key=lambda kv: -kv[1])[:5]))
 
 
 if __name__ == "__main__":
