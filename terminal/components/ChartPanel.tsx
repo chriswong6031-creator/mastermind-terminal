@@ -1067,6 +1067,37 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       try { m.pane.setStretchFactor(s); } catch {}
     }
+    applyMaximizeDom();
+  };
+  // Seamless maximize: stretch factors alone can't fully hide the other panes —
+  // the library floors EVERY pane at 2px (adjustSizeImpl's Math.max(h, 2)) plus
+  // 1px separator rows, so a "maximized" pane leaked compressed slivers of its
+  // neighbors at the top/bottom. While maximized, DOM-hide every other pane row
+  // and every separator row (each pane is a <tr>; separators are sibling <tr>s;
+  // the last row is the time axis and stays). Restore display on exit. The wrap
+  // background matches the chart background, so the few px the hidden rows gave
+  // up are invisible below the time axis.
+  const applyMaximizeDom = () => {
+    const ctl = paneCtl.current;
+    const paneEls: HTMLElement[] = [];
+    let maxedEl: HTMLElement | null = null;
+    for (const m of panesMeta.current) {
+      try {
+        const el = m.pane.getHTMLElement();
+        if (el) { paneEls.push(el); if (ctl.maximized === m.key) maxedEl = el; }
+      } catch {}
+    }
+    const tbody = paneEls[0]?.parentElement;
+    if (!tbody) return;
+    const rows = Array.from(tbody.children) as HTMLElement[];
+    const paneRows = new Set<HTMLElement>(paneEls);
+    const lastRow = rows[rows.length - 1]; // time-axis row
+    for (const row of rows) {
+      if (row === lastRow) continue; // time-axis row: its display is library-managed (timeScale.visible)
+      const hide = maxedEl != null && (paneRows.has(row) ? row !== maxedEl : true);
+      const want = hide ? "none" : "";
+      if (row.style.display !== want) row.style.display = want;
+    }
   };
   // legacy call-site name kept: every builder path calls normalizeStretch(). It now rebuilds the pane
   // registry (from the freshly-assigned paneMapRef), sizes via applyStretch, and re-applies the
@@ -1183,11 +1214,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const measure = () => measureRef.current();
   // toggle-off is always allowed; toggle-ON is a no-op when there is no other pane to hide (a lone
   // price pane already fills the chart — setting invisible sticky state would flatten panes added later)
-  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { if (panesMeta.current.length <= 1) return; ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); requestAnimationFrame(measure); };
-  const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); requestAnimationFrame(measure); };
-  const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {} requestAnimationFrame(measure); };
-  const canMoveUp = (pi: number) => pi > 0;
-  const canMoveDown = (pi: number) => pi < paneLayoutRef.current.length - 1;
+  // after toggling, re-render the price-pane-anchored overlay layers (signals/gap zones, drawings,
+  // ind fills, price tag) — they gate themselves off while a sub-pane is maximized and must clear/
+  // restore NOW, not on the next pan/zoom.
+  const rerenderOverlays = () => { try { renderSignalsRef.current(); renderRef.current(); renderTagRef.current?.(); } catch {} };
+  const doMaximize = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; if (ctl.maximized === key) ctl.maximized = null; else { if (panesMeta.current.length <= 1) return; ctl.maximized = key; ctl.collapsed.delete(key); } applyStretch(); rerenderOverlays(); requestAnimationFrame(measure); };
+  const doCollapse = (pi: number) => { const key = keyOfPaneIndex(pi); if (!key) return; const ctl = paneCtl.current; ctl.maximized = null; if (ctl.collapsed.has(key)) ctl.collapsed.delete(key); else ctl.collapsed.add(key); applyStretch(); rerenderOverlays(); requestAnimationFrame(measure); };
+  // applyStretch() after the swap re-runs applyMaximizeDom so the row-hiding tracks the panes'
+  // NEW positions if anything ever moves a pane while maximized (the ops buttons are gated off
+  // in that state, but programmatic paths stay safe).
+  const doMove = (pi: number, dir: -1 | 1) => { const ch = chartRef.current; if (!ch) return; const tgt = pi + dir; let n = 1; try { n = ch.panes().length; } catch {} if (tgt < 0 || tgt >= n) return; try { ch.swapPanes(pi, tgt); } catch {} applyStretch(); requestAnimationFrame(measure); };
+  // moves are disabled while a pane is maximized: the overlay layout is filtered to the single
+  // visible pane then (up/down would disagree), and reordering an invisible stack is meaningless.
+  const canMoveUp = (pi: number) => !paneCtl.current.maximized && pi > 0;
+  const canMoveDown = (pi: number) => { if (paneCtl.current.maximized) return false; let n = paneLayoutRef.current.length; try { const ch = chartRef.current; if (ch) n = ch.panes().length; } catch {} return pi < n - 1; };
   // visibility-on-intervals: is this indicator allowed to show on the current timeframe? (Settings → Visibility)
   const tfVisible = (k: string) => {
     const v = (indParamsRef.current[k] || {})._vis; if (!v) return true;
@@ -1644,7 +1684,35 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           g.fillStyle = bg;
           g.fillRect(0, 0, out.width, out.height);
           // Draw chart upscaled from its native resolution to TARGET_SCALE.
-          g.drawImage(src, 0, HDR, chartW, chartH);
+          // While a pane is maximized the DOM hides the other pane rows, but
+          // takeScreenshot() rasterizes the library's INTERNAL layout (which
+          // still holds 2px slivers + 1px separators for the hidden panes) —
+          // crop the raster to [maximized pane] + [time axis] so the PNG
+          // matches the on-screen view instead of leaking the slivers.
+          let srcDrawn = false;
+          const ctlSnap = paneCtl.current;
+          if (ctlSnap.maximized) {
+            try {
+              const ch = chartRef.current!;
+              const mMeta = panesMeta.current.find((m) => m.key === ctlSnap.maximized);
+              const maxIdx = mMeta ? mMeta.pane.paneIndex() : -1;
+              const nP = ch.panes().length;
+              if (maxIdx >= 0 && nP > 1) {
+                let mTop = 0;
+                for (let i = 0; i < maxIdx; i++) mTop += ch.paneSize(i).height + 1; // +1px separator
+                const mH = ch.paneSize(maxIdx).height;
+                let axTop = nP - 1; // separators
+                for (let i = 0; i < nP; i++) axTop += ch.paneSize(i).height;
+                const k = src.height / cssH; // raster px per css px
+                const mHOut = Math.round(mH * dpr);
+                g.drawImage(src, 0, Math.round(mTop * k), src.width, Math.round(mH * k), 0, HDR, chartW, mHOut);
+                const axSrcY = Math.round(axTop * k);
+                g.drawImage(src, 0, axSrcY, src.width, src.height - axSrcY, 0, HDR + mHOut, chartW, chartH - Math.round(axTop * dpr));
+                srcDrawn = true;
+              }
+            } catch {}
+          }
+          if (!srcDrawn) g.drawImage(src, 0, HDR, chartW, chartH);
           // ── composite drawing overlays (signal markers z:3, user drawings z:4) ──
           // Each SVG occupies the full wrap (inset:0 100% 100%), so we draw them at (0, HDR).
           if (wrap) {
@@ -1844,9 +1912,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     priceTag.appendChild(tagSym); priceTag.appendChild(tagVal);
     wrap.appendChild(priceTag); priceTagRef.current = priceTag;
 
+    // While a SUB-pane is maximized the price pane is DOM-hidden — every overlay that projects
+    // price-pane coordinates (signal pills, gap zones, drawings, ichimoku/ribbon fills, the
+    // last-price tag) must clear/hide itself instead of painting over the maximized pane.
+    const priceProjHidden = () => { const c = paneCtl.current; return c.maximized != null && c.maximized !== "__price__"; };
     const renderPriceTag = () => {
       const tag = priceTagRef.current, s = priceSeriesRef.current;
       if (!tag || !s || dead) return;
+      if (priceProjHidden()) { tag.style.display = "none"; return; }
       const bars = barsRef.current; const last = bars[bars.length - 1];
       if (!last) { tag.style.display = "none"; return; }
       const price = last.c;
@@ -1909,6 +1982,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const tierBadge = (tier?: string | null) => (tier === "aplus" ? "A+" : tier === "quality" ? "Q" : "");
       const SLATE = "#7c8aa0";   // regime_blocked dim slate (no matching CSS token — inline hex)
       while (layer.firstChild) layer.removeChild(layer.firstChild);
+      if (priceProjHidden()) return;   // sub-pane maximized → price-anchored markers stay cleared
 
       // ── Gap Zones premade indicator ──────────────────────────────────────────────
       // Independent of the oracle (drawn BEFORE the oracle gate below). Detects TRUE DAILY gaps — a day
@@ -2418,6 +2492,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const renderIndOverlays = () => {
       const svgEl = indSvgRef.current; if (!svgEl) return;
       while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+      if (priceProjHidden()) return;   // sub-pane maximized → price-anchored fills stay cleared
       const inds = indicatorsRef.current;
       const W = el!.clientWidth, H = el!.clientHeight;
       const priceS = priceSeriesRef.current;
@@ -2653,6 +2728,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const svgEl = svgRef.current; if (!svgEl) return;
       renderIndOverlays();
       while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+      if (priceProjHidden()) { positionBar(); renderPriceTag(); return; }   // drawings stay cleared while a sub-pane is maximized
       for (const d of drawRef.current) svgEl.appendChild(shape(d));
       // ── D2 locked vertical line overlay ──
       const lvt = lockedVLineRef.current;
@@ -2701,6 +2777,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       for (const paneApi of panesApi) {
         let pi = 0; try { pi = paneApi.paneIndex(); } catch {}
         const m = metaByIndex.get(pi); if (!m) continue;
+        // while a pane is maximized the other pane rows are DOM-hidden
+        // (applyMaximizeDom) — drop them from the overlay layout entirely so
+        // their legends/ops can't bleed over the maximized pane and the pane
+        // hover/double-tap hit-tests only ever see the visible pane.
+        if (ctl.maximized && m.key !== ctl.maximized) continue;
         let top = 0, height = 0;
         try { const pe = paneApi.getHTMLElement(); if (pe) { const r = pe.getBoundingClientRect(); top = r.top - wr.top; height = r.height; } } catch {}
         layout.push({ key: m.key, paneIndex: pi, isPrice: m.isPrice, top, height, collapsed: ctl.collapsed.has(m.key), maximized: ctl.maximized === m.key, entries: m.entries.map((e) => ({ ...e, hidden: hiddenRef.current.has(e.key) })) });
