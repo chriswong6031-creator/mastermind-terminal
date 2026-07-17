@@ -1,59 +1,34 @@
 import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
 import { createClient } from "@/lib/supabase/server";
+import { rateLimit, tooMany } from "@/lib/rateLimit";
+import { isIndKey } from "@/lib/indicators";
+import { verdictIsStale } from "@/lib/signalVerdict";
+import { COPILOT_TOOLS, execTool, getManifestRow, SYMBOL_RE } from "@/lib/copilotTools";
 
-const DATA = path.join(process.cwd(), "public", "data");
-const readJson = async (f: string) => { try { return JSON.parse(await fs.readFile(path.join(DATA, f), "utf8")); } catch { return null; } };
+// Timeframe tokens are short digit+unit strings ("5m", "2h", "D", "3D", "2W", "1M"...) — shape-match
+// instead of a literal list so a TF added to TerminalShell's picker can't silently drop out of the
+// chart context. Prompt-context only; never touches the filesystem.
+const TF_RE = /^\d{0,3}[a-zA-Z]{1,2}$/;
 
-const TOOLS = [
-  { type: "function", function: { name: "get_quote", description: "Last price, % change, Golden-Oracle verdict (BUY/SELL), win-rate, profit-factor, CAGR and regime for a ticker.", parameters: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"] } } },
-  { type: "function", function: { name: "get_intel", description: "Macro analyzer intelligence for a ticker: AI verdict, conviction score, regime, gamma walls, analyst revisions, smart-money trend.", parameters: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"] } } },
-  { type: "function", function: { name: "get_backtest", description: "Strategy-tester result for a ticker: metrics (win rate, profit factor, CAGR, Sharpe, max drawdown, vs buy-hold) and trade count.", parameters: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"] } } },
-  { type: "function", function: { name: "screen", description: "Scan the universe. Optionally filter by verdict (BUY|SELL) and/or regime (bull|mixed). Returns up to 12 tickers ranked by win rate.", parameters: { type: "object", properties: { verdict: { type: "string" }, regime: { type: "string" } }, required: [] } } },
-  { type: "function", function: { name: "annotate_chart", description: "Draw price levels onto the user's active chart. Use this when the user asks you to mark/draw/annotate/show support, resistance, targets or notes. Derive prices from real data you fetched (e.g. day/52-week highs & lows from get_quote, gamma walls from get_intel) — never invent levels.", parameters: { type: "object", properties: { annotations: { type: "array", items: { type: "object", properties: { type: { type: "string", enum: ["support", "resistance", "target", "level", "note"] }, price: { type: "number" }, label: { type: "string" } }, required: ["type", "price"] } } }, required: ["annotations"] } } },
-];
-
-// Strict allowlist for symbol values sourced from AI tool-call arguments.
-// Prevents path-traversal: only A-Z, 0-9, dot, and hyphen; 1–15 chars.
-const SYMBOL_RE = /^[A-Z0-9.\-]{1,15}$/i;
-
-async function runTool(name: string, args: any): Promise<any> {
-  // Symbol validation: only for tools that consume a symbol (prevents path-traversal).
-  // screen/annotate_chart take no symbol argument — guard must NOT run for them.
-  if (["get_quote", "get_intel", "get_backtest"].includes(name)) {
-    const rawSym = (args?.symbol || "");
-    if (!SYMBOL_RE.test(rawSym)) return { error: "invalid symbol" };
-    const sym = rawSym.toUpperCase();
-    if (name === "get_quote") {
-      const m = await readJson("manifest.json"); const r = m?.symbols?.[sym];
-      if (!r) return { error: "unknown symbol" };
-      const out: any = { symbol: sym, ...r };
-      // date the verdict so the copilot never asserts an old call as current
-      if (r.vts) {
-        out.verdict_date = r.vts;
-        const age = Math.floor((Date.now() - Date.parse(r.vts)) / 86_400_000);
-        if (Number.isFinite(age) && age > 21) out.verdict_note = `signal is ${age} days old — historical, not a current call`;
-      }
-      return out;
-    }
-    if (name === "get_intel") { const i = await readJson(`${sym}.intel.json`); return i || { error: "no intel for symbol" }; }
-    if (name === "get_backtest") { const b = await readJson(`${sym}.backtest.json`); return b ? { symbol: sym, metrics: b.metrics, n_trades: (b.trades || []).length, equity_mult: b.equity?.v?.slice(-1)[0], bh_total_return: b.equity?.bh_total_return } : { error: "no backtest" }; }
-  }
-  if (name === "screen") {
-    const m = await readJson("manifest.json"); const syms = m?.symbols || {};
-    let rows = Object.entries<any>(syms).map(([s, r]) => ({ symbol: s, ...r }));
-    if (args?.verdict) rows = rows.filter((r) => (r.verdict || "").toUpperCase() === args.verdict.toUpperCase() || (args.verdict.toUpperCase() === "BUY" && ["BUY", "REBUY", "RECLAIM"].includes((r.verdict || "").toUpperCase())));
-    if (args?.regime) rows = rows.filter((r) => (args.regime.toLowerCase().startsWith("bull") ? r.regimeBull : !r.regimeBull));
-    rows.sort((a, b) => (b.wr ?? 0) - (a.wr ?? 0));
-    return { count: rows.length, results: rows.slice(0, 12).map((r) => ({ symbol: r.symbol, last: r.last, chg: r.chg, verdict: r.verdict, verdict_date: r.vts ?? undefined, wr: r.wr, pf: r.pf, cagr: r.cagr, regimeBull: r.regimeBull })) };
-  }
-  return { error: "unknown tool" };
-}
-
-const SYSTEM = `You are Mastermind AI, the copilot inside an institutional charting terminal. You reason over a proprietary backtested confluence signal ("Golden Oracle"), a macro/regime read, and a strategy tester. Use the tools to ground every claim in real data — never invent numbers. Be concise, specific, and honest: the confluence is a timing/risk overlay, not a standalone return engine. Nothing is financial advice. When the user asks about a ticker, fetch its quote and intel before answering. When they ask you to mark/draw levels on the chart, fetch the data first (get_quote gives day & 52-week highs/lows; get_intel gives gamma walls), then call annotate_chart with those real prices — and say one line about what you drew.`;
+const SYSTEM = `You are Mastermind AI, the copilot inside an institutional charting terminal. You reason over a proprietary backtested confluence signal ("Golden Oracle"), a macro/regime read, and a strategy tester. Use the tools to ground every claim in real data — never invent numbers. Be concise, specific, and honest: the confluence is a timing/risk overlay, not a standalone return engine. Nothing is financial advice.
+Your tools cover every data surface for a ticker — prefer them over guessing:
+- get_price_summary: last/chg, today's range, 52wk, trailing returns, ATR, 200-DMA distance.
+- get_technicals: TV-style Summary/Osc/MA verdicts, RSI/MACD/ADX/Stoch, classic pivots, Supertrend, Bollinger.
+- get_signals: Golden-Oracle state, last 3 signals, condensed backtest, staleness.
+- get_options_summary: IV term + skew, and dealer gamma (net GEX, flip, call/put walls).
+- get_fundamentals: valuation, margins (already %-labeled), earnings vs estimates, analyst targets.
+- get_insiders: Insider Power score/signal/net dollars.
+- get_intel: research-desk AI judgment, conviction, key levels, smart money.
+- get_market_state: market-wide risk + macro regime (not per-ticker).
+- screen: universe scan by verdict/regime.
+When the user asks about a ticker, fetch its price summary and signals before answering; add other surfaces only as the question needs them. If a tool returns no_data, say that surface isn't available — never substitute a guess. When they ask you to mark/draw levels on the chart, fetch the data first (get_price_summary gives day & 52-week highs/lows; get_options_summary gives gamma walls; get_intel gives key levels), then call annotate_chart with those real prices — and say one line about what you drew.`;
 
 export async function POST(req: Request) {
+  // Tighter than DEFAULT_MAX: each POST fans out up to 6 paid model completions — 30/min/IP is
+  // ample for a chat UI while capping scripted abuse (auth alone is weak: signup is open).
+  const rl = rateLimit(req, { name: "copilot", max: 30 });
+  if (!rl.ok) return tooMany(rl);
+
   // auth-gate (defense in depth; the copilot UI lives behind the /terminal guard)
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -65,13 +40,40 @@ export async function POST(req: Request) {
   // sanitize client input: only {role:user|assistant, content:string}; cap count + size; drop any forged system/tool turns
   const symbol = typeof body?.symbol === "string" ? body.symbol.slice(0, 24) : "";
   const lang = body?.lang === "zh" ? "zh" : "en";
+  // chart context from the client — both fields are UNTRUSTED, sanitized to safe shapes (prompt
+  // context only). isIndKey covers the built-ins; _oracle/_lab are real pane keys outside IND_DEFS.
+  const tf = typeof body?.tf === "string" && TF_RE.test(body.tf) ? body.tf : "";
+  const indicators: string[] = (Array.isArray(body?.indicators) ? body.indicators : [])
+    .filter((k: any) => typeof k === "string" && (isIndKey(k) || k === "_oracle" || k === "_lab"))
+    .slice(0, 12);
   const messages = (Array.isArray(body?.messages) ? body.messages : [])
     .filter((m: any) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
     .slice(-30)
     .map((m: any) => ({ role: m.role, content: m.content.slice(0, 8000) }));
   if (!key) return NextResponse.json({ reply: "The AI copilot isn't configured (no model key).", steps: [] });
 
-  const convo: any[] = [{ role: "system", content: SYSTEM + (symbol ? ` The active chart symbol is ${symbol}.` : "") + (lang === "zh" ? " Respond in 简体中文 (Simplified Chinese); keep ticker symbols, numbers and the signal names (BUY/SELL/CUT/RE-BUY, Golden Oracle) as-is." : "") }, ...messages];
+  // compact chart-context line: active symbol + tf + visible indicators + the manifest row's
+  // last/chg/verdict (cheap — module-cached manifest), so trivial questions need zero tool calls
+  let chartCtx = "";
+  if (symbol) {
+    chartCtx = ` The active chart symbol is ${symbol}${tf ? ` on the ${tf} timeframe` : ""}${indicators.length ? ` with indicators: ${indicators.join(", ")}` : ""}.`;
+    if (SYMBOL_RE.test(symbol)) {
+      const row = await getManifestRow(symbol.toUpperCase()).catch(() => null);
+      const last = typeof row?.last === "number" ? row.last : null;
+      const chg = typeof row?.chg === "number" ? row.chg : null;
+      // The verdict must stay DATED (vts) — the old get_quote enforced this so the model never
+      // asserts an old call as current; the >21d staleness rule mirrors lib/signalVerdict.
+      let verdictCtx = "";
+      if (row?.verdict) {
+        const vts = typeof row.vts === "string" ? row.vts : null;
+        const staleNote = !vts || verdictIsStale(vts, Date.now()) ? " — historical, NOT a current call" : "";
+        verdictCtx = `, Golden-Oracle verdict ${row.verdict}${vts ? ` (as of ${vts}${staleNote})` : ` (undated${staleNote})`}`;
+      }
+      if (last != null) chartCtx += ` Manifest snapshot: last ${last}${chg != null ? ` (${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%)` : ""}${verdictCtx}.`;
+    }
+  }
+
+  const convo: any[] = [{ role: "system", content: SYSTEM + chartCtx + (lang === "zh" ? " Respond in 简体中文 (Simplified Chinese); keep ticker symbols, numbers and the signal names (BUY/SELL/CUT/RE-BUY, Golden Oracle) as-is." : "") }, ...messages];
   const E = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -82,7 +84,7 @@ export async function POST(req: Request) {
           const res = await fetch(`${base}/chat/completions`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-            body: JSON.stringify({ model: "deepseek-chat", messages: convo, tools: TOOLS, tool_choice: "auto", temperature: 0.3, max_tokens: 900, stream: true }),
+            body: JSON.stringify({ model: "deepseek-chat", messages: convo, tools: COPILOT_TOOLS, tool_choice: "auto", temperature: 0.3, max_tokens: 900, stream: true }),
           });
           if (!res.ok || !res.body) { send({ type: "error", message: `Model error (${res.status})` }); break; }
           const reader = res.body.getReader(); const dec = new TextDecoder();
@@ -113,7 +115,7 @@ export async function POST(req: Request) {
                 send({ type: "annotate", symbol, annotations: anns });
                 convo.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify({ ok: true, placed: anns.length }) });
               } else {
-                const result = await runTool(c.name, a); convo.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify(result) });
+                const result = await execTool(c.name, a); convo.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify(result) });
               }
             }
             continue;

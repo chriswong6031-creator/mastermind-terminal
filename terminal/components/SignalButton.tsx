@@ -34,8 +34,9 @@ export default function SignalButton({ oracle, desk, oracleLabel, deskLabel, vie
           <path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" fill="var(--vc)" />
         </svg>
         <span className="sig-btn-lbl">{oracleLabel}</span>
-        {/* sub always renders (nbsp placeholder) so the two halves stay height-symmetric
-            and the absolutely-centered View pill sits exactly on their boundary */}
+        {/* sub always renders (nbsp placeholder) for visual balance. NOTE: the seam span
+            below must stay BETWEEN the two halves — it is the zero-height anchor the View
+            pill centers on, so reordering children silently breaks its placement. */}
         <span className="sig-btn-vwrap">
           <span className="sig-btn-vd">{oracle.label}</span>
           <span className="sig-btn-sub">{oracle.sub || " "}</span>

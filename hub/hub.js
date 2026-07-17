@@ -8,7 +8,8 @@
 //
 // Feeds v1:
 //   (a) crypto: Coinbase exchange ws-feed (keyless) primary, OKX fallback (one writer at a time)
-//   (b) US: wss://delayed.polygon.io/stocks AM.* dynamic per-symbol subs, LRU 500, chg vs session anchor
+//   (b) US: Polygon AM.* dynamic per-symbol subs (delayed cluster by default; HUB_POLYGON_CLUSTER=live
+//       when RT-entitled, auto-demotes back on denial), LRU 500, chg vs session anchor
 //
 // prevClose fix (2026-07-09): the manifest baseline is stale all day (swaps at ~03:00 UTC).
 // An AnchorCache keyed by (sym, ET-session-date) resolves prevClose from:
