@@ -28,6 +28,8 @@ import { isIntradayTf, classify, tfMinutes, type Market } from "@/lib/intradaySo
 import { sessionVwap, openingRange, sessionLevels, pivotLevels, rvolSeries, ttmSqueeze, adx as calcAdx, cvdApprox, type Bar as IMBar, type DailyBar } from "@/lib/intradayMath";
 import { attachSessionShading, detachSessionShading, type SessionShadingPrimitive } from "@/lib/sessionShading";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
+import { SOFT_Q, anchorSignal } from "@/lib/signalVerdict";
+import { makeNearestBarIndex } from "@/lib/barSnap";
 import { ichimoku, supertrend, avwap as computeAvwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
 import DayStatsStrip from "@/components/DayStatsStrip";
@@ -1424,12 +1426,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (!rows.length) return [];
     const times = rows.map((r) => r.time);
     const lastDate = times[times.length - 1];
-    const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(String(y) + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y as any; } }); return bd < 9e8 ? b : null; };
+    const nearIdx = makeNearestBarIndex(times);
     const byTime = new Map(rows.map((r) => [r.time, r]));
     // BUY-side marks anchor below the bar (low), SELL-side above (high) — same anchors either path.
-    // Exact-date hit skips the near() scan: full-history slices carry hundreds of signals and replay
-    // re-resolves per tick, so the O(signals × bars) scan must stay the resampled-TF exception.
-    const snap = (ts: string, type: string): SigMark | null => { const t = byTime.has(ts) ? ts : near(ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) return null; return { t, type, price: type === "SELL" || type === "CUT" ? bar.h : bar.l }; };
+    // Exact-date hit skips the search; misses (resampled TFs, where most slice dates land between
+    // bars) binary-search the precomputed epoch array — replay re-resolves per tick, so the old
+    // O(signals × bars) Date-allocating scan is exactly what makeNearestBarIndex retires.
+    const snap = (ts: string, type: string): SigMark | null => { let bar = byTime.get(ts); if (!bar) { const i = nearIdx(ts); if (i >= 0) bar = rows[i]; } if (!bar) return null; return { t: bar.time as string, type, price: type === "SELL" || type === "CUT" ? bar.h : bar.l }; };
     const sigs = slice?.indicator?.signals;
     if (Array.isArray(sigs) && sigs.length) {
       const marks: SigMark[] = [];
@@ -1457,11 +1460,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const times = rows.map((r) => r.time);
     const lastDate = times[times.length - 1] as string;
     const tset = new Set(times as unknown as string[]);
-    const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(String(y) + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y as any; } }); return bd < 9e8 ? b : null; };
+    const nearIdx = makeNearestBarIndex(times);
     // Exact-hit shortcut mirrors resolveSigMarks' snap(): dots/warns are engine bar dates, so on
-    // the daily TF every one hits — the O(bars) near() scan stays the resampled-TF exception
-    // (replay re-resolves per tick; without this, scrubbing full-history names costs ~100ms/step).
-    const snapT = (iso: string) => (tset.has(iso) ? iso : near(iso));
+    // the daily TF every one hits — misses (the resampled-TF case) binary-search the precomputed
+    // epoch array (replay re-resolves per tick; the old linear scan cost ~100ms/step here).
+    const snapT = (iso: string) => { if (tset.has(iso)) return iso; const i = nearIdx(iso); return i >= 0 ? (times[i] as string) : null; };
     const dots = ((slice?.indicator?.early_dots || []) as string[])
       .filter((ts) => ts <= lastDate)
       .map((ts) => ({ t: snapT(ts) as string | null }))
@@ -1490,9 +1493,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // is controlled by oracleVisible in JSX; this guard prevents stale text from painting in the
     // background when the user has toggled the oracle OFF.
     if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) {
-      // Chip verdict = the scored lane's anchor: the newest slice signal the engine did NOT refuse —
-      // the same anchor rule as the rail card (signalVerdict.oracleVerdict), so chip and panel can't
-      // contradict. regime_blocked markers are vetoed displays and never anchor (contracts.py).
+      // Chip verdict = the scored lane's anchor: signalVerdict.anchorSignal — the SAME helper the
+      // rail card (oracleVerdict) runs, so chip and panel can't contradict. regime_blocked markers
+      // are vetoed displays and never anchor (contracts.py).
       // Bounded by the last visible bar's DATE so replay (and stale bar caches) can't future-leak a
       // verdict the on-chart marks don't show; intraday bars carry epoch times → convert to the day.
       // Client-Pine fallback (no slice signals): the latest computed mark stands in, as before.
@@ -1501,12 +1504,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const lastDate = typeof lastT === "string" ? lastT : lastT != null ? new Date((lastT as number) * 1000).toISOString().slice(0, 10) : null;
       let v = "—";
       if (Array.isArray(sigs) && sigs.length) {
-        for (let i = sigs.length - 1; i >= 0; i--) {
-          const s = sigs[i];
-          if (!s?.type || String(s.quality || "") === "regime_blocked") continue;
-          if (lastDate && typeof s.ts === "string" && s.ts > lastDate) continue;
-          v = String(s.type).toUpperCase(); break;
-        }
+        const { anchor } = anchorSignal(sigs, lastDate);
+        if (anchor) v = String(anchor.type).toUpperCase();
       } else { const sm = sigMarksRef.current; if (sm.length) v = sm[sm.length - 1].type; }
       const buy = v === "BUY" || v === "REBUY" || v === "RECLAIM";
       verdictRef.current.textContent = `GOLDEN ORACLE · ${v === "RECLAIM" ? "RE-ENTRY" : v}`;
@@ -2036,10 +2035,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
         const star = !!cfg.star;
         // GC v2 quality: take=solid, block=hollow outline, pending=dim gray, regime_blocked=dim slate.
-        // Softness gates on the SOFT set (not the type) so an engine-refused mark of ANY type renders
-        // subordinate; RECLAIM's own lane qualities (reclaim/block_repair) are NOT soft and keep the
-        // dashed-hollow re-entry law. A soft mark must never wear the scored style (SOFT_Q contract).
-        const q = m.quality === "pending" || m.quality === "block" || m.quality === "regime_blocked" ? m.quality : undefined;
+        // Softness gates on signalVerdict's SOFT_Q set (not the type) so an engine-refused mark of ANY
+        // type renders subordinate; RECLAIM's own lane qualities (reclaim/block_repair) are NOT soft and
+        // keep the dashed-hollow re-entry law. A soft mark must never wear the scored style.
+        const q = m.quality != null && SOFT_Q.has(m.quality) ? m.quality : undefined;
         const hollow = q === "block" || !!cfg.hollow;
         const dim = q === "pending" || q === "regime_blocked";
         const fill = q === "regime_blocked" ? SLATE : (q === "pending" ? t2.mut : cfg.fill);
@@ -3449,8 +3448,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
   // ────────────────────────────────────────────────────────────────────────────
   // EFFECT 8 — jump-to-signal [mount]. R14: window `mm:chart-jump` {sym, ts}. If this pane's active
-  //   symbol matches and the TF is daily-derived, snap ts to the nearest bar (SAME near() the marker
-  //   renderer uses), center ±40 bars, and pulse the target sigMark ~2.5s (transient highlight flag),
+  //   symbol matches and the TF is daily-derived, snap ts to the nearest bar (SAME makeNearestBarIndex
+  //   the marker resolver uses), center ±40 bars, and pulse the target sigMark ~2.5s (transient highlight flag),
   //   cleared on symbol/TF change (Effect 2 clears the timer) or when the next jump arrives.
   // ────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -3460,11 +3459,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (isIntradayRef.current) return;                 // ts is a date string; intraday axis is epoch-sec
       const chart = chartRef.current; if (!chart) return;
       const bars = barsRef.current; if (!bars.length) return;
-      // nearest-bar snapping identical to resolveSigMarks' near()
-      const x = new Date(d.ts + "T00:00:00Z").getTime();
-      let bi = -1, bd = 1e18;
-      for (let k = 0; k < bars.length; k++) { const dd = Math.abs(new Date(bars[k].time + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; bi = k; } }
-      if (bi < 0 || bd >= 9e8) return;
+      // nearest-bar snapping identical to resolveSigMarks' (same helper, same tolerance)
+      const bi = makeNearestBarIndex(bars.map((b) => b.time))(d.ts);
+      if (bi < 0) return;
       try { chart.timeScale().setVisibleLogicalRange({ from: bi - 40, to: bi + 40 }); } catch {}
       // pulse the matching sigMark (if one sits on that bar); transient highlight flag → renderSignals
       const tBar = bars[bi].time;

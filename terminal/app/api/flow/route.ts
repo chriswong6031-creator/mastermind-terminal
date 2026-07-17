@@ -7,9 +7,9 @@ import { rateLimit, tooMany } from "@/lib/rateLimit";
 // and SECURITY.md. Do not re-export computeFlowScore to any 'use client' component.
 import { computeFlowScore, type ScorerInput } from "@/lib/flowScore";
 
-// Upstream base (Python server); falls back to R2 public CDN.
-const BACKEND = process.env.FLOW_API_BASE || "http://127.0.0.1:8000";
-const R2_BASE = "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev";
+// Upstream base (Python server); falls back to R2 public CDN. Shared constants — a
+// bucket/host rotation edits lib/upstreams.ts once (copilotTools uses the same pair).
+import { FLOW_BACKEND as BACKEND, R2_BASE } from "@/lib/upstreams";
 const FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_fixture.json");
 const TIDE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "tide_fixture.json");
 const TICKER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ticker_fixture.json");
