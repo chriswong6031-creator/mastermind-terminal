@@ -18,21 +18,18 @@ import { promises as fs } from "fs";
 import path from "path";
 import { computeRatings, type Row as RatingRow } from "@/lib/techRating";
 import { ema, atr, supertrend, bollingerBands, type Bar } from "@/lib/indicatorMath";
-import { verdictIsStale, ORACLE_STALE_DAYS } from "@/lib/signalVerdict";
+import { verdictIsStale, ORACLE_STALE_DAYS, anchorSignal } from "@/lib/signalVerdict";
 import { isStalePlane, type MarketPlane } from "@/lib/nwPlane";
+// Same upstream topology as app/api/flow/route.ts (Python hub first, R2 mirror second) and
+// app/api/nw/route.ts — the shared endpoint constants live in lib/upstreams (the routes
+// themselves must not be imported from a lib).
+import { FLOW_BACKEND, R2_BASE, NW_BASE } from "@/lib/upstreams";
 
 const DATA = path.join(process.cwd(), "public", "data");
 
 // Strict allowlist for symbol values sourced from AI tool-call arguments.
 // Prevents path-traversal: only A-Z, 0-9, dot, and hyphen; 1–15 chars.
 export const SYMBOL_RE = /^[A-Z0-9.\-]{1,15}$/i;
-
-// Same upstream topology as app/api/flow/route.ts (Python hub first, R2 mirror second).
-// Duplicated URL logic by design — the route must not be imported from a lib.
-const FLOW_BACKEND = process.env.FLOW_API_BASE || "http://127.0.0.1:8000";
-const R2_BASE = "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev";
-// Neural Web market plane (same upstream as app/api/nw/route.ts, same 5-min cache idea).
-const NW_BASE = process.env.NW_DATA_BASE || "https://mastermind-x.com/neuralwebdata";
 
 /* ── small helpers ─────────────────────────────────────────────────────────── */
 
@@ -159,10 +156,37 @@ export async function getManifestRow(sym: string): Promise<Record<string, unknow
   return row && typeof row === "object" ? (row as Record<string, unknown>) : null;
 }
 
+// Full-history OHLC files run ~600KB (AAPL.json) and get_price_summary + get_technicals
+// each want the same file, often within one copilot turn — mtime-keyed parsed cache like
+// the manifest above, small LRU since chats revisit only a handful of symbols.
+const OHLC_CACHE_MAX = 8;
+const ohlcCache = new Map<string, { mtimeMs: number; data: unknown }>();
+async function readOhlcCached(sym: string): Promise<unknown | null> {
+  try {
+    const p = path.join(DATA, `${sym}.json`);
+    const st = await fs.stat(p);
+    const hit = ohlcCache.get(sym);
+    if (hit && hit.mtimeMs === st.mtimeMs) {
+      ohlcCache.delete(sym); ohlcCache.set(sym, hit);   // LRU refresh (Map = insertion order)
+      return hit.data;
+    }
+    const data: unknown = JSON.parse(await fs.readFile(p, "utf8"));
+    ohlcCache.delete(sym);
+    ohlcCache.set(sym, { mtimeMs: st.mtimeMs, data });
+    if (ohlcCache.size > OHLC_CACHE_MAX) ohlcCache.delete(ohlcCache.keys().next().value as string);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 // NW plane: 5-min in-memory cache (mirrors /api/nw); serve last-good on upstream hiccup.
 let planeCache: { ts: number; data: MarketPlane } | null = null;
 const PLANE_TTL_MS = 300_000;
 async function fetchPlane(): Promise<MarketPlane | null> {
+  // NW_FIXTURE parity with /api/nw: fixture dev boxes serve the checked-in sample and
+  // never touch the live producer.
+  if (process.env.NW_FIXTURE === "1") return (await readDataJson("nw_plane_fixture.json")) as MarketPlane | null;
   const now = Date.now();
   if (planeCache && now - planeCache.ts < PLANE_TTL_MS) return planeCache.data;
   try {
@@ -175,6 +199,13 @@ async function fetchPlane(): Promise<MarketPlane | null> {
 }
 
 async function fetchGexPayloads(root: string): Promise<{ gex: unknown | null; state: unknown | null }> {
+  // FLOW_FIXTURE parity with /api/flow (f=gex:/gexstate:): fixture dev boxes must not hit
+  // the live hub or R2. Same files, same keying (gex by root; gexstate single-root sample).
+  if (process.env.FLOW_FIXTURE === "1") {
+    const all = (await readDataJson("gex_fixture.json")) as Record<string, unknown> | null;
+    const state = await readDataJson("gexstate_fixture.json");
+    return { gex: all?.[root.toUpperCase()] ?? null, state };
+  }
   const grab = async (backendPath: string, r2Key: string): Promise<unknown | null> => {
     try {
       return await fetchJson(`${FLOW_BACKEND}${backendPath}`);
@@ -357,15 +388,12 @@ export function curateSignals(slice: unknown, nowMs: number = Date.now()): Recor
   const met = (bt.metrics ?? {}) as Record<string, unknown>;
   const vsBH = (met.vs_buy_hold ?? {}) as Record<string, unknown>;
 
-  // Staleness anchors on the newest signal the engine did NOT refuse — oracleVerdict's rule, which
-  // includes unscored-but-real RECLAIMs (decay-class names: last_scored_ts can be months older than
-  // the fresh re-entry the rail card shows). Fallback: last_scored_ts.
-  let lastTs: string | null = null;
-  for (let i = rawSigs.length - 1; i >= 0; i--) {
-    const s = rawSigs[i];
-    if (s?.type && typeof s.ts === "string" && String(s.quality || "") !== "regime_blocked") { lastTs = s.ts; break; }
-  }
-  lastTs = lastTs ?? (state?.last_scored_ts as string | undefined) ?? null;
+  // Staleness anchors on the newest signal the engine did NOT refuse — signalVerdict.anchorSignal,
+  // the SAME helper the rail card runs, which includes unscored-but-real RECLAIMs (decay-class
+  // names: last_scored_ts can be months older than the fresh re-entry the rail card shows).
+  // Fallback: last_scored_ts.
+  const lastTs = (anchorSignal(rawSigs).anchor?.ts as string | undefined)
+    ?? (state?.last_scored_ts as string | undefined) ?? null;
   const ageDays = lastTs && Number.isFinite(Date.parse(lastTs)) ? Math.floor((nowMs - Date.parse(lastTs)) / 86_400_000) : null;
 
   return {
@@ -680,11 +708,11 @@ export async function execTool(name: string, args: Record<string, unknown> | nul
 
     switch (name) {
       case "get_price_summary": {
-        const [row, ohlc] = await Promise.all([getManifestRow(sym), readDataJson(`${sym}.json`)]);
+        const [row, ohlc] = await Promise.all([getManifestRow(sym), readOhlcCached(sym)]);
         return capJson({ symbol: sym, ...curatePriceSummary(row, ohlc) });
       }
       case "get_technicals": {
-        const ohlc = await readDataJson(`${sym}.json`);
+        const ohlc = await readOhlcCached(sym);
         return capJson({ symbol: sym, ...curateTechnicals(ohlc) });
       }
       case "get_signals": {

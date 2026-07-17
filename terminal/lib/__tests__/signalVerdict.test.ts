@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS } from "../signalVerdict";
+import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, SOFT_Q } from "../signalVerdict";
 
 // Frozen "today" so ages are deterministic: 2026-07-14 (the NVDA/GOOGL stale-Sell incident date).
 const NOW = Date.parse("2026-07-14T21:00:00Z");
@@ -337,5 +337,42 @@ describe("deskVerdict — entry-timing honesty mapping", () => {
     const v = deskVerdict(intel({ dir: "BEAR", band: "low", entry: "bounce_wait", score: 8 }), true, NOW);
     expect(v.label).toBe("无买点");
     expect(v.sub).toContain("数据截至");
+  });
+});
+
+describe("anchorSignal — the shared scored-lane anchor rule", () => {
+  const sigs: Sig[] = [
+    { ts: "2026-06-01", type: "BUY", quality: "take" },
+    { ts: "2026-06-20", type: "SELL", quality: "take" },
+    { ts: "2026-07-01", type: "BUY", quality: "regime_blocked" },
+    { ts: "2026-07-10", type: "BUY", quality: "regime_blocked" },
+  ];
+
+  it("anchors on the newest unrefused signal and reports the newest refused tail", () => {
+    const { anchor, blockedTail } = anchorSignal(sigs);
+    expect(anchor?.ts).toBe("2026-06-20");
+    expect(blockedTail?.ts).toBe("2026-07-10");
+  });
+
+  it("maxTs bounds the scan (replay: a future signal never anchors)", () => {
+    expect(anchorSignal(sigs, "2026-06-10").anchor?.ts).toBe("2026-06-01");
+    // blocked markers past the bound don't surface as a tail either
+    expect(anchorSignal(sigs, "2026-06-30").blockedTail).toBe(null);
+  });
+
+  it("skips undated / typeless entries and handles missing input", () => {
+    expect(anchorSignal([{ ts: "2026-07-01" }, { type: "BUY" } as Sig]).anchor).toBe(null);
+    expect(anchorSignal(null).anchor).toBe(null);
+    expect(anchorSignal([]).blockedTail).toBe(null);
+  });
+
+  it("all-refused history yields no anchor (chip renders — / rail falls back)", () => {
+    const { anchor, blockedTail } = anchorSignal(sigs.slice(2));
+    expect(anchor).toBe(null);
+    expect(blockedTail?.ts).toBe("2026-07-10");
+  });
+
+  it("SOFT_Q stays the engine's three soft qualities (renderSignals + oracleVerdict share it)", () => {
+    expect([...SOFT_Q].sort()).toEqual(["block", "pending", "regime_blocked"]);
   });
 });

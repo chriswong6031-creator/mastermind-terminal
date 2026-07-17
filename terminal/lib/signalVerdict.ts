@@ -77,7 +77,36 @@ const BUYISH = ["BUY", "REBUY", "ADD"];
 const SELLISH = ["SELL", "CUT", "TRIM"];
 // engine-flagged soft qualities: annotate the tooltip; regime_blocked additionally means
 // "the engine refused this entry" — it must never anchor the verdict (contracts.py contract).
-const SOFT_Q = new Set(["pending", "block", "regime_blocked"]);
+// Exported: ChartPanel.renderSignals gates marker softness on this SAME set, so a new
+// engine quality string lands on both surfaces at once (add it here, nowhere else).
+export const SOFT_Q: ReadonlySet<string> = new Set(["pending", "block", "regime_blocked"]);
+
+/** THE scored-lane anchor rule — the newest signal the engine did NOT refuse
+ *  (quality !== 'regime_blocked'; contracts.py: a vetoed entry must never anchor a verdict).
+ *  Shared by the rail card (oracleVerdict), the chart chip (ChartPanel.paintStatus) and the
+ *  copilot get_signals staleness read, so the three surfaces can't drift.
+ *  `maxTs` (ISO date) bounds the scan — the replay / stale-cache guard: signals dated after
+ *  the last visible bar never anchor. Also returns the newest refused signal NEWER than the
+ *  anchor (`blockedTail`) — the rail card's "blocked — not an entry" note. */
+export function anchorSignal<S extends { ts?: unknown; type?: unknown; quality?: unknown }>(
+  signals: readonly (S | null | undefined)[] | null | undefined,
+  maxTs?: string | null,
+): { anchor: S | null; blockedTail: S | null } {
+  let blockedTail: S | null = null;
+  if (Array.isArray(signals)) {
+    for (let i = signals.length - 1; i >= 0; i--) {
+      const s = signals[i];
+      if (!s || !s.type || typeof s.ts !== "string" || !s.ts) continue;
+      if (maxTs != null && s.ts > maxTs) continue;
+      if (String(s.quality || "").toLowerCase() === "regime_blocked") {
+        if (!blockedTail) blockedTail = s;
+        continue;
+      }
+      return { anchor: s, blockedTail };
+    }
+  }
+  return { anchor: null, blockedTail };
+}
 
 function eventColor(u: string): string {
   return BUYISH.includes(u) || u === "RECLAIM"
@@ -142,18 +171,7 @@ export function oracleVerdict(
 
   // effective event = newest marker the engine did not refuse (regime_blocked markers are
   // display artifacts of vetoed entries — contracts.py: "never treat as an entry").
-  let eff: OracleSignal | null = null;
-  let blockedTail: OracleSignal | null = null;
-  for (let i = sigs.length - 1; i >= 0; i--) {
-    const s = sigs[i];
-    if (!s?.ts || !s?.type) continue;
-    if (String(s.quality || "").toLowerCase() === "regime_blocked") {
-      if (!eff && !blockedTail) blockedTail = s;   // remember a refused tail for the note
-      continue;
-    }
-    eff = s;
-    break;
-  }
+  const { anchor: eff, blockedTail } = anchorSignal(sigs);
 
   const mv = v ? String(v).toUpperCase() : null;
   const scored = st?.last_scored_signal ? String(st.last_scored_signal).toUpperCase() : null;

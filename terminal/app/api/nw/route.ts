@@ -7,7 +7,8 @@ import { rateLimit, tooMany } from "@/lib/rateLimit";
 // serves static JSON with no CORS header, so the browser can't fetch it cross-origin from
 // app.mastermind-x.com — this route proxies it same-origin. Display-only context: the
 // Terminal never ranks, gates, or scores features off these feeds.
-const NW_BASE = process.env.NW_DATA_BASE || "https://mastermind-x.com/neuralwebdata";
+// NW_BASE is shared with copilotTools via lib/upstreams (one edit rotates every consumer).
+import { NW_BASE } from "@/lib/upstreams";
 const PLANE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "nw_plane_fixture.json");
 
 const FEEDS: Record<string, string> = {

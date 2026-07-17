@@ -1,11 +1,11 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-
-// Public R2 base URL for snapshots (CDN-backed, no auth required)
-const R2_PUBLIC = "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev";
+// Public R2 base URL for snapshots (CDN-backed, no auth required) — shared constant,
+// see lib/upstreams.ts
+import { R2_BASE } from "@/lib/upstreams";
 
 function imgUrl(slug: string): string {
-  return `${R2_PUBLIC}/snapshots/${slug}.png`;
+  return `${R2_BASE}/snapshots/${slug}.png`;
 }
 
 // ── Next.js generateMetadata — produces OG tags for Discord/Twitter/Slack unfurls ──
