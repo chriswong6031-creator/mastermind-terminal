@@ -47,6 +47,11 @@
 .fin-grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .fin-grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .fin-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px 20px}
+/* intermediate widths: 4-up rows collapse to 2-up so card headers like
+ * "Dividend yield (TTM)" keep breathing room instead of touching card edges */
+@media (min-width:640.02px) and (max-width:899.98px){
+  .fin-grid4{grid-template-columns:repeat(2,1fr)}
+}
 @media (min-width:900px){
   .fin-pane>.fin-tabs{padding-left:clamp(28px,5vw,88px);padding-right:clamp(28px,5vw,88px)}
   .fin-pane>.fin-body{padding:24px clamp(28px,5vw,88px) 64px}
@@ -66,8 +71,10 @@
 }
 
 /* ── card ── */
-.fin-card{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:var(--sp-3);box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
-.fin-card-h{font:600 12px/1.2 var(--font-ui);color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:6px}
+/* NOTE: --sp-3 is not defined in globals.css — a bare var(--sp-3) computed to
+ * 0px padding, leaving card text touching the card border. Keep the fallback. */
+.fin-card{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:var(--sp-3,14px);box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
+.fin-card-h{font:600 12px/1.2 var(--font-ui);color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:6px;min-width:0;overflow-wrap:break-word}
 .fin-card-h .q{width:12px;height:12px;border-radius:50%;border:1px solid var(--line-3);color:var(--muted);font:600 8px/12px var(--font-ui);text-align:center;cursor:help}
 
 /* ── key-fact cell (label over value) ── */
@@ -195,7 +202,7 @@
 .fin-slider input[type=range]{width:70px;accent-color:var(--brand);height:3px}
 
 /* ── FinTip tooltip (fixed, .sa-trust-pop pattern) ── */
-.fin-tip{position:fixed;z-index:95;width:min(220px,72vw);background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:8px 10px;box-shadow:var(--shadow-2);pointer-events:none;animation:fin-tip-in .1s ease}
+.fin-tip{position:fixed;z-index:95;width:min(220px,72vw);background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:8px 10px;box-shadow:var(--shadow-2,0 8px 24px rgba(0,0,0,.45));pointer-events:none;animation:fin-tip-in .1s ease}
 @keyframes fin-tip-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
 .fin-tip-h{font:650 11px/1.3 var(--font-ui);color:var(--text);margin-bottom:5px}
 .fin-tip-row{display:flex;align-items:center;gap:6px;font:500 11px/1.5 var(--font-ui)}
@@ -889,3 +896,14 @@
 @media (max-width:860px){
   .fin-tabs{-webkit-overflow-scrolling:touch;padding-right:24px}
 }
+
+/* === TV-EARN: TradingView-parity earnings dumbbell ==========================
+ * Anchored in-chart tooltip card (clamped inside .fin-svg-box — can never
+ * leave the screen) + selected-column band. */
+.fin-hoverband.on{fill:rgba(255,255,255,.055)}
+.fin-dumbtip{position:absolute;z-index:6;top:6px;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:9px 12px;box-shadow:var(--shadow-2,0 8px 24px rgba(0,0,0,.45));pointer-events:none;animation:fin-tip-in .1s ease}
+.fin-dumbtip .r{display:flex;align-items:baseline;gap:14px;font:500 11.5px/1.7 var(--font-ui)}
+.fin-dumbtip .r .k{color:var(--text-2);flex:1;white-space:nowrap}
+.fin-dumbtip .r .v{color:var(--text);font-family:var(--font-num);font-weight:650;white-space:nowrap;font-feature-settings:"tnum"}
+.fin-dumbtip .r .v.up{color:var(--up)}
+.fin-dumbtip .r .v.down{color:var(--down)}

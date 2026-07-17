@@ -189,7 +189,7 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
         {head}
         <div className="pine-main">
           <div className="editor-pane" style={{ alignItems: "center", justifyContent: "center" }}>
-            <div className="strat-empty">No scripts yet.<br />Saved Pine indicators will appear here.</div>
+            <div className="pine-empty">No scripts yet.<br />Saved Pine indicators will appear here.</div>
           </div>
         </div>
         {foot}

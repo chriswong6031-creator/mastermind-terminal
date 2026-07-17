@@ -149,7 +149,7 @@ function EarningsMini({ fund, pick, onOpen }: { fund: Fund | null; pick: Pick; o
   const nDays = daysUntilLocal(fund?.earnings?.next_date);
   return (
     <Section title={pick("Earnings", "盈利")} sub={nDays != null && nDays >= 0 ? `${nDays}${pick("d", "天")}` : undefined}>
-      <Dumbbell points={points} vw={300} vh={150} zh={undefined} />
+      <Dumbbell points={points} vw={300} vh={150} zh={undefined} noWindow />
       {onOpen && <button className="sa-more-btn" onClick={onOpen}>{pick("More info", "更多")} ›</button>}
     </Section>
   );
