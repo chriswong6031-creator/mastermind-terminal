@@ -11,12 +11,14 @@ export const dynamic = "force-dynamic";
 //   ?syms=A,B,C   → { quotes: { SYM: quote|null } } (batch — the whole watchlist, ONE source)
 //   China A-share + Hong Kong → free Tencent snapshot (real-time A-share; ~15-min-delayed HK).
 //   US + crypto               → localhost Quote Hub (live crypto via Coinbase; delayed-15m US via
-//                               Polygon). Hub/Tencent down/timeout → quote:null → manifest EOD.
+//                               Polygon). Hub/Tencent down/timeout → quote:null → manifest EOD,
+//                               but a transient miss serves the last good quote (≤ KEEP_GOOD_MS).
 // `quote.basis` (LIVE | DELAYED_15M | EOD) flows through transparently for the frontend badge.
 
-type Entry = { at: number; quote: any };
+type Entry = { at: number; goodAt?: number; quote: any }; // goodAt: when quote was last genuinely fresh
 const CACHE = new Map<string, Entry>(); // per-symbol, shared by the single + batch paths
 const TTL = 5_000; // real-time snapshot cadence; also bounds upstream call volume per symbol
+const KEEP_GOOD_MS = 30_000; // ride out a transient upstream miss on a recently-good symbol
 const MAX_BATCH = 200; // a watchlist is normally < 50; cap to bound one poll's upstream fan-out
 
 // Split requested symbols into fresh cache hits vs misses (the misses are fetched in one batch).
@@ -34,12 +36,31 @@ function readCache(syms: string[]): { hits: Record<string, any>; miss: string[] 
 
 // Fetch the cache misses in one batched upstream call and write them back (null included, so a
 // symbol with no live leg is cached as a miss too and doesn't get re-fetched every poll).
+// Keep-last-good: one slow Tencent response aborts its whole chunk, which used to cache null for
+// every CN/HK symbol in it and flip the board to Historical for a full TTL. A miss for a symbol
+// whose last GOOD quote is < KEEP_GOOD_MS old re-serves that quote, re-stamped at `at` so it is a
+// normal cache hit for the next TTL — preserving the once-per-TTL upstream bound + cross-client
+// coalescing (retrying every request during a brownout would hammer Tencent hardest exactly while
+// it is struggling). goodAt is carried through unchanged by a stale re-serve, so it keeps the hard
+// window clock: a symbol that stays missing degrades to a genuine null (→ manifest EOD).
 async function fillMisses(miss: string[]): Promise<Record<string, any>> {
   if (!miss.length) return {};
   const fresh = await fetchQuotes(miss);
   const at = Date.now();
   const out: Record<string, any> = {};
-  for (const s of miss) { const q = fresh[s] ?? null; CACHE.set(s, { at, quote: q }); out[s] = q; }
+  for (const s of miss) {
+    const q = fresh[s] ?? null;
+    if (q) { CACHE.set(s, { at, quote: q }); out[s] = q; continue; }
+    const prior = CACHE.get(s);
+    const goodAt = prior?.quote ? prior.goodAt ?? prior.at : null;
+    if (goodAt != null && at - goodAt < KEEP_GOOD_MS) {
+      CACHE.set(s, { at, goodAt, quote: prior!.quote });
+      out[s] = prior!.quote;
+      continue;
+    }
+    CACHE.set(s, { at, quote: null });
+    out[s] = null;
+  }
   return out;
 }
 

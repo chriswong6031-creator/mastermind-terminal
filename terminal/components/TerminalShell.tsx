@@ -533,8 +533,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   // ONE batched live-quote poll for the active symbol + every watchlist row. Symbol-keyed results
   // merge into `quotes`, so switching tickers never bleeds a stale quote and the header + watchlist
-  // read the same numbers. A null entry (hub/Tencent down for that symbol) is deleted so its badge
-  // reverts to grey and its row falls back to manifest EOD — preserving the old fallback invariant.
+  // read the same numbers. A null entry (hub/Tencent down for that symbol) ages the key out after 3
+  // consecutive misses (see quoteMissRef) so its badge reverts to grey and its row falls back to
+  // manifest EOD — the old fallback invariant, minus the flap on a single slow upstream response.
   // F2: composite expressions expand their legs into the poll batch so compositeQuote() can sum them.
   const quoteSyms = useMemo(() => {
     const all: string[] = [];
@@ -558,6 +559,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const quoteSymsKeyRef = useRef(quoteSymsKey);
   quoteSymsKeyRef.current = quoteSymsKey;
   const quoteAliveRef = useRef(true);
+  // Consecutive null polls per symbol. A null only evicts a previously-good quote after 3 misses
+  // in a row (~18s at the 6s cadence): one aborted upstream chunk nulls every CN/HK symbol at
+  // once, and hard-deleting on the first null flipped the whole board (header + watchlist +
+  // pane cards) to Historical until the next good poll. Counted outside the setQuotes updater so
+  // StrictMode double-invocation can't double-count.
+  const quoteMissRef = useRef<Record<string, number>>({});
   const pollQuotes = useCallback(() => {
     const key = quoteSymsKeyRef.current;
     if (!key) return;
@@ -565,9 +572,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!quoteAliveRef.current || !d || !d.quotes) return;
+        const misses = quoteMissRef.current;
+        const drop = new Set<string>();
+        for (const k of Object.keys(d.quotes)) {
+          if (d.quotes[k]) delete misses[k];
+          else if ((misses[k] = (misses[k] ?? 0) + 1) >= 3) { drop.add(k); delete misses[k]; }
+        }
         setQuotes((prev) => {
           const n = { ...prev };
-          for (const k of Object.keys(d.quotes)) { const q = d.quotes[k]; if (q) n[k] = q; else delete n[k]; }
+          for (const k of Object.keys(d.quotes)) { const q = d.quotes[k]; if (q) n[k] = q; else if (drop.has(k)) delete n[k]; }
           return n;
         });
       })
@@ -579,9 +592,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     const id = setInterval(pollQuotes, 6000);
     return () => { quoteAliveRef.current = false; clearInterval(id); };
   }, [pollQuotes]);
-  // debounced fresh poll whenever the symbol set changes (rapid edits collapse to one fetch)
+  // debounced fresh poll whenever the symbol set changes (rapid edits collapse to one fetch);
+  // also prune miss counters for symbols that left the set so a re-added one starts at zero
   useEffect(() => {
     if (!quoteSymsKey) return;
+    const cur = new Set(quoteSymsKey.split(","));
+    for (const k of Object.keys(quoteMissRef.current)) if (!cur.has(k)) delete quoteMissRef.current[k];
     const id = setTimeout(pollQuotes, 250);
     return () => clearTimeout(id);
   }, [quoteSymsKey, pollQuotes]);
