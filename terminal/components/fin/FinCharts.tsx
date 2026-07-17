@@ -1391,35 +1391,51 @@ function WaterfallXAxis({ labels, boxW, rpad }: { labels: string[]; boxW?: numbe
   const gutterPx = rpad != null ? rpad + 8 : 56;
   const usable = Math.max(1, (boxW ?? 320) - gutterPx);
   const slotPx = usable / Math.max(1, n);
-  // Approximate rendered label width: ~6px per character at 7.5px font
-  const labelPx = (lbl: string) => lbl.length * 6;
+  // Approximate rendered label width. CONSERVATIVE 7px/char latin: the ≤860px
+  // media floor bumps this axis to a 10px font (~6.7px/char) and the old
+  // 6px/char estimate under-detected collisions there — labels like
+  // "Op expenses" / "Non-op & others" jammed into one unreadable run on real
+  // devices. CJK glyphs render full-em (~11px at that floor): without the
+  // wider estimate zh labels like 营业费用/营业利润 both ellipsized to 营业…
+  const CJK_RE = /[⺀-鿿　-ヿ豈-﫿＀-￯]/;
+  const labelPx = (lbl: string) => { let w = 0; for (const ch of lbl) w += CJK_RE.test(ch) ? 11 : 7; return w; };
   // Detect collision between adjacent pair assuming each is centred in its slot
   const collides = (a: string, b: string) => (labelPx(a) + labelPx(b)) / 2 > slotPx * 0.95;
   // Check if ANY adjacent pair collides → need stagger
   const needsStagger = labels.some((lbl, i) => i > 0 && collides(labels[i - 1], lbl));
-  // Wrap a label at its last space before the midpoint if it's too wide for a slot
+  // Wrap any label wider than its slot at a space near the midpoint —
+  // independent of stagger (a lone long label like "Enterprise value" can
+  // overflow its slot even when no adjacent PAIR collides). CJK labels carry
+  // no spaces but may break anywhere: split at the midpoint (营业外及其他 →
+  // 营业外 / 及其他) instead of falling through to the ellipsis clamp.
   const wrap = (lbl: string): string[] => {
-    if (!needsStagger || labelPx(lbl) <= slotPx * 1.1) return [lbl];
+    if (labelPx(lbl) <= slotPx * 1.05) return [lbl];
     const mid = Math.floor(lbl.length / 2);
     const sp = lbl.lastIndexOf(" ", mid);
     const sp2 = lbl.indexOf(" ", mid);
     const cut = sp > 0 ? sp : sp2 > 0 ? sp2 : -1;
-    if (cut < 0) return [lbl];
-    return [lbl.slice(0, cut), lbl.slice(cut + 1)];
+    if (cut >= 0) return [lbl.slice(0, cut), lbl.slice(cut + 1)];
+    const chars = [...lbl];
+    if (chars.length >= 4 && CJK_RE.test(lbl)) {
+      const half = Math.ceil(chars.length / 2);
+      return [chars.slice(0, half).join(""), chars.slice(half).join("")];
+    }
+    return [lbl];
   };
   return (
     <div className={"fin-wf-xaxis fin-xaxis-xs"} style={{ paddingRight: gutterPx + "px" }}>
       {labels.map((lbl, i) => {
         const staggerDown = needsStagger && i % 2 === 1;
+        // Always render lines as .fin-wf-lline spans — the CSS clamps each line
+        // to its slot (overflow:hidden + ellipsis) so a mis-estimated width can
+        // never bleed into the neighboring label again.
         const lines = wrap(lbl);
         return (
           <span
             key={i}
             className={"fin-xlbl fin-wf-xlbl" + (staggerDown ? " fin-wf-xlbl-lo" : "")}
           >
-            {lines.length === 1
-              ? lines[0]
-              : lines.map((ln, li) => <span key={li} className="fin-wf-lline">{ln}</span>)}
+            {lines.map((ln, li) => <span key={li} className="fin-wf-lline" title={lines.length > 1 || labelPx(lbl) > slotPx ? lbl : undefined}>{ln}</span>)}
           </span>
         );
       })}

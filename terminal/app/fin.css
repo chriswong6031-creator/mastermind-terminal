@@ -161,10 +161,10 @@
 /* ── waterfall x-axis (staggered collision-avoidance) ── */
 .fin-wf-xaxis{display:flex;justify-content:space-between;padding:6px 0 0 8px;font:500 7.5px/1 var(--font-num);color:var(--muted)}
 /* low-row label: pushed down by one row height + a connector gap */
-.fin-wf-xlbl{white-space:nowrap;text-align:center;flex:1 1 0;min-width:0;display:inline-flex;flex-direction:column;align-items:center}
+.fin-wf-xlbl{white-space:nowrap;text-align:center;flex:1 1 0;min-width:0;max-width:100%;overflow:hidden;display:inline-flex;flex-direction:column;align-items:center}
 .fin-wf-xlbl-lo{margin-top:12px}
 /* two-line wrap: each line is its own block */
-.fin-wf-lline{display:block;line-height:1.2}
+.fin-wf-lline{display:block;line-height:1.2;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ── donut ── */
 .fin-donut{display:flex;flex-direction:column;align-items:center;gap:12px}
@@ -413,7 +413,10 @@
 .fin-fc-bracket.t-down .lbl{background:var(--down)}
 
 /* Forecast band annotation: positioned at the right ~16% of the chart area */
-.fin-fc-forecast-ann{position:absolute;top:6px;right:0;width:16%;text-align:center;font:600 9px/1 var(--font-ui);color:var(--muted);letter-spacing:.04em;text-transform:uppercase;pointer-events:none;border-left:1px dashed var(--line-3);padding-left:4px}
+/* right:56px clears the LineSeries y-tick gutter (rPad ≈46-54 for price-scale
+ * ticks); nowrap + auto width stops the "1Y / FORECAST" two-line wrap that
+ * collided with the top ticks. */
+.fin-fc-forecast-ann{position:absolute;top:6px;right:56px;width:auto;max-width:40%;text-align:right;font:600 9px/1 var(--font-ui);color:var(--muted);letter-spacing:.04em;text-transform:uppercase;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:1px dashed var(--line-3);padding-left:6px}
 
 /* ── Forecast: analyst rating distribution ── */
 .fin-fc-dist{display:flex;flex-direction:column;gap:7px;margin-top:14px}
