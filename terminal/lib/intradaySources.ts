@@ -232,12 +232,26 @@ async function fetchTencentQuotes(syms: string[]): Promise<Record<string, Quote>
     if (code) { codeToSym.set(code, s); marketOf.set(s, mk); codes.push(code); }
   }
   if (!codes.length) return {};
-  const r = await fetch(`https://qt.gtimg.cn/q=${codes.join(",")}`, {
-    headers: { "User-Agent": "Mozilla/5.0", Referer: "https://gu.qq.com/" },
-    cache: "no-store", signal: AbortSignal.timeout(2500),
-  });
-  if (!r.ok) throw new Error("tencent-quote " + r.status);
-  const text = new TextDecoder("latin1").decode(await r.arrayBuffer());
+  // One quick retry on network failure/abort: typical latency is ~1-1.3s against the 2.5s cap, so
+  // a single slow response aborts and would otherwise blank the whole chunk for this poll. The
+  // timeout signal also governs body streaming, so the body read lives INSIDE the attempt (a
+  // mid-body stall must retry too); each try needs a fresh signal. A non-200 is thrown as-is and
+  // NOT retried — no point hammering an upstream that answered with an error.
+  const attempt = async (): Promise<ArrayBuffer> => {
+    const r = await fetch(`https://qt.gtimg.cn/q=${codes.join(",")}`, {
+      headers: { "User-Agent": "Mozilla/5.0", Referer: "https://gu.qq.com/" },
+      cache: "no-store", signal: AbortSignal.timeout(2500),
+    });
+    if (!r.ok) throw new Error("tencent-quote " + r.status);
+    return r.arrayBuffer();
+  };
+  let buf: ArrayBuffer;
+  try { buf = await attempt(); }
+  catch (e) {
+    if (e instanceof Error && e.message.startsWith("tencent-quote")) throw e;
+    buf = await attempt();
+  }
+  const text = new TextDecoder("latin1").decode(buf);
   const out: Record<string, Quote> = {};
   const re = /v_(\w+)="([^"]*)"/g;
   let m: RegExpExecArray | null;
@@ -292,7 +306,9 @@ export async function fetchQuotes(syms: string[]): Promise<Record<string, Quote>
   const out: Record<string, Quote> = {};
   await Promise.all([
     ...chunk(hub, 100).map((c) => fetchHubQuotes(c).then((mp) => { Object.assign(out, mp); }).catch(() => {})),
-    ...chunk(tencent, 60).map((c) => fetchTencentQuotes(c).then((mp) => { Object.assign(out, mp); }).catch(() => {})),
+    // 30/chunk (not 60): one slow/aborted Tencent response blanks its whole chunk, so smaller
+    // chunks halve the blast radius of a single bad request (chunks run in parallel anyway).
+    ...chunk(tencent, 30).map((c) => fetchTencentQuotes(c).then((mp) => { Object.assign(out, mp); }).catch(() => {})),
   ]);
   return out;
 }
