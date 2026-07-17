@@ -354,6 +354,7 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 
 /* ===== pine editor ===== */
 .pine-main{grid-column:2;grid-row:2;display:flex;min-width:0;min-height:0;overflow:hidden}
+.pine-empty{color:var(--muted);font-size:13px;padding:40px;text-align:center}
 .editor-pane{flex:1.7;display:flex;flex-direction:column;border-right:1px solid var(--line);min-width:0}
 .editor-head{display:flex;align-items:center;gap:10px;height:40px;padding:0 13px;border-bottom:1px solid var(--line);font:600 12.5px/1 var(--font-num);color:var(--text-2)}
 .editor-head .badge{font:600 9px/1 var(--font-ui);letter-spacing:.06em;color:var(--brand-2);background:rgba(41,98,255,.13);padding:3px 7px;border-radius:var(--r-pill)}
@@ -644,7 +645,7 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .authcard .alt .lnk:hover{text-decoration:underline}
 .authcard .alt .lnk:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 
-/* ===== §7 additions: drawings, copilot chat, strategy tester, intel, layouts ===== */
+/* ===== §7 additions: drawings, copilot chat, intel, layouts ===== */
 /* copilot chat */
 .cmsg{margin-bottom:12px}
 .cmsg .bub{font-size:13px;line-height:1.6;color:var(--text);border-radius:var(--r-md);padding:11px 13px;white-space:pre-wrap}
@@ -656,17 +657,6 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .cmsg .step svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2}
 .bub.typing span{animation:blink 1.2s infinite}
 @keyframes blink{0%,100%{opacity:.2}50%{opacity:1}}
-
-/* strategy tester */
-.strat{flex:1;min-height:0;overflow-y:auto;background:var(--bg);padding:14px 16px}
-.strat-empty{color:var(--muted);font-size:13px;padding:40px;text-align:center}
-.strat-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:14px}
-.strat-chart-h{display:flex;align-items:baseline;gap:10px;font:600 12px/1 var(--font-ui);color:var(--text);margin-bottom:8px}
-.strat-chart-h span{font-size:11px;color:var(--muted);font-weight:400}
-.strat-chart{height:200px;margin-bottom:16px;border:1px solid var(--line);border-radius:var(--r-md)}
-.strat-trades{border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden}
-.strat-trades table{margin:0}
-.strat-trades th{position:sticky;top:0;background:var(--panel);font-size:10px}
 
 /* intel card (rail) */
 .intel{border-top:1px solid var(--line);margin-top:12px;padding-top:12px}

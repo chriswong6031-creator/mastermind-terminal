@@ -19,10 +19,11 @@ import {
   useState,
   useRef,
   useEffect,
+  useLayoutEffect,
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { fmtNum, fmtPct, pick } from "../../lib/finFormat";
+import { fmtNum, fmtPct, fmtDate, pick } from "../../lib/finFormat";
 
 /**
  * Measure the chart box's live pixel width so the SVG viewBox can be set to
@@ -163,20 +164,36 @@ export interface TipState {
 /**
  * FinTip — a fixed-position, viewport-clamped tooltip. Render ONE per chart and
  * drive it with a `TipState | null` you set from `onMouseMove`/`onMouseLeave`.
- * Pointer-events are disabled so it never eats hover. Position is nudged so it
- * stays on-screen near the right/bottom edges.
+ * Pointer-events are disabled so it never eats hover. The rendered box is
+ * MEASURED after paint and clamped/flipped so it can never leave the viewport
+ * on any edge (the old right-anchor math pushed mid-screen mobile taps off the
+ * LEFT edge — the tooltip is a fixed 220px but a right-anchored box has an
+ * unbounded left edge).
  */
 export function FinTip({ tip }: { tip: TipState | null }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  // Layout effect: measure + clamp BEFORE paint so the box never flashes at
+  // the raw cursor offset (client component — no SSR concern).
+  useLayoutEffect(() => {
+    if (!tip || !ref.current) { setPos(null); return; }
+    const r = ref.current.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let left = tip.x + 14;
+    if (left + r.width > vw - 8) left = tip.x - 14 - r.width; // flip to the pointer's left
+    left = Math.min(Math.max(8, left), Math.max(8, vw - r.width - 8));
+    let top = tip.y + 14;
+    if (top + r.height > vh - 8) top = tip.y - 14 - r.height; // flip above the pointer
+    top = Math.min(Math.max(8, top), Math.max(8, vh - r.height - 8));
+    setPos({ left, top });
+  }, [tip]);
   if (!tip) return null;
-  const W = 220;
-  const flipX = typeof window !== "undefined" && tip.x + W + 24 > window.innerWidth;
-  const style: CSSProperties = {
-    left: flipX ? undefined : tip.x + 14,
-    right: flipX ? Math.max(8, window.innerWidth - tip.x + 14) : undefined,
-    top: tip.y + 14,
-  };
+  // First paint is measured invisibly; the effect above then places + reveals it.
+  const style: CSSProperties = pos
+    ? { left: pos.left, top: pos.top }
+    : { left: tip.x + 14, top: tip.y + 14, visibility: "hidden" };
   return (
-    <div className="fin-tip" style={style} role="tooltip">
+    <div className="fin-tip" style={style} role="tooltip" ref={ref}>
       {tip.title && <div className="fin-tip-h">{tip.title}</div>}
       {tip.rows.map((r, i) => (
         <div className="fin-tip-row" key={i}>
@@ -542,6 +559,10 @@ export interface DumbbellPoint {
   actual: NumOrNull;
   /** Estimate/consensus (hollow ring). */
   estimate: NumOrNull;
+  /** Report date (ISO) — rendered as the tooltip "Date" row (TV parity). */
+  date?: string | null;
+  /** Surprise % vs estimate — drives beat/miss dot color + tooltip Surprise row. */
+  surp_pct?: number | null;
 }
 
 /** Props for {@link Dumbbell}. */
@@ -561,31 +582,95 @@ export interface DumbbellProps {
   noLegend?: boolean;
   zh?: boolean;
   height?: number;
+  /** Disable the width-adaptive trailing window (rail minis pass a curated
+   *  short set — e.g. last 4Q + next — that must never be trimmed). */
+  noWindow?: boolean;
 }
 
 /**
  * Dumbbell / paired-dot plot: filled Actual dot + hollow Estimate ring per
- * period, connected by a thin stem. A diagonal-hatched FORECAST band shades the
- * forward (estimate-only) columns. This is the TV Earnings dumbbell.
+ * period. A diagonal-hatched FORECAST band shades the forward (estimate-only)
+ * columns. This is the TV Earnings dumbbell, at TV parity:
+ *   • WIDTH-ADAPTIVE WINDOW — only as many TRAILING periods as fit at a
+ *     comfortable slot width are drawn (TV mobile shows ~5 quarters), so the
+ *     x-axis can never crowd. Desktop keeps the full set.
+ *   • Beat/miss coloring — when a point carries `surp_pct`, the actual dot is
+ *     green (beat) / red (miss); otherwise `actualColor`.
+ *   • ANCHORED tooltip — hover/tap selects a column; a Date/Actual/Estimate/
+ *     Surprise card renders INSIDE the chart box, clamped to its bounds, so it
+ *     can never leave the screen (the old cursor-chasing FinTip could). A tap
+ *     pins it; tapping the column again or anywhere outside dismisses it.
  */
-export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFrom, actualColor = "var(--up)", estimateColor = "var(--text-2)", noLegend, zh, height }: DumbbellProps) {
+export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFrom, actualColor = "var(--up)", estimateColor = "var(--text-2)", noLegend, zh, height, noWindow }: DumbbellProps) {
   const hatchId = useId().replace(/:/g, "");
-  const { tip, show, hide } = useFinTip();
   const box = useBoxW(vw);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [pinIdx, setPinIdx] = useState<number | null>(null); // tap-to-pin (touch)
+  // ── TV-parity trailing window: keep the most recent N periods that fit at
+  // ≥56px per column (estimated with the default gutter; the exact gutter is
+  // recomputed from the windowed domain below). Hoisted above the early
+  // returns so the selection-reset effect can key on it.
+  const MIN_SLOT = 56;
+  const nPts = points?.length ?? 0;
+  const maxCols = noWindow ? Math.max(1, nPts) : Math.max(4, Math.floor(Math.max(1, box.w - PAD.l - PAD.r) / MIN_SLOT));
+  // hover/pin index INTO THE WINDOW — when the window shifts (resize changes
+  // maxCols, or the points set changes e.g. A/Q toggle) the same index would
+  // denote a different period, so drop any selection. Keyed on a VALUE
+  // signature, not array identity: parents rebuild the points array on every
+  // render (quote polls etc.) and identity-keying would dismiss an open card.
+  const winSig = `${nPts}:${points?.[0]?.label ?? ""}:${points?.[nPts - 1]?.label ?? ""}:${maxCols}`;
+  useEffect(() => { setPinIdx(null); setHoverIdx(null); }, [winSig]);
+  // Dismiss the card on any press outside this chart's box. Clears hover too:
+  // touch taps fire an emulated mouseenter that never gets a mouseleave, so
+  // hoverIdx would otherwise keep the card alive after an outside tap.
+  const cardOpen = pinIdx != null || hoverIdx != null;
+  useEffect(() => {
+    if (!cardOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (box.ref.current && !box.ref.current.contains(e.target as Node)) {
+        setPinIdx(null);
+        setHoverIdx(null);
+      }
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [cardOpen, box.ref]);
   if (!points || points.length === 0 || points.every((p) => !num(p.actual) && !num(p.estimate)))
     return <Empty zh={zh} />;
   vw = box.w; vh = height ?? 170;   // viewBox = real px box size → 1:1 scale, round dots + crisp labels
+
+  // Window start: normally the trailing maxCols slice, but if that slice is
+  // entirely null (sparse recent data) anchor it at the LAST period holding a
+  // value so the chart never says "No data" while older points have some.
+  let start = Math.max(0, points.length - maxCols);
+  if (points.slice(start).every((p) => !num(p.actual) && !num(p.estimate))) {
+    for (let i = points.length - 1; i >= 0; i--) {
+      if (num(points[i].actual) || num(points[i].estimate)) { start = Math.max(0, i + 1 - maxCols); break; }
+    }
+  }
+  const win = points.slice(start, start + maxCols);
+  const offset = start;
+
   const vals: number[] = [];
-  points.forEach((p) => { if (num(p.actual)) vals.push(p.actual as number); if (num(p.estimate)) vals.push(p.estimate as number); });
+  win.forEach((p) => { if (num(p.actual)) vals.push(p.actual as number); if (num(p.estimate)) vals.push(p.estimate as number); });
+  if (vals.length === 0) return <Empty zh={zh} />;
   const dom = domain([{ name: "", values: vals }], true);
   const tk = ticks(dom, 4);
   const PR = rPad(tk, fmtY);
   const iw = vw - PAD.l - PR;
   const ih = vh - PAD.t - PAD.b;
   const y = (v: number) => PAD.t + ih - ((v - dom[0]) / (dom[1] - dom[0])) * ih;
-  const slot = iw / Math.max(1, points.length);
-  const fFrom = forecastFrom ?? points.findIndex((p) => !num(p.actual) && num(p.estimate));
-  const labels = points.map((p) => p.label);
+  const slot = iw / Math.max(1, win.length);
+  const R = Math.max(5, Math.min(10, slot * 0.16)); // TV-sized dots, scaled to slot
+  let fFrom: number;
+  if (forecastFrom != null) {
+    const rel = forecastFrom - offset;
+    fFrom = rel >= win.length ? -1 : Math.max(0, rel);
+  } else {
+    fFrom = win.findIndex((p) => !num(p.actual) && num(p.estimate));
+  }
+  const labels = win.map((p) => p.label);
+  const active = pinIdx ?? hoverIdx;
   const SVGH = height ?? 170;
   return (
     <div className="fin-chart">
@@ -605,25 +690,50 @@ export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFr
             <text className="fin-axis-y" x={vw - PR + 4} y={y(t) + 3}>{fmtY(t)}</text>
           </g>
         ))}
-        {points.map((p, i) => {
+        {win.map((p, i) => {
           const cx = PAD.l + slot * i + slot / 2;
           const ya = num(p.actual) ? y(p.actual as number) : null;
           const ye = num(p.estimate) ? y(p.estimate as number) : null;
+          const dotCol = num(p.surp_pct) ? ((p.surp_pct as number) >= 0 ? "var(--up)" : "var(--down)") : actualColor;
           return (
             <g key={i}
-              onMouseMove={(e) => show(e, p.label, [
-                { label: pick(!!zh, "Actual", "实际"), value: num(p.actual) ? fmtY(p.actual as number) : "—", color: actualColor },
-                { label: pick(!!zh, "Estimate", "预期"), value: num(p.estimate) ? fmtY(p.estimate as number) : "—", color: estimateColor },
-              ])}
-              onMouseLeave={hide}>
-              <rect className="fin-hoverband" x={PAD.l + slot * i} y={PAD.t} width={slot} height={ih} />
+              onMouseEnter={() => setHoverIdx(i)}
+              onMouseLeave={() => setHoverIdx((h) => (h === i ? null : h))}
+              onClick={(e) => { e.stopPropagation(); if (pinIdx === i) { setPinIdx(null); setHoverIdx(null); } else { setPinIdx(i); } }}>
+              <rect className={"fin-hoverband" + (active === i ? " on" : "")} x={PAD.l + slot * i} y={PAD.t} width={slot} height={ih} />
               {ya != null && ye != null && <line className="fin-stem" x1={cx} x2={cx} y1={ya} y2={ye} />}
-              {ye != null && <circle className="fin-dot-est" cx={cx} cy={ye} r={4.2} fill="var(--panel)" stroke={estimateColor} />}
-              {ya != null && <circle className="fin-dot-act" cx={cx} cy={ya} r={4.2} fill={actualColor} />}
+              {ye != null && <circle className="fin-dot-est" cx={cx} cy={ye} r={R} fill="var(--panel)" stroke={estimateColor} style={{ strokeWidth: Math.max(1.8, R * 0.28) }} />}
+              {ya != null && <circle className="fin-dot-act" cx={cx} cy={ya} r={R} fill={dotCol} />}
             </g>
           );
         })}
       </svg>
+      {active != null && win[active] != null && (() => {
+        const p = win[active];
+        const cx = PAD.l + slot * active + slot / 2;
+        const TIPW = Math.min(180, Math.max(120, vw - 12));
+        const left = Math.min(Math.max(6, cx - TIPW / 2), Math.max(6, vw - TIPW - 6));
+        const diff = num(p.actual) && num(p.estimate) ? (p.actual as number) - (p.estimate as number) : null;
+        const sp = num(p.surp_pct)
+          ? (p.surp_pct as number)
+          : diff != null && (p.estimate as number) !== 0 ? (diff / Math.abs(p.estimate as number)) * 100 : null;
+        // Sign + color BOTH follow the displayed actual-vs-estimate diff so
+        // they can never disagree (provider surp_pct only breaks ties).
+        const beat = (diff ?? sp ?? 0) >= 0;
+        return (
+          <div className="fin-dumbtip" style={{ left, top: 6, width: TIPW }} role="tooltip">
+            <div className="r"><span className="k">{pick(!!zh, "Date", "日期")}</span><span className="v">{p.date ? fmtDate(p.date) : p.label}</span></div>
+            <div className="r"><span className="k">{pick(!!zh, "Actual", "实际")}</span><span className="v">{num(p.actual) ? fmtY(p.actual as number) : "—"}</span></div>
+            <div className="r"><span className="k">{pick(!!zh, "Estimate", "预期")}</span><span className="v">{num(p.estimate) ? fmtY(p.estimate as number) : "—"}</span></div>
+            {diff != null && (
+              <div className="r"><span className="k">{pick(!!zh, "Surprise", "超预期")}</span>
+                <span className={"v " + (beat ? "up" : "down")}>
+                  {(diff >= 0 ? "+" : "−") + fmtY(Math.abs(diff))}{sp != null ? ` (${Math.abs(sp).toFixed(2)}%)` : ""}
+                </span></div>
+            )}
+          </div>
+        );
+      })()}
       </div>
       <XAxis labels={labels} boxW={box.w} rpad={PR} />
       {!noLegend && (
@@ -632,7 +742,6 @@ export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFr
           <span className="fin-leg"><i className="fin-leg-dot fin-leg-ring" style={{ borderColor: estimateColor }} />{pick(!!zh, "Estimate", "预期")}</span>
         </div>
       )}
-      <FinTip tip={tip} />
     </div>
   );
 }
@@ -1226,12 +1335,21 @@ function XAxis({ labels, small, boxW, rpad }: { labels: string[]; small?: boolea
   const rotate = boxW != null && n > 8 && straightVisible < 4 && n <= maxTicksRot;
 
   // In rotated mode every label is shown (they fit at ~-35°); otherwise thin.
-  const keep = (i: number): boolean => {
-    if (rotate || !needsThin) return true;
-    if (i === 0 || i === n - 1) return true;   // always anchor first + last
+  // Kept indices are precomputed so the always-kept LAST label can evict a
+  // stride-kept neighbor that would jam against it (e.g. n=10, stride=2 kept
+  // BOTH 8 and 9 → "Q1 '26Q2 '26" collided at the right edge).
+  const kept = new Set<number>();
+  if (rotate || !needsThin) {
+    for (let i = 0; i < n; i++) kept.add(i);
+  } else {
     const stride = Math.ceil(n / maxTicks);
-    return i % stride === 0;
-  };
+    for (let i = 0; i < n; i += stride) kept.add(i);
+    kept.add(n - 1);
+    let prev = -1;
+    for (const i of kept) if (i !== n - 1 && i > prev) prev = i;
+    if (prev > 0 && n - 1 - prev < stride * 0.6) kept.delete(prev);
+  }
+  const keep = (i: number): boolean => kept.has(i);
 
   // Auto-shrink the font as labels get crowded so period labels (e.g. "Q2 '26")
   // stay whole instead of being clipped to "Q2 '.." on narrow containers.

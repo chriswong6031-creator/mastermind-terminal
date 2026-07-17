@@ -18,9 +18,9 @@ import type { Fund, EarningsQuarter, EarningsFY, StatementPeriodSet } from "../.
 import { fmtNum, fmtDate, daysUntil, periodLabel, pick } from "../../lib/finFormat"
 import { Dumbbell, type DumbbellPoint } from "./FinCharts"
 
-// Extend DumbbellPoint to carry pre-computed surprise so table rows
-// never re-index the raw qs/fys arrays by display position.
-type DumbbellPointWithSurp = DumbbellPoint & { surp_pct?: number | null }
+// DumbbellPoint carries pre-computed surp_pct + report date so table rows and
+// the chart tooltip never re-index the raw qs/fys arrays by display position.
+type DumbbellPointWithSurp = DumbbellPoint
 
 export interface EarningsPageProps {
   fund: Fund | null
@@ -48,12 +48,13 @@ function buildEpsDumbbell(
       if (surp_pct == null && q.eps_a != null && q.eps_e != null && q.eps_e !== 0) {
         surp_pct = ((q.eps_a - q.eps_e) / Math.abs(q.eps_e)) * 100
       }
-      return { label: periodLabel(q.period), actual: q.eps_a, estimate: q.eps_e, surp_pct }
+      return { label: periodLabel(q.period), date: q.report_date, actual: q.eps_a, estimate: q.eps_e, surp_pct }
     })
-    // Append forward quarter estimates (from estimates.eps_q)
+    // Append the NEXT forward quarter estimate only (TV parity: the quarterly
+    // chart shows one estimate-only column; the +1q estimate lives in Forecast)
     const eq = estimates?.eps_q
     if (eq) {
-      eq.periods.forEach((p, i) => {
+      eq.periods.slice(0, 1).forEach((p, i) => {
         // Avoid duplicating a quarter already in qs
         const label = periodLabel(p)
         if (!pts.some((pt) => pt.label === label)) {
@@ -94,7 +95,7 @@ function buildRevDumbbell(
       if (q.rev_a != null && q.rev_e != null && q.rev_e !== 0) {
         surp_pct = ((q.rev_a - q.rev_e) / Math.abs(q.rev_e)) * 100
       }
-      return { label: periodLabel(q.period), actual: q.rev_a, estimate: q.rev_e, surp_pct }
+      return { label: periodLabel(q.period), date: q.report_date, actual: q.rev_a, estimate: q.rev_e, surp_pct }
     })
     // no per-quarter rev estimates in spec
     return pts.slice(-10)
@@ -182,13 +183,12 @@ function RevenueModule({
         </div>
       </div>
 
-      {/* Dumbbell chart — orange for revenue actuals */}
+      {/* Dumbbell chart — TV parity: dots color by beat/miss via surp_pct */}
       {pts.length > 0 && (
         <Dumbbell
           points={pts}
           fmtY={(v) => fmtNum(v)}
-          actualColor="var(--warn)"
-          height={230}
+          height={260}
           zh={zh}
         />
       )}
@@ -444,14 +444,13 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
           </div>
         )}
 
-        {/* EPS dumbbell chart — blue for actuals */}
+        {/* EPS dumbbell chart — TV parity: dots color by beat/miss via surp_pct */}
         {epsPts.length > 0 ? (
           <Dumbbell
             points={epsPts}
             fmtY={(v) => v.toFixed(2)}
-            actualColor="var(--brand)"
             estimateColor="var(--text-2)"
-            height={230}
+            height={260}
             zh={zh}
           />
         ) : !estimatesOnlyEps ? (

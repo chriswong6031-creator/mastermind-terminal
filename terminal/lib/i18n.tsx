@@ -23,7 +23,6 @@ const LEX: Record<string, [string, string]> = {
   ai: ["Mastermind AI", "智脑 AI"],
   // chart toolbar
   priceChart: ["Price chart", "价格图表"],
-  strategyTester: ["Strategy tester", "策略回测"],
   indicators: ["Indicators", "指标"],
   compare: ["Compare", "对比"],
   detect: ["Detect", "智能识别"],
@@ -404,24 +403,6 @@ const LEX: Record<string, [string, string]> = {
   tmplOverwriteConfirm: ["A template with this name already exists. Overwrite?", "已存在同名模板，是否覆盖？"],
   // D1 Remove-all undo
   allIndicatorsRemoved: ["All indicators removed.", "已移除全部指标。"],
-  // strategy tester
-  netReturn: ["Net return", "净收益"],
-  sharpe: ["Sharpe", "夏普"],
-  maxDD: ["Max DD", "最大回撤"],
-  trades: ["Trades", "交易数"],
-  vsBuyHold: ["vs Buy&Hold", "对比买入持有"],
-  beats: ["beats", "跑赢"],
-  trails: ["trails", "跑输"],
-  equityCurve: ["Equity curve", "净值曲线"],
-  thEntry: ["Entry", "入场"],
-  thExit: ["Exit", "出场"],
-  thEntryPx: ["Entry px", "入场价"],
-  thExitPx: ["Exit px", "出场价"],
-  thReturn: ["Return", "收益"],
-  thBars: ["Bars", "持有"],
-  thReason: ["Reason", "原因"],
-  noStratData: ["No strategy-tester data for {sym}.", "{sym} 暂无策略回测数据。"],
-  stratLoadErr: ["Could not load strategy data.", "无法加载策略数据。"],
   // ─── Heatmap ─────────────────────────────────────────────────────────────
   heatmap: ["Heatmap", "热力图"],
   // ─── Options Hub ──────────────────────────────────────────────────────────

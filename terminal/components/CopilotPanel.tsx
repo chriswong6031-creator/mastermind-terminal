@@ -97,8 +97,8 @@ export default function CopilotPanel({ open, symbol, row, onClose, onAnnotate }:
                 ? <p>{rowName} 当前为 <span className={buy ? "buy" : "sell"}>黄金神谕 {v}</span>。今日 {up ? "+" : ""}{(row.chg ?? 0).toFixed(2)}%，报 {row.last?.toLocaleString()}。问我任何问题 —— 我可以调取它的报价、情报、回测，或扫描全市场。</p>
                 : <p>{rowName} is on a <span className={buy ? "buy" : "sell"}>Golden-Oracle {v}</span>. Today {up ? "+" : ""}{(row.chg ?? 0).toFixed(2)}% at {row.last?.toLocaleString()}. Ask me anything — I can pull its quote, intel, backtest, or screen the universe.</p>)
               : (zh
-                ? <p>向我询问 {symbol} —— 我可以调取报价、宏观情报、策略回测结果，或扫描全市场寻找机会。</p>
-                : <p>Ask me about {symbol} — I can pull its quote, macro intel, strategy-tester result, or screen the whole universe for setups.</p>)}
+                ? <p>向我询问 {symbol} —— 我可以调取报价、宏观情报、回测结果，或扫描全市场寻找机会。</p>
+                : <p>Ask me about {symbol} — I can pull its quote, macro intel, backtest result, or screen the whole universe for setups.</p>)}
           </div>
         )}
         {msgs.map((m, i) => (

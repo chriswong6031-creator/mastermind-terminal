@@ -26,10 +26,9 @@ import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey }
 import SeasonalityCard from "@/components/SeasonalityCard";
 // Code-split the conditionally-mounted heavies out of the /terminal first-paint bundle (task 9).
 // TerminalShell is a Client Component, so ssr:false is allowed — none of these render on any SSR
-// path (each mounts only when opened: paneOpen / signalsOpen / view==='strategy' / copilot toggle).
+// path (each mounts only when opened: paneOpen / signalsOpen / copilot toggle).
 const MegaPane = dynamic(() => import("@/components/fin/MegaPane"), { ssr: false });
 const OracleDash = dynamic(() => import("@/components/fin/OracleDash"), { ssr: false });
-const StrategyTester = dynamic(() => import("@/components/StrategyTester"), { ssr: false });
 const CopilotPanel = dynamic(() => import("@/components/CopilotPanel"), { ssr: false });
 import StockAnalysis from "@/components/StockAnalysis";
 import SignalButton from "@/components/SignalButton";
@@ -263,7 +262,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [replayOn, setReplayOn] = useState(false); const [replayIdx, setReplayIdx] = useState<number | null>(null); const [total, setTotal] = useState(0); const [playing, setPlaying] = useState(false); const [speed, setSpeed] = useState(1);
   const playRef = useRef<any>(null);
   // §7 state
-  const [view, setView] = useState<"price" | "strategy">("price");
   const [tool, setTool] = useState<string | null>(null);
   const [detectCmd, setDetectCmd] = useState<DetectCmd>(null);
   const [detectOpen, setDetectOpen] = useState(false);
@@ -1301,8 +1299,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
         </button>
         <div className="chart-tabs">
-          <div className={`ct${view === "price" ? " on" : ""}`} onClick={() => setView("price")}>{t("priceChart")}</div>
-          <div className={`ct${view === "strategy" ? " on" : ""}`} onClick={() => setView("strategy")}>{t("strategyTester")}</div>
+          <div className="ct on">{t("priceChart")}</div>
           <div className="tools">
             <div className="pophost">
               <div className="tftray">
@@ -1409,7 +1406,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           </div>
         </div>
 
-        {replayOn && view === "price" && (
+        {replayOn && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 14px", borderBottom: "1px solid var(--line)", background: "var(--bg)" }}>
             <button className="icbtn" title={t("replayReset")} aria-label={t("replayReset")} onClick={() => { setReplayIdx(Math.max(20, total - 80)); setPlaying(false); }}><svg viewBox="0 0 24 24"><path d="M11 19l-7-7 7-7M20 19l-7-7 7-7" /></svg></button>
             <button className="icbtn" disabled={mixedTfs} aria-label={t("replayPrev")} title={t("replayPrev")} onClick={() => setReplayIdx((i) => Math.max(20, (i ?? 0) - 1))}><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
@@ -1438,7 +1435,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             mode="workspace"
             intel={intel}
           />
-        ) : tableViewOpen && view === "price" ? (
+        ) : tableViewOpen ? (
           /* D3: Table view replaces the chart body */
           <ChartTableView
             symbol={active}
@@ -1451,7 +1448,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             indRowsAt={indRowsAt ?? undefined}
             onBack={() => setTableViewOpen(false)}
           />
-        ) : view === "price" ? (
+        ) : (
           <div className="chart-body" style={{ "--subpanes": subPanes } as React.CSSProperties}>
             <DrawingSidebar
               tool={tool}
@@ -1507,8 +1504,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               />
             )}
           </div>
-        ) : (
-          <StrategyTester symbol={active} key={"strat" + active} />
         )}
       </section>
 
