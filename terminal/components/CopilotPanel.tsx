@@ -8,8 +8,8 @@ type Step = { tool: string; args: any };
 type Msg = { role: "user" | "assistant"; content: string; steps?: Step[] };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
 
-export default function CopilotPanel({ open, symbol, row, onClose, onAnnotate }:
-  { open: boolean; symbol: string; row: Row | undefined; onClose: () => void; onAnnotate?: (symbol: string, annotations: any[]) => void }) {
+export default function CopilotPanel({ open, symbol, row, tf, indicators, onClose, onAnnotate }:
+  { open: boolean; symbol: string; row: Row | undefined; tf?: string; indicators?: string[]; onClose: () => void; onAnnotate?: (symbol: string, annotations: any[]) => void }) {
   const t = useT();
   const { lang } = useLang();
   const zh = lang === "zh";
@@ -46,7 +46,7 @@ export default function CopilotPanel({ open, symbol, row, onClose, onAnnotate }:
     const apply = (fn: (l: Msg) => Msg) => setMsgs((m) => { if (!m.length) return m; const c = [...m]; c[c.length - 1] = fn(c[c.length - 1]); return c; });
     try {
       const lang = (typeof document !== "undefined" && document.documentElement.getAttribute("data-lang")) || "en";
-      const r = await fetch("/api/copilot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, lang, messages: next.map((m) => ({ role: m.role, content: m.content })) }), signal: ac.signal });
+      const r = await fetch("/api/copilot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, lang, tf, indicators, messages: next.map((m) => ({ role: m.role, content: m.content })) }), signal: ac.signal });
       if (reqRef.current !== my) return;
       const ct = r.headers.get("content-type") || "";
       if (!r.body || !ct.includes("event-stream")) { const d = await r.json(); if (reqRef.current === my) setMsgs((m) => [...m, { role: "assistant", content: d.reply || "(no reply)", steps: d.steps }]); return; }
@@ -85,7 +85,7 @@ export default function CopilotPanel({ open, symbol, row, onClose, onAnnotate }:
     <aside ref={panelRef} className={`copilot${open ? " open" : ""}`}>
       <div className="ch">
         <span className="mk"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg></span>
-        <b>{t("ai")}</b><small>DEEPSEEK · TOOLS</small>
+        <b>{t("ai")}</b><small>AI · TOOLS</small>
         <span className="x" onClick={onClose}>✕</span>
       </div>
       <div className="cbody" ref={bodyRef}>

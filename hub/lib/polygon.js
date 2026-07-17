@@ -1,11 +1,17 @@
 "use strict";
-// Polygon delayed US equities/ETF feed (wss://delayed.polygon.io/stocks).
+// Polygon US equities/ETF feed — delayed cluster by default, real-time when entitled.
 //
 // Verified live: auth_success then 'subscribed to: AM.AAPL' acks. AM = per-minute aggregate
-// (delayed ~15 min). Contract §2: DYNAMIC per-symbol subs — subscribe on first request, LRU cap
-// 500, unsubscribe after ~30 min idle. Day o/h/l/vol accumulated from AM; chg vs manifest prev-close.
+// (delayed ~15 min on the delayed cluster). Contract §2: DYNAMIC per-symbol subs — subscribe on
+// first request, LRU cap 500, unsubscribe after ~30 min idle. Day o/h/l/vol accumulated from AM;
+// chg vs manifest prev-close.
 //
-// AM message fields (delayed cluster): ev=AM, sym, o, h, l, c, v, s(start ms), e(end ms).
+// Cluster select: HUB_POLYGON_CLUSTER=live → wss://socket.polygon.io (basis LIVE). A key that
+// is NOT real-time-entitled still gets auth_success there, then a status:"error" frame
+// ("You don't have access real-time data…") — we demote to the delayed cluster for the rest of
+// the process and reconnect, so a plan downgrade can never blank the US feed.
+//
+// AM message fields: ev=AM, sym, o, h, l, c, v, s(start ms), e(end ms).
 // We key the day accumulator on the ET trading date (same formatter family as
 // intradaySources.ts:etDisplay) so a UTC-midnight rollover doesn't reset the US day mid-session.
 //
@@ -15,7 +21,9 @@
 const WebSocket = require("ws");
 const log = require("./log");
 
-const URL = "wss://delayed.polygon.io/stocks";
+const URL_LIVE = "wss://socket.polygon.io/stocks";
+const URL_DELAYED = "wss://delayed.polygon.io/stocks";
+const WANT_LIVE = process.env.HUB_POLYGON_CLUSTER === "live";
 const LRU_CAP = 500;
 const IDLE_UNSUB_MS = 30 * 60 * 1000; // 30 min
 const SWEEP_INTERVAL_MS = 60 * 1000;
@@ -37,6 +45,8 @@ class Polygon {
   constructor(store, apiKey) {
     this.store = store;
     this.apiKey = apiKey || "";
+    // Effective cluster; starts from env, demoted (permanently for this process) on RT-denied.
+    this.cluster = WANT_LIVE ? "live" : "delayed";
     this.ws = null;
     this.authed = false;
     this.authFailed = false;
@@ -92,7 +102,7 @@ class Polygon {
       return;
     }
     let ws;
-    try { ws = new WebSocket(URL); } catch (e) {
+    try { ws = new WebSocket(this.cluster === "live" ? URL_LIVE : URL_DELAYED); } catch (e) {
       log.error("polygon ws construct failed", e.message); this._scheduleReconnect(); return;
     }
     this.ws = ws;
@@ -100,7 +110,7 @@ class Polygon {
 
     ws.on("open", () => {
       this.lastMsgAt = Date.now();
-      log.info("polygon connected — authenticating");
+      log.info("polygon connected — authenticating", `cluster=${this.cluster}`);
       // NEVER let the key reach the logger: pass it only into the frame.
       try { ws.send(JSON.stringify({ action: "auth", params: this.apiKey })); } catch (e) {
         log.error("polygon auth send failed", e.message);
@@ -138,6 +148,19 @@ class Polygon {
         this.authFailed = true;
         this.authed = false;
         log.error("polygon auth_failed — US feed unhealthy (manifest EOD fallback)", msg.message || "");
+      } else if (msg.status === "error" && this.cluster === "live" && /real.?time|not (?:authoriz|entitle)|access|subscri/i.test(msg.message || "")) {
+        // RT entitlement denied arrives AFTER auth_success (not as auth_failed): demote to the
+        // delayed cluster for the rest of the process and reconnect (close → _scheduleReconnect;
+        // _replaySubs re-subscribes everything on the delayed socket). The match is deliberately
+        // broad — free-text wording from a third party (Polygon → Massive rebrand in flight); a
+        // false-positive demote only costs latency, a miss silently blanks the whole US feed.
+        this.cluster = "delayed";
+        log.error("polygon real-time denied — demoting to delayed cluster", msg.message || "");
+        // Quotes already stamped LIVE must not linger overclaiming until their next AM bar.
+        for (const q of this.store.quotes.values()) {
+          if (q && q.source === "polygon-live") { q.source = "polygon-delayed"; q.basis = "DELAYED_15M"; q.live = false; }
+        }
+        try { this.ws.terminate(); } catch {}
       } else if (msg.status === "connected") {
         // handshake ack; wait for auth
       }
@@ -175,6 +198,7 @@ class Polygon {
     }
     this.dayAcc.set(sym, acc);
 
+    const live = this.cluster === "live";
     this.store.setQuote(sym, {
       last: acc.last,
       open: acc.open,
@@ -182,10 +206,10 @@ class Polygon {
       low: acc.low,
       vol: acc.vol,
       ts: Math.floor(endMs / 1000),
-      live: false,
-      source: "polygon-delayed",
+      live,
+      source: live ? "polygon-live" : "polygon-delayed",
       market: "us",
-      basis: "DELAYED_15M",
+      basis: live ? "LIVE" : "DELAYED_15M",
     });
   }
 
@@ -221,13 +245,15 @@ class Polygon {
   _writePlaceholder(sym) {
     // Only if we have no live entry yet: seed from the manifest so the header shows something.
     const existing = this.store.quotes.get(sym);
-    if (existing && existing.source === "polygon-delayed" && existing.last != null) return;
+    if (existing && String(existing.source || "").startsWith("polygon-") && existing.last != null) return;
     // Seed last = MANIFEST last (EOD close). setQuote derives prevClose from prevCloseBySym and
     // recomputes chg — reproducing the manifest's day-change (not a flat 0) until the first AM
     // bar lands, at which point the real delayed price/chg take over. Off-hours the header thus
     // keeps showing the session's ±% exactly like the pre-hub EOD fallback did.
     const manifestLast = this.store.manifest.lastBySym.get(sym);
     if (manifestLast == null) return;
+    // Placeholder is EOD-derived, so it always carries the delayed labels even on the live
+    // cluster — the first real AM bar upgrades it to LIVE; off-hours it never overclaims.
     this.store.setQuote(sym, {
       last: manifestLast,
       ts: Math.floor(Date.now() / 1000),
@@ -273,6 +299,8 @@ class Polygon {
     return {
       authed: this.authed,
       authFailed: this.authFailed,
+      cluster: this.cluster,
+      wantLive: WANT_LIVE,
       subs: this.subs.size,
       lruCap: LRU_CAP,
       lastMsgAt: this.lastMsgAt ? new Date(this.lastMsgAt).toISOString() : null,

@@ -24,7 +24,8 @@ Env vars come from `/opt/terminal/.env` (EnvironmentFile in the unit):
 
 | Var | Required | Notes |
 |---|---|---|
-| `POLYGON_API_KEY` | yes (US feed) | delayed cluster key |
+| `POLYGON_API_KEY` | yes (US feed) | Polygon stocks key (delayed or RT-entitled) |
+| `HUB_POLYGON_CLUSTER` | optional | `live` → wss://socket.polygon.io (basis `LIVE`); requires an RT-entitled plan + signed exchange agreements. Anything else/unset → delayed cluster (basis `DELAYED_15M`). A non-entitled key on `live` auto-demotes to delayed for the process lifetime — flip the env only after the plan upgrade, then `systemctl restart quote-hub`. `/health` reports the effective `cluster` |
 | `MANIFEST_PATH` | optional | default `/opt/terminal/terminal/public/data/manifest.json` |
 | `HUB_DATA_DIR` | optional | directory of per-symbol `<SYM>.json` files; default = dirname(MANIFEST_PATH) |
 | `HUB_PORT` | optional | default 3100 |

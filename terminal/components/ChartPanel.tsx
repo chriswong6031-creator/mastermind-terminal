@@ -275,13 +275,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const closesRef = useRef<number[]>([]);   // closes of barsRef
   const prevSymbolRef = useRef<string>("");  // tracks the symbol from the last Effect 2 run to detect symbol changes
   const precRef = useRef<number>(2);
-  // GC v2: sig marks additionally carry keeper quality + recipe tier for BUY|REBUY (drives the marker
-  // dimming/hollow style + the A+/Q badge). CUT is discriminated by `type` (the schema guarantees CUT ⟺
-  // scored:false), so `score`/`scored` aren't needed on the chart. All optional — v1 slices omit them.
-  const sigMarksRef = useRef<{ t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null }[]>([]);
-  // Golden Oracle v1: the confluence signals now come from ORACLE_V1_PINE run CLIENT-SIDE on the
-  // daily bars (no per-ticker backfill), memoized per (symbol · daily length · last daily date) so
-  // the flagship Pine runs once per load and replay just re-snaps the cached signal dates.
+  // GC v2: sig marks additionally carry keeper quality + recipe tier (drives the marker dimming/
+  // hollow style + the A+/Q badge) and the engine's quality_reason for the soft-mark tooltip. CUT is
+  // discriminated by `type` (the schema guarantees CUT ⟺ scored:false), so `score`/`scored` aren't
+  // needed on the chart. All optional — the client-Pine fallback path omits them.
+  type SigMark = { t: string; type: string; price: number; highlight?: boolean; quality?: string; tier?: string | null; reason?: string };
+  const sigMarksRef = useRef<SigMark[]>([]);
+  // Client-Pine FALLBACK: when a symbol ships no slice signal history, marks come from ORACLE_V1_PINE
+  // run client-side on the daily bars, memoized per (symbol · daily length · last daily date) so the
+  // flagship Pine runs at most once per load and replay just re-snaps the cached signal dates.
   const oracleMemoRef = useRef<{ key: string; sig: { ts: string; type: string }[] }>({ key: "", sig: [] });
   // Lab signal markers (TLT-R4): populated when _lab indicator is active and intel.tech is available.
   // Shape: Map<date-string, { names: string[]; dir: number }[]> — one entry per date, one item per signal fired that day.
@@ -1388,9 +1390,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     }
   };
 
-  // Golden Oracle v1: run the flagship confluence Pine (ORACLE_V1_PINE) on the DAILY bars and map its
-  // ★ / CUT / RE-BUY plotshapes to signal dates. Memoized per (symbol · daily length · last daily
-  // date) so the Pine runs once per symbol load and replay just re-snaps the cached signals.
+  // Client-Pine FALLBACK: run the ungated v1 confluence Pine (ORACLE_V1_PINE) on the DAILY bars and
+  // map its ★ / CUT / RE-BUY plotshapes to signal dates. Reached only when the slice ships no signal
+  // history (resolveSigMarks) — the v1 lane is unscored, so its marks carry no quality/tier. Memoized
+  // per (symbol · daily length · last daily date) so the Pine runs at most once per symbol load.
   const oracleSignals = (daily: Bar[]) => {
     const key = `${symbolRef.current}|${daily.length}|${daily[daily.length - 1]?.time ?? ""}`;
     if (oracleMemoRef.current.key === key) return oracleMemoRef.current.sig;
@@ -1409,40 +1412,66 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     oracleMemoRef.current = { key, sig };
     return sig;
   };
-  // Resolve BUY/SELL/CUT/REBUY marks against the CURRENT bar set. Those are computed CLIENT-SIDE from
-  // the v1 confluence Pine (no per-ticker backfill); RECLAIM re-entry marks additionally merge in from
-  // the slice's signal stream (the reclaim lane exists only server-side). Daily signal dates snap to
-  // the current bars exactly as the v2 path did, so intraday / replay / resampled views line up.
-  const resolveSigMarks = (_slice: any, rows: Bar[]) => {
-    const daily = dailyBarsRef.current.length ? dailyBarsRef.current : rows;
-    if (!daily.length || !rows.length) return [] as { t: string; type: string; price: number }[];
+  // Resolve BUY/SELL/CUT/REBUY/RECLAIM marks against the CURRENT bar set. PRIMARY source is the
+  // slice's signal stream (indicator.signals — the scored GC-v2 lane the rail card reads; the nightly
+  // regen ships full history universe-wide, and the flagship 5-min rewrites preserve it), so chart
+  // marks and the panel verdict can never contradict. Each signal snaps to the nearest bar (intraday /
+  // replay / resampled views line up) and carries quality/tier/quality_reason so renderSignals
+  // subordinates engine-refused entries — a soft {pending, block, regime_blocked} mark must never
+  // wear the scored style (signalVerdict SOFT_Q contract). Slice absent or signal-less (composites,
+  // fixtures, names outside the universe) → fall back to the client-side v1 Pine (unscored marks).
+  const resolveSigMarks = (slice: any, rows: Bar[]): SigMark[] => {
+    if (!rows.length) return [];
     const times = rows.map((r) => r.time);
     const lastDate = times[times.length - 1];
     const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(String(y) + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y as any; } }); return bd < 9e8 ? b : null; };
     const byTime = new Map(rows.map((r) => [r.time, r]));
-    const marks = oracleSignals(daily)
-      .filter((s) => s.ts <= (lastDate as string))
-      .map((s) => { const t = near(s.ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) return null; const price = (s.type === "BUY" || s.type === "REBUY") ? bar.l : bar.h; return { t, type: s.type, price }; })
-      .filter(Boolean) as { t: string; type: string; price: number; quality?: string }[];
-    // RECLAIM re-entry marks come from the SLICE (the reclaim lane has no Pine analog):
-    // snap each to its bar like the Pine marks, then keep the stream chronological so
-    // paintStatus's "latest mark" verdict chip stays honest.
-    const reclaims = _slice?.indicator?.signals;
-    if (Array.isArray(reclaims)) {
-      for (const s of reclaims) {
-        if (s?.type !== "RECLAIM" || typeof s?.ts !== "string" || s.ts > (lastDate as string)) continue;
-        const t = near(s.ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) continue;
-        marks.push({ t, type: "RECLAIM", price: bar.l, quality: s.quality as string | undefined });
+    // BUY-side marks anchor below the bar (low), SELL-side above (high) — same anchors either path.
+    // Exact-date hit skips the near() scan: full-history slices carry hundreds of signals and replay
+    // re-resolves per tick, so the O(signals × bars) scan must stay the resampled-TF exception.
+    const snap = (ts: string, type: string): SigMark | null => { const t = byTime.has(ts) ? ts : near(ts); const bar = t ? byTime.get(t) : null; if (!t || !bar) return null; return { t, type, price: type === "SELL" || type === "CUT" ? bar.h : bar.l }; };
+    const sigs = slice?.indicator?.signals;
+    if (Array.isArray(sigs) && sigs.length) {
+      const marks: SigMark[] = [];
+      for (const s of sigs) {
+        if (typeof s?.ts !== "string" || typeof s?.type !== "string" || s.ts > (lastDate as string)) continue;
+        const m = snap(s.ts, s.type); if (!m) continue;
+        m.quality = s.quality; m.tier = s.tier; m.reason = s.quality_reason;
+        marks.push(m);
       }
-      const idxOf = new Map(times.map((t, i) => [t, i]));
-      marks.sort((a, b) => (idxOf.get(a.t as any) ?? 0) - (idxOf.get(b.t as any) ?? 0));
+      // slice signals are chronological; snapping preserves order (the chip's fallback relies on it)
+      return marks;
     }
-    return marks;
+    const daily = dailyBarsRef.current.length ? dailyBarsRef.current : rows;
+    return oracleSignals(daily)
+      .filter((s) => s.ts <= (lastDate as string))
+      .map((s) => snap(s.ts, s.type))
+      .filter(Boolean) as SigMark[];
   };
 
-  // The v1 Golden Oracle has NO side channels (the early_dots + arm/confirm warnings were a GC v2
-  // display extra). Return empty so renderSignals draws none. Kept for call-site compatibility.
-  const resolveSideChannels = (_slice: any, _rows: Bar[]) => ({ dots: [] as { t: string }[], warns: [] as { t: string; kind: string }[] });
+  // GC v2 side channels → bar-snapped marks. early_dots is a list of date strings (anticipation
+  // pre-cross); warnings is a list of {ts, kind:"arm"|"confirm"} (structure-break). Both live on the
+  // slice indicator parallel to signals (emitter: ingest/gen_slices_all.py writes {"indicator": ind});
+  // the client-Pine fallback has no analog, so a missing slice simply yields empty channels.
+  const resolveSideChannels = (slice: any, rows: Bar[]) => {
+    const times = rows.map((r) => r.time);
+    const lastDate = times[times.length - 1] as string;
+    const tset = new Set(times as unknown as string[]);
+    const near = (iso: string) => { let b: string | null = null, bd = 1e18; const x = new Date(iso + "T00:00:00Z").getTime(); times.forEach((y) => { const dd = Math.abs(new Date(String(y) + "T00:00:00Z").getTime() - x); if (dd < bd) { bd = dd; b = y as any; } }); return bd < 9e8 ? b : null; };
+    // Exact-hit shortcut mirrors resolveSigMarks' snap(): dots/warns are engine bar dates, so on
+    // the daily TF every one hits — the O(bars) near() scan stays the resampled-TF exception
+    // (replay re-resolves per tick; without this, scrubbing full-history names costs ~100ms/step).
+    const snapT = (iso: string) => (tset.has(iso) ? iso : near(iso));
+    const dots = ((slice?.indicator?.early_dots || []) as string[])
+      .filter((ts) => ts <= lastDate)
+      .map((ts) => ({ t: snapT(ts) as string | null }))
+      .filter((m) => m.t) as { t: string }[];
+    const warns = ((slice?.indicator?.warnings || []) as { ts: string; kind: string }[])
+      .filter((w) => w?.ts <= lastDate)
+      .map((w) => ({ t: snapT(w.ts) as string | null, kind: w.kind }))
+      .filter((m) => m.t) as { t: string; kind: string }[];
+    return { dots, warns };
+  };
 
   // Status line + verdict badge from the current bars + slice.
   const paintStatus = (rows: Bar[], slice: any) => {
@@ -1460,7 +1489,31 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Gate oracle verdict text on whether the _oracle indicator is active. The chip's display:none
     // is controlled by oracleVisible in JSX; this guard prevents stale text from painting in the
     // background when the user has toggled the oracle OFF.
-    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) { const sm = sigMarksRef.current; const v = sm.length ? sm[sm.length - 1].type : "—"; const buy = v === "BUY" || v === "REBUY" || v === "RECLAIM"; verdictRef.current.textContent = `GOLDEN ORACLE · ${v === "RECLAIM" ? "RE-ENTRY" : v}`; verdictRef.current.style.color = buy ? t.buy : t.sell; const w = verdictRef.current.parentElement as HTMLElement; if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; } }
+    if (verdictRef.current && indicatorsRef.current.has("_oracle") && !hiddenRef.current.has("_oracle")) {
+      // Chip verdict = the scored lane's anchor: the newest slice signal the engine did NOT refuse —
+      // the same anchor rule as the rail card (signalVerdict.oracleVerdict), so chip and panel can't
+      // contradict. regime_blocked markers are vetoed displays and never anchor (contracts.py).
+      // Bounded by the last visible bar's DATE so replay (and stale bar caches) can't future-leak a
+      // verdict the on-chart marks don't show; intraday bars carry epoch times → convert to the day.
+      // Client-Pine fallback (no slice signals): the latest computed mark stands in, as before.
+      const sigs = slice?.indicator?.signals;
+      const lastT = rows[rows.length - 1]?.time;
+      const lastDate = typeof lastT === "string" ? lastT : lastT != null ? new Date((lastT as number) * 1000).toISOString().slice(0, 10) : null;
+      let v = "—";
+      if (Array.isArray(sigs) && sigs.length) {
+        for (let i = sigs.length - 1; i >= 0; i--) {
+          const s = sigs[i];
+          if (!s?.type || String(s.quality || "") === "regime_blocked") continue;
+          if (lastDate && typeof s.ts === "string" && s.ts > lastDate) continue;
+          v = String(s.type).toUpperCase(); break;
+        }
+      } else { const sm = sigMarksRef.current; if (sm.length) v = sm[sm.length - 1].type; }
+      const buy = v === "BUY" || v === "REBUY" || v === "RECLAIM";
+      verdictRef.current.textContent = `GOLDEN ORACLE · ${v === "RECLAIM" ? "RE-ENTRY" : v}`;
+      verdictRef.current.style.color = buy ? t.buy : t.sell;
+      const w = verdictRef.current.parentElement as HTMLElement;
+      if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; }
+    }
   };
 
   // ── R11 live-bar splice ───────────────────────────────────────────────────
@@ -1982,17 +2035,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const cfg = SIGCFG[m.type]; if (!cfg) continue;
         const x = xOf(m.t), y = yOf(m.price); if (x == null || y == null) continue;
         const star = !!cfg.star;
-        // GC v2 quality on BUY|REBUY: take=solid, block=hollow outline, pending=dim gray, regime_blocked=dim slate.
-        // (This SVG overlay has full shape control — the prompt's "○ glyph" fallback for shape-limited
-        //  lightweight-charts markers is unnecessary here; we draw a true hollow badge for `block`.)
-        const q = (m.type === "BUY" || m.type === "REBUY") ? m.quality : undefined;
+        // GC v2 quality: take=solid, block=hollow outline, pending=dim gray, regime_blocked=dim slate.
+        // Softness gates on the SOFT set (not the type) so an engine-refused mark of ANY type renders
+        // subordinate; RECLAIM's own lane qualities (reclaim/block_repair) are NOT soft and keep the
+        // dashed-hollow re-entry law. A soft mark must never wear the scored style (SOFT_Q contract).
+        const q = m.quality === "pending" || m.quality === "block" || m.quality === "regime_blocked" ? m.quality : undefined;
         const hollow = q === "block" || !!cfg.hollow;
         const dim = q === "pending" || q === "regime_blocked";
         const fill = q === "regime_blocked" ? SLATE : (q === "pending" ? t2.mut : cfg.fill);
         const groupOp = dim ? 0.5 : 0.97;
-        // tier badge is appended to the marker text for taken entries (take/undefined); suppressed on blocked/pending.
-        // tier badge ("A+"/"Q") shown only for TAKEN entries (take / ungraded v1); suppressed on block/pending/regime_blocked.
-        const badge = (m.type === "BUY" || m.type === "REBUY") && (q === "take" || q == null) ? tierBadge(m.tier) : "";
+        // tier badge ("A+"/"Q") shown only for TAKEN entries (quality take/undefined); suppressed on soft.
+        const badge = (m.type === "BUY" || m.type === "REBUY") && q == null ? tierBadge(m.tier) : "";
         const w = star ? 19 : Math.max(20, 9 + cfg.txt.length * 7), h = 15, r = 4, ptr = 5, gap = 9;
         const up = cfg.dir === "up";
         const top = up ? y + gap + ptr : y - gap - ptr - h;
@@ -2016,6 +2069,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (m.type === "RECLAIM") {
           const title = mk("title", {});
           title.textContent = `${m.t} · re-entry (${m.quality === "block_repair" ? "bear-block repaired" : "trend reclaim"}) — scored reclaim lane`;
+          g.appendChild(title);
+        } else if (q) {
+          // soft marks name their veto (the engine's quality_reason) — the dim pill alone can't say WHY
+          const title = mk("title", {});
+          title.textContent = `${m.t} · ${m.type} (${q === "pending" ? "pending" : "blocked"})${m.reason ? ` — ${m.reason}` : ""}`;
           g.appendChild(title);
         }
         // tier badge ("A+"/"Q") as a small superscript pill to the top-right of the marker (taken entries only).
