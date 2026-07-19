@@ -33,6 +33,10 @@ const GexDeskView = dynamic(
   () => import("@/components/gexdesk/GexDeskView").then((m) => ({ default: m.GexDeskView })),
   { ssr: false, loading: () => <TabSkeleton /> },
 );
+const LevelsView = dynamic(
+  () => import("@/components/levels/LevelsView").then((m) => ({ default: m.LevelsView })),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
 const PrismView = dynamic(
   () => import("@/components/prism/PrismView").then((m) => ({ default: m.PrismView })),
   { ssr: false, loading: () => <TabSkeleton /> },
@@ -44,10 +48,11 @@ const ProphetView = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism" | "leaders" | "radar";
+type TabKey = "prophet" | "levels" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism" | "leaders" | "radar";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
+  { key: "levels",   enKey: "tabLevels",   zhKey: "tabLevels" },
   { key: "desk",     enKey: "tabDesk",     zhKey: "tabDesk" },
   { key: "tape",     enKey: "tabTape",     zhKey: "tabTape" },
   { key: "tide",     enKey: "tabTide",     zhKey: "tabTide" },
@@ -3412,6 +3417,13 @@ export default function OptionsHubView() {
           {visitedTabs.has("gex") && (
             <div style={{ flex: 1, overflow: "hidden", display: activeTab === "gex" ? "flex" : "none", minHeight: 0 }}>
               <GexDeskView />
+            </div>
+          )}
+
+          {/* ═══ LEVELS TAB ═════════════════════════════════════════════════ */}
+          {visitedTabs.has("levels") && (
+            <div style={{ flex: 1, overflow: "hidden", display: activeTab === "levels" ? "flex" : "none", minHeight: 0 }}>
+              <LevelsView />
             </div>
           )}
 

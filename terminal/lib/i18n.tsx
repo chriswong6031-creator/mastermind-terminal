@@ -437,6 +437,7 @@ const LEX: Record<string, [string, string]> = {
   tabGex: ["GEX", "敞口"],
   tabPrism: ["PRISM", "矩阵"],
   tabProphet: ["Prophet", "先知"],
+  tabLevels: ["Levels", "价位图"],
   // Tide tab
   tideTitle: ["Market Tide", "市场资金潮"],
   tideMethodNote: ["Method note", "方法说明"],

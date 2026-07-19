@@ -25,6 +25,7 @@ const OICONF_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oiconf_f
 const CHAINHEAT_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "chain_heat_fixture.json");
 const GEXSTATE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gexstate_fixture.json");
 const MATRIX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "matrix_fixture.json");
+const LEVELS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "levels_fixture.json");
 const MANIFEST_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "manifest.json");
 const PROPHET_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_fixture.json");
 const PROPHET_MARKS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_marks_fixture.json");
@@ -53,6 +54,7 @@ function isValidF(f: FParam): boolean {
   if (f.startsWith("tctx:") && f.length > 5) return true;
   if (f.startsWith("gexstate:") && f.length > 9) return true;
   if (f.startsWith("matrix:") && f.length > 7) return true;
+  if (f.startsWith("levels:") && f.length > 7) return true;
   if (f === "manifest") return true;
   if (f === "flow_idx") return true;
   if (f === "prophet_idx") return true;
@@ -78,6 +80,7 @@ function backendPath(f: string): string {
   if (f === "chainheat") return "/api/flow/chainheat";
   if (f.startsWith("gexstate:")) return `/api/hub/gexstate/${f.slice(9)}`;
   if (f.startsWith("matrix:")) return `/api/hub/matrix/${f.slice(7)}`;
+  if (f.startsWith("levels:")) return `/api/hub/levels/${f.slice(7)}`;
   if (f === "manifest") return "/api/flow/manifest";
   if (f === "flow_idx") return "/api/flow/flow_idx";
   if (f === "prophet_idx") return "/api/hub/prophet";
@@ -103,6 +106,7 @@ function r2Key(f: string): string {
   if (f === "chainheat") return "live_flow/chain_heat_current.json";
   if (f.startsWith("gexstate:")) return `options_structure/gex_state/${f.slice(9)}.json`;
   if (f.startsWith("matrix:")) return `options_structure/matrix/${f.slice(7)}.json`;
+  if (f.startsWith("levels:")) return `levels/${f.slice(7)}.json`;
   if (f === "manifest") return "live_flow/manifest.json";
   if (f === "flow_idx") return "live_flow/flow_idx.json";
   if (f === "prophet_idx") return "prophet/index.json";
@@ -248,6 +252,15 @@ async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     const root = f.slice(7).toUpperCase();
     try {
       const raw = await fs.readFile(MATRIX_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? all["SPY"] ?? all[Object.keys(all)[0]] ?? {};
+    } catch { return {}; }
+  }
+  // Levels fixture — keyed by root; falls back to SPY if requested root absent.
+  if (f.startsWith("levels:")) {
+    const root = f.slice(7).toUpperCase();
+    try {
+      const raw = await fs.readFile(LEVELS_FIXTURE_FILE, "utf8");
       const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
       return all[root] ?? all["SPY"] ?? all[Object.keys(all)[0]] ?? {};
     } catch { return {}; }
