@@ -30,7 +30,9 @@ const DEPLOYMENT_ID =
 //     superset so a client fallback path can't silently break live quotes.
 // frame-ancestors 'self' + X-Frame-Options block competitors from iframing/rehosting the UI.
 // In dev, Turbopack HMR needs 'unsafe-eval'; production stays strict.
-const scriptSrc = ["'self'", "'unsafe-inline'", ...(isProd ? [] : ["'unsafe-eval'"])].join(" ");
+//   - Mastermind Brain widget bundle: components/BrainWidget.tsx loads
+//     https://www.mastermind-x.com/mm_brain.js on the Terminal, so that origin is allowed in script-src.
+const scriptSrc = ["'self'", "'unsafe-inline'", "https://www.mastermind-x.com", ...(isProd ? [] : ["'unsafe-eval'"])].join(" ");
 const CSP = [
   "default-src 'self'",
   "base-uri 'self'",

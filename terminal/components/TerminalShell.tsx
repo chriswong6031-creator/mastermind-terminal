@@ -29,7 +29,9 @@ import SeasonalityCard from "@/components/SeasonalityCard";
 // path (each mounts only when opened: paneOpen / signalsOpen / copilot toggle).
 const MegaPane = dynamic(() => import("@/components/fin/MegaPane"), { ssr: false });
 const OracleDash = dynamic(() => import("@/components/fin/OracleDash"), { ssr: false });
-const CopilotPanel = dynamic(() => import("@/components/CopilotPanel"), { ssr: false });
+// BrainWidget mounts the production Mastermind Brain widget (mm_brain.js) — it renders null
+// and only injects a cross-origin <script>, so ssr:false / dynamic isn't needed.
+import BrainWidget from "@/components/BrainWidget";
 import StockAnalysis from "@/components/StockAnalysis";
 import SignalButton from "@/components/SignalButton";
 import TrendRow from "@/components/TrendRow";
@@ -270,7 +272,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // ── F3 add-symbol dialog mode (distinct from "go" search) ──
   const [addSymOpen, setAddSymOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false); const [seed, setSeed] = useState("");
-  const [indOpen, setIndOpen] = useState(false); const [copilot, setCopilot] = useState(false);
+  const [indOpen, setIndOpen] = useState(false);
   const [wlSetOpen, setWlSetOpen] = useState(false); const [tfOpen, setTfOpen] = useState(false); const [ctOpen, setCtOpen] = useState(false); const [snapOpen, setSnapOpen] = useState(false);
   const [replayOn, setReplayOn] = useState(false); const [replayIdx, setReplayIdx] = useState<number | null>(null); const [total, setTotal] = useState(0); const [playing, setPlaying] = useState(false); const [speed, setSpeed] = useState(1);
   const playRef = useRef<any>(null);
@@ -679,7 +681,18 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }, [extSymsKey, pollExtQuotes]);
 
   useEffect(() => { fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || [])).catch(() => {}); }, []);
-  useEffect(() => { const open = () => setCopilot(true); window.addEventListener("mm:copilot", open); try { if (new URLSearchParams(window.location.search).get("ai") === "1") setCopilot(true); } catch {} return () => window.removeEventListener("mm:copilot", open); }, []);
+  useEffect(() => {
+    // Open the Brain widget. The script is deferred + cross-origin, so on early ?ai=1 deep-links
+    // window.MMBrain may not exist yet — retry once after 800ms before giving up.
+    const openBrain = () => {
+      const b = (window as any).MMBrain;
+      if (b?.open) { b.open(); return; }
+      window.setTimeout(() => (window as any).MMBrain?.open?.(), 800);
+    };
+    window.addEventListener("mm:copilot", openBrain);
+    try { if (new URLSearchParams(window.location.search).get("ai") === "1") openBrain(); } catch {}
+    return () => window.removeEventListener("mm:copilot", openBrain);
+  }, []);
   // shallow deep-link: ?pane=<page> opens the MegaPane on that page (MegaPane keeps the URL in sync
   // and strips ?pane= on close). Reactive so clicking ?pane= links while already on /terminal works.
   // Only OPEN when a valid pane is present — do NOT force-close when absent (MegaPane owns its close).
@@ -1235,6 +1248,26 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   };
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
 
+  // Brain widget → chart command executor. Mirrors the retired CopilotPanel's FLAT single-command
+  // contract EXACTLY ({action, symbol|tf|indicator+on|kind} at top level): every field is
+  // type-guarded, toggle_indicator adds ONLY on an explicit on===true (a missing flag never
+  // silently adds), and unknown/malformed actions are ignored gracefully.
+  const handleBrainCommand = (j: any) => {
+    const action = typeof j?.action === "string" ? j.action : "";
+    if (action === "set_symbol" && typeof j.symbol === "string") {
+      pick(j.symbol);
+    } else if (action === "set_timeframe" && typeof j.tf === "string") {
+      setTf(j.tf);
+    } else if (action === "toggle_indicator" && typeof j.indicator === "string") {
+      const on = j.on === true; // explicit only — a missing flag never silently adds
+      const indicator = j.indicator;
+      if (on) setInds((s) => { const n = new Set(s); n.add(indicator); return n; });
+      else setInds((s) => { const n = new Set(s); n.delete(indicator); return n; });
+    } else if (action === "run_detection" && typeof j.kind === "string") {
+      detect(j.kind);
+    }
+  };
+
   function saveLayout() { const name = layoutName.trim() || `Layout ${layouts.length + 1}`; const config = { panes, paneTfs, activePane, tf, chartType, inds: [...inds], favTF, compare, compareCfg, lockedVLine }; fetch("/api/layouts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, config }) }).then(() => fetch("/api/layouts").then((r) => r.json()).then((d) => setLayouts(d.layouts || []))); setLayoutName(""); }
   function loadLayout(l: any) { const c = l.config || {}; if (c.chartType) setChartType(c.chartType); if (c.inds) setInds(new Set(c.inds)); if (c.favTF) setFavTF(c.favTF); if (Array.isArray(c.compare)) setCompare(c.compare); if (c.compareCfg) setCompareCfg(c.compareCfg); if (typeof c.lockedVLine === "string" || c.lockedVLine === null) setLockedVLine(c.lockedVLine);
     if (Array.isArray(c.panes) && c.panes.length) {
@@ -1327,7 +1360,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           return <span className={badgeCls} style={{ marginLeft: 16 }} title={t("liveTip")}><i />{badgeLbl}</span>;
         })()}
         <div className="spacer" />
-        <button className="ai" onClick={() => setCopilot(true)}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
+        <button className="ai" onClick={() => (window as any).MMBrain?.toggle()}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
         <SettingsMenu email={email} />
       </header>
 
@@ -1336,7 +1369,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         email={email}
         fromMacro={fromMacro}
         onBack={onBack}
-        onOpenCopilot={() => setCopilot(true)}
+        onOpenCopilot={() => (window as any).MMBrain?.open()}
         isTerminal
         activeKey={(() => {
           const pane = new URLSearchParams(urlSearch).get("pane");
@@ -1764,7 +1797,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               {/* ── bottom button group (after Seasonality): full analysis + Ask AI ── */}
               <div className="sa-btn-group">
                 <button className="btn btn-primary" style={{ width: "100%", height: 38 }} onClick={() => setPaneOpen("overview")}>{t("openFullAnalysis")}</button>
-                <button className="btn btn-ghost" style={{ width: "100%", height: 36 }} onClick={() => setCopilot(true)}>{t("askAIabout")} {active} →</button>
+                <button className="btn btn-ghost" style={{ width: "100%", height: 36 }} onClick={() => (window as any).MMBrain?.open()}>{t("askAIabout")} {active} →</button>
               </div>
             </div>
           </div>
@@ -1807,11 +1840,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               onClose={() => setSettingsKey(null)} />
           : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
-      <CopilotPanel open={copilot} symbol={active} row={m} tf={tf} indicators={[...inds].filter((k) => !hidden.has(k))} onClose={() => setCopilot(false)} onAnnotate={annotateChart}
-        onSetSymbol={pick}
-        onSetTimeframe={setTf}
-        onToggleIndicator={(indicator, on) => { if (on) setInds((s) => { const n = new Set(s); n.add(indicator); return n; }); else setInds((s) => { const n = new Set(s); n.delete(indicator); return n; }); }}
-        onRunDetection={(kind) => detect(kind)}
+      <BrainWidget
+        active={active}
+        onCommand={handleBrainCommand}
+        onAnnotate={(j) => annotateChart(j.symbol || active, j.annotations || [])}
+        onAuthRequired={() => window.location.assign("/login")}
       />
 
       {/* ── Signals dashboard overlay (Golden Oracle scorecard · research read · signal history) ── */}
