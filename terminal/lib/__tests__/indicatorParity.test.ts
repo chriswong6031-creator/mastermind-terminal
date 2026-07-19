@@ -38,6 +38,11 @@ import {
   trendRibbon,
   rsiStack,
   bollingerBands,
+  rollingVwap,
+  weekAnchoredVwap,
+  avwap,
+  rollingPoc,
+  vprofile,
   type Bar,
 } from "../indicatorMath";
 
@@ -54,6 +59,7 @@ const expIchimoku = loadJSON("expected_ichimoku.json");
 const expRibbon = loadJSON("expected_ribbon.json");
 const expRsi = loadJSON("expected_rsi.json");
 const expBollinger = loadJSON("expected_bollinger.json");
+const expM2 = loadJSON("expected_m2.json");
 
 /** Convert fixture OHLCV arrays into the Bar type expected by indicatorMath. */
 function fixtureBars(): Bar[] {
@@ -265,4 +271,86 @@ describe("Bollinger Bands parity (TLT-R5)", () => {
       "factor (~0.05% at N=20). Fixing requires a deliberate UX decision to change the displayed " +
       "chart. Do NOT loosen this test — keep it as a documentation marker.",
   );
+});
+
+// ─── Indicators M2 parity (D04: VWAP / Anchored VWAP / Volume Profile + POC) ──
+//
+// Cross-repo parity contract with engine/indicators_m2.py. All values are daily-bar
+// approximations over typical price TP=(H+L+C)/3 (not intraday-true VWAP). No
+// test.todo divergences here — the fixture is the contract and the Terminal side is
+// aligned to match it exactly (see indicatorMath.ts avwap/rollingVwap/weekAnchoredVwap
+// /rollingPoc/vprofile).
+
+/** Assert that TS emits null exactly where (and only where) the fixture emits null.
+ *  This pins the warm-up boundary — a series that produced a value one bar early or
+ *  late would pass a pure value check but fail here. */
+function assertNullAlignment(
+  got: (number | null)[],
+  exp: (number | null)[],
+  label: string,
+): void {
+  for (let i = 0; i < exp.length; i++) {
+    const eNull = exp[i] === null || exp[i] === undefined;
+    const gNull = got[i] === null || got[i] === undefined;
+    expect(gNull, `${label}[${i}] null-alignment: got ${got[i]} exp ${exp[i]}`).toBe(eNull);
+  }
+}
+
+describe("Indicators M2 parity (D04 — VWAP / AVWAP / Volume Profile)", () => {
+  const params = expM2._params as {
+    rolling_vwap_n: number;
+    anchored_vwap_anchor_pos: number;
+    rolling_poc_window: number;
+    rolling_poc_bins: number;
+    volume_profile_window: number;
+    volume_profile_bins: number;
+  };
+
+  it("rolling_vwap (n=20) matches fixture within 1e-6 relative + null-aligned", () => {
+    const exp: (number | null)[] = expM2.rolling_vwap_n20;
+    const got = rollingVwap(BARS, params.rolling_vwap_n);
+    assertNullAlignment(got, exp, "rolling_vwap");
+    for (let i = 0; i < N; i++) assertClose(got[i], exp[i], "rolling_vwap", i);
+  });
+
+  it("week_anchored_vwap matches fixture within 1e-6 relative + null-aligned", () => {
+    const exp: (number | null)[] = expM2.week_anchored_vwap;
+    const got = weekAnchoredVwap(BARS);
+    assertNullAlignment(got, exp, "week_anchored_vwap");
+    for (let i = 0; i < N; i++) assertClose(got[i], exp[i], "week_anchored_vwap", i);
+  });
+
+  it("anchored_vwap (positional anchor = 50) matches fixture within 1e-6 relative + null-aligned", () => {
+    const exp: (number | null)[] = expM2.anchored_vwap_pos50;
+    const got = avwap(BARS, params.anchored_vwap_anchor_pos);
+    assertNullAlignment(got, exp, "anchored_vwap");
+    for (let i = 0; i < N; i++) assertClose(got[i], exp[i], "anchored_vwap", i);
+  });
+
+  it("rolling_poc (window=126, bins=24) matches fixture within 1e-6 relative + null-aligned", () => {
+    const exp: (number | null)[] = expM2.rolling_poc_w126_b24;
+    const got = rollingPoc(BARS, params.rolling_poc_window, params.rolling_poc_bins);
+    assertNullAlignment(got, exp, "rolling_poc");
+    for (let i = 0; i < N; i++) assertClose(got[i], exp[i], "rolling_poc", i);
+  });
+
+  it("volume_profile (final bar, full window) poc/va_low/va_high + bins match fixture", () => {
+    const exp = expM2.volume_profile_final as {
+      poc: number; va_low: number; va_high: number;
+      bin_edges: number[]; bin_volumes: number[]; window_used: number;
+    };
+    // Python built the fixture with window=len(df) (500) and bins=24.
+    const vp = vprofile(BARS, params.volume_profile_window, params.volume_profile_bins, false);
+    assertClose(vp.poc, exp.poc, "vp_poc", 0);
+    assertClose(vp.val, exp.va_low, "vp_va_low", 0);
+    assertClose(vp.vah, exp.va_high, "vp_va_high", 0);
+    // Bin-by-bin: edges (bin.priceLo == python bin_edges[i]) and volumes must match.
+    expect(vp.bins.length, "vp bin count").toBe(exp.bin_volumes.length);
+    for (let i = 0; i < vp.bins.length; i++) {
+      assertClose(vp.bins[i].priceLo, exp.bin_edges[i], "vp_edge", i);
+      assertClose(vp.bins[i].volume, exp.bin_volumes[i], "vp_binvol", i);
+    }
+    // Upper outer edge closes the histogram (python bin_edges has bins+1 entries).
+    assertClose(vp.bins[vp.bins.length - 1].priceHi, exp.bin_edges[exp.bin_volumes.length], "vp_topEdge", 0);
+  });
 });

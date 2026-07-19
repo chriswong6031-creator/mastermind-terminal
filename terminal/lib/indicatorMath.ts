@@ -250,14 +250,29 @@ export function supertrend(bars: Bar[], period = 10, mult = 3): SupertrendResult
 }
 
 // ─── Anchored VWAP ─────────────────────────────────────────────────────────────
+//
+// Canonical daily-bar approximation over typical price TP=(H+L+C)/3 (M2 parity
+// contract with engine/indicators_m2.py). Cumulative Σ(TP·V)/Σ(V) from the anchor
+// bar inclusive; strictly-before-anchor is null and a zero cumulative-volume span
+// is null (never the bar's raw TP) — matches the Python engine's NaN convention.
 
-export type AvwapAnchor = "swing_low" | "swing_high" | "max_history";
+/** String anchor modes. "vol_spike" = the max-volume bar in the trailing `lookback`
+ *  window (ties → most recent) — an EARNINGS PROXY (the quarter's top-volume session),
+ *  never a true earnings date. A plain number anchor is an explicit positional index. */
+export type AvwapAnchor = "swing_low" | "swing_high" | "max_history" | "vol_spike";
 
-/** Find the bar index of the anchor point. */
-function findAnchorIndex(bars: Bar[], anchor: AvwapAnchor, lookback: number): number {
-  const start = Math.max(0, bars.length - lookback);
+/** Resolve an anchor spec to a positional bar index, or null if it cannot be located.
+ *  A numeric spec is an explicit positional index (out-of-range → null). String modes
+ *  scan the trailing `lookback` window. */
+function findAnchorIndex(bars: Bar[], anchor: AvwapAnchor | number, lookback: number): number | null {
+  const n = bars.length;
+  if (typeof anchor === "number") {
+    const pos = Math.trunc(anchor);
+    return pos >= 0 && pos < n ? pos : null;
+  }
+  const start = Math.max(0, n - lookback);
   const window = bars.slice(start);
-  if (!window.length) return 0;
+  if (!window.length) return null;
   if (anchor === "swing_low") {
     let minI = 0, minV = Infinity;
     for (let i = 0; i < window.length; i++) if (window[i].l < minV) { minV = window[i].l; minI = i; }
@@ -266,14 +281,23 @@ function findAnchorIndex(bars: Bar[], anchor: AvwapAnchor, lookback: number): nu
     let maxI = 0, maxV = -Infinity;
     for (let i = 0; i < window.length; i++) if (window[i].h > maxV) { maxV = window[i].h; maxI = i; }
     return start + maxI;
+  } else if (anchor === "vol_spike") {
+    // Max-volume bar in the trailing window; ties → most recent (scan with >=).
+    let maxI = 0, maxV = -Infinity;
+    for (let i = 0; i < window.length; i++) if (window[i].v >= maxV) { maxV = window[i].v; maxI = i; }
+    return start + maxI;
   }
   // max_history
   return start;
 }
 
-export function avwap(bars: Bar[], anchor: AvwapAnchor = "swing_low", lookback = 252): (number | null)[] {
+/** Anchored VWAP. `anchor` is a string mode or an explicit positional bar index.
+ *  Values strictly before the anchor bar are null; a zero cumulative-volume span
+ *  yields null (M2 canonical convention). */
+export function avwap(bars: Bar[], anchor: AvwapAnchor | number = "swing_low", lookback = 252): (number | null)[] {
   const out: (number | null)[] = Array(bars.length).fill(null);
   const anchorIdx = findAnchorIndex(bars, anchor, lookback);
+  if (anchorIdx == null) return out;
   let cumTP = 0, cumV = 0;
   for (let i = anchorIdx; i < bars.length; i++) {
     const r = bars[i];
@@ -281,7 +305,56 @@ export function avwap(bars: Bar[], anchor: AvwapAnchor = "swing_low", lookback =
     const vol = r.v > 0 ? r.v : 0;
     cumTP += tp * vol;
     cumV += vol;
-    out[i] = cumV > 0 ? cumTP / cumV : tp;
+    out[i] = cumV > 0 ? cumTP / cumV : null;
+  }
+  return out;
+}
+
+/** Rolling VWAP over a trailing window of `n` bars: Σ(TP·V)/Σ(V).
+ *  null until `n` bars are available; null if the window's total volume is 0.
+ *  Daily-bar approximation over typical price (H+L+C)/3 — not intraday-true VWAP. */
+export function rollingVwap(bars: Bar[], n = 20): (number | null)[] {
+  const out: (number | null)[] = Array(bars.length).fill(null);
+  const tpv: number[] = [], vq: number[] = [];
+  let sTpv = 0, sV = 0;
+  for (let i = 0; i < bars.length; i++) {
+    const r = bars[i];
+    const tp = (r.h + r.l + r.c) / 3;
+    const vol = r.v > 0 ? r.v : 0;
+    tpv.push(tp * vol); vq.push(vol);
+    sTpv += tp * vol; sV += vol;
+    if (tpv.length > n) { sTpv -= tpv.shift()!; sV -= vq.shift()!; }
+    if (tpv.length === n) out[i] = sV > 0 ? sTpv / sV : null;
+  }
+  return out;
+}
+
+/** Bucket key for a 'YYYY-MM-DD' date under pandas W-FRI (week ending Friday):
+ *  the date of the Friday that closes this date's Sat..Fri window. */
+function weekEndFriKey(dateStr: string): string {
+  const dt = new Date(dateStr + "T00:00:00Z");
+  const w = dt.getUTCDay();          // Sun=0 .. Sat=6
+  const add = (5 - w + 7) % 7;       // Fri→0, Sat→6, Sun→5, … Thu→1
+  const fri = new Date(dt.getTime() + add * 86400_000);
+  return fri.toISOString().slice(0, 10);
+}
+
+/** Week-anchored VWAP: cumulative Σ(TP·V)/Σ(V) within each calendar week (pandas
+ *  W-FRI period — weeks end Friday), reset at the first session of each week.
+ *  The first session of a week has VWAP = that bar's TP (if volume > 0); a zero
+ *  cumulative-volume span yields null. Assumes ascending, deduplicated daily bars.
+ *  Daily-bar approximation over typical price (H+L+C)/3 — not intraday-true VWAP. */
+export function weekAnchoredVwap(bars: Bar[]): (number | null)[] {
+  const out: (number | null)[] = Array(bars.length).fill(null);
+  let curKey: string | null = null, cumTP = 0, cumV = 0;
+  for (let i = 0; i < bars.length; i++) {
+    const r = bars[i];
+    const key = weekEndFriKey(r.time);
+    if (key !== curKey) { curKey = key; cumTP = 0; cumV = 0; }
+    const tp = (r.h + r.l + r.c) / 3;
+    const vol = r.v > 0 ? r.v : 0;
+    cumTP += tp * vol; cumV += vol;
+    out[i] = cumV > 0 ? cumTP / cumV : null;
   }
   return out;
 }
@@ -352,6 +425,38 @@ export function vprofile(bars: Bar[], window = 126, bins = 24, shelfMode = false
   }
 
   return { bins: binArr, poc, vah: binArr[hi].priceHi, val: binArr[lo].priceLo };
+}
+
+/** Per-bar POC (Point of Control = midpoint of the max-volume price bin) computed
+ *  over the PRIOR `window` bars [t-window, t-1], EXCLUDING bar t (PIT-safe).
+ *  null while fewer than `window` prior bars exist. Bins: linspace(min low, max high,
+ *  bins+1) of the slice; each bar's full volume into the bin holding its TP (top edge
+ *  clipped into the last bin); POC ties → lower-price bin. M2 parity with rolling_poc.
+ *  Daily-bar approximation over typical price (H+L+C)/3 — not intraday-true VWAP. */
+export function rollingPoc(bars: Bar[], window = 126, bins = 24): (number | null)[] {
+  const out: (number | null)[] = Array(bars.length).fill(null);
+  for (let t = window; t < bars.length; t++) {
+    const slice = bars.slice(t - window, t); // prior window, excludes bar t
+    let loPrice = Infinity, hiPrice = -Infinity, totalVol = 0;
+    for (const r of slice) {
+      if (r.l < loPrice) loPrice = r.l;
+      if (r.h > hiPrice) hiPrice = r.h;
+      totalVol += r.v;
+    }
+    if (totalVol <= 0) continue;
+    if (loPrice === hiPrice) { out[t] = loPrice; continue; } // degenerate → that price
+    const binSize = (hiPrice - loPrice) / bins;
+    const volBins: number[] = Array(bins).fill(0);
+    for (const r of slice) {
+      const tp = (r.h + r.l + r.c) / 3;
+      const bi = Math.min(bins - 1, Math.floor((tp - loPrice) / binSize));
+      if (r.v > 0) volBins[bi] += r.v;
+    }
+    let pocIdx = 0;
+    for (let i = 1; i < bins; i++) if (volBins[i] > volBins[pocIdx]) pocIdx = i; // ties → lower bin
+    out[t] = loPrice + (pocIdx + 0.5) * binSize;
+  }
+  return out;
 }
 
 // ─── Volatility Box ────────────────────────────────────────────────────────────

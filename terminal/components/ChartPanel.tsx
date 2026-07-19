@@ -31,7 +31,7 @@ import { attachSessionShading, detachSessionShading, type SessionShadingPrimitiv
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
 import { SOFT_Q, anchorSignal } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
-import { ichimoku, supertrend, avwap as computeAvwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
+import { ichimoku, supertrend, avwap as computeAvwap, rollingVwap, weekAnchoredVwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
 import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/ChartOverlays";
 import DayStatsStrip from "@/components/DayStatsStrip";
 import { tPlain } from "@/lib/i18n";
@@ -796,13 +796,33 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return [upS, dnS];
   };
 
-  // AVWAP: dashed gold line.
+  // AVWAP: dashed gold line. anchor 3 = vol_spike (trailing max-volume bar; earnings PROXY, not a
+  // true earnings date).
   const buildAvwap = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
     const p = P("avwap");
-    const anchors = ["swing_low", "swing_high", "max_history"] as const;
-    const anchorKey = anchors[Math.min(2, Math.max(0, Math.round(p.anchor)))] ?? "swing_low";
+    const anchors = ["swing_low", "swing_high", "max_history", "vol_spike"] as const;
+    const anchorKey = anchors[Math.min(3, Math.max(0, Math.round(p.anchor)))] ?? "swing_low";
     const vals = computeAvwap(rows, anchorKey, p.lookback);
-    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lineStyle: 1 /* dashed */, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: "AVWAP" }, 0);
+    const title = anchorKey === "vol_spike" ? "AVWAP (vol-spike, earnings proxy)" : "AVWAP";
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lineStyle: 1 /* dashed */, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title }, 0);
+    ln.setData(toLine(rows, vals));
+    return [ln];
+  };
+
+  // Rolling VWAP (trailing n-bar): solid teal line on the price pane.
+  const buildRvwap = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
+    const p = P("rvwap");
+    const vals = rollingVwap(rows, p.length);
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: `RVWAP ${p.length}` }, 0);
+    ln.setData(toLine(rows, vals));
+    return [ln];
+  };
+
+  // Weekly VWAP (resets each W-FRI week): solid violet line on the price pane.
+  const buildWvwap = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
+    const p = P("wvwap");
+    const vals = weekAnchoredVwap(rows);
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: "WVWAP" }, 0);
     ln.setData(toLine(rows, vals));
     return [ln];
   };
@@ -1233,7 +1253,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Golden Oracle Confluence: not a plotted series but the flagship signal layer (BUY/SELL marks +
     // verdict badge). List it FIRST on the price pane so it can be hidden (eye) or removed like any study.
     if (inds.has("_oracle")) overlayEntries.push({ key: "_oracle", label: "Golden Oracle Confluence", kind: "overlay", isPine: false, noParams: true });
-    for (const k of ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox", "svwap", "orb", "slevels", "pivots"] as const) {
+    for (const k of ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "rvwap", "wvwap", "vprofile", "volbox", "svwap", "orb", "slevels", "pivots"] as const) {
       if (!inds.has(k)) continue;
       const hasEntry = indSeriesRef.current.has(k) || k === "vprofile" || k === "volbox" || k === "orb" || k === "slevels" || k === "pivots";
       if (!hasEntry) continue;
@@ -1378,6 +1398,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (inds.has("ribbon")) indSeriesRef.current.set("ribbon", buildRibbon(chart, rows, closes));
     if (inds.has("supertrend")) indSeriesRef.current.set("supertrend", buildSupertrend(chart, rows));
     if (inds.has("avwap")) indSeriesRef.current.set("avwap", buildAvwap(chart, rows));
+    if (inds.has("rvwap")) indSeriesRef.current.set("rvwap", buildRvwap(chart, rows));
+    if (inds.has("wvwap")) indSeriesRef.current.set("wvwap", buildWvwap(chart, rows));
     if (inds.has("vprofile")) indSeriesRef.current.set("vprofile", buildVprofile(rows));
     if (inds.has("volbox")) indSeriesRef.current.set("volbox", buildVolbox(rows));
     // DT price-pane overlays (intraday-only; builders return [] on daily)
@@ -3458,7 +3480,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // snapshot the visible range so a view-preserving toggle can restore it after series churn (§0.4)
     viewSavedRef.current = PRESERVE_VIEW_ON_INDICATOR_TOGGLE ? (() => { try { const r = chart.timeScale().getVisibleLogicalRange(); return r ? { from: r.from as number, to: r.to as number } : null; } catch { return null; } })() : null;
 
-    const OVERLAY_KEYS = ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox", "svwap", "orb", "slevels", "pivots"] as const;
+    const OVERLAY_KEYS = ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "rvwap", "wvwap", "vprofile", "volbox", "svwap", "orb", "slevels", "pivots"] as const;
     const wantOverlays = new Set<string>(OVERLAY_KEYS.filter((k) => indicators.has(k)));
     const haveOverlays = new Set<string>(OVERLAY_KEYS.filter((k) => indSeriesRef.current.has(k) || indOverlayRef.current[k]));
     const wantSub = activeSubpanes();                                   // canonical-order sub-pane keys
@@ -3482,6 +3504,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (k === "ribbon") indSeriesRef.current.set("ribbon", buildRibbon(chart, rows, closes));
       else if (k === "supertrend") indSeriesRef.current.set("supertrend", buildSupertrend(chart, rows));
       else if (k === "avwap") indSeriesRef.current.set("avwap", buildAvwap(chart, rows));
+      else if (k === "rvwap") indSeriesRef.current.set("rvwap", buildRvwap(chart, rows));
+      else if (k === "wvwap") indSeriesRef.current.set("wvwap", buildWvwap(chart, rows));
       else if (k === "vprofile") indSeriesRef.current.set("vprofile", buildVprofile(rows));
       else if (k === "volbox") indSeriesRef.current.set("volbox", buildVolbox(rows));
       else if (k === "svwap") indSeriesRef.current.set("svwap", buildSvwap(chart, rows));
