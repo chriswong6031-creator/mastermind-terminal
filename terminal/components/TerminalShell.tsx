@@ -1750,7 +1750,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               onClose={() => setSettingsKey(null)} />
           : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
-      <CopilotPanel open={copilot} symbol={active} row={m} tf={tf} indicators={[...inds].filter((k) => !hidden.has(k))} onClose={() => setCopilot(false)} onAnnotate={annotateChart} />
+      <CopilotPanel open={copilot} symbol={active} row={m} tf={tf} indicators={[...inds].filter((k) => !hidden.has(k))} onClose={() => setCopilot(false)} onAnnotate={annotateChart}
+        onSetSymbol={pick}
+        onSetTimeframe={setTf}
+        onToggleIndicator={(indicator, on) => { if (on) setInds((s) => { const n = new Set(s); n.add(indicator); return n; }); else setInds((s) => { const n = new Set(s); n.delete(indicator); return n; }); }}
+        onRunDetection={(kind) => detect(kind)}
+      />
 
       {/* ── Signals dashboard overlay (Golden Oracle scorecard · research read · signal history) ── */}
       {signalsOpen && (
