@@ -12,7 +12,7 @@
 // requested expression reads that higher-TF series. The expression keeps its own `[n]` indexing,
 // so the flagship's `_src[1]` (confirmed/closed HTF bar = non-repaint, lookahead_off) vs `_src`
 // (developing HTF bar) distinction maps onto the HTF timeline exactly. See callNs() below.
-import { Node, Stmt, Arg, parse } from "./parser";
+import { Node, Stmt, Arg, parse, type ParseResult } from "./parser";
 import { PineSyntaxError } from "./lexer";
 import { NA, NS_CONST, toCss, fmtNum, tfSeconds } from "./builtins";
 
@@ -30,7 +30,11 @@ const MAX_TOTAL_LOOP_ITERS = 4_000_000;  // for-loop iterations, totalled across
 const STMT_DEADLINE_INTERVAL = 10_000;   // poll Date.now() every N executed statements
 
 export type PlotKind = "line" | "histogram" | "columns" | "area" | "circles" | "cross" | "stepline";
-export interface PinePlot { id: number; title: string; kind: PlotKind; overlay: boolean; linewidth: number; color: string; data: { time: string; value: number; color?: string }[]; }
+// A plot point is EITHER a valued point ({ time, value, color? }) OR a whitespace/gap point
+// ({ time } with no `value`) emitted for na/non-finite bars on line-family series so
+// Lightweight-Charts BREAKS the line at the gap instead of drawing a segment across it.
+export interface PinePlotPoint { time: string; value?: number; color?: string }
+export interface PinePlot { id: number; title: string; kind: PlotKind; overlay: boolean; linewidth: number; color: string; data: PinePlotPoint[]; }
 export interface PineShape { time: string; position: "aboveBar" | "belowBar" | "inBar"; shape: "arrowUp" | "arrowDown" | "circle" | "square"; color: string; text?: string; overlay: boolean; }
 export interface PineHline { price: number; color: string; title: string; style: string; overlay: boolean; }
 export interface PineInput { title: string; type: string; value: any; }
@@ -44,6 +48,9 @@ const num = (x: any): number => (typeof x === "number" ? x : typeof x === "boole
 const NOOP_NS = new Set(["table", "array", "matrix", "map", "label", "line", "box", "linefill", "polyline", "strategy", "alert", "log", "chart", "ticker", "runtime", "request", "input_enum"]);
 const NAMESPACES = new Set(["ta", "math", "input", "color", "str", "request", "timeframe", "barstate", "syminfo", "plot", "shape", "location", "size", "hline", "line", "barmerge", "display", "format", "position", "xloc", "yloc", "extend", "text", "scale", "math", "dayofweek", "currency", "table", "array", "matrix", "map", "label", "box", "strategy", "alert", "log", "chart", "ticker", "runtime", "session", "adjustment"]);
 const MARKER_SHAPE: Record<string, PineShape["shape"]> = { triangleup: "arrowUp", arrowup: "arrowUp", labelup: "arrowUp", flag: "arrowUp", triangledown: "arrowDown", arrowdown: "arrowDown", labeldown: "arrowDown", circle: "circle", xcross: "square", cross: "square", square: "square", diamond: "square" };
+// Continuous series kinds where a na bar must render as a whitespace GAP (LWC breaks the line),
+// vs discrete kinds (histogram/columns/cross) where a na bar is correctly just absent.
+const GAP_KINDS = new Set<PlotKind>(["line", "area", "stepline", "circles"]);
 
 // ── built-in price/time series (module-level so the HTF resampler can read them off any bar array) ──
 const BUILTIN_SERIES = new Set(["close", "open", "high", "low", "volume", "hl2", "hlc3", "ohlc4", "hlcc4", "bar_index", "last_bar_index", "time", "time_close"]);
@@ -96,7 +103,10 @@ interface Ctx { i: number; frame: Frame | null; scalars: Map<string, number> | n
 // what an exec() pass exposes to a parent run so request.security can read its resampled series
 interface ExecOut { result: RunResult; globals: Map<string, any[]>; localStore: Map<string, any[]>; }
 
-export function run(source: string, bars: Bar[], opts: { timeframe?: string; symbol?: string; params?: Record<string, any>; budgetMs?: number } = {}): RunResult {
+// run() executes an already-parsed program. Pass a `ParseResult` (from parse()/compile()) to skip
+// re-parsing — the ONLY caller that still hands a raw string is the back-compat runPine() in index.ts,
+// which parses once and forwards the AST here, so a single run never lexes+parses twice.
+export function run(source: string | ParseResult, bars: Bar[], opts: { timeframe?: string; symbol?: string; params?: Record<string, any>; budgetMs?: number } = {}): RunResult {
   // capture the deadline the moment the run starts — checked between statements and inside loops
   const budgetMs = opts.budgetMs ?? DEFAULT_BUDGET_MS;
   const deadline = Date.now() + budgetMs;
@@ -104,7 +114,7 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
   let totalLoopIters = 0;  // every for-loop iteration, across ALL loops/nesting/bars
   const checkDeadline = () => { if (Date.now() > deadline) throw new PineRuntimeError(`script exceeded ${budgetMs} ms`); };
 
-  const { body } = parse(source);
+  const { body } = typeof source === "string" ? parse(source) : source;
 
   // ── hoist user function definitions (shared across the chart run and every HTF re-run) ──
   const funcs = new Map<string, { params: string[]; body: Stmt[]; localNames: Set<string> }>();
@@ -400,12 +410,22 @@ export function run(source: string, bars: Bar[], opts: { timeframe?: string; sym
       const colArg = named.color !== undefined ? named.color : pick(pos, named, 2, "color");
       const css = colArg !== undefined ? toCss(colArg) : acc.lastColor;
       if (!isNa(v) && isFinite(v)) { acc.data.push({ time: bars[ctx.i].time, value: v, color: css }); acc.lastColor = css; acc.color = css; }
+      // na/non-finite on a CONTINUOUS line-family series → emit a whitespace point so LWC breaks the
+      // line here instead of connecting across the gap (correct Pine `plot(cond ? x : na)` shape).
+      // Histograms/columns/cross want the bar simply absent, so keep omitting those.
+      else if (GAP_KINDS.has(acc.kind)) { acc.data.push({ time: bars[ctx.i].time }); }
       return { __plot: n.id };
     }
     function doPlotshape(n: Extract<Node, { t: "call" }>, ctx: Ctx, fn: string): any {
       const { pos, named } = evalArgs(n.args, ctx);
-      if (shapes.length >= MAX_SHAPES) return NA;
-      if (!truthy(pos[0])) return NA;
+      const cond = pos[0];
+      // Pine's plotshape/plotchar/plotarrow first arg is `series bool`. Honor bool/na semantics: a
+      // FINITE numeric series (e.g. `plotshape(close, …)`) is a type error in Pine and would otherwise
+      // fire a marker on EVERY non-zero bar here → surface a warning and don't trigger. na (NaN) is a
+      // legitimate value of a `series bool` (an un-warmed condition) so it must NOT hit this guard.
+      if (typeof cond === "number" && !isNa(cond)) { warn(`${fn}() expects a series bool (got a number) — condition ignored`); return NA; }
+      if (shapes.length >= MAX_SHAPES) { warn(`${fn}(): more than ${MAX_SHAPES} markers — extra markers were dropped`); return NA; }
+      if (!truthy(cond)) return NA;
       const styleRaw = String(named.style ?? (fn === "plotarrow" ? "arrowup" : "circle"));
       const loc = String(named.location ?? "abovebar");
       const position: PineShape["position"] = loc === "belowbar" || loc === "bottom" ? "belowBar" : loc === "absolute" ? "inBar" : "aboveBar";

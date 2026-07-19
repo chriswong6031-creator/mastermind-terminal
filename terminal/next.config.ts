@@ -3,6 +3,18 @@ import path from "path";
 
 const isProd = process.env.NODE_ENV === "production";
 
+// ── Deployment id (version-skew protection / stale-chunk self-heal) ───────────
+// Each build gets a DISTINCT id: prefer the git sha wired in by scripts/deploy_terminal.sh
+// (GIT_SHA / NEXT_DEPLOYMENT_ID), else fall back to the build timestamp so a local `next build`
+// still stamps a unique id. Next appends `?dpl=<id>` to every static asset URL and injects
+// `data-dpl-id` on <html> + an `x-nextjs-deployment-id` response header — so a client holding a
+// stale /flow shell (served inside its SWR window after a deploy) detects the mismatch and does a
+// full reload instead of resolving lazy chunks against purged content-hashed factories. This is the
+// deterministic half of the options-crash fix (the chunk-retention union in deploy_terminal.sh is
+// the belt-and-suspenders half). Keep the id stable ACROSS the containers of a single deploy.
+const DEPLOYMENT_ID =
+  process.env.GIT_SHA || process.env.NEXT_DEPLOYMENT_ID || `t${Date.now()}`;
+
 // ── Content-Security-Policy ───────────────────────────────────────────────────
 // Derived from an audit of every external resource the BROWSER actually reaches:
 //   - inline bootstrap script (app/layout.tsx LOCALE_INIT) + Next App Router streaming
@@ -10,7 +22,10 @@ const isProd = process.env.NODE_ENV === "production";
 //     follow-up hardening; documented in SECURITY.md).
 //   - React inline style attributes → style-src 'unsafe-inline'.
 //   - shared chart-snapshot <img> served from Cloudflare R2 (app/x/[slug]) → img-src *.r2.dev.
-//   - Supabase auth (REST + realtime WS) and the optional live Polygon WS → connect-src.
+//   - Supabase auth (REST + realtime WS) → connect-src. (The former browser→Polygon trades WS was
+//     removed 2026-07-19: any NEXT_PUBLIC_* key is world-readable and a dev sub is not a
+//     redistribution license — live data now flows server-mediated only, so wss://socket.polygon.io
+//     is no longer in connect-src.)
 //   - CN/HK quote hosts are fetched SERVER-side today, but are allowed in connect-src as a safe
 //     superset so a client fallback path can't silently break live quotes.
 // frame-ancestors 'self' + X-Frame-Options block competitors from iframing/rehosting the UI.
@@ -26,7 +41,7 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://*.r2.dev",
   "font-src 'self'",
-  "connect-src 'self' https://*.supabase.co wss://*.supabase.co wss://socket.polygon.io https://qt.gtimg.cn https://web.ifzq.gtimg.cn https://ifzq.gtimg.cn",
+  "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://qt.gtimg.cn https://web.ifzq.gtimg.cn https://ifzq.gtimg.cn",
   "worker-src 'self' blob:",
   "manifest-src 'self'",
   ...(isProd ? ["upgrade-insecure-requests"] : []),
@@ -46,6 +61,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Distinct-per-build id → version-skew protection + stale-chunk self-heal (see DEPLOYMENT_ID above).
+  deploymentId: DEPLOYMENT_ID,
   // pin the workspace root (sibling lockfiles exist) so Turbopack stops warning
   turbopack: { root: path.resolve(__dirname) },
   // Never ship client source maps to the browser (this is Next's default; pinned here as a

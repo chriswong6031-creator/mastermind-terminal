@@ -1,7 +1,14 @@
 // Public surface for the Pine v6 engine.
 //
-//   runPine(source, bars, opts)  → executes the script bar-by-bar and returns plots/shapes/hlines
-//   compilePine(source)          → parse-only check (real syntax errors with line/col), for the editor
+//   compile(source)             → parse ONCE → { ok, errors[], ast }  (the AST is reusable across runs)
+//   runCompiled(ast, bars, opts)→ execute a pre-parsed AST bar-by-bar (no re-parse)
+//   runPine(source, bars, opts) → convenience: compile + run (parses exactly ONCE — see below)
+//   compilePine(source)         → parse-only check (real syntax errors with line/col), for the editor
+//
+// SINGLE-PARSE CONTRACT: historically runPine() parsed the source, then run() parsed it AGAIN. That
+// double parse is gone — runPine() now compiles once (parse → AST) and hands the AST to run(), and
+// the worker/host layer (host.ts) caches the compiled AST per source hash so data-only re-runs
+// (replay ticks, live splices, param edits) never re-parse.
 //
 // SCOPE (this is a focused, single-timeframe interpreter, not a 100% Pine clone):
 //   ✓ indicator()/strategy(), input.int/float/bool/string/timeframe/source
@@ -16,33 +23,53 @@
 //   ✗ tables/labels/lines/boxes/fill/bgcolor/alertcondition: parsed and treated as no-ops (they don't
 //     produce chart series). The flagship's MTF dashboard table is therefore not drawn here — its
 //     validated BUY/SELL/CUT/RE-BUY signals keep coming from the precomputed Python oracle path.
-import { parse } from "./parser";
+import { parse, type ParseResult } from "./parser";
 import { PineSyntaxError } from "./lexer";
 import { run, type Bar, type RunResult } from "./runtime";
 
-export type { Bar, RunResult, PinePlot, PineShape, PineHline, PineInput, PineMeta } from "./runtime";
+export type { Bar, RunResult, PinePlot, PinePlotPoint, PineShape, PineHline, PineInput, PineMeta } from "./runtime";
 export { PineRuntimeError } from "./runtime";
+export type { ParseResult } from "./parser";
 
 export interface PineError { line: number; col: number; message: string; phase: "parse" | "runtime"; }
 export interface CompileResult { ok: boolean; errors: PineError[]; }
 export interface PineRunOutput { ok: boolean; errors: PineError[]; result: RunResult | null; }
+// compile() result: on success `ast` carries the parsed program (a ParseResult) that runCompiled()
+// consumes without re-parsing; callCount/histCount are exposed so a host can cheaply key/inspect it.
+export interface CompiledScript extends CompileResult { ast: ParseResult | null; callCount: number; histCount: number; }
 
-export function compilePine(source: string): CompileResult {
-  try { parse(source); return { ok: true, errors: [] }; }
-  catch (e) { return { ok: false, errors: [toError(e, "parse")] }; }
+export type RunOpts = { timeframe?: string; symbol?: string; params?: Record<string, any>; budgetMs?: number };
+
+// Parse ONCE and hand back the AST for reuse. This is the compile half of the split: the editor and
+// the worker call it, cache the AST by source hash, and feed it to runCompiled() for every data change.
+export function compile(source: string): CompiledScript {
+  try {
+    const ast = parse(source);
+    return { ok: true, errors: [], ast, callCount: ast.callCount, histCount: ast.histCount };
+  } catch (e) {
+    return { ok: false, errors: [toError(e, "parse")], ast: null, callCount: 0, histCount: 0 };
+  }
 }
 
-// opts.budgetMs caps the WHOLE run (wall-clock, default 3000ms in runtime.ts) — a runaway script
-// throws PineRuntimeError, caught below and returned as a normal runtime error in errors[].
-export function runPine(source: string, bars: Bar[], opts: { timeframe?: string; symbol?: string; params?: Record<string, any>; budgetMs?: number } = {}): PineRunOutput {
-  let parsed = false;
-  try {
-    parse(source); parsed = true;
-    const result = run(source, bars, opts);
-    return { ok: true, errors: [], result };
-  } catch (e) {
-    return { ok: false, errors: [toError(e, parsed ? "runtime" : "parse")], result: null };
-  }
+// Execute an already-compiled AST — no re-parse. Errors here are runtime (budget, etc.).
+export function runCompiled(ast: ParseResult, bars: Bar[], opts: RunOpts = {}): PineRunOutput {
+  try { return { ok: true, errors: [], result: run(ast, bars, opts) }; }
+  catch (e) { return { ok: false, errors: [toError(e, "runtime")], result: null }; }
+}
+
+// Parse-only check for the editor (back-compat wrapper over compile()).
+export function compilePine(source: string): CompileResult {
+  const c = compile(source);
+  return { ok: c.ok, errors: c.errors };
+}
+
+// Convenience: compile + run in one call. opts.budgetMs caps the WHOLE run (wall-clock, default
+// 3000ms in runtime.ts) — a runaway script throws PineRuntimeError, caught below and returned as a
+// normal runtime error in errors[]. Parses exactly once (compile → runCompiled), no double parse.
+export function runPine(source: string, bars: Bar[], opts: RunOpts = {}): PineRunOutput {
+  const c = compile(source);
+  if (!c.ok || !c.ast) return { ok: false, errors: c.errors, result: null };
+  return runCompiled(c.ast, bars, opts);
 }
 
 function toError(e: unknown, phase: "parse" | "runtime"): PineError {

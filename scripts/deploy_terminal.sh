@@ -62,7 +62,9 @@ log "parity gate OK."
 # 1. BUILD LOCALLY (the 1.9 GB box OOMs a Next build) -----------------------
 pgrep -f "next dev" >/dev/null 2>&1 && log "WARNING: a local 'next dev' looks active — it locks .next; stop it if the build fails."
 log "building $APP ..."
-( cd "$APP" && rm -rf .next && npm run build ) || { log "ABORT: local build failed"; exit 1; }
+# Wire the git HEAD sha into next.config.ts's deploymentId (version-skew protection + stale-chunk
+# self-heal). Distinct per deploy; next.config falls back to a build timestamp when GIT_SHA is empty.
+( cd "$APP" && rm -rf .next && GIT_SHA="$HEAD_SHA" npm run build ) || { log "ABORT: local build failed"; exit 1; }
 [ -f "$APP/.next/BUILD_ID" ] || { log "ABORT: no .next/BUILD_ID after build"; exit 1; }
 NEWID="$(cat "$APP/.next/BUILD_ID")"
 log "built BUILD_ID=$NEWID"
@@ -82,9 +84,29 @@ rsync -az -e "$SSH" \
   "$APP/" "$BOX:$DEST/" || { log "ABORT: source rsync failed — live site untouched"; exit 1; }
 
 # 3. ATOMIC SWAP + RESTART (guarded by .next.new/BUILD_ID) ------------------
-log "atomic swap + restart $SVC ..."
+# CHUNK-RETENTION CONTRACT (2026-07-19, options-crash fix): a deploy MUST keep the last 3 build
+# generations' content-hashed `_next/static` chunks alive in the LIVE tree, because the /flow (and
+# /,/screener,/alerts,/login) shells are served with `stale-while-revalidate=600` (next.config.ts):
+# an edge/browser can hold a PRE-deploy document for up to ~900s and will request the OLD build's
+# `_next/static/chunks/*`. If those hashes are gone, Turbopack throws "module factory is not
+# available" (the reported Options crash). deploymentId (?dpl + skew reload) is the primary fix; this
+# union is belt-and-suspenders so in-flight stale documents keep resolving until they self-reload.
+#
+# Retention model on the box:
+#   .next            = LIVE (new build). Its static/ is UNIONed with up to 3 prior gens (cp -n).
+#   .next.bak        = the immediately-prior FULL build — untouched, so step-5 ROLLBACK still
+#                      restores it cleanly and byte-for-byte (rollback semantics unchanged).
+#   .next.gen1/.gen2 = the two builds before that — kept ONLY as a source of old static chunks; we
+#                      never boot them. Older than gen2 is purged.
+# Ordering is: stop svc → rotate gen1←bak-of-last-time, gen2←gen1 → new .next.bak ← current .next →
+# swap in new build → union prior static into live → start svc. Rollback restores .next.bak as before.
+log "atomic swap + restart $SVC (keep 3 chunk generations) ..."
 $SSH "$BOX" "cd $DEST && [ -f .next.new/BUILD_ID ] && systemctl stop $SVC \
-  && rm -rf .next.bak && mv .next .next.bak && mv .next.new .next && systemctl start $SVC" \
+  && rm -rf .next.gen2 && { [ -d .next.gen1 ] && mv .next.gen1 .next.gen2 || true; } \
+  && { [ -d .next.bak ] && cp -al .next.bak .next.gen1 2>/dev/null || cp -a .next.bak .next.gen1 || true; } \
+  && rm -rf .next.bak && mv .next .next.bak && mv .next.new .next \
+  && for g in .next.bak .next.gen1 .next.gen2; do [ -d \$g/static ] && cp -an \$g/static/. .next/static/ 2>/dev/null || true; done \
+  && systemctl start $SVC" \
   || { log "ABORT: swap failed on box (staged BUILD_ID missing?) — restarting prior build"; \
        $SSH "$BOX" "systemctl start $SVC" 2>/dev/null; exit 1; }
 

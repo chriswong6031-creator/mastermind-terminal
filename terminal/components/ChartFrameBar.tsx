@@ -303,12 +303,6 @@ export default function ChartFrameBar({
                 <span className="qsg-lbl">{t("qsgAuto")}</span>
               </div>
 
-              {/* Scale price chart only — passive affordance (single-pane; full in Phase 2) */}
-              <div className="qsg-item qsg-disabled">
-                <span className="qsg-check" />
-                <span className="qsg-lbl">{t("qsgScaleChartOnly")}</span>
-              </div>
-
               {/* Invert scale ⌥I */}
               <div className={`qsg-item${s.invertScale ? " checked" : ""}`} onClick={() => onSettings({ invertScale: !s.invertScale })}>
                 <span className="qsg-check">{s.invertScale ? "✓" : ""}</span>
@@ -369,14 +363,6 @@ export default function ChartFrameBar({
                   </div>
                 )}
               </div>
-
-              {/* Plus button toggle */}
-              <div className="qsg-item" onClick={() => { window.dispatchEvent(new CustomEvent("mm:plus-btn")); setGearOpen(false); }}>
-                <span className="qsg-check">✓</span>
-                <span className="qsg-lbl">{t("qsgPlusBtn")}</span>
-              </div>
-
-              <div className="qsg-sep" />
 
               {/* More settings — opens the full settings modal on the Scales and lines tab */}
               <div className="qsg-item" onClick={() => { setGearOpen(false); onOpenSettingsModal?.("scales"); }}>

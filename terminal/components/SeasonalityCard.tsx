@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { getBars } from "@/lib/fund";
+import { MAX_YEARS } from "@/lib/seasonal";
 
 const M = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
 const MN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -19,8 +20,15 @@ export default function SeasonalityCard({ symbol, onOpenPane }: { symbol: string
   useEffect(() => {
     let dead = false;
     // getBars routes through dataCache (dedupes with the chart's OHLC fetch — no third raw fetch)
-    getBars(symbol).then((bars) => {
-      if (dead || !bars.length) { setStats(null); return; }
+    getBars(symbol).then((allBars) => {
+      if (dead || !allBars.length) { setStats(null); return; }
+      // 10y lookback (MAX_YEARS): keep only bars from the last N complete years +
+      // the current YTD, so the mini read matches the full Seasonals page default
+      // instead of blending decades of regimes.
+      const curYear = new Date().getUTCFullYear();
+      const cutYear = curYear - MAX_YEARS; // e.g. 2016 for a 2026 view (inclusive of 2016 Dec → 2017 Jan return)
+      const bars = allBars.filter((b) => parseInt(String(b.time).slice(0, 4), 10) >= cutYear);
+      if (!bars.length) { setStats(null); return; }
       const byMonthRet: number[][] = Array.from({ length: 12 }, () => []);
       // monthly close series → monthly returns bucketed by calendar month
       const monthly: { ym: string; c: number }[] = [];
@@ -41,6 +49,7 @@ export default function SeasonalityCard({ symbol, onOpenPane }: { symbol: string
       <div style={{ display: "flex", alignItems: "center", gap: 7, font: "600 10px/1 var(--font-ui)", letterSpacing: ".09em", textTransform: "uppercase", color: "var(--text-2)", marginBottom: 12 }}>
         <svg width="13" height="13" viewBox="0 0 24 24" style={{ stroke: "var(--brand-2)", fill: "none", strokeWidth: 2 }}><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" /></svg>
         {t("seasonalityTitle")}
+        <span style={{ marginLeft: "auto", font: "600 9px/1 var(--font-num)", letterSpacing: ".04em", color: "var(--text-dim)" }}>{MAX_YEARS}y</span>
       </div>
       {/* every bar shares the bottom baseline (align-items:flex-end) and grows up; sign only drives color */}
       <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 66 }}>

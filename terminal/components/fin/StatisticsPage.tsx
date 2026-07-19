@@ -72,9 +72,11 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
       color: "var(--brand)",
     },
     {
+      // Valuation ratio — categorical, not directional. --brand-2 is locale-stable
+      // (--up would flip red under the east red-up theme for no semantic reason).
       name: pick(!!zh, "Price to sales ratio", "市销率"),
       values: fund.ratios?.ps ?? [],
-      color: "var(--up)",
+      color: "var(--brand-2)",
     },
   ]
 
@@ -87,7 +89,7 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
     ? peSeries
     : [
         { name: pick(!!zh, "Price to earnings ratio", "市盈率"), values: [], color: "var(--brand)" },
-        { name: pick(!!zh, "Price to sales ratio", "市销率"), values: [], color: "var(--up)" },
+        { name: pick(!!zh, "Price to sales ratio", "市销率"), values: [], color: "var(--brand-2)" },
       ]
 
   // Whether ALL historical ratio series are null (common for CN / newly covered names).

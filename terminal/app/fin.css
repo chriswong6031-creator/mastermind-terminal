@@ -177,19 +177,33 @@
 .fin-donut-val{color:var(--text);font-family:var(--font-num);font-weight:600;white-space:nowrap}
 .fin-donut-pct{color:var(--muted);font-weight:500}
 
-/* ── capital structure ── */
-.fin-capstruct{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center}
-.fin-capstruct-chart{min-width:0}
-.fin-capstruct-legend{display:flex;flex-direction:column;gap:7px;min-width:120px}
-@media (max-width:640px){.fin-capstruct{grid-template-columns:1fr}}
+/* ── capital structure — purpose-built EV bridge (composition rows) ──
+ * Non-directional tokens only (brand / warn / outline). Inline mono values,
+ * full labels, dotted hairline connectors, and an EV identity explainer. */
+.fin-capbridge{display:flex;flex-direction:column;gap:9px;margin-top:4px}
+.fin-capbridge-row{display:grid;grid-template-columns:14px minmax(84px,auto) 1fr auto;align-items:center;gap:10px;min-height:22px}
+.fin-capbridge-op{font:650 13px/1 var(--font-num);color:var(--muted);text-align:center}
+.fin-capbridge-lbl{font:450 12.5px/1.2 var(--font-ui);color:var(--text-2);white-space:nowrap;letter-spacing:-.01em}
+.fin-capbridge-row.is-total .fin-capbridge-lbl{color:var(--text);font-weight:650}
+.fin-capbridge-track{position:relative;height:16px;display:flex;align-items:center}
+.fin-capbridge-bar{display:block;height:14px;min-width:3px;border-radius:3px;transition:width var(--t-slow) var(--ease-out)}
+.fin-capbridge-bar.is-outline{background:transparent;border:1.25px dashed var(--text-2);opacity:.85}
+.fin-capbridge-row.is-total .fin-capbridge-bar{height:16px;border-radius:4px}
+/* dotted hairline connector dropping from the prior row's bar top */
+.fin-capbridge-conn{position:absolute;left:0;top:-9px;width:1px;height:9px;border-left:1.25px dotted var(--hairline-strong);pointer-events:none}
+.fin-capbridge-val{font:650 12.5px/1 var(--font-num);color:var(--text);white-space:nowrap;font-feature-settings:"tnum";text-align:right}
+.fin-capbridge-row.is-total .fin-capbridge-val{color:var(--text)}
+.fin-capbridge-note{margin-top:4px;font:500 11px/1.3 var(--font-ui);color:var(--muted);letter-spacing:.01em}
+@media (prefers-reduced-motion:reduce){.fin-capbridge-bar{transition:none}}
+@media (max-width:640px){
+  .fin-capbridge-row{grid-template-columns:12px minmax(70px,auto) 1fr auto;gap:8px}
+  .fin-capbridge-lbl{font-size:12px}
+}
 
-/* ── half-gauge ── */
-.fin-gauge{display:flex;flex-direction:column;align-items:center;gap:6px}
-.fin-gauge-svg{flex:none;max-width:100%}
-.fin-gauge-tick{stroke:var(--bg);stroke-width:1.5;vector-effect:non-scaling-stroke}
-.fin-needle{stroke:var(--text);stroke-width:2.2;stroke-linecap:round;vector-effect:non-scaling-stroke}
-.fin-needle-hub{fill:var(--text);stroke:var(--bg);stroke-width:1.5}
-.fin-gauge-verdict{font:700 15px/1 var(--font-ui);letter-spacing:.01em}
+/* ── arc gauge (v6 — replaces the retired needle HalfGauge) ── */
+/* Stacks the ArcGauge over its optional vote-tally caption. The arc is the
+   headline (one state colour, animated sweep); counts are demoted beneath. */
+.fin-arc-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;margin:2px 0}
 .fin-gauge-counts{display:flex;gap:12px;font:600 10px/1 var(--font-ui)}
 .fin-gauge-counts .up{color:var(--up)}.fin-gauge-counts .down{color:var(--down)}.fin-gauge-counts .mut{color:var(--muted)}
 
@@ -423,11 +437,45 @@
 .fin-fc-dist-row{display:flex;align-items:center;gap:10px;font:500 12px/1 var(--font-ui)}
 .fin-fc-dist-row .lbl{width:88px;color:var(--text-2);flex:none}
 .fin-fc-dist-row .track{flex:1;height:8px;background:var(--panel-3);border-radius:var(--r-pill);overflow:hidden}
-.fin-fc-dist-row .track .bar{display:block;height:100%;border-radius:var(--r-pill)}
+.fin-fc-dist-row .track .bar{display:block;height:100%;border-radius:var(--r-pill);transition:width var(--t-slow) var(--ease-out)}
 .fin-fc-dist-row .track .bar.t-up{background:var(--up)}
-.fin-fc-dist-row .track .bar.t-up2{background:var(--up);opacity:.7}
+.fin-fc-dist-row .track .bar.t-up2{background:color-mix(in srgb,var(--up) 70%,transparent)}
 .fin-fc-dist-row .track .bar.t-neu{background:var(--muted)}
+/* Sell zone is RED, not neutral grey — 45%/28% down tints mirror the buy zone. */
+.fin-fc-dist-row .track .bar.t-down{background:color-mix(in srgb,var(--down) 45%,transparent)}
+.fin-fc-dist-row .track .bar.t-down2{background:color-mix(in srgb,var(--down) 28%,transparent)}
 .fin-fc-dist-row .cnt{width:30px;text-align:right;color:var(--text);font-feature-settings:"tnum";flex:none}
+@media (prefers-reduced-motion:reduce){.fin-fc-dist-row .track .bar{transition:none}}
+
+/* ── Forecast: consensus forward-growth chips (EPS / Revenue YoY) ── */
+.fin-fc-growth{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px}
+.fin-fc-growth-lbl{font:600 10px/1 var(--font-ui);color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.fin-fc-growth-chip{display:inline-flex;align-items:baseline;gap:6px;padding:4px 9px;border-radius:var(--r-pill);background:var(--panel-2);border:1px solid var(--hairline)}
+.fin-fc-growth-chip .k{font:500 10.5px/1 var(--font-ui);color:var(--text-2)}
+.fin-fc-growth-chip .v{font:650 12.5px/1 var(--font-num);font-feature-settings:"tnum"}
+
+/* ── Forecast: analyst target-range band (low—mean—high + current marker) ── */
+.fin-fc-band{margin:14px 0 6px}
+.fin-fc-band-track{position:relative;height:8px;border-radius:var(--r-pill);
+  background:linear-gradient(90deg,color-mix(in srgb,var(--brand) 16%,transparent),color-mix(in srgb,var(--brand) 34%,transparent))}
+.fin-fc-band-mean{position:absolute;top:-2px;width:2px;height:12px;background:var(--text-2);border-radius:1px;transform:translateX(-1px)}
+.fin-fc-band-cur{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center}
+.fin-fc-band-cur .dot{width:11px;height:11px;border-radius:50%;background:var(--brand);border:2px solid var(--panel);box-shadow:0 0 0 1px var(--brand)}
+.fin-fc-band-cur .tag{position:absolute;top:-19px;font:600 10px/1 var(--font-num);color:var(--brand);white-space:nowrap;font-feature-settings:"tnum"}
+.fin-fc-band-ends{display:flex;justify-content:space-between;margin-top:9px;font:500 11px/1 var(--font-num);color:var(--text);font-feature-settings:"tnum"}
+.fin-fc-band-ends .mid{color:var(--text-2)}
+.fin-fc-band-ends .k{color:var(--muted);font-family:var(--font-ui);font-weight:500;margin-right:3px}
+
+/* ── skeleton (kill the false "No analyst coverage" flash during load) ── */
+.fin-skel{background:linear-gradient(100deg,var(--panel-2) 30%,var(--panel-3) 50%,var(--panel-2) 70%);
+  background-size:200% 100%;border-radius:var(--r-md);animation:fin-skel-shimmer 1.3s var(--ease-out) infinite}
+.fin-skel-tabs{width:220px;height:34px;border-radius:var(--r-pill);opacity:.5}
+.fin-skel-chart{height:200px}
+.fin-skel-gauge{height:120px;margin-bottom:12px}
+.fin-skel-rows{height:120px}
+.fin-skel-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+@keyframes fin-skel-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.fin-skel{animation:none}}
 .fin-fc-analyst-empty{flex-direction:column;gap:12px;padding:26px 10px}
 .fin-fc-guidance{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center}
 .fin-fc-guidance .chip{background:var(--brand);color:#fff;font:600 11px/1 var(--font-ui);padding:5px 9px;border-radius:var(--r-pill)}
@@ -440,7 +488,7 @@
 .fin-tf-pill.on{background:var(--text);color:var(--bg)}
 
 /* ── Technicals: three gauges ── */
-.fin-tech-summary{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:8px;align-items:end;justify-items:center}
+.fin-tech-summary{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:8px;align-items:start;justify-items:center}
 .fin-tech-gauge{display:flex;flex-direction:column;align-items:center;gap:4px}
 .fin-tech-gauge-t{font:600 12px/1 var(--font-ui);color:var(--text-2)}
 @media (max-width:640px){.fin-tech-summary{grid-template-columns:1fr}}
@@ -840,42 +888,44 @@
 /* ─────────────────────────────────────────────────────────────────────────
  * Insider Power tab (InsiderPage)
  * ───────────────────────────────────────────────────────────────────────── */
-.fin-insider-hero{display:grid;grid-template-columns:minmax(200px,240px) 1fr;gap:22px;align-items:center;margin-top:12px}
-@media (max-width:640px){.fin-insider-hero{grid-template-columns:1fr;gap:16px}}
-.fin-insider-gaugebox{display:flex;flex-direction:column;align-items:center;gap:2px}
-.fin-insider-score{display:flex;align-items:baseline;gap:4px;margin-top:2px}
-.fin-insider-score .num{font:700 34px/1 var(--font-num);letter-spacing:-.01em}
-.fin-insider-score .scale{font:600 12px/1 var(--font-num);color:var(--muted)}
-.fin-insider-scorelbl{font:500 10.5px/1 var(--font-ui);color:var(--muted)}
-.fin-insider-signal{min-width:0}
-.fin-insider-sigrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.fin-insider-sigbadge{font:700 12px/1 var(--font-ui);letter-spacing:.04em;padding:6px 11px;border-radius:var(--r-pill);border:1px solid var(--line)}
-.fin-insider-sigbadge.up{color:var(--up);background:color-mix(in srgb,var(--up) 12%,transparent);border-color:color-mix(in srgb,var(--up) 34%,transparent)}
-.fin-insider-sigbadge.down{color:var(--down);background:color-mix(in srgb,var(--down) 12%,transparent);border-color:color-mix(in srgb,var(--down) 34%,transparent)}
-.fin-insider-sigbadge.mut{color:var(--text-2);background:var(--panel-2)}
+/* ── Verdict header: state + plain sentence + evidence strip · ArcGauge aside ── */
+.fin-insider-verdict{display:grid;grid-template-columns:1fr minmax(148px,168px);gap:24px;align-items:center;margin-top:12px}
+@media (max-width:640px){.fin-insider-verdict{grid-template-columns:1fr;gap:18px}}
+.fin-insider-verdict-main{min-width:0}
+.fin-insider-verdict-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+/* State chip — the plain-word verdict. Neutral is grey; "no signal" looks like no signal. */
+.fin-insider-state{font:650 14px/1 var(--font-ui);letter-spacing:-.01em;padding:6px 12px;border-radius:var(--r-pill);border:1px solid var(--hairline)}
+.fin-insider-state.up{color:var(--up);background:color-mix(in srgb,var(--up) 12%,transparent);border-color:color-mix(in srgb,var(--up) 34%,transparent)}
+.fin-insider-state.down{color:var(--down);background:color-mix(in srgb,var(--down) 12%,transparent);border-color:color-mix(in srgb,var(--down) 34%,transparent)}
+.fin-insider-state.neu{color:var(--text-2);background:var(--panel-2)}
 .fin-insider-conf{font:600 11px/1 var(--font-ui);color:var(--text-2);text-transform:capitalize}
-.fin-insider-analysis{font:500 13px/1.5 var(--font-ui);color:var(--text);margin:11px 0 0}
-.fin-insider-stats{display:flex;flex-wrap:wrap;gap:22px;margin-top:15px}
-.fin-insider-stat{display:flex;flex-direction:column;gap:3px}
-.fin-insider-stat .lbl{font:500 10px/1 var(--font-ui);color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.fin-insider-stat .val{font:700 15px/1 var(--font-num);color:var(--text)}
-.fin-insider-stat .val.up{color:var(--up)}
-.fin-insider-stat .val.down{color:var(--down)}
-.fin-insider-tbl .fin-insider-role{color:var(--text);font:500 12px/1.3 var(--font-ui)}
-.fin-insider-side{display:inline-flex;align-items:center;font:700 10.5px/1 var(--font-ui);letter-spacing:.03em;padding:3px 8px;border-radius:var(--r-pill)}
-.fin-insider-side.up{color:var(--up);background:color-mix(in srgb,var(--up) 13%,transparent)}
-.fin-insider-side.down{color:var(--down);background:color-mix(in srgb,var(--down) 13%,transparent)}
+.fin-insider-sentence{font:450 13px/1.5 var(--font-ui);color:var(--text);margin:11px 0 0;max-width:56ch}
+/* Evidence strip — mono, tabular */
+.fin-insider-ev{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:16px}
+.fin-insider-evcell{display:flex;flex-direction:column;gap:3px}
+.fin-insider-evcell .k{font:600 10px/1 var(--font-ui);color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.fin-insider-evcell .v{font:650 15px/1 var(--font-num);color:var(--text);font-feature-settings:"tnum"}
+.fin-insider-evcell .v.up{color:var(--up)}
+.fin-insider-evcell .v.down{color:var(--down)}
+.fin-insider-gauge{display:flex;justify-content:center;align-items:center}
+@media (max-width:640px){.fin-insider-gauge{justify-self:start}}
+
+/* ── Buy/sell volume chart restyle (bars already carry .7-alpha fills) ── */
+.fin-insider-volchart .fin-bar{rx:3px}
+.fin-insider-volchart .fin-line{stroke-width:1.25}
+.fin-insider-volchart .fin-node{r:2}
+.fin-insider-volchart .fin-axis-y{font-size:10px;fill:var(--muted)}
+
+/* ── Trades table: tinted type pills + mono right-aligned values ── */
+.fin-insider-tbl .fin-insider-role{color:var(--text);font:450 12px/1.3 var(--font-ui)}
+.fin-insider-mono{font-family:var(--font-num);font-feature-settings:"tnum"}
+.fin-insider-pill{display:inline-flex;align-items:center;font:600 10.5px/1 var(--font-ui);letter-spacing:.03em;padding:3px 9px;border-radius:var(--r-pill);border:1px solid transparent}
+.fin-insider-pill.up{color:var(--up);background:color-mix(in srgb,var(--up) 12%,transparent);border-color:color-mix(in srgb,var(--up) 26%,transparent)}
+.fin-insider-pill.down{color:var(--down);background:color-mix(in srgb,var(--down) 12%,transparent);border-color:color-mix(in srgb,var(--down) 26%,transparent)}
+/* Age-aware dimming: trades older than a year read fainter. */
+.fin-insider-stale{color:var(--muted)}
+.fin-insider-lasttrade{font:500 11px/1 var(--font-ui);color:var(--muted)}
 .fin-insider-asof{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:9px}
-/* docket-15 recency elements */
-.fin-insider-recency{padding:6px 0 4px;font:500 12.5px/1.4 var(--font-ui);color:var(--text-2)}
-.fin-insider-recency-date b{color:var(--text);font-weight:600}
-.fin-insider-recency-ago{color:var(--muted);font-size:11.5px}
-.fin-insider-recency-none{color:var(--muted)}
-.fin-insider-quiet{font:500 12px/1.4 var(--font-ui);color:var(--text-2);background:color-mix(in srgb,var(--signal,#f59e0b) 10%,transparent);border:1px solid color-mix(in srgb,var(--signal,#f59e0b) 30%,transparent);border-radius:var(--r-sm,4px);padding:7px 10px;margin:6px 0 10px}
-.fin-row-older{opacity:.65}
-.fin-row-older:hover{opacity:1}
-.fin-insider-show-older{display:flex;align-items:center;gap:5px;font:500 12px/1 var(--font-ui);color:var(--brand);background:none;border:none;cursor:pointer;padding:8px 0;margin-top:2px}
-.fin-insider-show-older:hover{color:var(--brand-2)}
 
 /* ── fin-xlbl font floor at mobile ── */
 @media (max-width:860px){
@@ -910,3 +960,67 @@
 .fin-dumbtip .r .v{color:var(--text);font-family:var(--font-num);font-weight:650;white-space:nowrap;font-feature-settings:"tnum"}
 .fin-dumbtip .r .v.up{color:var(--up)}
 .fin-dumbtip .r .v.down{color:var(--down)}
+
+/* ── seasonal (owned by SEASONAL lane) ──
+ * The seasonality restyle lane APPENDS its marked block below this anchor.
+ * FIN lane owns everything above; do not add FIN styles past this point.
+ *
+ * v6 restyle: window default (10y) + segmented control, mean/current-year as the
+ * two signal series (prior years recede to a 22% cloud), collapsed legend
+ * popover, and the windowed monthly table. Everything uses v6 tokens
+ * (--t-fast/--ease-out, --hairline, --fs-*, --pop-*). */
+
+/* header: view toggle + lookback window on one row */
+.fin-seas-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.fin-seas-head .fin-seas-view{margin-bottom:0}
+
+/* lookback segmented control — the epistemics control (5Y | 10Y | 15Y | Max) */
+.fin-seas-win button{font:650 var(--fs-label)/1 var(--font-num);letter-spacing:.01em;padding:5px 11px;transition:color var(--t-fast) var(--ease-out),background var(--t-fast) var(--ease-out)}
+.fin-seas-win button.on{color:#fff;background:var(--brand)}
+
+/* per-year context lines: cheap hit target, smooth opacity/width lift */
+.fin-seas-yline{vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round;cursor:pointer;transition:stroke-opacity var(--t-fast) var(--ease-out),stroke-width var(--t-fast) var(--ease-out)}
+
+/* mean path — soft brand area + 2px brand line (the typical year) */
+.fin-seas-meanarea{fill:var(--brand);fill-opacity:.07;pointer-events:none}
+.fin-seas-meanline{stroke:var(--brand-2);stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round;pointer-events:none}
+
+/* current year — 1.5px --signal (attention, non-directional) */
+.fin-seas-curline{stroke:var(--signal);stroke-width:1.5;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round;pointer-events:none}
+.fin-seas-curnode{fill:var(--signal)}
+.fin-seas-curlbl{fill:var(--signal);font:650 var(--fs-micro)/1 var(--font-num)}
+
+@media (prefers-reduced-motion: reduce){
+  .fin-seas-yline,.fin-seas-win button{transition:none}
+}
+
+/* legend keys (mean / this year) sit before the year chips */
+.fin-seas-legkey{display:inline-flex;align-items:center;gap:6px;font:650 var(--fs-micro)/1 var(--font-ui);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-right:4px}
+.fin-seas-legkey-mean{width:14px;height:0;border-top:2px solid var(--brand-2);border-radius:2px}
+.fin-seas-legkey-cur{width:14px;height:0;border-top:2px solid var(--signal);border-radius:2px}
+
+/* collapsed "N of M years" chip + popover (past 12 years) */
+.fin-seas-yearpop-wrap{position:relative;display:inline-flex}
+.fin-seas-yearpop-trig{gap:6px;letter-spacing:.01em}
+.fin-seas-yearpop-trig.open{border-color:var(--brand-2);color:var(--brand-2)}
+.fin-seas-yearpop-caret{transition:transform var(--t-fast) var(--ease-out)}
+.fin-seas-yearpop-trig.open .fin-seas-yearpop-caret{transform:rotate(180deg)}
+.fin-seas-yearpop{position:absolute;z-index:20;top:calc(100% + 7px);left:0;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;max-height:220px;overflow-y:auto;padding:9px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid var(--pop-edge);border-radius:var(--pop-r);box-shadow:var(--pop-shadow),var(--pop-sheen);animation:fin-tip-in var(--t-fast) var(--ease-out);scrollbar-width:thin}
+.fin-seas-yearpop-item{display:inline-flex;align-items:center;gap:6px;border:1px solid transparent;background:none;border-radius:var(--pop-item-r);padding:5px 8px;font:600 var(--fs-label)/1 var(--font-num);color:var(--muted);cursor:pointer;white-space:nowrap;transition:background var(--t-fast) var(--ease-out),color var(--t-fast) var(--ease-out)}
+.fin-seas-yearpop-item:hover{background:var(--pop-hover);color:var(--text)}
+.fin-seas-yearpop-item.on{color:var(--text)}
+.fin-seas-yearpop-item.cur{color:var(--signal)}
+@media (prefers-reduced-motion: reduce){ .fin-seas-yearpop{animation:none} .fin-seas-yearpop-caret{transition:none} }
+
+/* windowed monthly table — aggregate footer rows + scope/show-all foot */
+.fin-seas-aggrow .fin-cell{background:rgba(41,98,255,.05);font-weight:700}
+.fin-seas-aggrow .fin-cell-sticky{color:var(--text-2);text-transform:uppercase;letter-spacing:.04em;font:700 var(--fs-micro)/1.2 var(--font-ui)}
+.fin-seas-hitrow .fin-cell{background:rgba(41,98,255,.03);border-bottom:1px solid var(--hairline-strong)}
+.fin-seas-cell.dim{color:var(--muted);font-weight:600}
+.fin-seas-tablefoot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:10px}
+.fin-seas-tablescope{font:600 var(--fs-label)/1.3 var(--font-ui);color:var(--muted)}
+.fin-seas-showall{border:1px solid var(--hairline-strong);background:var(--panel-2);color:var(--text-2);border-radius:var(--r-pill);padding:5px 12px;font:650 var(--fs-label)/1 var(--font-ui);cursor:pointer;transition:color var(--t-fast) var(--ease-out),border-color var(--t-fast) var(--ease-out)}
+.fin-seas-showall:hover{color:var(--text);border-color:var(--brand-2)}
+
+/* advanced deck — plain-word window scope beside the title */
+.fin-adv-scope{font:650 var(--fs-label)/1 var(--font-ui);letter-spacing:.02em;text-transform:none;color:var(--text);background:rgba(41,98,255,.12);border:1px solid rgba(41,98,255,.22);border-radius:var(--r-pill);padding:3px 9px}

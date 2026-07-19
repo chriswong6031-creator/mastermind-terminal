@@ -5,7 +5,12 @@ import { pick as pickI18n, fmtPct } from "@/lib/finFormat";
 import type { Fund, Opts, Bar } from "@/lib/fund";
 import { computeRatings } from "@/lib/techRating";
 import { realizedVolCone } from "@/lib/realizedVol";
-import { Dumbbell, ComboChart, HalfGauge, LineSeries, type Series } from "@/components/fin/FinCharts";
+import { Dumbbell, ComboChart, LineSeries, type Series } from "@/components/fin/FinCharts";
+import { ArcGauge } from "@/components/ui/ArcGauge";
+// Single source of truth for the analyst rating reading + verdict word + arc
+// mapping — shared with ForecastPage so the rail gauge and the Analyst/Technicals
+// panes never disagree on reading, verdict, or where buy/hold/sell begin.
+import { analystReading, ratingVerdict, readingToArc } from "@/components/fin/ForecastPage";
 import type { FinPage } from "@/components/fin/MegaPane";
 import EventEdgePop from "@/components/fin/EventEdgePop";
 
@@ -280,15 +285,21 @@ function PerfGrid({ bars, pick }: { bars: Bar[]; pick: Pick }) {
   );
 }
 
-/** Technicals gauge — compact HalfGauge from techRating on daily bars. */
+/** Technicals gauge — compact ArcGauge from techRating on daily bars. */
 function TechGauge({ bars, pick, onOpen }: { bars: Bar[]; pick: Pick; onOpen?: () => void }) {
   const ratings = useMemo(() => (bars.length >= 30 ? computeRatings(bars) : null), [bars]);
   if (!ratings) return null;
   const overall = ratings.summary[2];
+  const arc = readingToArc(overall.score);
   return (
     <Section title={pick("Technicals", "技术评级")}>
-      <div className="sa-gauge">
-        <HalfGauge value={overall.score} verdict={pick(...verdictBi(overall.verdict))} counts={{ sell: overall.sell, neutral: overall.neutral, buy: overall.buy }} size={200} variant="tech" zh={undefined} />
+      <div className="sa-gauge fin-arc-wrap">
+        <ArcGauge value={arc.value} state={arc.state} size={150} sublabel={pick(...verdictBi(overall.verdict))} />
+        <div className="fin-gauge-counts">
+          <span className="down">{pick("Sell", "卖")} {overall.sell}</span>
+          <span className="mut">{pick("Neutral", "中性")} {overall.neutral}</span>
+          <span className="up">{pick("Buy", "买")} {overall.buy}</span>
+        </div>
       </div>
       {onOpen && <button className="sa-more-btn" onClick={onOpen}>{pick("More technicals", "更多技术面")} ›</button>}
     </Section>
@@ -310,19 +321,28 @@ function AnalystGauge({ fund, spot, pick, onOpen, hasIntelAnalyst }: { fund: Fun
     return null;
   }
   const d = an.dist;
-  const totalN = d.strongBuy + d.buy + d.hold + d.sell + d.strongSell;
-  // map distribution → gauge value in [-1,1] (weighted mean of -1..+1 buckets)
-  const score = totalN > 0 ? (d.strongBuy * 1 + d.buy * 0.5 + d.hold * 0 + d.sell * -0.5 + d.strongSell * -1) / totalN : null;
+  // Shared reading + verdict word (identical logic to the ForecastPage gauge).
+  const score = analystReading(d);
   const target = an.target?.mean ?? null;
   const upside = target != null && spot != null && spot !== 0 ? ((target - spot) / spot) * 100 : null;
   if (score == null && target == null) return null;
+  // Never empty: falls back to the zone word when rating_label is null.
+  const verdict = ratingVerdict(an.rating_label, score, false) || undefined;
   return (
     <Section title={pick("Analyst rating", "分析师评级")}>
-      {score != null && (
-        <div className="sa-gauge">
-          <HalfGauge value={score} verdict={an.rating_label ?? undefined} counts={{ sell: d.sell + d.strongSell, neutral: d.hold, buy: d.buy + d.strongBuy }} size={200} variant="analyst" zh={undefined} />
-        </div>
-      )}
+      {score != null && (() => {
+        const arc = readingToArc(score);
+        return (
+          <div className="sa-gauge fin-arc-wrap">
+            <ArcGauge value={arc.value} state={arc.state} size={150} sublabel={verdict} />
+            <div className="fin-gauge-counts">
+              <span className="down">{pick("Sell", "卖")} {d.sell + d.strongSell}</span>
+              <span className="mut">{pick("Neutral", "中性")} {d.hold}</span>
+              <span className="up">{pick("Buy", "买")} {d.buy + d.strongBuy}</span>
+            </div>
+          </div>
+        );
+      })()}
       {target != null && (
         <div className="sa-grid2">
           <Stat k={pick("1yr price target", "1年目标价")} v={fnum(target)} />

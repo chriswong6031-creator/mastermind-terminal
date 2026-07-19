@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { fetchIntraday, isIntradayTf } from "@/lib/intradaySources";
+import { fetchIntraday, isIntradayTf, classify } from "@/lib/intradaySources";
 import { withStoredHistory } from "@/lib/intradayStore";
 import type { Bar6 } from "@/lib/intradayShared";
 import { rateLimit, tooMany } from "@/lib/rateLimit";
@@ -27,8 +27,17 @@ export async function GET(req: Request) {
   const ext = searchParams.get("ext") !== "0"; // extended hours on by default (US only)
   if (!sym || !isIntradayTf(tf)) return NextResponse.json({ error: "bad params" }, { status: 400 });
 
+  // Resolve the provider basis (source + epoch convention) that WILL serve this symbol, and fold it
+  // into the cache key. Today every provider emits the same market-local "display epoch"
+  // (intradaySources.ts), but when a licensed UTC feed (DataBento) plugs in per-market, its bars are
+  // basis:'utc' — a bare `sym|tf|ext` key would then serve a warm cross-provider / cross-basis entry
+  // after an entitlement flip (databento-readiness audit, finding #6). Keying on source|basis makes
+  // a provider cutover a cache MISS rather than a silent stale-bar hazard.
+  const market = classify(sym);
+  const source = market === "ca" ? "none" : (market === "us" || market === "crypto") ? "polygon" : "tencent";
+  const basis = "display"; // all current providers emit the display-epoch convention; UTC feeds bump this
   // serve a warm cache without re-auth (it's public market data); only a fresh upstream fetch is gated
-  const ckey = `${sym}|${tf}|${ext ? 1 : 0}`;
+  const ckey = `${sym}|${tf}|${ext ? 1 : 0}|${source}|${basis}`;
   const hit = CACHE.get(ckey);
   if (hit && Date.now() - hit.at < TTL) return NextResponse.json(hit.data);
 

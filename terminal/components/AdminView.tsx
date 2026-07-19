@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import MobileNav from "@/components/MobileNav";
 import { useT } from "@/lib/i18n";
 
 type Ev = { id: number; created_at: string; symbol: string; query: string | null; source: string; user_id: string | null; anon_id: string | null; ip: string | null; ua: string | null };
@@ -88,6 +89,7 @@ export default function AdminView({ email }: { email: string }) {
 
   return (
     <div className="app2">
+      <MobileNav email={email} />
       <header className="topbar">
         <BrandLockup /><div className="tdiv" /><span className="page-title">{t("pageAdmin", "Admin")}</span>
         <div className="spacer" />

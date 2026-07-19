@@ -3,6 +3,7 @@
 // This replaces the entire document (html + body required); LangProvider is NOT available here
 // because it lives in the layout being replaced. English-only fallback is correct per spec.
 import { useEffect } from "react";
+import { tryChunkReload } from "./error";
 
 export default function GlobalError({
   error,
@@ -13,6 +14,10 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     console.error("[GlobalErrorBoundary]", error);
+    // Stale-chunk-after-deploy self-heal (shared one-shot guard with app/error.tsx). A chunk-load /
+    // module-factory crash in the root shell reloads the document once; non-chunk errors keep the
+    // manual retry UI below.
+    tryChunkReload(error);
   }, [error]);
 
   return (

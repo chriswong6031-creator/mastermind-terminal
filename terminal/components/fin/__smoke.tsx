@@ -12,7 +12,6 @@ import {
   ComboChart,
   Dumbbell,
   Donut,
-  HalfGauge,
   Waterfall,
   CapitalStructure,
   YearOverlay,
@@ -87,8 +86,6 @@ export default function FinChartsSmoke() {
       <ComboChart labels={labels} bars={[rev, ni]} line={margin} />
       <Dumbbell points={dumbbell} />
       <Donut slices={donut} centerValue="161.71 M" centerLabel="Shares out" />
-      <HalfGauge value={0.42} verdict="Buy" counts={{ sell: 3, neutral: 6, buy: 17 }} variant="tech" />
-      <HalfGauge value={0.8} variant="analyst" />
       <Waterfall steps={waterfall} />
       <CapitalStructure marketCap={23820} debt={1860} cash={3540} />
       <YearOverlay paths={years} horizon={52} monthLabels={["Jan", "May", "Sep"]} />
@@ -102,7 +99,6 @@ export default function FinChartsSmoke() {
       <ComboChart labels={labels} bars={[]} line={{ name: "x", values: [] }} />
       <Dumbbell points={[]} />
       <Donut slices={[]} />
-      <HalfGauge value={null} />
       <Waterfall steps={[]} />
       <CapitalStructure marketCap={null} debt={null} cash={null} />
       <YearOverlay paths={[]} horizon={0} />

@@ -18,6 +18,7 @@ import {
   CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
 import { runPine, type RunResult } from "@/lib/pine-engine";
+import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engine/host";
 import { ORACLE_V1_PINE } from "@/lib/pine";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
@@ -269,12 +270,51 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const pinePaneMapRef = useRef<Map<string, number>>(new Map());             // sub-pane scriptId → pane index (overlay scripts absent)
   const pineErrRef = useRef<Map<string, string>>(new Map());                 // scriptId → error text (surfaced in the legend)
   const pineCacheRef = useRef<Map<string, { key: string; result: RunResult | null; error: string | null }>>(new Map()); // memo: scriptId → last run
+  // ── worker-backed Pine host (PINE lane's host.ts) ──────────────────────────────────────────────
+  // The host runs compile+execute in a terminateable Web Worker (SSR/tests fall back to a sync host,
+  // same surface), caches the parsed AST by source hash (data-only re-runs skip re-parsing), and
+  // supersedes an in-flight run per `slot` (= scriptId) so a fast replay auto-advance coalesces to the
+  // latest tick instead of stacking O(N) re-parses on the main thread (the old O(N²) replay stall).
+  const pineHostRef = useRef<PineHost | null>(null);
+  const pineHost = (): PineHost => { if (!pineHostRef.current) pineHostRef.current = createPineHost(); return pineHostRef.current; };
+  // scriptId → { source, astId } for the last compiled source, so a data-only re-run passes the astId.
+  const pineAstRef = useRef<Map<string, { source: string; astId: string | null }>>(new Map());
+  // Monotonic epoch bumped on every pine rebuild request. An async worker batch stamps the epoch it was
+  // launched under and is DROPPED on resolve if a newer rebuild has since bumped it — the guard that
+  // stops a stale reply from painting over a newer bar set (host supersession handles same-slot; this
+  // covers a full clearAllPine()+buildAllPine() between launch and resolve).
+  const pineEpochRef = useRef(0);
+  // Debounce handle for the live-splice incremental pine re-run (≥250ms) so a burst of live quotes
+  // schedules ONE pine re-eval, not one per splice.
+  const pineLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pineScriptsRef = useRef<PineScript[]>(pineScripts); pineScriptsRef.current = pineScripts;
   const barsRef = useRef<Bar[]>([]);        // the bars currently ON the chart (full OR replay-sliced)
   const fullBarsRef = useRef<Bar[]>([]);    // the full resampled history — NEVER mutated by replay
   const dailyBarsRef = useRef<Bar[]>([]);   // the raw DAILY source (pre-resample) — the R11 splice operates here
   const isIntradayRef = useRef<boolean>(false);   // true when the active TF is an intraday branch (skip splice/resample/date-keyed overlays)
   const closesRef = useRef<number[]>([]);   // closes of barsRef
+  // PERF: time→index map for O(1) barIndex()/snapT lookups (was an O(n) linear scan called per marker
+  // per frame). Rebuilt lazily on `barsRef.current` array-identity change (every data/replay/splice
+  // reassigns barsRef to a NEW array), so it's always in step without touching the 6 assignment sites.
+  const barIdxRef = useRef<{ src: Bar[] | null; map: Map<string | number, number> }>({ src: null, map: new Map() });
+  const barIdxMap = (): Map<string | number, number> => {
+    const b = barsRef.current;
+    if (barIdxRef.current.src !== b) {
+      const m = new Map<string | number, number>();
+      // Key on BOTH the raw time and its stringified form so an exact lookup hits O(1) regardless of
+      // whether the query time arrives as a number (intraday epoch) or a string (the old scan used
+      // String()==String() coercion). Raw key set last so m.get(rawTime) returns the canonical index.
+      for (let k = 0; k < b.length; k++) { const t = b[k].time; m.set(String(t), k); m.set(t, k); }
+      barIdxRef.current = { src: b, map: m };
+    }
+    return barIdxRef.current.map;
+  };
+  // PERF: gap-zone detection memo — the O(daily²) gap+fill scan is pure data-derived geometry that does
+  // NOT depend on the crosshair/range, yet renderSignals ran it every frame. Cache keyed on the daily
+  // source array identity + the gap params so it recomputes only on a data/param change; the per-frame
+  // render just re-projects the cached zones' coordinates.
+  type GapZone = { date: string; type: "up" | "down"; lo: number; hi: number; fill: string | null };
+  const gapZonesRef = useRef<{ src: Bar[] | null; thr: number; map: Map<string, Bar["time"]>; gaps: GapZone[] }>({ src: null, thr: -1, map: new Map(), gaps: [] });
   const prevSymbolRef = useRef<string>("");  // tracks the symbol from the last Effect 2 run to detect symbol changes
   const precRef = useRef<number>(2);
   // GC v2: sig marks additionally carry keeper quality + recipe tier (drives the marker dimming/
@@ -522,25 +562,52 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   };
 
   // ── custom-script (Pine) run + translate layer ─────────────────────────────────────────────────
-  // Memoized per-script run: re-runs only when (id, source, params, symbol, tf, bar identity) change.
-  // A throwing/slow/invalid script never crashes the chart — the error is captured and surfaced in the
-  // legend row; its series are simply skipped. Bar identity = fullBarsRef.current (the on-chart set is
-  // a prefix during replay; v1 re-runs on the full set, cache-keyed by its length + last time).
-  const runPineMemo = (script: PineScript, rows: Bar[]): { result: RunResult | null; error: string | null } => {
-    const barSig = rows.length ? `${rows.length}:${rows[rows.length - 1].time}` : "0";
-    const key = `${script.source}\0${JSON.stringify(script.params)}\0${symbol}\0${timeframeRef.current}\0${barSig}`;
+  // Execution runs OFF the main thread via the worker-backed PineHost (host.ts): compile once per
+  // source (AST cached by hash), run per data change with per-slot supersession (a fast replay
+  // auto-advance coalesces to the latest tick), and a hard wall budget with real preemption. The
+  // per-(script,data) result is memoized in pineCacheRef so a re-render with the SAME bar set (pan,
+  // indicator toggle) rebuilds synchronously from cache with no worker round-trip or flicker.
+  //
+  // Cache key = source · params · symbol · tf · (len:lastTime). The AST cache inside the host is keyed
+  // on source alone, so a bar-count change (replay/live) reuses the compiled AST and only re-runs.
+  const pineDataSig = (rows: Bar[]) => (rows.length ? `${rows.length}:${rows[rows.length - 1].time}` : "0");
+  const pineCacheKey = (script: PineScript, rows: Bar[]) =>
+    `${script.source}\0${JSON.stringify(script.params)}\0${symbol}\0${timeframeRef.current}\0${pineDataSig(rows)}`;
+  // Cache READER: fresh hit → { result, error }; miss → null (caller launches an async run).
+  const pineCached = (script: PineScript, rows: Bar[]): { result: RunResult | null; error: string | null } | null => {
     const cached = pineCacheRef.current.get(script.id);
-    if (cached && cached.key === key) return { result: cached.result, error: cached.error };
-    let result: RunResult | null = null; let error: string | null = null;
+    return cached && cached.key === pineCacheKey(script, rows) ? { result: cached.result, error: cached.error } : null;
+  };
+  // Translate a host PineResult (or a caught crash) into the cache's { result, error } shape.
+  const pineOutcome = (out: PineResult | null, crash?: unknown): { result: RunResult | null; error: string | null } => {
+    if (crash !== undefined) return { result: null, error: (crash as any)?.message ? String((crash as any).message) : "Script crashed" };
+    if (!out) return { result: null, error: "Script produced no output" };
+    if (out.budgetExceeded) return { result: null, error: "Script exceeded the run budget (cancelled)" };
+    if (!out.ok) { const e = out.errors[0]; return { result: null, error: e ? (e.line ? `Line ${e.line}: ${e.message}` : e.message) : "Script failed to run" }; }
+    return { result: out.result, error: null };
+  };
+  // Launch an async host run for one script on `rows`, caching the outcome under the (script,data) key.
+  // Returns the cache-shaped outcome. `cancelled` results (superseded by a newer same-slot run) are
+  // dropped WITHOUT touching the cache so the newer run owns the entry. compile() is fire-and-forget to
+  // warm the AST cache — run() also carries `source` so it self-compiles if the astId isn't cached yet.
+  const runPineHost = async (script: PineScript, rows: Bar[]): Promise<{ result: RunResult | null; error: string | null } | null> => {
+    const key = pineCacheKey(script, rows);
+    const host = pineHost();
+    // warm/refresh the AST cache when the source changed for this script
+    const prevAst = pineAstRef.current.get(script.id);
+    if (!prevAst || prevAst.source !== script.source) {
+      pineAstRef.current.set(script.id, { source: script.source, astId: null });
+      host.compile(script.source).then((c) => { if (pineAstRef.current.get(script.id)?.source === script.source) pineAstRef.current.set(script.id, { source: script.source, astId: c.astId }); }).catch(() => {});
+    }
+    let out: PineResult | null = null; let crash: unknown;
     try {
-      const t0 = Date.now();
-      const out = runPine(script.source, rows as any, { timeframe: timeframeRef.current, symbol, params: script.params || {} });
-      if (Date.now() - t0 > PINE_RUNTIME_CAP_MS) { error = "Script exceeded the 2s runtime cap"; }
-      else if (!out.ok) { const e = out.errors[0]; error = e ? (e.line ? `Line ${e.line}: ${e.message}` : e.message) : "Script failed to run"; }
-      else result = out.result;
-    } catch (e: any) { error = e?.message ? String(e.message) : "Script crashed"; }
-    pineCacheRef.current.set(script.id, { key, result, error });
-    return { result, error };
+      out = await host.run({ slot: script.id, source: script.source, astId: pineAstRef.current.get(script.id)?.astId ?? undefined, bars: rows as any, inputs: script.params || {}, opts: { timeframe: timeframeRef.current, symbol }, budgetMs: PINE_RUNTIME_CAP_MS });
+    } catch (e) { crash = e; }
+    if (out && out.cancelled) return null;   // superseded → let the newer run win; don't cache
+    if (out && out.astId && pineAstRef.current.get(script.id)?.source === script.source) pineAstRef.current.set(script.id, { source: script.source, astId: out.astId });
+    const outcome = pineOutcome(out, crash);
+    pineCacheRef.current.set(script.id, { key, ...outcome });
+    return outcome;
   };
 
   // Map a Pine PlotKind → a Lightweight-Charts series on `pane`. Histogram/columns → HistogramSeries
@@ -570,7 +637,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // one markers plugin. Records series/markers/pane in the pine refs. Returns true if it got a pane.
   const buildPineScript = (script: PineScript, rows: Bar[], subPane: number): { ok: boolean; usedPane: boolean } => {
     const chart = chartRef.current, priceS = priceSeriesRef.current; if (!chart || !priceS) return { ok: false, usedPane: false };
-    const { result, error } = runPineMemo(script, rows);
+    // Consume the memoized outcome (a fresh cache hit). Callers (buildAllPine) only invoke this for
+    // scripts already resolved into pineCacheRef; a miss here means the async run hasn't landed yet.
+    const outcome = pineCached(script, rows);
+    if (!outcome) return { ok: false, usedPane: false };
+    const { result, error } = outcome;
     if (error || !result) { pineErrRef.current.set(script.id, error || "Script produced no output"); return { ok: false, usedPane: false }; }
     pineErrRef.current.delete(script.id);
     const overlay = result.meta.overlay;
@@ -604,9 +675,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     pineSeriesRef.current.clear(); pinePaneMapRef.current.clear();
   };
 
-  // Build ALL enabled scripts onto `rows`. Non-overlay scripts append sub-panes AFTER any built-in
-  // sub-panes (rsi/macd/…) in the scripts' array order. Errors are captured per-script (legend), never thrown.
-  const buildAllPine = (rows: Bar[]) => {
+  // Render every enabled script's series from the memo cache (synchronous). Non-overlay scripts append
+  // sub-panes AFTER any built-in sub-panes (rsi/macd/…) in array order. Scripts without a fresh cache
+  // entry are skipped (their series simply don't appear until the async run lands + triggers a rebuild).
+  const paintPineFromCache = (rows: Bar[]) => {
     const chart = chartRef.current; if (!chart) return;
     const scripts = pineScriptsRef.current; if (!scripts.length) return;
     // next free pane = 1 + max(any built-in sub-pane index already assigned)
@@ -616,6 +688,37 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const { usedPane } = buildPineScript(s, rows, pane);
       if (usedPane) pane++;
     }
+  };
+
+  // Build ALL enabled scripts onto `rows` via the worker host. FAST PATH: when every script already
+  // has a fresh cache entry for this bar set (pan / indicator toggle — bars unchanged), paint
+  // synchronously with no worker round-trip. SLOW PATH: any cache miss (replay tick, live splice,
+  // edited/added script, TF/symbol change) launches async host runs; when the batch for THIS epoch
+  // settles, clear + repaint the pine layer from the now-complete cache — guarded by pineEpochRef so a
+  // stale batch (superseded by a newer rebuild) never paints over the current bars. Errors are captured
+  // per-script (surfaced in the legend), never thrown. Callers invoke clearAllPine() before this, so on
+  // the sync fast path we paint straight away; on the async path clearAllPine already emptied the layer.
+  const buildAllPine = (rows: Bar[]) => {
+    const chart = chartRef.current; if (!chart) return;
+    const scripts = pineScriptsRef.current; if (!scripts.length) return;
+    const epoch = ++pineEpochRef.current;
+    const misses = scripts.filter((s) => pineCached(s, rows) === null);
+    // paint whatever is already cached now (avoids a blank flash when only SOME scripts changed)
+    paintPineFromCache(rows);
+    if (!misses.length) return;   // fast path: everything was cached
+    // slow path: run the misses off-thread, then rebuild the pine layer once they all resolve
+    Promise.all(misses.map((s) => runPineHost(s, rows).catch(() => null))).then(() => {
+      // Epoch guard: any newer buildAllPine() bumped pineEpochRef, so a stale batch (superseded by a
+      // newer bar set / replay tick / edit) is dropped here and never paints over the current bars.
+      if (pineEpochRef.current !== epoch) return;
+      if (!chartRef.current) return;
+      clearAllPine();
+      paintPineFromCache(rows);
+      normalizeStretch();
+      applyHidden();
+      renderSignalsRef.current();
+      measureRef.current();
+    });
   };
 
   // ── DT Technicals Suite builders ──────────────────────────────────────────
@@ -1579,6 +1682,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // fold to the bar the chart actually plots at this TF, then push it via update()
     let bucket = foldFinalBucket(spliced, tf);
     if (!bucket) return;
+    // Write the spliced daily back so the raw source stays current across ticks AND the
+    // gap-zone memo (keyed on this array's identity) recomputes — else a gap formed by
+    // today's developing bar stays invisible until the next full data reload.
+    dailyBarsRef.current = spliced;
     // R11: reuse the EXISTING final-bucket time key unless the spliced daily date GENUINELY starts a
     // new bucket (e.g. a fresh ISO week / month / 3D group). For resampled TFs the bucketer re-stamps
     // the merged bucket's time to the newest daily date, which > the on-chart key → update() would
@@ -1608,9 +1715,30 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (wasSame) { barsRef.current = fullBarsRef.current; }
     else if (bs.length) { if (bs[bs.length - 1].time === bucket.time) bs[bs.length - 1] = bucket; else barsRef.current = [...bs, bucket]; }
     closesRef.current = barsRef.current.map((r) => r.c);
+    barIdxRef.current = { src: null, map: new Map() };   // force the time→index map to rebuild (bar count may have grown)
     paintStatus(barsRef.current, sliceRef.current);
     renderSignalsRef.current();
     renderTagRef.current?.();   // live-quote splice moved the last close → refresh the price/countdown tag now
+    schedulePineLiveRerun();    // recompute Pine plots/markers on the developing bar (debounced ~250ms)
+  };
+
+  // Debounced (~250ms) incremental Pine re-run on a live splice. Pine indicators used to FREEZE on live
+  // ticks (applyLiveSplice moved the last close but never re-ran the scripts). We evict the memo cache
+  // (the in-place last-bucket replace keeps the same len:lastTime data-sig, so it would otherwise read
+  // as a stale HIT) and re-run off-thread via the host, coalescing a burst of 6s-poll splices into ONE
+  // re-eval. No-op under replay / intraday / when no scripts are active. NOTE: the engine re-runs the
+  // full bar set (host.ts exposes no append-only eval); the debounce + worker keep it off the hot path.
+  const PINE_LIVE_DEBOUNCE_MS = 250;
+  const schedulePineLiveRerun = () => {
+    if (replayIdxRef.current != null || isIntradayRef.current) return;
+    if (!pineScriptsRef.current.length) return;
+    if (pineLiveTimerRef.current != null) clearTimeout(pineLiveTimerRef.current);
+    pineLiveTimerRef.current = setTimeout(() => {
+      pineLiveTimerRef.current = null;
+      const chart = chartRef.current; if (!chart || isIntradayRef.current || replayIdxRef.current != null) return;
+      pineCacheRef.current.clear();   // force a re-run against the developing bar (last close moved in place)
+      buildAllPine(barsRef.current);  // async: epoch-guarded, repaints when the worker batch settles
+    }, PINE_LIVE_DEBOUNCE_MS);
   };
 
   // Apply the default view (recent ~240 window in normal mode; fit the slice in replay).
@@ -1961,10 +2089,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (/^\d+$/.test(t)) return Number(t) * 1000;
       return +new Date(t + "T12:00:00Z");
     };
-    const snapT = (tm: string) => { const b = barsRef.current; if (!b.length) return tm; for (let k = 0; k < b.length; k++) if (String(b[k].time) === String(tm)) return b[k].time; const x = toMs(tm); if (!Number.isFinite(x)) return b[0].time; let best = b[0].time, bd = Infinity; for (const r of b) { const dd = Math.abs(toMs(r.time) - x); if (dd < bd) { bd = dd; best = r.time; } } return best; };
+    // Return the CANONICAL bar time (b[idx].time, the exact type LWC's setData used) for an exact match,
+    // O(1) via the barIdxMap. Non-exact times fall back to the nearest-bar scan (rare — off-grid drawing
+    // anchors / cross-TF snapping). Returning the canonical time keeps xOf's timeToCoordinate on the type
+    // it was fed. `tm` may be a string (daily) or a number (intraday epoch) despite the string annotation.
+    const snapT = (tm: string) => {
+      const b = barsRef.current; if (!b.length) return tm;
+      const idx = barIdxMap().get(tm as any) ?? barIdxMap().get(String(tm));
+      if (idx != null) return b[idx].time as any;
+      const x = toMs(tm); if (!Number.isFinite(x)) return b[0].time;
+      let best = b[0].time, bd = Infinity; for (const r of b) { const dd = Math.abs(toMs(r.time) - x); if (dd < bd) { bd = dd; best = r.time; } } return best;
+    };
     const xOf = (tm: string) => chart.timeScale().timeToCoordinate(snapT(tm) as any) as number | null;
     const yOf = (p: number) => { const s = priceSeriesRef.current; return s ? (s.priceToCoordinate(p) as number | null) : null; };
-    const barIndex = (tm: string) => { const tt = snapT(tm); const b = barsRef.current; for (let k = 0; k < b.length; k++) if (b[k].time === tt) return k; return -1; };
+    const barIndex = (tm: string) => { const idx = barIdxMap().get(tm as any) ?? barIdxMap().get(String(tm)); if (idx != null) return idx; const tt = snapT(tm); const j = barIdxMap().get(tt as any); return j == null ? -1 : j; };
 
     // ── signal badges: BUY/SELL (★) + RE-BUY pill; GC v2 keeper quality/tier styling + CUT caution ──
     const renderSignals = () => {
@@ -2002,21 +2140,30 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           const daily = dailyBarsRef.current.length ? dailyBarsRef.current : cur;
           // current bars may be daily (YYYY-MM-DD strings) or intraday (numeric epoch secs) → a calendar date
           const dstr = (t: string | number) => (typeof t === "string" ? t : new Date((t as number) * 1000).toISOString().slice(0, 10));
-          // calendar date → first current-TF bar time of that day (identity on the daily TF)
-          const dayToBar = new Map<string, Bar["time"]>();
-          for (const b of cur) { const d = dstr(b.time); if (!dayToBar.has(d)) dayToBar.set(d, b.time); }
-          const lastX = cur.length ? xOf(cur[cur.length - 1].time) : null;
-          type Gap = { date: string; type: "up" | "down"; lo: number; hi: number; fill: string | null };
-          const gaps: Gap[] = [];
-          for (let i = 1; i < daily.length; i++) {
-            const b = daily[i], pb = daily[i - 1];
-            let g: Gap | null = null;
-            if (pb.h > 0 && b.l > pb.h && (b.l - pb.h) / pb.h >= thr) g = { date: dstr(b.time), type: "up", lo: pb.h, hi: b.l, fill: null };
-            else if (pb.l > 0 && b.h < pb.l && (pb.l - b.h) / pb.l >= thr) g = { date: dstr(b.time), type: "down", lo: b.h, hi: pb.l, fill: null };
-            if (!g) continue;
-            for (let j = i + 1; j < daily.length; j++) { if (g.type === "up" ? daily[j].l <= g.lo : daily[j].h >= g.hi) { g.fill = dstr(daily[j].time); break; } }
-            gaps.push(g);
+          // PERF: memoize the O(daily²) gap+fill detection AND the dayToBar map. These are pure functions
+          // of (daily bars, cur bars, thr) — NONE depend on the crosshair/range — so recompute only when
+          // the underlying bar array identity (or the size threshold) changes. `cur`/`daily` reassign to a
+          // fresh array on every data/replay/splice, so array-identity is a sound cache key.
+          // Key on daily identity + thr; the dayToBar map is derived from `cur`, which reassigns in
+          // lockstep with `daily` on every data change, so caching them together is safe.
+          const cache = gapZonesRef.current;
+          if (cache.src !== daily || cache.thr !== thr) {
+            const dayToBar = new Map<string, Bar["time"]>();
+            for (const b of cur) { const d = dstr(b.time); if (!dayToBar.has(d)) dayToBar.set(d, b.time); }
+            const gaps: GapZone[] = [];
+            for (let i = 1; i < daily.length; i++) {
+              const b = daily[i], pb = daily[i - 1];
+              let g: GapZone | null = null;
+              if (pb.h > 0 && b.l > pb.h && (b.l - pb.h) / pb.h >= thr) g = { date: dstr(b.time), type: "up", lo: pb.h, hi: b.l, fill: null };
+              else if (pb.l > 0 && b.h < pb.l && (pb.l - b.h) / pb.l >= thr) g = { date: dstr(b.time), type: "down", lo: b.h, hi: pb.l, fill: null };
+              if (!g) continue;
+              for (let j = i + 1; j < daily.length; j++) { if (g.type === "up" ? daily[j].l <= g.lo : daily[j].h >= g.hi) { g.fill = dstr(daily[j].time); break; } }
+              gaps.push(g);
+            }
+            gapZonesRef.current = { src: daily, thr, map: dayToBar, gaps };
           }
+          const { map: dayToBar, gaps } = gapZonesRef.current;
+          const lastX = cur.length ? xOf(cur[cur.length - 1].time) : null;
           // unfilled zones are the actionable ones → always drawn; filled ones are context → recent-capped.
           const shown = [...(hideFilled ? [] : gaps.filter((g) => g.fill).slice(-maxGaps)), ...gaps.filter((g) => !g.fill)];
           for (const g of shown) {
@@ -2337,7 +2484,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const hasInds = indCount > 0;
       // alert label: single-line with ellipsis so it never overflows
       ctxm.innerHTML = `
-        ${ctxRow("reset", icoReset, escH("Reset chart view"), "⌥R")}
+        ${ctxRow("reset", icoReset, escH("Reset chart view"), "Esc Esc")}
         <div class="sep"></div>
         <div data-a="copypx" class="ctx-row"><span class="ctx-ico">${icoCopy}</span><span class="ctx-lbl">${escH("Copy price")} <strong>${pxLabel}</strong></span></div>
         <div data-a="paste" class="ctx-row ctx-dis"><span class="ctx-ico">${icoPaste}</span><span class="ctx-lbl">${escH("Paste")}</span><span class="ctx-kbd">⌘V</span></div>
@@ -2756,6 +2903,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     renderRef.current = renderDraw;
     // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path
     const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderDraw(); } }); };
+    // Draw-only rAF coalescer for the drawing drag / shape-creation pointermove paths: those fire on
+    // every raw pointer event and previously called renderDraw() (→ full SVG clear + renderIndOverlays
+    // re-projecting every ichimoku/ribbon/vwap point) synchronously per event. Batching to one rebuild
+    // per frame caps the work at ~60fps; a trailing draw callback lets the handler paint its own preview
+    // shape after the base layer is rebuilt (see the creation move handler below).
+    let drawRaf: number | null = null; let drawTrailer: (() => void) | null = null;
+    const scheduleDraw = (trailer?: () => void) => {
+      if (trailer) drawTrailer = trailer;
+      if (drawRaf != null) return;
+      drawRaf = requestAnimationFrame(() => { drawRaf = null; if (dead) { drawTrailer = null; return; } renderDraw(); const t = drawTrailer; drawTrailer = null; if (t) t(); });
+    };
     chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
     // Re-project SVG overlays on vertical price-scale drags (LWC repaints candles but not SVG;
     // crosshairMove fires on any mouse interaction including Y-axis drag — chart.remove() cleans up).
@@ -2897,7 +3055,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const move = (e: PointerEvent) => {
         const m0 = rectXY(e); const cur = snap(m0.x, m0.y); const dp = cur.p - start.p, di = barIndex(cur.t!) - barIndex(start.t!), bars = barsRef.current;
         drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: orig.map((pt) => { const ni = Math.max(0, Math.min(bars.length - 1, barIndex(pt.t) + di)); return { t: bars[ni]?.time || pt.t, p: +(pt.p + dp).toFixed(prec) }; }) });
-        renderDraw();
+        scheduleDraw();   // rAF-coalesced: one renderDraw() per frame instead of per raw pointermove
       };
       const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); dragCleanup = null; onChangeRef.current?.([...drawRef.current]); };
       dragCleanup = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
@@ -2919,8 +3077,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (d && d.kind === "text") { ev.stopPropagation(); ev.preventDefault(); openTextEditor(d.points[0], d); }
     });
     svg.addEventListener("pointermove", (ev) => {
-      if (!pending) return; const { x, y } = rectXY(ev); const b = snap(x, y);
-      renderDraw(); svg.appendChild(shape({ id: "_p", kind: pending.kind as any, points: [pending.a, b] }, true));
+      if (!pending) return; const { x, y } = rectXY(ev); const p0 = pending; const b = snap(x, y);
+      // rAF-coalesced: rebuild the base draw layer once per frame, then (trailer) append the live preview
+      // shape ON TOP after the rebuild so it isn't wiped by renderDraw's clear.
+      scheduleDraw(() => { const svgEl = svgRef.current; if (svgEl && pending === p0) svgEl.appendChild(shape({ id: "_p", kind: p0.kind as any, points: [p0.a, b] }, true)); });
     });
     svg.addEventListener("pointerup", (ev) => {
       if (!pending) return; const { x, y } = rectXY(ev); const b = snap(x, y); const a = pending.a; const kind = pending.kind; pending = null;
@@ -2928,23 +3088,64 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       onChangeRef.current?.([...drawRef.current, { id: uid(), kind: kind as any, points: [a, b], ...applyStyle(kind) }]);
     });
 
+    // Alt+<key> → drawing-tool code. Mirrors DrawingSidebar's advertised kbd chips (do NOT edit that
+    // file — this is the receiving half). Alt+R was RESET-view but the sidebar advertises it as
+    // Rectangle; it now selects Rectangle (as advertised) and reset moves to the double-Esc gesture +
+    // the context-menu/toolbar. The tool is a CONTROLLED prop owned by TerminalShell.setTool, so
+    // ChartPanel can't set it directly — it dispatches the established `mm:set-tool` window event
+    // (same idiom as mm:set-tf / mm:open-pane). NOTE: this requires a matching listener in TerminalShell
+    // (`mm:set-tool` → setTool) to take effect — see the lane summary.
+    const ALT_TOOL: Record<string, string> = { KeyT: "trendline", KeyH: "hline", KeyV: "vline", KeyR: "rect", KeyX: "text", KeyM: "measure" };
+    let lastEscTs = 0;
     onKey = (e: KeyboardEvent) => {
       if (!activeRef.current) return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase(); if (tag === "input" || tag === "textarea") return;
-      if (e.key === "Escape") { if (sel) { sel = null; renderDraw(); } }
+      if (e.key === "Escape") {
+        // Esc deselects; double-Esc (within 500ms) resets the chart view (the gesture that replaces the
+        // former ⌥R — Alt+R is now the Rectangle tool as the sidebar advertises).
+        const now = Date.now();
+        if (now - lastEscTs < 500) { lastEscTs = 0; if (toolRef.current) { try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: null })); } catch {} } try { chart.timeScale().fitContent(); } catch {} }
+        else { lastEscTs = now; if (sel) { sel = null; renderDraw(); } }
+      }
       else if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
-      // D1 shortcuts: ⌥R = reset chart view, ⌥A = add alert at last bar close
-      else if (e.altKey && e.code === "KeyR") { e.preventDefault(); try { chart.timeScale().fitContent(); } catch {} }
+      // ⌥A = add alert at last bar close
       else if (e.altKey && e.code === "KeyA") { e.preventDefault(); const b = barsRef.current; if (b.length) onAddAlertRef.current?.(b[b.length - 1].c); }
+      // ⌥T/H/V/R/X/M = select the advertised drawing tool (via mm:set-tool → TerminalShell.setTool)
+      else if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && ALT_TOOL[e.code]) {
+        e.preventDefault();
+        try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: ALT_TOOL[e.code] })); } catch {}
+      }
     };
     window.addEventListener("keydown", onKey);
 
-    ro = new ResizeObserver(() => { const ch2 = chartRef.current; if (!ch2) return; const r = ch2.timeScale().getVisibleLogicalRange(); ch2.resize(el.clientWidth, el.clientHeight); if (r) ch2.timeScale().setVisibleLogicalRange(r); scheduleRender(); scheduleMeasure(); });
+    // Container resize → resize the chart, preserving the visible range. Coalesced through rAF so a
+    // window/splitter drag doesn't force a synchronous read(getVisibleLogicalRange) → write(resize) →
+    // write(setVisibleLogicalRange) reflow on every RO callback; the read+writes now happen once per
+    // frame after layout settles. The ResizeObserver entry carries the new box, avoiding a forced
+    // clientWidth/Height layout read inside the callback.
+    let resizeRaf: number | null = null; let pendW = 0, pendH = 0;
+    ro = new ResizeObserver((entries) => {
+      const e0 = entries[entries.length - 1];
+      const cr = e0?.contentRect;
+      pendW = cr ? Math.round(cr.width) : el.clientWidth;
+      pendH = cr ? Math.round(cr.height) : el.clientHeight;
+      if (resizeRaf != null) return;
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = null; if (dead) return; const ch2 = chartRef.current; if (!ch2) return;
+        const r = ch2.timeScale().getVisibleLogicalRange();
+        ch2.resize(pendW, pendH);
+        if (r) ch2.timeScale().setVisibleLogicalRange(r);
+        scheduleRender(); scheduleMeasure();
+      });
+    });
     ro.observe(el);
 
     // ── mount teardown (base line-416 logic + the new refs) ──
     return () => {
       dead = true; if (rafId != null) cancelAnimationFrame(rafId); if (measRaf != null) cancelAnimationFrame(measRaf);
+      if (drawRaf != null) cancelAnimationFrame(drawRaf); if (resizeRaf != null) cancelAnimationFrame(resizeRaf);
+      if (pineLiveTimerRef.current != null) { clearTimeout(pineLiveTimerRef.current); pineLiveTimerRef.current = null; }
+      if (pineHostRef.current) { try { pineHostRef.current.dispose(); } catch {} pineHostRef.current = null; }
       if (syncCleanupRef.current) { try { syncCleanupRef.current(); } catch {} syncCleanupRef.current = null; }
       if (dragCleanup) dragCleanup();
       window.removeEventListener("mm:snapshot", snapshot);
@@ -2971,7 +3172,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (shadingPrimRef.current && priceSeriesRef.current) { try { detachSessionShading(priceSeriesRef.current, shadingPrimRef.current); } catch {} shadingPrimRef.current = null; }
       indPriceLinesRef.current = new Map();
       indSeriesRef.current.clear(); cmpSeriesRef.current.clear(); paneMapRef.current.clear();
-      pineSeriesRef.current.clear(); pineMarkersRef.current.clear(); pinePaneMapRef.current.clear(); pineErrRef.current.clear(); pineCacheRef.current.clear();
+      pineSeriesRef.current.clear(); pineMarkersRef.current.clear(); pinePaneMapRef.current.clear(); pineErrRef.current.clear(); pineCacheRef.current.clear(); pineAstRef.current.clear();
       priceSeriesRef.current = null; priceFamilyRef.current = null;
       watermarkPluginRef.current = null;   // plugin is attached to a pane; chart.remove() tears it down
       if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; }   // ONLY chart.remove() in the file
@@ -3462,6 +3663,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const live = new Set(pineScriptsRef.current.map((s) => s.id));
     for (const id of Array.from(pineCacheRef.current.keys())) if (!live.has(id)) pineCacheRef.current.delete(id);
     for (const id of Array.from(pineErrRef.current.keys())) if (!live.has(id)) pineErrRef.current.delete(id);
+    // drop the worker's cached AST for removed scripts' sources (frees worker memory), then forget them
+    for (const [id, a] of Array.from(pineAstRef.current.entries())) if (!live.has(id)) { try { pineHostRef.current?.evict(a.source); } catch {} pineAstRef.current.delete(id); }
     clearAllPine();
     if (!isIntradayRef.current) buildAllPine(barsRef.current);
     normalizeStretch();

@@ -215,9 +215,11 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
   // ── Financial health: debt/fcf/cash bars + position bars ──
   const hSet = healthAQ === "annual" ? ann : qtr;
   const hLabels = hSet?.periods ?? [];
+  // Balance-sheet categories are CATEGORICAL, not directional — never --up/--down
+  // (those flip under the east red-up theme and carry price-direction meaning).
   const debtBars: Series[] = [
-    { name: pick(zh, "Debt", "债务"), values: hSet?.balance?.debt ?? [], color: "var(--down)" },
-    { name: pick(zh, "Free cash flow", "自由现金流"), values: hSet?.cashflow?.fcf ?? [], color: "var(--up)" },
+    { name: pick(zh, "Debt", "债务"), values: hSet?.balance?.debt ?? [], color: "var(--warn)" },
+    { name: pick(zh, "Free cash flow", "自由现金流"), values: hSet?.cashflow?.fcf ?? [], color: "var(--code-fn)" },
     { name: pick(zh, "Cash & equivalents", "现金及等价物"), values: hSet?.balance?.cash ?? [], color: "var(--brand)" },
   ];
   const posIdx = lastFiniteIdx(hSet?.balance?.assets_st);
@@ -233,7 +235,7 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
           {
             name: pick(zh, "Liabilities", "负债"),
             values: [hSet!.balance.liab_st[posIdx], hSet!.balance.liab_lt[posIdx]],
-            color: "var(--up)",
+            color: "var(--warn)",
           },
         ];
   const posLabels = [pick(zh, "Short term", "短期"), pick(zh, "Long term", "长期")];

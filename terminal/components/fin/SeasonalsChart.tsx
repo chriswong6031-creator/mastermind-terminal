@@ -99,6 +99,7 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
   const { tip, show, hide } = useFinTip();
   const [pct, setPct] = useState(true);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [hiYear, setHiYear] = useState<string | null>(null); // legend/line hover-highlight
   const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
   const [sel, setSel] = useState<{ a: number; b: number } | null>(null);
   const dragStart = useRef<number | null>(null);
@@ -166,16 +167,33 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
     });
     return pts.join(" ");
   };
+  // soft area under the mean path, dropping to the baseline (0 when Percent,
+  // else the domain floor). Gives the mean visual weight without a hard fill.
+  const meanArea = (vals: (number | null)[]) => {
+    const base = pct ? 0 : dom[0];
+    const top: string[] = [];
+    let first: number | null = null;
+    let lastI = -1;
+    vals.forEach((v, i) => {
+      if (num(v)) { top.push(`${x(i).toFixed(1)},${y(v as number).toFixed(1)}`); if (first == null) first = i; lastI = i; }
+    });
+    if (top.length < 2 || first == null) return "";
+    return `M${x(first).toFixed(1)},${y(base).toFixed(1)} L` + top.join(" L") + ` L${x(lastI).toFixed(1)},${y(base).toFixed(1)} Z`;
+  };
   const lastFinite = (vals: (number | null)[]): [number, number] | null => {
     for (let i = vals.length - 1; i >= 0; i--) if (num(vals[i])) return [i, vals[i] as number];
     return null;
   };
 
-  // deep history (decades of years): fade the many lines into a cloud, drop the per-year
-  // end-labels + collapse the per-year hover tooltip into a summary so it stays readable.
+  // v6: individual prior years are CONTEXT — 1px at 22% alpha, receding to a
+  // cloud as the count climbs; the mean path and the current year carry the
+  // signal. A hovered/legend-picked year lifts to full opacity. End-labels drop
+  // past ~12 years and the per-year hover tooltip collapses into a summary.
+  const YEAR_BASE_OP = 0.22;
   const manyYears = normed.length;
-  const yearLineOp = manyYears <= 10 ? 0.95 : Math.max(0.2, 9 / manyYears);
-  const showEndLabels = manyYears <= 14;
+  const yearLineOp = manyYears <= 12 ? YEAR_BASE_OP : Math.max(0.1, (YEAR_BASE_OP * 12) / manyYears);
+  const showEndLabels = manyYears <= 12;
+  const collapseLegend = years.length > 12; // "N years" chip + popover past 12
 
   /* ── pointer → grid index ─────────────────────────────────────────────── */
   const idxAt = (clientX: number): number => {
@@ -205,7 +223,7 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
           { label: pick(zh, "Win rate", "胜率"), value: rs.wr != null ? `${Math.round(rs.wr * 100)}% (${rs.n})` : "—", color: "var(--text-2)" },
         ]);
       }
-    } else if (manyYears > 14) {
+    } else if (manyYears > 12) {
       // hover: summary (avg · current year · range) — too many years for a per-year list
       const vs = normed.map((p) => p.values[i]).filter(num) as number[];
       const cur = normed.find((p) => p.isCurrent);
@@ -296,19 +314,47 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
             </g>
           )}
 
-          {/* average dotted */}
-          {line(avg) && <polyline className="fin-line fin-line-dotted" points={line(avg)} fill="none" stroke="var(--muted)" />}
+          {/* per-year paths (context: 1px, 22% alpha). Current year + a hovered
+              year lift above the mean; everything else recedes to a cloud. */}
+          {normed.filter((p) => !p.isCurrent).map((p) => {
+            const lifted = hiYear === p.year;
+            const dimmed = hiYear != null && !lifted;
+            return (
+              <polyline
+                key={p.year}
+                className="fin-seas-yline"
+                points={line(p.values)}
+                fill="none"
+                stroke={p.color}
+                strokeOpacity={lifted ? 1 : dimmed ? Math.min(yearLineOp, 0.1) : yearLineOp}
+                strokeWidth={lifted ? 1.5 : 1}
+                onPointerEnter={() => setHiYear(p.year)}
+                onPointerLeave={() => setHiYear((h) => (h === p.year ? null : h))}
+              />
+            );
+          })}
 
-          {/* per-year paths */}
-          {normed.map((p) => {
+          {/* mean path — soft brand area + 2px brand line (the typical year) */}
+          {meanArea(avg) && <path className="fin-seas-meanarea" d={meanArea(avg)} />}
+          {line(avg) && <polyline className="fin-seas-meanline" points={line(avg)} fill="none" />}
+
+          {/* current year — 1.5px --signal (attention, non-directional) */}
+          {normed.filter((p) => p.isCurrent).map((p) => {
             const end = lastFinite(p.values);
             return (
               <g key={p.year}>
-                <polyline className={"fin-line" + (p.isCurrent ? " fin-line-emph" : "")} points={line(p.values)} fill="none" stroke={p.color} strokeOpacity={p.isCurrent ? 1 : yearLineOp} />
-                {end && p.isCurrent && <circle className="fin-node" cx={x(end[0])} cy={y(end[1])} r={3.2} fill={p.color} />}
-                {end && (showEndLabels || p.isCurrent) && <text className="fin-yo-endlbl" x={vw - PAD.r + 3} y={y(end[1]) - 3} fill={p.color}>{p.year}</text>}
+                <polyline className="fin-seas-curline" points={line(p.values)} fill="none" />
+                {end && <circle className="fin-seas-curnode" cx={x(end[0])} cy={y(end[1])} r={3.2} />}
+                {end && <text className="fin-seas-curlbl" x={vw - PAD.r + 3} y={y(end[1]) - 3}>{p.year}</text>}
               </g>
             );
+          })}
+
+          {/* prior-year end labels (only when few enough to read) */}
+          {showEndLabels && normed.filter((p) => !p.isCurrent).map((p) => {
+            const end = lastFinite(p.values);
+            if (!end) return null;
+            return <text key={p.year} className="fin-yo-endlbl" x={vw - PAD.r + 3} y={y(end[1]) - 3} fill={p.color} opacity={hiYear === p.year ? 1 : 0.5}>{p.year}</text>;
           })}
 
           {/* month labels (calendar-centered) */}
@@ -343,24 +389,31 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
         </svg>
       </div>
 
-      {/* legend chips (click to toggle) */}
+      {/* legend — inline chips when few, an "N years" chip + popover past 12 */}
       <div className="fin-seas-legend">
         <div className="fin-seas-legend-years">
-          {years.map((yd, i) => {
-            const on = active.has(yd.year);
-            return (
-              <button
-                key={yd.year}
-                className={"fin-seas-chip" + (on ? "" : " off") + (yd.isCurrent ? " cur" : "")}
-                onClick={() => onToggleYear(yd.year)}
-                title={pick(zh, "Toggle year", "切换年份")}
-              >
-                <i className="fin-seas-chip-dot" style={{ background: on ? yearColor(yd.year, i) : "var(--text-dim)" }} />
-                {yd.year}
-              </button>
-            );
-          })}
-          <span className="fin-seas-chip legend-avg"><i className="fin-leg-dot fin-leg-dotted" />{pick(zh, "Avg", "平均")}</span>
+          <span className="fin-seas-legkey"><i className="fin-seas-legkey-mean" />{pick(zh, "Mean", "平均")}</span>
+          {years.some((y) => y.isCurrent) && <span className="fin-seas-legkey"><i className="fin-seas-legkey-cur" />{pick(zh, "This year", "今年")}</span>}
+          {collapseLegend ? (
+            <YearPopover years={years} active={active} onToggleYear={onToggleYear} onHiYear={setHiYear} zh={zh} />
+          ) : (
+            years.map((yd, i) => {
+              const on = active.has(yd.year);
+              return (
+                <button
+                  key={yd.year}
+                  className={"fin-seas-chip" + (on ? "" : " off") + (yd.isCurrent ? " cur" : "")}
+                  onClick={() => onToggleYear(yd.year)}
+                  onPointerEnter={() => setHiYear(yd.year)}
+                  onPointerLeave={() => setHiYear((h) => (h === yd.year ? null : h))}
+                  aria-pressed={on}
+                >
+                  <i className="fin-seas-chip-dot" style={{ background: on ? yearColor(yd.year, i) : "var(--text-dim)" }} />
+                  {yd.year}
+                </button>
+              );
+            })
+          )}
         </div>
         <div className="fin-seas-legend-acts">
           <button className="fin-seas-mini" onClick={() => onSetActive(new Set(years.map((y) => y.year)))}>{pick(zh, "All", "全部")}</button>
@@ -372,6 +425,74 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
       {sel && rs && rs.n > 0 && <SelectionSummary rs={rs} zh={zh} />}
 
       <FinTip tip={tip} />
+    </div>
+  );
+}
+
+/* Collapsed year legend: an "N years" chip that opens a frosted popover of all
+   year toggles (used past 12 years so the legend never becomes a scroll wall). */
+function YearPopover({
+  years,
+  active,
+  onToggleYear,
+  onHiYear,
+  zh,
+}: {
+  years: YearData[];
+  active: Set<string>;
+  onToggleYear: (year: string) => void;
+  onHiYear: (year: string | null) => void;
+  zh: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: globalThis.PointerEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("pointerdown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  const nOn = years.filter((y) => active.has(y.year)).length;
+  return (
+    <div className="fin-seas-yearpop-wrap" ref={wrapRef}>
+      <button
+        className={"fin-seas-chip fin-seas-yearpop-trig" + (open ? " open" : "")}
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        {pick(zh, `${nOn} of ${years.length} years`, `${years.length} 年中的 ${nOn} 年`)}
+        <svg className="fin-seas-yearpop-caret" width="9" height="9" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </button>
+      {open && (
+        <div className="fin-seas-yearpop" role="listbox" aria-label={pick(zh, "Toggle years", "切换年份")}>
+          {years
+            .slice()
+            .reverse()
+            .map((yd) => {
+              const on = active.has(yd.year);
+              const i = years.findIndex((y) => y.year === yd.year);
+              return (
+                <button
+                  key={yd.year}
+                  role="option"
+                  aria-selected={on}
+                  className={"fin-seas-yearpop-item" + (on ? " on" : "") + (yd.isCurrent ? " cur" : "")}
+                  onClick={() => onToggleYear(yd.year)}
+                  onPointerEnter={() => onHiYear(yd.year)}
+                  onPointerLeave={() => onHiYear(null)}
+                >
+                  <i className="fin-seas-chip-dot" style={{ background: on ? yearColor(yd.year, i) : "var(--text-dim)" }} />
+                  {yd.year}
+                </button>
+              );
+            })}
+        </div>
+      )}
     </div>
   );
 }
