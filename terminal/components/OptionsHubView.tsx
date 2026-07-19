@@ -41,7 +41,7 @@ const ProphetView = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism" | "leaders" | "radar";
+export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism" | "leaders" | "radar";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
@@ -1391,27 +1391,109 @@ type ScreenerPreset = "top_prem" | "unusual_z" | "fresh" | "doi" | "zerodte" | "
 
 // ─── Top-level component ─────────────────────────────────────────────────────
 
-export default function OptionsHubView() {
+/**
+ * OptionsHubView — the Research workspace engine (Wave-2 IA).
+ *
+ * Two modes, controlled by props (all optional; the no-prop call is the legacy
+ * self-contained hub used by any remaining direct mount):
+ *
+ *  • CONTROLLED (page-driven): the Research page owns tab state in the URL (`?tab=`)
+ *    via WorkspaceTabs and passes `activeTab` + `onTab`. In this mode the hub does
+ *    NOT render its own internal tab strip (the page renders WorkspaceTabs above it)
+ *    and does NOT touch the URL — `onTab` is the single writer. Pass `hideTabStrip`
+ *    to suppress the legacy strip even in uncontrolled mode.
+ *
+ *  • allowedTabs: restricts which tabs the hub will render at all. The internal
+ *    strip (when shown) only lists allowed tabs, and an incoming `?tab=` outside the
+ *    set is clamped to the first allowed tab. Tabs NOT in the set never mount — so a
+ *    single-tab mount (e.g. Discover › Leaders) instantiates only that tab's data
+ *    flow. Internal cross-tab jumps (a Leaders/Radar row → the Tickers drill) still
+ *    work: `tickers` is implicitly reachable whenever `leaders` or `radar` is allowed
+ *    so the drill-in that those tables depend on is preserved verbatim.
+ *
+ * Data flow, lazy mount-on-first-visit, and every tab's fetch/render are unchanged
+ * from Wave-1 — this parameterization only lifts tab SELECTION out of the component.
+ */
+export interface OptionsHubViewProps {
+  /** Restrict rendered tabs. Undefined = all tabs (legacy). */
+  allowedTabs?: TabKey[];
+  /** Controlled active tab (page-driven via ?tab=). Undefined = self-managed. */
+  activeTab?: TabKey;
+  /** Controlled tab setter. Provided ⇒ controlled mode (hub won't write the URL). */
+  onTab?: (tab: TabKey) => void;
+  /** Suppress the internal legacy tab strip even in uncontrolled mode. */
+  hideTabStrip?: boolean;
+}
+
+export default function OptionsHubView({
+  allowedTabs,
+  activeTab: controlledTab,
+  onTab,
+  hideTabStrip,
+}: OptionsHubViewProps = {}) {
   const { lang } = useLang();
   const t = useT();
 
-  // ── Tab state from URL ?tab= ──────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<TabKey>("tape");
-  // Track which tabs have been visited so they stay mounted (keep-alive pattern).
-  const [visitedTabs, setVisitedTabs] = useState<Set<TabKey>>(() => new Set<TabKey>(["tape"]));
+  const controlled = onTab !== undefined;
 
+  // Tabs the hub is permitted to render. `tickers` is always reachable when
+  // leaders/radar are allowed so their row → ticker-drill cross-jump survives
+  // (those tables call switchTab("tickers") + setSelectedTicker internally).
+  const renderableTabs = useMemo<Set<TabKey>>(() => {
+    if (!allowedTabs) return new Set<TabKey>(TABS.map((tb) => tb.key));
+    const s = new Set<TabKey>(allowedTabs);
+    if (s.has("leaders") || s.has("radar")) s.add("tickers");
+    return s;
+  }, [allowedTabs]);
+
+  // Tabs shown in the internal strip (allowed set, in canonical TABS order,
+  // minus the implicit tickers add-on when it wasn't explicitly allowed).
+  const stripTabs = useMemo(
+    () => TABS.filter((tb) => !allowedTabs || allowedTabs.includes(tb.key)),
+    [allowedTabs],
+  );
+
+  const defaultTab: TabKey = useMemo(() => {
+    if (allowedTabs && allowedTabs.length) return allowedTabs[0];
+    return "tape";
+  }, [allowedTabs]);
+
+  // ── Tab state ─────────────────────────────────────────────────────────────
+  // Uncontrolled mode seeds from the URL ?tab= (legacy). Controlled mode mirrors
+  // the page's `controlledTab` and never reads/writes the URL itself.
+  const [internalTab, setInternalTab] = useState<TabKey>(defaultTab);
+  const activeTab: TabKey = controlled ? (controlledTab ?? defaultTab) : internalTab;
+
+  // Track which tabs have been visited so they stay mounted (keep-alive pattern).
+  const [visitedTabs, setVisitedTabs] = useState<Set<TabKey>>(() => new Set<TabKey>([defaultTab]));
+
+  // Keep-alive bookkeeping for the controlled tab (the page moved it, so record it here).
   useEffect(() => {
+    setVisitedTabs((prev) => (prev.has(activeTab) ? prev : new Set(prev).add(activeTab)));
+  }, [activeTab]);
+
+  // Uncontrolled: seed the initial tab from ?tab=, clamped to the allowed set.
+  useEffect(() => {
+    if (controlled) return;
     const params = new URLSearchParams(window.location.search);
     const tab = params.get("tab") as TabKey | null;
-    if (tab && TABS.some((tb) => tb.key === tab)) {
-      setActiveTab(tab);
+    if (tab && renderableTabs.has(tab) && TABS.some((tb) => tb.key === tab)) {
+      setInternalTab(tab);
       setVisitedTabs((prev) => { const next = new Set(prev); next.add(tab); return next; });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function switchTab(tab: TabKey) {
-    setActiveTab(tab);
+    // Guard: never switch to a tab the hub can't render (e.g. a stray internal
+    // jump under a restricted allowedTabs set that didn't opt the tab in).
+    if (!renderableTabs.has(tab)) return;
     setVisitedTabs((prev) => { const next = new Set(prev); next.add(tab); return next; });
+    if (controlled) {
+      onTab!(tab);
+      return;
+    }
+    setInternalTab(tab);
     const u = new URL(window.location.href);
     u.searchParams.set("tab", tab);
     window.history.replaceState({}, "", u.toString());
@@ -1867,31 +1949,57 @@ export default function OptionsHubView() {
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
+  // Wrapper element: STANDALONE (legacy / self-managed) owns its own `.main2`
+  // grid cell — the chrome (.app2 grid + topbar + AppNav) is the route layout's.
+  // EMBEDDED (controlled by a workspace page) renders a bare flex column instead,
+  // because the page already provides the single `.main2` and mounts WorkspaceTabs
+  // above this engine — a second nested <main className="main2"> would be invalid
+  // HTML and double the grid cell.
+  const Wrapper: "main" | "div" = controlled ? "div" : "main";
+  const wrapperProps = controlled
+    ? { style: { flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" as const } }
+    : { className: "main2", style: { overflow: "hidden", display: "flex", flexDirection: "column" as const } };
+
   return (
     <CoachProvider>
-      {/* Chrome (.app2 grid + MobileNav + topbar + AppNav) is owned by
-          app/flow/layout.tsx (FlowChrome). This view renders ONLY the .main2
-          grid cell so a crash here surfaces the error boundary inside the chrome. */}
-      <main className="main2" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      {/* Chrome (.app2 grid + MobileNav + topbar + AppNav) is owned by the route
+          layout (AppShell for /research, FlowChrome legacy). Standalone renders the
+          .main2 grid cell; embedded renders a bare flex column inside the page's
+          .main2 (see Wrapper above) so a crash surfaces the error boundary in-place. */}
+      <Wrapper {...wrapperProps}>
 
-        {/* ── Tab bar (Observatory pill-nav) + live-feed status ── */}
+        {/* ── Tab bar (Observatory pill-nav) + live-feed status ──
+            In CONTROLLED mode (page-driven) the page renders WorkspaceTabs above
+            this engine, so the internal strip is suppressed — but the live-feed
+            status row still shows (it is view-state coupled, not tab chrome). The
+            strip is also suppressed when hideTabStrip is set.
+            The whole row collapses when there is neither a strip NOR live-feed
+            status to show (e.g. a Discover single-tab Leaders/Radar mount), so it
+            doesn't leave an empty bordered bar. */}
+        {(() => {
+          const showStrip = !controlled && !hideTabStrip;
+          const showLive = (activeTab === "tape" || activeTab === "tide") && !feedUnavailable && !feedDelayed;
+          if (!showStrip && !showLive && !lastFeedTs) return null;
+          return (
         <div style={{ display: "flex", alignItems: "center", padding: "8px 14px", borderBottom: "1px solid var(--line)", flexShrink: 0, gap: 8 }}>
-          <nav className="obs-pillnav" aria-label={lang === "zh" ? "期权工具选项卡" : "Options Hub tabs"}>
-            {TABS.map((tb) => (
-              <button
-                key={tb.key}
-                className={`obs-pillnav-tab${activeTab === tb.key ? " on" : ""}`}
-                onClick={() => switchTab(tb.key)}
-              >
-                {lang === "zh"
-                  ? t(tb.zhKey, tb.key)
-                  : t(tb.enKey, tb.key)}
-              </button>
-            ))}
-          </nav>
+          {showStrip && (
+            <nav className="obs-pillnav" aria-label={lang === "zh" ? "期权工具选项卡" : "Options Hub tabs"}>
+              {stripTabs.map((tb) => (
+                <button
+                  key={tb.key}
+                  className={`obs-pillnav-tab${activeTab === tb.key ? " on" : ""}`}
+                  onClick={() => switchTab(tb.key)}
+                >
+                  {lang === "zh"
+                    ? t(tb.zhKey, tb.key)
+                    : t(tb.enKey, tb.key)}
+                </button>
+              ))}
+            </nav>
+          )}
           <div className="spacer" />
           {/* Live status area (relocated out of the topbar chrome; view-state coupled) */}
-          {(activeTab === "tape" || activeTab === "tide") && !feedUnavailable && !feedDelayed && (
+          {showLive && (
             <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-2)" }}>
               <span className="obs-live-dot" />
               {lang === "zh" ? "实时" : "Live"}
@@ -1908,6 +2016,8 @@ export default function OptionsHubView() {
             </span>
           )}
         </div>
+          );
+        })()}
 
         {/* ── Live-feed status banner (Tape + Tide are intraday-live) ── */}
         {(activeTab === "tape" || activeTab === "tide") && (feedUnavailable || feedDelayed) && (
@@ -1942,8 +2052,11 @@ export default function OptionsHubView() {
         <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
 
           {/* ═══ DESK TAB ══════════════════════════════════════════════════ */}
-          {/* Keep-alive: stay mounted once visited so tab switches are instant. */}
-          {visitedTabs.has("desk") && (
+          {/* Keep-alive: stay mounted once visited so tab switches are instant.
+              `|| activeTab===` mounts it on the SAME render the page moves the tab
+              (controlled mode moves it via a prop, not the hub's switchTab which
+              seeds visitedTabs synchronously) — no one-frame skeleton flash. */}
+          {(activeTab === "desk" || visitedTabs.has("desk")) && (
             <div style={{ flex: 1, overflow: "hidden", display: activeTab === "desk" ? "flex" : "none", flexDirection: "column", minHeight: 0 }}>
               <FlowDeskView />
             </div>
@@ -3391,21 +3504,21 @@ export default function OptionsHubView() {
               All those state vars / components are still defined above and remain available
               for any wave that imports or extends this file.
               ──────────────────────────────────────────────────────────────────── */}
-          {visitedTabs.has("gex") && (
+          {(activeTab === "gex" || visitedTabs.has("gex")) && (
             <div style={{ flex: 1, overflow: "hidden", display: activeTab === "gex" ? "flex" : "none", minHeight: 0 }}>
               <GexDeskView />
             </div>
           )}
 
           {/* ═══ PRISM TAB ══════════════════════════════════════════════════ */}
-          {visitedTabs.has("prism") && (
+          {(activeTab === "prism" || visitedTabs.has("prism")) && (
             <div style={{ flex: 1, overflow: "hidden", display: activeTab === "prism" ? "flex" : "none", minHeight: 0 }}>
               <PrismView />
             </div>
           )}
 
           {/* ═══ PROPHET TAB ════════════════════════════════════════════════ */}
-          {visitedTabs.has("prophet") && (
+          {(activeTab === "prophet" || visitedTabs.has("prophet")) && (
             <div style={{ flex: 1, overflow: "hidden", display: activeTab === "prophet" ? "flex" : "none", minHeight: 0 }}>
               <ProphetView />
             </div>
@@ -4207,7 +4320,7 @@ export default function OptionsHubView() {
             ? "标注与方向标签为启发式近似（~），仅供展示，不构成投资建议。"
             : "Notability and direction labels are heuristic and approximate (~). Display only — not investment advice."}
         </div>
-      </main>
+      </Wrapper>
     </CoachProvider>
   );
 }

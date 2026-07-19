@@ -1,9 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BrandLockup } from "@/components/BrandMark";
-import { AppNav } from "@/components/AppNav";
-import MobileNav from "@/components/MobileNav";
 import { useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
 import { verdictIsStale } from "@/lib/signalVerdict";
@@ -53,15 +50,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
   const dayPnl = rows.reduce((a, r) => a + (r.chg || 0), 0) / (rows.length || 1);
 
   return (
-    <div className="app2">
-      <MobileNav email={email} />
-      <header className="topbar">
-        <BrandLockup /><div className="tdiv" /><span className="page-title">{t("pagePortfolio")}</span>
-        <div className="spacer" />
-        <form action="/auth/signout" method="post"><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
-      </header>
-      <AppNav />
-      <main className="main2"><div className="pg">
+    <main className="main2"><div className="pg">
         <div className="pg-head"><h2>{t("convictionBook")}</h2><span className="sub">{t("convictionSub")}</span></div>
         <div className="kpis">
           <div className="kpi"><small>{t("names")}</small><b>{rows.length}</b></div>
@@ -99,7 +88,5 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
           </div>
         </div>
       </div></main>
-      <div className="ticker"><span className="lbl">{t("convictionBook")}</span><span style={{ color: "var(--text-2)" }}>{t("convictionFoot").replace("{n}", String(buys.length))}</span></div>
-    </div>
   );
 }

@@ -1,8 +1,5 @@
 "use client";
 import { useEffect, useState } from "react";
-import { BrandLockup } from "@/components/BrandMark";
-import { AppNav } from "@/components/AppNav";
-import MobileNav from "@/components/MobileNav";
 import { useLang, useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
 
@@ -105,15 +102,7 @@ export default function AlertsView({ email }: { email: string }) {
   const symOptions = syms.length ? (syms.includes(sym) ? syms : [sym, ...syms]) : [sym];
 
   return (
-    <div className="app2">
-      <MobileNav email={email} />
-      <header className="topbar">
-        <BrandLockup /><div className="tdiv" /><span className="page-title">{t("pageAlerts")}</span>
-        <div className="spacer" />
-        <form action="/auth/signout" method="post"><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
-      </header>
-      <AppNav />
-      <main className="main2"><div className="pg">
+    <main className="main2"><div className="pg">
         <div className="pg-head"><h2>{t("signalRegimeAlerts")}</h2><span className="sub">{t("alertsSub")}</span></div>
         <div className="panel">
           <div className="ph">{t("newAlert")}</div>
@@ -150,7 +139,5 @@ export default function AlertsView({ email }: { email: string }) {
           })}
         </div>
       </div></main>
-      <div className="ticker"><span className="lbl">{t("pageAlerts")}</span></div>
-    </div>
   );
 }

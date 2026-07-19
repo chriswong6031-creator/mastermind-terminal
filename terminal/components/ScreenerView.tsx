@@ -1,9 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, startTransition, useDeferredValue, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { BrandLockup } from "@/components/BrandMark";
-import { AppNav } from "@/components/AppNav";
-import MobileNav from "@/components/MobileNav";
 import { useT } from "@/lib/i18n";
 import { getJSON } from "@/lib/dataCache";
 import { trackSearch } from "@/lib/searchTrack";
@@ -199,23 +196,7 @@ export default function ScreenerView({ email }: { email: string }) {
   }
 
   return (
-    <div className="app2">
-      <MobileNav email={email} />
-      <header className="topbar">
-        <BrandLockup /><div className="tdiv" /><span className="page-title">{t("pageScreener")}</span>
-        <div className="spacer" />
-        <span className="scr-stat">
-          <span><b>{view.length}</b> {t("matches")}</span>
-          <span><b className="up">{nBuy}</b> {t("buyLc")}</span>
-          <span><b className="down">{nSell}</b> {t("sellLc")}</span>
-          <span>{t("avgWR")} <b>{avgWr.toFixed(0)}%</b></span>
-        </span>
-        <form action="/auth/signout" method="post" style={{ marginLeft: 14 }}>
-          <button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button>
-        </form>
-      </header>
-      <AppNav />
-      <main className="main2 screener-main">
+    <main className="main2 screener-main">
         <div className="scr-filters">
           {/* branding chip */}
           <span className="chip on" style={{ cursor: "default" }} title={t("scanByOracle")}>
@@ -260,7 +241,13 @@ export default function ScreenerView({ email }: { email: string }) {
             title={t("scrShowAllTitle")}
           >{t("scrShowAll")}</button>
 
-          <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontSize: 11 }}>
+          <span className="scr-stat" style={{ marginLeft: "auto" }}>
+            <span><b>{view.length}</b> {t("matches")}</span>
+            <span><b className="up">{nBuy}</b> {t("buyLc")}</span>
+            <span><b className="down">{nSell}</b> {t("sellLc")}</span>
+            <span>{t("avgWR")} <b>{avgWr.toFixed(0)}%</b></span>
+          </span>
+          <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
             {t("scanAsOf").replace("{d}", asOf)}
           </span>
         </div>
@@ -354,12 +341,5 @@ export default function ScreenerView({ email }: { email: string }) {
           </table>
         </div>
       </main>
-      <div className="ticker">
-        <span className="lbl">{t("goldenOracleScan")}</span>
-        <span style={{ color: "var(--text-2)" }}>
-          {t("scanFootClick").replace("{nBuy}", String(nBuy)).replace("{nSell}", String(nSell)).replace("{n}", String(rows.length))}
-        </span>
-      </div>
-    </div>
   );
 }

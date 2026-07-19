@@ -1,9 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { BrandLockup } from "@/components/BrandMark";
-import { AppNav } from "@/components/AppNav";
-import MobileNav from "@/components/MobileNav";
 import { type Bar, type PineError } from "@/lib/pine-engine";
 import { createPineHost, type PineHost } from "@/lib/pine-engine/host";
 
@@ -170,11 +167,14 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
     }
   }
 
+  // Content-only toolbar. The app chrome (BrandLockup / AppNav / MobileNav / lang
+  // toggle) is now owned by AppShell (app/(shell)/layout.tsx); this bar keeps the
+  // Pine-specific controls (script picker, Pro lock, Save, Add to chart) that used
+  // to share the topbar and renders them inside .main2 per the shell doctrine.
   const head = (
     <>
-      <MobileNav email={email} />
-      <header className="topbar">
-        <BrandLockup /><div className="tdiv" /><span className="page-title">Pine Editor</span>
+      <header className="topbar pine-topbar">
+        <span className="page-title">Pine Editor</span>
         {active && (
           <span className="pair pophost" style={{ marginLeft: 14, cursor: scripts.length > 1 ? "pointer" : "default" }}
             onClick={(e) => { e.stopPropagation(); if (scripts.length > 1) setPicker((p) => !p); }}>
@@ -205,31 +205,27 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
         )}
         <button className="ai" style={{ marginLeft: 6 }} onClick={addToChart} disabled={!active || hasErrors || isLocked}
           title={isLocked ? "The proprietary flagship already backs the chart's built-in BUY/SELL signals — it can't be added as a separate script" : hasErrors ? "Fix compile errors before adding to the chart" : "Add this script to the chart"}>Add to chart</button>
-        <form action="/auth/signout" method="post" style={{ marginLeft: 10 }}><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
       </header>
-      <AppNav />
     </>
   );
-  const foot = <div className="ticker"><span className="lbl">Pine Editor</span><span style={{ color: "var(--text-2)" }}>{scripts.length} saved script{scripts.length === 1 ? "" : "s"} · runs against your Polygon data · golden-gated vs the Python oracle</span></div>;
 
   if (!active) {
     return (
-      <div className="app2 pine">
+      <main className="main2 pine">
         {head}
-        <div className="pine-main">
+        <div className="pine-main" style={{ flex: 1 }}>
           <div className="editor-pane" style={{ alignItems: "center", justifyContent: "center" }}>
             <div className="pine-empty">No scripts yet.<br />Saved Pine indicators will appear here.</div>
           </div>
         </div>
-        {foot}
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="app2 pine">
+    <main className="main2 pine">
       {head}
-      <div className="pine-main">
+      <div className="pine-main" style={{ flex: 1 }}>
         <div className="editor-pane">
           <div className="editor-head">
             <span>{active.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.pine</span>
@@ -318,7 +314,6 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
           </div>
         </div>
       </div>
-      {foot}
-    </div>
+    </main>
   );
 }
