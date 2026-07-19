@@ -1,54 +1,69 @@
 "use client";
 import Link from "next/link";
-import { Suspense, useEffect, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import { Tip } from "@/components/ui/Tip";
 
+// Line glyphs — all share the 24-box, 1.7-stroke, fill:none house style (.navbtn svg).
+// Multi-path keys draw each `d` as a stacked <path>; a few workspaces need composite
+// primitives (arc + line + blip, etc.) and render inline below.
 const ICON: Record<string, string[]> = {
   chart: ["M3 17l5-6 4 3 4-7 5 9", "M3 21h18"],
-  analyst: ["M4 19V5", "M4 19h16", "M8 15l3-4 3 2 4-6"],
-  screener: [], // rects drawn inline
-  scripts: ["M8 7l-5 5 5 5M16 7l5 5-5 5"],
   portfolio: ["M21 12a9 9 0 1 1-9-9v9z"],
-  alerts: ["M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"],
-  flow: [], // custom inline — options hub
-  heatmap: [], // custom inline — market heatmap
   ai: ["M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z"],
 };
+
 export function Glyph({ k }: { k: string }) {
-  if (k === "screener")
-    return (<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>);
-  if (k === "flow")
-    return (<svg viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>);
-  if (k === "heatmap")
-    return (<svg viewBox="0 0 24 24"><rect x="3" y="3" width="4" height="4" rx="0.5" /><rect x="10" y="3" width="4" height="4" rx="0.5" /><rect x="17" y="3" width="4" height="4" rx="0.5" /><rect x="3" y="10" width="4" height="4" rx="0.5" /><rect x="10" y="10" width="4" height="4" rx="0.5" /><rect x="17" y="10" width="4" height="4" rx="0.5" /><rect x="3" y="17" width="4" height="4" rx="0.5" /><rect x="10" y="17" width="4" height="4" rx="0.5" /><rect x="17" y="17" width="4" height="4" rx="0.5" /></svg>);
-  return (<svg viewBox="0 0 24 24">{ICON[k].map((d, i) => <path key={i} d={d} />)}</svg>);
+  // Discover — radar scan: one open concentric arc (the sweep boundary) + a sweep line
+  // from center out to a blip on the ring. "Scan the market for setups" reads truer than
+  // a literal compass rose, and stays legible at 20px.
+  if (k === "discover")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M12 4a8 8 0 1 1-8 8" />
+        <path d="M8 8a5.5 5.5 0 1 0 4-2" />
+        <path d="M12 12l5.5-4" />
+        <circle cx="17.5" cy="8" r="1.15" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  // Research — layered depth lens: a magnifier whose lens holds stacked strata (market
+  // depth / order-book layers, seen through analysis). Deliberately NOT a flask.
+  if (k === "research")
+    return (
+      <svg viewBox="0 0 24 24">
+        <circle cx="10.5" cy="10.5" r="6.5" />
+        <path d="M7 9h7M7.5 12h6M9 15h3" />
+        <path d="M15.5 15.5L21 21" />
+      </svg>
+    );
+  // Automate — bolt inside a loop: a lightning bolt wrapped by a partial circular arrow.
+  // "Energy that runs on repeat" — set-and-forget.
+  if (k === "automate")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M20 12a8 8 0 1 1-2.3-5.6" />
+        <path d="M17.6 3.5v3.4h-3.4" />
+        <path d="M12.5 7l-3.5 5h3l-1 4 4.5-6h-3z" />
+      </svg>
+    );
+  return (<svg viewBox="0 0 24 24">{(ICON[k] ?? []).map((d, i) => <path key={i} d={d} />)}</svg>);
 }
 
-// The single source of truth for the primary nav. Exported so the mobile drawer (TerminalShell)
-// derives its items from the SAME list — the two nav surfaces can't drift.
+// The single source of truth for the primary nav. Exported so the mobile drawer (MobileNav)
+// derives its items from the SAME list — the two nav surfaces can't drift. Wave-2: navigate
+// by JOB (find → analyze → automate → review), not by internal model name.
 export const TOP = [
   { k: "chart", label: "Chart", href: "/terminal" },
-  { k: "analyst", label: "Analyst", href: "/terminal?pane=overview" },
-  { k: "screener", label: "Screener", href: "/screener" },
-  { k: "scripts", label: "Scripts", href: "/scripts" },
+  { k: "discover", label: "Discover", href: "/discover" },
+  { k: "research", label: "Research", href: "/research" },
+  { k: "automate", label: "Automate", href: "/automate" },
   { k: "portfolio", label: "Portfolio", href: "/portfolio" },
-  { k: "alerts", label: "Alerts", href: "/alerts" },
-  { k: "flow", label: "Options", href: "/flow" },
-  {
-    k: "heatmap",
-    label: "Heatmap",
-    // ?v=2: sidesteps a poisoned EdgeOne cache entry for the bare /heatmap URL
-    // (year-long s-maxage shell from before the revalidate=300 fix, referencing
-    // deleted JS chunks). Remove after the operator purges /heatmap in the
-    // EdgeOne console.
-    href: "/heatmap?v=2",
-  },
 ];
 
-// useSearchParams() forces a CSR bailout during static prerender, so the hook lives in an inner
-// component behind Suspense (statically-prerendered pages — screener/alerts/flow — need this).
+// useSearchParams() forces a CSR bailout during static prerender; the primary nav no longer
+// reads params (active key is pure path-prefix), but the Suspense boundary is retained so the
+// nav keeps rendering a stable fallback while the shell hydrates.
 export function AppNav() {
   return (
     <Suspense fallback={<nav className="appnav" aria-label="Primary" />}>
@@ -59,25 +74,16 @@ export function AppNav() {
 
 function AppNavInner() {
   const path = usePathname();
-  const params = useSearchParams();
   const router = useRouter();
   const t = useT();
-  // The research/fundamentals MegaPane lives in TerminalShell and strips its ?pane= via
-  // history.replaceState on close — invisible to useSearchParams, so a URL-derived highlight left
-  // "Analyst" lit after the pane was closed. Track the REAL overlay state from the mm:pane-state
-  // event TerminalShell broadcasts (fires on open AND close); the URL param only seeds the initial
-  // highlight for a deep-linked ?pane= load.
-  const [paneOpen, setPaneOpen] = useState(() => path.startsWith("/terminal") && !!params.get("pane"));
-  useEffect(() => {
-    const h = (e: Event) => setPaneOpen(!!(e as CustomEvent).detail);
-    window.addEventListener("mm:pane-state", h);
-    return () => window.removeEventListener("mm:pane-state", h);
-  }, []);
-  const activeKey = path.startsWith("/screener") ? "screener" : path.startsWith("/scripts") ? "scripts"
-    : path.startsWith("/portfolio") ? "portfolio" : path.startsWith("/alerts") ? "alerts"
-    : path.startsWith("/flow") ? "flow"
-    : path.startsWith("/heatmap") ? "heatmap"
-    : (path.startsWith("/terminal") && paneOpen) ? "analyst" : "chart";
+  // Active key = path prefix per workspace. Chart is the default/center. The old Analyst
+  // mm:pane-state special case is gone — fundamentals is reachable from the chart rail and
+  // Research › fundamentals, so the pane no longer owns a top-level highlight.
+  const activeKey = path.startsWith("/discover") ? "discover"
+    : path.startsWith("/research") ? "research"
+    : path.startsWith("/automate") ? "automate"
+    : path.startsWith("/portfolio") ? "portfolio"
+    : "chart";
   const openAI = () => { if (path.startsWith("/terminal")) window.dispatchEvent(new CustomEvent("mm:copilot")); else router.push("/terminal?ai=1"); };
   return (
     <nav className="appnav" aria-label="Primary">
@@ -85,7 +91,13 @@ function AppNavInner() {
         const on = it.k === activeKey;
         return (
           <Tip key={it.k} label={t(it.k, it.label)} side="right" size="mini">
-            <Link href={it.href} onClick={path.startsWith("/terminal") ? (it.k === "analyst" ? () => window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "overview" })) : it.k === "chart" ? () => window.dispatchEvent(new CustomEvent("mm:close-pane")) : undefined) : undefined} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={t(it.k, it.label)}><Glyph k={it.k} /></Link>
+            <Link
+              href={it.href}
+              onClick={path.startsWith("/terminal") && it.k === "chart" ? () => window.dispatchEvent(new CustomEvent("mm:close-pane")) : undefined}
+              className={`navbtn${on ? " on" : ""}`}
+              aria-current={on ? "page" : undefined}
+              aria-label={t(it.k, it.label)}
+            ><Glyph k={it.k} /></Link>
           </Tip>
         );
       })}

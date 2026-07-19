@@ -9,10 +9,11 @@ import { useT } from "@/lib/i18n";
 
 /**
  * Shared mobile top-bar + slide-in drawer used by both the /terminal shell and
- * the five app2 routes (screener / portfolio / alerts / flow / scripts).
+ * the (shell) app2 routes (discover / research / automate / portfolio).
  *
  * Mirrors the exact .mobilebar / .m-drawer CSS classes already defined in
- * globals.css so no new visual idiom is introduced.
+ * globals.css so no new visual idiom is introduced. The drawer items derive
+ * from AppNav's TOP export (single source of truth) — the five workspaces.
  *
  * Props
  * -----
@@ -22,8 +23,8 @@ import { useT } from "@/lib/i18n";
  * onBack         — called when the Back pill is tapped (fromMacro only)
  * onOpenCopilot  — optional: when provided the AI star button calls this
  *                  instead of navigating to /terminal?ai=1
- * activeKey      — override the auto-derived active nav key (TerminalShell
- *                  needs this to highlight "analyst" when the pane is open)
+ * activeKey      — override the auto-derived active nav key (rarely needed;
+ *                  the derived path-prefix key is correct for every workspace)
  */
 export interface MobileNavProps {
   email: string;
@@ -31,7 +32,8 @@ export interface MobileNavProps {
   onBack?: () => void;
   onOpenCopilot?: () => void;
   activeKey?: string;
-  /** When set, an "analyst" pane-open event is dispatched instead of navigation */
+  /** Retained for call-site compatibility; the drawer no longer special-cases the
+   *  fundamentals pane (Analyst is gone from the nav). */
   isTerminal?: boolean;
 }
 
@@ -41,19 +43,18 @@ export default function MobileNav({
   onBack,
   onOpenCopilot,
   activeKey: activeKeyProp,
-  isTerminal = false,
+  isTerminal: _isTerminal = false,
 }: MobileNavProps) {
   const [drawer, setDrawer] = useState(false);
   const navPath = usePathname();
   const t = useT();
 
+  // Active key = path prefix per workspace, mirroring AppNav. Chart is the default/center.
   const derivedKey = activeKeyProp ?? (
-    navPath.startsWith("/screener") ? "screener"
-    : navPath.startsWith("/scripts") ? "scripts"
+    navPath.startsWith("/discover") ? "discover"
+    : navPath.startsWith("/research") ? "research"
+    : navPath.startsWith("/automate") ? "automate"
     : navPath.startsWith("/portfolio") ? "portfolio"
-    : navPath.startsWith("/alerts") ? "alerts"
-    : navPath.startsWith("/flow") ? "flow"
-    : navPath.startsWith("/heatmap") ? "heatmap"
     : "chart"
   );
 
@@ -63,13 +64,6 @@ export default function MobileNav({
       onOpenCopilot();
     } else {
       window.location.href = "/terminal?ai=1";
-    }
-  };
-
-  const handleAnalystClick = () => {
-    setDrawer(false);
-    if (isTerminal) {
-      window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "analyst" }));
     }
   };
 
@@ -116,21 +110,7 @@ export default function MobileNav({
         <div className="m-drawer-h"><BrandLockup /></div>
         <nav className="m-nav">
           {TOP.map((it) => {
-            const isAnalyst = it.k === "analyst";
             const on = it.k === derivedKey;
-            if (isAnalyst && isTerminal) {
-              return (
-                <Link
-                  key={it.k}
-                  href={it.href}
-                  className={on ? "on" : ""}
-                  onClick={handleAnalystClick}
-                >
-                  <NavGlyph k={it.k} />
-                  {t(it.k, it.label)}
-                </Link>
-              );
-            }
             return (
               <Link
                 key={it.k}

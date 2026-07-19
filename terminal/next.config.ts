@@ -72,6 +72,39 @@ const nextConfig: NextConfig = {
   // 2026-07-07 `typescript.ignoreBuildErrors` escape hatch (FinPage union nits)
   // is removed; CI (.github/workflows/ci.yml) also gates PRs on tsc + vitest.
   // Note: `eslint` key was removed in Next.js 16 — ESLint is no longer built-in.
+  // ── Wave-2 IA redirect contract (permanent 308) ────────────────────────────
+  // The old single-purpose route dirs (screener/heatmap/alerts/scripts/flow) were
+  // deleted; the five-workspace URLs now own those destinations. Redirects are
+  // checked before the filesystem, and Next passes through any request query that
+  // the destination doesn't already set — so `/heatmap?v=2` → `/discover?tab=heatmap&v=2`
+  // and the default `/flow?tab=gex` → `/research?tab=gex` both keep working without
+  // enumerating every tab. Bookmarks, the macro dashboard's cross-links and the
+  // ?v=2 cache-busted heatmap link all survive.
+  async redirects() {
+    return [
+      { source: "/screener", destination: "/discover?tab=screener", permanent: true },
+      { source: "/heatmap", destination: "/discover?tab=heatmap", permanent: true },
+      { source: "/alerts", destination: "/automate?tab=alerts", permanent: true },
+      { source: "/scripts", destination: "/automate?tab=scripts", permanent: true },
+      // The two ex-flow Discover tabs move to /discover; matched by query so only
+      // these specific tabs peel off. Ordered BEFORE the catch-all /flow below.
+      {
+        source: "/flow",
+        has: [{ type: "query", key: "tab", value: "leaders" }],
+        destination: "/discover?tab=leaders",
+        permanent: true,
+      },
+      {
+        source: "/flow",
+        has: [{ type: "query", key: "tab", value: "radar" }],
+        destination: "/discover?tab=radar",
+        permanent: true,
+      },
+      // Every other /flow (incl. no tab, and tape/desk/tide/tickers/vol/gex/prism/
+      // prophet/fundamentals) → Research; the ?tab= value passes through untouched.
+      { source: "/flow", destination: "/research", permanent: true },
+    ];
+  },
   async headers() {
     return [
       // Security headers on every route (framing, CSP, sniffing, referrer, HSTS).
@@ -102,7 +135,10 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        source: "/(screener|alerts|flow|login)",
+        // Wave-2 IA: the workspace shells replace screener/alerts/flow — they need the same
+        // 5-minute edge cap or EdgeOne pins their prerendered HTML for a year (the exact
+        // stale-shell class behind the Wave-1 module-factory crash).
+        source: "/(discover|research|automate|portfolio|login)",
         headers: [
           {
             key: "Cache-Control",

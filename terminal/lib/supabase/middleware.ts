@@ -44,7 +44,8 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const PROTECTED = ["/terminal", "/screener", "/scripts", "/portfolio", "/alerts"];
+  // Wave-2 IA: workspaces replaced the old flat routes (old URLs 308 before reaching here).
+  const PROTECTED = ["/terminal", "/discover", "/research", "/automate", "/portfolio"];
   // protect the app area; bounce unauthenticated users to /login
   if (!user && PROTECTED.some((p) => path.startsWith(p))) {
     const url = request.nextUrl.clone();

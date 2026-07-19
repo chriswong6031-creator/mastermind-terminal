@@ -1,8 +1,5 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BrandLockup } from "@/components/BrandMark";
-import { AppNav } from "@/components/AppNav";
-import MobileNav from "@/components/MobileNav";
 import { useT } from "@/lib/i18n";
 
 type Ev = { id: number; created_at: string; symbol: string; query: string | null; source: string; user_id: string | null; anon_id: string | null; ip: string | null; ua: string | null };
@@ -88,15 +85,7 @@ export default function AdminView({ email }: { email: string }) {
   const vLabel = visitor ? userMap[visitor] ?? (visitor.length > 14 ? visitor.slice(0, 12) + "…" : visitor) : "";
 
   return (
-    <div className="app2">
-      <MobileNav email={email} />
-      <header className="topbar">
-        <BrandLockup /><div className="tdiv" /><span className="page-title">{t("pageAdmin", "Admin")}</span>
-        <div className="spacer" />
-        <form action="/auth/signout" method="post"><button className="avatar" title={`${email} · sign out`}>{(email || "U")[0].toUpperCase()}</button></form>
-      </header>
-      <AppNav />
-      <main className="main2">
+    <main className="main2">
         {denied ? (
           <div className="pg">
             <div className="panel"><div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("admDenied", "Admin access required.")}</div></div>
@@ -197,7 +186,5 @@ export default function AdminView({ email }: { email: string }) {
           </div>
         )}
       </main>
-      <div className="ticker"><span className="lbl">{t("pageAdmin", "Admin")}</span><span style={{ color: "var(--text-2)" }}>{t("admSearchLogSub", "every committed ticker search, by visitor")}</span></div>
-    </div>
   );
 }

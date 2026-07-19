@@ -1,7 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import PortfolioView from "@/components/PortfolioView";
 
-// dynamic='auto': supabase reads cookies → Next auto-detects dynamic; no need to force it.
+// Moved under the (shell) route group in Wave-2; URL stays /portfolio (route
+// groups don't affect the path). Chrome now comes from app/(shell)/layout.tsx —
+// PortfolioView renders content-only. This page keeps its own user + watchlist
+// read (data, not chrome).
+//
+// dynamic='auto': supabase reads cookies → Next auto-detects dynamic.
 
 export default async function PortfolioPage() {
   const supabase = await createClient();

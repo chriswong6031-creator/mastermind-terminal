@@ -1,44 +1,19 @@
 "use client";
 /**
- * HeatmapPageRoot.tsx — shell wrapper for the /heatmap route.
+ * HeatmapPageRoot.tsx — content-only body for the Heatmap workspace tab.
  *
- * Uses the same app2 shell as /flow (OptionsHubView): topbar + AppNav sidebar
- * + main.main2 content area, so the user can navigate to other pages.
- *
- * P0 FIX: previous page.tsx rendered HeatmapView standalone (no nav).
+ * Wave-2: the app chrome (.app2 grid + topbar + AppNav + MobileNav + lang toggle)
+ * is now owned by AppShell (app/(shell)/layout.tsx). This root renders ONLY the
+ * .main2 content cell (the HeatmapView). The FLOW-SPLIT lane mounts this under
+ * Discover › Heatmap; the /heatmap URL is served by next.config redirects.
  */
 
-import { useLang } from "@/lib/i18n";
-import { BrandLockup } from "@/components/BrandMark";
-import { AppNav } from "@/components/AppNav";
-import MobileNav from "@/components/MobileNav";
 import { HeatmapView } from "./HeatmapView";
 
 export default function HeatmapPageRoot() {
-  const { lang, setLang } = useLang();
-
   return (
-    <div className="app2 obs obs-ambient">
-      <MobileNav email="" />
-      <header className="topbar">
-        <BrandLockup />
-        <div className="tdiv" />
-        <span className="page-title">{lang === "zh" ? "热力图" : "Heatmap"}</span>
-        <div className="spacer" />
-        <button
-          className="chip"
-          style={{ marginLeft: 8 }}
-          onClick={() => setLang(lang === "zh" ? "en" : "zh")}
-        >
-          {lang === "zh" ? "EN" : "中文"}
-        </button>
-      </header>
-
-      <AppNav />
-
-      <main className="main2" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        <HeatmapView />
-      </main>
-    </div>
+    <main className="main2" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <HeatmapView />
+    </main>
   );
 }

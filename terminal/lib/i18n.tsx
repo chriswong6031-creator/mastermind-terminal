@@ -13,14 +13,19 @@ const LEX: Record<string, [string, string]> = {
   redUp: ["Red up", "红涨绿跌"],
   language: ["Language", "语言"],
   signOut: ["Sign out", "退出登录"],
-  // nav
+  // nav — Wave-2 five workspaces (navigate by job). chart/portfolio kept; screener/scripts/
+  // alerts/analyst survive only as sub-tab or legacy labels below.
   chart: ["Chart", "图表"],
+  discover: ["Discover", "发现"],
+  research: ["Research", "研究"],
+  automate: ["Automate", "自动化"],
+  portfolio: ["Portfolio", "投资组合"],
+  ai: ["Mastermind AI", "智脑 AI"],
+  // legacy nav labels (retained: still referenced by sub-tabs / redirected views)
   screener: ["Screener", "选股"],
   scripts: ["Scripts", "脚本"],
-  portfolio: ["Portfolio", "投资组合"],
   alerts: ["Alerts", "提醒"],
   analyst: ["Analyst", "分析师"],
-  ai: ["Mastermind AI", "智脑 AI"],
   // chart toolbar
   priceChart: ["Price chart", "价格图表"],
   indicators: ["Indicators", "指标"],
@@ -359,6 +364,7 @@ const LEX: Record<string, [string, string]> = {
   smComingSoon: ["Coming soon", "即将上线"],
   // portfolio
   pagePortfolio: ["Portfolio", "投资组合"],
+  pageAdmin: ["Admin", "管理"],
   convictionBook: ["Conviction Book", "信念账本"],
   convictionSub: ["Display-only · paper. Your watchlist ranked by the Golden-Oracle confluence + regime — a suggested tilt, not advice.", "仅供展示 · 模拟。你的自选按黄金神谕共振 + 趋势排序 —— 仅为建议倾向，非投资建议。"],
   names: ["Names", "标的数"],
@@ -457,6 +463,24 @@ const LEX: Record<string, [string, string]> = {
   tabGex: ["GEX", "敞口"],
   tabPrism: ["PRISM", "矩阵"],
   tabProphet: ["Prophet", "先知"],
+  // ─── Wave-2 workspace sub-tab labels (WorkspaceTabs registries) ───────────────
+  // Disambiguated screeners: Discover › Stock Screener vs Research › Options Screener.
+  // Options Tape spells out the ex-"Tape" label. Others reuse the tab* keys above.
+  wtStockScreener: ["Stock Screener", "选股筛选器"],
+  wtHeatmap: ["Heatmap", "热力图"],
+  wtLeaders: ["Leaders", "资金领袖"],
+  wtRadar: ["Leader Radar", "领袖雷达"],
+  wtOptionsTape: ["Options Tape", "期权逐笔"],
+  wtFlowDesk: ["Flow Desk", "资金流台"],
+  wtTide: ["Tide", "资金潮"],
+  wtTickers: ["Tickers", "个股"],
+  wtOptionsScreener: ["Options Screener", "期权筛选器"],
+  wtGex: ["GEX", "敞口"],
+  wtPrism: ["PRISM", "矩阵"],
+  wtProphet: ["Prophet", "先知"],
+  wtFundamentals: ["Fundamentals", "基本面"],
+  wtAlerts: ["Alerts", "提醒"],
+  wtScripts: ["Pine Scripts", "Pine 脚本"],
   // Tide tab
   tideTitle: ["Market Tide", "市场资金潮"],
   tideMethodNote: ["Method note", "方法说明"],
