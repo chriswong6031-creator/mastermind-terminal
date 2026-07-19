@@ -24,11 +24,24 @@
  *   md   46px outer / 36px inner  — cards, inspector sub-stats
  *   lg   84px outer / 66px inner  — inspector hero ring
  *
+ * v6: the ring is now an SVG stroke arc (rounded terminal cap + animated sweep +
+ * soft tone glow) instead of the old hard-edged conic wedge that could not tween.
+ * The component prop API is UNCHANGED so every Observatory call site keeps working.
+ *
  * Styles live in observatory.css (.obs-ring, .obs-ring--{size}, .obs-ring--{tone}).
  */
 
+import { useEffect, useRef, useState } from "react";
+
 export type RingTone = "brand" | "up" | "down" | "muted" | "auto";
 export type RingSize = "sm" | "md" | "lg";
+
+// Geometry per size — outer diameter, stroke width, inner value font.
+const RING_GEO: Record<RingSize, { d: number; sw: number; fs: number }> = {
+  sm: { d: 34, sw: 3.5, fs: 11 },
+  md: { d: 46, sw: 4.5, fs: 13 },
+  lg: { d: 84, sw: 7, fs: 20 },
+};
 
 export interface RingGaugeProps {
   /** Score or confidence value — displayed as-is */
@@ -64,15 +77,45 @@ export function RingGauge({ value, max = 100, size = "sm", tone = "auto", label 
   const resolvedTone: Exclude<RingTone, "auto"> =
     tone === "auto" ? resolveAutoTone(fillPct) : tone;
 
+  const geo = RING_GEO[size];
+  const r = (geo.d - geo.sw) / 2;         // stroke sits inside the box
+  const c = 2 * Math.PI * r;              // full-circle circumference
+  const offset = c * (1 - fillPct / 100); // remaining unfilled length
+  const center = geo.d / 2;
+
+  // Sweep-in: draw from empty → real offset on mount (prefers-reduced-motion jumps).
+  const [drawn, setDrawn] = useState(false);
+  const reduce = useRef(false);
+  useEffect(() => {
+    reduce.current =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduce.current) { setDrawn(true); return; }
+    const id = requestAnimationFrame(() => setDrawn(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  const shownOffset = drawn || reduce.current ? offset : c;
+
   const ring = (
     <span
       className={`obs-ring obs-ring--${size} obs-ring--${resolvedTone}`}
-      style={{ "--pct": `${fillPct}%` } as React.CSSProperties}
       aria-label={`${displayValue} out of ${max}`}
       role="img"
     >
+      <svg className="obs-ring-svg" width={geo.d} height={geo.d} viewBox={`0 0 ${geo.d} ${geo.d}`}>
+        {/* track — faint full circle */}
+        <circle cx={center} cy={center} r={r} fill="none"
+          stroke="rgba(255,255,255,.08)" strokeWidth={geo.sw} />
+        {/* progress — one tone color, rounded terminal cap, animated sweep, glow */}
+        <circle cx={center} cy={center} r={r} fill="none"
+          className="obs-ring-arc"
+          stroke="var(--obs-ring-color)" strokeWidth={geo.sw} strokeLinecap="round"
+          strokeDasharray={c} strokeDashoffset={shownOffset}
+          transform={`rotate(-90 ${center} ${center})`}
+          style={{ transition: reduce.current ? "none" : "stroke-dashoffset .6s var(--ease-out)" }} />
+      </svg>
       <span className="obs-ring-inner">
-        <span className="obs-ring-value num">{displayValue}</span>
+        <span className="obs-ring-value num" style={{ fontSize: geo.fs }}>{displayValue}</span>
       </span>
     </span>
   );

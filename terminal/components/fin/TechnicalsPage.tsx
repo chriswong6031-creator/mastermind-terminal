@@ -7,7 +7,7 @@
  *     the daily `bars`) are ALWAYS available; intraday pills (15m / 1h / 4h …)
  *     are enabled per intradayCapable(market) and fetch /api/intraday directly
  *     (no cache).
- *   - Summary: three HalfGauges (Oscillators / Summary / Moving Averages).
+ *   - Summary: three ArcGauges (Oscillators / Summary / Moving Averages).
  *   - Oscillators + Moving Averages tables (name+params, value, action).
  *   - Pivots table across Classic / Fibonacci / Camarilla / Woodie / DM.
  *
@@ -19,10 +19,10 @@ import { memo, useEffect, useMemo, useState } from "react";
 import type { Bar } from "../../lib/fund";
 import { computeRatings, type Ratings, type Vote, type PivotLevels } from "../../lib/techRating";
 import { fmtNum, pick } from "../../lib/finFormat";
-import { HalfGauge } from "./FinCharts";
+import { ArcGauge } from "../ui/ArcGauge";
 import { intradayCapable } from "../ChartPanel";
 import { classify, isIntradayTf } from "../../lib/intradaySources";
-import { Disclaimer } from "./ForecastPage";
+import { Disclaimer, readingToArc } from "./ForecastPage";
 
 interface TechnicalsPageProps {
   sym: string;
@@ -186,17 +186,32 @@ function Gauge({
   zh: boolean;
   big?: boolean;
 }) {
+  const arc = readingToArc(group ? group.score : null);
   return (
     <div className={"fin-tech-gauge" + (big ? " big" : "")}>
       <div className="fin-tech-gauge-t">{title}</div>
-      <HalfGauge
-        value={group ? group.score : null}
-        verdict={group ? verdictWord(group.verdict, zh) : undefined}
-        counts={group ? { sell: group.sell, neutral: group.neutral, buy: group.buy } : null}
-        variant="tech"
-        size={big ? 220 : 180}
-        zh={zh}
-      />
+      <div className="fin-arc-wrap">
+        {group ? (
+          <>
+            <ArcGauge
+              value={arc.value}
+              state={arc.state}
+              size={big ? 148 : 118}
+              sublabel={verdictWord(group.verdict, zh)}
+            />
+            {/* vote tally demoted beneath the arc (was the old gauge's counts row) */}
+            <div className="fin-gauge-counts">
+              <span className="down">{pick(zh, "Sell", "卖")} {group.sell}</span>
+              <span className="mut">{pick(zh, "Neutral", "中性")} {group.neutral}</span>
+              <span className="up">{pick(zh, "Buy", "买")} {group.buy}</span>
+            </div>
+          </>
+        ) : (
+          // No bars yet → grey mid arc, numeral suppressed so an empty gauge can't
+          // read as a real "50" score.
+          <ArcGauge value={50} state="neutral" size={big ? 148 : 118} showValue={false} sublabel={pick(zh, "No signal", "无信号")} />
+        )}
+      </div>
     </div>
   );
 }

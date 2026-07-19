@@ -4,7 +4,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import MobileNav from "@/components/MobileNav";
-import { compilePine, runPine, type Bar, type PineError } from "@/lib/pine-engine";
+import { type Bar, type PineError } from "@/lib/pine-engine";
+import { createPineHost, type PineHost } from "@/lib/pine-engine/host";
 
 type Script = { id: string; name: string; source: string; lang: string; params: Record<string, any>; updated_at: string; locked?: boolean };
 
@@ -46,17 +47,29 @@ const SYNTH_BARS: Bar[] = (() => {
   return out;
 })();
 
-// Full diagnostics pass: real parse errors first; if the script parses, dry-run it over the
-// synthetic series to surface what a parse can't see — unsupported builtins land in warnings[]
-// (previously collected by the engine but never shown: the script dead-charted while the editor
-// said "Compiled"), and runaway loops abort via the engine's run budget into errors[]. The tight
-// budgetMs keeps a hostile script's cost on the editor's UI thread to ~1s instead of the default 3s.
-function diagnose(src: string, params: Record<string, any>): { errors: PineError[]; warnings: string[] } {
-  const c = compilePine(src);
+type Diag = { errors: PineError[]; warnings: string[] };
+
+// Full diagnostics pass, now OFF the UI thread via the Pine host's Web Worker (host.compile for the
+// authoritative parse errors that place the gutter/line markers, host.run for the dry-run warnings
+// a parse can't see — unsupported builtins that would otherwise dead-chart while the editor said
+// "Compiled"). Both go through the same host `slot` so a keystroke supersedes the previous in-flight
+// diagnostics run (terminateable — a mid-type recompile cancels the previous one), and the per-run
+// wall budget preempts a runaway. SSR/no-Worker falls back to a synchronous host transparently.
+async function diagnose(host: PineHost, src: string, params: Record<string, any>): Promise<Diag> {
+  const c = await host.compile(src);
+  if (c.cancelled) return { errors: [], warnings: [] };
   if (!c.ok) return { errors: c.errors, warnings: [] };
-  const r = runPine(src, SYNTH_BARS, { timeframe: "1D", symbol: "SYNTH", params, budgetMs: 1000 });
+  const r = await host.run({ slot: DIAG_SLOT, source: src, astId: c.astId ?? undefined, bars: SYNTH_BARS, inputs: params, opts: { timeframe: "1D", symbol: "SYNTH" }, budgetMs: 1000 });
+  if (r.cancelled) return { errors: [], warnings: [] };
   return { errors: r.ok ? [] : r.errors, warnings: r.result?.warnings ?? [] };
 }
+const DIAG_SLOT = "@diag";   // shared supersession slot for editor diagnostics (compile + dry-run)
+
+// Code-layer font metrics (must mirror .code / .code-wrap textarea in globals.css: 12.5px/1.65
+// JetBrains-Mono, 12px top pad, 14px left pad) so the error line-tint + column caret register
+// exactly over the highlighted source.
+const LINE_H = 12.5 * 1.65;        // px per line
+const COL_W = 12.5 * 0.6;          // px per mono char (JetBrains Mono advance ≈ 0.6em)
 
 export default function PineEditor({ scripts, isPro, email }: { scripts: Script[]; isPro: boolean; email: string }) {
   const router = useRouter();
@@ -71,6 +84,11 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "compiling" | "err">("idle");
   const [picker, setPicker] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // One Pine host (Web Worker in the browser, sync fallback under SSR/tests) for the editor's
+  // lifetime — diagnostics run off the UI thread through it and it's torn down on unmount.
+  const hostRef = useRef<PineHost | null>(null);
+  if (hostRef.current === null) hostRef.current = createPineHost();
+  useEffect(() => () => { hostRef.current?.dispose(); hostRef.current = null; }, []);
 
   // switching scripts resets the editable buffers to that script's stored source/params
   useEffect(() => { setSrc(active?.source || ""); setParams(active?.params || {}); setStatus("idle"); setPicker(false); }, [idx, active?.id]);
@@ -87,13 +105,24 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
   const [diag, setDiag] = useState<PineError[]>([]);
   const [warns, setWarns] = useState<string[]>([]);
   useEffect(() => {
-    const id = window.setTimeout(() => { const d = diagnose(src, params); setDiag(d.errors); setWarns(d.warnings); }, 300);
-    return () => window.clearTimeout(id);
+    let alive = true;
+    const id = window.setTimeout(() => {
+      const host = hostRef.current; if (!host) return;
+      diagnose(host, src, params).then((d) => { if (alive) { setDiag(d.errors); setWarns(d.warnings); } });
+    }, 300);
+    return () => { alive = false; window.clearTimeout(id); };
   }, [src, params]);
   const hasErrors = diag.length > 0;
+  // First parse error, mapped to its 1-based line so the gutter/code layers can decorate it.
+  const errAt = diag.find((e) => e.phase === "parse" && e.line > 0) ?? (diag[0]?.line ? diag[0] : null);
+  const errLine = errAt?.line ?? 0;
 
   // Run/compile button: kick an immediate (non-debounced) recompile with brief "Compiling…" feedback.
-  function compile() { setStatus("compiling"); const d = diagnose(src, params); setDiag(d.errors); setWarns(d.warnings); window.setTimeout(() => setStatus("idle"), 300); }
+  function compile() {
+    const host = hostRef.current; if (!host) return;
+    setStatus("compiling");
+    diagnose(host, src, params).then((d) => { setDiag(d.errors); setWarns(d.warnings); window.setTimeout(() => setStatus("idle"), 300); });
+  }
 
   // Save the current buffer. Returns the saved id (existing id on success, null on failure). Locked
   // scripts and non-Pro users can't save — but the proprietary/locked script is still addable to the
@@ -211,8 +240,25 @@ export default function PineEditor({ scripts, isPro, email }: { scripts: Script[
             </div>
           </div>
           <div className="editor">
-            <div className="gutter">{lines.map((_, i) => <div key={i}>{i + 1}</div>)}</div>
+            {/* gutter: a red dot marks the errored line so the eye lands on it without reading the console */}
+            <div className="gutter">{lines.map((_, i) => (
+              <div key={i} style={errLine === i + 1 ? { position: "relative", color: "var(--down)" } : undefined}>
+                {errLine === i + 1 && <span aria-hidden style={{ position: "absolute", left: -3, top: "50%", transform: "translateY(-50%)", width: 5, height: 5, borderRadius: "50%", background: "var(--down)" }} />}
+                {i + 1}
+              </div>
+            ))}</div>
             <div className="code-wrap">
+              {/* error decoration layer: a full-width line tint on the errored line + a column caret at
+                  the reported col:line. LINE_H/COL_W mirror the .code font metrics (12.5px/1.65 mono,
+                  14px left pad) so the markers register exactly over the highlighted code. */}
+              {errLine > 0 && (
+                <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 1 }}>
+                  <div style={{ position: "absolute", left: 0, right: 0, top: 12 + (errLine - 1) * LINE_H, height: LINE_H, background: "rgba(var(--down-rgb),.10)", borderLeft: "2px solid var(--down)" }} />
+                  {errAt && errAt.col > 0 && (
+                    <div style={{ position: "absolute", top: 12 + (errLine - 1) * LINE_H + LINE_H - 3, left: 14 + Math.max(0, errAt.col - 1) * COL_W, width: COL_W + 2, height: 2, background: "var(--down)", boxShadow: "0 0 0 1px rgba(var(--down-rgb),.35)" }} />
+                  )}
+                </div>
+              )}
               <div className="code">{lines.map((ln, i) => <div key={i} dangerouslySetInnerHTML={{ __html: hl(ln) || "&nbsp;" }} />)}</div>
               <textarea ref={taRef} value={src} spellCheck={false} aria-label={`${active.name} source`} readOnly={isLocked}
                 onChange={(e) => { if (!isLocked) setSrc(e.target.value); }} onKeyDown={onKeyDown} />

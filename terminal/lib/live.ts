@@ -1,39 +1,27 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
-// Live-data client (HANDOFF §7). The account is NOT real-time-entitled yet, so this is OFF by
-// default and the terminal runs on historical Polygon. Flip NEXT_PUBLIC_LIVE=1 with a real-time
-// NEXT_PUBLIC_POLYGON_KEY to activate the Polygon trades WebSocket — the wiring is complete.
+// Live-data client — NEUTRALIZED 2026-07-19 (Wave-1 INFRA lane, databento-readiness audit).
+//
+// The previous implementation read `process.env.NEXT_PUBLIC_POLYGON_KEY` in a "use client" module
+// and opened `new WebSocket("wss://socket.polygon.io/stocks")` DIRECTLY from the browser, sending
+// the key in an auth frame. Any NEXT_PUBLIC_* var is inlined into the client bundle → the market-
+// data key was world-readable, and a browser→vendor trades socket is a redistribution-license
+// liability (a dev subscription is not a terminal redistribution license). Both are killed here.
+//
+// This is a key-safe no-op stub, kept ONLY to preserve the `useLive`/`LiveStatus` export contract
+// its consumer (components/TerminalShell.tsx) depends on while the SHELL/DataBento lanes re-point
+// the live tick source at a SERVER-mediated stream (hub SSE/WS proxy — see
+// docs/DATABENTO_INTEGRATION_DESIGN.md). It never reads any NEXT_PUBLIC key and never opens a
+// browser→vendor socket. `onTick` is intentionally never invoked; status stays "off".
+// When TerminalShell is re-pointed, this file can be deleted outright.
 export type LiveStatus = "off" | "connecting" | "live" | "error";
 
-export function useLive(symbol: string, onTick: (price: number) => void) {
-  const [status, setStatus] = useState<LiveStatus>("off");
-  const cb = useRef(onTick); cb.current = onTick;
-
+export function useLive(_symbol: string, _onTick: (price: number) => void): LiveStatus {
+  const [status] = useState<LiveStatus>("off");
+  // No browser-side vendor socket and no NEXT_PUBLIC key read — live ticks arrive server-mediated.
   useEffect(() => {
-    const on = process.env.NEXT_PUBLIC_LIVE === "1";
-    const key = process.env.NEXT_PUBLIC_POLYGON_KEY;
-    if (!on || !key || symbol.includes("-USD")) { setStatus("off"); return; }
-    setStatus("connecting");
-    let dead = false; let ws: WebSocket | null = null;
-    try {
-      ws = new WebSocket("wss://socket.polygon.io/stocks");
-      ws.onopen = () => ws!.send(JSON.stringify({ action: "auth", params: key }));
-      ws.onmessage = (ev) => {
-        if (dead) return;
-        try {
-          for (const m of JSON.parse(ev.data)) {
-            if (m.ev === "status" && m.status === "auth_success") { ws!.send(JSON.stringify({ action: "subscribe", params: `T.${symbol}` })); setStatus("live"); }
-            else if (m.ev === "status" && m.status === "auth_failed") { setStatus("error"); ws!.close(); }
-            else if (m.ev === "T" && typeof m.p === "number" && !dead) cb.current(m.p);
-          }
-        } catch {}
-      };
-      ws.onerror = () => { if (!dead) setStatus("error"); };
-      ws.onclose = () => { if (!dead) setStatus((s) => (s === "live" ? "off" : s)); };
-    } catch { setStatus("error"); }
-    return () => { dead = true; try { ws?.close(); } catch {} };
-  }, [symbol]);
-
+    // intentionally inert
+  }, [_symbol]);
   return status;
 }

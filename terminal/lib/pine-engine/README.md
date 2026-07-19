@@ -37,7 +37,58 @@ source ──▶ lexer.ts ──▶ parser.ts ──▶ runtime.ts ──▶ { p
   requested expression off it — so MTF gates use real higher-TF values, not the chart TF.
 - **builtins.ts** — constant namespaces (`color.*`, `shape.*`, `plot.style_*`, …), color→CSS
   conversion, `str.tostring` formatting, timeframe-seconds.
-- **index.ts** — `runPine(source, bars, opts)` and `compilePine(source)` (parse-only check).
+- **index.ts** — the split public surface: `compile(source) → { ok, errors, ast }` parses **once**
+  and returns a reusable AST; `runCompiled(ast, bars, opts)` executes it with **no re-parse**;
+  `runPine(source, bars, opts)` = compile+run (still one parse total); `compilePine(source)` is the
+  parse-only editor check. (Historically `runPine` parsed, then `run` re-parsed — that double parse
+  is gone; `run()` accepts a `ParseResult` directly.)
+- **host-shared.ts** — side-effect-free helpers shared by the main thread and the worker:
+  `hashSource()` (FNV-1a source hash = the AST-cache key / `astId`) and columnar `Bar` packing
+  (`barsToColumns`/`columnsToBars`) for transferable worker payloads.
+- **worker.ts** — the Web Worker entry (runs compile+execute off the UI thread; caches the AST per
+  source hash worker-side so data-only re-runs skip parsing). See *Worker protocol* below.
+- **host.ts** — `createPineHost()` — the integration API for ChartPanel + PineEditor: async
+  `compile`/`run` over the worker with **cancellation/supersession** (per-`slot`), a **per-run wall
+  budget** (terminate + auto-respawn on breach), and a **synchronous fallback** (`runPineSync`,
+  `compilePineSync`) for SSR/tests/no-Worker environments.
+
+## Worker protocol (host.ts ⇄ worker.ts)
+
+The engine runs inside a terminateable `Web Worker` so a heavy or runaway script never blocks the UI
+thread. `createPineHost()` returns a `PineHost` (a real worker host in the browser, a synchronous host
+under SSR/tests where `hasWorker()` is false — same surface either way, so callers hold one reference).
+
+Host API:
+
+- `compile(source) → Promise<{ ok, errors[], astId }>` — parse once; the worker caches the AST under
+  `astId` (= source hash). Editors call this on a debounce; a new compile supersedes the prior one.
+- `run({ slot, source, astId?, bars, inputs?, opts?, budgetMs? }) → Promise<PineResult>` where
+  `PineResult = { ok, errors[], result, cancelled?, budgetExceeded?, astId? }`:
+  - **supersession** — a new `run` for the same `slot` (e.g. a scriptId) cancels any in-flight run
+    for that slot; the superseded promise resolves `{ cancelled: true, result: null }` and its worker
+    reply is dropped, so a stale result can never paint over a newer one.
+  - **wall budget** — each run arms a timer (`budgetMs`, default 1500ms). On breach the host
+    `terminate()`s the worker (real preemption — the cooperative in-engine budget can't stop a tight
+    non-looping hot path) and auto-respawns; the run resolves `{ budgetExceeded: true }` + a runtime
+    error. (A budget breach poisons the in-flight batch: every pending run resolves `budgetExceeded`
+    because the terminated worker will never reply — the consumer simply re-runs.)
+  - **transferable payload** — `bars` are packed to Float64Array columns (`o/h/l/c/v`) + an ISO-time
+    `string[]`; the numeric buffers are transferred (zero-copy) to the worker, which rehydrates them.
+  - `astId` lets the worker skip re-parsing on data-only re-runs; if the id isn't cached (a fresh
+    worker after a respawn), the worker recompiles from `source` (always sent) and re-caches.
+- `evict(source)` / `clear()` — drop one / all cached ASTs (e.g. on script delete).
+- `dispose()` — terminate the worker and resolve every pending run as cancelled.
+
+Wire message kinds: `→ compile / run / evict / clear`, `← compiled / ran`. The worker is
+constructed with `new Worker(new URL("./worker.ts", import.meta.url), { type: "module" })` (Turbopack
+/ Next 16 bundles it to a worker chunk).
+
+> **ChartPanel integration contract (for the consumer lane):** the na-gap fix (below) emits
+> **whitespace points** `{ time }` (no `value`) for na bars on line/area/stepline/circles plots. To
+> get the visual break, ChartPanel's `addPinePlot` must **pass those whitespace points through to
+> `series.setData` for line-family series** instead of filtering them out — Lightweight-Charts breaks
+> the line at a whitespace point. Histogram/columns/cross bars are still omitted (correct for discrete
+> series). Valued points remain `{ time, value, color? }`.
 
 ## Coverage
 
@@ -86,7 +137,35 @@ qualifiers (`series float`), na-valued comparisons, `ta.stoch` zero-range → na
 positional `plot()` style/linewidth, multi-dot/empty-exponent number lexing, `not`/equality operator
 precedence, and the `pineKey` re-run trigger (now keys on full source, not length).
 
+Fixed in the Wave-1 pass (worker + correctness quick wins):
+- **`plot()` na → whitespace gap.** na/non-finite points on line/area/stepline/circles plots now emit
+  a whitespace point `{ time }` (no `value`) so Lightweight-Charts **breaks the line** at the gap
+  instead of connecting across it (correct `plot(cond ? x : na)` shape). Histogram/columns/cross bars
+  are still omitted (a missing discrete bar is correct). *ChartPanel must pass whitespace points
+  through to `setData` for line-family series — see the integration contract above.*
+- **`plotshape`/`plotchar`/`plotarrow` honor `series bool`.** A **finite numeric** first arg (e.g.
+  `plotshape(close, …)`) is a Pine type error and no longer fires a marker on every non-zero bar —
+  it's warned and skipped. `na` (an un-warmed bool) is still a valid `series bool` value; boolean
+  conditions (`ta.crossover(...)`, `close > x`, `and`-chains) work unchanged.
+- **Real run cancellation.** With the Web Worker (host.ts) the per-run wall budget is enforced by
+  `terminate()` (true preemption) instead of the engine's post-hoc cooperative poll — a runaway
+  script is killed without ever freezing the UI thread. The in-engine cooperative budget
+  (`DEFAULT_BUDGET_MS`, `MAX_TOTAL_LOOP_ITERS`) remains as a soft in-worker guard.
+- **Single parse + AST cache.** A run parses the source once; `compile()` returns a reusable AST and
+  the worker caches it per source hash, so replay ticks / live splices / param edits re-run without
+  re-parsing.
+
 Remaining known limitations (low blast radius, documented on purpose):
+- **Tables/labels/lines/boxes/`strategy.*` orders/`fill`/`bgcolor`/`alertcondition` still no-op** —
+  parsed and skipped (they aren't chart series). Scripts using them run and plot what they can; the
+  editor surfaces a warning for the unsupported builtins (they no longer silently dead-chart under a
+  bare "✓ Compiled"). Mapping the chart-drawable subset (label/line/box → overlay primitives, bgcolor
+  → background rects) is future work.
+- **Pine is skipped on intraday timeframes** (the engine's date math assumes `YYYY-MM-DD`); the
+  chart guards the build so an added script simply doesn't run on intraday TFs. Normalizing time
+  handling to epoch-ms is future work.
+- A fresh `ta.*` computed **inside** a `request.security` expression isn't recomputed on the HTF
+  timeline (pre-computed series refs — the flagship's pattern — resample correctly).
 - `ta.*`/`expr[n]` inside an `if`-block branch only advance on bars where the branch runs — Pine
   itself documents this as unsupported; hoist `ta.*` to top level (the flagship does).
 - Per-bar `plot()` colors render as a single color on **line/area/circle** series (Lightweight-Charts

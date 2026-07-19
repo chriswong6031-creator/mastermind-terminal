@@ -205,8 +205,11 @@ function EstimatesSection({
           <span
             className="fin-chip"
             style={{
+              // Growth IS directional → tokens (never hardcoded green/red). The
+              // --up-rgb/--down-rgb triplets flip with the east red-up theme, so
+              // text and border stay in lockstep across locales.
               color: (est.growth.rev_yoy ?? 0) >= 0 ? "var(--up)" : "var(--down)",
-              borderColor: (est.growth.rev_yoy ?? 0) >= 0 ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)",
+              borderColor: (est.growth.rev_yoy ?? 0) >= 0 ? "rgba(var(--up-rgb),.3)" : "rgba(var(--down-rgb),.3)",
             }}
           >
             {fmtPct(est.growth.rev_yoy, { sign: true })}

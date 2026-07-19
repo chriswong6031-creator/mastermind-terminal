@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useT } from "@/lib/i18n";
+import { Tip } from "@/components/ui/Tip";
 
 const ICON: Record<string, string[]> = {
   chart: ["M3 17l5-6 4 3 4-7 5 9", "M3 21h18"],
@@ -83,11 +84,15 @@ function AppNavInner() {
       {TOP.map((it) => {
         const on = it.k === activeKey;
         return (
-          <Link key={it.k} href={it.href} onClick={path.startsWith("/terminal") ? (it.k === "analyst" ? () => window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "overview" })) : it.k === "chart" ? () => window.dispatchEvent(new CustomEvent("mm:close-pane")) : undefined) : undefined} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={t(it.k, it.label)} data-tip={t(it.k, it.label)}><Glyph k={it.k} /></Link>
+          <Tip key={it.k} label={t(it.k, it.label)} side="right" size="mini">
+            <Link href={it.href} onClick={path.startsWith("/terminal") ? (it.k === "analyst" ? () => window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "overview" })) : it.k === "chart" ? () => window.dispatchEvent(new CustomEvent("mm:close-pane")) : undefined) : undefined} className={`navbtn${on ? " on" : ""}`} aria-current={on ? "page" : undefined} aria-label={t(it.k, it.label)}><Glyph k={it.k} /></Link>
+          </Tip>
         );
       })}
       <div className="gap" />
-      <button className="navbtn" onClick={openAI} aria-label={t("ai")} data-tip={t("ai")}><Glyph k="ai" /></button>
+      <Tip label={t("ai")} side="right" size="mini">
+        <button className="navbtn" onClick={openAI} aria-label={t("ai")}><Glyph k="ai" /></button>
+      </Tip>
     </nav>
   );
 }

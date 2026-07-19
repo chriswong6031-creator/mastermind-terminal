@@ -36,6 +36,7 @@ import {
   currentMonthIdx,
   wilson,
   yearColor,
+  type SeasWindow,
   type YearData,
   type WindowStat,
 } from "../../lib/seasonal";
@@ -43,6 +44,7 @@ import {
 interface Props {
   years: YearData[];
   active: Set<string>;
+  win?: SeasWindow;
   zh?: boolean;
 }
 
@@ -75,9 +77,10 @@ function useBoxW(fallback: number) {
   return { ref, w };
 }
 
-export function AdvancedSeasonality({ years, active, zh = false }: Props) {
+export function AdvancedSeasonality({ years, active, win, zh = false }: Props) {
   const isActive = useMemo(() => (yr: string) => active.has(yr), [active]);
-  const nActive = years.filter((y) => active.has(y.year)).length;
+  const activeList = years.filter((y) => active.has(y.year));
+  const nActive = activeList.length;
   if (nActive === 0) {
     return (
       <div className="fin-adv">
@@ -85,9 +88,23 @@ export function AdvancedSeasonality({ years, active, zh = false }: Props) {
       </div>
     );
   }
+  // Plain-word window statement — the sample scope is never hidden. The default
+  // reads "Last 10 years"; a custom chip selection reads "10 years selected".
+  const yrsSorted = activeList.map((y) => y.year).sort();
+  const span = yrsSorted.length ? `${yrsSorted[0]}–${yrsSorted[yrsSorted.length - 1]}` : "";
+  const isPreset = win != null && win !== "max";
+  const scope = isPreset
+    ? pick(zh, `Last ${win} years`, `近 ${win} 年`)
+    : win === "max"
+      ? pick(zh, "All history", "全部历史")
+      : pick(zh, `${nActive} years selected`, `已选 ${nActive} 年`);
   return (
     <div className="fin-adv">
-      <div className="fin-adv-title">{pick(zh, "Advanced seasonality", "高级季节性")}<span className="fin-adv-n">N = {nActive}{pick(zh, " yrs", "年")}</span></div>
+      <div className="fin-adv-title">
+        {pick(zh, "Seasonal read", "季节性解读")}
+        <span className="fin-adv-scope">{scope}</span>
+        {span && <span className="fin-adv-n">{span} · N={nActive}</span>}
+      </div>
       <HeadlineCards years={years} isActive={isActive} zh={zh} />
       <FanConePanel years={years} isActive={isActive} zh={zh} />
       <div className="fin-adv-row2">
@@ -164,10 +181,10 @@ function HeadlineCards({ years, isActive, zh }: { years: YearData[]; isActive: (
         </div>
       ) : null}
 
-      {/* seasonal fuel left */}
+      {/* room left this year (typical move from today to year-end) */}
       {rw.frontier != null && rw.fuelMean != null ? (
         <div className="fin-adv-card">
-          <div className="fin-adv-card-t">{pick(zh, "Seasonal fuel left", "季节性剩余空间")}</div>
+          <div className="fin-adv-card-t">{pick(zh, "Room left this year", "年内剩余空间")}</div>
           <div className={"fin-adv-card-v " + (rw.fuelMean >= 0 ? "up" : "down")}>{rw.fuelMean >= 0 ? "+" : ""}{fmtNum(rw.fuelMean, { decimals: 1 })}%</div>
           <div className="fin-adv-card-s">{pick(zh, "avg to year-end", "至年末平均")}{rw.fuelP25 != null && rw.fuelP75 != null && ` · ${fmtNum(rw.fuelP25, { decimals: 0 })}…${fmtNum(rw.fuelP75, { decimals: 0 })}%`}</div>
         </div>
@@ -296,7 +313,7 @@ function MonthEdgePanel({ years, isActive, zh }: { years: YearData[]; isActive: 
   }, [ms, sort]);
 
   return (
-    <Panel title={pick(zh, "Month edge", "月度优势")} subtitle={pick(zh, "avg · win-rate (Wilson 95%) · best/worst", "平均 · 胜率(Wilson 95%) · 最佳/最差")}>
+    <Panel title={pick(zh, "Best months", "最佳月份")} subtitle={pick(zh, "average return and how often each month rose", "各月平均收益与上涨频率")}>
       <div className="fin-adv-table-scroll">
         <table className="fin-adv-table">
           <thead>
@@ -373,7 +390,7 @@ function HoldingMatrixPanel({ years, isActive, zh }: { years: YearData[]; isActi
   };
 
   return (
-    <Panel title={pick(zh, "Optimal holding window", "最佳持有窗口")} subtitle={pick(zh, "buy after row → sell after col · avg span return", "行=买入后 → 列=卖出后 · 区间平均收益")}>
+    <Panel title={pick(zh, "Best stretch to hold", "最佳持有区间")} subtitle={pick(zh, "average return of buying one month, selling another", "在某月买入、另一月卖出的平均收益")}>
       {best && best.mean != null ? (
         <div className="fin-adv-bestcall">
           <span className="fin-adv-bestcall-w">{monthsL[best.start]} → {monthsL[best.end]} <span className="fin-adv-holdlen">· {best.end - best.start + 1}{pick(zh, "mo", "月")}</span></span>
@@ -498,7 +515,7 @@ function YearAgreementPanel({ years, isActive, zh }: { years: YearData[]; isActi
   const monthsL = zh ? MONTHS_ZH : MONTHS_EN;
   const rows = years.filter((y) => isActive(y.year));
   return (
-    <Panel title={pick(zh, "Year agreement", "年度一致性")} subtitle={pick(zh, "sign of each month, per year (outlier-immune)", "每月涨跌方向（抗离群）")}>
+    <Panel title={pick(zh, "Up or down, year by year", "逐年涨跌")} subtitle={pick(zh, "each month's direction in every year — % up along the bottom", "每年各月的涨跌方向，底部为上涨占比")}>
       <div className="fin-adv-yamx">
         <div className="fin-adv-yamx-head">
           <span className="fin-adv-yamx-corner" />

@@ -61,6 +61,19 @@ const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) 
 const vol = (v: number | null | undefined) => (v == null || !isFinite(v) ? "—" : v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v));
 const chgStr = (c: number | null | undefined) => (c == null || !isFinite(c) ? "—" : (c >= 0 ? "+" : "") + fmt(c) + "%");
 
+// Shallow equality over the UNION of both quotes' keys (a/b are the /api/quote entries, whose
+// shape varies by asset class — last/chg/basis/vol/ts/prevClose/…). Returns true only when every
+// field is identical, so setQuotes can keep the prior object reference and let React bail out
+// on a no-op 6s poll. `null`/`undefined` are treated as "no quote".
+function quoteEq(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) if (a[k] !== b[k]) return false;
+  return true;
+}
+
 // Overlay a live quote's price fields onto the EOD manifest row (live wins when present; a missing
 // live field — e.g. a US placeholder that has no volume yet — keeps the manifest value). Used so the
 // watchlist rows + movers tape render the SAME live prices the header already shows.
@@ -276,6 +289,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [extQuotes, setExtQuotes] = useState<Record<string, { extPrice: number; extChg: number; extTs: number } | null>>({});
   const [slice, setSlice] = useState<any>(null);
   const [fund, setFund] = useState<Fund | null>(null);
+  const [fundLoading, setFundLoading] = useState(true);   // true from symbol reset until getFund settles — MegaPane/ForecastPage skeleton gate
   const [opts, setOpts] = useState<any>(null);
   const [bars, setBars] = useState<Bar[]>([]);
   // MegaPane (in-shell fundamentals overlay) + OracleDash (Golden Oracle history) overlays
@@ -500,7 +514,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   //                when the page is idle) — the user-visible delay is the same as before.
   useEffect(() => {
     let alive = true;
-    setIntel(null); setLivePx(null); setSlice(null); setFund(null); setOpts(null); setBars([]);
+    setIntel(null); setLivePx(null); setSlice(null); setFund(null); setOpts(null); setBars([]); setFundLoading(true);
     // immediate: chart-shared OHLC and 6KB slice (signal verdict for the rail badge)
     getJSON(`/data/${active}.slice.json`).then((d) => { if (alive) setSlice(d); });
     getBars(active).then((b) => { if (alive) setBars(b); }).catch(() => {});
@@ -512,7 +526,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       const id = requestIdleCallback(() => {
         if (!alive) return;
         getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
-        getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {});
+        getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {}).finally(() => { if (alive) setFundLoading(false); });
         getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
       }, { timeout: 2000 });
       cancelDeferred = () => cancelIdleCallback(id);
@@ -520,7 +534,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       const id = setTimeout(() => {
         if (!alive) return;
         getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
-        getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {});
+        getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {}).finally(() => { if (alive) setFundLoading(false); });
         getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
       }, 0);
       cancelDeferred = () => clearTimeout(id);
@@ -566,6 +580,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // StrictMode double-invocation can't double-count.
   const quoteMissRef = useRef<Record<string, number>>({});
   const pollQuotes = useCallback(() => {
+    if (typeof document !== "undefined" && document.hidden) return; // (b) don't poll a backgrounded tab
     const key = quoteSymsKeyRef.current;
     if (!key) return;
     fetch(`/api/quote?syms=${encodeURIComponent(key)}`)
@@ -579,18 +594,29 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           else if ((misses[k] = (misses[k] ?? 0) + 1) >= 3) { drop.add(k); delete misses[k]; }
         }
         setQuotes((prev) => {
-          const n = { ...prev };
-          for (const k of Object.keys(d.quotes)) { const q = d.quotes[k]; if (q) n[k] = q; else if (drop.has(k)) delete n[k]; }
-          return n;
+          // (a) Unchanged-value suppression: only touch symbols whose quote actually changed,
+          // reusing the prior object reference otherwise. If nothing changed, return `prev`
+          // unchanged so React bails out and the whole pane grid / watchlist skips re-render.
+          let changed = false;
+          const n: Record<string, any> = { ...prev };
+          for (const k of Object.keys(d.quotes)) {
+            const q = d.quotes[k];
+            if (q) { if (!quoteEq(prev[k], q)) { n[k] = q; changed = true; } }
+            else if (drop.has(k) && k in n) { delete n[k]; changed = true; }
+          }
+          return changed ? n : prev;
         });
       })
       .catch(() => {});
   }, []);
-  // stable 6s interval, mounted once
+  // stable 6s interval, mounted once. Pauses while the tab is hidden and fires an immediate
+  // catch-up poll on re-show so a returning user sees fresh prices without waiting a full cycle.
   useEffect(() => {
     quoteAliveRef.current = true;
     const id = setInterval(pollQuotes, 6000);
-    return () => { quoteAliveRef.current = false; clearInterval(id); };
+    const onVis = () => { if (!document.hidden) pollQuotes(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { quoteAliveRef.current = false; clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
   }, [pollQuotes]);
   // debounced fresh poll whenever the symbol set changes (rapid edits collapse to one fetch);
   // also prune miss counters for symbols that left the set so a re-added one starts at zero
@@ -622,20 +648,29 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   extSymsKeyRef.current = extSymsKey;
   const extAliveRef = useRef(true);
   const pollExtQuotes = useCallback(() => {
+    if (typeof document !== "undefined" && document.hidden) return; // don't poll a backgrounded tab
     const key = extSymsKeyRef.current;
     if (!key) return;
     fetch(`/api/ext-quote?syms=${encodeURIComponent(key)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!extAliveRef.current || !d?.quotes) return;
-        setExtQuotes((prev) => ({ ...prev, ...d.quotes }));
+        setExtQuotes((prev) => {
+          // reuse prior reference when every incoming ext quote is byte-identical
+          let changed = false;
+          const n: Record<string, any> = { ...prev };
+          for (const k of Object.keys(d.quotes)) { if (!quoteEq(prev[k], d.quotes[k])) { n[k] = d.quotes[k]; changed = true; } }
+          return changed ? n : prev;
+        });
       })
       .catch(() => {});
   }, []);
   useEffect(() => {
     extAliveRef.current = true;
     const id = setInterval(pollExtQuotes, 30_000);
-    return () => { extAliveRef.current = false; clearInterval(id); };
+    const onVis = () => { if (!document.hidden) pollExtQuotes(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { extAliveRef.current = false; clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
   }, [pollExtQuotes]);
   useEffect(() => {
     if (!extSymsKey) return;
@@ -659,6 +694,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // ChartPanel's intraday empty-state overlay dispatches mm:set-tf {tf} ("Back to Daily" → "D"). Mirror
   // the open-pane pattern: switch the ACTIVE pane's timeframe, guarded on its functional TF set.
   useEffect(() => { const h = (e: Event) => { const nt = (e as CustomEvent).detail?.tf as string | undefined; if (nt && FUNCTIONAL.has(nt)) setTf(nt); }; window.addEventListener("mm:set-tf", h); return () => window.removeEventListener("mm:set-tf", h); }, [FUNCTIONAL, activePane]);
+  // ChartPanel's keyboard layer owns Alt+T/H/V/R/X/M + double-Esc but cannot set the shell-owned
+  // tool state directly — it dispatches mm:set-tool {detail: toolId|null}; ids match DrawingSidebar.
+  useEffect(() => {
+    const TOOL_IDS = new Set(["trendline", "hline", "vline", "rect", "text", "measure", "arrow", "ray", "fib"]);
+    const h = (e: Event) => { const id = (e as CustomEvent).detail as string | null; if (id === null || TOOL_IDS.has(id)) setTool(id); };
+    window.addEventListener("mm:set-tool", h);
+    return () => window.removeEventListener("mm:set-tool", h);
+  }, []);
   // Broadcast the overlay's open/close so AppNav's left-rail "Analyst" highlight tracks the REAL pane
   // state (page name on open, null on close). The URL ?pane= is stripped via replaceState on close and
   // is invisible to Next's useSearchParams, so a URL-derived highlight would stay lit after closing.
@@ -1378,6 +1421,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             <button className={`tbtn tool-adv${isMtf ? " on" : ""}`} title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
             <button className={`tbtn dtm${dtm ? " on" : ""}`} title={t("dtmTip")} onClick={toggleDtm}><svg viewBox="0 0 24 24" style={{ width: 13, height: 13 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>{t("dtmBtn")}</button>
             {panes.length > 1 && <button className={`tbtn tool-adv${sync && !mixedTfs ? " on" : ""}`} disabled={mixedTfs} title={mixedTfs ? t("syncMixedTip") : t("syncTip")} onClick={() => setSync((s) => !s)}><svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3" /></svg>{t("sync")}</button>}
+            <button
+              className={`tbtn tool-adv${replayOn ? " on" : ""}`}
+              title={mixedTfs && !replayOn ? t("replayMixedTip") : (replayOn ? t("replayExitTip") : t("replayTip"))}
+              disabled={mixedTfs && !replayOn}
+              onClick={() => {
+                setReplayOn((on) => {
+                  const next = !on;
+                  if (next) setReplayIdx(Math.max(20, total - 80)); // seed like the reset control
+                  setPlaying(false);
+                  return next;
+                });
+              }}
+            ><svg viewBox="0 0 24 24"><path d="M3 3v18M8 6l10 6-10 6V6z" /></svg>{t("replayBtn")}</button>
             <div className="pophost tool-adv">
               <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !detectOpen; closeAll(); setDetectOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8" /></svg>{t("detect")}<span style={{ color: "var(--muted)" }}>▾</span></button>
               <div className={`pop${detectOpen ? " show" : ""}`} style={{ top: 32, left: 0, minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
@@ -1442,6 +1498,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <MegaPane
             sym={active}
             fund={fund}
+            fundLoading={fundLoading}
             quote={liveQuote ? { last: lastPx ?? null } : null}
             bars={bars}
             page={paneOpen}

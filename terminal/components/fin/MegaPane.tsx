@@ -75,6 +75,8 @@ const PAGE_LABELS: Record<FinPage, [string, string]> = {
 export interface MegaPaneProps {
   sym: string;
   fund: Fund | null;
+  /** True while the shell's deferred getFund is in flight — gates the Analyst skeleton. */
+  fundLoading?: boolean;
   /** live/delayed quote (statistics Current column, forecast spot). */
   quote?: { last: number | null } | null;
   /** OHLC bars for forecast/technicals/seasonals (from getBars). */
@@ -100,6 +102,7 @@ export interface MegaPaneProps {
 export default function MegaPane({
   sym,
   fund,
+  fundLoading = false,
   quote,
   bars = [],
   page,
@@ -218,7 +221,7 @@ export default function MegaPane({
           {page === "dividends" && <DividendsPage sym={sym} fund={fund} zh={zh} />}
           {page === "earnings" && <EarningsPage fund={fund} zh={zh} sym={sym} />}
           {page === "revenue" && <RevenuePage fund={fund} zh={zh} sym={sym} />}
-          {page === "forecast" && <ForecastPage sym={sym} fund={fund} bars={bars} zh={zh} />}
+          {page === "forecast" && <ForecastPage sym={sym} fund={fund} bars={bars} zh={zh} loading={fundLoading} />}
           {page === "technicals" && <TechnicalsPage sym={sym} bars={bars} zh={zh} />}
           {page === "seasonals" && <SeasonalsPage sym={sym} bars={bars} zh={zh} />}
           {page === "insider" && <InsiderPage sym={sym} bars={bars} zh={zh} />}

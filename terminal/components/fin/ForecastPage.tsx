@@ -3,8 +3,10 @@
  * ForecastPage — the TradingView "Forecast" dashboard (BUILD-SPEC §3.4 FE2c,
  * spec/forecast.md). Two sibling tabs:
  *   - "Price target": price-history line + forward fan to mean/high/low targets,
- *     summary sentence, analyst-rating HalfGauge + distribution bars, then EPS &
- *     Revenue reported/estimate Bars (with FORECAST hatch) + surprise MiniTable.
+ *     a low—mean—high target band with a current-price marker, summary sentence,
+ *     analyst-rating ArcGauge + distribution bars (sell zone in --down tints),
+ *     consensus forward-growth chips, then EPS & Revenue reported/estimate
+ *     Dumbbell (FORECAST hatch + "E"-suffixed estimate columns) + surprise MiniTable.
  *   - "Actuals and estimates": estimate-fan LineSeries + statement pills +
  *     Actual/Avg/High/Low/#estimates MiniTable from fund.estimates.
  *
@@ -29,27 +31,88 @@ import {
   signColor,
 } from "../../lib/finFormat";
 import {
-  Bars,
+  Dumbbell,
   LineSeries,
-  HalfGauge,
   MiniTable,
+  type DumbbellPoint,
   type Series,
   type MiniRow,
 } from "./FinCharts";
-import type { FundEarnings } from "../../lib/fund";
+import { ArcGauge, type ArcState } from "../ui/ArcGauge";
+import type { FundEarnings, AnalystDist } from "../../lib/fund";
 
 interface ForecastPageProps {
   sym: string;
   fund: Fund | null;
   bars?: Bar[];
   zh?: boolean;
+  /**
+   * Loading gate: when true the async fund fetch is still in flight, so the pane
+   * renders a skeleton instead of the false "No analyst coverage" empty state.
+   * Distinguishes "not yet loaded" (skeleton) from "loaded, no coverage" (empty).
+   * Wired by the shell (MegaPane/TerminalShell — SHELL lane) which knows fetch
+   * status; defaults false so untouched callers keep working.
+   */
+  loading?: boolean;
 }
 
-/* rating_label / dist → gauge reading in [-1, 1] (weighted mean of buckets). */
-function analystReading(dist: NonNullable<Fund["analyst"]>["dist"]): number | null {
+/**
+ * analystReading — rating distribution → gauge reading in [-1, 1] (weighted mean
+ * of buckets). SINGLE SOURCE OF TRUTH: the rail AnalystGauge (StockAnalysis.tsx)
+ * imports this so both surfaces compute the identical reading.
+ */
+export function analystReading(dist: AnalystDist): number | null {
   const w = dist.strongBuy * 1 + dist.buy * 0.5 + dist.hold * 0 + dist.sell * -0.5 + dist.strongSell * -1;
   const n = dist.strongBuy + dist.buy + dist.hold + dist.sell + dist.strongSell;
   return n > 0 ? w / n : null;
+}
+
+/**
+ * readingToArc — the SINGLE mapping from a [-1, +1] rating/consensus reading to
+ * an ArcGauge {value 0–100, state}. Every gauge across ForecastPage,
+ * TechnicalsPage and the StockAnalysis rail routes through this so they never
+ * disagree on where "buy" ends and "hold"/"sell" begin. Thresholds match
+ * zoneWord: ≥0.15 leans buy (bull), ≤−0.15 leans sell (bear), the ±0.15 band is
+ * hold (neutral → grey, so a flat consensus reads as no signal, not red).
+ * value maps −1→0, 0→50, +1→100 (50 = neutral centre).
+ */
+export function readingToArc(reading: number | null): { value: number; state: ArcState } {
+  if (reading == null || !Number.isFinite(reading)) return { value: 50, state: "neutral" };
+  const r = Math.max(-1, Math.min(1, reading));
+  const state: ArcState = r >= 0.15 ? "bull" : r <= -0.15 ? "bear" : "neutral";
+  return { value: Math.round(((r + 1) / 2) * 100), state };
+}
+
+/** Zone word for a reading — the fallback when no engine rating_label is given. */
+function zoneWord(reading: number | null, zh: boolean): string {
+  if (reading == null) return "";
+  if (reading >= 0.5) return pick(zh, "Strong buy", "强烈买入");
+  if (reading >= 0.15) return pick(zh, "Buy", "买入");
+  if (reading > -0.15) return pick(zh, "Hold", "持有");
+  if (reading > -0.5) return pick(zh, "Sell", "卖出");
+  return pick(zh, "Strong sell", "强烈卖出");
+}
+
+/**
+ * ratingVerdict — the ONE verdict word shared by the rail AnalystGauge and the
+ * ForecastPage gauge. Prefers the engine's `rating_label` (translated when zh);
+ * falls back to the reading's zone word so it is NEVER empty (the old rail
+ * gauge showed a word while the pane showed none — this reconciles them).
+ */
+export function ratingVerdict(label: string | null, reading: number | null, zh: boolean): string {
+  if (label) {
+    if (!zh) return label;
+    const map: Record<string, string> = {
+      "Strong buy": "强烈买入",
+      Buy: "买入",
+      Hold: "持有",
+      Neutral: "中性",
+      Sell: "卖出",
+      "Strong sell": "强烈卖出",
+    };
+    return map[label] ?? label;
+  }
+  return zoneWord(reading, zh);
 }
 
 /* signed % of a target vs the current price, formatted with explicit sign + color. */
@@ -64,11 +127,27 @@ function moneyFmt(ccy: string | null | undefined) {
 }
 
 export default memo(ForecastPage);   // pure prop-driven page — skip re-render on the 6s live-quote poll
-function ForecastPage({ sym, fund, bars = [], zh = false }: ForecastPageProps) {
+function ForecastPage({ sym, fund, bars = [], zh = false, loading = false }: ForecastPageProps) {
   const [tab, setTab] = useState<"target" | "actuals">("target");
   const [epsFreq, setEpsFreq] = useState<"A" | "Q">("A");
   const [revFreq, setRevFreq] = useState<"A" | "Q">("A");
   const [stmt, setStmt] = useState<"income" | "balance" | "cashflow">("income");
+
+  // Loading skeleton — while the fund fetch is in flight, show shimmer blocks
+  // instead of the false "No analyst coverage" empty state.
+  if (loading && !fund) {
+    return (
+      <div className="fin-fc">
+        <div className="fin-fc-tabs fin-toggle fin-skel-tabs" aria-hidden />
+        <div className="fin-grid2 fin-fc-top">
+          <div className="fin-card"><div className="fin-skel fin-skel-chart" /></div>
+          <div className="fin-card"><div className="fin-skel fin-skel-gauge" /><div className="fin-skel fin-skel-rows" /></div>
+        </div>
+        <div className="fin-sec"><div className="fin-skel fin-skel-chart" /></div>
+        <span className="fin-skel-sr" role="status">{pick(zh, "Loading analyst data…", "正在加载分析师数据…")}</span>
+      </div>
+    );
+  }
 
   const ccy = fund?.quote_currency ?? "USD";
   const stmtCcy = fund?.stmt_currency ?? ccy;
@@ -188,6 +267,7 @@ function PriceTargetTab({
                   )}
                 </div>
               )}
+              <TargetBand low={low} mean={mean} high={high} cur={lastPrice} zh={zh} />
               <PriceFan bars={bars} cur={lastPrice} mean={mean} high={high} low={low} ccy={ccy} zh={zh} />
             </>
           ) : (
@@ -199,7 +279,7 @@ function PriceTargetTab({
         <div className="fin-card">
           <div className="fin-sec-h">{pick(zh, "Analyst rating", "分析师评级")}</div>
           {analyst ? (
-            <AnalystRating analyst={analyst} zh={zh} />
+            <AnalystRating analyst={analyst} est={est} zh={zh} />
           ) : (
             <AnalystEmpty fund={fund} zh={zh} />
           )}
@@ -232,6 +312,52 @@ function PriceTargetTab({
         zh={zh}
       />
     </>
+  );
+}
+
+/**
+ * TargetBand — a low—mean—high horizontal band with a current-price marker,
+ * so the reader sees where spot sits inside the analyst target range at a
+ * glance. Uses only existing fields (target.low/mean/high + last price). The
+ * band is non-directional (a range); the current marker is brand.
+ */
+function TargetBand({
+  low,
+  mean,
+  high,
+  cur,
+  zh,
+}: {
+  low: number | null;
+  mean: number | null;
+  high: number | null;
+  cur: number | null;
+  zh: boolean;
+}) {
+  if (low == null || high == null || high <= low) return null;
+  const span = high - low;
+  const pos = (v: number | null) => (v == null ? null : Math.max(0, Math.min(100, ((v - low) / span) * 100)));
+  const meanPos = pos(mean);
+  const curPos = pos(cur);
+  return (
+    <div className="fin-fc-band" role="group" aria-label={pick(zh, "Analyst target range", "分析师目标区间")}>
+      <div className="fin-fc-band-track">
+        {/* mean tick */}
+        {meanPos != null && <span className="fin-fc-band-mean" style={{ left: `${meanPos}%` }} />}
+        {/* current-price marker */}
+        {curPos != null && (
+          <span className="fin-fc-band-cur" style={{ left: `${curPos}%` }}>
+            <span className="dot" />
+            <span className="tag">{pick(zh, "Now", "现价")} {fmtNum(cur)}</span>
+          </span>
+        )}
+      </div>
+      <div className="fin-fc-band-ends">
+        <span className="lo"><span className="k">{pick(zh, "Low", "最低")}</span> {fmtNum(low)}</span>
+        {mean != null && <span className="mid"><span className="k">{pick(zh, "Mean", "均值")}</span> {fmtNum(mean)}</span>}
+        <span className="hi"><span className="k">{pick(zh, "High", "最高")}</span> {fmtNum(high)}</span>
+      </div>
+    </div>
   );
 }
 
@@ -354,17 +480,21 @@ function Bracket({
   );
 }
 
-function AnalystRating({ analyst, zh }: { analyst: NonNullable<Fund["analyst"]>; zh: boolean }) {
+function AnalystRating({ analyst, est, zh }: { analyst: NonNullable<Fund["analyst"]>; est: Fund["estimates"]; zh: boolean }) {
   const dist = analyst.dist;
   const reading = analystReading(dist);
   const total = dist.strongBuy + dist.buy + dist.hold + dist.sell + dist.strongSell;
-  const maxCount = Math.max(dist.strongBuy, dist.buy, dist.hold, dist.sell, dist.strongSell, 1);
+  // Scale bars to the TOTAL analyst count (share-of-analysts), not the largest
+  // bucket — so a thin 3-analyst consensus doesn't render as a "full" bar.
+  const denom = Math.max(total, 1);
   const rows: { label: string; labelZh: string; count: number; tone: string }[] = [
     { label: "Strong buy", labelZh: "强烈买入", count: dist.strongBuy, tone: "up" },
     { label: "Buy", labelZh: "买入", count: dist.buy, tone: "up2" },
     { label: "Hold", labelZh: "持有", count: dist.hold, tone: "neu" },
-    { label: "Sell", labelZh: "卖出", count: dist.sell, tone: "neu" },
-    { label: "Strong sell", labelZh: "强烈卖出", count: dist.strongSell, tone: "neu" },
+    // Sell zone is RED (--down), not neutral grey — understating bearish
+    // consensus was a color-semantics violation.
+    { label: "Sell", labelZh: "卖出", count: dist.sell, tone: "down2" },
+    { label: "Strong sell", labelZh: "强烈卖出", count: dist.strongSell, tone: "down" },
   ];
   return (
     <>
@@ -375,13 +505,27 @@ function AnalystRating({ analyst, zh }: { analyst: NonNullable<Fund["analyst"]>;
           `基于过去3个月 ${total} 位分析师的评级。`,
         )}
       </div>
-      <HalfGauge value={reading} verdict={ratingWord(analyst.rating_label, reading, zh)} variant="analyst" size={220} zh={zh} />
+      {(() => {
+        const arc = readingToArc(reading);
+        return (
+          <div className="fin-arc-wrap">
+            <ArcGauge
+              value={arc.value}
+              state={arc.state}
+              size={168}
+              label={pick(zh, "Analyst rating", "分析师评级")}
+              sublabel={ratingVerdict(analyst.rating_label, reading, zh)}
+            />
+          </div>
+        );
+      })()}
+      <GrowthStrip est={est} zh={zh} />
       <div className="fin-fc-dist">
         {rows.map((r) => (
           <div className="fin-fc-dist-row" key={r.label}>
             <span className="lbl">{pick(zh, r.label, r.labelZh)}</span>
             <span className="track">
-              <span className={"bar t-" + r.tone} style={{ width: `${(r.count / maxCount) * 100}%` }} />
+              <span className={"bar t-" + r.tone} style={{ width: `${(r.count / denom) * 100}%` }} />
             </span>
             <span className="cnt">{r.count}</span>
           </div>
@@ -391,20 +535,28 @@ function AnalystRating({ analyst, zh }: { analyst: NonNullable<Fund["analyst"]>;
   );
 }
 
-function ratingWord(label: string | null, reading: number | null, zh: boolean): string {
-  if (label) {
-    if (!zh) return label;
-    const map: Record<string, string> = {
-      "Strong buy": "强烈买入",
-      Buy: "买入",
-      Hold: "持有",
-      Neutral: "中性",
-      Sell: "卖出",
-      "Strong sell": "强烈卖出",
-    };
-    return map[label] ?? label;
-  }
-  return "";
+/**
+ * GrowthStrip — consensus forward-growth chips (EPS / Revenue YoY) from
+ * estimates.growth. High-signal, previously unused. `growth` values are stored
+ * as fractions (e.g. 0.12 = +12%). Renders nothing when both are absent.
+ */
+function GrowthStrip({ est, zh }: { est: Fund["estimates"]; zh: boolean }) {
+  const g = est?.growth;
+  if (!g || (g.eps_yoy == null && g.rev_yoy == null)) return null;
+  const chip = (label: string, v: number | null) =>
+    v == null ? null : (
+      <span className="fin-fc-growth-chip" key={label}>
+        <span className="k">{label}</span>
+        <span className="v" style={{ color: v >= 0 ? "var(--up)" : "var(--down)" }}>{fmtPct(v, { sign: true })}</span>
+      </span>
+    );
+  return (
+    <div className="fin-fc-growth" role="group" aria-label={pick(zh, "Consensus forward growth", "一致预期未来增长")}>
+      <span className="fin-fc-growth-lbl">{pick(zh, "Consensus FY", "一致预期（本财年）")}</span>
+      {chip(pick(zh, "EPS", "每股收益"), g.eps_yoy)}
+      {chip(pick(zh, "Revenue", "营收"), g.rev_yoy)}
+    </div>
+  );
 }
 
 /* CN / no-coverage empty state; surfaces company guidance chip when present. */
@@ -457,10 +609,17 @@ function EstimateBarSection({
   const reportedColor = kind === "eps" ? "var(--brand)" : "var(--warn)";
   const fmtV = kind === "eps" ? (v: number) => fmtNum(v, { decimals: 2 }) : moneyFmt(ccy);
 
-  const barSeries: Series[] = [
-    { name: pick(zh, "Reported", "实际"), values: built.reported, color: reportedColor },
-    { name: pick(zh, "Estimate", "预期"), values: built.estimate, color: "var(--text-2)" },
-  ];
+  // Estimate-only (forward) columns get the FORECAST hatch + beat/miss dots via
+  // Dumbbell — so the reader sees exactly where reported actuals end and
+  // consensus begins (the old grey Bars made them indistinguishable).
+  const dumbPoints: DumbbellPoint[] = built.labels.map((label, i) => ({
+    // estimate-only (no reported actual) columns get an "E" suffix
+    label: built.reported[i] == null && built.estimate[i] != null ? `${label} E` : label,
+    actual: built.reported[i],
+    estimate: built.estimate[i],
+    surp_pct: built.surprise[i],
+  }));
+  const forecastFrom = built.reported.findIndex((v) => v == null);
 
   const rows: MiniRow[] = [
     { label: pick(zh, "Reported", "实际"), values: built.reported, fmt: fmtV },
@@ -485,7 +644,17 @@ function EstimateBarSection({
         <div className="fin-empty">{pick(zh, "No estimate data", "暂无预期数据")}</div>
       ) : (
         <>
-          <Bars labels={built.labels} series={barSeries} fmtY={kind === "eps" ? (v) => fmtNum(v, { decimals: 2 }) : (v) => fmtNum(v)} vw={520} vh={190} zh={zh} height={240} />
+          <Dumbbell
+            points={dumbPoints}
+            fmtY={kind === "eps" ? (v) => fmtNum(v, { decimals: 2 }) : (v) => fmtNum(v)}
+            forecastFrom={forecastFrom >= 0 ? forecastFrom : undefined}
+            actualColor={reportedColor}
+            vw={520}
+            vh={190}
+            zh={zh}
+            height={240}
+            noWindow
+          />
           <MiniTable
             periods={built.labels}
             rows={rows}
@@ -642,6 +811,8 @@ function ActualsTab({
     <>
       {chart && (
         <div className="fin-sec">
+          {/* Heading so the naked line chart is legible as the EPS estimate trend */}
+          <div className="fin-sec-h">{pick(zh, "EPS estimate trend", "每股收益预期走势")}</div>
           <LineSeries
             labels={chart.labels}
             series={chart.series}
@@ -654,21 +825,25 @@ function ActualsTab({
           />
         </div>
       )}
-      <div className="fin-fc-sec-head">
-        <div className="fin-toggle">
-          <button className={stmt === "income" ? "on" : ""} onClick={() => setStmt("income")}>{pick(zh, "Income statement", "利润表")}</button>
-          <button className={stmt === "balance" ? "on" : ""} onClick={() => setStmt("balance")}>{pick(zh, "Balance sheet", "资产负债表")}</button>
-          <button className={stmt === "cashflow" ? "on" : ""} onClick={() => setStmt("cashflow")}>{pick(zh, "Cash flow", "现金流量表")}</button>
+      {/* Statement toggle bound to the TABLE it controls (not the EPS chart above) */}
+      <div className="fin-sec">
+        <div className="fin-fc-sec-head">
+          <div className="fin-sec-h">{pick(zh, "Estimates table", "预期数据表")}</div>
+          <div className="fin-toggle">
+            <button className={stmt === "income" ? "on" : ""} onClick={() => setStmt("income")}>{pick(zh, "Income statement", "利润表")}</button>
+            <button className={stmt === "balance" ? "on" : ""} onClick={() => setStmt("balance")}>{pick(zh, "Balance sheet", "资产负债表")}</button>
+            <button className={stmt === "cashflow" ? "on" : ""} onClick={() => setStmt("cashflow")}>{pick(zh, "Cash flow", "现金流量表")}</button>
+          </div>
         </div>
+        <MiniTable
+          periods={built.periods}
+          rows={built.rows}
+          fmt={(v) => fmtNum(v)}
+          pageSize={8}
+          zh={zh}
+          cornerLabel={pick(zh, `Currency: ${ccy}`, `货币：${ccy}`)}
+        />
       </div>
-      <MiniTable
-        periods={built.periods}
-        rows={built.rows}
-        fmt={(v) => fmtNum(v)}
-        pageSize={8}
-        zh={zh}
-        cornerLabel={pick(zh, `Currency: ${ccy}`, `货币：${ccy}`)}
-      />
     </>
   );
 }

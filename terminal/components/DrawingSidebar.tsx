@@ -203,18 +203,17 @@ export default function DrawingSidebar({
 
       <div className="ds-spacer" />
 
-      {/* Bottom group: magnet, lock (reserved UI affordance, non-interactive), erase/clear */}
+      {/* Bottom group: magnet, erase/clear.
+          The Lock affordance was removed (Wave 1): there is no backing lock state on
+          drawings and no lock filter in the pointer handlers, so it was a permanently
+          disabled control that read as real. Reinstate it together with actual lock
+          behavior (a `locked` field + a lock filter in ChartPanel's pointer path). */}
       <button
         className={`ds-btn${magnet ? " on" : ""}`}
         title={t("magnetTip")}
         onClick={onMagnet}
       >
         <svg viewBox="0 0 24 24"><path d="M6 4v7a6 6 0 0 0 12 0V4h-4v7a2 2 0 0 1-4 0V4z" /></svg>
-      </button>
-
-      {/* Lock drawings — UI affordance; actual lock behavior is a future enhancement */}
-      <button className="ds-btn ds-btn-dim" title={t("toolLock")} disabled>
-        <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
       </button>
 
       {/* Clear all drawings */}

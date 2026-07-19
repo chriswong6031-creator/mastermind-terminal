@@ -35,6 +35,30 @@
   --pop-bg-modal: rgba(16, 19, 28, 0.93);
   /* Scrim: uniform across all modal backdrops */
   --pop-scrim: rgba(5,7,11,0.55);
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     DESIGN LANGUAGE v6 — additive surgical evolution of locked v5.
+     Nothing above is rewritten; these tokens unify motion, hairlines and the
+     type ramp across every surface this wave touches. The .obs layer and all
+     v5 selectors keep working untouched.
+     ═══════════════════════════════════════════════════════════════════════ */
+  /* Motion — THE easing. Pair with --t-fast (interactive) / --t-slow (data draw-in). */
+  --ease-out: cubic-bezier(.22,1,.36,1);
+  --t-fast: 120ms;   /* interactive: hover/press/focus */
+  --t-med:  200ms;   /* segmented/tab moves, small layout */
+  --t-slow: 320ms;   /* data draws in: bars grow, arcs sweep */
+  /* Hairlines — unify borders toward alpha whites (elevation = alpha steps, not brighter greys). */
+  --hairline: rgba(255,255,255,.08);
+  --hairline-strong: rgba(255,255,255,.14);
+  /* Type ramp — one scale, no new half-pixel sizes. Numerals always var(--font-num)+tabular. */
+  --fs-micro:10px;   /* uppercase micro-labels */
+  --fs-label:11px;   /* label rows, legends */
+  --fs-ui:12.5px;    /* dense tables, controls */
+  --fs-body:13px;    /* body copy */
+  --fs-emph:14px;    /* emphasised value */
+  --fs-title:16px;   /* section titles */
+  --fs-num:20px;     /* headline numerals */
+  --fs-num-lg:28px;  /* hero numerals */
 }
 /* East-Asian convention: red = up / green = down (CN/HK/TW/MO). Flips the up/down semantics only;
    accent colors (brand/signal/warn) are unchanged. Set on <html data-updown="east"> pre-paint. */
@@ -1706,3 +1730,61 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .adm-top-row:last-child{border-bottom:0}
 .adm-top-row .bar{width:100%;max-width:240px;margin-left:0}
 @media(max-width:860px){.adm-body{flex-direction:column}.adm-side{width:100%;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line)}.adm-body .kpis{grid-template-columns:repeat(2,1fr)}}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   v6 — Tip primitive (the ONE tooltip). Portalled to <body> by components/ui/Tip.tsx,
+   fixed-positioned from measured rects, so it escapes every overflow:hidden pane.
+   Glass is the v5 --pop-* family; enter is opacity + 4px slide (toward the anchor)
+   at --t-fast var(--ease-out). Two sizes: mini (single-line label) and card (rows).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.tip{
+  position:fixed;z-index:2000;pointer-events:none;
+  background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);
+  border:1px solid var(--pop-edge);border-radius:var(--r-md);
+  box-shadow:var(--pop-shadow),var(--pop-sheen);
+  color:var(--text);
+  opacity:0;transform:translateY(2px);
+  transition:opacity var(--t-fast) var(--ease-out),transform var(--t-fast) var(--ease-out);
+}
+.tip[data-open="1"]{opacity:1;transform:translateY(0)}
+/* enter direction leans toward the anchored side so the tip appears to grow from the trigger */
+.tip[data-side="top"]{transform:translateY(4px)}
+.tip[data-side="bottom"]{transform:translateY(-4px)}
+.tip[data-side="left"]{transform:translateX(4px)}
+.tip[data-side="right"]{transform:translateX(-4px)}
+.tip[data-side][data-open="1"]{transform:translate(0,0)}
+.tip-mini{
+  display:flex;align-items:center;gap:8px;white-space:nowrap;
+  padding:6px 9px;font:600 11.5px/1 var(--font-ui);letter-spacing:.01em;
+}
+.tip-card{
+  max-width:280px;padding:9px 11px;font:var(--fs-ui)/1.5 var(--font-ui);
+  display:flex;flex-direction:column;gap:5px;
+}
+.tip .ds-kbd{margin-left:0}          /* reuse the v5 shortcut chip; kill its auto-margin inside a tip */
+/* data-side arrow — a small rotated square peeking out of the glass toward the trigger */
+.tip::after{
+  content:"";position:absolute;width:7px;height:7px;
+  background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);
+  border:1px solid var(--pop-edge);
+  transform:rotate(45deg);
+}
+.tip[data-side="top"]::after   {bottom:-4px;left:50%;margin-left:-3.5px;border-top:0;border-left:0}
+.tip[data-side="bottom"]::after{top:-4px;left:50%;margin-left:-3.5px;border-bottom:0;border-right:0}
+.tip[data-side="left"]::after  {right:-4px;top:50%;margin-top:-3.5px;border-bottom:0;border-left:0}
+.tip[data-side="right"]::after {left:-4px;top:50%;margin-top:-3.5px;border-top:0;border-right:0}
+@media (prefers-reduced-motion:reduce){
+  .tip,.tip[data-side]{transition:opacity var(--t-fast) linear;transform:none}
+  .tip[data-side][data-open="1"]{transform:none}
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   v6 — shared utility classes. Opt-in; nothing above is forced onto them.
+   ═══════════════════════════════════════════════════════════════════════════ */
+/* uppercase micro-label — the one true caption idiom (10–11px / 600 / +0.08em / muted) */
+.v6-micro{font:600 var(--fs-micro)/1.2 var(--font-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+/* headline / hero numerals — mono, tabular, tight tracking (TV's signature big-number treatment) */
+.v6-num{font-family:var(--font-num);font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;font-weight:650;letter-spacing:-.01em}
+/* interactive surface baseline — one motion contract for hover/press/focus */
+.v6-interactive{transition:background var(--t-fast) var(--ease-out),color var(--t-fast) var(--ease-out),border-color var(--t-fast) var(--ease-out),transform var(--t-fast) var(--ease-out)}
+@media (prefers-reduced-motion:reduce){.v6-interactive{transition:none}}

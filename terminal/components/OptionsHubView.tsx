@@ -4,9 +4,6 @@ import {
   useCallback, useDeferredValue, useEffect, useMemo, useRef, useState,
 } from "react";
 import dynamic from "next/dynamic";
-import { BrandLockup } from "@/components/BrandMark";
-import { AppNav } from "@/components/AppNav";
-import MobileNav from "@/components/MobileNav";
 import { useLang, useT } from "@/lib/i18n";
 import type { Lang } from "@/lib/i18n";
 import { CoachProvider, useCoach } from "@/lib/tutorial/coach";
@@ -1395,7 +1392,7 @@ type ScreenerPreset = "top_prem" | "unusual_z" | "fresh" | "doi" | "zerodte" | "
 // ─── Top-level component ─────────────────────────────────────────────────────
 
 export default function OptionsHubView() {
-  const { lang, setLang } = useLang();
+  const { lang } = useLang();
   const t = useT();
 
   // ── Tab state from URL ?tab= ──────────────────────────────────────────────
@@ -1872,45 +1869,12 @@ export default function OptionsHubView() {
 
   return (
     <CoachProvider>
-    <div className="app2 obs obs-ambient">
-      <MobileNav email="" />
-      <header className="topbar">
-        <BrandLockup />
-        <div className="tdiv" />
-        <span className="page-title">{t("flow", "Options")}</span>
-        <div className="spacer" />
-        {/* Live status area */}
-        {(activeTab === "tape" || activeTab === "tide") && !feedUnavailable && !feedDelayed && (
-          <span style={{ display: "flex", alignItems: "center", gap: 6, marginRight: 10, fontSize: 12, color: "var(--text-2)" }}>
-            <span className="obs-live-dot" />
-            {lang === "zh" ? "实时" : "Live"}
-          </span>
-        )}
-        {lastFeedTs && (
-          <span style={{ color: "var(--text-dim)", fontSize: 11, marginRight: 12 }}>
-            {t("asOf", "as of")} {fmtAsof(lastFeedTs)}
-            {dataStale && (
-              <span style={{ marginLeft: 6, color: "var(--warn)", fontWeight: 600 }}>
-                {lang === "zh" ? "延迟" : "delayed"}
-              </span>
-            )}
-          </span>
-        )}
-        <button
-          className="chip"
-          style={{ marginLeft: 8 }}
-          onClick={() => setLang(lang === "zh" ? "en" : "zh")}
-          title={lang === "zh" ? "Switch to English" : "切换中文"}
-        >
-          {lang === "zh" ? "EN" : "中文"}
-        </button>
-      </header>
-
-      <AppNav />
-
+      {/* Chrome (.app2 grid + MobileNav + topbar + AppNav) is owned by
+          app/flow/layout.tsx (FlowChrome). This view renders ONLY the .main2
+          grid cell so a crash here surfaces the error boundary inside the chrome. */}
       <main className="main2" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
 
-        {/* ── Tab bar (Observatory pill-nav) ── */}
+        {/* ── Tab bar (Observatory pill-nav) + live-feed status ── */}
         <div style={{ display: "flex", alignItems: "center", padding: "8px 14px", borderBottom: "1px solid var(--line)", flexShrink: 0, gap: 8 }}>
           <nav className="obs-pillnav" aria-label={lang === "zh" ? "期权工具选项卡" : "Options Hub tabs"}>
             {TABS.map((tb) => (
@@ -1925,6 +1889,24 @@ export default function OptionsHubView() {
               </button>
             ))}
           </nav>
+          <div className="spacer" />
+          {/* Live status area (relocated out of the topbar chrome; view-state coupled) */}
+          {(activeTab === "tape" || activeTab === "tide") && !feedUnavailable && !feedDelayed && (
+            <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-2)" }}>
+              <span className="obs-live-dot" />
+              {lang === "zh" ? "实时" : "Live"}
+            </span>
+          )}
+          {lastFeedTs && (
+            <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+              {t("asOf", "as of")} {fmtAsof(lastFeedTs)}
+              {dataStale && (
+                <span style={{ marginLeft: 6, color: "var(--warn)", fontWeight: 600 }}>
+                  {lang === "zh" ? "延迟" : "delayed"}
+                </span>
+              )}
+            </span>
+          )}
         </div>
 
         {/* ── Live-feed status banner (Tape + Tide are intraday-live) ── */}
@@ -4226,7 +4208,6 @@ export default function OptionsHubView() {
             : "Notability and direction labels are heuristic and approximate (~). Display only — not investment advice."}
         </div>
       </main>
-    </div>
     </CoachProvider>
   );
 }

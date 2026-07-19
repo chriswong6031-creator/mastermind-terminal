@@ -819,88 +819,6 @@ export function Donut({ slices, centerValue, centerLabel, legend = true, fmtV = 
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
- * <HalfGauge> — needle + 5-zone gradient + verdict + Sell/Neutral/Buy counts
- * ───────────────────────────────────────────────────────────────────────── */
-
-/** Props for {@link HalfGauge}. */
-export interface HalfGaugeProps {
-  /** Reading in [-1, 1]: -1 = strong sell (left), +1 = strong buy (right). */
-  value: NumOrNull;
-  /** Bold verdict word (e.g. "Buy"). Falls back to a zone name from `value`. */
-  verdict?: string;
-  /** Optional Sell / Neutral / Buy counts shown beneath the arc. */
-  counts?: { sell: number; neutral: number; buy: number } | null;
-  size?: number;
-  zh?: boolean;
-  /** Gradient variant: "tech" (red→purple→green) or "analyst" (red→yellow→green). */
-  variant?: "tech" | "analyst";
-}
-
-const GAUGE_ZONES_EN = ["Strong sell", "Sell", "Neutral", "Buy", "Strong buy"];
-const GAUGE_ZONES_ZH = ["强烈卖出", "卖出", "中性", "买入", "强烈买入"];
-
-/**
- * Semicircular 5-zone gauge (Strong sell…Strong buy) with a 5-stop gradient arc,
- * a needle at `value` ∈ [-1,1], the verdict word beneath, and optional
- * Sell/Neutral/Buy vote counts. Used by Technicals + Analyst rating.
- */
-export function HalfGauge({ value, verdict, counts, size = 200, zh, variant = "tech" }: HalfGaugeProps) {
-  const gid = useId().replace(/:/g, "");
-  const v = num(value) ? Math.max(-1, Math.min(1, value as number)) : null;
-  if (v == null) return <Empty zh={zh} label={pick(!!zh, "No signal", "无信号")} />;
-  const w = size;
-  const h = size * 0.62;
-  const cx = w / 2;
-  const cy = h - 6;
-  const rad = w * 0.42;
-  const sw = w * 0.11;
-  // angle: -1 → 180° (left), +1 → 0° (right)
-  const ang = (t: number) => Math.PI - ((t + 1) / 2) * Math.PI;
-  const pt = (a: number, rr: number) => [cx + rr * Math.cos(a), cy - rr * Math.sin(a)];
-  const [ax, ay] = pt(ang(-1), rad);
-  const [bx, by] = pt(ang(1), rad);
-  const arc = `M ${ax} ${ay} A ${rad} ${rad} 0 0 1 ${bx} ${by}`;
-  const na = ang(v);
-  const [nx, ny] = pt(na, rad - sw * 0.2);
-  const zoneIdx = Math.min(4, Math.max(0, Math.floor(((v + 1) / 2) * 5 - 1e-9)));
-  const zones = zh ? GAUGE_ZONES_ZH : GAUGE_ZONES_EN;
-  const verdictText = verdict ?? zones[zoneIdx];
-  const grad = variant === "analyst"
-    ? [["0%", "var(--down)"], ["50%", "var(--warn)"], ["100%", "var(--up)"]]
-    : [["0%", "var(--down)"], ["50%", "var(--code-fn)"], ["100%", "var(--up)"]];
-  const verdictColor = zoneIdx <= 1 ? "var(--down)" : zoneIdx >= 3 ? "var(--up)" : "var(--text)";
-  return (
-    <div className="fin-gauge">
-      <svg viewBox={`0 0 ${w} ${h + 4}`} width={w} height={h + 4} className="fin-gauge-svg" aria-hidden>
-        <defs>
-          <linearGradient id={gid} x1="0%" y1="0%" x2="100%" y2="0%">
-            {grad.map(([o, c]) => <stop key={o} offset={o} stopColor={c} />)}
-          </linearGradient>
-        </defs>
-        <path d={arc} fill="none" stroke="var(--line)" strokeWidth={sw + 2} strokeLinecap="round" />
-        <path d={arc} fill="none" stroke={`url(#${gid})`} strokeWidth={sw} strokeLinecap="round" />
-        {/* zone tick separators */}
-        {[-0.6, -0.2, 0.2, 0.6].map((t) => {
-          const [x1, y1] = pt(ang(t), rad - sw / 2);
-          const [x2, y2] = pt(ang(t), rad + sw / 2);
-          return <line key={t} className="fin-gauge-tick" x1={x1} y1={y1} x2={x2} y2={y2} />;
-        })}
-        <line className="fin-needle" x1={cx} y1={cy} x2={nx} y2={ny} />
-        <circle className="fin-needle-hub" cx={cx} cy={cy} r={4} />
-      </svg>
-      <div className="fin-gauge-verdict" style={{ color: verdictColor }}>{verdictText}</div>
-      {counts && (
-        <div className="fin-gauge-counts">
-          <span className="down">{pick(!!zh, "Sell", "卖")} {counts.sell}</span>
-          <span className="mut">{pick(!!zh, "Neutral", "中性")} {counts.neutral}</span>
-          <span className="up">{pick(!!zh, "Buy", "买")} {counts.buy}</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────────────────────────────────
  * <Waterfall> — bridge (running total) bars
  * ───────────────────────────────────────────────────────────────────────── */
 
@@ -994,8 +912,59 @@ export function Waterfall({ steps, fmtY = fmtNum, vw = 340, vh = 200, zh, height
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
- * <CapitalStructure> — market cap → EV floating bridge + value table
+ * <CapitalStructure> — purpose-built enterprise-value bridge
+ *
+ * NOT a Waterfall reuse. The old build routed capital structure through the
+ * sign-colored Waterfall, which (a) painted Debt green / Cash red by numeric
+ * sign — meaningless for a composition — and (b) FLIPPED those colors under the
+ * east red-up theme, and (c) carried a detached legend whose dot colors
+ * contradicted the bars. Capital structure is a COMPOSITION, not a directional
+ * delta: it uses stable, non-directional tokens only (brand / warn / outline).
  * ───────────────────────────────────────────────────────────────────────── */
+
+/** One horizontal composition row in the EV bridge. */
+export interface CapStructRow {
+  /** Stable row key (locale-independent) — drives the color token. */
+  key: "mcap" | "debt" | "cash" | "ev";
+  /** Full bilingual label, never truncated. */
+  label: string;
+  /** Signed magnitude: cash is negative (it subtracts from EV). */
+  value: number;
+  /** Bar fill token — non-directional, locale-stable. */
+  color: string;
+  /** Grammar prefix rendered before the label ("+", "−", "="). */
+  op: "" | "+" | "−" | "=";
+  /** Bar width as a fraction 0..1 of the widest row (|value| / max|value|). */
+  frac: number;
+  /** True for the outline-notch cash row (subtracts, drawn hollow). */
+  outline: boolean;
+}
+
+/**
+ * buildCapStructRows — PURE mapping (market cap / debt / cash → bridge rows).
+ * Exported for the smoke test. Rows model the accounting identity
+ * `EV = market cap + debt − cash`: market cap is the base, debt adds, cash
+ * subtracts (drawn as an outline notch), enterprise value is the solid total.
+ * Bar fractions are relative to the largest absolute magnitude in the set so
+ * the visual reads as share-of-EV without a numeric axis.
+ */
+export function buildCapStructRows(
+  marketCap: number,
+  debt: number,
+  cash: number,
+  ev: number | null,
+  zh: boolean,
+): CapStructRow[] {
+  const enterprise = num(ev) ? (ev as number) : marketCap + debt - cash;
+  const base: Omit<CapStructRow, "frac">[] = [
+    { key: "mcap", label: pick(zh, "Market cap", "市值"), value: marketCap, color: "var(--brand)", op: "", outline: false },
+    { key: "debt", label: pick(zh, "Debt", "债务"), value: debt, color: "var(--warn)", op: "+", outline: false },
+    { key: "cash", label: pick(zh, "Cash & equivalents", "现金及等价物"), value: -cash, color: "var(--text-2)", op: "−", outline: true },
+    { key: "ev", label: pick(zh, "Enterprise value", "企业价值"), value: enterprise, color: "var(--brand)", op: "=", outline: false },
+  ];
+  const maxMag = Math.max(1, ...base.map((r) => Math.abs(r.value)));
+  return base.map((r) => ({ ...r, frac: Math.min(1, Math.abs(r.value) / maxMag) }));
+}
 
 /** Props for {@link CapitalStructure}. */
 export interface CapitalStructureProps {
@@ -1005,48 +974,42 @@ export interface CapitalStructureProps {
   /** Enterprise value. Derived (mktcap + debt − cash) if omitted. */
   ev?: NumOrNull;
   fmtV?: ValFmt;
-  vw?: number;
-  vh?: number;
   zh?: boolean;
 }
 
 /**
- * Capital structure bridge: Market cap (green base) + Debt (orange) − Cash
- * (pink) → Enterprise value (blue), with a right-side value legend. This is the
- * TV Overview "Capital structure" module.
+ * Capital structure bridge: horizontal composition rows —
+ * `Market cap` (brand) `+ Debt` (warn) `− Cash` (outline notch) `= Enterprise
+ * value` (brand solid). Inline mono value on every bar, full labels left (never
+ * truncated), dotted hairline connectors, and an `EV = market cap + debt −
+ * cash` explainer. No axis, no directional tokens, no detached legend.
  */
-export function CapitalStructure({ marketCap, debt, cash, ev, fmtV = fmtNum, vw = 340, vh = 200, zh }: CapitalStructureProps) {
+export function CapitalStructure({ marketCap, debt, cash, ev, fmtV = fmtNum, zh }: CapitalStructureProps) {
   if (!num(marketCap)) return <Empty zh={zh} />;
   const mc = marketCap as number;
   const d = num(debt) ? (debt as number) : 0;
   const c = num(cash) ? (cash as number) : 0;
-  const enterprise = num(ev) ? (ev as number) : mc + d - c;
-  const steps: WaterfallStep[] = [
-    { label: pick(!!zh, "Market cap", "市值"), value: mc, total: true },
-    { label: pick(!!zh, "Debt", "债务"), value: d },
-    { label: pick(!!zh, "Cash", "现金"), value: -c },
-    { label: pick(!!zh, "Enterprise value", "企业价值"), value: enterprise, total: true },
-  ];
-  const rows: { label: string; value: number; color: string }[] = [
-    { label: pick(!!zh, "Market cap", "市值"), value: mc, color: "var(--up)" },
-    { label: pick(!!zh, "Debt", "债务"), value: d, color: "var(--warn)" },
-    { label: pick(!!zh, "Cash & equivalents", "现金及等价物"), value: c, color: "var(--down)" },
-    { label: pick(!!zh, "Enterprise value", "企业价值"), value: enterprise, color: "var(--brand)" },
-  ];
+  const rows = buildCapStructRows(mc, d, c, num(ev) ? (ev as number) : null, !!zh);
   return (
-    <div className="fin-capstruct">
-      <div className="fin-capstruct-chart">
-        <Waterfall steps={steps} fmtY={fmtV} vw={vw} vh={vh} zh={zh} />
-      </div>
-      <div className="fin-capstruct-legend">
-        {rows.map((r, i) => (
-          <div className="fin-donut-row" key={i}>
-            <span className="fin-leg-dot" style={{ background: r.color }} />
-            <span className="fin-donut-lbl">{r.label}</span>
-            <span className="fin-donut-val">{fmtV(r.value)}</span>
-          </div>
-        ))}
-      </div>
+    <div className="fin-capbridge">
+      {rows.map((r, i) => (
+        <div className={"fin-capbridge-row" + (r.key === "ev" ? " is-total" : "")} key={r.key}>
+          <span className="fin-capbridge-op" aria-hidden>{r.op}</span>
+          <span className="fin-capbridge-lbl">{r.label}</span>
+          <span className="fin-capbridge-track">
+            {/* dotted connector to the prior row's bar top — pure decoration */}
+            {i > 0 && <span className="fin-capbridge-conn" aria-hidden />}
+            <span
+              className={"fin-capbridge-bar" + (r.outline ? " is-outline" : "")}
+              style={r.outline
+                ? { width: `${r.frac * 100}%`, borderColor: r.color }
+                : { width: `${r.frac * 100}%`, background: r.color }}
+            />
+          </span>
+          <span className="fin-capbridge-val">{fmtV(Math.abs(r.value))}</span>
+        </div>
+      ))}
+      <div className="fin-capbridge-note">{pick(!!zh, "EV = market cap + debt − cash", "企业价值 = 市值 + 债务 − 现金")}</div>
     </div>
   );
 }

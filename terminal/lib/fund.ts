@@ -340,6 +340,23 @@ export interface Insider {
   sell_shares: number;
   series: InsiderMonth[]; // oldest→newest, trailing ~24 months
   trades: InsiderTrade[]; // newest→oldest, capped
+
+  // ── v2 posture fields (OPTIONAL — added by engine/insider_power.py scoring v2;
+  // today's exported payloads do NOT carry them, so the Terminal degrades
+  // gracefully when they are absent). Semantics only DE-ESCALATE: the existing
+  // engine-owned `signal`/`confidence` keys stay authoritative and the Terminal
+  // never re-derives or escalates them. `routine_only` marks the null state
+  // (window is routine, spread-out, baseline-sized selling only); the engine
+  // sets `signal="NEUTRAL"` alongside it. See the Wave-1 spec "Insider scoring
+  // v2" and the display shim in InsiderPage. ──
+  /** True when the window is routine, spread-out, baseline-sized selling only. */
+  routine_only?: boolean;
+  /** Plain-word reason for the posture (EN), e.g. "Routine equity-comp selling…". */
+  posture_reason?: string;
+  /** Plain-word reason for the posture (ZH). */
+  posture_reason_zh?: string;
+  /** Age in days of the most recent open-market trade (drives the recency gate). */
+  last_trade_age_d?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

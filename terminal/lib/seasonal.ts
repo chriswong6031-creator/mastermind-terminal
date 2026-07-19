@@ -12,7 +12,42 @@
 import type { Bar } from "./fund";
 
 export const HORIZON = 252; // calendar trading-day positions Jan→Dec
-export const MAX_YEARS = 8;
+
+/** Default seasonality lookback: last N COMPLETE years + current YTD.
+ * This is the single source of truth for the "10Y" default window — the page
+ * seeds its active-year set from it, so the chart, the analytics deck and the
+ * monthly table all open on a clean recent sample instead of full inception
+ * history (a 40y name would otherwise render 30+ spaghetti lines and blend
+ * pre-2010 regimes into every aggregate). Full history stays togglable. */
+export const MAX_YEARS = 10;
+
+/** Segmented lookback presets shown on the Seasonals surface. `null` = Max (all
+ * history). Keyed by the string persisted at localStorage 'mm.seas.win'. */
+export type SeasWindow = "5" | "10" | "15" | "max";
+export const SEAS_WINDOWS: SeasWindow[] = ["5", "10", "15", "max"];
+export const DEFAULT_SEAS_WINDOW: SeasWindow = "10";
+/** How many COMPLETE years a preset spans (Max → Infinity). */
+export function windowYears(w: SeasWindow): number {
+  return w === "max" ? Infinity : parseInt(w, 10);
+}
+
+/**
+ * The set of years that should be ACTIVE for a given lookback window: the last
+ * `windowYears(w)` COMPLETE years plus the current (partial YTD) year. `years`
+ * must be the full ascending YearData list from buildYears(). A young listing
+ * with fewer complete years than the window simply returns all it has. Max
+ * returns every year. This is what seeds SeasonalsPage's `active` Set — the
+ * per-year chips can still toggle any year on top of it.
+ */
+export function windowActiveSet(years: YearData[], w: SeasWindow): Set<string> {
+  if (years.length === 0) return new Set();
+  const span = windowYears(w);
+  if (!isFinite(span)) return new Set(years.map((y) => y.year));
+  const complete = years.filter((y) => !y.isCurrent);
+  const current = years.filter((y) => y.isCurrent);
+  const keptComplete = complete.slice(Math.max(0, complete.length - span));
+  return new Set([...keptComplete, ...current].map((y) => y.year));
+}
 
 export const MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 export const MONTHS_ZH = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
@@ -114,6 +149,25 @@ export function buildYears(bars: Bar[]): YearData[] {
   const recent = years;                       // full history since inception (togglable per-year in the UI)
   const curYear = years[years.length - 1];
 
+  // prior year's LAST close, keyed by year — used to define January's return as
+  // prev-Dec-close → Jan-close (see monthly-returns note below).
+  const prevDecClose = new Map<string, number>();
+  {
+    let carry: number | null = null;
+    for (const yr of years) {
+      if (carry != null) prevDecClose.set(yr, carry);
+      const arr = byYear.get(yr)!;
+      // last close of this year (by max date — arr isn't guaranteed pre-sorted)
+      let last: number | null = null;
+      let lastKey = "";
+      for (const b of arr) {
+        const k = String(b.time);
+        if (b.c != null && k >= lastKey) { last = b.c; lastKey = k; }
+      }
+      if (last != null) carry = last;
+    }
+  }
+
   return recent.map((yr) => {
     const arr = byYear.get(yr)!.slice().sort((a, b) => String(a.time).localeCompare(String(b.time)));
     const price: (number | null)[] = new Array(HORIZON).fill(null);
@@ -148,6 +202,15 @@ export function buildYears(bars: Bar[]): YearData[] {
       if (monthFirst[m] == null) monthFirst[m] = b.o ?? b.c;
       monthLast[m] = b.c;
     }
+    // Monthly return = this month's last close / prior reference close − 1.
+    // The prior reference is the previous month's last close. For JANUARY the
+    // previous month lives in the PRIOR calendar year, so we thread that year's
+    // December close (prevDecClose). This makes January consistent with Feb–Dec
+    // (all close-to-close) instead of the old intra-January open→close move, and
+    // makes the 12-month compound a true full-year return. NOTE: this slightly
+    // shifts January's Month-Edge figure vs the prior definition. Fallbacks: for
+    // a name's first-ever January (no prior Dec) or a mid-year listing's first
+    // month, we fall back to that month's own open so the series still starts.
     const monthlyRet: (number | null)[] = new Array(12).fill(null);
     for (let m = 0; m < 12; m++) {
       const close = monthLast[m];
@@ -159,6 +222,7 @@ export function buildYears(bars: Bar[]): YearData[] {
           break;
         }
       }
+      if (prevRef == null && m === 0) prevRef = prevDecClose.get(yr) ?? null; // cross-year Dec→Jan
       if (prevRef == null) prevRef = monthFirst[m];
       if (prevRef != null && prevRef !== 0) monthlyRet[m] = (close / prevRef - 1) * 100;
     }
