@@ -668,6 +668,11 @@ const LEX: Record<string, [string, string]> = {
   indTtmsq: ["TTM Squeeze", "挤压动能"],
   indAdx: ["ADX", "趋势强度 ADX"],
   indCvd: ["Est. CVD (approx)", "估算累计成交量差(近似)"],
+  // Indicators M2 (D04) — VWAP family + Volume Profile
+  indAvwap: ["Anchored VWAP", "锚定VWAP"],
+  indRvwap: ["Rolling VWAP (20)", "滚动VWAP (20)"],
+  indWvwap: ["Weekly VWAP", "周锚定VWAP"],
+  indVprofile: ["Volume Profile", "成交量分布"],
   dsGap: ["Gap", "跳空"],
   dsRvol: ["RVOL", "相对量"],
   dsRange: ["Range used", "振幅消耗"],

@@ -10,7 +10,7 @@
 // directly in TerminalShell/ChartPanel.
 
 export type IndKey = "ema" | "bb" | "vwap" | "vol" | "rsi" | "stochrsi" | "macd" | "gaps"
-  | "ichimoku" | "ribbon" | "supertrend" | "avwap" | "vprofile" | "volbox"
+  | "ichimoku" | "ribbon" | "supertrend" | "avwap" | "rvwap" | "wvwap" | "vprofile" | "volbox"
   | "rsistack" | "accum" | "_lab"
   // Day Trade suite
   | "svwap" | "orb" | "slevels" | "pivots" | "rvol" | "ttmsq" | "adx" | "cvd";
@@ -40,7 +40,7 @@ export interface IndDef {
 // canonical display/draw order — overlays first, then sub-pane indicators top→bottom
 export const IND_ORDER: IndKey[] = [
   "ema", "bb", "vwap", "vol", "gaps",
-  "ichimoku", "ribbon", "supertrend", "avwap", "vprofile", "volbox",
+  "ichimoku", "ribbon", "supertrend", "avwap", "rvwap", "wvwap", "vprofile", "volbox",
   // Day Trade suite overlays (price pane)
   "svwap", "orb", "slevels", "pivots",
   "rsi", "stochrsi", "macd", "rsistack", "accum",
@@ -332,22 +332,64 @@ plot(trend ? na : dnLine, "Down rail", color.new(#f0566b, 0), 2)`,
     key: "avwap", label: "Anchored VWAP", tag: "AVWAP", kind: "overlay",
     defaults: { anchor: 0, lookback: 252, col: "#e8b339", width: 1.4 },
     fields: [
-      // anchor: 0=swing_low, 1=swing_high, 2=max_history (number field as proxy for select)
-      { key: "anchor", label: "Anchor (0=swing low, 1=swing high, 2=full history)", type: "number", group: "inputs", min: 0, max: 2, step: 1 },
+      // anchor: 0=swing_low, 1=swing_high, 2=max_history, 3=vol_spike (number field as proxy for select).
+      // vol_spike anchors on the trailing max-volume bar — an EARNINGS PROXY (quarter's top-volume
+      // session), NOT a true earnings date.
+      { key: "anchor", label: "Anchor (0=swing low, 1=swing high, 2=full history, 3=vol-spike/earnings proxy)", type: "number", group: "inputs", min: 0, max: 3, step: 1 },
       { key: "lookback", label: "Lookback bars", type: "number", group: "inputs", min: 20, max: 2000, step: 1 },
       { key: "col", label: "Line color", type: "color", group: "style" },
       { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.5 },
     ],
     source: `//@version=6
 indicator("Anchored VWAP", overlay = true)
-// DISPLAY-TIER DESCRIPTIVE — cumulative Σ(TP×Vol)/Σ(Vol) from anchor bar
-// anchor 0=swing_low, 1=swing_high, 2=max_history (over lookback window)
+// DISPLAY-TIER DESCRIPTIVE — cumulative Σ(TP×Vol)/Σ(Vol) from anchor bar (TP=(H+L+C)/3)
+// anchor 0=swing_low, 1=swing_high, 2=max_history, 3=vol_spike (over lookback window)
+// vol_spike = trailing max-volume bar (ties → most recent): a Vol-spike anchor (earnings PROXY,
+// the quarter's top-volume session) — NOT a true earnings date.
 lookback = input.int(252, "Lookback bars")
-anchor   = input.int(0, "Anchor (0=low, 1=high, 2=history)")
+anchor   = input.int(0, "Anchor (0=low, 1=high, 2=history, 3=vol-spike/earnings proxy)")
 // implementation: locate anchor in lookback window, compute cumulative VWAP from there
 typical = (high + low + close) / 3
 // (platform-specific anchor logic omitted from Pine stub)
 plot(ta.cum(typical * volume) / ta.cum(volume), "AVWAP", color.new(#e8b339, 0), 1, plot.style_line, linestyle = plot.style_linebr, trackprice = false)`,
+  },
+
+  rvwap: {
+    key: "rvwap", label: "Rolling VWAP (20)", tag: "RVWAP", kind: "overlay",
+    defaults: { length: 20, col: "#4dd0c4", width: 1.3 },
+    fields: [
+      { key: "length", label: "Window (bars)", type: "number", group: "inputs", min: 2, max: 500, step: 1 },
+      { key: "col", label: "Line color", type: "color", group: "style" },
+      { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.1 },
+    ],
+    source: `//@version=6
+indicator("Rolling VWAP", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — trailing-window Σ(TP×Vol)/Σ(Vol), TP=(H+L+C)/3.
+// Daily-bar approximation — not intraday-true VWAP. Null until 'length' bars.
+length  = input.int(20, "Window (bars)")
+typical = (high + low + close) / 3
+plot(math.sum(typical * volume, length) / math.sum(volume, length), "RVWAP", color.new(#4dd0c4, 0))`,
+  },
+
+  wvwap: {
+    key: "wvwap", label: "Weekly VWAP", tag: "WVWAP", kind: "overlay",
+    defaults: { col: "#b57bff", width: 1.3 },
+    fields: [
+      { key: "col", label: "Line color", type: "color", group: "style" },
+      { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.1 },
+    ],
+    source: `//@version=6
+indicator("Weekly VWAP", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — VWAP anchored to each week's first session (resets weekly,
+// pandas W-FRI buckets), cumulative Σ(TP×Vol)/Σ(Vol), TP=(H+L+C)/3.
+// Daily-bar approximation — not intraday-true VWAP.
+typical = (high + low + close) / 3
+newWeek = weekofyear != weekofyear[1]
+var float cumTPV = na
+var float cumV   = na
+cumTPV := newWeek ? typical * volume : nz(cumTPV) + typical * volume
+cumV   := newWeek ? volume           : nz(cumV)   + volume
+plot(cumTPV / cumV, "WVWAP", color.new(#b57bff, 0))`,
   },
 
   vprofile: {
