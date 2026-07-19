@@ -62,6 +62,9 @@ export async function POST(req: Request) {
   const lane: "fast" | "pro" =
     body?.lane === "pro" ? "pro" : "fast";
 
+  const mode: "chat" | "research" =
+    body?.mode === "research" ? "research" : "chat";
+
   const thread_id =
     typeof body?.thread_id === "string" ? body.thread_id : undefined;
 
@@ -84,7 +87,7 @@ export async function POST(req: Request) {
   if (typeof body?.context?.page === "string")
     context.page = body.context.page.slice(0, 64);
 
-  const payload: Record<string, unknown> = { message, lane };
+  const payload: Record<string, unknown> = { message, lane, mode };
   if (thread_id) payload.thread_id = thread_id;
   if (history && history.length > 0) payload.history = history;
   if (Object.keys(context).length > 0) payload.context = context;

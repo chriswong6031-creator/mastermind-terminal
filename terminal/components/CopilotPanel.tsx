@@ -11,7 +11,7 @@ type QuotaInfo = { lane: "fast" | "pro"; remaining: number; limit: number; perio
 
 type MetaEvent = { type: "meta"; lane: "fast" | "pro"; model: string; thread_id: string | null; quota: QuotaInfo };
 
-type Step = { tool: string; args: any };
+type Step = { tool: string; args: any; cmd?: string };
 type Msg = { role: "user" | "assistant"; content: string; steps?: Step[]; citations?: Citation[] };
 
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY";
@@ -22,8 +22,8 @@ function getLaneLabel(lane: "fast" | "pro"): string {
   return lane === "pro" ? "PRO" : "FAST";
 }
 
-export default function CopilotPanel({ open, symbol, row, tf, indicators, onClose, onAnnotate }:
-  { open: boolean; symbol: string; row: Row | undefined; tf?: string; indicators?: string[]; onClose: () => void; onAnnotate?: (symbol: string, annotations: any[]) => void }) {
+export default function CopilotPanel({ open, symbol, row, tf, indicators, onClose, onAnnotate, onSetSymbol, onSetTimeframe, onToggleIndicator, onRunDetection }:
+  { open: boolean; symbol: string; row: Row | undefined; tf?: string; indicators?: string[]; onClose: () => void; onAnnotate?: (symbol: string, annotations: any[]) => void; onSetSymbol?: (sym: string) => void; onSetTimeframe?: (tf: string) => void; onToggleIndicator?: (indicator: string, on: boolean) => void; onRunDetection?: (kind: string) => void }) {
   const t = useT();
   const { lang } = useLang();
   const zh = lang === "zh";
@@ -46,6 +46,10 @@ export default function CopilotPanel({ open, symbol, row, tf, indicators, onClos
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
   // error code for special-cased renders
   const [errorCode, setErrorCode] = useState<"unauthenticated" | "quota_exhausted" | null>(null);
+  // Deep Research mode toggle (Pro only — derived from quota.limit > 0 after first meta)
+  const [researchMode, setResearchMode] = useState(false);
+  // whether the user is pro-eligible (quota.limit > 0); starts false until first meta event
+  const [isProEligible, setIsProEligible] = useState(false);
 
   const bodyRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -69,6 +73,18 @@ export default function CopilotPanel({ open, symbol, row, tf, indicators, onClos
 
   // sticky-bottom autoscroll
   useEffect(() => { const el = bodyRef.current; if (!el) return; if (el.scrollHeight - el.scrollTop - el.clientHeight < 60) el.scrollTop = el.scrollHeight; }, [msgs, busy]);
+
+  // Pro-eligibility for the Deep Research toggle — probe quotas when the panel opens
+  // (parity with the dashboard, which gates the toggle on quotas.pro.limit>0).
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch("/api/brain/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled && d?.quotas?.pro?.limit > 0) setIsProEligible(true); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [open]);
 
   function switchLane(next: "fast" | "pro") {
     setLane(next);
@@ -99,12 +115,14 @@ export default function CopilotPanel({ open, symbol, row, tf, indicators, onClos
     const statelessHistory = msgs.map((m) => ({ role: m.role, content: m.content }));
 
     try {
+      const effectiveLane = researchMode ? "pro" : lane;
       const r = await fetch("/api/copilot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: txt,
-          lane,
+          lane: effectiveLane,
+          mode: researchMode ? "research" : "chat",
           thread_id: threadId ?? undefined,
           history: threadId ? undefined : statelessHistory, // only send when no thread yet
           context: { symbol, page: "terminal" },
@@ -142,13 +160,38 @@ export default function CopilotPanel({ open, symbol, row, tf, indicators, onClos
           if (j.type === "meta") {
             const meta: MetaEvent = j;
             if (meta.thread_id) setThreadId(meta.thread_id);
-            if (meta.quota) setQuota(meta.quota);
+            if (meta.quota) {
+              setQuota(meta.quota);
+              // Fallback reveal: a completed PRO-lane turn proves eligibility even if the
+              // /api/brain/me probe failed. Do NOT flip on a fast-lane limit (every user has one).
+              if (meta.quota.limit > 0 && meta.quota.lane === "pro") setIsProEligible(true);
+            }
           } else if (j.type === "delta") {
             apply((l) => ({ ...l, content: l.content + j.text }));
           } else if (j.type === "tool") {
             apply((l) => ({ ...l, steps: [...(l.steps || []), { tool: j.name, args: {} }] }));
           } else if (j.type === "annotate") {
             onAnnotate?.(j.symbol || symbol, j.annotations || []);
+          } else if (j.type === "command") {
+            // FLAT single-command contract (mirrors 'annotate'): the event itself carries
+            // action + the field(s) at top level — {type:'command', action:'set_symbol', symbol:'NVDA'}.
+            const action = typeof j.action === "string" ? j.action : "";
+            if (action === "set_symbol" && typeof j.symbol === "string") {
+              onSetSymbol?.(j.symbol);
+              apply((l) => ({ ...l, steps: [...(l.steps || []), { tool: "set_symbol", args: { symbol: j.symbol }, cmd: t("cmdSetSymbol").replace("{sym}", j.symbol) }] }));
+            } else if (action === "set_timeframe" && typeof j.tf === "string") {
+              onSetTimeframe?.(j.tf);
+              apply((l) => ({ ...l, steps: [...(l.steps || []), { tool: "set_timeframe", args: { tf: j.tf }, cmd: t("cmdSetTimeframe").replace("{tf}", j.tf) }] }));
+            } else if (action === "toggle_indicator" && typeof j.indicator === "string") {
+              const on = j.on === true;   // explicit only — a missing flag never silently adds
+              onToggleIndicator?.(j.indicator, on);
+              const label = on ? t("cmdToggleIndicatorOn") : t("cmdToggleIndicatorOff");
+              apply((l) => ({ ...l, steps: [...(l.steps || []), { tool: "toggle_indicator", args: { indicator: j.indicator, on }, cmd: label.replace("{ind}", j.indicator) }] }));
+            } else if (action === "run_detection" && typeof j.kind === "string") {
+              onRunDetection?.(j.kind);
+              apply((l) => ({ ...l, steps: [...(l.steps || []), { tool: "run_detection", args: { kind: j.kind }, cmd: t("cmdRunDetection").replace("{kind}", j.kind) }] }));
+            }
+            // unknown / malformed command actions are ignored gracefully
           } else if (j.type === "done") {
             if (j.quota) setQuota(j.quota);
             if (j.citations && Array.isArray(j.citations) && j.citations.length > 0) {
@@ -174,7 +217,8 @@ export default function CopilotPanel({ open, symbol, row, tf, indicators, onClos
   ];
 
   // Header label: "MASTERMIND AI · FAST" / "· PRO"
-  const headerLabel = `MASTERMIND AI · ${getLaneLabel(lane)}`;
+  // Research mode forces the Pro lane for the turn — reflect that in the header.
+  const headerLabel = `MASTERMIND AI · ${getLaneLabel(researchMode ? "pro" : lane)}`;
   const quotaStr = quota ? t("quotaLeft").replace("{n}", String(quota.remaining)) : "";
 
   return (
@@ -203,6 +247,13 @@ export default function CopilotPanel({ open, symbol, row, tf, indicators, onClos
           className={`lane-pill${lane === "pro" ? " active" : ""}`}
           onClick={() => switchLane("pro")}
         >{t("lanePro")}</button>
+        {isProEligible && (
+          <button
+            className={`lane-pill research-pill${researchMode ? " active" : ""}`}
+            title={t("deepResearchTip")}
+            onClick={() => setResearchMode((v) => !v)}
+          >🔬 {t("deepResearch")}</button>
+        )}
       </div>
 
       <div className="cbody" ref={bodyRef}>
@@ -235,14 +286,14 @@ export default function CopilotPanel({ open, symbol, row, tf, indicators, onClos
           <div key={i} className={`cmsg ${m.role}`}>
             {m.steps && m.steps.length > 0 && (
               <div className="steps">{m.steps.map((s, j) => (
-                <span key={j} className="step">
+                <span key={j} className={`step${s.cmd ? " step-cmd" : ""}`}>
                   <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10" /></svg>
-                  {s.tool}{s.args?.symbol ? ` · ${s.args.symbol}` : ""}
+                  {s.cmd ?? (s.tool + (s.args?.symbol ? ` · ${s.args.symbol}` : ""))}
                 </span>
               ))}</div>
             )}
             {m.role === "assistant"
-              ? (m.content ? <div className="bub md" dangerouslySetInnerHTML={{ __html: mdToHtml(m.content) }} /> : <div className="bub typing">{t("analyzing")}<span>…</span></div>)
+              ? (m.content ? <div className="bub md" dangerouslySetInnerHTML={{ __html: mdToHtml(m.content) }} /> : <div className="bub typing">{researchMode ? t("researching") : t("analyzing")}<span>…</span></div>)
               : <div className="bub">{m.content}</div>}
             {/* Citations rendered as small links */}
             {m.role === "assistant" && m.citations && m.citations.length > 0 && (
@@ -261,7 +312,7 @@ export default function CopilotPanel({ open, symbol, row, tf, indicators, onClos
         ))}
 
         {busy && msgs[msgs.length - 1]?.role !== "assistant" && (
-          <div className="cmsg assistant"><div className="bub typing">{t("analyzing")}<span>…</span></div></div>
+          <div className="cmsg assistant"><div className="bub typing">{researchMode ? t("researching") : t("analyzing")}<span>…</span></div></div>
         )}
         {msgs.length === 0 && !errorCode && (
           <div className="suggest">{suggestions.map((s, i) => <button key={i} onClick={() => send(s)}>{s}</button>)}</div>
