@@ -1,3 +1,6 @@
+// DEPRECATED: the Terminal UI now uses the Mastermind Brain widget via /api/brain/* — this route
+// is retained for rollback and is no longer called by the shipped UI.
+//
 // Brain-gateway proxy — all AI logic lives in the gateway (FastAPI, VPS).
 // This route validates the user session then forwards the request to the gateway,
 // piping the SSE body straight back to the browser.
