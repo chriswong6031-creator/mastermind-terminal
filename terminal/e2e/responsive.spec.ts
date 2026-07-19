@@ -391,6 +391,64 @@ test("Prophet fills its Options workspace at every supported width", async ({ pa
   expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
 });
 
+test("Levels keeps the gamma map and named-level rail reachable at every supported width", async ({ page }, testInfo) => {
+  await page.goto("/options?tab=levels");
+
+  const levelsTab = page.locator("#wtab-levels");
+  await expect(levelsTab).toHaveAttribute("aria-selected", "true");
+  await expect(levelsTab).toBeInViewport();
+  const board = page.locator(".levels-board");
+  const column = page.locator(".levels-column");
+  const rail = page.locator(".levels-rail");
+  await expect(board).toBeVisible({ timeout: 15_000 });
+  await expect(column).toBeVisible();
+  await expect(rail).toBeVisible();
+  await expect(board).toContainText("Positioning, not prophecy");
+
+  const geometry = await board.evaluate((root) => {
+    const columnEl = root.querySelector<HTMLElement>(".levels-column");
+    const railEl = root.querySelector<HTMLElement>(".levels-rail");
+    if (!columnEl || !railEl) throw new Error("Levels layout panes are unavailable");
+    const c = columnEl.getBoundingClientRect();
+    const r = railEl.getBoundingClientRect();
+    return {
+      boardClientWidth: root.clientWidth,
+      boardScrollWidth: root.scrollWidth,
+      boardClientHeight: root.clientHeight,
+      boardScrollHeight: root.scrollHeight,
+      column: { left: c.left, top: c.top, right: c.right, bottom: c.bottom },
+      rail: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
+    };
+  });
+
+  expect(geometry.boardScrollWidth).toBeLessThanOrEqual(geometry.boardClientWidth + 1);
+  if (testInfo.project.name === "mobile") {
+    expect(geometry.rail.top).toBeGreaterThanOrEqual(geometry.column.bottom - 1);
+    await rail.scrollIntoViewIfNeeded();
+  } else {
+    expect(Math.abs(geometry.rail.top - geometry.column.top)).toBeLessThanOrEqual(1);
+    expect(geometry.rail.left).toBeGreaterThanOrEqual(geometry.column.right - 1);
+  }
+
+  const keystone = rail.getByRole("button").filter({ hasText: "Keystone" });
+  await expect(keystone).toBeVisible();
+  await expect(keystone).toContainText("775");
+  await keystone.click();
+  await expect(rail).toContainText("The largest gamma concentration");
+
+  const viewportWidth = page.viewportSize()?.width ?? 1440;
+  const pageWidth = await page.evaluate(() => ({
+    client: document.documentElement.clientWidth,
+    scroll: document.documentElement.scrollWidth,
+  }));
+  expect(pageWidth.client).toBe(viewportWidth);
+  expect(pageWidth.scroll).toBeLessThanOrEqual(viewportWidth);
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-levels-board.png`),
+    fullPage: false,
+  });
+});
+
 test("Intraday Surface separates session, observed frames, and candle interval at every supported width", async ({ page }, testInfo) => {
   const candleResponsePromise = page.waitForResponse((response) => {
     const url = new URL(response.url());

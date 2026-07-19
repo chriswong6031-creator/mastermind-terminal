@@ -22,6 +22,7 @@ const TICKER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ticker_f
 const DTE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "dte_fixture.json");
 const VOL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "vol_fixture.json");
 const GEX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gex_fixture.json");
+const LEVELS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "levels_fixture.json");
 const AGG_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "agg_fixture.json");
 const QUAD_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "quad_fixture.json");
 const GRADES_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "grades_fixture.json");
@@ -98,6 +99,10 @@ export function isValidF(f: string): boolean {
   if (f.startsWith("ticker:")) return isValidRoot(f.slice(7));
   if (f.startsWith("vol:")) return isValidRoot(f.slice(4));
   if (f.startsWith("gex:")) return isValidRoot(f.slice(4));
+  // Named gamma-level weather map. The producer publishes one levels.v1 document
+  // per root at levels/{ROOT}.json; keep the root validator on this path just as
+  // strictly as the neighboring gex/vol planes.
+  if (f.startsWith("levels:")) return isValidRoot(f.slice(7));
   // Aggregate greek trend (Volland parity W2) — options_hub.aggtrend/v1, one row per
   // session back to 2017. Prefix is disjoint from every `gex*` form above.
   if (f.startsWith("agg:")) return isValidRoot(f.slice(4));
@@ -175,6 +180,7 @@ export function backendPath(f: string): string {
     return `/api/hub/gex_history/${root}/${date}`;
   }
   if (f.startsWith("gex:")) return `/api/hub/gex/${f.slice(4)}`;
+  if (f.startsWith("levels:")) return `/api/hub/levels/${f.slice(7)}`;
   if (f.startsWith("agg:")) return `/api/hub/aggtrend/${f.slice(4)}`;
   if (f === "quad") return "/api/hub/quad";
   if (f.startsWith("grades:")) return `/api/hub/level_grades/${f.slice(7)}`;
@@ -240,6 +246,7 @@ export function r2Key(f: string): string {
     return `options_hub/gex_history/${root}/${date}.json`;
   }
   if (f.startsWith("gex:")) return `options_hub/gex/${f.slice(4)}.json`;
+  if (f.startsWith("levels:")) return `levels/${f.slice(7)}.json`;
   if (f.startsWith("agg:")) return `options_hub/aggtrend/${f.slice(4)}.json`;
   if (f === "quad") return "options_hub/quad.json";
   if (f.startsWith("grades:")) return `options_hub/level_grades/${f.slice(7)}.json`;
@@ -443,6 +450,19 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     const raw = await fs.readFile(GEX_FIXTURE_FILE, "utf8");
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     return all[root] ?? {};
+  }
+  // levels.v1 fixtures are keyed by root so fixture mode exercises the same
+  // identity boundary as the live per-root R2 objects. Never substitute SPY for
+  // an unknown root: a plausible board under the wrong ticker is worse than empty.
+  if (f.startsWith("levels:")) {
+    const root = f.slice(7).toUpperCase();
+    try {
+      const raw = await fs.readFile(LEVELS_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? {};
+    } catch {
+      return {};
+    }
   }
   if (f === "quad") {
     try {
