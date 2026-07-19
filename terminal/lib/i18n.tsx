@@ -215,6 +215,15 @@ const LEX: Record<string, [string, string]> = {
   sugMarkSR: ["Mark the key support & resistance on the chart", "在图表上标出关键支撑与阻力"],
   sugBacktest: ["How has this signal backtested?", "这个信号的回测表现如何？"],
   sugFindBuys: ["Find BUY setups in an uptrend regime", "在上升趋势中寻找买入机会"],
+  // copilot gateway extras
+  newChat: ["New chat", "新对话"],
+  laneFast: ["Fast", "快速"],
+  lanePro: ["Pro", "专业"],
+  quotaLeft: ["{n} left", "剩余 {n}"],
+  signInPrompt: ["Sign in to use the AI copilot.", "请登录后使用 AI 助手。"],
+  upgradePrompt: ["Quota reached — upgrade for more.", "用量已达上限，请升级套餐。"],
+  upgradeLinkLabel: ["View plans", "查看套餐"],
+  citationsLabel: ["Sources", "来源"],
   // error boundary
   errTitle: ["Something went wrong", "出现错误"],
   errBody: ["An unexpected error occurred. Try reloading — if it persists, please refresh the page.", "发生了意外错误。请尝试重试，若问题持续请刷新页面。"],
