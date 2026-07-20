@@ -1387,10 +1387,11 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   .m-ic{min-width:40px;min-height:40px}
   /* floating fullscreen button */
   .chart-fs-float{min-width:40px;min-height:40px}
-  /* legend icon buttons in chart overlay (lg-collapse chip + hidden-row eye set their own
-     compact sizes in the legend mobile block further down — TradingView-compact by design) */
-  .lg-ic{min-width:40px;min-height:40px}
-  /* pane ops icons */
+  /* NOTE: .lg-ic legend icons are deliberately EXCLUDED from the 40px floor — flooring them
+     inflates 18px glyphs out of the 28px legend row (mid-pane blowup). The Static Legend keeps
+     ≥40px effective tap targets via a ::before{inset:-8px} hit area on each 24×24 button
+     (legend mobile block further down). */
+  /* pane ops icons (top-right strip — positioned clear of the legend, keeps its 40px floor) */
   .po-ic{min-width:40px;min-height:40px}
   /* drawer nav links */
   .m-nav a,.m-nav button{min-height:44px}
@@ -1488,15 +1489,23 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 /* per-pane top-left legend / titles */
 .lg-block{position:absolute;display:flex;flex-direction:column;align-items:flex-start;gap:2px}
 .lg-block:first-child{padding-top:11px}
-.lg-row{pointer-events:auto;display:inline-flex;align-items:center;gap:6px;height:18px;padding:1px 4px;border-radius:3px;max-width:46ch}
-.lg-name{color:var(--text);font-size:12px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px rgba(0,0,0,.55)}
+/* Static Legend: one box, two states, zero movement. The row is a single scrimmed box whose
+   left anchor / height / radius never change when its menu appears — the icons materialize
+   rightward inside the SAME box. Rest scrim rescues legibility over bright chart paint; the 1px
+   transparent border at rest reserves geometry so the armed border can't shift the box. */
+.lg-row{pointer-events:auto;display:inline-flex;align-items:center;gap:6px;height:18px;padding:1px 7px;border-radius:5px;max-width:46ch;background:rgba(6,9,14,.38);border:1px solid transparent;transition:background var(--t),border-color var(--t)}
+.lg-name{flex:0 1 auto;min-width:0;color:var(--text);font-size:12px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px rgba(0,0,0,.55)}
 .lg-row.is-hidden .lg-name{color:var(--text-dim);font-weight:500}
-.lg-menu{display:inline-flex;align-items:center;gap:2px;border-radius:9px;padding:3px;border:1px solid transparent;transition:background var(--t),border-color var(--t),box-shadow var(--t)}
-/* hover-reveal rules live in @media (hover:hover) below so they never fire on touch */
-.lg-ic{display:none;align-items:center;justify-content:center;width:26px;height:23px;border-radius:6px;color:var(--text-2);cursor:pointer;position:relative;background:none;border:none;padding:0;transition:background var(--t),color var(--t)}
+/* menu is a flush inline continuation of the same box — no chrome of its own; icons never shrink */
+.lg-menu{display:inline-flex;align-items:center;gap:2px;flex:none}
+/* hover-reveal (desktop) / .is-armed reveal (touch) rules live below so they never fire on touch */
+.lg-ic{display:none;align-items:center;justify-content:center;width:26px;height:23px;border-radius:6px;color:var(--text-2);cursor:pointer;position:relative;background:none;border:none;padding:0;flex:none;transition:background var(--t),color var(--t)}
 .lg-row.is-hidden .lg-ic.eye{display:inline-flex;color:var(--text-dim)}
-.lg-collapse{pointer-events:auto;display:inline-flex;align-items:center;justify-content:center;width:22px;height:16px;margin-top:1px;border-radius:3px;color:var(--text-2);cursor:pointer;background:rgba(0,0,0,.35);border:none}
-.lg-collapse:hover{color:var(--text);background:rgba(0,0,0,.6)}
+/* armed = same box, deepened scrim + hairline border; geometry (left/height/radius) unchanged */
+.lg-row.is-armed{background:rgba(6,9,14,.88);border-color:rgba(255,255,255,.08)}
+.lg-row.is-armed .lg-ic{display:inline-flex}
+.lg-collapse{pointer-events:auto;display:inline-flex;align-items:center;justify-content:center;width:22px;height:16px;margin-top:1px;border-radius:5px;color:var(--text-2);cursor:pointer;background:rgba(6,9,14,.38);border:1px solid transparent}
+.lg-collapse:hover{color:var(--text);background:rgba(6,9,14,.72)}
 /* per-pane top-right ops menu */
 .pane-ops{position:absolute;pointer-events:auto;display:inline-flex;gap:1px;padding:2px;background:rgba(13,15,19,.9);border:1px solid var(--line-3);border-radius:var(--r-md);box-shadow:0 6px 18px -8px rgba(0,0,0,.7)}
 .po-ic{display:inline-flex;align-items:center;justify-content:center;width:24px;height:22px;border-radius:var(--r);color:var(--text-2);cursor:pointer;position:relative;background:none;border:none;padding:0}
@@ -1516,8 +1525,9 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .cmp-set-opt:first-child{border-left:none}
 .cmp-set-opt.on{color:var(--text);background:var(--brand)}
 .cmp-set-opt:hover:not(.on){background:var(--panel-3);color:var(--text)}
-/* "More" dropdown */
-.lg-more{position:fixed;z-index:80;min-width:188px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid var(--pop-edge);border-radius:var(--pop-r);padding:5px;box-shadow:var(--pop-shadow),var(--pop-sheen);pointer-events:auto}
+/* "More" dropdown — same black object as the armed row, extending downward (deep scrim family,
+   hairline border, ≤8px radius); anchored flush under the row's left edge, viewport-clamped in JS */
+.lg-more{position:fixed;z-index:80;min-width:188px;background:rgba(6,9,14,.94);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:5px;box-shadow:var(--pop-shadow);pointer-events:auto}
 .lg-more-row{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:var(--r);font-size:12.5px;color:var(--text-2);cursor:pointer;white-space:nowrap}
 /* hover reveals in @media (hover:hover) */
 .lg-more-row.dis{opacity:.38;pointer-events:none}
@@ -1529,24 +1539,21 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .po-ic svg,.po-ic .lgsvg{width:15px;height:15px}
 /* B5 count chip on the collapse button */
 .lg-cnt{font:600 11.5px/1 var(--font-num);color:var(--text-2);padding:0 3px}
-/* B5 tap-to-activate floating pill (coarse) */
-/* B5 coarse action pill: the ACTIVE ROW itself becomes the TradingView-style pill (title + big
-   buttons inline on a dark rounded rect) — buttons must override the base .lg-ic{display:none}. */
-.lg-pill{display:inline-flex;align-items:center;gap:2px}
-.lg-row.is-live{height:auto;background:rgba(8,10,14,.95);border:1px solid var(--pop-edge);border-radius:11px;padding:3px 5px 3px 10px;box-shadow:var(--pop-shadow);position:relative;z-index:5;opacity:1}
-.lg-row.is-live .lg-name{color:var(--text)}
-.lg-pill .lgsvg,.lg-pill svg{width:18px;height:18px}
-.lg-pill .lg-ic{display:inline-flex;width:42px;height:38px;border-radius:8px}
-.lg-pill .lg-ic:active{background:rgba(255,255,255,.12)}
+/* Static Legend armed strip (touch): the icons appear INSIDE the same row box — no separate pill,
+   no geometry change. When the armed bar would exceed the viewport the NAME ellipsizes (base
+   flex:0 1 auto + min-width:0); icons stay full-size. Full bar clamped to the viewport width. */
+.lg-row.is-armed{max-width:calc(100vw - 16px)}
+/* :active feedback on touch icon presses (no hover on these devices) */
+.lg-ic:active{background:rgba(255,255,255,.12)}
 /* B5: hover-only affordances gated so they never half-fire on touch */
 @media (hover:hover){
-  .lg-row:hover .lg-menu{background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border-color:var(--pop-edge);box-shadow:0 10px 26px -10px rgba(0,0,0,.72)}
+  .lg-row:hover{background:rgba(6,9,14,.88);border-color:rgba(255,255,255,.08)}
   .lg-row:hover .lg-ic{display:inline-flex}
   .lg-ic:hover{color:var(--text);background:rgba(255,255,255,.11)}
   .lg-row.is-hidden .lg-ic.eye:hover{color:var(--text-2)}
   .po-ic:hover{color:var(--text);background:var(--panel-2)}
   .lg-ic[data-tip]:hover::after,.po-ic[data-tip]:hover::after{opacity:1;transition-delay:.5s}
-  .lg-more-row:hover{background:var(--panel-2);color:var(--text)}
+  .lg-more-row:hover{background:rgba(255,255,255,.06);color:var(--text)}
   .lg-more-row.danger:hover{color:var(--sell)}
 }
 
@@ -1573,17 +1580,28 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 @media (max-width:860px){
   /* B6 typography; C2: tight ellipsis cap so long names never obstruct the chart */
   .lg-name{font-size:13px;max-width:150px}
-  .lg-row{height:24px;gap:8px}
+  /* Static Legend: fixed 28px visual height on mobile — child sizing NEVER dictates row height,
+     so the box is identical at rest and armed (no vertical growth, no mid-pane float) */
+  .lg-row{height:28px;gap:6px}
+  .lg-row.is-armed{gap:2px}
   .lg-block{gap:3px}
   /* C3: hidden indicators read as muted — grey name (base rule) + whole-row fade */
   .lg-row.is-hidden{opacity:.66}
-  .lg-row.is-live{height:auto}
-  /* C1: the persistent crossed-eye on hidden rows is a real touch target (fits the 24px row;
-     min-* zeroed so the generic 40px .lg-ic floor doesn't inflate it out of the row) */
-  .lg-row.is-hidden .lg-ic.eye{width:36px;height:24px;min-width:0;min-height:0}
-  /* B5: count chip — the collapse control becomes a tappable "⌄ N" pill */
-  .lg-collapse{width:auto;min-width:34px;height:28px;padding:0 10px;gap:5px;border-radius:14px;background:rgba(0,0,0,.5)}
-  /* B5: pane-ops sizing on coarse — only restore affordance shown */
+  /* Touch targets without blowup: icons render 24×24 visual inside the 28px bar; an invisible
+     ::before hit area (inset:-8px on the position:relative button) restores a ≥40px tap target.
+     The ::before must NOT clobber the [data-tip]::after tooltip — different pseudo-elements, and
+     tooltips are suppressed on touch anyway (they only reveal under @media hover:hover). */
+  .lg-ic{width:24px;height:24px;min-width:0;min-height:0}
+  .lg-ic::before{content:"";position:absolute;inset:-8px}
+  .lg-ic svg,.lg-ic .lgsvg{width:18px;height:18px}
+  /* C1: the persistent crossed-eye on hidden rows fits the 28px row (min-* zeroed so the generic
+     40px .lg-ic floor — now removed for .lg-ic — can't inflate it out of the row) */
+  .lg-row.is-hidden .lg-ic.eye{width:24px;height:24px;min-width:0;min-height:0}
+  /* B5: count chip — the collapse control is a tappable "⌄ N" pill matching the scrim family;
+     28px box with its own expanded hit area */
+  .lg-collapse{width:auto;min-width:28px;height:28px;padding:0 9px;gap:5px;border-radius:6px;background:rgba(6,9,14,.5)}
+  .lg-collapse::before{content:"";position:absolute;inset:-6px}
+  /* B5: pane-ops sizing on coarse — only restore affordance shown (keeps its own 40px floor) */
   .po-ic{width:40px;height:36px}
 }
 
