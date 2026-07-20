@@ -21,8 +21,14 @@ export default function Tracker() {
   const maxScroll = useRef<number>(0);
   const started = useRef<boolean>(false);
 
+  // Embedded chart widgets (/embed/*) are iframed onto external dossier pages — they are companion
+  // widgets, not tracked Terminal pages. Skip ALL analytics there so iframe loads never emit
+  // pageviews/fingerprints. (Guard both effects; hooks still run unconditionally above.)
+  const isEmbed = pathname.startsWith("/embed");
+
   // One-time setup: fingerprint + global listeners.
   useEffect(() => {
+    if (isEmbed) return;
     const compute = () => { try { setFingerprint(deviceFingerprint()); } catch {} };
     const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: object) => void }).requestIdleCallback;
     if (ric) ric(compute, { timeout: 2000 }); else setTimeout(compute, 300);
@@ -75,6 +81,7 @@ export default function Tracker() {
 
   // Pageview + route changes (navigation order + dwell). Fires on first mount and each pathname change.
   useEffect(() => {
+    if (isEmbed) return;
     const path = pathname + (typeof location !== "undefined" ? location.search : "");
     if (!started.current) {
       started.current = true;
