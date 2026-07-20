@@ -167,6 +167,12 @@ export default function SearchModal({
     if (open) setSel(defaultSel);
   }, [open, defaultSel, showHistory]);
 
+  // M1: self-dismiss the AuthSheet once sign-in lands. On success AuthSheet fires router.refresh(),
+  // which re-runs the server component and delivers a real `email` — but a returning (already
+  // provisioned) user gets no navigation, so nothing else closes the sheet: it would sit stuck on
+  // its busy state over the now-signed-in hub. Close it the moment `signedIn` flips true.
+  useEffect(() => { if (signedIn) setAuthMode(null); }, [signedIn]);
+
   if (!open) return null;
 
   const added = compare.filter((c) => c !== active);
@@ -313,6 +319,7 @@ export default function SearchModal({
               : <button
                   className={`add${inWl ? " added" : ""}`}
                   title={inWl ? t("inWatchlist") : t("addToWatchlist")}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => { e.stopPropagation(); handleAdd(s, (e.currentTarget as HTMLElement).closest(".r") as HTMLElement | null); }}>
                   {inWl
                     ? <svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg>
@@ -328,6 +335,7 @@ export default function SearchModal({
               const has = l.symbols.some((x) => x.symbol === s);
               return (
                 <button key={l.name} className={`s-pick-row${has ? " has" : ""}`}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => { if (!has) { onAddToList?.(s, l.name); flashAdded(s, l.name); } setPicker(null); }}>
                   <span className="s-pick-nm">{l.name}</span>
                   <span className="s-pick-ct">{l.count}</span>
@@ -340,10 +348,10 @@ export default function SearchModal({
                 <input ref={pickerNewRef} value={pickerNewName} placeholder={t("newListPlaceholder")}
                   onChange={(e) => setPickerNewName(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitPickerCreate(s); } else if (e.key === "Escape") { e.preventDefault(); setPickerNew(false); setPickerNewName(""); } }} />
-                <button className="s-pick-ok" title={t("saveListName")} onClick={() => commitPickerCreate(s)}><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></button>
+                <button className="s-pick-ok" title={t("saveListName")} onMouseDown={(e) => { e.preventDefault(); commitPickerCreate(s); }}><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></button>
               </div>
             ) : (
-              <button className="s-pick-row s-pick-add" onClick={() => setPickerNew(true)}>
+              <button className="s-pick-row s-pick-add" onMouseDown={(e) => e.preventDefault()} onClick={() => setPickerNew(true)}>
                 <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>{t("newListInline")}
               </button>
             )}
@@ -413,7 +421,10 @@ export default function SearchModal({
             HOME: watchlist chips + "+ New list". SEARCH: category-filter tabs. */}
         {!cmp && (
           isHome ? (
-            <div className="s-chips s-rail" role="tablist">
+            // n1: the HOME rail is a watchlist SWITCHER (buttons navigate between lists), not a
+            // tabset selecting panels — so no role="tablist"/role="tab" here (that would be a lie to
+            // AT). The SEARCH category filters below ARE tabs and keep their tablist/tab roles.
+            <div className="s-chips s-rail">
               {lists.map((l) => (
                 <button key={l.name} className={`s-lchip${l.name === activeList ? " on" : ""}`}
                   onClick={() => onSwitchList?.(l.name)}>
@@ -442,6 +453,7 @@ export default function SearchModal({
                   <button key={id} className={`s-chip${id === cat ? " on" : ""}`} disabled={!enabled}
                     role="tab" aria-selected={id === cat}
                     style={enabled ? undefined : { opacity: 0.35, cursor: "default" }}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => { if (enabled) { setCat(id); setSel(0); } }}>{t(key)}</button>
                 );
               })}
@@ -459,8 +471,8 @@ export default function SearchModal({
                   <div className="s-cta-title">{t("ctaTitle")}</div>
                   <div className="s-cta-body">{t("ctaBody")}</div>
                 </div>
-                <button className="s-cta-primary" onClick={() => setAuthMode("signup")}>{t("ctaSignup")}</button>
-                <button className="s-cta-link" onClick={() => setAuthMode("signin")}>{t("ctaSignin")}</button>
+                <button className="s-cta-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => setAuthMode("signup")}>{t("ctaSignup")}</button>
+                <button className="s-cta-link" onMouseDown={(e) => e.preventDefault()} onClick={() => setAuthMode("signin")}>{t("ctaSignin")}</button>
               </div>
             )}
             {/* Eyebrow: active list name + count (quiet TV register). */}

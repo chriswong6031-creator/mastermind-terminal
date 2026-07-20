@@ -463,10 +463,40 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => {
     const saved = load("mm.wls", null);
     if (saved && saved.lists && typeof saved.lists === "object" && Object.keys(saved.lists).length) {
-      // TRAP 1 (mount side): when signed in, the SERVER's Default is authoritative — a stale
-      // guest mm.wls must NOT shadow it (that's exactly the "STALEGUEST" hazard). Force Default to
-      // the fresh `symbols` prop, but KEEP every other saved list so guest-built lists survive.
-      const restored = loggedIn ? { ...saved.lists, Default: symbols } : saved.lists;
+      // TRAP 1 (mount side): when signed in, RECONCILE the local Default against the server's
+      // Default membership — do NOT wholesale-replace it. The server row only carries add/remove
+      // (it knows MEMBERSHIP, not ORDER), and the /api/watchlist adds are fire-and-forget (they can
+      // fail silently). A wholesale clobber would therefore destroy the user's local reorder AND
+      // drop any local-only row whose add never reached the server. So we merge, preserving local
+      // order and keeping local-only rows as user data:
+      //   1. start from the local saved Default order;
+      //   2. keep local rows that also exist on the server (local order + local section preserved);
+      //   3. KEEP local-only rows too (offline/failed adds are user data — never dropped) and HEAL
+      //      each by firing the idempotent POST {action:"add"} (fire-and-forget, matching the sync
+      //      idiom at addSymbol/addToList) so the server catches up;
+      //   4. APPEND server rows missing locally (adds from other devices) at the end, with their
+      //      server section.
+      let restored: Record<string, { symbol: string; section: string }[]>;
+      if (loggedIn) {
+        const localDefault: { symbol: string; section: string }[] = Array.isArray(saved.lists.Default) ? saved.lists.Default : [];
+        const serverSyms = new Set(symbols.map((s) => s.symbol));
+        const localSyms = new Set(localDefault.map((r) => r.symbol));
+        // 2+3: keep every local row (present-on-server or local-only), local order + section intact.
+        const reconciledDefault = [...localDefault];
+        // heal local-only rows: fire the idempotent add so the server converges (fire-and-forget).
+        for (const r of localDefault) {
+          if (!serverSyms.has(r.symbol)) {
+            fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: r.symbol, section: r.section }) }).catch(() => {});
+          }
+        }
+        // 4: append server rows missing locally (other-device adds), with their server section.
+        for (const s of symbols) {
+          if (!localSyms.has(s.symbol)) reconciledDefault.push(s);
+        }
+        restored = { ...saved.lists, Default: reconciledDefault };
+      } else {
+        restored = saved.lists;
+      }
       setLists(restored);
       setActiveList(saved.active && restored[saved.active] ? saved.active : (loggedIn ? "Default" : Object.keys(restored)[0]));
     }

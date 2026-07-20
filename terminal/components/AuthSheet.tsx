@@ -34,6 +34,15 @@ export default function AuthSheet({
   //  mount carries the right initial mode. In-sheet toggling uses switchMode.)
   useEffect(() => { const id = setTimeout(() => emailRef.current?.focus(), 60); return () => clearTimeout(id); }, []);
 
+  // m3: Escape closes the sheet. A window listener mirrors the modal's Escape idiom without a full
+  // focus trap (out of scope). Re-bound if `onClose` changes identity — cheap, and keeps the latest
+  // closure without a render-phase ref write.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   function switchMode(m: "signin" | "signup") { setMode(m); setErr(""); setBusy(false); setConfirmSent(false); }
 
   async function submit(e: React.FormEvent) {
