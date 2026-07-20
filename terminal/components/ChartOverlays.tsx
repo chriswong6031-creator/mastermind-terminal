@@ -8,8 +8,7 @@
 //     remove / collapse / maximize, with active-state highlighting.
 // It owns NO chart logic — every action is a callback into ChartPanel, which holds the chart refs.
 
-import { useEffect, useRef, useState } from "react";
-import MobileSheet from "@/components/ui/MobileSheet";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export type LegendEntry = {
   key: string;          // "ema" | "bb" | … | "pine" | "cmp:SYM"
@@ -74,41 +73,69 @@ const ICONS = {
   maximize: "M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5",
 };
 
-type MoreState = { key: string; label: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; noParams: boolean; x: number; y: number };
+type MoreState = { key: string; label: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; noParams: boolean; x: number; y: number; rowTop: number };
 
 export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: string | null; legendOpen: boolean; onToggleLegend: () => void; coarse?: boolean } & OverlayActions) {
   const coarse = !!props.coarse;
   const [more, setMore] = useState<MoreState | null>(null);
   const [flip, setFlip] = useState<{ key: string; n: number } | null>(null);
-  // B5: tap-to-activate pill — activeKey tracks which entry's action pill is shown on coarse
-  const [activeKey, setActiveKey] = useState<string | null>(null);
-  const activeRowRef = useRef<HTMLDivElement | null>(null);
+  // Static Legend (touch): tapping a row's name ARMS it — the icon strip appears INSIDE the same
+  // box (no geometry change, no action fired). Only one row armed at a time; a pointerdown outside
+  // disarms. `armedKey` tracks the armed row.
+  const [armedKey, setArmedKey] = useState<string | null>(null);
+  const armedRowRef = useRef<HTMLDivElement | null>(null);
+  const moreRef = useRef<HTMLDivElement | null>(null);
   // bump `n` (a monotonic nonce) so the flipped icon remounts and the CSS animation replays on every click
   const doFlip = (key: string) => setFlip((f) => ({ key, n: (f?.n ?? 0) + 1 }));
-  // close desktop More popover on outside click/Escape. NOT on coarse — there the MobileSheet
-  // owns dismissal (scrim/swipe/Escape); a window pointerdown listener would unmount the sheet
-  // before a row's click can fire.
+  // close the More dropdown on outside pointerdown / Escape (desktop AND coarse — the coarse More is
+  // now the same .lg-more object anchored under the row, not a bottom sheet). The dropdown stops
+  // propagation on its own pointerdown so taps inside it don't self-close.
   useEffect(() => {
-    if (!more || coarse) return;
-    const close = () => setMore(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMore(null); };
+    if (!more) return;
+    const close = () => { setMore(null); setArmedKey(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setMore(null); setArmedKey(null); } };
     window.addEventListener("pointerdown", close); window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", onKey); };
-  }, [more, coarse]);
-  // B5: window pointerdown outside active row clears activeKey
+  }, [more]);
+  // Clamp the dropdown inside the viewport after it measures — useLayoutEffect so the clamp lands
+  // before paint (no one-frame off-position flash on narrow phones). Anchored to the row's left edge
+  // and its bottom edge; on a narrow phone the raw left could push it off the right edge, and a row
+  // in the lowest sub-pane could push the bottom rows (incl. danger "Remove") below the fold.
+  //   • x: 8px ≤ x ≤ vw − width − 8px.
+  //   • y: prefer below the row; if it won't fit, flip ABOVE the row; if the menu is taller than the
+  //     whole viewport (rare) it caps at 8px and the CSS max-height/overflow scroll takes over.
+  useLayoutEffect(() => {
+    if (!more) return;
+    const el = moreRef.current; if (!el) return;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const x = Math.max(8, Math.min(more.x, vw - w - 8));
+    // more.y anchors the menu below the row (row bottom + 4). more.rowTop is the row's top edge.
+    let y = more.y;
+    if (y + h > vh - 8) {
+      // not enough room below — try flipping ABOVE the row (menu bottom 4px above the row top)
+      const above = more.rowTop - 4 - h;
+      y = above >= 8 ? above : Math.max(8, vh - 8 - h);
+    }
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+  }, [more]);
+  // Static Legend: pointerdown outside the armed row disarms it (mirrors the More closer). Skipped
+  // while a More dropdown is open on coarse — that popover owns its own outside-click dismissal
+  // and disarming here would also close More on the same tap.
   useEffect(() => {
-    if (!coarse || activeKey == null) return;
+    if (!coarse || armedKey == null || more) return;
     const onDown = (e: PointerEvent) => {
-      if (activeRowRef.current && activeRowRef.current.contains(e.target as Node)) return;
-      setActiveKey(null);
+      if (armedRowRef.current && armedRowRef.current.contains(e.target as Node)) return;
+      setArmedKey(null);
     };
     window.addEventListener("pointerdown", onDown);
     return () => window.removeEventListener("pointerdown", onDown);
-  }, [coarse, activeKey]);
+  }, [coarse, armedKey, more]);
 
   const stop = (fn: () => void) => (ev: React.MouseEvent) => { ev.stopPropagation(); ev.preventDefault(); fn(); };
   const openMore = (e: LegendEntry, paneIndex: number, rect: DOMRect) =>
-    setMore({ key: e.key, label: e.label, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: rect.left, y: rect.bottom + 4 });
+    setMore({ key: e.key, label: e.label, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: rect.left, y: rect.bottom + 4, rowTop: rect.top });
 
   // B5: total entries count across all panes (for the count chip)
   const totalEntries = props.panes.reduce((s, p) => s + p.entries.length, 0);
@@ -116,7 +143,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
   return (
     <div className="chart-overlays">
       {props.panes.map((p) => {
-        const legendTop = p.top + (p.isPrice ? 38 : 9);   // price legend clears the OHLC status line + breathing room
+        const legendTop = p.top + (p.isPrice ? 38 : 4);   // price legend clears the OHLC status line; sub-panes hug the corner (TV-tight)
         const primaryKey = p.entries[0]?.key;
         const showOps = !p.isPrice && primaryKey != null;
         // B5: on coarse, pane-ops only visible when collapsed or maximized (restore affordance)
@@ -134,31 +161,34 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
               <div className="lg-block" style={{ top: legendTop, left: 8 }}>
                 {p.entries.map((e) => {
                   const visible = entriesVisible;
-                  const isActive = coarse && activeKey === e.key;
+                  const isArmed = coarse && armedKey === e.key;
                   return (
                     <div
                       key={e.key}
-                      ref={isActive ? activeRowRef : undefined}
-                      className={`lg-row${e.hidden ? " is-hidden" : ""}${e.isCompare ? " is-cmp" : ""}${isActive ? " is-live" : ""}`}
+                      ref={isArmed ? armedRowRef : undefined}
+                      className={`lg-row${e.hidden ? " is-hidden" : ""}${e.isCompare ? " is-cmp" : ""}${isArmed ? " is-armed" : ""}`}
                       style={visible ? undefined : { display: "none" }}
                     >
                       {e.isCompare && <span className="lg-dot" style={{ background: e.color || "currentColor" }} />}
-                      {/* B5: tap name area on coarse → activate pill */}
+                      {/* Static Legend: tapping the name area on touch ARMS the row (fires no action) */}
                       <span
                         className="lg-name"
-                        onClick={coarse && !isActive ? (ev) => { ev.stopPropagation(); setActiveKey(e.key); } : undefined}
+                        onClick={coarse && !isArmed ? (ev) => { ev.stopPropagation(); setArmedKey(e.key); } : undefined}
                       >{e.label}</span>
-                      {/* B5 coarse: floating action pill appears on the active row */}
-                      {coarse && isActive ? (
-                        <span className="lg-menu lg-pill">
-                          <button className="lg-ic eye" aria-label={e.hidden ? "Show" : "Hide"} onClick={stop(() => { props.onEye(e.key); setActiveKey(null); })}><EyeIcon off={e.hidden} /></button>
-                          {!e.noParams && <button className="lg-ic" aria-label="Settings" onClick={stop(() => { props.onSettings(e.key); setActiveKey(null); })}>{I(ICONS.settings, 1.6)}</button>}
-                          <button className="lg-ic" aria-label="Remove" onClick={stop(() => { props.onRemove(e.key); setActiveKey(null); })}>{I(ICONS.remove)}</button>
-                          {/* More → MobileSheet on coarse */}
-                          <button className="lg-ic" aria-label="More" onClick={stop(() => {
-                            setActiveKey(null);
-                            setMore({ key: e.key, label: e.label, paneIndex: p.paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: 0, y: 0 });
-                          })}>{I(ICONS.more, 2.4)}</button>
+                      {/* Touch armed strip: icons appear INSIDE the same box — same .lg-menu as desktop,
+                          no separate pill, no geometry change. Eye is the fixed first slot. */}
+                      {coarse && isArmed ? (
+                        <span className="lg-menu">
+                          <button className="lg-ic eye" aria-label={e.hidden ? "Show" : "Hide"} onClick={stop(() => { props.onEye(e.key); setArmedKey(null); })}><EyeIcon off={e.hidden} /></button>
+                          {!e.noParams && <button className="lg-ic" aria-label="Settings" onClick={stop(() => { props.onSettings(e.key); setArmedKey(null); })}>{I(ICONS.settings, 1.6)}</button>}
+                          <button className="lg-ic" aria-label="Remove" onClick={stop(() => { props.onRemove(e.key); setArmedKey(null); })}>{I(ICONS.remove)}</button>
+                          {/* More → dropdown anchored under the armed row's left edge (conforms on coarse too) */}
+                          <button className="lg-ic" aria-label="More" onClick={(ev) => {
+                            ev.stopPropagation(); ev.preventDefault();
+                            const rowEl = (ev.currentTarget as HTMLElement).closest(".lg-row") as HTMLElement | null;
+                            const r = (rowEl ?? (ev.currentTarget as HTMLElement)).getBoundingClientRect();
+                            setMore({ key: e.key, label: e.label, paneIndex: p.paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: r.left, y: r.bottom + 4, rowTop: r.top });
+                          }}>{I(ICONS.more, 2.4)}</button>
                         </span>
                       ) : !coarse ? (
                         <span className="lg-menu">
@@ -180,7 +210,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
                 })}
                 {/* B5: count chip on the collapse button — shows total entry count on coarse */}
                 {p.isPrice && (
-                  <button className="lg-collapse" title={props.legendOpen ? "Minimize indicator list" : "Show indicator list"} onClick={stop(props.onToggleLegend)}>
+                  <button className="lg-collapse" title={props.legendOpen ? "Minimize indicator list" : "Show indicator list"} onClick={stop(() => { setArmedKey(null); props.onToggleLegend(); })}>
                     <svg viewBox="0 0 24 24" style={{ width: 13, height: 13, stroke: "currentColor", fill: "none", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", transform: props.legendOpen ? "none" : "rotate(180deg)" }}><path d="M6 15l6-6 6 6" /></svg>
                     {coarse && totalEntries > 0 && <span className="lg-cnt">{totalEntries}</span>}
                   </button>
@@ -204,41 +234,24 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
         );
       })}
 
-      {/* Desktop More popover */}
-      {more && !coarse && (
-        <div className="lg-more" style={{ left: more.x, top: more.y }} onPointerDown={(e) => e.stopPropagation()}>
-          <div className="lg-more-row" onClick={stop(() => { props.onEye(more.key); setMore(null); })}><span className="mi"><EyeIcon off={more.hidden} /></span>{more.hidden ? "Show" : "Hide"}</div>
-          {!more.noParams && <div className="lg-more-row" onClick={stop(() => { props.onSettings(more.key); setMore(null); })}><span className="mi">{I(ICONS.settings, 1.6)}</span>Settings…</div>}
-          {!more.isCompare && !more.noParams && <div className="lg-more-row" onClick={stop(() => { props.onSource(more.key); setMore(null); })}><span className="mi">{I(ICONS.source)}</span>Source code…</div>}
+      {/* More dropdown — one conforming object for desktop AND touch: deep-scrim bg + hairline
+          border, anchored flush under the row's left edge, viewport-clamped (effect above). */}
+      {more && (() => { const done = () => { setMore(null); setArmedKey(null); }; return (
+        <div ref={moreRef} className="lg-more" style={{ left: more.x, top: more.y }} onPointerDown={(e) => e.stopPropagation()}>
+          <div className="lg-more-row" onClick={stop(() => { props.onEye(more.key); done(); })}><span className="mi"><EyeIcon off={more.hidden} /></span>{more.hidden ? "Show" : "Hide"}</div>
+          {!more.noParams && <div className="lg-more-row" onClick={stop(() => { props.onSettings(more.key); done(); })}><span className="mi">{I(ICONS.settings, 1.6)}</span>Settings…</div>}
+          {!more.isCompare && !more.noParams && <div className="lg-more-row" onClick={stop(() => { props.onSource(more.key); done(); })}><span className="mi">{I(ICONS.source)}</span>Source code…</div>}
           {more.isPane && <>
             <div className="lg-more-sep" />
-            <div className={`lg-more-row${props.canMoveUp(more.paneIndex) ? "" : " dis"}`} onClick={stop(() => { if (props.canMoveUp(more.paneIndex)) { props.onMoveUp(more.paneIndex); setMore(null); } })}><span className="mi">{I(ICONS.up)}</span>Move pane up</div>
-            <div className={`lg-more-row${props.canMoveDown(more.paneIndex) ? "" : " dis"}`} onClick={stop(() => { if (props.canMoveDown(more.paneIndex)) { props.onMoveDown(more.paneIndex); setMore(null); } })}><span className="mi">{I(ICONS.down)}</span>Move pane down</div>
-            <div className="lg-more-row" onClick={stop(() => { props.onCollapse(more.paneIndex); setMore(null); })}><span className="mi">{I(ICONS.collapse)}</span>Collapse pane</div>
-            <div className="lg-more-row" onClick={stop(() => { props.onMaximize(more.paneIndex); setMore(null); })}><span className="mi">{I(ICONS.maximize)}</span>Maximize pane</div>
+            <div className={`lg-more-row${props.canMoveUp(more.paneIndex) ? "" : " dis"}`} onClick={stop(() => { if (props.canMoveUp(more.paneIndex)) { props.onMoveUp(more.paneIndex); done(); } })}><span className="mi">{I(ICONS.up)}</span>Move pane up</div>
+            <div className={`lg-more-row${props.canMoveDown(more.paneIndex) ? "" : " dis"}`} onClick={stop(() => { if (props.canMoveDown(more.paneIndex)) { props.onMoveDown(more.paneIndex); done(); } })}><span className="mi">{I(ICONS.down)}</span>Move pane down</div>
+            <div className="lg-more-row" onClick={stop(() => { props.onCollapse(more.paneIndex); done(); })}><span className="mi">{I(ICONS.collapse)}</span>Collapse pane</div>
+            <div className="lg-more-row" onClick={stop(() => { props.onMaximize(more.paneIndex); done(); })}><span className="mi">{I(ICONS.maximize)}</span>Maximize pane</div>
           </>}
           <div className="lg-more-sep" />
-          <div className="lg-more-row danger" onClick={stop(() => { props.onRemove(more.key); setMore(null); })}><span className="mi">{I(ICONS.remove)}</span>Remove</div>
+          <div className="lg-more-row danger" onClick={stop(() => { props.onRemove(more.key); done(); })}><span className="mi">{I(ICONS.remove)}</span>Remove</div>
         </div>
-      )}
-
-      {/* B5: coarse More → MobileSheet */}
-      {more && coarse && (
-        <MobileSheet open={true} onClose={() => setMore(null)} title={more.label}>
-          <div className="msheet-row" onClick={() => { props.onEye(more.key); setMore(null); }}><span className="mi"><EyeIcon off={more.hidden} /></span>{more.hidden ? "Show" : "Hide"}</div>
-          {!more.noParams && <div className="msheet-row" onClick={() => { props.onSettings(more.key); setMore(null); }}><span className="mi">{I(ICONS.settings, 1.6)}</span>Settings…</div>}
-          {!more.isCompare && !more.noParams && <div className="msheet-row" onClick={() => { props.onSource(more.key); setMore(null); }}><span className="mi">{I(ICONS.source)}</span>Source code…</div>}
-          {more.isPane && <>
-            <div className="msheet-sep" />
-            <div className={`msheet-row${props.canMoveUp(more.paneIndex) ? "" : " dis"}`} onClick={() => { if (props.canMoveUp(more.paneIndex)) { props.onMoveUp(more.paneIndex); setMore(null); } }}><span className="mi">{I(ICONS.up)}</span>Move pane up</div>
-            <div className={`msheet-row${props.canMoveDown(more.paneIndex) ? "" : " dis"}`} onClick={() => { if (props.canMoveDown(more.paneIndex)) { props.onMoveDown(more.paneIndex); setMore(null); } }}><span className="mi">{I(ICONS.down)}</span>Move pane down</div>
-            <div className="msheet-row" onClick={() => { props.onCollapse(more.paneIndex); setMore(null); }}><span className="mi">{I(ICONS.collapse)}</span>Collapse pane</div>
-            <div className="msheet-row" onClick={() => { props.onMaximize(more.paneIndex); setMore(null); }}><span className="mi">{I(ICONS.maximize)}</span>Maximize pane</div>
-          </>}
-          <div className="msheet-sep" />
-          <div className="msheet-row danger" onClick={() => { props.onRemove(more.key); setMore(null); }}><span className="mi">{I(ICONS.remove)}</span>Remove</div>
-        </MobileSheet>
-      )}
+      ); })()}
     </div>
   );
 }
