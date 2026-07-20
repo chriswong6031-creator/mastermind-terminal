@@ -463,16 +463,69 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   useEffect(() => {
     const saved = load("mm.wls", null);
     if (saved && saved.lists && typeof saved.lists === "object" && Object.keys(saved.lists).length) {
-      setLists(saved.lists);
-      setActiveList(saved.active && saved.lists[saved.active] ? saved.active : Object.keys(saved.lists)[0]);
+      // TRAP 1 (mount side): when signed in, RECONCILE the local Default against the server's
+      // Default membership — do NOT wholesale-replace it. The server row only carries add/remove
+      // (it knows MEMBERSHIP, not ORDER), and the /api/watchlist adds are fire-and-forget (they can
+      // fail silently). A wholesale clobber would therefore destroy the user's local reorder AND
+      // drop any local-only row whose add never reached the server. So we merge, preserving local
+      // order and keeping local-only rows as user data:
+      //   1. start from the local saved Default order;
+      //   2. keep local rows that also exist on the server (local order + local section preserved);
+      //   3. KEEP local-only rows too (offline/failed adds are user data — never dropped) and HEAL
+      //      each by firing the idempotent POST {action:"add"} (fire-and-forget, matching the sync
+      //      idiom at addSymbol/addToList) so the server catches up;
+      //   4. APPEND server rows missing locally (adds from other devices) at the end, with their
+      //      server section.
+      let restored: Record<string, { symbol: string; section: string }[]>;
+      if (loggedIn) {
+        const localDefault: { symbol: string; section: string }[] = Array.isArray(saved.lists.Default) ? saved.lists.Default : [];
+        const serverSyms = new Set(symbols.map((s) => s.symbol));
+        const localSyms = new Set(localDefault.map((r) => r.symbol));
+        // 2+3: keep every local row (present-on-server or local-only), local order + section intact.
+        const reconciledDefault = [...localDefault];
+        // heal local-only rows: fire the idempotent add so the server converges (fire-and-forget).
+        for (const r of localDefault) {
+          if (!serverSyms.has(r.symbol)) {
+            fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: r.symbol, section: r.section }) }).catch(() => {});
+          }
+        }
+        // 4: append server rows missing locally (other-device adds), with their server section.
+        for (const s of symbols) {
+          if (!localSyms.has(s.symbol)) reconciledDefault.push(s);
+        }
+        restored = { ...saved.lists, Default: reconciledDefault };
+      } else {
+        restored = saved.lists;
+      }
+      setLists(restored);
+      setActiveList(saved.active && restored[saved.active] ? saved.active : (loggedIn ? "Default" : Object.keys(restored)[0]));
     }
     // F1 flags: stored alongside wls (additive — old saves without flags load fine)
     const savedFlags = load("mm.flags", {});
     if (savedFlags && typeof savedFlags === "object") setFlags(savedFlags);
     const savedLastColor = load("mm.lastFlagColor", FLAG_DEFAULT);
     if (typeof savedLastColor === "string") setLastFlagColor(savedLastColor);
+    // Mount-only restore: loggedIn/symbols are read for the signed-in Default override but must NOT
+    // re-trigger this (re-reading localStorage mid-session would clobber live edits; the guest→signin
+    // transition is handled by the prevEmailRef effect below).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList })); }, [lists, activeList]);
+  // ── TRAP 1: guest → signed-in reconciliation (AuthSheet router.refresh delivers a real `email`
+  //    + the server's Default symbols, but client `lists` was seeded from the guest state in the
+  //    useState initializer and never re-seeds on its own; stale mm.wls also shadows the server list).
+  //    Reconciliation: the SERVER wins for "Default" (overwrite with the fresh `symbols` prop);
+  //    any extra lists the guest built are KEPT as local lists so nothing they made vanishes. Runs
+  //    only on the "" → non-empty email edge, and only once (prevEmailRef guards re-refreshes). ──
+  const prevEmailRef = useRef(email);
+  useEffect(() => {
+    const was = prevEmailRef.current;
+    prevEmailRef.current = email;
+    if (was === "" && email !== "") {
+      setLists((l) => ({ ...l, Default: symbols }));   // server Default authoritative; guest extras preserved
+      setActiveList("Default");
+    }
+  }, [email, symbols]);
   // persist flags separately (not inside mm.wls to avoid shape-breaking old saves)
   const flagsMounted = useRef(false);
   useEffect(() => { if (!flagsMounted.current) { flagsMounted.current = true; return; } localStorage.setItem("mm.flags", JSON.stringify(flags)); }, [flags]);
@@ -1000,6 +1053,27 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   }
   // watchlist management (client-side; guests get real switch/create/rename/delete via localStorage)
   function switchList(name: string) { if (lists[name]) setActiveList(name); setWlMenuOpen(false); }
+  // Inline create used by the search-hub rail + add-to-list picker (no window.prompt — name is
+  // supplied by the caller's inline input). Returns the created/normalized name, or null if the
+  // name is empty/duplicate so the caller can keep its input open. Does NOT switch active list —
+  // callers decide (the rail switches; the add-picker adds a symbol then switches).
+  function createListNamed(raw: string): string | null {
+    const name = raw.trim();
+    if (!name || lists[name]) return null;
+    setLists((l) => ({ ...l, [name]: [] }));
+    return name;
+  }
+  // Add a symbol to a NAMED list (search-hub multi-list picker). Mirrors addSymbol's dedupe +
+  // Default-only server sync, but targets an explicit list instead of the active one.
+  function addToList(sym: string, listName: string) {
+    const sec = man?.symbols?.[sym]?.sec || "Watchlist";
+    setLists((l) => {
+      const cur = l[listName] || [];
+      if (cur.some((x) => x.symbol === sym)) return l;
+      return { ...l, [listName]: [...cur, { symbol: sym, section: sec }] };
+    });
+    if (listName === "Default") fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: sym, section: sec }) }).catch(() => {});
+  }
   function newList() {
     const name = (typeof window !== "undefined" ? window.prompt(t("newWatchlistPrompt")) : "")?.trim();
     setWlMenuOpen(false);
@@ -1822,6 +1896,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
       <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} compareCfg={compareCfg} active={active}
         flags={flags} lastFlagColor={lastFlagColor}
+        email={email}
+        lists={Object.entries(lists).map(([name, syms]) => ({ name, count: syms.length, symbols: syms }))}
+        activeList={activeList}
+        onSwitchList={switchList}
+        onCreateList={createListNamed}
+        onAddToList={addToList}
         onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} onRemove={removeSymbol}
         onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
       {/* F3 Add Symbol dialog — mode="add" with trash+crosshair for members */}
