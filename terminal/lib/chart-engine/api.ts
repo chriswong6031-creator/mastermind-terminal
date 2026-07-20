@@ -153,7 +153,18 @@ export interface PaneHandle {
   setHeight(px: number): void;
   setStretchFactor(factor: number): void;
   stretchFactor(): number;
+  // The pane's live DOM element (legend/overlay positioning hooks anchor to it).
+  // null while the pane is not laid out yet.
+  getHTMLElement(): HTMLElement | null;
   unwrap<T>(): T; // engine-unwrap: raw IPaneApi
+}
+
+// A price scale addressed by id ("right" | "left" | any overlay id like "volume").
+// Resolved live per call — scales are chart-owned and survive pane churn.
+export interface PriceScaleHandle {
+  width(): number;
+  applyOptions(opts: Record<string, unknown>): void;
+  unwrap<T>(): T; // engine-unwrap: raw IPriceScaleApi
 }
 
 export interface TimeScaleHandle {
@@ -184,6 +195,8 @@ export interface SeriesHandle {
   priceToCoordinate(price: number): number | null;
   coordinateToPrice(y: number): number | null;
   paneIndex(): number;
+  // The pane this series currently lives in (resolved live — see PaneHandle).
+  pane(): PaneHandle;
   // Moves the series to paneIndex. The renderer clamps an out-of-range index to the
   // current pane count and appends a new pane at the end (LWC getOrCreatePane
   // semantics; see lib/__tests__/subpaneAssign.test.ts). The contract preserves this.
@@ -200,6 +213,13 @@ export interface ChartEngine {
   addSeries(kind: EngineSeriesKind, options?: EngineSeriesOptions, paneIndex?: number): SeriesHandle;
   panes(): PaneHandle[];
   timeScale(): TimeScaleHandle;
+  priceScale(priceScaleId: string, paneIndex?: number): PriceScaleHandle;
+  // {width,height} of a pane's plotting area (throws for a missing pane, matching the
+  // renderer — callers that probe speculatively own their try/catch, as ChartPanel does).
+  paneSize(paneIndex?: number): { width: number; height: number };
+  swapPanes(first: number, second: number): void;
+  // All panes composited to one canvas (share/snapshot feature).
+  takeScreenshot(): HTMLCanvasElement;
   applyOptions(options: EngineOptions): void;
   subscribeCrosshairMove(handler: EngineMouseHandler): void;
   unsubscribeCrosshairMove(handler: EngineMouseHandler): void;

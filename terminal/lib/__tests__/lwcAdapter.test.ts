@@ -48,6 +48,13 @@ const H = vi.hoisted(() => {
     setHeight: Spy;
     getStretchFactor: Spy;
     setStretchFactor: Spy;
+    getHTMLElement: Spy;
+  }
+  interface FakePriceScale {
+    __id: string;
+    __paneIndex: number | undefined;
+    width: Spy;
+    applyOptions: Spy;
   }
   interface FakeMarkersPlugin {
     __series: FakeSeries;
@@ -87,8 +94,13 @@ const H = vi.hoisted(() => {
     unsubscribeDblClick: Spy;
     resize: Spy;
     remove: Spy;
+    priceScale: Spy;
+    paneSize: Spy;
+    swapPanes: Spy;
+    takeScreenshot: Spy;
     __ts: FakeTimeScale;
     __panes: FakePane[];
+    __priceScales: FakePriceScale[];
   }
   const reg = {
     charts: [] as FakeChart[],
@@ -111,6 +123,7 @@ const H = vi.hoisted(() => {
     setHeight: vi.fn(),
     getStretchFactor: vi.fn(() => index + 1),
     setStretchFactor: vi.fn(),
+    getHTMLElement: vi.fn(() => ({ __paneEl: index }) as unknown),
   });
 
   const makeSeries = (def: unknown, opts: unknown, paneIndex: number, chart: FakeChart): FakeSeries => {
@@ -184,6 +197,15 @@ const H = vi.hoisted(() => {
       unsubscribeDblClick: vi.fn(),
       resize: vi.fn(),
       remove: vi.fn(),
+      __priceScales: [],
+      priceScale: vi.fn((id: string, paneIndex?: number): FakePriceScale => {
+        const ps: FakePriceScale = { __id: id, __paneIndex: paneIndex, width: vi.fn(() => 57), applyOptions: vi.fn() };
+        chart.__priceScales.push(ps);
+        return ps;
+      }),
+      paneSize: vi.fn((paneIndex?: number) => ({ width: 800, height: 400 + (paneIndex ?? 0) })),
+      swapPanes: vi.fn(),
+      takeScreenshot: vi.fn(() => ({ __canvas: true }) as unknown),
     };
     reg.charts.push(chart);
     return chart;
@@ -594,6 +616,52 @@ describe("lwc adapter — watermark replace-on-recall", () => {
     expect(opts.horzAlign).toBe("center");
     expect(opts.vertAlign).toBe("center");
     expect(opts.lines[0].text).toBe("MASTERMIND");
+  });
+});
+
+describe("lwc adapter — P0.5 surface (priceScale / paneSize / swapPanes / takeScreenshot / pane element)", () => {
+  it("priceScale forwards id + paneIndex and resolves live per call", () => {
+    const e = createEngine(container);
+    const ps = e.priceScale("volume", 0);
+    ps.applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+    expect(ps.width()).toBe(57);
+    const c = H.reg.lastChart();
+    // Two method calls → two live resolutions of the same (id, paneIndex) address.
+    expect(c.priceScale).toHaveBeenCalledWith("volume", 0);
+    expect(c.__priceScales.length).toBe(2);
+    expect(c.__priceScales[0].applyOptions).toHaveBeenCalledWith({ scaleMargins: { top: 0.78, bottom: 0 } });
+  });
+
+  it("paneSize forwards the index and returns plain {width,height}", () => {
+    const e = createEngine(container);
+    expect(e.paneSize(2)).toEqual({ width: 800, height: 402 });
+    expect(H.reg.lastChart().paneSize).toHaveBeenCalledWith(2);
+  });
+
+  it("swapPanes and takeScreenshot delegate to the chart", () => {
+    const e = createEngine(container);
+    e.swapPanes(0, 1);
+    const shot = e.takeScreenshot();
+    const c = H.reg.lastChart();
+    expect(c.swapPanes).toHaveBeenCalledWith(0, 1);
+    expect((shot as unknown as { __canvas: boolean }).__canvas).toBe(true);
+  });
+
+  it("series.pane() resolves the live pane; pane.getHTMLElement() forwards", () => {
+    const e = createEngine(container);
+    const s = e.addSeries("line", {}, 1);
+    const pane = s.pane();
+    expect(pane.index()).toBe(1);
+    expect((pane.getHTMLElement() as unknown as { __paneEl: number }).__paneEl).toBe(1);
+  });
+
+  it("the new surface throws after destroy", () => {
+    const e = createEngine(container);
+    e.destroy();
+    expect(() => e.priceScale("right")).toThrow(/disposed/);
+    expect(() => e.paneSize()).toThrow(/disposed/);
+    expect(() => e.swapPanes(0, 1)).toThrow(/disposed/);
+    expect(() => e.takeScreenshot()).toThrow(/disposed/);
   });
 });
 

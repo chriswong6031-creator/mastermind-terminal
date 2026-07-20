@@ -26,6 +26,7 @@ export type {
   SeriesHandle,
   PriceLineHandle,
   PriceLineSpec,
+  PriceScaleHandle,
   PaneHandle,
   TimeScaleHandle,
   MarkerSpec,
