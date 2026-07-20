@@ -18,7 +18,7 @@ describe("oracleVerdict — age, dimming, provenance", () => {
     const v = oracleVerdict("SELL", slice("SELL", "2026-06-03", 205.1), false, NOW);
     expect(v.raw).toBe("SELL");
     expect(v.label).toBe("Sell");
-    expect(v.sub).toBe("Jun 3 · 41d ago");
+    expect(v.sub).toBe("Jun 3");
     expect(v.dim).toBe(true);
     expect(v.note).toContain("@ 205.1");
     expect(v.note).toContain("timing overlay");
@@ -27,7 +27,7 @@ describe("oracleVerdict — age, dimming, provenance", () => {
   it("keeps a fresh signal at full strength, dated", () => {
     const v = oracleVerdict("BUY", slice("BUY", "2026-07-10"), false, NOW);
     expect(v.dim).toBe(false);
-    expect(v.sub).toBe("Jul 10 · 4d ago");
+    expect(v.sub).toBe("Jul 10");
     expect(v.color).toBe("var(--buy)");
   });
 
@@ -68,7 +68,7 @@ describe("oracleVerdict — age, dimming, provenance", () => {
       NOW,
     );
     expect(v.raw).toBe("BUY");
-    expect(v.sub).toBe("Jul 13 · 1d ago");
+    expect(v.sub).toBe("Jul 13");
     expect(v.note).toContain("@ 314.86");
     expect(v.note).toContain("pending");
   });
@@ -107,7 +107,7 @@ describe("oracleVerdict — age, dimming, provenance", () => {
     expect(v.raw).toBe("RECLAIM");
     expect(v.color).toBe("var(--buy)");
     expect(v.soft).toBe(true);                     // hollow glyph law, scored or not
-    expect(v.sub).toBe("Jul 13 · 1d ago");
+    expect(v.sub).toBe("Jul 13");
     expect(v.note).toContain("scored reclaim lane");
     expect(v.note).not.toContain("unscored");
     expect(v.note).toContain("reclaimed");
@@ -151,7 +151,7 @@ describe("oracleVerdict — age, dimming, provenance", () => {
 
   it("zh variant localizes the sub-line", () => {
     const v = oracleVerdict("SELL", slice("SELL", "2026-06-03"), true, NOW);
-    expect(v.sub).toContain("41天前");
+    expect(v.sub).toContain("6月");
   });
 });
 
@@ -172,7 +172,8 @@ describe("oracleVerdict — stance-first render when the event is history", () =
     expect(v.label).toBe("Strong uptrend — awaiting pullback entry");
     expect(v.color).toBe("var(--up)");
     expect(v.dim).toBe(false);
-    expect(v.sub).toBe("● Sell · Jun 8 · 36d ago");   // the event stays visible, dated
+    expect(v.sub).toBeNull();                              // no rendered echo — the stance IS the read
+    expect(v.note).toContain("last signal: Sell · Jun 8"); // the event survives as tooltip context
     expect(v.note).toContain("not a trade signal");
   });
 
@@ -219,7 +220,8 @@ describe("oracleVerdict — stance-first render when the event is history", () =
     );
     expect(v.stance).toBe(true);
     expect(v.label).toBe("Hold — long bias");
-    expect(v.sub).toContain("● Buy · Apr 9");
+    expect(v.sub).toBeNull();
+    expect(v.note).toContain("last signal: Buy · Apr 9");
   });
 
   it("a bare {last_signal} legacy state has no regime to stand on → dated dim render, no stance", () => {

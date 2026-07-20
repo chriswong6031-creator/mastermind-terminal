@@ -2,7 +2,7 @@ export interface Verdict {
   label: string;
   color: string;
   raw: string | null;
-  /** small sub-line under the verdict: signal date + age (oracle) / data as-of date (desk) */
+  /** small sub-line under the verdict: signal date (oracle) / data as-of date (desk) */
   sub?: string | null;
   /** true = too old (or undated) to render as a live opinion — the UI strips its visual authority */
   dim?: boolean;
@@ -142,7 +142,7 @@ export function computeStance(st: OracleState, trend: StanceTrend, zh: boolean):
   if (sb && (trend === "UPTREND" || trend === "PULLBACK"))
     return { label: zh ? "强势上行 — 等回调买点" : "Strong uptrend — awaiting pullback entry", color: "var(--up)" };
   if ((a2 && wb) || trend === "UPTREND")
-    return { label: zh ? "上升趋势 — 等入场信号" : "Uptrend — awaiting entry signal", color: "var(--up)" };
+    return { label: zh ? "上升趋势 — 无入场信号" : "Uptrend — no entry signal", color: "var(--up)" };
   if (trend === "RANGE")
     return { label: zh ? "区间震荡 — 无优势" : "Range — no edge", color: "var(--text-2)" };
   if (trend === "DOWNTREND" || (!a2 && !wb))
@@ -206,7 +206,7 @@ export function oracleVerdict(
       label: eventLabel(effU, zh),
       color: eventColor(effU),
       raw: effU,
-      sub: `${fmtDate(eff.ts, zh)} · ${age}${zh ? "天前" : "d ago"}`,
+      sub: fmtDate(eff.ts, zh),
       dim: false,
       soft,
       note: notes.join(" · "),
@@ -229,17 +229,21 @@ export function oracleVerdict(
         );
       }
       const echoU = effU ?? scored ?? mv;
-      const echo = eff && echoU
-        ? `● ${eventLabel(echoU, zh)} · ${fmtDate(eff.ts, zh)}${age != null ? ` · ${age}${zh ? "天前" : "d ago"}` : ""}`
-        : echoU
-          ? `● ${eventLabel(echoU, zh)} · ${zh ? "无日期" : "undated"}`
-          : null;
-      if (eff?.price != null) notes.push(`${eventLabel(echoU!, zh)} @ ${eff.price}`);
+      // The stance IS the read — the old event demotes all the way to tooltip context.
+      // (A rendered "● Sell · 45d ago" echo under an Uptrend stance read as a mixed message;
+      // the dated history is one tap away in Signal history.)
+      if (echoU) {
+        notes.push(
+          `${zh ? "上次信号" : "last signal"}: ${eventLabel(echoU, zh)}` +
+          (eff ? ` · ${fmtDate(eff.ts, zh)}` : "") +
+          (eff?.price != null ? ` @ ${eff.price}` : ""),
+        );
+      }
       return {
         label: stance.label,
         color: stance.color,
         raw: echoU ?? null,
-        sub: echo,
+        sub: null,
         dim: false,          // a stance is a CURRENT read — authority comes from the stance style
         stance: true,
         note: notes.join(" · "),
@@ -256,7 +260,7 @@ export function oracleVerdict(
     label: eventLabel(u, zh),
     color: eventColor(u),
     raw: u,
-    sub: eff ? `${fmtDate(eff.ts, zh)} · ${age}${zh ? "天前" : "d ago"}` : zh ? "无日期" : "undated",
+    sub: eff ? fmtDate(eff.ts, zh) : zh ? "无日期" : "undated",
     dim: true,
     note: notes.join(" · "),
   };

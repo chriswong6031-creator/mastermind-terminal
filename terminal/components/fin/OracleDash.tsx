@@ -541,7 +541,6 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
           <div className="sd-head">
             <span className="sd-ic">{DeskGlyph}</span>
             <span className="sd-lbl">{pick(zh, "Research Desk", "研究台")}</span>
-            <span className="sd-badge">{dv.label}</span>
             <button className="sd-x" onClick={onClose} aria-label={pick(zh, "Close", "关闭")}>×</button>
           </div>
           <div
@@ -552,10 +551,11 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
           />
           <div className="sd-body">
 
-            {/* Research desk read — decision + conviction ring from the live cards schema */}
+            {/* Research desk read — decision + conviction ring from the live cards schema.
+                Deliberately terse: the verdict line carries the read; blend/staleness mechanics
+                stay silent (they still shape the ring score) instead of rendering meta-copy. */}
             {(aj?.verdict || convScore != null) && (
               <div className="sig-card">
-                <div className="sig-card-h">{pick(zh, "Research desk read", "研究台解读")}</div>
                 <div className="sig-desk">
                   {/* D1: ring shows blended score when desk data is stale */}
                   <ConvictionRing score={finalScore} zh={zh} />
@@ -564,7 +564,6 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                       {aj?.verdict || dv.label}
                       {convBand && <span className="sig-desk-band">{convBand}</span>}
                     </div>
-                    {aj?.gloss && <div className="sig-desk-gloss">{aj.gloss}</div>}
                     {typeof aj?.size_pct === "number" && aj.size_pct > 0 && (
                       <div className="sig-desk-rank">{pick(zh, "Suggested size", "建议仓位")}: {sizePctDisplay(aj.size_pct)}%</div>
                     )}
@@ -581,15 +580,6 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                     )}
                   </div>
                 </div>
-                {/* D1: staleness blend note */}
-                {freshnessW > 0 && (
-                  <div className="sig-stale-note">
-                    {pick(zh,
-                      `Read blended with live price action — desk data ${staleDays} days old`,
-                      `已结合最新价格走势 — 研究数据 ${staleDays} 天前`
-                    )}
-                  </div>
-                )}
                 {/* D2: disagreement caution/context chips */}
                 {d2Cap && (
                   <div className="sig-caution-chip">
@@ -601,7 +591,6 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                     {pick(zh, "Technical tape improving", "技术面转强")}
                   </div>
                 )}
-                <div className="sig-caveat">{pick(zh, "Context for the Oracle verdict — not a trade signal.", "作为神谕结论的背景参考——非交易信号。")}</div>
               </div>
             )}
 
@@ -638,7 +627,7 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                 <div className="sig-desk-gloss">
                   {sectorPulse.theme_name}
                   {sectorPulse.label ? ` — ${sectorPulse.label}` : ""}
-                  {sectorPulse.reco ? ` · ${pick(zh, "reco", "建议")} ${sectorPulse.reco}` : ""}
+                  {sectorPulse.reco ? ` · ${pick(zh, "suggested", "建议")}: ${sectorPulse.reco}` : ""}
                 </div>
               </div>
             )}
@@ -660,7 +649,6 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
           <div className="sd-head">
             <span className="sd-ic">{OracleStar}</span>
             <span className="sd-lbl">{pick(zh, "Golden Oracle", "黄金神谕")}</span>
-            <span className="sd-badge">{ov.label}</span>
             <button className="sd-x" onClick={onClose} aria-label={pick(zh, "Close", "关闭")}>×</button>
           </div>
           <div
@@ -701,29 +689,8 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                   </div>
                 </div>
               </div>
-              {/* supporting dims from the live cards.conviction + ai_judgment */}
-              {(convScore != null || convBand || (typeof aj?.size_pct === "number" && aj.size_pct > 0)) && (
-                <div className="sig-dims">
-                  {convScore != null && (
-                    <div className="sig-dim">
-                      <span className="sig-dim-k">{pick(zh, "Conviction", "信念度")}</span>
-                      <span className="sig-dim-v">{Math.round(convScore)}<i>/100</i></span>
-                    </div>
-                  )}
-                  {convBand && (
-                    <div className="sig-dim">
-                      <span className="sig-dim-k">{pick(zh, "Band", "评级")}</span>
-                      <span className="sig-dim-v">{convBand}</span>
-                    </div>
-                  )}
-                  {typeof aj?.size_pct === "number" && aj.size_pct > 0 && (
-                    <div className="sig-dim">
-                      <span className="sig-dim-k">{pick(zh, "Size", "仓位")}</span>
-                      <span className="sig-dim-v">{sizePctDisplay(aj.size_pct)}%</span>
-                    </div>
-                  )}
-                </div>
-              )}
+              {/* conviction/band/size intentionally NOT repeated here — they are the Research
+                  Desk card's read (left/top); this card is the signal engine's scorecard */}
               {/* GC v2: latest signal's keeper quality + recipe tier (BUY|REBUY only) */}
               {latestSig && (latestSig.type === "BUY" || latestSig.type === "REBUY") && latestSig.quality && (
                 <div className="sig-dims">
@@ -777,19 +744,18 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                     const q = isEntry ? qualityLabel(sig.quality, zh) : ""
                     return (
                       <button key={i} className="sd-sigrow" onClick={() => handleJump(sig.ts)} title={isReclaim ? (sig.quality_reason || "") : pick(zh, "Jump to chart", "跳转到图表")}>
-                        {/* RECLAIM = unscored re-entry: hollow badge (glyph law — never the solid entry pill) */}
+                        {/* tinted (not solid) pills — the signal color rides --sc; RECLAIM keeps the
+                            hollow treatment (glyph law — never the solid entry pill) */}
                         <span
-                          className="sd-sig-badge"
-                          style={isReclaim
-                            ? { background: "transparent", boxShadow: "inset 0 0 0 1px var(--buy)", color: "var(--buy)" }
-                            : { background: signalColor(sig.type) }}
+                          className={"sd-sig-badge" + (isReclaim ? " hollow" : "")}
+                          style={{ ["--sc" as any]: isReclaim ? "var(--buy)" : signalColor(sig.type) }}
                         >
                           {isReclaim ? pick(zh, "RE-ENTRY", "再入场") : sig.type}
                         </span>
                         {/* pre-promotion display-tier markers (scored:false) carry the unscored tag;
                             scored reclaim-lane events are normal position events and need none */}
-                        {isReclaim && sig.scored === false && <span className="sd-sig-q" style={{ color: "var(--text-2)" }}>{pick(zh, "unscored", "未计分")}</span>}
-                        {q && <span className="sd-sig-q" style={{ color: qualityColor(sig.quality) }}>{q}</span>}
+                        {isReclaim && sig.scored === false && <span className="sd-sig-q">{pick(zh, "unscored", "未计分")}</span>}
+                        {q && <span className="sd-sig-q">{q}</span>}
                         <span className="sd-sig-date">{fmtDate(sig.ts)}</span>
                         <span className="sd-sig-price">{sig.price != null ? sig.price.toFixed(2) : "—"}</span>
                       </button>
