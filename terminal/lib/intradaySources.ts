@@ -191,6 +191,14 @@ function _n(s: string | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// Like _n, but treats a non-positive value as ABSENT. CN/HK premarket call-auction snapshots report
+// open/high/low = 0 before the session resolves; a real equity price is always > 0, so a 0 here is a
+// placeholder, not a print. Passing it through would let the live-bar splice anchor a bar at $0.
+function _pos(s: string | undefined): number | null {
+  const n = _n(s);
+  return n != null && n > 0 ? n : null;
+}
+
 // Tencent quote time is "YYYYmmddHHMMSS" (A-share) or "YYYY/MM/DD HH:MM:SS" (HK); both UTC+8.
 function _tencentTs(s: string | undefined): number | null {
   if (!s) return null;
@@ -204,14 +212,14 @@ function _tencentTs(s: string | undefined): number | null {
 // batch fetchers). Field offsets: 3=last 4=prevClose 5=open 6=vol(手, A-share) 30=ts 32=change%
 // 33=high 34=low 37=amount. Tencent responds in GBK, but every field we read is ASCII, so the
 // caller decodes as latin1 (the Chinese name bytes we ignore decode to garbage, which is fine).
-function parseTencentFields(sym: string, market: Market, f: string[]): Quote | null {
+export function parseTencentFields(sym: string, market: Market, f: string[]): Quote | null {
   if (f.length < 35) return null;
   const last = _n(f[3]);
   if (last == null || last === 0) return null;
   const volRaw = _n(f[6]); // A-share volume is in 手 (lots, ×100 shares); HK is already in shares
   return {
     sym, last, prevClose: _n(f[4]), chg: _n(f[32]),
-    open: _n(f[5]), high: _n(f[33]), low: _n(f[34]),
+    open: _pos(f[5]), high: _pos(f[33]), low: _pos(f[34]),
     vol: volRaw == null ? null : (market === "cn" ? volRaw * 100 : volRaw),
     amount: _n(f[37]), ts: _tencentTs(f[30]),
     live: true, source: "tencent", market,
