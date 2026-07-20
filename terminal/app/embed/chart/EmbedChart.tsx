@@ -154,6 +154,7 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
       },
       rightPriceScale: { borderColor: pal.axisLine, scaleMargins: { top: 0.08, bottom: 0.24 } },
       timeScale: { borderColor: pal.axisLine, rightOffset: 4, barSpacing: 8, fixLeftEdge: true },
+      localization: { locale: lang === "zh" ? "zh-CN" : "en-US" },
       handleScale: { axisPressedMouseMove: { time: true, price: false } },
     });
     chartRef.current = chart;
@@ -243,7 +244,7 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
     };
     // Rebuild only when the data identity or palette changes (theme/transparent). Range + SMA
     // toggles are applied imperatively below without a teardown.
-  }, [state, pal]);
+  }, [state, pal, lang]);
 
   // ── Apply the visible range (initial + chip changes) ──────────────────────────
   useEffect(() => {
@@ -279,6 +280,18 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
         t={t}
         range={range}
         onRange={setRange}
+        legend={
+          state.kind === "ready" ? (
+            <Legend
+              sma50On={sma50On}
+              sma200On={sma200On}
+              onToggle50={() => setSma50On((v) => !v)}
+              onToggle200={() => setSma200On((v) => !v)}
+              pal={pal}
+              t={t}
+            />
+          ) : null
+        }
       />
 
       <div className="embed-body">
@@ -299,14 +312,6 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
           <>
             <div ref={hostRef} className="embed-chart-host" />
             <PriceRibbon dir={state.quote.dir} pal={pal} />
-            <Legend
-              sma50On={sma50On}
-              sma200On={sma200On}
-              onToggle50={() => setSma50On((v) => !v)}
-              onToggle200={() => setSma200On((v) => !v)}
-              pal={pal}
-              t={t}
-            />
           </>
         )}
 
@@ -331,6 +336,7 @@ function Header({
   t,
   range,
   onRange,
+  legend,
 }: {
   symbol: string;
   state: LoadState;
@@ -339,6 +345,7 @@ function Header({
   t: ReturnType<typeof makeT>;
   range: RangeKey;
   onRange: (r: RangeKey) => void;
+  legend?: React.ReactNode;
 }) {
   const quote = state.kind === "ready" ? state.quote : null;
   // When hovering the chart, the header becomes an OHLC status line (house pattern).
@@ -375,6 +382,8 @@ function Header({
         )}
       </div>
 
+      <div className="embed-head-right">
+      {legend}
       <nav className="embed-ranges" aria-label={t("rangePrefix")}>
         {RANGE_KEYS.map((rk) => (
           <button
@@ -388,6 +397,7 @@ function Header({
           </button>
         ))}
       </nav>
+      </div>
     </header>
   );
 }
@@ -599,7 +609,8 @@ function StyleTag({ pal }: { pal: EmbedPalette }) {
 
   /* Legend — quiet, bottom-left, floated ABOVE the LWC time-axis strip (~22px) so it never
      collides with the date labels the chart canvas paints along the bottom edge. */
-  .embed-legend{position:absolute;left:10px;bottom:27px;z-index:6;display:flex;gap:9px;pointer-events:auto;}
+  .embed-head-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;}
+  .embed-legend{display:flex;gap:7px;}
   .embed-leg{display:inline-flex;align-items:center;gap:5px;padding:2px 6px;border-radius:5px;
     font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--e-muted);
     background:color-mix(in srgb,var(--e-page) 62%,transparent);border:1px solid transparent;cursor:pointer;
@@ -611,7 +622,7 @@ function StyleTag({ pal }: { pal: EmbedPalette }) {
   .embed-leg-dot{width:12px;height:2.5px;border-radius:2px;flex:none;}
 
   /* Attribution — bottom-right, whisper-quiet, floated above the time-axis strip, brightens on hover. */
-  .embed-attr{position:absolute;right:10px;bottom:27px;z-index:7;display:inline-flex;align-items:center;gap:3px;
+  .embed-attr{position:absolute;left:10px;bottom:6px;z-index:7;display:inline-flex;align-items:center;gap:3px;
     padding:2px 5px;border-radius:5px;font-size:10px;font-weight:600;letter-spacing:.03em;
     color:var(--e-dim);background:color-mix(in srgb,var(--e-page) 55%,transparent);
     transition:color 120ms cubic-bezier(.4,0,.2,1);}
