@@ -231,8 +231,8 @@ const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
-  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount }:
-  { symbol: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
+  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "" }:
+  { symbol: string; companyName?: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
     chartSettings?: { mode?: number; invertScale?: boolean; scaleLeft?: boolean; autoScale?: boolean; priceLineVisible?: boolean; lastValueVisible?: boolean;
@@ -355,6 +355,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const renderRef = useRef<() => void>(() => {});
   const renderTagRef = useRef<(() => void) | null>(null);   // updates the last-price + bar-close-countdown axis tag
   const symbolRef = useRef(symbol);                          // current symbol (Effect 1 mounts once; symbol changes in Effect 2)
+  const companyNameRef = useRef(companyName);                 // proper name for the snapshot header (zh preferred over English)
   const renderSignalsRef = useRef<() => void>(() => {});
   const syncCleanupRef = useRef<(() => void) | null>(null);
   // D3 table-view: stable lookup of per-key indicator values by bar time (built after each data load).
@@ -466,7 +467,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
-  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol;
+  chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol; companyNameRef.current = companyName;
   lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
   showOHLCRef.current = chartSettings?.showOHLC !== false;
   showBarChangeRef.current = chartSettings?.showBarChange !== false;
@@ -1930,7 +1931,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           g.textAlign = "right";
           g.fillStyle = mut;
           g.font = `400 ${Math.round(9 * dpr)}px ${fam}`;
+          const tsW = g.measureText(tsStr).width;
           g.fillText(tsStr, out.width - pad, Math.round(HDR / 2 + 4 * dpr));
+          // company name (proper name; zh preferred over English) on a second line under the symbol,
+          // truncated with an ellipsis so a long name never runs into the right-aligned timestamp.
+          const coName = (companyNameRef.current || "").trim();
+          if (coName) {
+            g.textAlign = "left"; g.textBaseline = "middle";
+            g.font = `500 ${Math.round(9 * dpr)}px ${fam}`;
+            g.fillStyle = mut;
+            const maxNameW = out.width - pad - tsW - Math.round(20 * dpr) - symX;
+            let label = coName;
+            if (maxNameW > Math.round(24 * dpr) && g.measureText(label).width > maxNameW) {
+              while (label.length > 1 && g.measureText(label + "…").width > maxNameW) label = label.slice(0, -1);
+              label += "…";
+            }
+            if (maxNameW > Math.round(24 * dpr)) g.fillText(label, symX, Math.round(HDR / 2 + 7 * dpr));
+          }
           // ── per-pane indicator labels (top-left of each pane, matching live view) ──
           // paneLayoutRef holds CSS-pixel positions; we convert to output-px using dpr (TARGET_SCALE),
           // not realScale — so label positions align with the upscaled chart raster.
