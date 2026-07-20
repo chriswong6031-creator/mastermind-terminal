@@ -63,6 +63,7 @@ import type {
   PaneHandle,
   PriceLineHandle,
   PriceLineSpec,
+  PriceScaleHandle,
   SeriesHandle,
   TimeScaleHandle,
   WatermarkLine,
@@ -174,6 +175,12 @@ class LwcSeriesHandle implements SeriesHandle {
     this.live();
     return this.series.getPane().paneIndex();
   }
+  pane(): PaneHandle {
+    this.live();
+    // Resolve by index, not by caching the IPaneApi — pane objects dangle after a pane
+    // collapse (see LwcPaneHandle).
+    return new LwcPaneHandle(this.chart, this.series.getPane().paneIndex(), this.aliveCheck);
+  }
   moveToPane(paneIndex: number): void {
     this.live();
     this.series.moveToPane(paneIndex);
@@ -242,8 +249,34 @@ class LwcPaneHandle implements PaneHandle {
   stretchFactor(): number {
     return this.pane().getStretchFactor();
   }
+  getHTMLElement(): HTMLElement | null {
+    return this.pane().getHTMLElement();
+  }
   unwrap<T>(): T {
     return this.pane() as unknown as T;
+  }
+}
+
+// ── PriceScale handle ─────────────────────────────────────────────────────────
+// Resolved live per call by (id, paneIndex) — scales are chart-owned; holding the raw
+// IPriceScaleApi across pane churn is safe in LWC but resolving keeps disposal honest.
+class LwcPriceScaleHandle implements PriceScaleHandle {
+  constructor(
+    private readonly getChart: () => IChartApi,
+    private readonly id: string,
+    private readonly paneIdx: number | undefined,
+  ) {}
+  private scale() {
+    return this.getChart().priceScale(this.id, this.paneIdx);
+  }
+  width(): number {
+    return this.scale().width();
+  }
+  applyOptions(opts: Record<string, unknown>): void {
+    this.scale().applyOptions(opts as Parameters<ReturnType<IChartApi["priceScale"]>["applyOptions"]>[0]);
+  }
+  unwrap<T>(): T {
+    return this.scale() as unknown as T;
   }
 }
 
@@ -360,6 +393,24 @@ class LwcChartEngine implements ChartEngine {
       this.timeScaleHandle = new LwcTimeScaleHandle(chart.timeScale(), () => this.ensure());
     }
     return this.timeScaleHandle;
+  }
+
+  priceScale(priceScaleId: string, paneIndex?: number): PriceScaleHandle {
+    this.ensure();
+    return new LwcPriceScaleHandle(() => this.ensure(), priceScaleId, paneIndex);
+  }
+
+  paneSize(paneIndex?: number): { width: number; height: number } {
+    const s = this.ensure().paneSize(paneIndex);
+    return { width: s.width, height: s.height };
+  }
+
+  swapPanes(first: number, second: number): void {
+    this.ensure().swapPanes(first, second);
+  }
+
+  takeScreenshot(): HTMLCanvasElement {
+    return this.ensure().takeScreenshot();
   }
 
   applyOptions(options: EngineOptions): void {

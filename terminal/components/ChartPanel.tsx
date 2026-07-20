@@ -12,11 +12,12 @@ function cpMark(name: string) {
   console.log(`[boottrace] ${name} +${(now - _cpStart).toFixed(1)}ms`);
 }
 import {
-  createChart, CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries, BaselineSeries,
+  CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries, BaselineSeries,
   createSeriesMarkers, type ISeriesMarkersPluginApi,
   createTextWatermark,
   CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
+import { createEngine, type ChartEngine } from "@/lib/chart-engine";
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engine/host";
 import { ORACLE_V1_PINE } from "@/lib/pine";
@@ -264,6 +265,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const statusRef = useRef<HTMLSpanElement>(null);
   const verdictRef = useRef<HTMLSpanElement>(null);
   // ── chart / series refs (never in a dep array) ──
+  // The engine owns the renderer lifecycle (chart-engine P1); chartRef is the raw-LWC
+  // bridge handle the not-yet-migrated call sites still speak (P2 drives it out).
+  const engineRef = useRef<ChartEngine | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const priceSeriesRef = useRef<ISeriesApi<any> | null>(null);
   const priceFamilyRef = useRef<string | null>(null);   // which series family is on the chart now
@@ -2029,11 +2033,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     window.addEventListener("mm:snapshot", snapshot);
 
-    // ── create the ONE chart (the hard invariant: exactly one createChart in this file) ──
+    // ── create the ONE chart (the hard invariant — exactly one renderer instance — now
+    // lives behind createEngine; docs/CHART_ENGINE_MASTERPLAN.md P1) ──
     cpMark(`chart-create[${symbol}]`);
     tokensRef.current = readTokens();
     const t = tokensRef.current;
-    const chart = createChart(el, {
+    const engine = createEngine(el, {
       width: el.clientWidth || 900, height: el.clientHeight || 600,
       layout: { background: { color: "transparent" }, textColor: t.mut, fontSize: 11, attributionLogo: false, panes: { separatorColor: css("--pane-sep"), separatorHoverColor: css("--pane-sep-h") } },
       grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
@@ -2041,6 +2046,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       rightPriceScale: { borderColor: t.line, scaleMargins: { top: 0.1, bottom: 0.08 } },
       timeScale: { borderColor: t.line, rightOffset: 6, barSpacing: 8 },
     });
+    engineRef.current = engine;
+    // engine-unwrap: P1 bridge — the raw IChartApi for the call sites below; each cluster
+    // migrates behind the contract in P2, and this unwrap dies with the last one.
+    const chart = engine.unwrap<IChartApi>();
     chartRef.current = chart;
 
     // ── v5 text watermark (createTextWatermark plugin — chart.applyOptions({ watermark }) removed in v5) ──
@@ -3220,8 +3229,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       indSeriesRef.current.clear(); cmpSeriesRef.current.clear(); paneMapRef.current.clear();
       pineSeriesRef.current.clear(); pineMarkersRef.current.clear(); pinePaneMapRef.current.clear(); pineErrRef.current.clear(); pineCacheRef.current.clear(); pineAstRef.current.clear();
       priceSeriesRef.current = null; priceFamilyRef.current = null;
-      watermarkPluginRef.current = null;   // plugin is attached to a pane; chart.remove() tears it down
-      if (chartRef.current) { try { chartRef.current.remove(); } catch {} chartRef.current = null; }   // ONLY chart.remove() in the file
+      watermarkPluginRef.current = null;   // plugin is attached to a pane; engine.destroy() tears it down
+      // The engine owns disposal (its destroy() is the one chart.remove() call); chartRef
+      // was only ever the unwrap bridge, so it just drops.
+      if (engineRef.current) { try { engineRef.current.destroy(); } catch {} engineRef.current = null; }
+      chartRef.current = null;
     };
   }, []); // eslint-disable-line
 
