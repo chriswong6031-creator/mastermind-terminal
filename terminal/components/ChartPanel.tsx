@@ -59,19 +59,26 @@ export function intradayCapable(market: Market): boolean { return market !== "ca
 export function spliceDaily(daily: Bar[], q: { last?: number; open?: number; high?: number; low?: number; vol?: number } | null | undefined, sessionDate: string | null): Bar[] {
   if (!daily.length || !q || sessionDate == null) return daily;
   const last = q.last;
-  if (last == null || !isFinite(last)) return daily;
+  // Only splice a REAL positive price. Equities never trade at/below 0; a 0 (or missing) `last` is a
+  // premarket/feed placeholder — splicing it would draw a bar down to $0.
+  if (last == null || !isFinite(last) || last <= 0) return daily;
+  // Treat 0/negative open/high/low as MISSING, not real prices. CN/HK premarket call-auction snapshots
+  // report open/high/low = 0 before the session resolves; accepting the 0 open anchored a synthetic bar
+  // at $0 → the "$0 → last-close" spike on every China chart at the open.
+  const pos = (x: number | undefined): number | undefined => (typeof x === "number" && isFinite(x) && x > 0 ? x : undefined);
+  const qHigh = pos(q.high), qLow = pos(q.low), qOpen = pos(q.open);
   const tail = daily[daily.length - 1];
   if (sessionDate < tail.time) return daily;   // quote is older than the freshest bar — nothing to do
   if (sessionDate === tail.time) {
-    const h = Math.max(tail.h, last, isFinite(q.high as number) ? (q.high as number) : -Infinity);
-    const l = Math.min(tail.l, last, isFinite(q.low as number) ? (q.low as number) : Infinity);
+    const h = Math.max(tail.h, last, qHigh ?? -Infinity);
+    const l = Math.min(tail.l, last, qLow ?? Infinity);
     const patched: Bar = { ...tail, h, l, c: last, v: isFinite(q.vol as number) ? (q.vol as number) : tail.v };
     return [...daily.slice(0, -1), patched];
   }
   // newer session → append a synthetic bar built from the snapshot fields (open/high/low fall back to last)
-  const o = isFinite(q.open as number) ? (q.open as number) : last;
-  const h = Math.max(o, last, isFinite(q.high as number) ? (q.high as number) : -Infinity);
-  const l = Math.min(o, last, isFinite(q.low as number) ? (q.low as number) : Infinity);
+  const o = qOpen ?? last;
+  const h = Math.max(o, last, qHigh ?? -Infinity);
+  const l = Math.min(o, last, qLow ?? Infinity);
   const bar: Bar = { time: sessionDate, o, h, l, c: last, v: isFinite(q.vol as number) ? (q.vol as number) : 0 };
   return [...daily, bar];
 }
