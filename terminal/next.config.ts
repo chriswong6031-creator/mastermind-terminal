@@ -62,6 +62,34 @@ const securityHeaders = [
   { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
 ];
 
+// ── Embeddable widget headers (/embed/*) ──────────────────────────────────────
+// The /embed/chart widget is iframed by the ~1,500 SEO stock dossier pages on
+// https://mastermind-x.com/stocks/<TICKER>.html, so it must be FRAMEABLE by that origin — the
+// opposite of every other route (which stays locked with frame-ancestors 'self' + X-Frame-Options
+// to stop competitors rehosting the UI). This header set:
+//   - swaps frame-ancestors to allow the dossier host (apex + www), keeping everything else strict;
+//   - OMITS X-Frame-Options entirely (that legacy header only understands SAMEORIGIN/DENY, so its
+//     presence would veto the cross-origin frame regardless of CSP — X-Frame-Options ⇒ no framing);
+//   - keeps nosniff / referrer / HSTS / permissions / COOP unchanged;
+//   - adds X-Robots-Tag: noindex so search engines never index the widget shells directly;
+//   - caps edge caching at 5 min (SWR 10 min) like the other prerendered shells.
+// COEP is deliberately not set (an embedded third-party widget must stay cross-origin embeddable).
+const embedCSP = CSP.replace(
+  "frame-ancestors 'self'",
+  "frame-ancestors 'self' https://mastermind-x.com https://www.mastermind-x.com",
+);
+const embedHeaders = [
+  { key: "Content-Security-Policy", value: embedCSP },
+  // NB: no X-Frame-Options here (its presence would block the cross-origin iframe).
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), interest-cohort=()" },
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+  { key: "X-Robots-Tag", value: "noindex" },
+  { key: "Cache-Control", value: "public, s-maxage=300, stale-while-revalidate=600" },
+];
+
 const nextConfig: NextConfig = {
   // Distinct-per-build id → version-skew protection + stale-chunk self-heal (see DEPLOYMENT_ID above).
   deploymentId: DEPLOYMENT_ID,
@@ -109,10 +137,18 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
-      // Security headers on every route (framing, CSP, sniffing, referrer, HSTS).
+      // Security headers on every route EXCEPT the /embed subtree (framing, CSP, sniffing, referrer,
+      // HSTS). The negative-lookahead keeps EXACTLY today's strict set on everything else; /embed
+      // gets its own frameable set below. Regex is applied to the path without the leading slash.
       {
-        source: "/:path*",
+        source: "/((?!embed).*)",
         headers: securityHeaders,
+      },
+      // The embeddable widget subtree: frameable by the dossier host, no X-Frame-Options, noindex,
+      // 5-min edge cap. See embedHeaders above.
+      {
+        source: "/embed/:path*",
+        headers: embedHeaders,
       },
       // Cache static market-data JSON served from /data/* for 5 min, stale for 1 hour.
       {
