@@ -138,3 +138,9 @@ path lets each of those be conquered behind a flag with LWC as the always-on con
 ## Status log
 
 - 2026-07-20 · P0 landed (api.ts + lwc adapter + contract tests, 45 tests) — additive, dark.
+- 2026-07-20 · P0.5 + P1 landed (PR #157): contract gained the surface ChartPanel measurably
+  uses (priceScale/paneSize/swapPanes/takeScreenshot/pane()/getHTMLElement, 50 tests);
+  ChartPanel's renderer lifecycle now runs through createEngine with chartRef holding the
+  `engine-unwrap:` bridge — the engine is in the production path, downstream call sites
+  byte-identical. P2 next: migrate clusters (series builders, markers, price lines,
+  watermark, priceScale sites) behind the contract and drive the unwrap count to zero.
