@@ -74,9 +74,12 @@ const securityHeaders = [
 //   - adds X-Robots-Tag: noindex so search engines never index the widget shells directly;
 //   - caps edge caching at 5 min (SWR 10 min) like the other prerendered shells.
 // COEP is deliberately not set (an embedded third-party widget must stay cross-origin embeddable).
+// In dev, also allow localhost parents on any port so the dossier repo's local
+// preview (a plain static server on a random port) can frame the widget end-to-end.
 const embedCSP = CSP.replace(
   "frame-ancestors 'self'",
-  "frame-ancestors 'self' https://mastermind-x.com https://www.mastermind-x.com",
+  "frame-ancestors 'self' https://mastermind-x.com https://www.mastermind-x.com" +
+    (isProd ? "" : " http://localhost:* http://127.0.0.1:*"),
 );
 const embedHeaders = [
   { key: "Content-Security-Policy", value: embedCSP },

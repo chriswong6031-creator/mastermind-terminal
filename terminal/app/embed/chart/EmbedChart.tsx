@@ -65,6 +65,24 @@ function prefersReducedMotion(): boolean {
 
 const TERMINAL_BASE = "https://app.mastermind-x.com/terminal";
 
+/** Transparent mode must reach the ROOT — the app's globals.css paints html/body dark,
+ * which would otherwise show through as an opaque dark box inside the parent's
+ * light/glass card (the widget's own pageBg:transparent can't override an ancestor). */
+function useTransparentRoot(transparent: boolean): void {
+  useEffect(() => {
+    if (!transparent) return;
+    const html = document.documentElement;
+    const prevHtml = html.style.background;
+    const prevBody = document.body.style.background;
+    html.style.background = "transparent";
+    document.body.style.background = "transparent";
+    return () => {
+      html.style.background = prevHtml;
+      document.body.style.background = prevBody;
+    };
+  }, [transparent]);
+}
+
 export default function EmbedChart({ symbol, theme, lang, transparent, initialRange }: EmbedChartProps) {
   const pal = useMemo<EmbedPalette>(() => palette(theme, transparent), [theme, transparent]);
   const t = useMemo(() => makeT(lang), [lang]);
@@ -84,6 +102,8 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
   const sma50Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const sma200Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const barsRef = useRef<Bar[]>([]);
+
+  useTransparentRoot(transparent);
 
   // ── Fetch daily bars (same-origin static file) ────────────────────────────────
   // Small self-contained fetch (not lib/dataCache) so the embed doesn't pull the coverage/neg404
@@ -511,6 +531,7 @@ function EmptyOrError({
 export function EmbedError({ theme, lang, transparent }: { theme: ThemeName; lang: Lang; transparent: boolean }) {
   const pal = palette(theme, transparent);
   const t = makeT(lang);
+  useTransparentRoot(transparent);
   return (
     <div className="embed-root" data-theme={theme} data-transparent={transparent ? "1" : "0"}>
       <div className="embed-body embed-body-solo">
