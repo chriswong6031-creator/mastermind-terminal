@@ -38,6 +38,29 @@ function resolvePath(method: Method, segs: string[]): string | null {
   return null;
 }
 
+// Identity forwarding for the co-located gateway's device-linked free-credit pool.
+// The gateway trusts x-mm-aid / x-mm-ip ONLY when they carry BRAIN_PROXY_SECRET — a
+// source-IP check is insufficient because the gateway sits behind Caddy on 127.0.0.1,
+// so ALL public traffic appears local. We forward the visitor's first-party mm_aid
+// cookie, their real client IP, and the shared secret. All empty-safe.
+const PROXY_SECRET = process.env.BRAIN_PROXY_SECRET || "";
+function mmAid(req: Request): string {
+  const m = (req.headers.get("cookie") || "").match(/(?:^|;\s*)mm_aid=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+function mmIp(req: Request): string {
+  for (const k of ["eo-client-ip", "cf-connecting-ip", "true-client-ip"]) {
+    const v = (req.headers.get(k) || "").trim();
+    if (v) return v;
+  }
+  return (req.headers.get("x-forwarded-for") || "").split(",")[0].trim();
+}
+function idHeaders(req: Request): Record<string, string> {
+  const h: Record<string, string> = { "x-mm-aid": mmAid(req), "x-mm-ip": mmIp(req) };
+  if (PROXY_SECRET) h["x-mm-proxy-secret"] = PROXY_SECRET;
+  return h;
+}
+
 // Verify the session and return the access token, or a 401 Response to relay.
 async function authOrReject(): Promise<
   { token: string } | { error: Response }
@@ -93,7 +116,7 @@ export async function GET(
 
   try {
     const upstream = await fetch(`${GATEWAY}/api/brain/${upstreamPath}`, {
-      headers: { Authorization: `Bearer ${auth.token}` },
+      headers: { Authorization: `Bearer ${auth.token}`, ...idHeaders(req) },
       signal: req.signal,
     });
     return relay(upstream);
@@ -142,6 +165,7 @@ export async function POST(
       headers: {
         "Content-Type": contentType,
         Authorization: `Bearer ${auth.token}`,
+        ...idHeaders(req),
       },
       body,
       signal: req.signal,
