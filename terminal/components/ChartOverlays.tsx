@@ -8,7 +8,7 @@
 //     remove / collapse / maximize, with active-state highlighting.
 // It owns NO chart logic — every action is a callback into ChartPanel, which holds the chart refs.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export type LegendEntry = {
   key: string;          // "ema" | "bb" | … | "pine" | "cmp:SYM"
@@ -73,7 +73,7 @@ const ICONS = {
   maximize: "M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5",
 };
 
-type MoreState = { key: string; label: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; noParams: boolean; x: number; y: number };
+type MoreState = { key: string; label: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; noParams: boolean; x: number; y: number; rowTop: number };
 
 export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: string | null; legendOpen: boolean; onToggleLegend: () => void; coarse?: boolean } & OverlayActions) {
   const coarse = !!props.coarse;
@@ -97,14 +97,28 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
     window.addEventListener("pointerdown", close); window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", onKey); };
   }, [more]);
-  // Clamp the dropdown inside the viewport (8px ≤ x ≤ vw − width − 8px) after it measures. Anchored
-  // to the row's left edge; on a narrow phone the raw left could push it off the right edge.
-  useEffect(() => {
+  // Clamp the dropdown inside the viewport after it measures — useLayoutEffect so the clamp lands
+  // before paint (no one-frame off-position flash on narrow phones). Anchored to the row's left edge
+  // and its bottom edge; on a narrow phone the raw left could push it off the right edge, and a row
+  // in the lowest sub-pane could push the bottom rows (incl. danger "Remove") below the fold.
+  //   • x: 8px ≤ x ≤ vw − width − 8px.
+  //   • y: prefer below the row; if it won't fit, flip ABOVE the row; if the menu is taller than the
+  //     whole viewport (rare) it caps at 8px and the CSS max-height/overflow scroll takes over.
+  useLayoutEffect(() => {
     if (!more) return;
     const el = moreRef.current; if (!el) return;
-    const w = el.offsetWidth, vw = window.innerWidth;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    const vw = window.innerWidth, vh = window.innerHeight;
     const x = Math.max(8, Math.min(more.x, vw - w - 8));
+    // more.y anchors the menu below the row (row bottom + 4). more.rowTop is the row's top edge.
+    let y = more.y;
+    if (y + h > vh - 8) {
+      // not enough room below — try flipping ABOVE the row (menu bottom 4px above the row top)
+      const above = more.rowTop - 4 - h;
+      y = above >= 8 ? above : Math.max(8, vh - 8 - h);
+    }
     el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
   }, [more]);
   // Static Legend: pointerdown outside the armed row disarms it (mirrors the More closer). Skipped
   // while a More dropdown is open on coarse — that popover owns its own outside-click dismissal
@@ -121,7 +135,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
 
   const stop = (fn: () => void) => (ev: React.MouseEvent) => { ev.stopPropagation(); ev.preventDefault(); fn(); };
   const openMore = (e: LegendEntry, paneIndex: number, rect: DOMRect) =>
-    setMore({ key: e.key, label: e.label, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: rect.left, y: rect.bottom + 4 });
+    setMore({ key: e.key, label: e.label, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: rect.left, y: rect.bottom + 4, rowTop: rect.top });
 
   // B5: total entries count across all panes (for the count chip)
   const totalEntries = props.panes.reduce((s, p) => s + p.entries.length, 0);
@@ -173,7 +187,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
                             ev.stopPropagation(); ev.preventDefault();
                             const rowEl = (ev.currentTarget as HTMLElement).closest(".lg-row") as HTMLElement | null;
                             const r = (rowEl ?? (ev.currentTarget as HTMLElement)).getBoundingClientRect();
-                            setMore({ key: e.key, label: e.label, paneIndex: p.paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: r.left, y: r.bottom + 4 });
+                            setMore({ key: e.key, label: e.label, paneIndex: p.paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: r.left, y: r.bottom + 4, rowTop: r.top });
                           }}>{I(ICONS.more, 2.4)}</button>
                         </span>
                       ) : !coarse ? (
@@ -196,7 +210,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
                 })}
                 {/* B5: count chip on the collapse button — shows total entry count on coarse */}
                 {p.isPrice && (
-                  <button className="lg-collapse" title={props.legendOpen ? "Minimize indicator list" : "Show indicator list"} onClick={stop(props.onToggleLegend)}>
+                  <button className="lg-collapse" title={props.legendOpen ? "Minimize indicator list" : "Show indicator list"} onClick={stop(() => { setArmedKey(null); props.onToggleLegend(); })}>
                     <svg viewBox="0 0 24 24" style={{ width: 13, height: 13, stroke: "currentColor", fill: "none", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", transform: props.legendOpen ? "none" : "rotate(180deg)" }}><path d="M6 15l6-6 6 6" /></svg>
                     {coarse && totalEntries > 0 && <span className="lg-cnt">{totalEntries}</span>}
                   </button>
