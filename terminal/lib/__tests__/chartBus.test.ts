@@ -218,25 +218,61 @@ describe("ATR(14) + fit metrics on a synthetic series", () => {
     expect(Number.isFinite(a)).toBe(true);
   });
 
+  it("atr mirrors the gateway's Wilder smoothing (seed = mean of first 14 TRs, bar-0 TR = h−l)", () => {
+    // TRs alternate 1.6 (even bars: high 100.8, low 99.2 vs prior close 100) and 1.0 (odd bars: high
+    // 100.5, low 99.5). Wilder smoothing (seed = mean of first 14, then prev=(prev·13+TR)/14) converges
+    // to ≈1.2923 here — distinct from the plain last-14 SMA (≈1.30) the code used before this fix.
+    // Byte-for-byte cross-checked against the gateway's chart_perception._atr_series. Guards the port.
+    expect(atr(bars, 14)).toBeCloseTo(1.292284, 5);
+  });
+
   it("an hline at 100 is touched by every bar whose [l,h] straddles it", () => {
     const fit = fitMetrics({ kind: "hline", points: [{ t: "1700000000", p: 100 }] }, bars);
     expect(fit).not.toBeNull();
     expect(fit!.touches).toBe(30); // every bar's [l,h] contains 100
-    expect(fit!.max_dev_atr).toBe(0); // no bar's nearer extreme is beyond the line
+    // max_dev_atr = worst band-discounted violation THROUGH the line. Even bars' lows dip to 99.2,
+    // i.e. 0.8 below a support line at 100; minus the 0.5×ATR (=0.65) band → 0.15, /ATR(1.3) ≈ 0.119.
+    expect(fit!.max_dev_atr).toBeCloseTo(0.119, 3);
   });
 
-  it("an hline far above the range has zero touches and a positive max_dev", () => {
+  it("an hline far ABOVE a series it never violates does NOT inflate max_dev_atr", () => {
+    // Price sits far below the line and never closes through it. Closes are all below 130 → the line
+    // reads as resistance, and no high pokes above it → max_dev_atr must be 0 (the natural distance
+    // BELOW an un-violated resistance line is not a violation). This is the ruling's core semantic.
     const fit = fitMetrics({ kind: "hline", points: [{ t: "1700000000", p: 130 }] }, bars);
     expect(fit).not.toBeNull();
     expect(fit!.touches).toBe(0);
-    expect(fit!.max_dev_atr).toBeGreaterThan(0);
+    expect(fit!.max_dev_atr).toBe(0);
   });
 
-  it("a rising trendline counts touches only within its time segment", () => {
+  it("a close cleanly THROUGH a respected support line DOES register as max_dev_atr", () => {
+    // A support line at 100 respected for 29 bars — price rides ABOVE it (closes at 101, dips only to
+    // ~100), so the close distribution reads the line as support (29 above, 1 below). On the last bar
+    // price breaks and closes hard through it (low 96, close 96) — a genuine violation. Contrast the
+    // "rally far ABOVE, never violates" case above, which stays 0: here the wrong-side penetration
+    // must register clearly. Byte-cross-checked against the gateway → max_dev_atr ≈ 1.249.
+    const support = Array.from({ length: 30 }, (_, i) =>
+      i === 29
+        ? { time: 1700000000 + i * 86400, o: 101, c: 96, h: 101.2, l: 96 } // break: closes below
+        : {
+            time: 1700000000 + i * 86400, o: 101, c: 101, // respected: rides above, closes at 101
+            h: 101.8 + (i % 2 === 0 ? 0.3 : 0),
+            l: 100.0 - (i % 2 === 0 ? 0.2 : 0),
+          },
+    );
+    const fit = fitMetrics({ kind: "hline", points: [{ t: "1700000000", p: 100 }] }, support);
+    expect(fit).not.toBeNull();
+    expect(fit!.max_dev_atr).toBeCloseTo(1.249, 3);
+    // and it dwarfs the incidental within-band wick-poke of the un-broken respected case.
+    expect(fit!.max_dev_atr).toBeGreaterThan(1);
+  });
+
+  it("a horizontal trendline counts touches only within its time segment", () => {
     // line from (bar0, 100) to (bar10, 100) — horizontal segment over the first 11 bars.
     const fit = fitMetrics({ kind: "trendline", points: [{ t: "1700000000", p: 100 }, { t: String(1700000000 + 10 * 86400), p: 100 }] }, bars);
     expect(fit).not.toBeNull();
     expect(fit!.touches).toBe(11); // bars 0..10 inclusive
+    expect(fit!.max_dev_atr).toBeCloseTo(0.119, 3); // same band-discounted dip as the hline case
   });
 
   it("returns null for an unsupported kind", () => {

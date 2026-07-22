@@ -410,20 +410,30 @@ export function applyToStore(
 }
 
 // ── ATR(14) + fit metrics ─────────────────────────────────────────────────────────────────────
-// Bars as the chart holds them: {time,o,h,l,c,v}. ATR computed locally (Wilder-style simple mean of
-// the last `period` true ranges) — deterministic, no external dependency on indicator state.
+// Bars as the chart holds them: {time,o,h,l,c,v}. ATR is the last value of a **Wilder-smoothed**
+// ATR(period) — an EXACT mirror of the macro gateway's chart_perception._atr_series (the single
+// source of truth for ack-time fit). Wilder: seed = mean of the first `period` true ranges, then
+// prev = (prev·(period−1) + TR)/period. The TR series includes bar 0 (TR₀ = high−low, no prior
+// close), matching the gateway. Deterministic; no dependency on indicator state.
 export type FitBar = { time: string | number; h: number; l: number; c: number; o?: number };
 
 export function atr(bars: FitBar[], period = 14): number {
-  if (bars.length < 2) return 0;
+  const n = bars.length;
+  if (n < 2) return 0;
+  // True ranges aligned to input length; bar 0 uses high−low (mirrors gateway _true_ranges).
   const trs: number[] = [];
-  for (let i = 1; i < bars.length; i++) {
-    const h = bars[i].h, l = bars[i].l, pc = bars[i - 1].c;
-    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  for (let i = 0; i < n; i++) {
+    if (i === 0) {
+      trs.push(Math.max(0, bars[i].h - bars[i].l));
+    } else {
+      const h = bars[i].h, l = bars[i].l, pc = bars[i - 1].c;
+      trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+    }
   }
-  const take = trs.slice(-period);
-  if (!take.length) return 0;
-  return take.reduce((s, x) => s + x, 0) / take.length;
+  if (trs.length < period) return 0; // no full Wilder window yet → no scale (gateway returns None)
+  let prev = trs.slice(0, period).reduce((s, x) => s + x, 0) / period; // Wilder seed
+  for (let i = period; i < trs.length; i++) prev = (prev * (period - 1) + trs[i]) / period;
+  return prev;
 }
 
 const toMsFit = (t: string | number): number => {
@@ -444,9 +454,23 @@ function priceAt(points: Pt[], tm: number): number | null {
   return p0 + (p1 - p0) * frac;
 }
 
-// Fit metrics for trendline / ray / hline / zone. touches = bars whose [l,h] straddles the line within
-// a 0.5×ATR band; max_dev_atr = max distance (in ATRs) from the line to the nearer swing extreme of
-// bars the line crosses. Deterministic; simple. Returns null when uncomputable (too few bars / vertical).
+// Fit metrics for trendline / ray / hline / zone — an EXACT mirror of the macro gateway's
+// chart_perception._line_fit (the single source of truth the gateway reads back at ack time).
+//
+//   • touches      — bars whose [l,h] straddles the line within a 0.5×ATR band (unchanged).
+//   • max_dev_atr  — the worst *violation* of the line, in ATRs: how far price closed THROUGH it on
+//                    the wrong side, NOT the natural swing away from it. The line's side (support vs
+//                    resistance) is inferred from where the CLOSES predominantly sit over the span
+//                    (support if closes mostly ABOVE the line, resistance if mostly below — ties →
+//                    support, matching the gateway's `above >= below`). A support line is violated by
+//                    a low dipping BELOW it; a resistance line by a high poking ABOVE it. A within-band
+//                    poke is a touch, not a violation, so each violation is band-discounted. This is
+//                    what makes the verdict meaningful: a respected support line reads small even when
+//                    price legitimately rallies far ABOVE it between touches; a clean close THROUGH it
+//                    reads large.
+//
+// Rounded to 3 decimals to match the gateway's `round(max_pen / atr_now, 3)`. Returns null when
+// uncomputable (no bars / no ATR scale / line crosses nothing / degenerate zone).
 export type Fit = { touches: number; max_dev_atr: number };
 
 export function fitMetrics(obj: { kind: string; points: Pt[] }, bars: FitBar[]): Fit | null {
@@ -457,45 +481,65 @@ export function fitMetrics(obj: { kind: string; points: Pt[] }, bars: FitBar[]):
   if (!(a > 0)) return null;
   const band = 0.5 * a;
 
-  // For a zone (rect) the "line" is the band itself: touches = bars overlapping [lo,hi]; dev measured
-  // to the nearer edge.
+  // For a zone (rect) the band has two edges — the lower edge acts as support, the upper as
+  // resistance. touches = bars overlapping [lo,hi]±band; a violation is a bar that closed the range
+  // entirely on the wrong side of an edge (below lo → support broken; above hi → resistance broken),
+  // band-discounted exactly as the line case.
   if (kind === "rect") {
     if (obj.points.length < 2) return null;
     const hi = Math.max(obj.points[0].p, obj.points[1].p);
     const lo = Math.min(obj.points[0].p, obj.points[1].p);
-    let touches = 0, maxDev = 0;
+    let touches = 0, maxPen = 0;
     for (const b of bars) {
       if (b.l <= hi + band && b.h >= lo - band) touches++;
-      // distance from bar's nearer extreme to the band (0 when inside)
-      const dev = b.h < lo ? lo - b.h : b.l > hi ? b.l - hi : 0;
-      if (dev > maxDev) maxDev = dev;
+      // wrong-side penetration past the nearer edge (0 when the range overlaps the band)
+      let pen = b.h < lo ? lo - b.h : b.l > hi ? b.l - hi : 0;
+      pen = Math.max(0, pen - band); // a within-band poke is a touch, not a violation
+      if (pen > maxPen) maxPen = pen;
     }
-    return { touches, max_dev_atr: +(maxDev / a).toFixed(2) };
+    return { touches, max_dev_atr: +(maxPen / a).toFixed(3) };
   }
 
-  // trendline / ray / hline: evaluate the line's price at each bar's time.
+  // trendline / ray / hline: evaluate the line's price at each bar's time. Two passes over the
+  // in-span bars — first tally touches + the close distribution (side), then the band-discounted
+  // wrong-side penetration — mirroring the gateway's two loops.
   const ext = kind === "ray";
   const t0 = toMsFit(obj.points[0].t);
   const t1 = obj.points.length > 1 ? toMsFit(obj.points[1].t) : t0;
-  const lo = Math.min(t0, t1), hiT = Math.max(t0, t1);
-  let touches = 0, maxDev = 0, crossed = 0;
+  const loT = Math.min(t0, t1), hiT = Math.max(t0, t1);
+  const inSpan = (bt: number): boolean => {
+    // hline spans all bars; segment only within [loT,hiT]; ray only from loT onward.
+    if (kind === "trendline" && (bt < loT || bt > hiT)) return false;
+    if (kind === "ray" && bt < loT) return false;
+    return true;
+  };
+  // Pass 1: touches + side inference from the close distribution.
+  let touches = 0, above = 0, below = 0, crossed = 0;
+  const rows: Array<{ b: FitBar; lp: number }> = [];
   for (const b of bars) {
     const bt = toMsFit(b.time);
-    // hline spans all bars; segment only within [lo,hiT]; ray only from lo onward.
-    if (kind === "trendline" && (bt < lo || bt > hiT)) continue;
-    if (kind === "ray" && bt < lo) continue;
+    if (!inSpan(bt)) continue;
     void ext;
     const lp = kind === "hline" ? obj.points[0].p : priceAt(obj.points, bt);
     if (lp == null) continue;
     crossed++;
-    // touch: the bar's [l,h] straddles the line within the band
+    rows.push({ b, lp });
     if (b.l <= lp + band && b.h >= lp - band) touches++;
-    // deviation: distance from the line to the nearer swing extreme it crosses, in raw price
-    const dev = b.h < lp ? lp - b.h : b.l > lp ? b.l - lp : 0;
-    if (dev > maxDev) maxDev = dev;
+    if (b.c > lp) above++;
+    else if (b.c < lp) below++;
   }
   if (!crossed) return null;
-  return { touches, max_dev_atr: +(maxDev / a).toFixed(2) };
+  // Side: support if closes mostly sit above the line, resistance if mostly below (ties → support).
+  const isSupport = above >= below;
+  // Pass 2: worst band-discounted wrong-side violation.
+  let maxPen = 0;
+  for (const { b, lp } of rows) {
+    // support → low dipping BELOW the line; resistance → high poking ABOVE it.
+    let pen = isSupport ? Math.max(0, lp - b.l) : Math.max(0, b.h - lp);
+    pen = Math.max(0, pen - band); // within-band poke is a touch, not a violation
+    if (pen > maxPen) maxPen = pen;
+  }
+  return { touches, max_dev_atr: +(maxPen / a).toFixed(3) };
 }
 
 // ── command queue with pacing hooks ──────────────────────────────────────────────────────────
