@@ -175,27 +175,104 @@ export default function ChartFrameBar({
     return () => window.removeEventListener("mousedown", h);
   }, [gearOpen]);
 
-  // Keyboard shortcuts: ⌥I invert, ⌥P percent, ⌥L log — guard against typing contexts
+  // Keyboard shortcuts:
+  //   ⌥I invert, ⌥P percent, ⌥L log (existing, unchanged),
+  //   ←/→ pan (Shift = larger step), +/- zoom (TradingView-standard chart nav).
+  // All guarded against typing contexts.
   useEffect(() => {
+    // Pan/zoom the visible logical range. `frac` is signed for pan (fraction of visible
+    // width to shift; +right/-left), and a magnitude for zoom around the range center.
+    const panBy = (frac: number) => {
+      if (!chartApi) return;
+      try {
+        const ts = chartApi.timeScale();
+        const r = ts.getVisibleLogicalRange();
+        if (!r) return;                         // null range → no-op (no data / not laid out)
+        const w = r.to - r.from;
+        const d = w * frac;
+        ts.setVisibleLogicalRange({ from: r.from + d, to: r.to + d });
+      } catch {}
+    };
+    const zoomBy = (factor: number) => {        // <1 zooms in, >1 zooms out; anchored on center
+      if (!chartApi) return;
+      try {
+        const ts = chartApi.timeScale();
+        const r = ts.getVisibleLogicalRange();
+        if (!r) return;
+        const mid = (r.from + r.to) / 2;
+        const half = ((r.to - r.from) / 2) * factor;
+        ts.setVisibleLogicalRange({ from: mid - half, to: mid + half });
+      } catch {}
+    };
+
     const h = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
+      const tgt = e.target as HTMLElement | null;
+      const tag = tgt?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (e.isComposing) return;
-      if (!e.altKey) return;
-      if (e.key === "i" || e.key === "I") {
-        e.preventDefault();
-        onSettings({ invertScale: !settings.invertScale });
-      } else if (e.key === "p" || e.key === "P") {
-        e.preventDefault();
-        onSettings({ mode: settings.mode === PriceScaleMode.Percentage ? PriceScaleMode.Normal : PriceScaleMode.Percentage });
-      } else if (e.key === "l" || e.key === "L") {
-        e.preventDefault();
-        onSettings({ mode: settings.mode === PriceScaleMode.Logarithmic ? PriceScaleMode.Normal : PriceScaleMode.Logarithmic });
+      if (tgt?.isContentEditable) return;
+
+      // Existing ⌥-bindings (invert / percent / log) — unchanged.
+      if (e.altKey) {
+        if (e.key === "i" || e.key === "I") {
+          e.preventDefault();
+          onSettings({ invertScale: !settings.invertScale });
+        } else if (e.key === "p" || e.key === "P") {
+          e.preventDefault();
+          onSettings({ mode: settings.mode === PriceScaleMode.Percentage ? PriceScaleMode.Normal : PriceScaleMode.Percentage });
+        } else if (e.key === "l" || e.key === "L") {
+          e.preventDefault();
+          onSettings({ mode: settings.mode === PriceScaleMode.Logarithmic ? PriceScaleMode.Normal : PriceScaleMode.Logarithmic });
+        }
+        return;
+      }
+
+      // Chart-nav keys: reject ctrl/meta/alt combos so ⌥-bindings + browser shortcuts stay
+      // untouched (Shift is the only permitted modifier, and only for the arrows).
+      if (e.ctrlKey || e.metaKey) return;
+
+      // Yield to focused controls / open modals so this window-level (bubble) listener does
+      // not double-fire with element-scoped arrow handlers. WorkspaceTabs' roving-tab arrows
+      // (its focused <button> is document.activeElement) and the tutorial coach dialog
+      // (aria-modal) are the two real bubble collisions; both are covered here.
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== document.body) {
+        const atag = active.tagName;
+        if (
+          atag === "INPUT" || atag === "TEXTAREA" || atag === "SELECT" ||
+          atag === "BUTTON" || atag === "A" ||
+          active.isContentEditable ||
+          active.closest('[aria-modal="true"], [role="tab"], [role="dialog"]')
+        ) return;
+      }
+
+      switch (e.key) {
+        case "ArrowLeft":
+          e.preventDefault();
+          panBy(e.shiftKey ? -0.5 : -0.1);   // toward the past
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          panBy(e.shiftKey ? 0.5 : 0.1);     // toward the future
+          break;
+        // Zoom: match on the produced character. On a US layout "+" is itself Shift+"=" and
+        // "_" is Shift+"-", so Shift is intrinsic to these keys and must NOT be rejected here
+        // (ctrl/meta/alt were already filtered above). "=" and "-" cover the unshifted keys.
+        case "+":
+        case "=":
+          e.preventDefault();
+          zoomBy(0.8);                       // shrink by 20% → zoom in
+          break;
+        case "-":
+        case "_":
+          e.preventDefault();
+          zoomBy(1.25);                      // expand by 25% → zoom out
+          break;
       }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [settings, onSettings]);
+  }, [settings, onSettings, chartApi]);
 
   // Go-to-date: focus the input when it opens
   useEffect(() => {
