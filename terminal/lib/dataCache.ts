@@ -7,9 +7,49 @@
  *   - Inflight-request deduplication (collapse double slice fetch).
  *   - TTL = 60 s, stale-while-revalidate by default.
  *   - Never stores null responses — on null/error the key is evicted so the next call retries.
- *   - LRU cap ~400 entries.
+ *   - LRU cap ~400 entries (in-memory).
  *   - SSR-safe: prefetch is a no-op on the server; getJSON works (no window APIs needed).
+ *
+ * PERSISTENCE (IndexedDB write-through / read-back — added D3):
+ *   The in-memory Map is lost on every reload, so first paint after a reload
+ *   refetches multi-hundred-KB OHLC JSONs over the network. A transparent
+ *   IndexedDB layer (lib/idbJsonStore.ts, DB "mm-data-cache" v1, store "json"
+ *   keyPath "url", records {url,data,ts}, index "ts") mirrors committed entries
+ *   to disk so a revisit paints instantly.
+ *
+ *   - WRITE-THROUGH: when doFetch commits a successful response to the memory
+ *     store it ALSO fires (never awaits) a put() to IDB. Errors are swallowed.
+ *   - READ-BACK: getJSON/prefetch, ONLY on a full memory miss, await a short IDB
+ *     get BEFORE the blocking network fetch. A hit seeds the memory store with
+ *     the persisted ts, then the NORMAL freshness rules apply — fresh (within
+ *     ttl) is served directly; stale is served with background swr revalidation.
+ *   - EVICTION: IDB store capped at 300 records; oldest-by-ts evicted via the
+ *     "ts" index, checked lazily (every Nth write). Single-record size cap 8 MB
+ *     via a cheap array-length heuristic (NO double JSON.stringify — see
+ *     idbJsonStore.estimatePersistBytes; non-array values persist unconditionally
+ *     and rely on the record cap).
+ *   - neg404 stays SESSION-ONLY and is never persisted. invalidate(url?) also
+ *     deletes from IDB (fire-and-forget).
+ *   - SAFETY: every IDB path is behind `isAvailable()` (typeof indexedDB) and is
+ *     individually try/caught; a broken/blocked/absent IDB (SSR, private
+ *     browsing) leaves behaviour byte-identical to the memory-only cache. In the
+ *     node/jsdom test env indexedDB is undefined, so persistence is a no-op.
+ *   - NEVER GATES DATA: the read-back await (getJSON/prefetch, memory-miss only)
+ *     can NOT hang the terminal. A blocked/limbo IDB whose `open()` fires no event
+ *     is bounded inside idbJsonStore: idbGet races its whole body against a ~250ms
+ *     timeout and resolves null (→ a plain network miss), then LATCHES the store
+ *     off for the tab so subsequent reads short-circuit with no stall and writes
+ *     become no-ops. See the TIMEOUT + LATCH note in lib/idbJsonStore.ts. First
+ *     paint therefore falls back to the network exactly as no-IDB, never blank.
  */
+
+import {
+  idbGet,
+  idbPut,
+  idbDelete,
+  idbClear,
+  isAvailable as idbAvailable,
+} from "./idbJsonStore";
 
 type Entry = { data: any; ts: number; inflight: Promise<any> | null };
 
@@ -66,6 +106,12 @@ function doFetch(url: string, entry: Entry): Promise<any> {
         } else {
           const committed: Entry = { data, ts: Date.now(), inflight: null };
           touch(url, committed);
+          // Write-through to IndexedDB (fire-and-forget; never awaited on the
+          // hot path; all errors swallowed inside idbPut). Guarded so the call
+          // is a true no-op when IDB is unavailable (SSR / private browsing).
+          if (idbAvailable()) {
+            void idbPut(url, committed.data, committed.ts);
+          }
         }
       }
       return data;
@@ -79,6 +125,30 @@ function doFetch(url: string, entry: Entry): Promise<any> {
 }
 
 /**
+ * _seedDecision — PURE freshness classifier for a persisted IDB record.
+ *
+ * Given the persisted `ts`, the current time, the effective `ttl`, and whether
+ * stale-while-revalidate is enabled, decide what a read-back should do once it
+ * seeds the memory store with {data, ts}. Extracted (and exported as `_`-prefixed
+ * like `_neg404Has`) so the "IDB result seeds memory with correct ts + applies
+ * the normal freshness rules" logic is unit-testable with NO real IndexedDB.
+ *
+ *   "fresh"    → within ttl: seed memory, serve the persisted data, no network.
+ *   "stale-swr"→ expired but swr: seed memory, serve stale, background revalidate.
+ *   "refetch"  → expired and !swr: seeding does not help the caller; go to network.
+ *
+ * The persisted ts is ALWAYS carried through unchanged — never rewritten to now —
+ * so freshness after a reload matches what it would have been without the reload.
+ */
+export type SeedDecision = "fresh" | "stale-swr" | "refetch";
+export function _seedDecision(ts: number, now: number, ttl: number, swr: boolean): SeedDecision {
+  const age = now - ts;
+  if (age < ttl) return "fresh";
+  if (swr) return "stale-swr";
+  return "refetch";
+}
+
+/**
  * getJSON — the core cache primitive.
  *
  * Algorithm:
@@ -86,6 +156,7 @@ function doFetch(url: string, entry: Entry): Promise<any> {
  *   1. Inflight request present → return it (deduplication).
  *   2. Fresh (now - ts < ttl) → return cached data immediately.
  *   3. Stale + swr=true → kick off background revalidate; return stale data.
+ *   3b. Full memory miss → try IndexedDB read-back before the network (see below).
  *   4. Otherwise → fetch synchronously (caller awaits).
  */
 export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
@@ -121,6 +192,41 @@ export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
       doFetch(url, bgEntry); // fire-and-forget
       return Promise.resolve(staleData);
     }
+
+    // 3.stale + swr=false with an existing memory entry → fall through to (4).
+  } else if (idbAvailable()) {
+    // 3b. FULL memory miss only: short read-back from IndexedDB before hitting
+    // the network. A broken/absent IDB (guarded + try/caught in idbGet) just
+    // returns null and we fall through to the network exactly as before.
+    const rec = await idbGet(url);
+    // Re-check the memory store: another concurrent getJSON for the same url may
+    // have populated it while we awaited the IDB read. If so, defer to it.
+    const raced = store.get(url);
+    if (raced) {
+      if (raced.inflight !== null) return raced.inflight;
+      if (Date.now() - raced.ts < ttl) {
+        touch(url, raced);
+        return Promise.resolve(raced.data);
+      }
+      // raced entry is stale — fall through to the normal miss fetch below.
+    } else if (rec && !neg404.has(url)) {
+      // Seed memory with the PERSISTED ts (never `now`), then apply normal rules.
+      const decision = _seedDecision(rec.ts, Date.now(), ttl, swr);
+      if (decision === "fresh") {
+        const seeded: Entry = { data: rec.data, ts: rec.ts, inflight: null };
+        touch(url, seeded);
+        return Promise.resolve(rec.data);
+      }
+      if (decision === "stale-swr") {
+        const seeded: Entry = { data: rec.data, ts: rec.ts, inflight: null };
+        touch(url, seeded);
+        // Serve stale from disk immediately; revalidate in the background.
+        const bgEntry: Entry = { data: rec.data, ts: rec.ts, inflight: null };
+        doFetch(url, bgEntry); // fire-and-forget
+        return Promise.resolve(rec.data);
+      }
+      // decision === "refetch" (stale + swr=false): fall through to blocking fetch.
+    }
   }
 
   // 4. Miss or expired (swr=false): blocking fetch.
@@ -131,6 +237,11 @@ export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
 /**
  * prefetch — warm the cache without blocking the caller.
  * No-op on the server (SSR-safe).
+ *
+ * On a FULL memory miss, short-circuits via IndexedDB the same way getJSON does:
+ * a hover-prefetch that finds fresh persisted data seeds memory and skips the
+ * network entirely; stale persisted data seeds memory and revalidates in the
+ * background. IDB unavailable/miss → network exactly as before.
  */
 export function prefetch(url: string, opts?: GetOpts): void {
   if (typeof window === "undefined") return;
@@ -145,9 +256,47 @@ export function prefetch(url: string, opts?: GetOpts): void {
   if (entry) {
     if (entry.inflight !== null) return;
     if (now - entry.ts < ttl) return;
+    // Stale memory entry: revalidate (existing behaviour — no IDB detour needed
+    // since memory already holds data at least as fresh as disk).
+    const fresh: Entry = { data: entry.data, ts: entry.ts, inflight: null };
+    doFetch(url, fresh);
+    return;
   }
 
-  const fresh: Entry = { data: entry?.data ?? null, ts: entry?.ts ?? 0, inflight: null };
+  // Full memory miss.
+  if (idbAvailable()) {
+    // Async read-back; prefetch returns immediately (fire-and-forget internally).
+    void (async () => {
+      try {
+        const rec = await idbGet(url);
+        // Bail if another call populated memory or the url got neg404'd meanwhile.
+        if (store.get(url) || neg404.has(url)) return;
+        if (rec) {
+          // prefetch has no swr flag; treat as swr=true (revalidate if stale).
+          const decision = _seedDecision(rec.ts, Date.now(), ttl, true);
+          const seeded: Entry = { data: rec.data, ts: rec.ts, inflight: null };
+          touch(url, seeded);
+          if (decision === "fresh") return; // fresh on disk → skip the network
+          // stale → revalidate in the background
+          const bgEntry: Entry = { data: rec.data, ts: rec.ts, inflight: null };
+          doFetch(url, bgEntry);
+          return;
+        }
+        // IDB miss → network.
+        const fresh: Entry = { data: null, ts: 0, inflight: null };
+        doFetch(url, fresh);
+      } catch {
+        // Any failure → fall back to a plain network prefetch.
+        if (!store.get(url) && !neg404.has(url)) {
+          const fresh: Entry = { data: null, ts: 0, inflight: null };
+          doFetch(url, fresh);
+        }
+      }
+    })();
+    return;
+  }
+
+  const fresh: Entry = { data: null, ts: 0, inflight: null };
   doFetch(url, fresh);
 }
 
@@ -161,15 +310,19 @@ export function peek(url: string): any | undefined {
 
 /**
  * invalidate — remove one key (or all keys if url is omitted).
- * Also clears the 404 negative-cache entry so the URL can be re-requested.
+ * Also clears the 404 negative-cache entry so the URL can be re-requested, and
+ * removes the corresponding IndexedDB record(s) (fire-and-forget; guarded so it
+ * is a no-op when IDB is unavailable). neg404 itself is never persisted.
  */
 export function invalidate(url?: string): void {
   if (url === undefined) {
     store.clear();
     neg404.clear();
+    if (idbAvailable()) void idbClear();
   } else {
     store.delete(url);
     neg404.delete(url);
+    if (idbAvailable()) void idbDelete(url);
   }
 }
 
