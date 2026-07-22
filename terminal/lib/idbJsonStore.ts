@@ -95,6 +95,9 @@ export function isAvailable(): boolean {
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 let idbDead = false;
+// One-shot guard: at most one versioned self-heal reopen per session. Prevents a
+// heal loop if the store still can't be created (e.g. the upgrade keeps aborting).
+let healAttempted = false;
 
 /**
  * Latch the store off for the tab's lifetime. Idempotent. Called by the open
@@ -106,23 +109,44 @@ function markIdbDead(): void {
   dbPromise = null;
 }
 
-function openDB(): Promise<IDBDatabase | null> {
-  if (idbDead) return Promise.resolve(null);
-  if (dbPromise) return dbPromise;
+/**
+ * Create the "json" store + "ts" index on a db that is mid-upgrade. Shared by the
+ * fresh-create path (first open, version 1) and the self-heal path (versioned
+ * reopen when the store went missing) so both go through IDENTICAL code — the
+ * healed store is byte-for-byte what a clean install produces. MUST be called
+ * only from within an onupgradeneeded (versionchange) transaction; createObjectStore
+ * throws otherwise. Idempotent-guarded by the contains() check.
+ */
+function ensureStore(db: IDBDatabase): void {
+  try {
+    if (!db.objectStoreNames.contains(STORE)) {
+      const os = db.createObjectStore(STORE, { keyPath: "url" });
+      os.createIndex(TS_INDEX, "ts", { unique: false });
+    }
+  } catch {
+    // Swallow — the resolve path still yields a usable/failed db, and a
+    // still-missing store is detected by the contains() check in onsuccess.
+  }
+}
 
-  dbPromise = new Promise<IDBDatabase | null>((resolve) => {
+/**
+ * One open attempt at a specific version. Resolves the live db handle, or null on
+ * error/blocked/exception (latching the store dead in those cases, exactly as
+ * before). Does NOT itself inspect for a missing store — the caller (openDB) does
+ * that, so the heal decision lives in one place. `onversionchange` wiring and the
+ * "latched-while-in-flight → close + null" guard are preserved per attempt.
+ */
+function attemptOpen(version: number): Promise<IDBDatabase | null> {
+  return new Promise<IDBDatabase | null>((resolve) => {
     try {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      const req = indexedDB.open(DB_NAME, version);
 
       req.onupgradeneeded = () => {
+        // Same store-creation code path for a fresh create AND a heal reopen.
         try {
-          const db = req.result;
-          if (!db.objectStoreNames.contains(STORE)) {
-            const os = db.createObjectStore(STORE, { keyPath: "url" });
-            os.createIndex(TS_INDEX, "ts", { unique: false });
-          }
+          ensureStore(req.result);
         } catch {
-          // Swallow — resolve path below still yields a usable/failed db.
+          /* noop */
         }
       };
 
@@ -173,6 +197,66 @@ function openDB(): Promise<IDBDatabase | null> {
       resolve(null);
     }
   });
+}
+
+function openDB(): Promise<IDBDatabase | null> {
+  if (idbDead) return Promise.resolve(null);
+  if (dbPromise) return dbPromise;
+
+  // The whole heal lives inside this one cached promise, so callers and idbGet's
+  // 250ms race see a single Promise<IDBDatabase | null> exactly as before — the
+  // versioned reopen is invisible outside openDB.
+  dbPromise = (async () => {
+    const db = await attemptOpen(DB_VERSION);
+    if (!db) return null; // error/blocked/timeout-latch already handled by attemptOpen.
+
+    // Healthy DB (store present) → done, no versioned reopen.
+    if (db.objectStoreNames.contains(STORE)) return db;
+
+    // The DB exists at the current version but WITHOUT the "json" store — e.g.
+    // same-origin code opened "mm-data-cache" v1 with no upgrade handler before we
+    // did, or an upgrade aborted. onupgradeneeded will never fire again at this
+    // version, so every transaction("json") would throw NotFoundError forever.
+    // Self-heal ONCE: reopen at version+1 (never a hardcoded 2 — the live version
+    // may be anything) so onupgradeneeded fires and ensureStore() creates the
+    // store via the same path as a fresh install.
+    if (healAttempted) {
+      // Already spent our one heal this session and the store is still missing:
+      // give up rather than loop. Latch off exactly as a hard failure.
+      try {
+        db.close();
+      } catch {
+        /* noop */
+      }
+      markIdbDead();
+      return null;
+    }
+    healAttempted = true;
+
+    const healVersion = db.version + 1;
+    // Close our store-less handle first so it does not block the version bump.
+    try {
+      db.close();
+    } catch {
+      /* noop */
+    }
+
+    const healed = await attemptOpen(healVersion);
+    // The heal reopen may have failed, been blocked, or timed out (attemptOpen
+    // already latched idbDead in those cases and returned null). If it returned a
+    // handle that STILL lacks the store, treat that as a hard failure too.
+    if (!healed) return null;
+    if (!healed.objectStoreNames.contains(STORE)) {
+      try {
+        healed.close();
+      } catch {
+        /* noop */
+      }
+      markIdbDead();
+      return null;
+    }
+    return healed;
+  })();
 
   return dbPromise;
 }
@@ -398,6 +482,7 @@ export function _resetForTests(): void {
   dbPromise = null;
   idbDead = false;
   putsSinceEvict = 0;
+  healAttempted = false;
 }
 
 /** Test hook — read the session latch (asserts blocked-IDB disables the store). */
