@@ -2411,7 +2411,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 12 }));
       const grip = (pts: { x: number; y: number }[]) => { if (on) pts.forEach((p) => g.appendChild(mk("circle", { cx: p.x, cy: p.y, r: 4.5, fill: "var(--bg)", stroke: col, "stroke-width": 2 }))); };
       const A = d.points[0], B = d.points[1];
-      const dash = d.dash === "dashed" ? "7 5" : d.dash === "dotted" ? "2 4" : (d.auto ? "5 4" : "");
+      const dash = d.dash === "dashed" ? "7 5" : d.dash === "dotted" ? "2 4" : d.dash === "solid" ? "" : (d.auto ? "5 4" : "");
       const lw = (base: number, boost: number) => (d.width ?? base) + (on ? boost : 0);
       const ax = A ? xOf(A.t) : null, ay = A ? yOf(A.p) : null;
       if (d.kind === "hline") {
