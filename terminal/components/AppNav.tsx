@@ -10,7 +10,15 @@ import { Tip } from "@/components/ui/Tip";
 // primitives (arc + line + blip, etc.) and render inline below.
 const ICON: Record<string, string[]> = {
   chart: ["M3 17l5-6 4 3 4-7 5 9", "M3 21h18"],
+  // Analysis — an analytics card: a rounded frame holding three fundamentals bars.
+  analysis: ["M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z", "M8 16v-3", "M12 16v-6", "M16 16v-4"],
+  // Options — a long-call payoff diagram: L-axes with the flat-then-rising hockey stick.
+  options: ["M4 4v16h16", "M8 15h3l6-8"],
+  // Scripts — code angle-brackets with a script slash between them.
+  scripts: ["M9 8l-4 4 4 4", "M15 8l4 4-4 4", "M13.5 7l-3 10"],
   portfolio: ["M21 12a9 9 0 1 1-9-9v9z"],
+  // Alerts — a notification bell with its clapper.
+  alerts: ["M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9", "M10.3 21a1.94 1.94 0 0 0 3.4 0"],
   ai: ["M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z"],
 };
 
@@ -27,38 +35,21 @@ export function Glyph({ k }: { k: string }) {
         <circle cx="17.5" cy="8" r="1.15" fill="currentColor" stroke="none" />
       </svg>
     );
-  // Research — layered depth lens: a magnifier whose lens holds stacked strata (market
-  // depth / order-book layers, seen through analysis). Deliberately NOT a flask.
-  if (k === "research")
-    return (
-      <svg viewBox="0 0 24 24">
-        <circle cx="10.5" cy="10.5" r="6.5" />
-        <path d="M7 9h7M7.5 12h6M9 15h3" />
-        <path d="M15.5 15.5L21 21" />
-      </svg>
-    );
-  // Automate — bolt inside a loop: a lightning bolt wrapped by a partial circular arrow.
-  // "Energy that runs on repeat" — set-and-forget.
-  if (k === "automate")
-    return (
-      <svg viewBox="0 0 24 24">
-        <path d="M20 12a8 8 0 1 1-2.3-5.6" />
-        <path d="M17.6 3.5v3.4h-3.4" />
-        <path d="M12.5 7l-3.5 5h3l-1 4 4.5-6h-3z" />
-      </svg>
-    );
   return (<svg viewBox="0 0 24 24">{(ICON[k] ?? []).map((d, i) => <path key={i} d={d} />)}</svg>);
 }
 
 // The single source of truth for the primary nav. Exported so the mobile drawer (MobileNav)
-// derives its items from the SAME list — the two nav surfaces can't drift. Wave-2: navigate
-// by JOB (find → analyze → automate → review), not by internal model name.
+// derives its items from the SAME list — the two nav surfaces can't drift. Wave-3: the
+// options hub is renamed Options; Fundamentals is promoted to its own Analysis page; Automate
+// is split back into standalone Scripts + Alerts.
 export const TOP = [
   { k: "chart", label: "Chart", href: "/terminal" },
+  { k: "analysis", label: "Analysis", href: "/analysis" },
   { k: "discover", label: "Discover", href: "/discover" },
-  { k: "research", label: "Research", href: "/research" },
-  { k: "automate", label: "Automate", href: "/automate" },
+  { k: "options", label: "Options", href: "/options" },
+  { k: "scripts", label: "Scripts", href: "/scripts" },
   { k: "portfolio", label: "Portfolio", href: "/portfolio" },
+  { k: "alerts", label: "Alerts", href: "/alerts" },
 ];
 
 // useSearchParams() forces a CSR bailout during static prerender; the primary nav no longer
@@ -76,12 +67,14 @@ function AppNavInner() {
   const path = usePathname();
   const router = useRouter();
   const t = useT();
-  // Active key = path prefix per workspace. Chart is the default/center. The old Analyst
-  // mm:pane-state special case is gone — fundamentals is reachable from the chart rail and
-  // Research › fundamentals, so the pane no longer owns a top-level highlight.
-  const activeKey = path.startsWith("/discover") ? "discover"
-    : path.startsWith("/research") ? "research"
-    : path.startsWith("/automate") ? "automate"
+  // Active key = path prefix per workspace. Chart is the default/center. Fundamentals now
+  // owns its own top-level Analysis highlight (/analysis); the chart's in-shell fundamentals
+  // pane still exists but no longer drives the nav.
+  const activeKey = path.startsWith("/analysis") ? "analysis"
+    : path.startsWith("/discover") ? "discover"
+    : path.startsWith("/options") ? "options"
+    : path.startsWith("/scripts") ? "scripts"
+    : path.startsWith("/alerts") ? "alerts"
     : path.startsWith("/portfolio") ? "portfolio"
     : "chart";
   const openAI = () => { if (path.startsWith("/terminal")) window.dispatchEvent(new CustomEvent("mm:copilot")); else router.push("/terminal?ai=1"); };

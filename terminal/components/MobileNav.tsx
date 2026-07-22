@@ -51,9 +51,11 @@ export default function MobileNav({
 
   // Active key = path prefix per workspace, mirroring AppNav. Chart is the default/center.
   const derivedKey = activeKeyProp ?? (
-    navPath.startsWith("/discover") ? "discover"
-    : navPath.startsWith("/research") ? "research"
-    : navPath.startsWith("/automate") ? "automate"
+    navPath.startsWith("/analysis") ? "analysis"
+    : navPath.startsWith("/discover") ? "discover"
+    : navPath.startsWith("/options") ? "options"
+    : navPath.startsWith("/scripts") ? "scripts"
+    : navPath.startsWith("/alerts") ? "alerts"
     : navPath.startsWith("/portfolio") ? "portfolio"
     : "chart"
   );

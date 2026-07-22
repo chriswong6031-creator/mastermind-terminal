@@ -44,8 +44,9 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Wave-2 IA: workspaces replaced the old flat routes (old URLs 308 before reaching here).
-  const PROTECTED = ["/terminal", "/discover", "/research", "/automate", "/portfolio"];
+  // Wave-3 IA: chart + the six workspaces (old /research, /automate URLs 308 to these
+  // before reaching here). Only enforced when TERMINAL_REQUIRE_AUTH=1.
+  const PROTECTED = ["/terminal", "/analysis", "/discover", "/options", "/scripts", "/alerts", "/portfolio"];
   // protect the app area; bounce unauthenticated users to /login
   if (!user && PROTECTED.some((p) => path.startsWith(p))) {
     const url = request.nextUrl.clone();

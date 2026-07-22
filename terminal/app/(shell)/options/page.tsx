@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
-import ResearchWorkspace from "@/components/workspaces/ResearchWorkspace";
+import OptionsWorkspace from "@/components/workspaces/OptionsWorkspace";
 
-// Research workspace (Wave-2 IA) — market/options intelligence. Serves /research
-// under the (shell) route group (route groups don't affect the path); the shared
-// chrome comes from app/(shell)/layout.tsx. This is the ex-/flow OptionsHubView
-// engine, now driven by the page-level WorkspaceTabs (see ResearchWorkspace).
+// Options workspace (Wave-3 IA) — the options-intelligence hub, renamed from the
+// former Research page. Serves /options under the (shell) route group (route groups
+// don't affect the path); the shared chrome comes from app/(shell)/layout.tsx. This
+// is the ex-/flow OptionsHubView engine, driven by the page-level WorkspaceTabs
+// (see OptionsWorkspace). The old Fundamentals chip has moved to /analysis.
 //
 // All data is fetched CLIENT-side by the hub (flowGet, ~25s SWR), so there is no
 // server payload to cache — the page is a thin server shell. The (shell) layout
@@ -16,8 +17,8 @@ import ResearchWorkspace from "@/components/workspaces/ResearchWorkspace";
 // either of those ever changes. (Old /screener|/heatmap|/flow pages carried the same.)
 export const revalidate = 300;
 
-export const metadata: Metadata = { title: "Research · Mastermind Terminal" };
+export const metadata: Metadata = { title: "Options · Mastermind Terminal" };
 
-export default function ResearchPage() {
-  return <ResearchWorkspace />;
+export default function OptionsPage() {
+  return <OptionsWorkspace />;
 }

@@ -16,7 +16,9 @@ const LEX: Record<string, [string, string]> = {
   // nav — Wave-2 five workspaces (navigate by job). chart/portfolio kept; screener/scripts/
   // alerts/analyst survive only as sub-tab or legacy labels below.
   chart: ["Chart", "图表"],
+  analysis: ["Analysis", "分析"],
   discover: ["Discover", "发现"],
+  options: ["Options", "期权"],
   research: ["Research", "研究"],
   automate: ["Automate", "自动化"],
   portfolio: ["Portfolio", "投资组合"],
