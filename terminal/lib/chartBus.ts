@@ -544,16 +544,32 @@ export function fitMetrics(obj: { kind: string; points: Pt[] }, bars: FitBar[]):
 
 // ── command queue with pacing hooks ──────────────────────────────────────────────────────────
 // Applies commands sequentially. Default delay 0 = synchronous/instant. A configurable delay paces
-// each step (for the future W3 theater); applyInstantly() drains the queue with delay forced to 0.
-// The emitter lets W3 subscribe to per-step (op + caption) events without this module knowing about it.
-export type QueueStep = { op: ChartOp; id: string | null; caption?: string; ok: boolean };
+// each step (the W3 theater); applyInstantly() drains the queue with delay forced to 0.
+// The emitter lets W3 subscribe to per-step (op + caption + fit) events without this module knowing
+// about the DOM, PLUS two session-lifecycle events W3 needs to bracket the conductor overlay:
+//   • "batch-start" — fires when work enters a previously IDLE queue (queue was empty AND not
+//                     draining). This is the "session begins" edge W3 arms the overlay on.
+//   • "drain"       — fires once the queue empties after processing (both the paced path and the
+//                     applyInstantly() escape). W3 arms its 1.2s done-timer on this.
+// A single burst that enqueues N ops in one tick fires exactly ONE batch-start (on the first op) and
+// exactly ONE drain (after the last). fit metrics ride the step so the rail can show the ack chip
+// for the object that step produced (populated by the dispatch job, which owns the bar series).
+// `anchor` (epoch-seconds t + price p of the object's FIRST point) rides the step so W3's ghost cursor
+// can glide to the exact pane pixel via the DrawLayer transform — the step is otherwise geometry-free.
+export type QueueStep = { op: ChartOp; id: string | null; caption?: string; ok: boolean; fit?: Fit; anchor?: { t: number; p: number } };
 export type StepListener = (step: QueueStep) => void;
+export type LifecycleListener = () => void;
 
 export class CommandQueue {
   private q: Array<() => QueueStep> = [];
   private listeners = new Set<StepListener>();
+  private startListeners = new Set<LifecycleListener>();
+  private drainListeners = new Set<LifecycleListener>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  // "active" is true from the batch-start edge until the drain edge — the window in which further
+  // enqueues belong to the SAME session (no second batch-start) even across the paced setTimeout gaps.
+  private active = false;
   delayMs: number;
 
   constructor(delayMs = 0) {
@@ -565,12 +581,33 @@ export class CommandQueue {
     return () => this.listeners.delete(fn);
   }
 
+  // Subscribe to the session-start edge (queue idle → work). Returns an unsubscribe.
+  onBatchStart(fn: LifecycleListener): () => void {
+    this.startListeners.add(fn);
+    return () => this.startListeners.delete(fn);
+  }
+
+  // Subscribe to the drain edge (last job processed, queue now empty). Returns an unsubscribe.
+  onDrain(fn: LifecycleListener): () => void {
+    this.drainListeners.add(fn);
+    return () => this.drainListeners.delete(fn);
+  }
+
   private emit(step: QueueStep) {
     for (const fn of this.listeners) { try { fn(step); } catch { /* listener errors never break the queue */ } }
   }
+  private emitStart() {
+    for (const fn of this.startListeners) { try { fn(); } catch { /* never break the queue */ } }
+  }
+  private emitDrain() {
+    for (const fn of this.drainListeners) { try { fn(); } catch { /* never break the queue */ } }
+  }
 
   // Enqueue a unit of work. `run` performs the side-effect and returns the step descriptor to emit.
+  // The batch-start edge is the transition into an active session — detected BEFORE the job runs so
+  // W3 can arm the overlay ahead of the first stroke.
   enqueue(run: () => QueueStep) {
+    if (!this.active) { this.active = true; this.emitStart(); }
     this.q.push(run);
     this.pump();
   }
@@ -580,16 +617,26 @@ export class CommandQueue {
     const step = () => {
       this.timer = null;
       const job = this.q.shift();
-      if (!job) return;
+      if (!job) { this.settleDrain(); return; }
       const desc = job();
       this.emit(desc);
       if (this.q.length) {
         if (this.delayMs > 0) this.timer = setTimeout(step, this.delayMs);
         else step();
+      } else {
+        this.settleDrain();
       }
     };
     if (this.delayMs > 0) this.timer = setTimeout(step, this.delayMs);
     else step();
+  }
+
+  // Fire the drain edge exactly once per active session, only when genuinely empty.
+  private settleDrain() {
+    if (this.active && this.q.length === 0 && !this.timer) {
+      this.active = false;
+      this.emitDrain();
+    }
   }
 
   // Drain everything synchronously right now, ignoring the pace delay (the W3 "skip" escape).
@@ -602,8 +649,9 @@ export class CommandQueue {
     } finally {
       this.running = false;
     }
+    this.settleDrain();
   }
 
   get size() { return this.q.length; }
-  clear() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } this.q = []; }
+  clear() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } this.q = []; this.settleDrain(); }
 }

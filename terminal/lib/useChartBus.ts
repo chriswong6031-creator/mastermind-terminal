@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Drawing } from "@/lib/drawings";
 import {
   CommandQueue, applyToStore, isV2Envelope, translate, validateEnvelope,
-  fitMetrics, type Ack, type AiObject, type FitBar, type IndicatorSpec,
+  fitMetrics, type Ack, type AiObject, type Fit, type FitBar, type IndicatorSpec,
   type QueueStep, type StoreEffect,
 } from "@/lib/chartBus";
 
@@ -152,7 +152,20 @@ export function useChartBus(host: ChartBusHost): ChartBus {
         }
       }
       pushAck(r.ack);
-      return { op: cmd.op, id: cmd.id ?? null, caption: res.ok ? res.caption : undefined, ok: r.ack.ok };
+      // Fit metrics ride the step for the W3 rail's ack chip. Computed against the current bar series
+      // for the FIRST object this draw produced (the primary object; channel/path fan out to siblings
+      // that share the same read). Only trendline/ray/hline/zone(rect) yield fit — otherwise undefined.
+      let fit: Fit | undefined;
+      let anchor: { t: number; p: number } | undefined;
+      if (r.ack.ok && res.ok && res.draw && res.draw.length) {
+        const obj = res.draw[0];
+        const f = fitMetrics(obj, hostRef.current.bars);
+        if (f) fit = f;
+        // first anchor point → {t: epoch-seconds, p: price} for the W3 ghost cursor glide.
+        const p0 = obj.points[0];
+        if (p0) { const tSec = Number(p0.t); if (Number.isFinite(tSec)) anchor = { t: tSec, p: p0.p }; }
+      }
+      return { op: cmd.op, id: cmd.id ?? null, caption: res.ok ? res.caption : undefined, ok: r.ack.ok, fit, anchor };
     });
   }, [queue, pushAck]);
 

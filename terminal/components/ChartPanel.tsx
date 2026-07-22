@@ -23,6 +23,7 @@ import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engin
 import { ORACLE_V1_PINE } from "@/lib/pine";
 import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
+import { setActivePaneCoords, getActivePaneCoords } from "@/lib/paneCoords";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
 import { parseComposite, alignAndSum } from "@/lib/composite";
 import { CMP_PALETTE, type CmpCfg, defaultCmpCfg, cmpKey } from "@/lib/compare";
@@ -429,6 +430,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const onChangeRef = useRef(onDrawingsChange);
   const magnetRef = useRef(magnet);
   const activeRef = useRef(isActive); activeRef.current = isActive;
+  // CMX W3: ids of AI-session objects whose stroke-enter animation has already played. renderDraw()
+  // rebuilds every <g> on each pan/zoom frame, so this set gates the enter class to fire exactly once
+  // per object (never re-firing on re-render). Cleared for an id only when it leaves the draw set.
+  const cmxPlayedRef = useRef<Set<string>>(new Set());
+  // CMX W3: this pane's live coordinate resolver (set inside the chart effect once xOf/yOf exist).
+  const cmxCoordResolverRef = useRef<import("@/lib/paneCoords").PaneCoordResolver | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   const ctxRef = useRef<HTMLDivElement | null>(null);
   const textEditRef = useRef<HTMLInputElement | null>(null);
@@ -479,6 +486,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // rebuild the CHART STYLE (not the chart) when the up/down color scheme flips (Effect 5)
   const [csNonce, setCsNonce] = useState(0);
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
+  // CMX W3: keep the active-pane coordinate registration in sync with isActive (the chart mount effect
+  // only re-runs on symbol/tf changes). Register when active, and clear our entry on deactivate/unmount
+  // only if it's still ours (last-writer-wins — never clobber another pane that became active after us).
+  useEffect(() => {
+    if (isActive && cmxCoordResolverRef.current) setActivePaneCoords(cmxCoordResolverRef.current);
+    return () => {
+      if (getActivePaneCoords() === cmxCoordResolverRef.current) setActivePaneCoords(null);
+    };
+  }, [isActive]);
   drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
   chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol; companyNameRef.current = companyName;
@@ -2408,6 +2424,21 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const prec = precRef.current;
       const col = dcol(d); const W = el!.clientWidth, H = el!.clientHeight, op = preview ? 0.7 : 1; const on = d.id === sel && !preview;
       const g = mk("g", { "data-id": d.id, opacity: op, "pointer-events": preview ? "none" : "all", style: "cursor:pointer" });
+      // CMX W3: stroke-and-draw entrance for AI-session objects. Fires ONCE per object (played-set),
+      // only while a paced session is animating (<html data-cmx-anim="on">, set by ChartConductor —
+      // absent under reduced-motion / pace 0 so objects just appear). The class self-removes on
+      // animationend so pan/zoom re-renders (which rebuild this <g>) never re-trigger it.
+      if (!preview && (d.meta as any)?.by === "ai" &&
+          typeof document !== "undefined" && document.documentElement.getAttribute("data-cmx-anim") === "on" &&
+          !cmxPlayedRef.current.has(d.id)) {
+        const cls = d.kind === "rect" ? "cmx-enter-zone"
+          : d.kind === "fib" ? "cmx-enter-fib"
+          : (d.kind === "text") ? "cmx-enter-pop"
+          : "cmx-enter-line"; // trendline / ray / hline
+        g.classList.add(cls);
+        cmxPlayedRef.current.add(d.id);
+        g.addEventListener("animationend", () => { try { g.classList.remove(cls); } catch { /* noop */ } }, { once: true });
+      }
       const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 12 }));
       const grip = (pts: { x: number; y: number }[]) => { if (on) pts.forEach((p) => g.appendChild(mk("circle", { cx: p.x, cy: p.y, r: 4.5, fill: "var(--bg)", stroke: col, "stroke-width": 2 }))); };
       const A = d.points[0], B = d.points[1];
@@ -2962,6 +2993,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       renderPriceTag();   // keep the last-price + countdown tag in step with every data/pan/style render
     };
     renderRef.current = renderDraw;
+    // CMX W3: when THIS is the active pane, publish a coordinate resolver so ChartConductor's ghost
+    // cursor can map an op's first anchor (epoch-seconds + price) into pane pixels via the exact
+    // DrawLayer transform (xOf/yOf). Registration is refreshed on the active-pane effect below; here we
+    // just make the resolver available to that effect via a ref-captured closure.
+    cmxCoordResolverRef.current = {
+      toPx: (tSec: number, price: number) => {
+        const x = xOf(String(Math.round(tSec))); const y = yOf(price);
+        return (x == null || y == null || !isFinite(x) || !isFinite(y)) ? null : { x, y };
+      },
+      rect: () => { const w = wrapElRef.current; return w ? w.getBoundingClientRect() : null; },
+    };
+    if (activeRef.current) setActivePaneCoords(cmxCoordResolverRef.current);
     // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path
     const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderDraw(); } }); };
     // Draw-only rAF coalescer for the drawing drag / shape-creation pointermove paths: those fire on
