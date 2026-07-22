@@ -152,51 +152,67 @@ hline(input.int(70, "Overbought"))
 hline(input.int(30, "Oversold"))`,
   },
   stochrsi: {
+    // NOTE: math is now the CM_Stochastic_MTF *price* stochastic (stoch of close/high/low),
+    // NOT a stochastic-of-RSI. Label kept as "Stochastic RSI" (the user's term). The Golden
+    // Oracle confluence keeps its own high-amplitude stoch-of-RSI — this indicator is chart-only.
     key: "stochrsi", label: "Stochastic RSI", tag: "Stoch RSI", kind: "pane",
-    defaults: { rsiLength: 14, stochLength: 14, smoothK: 3, smoothD: 3, kCol: COL.up, dCol: COL.down, width: 1.6 },
+    defaults: { length: 14, smoothK: 3, smoothD: 3, upLine: 80, lowLine: 20, kCol: COL.up, dCol: COL.down, width: 1.6 },
     fields: [
-      { key: "rsiLength", label: "RSI length", type: "number", group: "inputs", min: 2, max: 100, step: 1 },
-      { key: "stochLength", label: "Stochastic length", type: "number", group: "inputs", min: 2, max: 100, step: 1 },
+      { key: "length", label: "Length", type: "number", group: "inputs", min: 2, max: 100, step: 1 },
       { key: "smoothK", label: "Smooth %K", type: "number", group: "inputs", min: 1, max: 20, step: 1 },
       { key: "smoothD", label: "Smooth %D", type: "number", group: "inputs", min: 1, max: 20, step: 1 },
+      { key: "upLine", label: "Upper line", type: "number", group: "inputs", min: 50, max: 100, step: 1 },
+      { key: "lowLine", label: "Lower line", type: "number", group: "inputs", min: 0, max: 50, step: 1 },
       { key: "kCol", label: "%K color", type: "color", group: "style" },
       { key: "dCol", label: "%D color", type: "color", group: "style" },
       { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.5 },
     ],
-    source: `//@version=6
-indicator("Stochastic RSI")
-rsiLen = input.int(14, "RSI length")
-stochLen = input.int(14, "Stochastic length")
-smoothK = input.int(3, "Smooth %K")
-smoothD = input.int(3, "Smooth %D")
-r = ta.rsi(close, rsiLen)
-k = ta.sma(ta.stoch(r, r, r, stochLen), smoothK)
+    source: `//@version=5
+// CM_Stochastic_MTF — ChrisMoody. Regular (price) stochastic, current timeframe.
+indicator("CM_Stochastic_MTF", shorttitle="CM_Stoch_MTF")
+len = input.int(14, "Length")
+smoothK = input.int(3, "SmoothK")
+smoothD = input.int(3, "SmoothD")
+upLine = input.int(80, "Upper Line Value?")
+lowLine = input.int(20, "Lower Line Value?")
+k = ta.sma(ta.stoch(close, high, low, len), smoothK)
 d = ta.sma(k, smoothD)
-plot(k, "%K", color.new(#26c281, 0))
-plot(d, "%D", color.new(#f0566b, 0))`,
+plot(k, "Stoch K", color=color.lime, linewidth=3)
+plot(d, "Stoch D", color=color.red, linewidth=3)
+hline(upLine, "Upper", color=color.red)
+hline(lowLine, "Lower", color=color.lime)
+hline(50, "Mid", color=color.gray)`,
   },
   macd: {
-    key: "macd", label: "MACD", tag: "MACD", kind: "pane",
-    defaults: { fast: 12, slow: 26, signal: 9, macdCol: COL.link, signalCol: COL.warn, upHist: COL.upHist, downHist: COL.downHist, width: 1.3 },
+    // RSI-based MACD (TH_RSIMACD+): MACD of the RSI, not of price. This is the same math the
+    // Golden Oracle confluence uses for its "RSI-MACD" (rsi=RSI(close,14); macd=EMA(rsi,14)-EMA(rsi,60); signal=EMA(macd,5)).
+    key: "macd", label: "MACD-RSI", tag: "MACD-RSI", kind: "pane",
+    defaults: { rsiLen: 14, fastLen: 14, baseLen: 60, signalLen: 5, macdCol: "#00bcd4", signalCol: "#d4ac0d", upHist: COL.upHist, downHist: COL.downHist, width: 1.3 },
     fields: [
-      { key: "fast", label: "Fast length", type: "number", group: "inputs", min: 1, max: 100, step: 1 },
-      { key: "slow", label: "Slow length", type: "number", group: "inputs", min: 1, max: 200, step: 1 },
-      { key: "signal", label: "Signal length", type: "number", group: "inputs", min: 1, max: 100, step: 1 },
+      { key: "rsiLen", label: "RSI length", type: "number", group: "inputs", min: 1, max: 100, step: 1 },
+      { key: "fastLen", label: "Fast MA (on RSI)", type: "number", group: "inputs", min: 1, max: 100, step: 1 },
+      { key: "baseLen", label: "Base MA (on RSI)", type: "number", group: "inputs", min: 1, max: 200, step: 1 },
+      { key: "signalLen", label: "Signal length", type: "number", group: "inputs", min: 1, max: 100, step: 1 },
       { key: "macdCol", label: "MACD color", type: "color", group: "style" },
       { key: "signalCol", label: "Signal color", type: "color", group: "style" },
       { key: "upHist", label: "Histogram +", type: "color", group: "style" },
       { key: "downHist", label: "Histogram −", type: "color", group: "style" },
       { key: "width", label: "Line width", type: "number", group: "style", min: 1, max: 4, step: 0.1 },
     ],
-    source: `//@version=6
-indicator("MACD")
-fast = input.int(12, "Fast length")
-slow = input.int(26, "Slow length")
-sig = input.int(9, "Signal length")
-[macdLine, signalLine, hist] = ta.macd(close, fast, slow, sig)
-plot(hist, "Histogram", style = plot.style_columns)
-plot(macdLine, "MACD", color.new(#4d82ff, 0))
-plot(signalLine, "Signal", color.new(#e8a33d, 0))`,
+    source: `//@version=5
+// TH_RSIMACD+ — RSI-based MACD (MACD computed on the RSI, not price).
+indicator("TH_RSIMACD+", shorttitle="TH_RSIMACD+")
+rsiLen    = input.int(14, "RSI")
+fastLen   = input.int(14, "Fast MA")
+baseLen   = input.int(60, "Base MA")
+signalLen = input.int(5,  "Signal RSI")
+rsi    = ta.rsi(close, rsiLen)
+macd   = ta.ema(rsi, fastLen) - ta.ema(rsi, baseLen)
+signal = ta.ema(macd, signalLen)
+hist   = macd - signal
+plot(hist,   "Histogram", style = plot.style_columns)
+plot(macd,   "RSI MACD",  color = #00bcd4)
+plot(signal, "Signal",    color = #d4ac0d)`,
   },
   gaps: {
     // signal-style overlay (no plotted series): zones are drawn on the chart's signal layer, so this

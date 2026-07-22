@@ -250,9 +250,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // per-market functional TF set: daily-derived always; intraday TFs only for intraday-capable markets (R12)
   const FUNCTIONAL = useMemo(() => functionalSet(active), [active]);
   const [chartType, setChartType] = useState("candles");
-  // item-28: Golden Oracle is OFF by default for new users. A user's explicit saved
-  // indicator set (mm.inds) is loaded below and left completely untouched.
-  const [inds, setInds] = useState<Set<string>>(new Set(["ema", "rsi", "stochrsi"]));
+  // Default-on indicators for new users: Moving Averages + Volume + MACD-RSI (TH_RSIMACD+) + Stochastic (CM_Stochastic_MTF).
+  // item-28: Golden Oracle is OFF by default. A user's explicit saved indicator set (mm.inds)
+  // is loaded below and left completely untouched.
+  const [inds, setInds] = useState<Set<string>>(new Set(["ema", "vol", "macd", "stochrsi"]));
   const [hidden, setHidden] = useState<Set<string>>(new Set());                       // indicators the eye has hidden
   const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());      // per-indicator params (Settings dialog)
   const [settingsKey, setSettingsKey] = useState<string | null>(null);                 // indicator whose Settings dialog is open
@@ -403,7 +404,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // never fire a network request for intel/fund/opts files.
   useEffect(() => { let alive = true; btMark("manifest-fetch-start"); getJSON("/data/manifest.json").then((m) => { if (alive && m) { btMark("manifest-fetch-done"); setMan(m); loadCoverage(Object.keys(m.symbols || {})); } }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
-    { const si = load("mm.inds", ["ema", "rsi", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); { const sv = load("mm.set", {}); setSet({ ...DEFAULT_SET, ...sv, cols: { ...DEFAULT_SET.cols, ...(sv.cols || {}) }, colW: { ...(sv.colW || {}) } }); } setCompareCfg(load("mm.cmpCfg", {}));
+    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs(["3D"]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); { const sv = load("mm.set", {}); setSet({ ...DEFAULT_SET, ...sv, cols: { ...DEFAULT_SET.cols, ...(sv.cols || {}) }, colW: { ...(sv.colW || {}) } }); } setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {

@@ -186,8 +186,11 @@ function ema(a: (number | null)[], p: number) { const o: (number | null)[] = Arr
 function sma(a: (number | null)[], p: number) { const o: (number | null)[] = Array(a.length).fill(null); const q: number[] = []; let s = 0; for (let i = 0; i < a.length; i++) { const v = a[i]; q.push(v == null ? 0 : v); if (v != null) s += v; if (q.length > p) s -= q.shift()!; if (q.length === p) o[i] = s / p; } return o; }
 function stddev(a: number[], p: number) { const o: (number | null)[] = Array(a.length).fill(null); for (let i = p - 1; i < a.length; i++) { const w = a.slice(i - p + 1, i + 1); const m = w.reduce((x, y) => x + y, 0) / p; o[i] = Math.sqrt(w.reduce((x, y) => x + (y - m) ** 2, 0) / p); } return o; }
 function rsi(cl: number[], p = 14) { const o: (number | null)[] = Array(cl.length).fill(null); let g = 0, l = 0; for (let i = 1; i < cl.length; i++) { const ch = cl[i] - cl[i - 1], u = ch > 0 ? ch : 0, d = ch < 0 ? -ch : 0; if (i <= p) { g += u; l += d; if (i === p) { g /= p; l /= p; o[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } } else { g = (g * (p - 1) + u) / p; l = (l * (p - 1) + d) / p; o[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } } return o; }
-function stochRsi(cl: number[], rsiLen = 14, stochLen = 14, smoothK = 3, smoothD = 3) { const r = rsi(cl, rsiLen); const raw: (number | null)[] = Array(cl.length).fill(null); for (let i = 0; i < cl.length; i++) { if (r[i] == null) continue; let hh = -1e9, ll = 1e9, ok = true; for (let j = i - (stochLen - 1); j <= i; j++) { if (j < 0 || r[j] == null) { ok = false; break; } hh = Math.max(hh, r[j]!); ll = Math.min(ll, r[j]!); } if (ok) raw[i] = hh === ll ? 50 : (100 * (r[i]! - ll)) / (hh - ll); } const k = sma(raw, smoothK); return { k, d: sma(k, smoothD) }; }
-function macd(cl: number[], fast = 12, slow = 26, signal = 9) { const ef = ema(cl, fast), es = ema(cl, slow); const line = cl.map((_, i) => (ef[i] != null && es[i] != null ? ef[i]! - es[i]! : null)); const sig = ema(line, signal); const hist = line.map((_, i) => (line[i] != null && sig[i] != null ? line[i]! - sig[i]! : null)); return { line, sig, hist }; }
+// CM_Stochastic_MTF (ChrisMoody) — regular *price* stochastic on the current timeframe:
+// rawK = 100·(close − lowest(low,len)) / (highest(high,len) − lowest(low,len)); %K = SMA(rawK, smoothK); %D = SMA(%K, smoothD).
+function cmStoch(highs: number[], lows: number[], cl: number[], len = 14, smoothK = 3, smoothD = 3) { const raw: (number | null)[] = Array(cl.length).fill(null); for (let i = len - 1; i < cl.length; i++) { let hh = -1e9, ll = 1e9; for (let j = i - len + 1; j <= i; j++) { if (highs[j] > hh) hh = highs[j]; if (lows[j] < ll) ll = lows[j]; } raw[i] = hh === ll ? 50 : (100 * (cl[i] - ll)) / (hh - ll); } const k = sma(raw, smoothK); return { k, d: sma(k, smoothD) }; }
+// TH_RSIMACD+ — RSI-based MACD: MACD computed on the RSI, not on price (matches the Golden Oracle confluence's RSI-MACD).
+function rsiMacd(cl: number[], rsiLen = 14, fastLen = 14, baseLen = 60, signalLen = 5) { const r = rsi(cl, rsiLen); const ef = ema(r, fastLen), es = ema(r, baseLen); const line = cl.map((_, i) => (ef[i] != null && es[i] != null ? ef[i]! - es[i]! : null)); const sig = ema(line, signalLen); const hist = line.map((_, i) => (line[i] != null && sig[i] != null ? line[i]! - sig[i]! : null)); return { line, sig, hist }; }
 const toLine = (rows: Bar[], arr: (number | null)[]) => rows.map((r, i) => (arr[i] != null && isFinite(arr[i]!) ? { time: r.time, value: arr[i]! } : null)).filter(Boolean) as any[];
 
 function resampleTf(rows: Bar[], tf: string): Bar[] {
@@ -559,17 +562,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return [rS];
   };
   const buildStochRsiPane = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
-    const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD);
+    const p = P("stochrsi"); const sr = cmStoch(rows.map(r => r.h), rows.map(r => r.l), closes, p.length, p.smoothK, p.smoothD);
     const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: "%K" }, pane);
     const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: "%D" }, pane);
     kS.setData(toLine(rows, sr.k)); dS.setData(toLine(rows, sr.d));
+    // CM_Stochastic_MTF upper/lower/mid guide lines (80 / 20 / 50 by default)
+    try { kS.createPriceLine({ price: p.upLine, color: "rgba(240,86,107,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: p.lowLine, color: "rgba(38,194,129,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: 50, color: "rgba(214,218,227,.15)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
     return [kS, dS];
   };
   const buildMacd = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
-    const p = P("macd"); const m = macd(closes, p.fast, p.slow, p.signal);
+    const p = P("macd"); const m = rsiMacd(closes, p.rsiLen, p.fastLen, p.baseLen, p.signalLen);
     const hs = chart.addSeries(HistogramSeries, {}, pane); hs.setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? p.upHist : p.downHist } : null)).filter(Boolean) as any);
-    const lS = chart.addSeries(LineSeries, { color: p.macdCol, lineWidth: p.width as any, title: "MACD" }, pane); const sS = chart.addSeries(LineSeries, { color: p.signalCol, lineWidth: 1, title: "signal" }, pane);
+    const lS = chart.addSeries(LineSeries, { color: p.macdCol, lineWidth: p.width as any, title: "MACD-RSI" }, pane); const sS = chart.addSeries(LineSeries, { color: p.signalCol, lineWidth: 1, title: "signal" }, pane);
     lS.setData(toLine(rows, m.line)); sS.setData(toLine(rows, m.sig));
+    try { lS.createPriceLine({ price: 0, color: "rgba(214,218,227,.2)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
     return [hs, lS, sS];
   };
 
@@ -1481,12 +1487,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (sArr[0]) sArr[0].setData(toLine(rows, rsi(closes, p.length)));
     }
     if (SB.has("stochrsi")) {
-      const sArr = SB.get("stochrsi")!; const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD);
+      const sArr = SB.get("stochrsi")!; const p = P("stochrsi"); const sr = cmStoch(rows.map(r => r.h), rows.map(r => r.l), closes, p.length, p.smoothK, p.smoothD);
       if (sArr[0]) sArr[0].setData(toLine(rows, sr.k));
       if (sArr[1]) sArr[1].setData(toLine(rows, sr.d));
     }
     if (SB.has("macd")) {
-      const sArr = SB.get("macd")!; const p = P("macd"); const m = macd(closes, p.fast, p.slow, p.signal);
+      const sArr = SB.get("macd")!; const p = P("macd"); const m = rsiMacd(closes, p.rsiLen, p.fastLen, p.baseLen, p.signalLen);
       if (sArr[0]) sArr[0].setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? p.upHist : p.downHist } : null)).filter(Boolean) as any);
       if (sArr[1]) sArr[1].setData(toLine(rows, m.line));
       if (sArr[2]) sArr[2].setData(toLine(rows, m.sig));
@@ -1521,12 +1527,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       rows.forEach((r, i) => { slot(r.time)["rsi"] = rsiVals[i] ?? null; });
     }
     if (inds.has("stochrsi")) {
-      const p = P("stochrsi"); const sr = stochRsi(closes, p.rsiLength, p.stochLength, p.smoothK, p.smoothD);
+      const p = P("stochrsi"); const sr = cmStoch(rows.map(r => r.h), rows.map(r => r.l), closes, p.length, p.smoothK, p.smoothD);
       // expose %K under "stochrsi" (the primary line shown in the legend)
       rows.forEach((r, i) => { slot(r.time)["stochrsi"] = sr.k[i] ?? null; });
     }
     if (inds.has("macd")) {
-      const p = P("macd"); const mv = macd(closes, p.fast, p.slow, p.signal);
+      const p = P("macd"); const mv = rsiMacd(closes, p.rsiLen, p.fastLen, p.baseLen, p.signalLen);
       rows.forEach((r, i) => { slot(r.time)["macd"] = mv.line[i] ?? null; });
     }
     indDataMapRef.current = m;

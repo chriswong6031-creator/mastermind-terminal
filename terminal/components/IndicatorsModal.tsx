@@ -6,7 +6,7 @@ import { type UserScript } from "@/lib/userScripts";
 
 const CATS: Record<string, { key: string; label: string; mm?: boolean; tkey?: string }[]> = {
   Mastermind: [{ key: "_oracle", label: "Golden Oracle Confluence", mm: true }],
-  Trend: [{ key: "ema", label: "Moving Averages (EMA 20/50/200)" }, { key: "bb", label: "Bollinger Bands" }, { key: "vwap", label: "VWAP" }, { key: "rvwap", label: "Rolling VWAP (20)", tkey: "indRvwap" }, { key: "wvwap", label: "Weekly VWAP", tkey: "indWvwap" }, { key: "avwap", label: "Anchored VWAP", tkey: "indAvwap" }, { key: "macd", label: "MACD" }],
+  Trend: [{ key: "ema", label: "Moving Averages (EMA 20/50/200)" }, { key: "bb", label: "Bollinger Bands" }, { key: "vwap", label: "VWAP" }, { key: "rvwap", label: "Rolling VWAP (20)", tkey: "indRvwap" }, { key: "wvwap", label: "Weekly VWAP", tkey: "indWvwap" }, { key: "avwap", label: "Anchored VWAP", tkey: "indAvwap" }, { key: "macd", label: "MACD-RSI" }],
   Momentum: [{ key: "rsi", label: "RSI" }, { key: "stochrsi", label: "Stochastic RSI" }],
   "Price Action": [{ key: "gaps", label: "Gap Zones" }],
   Volume: [{ key: "vol", label: "Volume" }, { key: "vprofile", label: "Volume Profile", tkey: "indVprofile" }],
