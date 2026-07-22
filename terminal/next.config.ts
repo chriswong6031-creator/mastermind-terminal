@@ -117,8 +117,35 @@ const nextConfig: NextConfig = {
     return [
       { source: "/screener", destination: "/discover?tab=screener", permanent: true },
       { source: "/heatmap", destination: "/discover?tab=heatmap", permanent: true },
-      { source: "/alerts", destination: "/automate?tab=alerts", permanent: true },
-      { source: "/scripts", destination: "/automate?tab=scripts", permanent: true },
+      // ── Wave-3 IA: Research→Options, Fundamentals→Analysis, Automate split ─────
+      // Research is renamed Options. Its ex-Fundamentals chip is now the standalone
+      // /analysis page — peel that specific deep-link off FIRST (ordered before the
+      // catch-all), then send everything else (incl. tape/desk/tide/gex/… via ?tab=
+      // passthrough) to /options.
+      {
+        source: "/research",
+        has: [{ type: "query", key: "tab", value: "fundamentals" }],
+        destination: "/analysis",
+        permanent: true,
+      },
+      { source: "/research", destination: "/options", permanent: true },
+      // Automate is split back into standalone Scripts + Alerts. Peel the two tabs
+      // off first, then default bare /automate to /alerts (its old default tab).
+      // NB: /alerts and /scripts are now REAL routes (their old redirects into
+      // /automate are removed) — the filesystem serves them directly.
+      {
+        source: "/automate",
+        has: [{ type: "query", key: "tab", value: "scripts" }],
+        destination: "/scripts",
+        permanent: true,
+      },
+      {
+        source: "/automate",
+        has: [{ type: "query", key: "tab", value: "alerts" }],
+        destination: "/alerts",
+        permanent: true,
+      },
+      { source: "/automate", destination: "/alerts", permanent: true },
       // The two ex-flow Discover tabs move to /discover; matched by query so only
       // these specific tabs peel off. Ordered BEFORE the catch-all /flow below.
       {
@@ -134,8 +161,8 @@ const nextConfig: NextConfig = {
         permanent: true,
       },
       // Every other /flow (incl. no tab, and tape/desk/tide/tickers/vol/gex/prism/
-      // prophet/fundamentals) → Research; the ?tab= value passes through untouched.
-      { source: "/flow", destination: "/research", permanent: true },
+      // prophet) → Options; the ?tab= value passes through untouched.
+      { source: "/flow", destination: "/options", permanent: true },
     ];
   },
   async headers() {
@@ -176,10 +203,10 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // Wave-2 IA: the workspace shells replace screener/alerts/flow — they need the same
-        // 5-minute edge cap or EdgeOne pins their prerendered HTML for a year (the exact
-        // stale-shell class behind the Wave-1 module-factory crash).
-        source: "/(discover|research|automate|portfolio|login)",
+        // Wave-3 IA: the workspace shells (now chart/analysis/discover/options/scripts/alerts/
+        // portfolio) need the same 5-minute edge cap or EdgeOne pins their prerendered HTML for
+        // a year (the exact stale-shell class behind the Wave-1 module-factory crash).
+        source: "/(discover|analysis|options|scripts|alerts|portfolio|login)",
         headers: [
           {
             key: "Cache-Control",

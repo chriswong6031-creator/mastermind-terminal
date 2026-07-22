@@ -5,7 +5,8 @@ import OptionsHubView, { type TabKey } from "@/components/OptionsHubView";
 import { useLang } from "@/lib/i18n";
 
 /**
- * Research workspace composer (Wave-2 IA) — the `/research` body.
+ * Options workspace composer (Wave-3 IA) — the `/options` body (renamed from the
+ * former Research page).
  *
  * Renders the ONE sub-nav (WorkspaceTabs) above the OptionsHubView engine and
  * owns the `?tab=` URL state (shallow, via window.history.replaceState — the
@@ -14,14 +15,15 @@ import { useLang } from "@/lib/i18n";
  * composer is the single writer of the active tab.
  *
  * Tab registry order per spec:
- *   tape · desk · tide · tickers · vol (Options Screener) · gex · prism · prophet
- *   · fundamentals (a cross-JUMP to /terminal?pane=overview — not a hub tab).
+ *   tape · desk · tide · tickers · vol (Options Screener) · gex · prism · prophet.
+ * (Fundamentals was here as a cross-jump chip; it graduated to the standalone
+ * /analysis page. A stray ?tab=fundamentals now redirects there — see below.)
  *
  * Key mapping: the spec's `vol` sub-tab IS the hub's `screener` tab (the Options
  * Screener; the hub folded its old standalone "vol" surface into Tickers). Both
- * `?tab=vol` and `?tab=screener` (arriving from the /flow→/research redirect
+ * `?tab=vol` and `?tab=screener` (arriving from the /flow→/options redirect
  * passthrough) select that one tab. `leaders`/`radar` moved to Discover and are
- * force-redirected there before they reach /research; if one still arrives we
+ * force-redirected there before they reach /options; if one still arrives we
  * hard-navigate to /discover so the URL/behaviour stays correct.
  */
 
@@ -55,10 +57,12 @@ const TABS: WorkspaceTab[] = [
   { key: "gex", labelKey: "wtGex" },
   { key: "prism", labelKey: "wtPrism" },
   { key: "prophet", labelKey: "wtProphet" },
-  { key: "fundamentals", labelKey: "wtFundamentals" },
 ];
 
-const FUNDAMENTALS_HREF = "/terminal?pane=overview";
+// Fundamentals is no longer a tab here — it graduated to the standalone /analysis
+// page. This href is kept only so a lingering ?tab=fundamentals deep-link (or the
+// next.config redirect passthrough) lands on the new page instead of a dead tab.
+const FUNDAMENTALS_HREF = "/analysis";
 
 // hub TabKey → the page tab-key WorkspaceTabs highlights (inverse of HUB_KEY for
 // the canonical entries; `screener` maps back to the `vol` pill).
@@ -68,7 +72,7 @@ const PAGE_KEY: Record<TabKey, string> = {
   leaders: "tape", radar: "tape", // never shown here (redirected to Discover)
 };
 
-export default function ResearchWorkspace() {
+export default function OptionsWorkspace() {
   const { lang } = useLang();
   const [hubTab, setHubTab] = useState<TabKey>(DEFAULT_TAB);
 
@@ -130,7 +134,7 @@ export default function ResearchWorkspace() {
           tabs={TABS}
           active={activePageKey}
           onSelect={onSelect}
-          aria-label={lang === "zh" ? "研究选项卡" : "Research tabs"}
+          aria-label={lang === "zh" ? "期权选项卡" : "Options tabs"}
         />
       </div>
       <OptionsHubView

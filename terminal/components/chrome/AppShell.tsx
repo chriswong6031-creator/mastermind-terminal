@@ -37,9 +37,11 @@ export function useShellEmail() {
 // pathname prefix → [i18n key, english fallback]. Order matters: first match wins.
 // Chart (/terminal) has its own shell and is intentionally absent.
 const TITLE_MAP: Array<[string, string, string]> = [
+  ["/analysis", "analysis", "Analysis"],
   ["/discover", "discover", "Discover"],
-  ["/research", "research", "Research"],
-  ["/automate", "automate", "Automate"],
+  ["/options", "options", "Options"],
+  ["/scripts", "scripts", "Scripts"],
+  ["/alerts", "alerts", "Alerts"],
   ["/portfolio", "pagePortfolio", "Portfolio"],
   ["/admin", "pageAdmin", "Admin"],
 ];
