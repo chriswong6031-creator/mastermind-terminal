@@ -32,6 +32,7 @@ import { isIntradayTf, classify, tfMinutes, type Market } from "@/lib/intradaySo
 import { sessionVwap, openingRange, sessionLevels, pivotLevels, rvolSeries, ttmSqueeze, adx as calcAdx, cvdApprox, type Bar as IMBar, type DailyBar } from "@/lib/intradayMath";
 import { attachSessionShading, detachSessionShading, type SessionShadingPrimitive } from "@/lib/sessionShading";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
+import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
 import { SOFT_Q, anchorSignal } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
 import { ichimoku, supertrend, avwap as computeAvwap, rollingVwap, weekAnchoredVwap, vprofile, volbox, rsiStack, accumPct, trendRibbon, buyShare as mfBuyShare } from "@/lib/indicatorMath";
@@ -283,6 +284,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const pineSeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());   // scriptId → its series (all panes)
   const pineMarkersRef = useRef<Map<string, ISeriesMarkersPluginApi<any>>>(new Map()); // scriptId → its markers plugin
   const ttmsqMarkersRef = useRef<ISeriesMarkersPluginApi<any> | null>(null); // ttmsq squeeze-tier dots plugin
+  const macdMarkersRef = useRef<ISeriesMarkersPluginApi<any> | null>(null);  // TH_RSIMACD+ crossover dots plugin (on the MACD-RSI line series)
   const pinePaneMapRef = useRef<Map<string, number>>(new Map());             // sub-pane scriptId → pane index (overlay scripts absent)
   const pineErrRef = useRef<Map<string, string>>(new Map());                 // scriptId → error text (surfaced in the legend)
   const pineCacheRef = useRef<Map<string, { key: string; result: RunResult | null; error: string | null }>>(new Map()); // memo: scriptId → last run
@@ -578,14 +580,40 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (p.showLevels) { try { rS.createPriceLine({ price: p.obLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); rS.createPriceLine({ price: p.osLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {} }
     return [rS];
   };
+  // CM_Stochastic crossover-highlight bars (Pine bgcolor port): value 1 (full-pane
+  // via the fixed 0..1 autoscale on scale "stochsig") at a bullish/bearish cross,
+  // whitespace elsewhere so only signal bars draw. Green when %K crosses ABOVE %D
+  // while %K < lowLine; red when %K crosses BELOW %D while %K > upLine.
+  const stochHiData = (rows: Bar[], k: (number | null)[], d: (number | null)[], upLine: number, lowLine: number) => {
+    const bull = crossUpsBelow(k, d, lowLine); const bear = crossDownsAbove(k, d, upLine);
+    return rows.map((r, i) => (bull[i] ? { time: r.time, value: 1, color: "rgba(38,194,129,0.22)" } : bear[i] ? { time: r.time, value: 1, color: "rgba(240,86,107,0.22)" } : { time: r.time }));
+  };
   const buildStochRsiPane = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
     const p = P("stochrsi"); const sr = cmStoch(rows.map(r => r.h), rows.map(r => r.l), closes, p.length, p.smoothK, p.smoothD);
+    // Highlight bars are added FIRST so LWC (draws in add order) paints them BENEATH the %K/%D curves.
+    const hlS = chart.addSeries(HistogramSeries, { priceScaleId: "stochsig", base: 0, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 1 } }) }, pane);
+    try { chart.priceScale("stochsig").applyOptions({ scaleMargins: { top: 0, bottom: 0 } }); } catch {}   // full-pane-height bars (default overlay margins are 0.2/0.1)
+    hlS.setData(stochHiData(rows, sr.k, sr.d, p.upLine, p.lowLine) as any);
     const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: "%K" }, pane);
     const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: "%D" }, pane);
     kS.setData(toLine(rows, sr.k)); dS.setData(toLine(rows, sr.d));
     // CM_Stochastic_MTF upper/lower/mid guide lines (80 / 20 / 50 by default)
     try { kS.createPriceLine({ price: p.upLine, color: "rgba(240,86,107,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: p.lowLine, color: "rgba(38,194,129,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: 50, color: "rgba(214,218,227,.15)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
-    return [kS, dS];
+    // Return order keeps kS@0/dS@1 stable for the in-place update path; the highlight histogram rides at [2]
+    // (a real series → the teardown loops removeSeries it for free).
+    return [kS, dS, hlS];
+  };
+  // TH_RSIMACD+ crossover dots (Pine plotshape port): a circle at the mid-price of every
+  // macd/signal cross — bullish (line crosses ABOVE signal) green, bearish red. Rebuilt on the
+  // passed LINE series and cached in macdMarkersRef (detached on teardown, like ttmsqMarkersRef).
+  const applyMacdMarkers = (lineSeries: ISeriesApi<any>, rows: Bar[], line: (number | null)[], sig: (number | null)[]) => {
+    if (macdMarkersRef.current) { try { macdMarkersRef.current.detach(); } catch {} macdMarkersRef.current = null; }
+    const up = crossUps(line, sig); const dn = crossDowns(line, sig); const markers: any[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (!up[i] && !dn[i]) continue;
+      markers.push({ time: rows[i].time, position: "atPriceMiddle", price: (line[i]! + sig[i]!) / 2, shape: "circle", size: 1, color: up[i] ? "rgba(38,194,129,1)" : "rgba(240,86,107,1)" });
+    }
+    try { macdMarkersRef.current = createSeriesMarkers(lineSeries, markers as any); } catch {}
   };
   const buildMacd = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
     const p = P("macd"); const m = rsiMacd(closes, p.rsiLen, p.fastLen, p.baseLen, p.signalLen);
@@ -593,6 +621,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const lS = chart.addSeries(LineSeries, { color: p.macdCol, lineWidth: p.width as any, title: "MACD-RSI" }, pane); const sS = chart.addSeries(LineSeries, { color: p.signalCol, lineWidth: 1, title: "signal" }, pane);
     lS.setData(toLine(rows, m.line)); sS.setData(toLine(rows, m.sig));
     try { lS.createPriceLine({ price: 0, color: "rgba(214,218,227,.2)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
+    applyMacdMarkers(lS, rows, m.line, m.sig);
     return [hs, lS, sS];
   };
 
@@ -1409,8 +1438,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Remove EVERY tracked indicator series (price/compare/drawings survive). Used by the bounded rebuild.
   const clearAllIndicators = () => {
     const chart = chartRef.current; if (!chart) return;
-    // Detach the ttmsq squeeze-dot markers BEFORE removing its host series.
+    // Detach marker plugins (ttmsq dots, macd crossover dots) BEFORE removing their host series.
     if (ttmsqMarkersRef.current) { try { ttmsqMarkersRef.current.detach(); } catch {} ttmsqMarkersRef.current = null; }
+    if (macdMarkersRef.current) { try { macdMarkersRef.current.detach(); } catch {} macdMarkersRef.current = null; }
     for (const arr of indSeriesRef.current.values()) for (const s of arr) { try { chart.removeSeries(s); } catch {} }
     indSeriesRef.current.clear(); paneMapRef.current.clear();
     indOverlayRef.current = {};
@@ -1507,12 +1537,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const sArr = SB.get("stochrsi")!; const p = P("stochrsi"); const sr = cmStoch(rows.map(r => r.h), rows.map(r => r.l), closes, p.length, p.smoothK, p.smoothD);
       if (sArr[0]) sArr[0].setData(toLine(rows, sr.k));
       if (sArr[1]) sArr[1].setData(toLine(rows, sr.d));
+      if (sArr[2]) sArr[2].setData(stochHiData(rows, sr.k, sr.d, p.upLine, p.lowLine) as any);   // refresh crossover-highlight bars
     }
     if (SB.has("macd")) {
       const sArr = SB.get("macd")!; const p = P("macd"); const m = rsiMacd(closes, p.rsiLen, p.fastLen, p.baseLen, p.signalLen);
       if (sArr[0]) sArr[0].setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? p.upHist : p.downHist } : null)).filter(Boolean) as any);
       if (sArr[1]) sArr[1].setData(toLine(rows, m.line));
       if (sArr[2]) sArr[2].setData(toLine(rows, m.sig));
+      if (sArr[1]) applyMacdMarkers(sArr[1], rows, m.line, m.sig);   // refresh crossover dots on the line series
     }
   };
 
@@ -3673,6 +3705,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // removals (highest sub-pane only, by the guard above)
       for (const r of removed) {
         if (r === "ttmsq" && ttmsqMarkersRef.current) { try { ttmsqMarkersRef.current.detach(); } catch {} ttmsqMarkersRef.current = null; }
+        if (r === "macd" && macdMarkersRef.current) { try { macdMarkersRef.current.detach(); } catch {} macdMarkersRef.current = null; }
         const arr = indSeriesRef.current.get(r) || []; for (const s of arr) { try { chart.removeSeries(s); } catch {} } indSeriesRef.current.delete(r); paneMapRef.current.delete(r);
       }
       // additions (tail append, by the guard above) — assign the next free pane index

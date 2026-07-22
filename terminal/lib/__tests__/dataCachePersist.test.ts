@@ -488,3 +488,225 @@ describe("dataCache × idbJsonStore — blocked IDB whose open() never settles (
     expect(neverDb.openCalls).toBe(opensAfterRead); // put opened nothing
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// Tier D — self-heal of a store-less DB (missing "json" object store).
+//
+// Regression guard: if "mm-data-cache" already exists at the current version but
+// WITHOUT the "json" store — real causes: same-origin code called
+// indexedDB.open("mm-data-cache", 1) with no upgrade handler before the app did,
+// or a crashed/aborted upgrade — then onupgradeneeded never fires again at that
+// version and every transaction("json") throws NotFoundError FOREVER, killing
+// persistence for the lifetime of the profile with no self-heal.
+//
+// The fix: after a successful open, openDB checks db.objectStoreNames.contains
+// (STORE); if missing it reopens ONCE at db.version+1 (never a hardcoded 2), whose
+// onupgradeneeded creates the store + ts index via the SAME helper as a fresh
+// install. A failed/blocked/timed-out heal (or a heal that still lacks the store)
+// latches idbDead exactly as a hard failure. The whole heal lives inside openDB's
+// promise, so idbGet's 250ms race and every caller are untouched.
+//
+// This fake models a store set as LIVE state: objectStoreNames.contains reads it,
+// createObjectStore (invoked by the real ensureStore inside onupgradeneeded) adds
+// to it — so the healed store is created through the production code path, and the
+// post-heal contains() check reflects reality. It records every version passed to
+// open() so tests can prove the reopen happened at version+1.
+// ───────────────────────────────────────────────────────────────────────────
+
+type HealFakeOpts = {
+  // Store names present BEFORE the app opens (empty → store-less DB to be healed).
+  initialStores?: string[];
+  // Starting on-disk version the DB reports.
+  initialVersion?: number;
+  // If set, the Nth open() call (1-based) never settles (no success/error/blocked)
+  // — models a heal reopen that hangs, so the read-timeout+latch path is exercised.
+  neverSettleOnCall?: number;
+};
+
+function makeHealFakeIndexedDB(opts: HealFakeOpts = {}) {
+  const storeNames = new Set<string>(opts.initialStores ?? []);
+  const data = new Map<string, Rec>();
+  let version = opts.initialVersion ?? 1;
+  const openVersions: number[] = [];
+
+  function fire<T>(makeResult: () => T) {
+    const req: any = { onsuccess: null, onerror: null, result: undefined };
+    queueMicrotask(() => {
+      try {
+        req.result = makeResult();
+        req.onsuccess && req.onsuccess({ target: req });
+      } catch (e) {
+        req.onerror && req.onerror({ target: req });
+      }
+    });
+    return req;
+  }
+
+  function makeStore() {
+    return {
+      get: (url: string) => fire(() => data.get(url)),
+      put: (rec: Rec) =>
+        fire(() => {
+          data.set(rec.url, rec);
+          return rec.url;
+        }),
+      delete: (url: string) =>
+        fire(() => {
+          data.delete(url);
+          return undefined;
+        }),
+      clear: () =>
+        fire(() => {
+          data.clear();
+          return undefined;
+        }),
+      count: () => fire(() => data.size),
+      index: (_name: string) => ({ openCursor: () => fire(() => null) }),
+      createIndex: () => {},
+    };
+  }
+
+  const db: any = {
+    // Reads LIVE store state so a heal's createObjectStore flips contains() to true.
+    get objectStoreNames() {
+      return { contains: (n: string) => storeNames.has(n) };
+    },
+    get version() {
+      return version;
+    },
+    // Invoked by the real ensureStore() from within onupgradeneeded.
+    createObjectStore: (name: string) => {
+      storeNames.add(name);
+      return makeStore();
+    },
+    transaction: (store: string, _mode?: string) => {
+      // Mirror real IDB: a transaction naming an absent store throws NotFoundError.
+      if (!storeNames.has(store)) {
+        throw new DOMException(`store ${store} not found`, "NotFoundError");
+      }
+      const tx: any = { oncomplete: null, onerror: null, onabort: null, objectStore: () => makeStore() };
+      queueMicrotask(() => queueMicrotask(() => tx.oncomplete && tx.oncomplete({ target: tx })));
+      return tx;
+    },
+    close: () => {},
+    onversionchange: null,
+  };
+
+  return {
+    _data: data,
+    _storeNames: storeNames,
+    get openVersions() {
+      return openVersions;
+    },
+    get openCalls() {
+      return openVersions.length;
+    },
+    open: (_name: string, v?: number) => {
+      const callNo = openVersions.length + 1;
+      openVersions.push(v ?? 1);
+      const req: any = {
+        onupgradeneeded: null,
+        onsuccess: null,
+        onerror: null,
+        onblocked: null,
+        result: db,
+      };
+      // Model a hung reopen: hand back the request and never fire anything.
+      if (opts.neverSettleOnCall === callNo) return req;
+      queueMicrotask(() => {
+        // Fire upgrade only when the requested version exceeds the on-disk one,
+        // exactly as real IDB — this is what lets the heal (version+1) create the
+        // store while a same-version open would NOT.
+        if ((v ?? 1) > version) {
+          version = v ?? 1;
+          req.onupgradeneeded && req.onupgradeneeded({ target: req });
+        }
+        req.onsuccess && req.onsuccess({ target: req });
+      });
+      return req;
+    },
+  };
+}
+
+describe("idbJsonStore — self-heal when the DB exists without the 'json' store", () => {
+  const realIDB = (globalThis as any).indexedDB;
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    if (realIDB === undefined) delete (globalThis as any).indexedDB;
+    else (globalThis as any).indexedDB = realIDB;
+    globalThis.fetch = realFetch;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("(a) a pre-created store-less DB heals: reopen at version+1 creates the store and put+get round-trips", async () => {
+    const { idb } = await freshModules();
+    // DB already exists at v1 with NO "json" store (the reproduced bug).
+    const heal = makeHealFakeIndexedDB({ initialStores: [], initialVersion: 1 });
+    (globalThis as any).indexedDB = heal;
+
+    // A round-trip that can only succeed if the store was created by the heal.
+    const url = "/data/HEALME.json";
+    await idb.idbPut(url, [{ o: 1, h: 2, l: 3, c: 4 }], 5_000);
+    const rec = await idb.idbGet(url);
+
+    expect(rec).not.toBeNull();
+    expect(rec!.data).toEqual([{ o: 1, h: 2, l: 3, c: 4 }]);
+    expect(rec!.ts).toBe(5_000);
+
+    // The store now exists...
+    expect(heal._storeNames.has("json")).toBe(true);
+    // ...and it was created by a reopen at exactly (opened version + 1), computed
+    // from the live handle — NOT a hardcoded 2. The relational assertion holds
+    // whatever DB_VERSION is: the heal open is always one past the first open.
+    expect(heal.openVersions).toHaveLength(2);
+    expect(heal.openVersions[0]).toBe(idb.DB_VERSION); // first open at DB_VERSION
+    expect(heal.openVersions[1]).toBe(heal.openVersions[0] + 1); // heal at version+1
+    expect(idb._isIdbDead()).toBe(false); // healed cleanly, store NOT latched off
+  });
+
+  it("(b) heal failure (second open never settles) latches idbDead and getJSON still resolves via network", async () => {
+    vi.useFakeTimers();
+    const { idb, dc } = await freshModules();
+    // First open succeeds but is store-less → triggers a heal; the SECOND open
+    // (the heal reopen) never settles, so only idbGet's 250ms timeout can unblock.
+    const heal = makeHealFakeIndexedDB({ initialStores: [], initialVersion: 1, neverSettleOnCall: 2 });
+    (globalThis as any).indexedDB = heal;
+
+    const url = "/data/HEALFAIL.json";
+    const payload = [{ o: 9, h: 9, l: 9, c: 9 }];
+    const fetchSpy = vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(payload) } as any),
+    );
+    globalThis.fetch = fetchSpy as any;
+
+    // Read-back parks on the ~250ms race because the heal reopen hangs.
+    const p = dc.getJSON(url);
+    await vi.advanceTimersByTimeAsync(idb.IDB_READ_TIMEOUT_MS + 5);
+
+    const out = await p;
+    expect(out).toEqual(payload); // data delivered via network, terminal not blank
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // fell through to network as a miss
+    expect(idb._isIdbDead()).toBe(true); // hung heal latched the store off
+    // Both opens were attempted (initial + the heal reopen that then hung).
+    expect(heal.openVersions).toEqual([1, 2]);
+  });
+
+  it("(c) a healthy DB (store present) does NOT trigger a versioned reopen — exactly one open()", async () => {
+    const { idb } = await freshModules();
+    // Store already present → no heal needed.
+    const heal = makeHealFakeIndexedDB({ initialStores: ["json"], initialVersion: 1 });
+    (globalThis as any).indexedDB = heal;
+
+    await idb.idbPut("/data/HEALTHY.json", [1, 2, 3], 2_000);
+    const rec = await idb.idbGet("/data/HEALTHY.json");
+
+    expect(rec).not.toBeNull();
+    expect(rec!.data).toEqual([1, 2, 3]);
+    // The whole point: no version+1 reopen. Exactly one open(), at DB_VERSION.
+    expect(heal.openCalls).toBe(1);
+    expect(heal.openVersions).toEqual([idb.DB_VERSION]);
+    expect(idb._isIdbDead()).toBe(false);
+  });
+});
