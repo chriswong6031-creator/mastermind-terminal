@@ -4,8 +4,8 @@
  *
  * Wave-2: the app chrome (.app2 grid + topbar + AppNav + MobileNav + lang toggle)
  * is now owned by AppShell (app/(shell)/layout.tsx). This root renders ONLY the
- * .main2 content cell (the HeatmapView). The FLOW-SPLIT lane mounts this under
- * Discover › Heatmap; the /heatmap URL is served by next.config redirects.
+ * .main2 content cell (the HeatmapView). Mounted under Screener › Heatmap; the
+ * legacy /heatmap and /discover?tab=heatmap URLs are served by next.config redirects.
  */
 
 import { HeatmapView } from "./HeatmapView";

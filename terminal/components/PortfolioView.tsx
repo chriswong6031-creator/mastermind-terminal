@@ -11,29 +11,47 @@ const isBuy = (v: string | null) => v === "BUY" || v === "REBUY" || v === "RECLA
 
 const GUEST_SEED = ["BTC-USD", "ETH-USD", "NVDA", "AAPL", "MSFT", "QQQ"];
 
-export default function PortfolioView({ symbols, email }: { symbols: string[]; email: string }) {
+type WList = { id: string; name: string; symbols: string[] };
+
+export default function PortfolioView({ lists, email }: { lists: WList[]; email: string }) {
   const router = useRouter();
   const t = useT();
   const [man, setMan] = useState<Record<string, Row>>({});
   const [loaded, setLoaded] = useState(false);
-  // The whole prod base is guest right now (login disabled), so the server watchlist
-  // is empty. Fall back to the client-side watchlist (mm.wls, written by TerminalShell)
-  // and then the same seed the Terminal opens with — so Portfolio isn't blank for guests.
-  const [effSymbols, setEffSymbols] = useState<string[]>(symbols);
+  // Watchlists the user can switch between. Signed-in users get their server lists
+  // (passed in). The whole prod base is guest right now (login disabled), so when the
+  // server list is empty we fall back to the client-side watchlists (mm.wls, written by
+  // TerminalShell — an object keyed by list name) and finally a single seed list, so
+  // Portfolio is never blank and the switcher still works for guests.
+  const [allLists, setAllLists] = useState<WList[]>(lists.length ? lists : []);
+  const [activeIdx, setActiveIdx] = useState(0);
   useEffect(() => {
-    if (symbols.length) { setEffSymbols(symbols); return; }
+    if (lists.length) { setAllLists(lists); setActiveIdx(0); return; }
     try {
       const raw = localStorage.getItem("mm.wls");
       if (raw) {
         const w = JSON.parse(raw);
-        const list = w?.lists?.[w?.active] ?? w?.lists?.Default;
-        const syms = Array.isArray(list) ? list.map((x: { symbol: string }) => x.symbol).filter(Boolean) : [];
-        setEffSymbols(syms.length ? syms : GUEST_SEED);
-        return;
+        const entries: [string, unknown][] = w?.lists && typeof w.lists === "object" ? Object.entries(w.lists) : [];
+        const built: WList[] = entries.map(([name, arr]) => ({
+          id: name,
+          name,
+          symbols: Array.isArray(arr) ? arr.map((x: { symbol: string }) => x.symbol).filter(Boolean) : [],
+        })).filter((l) => l.symbols.length);
+        if (built.length) {
+          setAllLists(built);
+          const ai = built.findIndex((l) => l.id === w?.active);
+          setActiveIdx(ai >= 0 ? ai : 0);
+          return;
+        }
       }
     } catch {}
-    setEffSymbols(GUEST_SEED);
-  }, [symbols]);
+    setAllLists([{ id: "seed", name: "Watchlist", symbols: GUEST_SEED }]);
+    setActiveIdx(0);
+  }, [lists]);
+
+  // Clamp against a shrunk list, then resolve the active list's symbols.
+  const safeIdx = Math.min(activeIdx, Math.max(0, allLists.length - 1));
+  const effSymbols = allLists[safeIdx]?.symbols ?? [];
   // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
   useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive) setMan(m?.symbols || {}); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); }); return () => { alive = false; }; }, []);
 
@@ -51,7 +69,33 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
 
   return (
     <main className="main2"><div className="pg">
+        <style>{`
+          .wl-switch{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 10px}
+          .wl-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--muted);font-size:12.5px;font-weight:600;cursor:pointer;transition:color .15s ease,border-color .15s ease,background .15s ease}
+          .wl-pill:hover{color:var(--text);border-color:var(--brand)}
+          .wl-pill.on{color:var(--brand-2);border-color:var(--brand);background:color-mix(in srgb, var(--brand) 12%, var(--card))}
+          .wl-ct{font-size:11px;font-weight:700;opacity:.8;padding:1px 6px;border-radius:999px;background:color-mix(in srgb, var(--muted) 20%, transparent)}
+          .wl-pill.on .wl-ct{background:color-mix(in srgb, var(--brand) 24%, transparent)}
+        `}</style>
         <div className="pg-head"><h2>{t("convictionBook")}</h2><span className="sub">{t("convictionSub")}</span></div>
+        {allLists.length > 1 && (
+          <div className="wl-switch" role="tablist" aria-label={t("watchlists", "Watchlists")}>
+            {allLists.map((l, i) => (
+              <button
+                key={l.id}
+                type="button"
+                role="tab"
+                aria-selected={i === safeIdx}
+                className={`wl-pill${i === safeIdx ? " on" : ""}`}
+                onClick={() => setActiveIdx(i)}
+                title={l.name}
+              >
+                <span className="wl-nm">{l.name}</span>
+                <span className="wl-ct">{l.symbols.length}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="kpis">
           <div className="kpi"><small>{t("names")}</small><b>{rows.length}</b></div>
           <div className="kpi"><small>{t("bullishSignals")}</small><b className="up">{buys.length}</b></div>

@@ -16,15 +16,16 @@ const LEX: Record<string, [string, string]> = {
   // nav — Wave-2 five workspaces (navigate by job). chart/portfolio kept; screener/scripts/
   // alerts/analyst survive only as sub-tab or legacy labels below.
   chart: ["Chart", "图表"],
-  discover: ["Discover", "发现"],
   research: ["Research", "研究"],
-  automate: ["Automate", "自动化"],
+  screener: ["Screener", "选股"],
+  options: ["Options Flow", "期权流"],
+  alerts: ["Alerts", "提醒"],
+  scripts: ["Scripts", "脚本"],
   portfolio: ["Portfolio", "投资组合"],
   ai: ["Mastermind AI", "智脑 AI"],
   // legacy nav labels (retained: still referenced by sub-tabs / redirected views)
-  screener: ["Screener", "选股"],
-  scripts: ["Scripts", "脚本"],
-  alerts: ["Alerts", "提醒"],
+  discover: ["Discover", "发现"],
+  automate: ["Automate", "自动化"],
   analyst: ["Analyst", "分析师"],
   // chart toolbar
   priceChart: ["Price chart", "价格图表"],

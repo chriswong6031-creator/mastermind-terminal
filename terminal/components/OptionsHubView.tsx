@@ -1963,7 +1963,7 @@ export default function OptionsHubView({
   return (
     <CoachProvider>
       {/* Chrome (.app2 grid + MobileNav + topbar + AppNav) is owned by the route
-          layout (AppShell for /research, FlowChrome legacy). Standalone renders the
+          layout (AppShell for /options, FlowChrome legacy). Standalone renders the
           .main2 grid cell; embedded renders a bare flex column inside the page's
           .main2 (see Wrapper above) so a crash surfaces the error boundary in-place. */}
       <Wrapper {...wrapperProps}>

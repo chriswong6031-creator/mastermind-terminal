@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
@@ -9,11 +9,11 @@ import { useT } from "@/lib/i18n";
 
 /**
  * Shared mobile top-bar + slide-in drawer used by both the /terminal shell and
- * the (shell) app2 routes (discover / research / automate / portfolio).
+ * the (shell) app2 routes (screener / options / alerts / scripts / portfolio).
  *
  * Mirrors the exact .mobilebar / .m-drawer CSS classes already defined in
  * globals.css so no new visual idiom is introduced. The drawer items derive
- * from AppNav's TOP export (single source of truth) — the five workspaces.
+ * from AppNav's TOP export (single source of truth) — the seven sidebar items.
  *
  * Props
  * -----
@@ -32,8 +32,8 @@ export interface MobileNavProps {
   onBack?: () => void;
   onOpenCopilot?: () => void;
   activeKey?: string;
-  /** Retained for call-site compatibility; the drawer no longer special-cases the
-   *  fundamentals pane (Analyst is gone from the nav). */
+  /** Retained for call-site compatibility; the drawer derives Research's active state
+   *  from mm:pane-state, so no per-call terminal flag is needed. */
   isTerminal?: boolean;
 }
 
@@ -49,12 +49,30 @@ export default function MobileNav({
   const navPath = usePathname();
   const t = useT();
 
-  // Active key = path prefix per workspace, mirroring AppNav. Chart is the default/center.
+  // Research (the analysis MegaPane) has no route of its own — it opens over the chart.
+  // Track the REAL overlay state from the mm:pane-state event TerminalShell broadcasts
+  // so the drawer lights Research while the pane is open (mirrors AppNav). Seeded from
+  // the URL on mount (client-only read — no useSearchParams).
+  const [paneOpen, setPaneOpen] = useState(false);
+  useEffect(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get("pane");
+      if (window.location.pathname.startsWith("/terminal") && p) setPaneOpen(true);
+    } catch {}
+    const h = (e: Event) => setPaneOpen(!!(e as CustomEvent).detail);
+    window.addEventListener("mm:pane-state", h);
+    return () => window.removeEventListener("mm:pane-state", h);
+  }, []);
+
+  // Active key = path prefix per workspace, mirroring AppNav. On the chart, Research
+  // lights while the analysis pane is open (else Chart). Chart is the default/center.
   const derivedKey = activeKeyProp ?? (
-    navPath.startsWith("/discover") ? "discover"
-    : navPath.startsWith("/research") ? "research"
-    : navPath.startsWith("/automate") ? "automate"
+    navPath.startsWith("/screener") ? "screener"
+    : navPath.startsWith("/options") ? "options"
+    : navPath.startsWith("/alerts") ? "alerts"
+    : navPath.startsWith("/scripts") ? "scripts"
     : navPath.startsWith("/portfolio") ? "portfolio"
+    : (navPath.startsWith("/terminal") && paneOpen) ? "research"
     : "chart"
   );
 
@@ -116,7 +134,15 @@ export default function MobileNav({
                 key={it.k}
                 href={it.href}
                 className={on ? "on" : ""}
-                onClick={() => setDrawer(false)}
+                onClick={() => {
+                  setDrawer(false);
+                  // On the chart, Research/Chart toggle the in-shell MegaPane via events
+                  // (same path, so the href alone wouldn't re-fire the deep-link effect).
+                  if (navPath.startsWith("/terminal")) {
+                    if (it.k === "research") window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "overview" }));
+                    else if (it.k === "chart") window.dispatchEvent(new CustomEvent("mm:close-pane"));
+                  }
+                }}
               >
                 <NavGlyph k={it.k} />
                 {t(it.k, it.label)}

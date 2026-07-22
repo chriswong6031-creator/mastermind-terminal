@@ -105,37 +105,41 @@ const nextConfig: NextConfig = {
   // 2026-07-07 `typescript.ignoreBuildErrors` escape hatch (FinPage union nits)
   // is removed; CI (.github/workflows/ci.yml) also gates PRs on tsc + vitest.
   // Note: `eslint` key was removed in Next.js 16 — ESLint is no longer built-in.
-  // ── Wave-2 IA redirect contract (permanent 308) ────────────────────────────
-  // The old single-purpose route dirs (screener/heatmap/alerts/scripts/flow) were
-  // deleted; the five-workspace URLs now own those destinations. Redirects are
-  // checked before the filesystem, and Next passes through any request query that
-  // the destination doesn't already set — so `/heatmap?v=2` → `/discover?tab=heatmap&v=2`
-  // and the default `/flow?tab=gex` → `/research?tab=gex` both keep working without
-  // enumerating every tab. Bookmarks, the macro dashboard's cross-links and the
-  // ?v=2 cache-busted heatmap link all survive.
+  // ── Flat-sidebar redirect contract (permanent 308) ─────────────────────────
+  // The sidebar is granular again: Chart · Research · Screener · Options Flow ·
+  // Alerts · Scripts · Portfolio. /screener, /options, /alerts, /scripts, /portfolio
+  // are REAL routes (no redirect). This block retires the URLs that were superseded:
+  //   • Wave-1 legacy   : /flow (options), /heatmap
+  //   • Wave-2 hubs     : /discover (→ split: screener/heatmap vs leaders/radar),
+  //                       /automate (→ split: alerts vs scripts), /research (→ /options)
+  // Redirects are checked before the filesystem, and Next passes through any request
+  // query the destination doesn't already set — so `/heatmap?v=2` → `/screener?tab=heatmap&v=2`
+  // and `/research?tab=gex` → `/options?tab=gex` both keep working without enumerating
+  // every tab. `has:query` rules are ordered BEFORE their bare catch-all (first match wins).
   async redirects() {
     return [
-      { source: "/screener", destination: "/discover?tab=screener", permanent: true },
-      { source: "/heatmap", destination: "/discover?tab=heatmap", permanent: true },
-      { source: "/alerts", destination: "/automate?tab=alerts", permanent: true },
-      { source: "/scripts", destination: "/automate?tab=scripts", permanent: true },
-      // The two ex-flow Discover tabs move to /discover; matched by query so only
-      // these specific tabs peel off. Ordered BEFORE the catch-all /flow below.
-      {
-        source: "/flow",
-        has: [{ type: "query", key: "tab", value: "leaders" }],
-        destination: "/discover?tab=leaders",
-        permanent: true,
-      },
-      {
-        source: "/flow",
-        has: [{ type: "query", key: "tab", value: "radar" }],
-        destination: "/discover?tab=radar",
-        permanent: true,
-      },
-      // Every other /flow (incl. no tab, and tape/desk/tide/tickers/vol/gex/prism/
-      // prophet/fundamentals) → Research; the ?tab= value passes through untouched.
-      { source: "/flow", destination: "/research", permanent: true },
+      // ── Wave-1 legacy /heatmap → Screener's heatmap tab ──
+      { source: "/heatmap", destination: "/screener?tab=heatmap", permanent: true },
+
+      // ── Wave-1 legacy /flow → Options Flow; leaders/radar peel to their Options tabs ──
+      { source: "/flow", has: [{ type: "query", key: "tab", value: "leaders" }], destination: "/options?tab=leaders", permanent: true },
+      { source: "/flow", has: [{ type: "query", key: "tab", value: "radar" }], destination: "/options?tab=radar", permanent: true },
+      { source: "/flow", destination: "/options", permanent: true },
+
+      // ── Wave-2 /discover split: screener/heatmap → Screener; leaders/radar → Options ──
+      { source: "/discover", has: [{ type: "query", key: "tab", value: "heatmap" }], destination: "/screener?tab=heatmap", permanent: true },
+      { source: "/discover", has: [{ type: "query", key: "tab", value: "leaders" }], destination: "/options?tab=leaders", permanent: true },
+      { source: "/discover", has: [{ type: "query", key: "tab", value: "radar" }], destination: "/options?tab=radar", permanent: true },
+      { source: "/discover", destination: "/screener", permanent: true },
+
+      // ── Wave-2 /automate split: scripts → Scripts; everything else → Alerts ──
+      { source: "/automate", has: [{ type: "query", key: "tab", value: "scripts" }], destination: "/scripts", permanent: true },
+      { source: "/automate", destination: "/alerts", permanent: true },
+
+      // ── Wave-2 /research (the options hub) → Options Flow; leaders/radar to their tabs ──
+      { source: "/research", has: [{ type: "query", key: "tab", value: "leaders" }], destination: "/options?tab=leaders", permanent: true },
+      { source: "/research", has: [{ type: "query", key: "tab", value: "radar" }], destination: "/options?tab=radar", permanent: true },
+      { source: "/research", destination: "/options", permanent: true },
     ];
   },
   async headers() {
