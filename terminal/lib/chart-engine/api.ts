@@ -123,6 +123,7 @@ export type EngineOptions = {
   localization?: Record<string, unknown>;
   handleScroll?: Record<string, unknown> | boolean;
   handleScale?: Record<string, unknown> | boolean;
+  kineticScroll?: Record<string, unknown>;
 } & Record<string, unknown>;
 
 // ── Event params ────────────────────────────────────────────────────────────────

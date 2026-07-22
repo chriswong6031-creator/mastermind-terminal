@@ -18,6 +18,7 @@ import {
   CrosshairMode, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
 import { createEngine, type ChartEngine } from "@/lib/chart-engine";
+import { clampAxisZoom, axisZoomMargins, wheelDeltaToZoomStep, type AxisMargins } from "@/lib/chart-engine/axisZoom";
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engine/host";
 import { ORACLE_V1_PINE } from "@/lib/pine";
@@ -2067,6 +2068,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       crosshair: { mode: CrosshairMode.Normal, vertLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: t.p3 }, horzLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: t.p3 } },
       rightPriceScale: { borderColor: t.line, scaleMargins: { top: 0.1, bottom: 0.08 } },
       timeScale: { borderColor: t.line, rightOffset: 6, barSpacing: 8 },
+      // momentum glide on pan release (LWC ships mouse:false — that reads as a hard stop)
+      kineticScroll: { mouse: true, touch: true },
     });
     engineRef.current = engine;
     // engine-unwrap: P1 bridge — the raw IChartApi for the call sites below; each cluster
@@ -3080,6 +3083,47 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const p = paneLayoutRef.current.find((q) => y >= q.top && y <= q.top + q.height); if (!p) return;
       doMaximize(p.paneIndex);
     };
+    // TV-style wheel-on-price-axis: scrolling over any pane's right axis band squashes/stretches
+    // THAT pane via its scale's margins (LWC exposes no price-range setter; margins move the pane's
+    // series coherently and leave overlays' own margins alone). The hit pane is resolved from the
+    // cursor y against paneLayoutRef, so price/StochRSI/MACD/any subpane all respond. Capture phase:
+    // LWC's wheel listener sits on inner elements and would time-zoom first in bubble. Dbl-click on
+    // the band restores that pane's captured margins alongside LWC's built-in autoscale reset.
+    const AXIS_MARGINS_DEFAULT: AxisMargins = { top: 0.1, bottom: 0.08 };  // mirrors createEngine rightPriceScale
+    // per-pane zoom state, keyed by pane key. `base` is the pane's OWN margins captured on first
+    // interaction (subpane series carry their own), so reset restores exactly what they started with.
+    const axisZoomState = new Map<string, { base: AxisMargins; zoom: number }>();
+    // resolve the price scale for a pane: the price series for "__price__", else the pane's first series.
+    const paneScale = (key: string, paneIndex: number) => {
+      if (key === "__price__") return priceSeriesRef.current?.priceScale() ?? null;
+      try { return chartRef.current?.panes()[paneIndex]?.getSeries()?.[0]?.priceScale() ?? null; } catch { return null; }
+    };
+    const onAxisWheel = (e: WheelEvent) => {
+      const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect();
+      if (!inAxisBand(e.clientX, wr)) return;
+      const y = e.clientY - wr.top;
+      const pane = paneLayoutRef.current.find((q) => y >= q.top && y <= q.top + q.height);
+      if (!pane) return;
+      const scale = paneScale(pane.key, pane.paneIndex); if (!scale) return;  // no series on the pane → no-op
+      e.preventDefault(); e.stopPropagation();
+      let st = axisZoomState.get(pane.key);
+      if (!st) {  // first touch: capture the pane's current margins BEFORE changing anything
+        const base = (() => { try { return scale.options().scaleMargins ?? AXIS_MARGINS_DEFAULT; } catch { return AXIS_MARGINS_DEFAULT; } })();
+        st = { base: { top: base.top, bottom: base.bottom }, zoom: 0 };
+        axisZoomState.set(pane.key, st);
+      }
+      st.zoom = clampAxisZoom(st.base, st.zoom + wheelDeltaToZoomStep(e.deltaY, e.deltaMode));
+      scale.applyOptions({ scaleMargins: axisZoomMargins(st.base, st.zoom) });
+    };
+    const onAxisDbl = (e: MouseEvent) => {
+      const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect();
+      if (!inAxisBand(e.clientX, wr)) return;
+      const y = e.clientY - wr.top;
+      const pane = paneLayoutRef.current.find((q) => y >= q.top && y <= q.top + q.height); if (!pane) return;
+      const st = axisZoomState.get(pane.key); if (!st) return;  // never wheel-scaled → nothing to reset
+      st.zoom = 0;
+      try { paneScale(pane.key, pane.paneIndex)?.applyOptions({ scaleMargins: { ...st.base } }); } catch {}
+    };
     // B1: touch double-tap handler — two qualifying taps (down→up <300ms, <12px displacement) within
     // 350ms and <40px of each other → trigger the same pane maximize-toggle as dblclick.
     const onTouchDown = (e: PointerEvent) => {
@@ -3130,6 +3174,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     mqlMobile?.addEventListener("change", onMqlChange);
     wrap.addEventListener("mousemove", onPaneMove); wrap.addEventListener("mouseleave", onPaneLeave); wrap.addEventListener("dblclick", onPaneDbl);
     wrap.addEventListener("pointerdown", onTouchDown);
+    wrap.addEventListener("wheel", onAxisWheel, { passive: false, capture: true });
+    wrap.addEventListener("dblclick", onAxisDbl);
 
     // observe each pane element so separator drags / collapses reposition the overlay + rebaseline sizes.
     // scheduleRender() re-lays the signal-marker + drawing SVG overlays: a pane collapse/maximize/drag
@@ -3257,7 +3303,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (winDown) window.removeEventListener("pointerdown", winDown);
       const wEl = wrapElRef.current;
       if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx);
-      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onTouchDown); }
+      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); }
       mqlMobile?.removeEventListener("change", onMqlChange);
       paneRO?.disconnect(); paneRORef.current = null; wrapElRef.current = null;
       ro?.disconnect();
