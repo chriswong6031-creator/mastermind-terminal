@@ -23,6 +23,8 @@ import IndicatorsModal from "@/components/IndicatorsModal";
 import IndicatorSettings from "@/components/IndicatorSettings";
 import IndicatorSource from "@/components/IndicatorSource";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
+import { useChartBus } from "@/lib/useChartBus";
+import { isV2Envelope, type IndicatorSpec } from "@/lib/chartBus";
 import SeasonalityCard from "@/components/SeasonalityCard";
 // Code-split the conditionally-mounted heavies out of the /terminal first-paint bundle (task 9).
 // TerminalShell is a Client Component, so ssr:false is allowed — none of these render on any SSR
@@ -1323,11 +1325,43 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   };
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
 
+  // ── Chart Bus v2 (CMX W1) ──────────────────────────────────────────────────────────────────
+  // The v2 typed drawing/command vocabulary. v1 envelopes stay on handleBrainCommand below; a v:2
+  // envelope routes here. The bus owns the in-memory per-symbol AI drawing layer, acks, and the
+  // debounced state-mirror POST. capabilities report the REAL enums (kills hallucinated names).
+  const sessionIndicators: IndicatorSpec[] = useMemo(
+    () => [...inds].map((k) => ({ name: k, params: indParams[k] as Record<string, number> | undefined })),
+    [inds, indParams],
+  );
+  const chartBus = useChartBus({
+    activeSymbol: active,
+    bars,
+    capabilities: { tfs: TF_CANONICAL_ORDER, indicators: [...IND_ORDER] },
+    sessionIndicators,
+    currentTf: tf,
+    // AI objects live in the bus's own store, never in drawStore — so drawStore[active] is purely the
+    // user's own drawings (by:"user"). Enumerable, so we report them.
+    userDrawings: drawStore[active] ?? [],
+    setSymbol: (s) => pick(s),
+    setTf: (t2) => setTf(t2),
+    setIndicators: (specs) => {
+      const keys = specs.map((s) => s.name).filter((k) => isIndKey(k) || scriptById[k]);
+      setInds(new Set(keys));
+      const withParams = specs.filter((s) => s.params && isIndKey(s.name));
+      if (withParams.length) setIndParams((p) => { const n = { ...p }; for (const s of withParams) n[s.name] = { ...(n[s.name] || {}), ...s.params }; return n; });
+    },
+    // MVP: jump the chart to the range start via the existing mm:chart-jump consumer. A precise
+    // setVisibleRange is a follow-up via the onChartApi seam (see PR body).
+    setRange: (from) => { try { window.dispatchEvent(new CustomEvent("mm:chart-jump", { detail: { ts: from } })); } catch {} },
+  });
+
   // Brain widget → chart command executor. Mirrors the retired CopilotPanel's FLAT single-command
   // contract EXACTLY ({action, symbol|tf|indicator+on|kind} at top level): every field is
   // type-guarded, toggle_indicator adds ONLY on an explicit on===true (a missing flag never
   // silently adds), and unknown/malformed actions are ignored gracefully.
   const handleBrainCommand = (j: any) => {
+    // v2 envelope ({on:true, v:2, batch_id, seq, op, …}) → the typed Chart Bus. v1 falls through.
+    if (isV2Envelope(j)) { chartBus.dispatchV2(j); return; }
     const action = typeof j?.action === "string" ? j.action : "";
     if (action === "set_symbol" && typeof j.symbol === "string") {
       pick(j.symbol);
@@ -1642,7 +1676,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={drawStore[sym] ?? []} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm}
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawStore[sym] ?? []), ...chartBus.aiDrawingsFor(sym)]} onDrawingsChange={(d) => setSymbolDrawings(sym, d.filter((x) => !x.id.startsWith("ai_")))} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}
@@ -1653,6 +1687,23 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 />
               ))}
             </div>
+            {/* CMX W1: AI drawing-layer legend chip — appears when the active symbol carries AI objects.
+                Eye toggles hide/show all; the × clears the layer. Functional chrome, not the W3 theater. */}
+            {chartBus.legend.count > 0 && (
+              <div className="ai-chip" title={t("aiLayerTip")}>
+                <span className="ai-dot" />
+                <b>{t("aiLayer")}</b>
+                <i className="ai-n">{chartBus.legend.count}</i>
+                <button className={`ai-eye${chartBus.legend.hidden ? " off" : ""}`} onClick={chartBus.legend.toggleHidden} title={chartBus.legend.hidden ? t("aiShow") : t("aiHide")} aria-label={chartBus.legend.hidden ? t("aiShow") : t("aiHide")}>
+                  {chartBus.legend.hidden
+                    ? <svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" /><path d="M4 4l16 16" /></svg>
+                    : <svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>}
+                </button>
+                <button className="ai-clear" onClick={chartBus.legend.clear} title={t("aiClear")} aria-label={t("aiClear")}>
+                  <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </button>
+              </div>
+            )}
             {/* D4: Object Tree right-rail panel */}
             {objectTreeOpen && (
               <ChartObjectTree

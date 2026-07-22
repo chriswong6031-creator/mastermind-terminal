@@ -25,7 +25,10 @@ type Method = "GET" | "POST";
 function resolvePath(method: Method, segs: string[]): string | null {
   const joined = segs.join("/");
   if (method === "POST") {
-    return joined === "stream" ? "stream" : null;
+    // `stream` = SSE chat turn; `chart/state` = the Chart Bus v2 state-mirror POST (CMX W1) —
+    // a small JSON body carrying the terminal's chart session + drawing acks for the gateway.
+    if (joined === "stream" || joined === "chart/state") return joined;
+    return null;
   }
   // GET
   if (joined === "me" || joined === "threads") return joined;
@@ -150,12 +153,15 @@ export async function POST(
   // (~500KB each as data URIs) — 8MB is generous headroom while still bounding what
   // an abusive client can make this proxy buffer.
   const contentType = req.headers.get("content-type") || "application/json";
+  // Path-specific body caps: the chat `stream` carries vision data URIs (up to ~8MB); the Chart Bus
+  // `chart/state` mirror is a small JSON session snapshot — cap it tight at 64KB.
+  const maxBody = upstreamPath === "chart/state" ? 64_000 : 8_000_000;
   const cl = req.headers.get("content-length");
-  if (cl && /^\d+$/.test(cl) && parseInt(cl, 10) > 8_000_000) {
+  if (cl && /^\d+$/.test(cl) && parseInt(cl, 10) > maxBody) {
     return NextResponse.json({ error: "payload_too_large" }, { status: 413 });
   }
   const body = await req.text();
-  if (body.length > 8_000_000) {
+  if (body.length > maxBody) {
     return NextResponse.json({ error: "payload_too_large" }, { status: 413 });
   }
 

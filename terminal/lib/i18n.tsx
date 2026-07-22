@@ -60,6 +60,12 @@ const LEX: Record<string, [string, string]> = {
   saveCurrentAs: ["Save current as…", "保存当前为…"],
   save: ["Save", "保存"],
   noSavedLayouts: ["No saved layouts", "暂无已存布局"],
+  // Chart Bus v2 — AI drawing-layer legend chip
+  aiLayer: ["AI layer", "AI 图层"],
+  aiLayerTip: ["Drawings placed by Mastermind AI", "由 Mastermind AI 绘制的图形"],
+  aiHide: ["Hide AI drawings", "隐藏 AI 图形"],
+  aiShow: ["Show AI drawings", "显示 AI 图形"],
+  aiClear: ["Clear AI layer", "清除 AI 图层"],
   // toolbar tooltips / drawing tools
   fullscreenChart: ["Fullscreen chart", "全屏图表"],
   exitFullscreen: ["Exit fullscreen", "退出全屏"],
