@@ -14,6 +14,7 @@ import { AppNav } from "@/components/AppNav";
 import MobileNav from "@/components/MobileNav";
 import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
+import ChartConductor from "@/components/ChartConductor";
 import { intradayCapable } from "@/components/ChartPanel";
 import { classify } from "@/lib/intradaySources";
 import { type FinPage } from "@/components/fin/MegaPane";
@@ -1687,6 +1688,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 />
               ))}
             </div>
+            {/* CMX W3: the Conductor overlay — narrates the Brain's chart work (orb + caption plate +
+                step rail + ghost cursor + stroke animations). Absolute overlay spanning .chart-body;
+                pointer-events:none except its own controls, so the chart stays usable underneath. */}
+            <ChartConductor queue={chartBus.queue} count={chartBus.legend.count} />
             {/* CMX W1: AI drawing-layer legend chip — appears when the active symbol carries AI objects.
                 Eye toggles hide/show all; the × clears the layer. Functional chrome, not the W3 theater. */}
             {chartBus.legend.count > 0 && (

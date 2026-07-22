@@ -66,6 +66,12 @@ const LEX: Record<string, [string, string]> = {
   aiHide: ["Hide AI drawings", "隐藏 AI 图形"],
   aiShow: ["Show AI drawings", "显示 AI 图形"],
   aiClear: ["Clear AI layer", "清除 AI 图层"],
+  // CMX W3 — the conductor overlay chrome (captions themselves come from the model, shown as-is)
+  cmxSkip: ["Skip", "跳过"],
+  cmxLiveSteps: ["Live steps", "实时步骤"],
+  cmxToggleSteps: ["Show live steps", "显示实时步骤"],
+  cmxHideSteps: ["Hide live steps", "隐藏实时步骤"],
+  cmxDone: ["Done — {n} on chart", "完成 — 图上共 {n} 项"],
   // toolbar tooltips / drawing tools
   fullscreenChart: ["Fullscreen chart", "全屏图表"],
   exitFullscreen: ["Exit fullscreen", "退出全屏"],

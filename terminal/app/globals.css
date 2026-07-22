@@ -883,6 +883,164 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .ai-chip .ai-eye.off{color:var(--ai)}
 .ai-chip .ai-clear:hover{color:var(--sell)}
 .ai-chip svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+
+/* ═══════════════════════════════════════════════════════════════════════════════════════════════
+   CMX W3 — the Conductor overlay. The Brain's chart work, made visible + narrated.
+   One orchestrated moment; everything else quiet. Signature = the stroke-and-caption cadence.
+   Root overlay is pointer-events:none — only orb / plate / rail are interactive, so the chart stays
+   fully usable underneath. All colour is the house violet (--ai / --ai-rgb); no gradients beyond it.
+   ═══════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* Root overlay — spans the pane, never intercepts pointer events. */
+.cmx{position:absolute;inset:0;z-index:7;pointer-events:none;font-family:var(--font-ui)}
+
+/* ── Frame — inset ring + corner vignette while a session is active ── */
+.cmx-frame{position:absolute;inset:0;pointer-events:none;opacity:0;
+  box-shadow:inset 0 0 0 1px rgba(var(--ai-rgb),.28);
+  background:radial-gradient(120% 90% at 0% 0%, rgba(var(--ai-rgb),.05), transparent 45%),
+             radial-gradient(120% 90% at 100% 100%, rgba(var(--ai-rgb),.05), transparent 45%);
+  transition:opacity 600ms var(--ease-out)}
+.cmx.is-active .cmx-frame{opacity:1;transition:opacity 320ms var(--ease-out)}
+
+/* ── Orb — 34px, docked top-right (or bottom-right via .dock-br fallback) ── */
+.cmx-orb{position:absolute;width:34px;height:34px;border-radius:50%;pointer-events:auto;cursor:pointer;
+  top:10px;right:10px;border:0;padding:0;
+  background:radial-gradient(circle at 32% 28%, #c9b8ff, var(--ai) 55%, #1a1030 100%);
+  box-shadow:inset 0 1px 3px rgba(255,255,255,.4), 0 0 18px -2px rgba(var(--ai-rgb),.75);
+  transform:scale(1);transition:opacity 600ms var(--ease-out)}
+.cmx-orb.dock-br{top:auto;bottom:34px;right:10px}
+.cmx-orb::after{content:"";position:absolute;inset:-6px;border-radius:50%;
+  box-shadow:0 0 0 2px rgba(var(--ai-rgb),.35);opacity:.18;pointer-events:none}
+/* summoned — bloom in: scale .6→1 with a halo flash settling to a steady ring */
+.cmx-orb.is-summoned{animation:cmxOrbBloom 380ms var(--ease-out) both}
+.cmx-orb.is-summoned::after{animation:cmxOrbHalo 380ms var(--ease-out) both}
+/* thinking — slow breathe */
+.cmx-orb.is-thinking{animation:cmxOrbBreathe 4600ms ease-in-out infinite}
+/* acting — a single per-op pulse (the view re-triggers by toggling the class) */
+.cmx-orb.is-acting{animation:cmxOrbPulse 180ms var(--ease-out)}
+/* done — steady, ring settled (no breathe) */
+.cmx-orb.is-done{animation:none}
+@keyframes cmxOrbBloom{from{transform:scale(.6)}to{transform:scale(1)}}
+@keyframes cmxOrbHalo{0%{opacity:0}40%{opacity:.5}100%{opacity:.18}}
+@keyframes cmxOrbBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.045)}}
+@keyframes cmxOrbPulse{0%{transform:scale(1)}45%{transform:scale(1.12)}100%{transform:scale(1)}}
+
+/* ── Caption plate — glass bar extending LEFT from the orb ── */
+.cmx-plate{position:absolute;top:10px;right:52px;pointer-events:auto;display:flex;align-items:center;gap:8px;
+  max-width:min(46ch,60%);
+  background:color-mix(in srgb, var(--panel-3) 78%, transparent);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+  border:1px solid rgba(var(--ai-rgb),.35);border-radius:var(--r-lg);
+  font:600 12px/1.35 var(--font-ui);color:var(--text);padding:8px 12px;
+  box-shadow:0 10px 28px -14px rgba(0,0,0,.7);
+  opacity:0;transform:translateY(4px);transition:opacity 240ms var(--ease-out),transform 240ms var(--ease-out)}
+.cmx-plate.dock-br{top:auto;bottom:34px;right:52px}
+.cmx.is-active .cmx-plate.show,.cmx-plate.show{opacity:1;transform:none}
+.cmx-plate-text{min-width:0;flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* caption crossfade + 6px slide-up on swap (keyed by the swap counter in the view) */
+.cmx-cap{display:block;animation:cmxCapIn 240ms var(--ease-out) both}
+@keyframes cmxCapIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+/* plate controls — Skip + chevron */
+.cmx-plate-ctl{flex:0 0 auto;display:flex;align-items:center;gap:2px;margin-left:2px}
+.cmx-btn{display:grid;place-items:center;height:22px;min-width:22px;padding:0 5px;border:0;border-radius:var(--r);
+  color:var(--muted);background:transparent;cursor:pointer;font:700 13px/1 var(--font-ui);
+  transition:background var(--t),color var(--t)}
+.cmx-btn:hover{background:rgba(var(--ai-rgb),.16);color:var(--text)}
+.cmx-btn.cmx-skip{font:600 11px/1 var(--font-ui);gap:3px;letter-spacing:.02em}
+.cmx-btn.cmx-skip .chv{font-size:14px;font-weight:700}
+.cmx-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.cmx-chev{transition:transform var(--t)}
+.cmx-chev.open{transform:rotate(180deg)}
+
+/* ── Step rail — "thinking in full view", under the orb, right-aligned ── */
+.cmx-rail{position:absolute;top:52px;right:10px;width:320px;max-height:42%;pointer-events:auto;
+  display:flex;flex-direction:column;overflow:hidden;
+  background:color-mix(in srgb, var(--panel-3) 78%, transparent);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+  border:1px solid rgba(var(--ai-rgb),.35);border-radius:var(--r-lg);
+  box-shadow:0 16px 40px -18px rgba(0,0,0,.75);
+  animation:cmxRailIn 200ms var(--ease-out) both}
+.cmx-rail.dock-br{top:auto;bottom:76px}
+@keyframes cmxRailIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.cmx-rail-hd{flex:0 0 auto;display:flex;align-items:center;gap:7px;padding:8px 11px;
+  border-bottom:1px solid rgba(var(--ai-rgb),.18);
+  font:700 10px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--text-2)}
+.cmx-rail-hd .dot{width:6px;height:6px;border-radius:50%;background:var(--ai);box-shadow:0 0 6px rgba(var(--ai-rgb),.7)}
+.cmx-rail-hd .n{margin-left:auto;font:700 10px/1 var(--font-num);color:var(--ai);
+  background:rgba(var(--ai-rgb),.14);border-radius:var(--r-pill);padding:2px 7px}
+.cmx-rail-body{flex:1 1 auto;overflow-y:auto;padding:5px 6px;display:flex;flex-direction:column;gap:2px}
+.cmx-row{display:flex;align-items:flex-start;gap:8px;padding:6px 6px;border-radius:var(--r-md);
+  animation:cmxRowIn 160ms var(--ease-out) both}
+.cmx-row.rej{opacity:.55}
+@keyframes cmxRowIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+.cmx-row .ico{flex:0 0 auto;width:16px;height:16px;margin-top:1px;color:var(--ai)}
+.cmx-row .ico svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.cmx-row .cap{flex:1 1 auto;min-width:0;font:500 11.5px/1.4 var(--font-ui);color:var(--text-2);word-break:break-word}
+.cmx-row .fit{flex:0 0 auto;margin-top:1px;font:600 10px/1.4 var(--font-num);color:var(--ai);
+  background:rgba(var(--ai-rgb),.14);border-radius:var(--r-pill);padding:2px 7px;white-space:nowrap}
+
+/* ── Ghost cursor — 8px violet core + 22px blurred halo ── */
+.cmx-cursor{position:absolute;left:0;top:0;width:8px;height:8px;pointer-events:none;
+  transform:translate(-50%,-50%);opacity:0;z-index:8;
+  transition:left 260ms var(--ease-out),top 260ms var(--ease-out),opacity 200ms linear}
+.cmx-cursor::before{content:"";position:absolute;inset:0;border-radius:50%;background:var(--ai);
+  box-shadow:0 0 8px rgba(var(--ai-rgb),.9)}
+.cmx-cursor::after{content:"";position:absolute;left:50%;top:50%;width:22px;height:22px;
+  transform:translate(-50%,-50%);border-radius:50%;background:rgba(var(--ai-rgb),.55);filter:blur(6px)}
+.cmx-cursor.on{opacity:.85}
+
+/* ═══ Stroke-enter animations — added to a DrawLayer <g> on FIRST paint of a session AI object,
+   removed on animationend. renderDraw() rebuilds every frame, so a played-id set in ChartPanel gates
+   these to fire exactly once per object (never re-firing on pan/zoom). ═══ */
+.cmx-enter-line [pathLength],.cmx-enter-line line,.cmx-enter-line path{
+  stroke-dasharray:1;stroke-dashoffset:1;animation:cmxDraw 450ms var(--ease-out) forwards}
+.cmx-enter-zone rect{animation:cmxZoneFill 380ms var(--ease-out) forwards}
+.cmx-enter-zone line{stroke-dasharray:1;stroke-dashoffset:1;animation:cmxDraw 380ms var(--ease-out) forwards}
+.cmx-enter-fib line{stroke-dasharray:1;stroke-dashoffset:1;animation:cmxDraw 420ms var(--ease-out) forwards}
+.cmx-enter-fib line:nth-of-type(2){animation-delay:60ms}
+.cmx-enter-fib line:nth-of-type(3){animation-delay:120ms}
+.cmx-enter-fib line:nth-of-type(4){animation-delay:180ms}
+.cmx-enter-fib line:nth-of-type(5){animation-delay:240ms}
+.cmx-enter-fib line:nth-of-type(6){animation-delay:300ms}
+.cmx-enter-fib line:nth-of-type(7){animation-delay:360ms}
+.cmx-enter-pop{transform-box:fill-box;transform-origin:center;animation:cmxPop 320ms var(--ease-out) both}
+@keyframes cmxDraw{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
+@keyframes cmxZoneFill{from{fill-opacity:0}to{fill-opacity:.12}}
+@keyframes cmxPop{0%{transform:scale(.6)}60%{transform:scale(1.04)}100%{transform:scale(1)}}
+
+/* ── Narrow (≤480px pane): plate = bottom strip, rail = bottom sheet ── */
+.cmx.narrow .cmx-plate{top:auto;bottom:8px;left:8px;right:8px;max-width:none}
+.cmx.narrow .cmx-plate.dock-br{bottom:8px}
+.cmx.narrow .cmx-rail{top:auto;bottom:8px;left:8px;right:8px;width:auto;max-height:45%}
+.cmx.narrow .cmx-rail.dock-br{bottom:8px}
+/* keep the orb clear of the bottom strip on narrow */
+.cmx.narrow .cmx-orb{top:10px;bottom:auto}
+
+/* ── Reduced motion — no strokes / cursor / breathe; captions still update; static ring ── */
+@media (prefers-reduced-motion:reduce){
+  .cmx-orb,.cmx-orb.is-summoned,.cmx-orb.is-thinking,.cmx-orb.is-acting{animation:none;transform:none}
+  .cmx-orb.is-summoned::after{animation:none;opacity:.18}
+  .cmx-frame{transition:none}
+  .cmx-plate{transition:opacity 120ms linear;transform:none}
+  .cmx-cap{animation:none}
+  .cmx-rail,.cmx-row{animation:none}
+  .cmx-cursor{display:none}
+  .cmx-enter-line line,.cmx-enter-line path,.cmx-enter-zone rect,.cmx-enter-zone line,
+  .cmx-enter-fib line,.cmx-enter-pop{animation:none;stroke-dasharray:none;stroke-dashoffset:0;fill-opacity:.12;transform:none}
+}
+/* Harness reduced-motion simulation — a .cmx-rm ancestor mirrors the media query for the /dev/theater
+   toggle (so reduced-motion is verifiable without OS settings). Keep in sync with the block above. */
+.cmx-rm .cmx-orb,.cmx-rm .cmx-orb.is-summoned,.cmx-rm .cmx-orb.is-thinking,.cmx-rm .cmx-orb.is-acting{animation:none;transform:none}
+.cmx-rm .cmx-orb.is-summoned::after{animation:none;opacity:.18}
+.cmx-rm .cmx-frame{transition:none}
+.cmx-rm .cmx-plate{transition:opacity 120ms linear;transform:none}
+.cmx-rm .cmx-cap{animation:none}
+.cmx-rm .cmx-rail,.cmx-rm .cmx-row{animation:none}
+.cmx-rm .cmx-cursor{display:none}
+.cmx-rm .cmx-enter-line line,.cmx-rm .cmx-enter-line path,.cmx-rm .cmx-enter-zone rect,
+.cmx-rm .cmx-enter-zone line,.cmx-rm .cmx-enter-fib line,.cmx-rm .cmx-enter-pop{
+  animation:none;stroke-dasharray:none;stroke-dashoffset:0;fill-opacity:.12;transform:none}
+
 /* inline editable text box (replaces window.prompt) */
 .text-edit{position:absolute;z-index:9;min-width:90px;max-width:60%;background:rgba(13,15,19,.9);border:1px solid var(--brand);border-radius:var(--r);padding:2px 7px;font-family:var(--font-ui);line-height:1.25;outline:none;caret-color:var(--brand-2);box-shadow:0 6px 18px -8px rgba(0,0,0,.7)}
 .text-edit::placeholder{color:var(--text-dim)}
