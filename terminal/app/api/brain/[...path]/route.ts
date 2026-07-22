@@ -1,11 +1,18 @@
 // Brain-gateway catch-all proxy — the Mastermind Brain widget (mm_brain.js) calls
 // /api/brain/* same-origin with credentials:'include' and NO Authorization header (the
-// Terminal has no window.MDXAuth). This route verifies the Supabase session and injects
-// the Bearer for the gateway, streaming the response body straight through.
+// Terminal has no window.MDXAuth). This route verifies the Supabase session and, when it
+// has one, injects the Bearer for the gateway, streaming the response body straight through.
 //
 // This is a TIGHT allowlist, not a generic open proxy. Only the exact paths the widget
-// needs are forwarded; everything else 404s. The static /api/brain/me route.ts takes
-// precedence over this catch-all in Next.js routing and is left in place.
+// needs are forwarded; everything else 404s.
+//
+// GUEST LANE: the gateway has an admin-toggled guest mode (a free Fast lane, N/day per
+// device cookie+IP). For `GET me` and `POST stream` ONLY, a missing/invalid session no
+// longer 401s here — we forward WITHOUT any Authorization header and let the GATEWAY be
+// the sole authority: guest mode on → it serves tier "guest"; off → it 401s itself and we
+// pass that through unchanged. The device-identity headers (x-mm-aid / x-mm-ip /
+// x-mm-proxy-secret) still ride along so the gateway can meter the per-device pool, and
+// the rate limit + body caps still apply. All other paths stay session-required 401s.
 //
 // Required env: BRAIN_GATEWAY_URL (default https://mastermind-x.com; VPS co-located http://127.0.0.1:8000)
 // The gateway expects Authorization: Bearer <supabase access token> and does its own tier/quota checks.
@@ -64,10 +71,16 @@ function idHeaders(req: Request): Record<string, string> {
   return h;
 }
 
-// Verify the session and return the access token, or a 401 Response to relay.
-async function authOrReject(): Promise<
-  { token: string } | { error: Response }
-> {
+// Upstream paths served through the gateway's guest lane: `GET me` and `POST stream` ONLY.
+// For these, a missing/invalid session is forwarded (no Authorization) so the gateway can
+// decide; every other allowlisted path stays session-required.
+const GUEST_OK = new Set(["me", "stream"]);
+
+// Verify the session and return the access token, or null when there is no valid session.
+// The caller decides what null means per path. We NEVER read or forward a client-supplied
+// Authorization header — the only Bearer this proxy sends is one minted here from the
+// server-verified session.
+async function sessionToken(): Promise<string | null> {
   const supabase = await createClient();
   const {
     data: { session },
@@ -75,15 +88,27 @@ async function authOrReject(): Promise<
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!session || !user) {
+  if (!session || !user) return null;
+  return session.access_token;
+}
+
+// Resolve auth for a resolved upstream path: return the outbound headers to attach
+// (device identity always; Authorization only when we hold a token), or a 401 Response to
+// relay when the path requires a session and none is present. Anonymous callers to a
+// GUEST_OK path get device headers but NO Authorization — the gateway does the rest.
+async function authHeaders(
+  req: Request,
+  upstreamPath: string,
+): Promise<{ headers: Record<string, string> } | { error: Response }> {
+  const token = await sessionToken();
+  if (!token && !GUEST_OK.has(upstreamPath)) {
     return {
-      error: NextResponse.json(
-        { error: "unauthenticated" },
-        { status: 401 },
-      ),
+      error: NextResponse.json({ error: "unauthenticated" }, { status: 401 }),
     };
   }
-  return { token: session.access_token };
+  const headers: Record<string, string> = { ...idHeaders(req) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return { headers };
 }
 
 // SSE / JSON pass-through: relay upstream status + body untouched. Streaming bodies
@@ -114,12 +139,12 @@ export async function GET(
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
-  const auth = await authOrReject();
+  const auth = await authHeaders(req, upstreamPath);
   if ("error" in auth) return auth.error;
 
   try {
     const upstream = await fetch(`${GATEWAY}/api/brain/${upstreamPath}`, {
-      headers: { Authorization: `Bearer ${auth.token}`, ...idHeaders(req) },
+      headers: auth.headers,
       signal: req.signal,
     });
     return relay(upstream);
@@ -144,7 +169,7 @@ export async function POST(
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
-  const auth = await authOrReject();
+  const auth = await authHeaders(req, upstreamPath);
   if ("error" in auth) return auth.error;
 
   // Forward the raw body; the gateway validates the contract. Preserve the client's
@@ -168,11 +193,7 @@ export async function POST(
   try {
     const upstream = await fetch(`${GATEWAY}/api/brain/${upstreamPath}`, {
       method: "POST",
-      headers: {
-        "Content-Type": contentType,
-        Authorization: `Bearer ${auth.token}`,
-        ...idHeaders(req),
-      },
+      headers: { "Content-Type": contentType, ...auth.headers },
       body,
       signal: req.signal,
     });
