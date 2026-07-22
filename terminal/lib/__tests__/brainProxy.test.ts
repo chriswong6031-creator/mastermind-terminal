@@ -49,7 +49,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 // Imported AFTER the mock + env are in place.
-import { GET, POST } from "@/app/api/brain/[...path]/route";
+import { GET, POST, PATCH, DELETE } from "@/app/api/brain/[...path]/route";
 
 // A recorded outbound call to the gateway.
 type Captured = { url: string; init: RequestInit; headers: Record<string, string> };
@@ -79,7 +79,7 @@ let ipCounter = 0;
 /** Build a Request with a UNIQUE client IP (own rate-limit bucket), an mm_aid cookie,
  *  and optional extra headers (e.g. a client-supplied Authorization we must never forward). */
 function req(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   extra: Record<string, string> = {},
   body?: string,
 ): Request {
@@ -262,6 +262,101 @@ describe("allowlist unchanged: unknown paths 404 before auth", () => {
   it("GET some/other → 404, no gateway call, regardless of session", async () => {
     anon();
     const res = await GET(req("GET"), params("some", "other"));
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+// ── PATCH (rename) / DELETE threads/<id>: session-required, Bearer injected, tight scope ──
+
+describe("PATCH threads/<id> (rename): session-required", () => {
+  it("signed-in → forwarded with PATCH + Bearer + body, client Authorization dropped", async () => {
+    signedIn("sess-token-patch");
+    const payload = JSON.stringify({ title: "New name" });
+    const res = await PATCH(
+      req("PATCH", {
+        "content-type": "application/json",
+        authorization: "Bearer client-forged-token",
+      }, payload),
+      params("threads", "t_42"),
+    );
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://mastermind-x.com/api/brain/threads/t_42");
+    expect(calls[0].init.method).toBe("PATCH");
+    expect(calls[0].init.body).toBe(payload);
+    // The proxy's own session Bearer, never the client's forged one.
+    expect(calls[0].headers["authorization"]).toBe("Bearer sess-token-patch");
+    expect(calls[0].headers["x-mm-aid"]).toBe("aid-123");
+  });
+
+  it("anonymous → 401, gateway never contacted (NOT guest-eligible)", async () => {
+    anon();
+    const res = await PATCH(
+      req("PATCH", { "content-type": "application/json" }, JSON.stringify({ title: "x" })),
+      params("threads", "t_42"),
+    );
+    expect(res.status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("non-thread path → 404, gateway never contacted", async () => {
+    signedIn();
+    const res = await PATCH(
+      req("PATCH", { "content-type": "application/json" }, JSON.stringify({ title: "x" })),
+      params("me"),
+    );
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("oversized body → 413 (advertised content-length), gateway never contacted", async () => {
+    signedIn();
+    const res = await PATCH(
+      req("PATCH", {
+        "content-type": "application/json",
+        "content-length": String(5_000), // cap is 4KB
+      }, "x"),
+      params("threads", "t_42"),
+    );
+    expect(res.status).toBe(413);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("oversized body → 413 (actual body length), gateway never contacted", async () => {
+    signedIn();
+    const big = "y".repeat(4_001); // one byte over the 4KB cap, no content-length header
+    const res = await PATCH(
+      req("PATCH", { "content-type": "application/json" }, big),
+      params("threads", "t_42"),
+    );
+    expect(res.status).toBe(413);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("DELETE threads/<id>: session-required", () => {
+  it("signed-in → forwarded with DELETE + Bearer, no body", async () => {
+    signedIn("sess-token-del");
+    const res = await DELETE(req("DELETE"), params("threads", "t_99"));
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://mastermind-x.com/api/brain/threads/t_99");
+    expect(calls[0].init.method).toBe("DELETE");
+    expect(calls[0].headers["authorization"]).toBe("Bearer sess-token-del");
+    expect(calls[0].headers["x-mm-aid"]).toBe("aid-123");
+  });
+
+  it("anonymous → 401, gateway never contacted (NOT guest-eligible)", async () => {
+    anon();
+    const res = await DELETE(req("DELETE"), params("threads", "t_99"));
+    expect(res.status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("non-thread path (threads collection) → 404, gateway never contacted", async () => {
+    signedIn();
+    const res = await DELETE(req("DELETE"), params("threads"));
     expect(res.status).toBe(404);
     expect(calls).toHaveLength(0);
   });

@@ -4,7 +4,8 @@
 // has one, injects the Bearer for the gateway, streaming the response body straight through.
 //
 // This is a TIGHT allowlist, not a generic open proxy. Only the exact paths the widget
-// needs are forwarded; everything else 404s.
+// needs are forwarded; everything else 404s. Thread rename (PATCH) and delete (DELETE)
+// target `threads/<id>` ONLY and are session-required — never guest-eligible.
 //
 // GUEST LANE: the gateway has an admin-toggled guest mode (a free Fast lane, N/day per
 // device cookie+IP). For `GET me` and `POST stream` ONLY, a missing/invalid session no
@@ -26,9 +27,22 @@ import { rateLimit, tooMany } from "@/lib/rateLimit";
 const GATEWAY = process.env.BRAIN_GATEWAY_URL || "https://mastermind-x.com";
 
 // Allowlist of forwarded upstream paths, keyed by HTTP method. `stream` is the only POST;
-// `me` / `threads` / `threads/<id>` are GET reads. A thread id is a single path segment
-// (no slashes) so `threads/abc/../secret` can never slip through.
-type Method = "GET" | "POST";
+// `me` / `threads` / `threads/<id>` are GET reads; `threads/<id>` is also the ONLY
+// PATCH (rename) and DELETE target. A thread id is a single path segment (no slashes) so
+// `threads/abc/../secret` can never slip through.
+type Method = "GET" | "POST" | "PATCH" | "DELETE";
+
+// `threads/<id>` where <id> is a single, non-empty, path-safe segment — the sole
+// per-thread target, shared by GET (read) / PATCH (rename) / DELETE. Returns the joined
+// upstream path or null.
+function threadIdPath(segs: string[]): string | null {
+  if (segs.length === 2 && segs[0] === "threads") {
+    const id = segs[1];
+    if (id && !id.includes("/") && !id.includes("..")) return `threads/${id}`;
+  }
+  return null;
+}
+
 function resolvePath(method: Method, segs: string[]): string | null {
   const joined = segs.join("/");
   if (method === "POST") {
@@ -37,15 +51,11 @@ function resolvePath(method: Method, segs: string[]): string | null {
     if (joined === "stream" || joined === "chart/state") return joined;
     return null;
   }
+  // PATCH (rename) and DELETE target a single thread and nothing else.
+  if (method === "PATCH" || method === "DELETE") return threadIdPath(segs);
   // GET
   if (joined === "me" || joined === "threads") return joined;
-  if (segs.length === 2 && segs[0] === "threads") {
-    const id = segs[1];
-    // single, non-empty, path-safe segment only
-    if (id && !id.includes("/") && !id.includes("..")) return `threads/${id}`;
-    return null;
-  }
-  return null;
+  return threadIdPath(segs);
 }
 
 // Identity forwarding for the co-located gateway's device-linked free-credit pool.
@@ -195,6 +205,87 @@ export async function POST(
       method: "POST",
       headers: { "Content-Type": contentType, ...auth.headers },
       body,
+      signal: req.signal,
+    });
+    return relay(upstream);
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: "Gateway unreachable", detail: e?.message },
+      { status: 502 },
+    );
+  }
+}
+
+// PATCH = rename a thread. Target is `threads/<id>` ONLY and it is session-required — it is
+// NOT in GUEST_OK, so an anonymous caller gets a proxy-side 401 and the gateway is never
+// contacted. The body carries just the new title, so the cap is tight (4KB).
+export async function PATCH(
+  req: Request,
+  { params }: { params: Promise<{ path: string[] }> },
+) {
+  const rl = rateLimit(req, { name: "brain", max: 60 });
+  if (!rl.ok) return tooMany(rl);
+
+  const { path = [] } = await params;
+  const upstreamPath = resolvePath("PATCH", path);
+  if (!upstreamPath) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+
+  const auth = await authHeaders(req, upstreamPath);
+  if ("error" in auth) return auth.error;
+
+  // Rename payload is a tiny JSON `{ title }` — cap at 4KB. Reject on advertised
+  // content-length first, then on the actual body length.
+  const contentType = req.headers.get("content-type") || "application/json";
+  const maxBody = 4_000;
+  const cl = req.headers.get("content-length");
+  if (cl && /^\d+$/.test(cl) && parseInt(cl, 10) > maxBody) {
+    return NextResponse.json({ error: "payload_too_large" }, { status: 413 });
+  }
+  const body = await req.text();
+  if (body.length > maxBody) {
+    return NextResponse.json({ error: "payload_too_large" }, { status: 413 });
+  }
+
+  try {
+    const upstream = await fetch(`${GATEWAY}/api/brain/${upstreamPath}`, {
+      method: "PATCH",
+      headers: { "Content-Type": contentType, ...auth.headers },
+      body,
+      signal: req.signal,
+    });
+    return relay(upstream);
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: "Gateway unreachable", detail: e?.message },
+      { status: 502 },
+    );
+  }
+}
+
+// DELETE = remove a thread. Target is `threads/<id>` ONLY and session-required (NOT in
+// GUEST_OK → anonymous callers get a proxy-side 401, gateway never contacted). No body.
+export async function DELETE(
+  req: Request,
+  { params }: { params: Promise<{ path: string[] }> },
+) {
+  const rl = rateLimit(req, { name: "brain", max: 60 });
+  if (!rl.ok) return tooMany(rl);
+
+  const { path = [] } = await params;
+  const upstreamPath = resolvePath("DELETE", path);
+  if (!upstreamPath) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+
+  const auth = await authHeaders(req, upstreamPath);
+  if ("error" in auth) return auth.error;
+
+  try {
+    const upstream = await fetch(`${GATEWAY}/api/brain/${upstreamPath}`, {
+      method: "DELETE",
+      headers: auth.headers,
       signal: req.signal,
     });
     return relay(upstream);
