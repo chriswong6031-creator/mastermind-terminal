@@ -827,7 +827,10 @@ const LEX: Record<string, [string, string]> = {
   // Interpolation tokens ({firstName}/{email}) are .replace()'d at the call site.
   // rail / stepper
   obBrand: ["MASTERMIND", "MASTERMIND"],
-  obBrandSub: ["智投大师", "智投大师"],
+  // EN mode must never show Chinese chrome (operator ruling 2026-07-23): the rail
+  // lockup reads MASTERMIND/TERMINAL in EN; 智投大师 appears only in zh mode.
+  obBrandSub: ["TERMINAL", "智投大师"],
+  obProvRetry: ["Retry", "重试"],
   obStepAccount: ["Account", "账户"],
   obStepPreferences: ["Preferences", "偏好"],
   obStepPlan: ["Plan", "方案"],
