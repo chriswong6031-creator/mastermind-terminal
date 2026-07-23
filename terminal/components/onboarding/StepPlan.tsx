@@ -5,7 +5,6 @@ import {
   PLANS, perMonth, monthlyPrice, annualBilled, bestSavePct, proWedgePerMonth,
 } from "./plans";
 
-const PLANS_URL = "https://www.mastermind-x.com/plans.html";
 const PRICING_URL = "https://www.mastermind-x.com/#pricing";
 
 const HUE: Record<PlanKey, string> = {
@@ -17,9 +16,6 @@ const NAME_KEY: Record<PlanKey, string> = {
 
 function SCk() { return <svg className="ob-sck" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>; }
 function RadioCk() { return <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>; }
-function ExtIcon() {
-  return <svg className="ob-ext" viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M11 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5" /></svg>;
-}
 
 export interface StepPlanProps {
   plan: PlanKey;
@@ -181,8 +177,8 @@ export default function StepPlan({ plan, period, setPlan, setPeriod }: StepPlanP
     </div>
   );
 }
-
-// Footer for Step 3 — CTAs depend on the selected tier.
+// Footer for Step 3 — CTAs depend on the selected tier. Paid now advances to the
+// in-sheet Billing step (no external-link glyph) instead of opening plans.html.
 export function StepPlanFooter(
   { plan, onFree, onPaid }: { plan: PlanKey; onFree: () => void; onPaid: () => void },
 ) {
@@ -200,10 +196,8 @@ export function StepPlanFooter(
       <button type="button" className="ob-link" onClick={onFree}>{t("obOrFree")}</button>
       <div className="ob-foot-spacer" />
       <button type="button" className="ob-btn" onClick={onPaid}>
-        {t("obStartTrial")}<ExtIcon />
+        {t("obContinueBilling")}
       </button>
     </>
   );
 }
-
-export { PLANS_URL };

@@ -3,6 +3,15 @@ import { useEffect, useState } from "react";
 import { useLang, useT } from "@/lib/i18n";
 import { createClient } from "@/lib/supabase/client";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
+import { useEntitlement } from "@/lib/useEntitlement";
+
+// Tier label key, with a "· trial" suffix only while status === "trialing".
+function tierLabelKey(tier: string, status: string): string {
+  const trial = status === "trialing";
+  if (tier === "insider") return trial ? "obTierInsiderTrial" : "obTierInsider";
+  if (tier === "pro") return trial ? "obTierProTrial" : "obTierPro";
+  return "obTierFree";
+}
 
 // User-settings popover anchored on the top-right avatar: up/down color scheme + language + sign out.
 // The up/down scheme and language auto-initialize from the browser locale (pre-paint script in layout),
@@ -15,6 +24,7 @@ export default function SettingsMenu({ email }: { email: string }) {
   const t = useT();
   const onboarding = useOnboarding();
   const signedIn = !!email;
+  const ent = useEntitlement(email);
 
   useEffect(() => { const v = document.documentElement.getAttribute("data-updown"); setUd(v === "east" ? "east" : "west"); }, []);
   useEffect(() => { if (!open) return; const close = () => setOpen(false); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [open]);
@@ -59,6 +69,12 @@ export default function SettingsMenu({ email }: { email: string }) {
             <>
               {firstName && <div className="set-acct-name">{firstName}</div>}
               <div className="set-acct">{email}</div>
+              {!ent.loading && (
+                // Small muted tier line under the email — inline so no globals.css class is added.
+                <div style={{ padding: "0 13px 6px", font: "600 11px/1.2 var(--font-ui)", color: "var(--text-2)" }}>
+                  {t(tierLabelKey(ent.tier, ent.status))}
+                </div>
+              )}
               <form action="/auth/signout" method="post"><button className="menu-row" type="submit"><svg viewBox="0 0 24 24"><path d="M16 17l5-5-5-5M21 12H9M12 19H5V5h7" /></svg>{t("signOut")}</button></form>
             </>
           ) : (

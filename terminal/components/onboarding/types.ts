@@ -64,6 +64,37 @@ export interface PendingPrefs extends OnboardPrefs {
 export const LS_ONBOARD_RESUME = "mm.onboardResume";
 export const LS_PENDING_PREFS = "mm.pendingPrefs";
 
+// ── Wizard step model (W2) ────────────────────────────────────────────────────
+//  1 Account · 2 Preferences · 3 Plan · 4 Billing (PAID ONLY) · 5 Done.
+//  Free path jumps 3 → 5 (numbering stays stable so the stash stays coherent — the
+//  Billing step simply has no free variant). The stepper hides the Billing entry
+//  unless a paid plan is selected. Stale W1-shaped stashes (which used step 4 as
+//  Done) must rehydrate without crashing: see remapStashStep in OnboardingSheet.
+export const STEP_ACCOUNT = 1;
+export const STEP_PREFS = 2;
+export const STEP_PLAN = 3;
+export const STEP_BILLING = 4;
+export const STEP_DONE = 5;
+
+// The live wizard fields that survive a client-tree remount (see SS_WIZARD below).
+// Password is deliberately absent — never persisted anywhere. Extended in W2 with
+// trialActive/trialEnd (the in-sheet trial outcome carried into the Done copy).
+export interface WizardStash {
+  step: number;
+  firstName: string;
+  lastName: string;
+  email: string;
+  prefs: OnboardPrefs;
+  plan: PlanKey;
+  period: Period;
+  confirmPending: boolean;
+  // W2: true once an in-sheet Stripe trial has started (Done copy → "trial live").
+  trialActive: boolean;
+  // W2: epoch seconds when the first charge lands (from subscribe/complete); null
+  // until the trial starts. Carried into StepDone for the localized date.
+  trialEnd: number | null;
+}
+
 // sessionStorage (per-tab): the signup flow's live state. router.refresh() at the
 // step-1→2 boundary flips app/terminal/page.tsx from its guest branch to its
 // signed-in branch, which REMOUNTS the client tree (provider included) — so both
