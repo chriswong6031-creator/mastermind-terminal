@@ -4,32 +4,38 @@ import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
 import { useT } from "@/lib/i18n";
 import type {
-  OnboardMode, OnboardingSheetProps, OnboardPrefs, PlanKey, Period, PendingPrefs,
+  OnboardMode, OnboardingSheetProps, OnboardPrefs, PlanKey, Period, PendingPrefs, WizardStash,
 } from "./types";
-import { LS_PENDING_PREFS, LS_ONBOARD_RESUME, SS_WIZARD, type OnboardResumeStash } from "./types";
-import { PLANS_URL } from "./StepPlan";
+import {
+  LS_PENDING_PREFS, LS_ONBOARD_RESUME, SS_WIZARD, type OnboardResumeStash,
+  STEP_ACCOUNT, STEP_PREFS, STEP_PLAN, STEP_BILLING, STEP_DONE,
+} from "./types";
 import RailCard, { MobileStepper, type WizardSnapshot } from "./RailCard";
 import StepAccount from "./StepAccount";
 import StepPreferences, { StepPreferencesFooter } from "./StepPreferences";
 import StepPlan, { StepPlanFooter } from "./StepPlan";
+import StepBilling from "./StepBilling";
 import StepDone, { StepDoneFooter } from "./StepDone";
 
 const DRAG_MIN_WIDTH = 861; // drag disabled under this viewport width
 
 const emptyPrefs: OnboardPrefs = { market_focus: [], trade_types: [], theme_pref: "dark" };
 
-// Wizard fields that survive a client-tree remount (see SS_WIZARD in types.ts).
-// The password is deliberately absent — never persisted anywhere.
-interface WizardStash {
-  step: number;
-  firstName: string;
-  lastName: string;
-  email: string;
-  prefs: OnboardPrefs;
-  plan: PlanKey;
-  period: Period;
-  confirmPending: boolean;
-  paidPending: boolean;
+// Rehydrate a stashed step under the W2 five-step model, tolerating stale W1-shaped
+// stashes. In W1, step 4 meant DONE (there was no Billing step). If a stale stash
+// lands here, remap: a paid plan with step ≥ 4 → Billing (STEP_BILLING); anything
+// else at the old terminal step → Done. Fresh W2 stashes already carry 1–5 and pass
+// through unchanged. Missing/garbage → step 1.
+function remapStashStep(raw: Partial<WizardStash>): number {
+  const s = typeof raw.step === "number" && raw.step >= 1 ? raw.step : STEP_ACCOUNT;
+  const paid = raw.plan === "insider" || raw.plan === "pro";
+  // W1 stash never had trialActive/trialEnd; treat a step-4 W1 stash as the old Done.
+  const isW1Shape = raw.trialActive === undefined && raw.trialEnd === undefined;
+  if (isW1Shape && s >= STEP_BILLING) {
+    // Old W1 "step 4 = Done": paid → land on the new Billing step, free → Done.
+    return paid ? STEP_BILLING : STEP_DONE;
+  }
+  return Math.min(s, STEP_DONE);
 }
 
 function readWizardStash(): Partial<WizardStash> | null {
@@ -54,7 +60,7 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
   if (stashRef.current === undefined) stashRef.current = props.mode === "signup" ? readWizardStash() : null;
   const stash = stashRef.current;
   const [mode, setMode] = useState<OnboardMode>(props.mode);
-  const [step, setStep] = useState(stash?.step ?? 1);
+  const [step, setStep] = useState(stash ? remapStashStep(stash) : STEP_ACCOUNT);
   const [firstName, setFirstName] = useState(stash?.firstName ?? "");
   const [lastName, setLastName] = useState(stash?.lastName ?? "");
   const [email, setEmail] = useState(stash?.email ?? props.email);
@@ -63,18 +69,22 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
   const [plan, setPlan] = useState<PlanKey>(stash?.plan ?? props.initialPlan ?? "pro");
   const [period, setPeriod] = useState<Period>(stash?.period ?? props.initialPeriod ?? "annual");
   const [confirmPending, setConfirmPending] = useState(stash?.confirmPending ?? false);
-  const [paidPending, setPaidPending] = useState(stash?.paidPending ?? false);
+  // W2: an in-sheet Stripe trial has started (drives the Done "trial live" copy + rail chip).
+  const [trialActive, setTrialActive] = useState(stash?.trialActive ?? false);
+  const [trialEnd, setTrialEnd] = useState<number | null>(stash?.trialEnd ?? null);
   const [drag, setDrag] = useState({ x: 0, y: 0 }); // header-drag translate
+
+  const paid = plan === "insider" || plan === "pro";
 
   // Persist the live wizard (signup mode only) so a remount resumes in place; the
   // stash is cleared by handleClose once the flow reaches Done.
   useEffect(() => {
     if (mode !== "signup") return;
     try {
-      const w: WizardStash = { step, firstName, lastName, email, prefs, plan, period, confirmPending, paidPending };
+      const w: WizardStash = { step, firstName, lastName, email, prefs, plan, period, confirmPending, trialActive, trialEnd };
       sessionStorage.setItem(SS_WIZARD, JSON.stringify(w));
     } catch { /* storage blocked — flow still works, just without remount resilience */ }
-  }, [mode, step, firstName, lastName, email, prefs, plan, period, confirmPending, paidPending]);
+  }, [mode, step, firstName, lastName, email, prefs, plan, period, confirmPending, trialActive, trialEnd]);
 
   // Effective email for display + persistence: what the user typed wins; otherwise
   // the shell-delivered address (signed-in / resume). Derived — no state sync effect.
@@ -119,7 +129,7 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
   // Close, clearing the wizard stash once the flow is finished (Done) — a mid-flow
   // dismiss keeps the stash so reopening (or a remount) resumes in place.
   const handleClose = useCallback(() => {
-    if (step === 4 || mode === "signin") {
+    if (step === STEP_DONE || mode === "signin") {
       try { sessionStorage.removeItem(SS_WIZARD); } catch { /* ignore */ }
     }
     onClose();
@@ -195,26 +205,35 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
   }, [firstName, lastName, prefs, confirmPending, effEmail]);
 
   // ── Step transitions ──────────────────────────────────────────────────────────
-  function accountConfirmPending() { setConfirmPending(true); setStep(2); }
-  function accountAdvance() { setStep(2); }
-  function prefsContinue() { void persistPrefs(); setStep(3); }
-  function prefsSkip() { setStep(3); }
-  // "Continue with Free" — also from the quiet or-link while a paid card is selected,
-  // so the plan itself must flip to free or the done-card would claim a paid tier.
-  function planFree() { setPlan("free"); setPaidPending(false); setStep(4); }
-  function planPaid() {
-    setPaidPending(true);
-    window.open(PLANS_URL, "_blank", "noopener,noreferrer");
-    setStep(4);
-  }
+  function accountConfirmPending() { setConfirmPending(true); setStep(STEP_PREFS); }
+  function accountAdvance() { setStep(STEP_PREFS); }
+  function prefsContinue() { void persistPrefs(); setStep(STEP_PLAN); }
+  function prefsSkip() { setStep(STEP_PLAN); }
+  // "Continue with Free" — also from the quiet or-links (Plan + Billing) while a paid
+  // card is selected, so the plan itself must flip to free or the done-card would
+  // claim a paid tier. Free path jumps STEP_PLAN → STEP_DONE (no Billing step).
+  function chooseFree() { setPlan("free"); setTrialActive(false); setTrialEnd(null); setStep(STEP_DONE); }
+  // Paid → advance to the in-sheet Billing step (Stripe Elements). No external link.
+  function planPaid() { setStep(STEP_BILLING); }
+  // Billing outcomes.
+  function billingTrialStarted(end: number | null) { setTrialActive(true); setTrialEnd(end); setStep(STEP_DONE); }
+  function billingAlreadyActive() { setStep(STEP_DONE); }       // 409 — plan already active, no in-sheet trial
+  function billingContinueToDone() { setStep(STEP_DONE); }       // confirm-first blocker escape
 
   // ── Snapshot for the rail account card ────────────────────────────────────────
   const snap: WizardSnapshot = {
     firstName, lastName, email: effEmail,
     marketFocus: prefs.market_focus,
     plan, period,
-    planChosen: step >= 3,
+    planChosen: step >= STEP_PLAN,
+    paid,
+    trialActive,
   };
+
+  // confirmPending + paid with NO session: in-sheet billing REQUIRES auth, so the
+  // billing step shows an honest blocker instead of Stripe Elements. (Prod has email
+  // confirmation OFF today, so this branch is rare.)
+  const billingNeedsConfirmFirst = confirmPending && !effEmail;
 
   if (!mounted) return null;
 
@@ -275,9 +294,9 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
           <div className="ob-body">
             <RailCard step={step} snap={snap} />
             <div className="ob-pane" ref={paneRef}>
-              <MobileStepper step={step} />
+              <MobileStepper step={step} paid={paid} />
               <div className="ob-pane-scroll">
-                {step === 1 && (
+                {step === STEP_ACCOUNT && (
                   <StepAccount
                     mode="signup"
                     firstName={firstName} lastName={lastName} email={email} password={password}
@@ -293,26 +312,39 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
                     onAdvance={accountAdvance}
                   />
                 )}
-                {step === 2 && <StepPreferences prefs={prefs} setPrefs={setPrefs} />}
-                {step === 3 && <StepPlan plan={plan} period={period} setPlan={setPlan} setPeriod={setPeriod} />}
-                {step === 4 && (
+                {step === STEP_PREFS && <StepPreferences prefs={prefs} setPrefs={setPrefs} />}
+                {step === STEP_PLAN && <StepPlan plan={plan} period={period} setPlan={setPlan} setPeriod={setPeriod} />}
+                {step === STEP_BILLING && plan !== "free" && (
+                  <StepBilling
+                    tier={plan}
+                    period={period}
+                    onTrialStarted={billingTrialStarted}
+                    onAlreadyActive={billingAlreadyActive}
+                    onFree={chooseFree}
+                    needsConfirmFirst={billingNeedsConfirmFirst}
+                    onContinueToDone={billingContinueToDone}
+                  />
+                )}
+                {step === STEP_DONE && (
                   <StepDone firstName={firstName} email={effEmail}
-                    confirmPending={confirmPending} paidPending={paidPending} />
+                    confirmPending={confirmPending} trialActive={trialActive}
+                    trialEnd={trialEnd} plan={plan} />
                 )}
               </div>
 
-              {/* Footer action bar — per step */}
-              {step === 2 && (
+              {/* Footer action bar — per step. Billing (4) owns its own action row
+                  (submit lives inside Stripe's <Elements>), so no ob-foot here. */}
+              {step === STEP_PREFS && (
                 <div className="ob-foot">
                   <StepPreferencesFooter onSkip={prefsSkip} onContinue={prefsContinue} />
                 </div>
               )}
-              {step === 3 && (
+              {step === STEP_PLAN && (
                 <div className="ob-foot">
-                  <StepPlanFooter plan={plan} onFree={planFree} onPaid={planPaid} />
+                  <StepPlanFooter plan={plan} onFree={chooseFree} onPaid={planPaid} />
                 </div>
               )}
-              {step === 4 && (
+              {step === STEP_DONE && (
                 <div className="ob-foot">
                   <StepDoneFooter onClose={handleClose} />
                 </div>

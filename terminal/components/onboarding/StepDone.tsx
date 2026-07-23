@@ -1,19 +1,34 @@
 "use client";
-import { useT } from "@/lib/i18n";
+import { useLang, useT } from "@/lib/i18n";
+import type { PlanKey } from "./types";
 
 export interface StepDoneProps {
   firstName: string;
   email: string;
   confirmPending: boolean;
-  paidPending: boolean;
+  /** W2: an in-sheet Stripe trial started. Drives the "trial is live" body line. */
+  trialActive: boolean;
+  /** W2: epoch seconds of the first charge (from subscribe/complete), or null. */
+  trialEnd: number | null;
+  /** The paid tier the trial is on (only meaningful when trialActive). */
+  plan: PlanKey;
 }
 
-export default function StepDone({ firstName, email, confirmPending, paidPending }: StepDoneProps) {
+// Localized "Month Day" from an epoch-seconds trial_end.
+function fmtTrialDate(trialEnd: number | null, lang: string): string {
+  const d = trialEnd != null ? new Date(trialEnd * 1000) : (() => { const x = new Date(); x.setDate(x.getDate() + 7); return x; })();
+  return d.toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US", { month: "long", day: "numeric" });
+}
+
+export default function StepDone({ firstName, email, confirmPending, trialActive, trialEnd, plan }: StepDoneProps) {
   const t = useT();
+  const { lang } = useLang();
   const name = firstName.trim();
   const title = name
     ? t("obDoneTitleNamed").replace("{firstName}", name)
     : t("obDoneTitle");
+
+  const tierName = plan === "insider" ? t("obPlanInsider") : plan === "pro" ? t("obPlanPro") : "";
 
   return (
     <div className="ob-fade">
@@ -28,10 +43,14 @@ export default function StepDone({ firstName, email, confirmPending, paidPending
               {t("obDoneConfirm").replace("{email}", email || "your inbox")}
             </p>
           )}
-          {paidPending && (
-            <p className="ob-done-line">{t("obDonePaid")}</p>
+          {trialActive && (
+            <p className="ob-done-line">
+              {t("obDoneTrial")
+                .replace("{tier}", tierName)
+                .replace("{date}", fmtTrialDate(trialEnd, lang))}
+            </p>
           )}
-          {!confirmPending && !paidPending && (
+          {!confirmPending && !trialActive && (
             <p className="ob-done-line">{t("obDoneReady")}</p>
           )}
         </div>

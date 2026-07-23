@@ -61,6 +61,16 @@ export function bestSavePct(): number {
   return Math.max(savePct("insider"), savePct("pro"));
 }
 
+/**
+ * The real FIRST invoice total (whole dollars) for a paid tier — the amount that
+ * lands after the 7-day trial. Annual → the full-year billed amount ($588 / $828);
+ * monthly → the monthly price ($69 / $99). Derived from the same cents as everything
+ * else — never hardcode this in the UI.
+ */
+export function firstInvoiceTotal(key: Exclude<PlanKey, "free">, period: Period): number {
+  return period === "annual" ? annualBilled(key) : monthlyPrice(key);
+}
+
 /** Extra $/mo (annual) that upgrades Insider → Pro, e.g. 20. Powers the wedge row. */
 export function proWedgePerMonth(): number {
   return perMonth("pro", "annual") - perMonth("insider", "annual");

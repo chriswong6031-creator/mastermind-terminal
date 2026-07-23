@@ -1,6 +1,7 @@
 "use client";
 import { useT } from "@/lib/i18n";
 import type { PlanKey, Period } from "./types";
+import { STEP_ACCOUNT, STEP_PREFS, STEP_PLAN, STEP_BILLING, STEP_DONE } from "./types";
 import { perMonth } from "./plans";
 
 // Shared wizard snapshot the rail (and the account card) read from. Owned by
@@ -13,9 +14,25 @@ export interface WizardSnapshot {
   plan: PlanKey;
   period: Period;
   planChosen: boolean;   // true once the user has reached/interacted with Step 3
+  paid: boolean;         // W2: a paid plan is selected → the Billing step exists
+  trialActive: boolean;  // W2: an in-sheet trial has started → account card "trial" chip
 }
 
-const STEP_KEYS = ["obStepAccount", "obStepPreferences", "obStepPlan", "obStepDone"] as const;
+// The stepper's displayed entries, in order, each carrying the wizard step number it
+// maps to. The Billing entry is spliced in (paid only) by stepEntries() below — the
+// free path jumps STEP_PLAN → STEP_DONE, so its stepper never shows Billing.
+interface StepEntry { key: string; step: number; }
+
+function stepEntries(paid: boolean): StepEntry[] {
+  const base: StepEntry[] = [
+    { key: "obStepAccount", step: STEP_ACCOUNT },
+    { key: "obStepPreferences", step: STEP_PREFS },
+    { key: "obStepPlan", step: STEP_PLAN },
+  ];
+  if (paid) base.push({ key: "obBillStep", step: STEP_BILLING });
+  base.push({ key: "obStepDone", step: STEP_DONE });
+  return base;
+}
 
 // Tier hue CSS var per plan key — mirrors onboarding.css tokens.
 const HUE: Record<PlanKey, string> = {
@@ -63,6 +80,10 @@ export function AccountCard({ snap }: { snap: WizardSnapshot }) {
           <span className="ob-acct-tier-nm" style={{ color: hue }}>
             {t(snap.plan === "free" ? "obPlanFree" : snap.plan === "insider" ? "obPlanInsider" : "obPlanPro")}
           </span>
+          {snap.trialActive && snap.plan !== "free" && (
+            // Non-directional hue = the tier hue (never --up/--down, which flip in zh).
+            <span className="ob-acct-trial" style={{ color: hue, borderColor: hue }}>{t("obTrialChip")}</span>
+          )}
           {price != null ? (
             <span className="ob-acct-tier-price">
               ${price}<span className="ob-acct-tier-per">{t("obAcctPerMo")}</span>
@@ -79,6 +100,8 @@ export function AccountCard({ snap }: { snap: WizardSnapshot }) {
 /** Desktop left rail: brand eyebrow, vertical stepper, and the live account card. */
 export default function RailCard({ step, snap }: { step: number; snap: WizardSnapshot }) {
   const t = useT();
+  // Show the Billing entry only when a paid plan is selected (the free path skips it).
+  const entries = stepEntries(snap.paid);
   return (
     <aside className="ob-rail">
       <div className="ob-brand">
@@ -87,15 +110,14 @@ export default function RailCard({ step, snap }: { step: number; snap: WizardSna
       </div>
 
       <nav className="ob-steps" aria-label={t("obHeaderHint")}>
-        {STEP_KEYS.map((k, i) => {
-          const n = i + 1;
-          const state = n < step ? "done" : n === step ? "on" : "";
+        {entries.map((e) => {
+          const state = e.step < step ? "done" : e.step === step ? "on" : "";
           return (
-            <div key={k} className={`ob-step ${state}`}>
+            <div key={e.key} className={`ob-step ${state}`}>
               <span className="ob-step-dot">
-                {n < step && <Check cls="ob-step-ck" />}
+                {e.step < step && <Check cls="ob-step-ck" />}
               </span>
-              <span className="ob-step-lbl">{t(k)}</span>
+              <span className="ob-step-lbl">{t(e.key)}</span>
             </div>
           );
         })}
@@ -107,22 +129,23 @@ export default function RailCard({ step, snap }: { step: number; snap: WizardSna
 }
 
 /** Mobile top stepper row (rail is hidden under 861px). */
-export function MobileStepper({ step }: { step: number }) {
+export function MobileStepper({ step, paid }: { step: number; paid: boolean }) {
   const t = useT();
-  const labelKey = STEP_KEYS[Math.min(step - 1, STEP_KEYS.length - 1)];
+  const entries = stepEntries(paid);
+  // Current label = the last entry we've reached (step numbers may skip Billing).
+  const current = [...entries].reverse().find((e) => e.step <= step) ?? entries[0];
   return (
     <div className="ob-mstep" aria-hidden="true">
-      {STEP_KEYS.map((k, i) => {
-        const n = i + 1;
-        const dotState = n < step ? "done" : n === step ? "on" : "";
+      {entries.map((e, i) => {
+        const dotState = e.step < step ? "done" : e.step === step ? "on" : "";
         return (
-          <div key={k} style={{ display: "contents" }}>
-            {i > 0 && <span className={`ob-mstep-bar${n <= step ? " done" : ""}`} />}
+          <div key={e.key} style={{ display: "contents" }}>
+            {i > 0 && <span className={`ob-mstep-bar${e.step <= step ? " done" : ""}`} />}
             <span className={`ob-mstep-dot ${dotState}`} />
           </div>
         );
       })}
-      <span className="ob-mstep-lbl">{t(labelKey)}</span>
+      <span className="ob-mstep-lbl">{t(current.key)}</span>
     </div>
   );
 }

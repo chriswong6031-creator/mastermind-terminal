@@ -920,20 +920,61 @@ const LEX: Record<string, [string, string]> = {
   obPro4: ["MCP server", "MCP 服务器"],
   obComingSoon: ["Coming soon", "即将推出"],
   obCompare: ["Compare every feature →", "逐项对比 →"],
-  // step 3 CTAs
+  // step 3 CTAs (W2: paid CTA moved to obContinueBilling below; obStartTrial retired)
   obContinueFree: ["Continue with Free", "以免费版继续"],
-  obStartTrial: ["Start 7-day trial · card required", "开始 7 天试用 · 需绑卡"],
   obOrFree: ["or continue with Free", "或以免费版继续"],
   // step 4 — done
   obDoneTitleNamed: ["You're in, {firstName}", "{firstName}，欢迎加入"],
   obDoneTitle: ["You're in", "欢迎加入"],
   obDoneConfirm: ["Confirm your email to activate your account — we sent a link to {email}. Your preferences are saved and apply on first sign-in.", "请查收 {email} 的确认邮件以激活账户——你的偏好已保存，首次登录时自动生效。"],
-  obDonePaid: ["Your 7-day trial continues on the plans page.", "你的 7 天试用在方案页继续。"],
   obDoneReady: ["Your desk is set. Jump in whenever you're ready.", "你的工作台已就绪。准备好就随时进入。"],
   obOpenTerminal: ["Open the Terminal", "进入终端"],
   // onboarding wiring (W1)
   obwCreateAccount: ["Create account", "创建账户"],
   obwSignIn: ["Sign in", "登录"],
+
+  // onboarding billing (W2)
+  // Product names "Flash AI" / "Pro AI" / "Mastermind" are NEVER translated.
+  // Interpolation tokens ({total}/{date}/{tier}/{email}) are .replace()'d at the call site.
+  // stepper / heading
+  obBillStep: ["Billing", "支付"],
+  obBillTitle: ["Add your card", "添加银行卡"],
+  obBillSub: ["Start your 7-day trial. You can cancel anytime before it ends.", "开始 7 天免费试用。你可以在结束前随时取消。"],
+  // order summary card
+  obBillPerMo: ["/mo", "/月"],
+  obBillAnnually: ["billed annually ${total}/yr", "按年计费 ${total}/年"],
+  obBillMonthly: ["billed monthly", "按月计费"],
+  obBillTrialLine: ["7-day free trial — your first charge of ${total} lands on {date}.", "7 天免费试用——首笔 ${total} 将于 {date} 扣款。"],
+  obBillCancelLine: ["Cancel before then and you pay nothing.", "在此之前取消，不会产生任何费用。"],
+  // actions
+  obBillSubmit: ["Start 7-day trial", "开始 7 天免费试用"],
+  obBillSubmitBusy: ["Starting your trial…", "正在开始试用…"],
+  obBillOrFree: ["or continue with Free", "或以免费版继续"],
+  // loading / errors / edge states
+  obBillLoading: ["Preparing secure checkout…", "正在准备安全结账…"],
+  obBillRetry: ["Try again", "重试"],
+  obBillErr: ["We couldn't set up checkout. Please try again.", "无法准备结账，请重试。"],
+  obBillAlready: ["You already have an active plan", "你已有一个有效方案"],
+  obBillAlreadySub: ["Nothing more to do here — jump into the Terminal.", "这里无需其他操作——直接进入终端。"],
+  obBillAlreadyGo: ["Continue", "继续"],
+  obBillSignin: ["Please sign in first, then start your trial.", "请先登录，然后开始试用。"],
+  obBillNotConfigured: ["Billing is not configured yet.", "支付功能尚未配置。"],
+  obBillPlansLink: ["View plans", "查看方案"],
+  // confirm-email-first blocker (confirmPending + paid, no session)
+  obBillConfirmFirst: ["Confirm your email first — then start your trial from your account.", "请先确认邮箱——然后在你的账户中开始试用。"],
+  obBillConfirmGo: ["Continue", "继续"],
+  // step done — trial live
+  obDoneTrial: ["Your {tier} trial is live — first charge {date}; cancel before then and you pay nothing.", "你的 {tier} 试用已开始——首次扣款 {date}；在此之前取消，不会产生任何费用。"],
+  // rail account card trial chip
+  obTrialChip: ["trial", "试用"],
+  // settings menu tier line
+  obTierFree: ["Free", "免费版"],
+  obTierInsider: ["Insider", "Insider"],
+  obTierInsiderTrial: ["Insider · trial", "Insider · 试用"],
+  obTierPro: ["Pro", "Pro"],
+  obTierProTrial: ["Pro · trial", "Pro · 试用"],
+  // step 3 CTA — replaces the external-link "start trial" for paid
+  obContinueBilling: ["Continue to billing", "前往支付"],
 };
 
 // Non-hook LEX lookup for imperative contexts (e.g. chart legend meta assembled outside React render).
