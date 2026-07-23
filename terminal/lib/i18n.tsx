@@ -392,6 +392,19 @@ const LEX: Record<string, [string, string]> = {
   loadingBook: ["Loading book…", "正在加载账本…"],
   noNamesYet: ["No names in your watchlist yet.", "你的自选中暂无标的。"],
   convictionFoot: ["{n} bullish · tilt weighted by backtested win-rate · paper / display-only", "{n} 看多 · 按回测胜率加权 · 模拟 / 仅供展示"],
+  // portfolio brief — "Your book today" (Pro). Content lines arrive pre-localized from the
+  // desk API; these keys are only the panel's own UI chrome.
+  briefEyebrow: ["Your book today", "今日你的账本"],
+  briefAsOf: ["as of {asof}", "截至 {asof}"],
+  briefStale: ["data as of {asof}", "数据截至 {asof}"],
+  briefUncovered: ["No desk coverage yet for: {names}", "以下暂无台面覆盖：{names}"],
+  briefUnavailable: ["Your book brief is unavailable right now.", "你的账本简报暂时无法加载。"],
+  briefLoading: ["Reading your book…", "正在解读你的账本…"],
+  // teaser (Free / Insider → 403)
+  briefTeaserWhat: ["Your holdings, read through the desks' daily work — exposure, signal states, earnings clock and filings on your own names, in plain words. Part of Pro.", "把你的持仓交给台面每日研判 —— 用大白话讲清你名下的敞口、信号状态、财报节奏与备案动向。Pro 专享。"],
+  briefSampleTag: ["Sample", "示例"],
+  briefSample: ["41% of your book is Technology — today's desk read on Technology is Cautious (a bounce, not a turn).", "你账本的 41% 在科技板块 —— 台面今日对科技的研判是「谨慎」（是反弹，不是反转）。"],
+  briefUpsell: ["See your book with Pro", "用 Pro 查看你的账本"],
   // alerts
   pageAlerts: ["Alerts", "提醒"],
   signalRegimeAlerts: ["Signal & regime alerts", "信号与趋势提醒"],

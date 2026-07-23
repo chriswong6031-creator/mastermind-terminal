@@ -771,6 +771,49 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .kpi{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:14px 16px}.kpi small{font:600 10px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.kpi b{display:block;font:700 22px/1.1 var(--font-ui);margin-top:7px;font-variant-numeric:tabular-nums}
 @media(max-width:500px){.kpis{grid-template-columns:repeat(2,1fr);gap:8px}.kpi{padding:11px 12px}.kpi b{font-size:18px}}
 
+/* ── Your book today · portfolio brief panel ──────────────────────────────────
+   The desk's morning read of the user's own book, rendered as threaded prose.
+   Signature: a single --brand-2 hairline "reading spine" runs down the left of the
+   body, each section label a quiet notch on it — a margin annotation on your holdings.
+   All Tier-1 glance content: the headline carries the panel, labels recede, prose graze. */
+.pbrief{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);margin-bottom:16px;overflow:hidden}
+.pbrief-top{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding:15px 18px 0}
+.pbrief-eyebrow{font:650 10px/1 var(--font-num);letter-spacing:.14em;text-transform:uppercase;color:var(--text-2)}
+.pbrief-meta{margin-left:auto;font:500 11px/1.4 var(--font-num);color:var(--muted);letter-spacing:.01em}
+/* stale caution: warm, muted — a heads-up, never an alarm */
+.pbrief-stale{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:var(--r-pill);font:600 10px/1.4 var(--font-num);letter-spacing:.03em;color:var(--warn);background:color-mix(in srgb, var(--warn) 11%, transparent)}
+/* the body carries the reading spine */
+.pbrief-body{position:relative;padding:14px 18px 18px 22px;margin-left:18px}
+.pbrief-body::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:2px;border-radius:2px;background:linear-gradient(180deg,var(--brand-2),color-mix(in srgb,var(--brand-2) 35%,transparent))}
+.pbrief-headline{font:550 18px/1.5 var(--font-ui);letter-spacing:-.005em;color:var(--text);margin:2px 0 4px;max-width:64ch;text-wrap:pretty}
+.pbrief-sec{margin-top:16px}
+.pbrief-sec-label{position:relative;font:650 10px/1 var(--font-num);letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+/* the notch: a short tick anchoring each label to the spine */
+.pbrief-sec-label::before{content:"";position:absolute;left:-22px;top:50%;width:11px;height:1.5px;background:var(--brand-2);opacity:.7;transform:translateY(-50%)}
+.pbrief-line{font:400 13.5px/1.6 var(--font-ui);color:var(--text-2);margin:0;max-width:66ch;text-wrap:pretty}
+.pbrief-line+.pbrief-line{margin-top:5px}
+/* honest null — no desk coverage yet: quiet, factual, never styled as an error */
+.pbrief-uncovered{margin-top:16px;font:400 12px/1.55 var(--font-ui);color:var(--muted);max-width:66ch}
+/* one quiet unavailable line — 503 / network; never blocks the book below */
+.pbrief-unavailable{padding:15px 18px;font:400 12.5px/1.5 var(--font-ui);color:var(--muted)}
+
+/* loading skeleton — shimmer, honours reduced-motion */
+.pbrief-sk{height:12px;border-radius:5px;background:linear-gradient(90deg,var(--panel-2),var(--panel-3),var(--panel-2));background-size:200% 100%;animation:pbriefShimmer 1.4s var(--ease) infinite}
+.pbrief-sk.h{height:17px}
+.pbrief-sk+.pbrief-sk{margin-top:8px}
+@keyframes pbriefShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@media(prefers-reduced-motion:reduce){.pbrief-sk{animation:none}}
+
+/* teaser (403) — same chrome + spine; one blurred SAMPLE line, plain what-it-is,
+   an understated upgrade affordance. No real data, no urgency, no dark patterns. */
+.pbrief-teaser-what{font:400 13px/1.55 var(--font-ui);color:var(--text-2);margin:2px 0 12px;max-width:60ch}
+.pbrief-sample{position:relative;font:400 13.5px/1.6 var(--font-ui);color:var(--text-2);max-width:60ch;filter:blur(4px);opacity:.5;user-select:none;pointer-events:none}
+.pbrief-sample-tag{display:inline-block;font:650 9px/1 var(--font-num);letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:7px}
+.pbrief-upsell{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 15px;margin-top:16px;border-radius:var(--r-md);border:1px solid var(--line-3);background:var(--panel-2);color:var(--text);font:600 12.5px/1 var(--font-ui);cursor:pointer;transition:background var(--t),border-color var(--t)}
+.pbrief-upsell:hover{background:var(--panel-3);border-color:var(--brand-2)}
+.pbrief-upsell .dot{width:6px;height:6px;border-radius:50%;background:var(--brand-2)}
+@media(max-width:500px){.pbrief-headline{font-size:16px}.pbrief-body{padding-left:18px;margin-left:14px}.pbrief-meta{margin-left:0;flex-basis:100%}}
+
 /* landing + login */
 .center{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;padding:24px}
 .hero{max-width:560px;text-align:center}
