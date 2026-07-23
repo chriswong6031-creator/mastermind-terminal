@@ -44,6 +44,7 @@ import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
 import SettingsMenu from "@/components/SettingsMenu";
+import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 import DrawingSidebar from "@/components/DrawingSidebar";
 import DayRange from "@/components/DayRange";
 import { useT, useLang } from "@/lib/i18n";
@@ -1440,6 +1441,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   };
 
   return (
+    <OnboardingProvider email={email}>
     <div className={`app${fullChart ? " fs" : ""}`} style={{ ["--rail-w" as any]: `${railW}px` }}>
       <header className="topbar">
         {fromMacro
@@ -2047,6 +2049,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       )}
 
     </div>
+    </OnboardingProvider>
   );
 }
 

@@ -6,7 +6,7 @@ import { parseComposite, compositeExpr, validateLegs } from "@/lib/composite";
 import { getHistory } from "@/lib/searchHistory";
 import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
-import AuthSheet from "@/components/AuthSheet";
+import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 
 type Row = { name: string; col: string; verdict: string | null; vts?: string | null; mkt?: string; zh?: string; sec?: string };
 type ListInfo = { name: string; count: number; symbols: { symbol: string; section: string }[] };
@@ -71,6 +71,7 @@ export default function SearchModal({
   compareCfg?: Record<string, CmpCfg>;
 }) {
   const t = useT();
+  const onboarding = useOnboarding();
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const [choosing, setChoosing] = useState<string | null>(null);
@@ -84,7 +85,6 @@ export default function SearchModal({
   const [pickerNew, setPickerNew] = useState(false);          // inline "new list" inside the picker
   const [pickerNewName, setPickerNewName] = useState("");
   const [justAdded, setJustAdded] = useState<{ sym: string; list: string } | null>(null);  // inline confirm
-  const [authMode, setAuthMode] = useState<"signin" | "signup" | null>(null);   // AuthSheet
   const inputRef = useRef<HTMLInputElement>(null);
   const railInputRef = useRef<HTMLInputElement>(null);
   const pickerNewRef = useRef<HTMLInputElement>(null);
@@ -100,7 +100,7 @@ export default function SearchModal({
       setFocused(false);
       setRailCreating(false); setRailName("");
       setPicker(null); setPickerUp(false); setPickerNew(false); setPickerNewName("");
-      setJustAdded(null); setAuthMode(null);
+      setJustAdded(null);
       setTimeout(() => inputRef.current?.focus(), 10);
     }
   }, [open, seed]);
@@ -166,12 +166,6 @@ export default function SearchModal({
   useEffect(() => {
     if (open) setSel(defaultSel);
   }, [open, defaultSel, showHistory]);
-
-  // M1: self-dismiss the AuthSheet once sign-in lands. On success AuthSheet fires router.refresh(),
-  // which re-runs the server component and delivers a real `email` — but a returning (already
-  // provisioned) user gets no navigation, so nothing else closes the sheet: it would sit stuck on
-  // its busy state over the now-signed-in hub. Close it the moment `signedIn` flips true.
-  useEffect(() => { if (signedIn) setAuthMode(null); }, [signedIn]);
 
   if (!open) return null;
 
@@ -471,8 +465,8 @@ export default function SearchModal({
                   <div className="s-cta-title">{t("ctaTitle")}</div>
                   <div className="s-cta-body">{t("ctaBody")}</div>
                 </div>
-                <button className="s-cta-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => setAuthMode("signup")}>{t("ctaSignup")}</button>
-                <button className="s-cta-link" onMouseDown={(e) => e.preventDefault()} onClick={() => setAuthMode("signin")}>{t("ctaSignin")}</button>
+                <button className="s-cta-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => { onClose(); onboarding.open("signup"); }}>{t("ctaSignup")}</button>
+                <button className="s-cta-link" onMouseDown={(e) => e.preventDefault()} onClick={() => { onClose(); onboarding.open("signin"); }}>{t("ctaSignin")}</button>
               </div>
             )}
             {/* Eyebrow: active list name + count (quiet TV register). */}
@@ -619,9 +613,6 @@ export default function SearchModal({
           <div className="smodal-hint">{t("shiftClickHint")}</div>
         )}
 
-        {/* AuthSheet layered over the body (Part E). Keyed on mode so switching CTA buttons
-            remounts with the right initial mode (no initialMode→state sync effect needed). */}
-        {authMode && <AuthSheet key={authMode} initialMode={authMode} onClose={() => setAuthMode(null)} />}
       </div>
     </div>
   );

@@ -1,0 +1,151 @@
+"use client";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { createClient } from "@/lib/supabase/client";
+import { LS_PENDING_PREFS, SS_OPEN, type OnboardMode, type PlanKey, type Period, type OnboardingSheetProps } from "./types";
+
+// The wizard itself is code-split (ssr:false) so it never bloats first paint — it only loads
+// when the user actually opens onboarding. Generic pinned to the shared contract so the JSX
+// below is validated against OnboardingSheetProps regardless of inference.
+const OnboardingSheet = dynamic<OnboardingSheetProps>(() => import("./OnboardingSheet"), { ssr: false });
+
+interface OnboardingApi {
+  open: (mode: OnboardMode, opts?: { plan?: PlanKey; period?: Period }) => void;
+  close: () => void;
+}
+
+// No-op fallback for provider-less hosts. SettingsMenu (via MobileNav) is also rendered inside
+// the transient route-loading skeleton (components/RouteSkeleton.tsx, used by the loading.tsx
+// files), which sits OUTSIDE any provider by design — a throwing hook would crash every route
+// transition. The skeleton's onboarding buttons are non-interactive placeholders, so a no-op is
+// the correct degradation there; real hosts (both shells) always supply the provider.
+const NOOP_API: OnboardingApi = { open: () => {}, close: () => {} };
+
+const OnboardingCtx = createContext<OnboardingApi>(NOOP_API);
+
+export function useOnboarding(): OnboardingApi {
+  return useContext(OnboardingCtx);
+}
+
+// Sheet state lives HERE, above the (unmounted-when-closed) sheet, so a closed sheet reopens
+// where it left off — the state-preserving requirement. `email` is the shell's auth signal.
+export function OnboardingProvider({ email, children }: { email: string; children: React.ReactNode }) {
+  const [isOpen, setIsOpen] = useState(false);
+  // Once opened, the sheet stays MOUNTED (hidden via `visible`) so a dismissed mid-flow
+  // wizard reopens exactly where it left off — the state-preserving requirement.
+  const [everOpened, setEverOpened] = useState(false);
+  const [mode, setMode] = useState<OnboardMode>("signup");
+  const [plan, setPlan] = useState<PlanKey | undefined>();
+  const [period, setPeriod] = useState<Period | undefined>();
+  const [resume, setResume] = useState(false);
+
+  const open = useCallback<OnboardingApi["open"]>((m, opts) => {
+    setMode(m);
+    setResume(false);
+    if (opts?.plan) setPlan(opts.plan);
+    if (opts?.period) setPeriod(opts.period);
+    setIsOpen(true);
+    setEverOpened(true);
+  }, []);
+
+  const close = useCallback(() => setIsOpen(false), []);
+
+  // Stable API object so the (large) consumer tree doesn't re-render on every provider render;
+  // open/close are useCallback-stable, so this recomputes never.
+  const api = useMemo<OnboardingApi>(() => ({ open, close }), [open, close]);
+
+  // ── Remount resilience: router.refresh() at the signup step-1→2 boundary flips
+  //    app/terminal/page.tsx from its guest branch to its signed-in branch, which
+  //    remounts this provider. Restore the open-state stash so the sheet carries on
+  //    (its own wizard fields rehydrate from SS_WIZARD). A restored SIGNIN sheet is
+  //    NOT reopened once signed in — that flow is complete by definition. ──
+  useEffect(() => {
+    let saved: { open?: boolean; mode?: OnboardMode; plan?: PlanKey; period?: Period } | null = null;
+    try { saved = JSON.parse(sessionStorage.getItem(SS_OPEN) || "null"); } catch { /* ignore */ }
+    if (!saved?.open) return;
+    if (saved.mode === "signin") { if (email !== "") return; setMode("signin"); }
+    else setMode("signup");
+    if (saved.plan) setPlan(saved.plan);
+    if (saved.period) setPeriod(saved.period);
+    setIsOpen(true);
+    setEverOpened(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist the open-state (per-tab) so a remount can restore it.
+  useEffect(() => {
+    try { sessionStorage.setItem(SS_OPEN, JSON.stringify({ open: isOpen, mode, plan, period })); }
+    catch { /* ignore */ }
+  }, [isOpen, mode, plan, period]);
+
+  // ── Deep-links: read window.location.search on mount (client-side; avoids useSearchParams +
+  //    Suspense). Consume the onboarding params, then strip them via history.replaceState while
+  //    keeping every other param (e.g. ?sym) intact. Runs once. ──
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const wantSignup = sp.has("signup") || sp.has("onboard") || sp.has("plan");
+    const wantSignin = sp.has("signin");
+    const isResume = sp.get("onboard") === "resume";
+    if (!wantSignup && !wantSignin) return;
+
+    const planParam = sp.get("plan");
+    const periodParam = sp.get("period");
+    if (planParam === "insider" || planParam === "pro" || planParam === "free") setPlan(planParam);
+    if (periodParam === "monthly" || periodParam === "annual") setPeriod(periodParam);
+
+    setMode(wantSignin && !wantSignup ? "signin" : "signup");
+    setResume(isResume);
+    setIsOpen(true);
+    setEverOpened(true);
+
+    // Strip only the onboarding params; preserve the rest of the query string.
+    for (const k of ["signup", "signin", "onboard", "plan", "period"]) sp.delete(k);
+    const qs = sp.toString();
+    const url = window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash;
+    window.history.replaceState(null, "", url);
+  }, []);
+
+  // ── Auto-close on auth: when `email` transitions ""→non-empty while a SIGNIN sheet is open,
+  //    close it (the AuthSheet parent-close pattern). SIGNUP does NOT auto-close — that flow
+  //    continues to prefs/plan/done after the session lands. ──
+  const prevEmail = useRef(email);
+  useEffect(() => {
+    const was = prevEmail.current;
+    prevEmail.current = email;
+    if (was === "" && email !== "" && isOpen && mode === "signin") setIsOpen(false);
+  }, [email, isOpen, mode]);
+
+  // ── Pending prefs: on first authed mount, if a stash exists, push it into user_metadata and
+  //    clear it. Fire-and-forget (the sheet may not even be open). Guarded to run once. ──
+  const prefsApplied = useRef(false);
+  useEffect(() => {
+    if (prefsApplied.current || email === "") return;
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(LS_PENDING_PREFS); } catch { /* storage blocked */ }
+    if (!raw) return;
+    prefsApplied.current = true;
+    let data: unknown;
+    try { data = JSON.parse(raw); } catch { data = null; }
+    if (data && typeof data === "object") {
+      createClient().auth.updateUser({ data: data as Record<string, unknown> }).catch(console.warn);
+    }
+    try { localStorage.removeItem(LS_PENDING_PREFS); } catch { /* ignore */ }
+  }, [email]);
+
+  return (
+    <OnboardingCtx.Provider value={api}>
+      {children}
+      {everOpened && (
+        <OnboardingSheet
+          mode={mode}
+          visible={isOpen}
+          email={email}
+          initialPlan={plan}
+          initialPeriod={period}
+          resume={resume}
+          onClose={close}
+        />
+      )}
+    </OnboardingCtx.Provider>
+  );
+}
