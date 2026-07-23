@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useLang, useT } from "@/lib/i18n";
+import { createClient } from "@/lib/supabase/client";
+import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 
 // User-settings popover anchored on the top-right avatar: up/down color scheme + language + sign out.
 // The up/down scheme and language auto-initialize from the browser locale (pre-paint script in layout),
@@ -8,11 +10,26 @@ import { useLang, useT } from "@/lib/i18n";
 export default function SettingsMenu({ email }: { email: string }) {
   const [open, setOpen] = useState(false);
   const [ud, setUd] = useState<"east" | "west">("west");
+  const [firstName, setFirstName] = useState("");
   const { lang, setLang } = useLang();
   const t = useT();
+  const onboarding = useOnboarding();
+  const signedIn = !!email;
 
   useEffect(() => { const v = document.documentElement.getAttribute("data-updown"); setUd(v === "east" ? "east" : "west"); }, []);
   useEffect(() => { if (!open) return; const close = () => setOpen(false); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [open]);
+
+  // Signed-in only: pull first_name from user_metadata once (the component is handed just `email`).
+  // Guarded against unmount so a late resolve never sets state on a torn-down component.
+  useEffect(() => {
+    if (!signedIn) { setFirstName(""); return; }
+    let alive = true;
+    createClient().auth.getUser().then(({ data }) => {
+      const fn = (data.user?.user_metadata?.first_name as string | undefined) || "";
+      if (alive) setFirstName(fn);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [signedIn]);
 
   const setUpDown = (v: "east" | "west") => {
     setUd(v);
@@ -38,8 +55,18 @@ export default function SettingsMenu({ email }: { email: string }) {
             <button className={lang === "zh" ? "on" : ""} onClick={() => setLang("zh")}>中文</button>
           </div>
           <div className="set-sep" />
-          <div className="set-acct">{email}</div>
-          <form action="/auth/signout" method="post"><button className="menu-row" type="submit"><svg viewBox="0 0 24 24"><path d="M16 17l5-5-5-5M21 12H9M12 19H5V5h7" /></svg>{t("signOut")}</button></form>
+          {signedIn ? (
+            <>
+              {firstName && <div className="set-acct-name">{firstName}</div>}
+              <div className="set-acct">{email}</div>
+              <form action="/auth/signout" method="post"><button className="menu-row" type="submit"><svg viewBox="0 0 24 24"><path d="M16 17l5-5-5-5M21 12H9M12 19H5V5h7" /></svg>{t("signOut")}</button></form>
+            </>
+          ) : (
+            <>
+              <button className="menu-row" onClick={() => { setOpen(false); onboarding.open("signup"); }}><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M20 8v6M23 11h-6" /></svg>{t("obwCreateAccount")}</button>
+              <button className="menu-row" onClick={() => { setOpen(false); onboarding.open("signin"); }}><svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" /></svg>{t("obwSignIn")}</button>
+            </>
+          )}
         </div>
       )}
     </div>

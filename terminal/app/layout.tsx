@@ -3,6 +3,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import "./fin.css";
 import "./observatory.css";
+import "./onboarding.css";
 import { LangProvider } from "@/lib/i18n";
 import Tracker from "@/components/Tracker";
 

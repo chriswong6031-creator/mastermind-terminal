@@ -5,6 +5,7 @@ import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import MobileNav from "@/components/MobileNav";
 import SettingsMenu from "@/components/SettingsMenu";
+import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 import { useLang, useT } from "@/lib/i18n";
 
 /**
@@ -61,6 +62,7 @@ export default function AppShell({
 
   return (
     <AppShellEmailCtx.Provider value={email}>
+      <OnboardingProvider email={email}>
       <div className="app2 obs obs-ambient">
         <MobileNav email={email} />
         <header className="topbar">
@@ -84,6 +86,7 @@ export default function AppShell({
         <AppNav />
         {children}
       </div>
+      </OnboardingProvider>
     </AppShellEmailCtx.Provider>
   );
 }
