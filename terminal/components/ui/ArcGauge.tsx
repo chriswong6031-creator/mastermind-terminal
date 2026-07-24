@@ -4,8 +4,8 @@
  * ArcGauge — v6 primitive. Replaces every speedometer / rainbow / hard-edged
  * conic "retro odometer". A single open 240° SVG arc with a round terminal cap,
  * a faint track, ONE state color, a soft drop-shadow glow, and a mono numeral at
- * the center. The arc SWEEPS in on mount / value change (CSS transition on
- * stroke-dashoffset). prefers-reduced-motion kills the sweep.
+ * the center. The progress arc renders at its final reading immediately so a
+ * throttled mobile animation frame can never leave the gauge visually empty.
  *
  * Law: the STATE picks the color — never a red→green gradient across the arc.
  *   bull → var(--up)   bear → var(--down)   warn → var(--signal)
@@ -17,8 +17,6 @@
  *   <ArcGauge value={72} state="bull" label="Buy pressure" />
  *   <ArcGauge value={48} state="neutral" label="Insider" sublabel="routine only" />
  */
-
-import { useEffect, useRef, useState } from "react";
 
 export type ArcState = "bull" | "bear" | "warn" | "neutral";
 
@@ -92,24 +90,6 @@ export function ArcGauge({
   // 60° start offset lands the gap symmetrically at the bottom.
   const rotation = 90 + (360 - ARC_SWEEP_DEG) / 2; // = 90 + 60 = 150°
 
-  // Sweep-in: start collapsed (offset = full arc = empty) then transition to the
-  // real offset on mount. prefers-reduced-motion → jump straight to final.
-  const [drawn, setDrawn] = useState(false);
-  const reduce = useRef(false);
-  useEffect(() => {
-    reduce.current =
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (reduce.current) { setDrawn(true); return; }
-    const id = requestAnimationFrame(() => setDrawn(true));
-    return () => cancelAnimationFrame(id);
-  }, []);
-  // Re-arm the sweep when the value changes materially (keeps the "arc grows to
-  // the new reading" feel rather than snapping).
-  useEffect(() => { if (reduce.current) setDrawn(true); }, [v]);
-
-  const shownOffset = drawn || reduce.current ? offset : arcLen;
-
   return (
     <span
       className="arcg"
@@ -146,11 +126,8 @@ export function ArcGauge({
               strokeWidth={stroke}
               strokeLinecap="round"
               strokeDasharray={`${arcLen} 9999`}
-              strokeDashoffset={shownOffset}
+              strokeDashoffset={offset}
               style={{
-                transition: reduce.current
-                  ? "none"
-                  : "stroke-dashoffset 600ms var(--ease-out)",
                 filter: `drop-shadow(0 0 5px color-mix(in srgb, ${color} 30%, transparent))`,
               }}
             />

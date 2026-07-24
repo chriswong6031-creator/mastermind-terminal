@@ -7,7 +7,7 @@
  *     the daily `bars`) are ALWAYS available; intraday pills (15m / 1h / 4h …)
  *     are enabled per intradayCapable(market) and fetch /api/intraday directly
  *     (no cache).
- *   - Summary: three ArcGauges (Oscillators / Summary / Moving Averages).
+ *   - Signal gauges: Oscillators / Moving Averages.
  *   - Oscillators + Moving Averages tables (name+params, value, action).
  *   - Pivots table across Classic / Fibonacci / Camarilla / Woodie / DM.
  *
@@ -152,11 +152,10 @@ function TechnicalsPage({ sym, bars = [], zh = false }: TechnicalsPageProps) {
 
       {loading && <div className="fin-sec-cap">{pick(zh, "Loading intraday…", "加载盘中数据…")}</div>}
 
-      {/* Summary — three gauges */}
+      {/* The aggregate summary duplicated the two underlying signal groups. */}
       <div className="fin-sec">
         <div className="fin-tech-summary">
           <Gauge title={pick(zh, "Oscillators", "震荡指标")} group={ratings?.summary[0]} zh={zh} />
-          <Gauge title={pick(zh, "Summary", "综合")} group={ratings?.summary[2]} zh={zh} big />
           <Gauge title={pick(zh, "Moving Averages", "移动平均")} group={ratings?.summary[1]} zh={zh} />
         </div>
       </div>
@@ -179,16 +178,14 @@ function Gauge({
   title,
   group,
   zh,
-  big,
 }: {
   title: string;
   group: Ratings["summary"][number] | undefined;
   zh: boolean;
-  big?: boolean;
 }) {
   const arc = readingToArc(group ? group.score : null);
   return (
-    <div className={"fin-tech-gauge" + (big ? " big" : "")}>
+    <div className="fin-tech-gauge">
       <div className="fin-tech-gauge-t">{title}</div>
       <div className="fin-arc-wrap">
         {group ? (
@@ -196,7 +193,7 @@ function Gauge({
             <ArcGauge
               value={arc.value}
               state={arc.state}
-              size={big ? 148 : 118}
+              size={118}
               sublabel={verdictWord(group.verdict, zh)}
             />
             {/* vote tally demoted beneath the arc (was the old gauge's counts row) */}
@@ -209,7 +206,7 @@ function Gauge({
         ) : (
           // No bars yet → grey mid arc, numeral suppressed so an empty gauge can't
           // read as a real "50" score.
-          <ArcGauge value={50} state="neutral" size={big ? 148 : 118} showValue={false} sublabel={pick(zh, "No signal", "无信号")} />
+          <ArcGauge value={50} state="neutral" size={118} showValue={false} sublabel={pick(zh, "No signal", "无信号")} />
         )}
       </div>
     </div>
