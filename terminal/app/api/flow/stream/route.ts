@@ -13,6 +13,7 @@
  */
 import { rateLimit, tooMany } from "@/lib/rateLimit";
 import { isValidF, loadFlowFresh } from "@/lib/flowSource";
+import { getUserTier } from "@/lib/supabase/getUserTier";
 
 // SSE must never be statically cached, and flowSource reads fixtures via fs → node runtime.
 export const dynamic = "force-dynamic";
@@ -40,6 +41,13 @@ function signature(data: Record<string, unknown> | null): string {
 export async function GET(req: Request): Promise<Response> {
   const rl = rateLimit(req, { name: "flow-stream" });
   if (!rl.ok) return tooMany(rl);
+
+  // Options data is a PAID feature — gate the stream at connection open
+  // (server-verified), mirroring GET /api/flow. Fixture mode (dev/CI) is exempt.
+  if (process.env.FLOW_FIXTURE !== "1") {
+    const { isPro } = await getUserTier();
+    if (!isPro) return new Response("pro_required", { status: 403 });
+  }
 
   const url = new URL(req.url);
   const f = url.searchParams.get("f") ?? "feed";
