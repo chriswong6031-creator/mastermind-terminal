@@ -1545,7 +1545,7 @@ export default function OptionsHubView({
   // (so the cross-tab top-net-impact memos below still resolve) and reconnects on
   // re-entry. This also fixes a latent bug: the old 45s poll never actually refreshed
   // tide — fetchTide short-circuited on `if (tideData) return` after the first load.
-  const { data: tideData } = useFlowStream<TidePayload>(
+  const { data: tideData, error: tideStreamError } = useFlowStream<TidePayload>(
     activeTab === "tide" ? "tide" : null,
   );
   const [dteTide, setDteTide] = useState<DteTidePayload | null>(null);
@@ -1734,9 +1734,26 @@ export default function OptionsHubView({
   const marketOpenNow = isUsMarketHoursNow();
   const feedUnavailable = fetchError && !feed;        // couldn't load the feed at all
   const feedDelayed = !!feed && dataStale;            // have data, but it isn't fresh
-  const feedProblem = feedUnavailable || (feedDelayed && marketOpenNow);
-  const lastUpdatedLabel = lastFeedTs
-    ? `${feed?.session_date ? feed.session_date + " · " : ""}${fmtAsof(lastFeedTs)} ET`
+  // ── Active-tab freshness ──────────────────────────────────────────────────
+  // The status row + banner below are SHARED by the Tape and Tide tabs, but the
+  // Tide tab renders tideData — a SEPARATE stream. Its live/as-of/delayed state
+  // must come from tideData.asof, NOT the tape feed; otherwise the Tide tab shows
+  // the tape's clock (and tape-specific "the tape may not be refreshing" copy)
+  // over an independently-fresh series. `active*` resolves to the tape-derived
+  // values off the Tide tab, so the Tape tab is byte-identical to before.
+  const onTide = activeTab === "tide";
+  const tideAsof = tideData?.asof ?? "";
+  const tideStale = tideAsof ? isStale(tideAsof) : false;
+  const tideUnavailable = onTide && tideStreamError && !tideData;
+  const tideDelayed = !!tideData && tideStale;
+  const activeUnavailable = onTide ? tideUnavailable : feedUnavailable;
+  const activeDelayed     = onTide ? tideDelayed     : feedDelayed;
+  const activeAsof        = onTide ? tideAsof         : lastFeedTs;
+  const activeStale       = onTide ? tideStale        : dataStale;
+  const activeProblem     = activeUnavailable || (activeDelayed && marketOpenNow);
+  const activeSessionDate = onTide ? tideData?.session_date : feed?.session_date;
+  const activeUpdatedLabel = activeAsof
+    ? `${activeSessionDate ? activeSessionDate + " · " : ""}${fmtAsof(activeAsof)} ET`
     : "";
 
   // Ticker search candidates from tide top_net_impact + unusual names
@@ -1975,8 +1992,8 @@ export default function OptionsHubView({
             doesn't leave an empty bordered bar. */}
         {(() => {
           const showStrip = !controlled && !hideTabStrip;
-          const showLive = (activeTab === "tape" || activeTab === "tide") && !feedUnavailable && !feedDelayed;
-          if (!showStrip && !showLive && !lastFeedTs) return null;
+          const showLive = (activeTab === "tape" || activeTab === "tide") && !activeUnavailable && !activeDelayed;
+          if (!showStrip && !showLive && !activeAsof) return null;
           return (
         <div style={{ display: "flex", alignItems: "center", padding: "8px 14px", borderBottom: "1px solid var(--line)", flexShrink: 0, gap: 8 }}>
           {showStrip && (
@@ -2002,10 +2019,10 @@ export default function OptionsHubView({
               {lang === "zh" ? "实时" : "Live"}
             </span>
           )}
-          {lastFeedTs && (
+          {activeAsof && (
             <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
-              {t("asOf", "as of")} {fmtAsof(lastFeedTs)}
-              {dataStale && (
+              {t("asOf", "as of")} {fmtAsof(activeAsof)}
+              {activeStale && (
                 <span style={{ marginLeft: 6, color: "var(--warn)", fontWeight: 600 }}>
                   {lang === "zh" ? "延迟" : "delayed"}
                 </span>
@@ -2017,30 +2034,30 @@ export default function OptionsHubView({
         })()}
 
         {/* ── Live-feed status banner (Tape + Tide are intraday-live) ── */}
-        {(activeTab === "tape" || activeTab === "tide") && (feedUnavailable || feedDelayed) && (
+        {(activeTab === "tape" || activeTab === "tide") && (activeUnavailable || activeDelayed) && (
           <div
             role="status"
             style={{
               display: "flex", alignItems: "center", gap: 8,
               padding: "6px 12px", fontSize: 12, fontWeight: 600, lineHeight: 1.4,
               borderBottom: "1px solid var(--border, #222)",
-              color: feedProblem ? "var(--warn)" : "var(--text-dim)",
-              background: feedProblem ? "color-mix(in srgb, var(--warn) 12%, transparent)" : "transparent",
+              color: activeProblem ? "var(--warn)" : "var(--text-dim)",
+              background: activeProblem ? "color-mix(in srgb, var(--warn) 12%, transparent)" : "transparent",
             }}
           >
-            <span aria-hidden>{feedProblem ? "⚠" : "◷"}</span>
+            <span aria-hidden>{activeProblem ? "⚠" : "◷"}</span>
             <span>
-              {feedUnavailable
+              {activeUnavailable
                 ? (lang === "zh"
-                    ? "实时期权流不可用 — 暂时无法连接数据源。"
-                    : "Live options feed unavailable — can’t reach the data source right now.")
+                    ? `${onTide ? "实时市场潮汐" : "实时期权流"}不可用 — 暂时无法连接数据源。`
+                    : `${onTide ? "Live market tide" : "Live options feed"} unavailable — can’t reach the data source right now.`)
                 : marketOpenNow
                 ? (lang === "zh"
-                    ? `实时期权流延迟 — 最近更新 ${lastUpdatedLabel}，盘口可能未在刷新。`
-                    : `Live options feed delayed — last update ${lastUpdatedLabel}; the tape may not be refreshing.`)
+                    ? `${onTide ? "实时市场潮汐" : "实时期权流"}延迟 — 最近更新 ${activeUpdatedLabel}，${onTide ? "潮汐" : "盘口"}可能未在刷新。`
+                    : `${onTide ? "Live market tide" : "Live options feed"} delayed — last update ${activeUpdatedLabel}; ${onTide ? "the tide" : "the tape"} may not be refreshing.`)
                 : (lang === "zh"
-                    ? `市场休市 — 显示上一交易时段（${lastUpdatedLabel}）。实时盘口 9:30 ET 恢复。`
-                    : `Market closed — showing the last session (${lastUpdatedLabel}). Live tape resumes at 9:30 ET.`)}
+                    ? `市场休市 — 显示上一交易时段（${activeUpdatedLabel}）。实时${onTide ? "潮汐" : "盘口"} 9:30 ET 恢复。`
+                    : `Market closed — showing the last session (${activeUpdatedLabel}). Live ${onTide ? "tide" : "tape"} resumes at 9:30 ET.`)}
             </span>
           </div>
         )}
