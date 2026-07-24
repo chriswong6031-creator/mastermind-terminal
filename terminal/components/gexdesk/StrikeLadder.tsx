@@ -27,7 +27,7 @@ import React, {
 } from "react";
 import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
-import type { GexPayload } from "./GexDeskView";
+import type { GexPayload, GreekLens } from "./GexDeskView";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,9 +42,11 @@ interface Levels {
 
 interface TooltipData {
   strike: number;
-  gamma_net: number;
+  net: number;               // signed net exposure for the active lens
   gamma_call: number;
   gamma_put: number;
+  showBreakdown: boolean;     // call/put split only shown for the gamma lens
+  netLabel: string;          // "Net GEX" / "Net DEX" / …
   badge?: string;
   x: number;
   y: number;
@@ -54,10 +56,31 @@ interface StrikeLadderProps {
   strikes: StrikeRow[];
   spot: number | null;
   levels: Levels;
+  greek?: GreekLens;
   byExpiry?: GexPayload["by_expiry"] | null;
   selectedExpiry: string | null;
   onSelectExpiry: (exp: string | null) => void;
   lang: Lang;
+}
+
+/** Signed net exposure for a strike row under the active greek lens. */
+function rowNet(s: StrikeRow, greek: GreekLens): number {
+  switch (greek) {
+    case "delta": return s.delta_net ?? 0;
+    case "vanna": return s.vanna_net ?? 0;
+    case "charm": return s.charm_net ?? 0;
+    default:      return s.gamma_net;
+  }
+}
+
+/** "Net GEX" / "Net DEX" / "Net VEX" / "Net CHEX" for the active lens. */
+function netLensLabel(greek: GreekLens, t: ReturnType<typeof makeGexT>): string {
+  const acr =
+    greek === "delta" ? t("greekDelta")
+    : greek === "vanna" ? t("greekVanna")
+    : greek === "charm" ? t("greekCharm")
+    : t("greekGamma");
+  return `${t("ladderNetPrefix")} ${acr}`;
 }
 
 type BadgeTone = "cyan" | "red" | "amber" | "purple";
@@ -165,6 +188,7 @@ export function StrikeLadder({
   strikes,
   spot,
   levels,
+  greek = "gamma",
   byExpiry,
   selectedExpiry,
   onSelectExpiry,
@@ -182,9 +206,10 @@ export function StrikeLadder({
   const sorted = [...strikes].sort((a, b) => b.strike - a.strike);
   const step = estimateStep(strikes);
 
-  // Max |gamma_net| for bar scaling
+  // Max |net| for bar scaling — computed over the ACTIVE lens so each greek's bars
+  // fill their own dynamic range (delta/vanna/charm live on very different scales).
   const maxAbs = sorted.reduce(
-    (m, s) => Math.max(m, Math.abs(s.gamma_net)),
+    (m, s) => Math.max(m, Math.abs(rowNet(s, greek))),
     0.001
   );
 
@@ -364,20 +389,25 @@ export function StrikeLadder({
     return () => document.removeEventListener("mousedown", handler);
   }, [dropdownOpen]);
 
+  const netLabel = netLensLabel(greek, t);
+  const showBreakdown = greek === "gamma";
+
   const handleMouseEnter = useCallback(
     (s: StrikeRow, badge: string | undefined, e: React.MouseEvent) => {
       const rect = containerRef.current?.getBoundingClientRect();
       setTooltip({
         strike: s.strike,
-        gamma_net: s.gamma_net,
+        net: rowNet(s, greek),
         gamma_call: s.gamma_call,
         gamma_put: s.gamma_put,
+        showBreakdown,
+        netLabel,
         badge,
         x: e.clientX - (rect?.left ?? 0) + 14,
         y: e.clientY - (rect?.top ?? 0) - 10,
       });
     },
-    []
+    [greek, netLabel, showBreakdown]
   );
 
   const handleMouseLeave = useCallback(() => setTooltip(null), []);
@@ -510,8 +540,9 @@ export function StrikeLadder({
         {sorted.map((s, i) => {
           const badge = classifyBadge(s, levels, step);
           const isCurrent = s.strike === currentStrikeVal;
-          const isPos = s.gamma_net >= 0;
-          const pct = Math.abs(s.gamma_net) / maxAbs;
+          const net = rowNet(s, greek);
+          const isPos = net >= 0;
+          const pct = Math.abs(net) / maxAbs;
           const shaped = Math.pow(pct, 0.7);
           const barW = Math.max(shaped * 46, pct > 0 ? 2 : 0); // max 46% per half
           const isBig = pct > 0.35;
@@ -618,7 +649,7 @@ export function StrikeLadder({
                     color: isPos ? "var(--up)" : "var(--down)",
                   }}
                 >
-                  {fmtGexVal(s.gamma_net)}
+                  {fmtGexVal(net)}
                 </span>
               </div>
             </React.Fragment>
@@ -660,29 +691,35 @@ export function StrikeLadder({
             )}
           </div>
           <div style={TOOLTIP_ROW}>
-            <span style={TOOLTIP_KEY}>{t("tooltipNetGex")}</span>
+            <span style={TOOLTIP_KEY}>{tooltip.netLabel}</span>
             <span
               style={{
-                color: tooltip.gamma_net >= 0 ? "var(--brand-2)" : "var(--down)",
+                color: tooltip.net >= 0 ? "var(--brand-2)" : "var(--down)",
                 fontVariantNumeric: "tabular-nums",
               }}
             >
-              {fmtGexVal(tooltip.gamma_net)}
+              {fmtGexVal(tooltip.net)}
             </span>
           </div>
-          <div style={TOOLTIP_SEP} />
-          <div style={TOOLTIP_ROW}>
-            <span style={TOOLTIP_KEY}>{t("tooltipCallGex")}</span>
-            <span style={{ color: "var(--brand-2)", fontVariantNumeric: "tabular-nums" }}>
-              {fmtGexVal(tooltip.gamma_call)}
-            </span>
-          </div>
-          <div style={TOOLTIP_ROW}>
-            <span style={TOOLTIP_KEY}>{t("tooltipPutGex")}</span>
-            <span style={{ color: "var(--down)", fontVariantNumeric: "tabular-nums" }}>
-              {fmtGexVal(tooltip.gamma_put)}
-            </span>
-          </div>
+          {/* Call/put split is a gamma-only breakdown — the by_strike payload carries
+              gamma_call/gamma_put but no per-side split for delta/vanna/charm. */}
+          {tooltip.showBreakdown && (
+            <>
+              <div style={TOOLTIP_SEP} />
+              <div style={TOOLTIP_ROW}>
+                <span style={TOOLTIP_KEY}>{t("tooltipCallGex")}</span>
+                <span style={{ color: "var(--brand-2)", fontVariantNumeric: "tabular-nums" }}>
+                  {fmtGexVal(tooltip.gamma_call)}
+                </span>
+              </div>
+              <div style={TOOLTIP_ROW}>
+                <span style={TOOLTIP_KEY}>{t("tooltipPutGex")}</span>
+                <span style={{ color: "var(--down)", fontVariantNumeric: "tabular-nums" }}>
+                  {fmtGexVal(tooltip.gamma_put)}
+                </span>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
