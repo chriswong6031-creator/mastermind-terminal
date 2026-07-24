@@ -13,7 +13,7 @@
  */
 import { rateLimit, tooMany } from "@/lib/rateLimit";
 import { isValidF, loadFlowFresh } from "@/lib/flowSource";
-import { hasLiveOptions } from "@/lib/liveOptions";
+import { hasLiveOptions } from "@/lib/entitlement";
 
 // SSE must never be statically cached, and flowSource reads fixtures via fs → node runtime.
 export const dynamic = "force-dynamic";
