@@ -38,8 +38,10 @@ import { flowGet } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
 import { trackSearch } from "@/lib/searchTrack";
 import { makeGexT } from "./gexStrings";
+import type { GexDeskKey } from "./gexStrings";
 import { GexSummaryBar } from "./GexSummaryBar";
 import { StrikeLadder } from "./StrikeLadder";
+import { ExpiryBars } from "./ExpiryBars";
 import { MarketStateCard } from "./MarketStateCard";
 import type { GexStatePayload } from "./MarketStateCard";
 import { GexGuide } from "./GexGuide";
@@ -88,6 +90,21 @@ export interface GexPayload {
   }[];
 }
 
+/**
+ * Greek exposure lens. The GEX payload's `by_strike` rows already carry
+ * `delta_net`/`vanna_net`/`charm_net` alongside `gamma_net` (built upstream by the
+ * Cboe gex_engine) — this switches which one the ladder renders. Walls/flip are a
+ * gamma-only overlay, suppressed for the other lenses (see `ladderLevels` below).
+ */
+export type GreekLens = "gamma" | "delta" | "vanna" | "charm";
+
+const GREEK_LENSES: { key: GreekLens; labelKey: GexDeskKey; fullKey: GexDeskKey }[] = [
+  { key: "gamma", labelKey: "greekGamma", fullKey: "greekGammaFull" },
+  { key: "delta", labelKey: "greekDelta", fullKey: "greekDeltaFull" },
+  { key: "vanna", labelKey: "greekVanna", fullKey: "greekVannaFull" },
+  { key: "charm", labelKey: "greekCharm", fullKey: "greekCharmFull" },
+];
+
 // ─── Index ETF list (same blacklist as gex_spec §13) ─────────────────────────
 
 const INDEX_ETFS = new Set([
@@ -134,6 +151,8 @@ export function GexDeskView() {
   // ── State ────────────────────────────────────────────────────────────────────
   const [ticker, setTicker]           = useState("SPY");
   const [inputVal, setInputVal]       = useState("SPY");
+  const [greek, setGreek]             = useState<GreekLens>("gamma");
+  const [view, setView]               = useState<"strike" | "expiry">("strike");
   const [gexPayload, setGexPayload]   = useState<GexPayload | null>(null);
   const [statePayload, setStatePayload] = useState<GexStatePayload | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
@@ -256,6 +275,14 @@ export function GexDeskView() {
     hvl: gexPayload?.hvl ?? null,
   };
 
+  // Walls / flip are gamma-specific constructs. When a non-gamma lens is active,
+  // suppress them so the ladder never draws a gamma "WALL"/"SUPPORT"/"FLIP" tag over a
+  // DEX/VEX/CHEX view (that would be misleading — those levels aren't defined per-greek).
+  const ladderLevels =
+    greek === "gamma"
+      ? levels
+      : { callWall: null, putWall: null, gammaFlip: null, hvl: null };
+
   // Format spot for display
   const spotStr =
     spot != null
@@ -339,7 +366,27 @@ export function GexDeskView() {
           )}
         </div>
 
+        {/* Greek exposure lens — GEX / DEX / VEX / CHEX. Switches which per-strike
+            greek the ladder renders from the by_strike payload (data already present). */}
+        <div style={GREEK_GROUP} role="group" aria-label={t("greekLensAria")}>
+          {GREEK_LENSES.map((g) => (
+            <button
+              key={g.key}
+              className={`chip${greek === g.key ? " on" : ""}`}
+              style={GREEK_CHIP}
+              aria-pressed={greek === g.key}
+              aria-label={t(g.fullKey)}
+              onClick={() => setGreek(g.key)}
+            >
+              {t(g.labelKey)}
+            </button>
+          ))}
+        </div>
+
         <div style={CONTROLS_RIGHT}>
+          {greek !== "gamma" && (
+            <span style={LENS_NOTE}>{t("greekLensNote")}</span>
+          )}
           {asofStr && (
             <span style={asofStale ? { ...ASOF_BADGE, color: "var(--warn)" } : ASOF_BADGE}>
               {t("asOf")} {asofStr}
@@ -371,16 +418,43 @@ export function GexDeskView() {
         {/* ── Left pane: Guide + Ladder ─────────────────────────────────── */}
         <div style={LEFT_PANE}>
           <GexGuide lang={lang} />
+          {/* Exposure axis: By Strike (ladder) / By Expiration (bars). The by_expiry
+              series is already in the payload — previously used only as a filter. */}
+          <div style={VIEW_TOGGLE_ROW} role="group" aria-label={t("viewAria")}>
+            <button
+              className={`chip${view === "strike" ? " on" : ""}`}
+              style={VIEW_CHIP}
+              aria-pressed={view === "strike"}
+              onClick={() => setView("strike")}
+            >
+              {t("viewByStrike")}
+            </button>
+            <button
+              className={`chip${view === "expiry" ? " on" : ""}`}
+              style={VIEW_CHIP}
+              aria-pressed={view === "expiry"}
+              onClick={() => setView("expiry")}
+            >
+              {t("viewByExpiry")}
+            </button>
+          </div>
           {loading && !gexPayload ? (
             <div style={LADDER_LOADING}>{t("loadingGex")}</div>
-          ) : (
+          ) : view === "strike" ? (
             <StrikeLadder
               strikes={gexPayload?.by_strike ?? []}
               spot={spot}
-              levels={levels}
+              levels={ladderLevels}
+              greek={greek}
               byExpiry={gexPayload?.by_expiry ?? null}
               selectedExpiry={selectedExpiry}
               onSelectExpiry={setSelectedExpiry}
+              lang={lang}
+            />
+          ) : (
+            <ExpiryBars
+              byExpiry={gexPayload?.by_expiry ?? null}
+              greek={greek}
               lang={lang}
             />
           )}
@@ -447,6 +521,40 @@ const SPOT_DISPLAY: React.CSSProperties = {
   fontWeight: 700,
   color: "var(--text)",
   fontVariantNumeric: "tabular-nums",
+};
+
+const GREEK_GROUP: React.CSSProperties = {
+  display: "flex",
+  gap: 4,
+  alignItems: "center",
+};
+
+const GREEK_CHIP: React.CSSProperties = {
+  height: 24,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+};
+
+const LENS_NOTE: React.CSSProperties = {
+  fontSize: 10,
+  color: "var(--muted)",
+  fontStyle: "italic",
+};
+
+const VIEW_TOGGLE_ROW: React.CSSProperties = {
+  display: "flex",
+  gap: 4,
+  padding: "6px 8px",
+  borderBottom: "1px solid var(--line)",
+  flexShrink: 0,
+};
+
+const VIEW_CHIP: React.CSSProperties = {
+  height: 24,
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: "0.02em",
 };
 
 const CONTROLS_RIGHT: React.CSSProperties = {

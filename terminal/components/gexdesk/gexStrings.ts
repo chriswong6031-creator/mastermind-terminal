@@ -27,6 +27,31 @@ const GEX_LEX = {
   expiryAll:         ["ALL", "全部"],
   expiryChipDte:     ["DTE", "到期天数"],
 
+  // ── Greek exposure lens (GEX / DEX / VEX / CHEX switcher) ───────────────────
+  // Acronyms are identical EN/ZH; the aria + full names carry the translation.
+  greekLensAria:  ["Exposure greek", "敞口希腊值"],
+  greekGamma:     ["GEX", "GEX"],
+  greekDelta:     ["DEX", "DEX"],
+  greekVanna:     ["VEX", "VEX"],
+  greekCharm:     ["CHEX", "CHEX"],
+  greekGammaFull: ["Gamma exposure", "伽马敞口"],
+  greekDeltaFull: ["Delta exposure", "德尔塔敞口"],
+  greekVannaFull: ["Vanna exposure", "Vanna 敞口"],
+  greekCharmFull: ["Charm exposure", "Charm 敞口"],
+  // Walls/flip are gamma-only constructs — this note shows when a non-gamma lens is active.
+  greekLensNote:  ["walls & flip apply to gamma only", "墙与翻转仅适用于伽马"],
+  ladderNetPrefix:["Net", "净"],
+
+  // ── Exposure axis toggle: By Strike / By Expiration ────────────────────────
+  viewAria:       ["Exposure axis", "敞口维度"],
+  viewByStrike:   ["By Strike", "按行权价"],
+  viewByExpiry:   ["By Expiration", "按到期日"],
+  expiryLensNA:   [
+    "Vanna & Charm aren't provided per-expiration yet — gamma & delta only.",
+    "Vanna 与 Charm 暂未提供按到期日数据 — 仅伽马与德尔塔。",
+  ],
+  expiryNoData:   ["No expiration breakdown for this ticker yet.", "该品种暂无按到期日数据。"],
+
   // ── Summary bar labels ─────────────────────────────────────────────────────
   sumNetGex:      ["Net GEX", "净GEX"],
   sumCallWall:    ["Call Wall", "看涨墙"],
