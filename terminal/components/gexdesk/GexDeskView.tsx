@@ -41,6 +41,7 @@ import { makeGexT } from "./gexStrings";
 import type { GexDeskKey } from "./gexStrings";
 import { GexSummaryBar } from "./GexSummaryBar";
 import { StrikeLadder } from "./StrikeLadder";
+import { ExpiryBars } from "./ExpiryBars";
 import { MarketStateCard } from "./MarketStateCard";
 import type { GexStatePayload } from "./MarketStateCard";
 import { GexGuide } from "./GexGuide";
@@ -151,6 +152,7 @@ export function GexDeskView() {
   const [ticker, setTicker]           = useState("SPY");
   const [inputVal, setInputVal]       = useState("SPY");
   const [greek, setGreek]             = useState<GreekLens>("gamma");
+  const [view, setView]               = useState<"strike" | "expiry">("strike");
   const [gexPayload, setGexPayload]   = useState<GexPayload | null>(null);
   const [statePayload, setStatePayload] = useState<GexStatePayload | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
@@ -416,9 +418,29 @@ export function GexDeskView() {
         {/* ── Left pane: Guide + Ladder ─────────────────────────────────── */}
         <div style={LEFT_PANE}>
           <GexGuide lang={lang} />
+          {/* Exposure axis: By Strike (ladder) / By Expiration (bars). The by_expiry
+              series is already in the payload — previously used only as a filter. */}
+          <div style={VIEW_TOGGLE_ROW} role="group" aria-label={t("viewAria")}>
+            <button
+              className={`chip${view === "strike" ? " on" : ""}`}
+              style={VIEW_CHIP}
+              aria-pressed={view === "strike"}
+              onClick={() => setView("strike")}
+            >
+              {t("viewByStrike")}
+            </button>
+            <button
+              className={`chip${view === "expiry" ? " on" : ""}`}
+              style={VIEW_CHIP}
+              aria-pressed={view === "expiry"}
+              onClick={() => setView("expiry")}
+            >
+              {t("viewByExpiry")}
+            </button>
+          </div>
           {loading && !gexPayload ? (
             <div style={LADDER_LOADING}>{t("loadingGex")}</div>
-          ) : (
+          ) : view === "strike" ? (
             <StrikeLadder
               strikes={gexPayload?.by_strike ?? []}
               spot={spot}
@@ -427,6 +449,12 @@ export function GexDeskView() {
               byExpiry={gexPayload?.by_expiry ?? null}
               selectedExpiry={selectedExpiry}
               onSelectExpiry={setSelectedExpiry}
+              lang={lang}
+            />
+          ) : (
+            <ExpiryBars
+              byExpiry={gexPayload?.by_expiry ?? null}
+              greek={greek}
               lang={lang}
             />
           )}
@@ -512,6 +540,21 @@ const LENS_NOTE: React.CSSProperties = {
   fontSize: 10,
   color: "var(--muted)",
   fontStyle: "italic",
+};
+
+const VIEW_TOGGLE_ROW: React.CSSProperties = {
+  display: "flex",
+  gap: 4,
+  padding: "6px 8px",
+  borderBottom: "1px solid var(--line)",
+  flexShrink: 0,
+};
+
+const VIEW_CHIP: React.CSSProperties = {
+  height: 24,
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: "0.02em",
 };
 
 const CONTROLS_RIGHT: React.CSSProperties = {
