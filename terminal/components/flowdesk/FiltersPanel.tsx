@@ -117,7 +117,7 @@ const BADGE_OPTIONS: { key: BadgeFlag; label: string; zh: string; tip: string }[
     key: "cluster",
     label: "Cluster",
     zh: "集群",
-    tip: "Chain-heat campaign: ≥$3M accumulated same contract-day",
+    tip: "Repeat-root: multiple prints on the same underlying this session (repeat/multi-print flag — not a $ threshold)",
   },
   {
     key: "sweep",

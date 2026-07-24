@@ -94,6 +94,18 @@ const PRISM_LEX = {
     "$ gamma per 1% move — dealer-sign assumed",
     "每1%波动的美元伽马 — 假定做市商符号",
   ],
+  oiFormulaUnit: [
+    "call + put open interest — contracts (total, not signed)",
+    "认购+认沽持仓量 — 张（合计，非净额）",
+  ],
+  volFormulaUnit: [
+    "call + put volume today — contracts (total)",
+    "今日认购+认沽成交量 — 张（合计）",
+  ],
+  doiFormulaUnit: [
+    "day-over-day Δ open interest — signed, per cell",
+    "持仓量逐日变化 — 有符号，每格",
+  ],
 
   // ── Per-lens unit descriptions ─────────────────────────────────────────────
   gexUnitDesc: [
@@ -101,12 +113,12 @@ const PRISM_LEX = {
     "每1%现价波动的美元伽马敞口。符号遵循标准做市商惯例（认购为正，认沽为负）——这是假设而非实测事实。数量级才是可靠读数。",
   ],
   oiUnitDesc: [
-    "Net open interest at this cell, calls minus puts, in contracts. Positive = more calls parked; negative = more puts.",
-    "本格净持仓量（认购减认沽），单位：张。正值 = 认购更多；负值 = 认沽更多。",
+    "Total open interest at this cell — call + put, in contracts. Magnitude only; not call/put-signed.",
+    "本格总持仓量 — 认购+认沽，单位：张。仅数量级，不区分认购/认沽方向。",
   ],
   volUnitDesc: [
-    "Net traded volume today at this cell, calls minus puts, in contracts. Fresh flow rather than standing positions.",
-    "本格今日净成交量（认购减认沽），单位：张。反映当日新增流量而非存量持仓。",
+    "Total traded volume today at this cell — call + put, in contracts. Fresh flow rather than standing positions.",
+    "本格今日总成交量 — 认购+认沽，单位：张。反映当日新增流量而非存量持仓。",
   ],
   doiUnitDesc: [
     "PIT: OI[t-1] − OI[t-2] — day-over-day change in open interest per cell. Positive = contracts added; negative = contracts removed.",

@@ -661,7 +661,12 @@ export function MatrixGrid({
             />
           )}
           <div style={TIP_SEP} />
-          <div style={TIP_FORMULA}>{t("gexFormulaUnit")}</div>
+          <div style={TIP_FORMULA}>{t(
+            activeLens === "GEX" ? "gexFormulaUnit"
+            : activeLens === "OI" ? "oiFormulaUnit"
+            : activeLens === "VOL" ? "volFormulaUnit"
+            : "doiFormulaUnit"
+          )}</div>
         </div>
       )}
     </div>
