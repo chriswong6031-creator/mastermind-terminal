@@ -7,6 +7,7 @@ import { useMemo } from "react";
 import { pick } from "../../lib/finFormat";
 import type { Lang } from "../../lib/i18n";
 import { FD } from "../../lib/flowdeskStrings";
+import { Tip } from "../ui/Tip";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -87,9 +88,15 @@ export function RadarStrip({ feed, lang }: RadarStripProps) {
       {/* Column headers */}
       <div className="obs-fd-radar-col-head">
         <span style={{ flex: "0 0 44px" }}>{pick(zh, "Ticker", "标的")}</span>
-        <span style={{ flex: "0 0 38px", textAlign: "right" }}>z</span>
-        <span style={{ flex: 1, textAlign: "right" }}>{pick(zh, "Gross Prem", "总权利金")}</span>
-        <span style={{ flex: "0 0 36px", textAlign: "right" }}>{pick(zh, "C%", "认购%")}</span>
+        <Tip label={pick(zh, "Premium z-score vs the 252-session baseline — higher = more unusual", "相对252个交易日基线的权利金 z 值 — 越高越异常")} side="top" size="card">
+          <span style={{ flex: "0 0 38px", textAlign: "right", cursor: "help" }}>z</span>
+        </Tip>
+        <Tip label={pick(zh, "Gross options premium traded today (calls + puts)", "今日期权总权利金（认购+认沽）")} side="top" size="card">
+          <span style={{ flex: 1, textAlign: "right", cursor: "help" }}>{pick(zh, "Gross Prem", "总权利金")}</span>
+        </Tip>
+        <Tip label={pick(zh, "Call premium as a share of total (call + put) premium", "认购权利金占总权利金（认购+认沽）的比例")} side="top" size="card">
+          <span style={{ flex: "0 0 36px", textAlign: "right", cursor: "help" }}>{pick(zh, "C%", "认购%")}</span>
+        </Tip>
       </div>
 
       {/* Rows */}
