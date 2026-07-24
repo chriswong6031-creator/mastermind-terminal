@@ -337,6 +337,27 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Brief mode-change toast
   const [dtmToast, setDtmToast] = useState<string | null>(null);
   const dtmToastTimer = useRef<any>(null);
+
+  // ── Free-tier gate ──────────────────────────────────────────────────────────
+  // Anonymous visitors get MAX_ANON_IND active indicators and no watchlist; a
+  // free account unlocks unlimited indicators + the watchlist. One toast nudge
+  // with a Sign-up CTA (same /login idiom as onAuthRequired below).
+  const MAX_ANON_IND = 3;
+  const [gateNudge, setGateNudge] = useState<string | null>(null);
+  const gateNudgeTimer = useRef<any>(null);
+  const showGateNudge = useCallback((msg: string) => {
+    setGateNudge(msg);
+    clearTimeout(gateNudgeTimer.current);
+    gateNudgeTimer.current = setTimeout(() => setGateNudge(null), 5000);
+  }, []);
+  // Enforce the indicator cap in ONE place: every mutation path (default set,
+  // localStorage restore, templates, DTM presets, layouts, commands, undo) flows
+  // through `inds`, so clamp here instead of guarding ~10 setInds call sites.
+  // Silent — the manual add path (toggleInd) shows the nudge; bulk/load just cap.
+  useEffect(() => {
+    if (loggedIn || inds.size <= MAX_ANON_IND) return;
+    setInds((s) => new Set([...s].slice(0, MAX_ANON_IND)));
+  }, [inds, loggedIn]);
   // pre-draw style chosen BEFORE drawing (color/width/dash) — applied to each new line/arrow/box/HV drawing
   const [drawStyle, setDrawStyle] = useState<{ color: string; width: number; dash: "solid" | "dashed" | "dotted" }>({ color: "#4d82ff", width: 1.5, dash: "solid" });
   const [compare, setCompare] = useState<string[]>([]);
@@ -1045,6 +1066,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // ────────────────────────────────────────────────────────────────────────────
 
   async function addSymbol(sym: string) {
+    if (!loggedIn) { showGateNudge(t("gateWatchlist")); return; }
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
     if (!inWl.has(sym)) {
       setWl((w: any[]) => [...w, { symbol: sym, section: sec }]);
@@ -1071,6 +1093,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Add a symbol to a NAMED list (search-hub multi-list picker). Mirrors addSymbol's dedupe +
   // Default-only server sync, but targets an explicit list instead of the active one.
   function addToList(sym: string, listName: string) {
+    if (!loggedIn) { showGateNudge(t("gateWatchlist")); return; }
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
     setLists((l) => {
       const cur = l[listName] || [];
@@ -1097,7 +1120,12 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     setLists((l) => { const n = { ...l }; delete n[name]; return n; });
     if (activeList === name) setActiveList(Object.keys(lists).filter((k) => k !== name)[0] || "Default");
   }
-  const toggleInd = (k: string) => setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const toggleInd = (k: string) => {
+    // Anon cap: toggling OFF is always fine; block ADDING past the cap + nudge.
+    // Checked OUTSIDE the setInds updater (no setState side-effect in a reducer).
+    if (!loggedIn && !inds.has(k) && inds.size >= MAX_ANON_IND) { showGateNudge(t("gateIndCap")); return; }
+    setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  };
   const toggleCompare = useCallback((s: string, mode: CmpMode = "percent") => {
     if (s === active) return;
     if (compare.includes(s)) {
@@ -2045,6 +2073,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       {dtmToast && (
         <div className="undo-toast" style={{ position: "fixed", bottom: 56, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 50, display: "flex", alignItems: "center", gap: 10 }}>
           {dtmToast}
+        </div>
+      )}
+
+      {/* Free-tier register nudge — indicator cap / watchlist (anon only) */}
+      {gateNudge && (
+        <div className="undo-toast" role="status" style={{ position: "fixed", bottom: 96, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 51, display: "flex", alignItems: "center", gap: 12 }}>
+          <span>{gateNudge}</span>
+          <a href="/login" style={{ color: "#4d82ff", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>{t("gateSignupCta")}</a>
         </div>
       )}
 

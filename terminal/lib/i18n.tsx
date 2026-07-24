@@ -277,6 +277,10 @@ const LEX: Record<string, [string, string]> = {
   renameWatchlistPrompt: ["Rename watchlist", "重命名自选列表"],
   deleteWatchlist: ["Delete list", "删除列表"],
   deleteWatchlistConfirm: ["Delete this watchlist?", "确定删除这个自选列表？"],
+  // Free-tier gate nudges (anonymous → free-account conversion)
+  gateIndCap: ["Free plan: 3 indicators max.", "免费版最多 3 个指标"],
+  gateWatchlist: ["Create a free account to build a watchlist.", "注册免费账户即可创建自选列表"],
+  gateSignupCta: ["Sign up free →", "免费注册 →"],
   emptyWatchlist: ["No symbols yet — use + to add.", "暂无标的 —— 点击 + 添加。"],
   // compare
   compareTitle: ["Compare — overlay symbols", "对比 —— 叠加标的"],
