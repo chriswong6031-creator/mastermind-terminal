@@ -1312,7 +1312,7 @@ const GexStrikeLadder = memo(function GexStrikeLadder({ rows, greek, spotRef, ga
                 )}
                 {/* Strike label */}
                 <text x={MID + 30} y={y + ROW_H / 2 + 2} textAnchor="middle"
-                  fill="var(--text-2)" fontSize={11} fontWeight={row.strike === Math.round(spotRef) ? 700 : 400}>
+                  fill="var(--text-2)" fontSize={11} fontWeight={row.strike === spotStrike ? 700 : 400}>
                   {row.strike}
                 </text>
                 {/* Spot ref line */}
