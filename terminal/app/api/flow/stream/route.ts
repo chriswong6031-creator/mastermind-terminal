@@ -13,7 +13,7 @@
  */
 import { rateLimit, tooMany } from "@/lib/rateLimit";
 import { isValidF, loadFlowFresh } from "@/lib/flowSource";
-import { getUserTier } from "@/lib/supabase/getUserTier";
+import { hasLiveOptions } from "@/lib/liveOptions";
 
 // SSE must never be statically cached, and flowSource reads fixtures via fs → node runtime.
 export const dynamic = "force-dynamic";
@@ -42,11 +42,11 @@ export async function GET(req: Request): Promise<Response> {
   const rl = rateLimit(req, { name: "flow-stream" });
   if (!rl.ok) return tooMany(rl);
 
-  // Options data is a PAID feature — gate the stream at connection open
-  // (server-verified), mirroring GET /api/flow. Fixture mode (dev/CI) is exempt.
-  if (process.env.FLOW_FIXTURE !== "1") {
-    const { isPro } = await getUserTier();
-    if (!isPro) return new Response("pro_required", { status: 403 });
+  // Options data is a PAID feature — gate the stream at connection open against
+  // the macro-api entitlement (terminal_live_options via /api/me), not
+  // profiles.is_pro. Fixture mode (dev/CI) is exempt.
+  if (process.env.FLOW_FIXTURE !== "1" && !(await hasLiveOptions())) {
+    return new Response("pro_required", { status: 403 });
   }
 
   const url = new URL(req.url);
