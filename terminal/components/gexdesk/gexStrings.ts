@@ -18,8 +18,8 @@ import type { Lang } from "@/lib/i18n";
 
 const GEX_LEX = {
   // ── Tab / surface header ───────────────────────────────────────────────────
-  gexTitle:        ["GEX Desk", "敞口台"],
-  gexSubtitle:     ["Dealer gamma levels map", "做市商伽马水平图"],
+  gexTitle:        ["Exposure Desk", "敞口台"],
+  gexSubtitle:     ["Dealer greek exposure & levels", "做市商希腊值敞口与水平"],
 
   // ── Controls ───────────────────────────────────────────────────────────────
   tickerInputLabel:  ["Ticker", "代码"],

@@ -474,7 +474,7 @@ const LEX: Record<string, [string, string]> = {
   tabTickers: ["Tickers", "个股"],
   tabScreener: ["Screener", "筛选"],
   tabVol: ["Vol", "波动率"],
-  tabGex: ["GEX", "敞口"],
+  tabGex: ["Exposure", "敞口"],
   tabPrism: ["PRISM", "矩阵"],
   tabProphet: ["Prophet", "先知"],
   // ─── Wave-2 workspace sub-tab labels (WorkspaceTabs registries) ───────────────
@@ -489,7 +489,7 @@ const LEX: Record<string, [string, string]> = {
   wtTide: ["Tide", "资金潮"],
   wtTickers: ["Tickers", "个股"],
   wtOptionsScreener: ["Options Screener", "期权筛选器"],
-  wtGex: ["GEX", "敞口"],
+  wtGex: ["Exposure", "敞口"],
   wtPrism: ["PRISM", "矩阵"],
   wtProphet: ["Prophet", "先知"],
   wtFundamentals: ["Fundamentals", "基本面"],
