@@ -103,6 +103,13 @@ const GEX_LEX = {
   stateNetGamma:      ["Net γ", "净伽马"],
   stateGammaPos:      ["POSITIVE", "正值"],
   stateGammaNeg:      ["NEGATIVE", "负值"],
+  stateDistToFlip:    ["Dist to flip", "距翻转"],
+  stateAboveFlip:     ["above", "上方"],
+  stateBelowFlip:     ["below", "下方"],
+  stateDistToFlipTip: [
+    "Spot's distance from the gamma-flip level, as % of spot. Above the flip = long-gamma (dealers dampen moves — pinning / mean-reversion); below = short-gamma (dealers amplify — trend / cascade risk). The smaller the number, the closer to a regime change.",
+    "现价距伽马翻转位的距离（占现价百分比）。翻转位上方=多头伽马（做市商抑制波动——锁定/均值回归）；下方=空头伽马（做市商放大波动——趋势/瀑布风险）。数值越小，越接近状态切换。",
+  ],
 
   // ── Regime names + one-line honest structural theses ──────────────────────
   // These are structural descriptions only — not trade forecasts.
