@@ -11,6 +11,7 @@ import { getTutStr } from "@/lib/tutorial/tutorialStrings";
 import { abbrevSector } from "@/lib/sectorAbbrev";
 import { windowGexRows } from "@/lib/windowGexRows.mjs";
 import { flowGet, flowInvalidate, flowPrefetch } from "@/lib/flowClientCache";
+import { useFlowStream } from "@/lib/flowStream";
 import { trackSearch } from "@/lib/searchTrack";
 import {
   createChart, LineSeries, AreaSeries,
@@ -1539,23 +1540,25 @@ export default function OptionsHubView({
   }, []);
 
   // ── Tide fetch ────────────────────────────────────────────────────────────
-  const [tideData, setTideData] = useState<TidePayload | null>(null);
+  // Tide (intraday NCP/NPP + sector tide + top-net-impact) streams over the SSE spine
+  // while the Tide tab is open. The hook keeps the last payload after you leave the tab
+  // (so the cross-tab top-net-impact memos below still resolve) and reconnects on
+  // re-entry. This also fixes a latent bug: the old 45s poll never actually refreshed
+  // tide — fetchTide short-circuited on `if (tideData) return` after the first load.
+  const { data: tideData } = useFlowStream<TidePayload>(
+    activeTab === "tide" ? "tide" : null,
+  );
   const [dteTide, setDteTide] = useState<DteTidePayload | null>(null);
-  const [tideLoading, setTideLoading] = useState(false);
+  const tideLoading = activeTab === "tide" && !tideData;
 
-  const fetchTide = useCallback(async () => {
-    if (tideData) return; // already loaded
-    setTideLoading(true);
+  // DTE-tide is a secondary sub-view — fetch once when the Tide tab first opens.
+  const fetchDte = useCallback(async () => {
+    if (dteTide) return;
     try {
-      const [td, dd] = await Promise.all([
-        flowGet("tide"),
-        flowGet("dte"),
-      ]);
-      if (td) setTideData(td as TidePayload);
+      const dd = await flowGet("dte");
       if (dd) setDteTide(dd as DteTidePayload);
-    } catch {}
-    setTideLoading(false);
-  }, [tideData]);
+    } catch { /* secondary view — fail soft */ }
+  }, [dteTide]);
 
   // ── Ticker drill ─────────────────────────────────────────────────────────
   const [tickerSearch, setTickerSearch] = useState("");
@@ -1637,14 +1640,8 @@ export default function OptionsHubView({
   // previously fetched once and went stale). Poll stops when leaving the tab.
   useEffect(() => {
     if (activeTab !== "tide") return;
-    fetchTide();
-    const id = setInterval(() => {
-      flowInvalidate("tide");
-      flowInvalidate("dte");
-      fetchTide();
-    }, 45_000);
-    return () => clearInterval(id);
-  }, [activeTab, fetchTide]);
+    void fetchDte();
+  }, [activeTab, fetchDte]);
 
   // Lazy-prefetch manifest only when Prophet tab activates (manifest is ~1.9MB —
   // prefetching it on every page mount wastes bandwidth for users who never visit Prophet).
