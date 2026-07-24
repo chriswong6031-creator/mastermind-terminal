@@ -35,6 +35,7 @@ import React, {
   useState,
 } from "react";
 import { flowGet } from "@/lib/flowClientCache";
+import { useFlowStream } from "@/lib/flowStream";
 import { useLang } from "@/lib/i18n";
 import { trackSearch } from "@/lib/searchTrack";
 import { makeGexT } from "./gexStrings";
@@ -153,38 +154,27 @@ export function GexDeskView() {
   const [inputVal, setInputVal]       = useState("SPY");
   const [greek, setGreek]             = useState<GreekLens>("gamma");
   const [view, setView]               = useState<"strike" | "expiry">("strike");
-  const [gexPayload, setGexPayload]   = useState<GexPayload | null>(null);
   const [statePayload, setStatePayload] = useState<GexStatePayload | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
-  const [loading, setLoading]         = useState(false);
-  const [error, setError]             = useState(false);
+
+  // GEX payload now arrives over the SSE live spine (push) instead of a 60s poll;
+  // the hook falls back to flowGet polling if SSE is unavailable, so this is never
+  // worse than before. NOTE: gex data is EOD-nightly — the live connection is a
+  // transport upgrade, not live data, so there is deliberately NO "LIVE" badge here;
+  // the asof staleness chip remains the honest source of truth on freshness.
+  const { data: gexRaw, error: gexErr } =
+    useFlowStream<Record<string, unknown>>(`gex:${ticker}`);
+  // Fixture returns the payload directly; prod may key it by root — unwrap either shape.
+  const gexPayload: GexPayload | null = gexRaw
+    ? (((gexRaw as Record<string, unknown>)[ticker] as GexPayload | undefined) ??
+       (gexRaw as unknown as GexPayload))
+    : null;
+  const loading = gexRaw === null && !gexErr;
+  const error = gexErr && gexRaw === null;
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Fetch functions ───────────────────────────────────────────────────────────
-
-  const fetchGex = useCallback(
-    async (root: string) => {
-      if (document.visibilityState === "hidden") return;
-      const data = await safeFetch<{ [key: string]: GexPayload }>(
-        `/api/flow?f=gex:${root}`
-      );
-      if (data) {
-        // The fixture returns a dict keyed by root; server may return either shape
-        const payload: GexPayload | null =
-          data[root] ?? (data as unknown as GexPayload) ?? null;
-        if (payload) {
-          setGexPayload(payload);
-          setError(false);
-        } else {
-          setError(true);
-        }
-      } else {
-        setError(true);
-      }
-    },
-    []
-  );
 
   const fetchGexState = useCallback(async (root: string) => {
     // FUTURE endpoint — handle gracefully when absent (404 / null)
@@ -194,39 +184,20 @@ export function GexDeskView() {
     setStatePayload(data);
   }, []);
 
-  // ── Load on ticker change ─────────────────────────────────────────────────────
-
-  const loadTicker = useCallback(
-    async (root: string) => {
-      setLoading(true);
-      setGexPayload(null);
-      setStatePayload(null);
-      setSelectedExpiry(null);
-      setError(false);
-      await Promise.all([fetchGex(root), fetchGexState(root)]);
-      setLoading(false);
-    },
-    [fetchGex, fetchGexState]
-  );
-
-  // ── Polling ───────────────────────────────────────────────────────────────────
+  // ── GEX-state feed (market-state card) ─────────────────────────────────────────
+  // The gex ladder payload rides the SSE hook above; this separate low-churn feed
+  // (gexstate) stays on the light poll and resets on ticker change.
 
   useEffect(() => {
-    void loadTicker(ticker);
+    setStatePayload(null);
+    setSelectedExpiry(null);
+    void fetchGexState(ticker);
 
-    pollRef.current = setInterval(() => {
-      void fetchGex(ticker);
-      void fetchGexState(ticker);
-    }, GEX_POLL_MS);
+    pollRef.current = setInterval(() => void fetchGexState(ticker), GEX_POLL_MS);
 
-    // Hidden-tab deferral: fetches skip while document is hidden (harness/
-    // backgrounded mounts). Load immediately when the tab becomes visible so
-    // the ladder never sits empty waiting for the next poll tick.
+    // Hidden-tab deferral: refresh on becoming visible so the card isn't stale.
     const onVis = () => {
-      if (document.visibilityState === "visible") {
-        void fetchGex(ticker);
-        void fetchGexState(ticker);
-      }
+      if (document.visibilityState === "visible") void fetchGexState(ticker);
     };
     document.addEventListener("visibilitychange", onVis);
 

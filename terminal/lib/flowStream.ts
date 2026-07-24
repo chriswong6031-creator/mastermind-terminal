@@ -34,6 +34,12 @@ export function useFlowStream<T = unknown>(
 
   useEffect(() => {
     if (!f) return;
+    // New subscription key — clear the previous feed's data so a consumer never
+    // flashes stale content (e.g. the old ticker's ladder) while the first snapshot
+    // for the new key is in flight.
+    setData(null);
+    setLive(false);
+    setError(false);
     let cancelled = false;
     let es: EventSource | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
