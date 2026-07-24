@@ -68,6 +68,7 @@ export interface GexStatePayload {
   // Extended fields from richer fixture (tolerated-optional)
   net_gex_bn?: number | null;
   gamma_flip?: number | null;
+  dist_to_flip_pct?: number | null;   // spot's % distance from the flip level (signed: + = spot above flip)
   call_wall?: number | null;
   put_wall?: number | null;
   magnet?: number | null;
@@ -379,6 +380,14 @@ export function MarketStateCard({
 
   const stabilityPct = Math.round(statePayload.stability_pct ?? 0);
 
+  // Distance from spot to the gamma-flip level, % of spot — how close we are to a
+  // long-γ ↔ short-γ regime change (the most actionable dealer-positioning read).
+  // Prefer the published field; else derive it. Signed: + = spot above flip.
+  const distToFlipPct = statePayload.dist_to_flip_pct
+    ?? (spotRef != null && flipLevel != null && spotRef !== 0
+        ? ((spotRef - flipLevel) / spotRef) * 100
+        : null);
+
   const pin = statePayload.pin_target ?? (statePayload.magnet != null
     ? { strike: statePayload.magnet, probability: statePayload.pin_probability != null ? Math.round(statePayload.pin_probability * 100) : 0 }
     : null);
@@ -453,6 +462,17 @@ export function MarketStateCard({
               {stabilityPct}%
             </span>
           </div>
+          {distToFlipPct != null && (
+            <div style={STAB_STAT} aria-label={t("stateDistToFlipTip")}>
+              <span className="obs-lbl">{t("stateDistToFlip")}</span>
+              <span className="num" style={{ fontSize: 11, color: "var(--text-2)", fontWeight: 700 }}>
+                {Math.abs(distToFlipPct).toFixed(2)}%{" "}
+                <span style={{ color: "var(--muted)", fontWeight: 400 }}>
+                  {distToFlipPct >= 0 ? t("stateAboveFlip") : t("stateBelowFlip")}
+                </span>
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
