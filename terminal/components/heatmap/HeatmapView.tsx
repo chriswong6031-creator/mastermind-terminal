@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLang } from "@/lib/i18n";
 import { trackSearch } from "@/lib/searchTrack";
 import { makeHeatmapT } from "@/lib/heatmapStrings";
+import { Tip } from "@/components/ui/Tip";
 import { Treemap, heatSwatches } from "./Treemap";
 import { HeatmapTable } from "./HeatmapTable";
 import { DetailPanel } from "./DetailPanel";
@@ -475,7 +476,9 @@ export function HeatmapView() {
           <>
             <div style={BREADTH_SEP} />
             <div style={BREADTH_ITEM}>
-              <span className="obs-lbl" aria-label={t("bullFlowTip")} style={{ textTransform: "none", letterSpacing: 0, fontSize: 10 }}>{t("bullFlow")}</span>
+              <Tip label={t("bullFlowTip")} side="top" size="card">
+                <span className="obs-lbl" style={{ textTransform: "none", letterSpacing: 0, fontSize: 10, cursor: "help" }}>{t("bullFlow")}</span>
+              </Tip>
               <span className="num" style={{ marginLeft: 4 }}>
                 {Math.round(breadth.callSharePct * 100)}%
               </span>

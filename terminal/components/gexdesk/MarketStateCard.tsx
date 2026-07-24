@@ -33,6 +33,7 @@ import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload } from "./GexDeskView";
 import { RingGauge } from "@/components/ui/RingGauge";
+import { Tip } from "@/components/ui/Tip";
 
 // ─── Schema (gexstate/v1) ────────────────────────────────────────────────────
 
@@ -463,8 +464,10 @@ export function MarketStateCard({
             </span>
           </div>
           {distToFlipPct != null && (
-            <div style={STAB_STAT} aria-label={t("stateDistToFlipTip")}>
-              <span className="obs-lbl">{t("stateDistToFlip")}</span>
+            <div style={STAB_STAT}>
+              <Tip label={t("stateDistToFlipTip")} side="left" size="card">
+                <span className="obs-lbl" style={{ cursor: "help" }}>{t("stateDistToFlip")}</span>
+              </Tip>
               <span className="num" style={{ fontSize: 11, color: "var(--text-2)", fontWeight: 700 }}>
                 {Math.abs(distToFlipPct).toFixed(2)}%{" "}
                 <span style={{ color: "var(--muted)", fontWeight: 400 }}>
