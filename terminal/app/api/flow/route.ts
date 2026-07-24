@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { rateLimit, tooMany } from "@/lib/rateLimit";
-import { getUserTier } from "@/lib/supabase/getUserTier";
+import { hasLiveOptions } from "@/lib/liveOptions";
 // Shared server-side data path (fixture / backend→R2 / server-side flowScore).
 // The proprietary flow_score_v1 model stays server-only inside flowSource — see SECURITY.md.
 import {
@@ -22,17 +22,15 @@ const INFLIGHT: Record<string, Promise<Record<string, unknown> | null>> = {};
 export async function GET(req: Request): Promise<Response> {
   const rl = rateLimit(req, { name: "flow" });
   if (!rl.ok) return tooMany(rl);
-  // Options data is a PAID feature — enforced SERVER-SIDE (not just hidden in the
-  // UI), mirroring the Pine-script save gate. Dev fixture mode (fake data) is
-  // exempt so local dev / CI needs no Pro user.
-  if (process.env.FLOW_FIXTURE !== "1") {
-    const { isPro } = await getUserTier();
-    if (!isPro) {
-      return NextResponse.json(
-        { error: "pro_required" },
-        { status: 403, headers: { "Cache-Control": "no-store" } }
-      );
-    }
+  // Options data is a PAID feature — enforced SERVER-SIDE against the macro-api
+  // entitlement authority: the `terminal_live_options` feature from /api/me
+  // (config/plans.yml — insider + pro, incl. trial), NOT profiles.is_pro (a UI
+  // hint that can drift; see AGENTS.md). Dev fixture mode is exempt.
+  if (process.env.FLOW_FIXTURE !== "1" && !(await hasLiveOptions())) {
+    return NextResponse.json(
+      { error: "pro_required" },
+      { status: 403, headers: { "Cache-Control": "no-store" } }
+    );
   }
   const url = new URL(req.url);
   const f = url.searchParams.get("f") ?? "feed";
