@@ -46,6 +46,16 @@ file are silently skipped (no source file in stockdata/).
      bare symbols / ``--only SYM ...`` select explicitly; no args still falls back to
      the curated DEFAULT list (VPS nightly behavior unchanged).
 
+factordata local-source (2026-07-24):
+  9. The tech block (tech_lab.json + tech_events/<SYM>.json) no longer depends on
+     anonymous public HTTP.  Macro PR #3393 regwalled /factordata/* and had to carve
+     out exactly those two paths for this script; the source is now resolved local-first
+     (FACTORDATA_BASE path or file:// URL → $MACRO_REPO/site/factordata →
+     ~/.mm-factordata → sibling checkout) with the public HTTPS base only as the
+     legacy fallback — see the resolution-order comment at _FACTORDATA_HTTP_DEFAULT.
+     refresh_fund.sh step 9b keeps ~/.mm-factordata fresh via an authenticated rsync
+     from the droplet's /opt/macro checkout.
+
 Usage:
     python ingest/pull_macro_intel.py [SYM ...]        # explicit symbols (default: DEFAULT list)
     python ingest/pull_macro_intel.py --only AAPL      # same as positional
@@ -60,6 +70,7 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -103,15 +114,34 @@ _R2_WORKERS  = 16
 _R2_META     = ".r2_sync.json"   # local stamp: {"etag": "...", "count": N}
 
 # ── factordata (tech lab) ──────────────────────────────────────────────────────
-# tech_lab.json — per-signal descriptive profiles (64 signals; fetched once per run).
-# tech_events/<SYM>.json — per-symbol fire dates (only available for covered symbols).
-# Both are on the public macro site; 404 / timeout → omit the tech block entirely.
-_FACTORDATA_BASE = os.environ.get(
-    "FACTORDATA_BASE", "https://mastermind-x.com/factordata"
-)
+# tech_lab.json — per-signal descriptive profiles (~71 signals; read once per run).
+# tech_events/<SYM>.json — per-symbol fire dates (only present for covered symbols).
+#
+# These are PAID signal payloads: macro PR #3393 gated /factordata/* behind the
+# registration wall and had to carve out exactly these two paths for this script's
+# anonymous fetches.  To let that carve-out close, prefer a LOCAL macro surface
+# and keep anonymous HTTPS only as the legacy fallback.  Resolution order
+# (first usable wins; "usable" = <dir>/tech_lab.json exists):
+#   1. FACTORDATA_BASE env — http(s):// URL, file:// URL, or filesystem path.
+#      A local value without tech_lab.json falls back to the HTTPS default.
+#   2. $MACRO_REPO/site/factordata — the VPS nightly (terminal-refresh.sh exports
+#      MACRO_REPO=/opt/macro, the droplet's own 3-min-pulled macro checkout) and
+#      any lane driven by ingest/refresh_fund.sh (which exports MACRO_REPO).
+#   3. ~/.mm-factordata — the Mac lanes: refresh_fund.sh rsyncs the two payload
+#      sets down from the VPS into this cache each run.  $HOME because launchd
+#      cannot read ~/Documents (macOS TCC — see ops/nightly_fund.sh header).
+#   4. <sibling>/Macro Dashboard/site/factordata — dev checkouts.
+#   5. https://mastermind-x.com/factordata — the legacy public carve-out.
+# A chosen local dir is AUTHORITATIVE: a missing tech_events/<SYM>.json means
+# "symbol not covered" (the old HTTP 404) and is NOT retried over HTTPS — an
+# --all run must never spray ~1,700 requests at the (closing) public endpoint.
+_FACTORDATA_HTTP_DEFAULT = "https://mastermind-x.com/factordata"
+_FACTORDATA_HOME_CACHE   = Path.home() / ".mm-factordata"
+_FACTORDATA_SIBLING      = ROOT.parent / "Macro Dashboard" / "site" / "factordata"
 _FACTORDATA_UA      = "mastermind-feed/1.0"
 _FACTORDATA_TIMEOUT = 20   # seconds per request — tech_lab.json is ~20–80KB
-_TECH_LAB_LOG_ONCE: set = set()  # suppress repeated 404/error log per URL
+_TECH_LAB_LOG_ONCE: set = set()  # suppress repeated 404/error log per target
+_FACTORDATA_SOURCE: Path | str | None = None  # memoized by _factordata_source()
 
 log = logging.getLogger(__name__)
 
@@ -554,13 +584,92 @@ def build_intel(sym: str, src: dict, today: date | None = None) -> dict:
 
 # ── tech block helpers ─────────────────────────────────────────────────────────
 
-def _factordata_fetch(path: str) -> dict | None:
-    """GET {_FACTORDATA_BASE}/{path} → parsed JSON dict, or None on 404/error.
+def _as_local_path(base: str) -> Path | None:
+    """A FACTORDATA_BASE value → Path when it denotes a local directory, else None.
 
-    On 404 or network error, logs once per URL and returns None.  Callers treat
-    None as "not available" and omit the block rather than crashing.
+    Accepts bare filesystem paths (absolute, relative, or ~-prefixed) and
+    file:// URLs.  http(s):// values return None (HTTP mode).
     """
-    url = f"{_FACTORDATA_BASE}/{path}"
+    if base.startswith("file://"):
+        return Path(urllib.request.url2pathname(urllib.parse.urlparse(base).path))
+    if base.startswith(("http://", "https://")):
+        return None
+    return Path(base).expanduser()
+
+
+def _has_tech_lab(d: Path) -> bool:
+    """True when *d* is a usable factordata dir (tech_lab.json present).
+
+    Swallows OSError: a TCC-denied candidate (launchd reading ~/Documents raises
+    EPERM, which pathlib propagates) must mean "keep looking", not a crash.
+    """
+    try:
+        return (d / "tech_lab.json").is_file()
+    except OSError:
+        return False
+
+
+def _factordata_source() -> Path | str:
+    """Resolve the factordata source once per run (memoized).
+
+    Returns a Path (local authoritative dir) or an http(s) base-URL string.
+    See the resolution-order comment at the _FACTORDATA_* constants above.
+    """
+    global _FACTORDATA_SOURCE
+    if _FACTORDATA_SOURCE is not None:
+        return _FACTORDATA_SOURCE
+
+    env = os.environ.get("FACTORDATA_BASE", "").strip()
+    if env:
+        local = _as_local_path(env)
+        if local is None:
+            _FACTORDATA_SOURCE = env.rstrip("/")
+            return _FACTORDATA_SOURCE
+        if _has_tech_lab(local):
+            _FACTORDATA_SOURCE = local
+            return _FACTORDATA_SOURCE
+        log.warning(
+            "FACTORDATA_BASE=%s has no tech_lab.json — falling back to %s",
+            env, _FACTORDATA_HTTP_DEFAULT,
+        )
+        _FACTORDATA_SOURCE = _FACTORDATA_HTTP_DEFAULT
+        return _FACTORDATA_SOURCE
+
+    candidates: list[Path] = []
+    macro_repo = os.environ.get("MACRO_REPO", "").strip()
+    if macro_repo:
+        candidates.append(Path(macro_repo).expanduser() / "site" / "factordata")
+    candidates += [_FACTORDATA_HOME_CACHE, _FACTORDATA_SIBLING]
+    for cand in candidates:
+        if _has_tech_lab(cand):
+            _FACTORDATA_SOURCE = cand
+            return _FACTORDATA_SOURCE
+    _FACTORDATA_SOURCE = _FACTORDATA_HTTP_DEFAULT
+    return _FACTORDATA_SOURCE
+
+
+def _factordata_fetch(path: str) -> dict | None:
+    """Read {source}/{path} → parsed JSON dict, or None when unavailable.
+
+    Local source: a missing file is the old HTTP 404 ("not covered") — return
+    None without touching the network.  HTTP source: GET as before.  Either way
+    a failure logs once per target and returns None; callers treat None as
+    "not available" and omit the block rather than crashing.
+    """
+    src = _factordata_source()
+    if isinstance(src, Path):
+        fp = src / path
+        try:
+            return json.loads(fp.read_text())
+        except FileNotFoundError:
+            log.debug("factordata local miss (not covered): %s", fp)
+            return None
+        except Exception as e:
+            if str(fp) not in _TECH_LAB_LOG_ONCE:
+                _TECH_LAB_LOG_ONCE.add(str(fp))
+                log.warning("factordata local read error for %s: %s", fp, e)
+            return None
+    url = f"{src}/{path}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _FACTORDATA_UA})
         with urllib.request.urlopen(req, timeout=_FACTORDATA_TIMEOUT) as r:
@@ -707,16 +816,18 @@ def main(syms: list[str], *, all_syms: bool = False, limit: int | None = None) -
     if limit is not None and limit >= 0:
         equity_syms = equity_syms[:limit]
 
-    # ── tech block: fetch tech_lab.json once per run ─────────────────────────
-    # 404 or timeout → lab_profiles=None; per-symbol tech block is omitted when None.
+    # ── tech block: read tech_lab.json once per run ──────────────────────────
+    # Missing/unreadable → lab_profiles=None; per-symbol tech block is omitted when None.
     # This is a best-effort enrichment — failure here must never block the core intel write.
-    log.info("fetching tech_lab.json from %s …", _FACTORDATA_BASE)
+    fd_src = _factordata_source()
+    log.info("reading tech_lab.json from %s (%s) …",
+             fd_src, "local" if isinstance(fd_src, Path) else "https")
     lab_profiles = _fetch_tech_lab_profiles()
     if lab_profiles is None:
         log.warning(
-            "tech_lab.json unavailable (404 or timeout) — tech block will be omitted "
-            "from all intel files this run.  This is expected until the macro endpoint "
-            "goes live.  Core intel write is unaffected."
+            "tech_lab.json unavailable from %s — tech block will be omitted "
+            "from all intel files this run.  Core intel write is unaffected.",
+            fd_src,
         )
     else:
         log.info("tech_lab.json: %d signals loaded", len(lab_profiles))
