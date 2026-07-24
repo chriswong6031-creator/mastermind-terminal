@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flowGet } from "../../lib/flowClientCache";
+import { useFlowStream } from "../../lib/flowStream";
 import { useLang } from "../../lib/i18n";
 import { makeFlowT } from "../../lib/flowdeskStrings";
 import { WatchlistRail } from "./WatchlistRail";
@@ -88,7 +89,6 @@ interface ChainHeatPayload {
 
 // ─── Polling constants ────────────────────────────────────────────────────────
 
-const FEED_POLL_MS   = 30_000;
 const TIDE_POLL_MS   = 60_000;
 const CHAIN_POLL_MS  = 45_000;
 
@@ -269,14 +269,17 @@ export function FlowDeskView() {
   const { lang } = useLang();
 
   // ── Data state ──────────────────────────────────────────────────────────────
-  const [feed,      setFeed]      = useState<FeedPayload | null>(null);
+  // The order-flow tape rides the SSE live spine (push) instead of a 30s poll; the
+  // hook falls back to flowGet polling if SSE is unavailable, so this is never worse
+  // than before. feedLive drives the toolbar LIVE badge — honest here because this is
+  // session-intraday order flow (unlike the EOD gex desk). The SSE endpoint already
+  // pushes only on change (asof+size signature), so the old client-side asof dedup is
+  // no longer needed.
+  const { data: feed, live: feedLive } = useFlowStream<FeedPayload>("feed");
   const [tide,      setTide]      = useState<TidePayload | null>(null);
   const [chainHeat, setChainHeat] = useState<ChainHeatPayload | null>(null);
   const [enrich,    setEnrich]    = useState<EnrichPayload | null>(null);
 
-  // Track last feed asof to skip re-renders when the poll returns unchanged data.
-  // This avoids a full 200-card re-render on ticks where the feed hasn't updated.
-  const lastFeedAsofRef = useRef<string | null>(null);
 
   // ── Selection state ──────────────────────────────────────────────────────────
   const [selectedEvent, setSelectedEvent] = useState<FlowEvent | null>(null);
@@ -303,28 +306,11 @@ export function FlowDeskView() {
   const autoPromptRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Polling refs ─────────────────────────────────────────────────────────────
-  const feedTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const tideTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const chainTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const enrichTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Fetch functions ──────────────────────────────────────────────────────────
-
-  const fetchFeed = useCallback(async () => {
-    if (document.visibilityState === "hidden") return;
-    const data = await safeFetch<FeedPayload>("/api/flow?f=feed");
-    if (data) {
-      // Skip re-render if the payload asof is unchanged — avoids forcing all 200
-      // FlowCards to reconcile on a poll tick that returns the same data.
-      // Producer contract assumed: asof advances whenever new events are appended.
-      // If the backend ever appends events under a constant asof, those events would
-      // be silently dropped here. Verify at /api/flow that asof is a write-time
-      // timestamp or sequence number that strictly increases with each append.
-      if (data.asof && data.asof === lastFeedAsofRef.current) return;
-      lastFeedAsofRef.current = data.asof ?? null;
-      setFeed(data);
-    }
-  }, []);
 
   const fetchTide = useCallback(async () => {
     if (document.visibilityState === "hidden") return;
@@ -372,13 +358,12 @@ export function FlowDeskView() {
     // Initial fetches (bypass visibility guard on mount)
     void (async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const [f, ti, ch, en] = await Promise.all([
-        safeFetch<FeedPayload>("/api/flow?f=feed"),
+      // feed is streamed via useFlowStream — bootstrap only the still-polled feeds.
+      const [ti, ch, en] = await Promise.all([
         safeFetch<TidePayload>("/api/flow?f=tide"),
         safeFetch<ChainHeatPayload>("/api/flow?f=chainheat"),
         safeFetch<any>("/api/flow?f=enrich"),
       ]);
-      if (f)  { lastFeedAsofRef.current = f.asof ?? null; setFeed(f); }
       if (ti) setTide(ti);
       if (ch) setChainHeat(ch);
       // Enrich: stale check (same logic as fetchEnrich callback)
@@ -398,14 +383,12 @@ export function FlowDeskView() {
       }
     })();
 
-    feedTimerRef.current   = setInterval(fetchFeed,      FEED_POLL_MS);
     tideTimerRef.current   = setInterval(fetchTide,      TIDE_POLL_MS);
     chainTimerRef.current  = setInterval(fetchChainHeat, CHAIN_POLL_MS);
     // Enrich polls at 5-min cadence (offset from feed)
     enrichTimerRef.current = setInterval(fetchEnrich, 5 * 60_000);
 
     return () => {
-      if (feedTimerRef.current)   clearInterval(feedTimerRef.current);
       if (tideTimerRef.current)   clearInterval(tideTimerRef.current);
       if (chainTimerRef.current)  clearInterval(chainTimerRef.current);
       if (enrichTimerRef.current) clearInterval(enrichTimerRef.current);
@@ -544,6 +527,7 @@ export function FlowDeskView() {
         {/* FeedPane takes full center column height */}
         <FeedPane
           feed={feed}
+          live={feedLive}
           enrich={enrich}
           lang={lang}
           selectedId={selectedEvent?.id ?? null}
