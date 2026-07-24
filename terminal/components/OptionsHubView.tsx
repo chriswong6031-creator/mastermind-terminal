@@ -1501,42 +1501,28 @@ export default function OptionsHubView({
   }
 
   // ── Shared fetch: feed + heat (Tape tab) ─────────────────────────────────
-  const [feed, setFeed] = useState<FeedPayload | null>(null);
+  // Tape feed rides the SSE live spine — the LAST in-repo consumer migrated off
+  // polling (Phase 1c). The server pushes only on change (asof + byte-length
+  // signature), so the old client asof-dedup ref is gone and new events under an
+  // unchanged asof can no longer be silently dropped. Subscribed unconditionally:
+  // `feed` also drives cross-tab consumers (unusual_names → ticker candidates)
+  // and the shared freshness chrome, so it must stay fresh off the Tape tab too.
+  const { data: feed, error: fetchError } = useFlowStream<FeedPayload>("feed");
+  const lastFeedTs = feed?.asof ?? "";
   const [heat, setHeat] = useState<HeatPayload | null>(null);
-  const [lastFeedTs, setLastFeedTs] = useState<string>("");
-  const [fetchError, setFetchError] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Guard: skip setFeed when asof is unchanged (avoids re-running events useMemo
-  // on poll ticks that return the same payload).
-  const lastTapeAsofRef = useRef<string | null>(null);
 
+  // Chain-heat stays on the 45s poll (not on the SSE spine); the tape feed now
+  // arrives via useFlowStream above, so this only refreshes heat.
   const doFetch = useCallback(async () => {
     if (document.visibilityState === "hidden") return;
     try {
-      // Invalidate before polling so the recurring 45s interval always fetches
-      // fresh data. flowGet's stale-while-revalidate TTL is 25s — shorter than
-      // the poll interval — so without invalidation every poll hits the stale
-      // branch and returns the previous cycle's data (the background revalidation
-      // updates the cache but never pushes to setFeed/setHeat).
-      flowInvalidate("feed");
+      // flowGet's SWR TTL (25s) is shorter than the 45s poll, so invalidate first
+      // or every tick returns the previous cycle's cached heat.
       flowInvalidate("heat");
-      const [fj, hj] = await Promise.all([
-        flowGet("feed"),
-        flowGet("heat"),
-      ]);
-      if (fj) {
-        const d = fj as FeedPayload;
-        setFetchError(false);
-        // Skip re-render when asof is unchanged (same payload redelivered on quiet tape).
-        // Producer contract assumed: asof advances with every new event batch; if the
-        // backend returns new events under an unchanged asof they will be silently dropped.
-        if (!d.asof || d.asof !== lastTapeAsofRef.current) {
-          lastTapeAsofRef.current = d.asof ?? null;
-          setFeed(d); setLastFeedTs(d.asof);
-        }
-      } else { setFetchError(true); }
+      const hj = await flowGet("heat");
       if (hj) setHeat(hj as HeatPayload);
-    } catch { setFetchError(true); }
+    } catch { /* heat is secondary — the tape feed carries its own SSE error state */ }
   }, []);
 
   // ── Tide fetch ────────────────────────────────────────────────────────────
@@ -1605,28 +1591,16 @@ export default function OptionsHubView({
     return () => clearTimeout(id);
   }, [tapeTickerSearch]);
 
-  // Initial fetch (unconditional — visibility guard applies only to polling).
+  // Bootstrap heat + warm secondary feeds; the tape feed bootstraps itself via
+  // useFlowStream (initial SSE snapshot). The 45s poll refreshes heat only.
   useEffect(() => {
-    // Bypass visibility check on mount: the guard is relevant for background-tab polling,
-    // not for the user actively opening the page.
     (async () => {
       try {
-        // SWR: flowGet serves cache-first on revisits; blocking on first mount.
-        const [fj, hj] = await Promise.all([
-          flowGet("feed"),
-          flowGet("heat"),
-        ]);
-        if (fj) {
-          const d = fj as FeedPayload;
-          setFetchError(false);
-          lastTapeAsofRef.current = d.asof ?? null;
-          setFeed(d); setLastFeedTs(d.asof);
-        } else { setFetchError(true); }
+        const hj = await flowGet("heat");
         if (hj) setHeat(hj as HeatPayload);
-      } catch { setFetchError(true); }
-      // Warm secondary feeds in the background so first tab switches are fast.
-      // manifest is 1.9MB and only used by ProphetView — skip the eager prefetch here;
-      // it is prefetched lazily when the Prophet tab activates (see prophet useEffect below).
+      } catch { /* heat secondary */ }
+      // Warm secondary feeds so first tab switches are fast. manifest (1.9MB) is
+      // only used by ProphetView and is prefetched lazily when that tab activates.
       flowPrefetch("tide");
       flowPrefetch("prophet_idx");
     })();
