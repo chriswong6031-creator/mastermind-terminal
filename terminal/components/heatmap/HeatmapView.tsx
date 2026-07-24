@@ -432,7 +432,7 @@ export function HeatmapView() {
           }}>
             {layer === "price"
               ? (breadth.priceMode === "BULLISH" ? t("bullish") : breadth.priceMode === "BEARISH" ? t("bearish") : t("mixed"))
-              : (breadth.callShareClass === "CALL-HEAVY" ? t("callHeavy") : breadth.callShareClass === "PUT-HEAVY" ? t("putHeavy") : t("mixedZone"))
+              : (breadth.callShareClass === "CALL-HEAVY" ? t("bullish") : breadth.callShareClass === "PUT-HEAVY" ? t("bearish") : t("mixed"))
             }
           </span>
         </div>
@@ -475,7 +475,7 @@ export function HeatmapView() {
           <>
             <div style={BREADTH_SEP} />
             <div style={BREADTH_ITEM}>
-              <span className="obs-lbl" style={{ textTransform: "none", letterSpacing: 0, fontSize: 10 }}>{t("callShare")}</span>
+              <span className="obs-lbl" aria-label={t("bullFlowTip")} style={{ textTransform: "none", letterSpacing: 0, fontSize: 10 }}>{t("bullFlow")}</span>
               <span className="num" style={{ marginLeft: 4 }}>
                 {Math.round(breadth.callSharePct * 100)}%
               </span>

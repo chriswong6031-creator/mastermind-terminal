@@ -75,7 +75,7 @@ const FLOW_LEX = {
   badgeBlock:   ["BLOCK",   "大宗"],
 
   badgeWhaleDesc:   ["Premium ≥$1M single event", "单笔权利金≥100万美元"],
-  badgeClusterDesc: ["Contract-day accumulation ≥$3M across multiple prints", "合约日累计权利金≥300万美元（多笔）"],
+  badgeClusterDesc: ["Repeat-root: multiple prints on this underlying this session (not a $-sized campaign)", "重复标的：本时段该标的多次成交（非按金额的集群）"],
   badgeSweepDesc:   ["Multi-exchange heuristic — labeled, not confirmed aggressor", "多交易所启发式扫单 — 标记，非确认主动方"],
   badgeUnusualDesc: ["z-score ≥2 vs 252-session baseline", "z值≥2（相对252交易日基线）"],
   badgeBlockDesc:   ["Large single-print block; size ≥500 contracts", "单笔大宗；规模≥500张"],
