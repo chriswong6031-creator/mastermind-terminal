@@ -276,6 +276,8 @@ function presetFilters(preset: ViewPreset): Partial<FlowFilters> {
 
 interface FeedPaneProps {
   feed: FeedPayload | null;
+  /** SSE live-connection state (from useFlowStream). Drives the toolbar LIVE badge. */
+  live?: boolean;
   enrich: EnrichPayload | null;
   lang: "en" | "zh";
   selectedId: string | null;
@@ -288,6 +290,7 @@ interface FeedPaneProps {
 
 export function FeedPane({
   feed,
+  live,
   enrich,
   lang,
   selectedId,
@@ -296,6 +299,18 @@ export function FeedPane({
   onFiltersChange,
 }: FeedPaneProps) {
   const zh = lang === "zh";
+
+  // LIVE = an open SSE connection AND session-current data (same ET calendar day).
+  // Gating on freshness means the badge never contradicts the STALE/asof indicators
+  // and correctly stays dark on old fixture / EOD payloads — it only claims "live"
+  // when we're genuinely streaming today's session flow.
+  const feedSessionCurrent = (() => {
+    const a = feed?.asof ? Date.parse(feed.asof) : 0;
+    if (!a) return false;
+    const etDay = (t: number) =>
+      new Date(t).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    return etDay(a) === etDay(Date.now());
+  })();
 
   // Persist preset + sort across page loads
   const [prefs, setPrefs] = useState<PersistedPrefs>(() => loadPrefs());
@@ -496,6 +511,25 @@ export function FeedPane({
           {feed?.stale && (
             <span style={{ marginLeft: 6, color: "var(--warn)", fontSize: 10 }}>
               {zh ? "数据较旧" : "STALE"}
+            </span>
+          )}
+          {/* LIVE — the tape rides an open SSE connection AND the data is session-current.
+              --brand-2 (cyan) is non-directional so it never flips in East-Asian mode.
+              Gated on freshness so LIVE never contradicts STALE / an old asof. */}
+          {live && feedSessionCurrent && !feed?.stale && (
+            <span
+              style={{
+                marginLeft: 6, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
+                color: "var(--brand-2)", display: "inline-flex", alignItems: "center", gap: 3,
+              }}
+            >
+              <span
+                style={{
+                  width: 6, height: 6, borderRadius: "50%", display: "inline-block",
+                  background: "var(--brand-2)", boxShadow: "0 0 5px var(--brand-2)",
+                }}
+              />
+              {zh ? "实时" : "LIVE"}
             </span>
           )}
         </div>
