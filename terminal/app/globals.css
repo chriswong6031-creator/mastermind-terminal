@@ -1605,9 +1605,10 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   .chart-fs-float{display:grid}
   .tooldock{display:none}.ds-dock{display:none}
   /* B3: chart-body grows with sub-pane count (--subpanes set by TerminalShell via inline style);
-     pans without hijacking page scroll. vh line first = fallback for engines without dvh. */
+     pans without hijacking page scroll. Use the stable small viewport so mobile browser chrome
+     opening/closing during a direction change cannot resize the chart mid-scroll. */
   .chart-body{height:min(calc(46vh + var(--subpanes,0)*10vh), 80vh);flex:none;overscroll-behavior-y:contain}
-  .chart-body{height:min(calc(46dvh + var(--subpanes,0)*10dvh), 80dvh)}
+  .chart-body{height:min(calc(46svh + var(--subpanes,0)*10svh), 80svh)}
   .chart-body .pane-grid{grid-template-columns:1fr!important;grid-template-rows:1fr!important}
   .chart-body .pane-grid>.pane~.pane{display:none}
   /* chart canvas wrapper: block touch pan events so LWC gets them, not the page */
