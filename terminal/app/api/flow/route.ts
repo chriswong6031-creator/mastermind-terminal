@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { rateLimit, tooMany } from "@/lib/rateLimit";
-import { hasLiveOptions } from "@/lib/liveOptions";
+import { hasLiveOptions } from "@/lib/entitlement";
 // Shared server-side data path (fixture / backend→R2 / server-side flowScore).
 // The proprietary flow_score_v1 model stays server-only inside flowSource — see SECURITY.md.
 import {

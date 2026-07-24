@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { isPaidTier } from "@/lib/entitlement";
 
-// Save a Pine script — Pro-gated SERVER-SIDE (not just hidden in the UI).
+// Save a Pine script — PAID-gated SERVER-SIDE against the macro-api entitlement
+// (any paid tier via /api/me), NOT profiles.is_pro (a UI hint; see AGENTS.md).
 export async function POST(req: Request) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
 
-  const { data: prof } = await supabase.from("profiles").select("is_pro").eq("id", user.id).single();
-  if (!prof?.is_pro) return NextResponse.json({ error: "pro_required" }, { status: 403 });
+  if (!(await isPaidTier())) return NextResponse.json({ error: "pro_required" }, { status: 403 });
 
   const { id, name, source, lang = "pine", params = {} } = await req.json();
   const res = id

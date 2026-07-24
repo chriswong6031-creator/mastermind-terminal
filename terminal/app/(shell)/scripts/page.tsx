@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import { createClient } from "@/lib/supabase/server";
+import { isPaidTier } from "@/lib/entitlement";
 import { PROPRIETARY_SCRIPT } from "@/lib/pine";
 import PineEditor from "@/components/PineEditor";
 
 // Scripts (Wave-3 IA) — the Pine editor, split back out of the former Automate page
 // into its own /scripts route. Shared chrome from app/(shell)/layout.tsx.
 //
-// Pro-gated on SAVE (server-side in /api/scripts/save via profiles.is_pro) but
+// Paid-gated on SAVE (server-side in /api/scripts/save via the macro-api entitlement) but
 // readable/runnable for everyone — so this page hands PineEditor the full list: the
 // locked proprietary flagship (viewable, never editable) prepended to the signed-in
 // user's saved_scripts. Guests get just the flagship (their own scripts live in
@@ -23,8 +24,7 @@ export default async function ScriptsPage() {
   let isPro = false;
   let saved: Script[] = [];
   if (user) {
-    const { data: prof } = await supabase.from("profiles").select("is_pro").eq("id", user.id).single();
-    isPro = !!prof?.is_pro;
+    isPro = await isPaidTier();
     const { data } = await supabase
       .from("saved_scripts")
       .select("id,name,source,lang,params,updated_at")
