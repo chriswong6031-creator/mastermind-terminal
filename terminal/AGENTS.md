@@ -18,7 +18,7 @@ Opus builds and reviews code. Design choices are judgment work — made in the s
 ## Verification law (what "done" means)
 - A user-facing flow is NOT done until a fresh incognito end-to-end pass succeeds with zero manual workarounds — no reload-to-recover. If you hit a race and work around it, the bug is yours to fix, not to route around.
 - Every UI PR carries its verification artifact in the body: screenshots/crops of each step and state (light + dark + zh via the LEX i18n tuples — zh strings must never leak into the EN view, and vice versa).
-- Flagship surfaces (auth, onboarding, billing, anything the operator will demo) do NOT self-merge on the first pass — post the PR with artifacts and wait for review.
+- A spawned child builder does not self-merge a flagship first pass; it returns the PR and artifacts to the commissioning main session. The main session reviews them and completes the merge plus git-gated live deployment in the same task unless the operator explicitly requests a hold or a genuine check is red.
 
 ## Repo facts
 Next.js 16 + Supabase; entitlements authority = macro-api (`profiles.is_pro` is a UI hint only); i18n via LEX `[en, zh]` tuples in `lib/i18n.tsx`; tests = vitest, golden fixtures in `lib/__tests__/fixtures/`. The main checkout is often on another agent's branch — ALWAYS `git worktree add` off `origin/master`; never touch the main checkout's git state.
