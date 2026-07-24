@@ -2,6 +2,13 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "macro-landing",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8899"],
+      "cwd": "macro-site-link",
+      "port": 8899
+    },
+    {
       "name": "terminal-flow",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev:fixture"],

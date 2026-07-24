@@ -45,8 +45,12 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   // Wave-3 IA: chart + the six workspaces (old /research, /automate URLs 308 to these
-  // before reaching here). Only enforced when TERMINAL_REQUIRE_AUTH=1.
-  const PROTECTED = ["/terminal", "/analysis", "/discover", "/options", "/scripts", "/alerts", "/portfolio"];
+  // before reaching here) PLUS the prerendered surfaces (/flow /heatmap /screener) —
+  // the 2026-07-24 lockdown gates the whole app. /embed stays public: the landing's
+  // product showcase renders it to signed-out visitors by design. NOTE: EdgeOne pins
+  // prerendered pages ~1yr, so already-cached copies of /flow|/heatmap|/screener can
+  // serve from the edge until the operator purges — the gate is origin-enforced.
+  const PROTECTED = ["/terminal", "/analysis", "/discover", "/options", "/scripts", "/alerts", "/portfolio", "/flow", "/heatmap", "/screener"];
   // protect the app area; bounce unauthenticated users to /login
   if (!user && PROTECTED.some((p) => path.startsWith(p))) {
     const url = request.nextUrl.clone();

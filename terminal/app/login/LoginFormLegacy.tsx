@@ -55,7 +55,7 @@ function LoginForm() {
         </button>
         <div className="alt">
           {mode === "signin" ? (
-            <>New here? <button type="button" className="lnk" onClick={() => switchMode("signup")}>Create an account</button></>
+            <>New here? <a className="lnk" href="https://www.mastermind-x.com/?signup=1">Create your free account</a></>
           ) : (
             <>Already have an account? <button type="button" className="lnk" onClick={() => switchMode("signin")}>Sign in</button></>
           )}
