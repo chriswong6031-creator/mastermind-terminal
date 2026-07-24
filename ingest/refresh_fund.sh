@@ -228,6 +228,34 @@ if [ "$CN_HK_ONLY" = "0" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 9b. factordata pull-down (tech_lab.json + tech_events/) → ~/.mm-factordata
+#     pull_macro_intel's tech block used to fetch these two payload sets from
+#     the PUBLIC https://mastermind-x.com/factordata carve-out (macro PR #3393
+#     regwalled everything else under /factordata/).  So that carve-out can
+#     close, mirror them down from the droplet's own macro checkout over ssh
+#     instead — /opt/macro is git-pulled every ~3 min, so it is at least as
+#     fresh as the public edge.  $HOME cache (not $MACRO/site/) because the
+#     launchd lanes cannot read ~/Documents (TCC) and the Documents checkout
+#     is a git working tree we must not write into.  Non-fatal: on rsync
+#     failure the last-good cache serves; on a cold cache pull_macro_intel
+#     falls back to the HTTPS carve-out while it still exists.
+#     Tiny transfer (~230 small JSONs) — deliberately OUTSIDE the 21:00–22:30
+#     bulk-rsync window guard below (it is a pull, no manifest race).
+# ---------------------------------------------------------------------------
+FD_CACHE="$HOME/.mm-factordata"
+echo "[$(ts)] === factordata pull-down (VPS /opt/macro → $FD_CACHE) ==="
+run mkdir -p "$FD_CACHE/tech_events"
+run rsync -az --timeout=60 --delete -e "ssh -i $KEY" \
+    "$VPS:/opt/macro/site/factordata/tech_events/" "$FD_CACHE/tech_events/" \
+  || echo "[$(ts)] WARN: tech_events pull-down failed — using last-good cache"
+# tech_lab.json last: it is the cache-valid marker pull_macro_intel checks for.
+run rsync -az --timeout=60 -e "ssh -i $KEY" \
+    "$VPS:/opt/macro/site/factordata/tech_lab.json" "$FD_CACHE/tech_lab.json" \
+  || echo "[$(ts)] WARN: tech_lab pull-down failed — using last-good cache"
+# Respect an operator override; else point the intel build at the cache.
+export FACTORDATA_BASE="${FACTORDATA_BASE:-$FD_CACHE}"
+
+# ---------------------------------------------------------------------------
 # 10. US deep intel (pull_macro_intel --all)
 # ---------------------------------------------------------------------------
 echo "[$(ts)] === rebuild US intel (pull_macro_intel --all) ==="
