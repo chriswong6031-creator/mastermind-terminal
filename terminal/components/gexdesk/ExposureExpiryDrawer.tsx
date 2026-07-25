@@ -21,6 +21,7 @@ import { ExpiryBars } from "./ExpiryBars";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload, GreekLens } from "./GexDeskView";
 import { byExpiryToTermStructure, type ExpiryRow } from "@/lib/expiryTermStructure";
+import { fmtMn } from "@/lib/gexLadder";
 
 interface Props {
   byExpiry: GexPayload["by_expiry"] | null;
@@ -32,14 +33,9 @@ interface Props {
 
 type View = "bubbles" | "bars";
 
-function fmtGexVal(v: number): string {
-  if (!Number.isFinite(v)) return "—";
-  const sign = v >= 0 ? "+" : "-";
-  const abs = Math.abs(v);
-  if (abs >= 1) return `${sign}${abs.toFixed(2)}B`;
-  if (abs >= 0.001) return `${sign}${(abs * 1000).toFixed(1)}M`;
-  return `${sign}${(abs * 1e6).toFixed(0)}K`;
-}
+// `by_expiry` values are $mn (engine/options_hub.py divides those columns by 1e6) — the
+// desk's local formatter used to read them as billions and printed a $4.9bn expiration as
+// "-4949.61B". lib/gexLadder.ts now owns one formatter per unit.
 
 export function ExposureExpiryDrawer({ byExpiry, greek, asOf, lang }: Props) {
   const t = makeGexT(lang);
@@ -104,7 +100,7 @@ export function ExposureExpiryDrawer({ byExpiry, greek, asOf, lang }: Props) {
           ) : (
             // Bars view reuses the existing ExpiryBars component unchanged.
             <div style={{ display: "flex", flexDirection: "column", maxHeight: 168, overflowY: "auto" }}>
-              <ExpiryBars byExpiry={byExpiry} greek={greek} lang={lang} />
+              <ExpiryBars byExpiry={byExpiry} greek={greek} asOf={asOf} lang={lang} />
             </div>
           )}
 
@@ -166,7 +162,7 @@ function BubbleField({ ts }: { ts: ReturnType<typeof byExpiryToTermStructure> })
                 textAnchor="middle" fontSize={9} fill={col}
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
-                {fmtGexVal(node.net)}
+                {fmtMn(node.net)}
               </text>
               {/* DTE label on the x axis */}
               <text

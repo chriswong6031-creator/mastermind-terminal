@@ -11,7 +11,15 @@
  *
  * This is an EOD structural read (the by_expiry snapshot), NOT an intraday series — the
  * drawer stamps its own as-of and does not participate in the replay scrubber.
+ *
+ * DTE + expiry-label maths moved to lib/dte.ts (T-A / B7 — the desk used to run two
+ * conventions). The as-of-anchored form defined HERE is the one that won, so this module
+ * re-exports it: every existing caller and test keeps importing from here unchanged.
  */
+
+import { dteFrom, dteLabel, expLabel } from "./dte";
+
+export { dteFrom, expLabel };
 
 // Structural mirror of GexPayload["by_expiry"][number] — kept local so this lib has no
 // dependency on the gexdesk component module (which is a client component).
@@ -49,34 +57,6 @@ export function expiryNetFor(r: ExpiryRow, lens: ExpiryLens): number | null {
   if (lens === "delta")
     return r.delta_net != null && Number.isFinite(r.delta_net) ? r.delta_net : null;
   return null; // vanna / charm not provided per-expiration
-}
-
-/** MM-DD label — language-neutral, matches the ladder's expiry dropdown. */
-export function expLabel(exp: string): string {
-  // Tolerate "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" forms.
-  const d = exp.slice(0, 10);
-  return d.length >= 10 ? d.slice(5) : exp;
-}
-
-/**
- * Whole-day DTE relative to a fixed session date (the snapshot's `asof` day) — NOT the wall
- * clock, so the label is deterministic and testable. `asOf` is any ISO-ish stamp; only its
- * date part is used. Falls back to 0 for unparseable inputs.
- */
-export function dteFrom(exp: string, asOf: string | null | undefined): number {
-  try {
-    const base = (asOf ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10);
-    const baseMs = new Date(`${base}T00:00:00Z`).getTime();
-    const expMs = new Date(`${exp.slice(0, 10)}T00:00:00Z`).getTime();
-    if (!Number.isFinite(baseMs) || !Number.isFinite(expMs)) return 0;
-    return Math.max(0, Math.round((expMs - baseMs) / 86_400_000));
-  } catch {
-    return 0;
-  }
-}
-
-function dteLabel(dte: number): string {
-  return dte <= 0 ? "0DTE" : `${dte}d`;
 }
 
 /**

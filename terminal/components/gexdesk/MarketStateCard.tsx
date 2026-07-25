@@ -149,6 +149,27 @@ function fmtLevel(val: number | null | undefined): string {
   return val % 1 === 0 ? String(val) : val.toFixed(1);
 }
 
+/**
+ * Pin probability — shape guard (bug B6).
+ *
+ * Two producers publish this field on two scales: the fixture's `pin_target.probability`
+ * is 0-100 (documented on the interface above) while the live schema's `pin_probability`
+ * is a 0..1 fraction. The card multiplied by 100 unconditionally, so the day the live
+ * feed switched to whole percents a 55% pin rendered as "5500% prob".
+ *
+ * Rule: a value at or below 1 is a fraction and scales up; anything above 1 is already a
+ * percent and is left alone. Everything is clamped to 0-100, and an absent/garbage value
+ * returns null so the caller can print an em dash instead of a confident "0%".
+ *
+ * The 1.0 boundary maps to 100% either way (a fraction of 1.0 IS 100%), so the ambiguity
+ * at the seam is harmless.
+ */
+export function normalizePinProbability(raw: number | null | undefined): number | null {
+  if (raw == null || !Number.isFinite(raw) || raw < 0) return null;
+  const pct = raw <= 1 ? raw * 100 : raw;
+  return Math.max(0, Math.min(100, Math.round(pct)));
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 /**
@@ -160,11 +181,13 @@ function StructuralRangeBar({
   high,
   spot,
   flip,
+  t,
 }: {
   low: number;
   high: number;
   spot: number | null;
   flip: number | null;
+  t: ReturnType<typeof makeGexT>;
 }) {
   const range = high - low;
   if (range <= 0) return null;
@@ -182,8 +205,8 @@ function StructuralRangeBar({
     <div style={RANGE_BAR_WRAP}>
       <div style={RANGE_BAR_LABELS}>
         <span style={RANGE_BAR_LBL}>{fmtLevel(low)}</span>
-        <span style={{ ...RANGE_BAR_LBL, opacity: 0.5 }}>PUT SUPP</span>
-        <span style={{ ...RANGE_BAR_LBL, opacity: 0.5 }}>CALL WALL</span>
+        <span style={{ ...RANGE_BAR_LBL, opacity: 0.5 }}>{t("statePutSupp")}</span>
+        <span style={{ ...RANGE_BAR_LBL, opacity: 0.5 }}>{t("stateCallWall")}</span>
         <span style={{ ...RANGE_BAR_LBL, textAlign: "right" }}>
           {fmtLevel(high)}
         </span>
@@ -244,7 +267,7 @@ function StructuralRangeBar({
               color: "var(--cat-2)",
             }}
           >
-            FLIP
+            {t("stateFlipMark")}
           </span>
         )}
         {spotPct != null && (
@@ -256,7 +279,7 @@ function StructuralRangeBar({
               marginTop: 0,
             }}
           >
-            SPOT
+            {t("stateSpotMark")}
           </span>
         )}
       </div>
@@ -271,22 +294,24 @@ function WhatIfFlipBreaks({
   low,
   flip,
   high,
+  t,
 }: {
   low: number | null;
   flip: number | null;
   high: number | null;
+  t: ReturnType<typeof makeGexT>;
 }) {
   if (low == null && flip == null && high == null) return null;
   return (
     <div style={WHATIF_WRAP}>
-      <span style={WHATIF_TITLE}>WHAT IF FLIP BREAKS?</span>
+      <span style={WHATIF_TITLE}>{t("stateWhatIf")}</span>
       <div style={WHATIF_BOXES}>
         {low != null && (
           <div style={WHATIF_BOX}>
             <span style={{ ...WHATIF_BOX_VAL, color: "var(--down)" }}>
               {fmtLevel(low)}
             </span>
-            <span style={WHATIF_BOX_LBL}>PUT SUPP</span>
+            <span style={WHATIF_BOX_LBL}>{t("statePutSupp")}</span>
           </div>
         )}
         {flip != null && (
@@ -294,7 +319,7 @@ function WhatIfFlipBreaks({
             <span style={{ ...WHATIF_BOX_VAL, color: "var(--cat-2)" }}>
               {fmtLevel(flip)}
             </span>
-            <span style={WHATIF_BOX_LBL}>FLIP</span>
+            <span style={WHATIF_BOX_LBL}>{t("stateFlipMark")}</span>
           </div>
         )}
         {high != null && (
@@ -302,7 +327,7 @@ function WhatIfFlipBreaks({
             <span style={{ ...WHATIF_BOX_VAL, color: "var(--brand-2)" }}>
               {fmtLevel(high)}
             </span>
-            <span style={WHATIF_BOX_LBL}>CALL WALL</span>
+            <span style={WHATIF_BOX_LBL}>{t("stateCallWall")}</span>
           </div>
         )}
       </div>
@@ -389,9 +414,15 @@ export function MarketStateCard({
         ? ((spotRef - flipLevel) / spotRef) * 100
         : null);
 
-  const pin = statePayload.pin_target ?? (statePayload.magnet != null
-    ? { strike: statePayload.magnet, probability: statePayload.pin_probability != null ? Math.round(statePayload.pin_probability * 100) : 0 }
-    : null);
+  // Pin target: strike from either schema; probability through the B6 shape guard, which
+  // keeps a 0..1 fraction and a 0-100 percent from ever being multiplied by the same 100.
+  // `probability: null` is a real state (strike known, confidence not published) and
+  // renders as an em dash rather than a fabricated 0%.
+  const pinStrike = statePayload.pin_target?.strike ?? statePayload.magnet ?? null;
+  const pinProbability = normalizePinProbability(
+    statePayload.pin_target?.probability ?? statePayload.pin_probability
+  );
+  const pin = pinStrike != null ? { strike: pinStrike, probability: pinProbability } : null;
 
   const range = statePayload.structural_range ?? (
     callWall != null && putWall != null
@@ -415,8 +446,10 @@ export function MarketStateCard({
         </span>
       </div>
 
-      {/* Large state label */}
-      <div style={{ ...STATE_HERO, color: regimeColor }}>{state}</div>
+      {/* Large state label — the translated regime name, not the raw enum key. In EN the
+          two read identically (PIN/PIN); in ZH the chip said 锁定 while the hero still
+          said "PIN", the last English leak on this card. */}
+      <div style={{ ...STATE_HERO, color: regimeColor }}>{regimeLabel}</div>
 
       {/* Thesis */}
       <div style={THESIS}>{thesisText}</div>
@@ -490,6 +523,7 @@ export function MarketStateCard({
             high={range.high}
             spot={spotRef}
             flip={flipLevel}
+            t={t}
           />
         </div>
       )}
@@ -500,6 +534,7 @@ export function MarketStateCard({
           low={putWall}
           flip={flipLevel}
           high={callWall}
+          t={t}
         />
       </div>
 
@@ -507,7 +542,7 @@ export function MarketStateCard({
 
       {/* ── γ POLARITY block ─────────────────────────────────────────────────── */}
       <div style={METRIC_BLOCK}>
-        <span className="obs-lbl">γ POLARITY</span>
+        <span className="obs-lbl">{t("statePolarity")}</span>
         <div style={METRIC_BLOCK_BODY}>
           <span
             style={{
@@ -523,10 +558,10 @@ export function MarketStateCard({
             {gammaPolarity == null
               ? "—"
               : gammaPolarity.isLong
-              ? "LONG γ DOMINANT"
-              : "SHORT γ DOMINANT"}
+              ? t("statePolarityLong")
+              : t("statePolarityShort")}
           </span>
-          <span style={METRIC_BLOCK_CAPTION}>Net dealer gamma regime.</span>
+          <span style={METRIC_BLOCK_CAPTION}>{t("statePolarityCaption")}</span>
           {gammaPolarity != null && (
             <span
               className="num"
@@ -546,7 +581,7 @@ export function MarketStateCard({
 
       {/* ── HEDGE PRESSURE block ─────────────────────────────────────────────── */}
       <div style={METRIC_BLOCK}>
-        <span className="obs-lbl">HEDGE PRESSURE</span>
+        <span className="obs-lbl">{t("stateHedgePressure")}</span>
         <div style={METRIC_BLOCK_BODY}>
           <span
             style={{
@@ -557,17 +592,17 @@ export function MarketStateCard({
                   : "var(--up)",
             }}
           >
-            {hedgePressure.level}
+            {hedgePressure.level === "HIGH" ? t("stateHedgeHigh") : t("stateHedgeLow")}
           </span>
           <span style={METRIC_BLOCK_CAPTION}>
-            Size of dealer hedging flow.
+            {t("stateHedgeCaption")}
           </span>
           {hedgePressure.absVal != null && (
             <span
               className="num"
               style={{ fontSize: 10, color: "var(--muted)" }}
             >
-              |net γ| {fmtBn(hedgePressure.absVal)}
+              {t("stateHedgeAbs")} {fmtBn(hedgePressure.absVal)}
             </span>
           )}
         </div>
@@ -577,7 +612,7 @@ export function MarketStateCard({
 
       {/* ── PIN TARGET block ─────────────────────────────────────────────────── */}
       <div style={METRIC_BLOCK}>
-        <span className="obs-lbl">PIN TARGET</span>
+        <span className="obs-lbl">{t("statePinTarget")}</span>
         <div style={METRIC_BLOCK_BODY}>
           {pin ? (
             <>
@@ -588,17 +623,18 @@ export function MarketStateCard({
                 {fmtLevel(pin.strike)}
               </span>
               <span style={METRIC_BLOCK_CAPTION}>
-                Strike dealers pin toward.
+                {t("statePinCaption")}
               </span>
               <span
                 className="num"
                 style={{ fontSize: 10, color: "var(--muted)" }}
               >
-                {pin.probability}% prob
+                {pin.probability == null ? t("statePinNone") : `${pin.probability}%`}{" "}
+                {t("statePinProb")}
               </span>
             </>
           ) : (
-            <span style={{ fontSize: 12, color: "var(--muted)" }}>—</span>
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("statePinNone")}</span>
           )}
         </div>
       </div>
@@ -657,8 +693,11 @@ const CARD_OUTER: React.CSSProperties = {
   borderRadius: 0,
   display: "flex",
   flexDirection: "column",
-  minWidth: 300,
+  /* 340px rail on desktop; on a phone the row has already wrapped, so cap at the track
+     width instead of demanding 300px minimum and pushing a horizontal scrollbar. */
+  minWidth: 0,
   width: 340,
+  maxWidth: "100%",
   flexShrink: 0,
   overflowY: "auto",
   scrollbarWidth: "thin" as const,
