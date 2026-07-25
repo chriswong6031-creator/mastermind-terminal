@@ -70,7 +70,7 @@ const FUNDAMENTALS_HREF = "/analysis";
 // the canonical entries; `screener` maps back to the `vol` pill).
 const PAGE_KEY: Record<TabKey, string> = {
   tape: "tape", desk: "desk", tide: "tide", tickers: "tickers",
-  screener: "vol", vol: "vol", gex: "gex", surface: "surface", prism: "prism", prophet: "prophet",
+  screener: "vol", gex: "gex", surface: "surface", prism: "prism", prophet: "prophet",
   leaders: "tape", radar: "tape", // never shown here (redirected to Discover)
 };
 

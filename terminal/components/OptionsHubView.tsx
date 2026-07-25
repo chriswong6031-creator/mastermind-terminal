@@ -52,7 +52,7 @@ const ProphetView = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "surface" | "prism" | "leaders" | "radar";
+export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "gex" | "surface" | "prism" | "leaders" | "radar";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
@@ -1793,22 +1793,9 @@ export default function OptionsHubView({
   }
 
   // ── Vol fetch ─────────────────────────────────────────────────────────────
-  const [volSearch, setVolSearch] = useState("");
   const [selectedVolRoot, setSelectedVolRoot] = useState<string | null>(null);
   const [volData, setVolData] = useState<VolPayload | null>(null);
   const [volLoading, setVolLoading] = useState(false);
-
-  // Vol root candidates from tide top_net_impact (or fallback list)
-  const volCandidates: string[] = useMemo(() => {
-    const from = tideData?.top_net_impact.map((x) => x.root) ?? [];
-    const defaults = ["NVDA", "SPY", "QQQ", "AAPL", "TSLA"];
-    const set = new Set([...from, ...defaults]);
-    return Array.from(set).sort();
-  }, [tideData]);
-
-  const filteredVolCandidates = volSearch.trim()
-    ? volCandidates.filter((r) => r.includes(volSearch.toUpperCase()))
-    : volCandidates.slice(0, 20);
 
   const fetchVol = useCallback(async (root: string) => {
     setVolLoading(true); setVolData(null);
@@ -3332,187 +3319,6 @@ export default function OptionsHubView({
                   </div>
                 </div>
               )}
-            </div>
-          )}
-
-          {/* ═══ VOL TAB ════════════════════════════════════════════════════ */}
-          {activeTab === "vol" && (
-            <div style={{ flex: 1, overflow: "hidden", display: "flex", minHeight: 0 }}>
-              {/* Sidebar */}
-              <div style={{ width: 200, flexShrink: 0, borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column", minHeight: 0 }}>
-                <div style={{ padding: "10px 10px 8px" }}>
-                  <input
-                    type="text"
-                    placeholder={lang === "zh" ? "搜索代码…" : "Search ticker…"}
-                    value={volSearch}
-                    onChange={(e) => setVolSearch(e.target.value)}
-                    style={{ width: "100%", height: 30, padding: "0 10px", borderRadius: "var(--r-md)", background: "var(--inset)", border: "1px solid var(--line)", color: "var(--text)", font: "13px var(--font-ui)" }}
-                  />
-                </div>
-                <div style={{ flex: 1, overflow: "auto" }}>
-                  {filteredVolCandidates.map((root) => (
-                    <button
-                      key={root}
-                      onClick={() => setSelectedVolRoot(root)}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 8, width: "100%",
-                        padding: "8px 12px", textAlign: "left", fontSize: 13,
-                        fontWeight: selectedVolRoot === root ? 700 : 400,
-                        color: selectedVolRoot === root ? "var(--text)" : "var(--text-2)",
-                        background: selectedVolRoot === root ? "rgba(41,98,255,.1)" : "none",
-                        borderRadius: "var(--r)", cursor: "pointer", transition: "background var(--t)",
-                      }}
-                      onMouseEnter={(e) => { if (selectedVolRoot !== root) e.currentTarget.style.background = "var(--panel-2)"; }}
-                      onMouseLeave={(e) => { if (selectedVolRoot !== root) e.currentTarget.style.background = "none"; }}
-                    >
-                      {root}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Vol drill pane */}
-              <div style={{ flex: 1, overflow: "auto", padding: "16px 18px" }}>
-                {!selectedVolRoot && (
-                  <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
-                    {t("volRootPrompt", "Select a root to view volatility analytics")}
-                  </div>
-                )}
-                {selectedVolRoot && volLoading && (
-                  <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
-                )}
-                {selectedVolRoot && !volLoading && volData && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-
-                    {/* IV Rank hero */}
-                    <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "18px 20px" }}>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 28, alignItems: "flex-start" }}>
-                        {/* Big IV rank number — primary: 252d; secondary: full-history if available */}
-                        <div>
-                          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 6 }}>
-                            {t("volIvRank", "IV Rank (252d)")}
-                          </div>
-                          {volData.iv_rank_252 != null ? (
-                            <>
-                              <div style={{ fontWeight: 700, fontSize: 36, lineHeight: 1, color: volData.iv_rank_252 > 75 ? "var(--down)" : volData.iv_rank_252 > 50 ? "var(--warn)" : "var(--up)" }}>
-                                {volData.iv_rank_252.toFixed(1)}
-                              </div>
-                              <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
-                                {lang === "zh" ? "分位（0–100）" : "percentile (0–100)"}
-                              </div>
-                              {/* Full-history rank, when present */}
-                              {volData.iv_rank_all != null && (
-                                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
-                                  {t("volIvRankFull", "full-history")}
-                                  {volData.coverage_days_all != null
-                                    ? ` (${Math.round(volData.coverage_days_all / 252)}y)`
-                                    : ""}: <strong style={{ color: "var(--text-2)" }}>{volData.iv_rank_all.toFixed(1)}</strong>
-                                  {volData.since_all && (
-                                    <span style={{ color: "var(--text-dim)", marginLeft: 4 }}>since {volData.since_all}</span>
-                                  )}
-                                </div>
-                              )}
-                              {/* 52w range bar */}
-                              <div style={{ marginTop: 10, width: 160 }}>
-                                <div style={{ height: 6, borderRadius: 4, background: "var(--panel-3)", position: "relative", overflow: "visible" }}>
-                                  <div style={{
-                                    position: "absolute", left: 0, top: 0, height: "100%",
-                                    width: `${volData.iv_rank_252}%`,
-                                    background: volData.iv_rank_252 > 75 ? "var(--down)" : volData.iv_rank_252 > 50 ? "var(--warn)" : "var(--up)",
-                                    borderRadius: 4,
-                                  }} />
-                                </div>
-                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--text-dim)", marginTop: 3 }}>
-                                  <span>0</span>
-                                  <span>100</span>
-                                </div>
-                              </div>
-                            </>
-                          ) : (
-                            <div style={{ fontWeight: 600, fontSize: 15, color: "var(--muted)", marginTop: 4 }}>
-                              {lang === "zh" ? "基线积累中" : "warming"}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Stat mini-cards */}
-                        {[
-                          { key: "volAtmIv", label: "ATM IV", v: (volData.atm_iv * 100).toFixed(1) + "%" },
-                          { key: "vol52wHi", label: "52w Hi", v: (volData.iv_52w_hi * 100).toFixed(1) + "%" },
-                          { key: "vol52wLo", label: "52w Lo", v: (volData.iv_52w_lo * 100).toFixed(1) + "%" },
-                          { key: "volRv20", label: "RV (20d)", v: (volData.rv20 * 100).toFixed(1) + "%" },
-                          { key: "volVrp", label: "VRP (IV-RV)", v: ((volData.vrp) * 100).toFixed(1) + "%", color: volData.vrp > 0 ? "var(--down)" : "var(--up)" },
-                        ].map((kv) => (
-                          <div key={kv.key}>
-                            <div className="hub-sec">
-                              {t(kv.key, kv.label)}
-                            </div>
-                            <div style={{ fontWeight: 650, fontSize: 15, color: (kv as any).color ?? "var(--text)", fontVariantNumeric: "tabular-nums" }}>
-                              {kv.v}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Term structure chart */}
-                    {volData.term.length >= 2 && (
-                      <div className="hub-card">
-                        <div className="hub-stat">
-                          {t("volTermTitle", "Term Structure")}
-                        </div>
-                        <TermStructureChart term={volData.term} />
-                      </div>
-                    )}
-
-                    {/* Volatility smile */}
-                    {volData.smile.length > 0 && (
-                      <div className="hub-card">
-                        <div className="hub-stat">
-                          {t("volSmileTitle", "Volatility Smile")}
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                          {volData.smile.slice(0, 2).map((se) => (
-                            <div key={se.exp}>
-                              <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 6 }}>
-                                {lang === "zh" ? "到期：" : "Exp: "}{se.exp}
-                              </div>
-                              <SmileChart points={se.points} spotRef={volData.spot_ref ?? null} />
-                            </div>
-                          ))}
-                        </div>
-                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 8, display: "flex", gap: 16 }}>
-                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                            <span style={{ display: "inline-block", width: 10, height: 2, background: "var(--up)" }} />
-                            {lang === "zh" ? "认购IV" : "Call IV"}
-                          </span>
-                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                            <span style={{ display: "inline-block", width: 10, height: 2, borderBottom: "1px dashed var(--down)" }} />
-                            {lang === "zh" ? "认沽IV" : "Put IV"}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* IV Rank history sparkline */}
-                    {volData.history.length >= 2 && (
-                      <div className="hub-card">
-                        <div className="hub-stat">
-                          {t("volHistTitle", "IV Rank History (90 sessions)")}
-                        </div>
-                        <IvRankHistory history={volData.history} />
-                      </div>
-                    )}
-
-                    {/* Coverage */}
-                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                      {lang === "zh"
-                        ? `数据覆盖：${volData.coverage.n_days} 天，起始 ${volData.coverage.since}`
-                        : `Coverage: ${volData.coverage.n_days} days since ${volData.coverage.since}`}
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           )}
 

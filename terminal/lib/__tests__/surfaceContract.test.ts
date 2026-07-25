@@ -13,6 +13,7 @@ import {
   composeSessionSeries,
   topExpiriesForStrike,
   metricEnabled,
+  expiryPanelState,
   buildStrikeSeries,
   type SurfaceIndex,
   type SurfaceFrame,
@@ -127,6 +128,79 @@ describe("buildHeatBars", () => {
   it("returns [] for a missing metric or empty grid", () => {
     expect(buildHeatBars(FRAME, "gamma", anchor)).toEqual([]);
     expect(buildHeatBars({ ...FRAME, time_steps: [] }, "netprem", anchor)).toEqual([]);
+  });
+});
+
+// ─── B3 regression: non-uniform price_levels must paint SOLID ────────────────
+// The renderer (lib/heatSeries) builds its pixel grid from the UNION of every cell
+// boundary in a bar and gives each cell the row starting at its `low`. So the field is
+// gapless only when the cells tile the band exactly: contiguous (cell[i].high ===
+// cell[i+1].low) and non-overlapping, which makes |union| === cells + 1 === rows + 1.
+//
+// The pre-fix construction gave every cell the SAME half-height (the MEDIAN level gap),
+// so a non-uniform ladder produced overlapping cells AND a union with more rows than
+// cells — the surplus rows were never written and showed as transparent stripes.
+const NONUNIFORM: SurfaceFrame = {
+  spot: 110,
+  // gaps: 5,5,10,10 → median 10. Pre-fix every cell was ±5 regardless of its real gap.
+  price_levels: [100, 105, 110, 120, 130],
+  time_steps: ["09:31", "09:41"],
+  grids: {
+    netprem: [
+      [1, 2],
+      [3, 4],
+      [5, 6],
+      [7, 8],
+      [9, 10],
+    ],
+  },
+  asof: "2026-07-06T13:31:00Z",
+  cadence: "10-min",
+  session_date: "2026-07-06",
+};
+
+describe("buildHeatBars — non-uniform price_levels tile solid (B3)", () => {
+  it("emits contiguous, non-overlapping cells: cell[i].high === cell[i+1].low", () => {
+    const cells = buildHeatBars(NONUNIFORM, "netprem", anchor)[0].cells;
+    expect(cells).toHaveLength(5);
+    for (let i = 0; i < cells.length - 1; i++) {
+      expect(cells[i].high).toBeCloseTo(cells[i + 1].low, 10);
+      expect(cells[i].high).toBeGreaterThan(cells[i].low);
+    }
+  });
+
+  it("boundary union has exactly cells+1 entries, so every row is owned by a cell", () => {
+    const cells = buildHeatBars(NONUNIFORM, "netprem", anchor)[0].cells;
+    const union = new Set<number>();
+    for (const c of cells) { union.add(c.low); union.add(c.high); }
+    // rows = union - 1; one row per cell means no unpainted stripe.
+    expect(union.size).toBe(cells.length + 1);
+  });
+
+  it("sizes each band by its own local gap, not the median gap", () => {
+    const cells = buildHeatBars(NONUNIFORM, "netprem", anchor)[0].cells;
+    // 110 sits between a 5-wide gap below and a 10-wide gap above → [107.5, 115]
+    expect(cells[2].low).toBeCloseTo(107.5);
+    expect(cells[2].high).toBeCloseTo(115);
+    // edge levels extend by half their single neighbouring gap
+    expect(cells[0].low).toBeCloseTo(97.5);
+    expect(cells[4].high).toBeCloseTo(135);
+  });
+
+  it("keeps the uniform-ladder geometry unchanged (no regression)", () => {
+    const cells = buildHeatBars(FRAME, "netprem", anchor)[0].cells;
+    const union = new Set<number>();
+    for (const c of cells) { union.add(c.low); union.add(c.high); }
+    expect(union.size).toBe(cells.length + 1);
+    expect(cells[2].low).toBeCloseTo(97.5);
+    expect(cells[2].high).toBeCloseTo(102.5);
+  });
+
+  it("survives a degenerate single-level ladder", () => {
+    const one: SurfaceFrame = { ...NONUNIFORM, price_levels: [100], grids: { netprem: [[1, 2]] } };
+    const cells = buildHeatBars(one, "netprem", anchor)[0].cells;
+    expect(cells).toHaveLength(1);
+    expect(cells[0].high).toBeGreaterThan(cells[0].low);
   });
 });
 
@@ -325,5 +399,33 @@ describe("buildStrikeSeries — one strike's session series + replay truncation"
   it("coerces a non-finite cell to 0 (no NaN leaks into the chart)", () => {
     const f: SurfaceFrame = { ...FRAME, grids: { netprem: [[NaN, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3]] } };
     expect(buildStrikeSeries(f, 0, "netprem", null).points[0]).toEqual({ t: "09:31", v: 0 });
+  });
+});
+
+// ─── B4: the expiry breakdown must not caption present-time shares "at NOW" ──
+// The matrix is fetched once per root (no stamp in the key), so it always describes the
+// present. Scrubbed back, there is nothing stamp-consistent to show — so the panel has to
+// withdraw and say so rather than quietly relabelling today's split as a past moment's.
+describe("expiryPanelState — point-in-time gate for the drill modal (B4)", () => {
+  it("omits the section entirely when the matrix has no cells for this strike", () => {
+    expect(expiryPanelState(0, true)).toBe("none");
+    expect(expiryPanelState(0, false)).toBe("none");
+  });
+
+  it("shows the bars only at the head of the replay", () => {
+    expect(expiryPanelState(3, true)).toBe("live");
+  });
+
+  it("withdraws the bars the moment the user scrubs back", () => {
+    expect(expiryPanelState(3, false)).toBe("stale");
+    expect(expiryPanelState(1, false)).toBe("stale");
+  });
+
+  it("never returns `live` while replayed, for any cell count", () => {
+    for (const n of [1, 2, 5, 50]) expect(expiryPanelState(n, false)).not.toBe("live");
+  });
+
+  it("treats a negative/garbage count as nothing to show", () => {
+    expect(expiryPanelState(-1, true)).toBe("none");
   });
 });

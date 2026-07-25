@@ -36,6 +36,7 @@ const SURFACE_LEX = {
   agg1m: ["1m", "1分"],
   agg5m: ["5m", "5分"],
   agg15m: ["15m", "15分"],
+  agg30m: ["30m", "30分"],
 
   // ── Controls ────────────────────────────────────────────────────────────────
   opacity: ["Opacity", "不透明度"],
@@ -112,6 +113,73 @@ const SURFACE_LEX = {
   evoExpiryBreakdown: ["Expiry breakdown at NOW", "当前各到期日拆解"],
   evoNoSeries: ["No evolution for this strike yet.", "该行权价暂无演变数据。"],
   evoMetricAt: ["at this strike", "在该行权价"],
+
+  // ── B4: point-in-time honesty for the expiry breakdown ──────────────────────
+  // The per-expiry matrix is a single head-of-day fetch, so it describes the PRESENT,
+  // not the scrubbed moment. Replayed → say so instead of mislabelling it "at NOW".
+  evoExpiryReplayTitle: ["Expiry breakdown", "各到期日拆解"],
+  evoExpiryReplayNote: [
+    "Only available live — the per-expiry split is not stored for past moments in this session.",
+    "仅在实时状态下可用 — 本交易日的历史时点未保存各到期日拆解数据。",
+  ],
+  evoReplayBadge: ["replay", "回放"],
+  evoLiveBadge: ["live", "实时"],
+
+  // ── Send-to-chart: pin a strike as a price level ────────────────────────────
+  pinToChart: ["Pin to chart", "钉在图上"],
+  pinnedUnpin: ["Unpin", "取消固定"],
+  pinnedLabel: ["Pinned", "已固定"],
+  pinnedClearAll: ["Clear all", "全部清除"],
+  pinnedAria: ["Pinned strike levels", "已固定的行权价水平"],
+  pinnedRemoveAria: ["Remove pinned level", "移除已固定水平"],
+  pinnedSessionNote: ["Pins last for this session only", "固定项仅在本次会话内保留"],
+
+  // ── Quad view ───────────────────────────────────────────────────────────────
+  viewSingle: ["Single", "单图"],
+  viewQuad: ["Quad", "四宫格"],
+  viewAria: ["Field layout", "视图布局"],
+  quadAria: ["Four synchronised metric fields", "四个同步指标曲面"],
+  quadAccruing: ["accruing", "累积中"],
+  quadSharedReplay: ["All four share one replay stamp", "四格共用同一回放时点"],
+
+  // ── Style (theme) popover ───────────────────────────────────────────────────
+  styleBtn: ["Style", "配色"],
+  styleAria: ["Field colours", "曲面配色"],
+  styleTitle: ["Field colours", "曲面配色"],
+  stylePresets: ["Preset", "预设"],
+  stylePerMetric: ["Per metric", "按指标"],
+  stylePos: ["Inflow", "流入"],
+  styleNeg: ["Outflow", "流出"],
+  styleReset: ["Reset to theme", "恢复主题默认"],
+  styleClose: ["Done", "完成"],
+  presetDefault: ["Theme default", "主题默认"],
+  presetColorblind: ["Colourblind-safe", "色盲友好"],
+  presetMono: ["Monochrome heat", "单色热度"],
+  presetClassic: ["Classic", "经典"],
+  styleDefaultNote: [
+    "Theme default follows the up/down colours, so it flips with the language convention.",
+    "主题默认跟随涨跌色，因此会随语言习惯自动切换。",
+  ],
+
+  // ── Alert from the drill modal ──────────────────────────────────────────────
+  alertAtStrike: ["Alert me at this strike", "在该行权价提醒我"],
+  alertCreating: ["Creating…", "创建中…"],
+  alertCreated: ["Alert created", "提醒已创建"],
+  alertFailed: ["Could not create the alert", "无法创建提醒"],
+  alertCrossesAbove: ["when price crosses above", "当价格上穿"],
+  alertCrossesBelow: ["when price crosses below", "当价格下穿"],
+  alertSignIn: ["Sign in to set alerts", "登录后可设置提醒"],
+  alertSignInCta: ["Sign in", "登录"],
+  alertManage: ["Manage alerts", "管理提醒"],
+
+  // ── Root picker honesty ─────────────────────────────────────────────────────
+  rootPickerAria: ["Surface root", "曲面标的"],
+  rootAvailable: ["Available", "可用"],
+  rootNoSurface: ["No surface for {sym} yet", "{sym} 暂无曲面数据"],
+  rootNoSurfaceHint: [
+    "The field is materialised for these roots only. Others are not built yet — nothing is hidden.",
+    "目前仅为以下标的生成曲面数据，其余尚未构建 — 并非隐藏内容。",
+  ],
 } as const;
 
 type SurfaceKey = keyof typeof SURFACE_LEX;

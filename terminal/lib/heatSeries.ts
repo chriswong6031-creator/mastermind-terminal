@@ -84,6 +84,28 @@ export function heatShade(
   return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${a.toFixed(3)})`;
 }
 
+/**
+ * The grid rows `[start, end)` a cell occupies, given the boundary→row lookup built from
+ * the union of every visible cell boundary.
+ *
+ * A cell spans [low, high), which may cover MORE than one row whenever some other bar
+ * contributed a boundary inside this cell's band. Keying a cell to the single row at its
+ * `low` (the pre-fix behaviour) left those interior rows unwritten — transparent stripes
+ * across the field on non-uniform ladders (B3). Returns null when the cell's `low` isn't a
+ * known boundary; an unknown `high` degrades to a single row rather than dropping the cell.
+ */
+export function cellRowSpan(
+  rowOf: Map<number, number>,
+  cell: { low: number; high: number },
+  g: number,
+): [number, number] | null {
+  const start = rowOf.get(cell.low);
+  if (start === undefined || start >= g) return null;
+  const endBoundary = rowOf.get(cell.high);
+  const end = endBoundary === undefined ? start + 1 : Math.max(start + 1, endBoundary);
+  return [start, Math.min(end, g)];
+}
+
 /** Parse an `rgb()/rgba()` string to `[r,g,b,a255]`. Falls back to transparent black. */
 export function parseRgba(s: string): [number, number, number, number] {
   const m = s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),?\s*([\d.]*)\)/);
@@ -116,17 +138,23 @@ export function cssColorToRgb(raw: string): Rgb | null {
 
 /**
  * Resolve the pos/neg RGB pair for a metric from CSS custom properties.
- *   netprem, gamma (`gex`) → --up / --down (directional; East-Asian red-up flip aware).
- *   vanna → --metric-vanna-* (purple/orange), charm → --metric-charm-* (indigo/yellow):
- *   greek hues, NOT a bull/bear read, so they do not flip. Those pair vars are .obs-scoped
- *   (observatory.css), so pass the pane's .obs-scoped root as `at` to resolve them — falling
- *   back to documentElement (where --up/--down live) and then to the west defaults.
+ *
+ * EVERY metric now resolves its OWN `--metric-<key>-pos/neg` pair. In observatory.css the
+ * directional metrics default to `var(--up)` / `var(--down)`, so an untouched surface still
+ * follows the theme's directional tokens and honours the East-Asian red-up flip; vanna and
+ * charm default to fixed greek hues (NOT a bull/bear read, so they do not flip). Routing all
+ * four through per-metric vars is what lets the surface theme engine
+ * (components/surface/surfaceTheme) recolour any single metric by writing one inline custom
+ * property — no hardcoded direction hex anywhere, and no chart remount.
+ *
+ * Those pair vars are .obs-scoped, so pass the pane's .obs-scoped root as `at` to resolve
+ * them — falling back to documentElement and then to the west defaults.
  * SSR-safe (returns sensible defaults with no document).
  */
 export const METRIC_COLOR_VARS: Record<string, { pos: string; neg: string }> = {
-  netprem: { pos: "--up", neg: "--down" },
-  gamma: { pos: "--up", neg: "--down" },
-  gex: { pos: "--up", neg: "--down" }, // `gex` is the gamma grid key in the snapshot store
+  netprem: { pos: "--metric-netprem-pos", neg: "--metric-netprem-neg" },
+  gamma: { pos: "--metric-gamma-pos", neg: "--metric-gamma-neg" },
+  gex: { pos: "--metric-gamma-pos", neg: "--metric-gamma-neg" }, // `gex` = the gamma grid key
   vanna: { pos: "--metric-vanna-pos", neg: "--metric-vanna-neg" },
   charm: { pos: "--metric-charm-pos", neg: "--metric-charm-neg" },
 };
@@ -241,7 +269,9 @@ class HeatRenderer implements ICustomSeriesPaneRenderer {
       const boundaries = [...boundarySet].sort((a, b) => a - b);
       const g = Math.max(1, boundaries.length - 1); // grid height (level count)
 
-      // Boundary → row index (a cell spanning [low,high] fills the row for its `low`).
+      // Boundary → row index. A cell fills EVERY row in its [low,high) band (cellRowSpan),
+      // not just the row at its `low` — otherwise interior rows contributed by another
+      // bar's boundaries stay unwritten and read as transparent stripes (B3).
       const rowOf = new Map<number, number>();
       for (let i = 0; i < boundaries.length; i++) rowOf.set(boundaries[i], i);
 
@@ -272,15 +302,18 @@ class HeatRenderer implements ICustomSeriesPaneRenderer {
         if (!cells) continue;
         const col = i - from;
         for (const cell of cells) {
-          const row = rowOf.get(cell.low);
-          if (row === undefined || row >= g) continue;
-          const yFlipped = g - 1 - row; // highest price at the top row
+          const span = cellRowSpan(rowOf, cell, g);
+          if (!span) continue;
+          // One shader call per CELL (not per row) — the band is one value.
           const [r, gg, b, a] = parseRgba(options.cellShader(cell.amount));
-          const px = (yFlipped * h + col) * 4;
-          buf[px] = r;
-          buf[px + 1] = gg;
-          buf[px + 2] = b;
-          buf[px + 3] = a;
+          for (let row = span[0]; row < span[1]; row++) {
+            const yFlipped = g - 1 - row; // highest price at the top row
+            const px = (yFlipped * h + col) * 4;
+            buf[px] = r;
+            buf[px + 1] = gg;
+            buf[px + 2] = b;
+            buf[px + 3] = a;
+          }
         }
       }
       octx.putImageData(img, 0, 0);

@@ -14,6 +14,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { computeFlowScore, type ScorerInput } from "@/lib/flowScore";
 import { FLOW_BACKEND as BACKEND, R2_BASE } from "@/lib/upstreams";
+import { type Bar6, tfMinutes, resample, sessionEpoch } from "@/lib/intradayShared";
 
 const FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_fixture.json");
 const TIDE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "tide_fixture.json");
@@ -342,6 +343,96 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
   const raw = await fs.readFile(FIXTURE_FILE, "utf8");
   const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
   return all[f] ?? {};
+}
+
+// ── Fixture intraday candles (DEV ONLY) ──────────────────────────────────────
+//
+// The Surface pane draws a heat field (surface fixture) AND price candles (/api/intraday). With no
+// market-data key and an empty history store, dev showed the field with no candles at all. These
+// helpers derive candles from the surface fixture's OWN spot_path so both layers share one
+// synthetic price scale.
+//
+// NEVER let this reach production. The ONLY caller (app/api/intraday/route.ts) gates strictly on
+// FLOW_FIXTURE === "1", a dev-only flag. Deliberately NOT a data file: public/data/intraday/ is not
+// gitignored and intradayStore.withStoredHistory() reads it UNCONDITIONALLY, so a synthetic bar file
+// there would serve fabricated SPY market data to real users.
+
+/**
+ * Deterministic [0,1) hash of a bar index — integer math only (Math.imul fmix32), so the wiggle is
+ * byte-identical on every run/platform and fixture screenshots don't churn. Never Math.random().
+ */
+function hash01(i: number): number {
+  let x = (i + 1) >>> 0;
+  x = Math.imul(x ^ (x >>> 16), 2246822507) >>> 0;
+  x = Math.imul(x ^ (x >>> 13), 3266489909) >>> 0;
+  x = (x ^ (x >>> 16)) >>> 0;
+  return x / 4294967296;
+}
+
+/** 2-dp price rounding (named `round2`, not `r2` — this file's `r2Key`/`R2_BASE` mean Cloudflare R2). */
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/**
+ * FLOW_FIXTURE-only intraday candles for a surface-fixture root, on the SAME time axis and price
+ * scale as the surface heat field.
+ *
+ * One Bar6 per fixture time step: close = spot_path[i], open = spot_path[i-1] (first bar opens flat),
+ * wicks = a deterministic 5–20 bp extension beyond the body. Epochs use `sessionEpoch` — the app's
+ * display-epoch convention, the same one `etDisplay` gives real Polygon bars — so these candles sit
+ * on exactly the axis production candles would, and line up with the heat field. Bars come back ascending and epoch-unique.
+ *
+ * `tf` honoured by resampling the 5-min base upward (tfMinutes > 5). Sub-5m timeframes get the 5m
+ * series unchanged — the fixture has no finer granularity to synthesize from.
+ *
+ * Returns null when the root has no surface fixture (or the fixture lacks a usable spot_path), so
+ * the caller falls through to the real path instead of inventing a price series.
+ */
+export async function intradayFixture(sym: string, tf: string): Promise<Bar6[] | null> {
+  const root = (sym || "").trim().toUpperCase();
+  if (!root) return null;
+  let full: Record<string, unknown> | undefined;
+  try {
+    const raw = await fs.readFile(SURFACE_FIXTURE_FILE, "utf8");
+    const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+    full = all[root];
+  } catch {
+    return null;
+  }
+  if (!full) return null;
+
+  const times = Array.isArray(full.time_steps) ? (full.time_steps as string[]) : [];
+  const spotPath = Array.isArray(full.spot_path) ? (full.spot_path as number[]) : [];
+  const date = typeof full.session_date === "string" ? full.session_date : "";
+  const n = Math.min(times.length, spotPath.length);
+  if (!date || n === 0) return null;
+
+  const base: Bar6[] = [];
+  for (let i = 0; i < n; i++) {
+    const hhmm = String(times[i] ?? "");
+    const [hh, mm] = hhmm.split(":").map(Number);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) continue;
+    const close = Number(spotPath[i]);
+    const open = Number(i > 0 ? spotPath[i - 1] : spotPath[0]);
+    if (!Number.isFinite(close) || !Number.isFinite(open)) continue;
+    const epoch = sessionEpoch(date, hhmm);
+    if (!Number.isFinite(epoch)) continue;
+    const jHi = 0.0005 + hash01(2 * i) * 0.0015;      // 5–20 bp
+    const jLo = 0.0005 + hash01(2 * i + 1) * 0.0015;
+    // clamp after rounding so a 2-dp high can never land inside the body
+    const high = Math.max(round2(Math.max(open, close) * (1 + jHi)), open, close);
+    const low = Math.min(round2(Math.min(open, close) * (1 - jLo)), open, close);
+    const vol = 400_000 + Math.round(hash01(i + 977) * 1_600_000);
+    base.push([epoch, round2(open), high, low, round2(close), vol]);
+  }
+  if (!base.length) return null;
+
+  base.sort((a, b) => a[0] - b[0]);
+  const bars: Bar6[] = [];
+  let last = -1;
+  for (const b of base) { if (b[0] !== last) { bars.push(b); last = b[0]; } } // ascending + unique
+
+  const mins = tfMinutes(tf);
+  return mins > 5 ? resample(bars, mins) : bars;
 }
 
 /**

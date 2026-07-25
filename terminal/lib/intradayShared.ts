@@ -45,3 +45,27 @@ export function resample(bars: Bar6[], minutes: number): Bar6[] {
   if (cur) out.push(cur);
   return out;
 }
+
+/**
+ * "HH:MM" ET on a session date → the app's DISPLAY-EPOCH seconds.
+ *
+ * THE CONVENTION (see `etDisplay` in intradaySources): every provider's bars are emitted as a
+ * "display epoch" — the market-local wall clock read AS IF it were UTC. A 09:31 ET bar becomes
+ * 09:31Z, not 13:31Z. Lightweight-Charts renders timestamps in UTC, so this is what makes the
+ * time axis read as the local session clock without any per-chart timezone plumbing.
+ *
+ * Anything drawn on the same axis as intraday candles MUST use this convention. Building the
+ * true UTC instant instead (e.g. `new Date("<date>T09:31:00-04:00")`) silently shifts a series by
+ * the market's UTC offset — 4h in EDT, 5h in EST — which is how the surface heat field ended up
+ * plotted four hours to the right of its own candles and axis-labelled 13:31 for the 09:31 column.
+ *
+ * Deliberately arithmetic-only: no Intl, no DST lookup. The offset is not needed — and must not be
+ * applied — because the wall-clock components ARE the output. Returns NaN on unparseable input so
+ * callers can drop the point rather than plot it at the epoch.
+ */
+export function sessionEpoch(sessionDate: string, hhmm: string): number {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(sessionDate);
+  const t = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
+  if (!d || !t) return NaN;
+  return Date.UTC(+d[1], +d[2] - 1, +d[3], +t[1], +t[2]) / 1000;
+}
