@@ -28,6 +28,7 @@ import React, {
 import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload, GreekLens } from "./GexDeskView";
+import { topExpiriesForStrike, type MatrixCell, type ExpiryShare } from "@/lib/surfaceContract";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ interface TooltipData {
   showBreakdown: boolean;     // call/put split only shown for the gamma lens
   netLabel: string;          // "Net GEX" / "Net DEX" / …
   badge?: string;
+  topExpiries: ExpiryShare[]; // top-3 per-expiry breakdown (from matrix; [] if absent)
   x: number;
   y: number;
 }
@@ -61,6 +63,12 @@ interface StrikeLadderProps {
   selectedExpiry: string | null;
   onSelectExpiry: (exp: string | null) => void;
   lang: Lang;
+  /** Net GEX (bn) for the walls chip row — the ladder's own "so what" strip. */
+  netGexBn?: number | null;
+  /** Session GEX history (EOD) — PEAK scale normalizes to the largest |net| here. */
+  history?: GexPayload["history"] | null;
+  /** Per-strike-per-expiry cells for the hover top-3 expiry breakdown (optional). */
+  matrixCells?: MatrixCell[] | null;
 }
 
 /** Signed net exposure for a strike row under the active greek lens. */
@@ -184,6 +192,14 @@ function toneBorderColor(tone: BadgeTone): string {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+// ±% range presets for the ladder (0 = All). Mirrors quanted's ±2/±5/±10/All.
+const RANGE_PRESETS: { pct: number; label: string }[] = [
+  { pct: 0.02, label: "±2%" },
+  { pct: 0.05, label: "±5%" },
+  { pct: 0.10, label: "±10%" },
+  { pct: 0, label: "" }, // All (label filled from i18n at render)
+];
+
 export function StrikeLadder({
   strikes,
   spot,
@@ -193,25 +209,47 @@ export function StrikeLadder({
   selectedExpiry,
   onSelectExpiry,
   lang,
+  netGexBn = null,
+  history = null,
+  matrixCells = null,
 }: StrikeLadderProps) {
   const t = makeGexT(lang);
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [rangePct, setRangePct] = useState<number>(0); // 0 = All
+  const [scaleMode, setScaleMode] = useState<"now" | "peak">("now");
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const spotRowRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Sort descending (highest strike at top)
-  const sorted = [...strikes].sort((a, b) => b.strike - a.strike);
+  const sortedAll = [...strikes].sort((a, b) => b.strike - a.strike);
   const step = estimateStep(strikes);
+
+  // Range filter: keep strikes within spot ± pct (falls back to all if too sparse).
+  const sorted = (() => {
+    if (rangePct <= 0 || spot == null || spot <= 0) return sortedAll;
+    const lo = spot * (1 - rangePct), hi = spot * (1 + rangePct);
+    const w = sortedAll.filter((s) => s.strike >= lo && s.strike <= hi);
+    return w.length >= 3 ? w : sortedAll;
+  })();
 
   // Max |net| for bar scaling — computed over the ACTIVE lens so each greek's bars
   // fill their own dynamic range (delta/vanna/charm live on very different scales).
-  const maxAbs = sorted.reduce(
+  const nowMaxAbs = sorted.reduce(
     (m, s) => Math.max(m, Math.abs(rowNet(s, greek))),
     0.001
   );
+
+  // PEAK scale: normalize gamma bars to the largest |net GEX| across retained session
+  // history (EOD). Only meaningful for gamma (history carries net_gex_bn). When history
+  // is absent, PEAK falls back to NOW — disclosed in the footer note.
+  const peakAbs = (() => {
+    if (greek !== "gamma" || !history || history.length === 0) return null;
+    return history.reduce((m, h) => Math.max(m, Math.abs(h.net_gex_bn ?? 0)), 0) || null;
+  })();
+  const maxAbs = scaleMode === "peak" && peakAbs != null ? Math.max(peakAbs, 0.001) : nowMaxAbs;
 
   // Current-price row: nearest strike to spot
   const currentStrikeVal: number | null = (() => {
@@ -403,11 +441,12 @@ export function StrikeLadder({
         showBreakdown,
         netLabel,
         badge,
+        topExpiries: topExpiriesForStrike(matrixCells, s.strike),
         x: e.clientX - (rect?.left ?? 0) + 14,
         y: e.clientY - (rect?.top ?? 0) - 10,
       });
     },
-    [greek, netLabel, showBreakdown]
+    [greek, netLabel, showBreakdown, matrixCells]
   );
 
   const handleMouseLeave = useCallback(() => setTooltip(null), []);
@@ -523,6 +562,31 @@ export function StrikeLadder({
           </span>
         </div>
       )}
+
+      {/* ── Walls chip row + range presets (the ladder's own "so what" strip) ── */}
+      <div style={WALLS_ROW}>
+        {greek === "gamma" && (
+          <div style={WALLS_CHIPS}>
+            <WallChip label={t("ladderWallsNet")} value={fmtGexVal(netGexBn ?? 0)}
+              color={(netGexBn ?? 0) >= 0 ? "var(--brand-2)" : "var(--down)"} show={netGexBn != null} />
+            <WallChip label={t("ladderWallsFlip")} value={levels.gammaFlip != null ? fmtStrike(levels.gammaFlip) : "—"}
+              color="var(--cat-2)" show={levels.gammaFlip != null} />
+            <WallChip label={t("ladderWallsCall")} value={levels.callWall != null ? fmtStrike(levels.callWall) : "—"}
+              color="var(--brand-2)" show={levels.callWall != null} />
+            <WallChip label={t("ladderWallsPut")} value={levels.putWall != null ? fmtStrike(levels.putWall) : "—"}
+              color="var(--down)" show={levels.putWall != null} />
+          </div>
+        )}
+        {/* Range presets ±2 / ±5 / ±10 / All */}
+        <div style={RANGE_PRESET_GROUP} role="group" aria-label={t("rangePresetAria")}>
+          {RANGE_PRESETS.map((r) => (
+            <button key={r.pct} className={`obs-chip${rangePct === r.pct ? " on" : ""}`} style={RANGE_CHIP}
+              aria-pressed={rangePct === r.pct} onClick={() => setRangePct(r.pct)}>
+              {r.pct === 0 ? t("rangeAll") : r.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* ── Column headers ──────────────────────────────────────────────────── */}
       <div style={COL_HEADER_ROW}>
@@ -720,8 +784,64 @@ export function StrikeLadder({
               </div>
             </>
           )}
+          {/* Top-3 per-expiry breakdown — only when the matrix payload carries per-expiry
+              cells for this strike. Absent → omitted (never fabricated). */}
+          {tooltip.topExpiries.length > 0 && (
+            <>
+              <div style={TOOLTIP_SEP} />
+              <div style={{ ...TOOLTIP_KEY, fontSize: 9.5, marginBottom: 3 }}>
+                {t("expiryBreakdownTitle")}
+              </div>
+              {tooltip.topExpiries.map((e) => (
+                <div key={e.exp} style={TOOLTIP_ROW}>
+                  <span style={{ color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
+                    {e.exp.length >= 10 ? e.exp.slice(5, 10) : e.exp}
+                  </span>
+                  <span style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+                    <span style={{ color: e.gex >= 0 ? "var(--brand-2)" : "var(--down)", fontVariantNumeric: "tabular-nums" }}>
+                      {fmtGexVal(e.gex)}
+                    </span>
+                    <span style={{ color: "var(--muted)", fontSize: 9.5, fontVariantNumeric: "tabular-nums", minWidth: 26, textAlign: "right" }}>
+                      {(e.share * 100).toFixed(0)}%
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
+
+      {/* ── NOW | PEAK scale footer (dual normalization) ─────────────────────── */}
+      {greek === "gamma" && (
+        <div style={SCALE_FOOTER}>
+          <div style={SCALE_TOGGLE} role="group" aria-label="scale">
+            <button className={`obs-chip${scaleMode === "now" ? " on" : ""}`} style={SCALE_CHIP}
+              aria-pressed={scaleMode === "now"} onClick={() => setScaleMode("now")}>
+              {t("scaleNow")} ±{fmtGexVal(nowMaxAbs).replace(/^[+-]/, "")}
+            </button>
+            <button className={`obs-chip${scaleMode === "peak" ? " on" : ""}`} style={SCALE_CHIP}
+              aria-pressed={scaleMode === "peak"} aria-disabled={peakAbs == null}
+              onClick={() => peakAbs != null && setScaleMode("peak")}>
+              {t("scalePeak")} {peakAbs != null ? `±${fmtGexVal(peakAbs).replace(/^[+-]/, "")}` : "—"}
+            </button>
+          </div>
+          {peakAbs == null && (
+            <span style={{ fontSize: 9, color: "var(--muted)" }}>{t("scalePeakNote")}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Walls chip (compact KV cell in the walls row) ─────────────────────────────
+
+function WallChip({ label, value, color, show }: { label: string; value: string; color: string; show: boolean }) {
+  return (
+    <div style={{ ...WALL_CHIP, opacity: show ? 1 : 0.5 }}>
+      <span style={WALL_CHIP_LBL}>{label}</span>
+      <span className="num" style={{ ...WALL_CHIP_VAL, color: show ? color : "var(--muted)" }}>{value}</span>
     </div>
   );
 }
@@ -737,6 +857,38 @@ const LADDER_OUTER: React.CSSProperties = {
   overflow: "hidden",
   background: "var(--bg)",
 };
+
+const WALLS_ROW: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+  padding: "5px 10px", borderBottom: "1px solid var(--line-2)", background: "var(--panel)", flexShrink: 0,
+};
+
+const WALLS_CHIPS: React.CSSProperties = { display: "flex", gap: 6, flexWrap: "wrap" };
+
+const WALL_CHIP: React.CSSProperties = {
+  display: "flex", flexDirection: "column", gap: 1,
+  padding: "2px 8px", borderRadius: "var(--r-sm, 6px)",
+  border: "1px solid var(--line-2)", background: "var(--inset)", minWidth: 54,
+};
+
+const WALL_CHIP_LBL: React.CSSProperties = {
+  fontSize: 8, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700,
+};
+
+const WALL_CHIP_VAL: React.CSSProperties = { fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" };
+
+const RANGE_PRESET_GROUP: React.CSSProperties = { display: "flex", gap: 3, marginLeft: "auto" };
+
+const RANGE_CHIP: React.CSSProperties = { height: 22, minWidth: 34, fontSize: 10, padding: "0 7px" };
+
+const SCALE_FOOTER: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+  padding: "4px 10px", borderTop: "1px solid var(--line-2)", background: "var(--panel)", flexShrink: 0,
+};
+
+const SCALE_TOGGLE: React.CSSProperties = { display: "flex", gap: 3 };
+
+const SCALE_CHIP: React.CSSProperties = { height: 20, fontSize: 9.5, padding: "0 8px", fontVariantNumeric: "tabular-nums" };
 
 const LADDER_EMPTY: React.CSSProperties = {
   padding: 24,

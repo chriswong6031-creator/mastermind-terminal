@@ -156,6 +156,8 @@ export function GexDeskView() {
   const [view, setView]               = useState<"strike" | "expiry">("strike");
   const [statePayload, setStatePayload] = useState<GexStatePayload | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
+  // Per-strike-per-expiry cells for the ladder hover breakdown (optional, best-effort).
+  const [matrixCells, setMatrixCells] = useState<{ strike: number; expiry: string; gex: number }[] | null>(null);
 
   // GEX payload now arrives over the SSE live spine (push) instead of a 60s poll;
   // the hook falls back to flowGet polling if SSE is unavailable, so this is never
@@ -188,10 +190,21 @@ export function GexDeskView() {
   // The gex ladder payload rides the SSE hook above; this separate low-churn feed
   // (gexstate) stays on the light poll and resets on ticker change.
 
+  // Matrix cells feed the ladder hover top-3 expiry breakdown. Best-effort: the payload
+  // (options_structure.matrix) exists only for some roots — absent → breakdown just omitted.
+  const fetchMatrix = useCallback(async (root: string) => {
+    const data = await safeFetch<{ cells?: { strike: number; expiry: string; gex: number }[] }>(
+      `/api/flow?f=matrix:${root}`
+    );
+    setMatrixCells(Array.isArray(data?.cells) ? data!.cells! : null);
+  }, []);
+
   useEffect(() => {
     setStatePayload(null);
     setSelectedExpiry(null);
+    setMatrixCells(null);
     void fetchGexState(ticker);
+    void fetchMatrix(ticker);
 
     pollRef.current = setInterval(() => void fetchGexState(ticker), GEX_POLL_MS);
 
@@ -421,6 +434,9 @@ export function GexDeskView() {
               selectedExpiry={selectedExpiry}
               onSelectExpiry={setSelectedExpiry}
               lang={lang}
+              netGexBn={gexPayload?.net_gex_bn ?? null}
+              history={gexPayload?.history ?? null}
+              matrixCells={matrixCells}
             />
           ) : (
             <ExpiryBars
