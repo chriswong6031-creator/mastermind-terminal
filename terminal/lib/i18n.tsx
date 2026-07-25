@@ -201,6 +201,21 @@ const LEX: Record<string, [string, string]> = {
   // search
   searchPlaceholder: ["Search symbol or company…", "搜索代码或公司…"],
   noSymbolMatch: ["No supported symbol matches", "没有匹配的代码"],
+  // watchlist sections + list menu
+  thisList: ["This list", "当前列表"],
+  addSection: ["Add section", "添加分组"],
+  addSectionPrompt: ["Name this section", "为分组命名"],
+  renameSection: ["Rename section", "重命名分组"],
+  renameSectionPrompt: ["Rename section", "重命名分组"],
+  deleteSection: ["Remove section", "删除分组"],
+  collapseSection: ["Collapse / expand", "折叠 / 展开"],
+  copyWatchlist: ["Make a copy", "创建副本"],
+  copyWatchlistPrompt: ["Name for the copy", "副本名称"],
+  clearWatchlist: ["Clear list", "清空列表"],
+  clearWatchlistConfirm: ["Remove every symbol from this list? Sections are kept.", "从此列表中移除所有代码？分组将保留。"],
+  sortAZ: ["Sort A → Z", "按 A → Z 排序"],
+  exportCsv: ["Export CSV", "导出 CSV"],
+  importCsv: ["Import CSV", "导入 CSV"],
   // market names — used by the search filter notice and the Markets settings pane
   mktUs: ["United States", "美国"],
   mktCn: ["China A-shares", "中国 A 股"],
