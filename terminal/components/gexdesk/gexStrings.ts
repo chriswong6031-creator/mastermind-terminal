@@ -244,6 +244,23 @@ const GEX_LEX = {
   daysOld:         ["{n}d old", "{n}天前"],
   dataEod:         ["EOD", "收盘数据"],
   dataIntraday:    ["intraday", "盘中"],
+
+  // ── Exposure-by-Expiry term-structure drawer (Wave 2E, RECON §4.5) ──────────
+  xdrawerTitle:    ["Exposure by expiry", "各到期日敞口"],
+  xdrawerExp:      ["exp", "到期"],
+  xdrawerBubbles:  ["Bubbles", "气泡"],
+  xdrawerBars:     ["Bars", "柱状"],
+  xdrawerViewAria: ["Term-structure view", "期限结构视图"],
+  xdrawerNet:      ["Net", "净"],
+  xdrawerNetOnly:  [
+    "Net only — the payload carries no call/put split per expiration. EOD structural read, not intraday.",
+    "仅净值——数据未按到期日提供认购/认沽拆分。收盘结构快照，非盘中。",
+  ],
+  xdrawerNA:       [
+    "Vanna & Charm aren't provided per-expiration yet — gamma & delta only.",
+    "Vanna 与 Charm 暂未提供按到期日数据 — 仅伽马与德尔塔。",
+  ],
+  xdrawerEmpty:    ["No expiration breakdown for this ticker yet.", "该品种暂无按到期日数据。"],
 } as const;
 
 type GexDeskKey = keyof typeof GEX_LEX;
