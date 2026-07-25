@@ -116,24 +116,31 @@ export function cssColorToRgb(raw: string): Rgb | null {
 
 /**
  * Resolve the pos/neg RGB pair for a metric from CSS custom properties.
- * Wave-1 metric "Net Prem" uses --up / --down; the map scaffolds per-metric pairs
- * (gamma/vanna/charm) for the greeks lane — each falls back to --up/--down until a
- * dedicated pair var is themed. SSR-safe (returns sensible defaults with no document).
+ *   netprem, gamma (`gex`) → --up / --down (directional; East-Asian red-up flip aware).
+ *   vanna → --metric-vanna-* (purple/orange), charm → --metric-charm-* (indigo/yellow):
+ *   greek hues, NOT a bull/bear read, so they do not flip. Those pair vars are .obs-scoped
+ *   (observatory.css), so pass the pane's .obs-scoped root as `at` to resolve them — falling
+ *   back to documentElement (where --up/--down live) and then to the west defaults.
+ * SSR-safe (returns sensible defaults with no document).
  */
 export const METRIC_COLOR_VARS: Record<string, { pos: string; neg: string }> = {
   netprem: { pos: "--up", neg: "--down" },
   gamma: { pos: "--up", neg: "--down" },
-  vanna: { pos: "--up", neg: "--down" },
-  charm: { pos: "--up", neg: "--down" },
+  gex: { pos: "--up", neg: "--down" }, // `gex` is the gamma grid key in the snapshot store
+  vanna: { pos: "--metric-vanna-pos", neg: "--metric-vanna-neg" },
+  charm: { pos: "--metric-charm-pos", neg: "--metric-charm-neg" },
 };
 
 const DEFAULT_POS: Rgb = [38, 194, 129] as const; // --up west default
 const DEFAULT_NEG: Rgb = [240, 86, 107] as const; // --down west default
 
-export function resolveMetricColors(metric: string): { pos: Rgb; neg: Rgb } {
+export function resolveMetricColors(metric: string, at?: Element | null): { pos: Rgb; neg: Rgb } {
   const vars = METRIC_COLOR_VARS[metric] ?? METRIC_COLOR_VARS.netprem;
   if (typeof document === "undefined") return { pos: DEFAULT_POS, neg: DEFAULT_NEG };
-  const cs = getComputedStyle(document.documentElement);
+  // Resolve against the pane's .obs-scoped element when given (so the greek pair vars
+  // resolve), else :root (where --up/--down are defined).
+  const el = at ?? document.documentElement;
+  const cs = getComputedStyle(el);
   const pos = cssColorToRgb(cs.getPropertyValue(vars.pos)) ?? DEFAULT_POS;
   const neg = cssColorToRgb(cs.getPropertyValue(vars.neg)) ?? DEFAULT_NEG;
   return { pos, neg };

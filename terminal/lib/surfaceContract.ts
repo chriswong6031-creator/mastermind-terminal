@@ -245,6 +245,91 @@ export function topExpiriesForStrike(
     .slice(0, n);
 }
 
+// ─── Greek metric enablement (Wave 2E feature-detection) ─────────────────────
+
+/**
+ * The surface metric grid keys, in tab order. `netprem` is Wave-1's premium-flow field;
+ * the greek grids (`gex` gamma, `vanna`, `charm`) arrive with the greeks snapshotter and
+ * are enabled per-frame ONLY when the loaded snapshot actually carries the key — never
+ * assumed. `gex` is the gamma grid's key in the snapshot store (matches the macro lane's
+ * grids:{gex,dex,vanna,charm}); the UI labels it "Gamma".
+ */
+export const SURFACE_METRIC_KEYS = ["netprem", "gex", "vanna", "charm"] as const;
+export type SurfaceMetricKey = (typeof SURFACE_METRIC_KEYS)[number];
+
+/**
+ * Feature-detect which metric a frame can render: a grid key is enabled only when the
+ * frame's `grids` carries a non-empty 2-D array for it. A missing key, a null frame, or an
+ * empty grid all read as disabled — so the greek tabs stay disabled-with-tooltip until the
+ * snapshotter ships them, and light up the instant a snapshot arrives with the grid. Pure
+ * (no DOM) so the tab-enablement logic is unit-testable.
+ */
+export function metricEnabled(frame: SurfaceFrame | null | undefined, key: string): boolean {
+  const grid = frame?.grids?.[key];
+  return Array.isArray(grid) && grid.length > 0 && Array.isArray(grid[0]) && grid[0].length > 0;
+}
+
+// ─── Strike Intraday-Evolution series (Wave 2E drill modal) ──────────────────
+
+export interface StrikePoint {
+  t: string; // "HH:MM" session time column
+  v: number; // the metric's value for this strike at that time
+}
+
+export interface StrikeSeries {
+  strike: number;
+  metric: string;
+  points: StrikePoint[]; // realized-so-far, truncated at the replay stamp
+  nowT: string | null; // the "HH:MM" of the NOW marker (the scrubbed stamp), or null
+  nowValue: number | null; // the metric value at NOW (last kept point), or null
+  total: number; // count of session columns in the full day (for "N snapshots")
+}
+
+/**
+ * Build a single strike's intraday evolution for the Intraday-Evolution modal.
+ *
+ * A surface frame's grid is `grid[levelIdx][timeIdx]` — one strike's whole-session series
+ * is therefore the row `grid[strikeIdx]`, indexed by `time_steps`. The frame passed in is
+ * the HEAD (full realized day); `upToTimeIdx` truncates the series to the replay-scrubbed
+ * stamp (inclusive) so the modal time-travels with the scrubber (left of NOW = realized).
+ * When `upToTimeIdx` is null/out-of-range the full realized series is returned.
+ *
+ * The NOW marker sits at the last kept column. Returns an empty series (points:[]) when the
+ * grid/row is absent — the caller then shows an honest empty state, never a fabricated line.
+ * Pure + DOM-free for unit tests.
+ */
+export function buildStrikeSeries(
+  frame: SurfaceFrame | null | undefined,
+  strikeIdx: number,
+  metric: string,
+  upToTimeIdx: number | null,
+): StrikeSeries {
+  const empty: StrikeSeries = { strike: NaN, metric, points: [], nowT: null, nowValue: null, total: 0 };
+  if (!frame) return empty;
+  const grid = frame.grids?.[metric];
+  const row = grid?.[strikeIdx];
+  const steps = frame.time_steps ?? [];
+  const strike = frame.price_levels?.[strikeIdx] ?? NaN;
+  if (!Array.isArray(row) || steps.length === 0) return { ...empty, strike };
+  const total = Math.min(row.length, steps.length);
+  const cut =
+    upToTimeIdx == null || upToTimeIdx < 0 || upToTimeIdx >= total ? total - 1 : upToTimeIdx;
+  const points: StrikePoint[] = [];
+  for (let ti = 0; ti <= cut; ti++) {
+    const v = row[ti];
+    points.push({ t: steps[ti], v: Number.isFinite(v) ? v : 0 });
+  }
+  const last = points[points.length - 1] ?? null;
+  return {
+    strike,
+    metric,
+    points,
+    nowT: last ? last.t : null,
+    nowValue: last ? last.v : null,
+    total,
+  };
+}
+
 /**
  * Compose the display series from the raw cumulative series under the pane's toggles,
  * in a fixed order: per-min differencing → off-open rebase → absolute. (Rebase-then-abs

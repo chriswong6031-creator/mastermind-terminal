@@ -12,6 +12,8 @@ import {
   toAbsolute,
   composeSessionSeries,
   topExpiriesForStrike,
+  metricEnabled,
+  buildStrikeSeries,
   type SurfaceIndex,
   type SurfaceFrame,
   type SessionPoint,
@@ -247,5 +249,81 @@ describe("topExpiriesForStrike", () => {
     expect(topExpiriesForStrike([], 750)).toEqual([]);
     expect(topExpiriesForStrike(null, 750)).toEqual([]);
     expect(topExpiriesForStrike(undefined, 750)).toEqual([]);
+  });
+});
+
+// ── Greek metric enablement (feature-detection) ─────────────────────────────
+
+describe("metricEnabled — feature-detect a metric grid on a frame", () => {
+  const withGex: SurfaceFrame = {
+    ...FRAME,
+    grids: { netprem: FRAME.grids.netprem, gex: [[1, -1, 2], [0, 3, -4], [0, 0, 0], [1, 1, 1], [0, 0, 0]] },
+  };
+  it("enabled when the frame carries a non-empty grid for the key", () => {
+    expect(metricEnabled(FRAME, "netprem")).toBe(true);
+    expect(metricEnabled(withGex, "gex")).toBe(true);
+  });
+  it("DISABLED when the key is missing (the greek tab stays off until the snapshotter ships)", () => {
+    expect(metricEnabled(FRAME, "gex")).toBe(false);
+    expect(metricEnabled(FRAME, "vanna")).toBe(false);
+    expect(metricEnabled(FRAME, "charm")).toBe(false);
+  });
+  it("disabled for a null/undefined frame or an empty grid", () => {
+    expect(metricEnabled(null, "netprem")).toBe(false);
+    expect(metricEnabled(undefined, "gex")).toBe(false);
+    expect(metricEnabled({ ...FRAME, grids: { gex: [] } }, "gex")).toBe(false);
+    expect(metricEnabled({ ...FRAME, grids: { gex: [[]] } }, "gex")).toBe(false);
+  });
+});
+
+// ── Strike intraday-evolution series (drill modal) ──────────────────────────
+
+describe("buildStrikeSeries — one strike's session series + replay truncation", () => {
+  // FRAME grid[2] (level 100) = [0, 5, 10] over time_steps 09:31/09:41/09:51.
+  it("full series when the replay stamp is at (or past) the head", () => {
+    const s = buildStrikeSeries(FRAME, 2, "netprem", null);
+    expect(s.strike).toBe(100);
+    expect(s.points).toEqual([
+      { t: "09:31", v: 0 },
+      { t: "09:41", v: 5 },
+      { t: "09:51", v: 10 },
+    ]);
+    expect(s.nowT).toBe("09:51");
+    expect(s.nowValue).toBe(10);
+    expect(s.total).toBe(3);
+  });
+  it("TRUNCATES to the scrubbed stamp (left of NOW = realized only)", () => {
+    const s = buildStrikeSeries(FRAME, 2, "netprem", 1); // scrubbed to the 2nd column
+    expect(s.points).toEqual([
+      { t: "09:31", v: 0 },
+      { t: "09:41", v: 5 },
+    ]);
+    expect(s.nowT).toBe("09:41"); // NOW marker follows the scrubber, not the head
+    expect(s.nowValue).toBe(5);
+    expect(s.total).toBe(3); // "N snapshots" reflects the FULL day, not the truncation
+  });
+  it("first stamp → single realized point", () => {
+    const s = buildStrikeSeries(FRAME, 2, "netprem", 0);
+    expect(s.points).toEqual([{ t: "09:31", v: 0 }]);
+    expect(s.nowT).toBe("09:31");
+  });
+  it("an out-of-range index falls back to the full realized series", () => {
+    expect(buildStrikeSeries(FRAME, 2, "netprem", 99).points).toHaveLength(3);
+    expect(buildStrikeSeries(FRAME, 2, "netprem", -1).points).toHaveLength(3);
+  });
+  it("negative-strike row (level 110 = [0,0,-8]) keeps its sign", () => {
+    const s = buildStrikeSeries(FRAME, 4, "netprem", null);
+    expect(s.nowValue).toBe(-8);
+  });
+  it("empty (no points) for a missing metric grid or empty frame — never fabricated", () => {
+    const g = buildStrikeSeries(FRAME, 2, "gex", null);
+    expect(g.points).toEqual([]);
+    expect(g.strike).toBe(100); // strike still resolved from price_levels
+    expect(buildStrikeSeries(null, 0, "netprem", null).points).toEqual([]);
+    expect(buildStrikeSeries({ ...FRAME, time_steps: [] }, 2, "netprem", null).points).toEqual([]);
+  });
+  it("coerces a non-finite cell to 0 (no NaN leaks into the chart)", () => {
+    const f: SurfaceFrame = { ...FRAME, grids: { netprem: [[NaN, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3]] } };
+    expect(buildStrikeSeries(f, 0, "netprem", null).points[0]).toEqual({ t: "09:31", v: 0 });
   });
 });

@@ -97,6 +97,21 @@ const SURFACE_LEX = {
   sessionPts: ["pts", "点"],
   sessionEmpty: ["No session flow yet — accruing.", "暂无盘中资金流 — 累积中。"],
   sessionOffOpenNote: ["Δ since 9:30 ET open", "自美东9:30开盘以来的变化"],
+
+  // ── Strike hover popover + Intraday-Evolution modal (Wave 2E, RECON §4.2) ────
+  popFromSpot: ["from spot", "距现价"],
+  popClickHint: ["Click for evolution", "点击查看盘中演变"],
+  evoTitle: ["Intraday Evolution", "盘中演变"],
+  evoStrike: ["strike", "行权价"],
+  evoClose: ["Close", "关闭"],
+  evoCloseAria: ["Close (Esc)", "关闭（Esc）"],
+  evoEscHint: ["Press Esc to close", "按 Esc 关闭"],
+  evoSnapshots: ["snapshots", "快照"],
+  evoSpot: ["Spot", "现价"],
+  evoNow: ["NOW", "当前"],
+  evoExpiryBreakdown: ["Expiry breakdown at NOW", "当前各到期日拆解"],
+  evoNoSeries: ["No evolution for this strike yet.", "该行权价暂无演变数据。"],
+  evoMetricAt: ["at this strike", "在该行权价"],
 } as const;
 
 type SurfaceKey = keyof typeof SURFACE_LEX;

@@ -48,20 +48,27 @@ import {
   gridMaxAbs,
   isSurfaceFrame,
   isSurfaceIndex,
+  metricEnabled,
   type SurfaceFrame,
+  type MatrixCell,
 } from "@/lib/surfaceContract";
 import { useReplay } from "./replayContext";
+import { StrikeEvolutionModal } from "./StrikeEvolutionModal";
 import { makeSurfaceT } from "./surfaceStrings";
 import type { SurfaceKey } from "./surfaceStrings";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
-type Metric = "netprem" | "gamma" | "vanna" | "charm";
-const METRICS: { key: Metric; labelKey: SurfaceKey; enabled: boolean }[] = [
-  { key: "netprem", labelKey: "metricNetPrem", enabled: true },
-  { key: "gamma", labelKey: "metricGamma", enabled: false },
-  { key: "vanna", labelKey: "metricVanna", enabled: false },
-  { key: "charm", labelKey: "metricCharm", enabled: false },
+// Metric identity === the snapshot grid key. Gamma's grid key is `gex` (matches the macro
+// lane's grids:{gex,dex,vanna,charm}); the tab is labelled "Gamma". Enablement is
+// feature-detected per-frame (metricEnabled) — a greek tab is live ONLY when the loaded
+// snapshot carries its grid, otherwise disabled-with-tooltip ("accruing").
+type Metric = "netprem" | "gex" | "vanna" | "charm";
+const METRICS: { key: Metric; labelKey: SurfaceKey }[] = [
+  { key: "netprem", labelKey: "metricNetPrem" },
+  { key: "gex", labelKey: "metricGamma" },
+  { key: "vanna", labelKey: "metricVanna" },
+  { key: "charm", labelKey: "metricCharm" },
 ];
 
 const AGGS: { min: number; labelKey: SurfaceKey }[] = [
@@ -115,6 +122,21 @@ function fmtAsofLabel(asof: string | undefined): string {
 
 interface Readout { strike: number; value: number }
 
+/** A hovered strike row: the level, its index, the active-metric value, all-greek values
+ *  at the current stamp, and the screen point to anchor the popover to. */
+interface StrikeHover {
+  strike: number;
+  strikeIdx: number;
+  pctFromSpot: number | null;
+  active: { key: Metric; value: number };
+  others: { key: Metric; value: number }[]; // other metrics present in this frame's grids
+  x: number; // clientX for the fixed popover
+  y: number; // clientY
+}
+
+/** All greek grid keys we might surface, in a stable order (label mapping via METRICS). */
+const GREEK_KEYS: Metric[] = ["gex", "vanna", "charm"];
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export function SurfacePane({ root = "SPY" }: { root?: string }) {
@@ -130,6 +152,12 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
   const [candles, setCandles] = useState<Bar6[]>([]);
   const [readout, setReadout] = useState<Readout | null>(null);
   const [loading, setLoading] = useState(true);
+  // Strike hover popover (RECON §4.2): the row under the crosshair + its screen anchor.
+  const [hover, setHover] = useState<StrikeHover | null>(null);
+  // Intraday-Evolution modal: the strike index it opened on (null = closed).
+  const [modalIdx, setModalIdx] = useState<number | null>(null);
+  // Per-strike-per-expiry cells for the modal's expiry breakdown (matrix payload; optional).
+  const [matrixCells, setMatrixCells] = useState<MatrixCell[] | null>(null);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -139,8 +167,10 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
   const frameRef = useRef<SurfaceFrame | null>(null);
   const metricRef = useRef<Metric>("netprem");
   const opacityRef = useRef<number>(1);
+  const hoverIdxRef = useRef<number | null>(null); // latest hovered strike idx for click→modal
   useEffect(() => { metricRef.current = metric; }, [metric]);
   useEffect(() => { opacityRef.current = opacity; }, [opacity]);
+  useEffect(() => { hoverIdxRef.current = hover?.strikeIdx ?? null; }, [hover]);
 
   // Apply the shader to the heat series from the CURRENT frame/metric/opacity/colors.
   // Ref-backed (reads *Ref values) so the chart-mount effect and the MutationObserver
@@ -194,6 +224,40 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
   }, [root, asOfStamp]);
 
   useEffect(() => { frameRef.current = frame; }, [frame]);
+
+  // If the active greek metric isn't carried by the freshly-loaded frame, fall back to the
+  // premium field (which is always present) so the pane never sits on a dead tab.
+  useEffect(() => {
+    if (metric !== "netprem" && frame && !metricEnabled(frame, metric)) setMetric("netprem");
+  }, [frame, metric]);
+
+  // ── Per-strike-per-expiry matrix (modal expiry breakdown; optional per root) ──
+  // The matrix payload (options_structure.matrix) exists only for some roots — absent →
+  // the modal simply omits the expiry-breakdown section rather than fabricating it.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await flowGet(`matrix:${root}`);
+        if (cancelled) return;
+        const raw = (data as { cells?: unknown })?.cells;
+        if (!Array.isArray(raw)) { setMatrixCells(null); return; }
+        const cells: MatrixCell[] = [];
+        for (const c of raw) {
+          if (!c || typeof c !== "object") continue;
+          const rec = c as Record<string, unknown>;
+          const strike = Number(rec.strike);
+          const expiry = typeof rec.expiry === "string" ? rec.expiry : "";
+          const gex = Number(rec.gex);
+          if (Number.isFinite(strike) && expiry) cells.push({ strike, expiry, gex: Number.isFinite(gex) ? gex : 0 });
+        }
+        setMatrixCells(cells.length ? cells : null);
+      } catch {
+        if (!cancelled) setMatrixCells(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [root]);
 
   // ── Intraday candles (per agg) ───────────────────────────────────────────────
   useEffect(() => {
@@ -256,9 +320,9 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
     // Crosshair readout: nearest strike level + its amount at the crosshair time.
     chart.subscribeCrosshairMove((param: MouseEventParams) => {
       const f = frameRef.current;
-      if (!param.point || !f || !f.price_levels.length) { setReadout(null); return; }
+      if (!param.point || !f || !f.price_levels.length) { setReadout(null); setHover(null); return; }
       const price = candle.coordinateToPrice(param.point.y);
-      if (price == null) { setReadout(null); return; }
+      if (price == null) { setReadout(null); setHover(null); return; }
       // nearest strike level to the crosshair price
       let li = 0, best = Infinity;
       for (let i = 0; i < f.price_levels.length; i++) {
@@ -281,7 +345,35 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
         }
       }
       const value = grid?.[li]?.[ti] ?? 0;
-      setReadout({ strike: f.price_levels[li], value });
+      const strike = f.price_levels[li];
+      setReadout({ strike, value });
+
+      // Strike hover popover: active-metric value + any other greek grids present, at this
+      // stamp. Anchored to the wrapper's client rect (fixed layer → no overflow clipping).
+      const others: { key: Metric; value: number }[] = [];
+      for (const k of GREEK_KEYS) {
+        if (k === metricRef.current) continue;
+        const g2 = f.grids[k];
+        if (metricEnabled(f, k) && g2?.[li]) others.push({ key: k, value: g2[li][ti] ?? 0 });
+      }
+      const rect = el.getBoundingClientRect();
+      const spot = f.spot;
+      setHover({
+        strike,
+        strikeIdx: li,
+        pctFromSpot: spot != null && spot !== 0 ? ((strike - spot) / spot) * 100 : null,
+        active: { key: metricRef.current, value },
+        others,
+        x: rect.left + param.point.x,
+        y: rect.top + param.point.y,
+      });
+    });
+
+    // Click a strike → open the Intraday-Evolution modal for the hovered strike row.
+    chart.subscribeClick((param: MouseEventParams) => {
+      if (!param.point) return;
+      const idx = hoverIdxRef.current;
+      if (idx != null) setModalIdx(idx);
     });
 
     const ro = new ResizeObserver(() => {
@@ -291,9 +383,10 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
     });
     ro.observe(el);
 
-    // Re-resolve shader colors on theme / data-updown flips.
+    // Re-resolve shader colors on theme / data-updown flips. Resolve against the pane
+    // element so the .obs-scoped greek pair vars (vanna/charm) are seen — not just :root.
     const mo = new MutationObserver(() => {
-      colorsRef.current = resolveMetricColors(metricRef.current);
+      colorsRef.current = resolveMetricColors(metricRef.current, el);
       applyShaderRef.current();
     });
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-updown", "class"] });
@@ -312,7 +405,7 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
   useEffect(() => {
     const heat = heatSeriesRef.current;
     if (!heat) return;
-    colorsRef.current = resolveMetricColors(metric);
+    colorsRef.current = resolveMetricColors(metric, wrapRef.current);
 
     if (!frame || !frame.grids[metric]) {
       heat.setData([]);
@@ -358,22 +451,27 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
     <div style={PANE}>
       {/* Controls row */}
       <div style={CONTROLS}>
-        {/* Metric tabs */}
+        {/* Metric tabs — greek tabs feature-detect on the loaded frame's grids. */}
         <div style={GROUP} role="group" aria-label={t("metricLensAria")}>
-          {METRICS.map((m) => (
-            <button
-              key={m.key}
-              className={`obs-chip${metric === m.key ? " on" : ""}`}
-              style={{ ...CHIP, ...(m.enabled ? {} : DISABLED_CHIP) }}
-              aria-pressed={metric === m.key}
-              aria-disabled={!m.enabled}
-              aria-label={m.enabled ? undefined : `${t(m.labelKey)} — ${t("metricAccruing")}`}
-              onClick={() => m.enabled && setMetric(m.key)}
-            >
-              {t(m.labelKey)}
-              {!m.enabled && <span style={ACCRUING_DOT} aria-hidden>·</span>}
-            </button>
-          ))}
+          {METRICS.map((m) => {
+            // netprem is always available (Wave-1 field); greeks light up only when the
+            // loaded snapshot actually carries their grid.
+            const enabled = m.key === "netprem" || metricEnabled(frame, m.key);
+            return (
+              <button
+                key={m.key}
+                className={`obs-chip${metric === m.key ? " on" : ""}`}
+                style={{ ...CHIP, ...(enabled ? {} : DISABLED_CHIP) }}
+                aria-pressed={metric === m.key}
+                aria-disabled={!enabled}
+                aria-label={enabled ? undefined : `${t(m.labelKey)} — ${t("metricAccruing")}`}
+                onClick={() => enabled && setMetric(m.key)}
+              >
+                {t(m.labelKey)}
+                {!enabled && <span style={ACCRUING_DOT} aria-hidden>·</span>}
+              </button>
+            );
+          })}
         </div>
 
         {/* Aggregation */}
@@ -444,6 +542,65 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
           </div>
         )}
       </div>
+
+      {/* Strike hover popover (RECON §4.2) — fixed layer, never clipped by the chart. */}
+      {hover && hasData && modalIdx == null && (
+        <div
+          className="obs-surf-pop"
+          style={{
+            left: Math.min(hover.x + 16, (typeof window !== "undefined" ? window.innerWidth : 1200) - 244),
+            top: Math.max(8, hover.y - 30),
+          }}
+          role="tooltip"
+        >
+          <div className="obs-surf-pop-hd">
+            <span className="obs-surf-pop-strike">{hover.strike}</span>
+            {hover.pctFromSpot != null && (
+              <span className="obs-surf-pop-pct">
+                {hover.pctFromSpot >= 0 ? "+" : ""}{hover.pctFromSpot.toFixed(1)}% {t("popFromSpot")}
+              </span>
+            )}
+          </div>
+          <div className="obs-surf-pop-row">
+            <span className="k">{metricLabel}</span>
+            <span className="v" style={{ color: hover.active.value >= 0 ? "var(--up)" : "var(--down)" }}>
+              {fmtDollarSigned(hover.active.value)}
+            </span>
+          </div>
+          {hover.others.length > 0 && (
+            <>
+              <div className="obs-surf-pop-sep" />
+              {hover.others.map((o) => (
+                <div className="obs-surf-pop-row" key={o.key}>
+                  <span className="k">{t(METRICS.find((m) => m.key === o.key)?.labelKey ?? "metricNetPrem")}</span>
+                  <span className="v" style={{ color: o.value >= 0 ? "var(--up)" : "var(--down)" }}>
+                    {fmtDollarSigned(o.value)}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
+          <div className="obs-surf-pop-hint">{t("popClickHint")}</div>
+        </div>
+      )}
+
+      {/* Intraday-Evolution modal (RECON §4.2) */}
+      {modalIdx != null && frame && (
+        <StrikeEvolutionModal
+          // The frame is ALREADY server-truncated to the scrubbed stamp, so its time_steps /
+          // grid rows are the realized-so-far window — the modal's series is replay-aware by
+          // construction (NOW = the last realized column). scrubbedTimeIdx=null = full frame.
+          frame={frame}
+          strikeIdx={modalIdx}
+          metric={metric}
+          metricLabel={metricLabel}
+          scrubbedTimeIdx={null}
+          matrixCells={matrixCells}
+          asofLabel={asofLabel}
+          lang={lang}
+          onClose={() => setModalIdx(null)}
+        />
+      )}
 
       {/* Honesty note */}
       <div className="obs-note" style={NOTE}>{t("surfaceNote")}</div>
