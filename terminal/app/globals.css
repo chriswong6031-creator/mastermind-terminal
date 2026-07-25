@@ -737,6 +737,12 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .arow{display:grid;grid-template-columns:30px 1fr auto auto auto 36px;gap:12px;align-items:center;padding:12px 15px;border-bottom:1px solid var(--line-2);font-size:13px}
 .arow .dot{width:8px;height:8px;border-radius:50%;background:var(--up)}.arow .dot.off{background:var(--text-dim)}
 .arow .cond{color:var(--text-2)} .arow .tk{font-weight:600}
+/* options-flow alert params: inline label+input; preview strip under the form */
+.opt-field{display:inline-flex;align-items:center;gap:7px;font:600 10.5px/1 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.opt-field input{text-align:right;font-variant-numeric:tabular-nums}
+.opt-preview{display:flex;align-items:center;gap:9px;padding:0 15px 13px;flex-wrap:wrap}
+.opt-preview-lbl{font:600 9.5px/1 var(--font-ui);letter-spacing:.07em;text-transform:uppercase;color:var(--signal)}
+.opt-preview-txt{font-size:12.5px;color:var(--text-2)}
 .ptable{width:100%;border-collapse:collapse;font-size:13px}
 .ptable th{text-align:right;padding:10px 15px;font:600 10px/1 var(--font-ui);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line)}
 .ptable th:first-child{text-align:left}
