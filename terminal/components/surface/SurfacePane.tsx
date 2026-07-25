@@ -217,19 +217,20 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
       setLoading(true);
       const data = await flowGet(`surface:${root}:${asOfStamp}`);
       if (cancelled) return;
-      setFrame(isSurfaceFrame(data) ? data : null);
+      const nextFrame = isSurfaceFrame(data) ? data : null;
+      setFrame(nextFrame);
+      // If the active greek metric isn't carried by this frame, fall back to the premium
+      // field (always present) so the pane never sits on a dead tab. Done here inside the
+      // async task (with the frame write) rather than a separate setState-in-effect.
+      if (metricRef.current !== "netprem" && (!nextFrame || !metricEnabled(nextFrame, metricRef.current))) {
+        setMetric("netprem");
+      }
       setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [root, asOfStamp]);
 
   useEffect(() => { frameRef.current = frame; }, [frame]);
-
-  // If the active greek metric isn't carried by the freshly-loaded frame, fall back to the
-  // premium field (which is always present) so the pane never sits on a dead tab.
-  useEffect(() => {
-    if (metric !== "netprem" && frame && !metricEnabled(frame, metric)) setMetric("netprem");
-  }, [frame, metric]);
 
   // ── Per-strike-per-expiry matrix (modal expiry breakdown; optional per root) ──
   // The matrix payload (options_structure.matrix) exists only for some roots — absent →
@@ -321,7 +322,10 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
     chart.subscribeCrosshairMove((param: MouseEventParams) => {
       const f = frameRef.current;
       if (!param.point || !f || !f.price_levels.length) { setReadout(null); setHover(null); return; }
-      const price = candle.coordinateToPrice(param.point.y);
+      // Map the crosshair Y → price via the price scale. Prefer the candle series, but fall
+      // back to the heat series when candles are empty (fixture / illiquid roots) — they
+      // share the right price scale, and the heat field always has data when a frame loads.
+      const price = candle.coordinateToPrice(param.point.y) ?? heat.coordinateToPrice(param.point.y);
       if (price == null) { setReadout(null); setHover(null); return; }
       // nearest strike level to the crosshair price
       let li = 0, best = Infinity;
