@@ -222,6 +222,22 @@ const GEX_LEX = {
   tooltipCallOi:   ["Call OI", "认购持仓"],
   tooltipPutOi:    ["Put OI", "认沽持仓"],
 
+  // ── Walls chip row + range presets + NOW|PEAK scale (Wave-1 ladder upgrades) ──
+  ladderWallsNet:  ["NET GEX", "净GEX"],
+  ladderWallsFlip: ["FLIP", "翻转"],
+  ladderWallsCall: ["C WALL", "认购墙"],
+  ladderWallsPut:  ["P WALL", "认沽墙"],
+  rangePresetAria: ["Strike range", "行权价范围"],
+  rangeAll:        ["All", "全部"],
+  scaleNow:        ["NOW", "当前"],
+  scalePeak:       ["PEAK", "峰值"],
+  scalePeakNote:   [
+    "PEAK normalizes bars to the largest |net| across the retained session history; absent here → NOW scale only.",
+    "PEAK 以留存历史中最大的 |净值| 归一化柱状图；此处暂无 → 仅按当前(NOW)刻度。",
+  ],
+  expiryBreakdownTitle: ["Top expiries", "主要到期日"],
+  expiryBreakdownNote:  ["per-expiry net-γ share", "按到期日净伽马占比"],
+
   // ── Data freshness ─────────────────────────────────────────────────────────
   asOf:            ["as of", "更新于"],
   lastSession:     ["last session", "上一交易日"],

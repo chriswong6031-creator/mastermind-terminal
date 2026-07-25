@@ -35,6 +35,8 @@ const PROPHET_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet
 const PROPHET_MARKS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_marks_fixture.json");
 const ENRICH_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "enrich_fixture.json");
 const FLOW_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_idx_fixture.json");
+const SURFACE_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_idx_fixture.json");
+const SURFACE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_fixture.json");
 
 // Valid f-param values: existing feed|heat|meta, plus hub params.
 // Parameterized sub-types: tide, dte, ticker:{ROOT}, vol:{ROOT}, gex:{ROOT}, oi, hot
@@ -46,6 +48,9 @@ export function isValidF(f: string): boolean {
   if (f.startsWith("tctx:") && f.length > 5) return true;
   if (f.startsWith("gexstate:") && f.length > 9) return true;
   if (f.startsWith("matrix:") && f.length > 7) return true;
+  // Surface replay store: surface_idx:{ROOT} (frame index) + surface:{ROOT}:{STAMP} (one frame).
+  if (f.startsWith("surface_idx:") && f.length > 12) return true;
+  if (f.startsWith("surface:") && f.split(":").length === 3 && f.length > 10) return true;
   if (f === "manifest") return true;
   if (f === "flow_idx") return true;
   if (f === "prophet_idx") return true;
@@ -71,6 +76,12 @@ function backendPath(f: string): string {
   if (f === "chainheat") return "/api/flow/chainheat";
   if (f.startsWith("gexstate:")) return `/api/hub/gexstate/${f.slice(9)}`;
   if (f.startsWith("matrix:")) return `/api/hub/matrix/${f.slice(7)}`;
+  // Surface store: /api/flow/surface/{ROOT}/idx  and  /api/flow/surface/{ROOT}/{STAMP}
+  if (f.startsWith("surface_idx:")) return `/api/flow/surface/${f.slice(12)}/idx`;
+  if (f.startsWith("surface:")) {
+    const [, root, stamp] = f.split(":");
+    return `/api/flow/surface/${root}/${stamp}`;
+  }
   if (f === "manifest") return "/api/flow/manifest";
   if (f === "flow_idx") return "/api/flow/flow_idx";
   if (f === "prophet_idx") return "/api/hub/prophet";
@@ -96,6 +107,12 @@ function r2Key(f: string): string {
   if (f === "chainheat") return "live_flow/chain_heat_current.json";
   if (f.startsWith("gexstate:")) return `options_structure/gex_state/${f.slice(9)}.json`;
   if (f.startsWith("matrix:")) return `options_structure/matrix/${f.slice(7)}.json`;
+  // Surface store on R2: live_flow/surface/{ROOT}/idx.json + live_flow/surface/{ROOT}/{STAMP}.json
+  if (f.startsWith("surface_idx:")) return `live_flow/surface/${f.slice(12)}/idx.json`;
+  if (f.startsWith("surface:")) {
+    const [, root, stamp] = f.split(":");
+    return `live_flow/surface/${root}/${stamp}.json`;
+  }
   if (f === "manifest") return "live_flow/manifest.json";
   if (f === "flow_idx") return "live_flow/flow_idx.json";
   if (f === "prophet_idx") return "prophet/index.json";
@@ -238,6 +255,53 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       const raw = await fs.readFile(FLOW_IDX_FIXTURE_FILE, "utf8");
       return JSON.parse(raw) as Record<string, unknown>;
     } catch { return { rows: [], as_of: "", source: "fixture-empty" }; }
+  }
+  // Surface frame index — keyed by ROOT. Unknown roots return an honest empty index.
+  if (f.startsWith("surface_idx:")) {
+    const root = f.slice(12).toUpperCase();
+    try {
+      const raw = await fs.readFile(SURFACE_IDX_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? { date: "", stamps: [], latest: null, cadenceSec: 0, source: "fixture-empty" };
+    } catch {
+      return { date: "", stamps: [], latest: null, cadenceSec: 0, source: "fixture-empty" };
+    }
+  }
+  // Surface frame for a given stamp — the fixture stores ONE canonical full-day frame per
+  // root; we truncate time_steps + each metric grid to the realized-so-far window for the
+  // requested stamp (replay = the surface as it existed at that time). Unknown root/stamp →
+  // empty frame (honest "no surface data" state), never fabricated.
+  if (f.startsWith("surface:")) {
+    const [, rootRaw, stamp] = f.split(":");
+    const root = (rootRaw ?? "").toUpperCase();
+    const empty = { spot: null, price_levels: [], time_steps: [], grids: {}, asof: "", cadence: "" };
+    try {
+      const raw = await fs.readFile(SURFACE_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      const full = all[root];
+      if (!full) return empty;
+      const stamps = (full.stamps as string[]) ?? [];
+      const times = (full.time_steps as string[]) ?? [];
+      const idx = stamps.indexOf(stamp);
+      const upto = idx >= 0 ? idx + 1 : times.length; // unknown stamp → full day
+      const gridsFull = (full.grids as Record<string, number[][]>) ?? {};
+      const grids: Record<string, number[][]> = {};
+      for (const [m, g] of Object.entries(gridsFull)) grids[m] = g.map((row) => row.slice(0, upto));
+      const spotPath = (full.spot_path as number[] | undefined) ?? null;
+      return {
+        spot: spotPath ? spotPath[Math.max(0, upto - 1)] ?? full.spot : full.spot,
+        price_levels: full.price_levels,
+        time_steps: times.slice(0, upto),
+        grids,
+        asof: full.asof,
+        cadence: full.cadence,
+        metrics: full.metrics,
+        root,
+        session_date: full.session_date,
+      } as Record<string, unknown>;
+    } catch {
+      return empty;
+    }
   }
   if (f === "prophet_idx") {
     try {

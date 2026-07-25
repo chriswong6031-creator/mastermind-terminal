@@ -31,6 +31,16 @@ const GexDeskView = dynamic(
   () => import("@/components/gexdesk/GexDeskView").then((m) => ({ default: m.GexDeskView })),
   { ssr: false, loading: () => <TabSkeleton /> },
 );
+const SurfaceView = dynamic(
+  () => import("@/components/surface/SurfaceView").then((m) => ({ default: m.SurfaceView })),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
+// Session Flow pane (quanted Wave 1) — a sub-toggle of the Tide tab (smaller diff than a
+// new top-level tab; consumes the tide payload's per-minute cumulative ncp/npp series).
+const SessionFlowPane = dynamic(
+  () => import("@/components/surface/SessionFlowPane").then((m) => ({ default: m.SessionFlowPane })),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
 const PrismView = dynamic(
   () => import("@/components/prism/PrismView").then((m) => ({ default: m.PrismView })),
   { ssr: false, loading: () => <TabSkeleton /> },
@@ -42,7 +52,7 @@ const ProphetView = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "prism" | "leaders" | "radar";
+export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "vol" | "gex" | "surface" | "prism" | "leaders" | "radar";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
@@ -53,6 +63,7 @@ const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "screener", enKey: "tabScreener", zhKey: "tabScreener" },
   // "vol" tab removed from bar — vol surface now lives in the Tickers tab right column
   { key: "gex",      enKey: "tabGex",      zhKey: "tabGex" },
+  { key: "surface",  enKey: "tabSurface",  zhKey: "tabSurface" },
   { key: "prism",    enKey: "tabPrism",    zhKey: "tabPrism" },
   { key: "leaders",  enKey: "tabLeaders",  zhKey: "tabLeaders" },
   { key: "radar",    enKey: "tabRadar",    zhKey: "tabRadar" },
@@ -1566,6 +1577,9 @@ export default function OptionsHubView({
   const [dteBuckets, setDteBuckets] = useState<Set<DteBucket>>(new Set());
   const [mnyBuckets, setMnyBuckets] = useState<Set<MnyBucket>>(new Set());
   const [groupFilter, setGroupFilter] = useState<string>("");
+  // Tide tab sub-view: the classic net-premium tide chart, or the quanted-style Session
+  // Flow pane (C+P|calls|puts · cumulative|per-min · off-open · fill · absolute).
+  const [tideView, setTideView] = useState<"tide" | "session">("tide");
   const [drillTicker, setDrillTicker] = useState<string | null>(null);
   const [tapeTickerSearch, setTapeTickerSearch] = useState<string>("");
   const [sideFilter, setSideFilter] = useState<string>("");
@@ -2361,15 +2375,37 @@ export default function OptionsHubView({
                         </span>
                       )}
                     </div>
-                    <div style={{ marginLeft: "auto" }}>
+                    <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                      {/* Tide | Session sub-view toggle (quanted Wave 1) */}
+                      <div className="obs-pillnav" role="group" aria-label={lang === "zh" ? "资金潮视图" : "Tide view"} style={{ padding: 2 }}>
+                        <button
+                          className={`obs-pillnav-tab${tideView === "tide" ? " on" : ""}`}
+                          onClick={() => setTideView("tide")}
+                        >
+                          {t("tabTide", "Tide")}
+                        </button>
+                        <button
+                          className={`obs-pillnav-tab${tideView === "session" ? " on" : ""}`}
+                          onClick={() => setTideView("session")}
+                        >
+                          {lang === "zh" ? "盘中" : "Session"}
+                        </button>
+                      </div>
                       <TideTutorialButton lang={lang} />
                     </div>
                   </div>
 
-                  {/* Main tide chart — explicit height so LWC canvas isn't clipped */}
-                  <div data-tut="tide-chart" style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 4px 4px", height: 240, boxSizing: "border-box" }}>
-                    <TideChart minutes={tideData.minutes} spy={tideData.spy} height={216} sessionDate={tideData.session_date} />
-                  </div>
+                  {/* Main tide chart — explicit height so LWC canvas isn't clipped.
+                      Session view swaps in the quanted-style Session Flow pane. */}
+                  {tideView === "tide" ? (
+                    <div data-tut="tide-chart" style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 4px 4px", height: 240, boxSizing: "border-box" }}>
+                      <TideChart minutes={tideData.minutes} spy={tideData.spy} height={216} sessionDate={tideData.session_date} />
+                    </div>
+                  ) : (
+                    <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 12px 8px" }}>
+                      <SessionFlowPane minutes={tideData.minutes} sessionDate={tideData.session_date} height={240} />
+                    </div>
+                  )}
 
                   {/* Sector tide grid */}
                   <div data-tut="tide-sector">
@@ -3495,6 +3531,13 @@ export default function OptionsHubView({
           {(activeTab === "gex" || visitedTabs.has("gex")) && (
             <div style={{ flex: 1, overflow: "hidden", display: activeTab === "gex" ? "flex" : "none", minHeight: 0 }}>
               <GexDeskView />
+            </div>
+          )}
+
+          {/* ═══ SURFACE TAB (quanted Wave 1 — paint surface + replay spine) ══ */}
+          {(activeTab === "surface" || visitedTabs.has("surface")) && (
+            <div style={{ flex: 1, overflow: "hidden", display: activeTab === "surface" ? "flex" : "none", minHeight: 0 }}>
+              <SurfaceView />
             </div>
           )}
 
