@@ -1128,3 +1128,263 @@
   text-align: center;
   font-style: italic;
 }
+
+/* ─── Wave 2E: per-greek surface color pairs ─────────────────────────────────
+ *
+ * Diverging color pairs for the surface pane's greek metrics (RECON §4.6 defaults).
+ * Resolved to RGB at mount by lib/heatSeries.resolveMetricColors and fed to the paint
+ * shader (same code path as Wave-1's --up/--down premium field).
+ *
+ *   gamma → the directional up/down tokens (teal +, red −) so it follows the East-Asian
+ *           red-up flip like every other directional read.
+ *   vanna → purple / orange, charm → indigo / yellow. These are GREEK HUES, not a
+ *           bull/bear read, so they are the SAME in east + west (no flip) — overridable
+ *           here per theme. Defined on .obs so a themed page can restyle them centrally.
+ */
+.obs {
+  --metric-vanna-pos: #9b6bff; /* purple */
+  --metric-vanna-neg: #ff9d42; /* orange */
+  --metric-charm-pos: #5b6cff; /* indigo */
+  --metric-charm-neg: #f2c53d; /* yellow */
+}
+
+/* ─── Wave 2E: surface strike-hover popover ──────────────────────────────────
+ * Floating obs-card popover on a surface strike row (RECON §4.2 parity). Lives on a
+ * fixed layer above the pane so it never clips inside the chart's overflow.
+ */
+.obs-surf-pop {
+  position: fixed;
+  z-index: 80;
+  min-width: 188px;
+  max-width: 236px;
+  padding: 9px 11px 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 11px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.obs-surf-pop-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.obs-surf-pop-strike {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  font-family: var(--font-num);
+}
+.obs-surf-pop-pct {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--font-num);
+}
+.obs-surf-pop-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.obs-surf-pop-row .k {
+  color: var(--text-2);
+}
+.obs-surf-pop-row .v {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.obs-surf-pop-sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 6px 0 5px;
+}
+.obs-surf-pop-hint {
+  margin-top: 7px;
+  font-size: 9.5px;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* ─── Wave 2E: Intraday-Evolution modal ──────────────────────────────────────
+ * Full floating layer (scrim + centered card). Focus-trapped; Esc closes.
+ */
+.obs-modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(6, 8, 12, 0.62);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.obs-modal {
+  width: min(760px, 96vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+}
+.obs-modal-hd {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.obs-modal-title {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.obs-modal-title b {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  font-family: var(--font-num);
+}
+.obs-modal-close {
+  height: 26px;
+  min-width: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 110ms var(--ease), color 110ms var(--ease);
+}
+.obs-modal-close:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: var(--text);
+}
+.obs-modal-body {
+  padding: 12px 16px 6px;
+  overflow-y: auto;
+}
+.obs-modal-chart {
+  width: 100%;
+  height: 260px;
+  position: relative;
+}
+.obs-modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 9px 16px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 10.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Expiry-breakdown horizontal bars inside the modal */
+.obs-modal-exp-row {
+  display: grid;
+  grid-template-columns: 58px 1fr 70px;
+  align-items: center;
+  height: 20px;
+  gap: 8px;
+}
+.obs-modal-exp-lbl {
+  font-size: 10.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.obs-modal-exp-track {
+  position: relative;
+  height: 10px;
+}
+.obs-modal-exp-bar {
+  position: absolute;
+  top: 0;
+  height: 10px;
+  border-radius: 2px;
+  transition: width 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.obs-modal-exp-val {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Wave 2E: Exposure-by-Expiry drawer ─────────────────────────────────────
+ * Collapsible bottom drawer on the Exposure tab. Bubbles | Bars.
+ */
+.obs-xdrawer {
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  flex-shrink: 0;
+}
+.obs-xdrawer-hd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-2);
+  text-align: left;
+}
+.obs-xdrawer-hd:hover {
+  color: var(--text);
+}
+.obs-xdrawer-caret {
+  font-size: 9px;
+  color: var(--muted);
+  transition: transform 160ms var(--ease);
+}
+.obs-xdrawer-caret.open {
+  transform: rotate(90deg);
+}
+.obs-xdrawer-count {
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+.obs-xdrawer-body {
+  padding: 6px 14px 12px;
+}
+.obs-xdrawer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.obs-xdrawer-plot {
+  width: 100%;
+  height: 168px;
+  position: relative;
+}
+.obs-xdrawer-note {
+  margin-top: 8px;
+}
+.obs-xdrawer-empty {
+  padding: 22px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}

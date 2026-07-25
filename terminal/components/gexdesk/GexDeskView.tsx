@@ -43,6 +43,7 @@ import type { GexDeskKey } from "./gexStrings";
 import { GexSummaryBar } from "./GexSummaryBar";
 import { StrikeLadder } from "./StrikeLadder";
 import { ExpiryBars } from "./ExpiryBars";
+import { ExposureExpiryDrawer } from "./ExposureExpiryDrawer";
 import { MarketStateCard } from "./MarketStateCard";
 import type { GexStatePayload } from "./MarketStateCard";
 import { GexGuide } from "./GexGuide";
@@ -455,6 +456,14 @@ export function GexDeskView() {
           lang={lang}
         />
       </div>
+
+      {/* ── Exposure-by-Expiry term-structure drawer (RECON §4.5) ──────────── */}
+      <ExposureExpiryDrawer
+        byExpiry={gexPayload?.by_expiry ?? null}
+        greek={greek}
+        asOf={gexPayload?.asof ?? null}
+        lang={lang}
+      />
     </div>
   );
 }
