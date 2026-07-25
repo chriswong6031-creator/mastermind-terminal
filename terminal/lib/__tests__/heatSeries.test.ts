@@ -3,9 +3,12 @@ import {
   heatShade,
   parseRgba,
   cssColorToRgb,
+  cellRowSpan,
   resolveMetricColors,
   type Rgb,
 } from "@/lib/heatSeries";
+import { buildHeatBars, type SurfaceFrame } from "@/lib/surfaceContract";
+import type { Time } from "lightweight-charts";
 
 // west-theme defaults; the shader takes explicit triplets so tests are theme-independent.
 const POS: Rgb = [38, 194, 129];
@@ -104,5 +107,93 @@ describe("resolveMetricColors — SSR-safe defaults", () => {
     const a = resolveMetricColors("does-not-exist");
     const b = resolveMetricColors("netprem");
     expect(a).toEqual(b);
+  });
+});
+
+// ─── B3: every grid row is written, on uniform AND non-uniform ladders ───────
+// The renderer maps the union of visible cell boundaries to pixel rows. This mirrors
+// that mapping in pure form and asserts full coverage — an unwritten row is a
+// transparent stripe on screen.
+describe("cellRowSpan — a cell fills its whole [low,high) band (B3)", () => {
+  const rowOf = new Map<number, number>([
+    [95, 0], [100, 1], [105, 2], [110, 3], [115, 4],
+  ]);
+  const g = 4; // boundaries - 1
+
+  it("spans every row between its boundaries", () => {
+    expect(cellRowSpan(rowOf, { low: 95, high: 100 }, g)).toEqual([0, 1]);
+    // a band two rows tall (an interior boundary landed inside it)
+    expect(cellRowSpan(rowOf, { low: 100, high: 110 }, g)).toEqual([1, 3]);
+    expect(cellRowSpan(rowOf, { low: 95, high: 115 }, g)).toEqual([0, 4]);
+  });
+
+  it("degrades to a single row when `high` is not a known boundary", () => {
+    expect(cellRowSpan(rowOf, { low: 100, high: 107 }, g)).toEqual([1, 2]);
+  });
+
+  it("returns null for an unknown or out-of-range `low`", () => {
+    expect(cellRowSpan(rowOf, { low: 97, high: 100 }, g)).toBeNull();
+    expect(cellRowSpan(rowOf, { low: 115, high: 120 }, g)).toBeNull(); // row 4 >= g
+  });
+
+  it("clamps the span to the grid height", () => {
+    expect(cellRowSpan(rowOf, { low: 110, high: 115 }, 4)).toEqual([3, 4]);
+  });
+});
+
+describe("heat grid coverage — no unpainted row for any ladder (B3)", () => {
+  const anchor = (hhmm: string): Time => Number(hhmm.replace(":", "")) as unknown as Time;
+
+  /** Replays the renderer's boundary-union → row-write pass; returns rows never written. */
+  function unpaintedRows(frame: SurfaceFrame): number[] {
+    const bars = buildHeatBars(frame, "netprem", anchor);
+    const boundarySet = new Set<number>();
+    for (const bar of bars) for (const c of bar.cells) { boundarySet.add(c.low); boundarySet.add(c.high); }
+    const boundaries = [...boundarySet].sort((a, b) => a - b);
+    const g = Math.max(1, boundaries.length - 1);
+    const rowOf = new Map<number, number>();
+    boundaries.forEach((b, i) => rowOf.set(b, i));
+    const painted = new Set<number>();
+    for (const c of bars[0].cells) {
+      const span = cellRowSpan(rowOf, c, g);
+      if (!span) continue;
+      for (let r = span[0]; r < span[1]; r++) painted.add(r);
+    }
+    return Array.from({ length: g }, (_, i) => i).filter((r) => !painted.has(r));
+  }
+
+  const base = {
+    spot: 110,
+    time_steps: ["09:31", "09:41"],
+    asof: "2026-07-06T13:31:00Z",
+    cadence: "10-min",
+    session_date: "2026-07-06",
+  };
+
+  it("covers every row on a NON-UNIFORM ladder", () => {
+    const frame: SurfaceFrame = {
+      ...base,
+      price_levels: [100, 105, 110, 120, 130],
+      grids: { netprem: [[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]] },
+    };
+    expect(unpaintedRows(frame)).toEqual([]);
+  });
+
+  it("covers every row on a uniform ladder", () => {
+    const frame: SurfaceFrame = {
+      ...base,
+      price_levels: [90, 95, 100, 105, 110],
+      grids: { netprem: [[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]] },
+    };
+    expect(unpaintedRows(frame)).toEqual([]);
+  });
+
+  it("covers every row on a wildly irregular ladder", () => {
+    const frame: SurfaceFrame = {
+      ...base,
+      price_levels: [50, 51, 52, 60, 100, 101, 250],
+      grids: { netprem: [[1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7]] },
+    };
+    expect(unpaintedRows(frame)).toEqual([]);
   });
 });

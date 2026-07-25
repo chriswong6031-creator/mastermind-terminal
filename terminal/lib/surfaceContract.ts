@@ -115,6 +115,46 @@ export function gridMaxAbs(grid: number[][]): number {
   return m;
 }
 
+/**
+ * Per-level price bands: the [low, high) each strike row owns on the price axis.
+ *
+ * Each level extends half-way to each neighbour, so the bands are CONTIGUOUS and
+ * NON-OVERLAPPING — `bands[i].high === bands[i+1].low` exactly. Edge levels extend by
+ * half their single neighbouring gap. A single-level ladder falls back to `levelStep`.
+ *
+ * This is what makes a non-uniform ladder paint solid (B3). The renderer
+ * (lib/heatSeries) builds its pixel grid from the UNION of every cell boundary in a bar;
+ * contiguous non-overlapping bands make that union exactly `levels + 1` entries, i.e.
+ * one grid row per level with no row left unowned. The previous construction gave every
+ * cell the same half-height (the MEDIAN gap), which on a non-uniform ladder both
+ * overlapped neighbours and left surplus union rows that nothing ever wrote —
+ * transparent stripes across the field.
+ *
+ * On a uniform ladder this is arithmetically identical to level ± step/2, so the
+ * geometry of every existing (uniform) surface is unchanged.
+ */
+export function levelBands(priceLevels: number[]): { low: number; high: number }[] {
+  const n = priceLevels.length;
+  if (n === 0) return [];
+  if (n === 1) {
+    const h = levelStep(priceLevels) / 2;
+    return [{ low: priceLevels[0] - h, high: priceLevels[0] + h }];
+  }
+  const bands: { low: number; high: number }[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const low =
+      i === 0
+        ? priceLevels[0] - (priceLevels[1] - priceLevels[0]) / 2
+        : (priceLevels[i - 1] + priceLevels[i]) / 2;
+    const high =
+      i === n - 1
+        ? priceLevels[n - 1] + (priceLevels[n - 1] - priceLevels[n - 2]) / 2
+        : (priceLevels[i] + priceLevels[i + 1]) / 2;
+    bands[i] = { low, high };
+  }
+  return bands;
+}
+
 /** A time-anchoring converter: "HH:MM" on a session date → LWC UNIX time (seconds). */
 export type TimeAnchor = (hhmm: string) => Time;
 
@@ -130,12 +170,13 @@ export function buildHeatBars(
 ): HeatData[] {
   const grid = frame.grids[metric];
   if (!grid || !frame.price_levels.length || !frame.time_steps.length) return [];
-  const step = levelStep(frame.price_levels);
+  // Contiguous half-way bands (see levelBands) — non-uniform ladders tile solid (B3).
+  const bands = levelBands(frame.price_levels);
   const bars: HeatData[] = [];
   for (let ti = 0; ti < frame.time_steps.length; ti++) {
-    const cells: HeatCell[] = frame.price_levels.map((lvl, li) => ({
-      low: lvl - step / 2,
-      high: lvl + step / 2,
+    const cells: HeatCell[] = bands.map((b, li) => ({
+      low: b.low,
+      high: b.high,
       amount: grid[li]?.[ti] ?? 0,
     }));
     bars.push({ time: anchor(frame.time_steps[ti]), cells });
@@ -243,6 +284,28 @@ export function topExpiriesForStrike(
     .map((c) => ({ exp: c.expiry, gex: c.gex, share: Math.abs(c.gex) / totalAbs }))
     .sort((a, b) => Math.abs(b.gex) - Math.abs(a.gex))
     .slice(0, n);
+}
+
+/**
+ * What the drill modal may show for the per-expiry breakdown (B4 — point-in-time honesty).
+ *
+ * The per-expiry matrix (`matrix:{ROOT}`) is fetched ONCE per root, with no stamp in the key,
+ * so it always describes the PRESENT — there is no stored per-stamp matrix to substitute.
+ * Captioning those present-time shares "Expiry breakdown at NOW" while the user is scrubbed
+ * back would state something false about a past moment, so:
+ *
+ *   "none"   — no cells for this strike: omit the section entirely (never fabricate it).
+ *   "live"   — at the head of the replay: NOW really is now, show the bars as before.
+ *   "stale"  — scrubbed back: withdraw the bars and say the split is live-only.
+ *
+ * Split out as a pure function so the rule is unit-testable and cannot silently regress into
+ * "just render it anyway".
+ */
+export type ExpiryPanelState = "none" | "live" | "stale";
+
+export function expiryPanelState(expiryCount: number, replayLive: boolean): ExpiryPanelState {
+  if (expiryCount <= 0) return "none";
+  return replayLive ? "live" : "stale";
 }
 
 // ─── Greek metric enablement (Wave 2E feature-detection) ─────────────────────

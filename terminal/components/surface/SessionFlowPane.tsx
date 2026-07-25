@@ -29,6 +29,7 @@ import {
   type SessionMode,
   type SessionSide,
 } from "@/lib/surfaceContract";
+import { sessionEpoch } from "@/lib/intradayShared";
 import { makeSurfaceT } from "./surfaceStrings";
 
 interface TideMinuteLite { t: string; ncp: number; npp: number }
@@ -38,18 +39,6 @@ function css(n: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 }
 
-function etOffsetSuffix(sessionDate: string): string {
-  try {
-    const noonUtc = new Date(`${sessionDate}T12:00:00Z`);
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York", hour12: false, timeZoneName: "shortOffset",
-    }).formatToParts(noonUtc);
-    const tz = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
-    const m = tz.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);
-    if (m) return `${m[1]}${m[2].padStart(2, "0")}:${m[3] ?? "00"}`;
-  } catch {}
-  return "-04:00";
-}
 
 function fmtPrem(n: number): string {
   const a = Math.abs(n);
@@ -108,13 +97,10 @@ export const SessionFlowPane = memo(function SessionFlowPane({
     }
 
     const date = sessionDate || new Date().toISOString().slice(0, 10);
-    const off = etOffsetSuffix(date);
-    const toTs = (hhmm: string): Time => {
-      const [hh, mm] = hhmm.split(":").map(Number);
-      return Math.floor(
-        new Date(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00${off}`).getTime() / 1000,
-      ) as unknown as Time;
-    };
+    // Display-epoch convention, shared with the surface field and the candle feed (B11) —
+    // see lib/intradayShared sessionEpoch. Anchoring to the true UTC instant instead made
+    // this pane's axis read 14:00–19:45 for a 09:30–15:45 ET session.
+    const toTs = (hhmm: string): Time => sessionEpoch(date, hhmm) as unknown as Time;
 
     // Directional tokens (East-Asian flip aware) — never a hardcoded direction hex.
     const up = css("--up");

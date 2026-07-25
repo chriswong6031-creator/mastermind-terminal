@@ -52,10 +52,13 @@ import {
   type SurfaceFrame,
   type MatrixCell,
 } from "@/lib/surfaceContract";
+import { sessionEpoch } from "@/lib/intradayShared";
 import { useReplay } from "./replayContext";
 import { StrikeEvolutionModal } from "./StrikeEvolutionModal";
 import { makeSurfaceT } from "./surfaceStrings";
 import type { SurfaceKey } from "./surfaceStrings";
+import { useSurfaceSync } from "./surfaceSync";
+import type { SurfacePin } from "./surfacePins";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -75,30 +78,30 @@ const AGGS: { min: number; labelKey: SurfaceKey }[] = [
   { min: 1, labelKey: "agg1m" },
   { min: 5, labelKey: "agg5m" },
   { min: 15, labelKey: "agg15m" },
+  { min: 30, labelKey: "agg30m" },
 ];
 
 // Range slider stops (± strikes/points around spot); 0 = All.
 const RANGE_STOPS = [10, 20, 40, 0];
+
+/**
+ * The CSS custom properties each metric's swatches read — the same pair the shader
+ * resolves (lib/heatSeries METRIC_COLOR_VARS) and the same pair the theme engine writes
+ * (components/surface/surfaceTheme METRIC_VAR). Keeping the legend/badge on these vars is
+ * what makes a preset switch recolour the chrome and the field together.
+ */
+const METRIC_CSS: Record<Metric, { pos: string; neg: string }> = {
+  netprem: { pos: "--metric-netprem-pos", neg: "--metric-netprem-neg" },
+  gex: { pos: "--metric-gamma-pos", neg: "--metric-gamma-neg" },
+  vanna: { pos: "--metric-vanna-pos", neg: "--metric-vanna-neg" },
+  charm: { pos: "--metric-charm-pos", neg: "--metric-charm-neg" },
+};
 
 type Bar6 = [number, number, number, number, number, number];
 
 function css(n: string): string {
   if (typeof document === "undefined") return "";
   return getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-}
-
-/** DST-aware US-Eastern offset suffix for a session date (mirrors OptionsHubView). */
-function etOffsetSuffix(sessionDate: string): string {
-  try {
-    const noonUtc = new Date(`${sessionDate}T12:00:00Z`);
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York", hour12: false, timeZoneName: "shortOffset",
-    }).formatToParts(noonUtc);
-    const tz = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
-    const m = tz.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);
-    if (m) return `${m[1]}${m[2].padStart(2, "0")}:${m[3] ?? "00"}`;
-  } catch {}
-  return "-04:00";
 }
 
 function fmtDollarSigned(v: number): string {
@@ -137,14 +140,53 @@ interface StrikeHover {
 /** All greek grid keys we might surface, in a stable order (label mapping via METRICS). */
 const GREEK_KEYS: Metric[] = ["gex", "vanna", "charm"];
 
+export interface SurfacePaneProps {
+  root?: string;
+  /**
+   * Quad-view cell: pin this pane to one metric and drop the metric tabs. The cell still
+   * feature-detects — a greek the snapshot doesn't carry shows the same "accruing" state
+   * the tab strip uses, rather than an empty chart with no explanation.
+   */
+  fixedMetric?: Metric;
+  /** `cell` strips the controls row / honesty note (the quad's shared toolbar owns them). */
+  chrome?: "full" | "cell";
+  /** Identity for crosshair sync inside a quad. Ignored outside a SurfaceSyncProvider. */
+  syncId?: string;
+  /** Aggregation is lifted to the shared toolbar in quad mode. */
+  aggMinOverride?: number;
+  /**
+   * Signature of the active surface theme. Colours are read from CSS custom properties, so
+   * a theme change only needs a re-resolve + re-shade — this prop is the trigger. The chart
+   * is never torn down for a recolour.
+   */
+  themeSig?: string;
+  /** Pinned strike levels, drawn as price lines ("send to chart"). */
+  pins?: SurfacePin[];
+  onTogglePin?: (strike: number, metric: string, value: number | null) => void;
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
-export function SurfacePane({ root = "SPY" }: { root?: string }) {
+export function SurfacePane({
+  root = "SPY",
+  fixedMetric,
+  chrome = "full",
+  syncId,
+  aggMinOverride,
+  themeSig,
+  pins,
+  onTogglePin,
+}: SurfacePaneProps) {
   const { lang } = useLang();
   const t = makeSurfaceT(lang);
-  const { dispatch, asOfStamp } = useReplay();
+  const { state: replayState, dispatch, asOfStamp, live } = useReplay();
+  const sync = useSurfaceSync();
+  const isCell = chrome === "cell";
 
-  const [metric, setMetric] = useState<Metric>("netprem");
+  // A quad cell is pinned to one metric by its parent; the full pane owns its own via the
+  // tab strip. Deriving rather than mirroring into state keeps the two from drifting.
+  const [metricState, setMetricState] = useState<Metric>("netprem");
+  const metric: Metric = fixedMetric ?? metricState;
   const [aggMin, setAggMin] = useState<number>(5);
   const [opacity, setOpacity] = useState<number>(1);
   const [rangeQ, setRangeQ] = useState<number>(0); // 0 = All
@@ -168,9 +210,25 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
   const metricRef = useRef<Metric>("netprem");
   const opacityRef = useRef<number>(1);
   const hoverIdxRef = useRef<number | null>(null); // latest hovered strike idx for click→modal
+  // B9: the frame's time axis in display epochs, rebuilt ONCE per frame. The crosshair
+  // handler used to construct one Date per session column on every mousemove (~390 for a
+  // full 1-min day); it now binary-free scans this prebuilt array instead.
+  const timeEpochsRef = useRef<number[]>([]);
+  // B9: the viewport is set ONCE per root and never again — never on a replay scrub or a
+  // metric/range toggle, which used to yank the user's zoom back on every step.
+  const fittedForRootRef = useRef<string | null>(null);
+  // The session's full stamp list, so the axis can be pinned to the WHOLE day.
+  const stampsRef = useRef<string[]>([]);
+  // Live price lines for pinned strikes, by pin id (send-to-chart).
+  const pinLinesRef = useRef<Map<string, { series: ISeriesApi<"Candlestick"> | ISeriesApi<"Custom">; line: unknown }>>(new Map());
+  // The crosshair handler is registered once at mount; reading sync through a ref keeps it
+  // off the mount effect's dep list (and out of stale-closure territory).
+  const syncRef = useRef({ sync, id: syncId });
+  useEffect(() => { syncRef.current = { sync, id: syncId }; }, [sync, syncId]);
   useEffect(() => { metricRef.current = metric; }, [metric]);
   useEffect(() => { opacityRef.current = opacity; }, [opacity]);
   useEffect(() => { hoverIdxRef.current = hover?.strikeIdx ?? null; }, [hover]);
+  const effAggMin = aggMinOverride ?? aggMin;
 
   // Apply the shader to the heat series from the CURRENT frame/metric/opacity/colors.
   // Ref-backed (reads *Ref values) so the chart-mount effect and the MutationObserver
@@ -222,15 +280,27 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
       // If the active greek metric isn't carried by this frame, fall back to the premium
       // field (always present) so the pane never sits on a dead tab. Done here inside the
       // async task (with the frame write) rather than a separate setState-in-effect.
-      if (metricRef.current !== "netprem" && (!nextFrame || !metricEnabled(nextFrame, metricRef.current))) {
-        setMetric("netprem");
+      // A quad cell is EXEMPT: its whole job is to hold one metric's slot, so an absent
+      // greek must show the honest "accruing" state, not silently become a second
+      // Net-Premium panel next to the real one.
+      if (!fixedMetric && metricRef.current !== "netprem" && (!nextFrame || !metricEnabled(nextFrame, metricRef.current))) {
+        setMetricState("netprem");
       }
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [root, asOfStamp]);
+  }, [root, asOfStamp, fixedMetric]);
 
   useEffect(() => { frameRef.current = frame; }, [frame]);
+  useEffect(() => { stampsRef.current = replayState.stamps ?? []; }, [replayState.stamps]);
+
+  // B9: precompute the frame's column epochs once per frame. The crosshair handler reads
+  // this array; it used to build a Date per column on every single mousemove.
+  useEffect(() => {
+    if (!frame || !frame.time_steps.length) { timeEpochsRef.current = []; return; }
+    const date = frame.session_date ?? new Date().toISOString().slice(0, 10);
+    timeEpochsRef.current = frame.time_steps.map((hhmm) => sessionEpoch(date, hhmm));
+  }, [frame]);
 
   // ── Per-strike-per-expiry matrix (modal expiry breakdown; optional per root) ──
   // The matrix payload (options_structure.matrix) exists only for some roots — absent →
@@ -265,7 +335,7 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/intraday?sym=${encodeURIComponent(root)}&tf=${aggMin}m`, { cache: "no-store" });
+        const r = await fetch(`/api/intraday?sym=${encodeURIComponent(root)}&tf=${effAggMin}m`, { cache: "no-store" });
         if (!r.ok) { if (!cancelled) setCandles([]); return; }
         const j = await r.json();
         if (!cancelled) setCandles(Array.isArray(j?.bars) ? (j.bars as Bar6[]) : []);
@@ -274,12 +344,14 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [root, aggMin]);
+  }, [root, effAggMin]);
 
   // ── Chart lifecycle: create once, tear down on unmount ───────────────────────
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
+    // Captured for the cleanup closure — the Map identity is stable for the pane's life.
+    const pinLines = pinLinesRef.current;
 
     const chart = createChart(el, {
       width: el.clientWidth || 800,
@@ -294,7 +366,14 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
         horzLine: { color: "rgba(214,218,227,.28)", labelBackgroundColor: css("--panel-3") || "#1a1d24" },
       },
       rightPriceScale: { borderColor: css("--line") || "#242832", scaleMargins: { top: 0.06, bottom: 0.06 } },
-      timeScale: { borderColor: css("--line") || "#242832", timeVisible: true, secondsVisible: false, rightOffset: 3 },
+      // fixLeftEdge: the replay truncates the series as you scrub back, and without this
+      // Lightweight-Charts keeps the RIGHT edge anchored — so the shrinking day slides across
+      // the pane instead of emptying out from the right. Pinning the left edge keeps 09:31
+      // where it is and lets the session drain backwards, which is what a scrubber should do.
+      timeScale: {
+        borderColor: css("--line") || "#242832", timeVisible: true, secondsVisible: false,
+        rightOffset: 3, fixLeftEdge: true,
+      },
     });
     chartRef.current = chart;
 
@@ -321,7 +400,13 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
     // Crosshair readout: nearest strike level + its amount at the crosshair time.
     chart.subscribeCrosshairMove((param: MouseEventParams) => {
       const f = frameRef.current;
-      if (!param.point || !f || !f.price_levels.length) { setReadout(null); setHover(null); return; }
+      if (!param.point || !f || !f.price_levels.length) {
+        setReadout(null);
+        setHover(null);
+        const s0 = syncRef.current;
+        if (s0.sync.active && s0.id) s0.sync.publish(s0.id, null);
+        return;
+      }
       // Map the crosshair Y → price via the price scale. Prefer the candle series, but fall
       // back to the heat series when candles are empty (fixture / illiquid roots) — they
       // share the right price scale, and the heat field always has data when a frame loads.
@@ -333,24 +418,28 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
         const d = Math.abs(f.price_levels[i] - price);
         if (d < best) { best = d; li = i; }
       }
-      // nearest time column to the crosshair time
+      // nearest time column to the crosshair time — scans the epochs precomputed on the
+      // frame effect (B9: this loop used to allocate a Date per column per mousemove).
       const grid = f.grids[metricRef.current];
       let ti = (grid?.[li]?.length ?? 1) - 1;
       const timeSec = typeof param.time === "number" ? (param.time as number) : null;
-      const date = f.session_date ?? new Date().toISOString().slice(0, 10);
-      if (timeSec != null && f.time_steps.length) {
-        const off = etOffsetSuffix(date);
+      const epochs = timeEpochsRef.current;
+      if (timeSec != null && epochs.length) {
         let bestT = Infinity;
-        for (let k = 0; k < f.time_steps.length; k++) {
-          const [hh, mm] = f.time_steps[k].split(":").map(Number);
-          const sec = Math.floor(new Date(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00${off}`).getTime() / 1000);
-          const d = Math.abs(sec - timeSec);
+        for (let k = 0; k < epochs.length; k++) {
+          const d = Math.abs(epochs[k] - timeSec);
           if (d < bestT) { bestT = d; ti = k; }
         }
       }
       const value = grid?.[li]?.[ti] ?? 0;
       const strike = f.price_levels[li];
       setReadout({ strike, value });
+
+      // Quad: broadcast the pointer so the other three fields light the same strike-minute.
+      const s = syncRef.current;
+      if (s.sync.active && s.id && timeSec != null) {
+        s.sync.publish(s.id, { time: timeSec, price: strike });
+      }
 
       // Strike hover popover: active-metric value + any other greek grids present, at this
       // stamp. Anchored to the wrapper's client rect (fixed layer → no overflow clipping).
@@ -402,6 +491,9 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
       chartRef.current = null;
       heatSeriesRef.current = null;
       candleSeriesRef.current = null;
+      // The removed chart took its price lines with it; drop the handles so a remount
+      // re-creates them from `pins` instead of holding references to a dead chart.
+      pinLines.clear();
     };
   }, []);
 
@@ -416,33 +508,118 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
       return;
     }
     const date = frame.session_date ?? new Date().toISOString().slice(0, 10);
-    const off = etOffsetSuffix(date);
-    const anchor = (hhmm: string): Time => {
-      const [hh, mm] = hhmm.split(":").map(Number);
-      return Math.floor(
-        new Date(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00${off}`).getTime() / 1000,
-      ) as unknown as Time;
-    };
+    // B11: the DISPLAY-EPOCH convention every intraday series on this axis uses (see
+    // lib/intradayShared sessionEpoch). Anchoring to the true UTC instant instead put the
+    // field 4h (EDT) to the right of its own candles and labelled the 09:31 column "13:31".
+    const anchor = (hhmm: string): Time => sessionEpoch(date, hhmm) as unknown as Time;
     const shown = rangeQ > 0 && frame.spot != null ? filterFrameToRange(frame, frame.spot, rangeQ) : frame;
     const bars: HeatData[] = buildHeatBars(shown, metric, anchor);
     heat.setData(bars);
     applyShaderRef.current();
-    chartRef.current?.timeScale().fitContent();
-  }, [frame, metric, rangeQ]);
+    // B9: fit ONCE per root. Re-fitting on every [frame, metric, rangeQ] change threw away
+    // any zoom or pan on the very next replay step. Safe to do once now that the whitespace
+    // padding above keeps the bar count constant across scrubs — there is nothing left for a
+    // later fit to correct.
+    if (fittedForRootRef.current !== root) {
+      fittedForRootRef.current = root;
+      chartRef.current?.timeScale().fitContent();
+    }
+  }, [frame, metric, rangeQ, root]);
 
   // Re-apply the shader when opacity changes (data unchanged).
   useEffect(() => { applyShaderRef.current(); }, [opacity]);
 
-  // Candles → chart
+  // ── Theme engine: recolour in place, no remount ─────────────────────────────
+  // The pane's colours come from CSS custom properties, and the theme writes those onto an
+  // ancestor. Custom properties inherit, so by the time this effect runs the new values are
+  // already computed on our element — re-resolving and re-shading is the whole update. The
+  // chart, its data and the user's zoom all survive a palette change untouched.
+  useEffect(() => {
+    if (!heatSeriesRef.current) return;
+    colorsRef.current = resolveMetricColors(metricRef.current, wrapRef.current);
+    applyShaderRef.current();
+  }, [themeSig]);
+
+  // ── Quad crosshair sync: mirror a sibling cell's pointer ────────────────────
+  useEffect(() => {
+    if (!sync.active || !syncId) return;
+    return sync.subscribe(syncId, (pos) => {
+      const chart = chartRef.current;
+      const target = candleSeriesRef.current ?? heatSeriesRef.current;
+      if (!chart || !target) return;
+      try {
+        if (pos) chart.setCrosshairPosition(pos.price, pos.time as unknown as Time, target);
+        else chart.clearCrosshairPosition();
+      } catch {
+        /* the sibling may be on a time the chart hasn't painted — ignore, don't crash */
+      }
+    });
+  }, [sync, syncId]);
+
+  // ── Pinned strike levels → price lines (send to chart) ──────────────────────
+  // Reconciled against the incoming pin list: add what's new, drop what's gone. The line is
+  // attached to the candle series when candles exist and to the heat series otherwise —
+  // they share the right price scale, so the level lands in the same place either way, and
+  // a root with no candle data (illiquid, or fixture) still gets its pins drawn.
+  useEffect(() => {
+    const host = candleSeriesRef.current ?? heatSeriesRef.current;
+    if (!host) return;
+    const want = new Map((pins ?? []).map((p) => [p.id, p]));
+    const drawn = pinLinesRef.current; // NOT the replay `live` flag — different thing
+
+    for (const [id, rec] of drawn) {
+      if (want.has(id)) continue;
+      try { (rec.series as unknown as { removePriceLine: (l: unknown) => void }).removePriceLine(rec.line); } catch {}
+      drawn.delete(id);
+    }
+    for (const [id, pin] of want) {
+      if (drawn.has(id)) continue;
+      try {
+        const line = (host as unknown as { createPriceLine: (o: unknown) => unknown }).createPriceLine({
+          price: pin.strike,
+          color: css("--signal") || "#e8b339",
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: String(pin.strike),
+        });
+        drawn.set(id, { series: host, line });
+      } catch {
+        /* LWC rejected the level (no price scale yet) — the chip still lists it */
+      }
+    }
+  }, [pins]);
+
+  // Candles → chart.
+  // PIT: the heat field is server-truncated to the scrubbed stamp, so the candles must stop
+  // there too. Leaving the full session drawn under a replayed field showed price the user
+  // could not have known yet — the same class of point-in-time lie as B4's expiry panel,
+  // and a much louder one. At the head (live) nothing is cut.
   useEffect(() => {
     const candle = candleSeriesRef.current;
     if (!candle) return;
     if (!candles.length) { candle.setData([]); return; }
-    const data = candles
-      .filter((b, i, arr) => i === 0 || b[0] !== arr[i - 1][0])
+    const date = frame?.session_date;
+    let cutoff = Infinity;
+    if (!live && asOfStamp && date && asOfStamp.length >= 4) {
+      const e = sessionEpoch(date, `${asOfStamp.slice(0, 2)}:${asOfStamp.slice(2, 4)}`);
+      if (Number.isFinite(e)) cutoff = e;
+    }
+    const kept = candles.filter((b, i, arr) => i === 0 || b[0] !== arr[i - 1][0]);
+    const data = kept
+      .filter((b) => b[0] <= cutoff)
       .map((b) => ({ time: b[0] as unknown as Time, open: b[1], high: b[2], low: b[3], close: b[4] }));
-    candle.setData(data);
-  }, [candles]);
+    // Keep the time axis on the WHOLE session by padding the cut tail with whitespace points.
+    // This is half of a pair: the padding extends the scale to 15:56, and `fixLeftEdge` on the
+    // time scale stops Lightweight-Charts re-anchoring the shorter series to the right edge.
+    // Without BOTH, scrubbing back slides the whole day across the pane. With them, the
+    // gridlines never move and the session simply drains backwards, leaving the right-hand
+    // side blank — which reads honestly as "not known at this moment".
+    // (Padding the custom heat series instead does not hold the scale; the built-in
+    // candlestick series does, so the whitespace lives here.)
+    const tail = kept.filter((b) => b[0] > cutoff).map((b) => ({ time: b[0] as unknown as Time }));
+    candle.setData([...data, ...tail] as Parameters<typeof candle.setData>[0]);
+  }, [candles, live, asOfStamp, frame?.session_date]);
 
   // ── Stamps / labels ──────────────────────────────────────────────────────────
   // Plain computations — the React Compiler auto-memoizes; a manual useMemo here trips
@@ -450,10 +627,15 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
   const asofLabel = fmtAsofLabel(frame?.asof);
   const metricLabel = t(METRICS.find((m) => m.key === metric)?.labelKey ?? "metricNetPrem");
   const hasData = !!frame && !!frame.grids[metric] && frame.time_steps.length > 0;
+  // A quad cell whose greek the snapshot doesn't carry: say "accruing" over the empty
+  // field instead of leaving a blank rectangle with no explanation.
+  const cellAccruing = isCell && !!fixedMetric && fixedMetric !== "netprem" && !metricEnabled(frame, fixedMetric);
+  const pinnedHere = hover ? (pins ?? []).some((p) => p.strike === hover.strike) : false;
 
   return (
     <div style={PANE}>
-      {/* Controls row */}
+      {/* Controls row — the quad's shared toolbar owns these in cell mode. */}
+      {!isCell && (
       <div style={CONTROLS}>
         {/* Metric tabs — greek tabs feature-detect on the loaded frame's grids. */}
         <div style={GROUP} role="group" aria-label={t("metricLensAria")}>
@@ -469,7 +651,7 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
                 aria-pressed={metric === m.key}
                 aria-disabled={!enabled}
                 aria-label={enabled ? undefined : `${t(m.labelKey)} — ${t("metricAccruing")}`}
-                onClick={() => enabled && setMetric(m.key)}
+                onClick={() => enabled && setMetricState(m.key)}
               >
                 {t(m.labelKey)}
                 {!enabled && <span style={ACCRUING_DOT} aria-hidden>·</span>}
@@ -481,8 +663,8 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
         {/* Aggregation */}
         <div style={GROUP} role="group" aria-label={t("aggAria")}>
           {AGGS.map((a) => (
-            <button key={a.min} className={`obs-chip${aggMin === a.min ? " on" : ""}`} style={CHIP}
-              aria-pressed={aggMin === a.min} onClick={() => setAggMin(a.min)}>
+            <button key={a.min} className={`obs-chip${effAggMin === a.min ? " on" : ""}`} style={CHIP}
+              aria-pressed={effAggMin === a.min} onClick={() => setAggMin(a.min)}>
               {t(a.labelKey)}
             </button>
           ))}
@@ -507,16 +689,27 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
           <span style={SLIDER_VAL} className="num">{rangeQ === 0 ? t("rangeAll") : `±${rangeQ}`}</span>
         </label>
 
-        {/* Legend */}
+        {/* Legend — reads the ACTIVE metric's theme pair, so it keeps telling the truth
+            after a preset switch (and still flips with --up/--down on the default). */}
         <div style={LEGEND}>
-          <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: "var(--up)" }} />{t("legendPos")}</span>
-          <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: "var(--down)" }} />{t("legendNeg")}</span>
+          <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].pos})` }} />{t("legendPos")}</span>
+          <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].neg})` }} />{t("legendNeg")}</span>
         </div>
       </div>
+      )}
 
       {/* Chart area */}
       <div style={CHART_AREA}>
         <div ref={wrapRef} style={{ width: "100%", height: "100%" }} />
+
+        {/* Quad cell: the metric name lives on the cell itself (no tab strip here). */}
+        {isCell && (
+          <div style={CELL_BADGE}>
+            <span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].pos})`, marginRight: 5 }} />
+            {metricLabel}
+            {cellAccruing && <span style={CELL_ACCRUING}>{t("quadAccruing")}</span>}
+          </div>
+        )}
 
         {/* Crosshair readout pill (top-left) */}
         {readout && hasData && (
@@ -530,8 +723,9 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
           </div>
         )}
 
-        {/* As-of + cadence stamp (bottom-right) */}
-        {hasData && (
+        {/* As-of + cadence stamp (bottom-right) — full pane only; in a quad the shared
+            replay bar carries one stamp for all four cells. */}
+        {hasData && !isCell && (
           <div style={STAMP_PILL}>
             {asofLabel && <span>{t("asOf")} {asofLabel}</span>}
             {frame?.cadence && <span style={{ color: "var(--muted)", marginLeft: 8 }}>· {frame.cadence} {t("cadenceLabel")}</span>}
@@ -542,7 +736,7 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
         {/* Empty / loading */}
         {!hasData && (
           <div style={EMPTY}>
-            {loading ? t("surfaceLoading") : t("surfaceEmpty")}
+            {loading ? t("surfaceLoading") : cellAccruing ? t("metricAccruing") : t("surfaceEmpty")}
           </div>
         )}
       </div>
@@ -584,6 +778,19 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
               ))}
             </>
           )}
+          {/* Send to chart — pin this strike as a level line. Pointer events are on for
+              this one control; the rest of the popover stays click-through. */}
+          {onTogglePin && (
+            <button
+              type="button"
+              className="obs-surf-pop-pin"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onTogglePin(hover.strike, hover.active.key, hover.active.value)}
+              aria-pressed={pinnedHere}
+            >
+              {pinnedHere ? t("pinnedUnpin") : t("pinToChart")}
+            </button>
+          )}
           <div className="obs-surf-pop-hint">{t("popClickHint")}</div>
         </div>
       )}
@@ -595,6 +802,7 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
           // grid rows are the realized-so-far window — the modal's series is replay-aware by
           // construction (NOW = the last realized column). scrubbedTimeIdx=null = full frame.
           frame={frame}
+          root={root}
           strikeIdx={modalIdx}
           metric={metric}
           metricLabel={metricLabel}
@@ -602,12 +810,19 @@ export function SurfacePane({ root = "SPY" }: { root?: string }) {
           matrixCells={matrixCells}
           asofLabel={asofLabel}
           lang={lang}
+          // B4: the per-expiry matrix is ONE head-of-day fetch keyed on root, so it always
+          // describes the present. Telling the modal whether the replay is at the head lets
+          // it label that panel honestly instead of captioning present-time shares "at NOW"
+          // over a scrubbed-back moment.
+          replayLive={live}
+          pinned={(pins ?? []).some((p) => p.strike === frame.price_levels[modalIdx])}
+          onTogglePin={onTogglePin}
           onClose={() => setModalIdx(null)}
         />
       )}
 
       {/* Honesty note */}
-      <div className="obs-note" style={NOTE}>{t("surfaceNote")}</div>
+      {!isCell && <div className="obs-note" style={NOTE}>{t("surfaceNote")}</div>}
     </div>
   );
 }
@@ -670,3 +885,16 @@ const EMPTY: React.CSSProperties = {
 };
 
 const NOTE: React.CSSProperties = { margin: "8px 14px", flexShrink: 0 };
+
+const CELL_BADGE: React.CSSProperties = {
+  position: "absolute", top: 6, left: 8, zIndex: 5,
+  display: "inline-flex", alignItems: "center",
+  fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase",
+  color: "var(--text-2)", padding: "2px 7px",
+  background: "color-mix(in srgb, var(--panel) 82%, transparent)",
+  borderRadius: "var(--r-sm, 6px)", pointerEvents: "none",
+};
+
+const CELL_ACCRUING: React.CSSProperties = {
+  marginLeft: 6, color: "var(--signal)", fontWeight: 600, textTransform: "none", letterSpacing: 0,
+};

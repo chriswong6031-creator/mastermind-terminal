@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchIntraday, isIntradayTf, classify } from "@/lib/intradaySources";
 import { withStoredHistory } from "@/lib/intradayStore";
 import type { Bar6 } from "@/lib/intradayShared";
+import { intradayFixture } from "@/lib/flowSource";
 import { rateLimit, tooMany } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
@@ -26,6 +27,17 @@ export async function GET(req: Request) {
   const tf = (searchParams.get("tf") || "").trim();
   const ext = searchParams.get("ext") !== "0"; // extended hours on by default (US only)
   if (!sym || !isIntradayTf(tf)) return NextResponse.json({ error: "bad params" }, { status: 400 });
+
+  // Dev fixture branch (FLOW_FIXTURE=1 only, never production): with no market-data key and an empty
+  // history store the Surface pane paints its heat field over an empty price axis. intradayFixture
+  // derives candles from the surface fixture's own spot_path — same synthetic price scale, same
+  // ET-anchored epochs as the heat columns. Roots without a surface fixture return null and fall
+  // through to the normal path unchanged. Placed ahead of the cache + the key-spending upstream
+  // fetch so the fixture never warms (or reads) the shared cross-provider cache.
+  if (process.env.FLOW_FIXTURE === "1") {
+    const fx = await intradayFixture(sym, tf);
+    if (fx?.length) return NextResponse.json({ t: sym, tf, bars: fx, source: "fixture" });
+  }
 
   // Resolve the provider basis (source + epoch convention) that WILL serve this symbol, and fold it
   // into the cache key. Today every provider emits the same market-local "display epoch"
