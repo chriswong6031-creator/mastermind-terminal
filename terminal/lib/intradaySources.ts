@@ -16,6 +16,7 @@ export type { Bar6, Market } from "./intradayShared";
 export { INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
 import type { Bar6, Market } from "./intradayShared";
 import { isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
+import { isMacroSymbol, fetchMacroQuotes } from "./macroSymbols";
 
 // ── US / crypto → Polygon ──
 const ET_FMT = new Intl.DateTimeFormat("en-US", {
@@ -306,8 +307,15 @@ export async function fetchQuotes(syms: string[]): Promise<Record<string, Quote>
   const uniq = Array.from(new Set(syms.map((s) => s.trim()).filter(Boolean)));
   const hub: string[] = [];
   const tencent: string[] = [];
+  const macro: string[] = [];
   for (const s of uniq) {
+    // Macro instruments (^GSPC, GC=F, EURUSD=X, DX-Y.NYB) are checked FIRST: their shapes would
+    // otherwise fall through classify()'s default and be sent to the Quote Hub, which knows only
+    // US equities and crypto and would silently return nothing for every one of them.
+    if (isMacroSymbol(s)) { macro.push(s); continue; }
     const mk = classify(s);
+    // CN/HK index codes (000001.SS, 000300.SS, 399001.SZ, 399006.SZ) need no special case: they
+    // match the A-share pattern and Tencent serves indices under the same sh######/sz###### codes.
     if (mk === "cn" || mk === "hk") tencent.push(s);
     else if (mk === "us" || mk === "crypto") hub.push(s); // ca → no live leg → manifest EOD
   }
@@ -317,6 +325,20 @@ export async function fetchQuotes(syms: string[]): Promise<Record<string, Quote>
     // 30/chunk (not 60): one slow/aborted Tencent response blanks its whole chunk, so smaller
     // chunks halve the blast radius of a single bad request (chunks run in parallel anyway).
     ...chunk(tencent, 30).map((c) => fetchTencentQuotes(c).then((mp) => { Object.assign(out, mp); }).catch(() => {})),
+    macro.length
+      ? fetchMacroQuotes(macro).then((mp) => {
+          for (const [sym, q] of Object.entries(mp)) {
+            out[sym] = {
+              sym, last: q.last, prevClose: q.prevClose, chg: q.chg,
+              open: null, high: null, low: null, vol: null, amount: null, ts: q.ts,
+              // DELAYED, not live: this source runs behind the exchange, and real-time
+              // index/CME/ICE data requires a licensed feed we do not hold. Marking these LIVE
+              // would print a claim we cannot back.
+              live: false, source: "yahoo-spark", market: "us", basis: "DELAYED_15M",
+            };
+          }
+        }).catch(() => {})
+      : Promise.resolve(),
   ]);
   return out;
 }
