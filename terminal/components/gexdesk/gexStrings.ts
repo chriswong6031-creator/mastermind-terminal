@@ -64,18 +64,62 @@ const GEX_LEX = {
   sumIv30:        ["IV30", "30日IV"],
   sumFlip:        ["Gamma Flip", "伽马翻转"],
   sumNotAvail:    ["—", "—"],
+  // Tag on the summary bar's LEVEL cells while a narrower expiry lens is active: walls,
+  // flip and magnet are all-expiry constructs and do not re-derive per expiration.
+  sumAllExpTag:   ["all exp", "全到期"],
 
-  // ── Expiry dropdown ────────────────────────────────────────────────────────
+  // ── Expiry lens (dropdown + 0DTE chip) ─────────────────────────────────────
   expiryDropdownLabel: ["All expirations", "全部到期日"],
   expiry0Dte:          ["0DTE", "当日到期"],
-  expiryAggregateNote: ["net-γ by expiry — ladder is all-expiry aggregate", "按到期日净伽马 — 梯图为全到期日合计"],
+  expiryLensAria:      ["Expiration lens", "到期日视角"],
+  expiryLensZero:      ["0DTE only", "仅当日到期"],
+  expiryLensExZero:    ["All except 0DTE", "除当日到期外"],
+  expiryLensGroupOne:  ["Single expiration", "单一到期日"],
+  // Shown against an expiry the per-strike store cannot answer for.
+  expiryLensNoRows:    ["no per-strike data", "无逐行权价数据"],
+  // Honest footers under the lens bar — one per state, never a silent fallback.
+  expiryAggregateNote: [
+    "ladder shows every expiration combined",
+    "梯图为全部到期日合计",
+  ],
+  expiryScopedNote: [
+    "per-strike split from the structure snapshot · {n}/{m} strikes covered",
+    "逐行权价拆分来自结构快照 · 覆盖 {n}/{m} 个行权价",
+  ],
+  expiryNoMatrixNote: [
+    "per-expiration split not available for this ticker — ladder stays all-expiry",
+    "该品种暂无按到期日拆分 — 梯图保持全到期日合计",
+  ],
+  expiryGammaOnlyNote: [
+    "per-expiration split is gamma-only — switch to GEX to use the lens",
+    "按到期日拆分仅支持伽马 — 切换到 GEX 使用该视角",
+  ],
+  expiryDashNote: [
+    "— = strike outside the per-expiration snapshot, not a zero",
+    "— 表示该行权价不在按到期日快照范围内，并非零值",
+  ],
+
+  // ── Net | Call/Put ladder side toggle ──────────────────────────────────────
+  sideAria:    ["Ladder side", "梯图方向"],
+  sideNet:     ["Net", "净值"],
+  sideSplit:   ["Call/Put", "认购/认沽"],
+  sideNote: [
+    "call/put split is carried all-expiry on gamma only",
+    "认购/认沽拆分仅在全到期日的伽马数据中提供",
+  ],
 
   // ── Strike ladder ──────────────────────────────────────────────────────────
   ladderTitle:      ["Strike Ladder", "行权价梯度"],
+  // Right-edge level tags. The `…Short` pair is the compact-grid (phone) form, where the
+  // tag column is 34px wide.
   ladderCallWall:   ["WALL", "看涨墙"],
   ladderPutSupport: ["SUPPORT", "看跌墙"],
   ladderMagnet:     ["MAGNET", "磁吸"],
   ladderFlip:       ["FLIP", "翻转"],
+  ladderCallWallShort:   ["WALL", "涨墙"],
+  ladderPutSupportShort: ["SUPP", "跌墙"],
+  ladderMagnetShort:     ["MAG", "磁吸"],
+  ladderFlipShort:       ["FLIP", "翻转"],
   ladderSpot:       ["SPOT", "现价"],
   ladderNetGex:     ["Net GEX", "净GEX"],
   ladderCallGex:    ["Call GEX", "认购GEX"],
@@ -106,6 +150,25 @@ const GEX_LEX = {
   stateDistToFlip:    ["Dist to flip", "距翻转"],
   stateAboveFlip:     ["above", "上方"],
   stateBelowFlip:     ["below", "下方"],
+  // Structural range bar + what-if boxes (were hardcoded English on a bilingual card).
+  statePutSupp:       ["PUT SUPP", "看跌墙"],
+  stateCallWall:      ["CALL WALL", "看涨墙"],
+  stateFlipMark:      ["FLIP", "翻转"],
+  stateSpotMark:      ["SPOT", "现价"],
+  stateWhatIf:        ["What if flip breaks?", "若翻转位失守？"],
+  // γ polarity block
+  statePolarity:      ["γ polarity", "伽马极性"],
+  statePolarityLong:  ["LONG γ DOMINANT", "多头伽马主导"],
+  statePolarityShort: ["SHORT γ DOMINANT", "空头伽马主导"],
+  statePolarityCaption: ["Net dealer gamma regime.", "做市商净伽马状态。"],
+  // Hedge pressure block
+  stateHedgePressure: ["Hedge pressure", "对冲压力"],
+  stateHedgeHigh:     ["HIGH", "高"],
+  stateHedgeLow:      ["LOW", "低"],
+  stateHedgeCaption:  ["Size of dealer hedging flow.", "做市商对冲流的规模。"],
+  stateHedgeAbs:      ["|net γ|", "|净伽马|"],
+  // Pin target block
+  statePinCaption:    ["Strike dealers pin toward.", "做市商倾向锁定的行权价。"],
   stateDistToFlipTip: [
     "Spot's distance from the gamma-flip level, as % of spot. Above the flip = long-gamma (dealers dampen moves — pinning / mean-reversion); below = short-gamma (dealers amplify — trend / cascade risk). The smaller the number, the closer to a regime change.",
     "现价距伽马翻转位的距离（占现价百分比）。翻转位上方=多头伽马（做市商抑制波动——锁定/均值回归）；下方=空头伽马（做市商放大波动——趋势/瀑布风险）。数值越小，越接近状态切换。",
@@ -229,11 +292,16 @@ const GEX_LEX = {
   ladderWallsPut:  ["P WALL", "认沽墙"],
   rangePresetAria: ["Strike range", "行权价范围"],
   rangeAll:        ["All", "全部"],
+  // Bar normalization (B1). Both bases are the SAME quantity as the bars — per-strike
+  // exposure under the active greek + expiry lens. The old PEAK divided per-strike bars
+  // by the session's AGGREGATE net in billions; bars collapsed (fixtures) or saturated
+  // (live). Never normalize one quantity against another.
+  scaleAria:       ["Bar scale", "柱状刻度"],
   scaleNow:        ["NOW", "当前"],
-  scalePeak:       ["PEAK", "峰值"],
+  scalePeak:       ["LADDER MAX", "全梯最大"],
   scalePeakNote:   [
-    "PEAK normalizes bars to the largest |net| across the retained session history; absent here → NOW scale only.",
-    "PEAK 以留存历史中最大的 |净值| 归一化柱状图；此处暂无 → 仅按当前(NOW)刻度。",
+    "NOW scales bars to the biggest strike on screen; LADDER MAX to the biggest in the whole ladder, so the range presets don't rescale them.",
+    "「当前」以屏幕内最大的行权价归一化柱状图；「全梯最大」以整个梯图的最大值归一化，切换范围时刻度不变。",
   ],
   expiryBreakdownTitle: ["Top expiries", "主要到期日"],
   expiryBreakdownNote:  ["per-expiry net-γ share", "按到期日净伽马占比"],

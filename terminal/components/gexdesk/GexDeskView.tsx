@@ -31,6 +31,7 @@
 import React, {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -47,6 +48,13 @@ import { ExposureExpiryDrawer } from "./ExposureExpiryDrawer";
 import { MarketStateCard } from "./MarketStateCard";
 import type { GexStatePayload } from "./MarketStateCard";
 import { GexGuide } from "./GexGuide";
+import {
+  LENS_ALL,
+  matrixExpiryCoverage,
+  matrixLensByStrike,
+  type ExpiryLens,
+  type GexMatrix,
+} from "@/lib/gexLadder";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -156,9 +164,14 @@ export function GexDeskView() {
   const [greek, setGreek]             = useState<GreekLens>("gamma");
   const [view, setView]               = useState<"strike" | "expiry">("strike");
   const [statePayload, setStatePayload] = useState<GexStatePayload | null>(null);
-  const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
-  // Per-strike-per-expiry cells for the ladder hover breakdown (optional, best-effort).
-  const [matrixCells, setMatrixCells] = useState<{ strike: number; expiry: string; gex: number }[] | null>(null);
+  // Expiry lens — All / 0DTE / All−0DTE / one expiration. Owned here because BOTH the
+  // ladder and the summary bar have to be scoped by it (it used to be ladder-local state
+  // with no consumer at all: a dead control).
+  const [lens, setLens] = useState<ExpiryLens>(LENS_ALL);
+  // options_structure.matrix — the ONLY store carrying strike × expiry together, so it is
+  // what makes the lens real. Best-effort: it exists only for some roots (and can run a
+  // different session than the gex payload) — absent → the lens reports itself unavailable.
+  const [matrix, setMatrix] = useState<GexMatrix | null>(null);
 
   // GEX payload now arrives over the SSE live spine (push) instead of a 60s poll;
   // the hook falls back to flowGet polling if SSE is unavailable, so this is never
@@ -191,19 +204,18 @@ export function GexDeskView() {
   // The gex ladder payload rides the SSE hook above; this separate low-churn feed
   // (gexstate) stays on the light poll and resets on ticker change.
 
-  // Matrix cells feed the ladder hover top-3 expiry breakdown. Best-effort: the payload
-  // (options_structure.matrix) exists only for some roots — absent → breakdown just omitted.
+  // Matrix cells feed the expiry lens AND the ladder hover top-3 expiry breakdown.
+  // Best-effort: the payload (options_structure.matrix) exists only for some roots —
+  // absent → the lens goes dark with a reason and the breakdown is simply omitted.
   const fetchMatrix = useCallback(async (root: string) => {
-    const data = await safeFetch<{ cells?: { strike: number; expiry: string; gex: number }[] }>(
-      `/api/flow?f=matrix:${root}`
-    );
-    setMatrixCells(Array.isArray(data?.cells) ? data!.cells! : null);
+    const data = await safeFetch<GexMatrix>(`/api/flow?f=matrix:${root}`);
+    setMatrix(Array.isArray(data?.cells) ? data : null);
   }, []);
 
   useEffect(() => {
     setStatePayload(null);
-    setSelectedExpiry(null);
-    setMatrixCells(null);
+    setLens(LENS_ALL);
+    setMatrix(null);
     void fetchGexState(ticker);
     void fetchMatrix(ticker);
 
@@ -259,6 +271,39 @@ export function GexDeskView() {
     gammaFlip,
     hvl: gexPayload?.hvl ?? null,
   };
+
+  // ── Expiry lens plumbing ─────────────────────────────────────────────────────
+  // The gex payload gives per-STRIKE (all expiries) and per-EXPIRY (all strikes); only
+  // the matrix carries the two axes crossed. So: All reads by_strike; every narrower lens
+  // is summed out of the matrix here, once, and handed to both consumers below.
+  //
+  // Both matrix reads are anchored to the GEX payload's own as-of, never the wall clock —
+  // an EOD snapshot's "0DTE" is a property of the snapshot's session, not of today.
+  const matrixCells = useMemo(
+    () => (Array.isArray(matrix?.cells)
+      ? matrix.cells.filter((c): c is { strike: number; expiry: string; gex: number } =>
+          c.gex != null && Number.isFinite(c.gex))
+      : null),
+    [matrix]
+  );
+
+  const ladderStrikes = useMemo(
+    () => (gexPayload?.by_strike ?? []).map((s) => s.strike),
+    [gexPayload?.by_strike]
+  );
+
+  // Which expiries the matrix can actually answer for THIS ladder (see lib/gexLadder.ts —
+  // it demands a real strike overlap, so two stores on different sessions read as "no
+  // coverage" rather than producing a ladder of dashes).
+  const lensCoverage = useMemo(
+    () => matrixExpiryCoverage(matrix, ladderStrikes),
+    [matrix, ladderStrikes]
+  );
+
+  const lensValues = useMemo(
+    () => matrixLensByStrike(matrix, lens, asof),
+    [matrix, lens, asof]
+  );
 
   // Walls / flip are gamma-specific constructs. When a non-gamma lens is active,
   // suppress them so the ladder never draws a gamma "WALL"/"SUPPORT"/"FLIP" tag over a
@@ -331,8 +376,9 @@ export function GexDeskView() {
               {GEX_AUTOCOMPLETE_ROOTS.map((r) => <option key={r} value={r} />)}
             </datalist>
           </div>
-          {/* Quick picks — the "dropdown options" the desk was missing */}
-          <div style={{ display: "flex", gap: 4 }}>
+          {/* Quick picks — the "dropdown options" the desk was missing. Wraps so the tail
+              of the list stays reachable on a phone instead of clipping past the edge. */}
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
             {GEX_QUICK_ROOTS.map((r) => (
               <button
                 key={r}
@@ -394,6 +440,8 @@ export function GexDeskView() {
         payload={gexPayload}
         callOI={(statePayload as unknown as Record<string, number | null | undefined>)?.call_oi ?? null}
         putOI={(statePayload as unknown as Record<string, number | null | undefined>)?.put_oi ?? null}
+        lens={lens}
+        lensNetMn={lensValues.cellCount > 0 ? lensValues.totalMn : null}
         lang={lang}
       />
 
@@ -432,17 +480,21 @@ export function GexDeskView() {
               levels={ladderLevels}
               greek={greek}
               byExpiry={gexPayload?.by_expiry ?? null}
-              selectedExpiry={selectedExpiry}
-              onSelectExpiry={setSelectedExpiry}
+              lens={lens}
+              onLens={setLens}
+              lensValues={lensValues}
+              lensCoverage={lensCoverage}
+              asOf={asof}
+              matrixAsOf={matrix?.asof ?? null}
               lang={lang}
               netGexBn={gexPayload?.net_gex_bn ?? null}
-              history={gexPayload?.history ?? null}
               matrixCells={matrixCells}
             />
           ) : (
             <ExpiryBars
               byExpiry={gexPayload?.by_expiry ?? null}
               greek={greek}
+              asOf={asof}
               lang={lang}
             />
           )}
@@ -487,12 +539,17 @@ const CONTROLS_BAR: React.CSSProperties = {
   borderBottom: "1px solid var(--line)",
   background: "var(--panel)",
   flexShrink: 0,
+  /* On a phone the ticker box + 7 quick picks + 4 greek chips overflowed the bar and the
+     tail was simply unreachable (no scroll, no wrap). Wrapping keeps every control on the
+     surface at 375px and is a no-op on desktop, where it all fits on one line. */
+  flexWrap: "wrap",
 };
 
 const TICKER_GROUP: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 10,
+  flexWrap: "wrap",
 };
 
 const TICKER_INPUT: React.CSSProperties = {
@@ -587,7 +644,11 @@ const BODY_ROW: React.CSSProperties = {
 
 const LEFT_PANE: React.CSSProperties = {
   flex: "1 1 0px",
-  minWidth: 480,       /* ladder gets all remaining space above 480px */
+  /* Ladder gets all remaining space above 480px, but never demands more room than the
+     viewport has: a hard 480 forced a horizontal scrollbar (and ~117px of usable bar
+     column) on a 375px phone. min() keeps the desktop floor and drops it on narrow ones —
+     the ladder itself switches to its compact grid below 420px. */
+  minWidth: "min(480px, 100%)",
   minHeight: 0,        /* allow flex shrink past content height */
   alignSelf: "stretch",/* fill BODY_ROW track height */
   display: "flex",

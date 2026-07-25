@@ -1,27 +1,36 @@
 "use client";
 /**
- * StrikeLadder — per-strike horizontal signed GEX bar chart.
+ * StrikeLadder — per-strike horizontal signed exposure bar chart.
  *
- * Pass 3 (MomoEdge parity):
- *   - EXPIRY SELECTOR: dropdown (not chips) with DTE captions + inline 0DTE quick chip.
+ *   - EXPIRY LENS (OEU T-A): All / 0DTE / All−0DTE / one expiration. The selection now
+ *     RECOMPUTES the ladder instead of setting state nobody read. All reads `by_strike`
+ *     (the all-expiry aggregate, all four greeks); narrower lenses read the per
+ *     strike×expiry matrix. A strike the matrix doesn't cover renders an em dash — never
+ *     the aggregate wearing the lens's label. Maths + coverage rules: lib/gexLadder.ts.
+ *   - NET | CALL/PUT: the payload's `gamma_call`/`gamma_put` columns, drawn as opposing
+ *     bars. All-expiry gamma only — that is the only cut the feed splits by side.
  *   - AUTO-CENTER: on load and ticker change, spot row scrolls to mid-viewport.
- *   - BAR: power-curve (^0.7) length, max 46% per side, positive cyan / negative red,
- *          center axis hairline.
+ *   - BAR: power-curve (^0.7) length, max 46% per side, --up/--down tokens (so the East
+ *     Asian 红涨绿跌 convention flips with the theme), center axis hairline.
  *   - LEVEL BADGES: right-edge tags (WALL / SUPPORT / MAGNET / FLIP) only on keyed rows.
  *   - SPOT ROW: amber highlight + distinct marker line treatment.
  *   - FLIP LINE: inserted between straddling strikes (purple divider).
- *   - PERCENT-FROM-SPOT: strike label shows % distance when not at spot.
+ *   - NOW | LADDER MAX: two bar normalizers, both the same quantity as the bars (B1).
  *
- * Layout: [strike label + %dist] [center-axis bars] [level-tag]  [gex value]
- * Strikes rendered descending (highest at top).
+ * Layout: [strike label + %dist] [center-axis bars] [level-tag] [value]
+ * Strikes rendered descending (highest at top). Under ~420px the grid drops to its
+ * compact track set so the bar column survives on a phone.
  *
  * HONESTY DOCTRINE: bar direction (positive/negative) is the dealer-sign convention
  * — an assumption. Magnitude is the reliable read. Passport caveat is in MarketStateCard.
+ * Values are $mn (engine/options_hub.py divides those columns by 1e6); only `net_gex_bn`
+ * is billions — hence two formatters, `fmtMn` and `fmtBn`, never one.
  */
 
 import React, {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -29,6 +38,17 @@ import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload, GreekLens } from "./GexDeskView";
 import { topExpiriesForStrike, type MatrixCell, type ExpiryShare } from "@/lib/surfaceContract";
+import { dteFrom, dteLabelFor, expLabel, isZeroDte } from "@/lib/dte";
+import {
+  fmtBn,
+  fmtMn,
+  fmtMnMag,
+  lensValueForStrike,
+  normExp,
+  scaleBases,
+  type ExpiryLens,
+  type LensStrikeValues,
+} from "@/lib/gexLadder";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,16 +61,21 @@ interface Levels {
   hvl: number | null;
 }
 
+/** Which side(s) of the chain the bars draw. */
+type LadderSide = "net" | "split";
+
 interface TooltipData {
   strike: number;
-  net: number;               // signed net exposure for the active lens
+  /** Signed exposure under the active lens, $mn. null = strike outside the lens snapshot. */
+  net: number | null;
   gamma_call: number;
   gamma_put: number;
-  showBreakdown: boolean;     // call/put split only shown for the gamma lens
-  netLabel: string;          // "Net GEX" / "Net DEX" / …
+  showBreakdown: boolean;     // call/put split only shown for all-expiry gamma
+  netLabel: string;           // "Net GEX" / "Net DEX" / …
+  lensTag: string | null;     // "0DTE" / "07-17" / null when the All lens is active
   badge?: string;
   topExpiries: ExpiryShare[]; // top-3 per-expiry breakdown (from matrix; [] if absent)
-  x: number;
+  x: number;                  // viewport coords — the popover lives on the fixed layer
   y: number;
 }
 
@@ -60,18 +85,25 @@ interface StrikeLadderProps {
   levels: Levels;
   greek?: GreekLens;
   byExpiry?: GexPayload["by_expiry"] | null;
-  selectedExpiry: string | null;
-  onSelectExpiry: (exp: string | null) => void;
+  /** Active expiry lens (owned by GexDeskView so the summary bar can scope with it). */
+  lens: ExpiryLens;
+  onLens: (lens: ExpiryLens) => void;
+  /** Per-strike values for the active lens + the matrix's strike coverage. */
+  lensValues: LensStrikeValues;
+  /** Expiries (date-part keys) the matrix can answer for THIS ladder's strikes. */
+  lensCoverage: Set<string>;
+  /** as-of of the GEX snapshot — anchors every DTE on the desk (never the wall clock). */
+  asOf?: string | null;
+  /** as-of of the per strike×expiry snapshot; shown when a narrower lens is active. */
+  matrixAsOf?: string | null;
   lang: Lang;
   /** Net GEX (bn) for the walls chip row — the ladder's own "so what" strip. */
   netGexBn?: number | null;
-  /** Session GEX history (EOD) — PEAK scale normalizes to the largest |net| here. */
-  history?: GexPayload["history"] | null;
   /** Per-strike-per-expiry cells for the hover top-3 expiry breakdown (optional). */
   matrixCells?: MatrixCell[] | null;
 }
 
-/** Signed net exposure for a strike row under the active greek lens. */
+/** Signed net exposure for a strike row under the active greek lens (all-expiry, $mn). */
 function rowNet(s: StrikeRow, greek: GreekLens): number {
   switch (greek) {
     case "delta": return s.delta_net ?? 0;
@@ -92,22 +124,28 @@ function netLensLabel(greek: GreekLens, t: ReturnType<typeof makeGexT>): string 
 }
 
 type BadgeTone = "cyan" | "red" | "amber" | "purple";
+type BadgeKind = "flip" | "wall" | "support" | "magnet";
 
 interface BadgeInfo {
-  tag: string;
+  kind: BadgeKind;
   tone: BadgeTone;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function fmtGexVal(v: number): string {
-  if (!Number.isFinite(v)) return "—";
-  const sign = v >= 0 ? "+" : "-";
-  const abs = Math.abs(v);
-  if (abs >= 1) return `${sign}${abs.toFixed(2)}B`;
-  if (abs >= 0.001) return `${sign}${(abs * 1000).toFixed(1)}M`;
-  return `${sign}${(abs * 1e6).toFixed(0)}K`;
+/**
+ * Level-tag label. The tags were hardcoded English on a bilingual desk, even though the
+ * LEX has carried the pairs since the desk shipped. `short` is the compact-grid form
+ * (the tag column is 34px on a phone).
+ */
+function badgeLabel(kind: BadgeKind, t: ReturnType<typeof makeGexT>, short: boolean): string {
+  switch (kind) {
+    case "flip":    return short ? t("ladderFlipShort") : t("ladderFlip");
+    case "wall":    return short ? t("ladderCallWallShort") : t("ladderCallWall");
+    case "support": return short ? t("ladderPutSupportShort") : t("ladderPutSupport");
+    case "magnet":  return short ? t("ladderMagnetShort") : t("ladderMagnet");
+  }
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmtStrike(s: number): string {
   return s % 1 === 0 ? String(s) : s.toFixed(1);
@@ -117,21 +155,6 @@ function fmtPctFromSpot(strike: number, spot: number): string {
   const pct = ((strike - spot) / spot) * 100;
   const sign = pct >= 0 ? "+" : "";
   return `${sign}${pct.toFixed(1)}%`;
-}
-
-function dteDays(expStr: string): number {
-  try {
-    const now = Date.now();
-    const exp = new Date(expStr + "T20:00:00Z").getTime();
-    return Math.max(0, Math.round((exp - now) / 86_400_000));
-  } catch {
-    return 0;
-  }
-}
-
-function dteLabelStr(exp: string): string {
-  const d = dteDays(exp);
-  return d === 0 ? "0DTE" : `${d}d`;
 }
 
 /** Classify a strike row to a badge type — priority: flip > wall > support > magnet */
@@ -144,16 +167,16 @@ function classifyBadge(
   const prox = step * 1.2;
 
   if (gammaFlip != null && Math.abs(s.strike - gammaFlip) < prox) {
-    return { tag: "FLIP", tone: "purple" };
+    return { kind: "flip", tone: "purple" };
   }
   if (callWall != null && Math.abs(s.strike - callWall) < prox) {
-    return { tag: "WALL", tone: "cyan" };
+    return { kind: "wall", tone: "cyan" };
   }
   if (putWall != null && Math.abs(s.strike - putWall) < prox) {
-    return { tag: "SUPPORT", tone: "red" };
+    return { kind: "support", tone: "red" };
   }
   if (hvl != null && Math.abs(s.strike - hvl) < prox) {
-    return { tag: "MAGNET", tone: "amber" };
+    return { kind: "magnet", tone: "amber" };
   }
   return null;
 }
@@ -200,72 +223,116 @@ const RANGE_PRESETS: { pct: number; label: string }[] = [
   { pct: 0, label: "" }, // All (label filled from i18n at render)
 ];
 
+/** Below this container width the ladder switches to its compact track set. */
+const NARROW_PX = 420;
+
+/** Grid tracks: [strike, bar(1fr), tag, value]. */
+const TRACKS = {
+  wide:      { strike: 100, tag: 52, val: 72 },
+  wideSplit: { strike: 100, tag: 52, val: 88 },
+  narrow:    { strike: 52,  tag: 34, val: 52 },
+} as const;
+
+/** One rendered ladder row: the payload row plus its value(s) under the active lens. */
+interface LadderRow {
+  s: StrikeRow;
+  /** Signed exposure under the lens, $mn. null = the lens snapshot doesn't cover it. */
+  value: number | null;
+  /** Call/put legs — only populated in split mode (all-expiry gamma). */
+  call: number | null;
+  put: number | null;
+}
+
 export function StrikeLadder({
   strikes,
   spot,
   levels,
   greek = "gamma",
   byExpiry,
-  selectedExpiry,
-  onSelectExpiry,
+  lens,
+  onLens,
+  lensValues,
+  lensCoverage,
+  asOf = null,
+  matrixAsOf = null,
   lang,
   netGexBn = null,
-  history = null,
   matrixCells = null,
 }: StrikeLadderProps) {
   const t = makeGexT(lang);
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [rangePct, setRangePct] = useState<number>(0); // 0 = All
-  const [scaleMode, setScaleMode] = useState<"now" | "peak">("now");
+  const [scaleMode, setScaleMode] = useState<"now" | "ladder">("now");
+  const [side, setSide] = useState<LadderSide>("net");
+  const [narrow, setNarrow] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const spotRowRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Sort descending (highest strike at top)
-  const sortedAll = [...strikes].sort((a, b) => b.strike - a.strike);
-  const step = estimateStep(strikes);
+  // The call/put split exists ONLY on the all-expiry gamma columns (gamma_call/gamma_put).
+  // The per strike×expiry store carries a net per cell and no side breakdown, so a scoped
+  // lens cannot be split — the toggle disables rather than inventing legs.
+  //
+  // `effSide` (not `side`) drives every read, so a greek/lens change can never strand the
+  // ladder on a split it has no data for. The preference itself is kept, and comes back
+  // the moment the user returns to all-expiry gamma.
+  const splitAvailable = greek === "gamma" && lens.kind === "all";
+  const effSide: LadderSide = splitAvailable ? side : "net";
 
-  // Range filter: keep strikes within spot ± pct (falls back to all if too sparse).
-  const sorted = (() => {
-    if (rangePct <= 0 || spot == null || spot <= 0) return sortedAll;
-    const lo = spot * (1 - rangePct), hi = spot * (1 + rangePct);
-    const w = sortedAll.filter((s) => s.strike >= lo && s.strike <= hi);
-    return w.length >= 3 ? w : sortedAll;
-  })();
+  // ── Rows under the active lens ────────────────────────────────────────────────
+  const sortedAll = useMemo(
+    () => [...strikes].sort((a, b) => b.strike - a.strike),
+    [strikes]
+  );
+  const step = useMemo(() => estimateStep(strikes), [strikes]);
 
-  // Max |net| for bar scaling — computed over the ACTIVE lens so each greek's bars
-  // fill their own dynamic range (delta/vanna/charm live on very different scales).
-  const nowMaxAbs = sorted.reduce(
-    (m, s) => Math.max(m, Math.abs(rowNet(s, greek))),
-    0.001
+  const rowsAll: LadderRow[] = useMemo(
+    () =>
+      sortedAll.map((s) => ({
+        s,
+        value: lensValueForStrike(s.strike, rowNet(s, greek), lens, lensValues),
+        call: splitAvailable ? s.gamma_call : null,
+        put: splitAvailable ? s.gamma_put : null,
+      })),
+    [sortedAll, greek, lens, lensValues, splitAvailable]
   );
 
-  // PEAK scale: normalize gamma bars to the largest |net GEX| across retained session
-  // history (EOD). Only meaningful for gamma (history carries net_gex_bn). When history
-  // is absent, PEAK falls back to NOW — disclosed in the footer note.
-  const peakAbs = (() => {
-    if (greek !== "gamma" || !history || history.length === 0) return null;
-    return history.reduce((m, h) => Math.max(m, Math.abs(h.net_gex_bn ?? 0)), 0) || null;
-  })();
-  const maxAbs = scaleMode === "peak" && peakAbs != null ? Math.max(peakAbs, 0.001) : nowMaxAbs;
+  // Range filter: keep strikes within spot ± pct (falls back to all if too sparse).
+  const rows = useMemo(() => {
+    if (rangePct <= 0 || spot == null || spot <= 0) return rowsAll;
+    const lo = spot * (1 - rangePct), hi = spot * (1 + rangePct);
+    const w = rowsAll.filter((r) => r.s.strike >= lo && r.s.strike <= hi);
+    return w.length >= 3 ? w : rowsAll;
+  }, [rowsAll, rangePct, spot]);
+
+  // ── Bar normalization (B1) ────────────────────────────────────────────────────
+  // Both bases measure the SAME quantity as the bars: per-strike exposure under the
+  // active greek + expiry lens. NOW follows the range filter; LADDER MAX pins to the
+  // whole snapshot so switching ±2%/±5%/All doesn't silently rescale every bar.
+  const { nowMax, ladderMax } = useMemo(() => {
+    const vals = (r: LadderRow): (number | null)[] =>
+      effSide === "split" ? [r.call, r.put] : [r.value];
+    return scaleBases(rows.flatMap(vals), rowsAll.flatMap(vals));
+  }, [rows, rowsAll, effSide]);
+  const maxAbs = scaleMode === "ladder" ? ladderMax : nowMax;
 
   // Current-price row: nearest strike to spot
-  const currentStrikeVal: number | null = (() => {
-    if (spot == null || sorted.length === 0) return null;
-    const nearest = sorted.reduce((best, s) =>
-      Math.abs(s.strike - spot) < Math.abs(best.strike - spot) ? s : best
+  const currentStrikeVal: number | null = useMemo(() => {
+    if (spot == null || rows.length === 0) return null;
+    const nearest = rows.reduce((best, r) =>
+      Math.abs(r.s.strike - spot) < Math.abs(best.s.strike - spot) ? r : best
     );
-    return Math.abs(nearest.strike - spot) <= step * 0.8 ? nearest.strike : null;
-  })();
+    return Math.abs(nearest.s.strike - spot) <= step * 0.8 ? nearest.s.strike : null;
+  }, [rows, spot, step]);
 
   // Gamma flip insertion index
   const flipStrike = levels.gammaFlip;
   let flipInsertAfter: number | null = null;
   if (flipStrike != null) {
-    for (let i = 0; i < sorted.length - 1; i++) {
-      if (sorted[i].strike >= flipStrike && flipStrike > sorted[i + 1].strike) {
+    for (let i = 0; i < rows.length - 1; i++) {
+      if (rows[i].s.strike >= flipStrike && flipStrike > rows[i + 1].s.strike) {
         flipInsertAfter = i;
         break;
       }
@@ -284,9 +351,9 @@ export function StrikeLadder({
   //      event unblocks the data fetch. We re-attempt centering on that event.
   //
   // Implementation: DOM-query approach avoids the early-return ref problem.
-  // spotRowRef/scrollRef are only valid after the FULL render path (sorted.length>0).
+  // spotRowRef/scrollRef are only valid after the FULL render path (rows.length>0).
   // Instead, we query containerRef (always rendered) to find the scroll container
-  // and the spot row directly from the DOM — no ref dependency on sorted.length.
+  // and the spot row directly from the DOM — no ref dependency on rows.length.
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -408,9 +475,21 @@ export function StrikeLadder({
       observer?.disconnect();
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  // Re-center when strike data changes (proxy: sorted.length and spot)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sorted.length, spot, currentStrikeVal]);
+  // Re-center when strike data changes (proxy: rows.length and spot)
+  }, [rows.length, spot, currentStrikeVal]);
+
+  // Compact track set below NARROW_PX — measured on the ladder itself, not the viewport,
+  // so the desk stays usable when the pane is narrow for any reason (phone, split view).
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      if (w > 0) setNarrow(w < NARROW_PX);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -428,48 +507,80 @@ export function StrikeLadder({
   }, [dropdownOpen]);
 
   const netLabel = netLensLabel(greek, t);
-  const showBreakdown = greek === "gamma";
 
-  const handleMouseEnter = useCallback(
-    (s: StrikeRow, badge: string | undefined, e: React.MouseEvent) => {
-      const rect = containerRef.current?.getBoundingClientRect();
-      setTooltip({
-        strike: s.strike,
-        net: rowNet(s, greek),
-        gamma_call: s.gamma_call,
-        gamma_put: s.gamma_put,
-        showBreakdown,
-        netLabel,
-        badge,
-        topExpiries: topExpiriesForStrike(matrixCells, s.strike),
-        x: e.clientX - (rect?.left ?? 0) + 14,
-        y: e.clientY - (rect?.top ?? 0) - 10,
-      });
-    },
-    [greek, netLabel, showBreakdown, matrixCells]
+  // ── Expiry lens options ───────────────────────────────────────────────────────
+  // Driven by `by_expiry` (the payload's own term structure, with its net-γ per expiry
+  // as a badge); each option is only selectable when the per strike×expiry snapshot can
+  // actually answer for it at strikes this ladder renders.
+  const expiryOptions = useMemo(
+    () =>
+      (byExpiry ?? []).map((e) => ({
+        exp: normExp(e.exp),
+        raw: e.exp,
+        label: expLabel(e.exp),
+        dte: dteFrom(e.exp, asOf),
+        dteLabel: dteLabelFor(e.exp, asOf),
+        netMn: e.gamma_net,
+        isZero: isZeroDte(e.exp, asOf),
+        covered: lensCoverage.has(normExp(e.exp)),
+      })),
+    [byExpiry, asOf, lensCoverage]
   );
+
+  // B8: order-independent — the 0DTE expiry is whichever row lands on the snapshot's
+  // session day, not `expiryOptions[0]`. (The old check also used the wall clock, so any
+  // already-expired first row read as 0DTE.)
+  const zeroOpt = expiryOptions.find((o) => o.isZero) ?? null;
+  const has0Dte = zeroOpt != null;
+  const zeroSelectable = has0Dte && zeroOpt.covered;
+  const exZeroSelectable = expiryOptions.some((o) => o.covered && !o.isZero);
+  const anyCovered = expiryOptions.some((o) => o.covered);
+
+  const lensLabel =
+    lens.kind === "all" ? t("expiryDropdownLabel")
+    : lens.kind === "zero" ? t("expiryLensZero")
+    : lens.kind === "ex-zero" ? t("expiryLensExZero")
+    : expLabel(lens.exp ?? "");
+  const lensTag =
+    lens.kind === "all" ? null
+    : lens.kind === "zero" ? t("expiry0Dte")
+    : lens.kind === "ex-zero" ? t("expiryLensExZero")
+    : expLabel(lens.exp ?? "");
+
+  const coveredRows = rowsAll.filter((r) => r.value != null).length;
+  const showBreakdown = greek === "gamma" && lens.kind === "all";
+
+  function handleMouseEnter(r: LadderRow, badge: string | undefined, e: React.MouseEvent) {
+    setTooltip({
+      strike: r.s.strike,
+      net: r.value,
+      gamma_call: r.s.gamma_call,
+      gamma_put: r.s.gamma_put,
+      showBreakdown,
+      netLabel,
+      lensTag,
+      badge,
+      topExpiries: topExpiriesForStrike(matrixCells, r.s.strike),
+      // Viewport coordinates: the popover renders on the fixed layer (.obs-surf-pop),
+      // so it is never clipped by the ladder's own overflow:hidden shell.
+      x: e.clientX,
+      y: e.clientY,
+    });
+  }
 
   const handleMouseLeave = useCallback(() => setTooltip(null), []);
 
-  // ── Expiry dropdown: build option list
-  const expiryOptions: { exp: string; label: string; dte: string }[] = byExpiry
-    ? byExpiry.map((e) => ({
-        exp: e.exp,
-        // Show MM-DD (strip year) for compactness
-        label: e.exp.length >= 10 ? e.exp.slice(5) : e.exp,
-        dte: dteLabelStr(e.exp),
-      }))
-    : [];
+  const tracks = narrow
+    ? TRACKS.narrow
+    : effSide === "split"
+    ? TRACKS.wideSplit
+    : TRACKS.wide;
+  const gridTemplate = `${tracks.strike}px 1fr ${tracks.tag}px ${tracks.val}px`;
+  const centerLeft = `calc(${tracks.strike}px + (100% - ${
+    tracks.strike + tracks.tag + tracks.val
+  }px) / 2)`;
 
-  const selectedLabel = selectedExpiry
-    ? expiryOptions.find((o) => o.exp === selectedExpiry)?.label ?? selectedExpiry
-    : t("expiryDropdownLabel");
-
-  const has0Dte =
-    expiryOptions.length > 0 &&
-    dteDays(expiryOptions[0].exp) === 0;
-
-  if (sorted.length === 0) {
+  if (rows.length === 0) {
     return (
       <div style={LADDER_OUTER} data-tut="gex-ladder">
         <div style={LADDER_EMPTY}>{t("ladderNoData")}</div>
@@ -479,18 +590,19 @@ export function StrikeLadder({
 
   return (
     <div style={LADDER_OUTER} ref={containerRef} data-tut="gex-ladder">
-      {/* ── Expiry selector ───────────────────────────────────────────────────── */}
+      {/* ── Expiry lens ───────────────────────────────────────────────────────── */}
       {byExpiry && byExpiry.length > 0 && (
         <div style={EXPIRY_BAR}>
           {/* Dropdown */}
           <div style={{ position: "relative" }} ref={dropdownRef}>
             <button
-              style={DD_TRIGGER}
+              style={{ ...DD_TRIGGER, minWidth: narrow ? 108 : 150 }}
               onClick={() => setDropdownOpen((v) => !v)}
               aria-haspopup="listbox"
               aria-expanded={dropdownOpen}
+              aria-label={t("expiryLensAria")}
             >
-              <span>{selectedLabel}</span>
+              <span>{lensLabel}</span>
               <span
                 style={{
                   ...DD_CARET,
@@ -502,73 +614,156 @@ export function StrikeLadder({
             </button>
             {dropdownOpen && (
               <div style={DD_MENU} role="listbox">
-                {/* ALL option */}
+                {/* All — always available: it is the by_strike aggregate itself */}
                 <button
-                  style={{
-                    ...DD_OPT,
-                    ...(selectedExpiry === null ? DD_OPT_ACTIVE : {}),
-                  }}
+                  style={{ ...DD_OPT, ...(lens.kind === "all" ? DD_OPT_ACTIVE : {}) }}
                   role="option"
-                  aria-selected={selectedExpiry === null}
-                  onClick={() => {
-                    onSelectExpiry(null);
-                    setDropdownOpen(false);
-                  }}
+                  aria-selected={lens.kind === "all"}
+                  onClick={() => { onLens({ kind: "all" }); setDropdownOpen(false); }}
                 >
                   <span>{t("expiryDropdownLabel")}</span>
-                  <span style={DD_OPT_DTE}>all</span>
+                  <span style={DD_OPT_DTE}>{fmtBn(netGexBn)}</span>
                 </button>
+
+                {/* Session cuts */}
+                {has0Dte && (
+                  <button
+                    style={{
+                      ...DD_OPT,
+                      ...(lens.kind === "zero" ? DD_OPT_ACTIVE : {}),
+                      ...(zeroSelectable ? {} : DD_OPT_OFF),
+                    }}
+                    role="option"
+                    aria-selected={lens.kind === "zero"}
+                    aria-disabled={!zeroSelectable}
+                    onClick={() => {
+                      if (!zeroSelectable) return;
+                      onLens({ kind: "zero" });
+                      setDropdownOpen(false);
+                    }}
+                  >
+                    <span>{t("expiryLensZero")}</span>
+                    <span style={DD_OPT_DTE}>
+                      {zeroSelectable ? fmtMn(zeroOpt.netMn) : t("expiryLensNoRows")}
+                    </span>
+                  </button>
+                )}
+                {has0Dte && (
+                  <button
+                    style={{
+                      ...DD_OPT,
+                      ...(lens.kind === "ex-zero" ? DD_OPT_ACTIVE : {}),
+                      ...(exZeroSelectable ? {} : DD_OPT_OFF),
+                    }}
+                    role="option"
+                    aria-selected={lens.kind === "ex-zero"}
+                    aria-disabled={!exZeroSelectable}
+                    onClick={() => {
+                      if (!exZeroSelectable) return;
+                      onLens({ kind: "ex-zero" });
+                      setDropdownOpen(false);
+                    }}
+                  >
+                    <span>{t("expiryLensExZero")}</span>
+                    <span style={DD_OPT_DTE}>
+                      {exZeroSelectable ? "" : t("expiryLensNoRows")}
+                    </span>
+                  </button>
+                )}
+
+                <div style={DD_GROUP_LBL}>{t("expiryLensGroupOne")}</div>
                 {expiryOptions.map((o) => (
                   <button
                     key={o.exp}
                     style={{
                       ...DD_OPT,
-                      ...(selectedExpiry === o.exp ? DD_OPT_ACTIVE : {}),
+                      ...(lens.kind === "one" && lens.exp === o.exp ? DD_OPT_ACTIVE : {}),
+                      ...(o.covered ? {} : DD_OPT_OFF),
                     }}
                     role="option"
-                    aria-selected={selectedExpiry === o.exp}
+                    aria-selected={lens.kind === "one" && lens.exp === o.exp}
+                    aria-disabled={!o.covered}
                     onClick={() => {
-                      onSelectExpiry(o.exp);
+                      if (!o.covered) return;
+                      onLens({ kind: "one", exp: o.exp });
                       setDropdownOpen(false);
                     }}
                   >
-                    <span>{o.exp}</span>
-                    <span style={DD_OPT_DTE}>{o.dte}</span>
+                    <span>
+                      {o.exp}
+                      <span style={DD_OPT_DTE}> · {o.dteLabel}</span>
+                    </span>
+                    <span style={DD_OPT_DTE}>
+                      {o.covered ? fmtMn(o.netMn) : t("expiryLensNoRows")}
+                    </span>
                   </button>
                 ))}
               </div>
             )}
           </div>
 
-          {/* 0DTE quick chip (only when nearest expiry is today) */}
+          {/* 0DTE quick chip — shown whenever the snapshot HAS a same-day expiry */}
           {has0Dte && (
             <button
-              className={`obs-chip${
-                selectedExpiry === expiryOptions[0].exp ? " on" : ""
-              }`}
-              style={QUICK_CHIP}
+              className={`obs-chip${lens.kind === "zero" ? " on" : ""}`}
+              style={{ ...QUICK_CHIP, opacity: zeroSelectable ? 1 : 0.45 }}
+              aria-pressed={lens.kind === "zero"}
+              aria-disabled={!zeroSelectable}
               onClick={() => {
-                const t0 = expiryOptions[0].exp;
-                onSelectExpiry(selectedExpiry === t0 ? null : t0);
+                if (!zeroSelectable) return;
+                onLens(lens.kind === "zero" ? { kind: "all" } : { kind: "zero" });
               }}
             >
               {t("expiry0Dte")}
             </button>
           )}
-          {/* Honesty: the feed carries per-expiry net-γ but not per-expiry strikes,
-              so the ladder below is always the all-expiry aggregate. Say so. */}
-          <span style={{ fontSize: 9.5, color: "var(--muted)", marginLeft: 2 }}>
-            {t("expiryAggregateNote")}
+
+          {/* Net | Call/Put — only where the feed actually carries both legs */}
+          <div style={SIDE_GROUP} role="group" aria-label={t("sideAria")}>
+            {(["net", "split"] as LadderSide[]).map((k) => (
+              <button
+                key={k}
+                className={`obs-chip${effSide === k ? " on" : ""}`}
+                style={{ ...SIDE_CHIP, opacity: splitAvailable || k === "net" ? 1 : 0.45 }}
+                aria-pressed={effSide === k}
+                aria-disabled={k === "split" && !splitAvailable}
+                onClick={() => { if (k === "net" || splitAvailable) setSide(k); }}
+              >
+                {k === "net" ? t("sideNet") : t("sideSplit")}
+              </button>
+            ))}
+          </div>
+
+          {/* Honest state line — one per situation, never a silent fallback */}
+          <span style={LENS_NOTE}>
+            {greek !== "gamma" && lens.kind === "all"
+              ? t("expiryGammaOnlyNote")
+              : !anyCovered && lens.kind === "all"
+              ? t("expiryNoMatrixNote")
+              : lens.kind === "all"
+              ? t("expiryAggregateNote")
+              : t("expiryScopedNote")
+                  .replace("{n}", String(coveredRows))
+                  .replace("{m}", String(rowsAll.length))}
+            {lens.kind !== "all" && matrixAsOf && (
+              <span style={{ opacity: 0.75 }}> · {matrixAsOf.slice(0, 10)}</span>
+            )}
           </span>
         </div>
       )}
 
       {/* ── Walls chip row + range presets (the ladder's own "so what" strip) ── */}
       <div style={WALLS_ROW}>
-        {greek === "gamma" && (
+        {greek === "gamma" && !narrow && (
           <div style={WALLS_CHIPS}>
-            <WallChip label={t("ladderWallsNet")} value={fmtGexVal(netGexBn ?? 0)}
-              color={(netGexBn ?? 0) >= 0 ? "var(--brand-2)" : "var(--down)"} show={netGexBn != null} />
+            {/* Net GEX follows the lens: the all-expiry headline ($bn) under All, the
+                lens's own sum ($mn) when scoped — with the lens named on the label so the
+                two can never be mistaken for each other. */}
+            <WallChip
+              label={lens.kind === "all" ? t("ladderWallsNet") : `${t("ladderWallsNet")} · ${lensTag}`}
+              value={lens.kind === "all" ? fmtBn(netGexBn) : fmtMn(lensValues.totalMn)}
+              color={(lens.kind === "all" ? (netGexBn ?? 0) : lensValues.totalMn) >= 0 ? "var(--up)" : "var(--down)"}
+              show={lens.kind === "all" ? netGexBn != null : lensValues.cellCount > 0} />
             <WallChip label={t("ladderWallsFlip")} value={levels.gammaFlip != null ? fmtStrike(levels.gammaFlip) : "—"}
               color="var(--cat-2)" show={levels.gammaFlip != null} />
             <WallChip label={t("ladderWallsCall")} value={levels.callWall != null ? fmtStrike(levels.callWall) : "—"}
@@ -589,27 +784,38 @@ export function StrikeLadder({
       </div>
 
       {/* ── Column headers ──────────────────────────────────────────────────── */}
-      <div style={COL_HEADER_ROW}>
+      <div style={{ ...COL_HEADER_ROW, gridTemplateColumns: gridTemplate }}>
         <span style={COL_STRIKE_HDR}>{t("ladderStrike")}</span>
-        <span style={COL_BAR_HDR}>{t("ladderNetGex")}</span>
+        <span style={COL_BAR_HDR}>
+          {effSide === "split" ? `${t("ladderPutGex")} · ${t("ladderCallGex")}` : netLabel}
+        </span>
         <span style={COL_TAG_HDR}>{/* level tag column — no header */}</span>
-        <span style={COL_VAL_HDR}>{t("ladderNetGex")}</span>
+        <span style={COL_VAL_HDR}>{effSide === "split" ? t("sideSplit") : netLabel}</span>
       </div>
 
       {/* ── Scrollable chart body ─────────────────────────────────────────────── */}
       <div style={CHART_SCROLL} ref={scrollRef} className="obs-scroll">
         {/* Center axis hairline (positioned over bar area) */}
-        <div style={CENTER_LINE} />
+        <div style={{ ...CENTER_LINE, left: centerLeft }} />
 
-        {sorted.map((s, i) => {
+        {rows.map((r, i) => {
+          const s = r.s;
           const badge = classifyBadge(s, levels, step);
           const isCurrent = s.strike === currentStrikeVal;
-          const net = rowNet(s, greek);
+          const hasValue = r.value != null;
+          const net = r.value ?? 0;
           const isPos = net >= 0;
-          const pct = Math.abs(net) / maxAbs;
-          const shaped = Math.pow(pct, 0.7);
-          const barW = Math.max(shaped * 46, pct > 0 ? 2 : 0); // max 46% per half
-          const isBig = pct > 0.35;
+
+          // Bar geometry: power curve, max 46% per half. A null (uncovered) strike draws
+          // no bar at all — the dash in the value column is the whole story.
+          const barOf = (v: number | null) => {
+            if (v == null || !Number.isFinite(v)) return { w: 0, big: false };
+            const pct = Math.abs(v) / maxAbs;
+            return { w: Math.max(Math.pow(pct, 0.7) * 46, pct > 0 ? 2 : 0), big: pct > 0.35 };
+          };
+          const netBar = barOf(hasValue ? net : null);
+          const callBar = barOf(r.call);
+          const putBar = barOf(r.put);
 
           const strikeColor = isCurrent
             ? "var(--signal)"
@@ -638,12 +844,15 @@ export function StrikeLadder({
                 ref={isCurrent ? spotRowRef : undefined}
                 style={{
                   ...STRIKE_ROW,
+                  gridTemplateColumns: gridTemplate,
                   ...(isCurrent ? CURRENT_ROW : {}),
                   ...(badge?.tone === "cyan" ? ZONE_CW : {}),
                   ...(badge?.tone === "amber" ? ZONE_HVL : {}),
                   ...(badge?.tone === "red" ? ZONE_PS : {}),
                 }}
-                onMouseEnter={(e) => handleMouseEnter(s, badge?.tag, e)}
+                onMouseEnter={(e) =>
+                  handleMouseEnter(r, badge ? badgeLabel(badge.kind, t, false) : undefined, e)
+                }
                 onMouseLeave={handleMouseLeave}
               >
                 {/* Strike price label + %-from-spot */}
@@ -657,7 +866,7 @@ export function StrikeLadder({
                   >
                     {fmtStrike(s.strike)}
                   </span>
-                  {spot != null && !isCurrent && (
+                  {spot != null && !isCurrent && !narrow && (
                     <span style={PCT_DIST}>
                       {fmtPctFromSpot(s.strike, spot)}
                     </span>
@@ -669,23 +878,24 @@ export function StrikeLadder({
 
                 {/* Bar area (symmetric around center axis) */}
                 <div style={BAR_AREA}>
-                  {!isPos && barW > 0 && (
-                    <div
-                      style={{
-                        ...BAR_NEG,
-                        width: `${barW}%`,
-                        opacity: isBig ? 1 : 0.75,
-                      }}
-                    />
-                  )}
-                  {isPos && barW > 0 && (
-                    <div
-                      style={{
-                        ...BAR_POS,
-                        width: `${barW}%`,
-                        opacity: isBig ? 1 : 0.75,
-                      }}
-                    />
+                  {effSide === "split" ? (
+                    <>
+                      {putBar.w > 0 && (
+                        <div style={{ ...BAR_NEG, width: `${putBar.w}%`, opacity: putBar.big ? 1 : 0.75 }} />
+                      )}
+                      {callBar.w > 0 && (
+                        <div style={{ ...BAR_POS, width: `${callBar.w}%`, opacity: callBar.big ? 1 : 0.75 }} />
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {!isPos && netBar.w > 0 && (
+                        <div style={{ ...BAR_NEG, width: `${netBar.w}%`, opacity: netBar.big ? 1 : 0.75 }} />
+                      )}
+                      {isPos && netBar.w > 0 && (
+                        <div style={{ ...BAR_POS, width: `${netBar.w}%`, opacity: netBar.big ? 1 : 0.75 }} />
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -700,21 +910,37 @@ export function StrikeLadder({
                         background: `${toneBorderColor(badge.tone).replace("0.35", "0.08")}`,
                       }}
                     >
-                      {badge.tag}
+                      {badgeLabel(badge.kind, t, narrow)}
                     </span>
                   )}
                 </div>
 
-                {/* GEX value */}
-                <span
-                  className="num"
-                  style={{
-                    ...GEX_VAL,
-                    color: isPos ? "var(--up)" : "var(--down)",
-                  }}
-                >
-                  {fmtGexVal(net)}
-                </span>
+                {/* Value column */}
+                {effSide === "split" ? (
+                  <div style={SPLIT_VAL_COL}>
+                    <span className="num" style={{ ...SPLIT_VAL, color: "var(--up)" }}>
+                      {fmtMn(r.call)}
+                    </span>
+                    <span className="num" style={{ ...SPLIT_VAL, color: "var(--down)" }}>
+                      {fmtMn(r.put)}
+                    </span>
+                  </div>
+                ) : (
+                  <span
+                    className="num"
+                    style={{
+                      ...GEX_VAL,
+                      fontSize: narrow ? 9 : 10,
+                      color: !hasValue
+                        ? "var(--text-dim)"
+                        : isPos
+                        ? "var(--up)"
+                        : "var(--down)",
+                    }}
+                  >
+                    {hasValue ? fmtMn(net) : "—"}
+                  </span>
+                )}
               </div>
             </React.Fragment>
           );
@@ -723,7 +949,7 @@ export function StrikeLadder({
         {/* Gamma flip at the very bottom (if below all strikes) */}
         {flipInsertAfter === null &&
           flipStrike != null &&
-          flipStrike < (sorted[sorted.length - 1]?.strike ?? Infinity) && (
+          flipStrike < (rows[rows.length - 1]?.s.strike ?? Infinity) && (
             <div style={FLIP_LINE}>
               <span style={FLIP_LABEL}>{t("ladderFlipLine")}</span>
               <div style={FLIP_GRADIENT} />
@@ -732,54 +958,82 @@ export function StrikeLadder({
           )}
       </div>
 
-      {/* ── Tooltip ─────────────────────────────────────────────────────────── */}
+      {/* ── Hover popover ───────────────────────────────────────────────────────
+          Fixed layer (.obs-surf-pop, the same one SurfacePane uses) — the ladder's
+          shell is overflow:hidden, so an absolutely-positioned tooltip got sliced off
+          at the pane edges on the outermost rows. */}
       {tooltip && (
         <div
+          className="obs-surf-pop"
+          role="tooltip"
           style={{
-            ...TOOLTIP,
-            left: tooltip.x,
-            top: tooltip.y,
+            left: Math.max(
+              8,
+              Math.min(
+                tooltip.x + 16,
+                (typeof window !== "undefined" ? window.innerWidth : 1200) - 248
+              )
+            ),
+            top: Math.max(
+              8,
+              Math.min(
+                tooltip.y - 24,
+                (typeof window !== "undefined" ? window.innerHeight : 800) - 220
+              )
+            ),
           }}
         >
-          <div style={TOOLTIP_TITLE}>
-            ${fmtStrike(tooltip.strike)}
+          <div className="obs-surf-pop-hd">
+            <span className="obs-surf-pop-strike">${fmtStrike(tooltip.strike)}</span>
             {spot != null && (
-              <span style={{ marginLeft: 6, color: "var(--muted)", fontSize: 10 }}>
+              <span className="obs-surf-pop-pct">
                 {fmtPctFromSpot(tooltip.strike, spot)}
               </span>
             )}
             {tooltip.badge && (
-              <span style={{ marginLeft: 6, color: "var(--muted)" }}>
-                · {tooltip.badge}
-              </span>
+              <span className="obs-surf-pop-pct">· {tooltip.badge}</span>
             )}
           </div>
-          <div style={TOOLTIP_ROW}>
-            <span style={TOOLTIP_KEY}>{tooltip.netLabel}</span>
+          <div className="obs-surf-pop-row">
+            <span className="k">
+              {tooltip.netLabel}
+              {tooltip.lensTag && (
+                <span style={{ color: "var(--muted)" }}> · {tooltip.lensTag}</span>
+              )}
+            </span>
             <span
+              className="v"
               style={{
-                color: tooltip.net >= 0 ? "var(--brand-2)" : "var(--down)",
-                fontVariantNumeric: "tabular-nums",
+                color:
+                  tooltip.net == null
+                    ? "var(--text-dim)"
+                    : tooltip.net >= 0
+                    ? "var(--up)"
+                    : "var(--down)",
               }}
             >
-              {fmtGexVal(tooltip.net)}
+              {tooltip.net == null ? "—" : fmtMn(tooltip.net)}
             </span>
           </div>
-          {/* Call/put split is a gamma-only breakdown — the by_strike payload carries
-              gamma_call/gamma_put but no per-side split for delta/vanna/charm. */}
+          {/* An uncovered strike says so, rather than borrowing the aggregate's number. */}
+          {tooltip.net == null && (
+            <div className="obs-surf-pop-hint">{t("expiryDashNote")}</div>
+          )}
+          {/* Call/put split is an all-expiry gamma breakdown — the by_strike payload carries
+              gamma_call/gamma_put, but no per-side split for delta/vanna/charm or per expiry. */}
           {tooltip.showBreakdown && (
             <>
-              <div style={TOOLTIP_SEP} />
-              <div style={TOOLTIP_ROW}>
-                <span style={TOOLTIP_KEY}>{t("tooltipCallGex")}</span>
-                <span style={{ color: "var(--brand-2)", fontVariantNumeric: "tabular-nums" }}>
-                  {fmtGexVal(tooltip.gamma_call)}
+              <div className="obs-surf-pop-sep" />
+              <div className="obs-surf-pop-row">
+                <span className="k">{t("tooltipCallGex")}</span>
+                <span className="v" style={{ color: "var(--up)" }}>
+                  {fmtMn(tooltip.gamma_call)}
                 </span>
               </div>
-              <div style={TOOLTIP_ROW}>
-                <span style={TOOLTIP_KEY}>{t("tooltipPutGex")}</span>
-                <span style={{ color: "var(--down)", fontVariantNumeric: "tabular-nums" }}>
-                  {fmtGexVal(tooltip.gamma_put)}
+              <div className="obs-surf-pop-row">
+                <span className="k">{t("tooltipPutGex")}</span>
+                <span className="v" style={{ color: "var(--down)" }}>
+                  {fmtMn(tooltip.gamma_put)}
                 </span>
               </div>
             </>
@@ -788,20 +1042,21 @@ export function StrikeLadder({
               cells for this strike. Absent → omitted (never fabricated). */}
           {tooltip.topExpiries.length > 0 && (
             <>
-              <div style={TOOLTIP_SEP} />
-              <div style={{ ...TOOLTIP_KEY, fontSize: 9.5, marginBottom: 3 }}>
+              <div className="obs-surf-pop-sep" />
+              <div className="obs-surf-pop-hint" style={{ marginTop: 0, marginBottom: 3 }}>
                 {t("expiryBreakdownTitle")}
               </div>
               {tooltip.topExpiries.map((e) => (
-                <div key={e.exp} style={TOOLTIP_ROW}>
-                  <span style={{ color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}>
-                    {e.exp.length >= 10 ? e.exp.slice(5, 10) : e.exp}
-                  </span>
+                <div key={e.exp} className="obs-surf-pop-row">
+                  <span className="k">{expLabel(e.exp)}</span>
                   <span style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-                    <span style={{ color: e.gex >= 0 ? "var(--brand-2)" : "var(--down)", fontVariantNumeric: "tabular-nums" }}>
-                      {fmtGexVal(e.gex)}
+                    <span className="v" style={{ color: e.gex >= 0 ? "var(--up)" : "var(--down)" }}>
+                      {fmtMn(e.gex / 1e6)}
                     </span>
-                    <span style={{ color: "var(--muted)", fontSize: 9.5, fontVariantNumeric: "tabular-nums", minWidth: 26, textAlign: "right" }}>
+                    <span
+                      className="v"
+                      style={{ color: "var(--muted)", fontSize: 9.5, minWidth: 26, textAlign: "right" }}
+                    >
                       {(e.share * 100).toFixed(0)}%
                     </span>
                   </span>
@@ -812,25 +1067,22 @@ export function StrikeLadder({
         </div>
       )}
 
-      {/* ── NOW | PEAK scale footer (dual normalization) ─────────────────────── */}
-      {greek === "gamma" && (
-        <div style={SCALE_FOOTER}>
-          <div style={SCALE_TOGGLE} role="group" aria-label="scale">
-            <button className={`obs-chip${scaleMode === "now" ? " on" : ""}`} style={SCALE_CHIP}
-              aria-pressed={scaleMode === "now"} onClick={() => setScaleMode("now")}>
-              {t("scaleNow")} ±{fmtGexVal(nowMaxAbs).replace(/^[+-]/, "")}
-            </button>
-            <button className={`obs-chip${scaleMode === "peak" ? " on" : ""}`} style={SCALE_CHIP}
-              aria-pressed={scaleMode === "peak"} aria-disabled={peakAbs == null}
-              onClick={() => peakAbs != null && setScaleMode("peak")}>
-              {t("scalePeak")} {peakAbs != null ? `±${fmtGexVal(peakAbs).replace(/^[+-]/, "")}` : "—"}
-            </button>
-          </div>
-          {peakAbs == null && (
-            <span style={{ fontSize: 9, color: "var(--muted)" }}>{t("scalePeakNote")}</span>
-          )}
+      {/* ── NOW | LADDER MAX bar scale (B1) ──────────────────────────────────── */}
+      <div style={SCALE_FOOTER}>
+        <div style={SCALE_TOGGLE} role="group" aria-label={t("scaleAria")}>
+          <button className={`obs-chip${scaleMode === "now" ? " on" : ""}`} style={SCALE_CHIP}
+            aria-pressed={scaleMode === "now"} onClick={() => setScaleMode("now")}>
+            {t("scaleNow")} ±{fmtMnMag(nowMax)}
+          </button>
+          <button className={`obs-chip${scaleMode === "ladder" ? " on" : ""}`} style={SCALE_CHIP}
+            aria-pressed={scaleMode === "ladder"} onClick={() => setScaleMode("ladder")}>
+            {t("scalePeak")} ±{fmtMnMag(ladderMax)}
+          </button>
         </div>
-      )}
+        {!narrow && (
+          <span style={{ fontSize: 9, color: "var(--muted)" }}>{t("scalePeakNote")}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -897,7 +1149,7 @@ const LADDER_EMPTY: React.CSSProperties = {
   textAlign: "center",
 };
 
-// Expiry selector bar
+// Expiry lens bar
 const EXPIRY_BAR: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -908,6 +1160,19 @@ const EXPIRY_BAR: React.CSSProperties = {
   flexShrink: 0,
   flexWrap: "wrap",
 };
+
+const LENS_NOTE: React.CSSProperties = {
+  fontSize: 9.5,
+  color: "var(--muted)",
+  marginLeft: 2,
+  flex: "1 1 160px",
+  minWidth: 0,
+  lineHeight: 1.35,
+};
+
+const SIDE_GROUP: React.CSSProperties = { display: "flex", gap: 3 };
+
+const SIDE_CHIP: React.CSSProperties = { height: 22, fontSize: 10, padding: "0 8px" };
 
 // Dropdown trigger
 const DD_TRIGGER: React.CSSProperties = {
@@ -923,7 +1188,6 @@ const DD_TRIGGER: React.CSSProperties = {
   borderRadius: "var(--r-md)",
   cursor: "pointer",
   whiteSpace: "nowrap",
-  minWidth: 140,
 };
 
 const DD_CARET: React.CSSProperties = {
@@ -942,9 +1206,9 @@ const DD_MENU: React.CSSProperties = {
   background: "var(--panel-2)",
   border: "1px solid var(--line)",
   borderRadius: "var(--r-md)",
-  maxHeight: 280,
+  maxHeight: 300,
   overflowY: "auto",
-  minWidth: 160,
+  minWidth: 208,
   boxShadow: "var(--shadow-1)",
   backdropFilter: "blur(8px)",
 };
@@ -970,11 +1234,28 @@ const DD_OPT_ACTIVE: React.CSSProperties = {
   background: "rgba(232,179,57,0.09)",
 };
 
+/** An expiry the per-strike snapshot cannot answer for — visible, but not selectable. */
+const DD_OPT_OFF: React.CSSProperties = {
+  color: "var(--text-dim)",
+  cursor: "not-allowed",
+};
+
 const DD_OPT_DTE: React.CSSProperties = {
   fontSize: 9,
   color: "var(--muted)",
   fontVariantNumeric: "tabular-nums",
   flexShrink: 0,
+};
+
+const DD_GROUP_LBL: React.CSSProperties = {
+  padding: "6px 12px 3px",
+  fontSize: 8.5,
+  fontWeight: 700,
+  letterSpacing: "0.1em",
+  textTransform: "uppercase",
+  color: "var(--muted)",
+  borderTop: "1px solid var(--line-2)",
+  marginTop: 3,
 };
 
 const QUICK_CHIP: React.CSSProperties = {
@@ -986,7 +1267,6 @@ const QUICK_CHIP: React.CSSProperties = {
 // Column headers
 const COL_HEADER_ROW: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "100px 1fr 52px 72px",
   padding: "3px 8px",
   borderBottom: "1px solid var(--line-2)",
   background: "var(--panel)",
@@ -1028,24 +1308,21 @@ const CHART_SCROLL: React.CSSProperties = {
   position: "relative",
 };
 
-// Center-axis hairline — spans full scroll height, pinned at 50% of bar area
-// Bar area is col 2 (1fr) so 100px + 50% of (100% - 100px - 52px - 72px)
+// Center-axis hairline — spans full scroll height, pinned at the middle of the bar column.
+// `left` is computed from the live grid tracks (they change with the split toggle and the
+// narrow breakpoint), so the hairline can't drift off the bars' zero point.
 const CENTER_LINE: React.CSSProperties = {
   position: "absolute",
-  // Approximate center of bar column (col 2). The grid makes exact px unavailable
-  // but 100px strike col + half of remaining ≈ calc(100px + (100% - 224px)/2)
-  left: "calc(100px + (100% - 224px) / 2)",
   top: 0,
   bottom: 0,
   width: 1,
-  background: "rgba(77,130,255,0.13)",
+  background: "rgba(255,255,255,0.10)",
   pointerEvents: "none",
   zIndex: 1,
 };
 
 const STRIKE_ROW: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "100px 1fr 52px 72px",
   alignItems: "center",
   height: 22,
   borderBottom: "1px solid rgba(255,255,255,0.04)",
@@ -1107,13 +1384,16 @@ const BAR_AREA: React.CSSProperties = {
   alignItems: "center",
 };
 
+// Bars ride the --up/--down TOKENS (via their RGB triplets), so a positive bar and the
+// positive number beside it are one hue, and the East-Asian 红涨绿跌 theme flips both.
+// The old hardcoded rgba(77,130,255)/rgba(240,86,107) could do neither.
 const BAR_POS: React.CSSProperties = {
   position: "absolute",
   left: "50%",
   height: 11,
   borderRadius: "0 2px 2px 0",
   background:
-    "linear-gradient(90deg, rgba(77,130,255,0.45), rgba(77,130,255,0.85))",
+    "linear-gradient(90deg, rgba(var(--up-rgb),0.45), rgba(var(--up-rgb),0.85))",
   transition: "width 0.35s cubic-bezier(.22,1,.36,1)",
 };
 
@@ -1123,7 +1403,7 @@ const BAR_NEG: React.CSSProperties = {
   height: 11,
   borderRadius: "2px 0 0 2px",
   background:
-    "linear-gradient(270deg, rgba(240,86,107,0.45), rgba(240,86,107,0.85))",
+    "linear-gradient(270deg, rgba(var(--down-rgb),0.45), rgba(var(--down-rgb),0.85))",
   transition: "width 0.35s cubic-bezier(.22,1,.36,1)",
 };
 
@@ -1132,6 +1412,7 @@ const TAG_COL: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "flex-end",
   paddingRight: 4,
+  overflow: "hidden",
 };
 
 const LEVEL_TAG: React.CSSProperties = {
@@ -1153,6 +1434,22 @@ const GEX_VAL: React.CSSProperties = {
   textAlign: "right",
   paddingRight: 8,
   letterSpacing: "0.01em",
+};
+
+const SPLIT_VAL_COL: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-end",
+  justifyContent: "center",
+  paddingRight: 8,
+  overflow: "hidden",
+};
+
+const SPLIT_VAL: React.CSSProperties = {
+  fontSize: 8.5,
+  lineHeight: 1.25,
+  fontWeight: 600,
+  fontVariantNumeric: "tabular-nums",
 };
 
 const FLIP_LINE: React.CSSProperties = {
@@ -1188,45 +1485,4 @@ const FLIP_PRICE: React.CSSProperties = {
   color: "var(--cat-2)",
   fontVariantNumeric: "tabular-nums",
   flexShrink: 0,
-};
-
-const TOOLTIP: React.CSSProperties = {
-  position: "absolute",
-  background: "var(--panel-2)",
-  border: "1px solid var(--line-3)",
-  borderRadius: "var(--r-md)",
-  padding: "8px 10px",
-  fontSize: 11,
-  boxShadow: "var(--shadow-1)",
-  pointerEvents: "none",
-  zIndex: 100,
-  minWidth: 160,
-};
-
-const TOOLTIP_TITLE: React.CSSProperties = {
-  fontWeight: 700,
-  marginBottom: 5,
-  color: "var(--text)",
-  fontVariantNumeric: "tabular-nums",
-  display: "flex",
-  alignItems: "center",
-  flexWrap: "wrap",
-  gap: 2,
-};
-
-const TOOLTIP_ROW: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 12,
-  marginTop: 2,
-};
-
-const TOOLTIP_KEY: React.CSSProperties = {
-  color: "var(--muted)",
-};
-
-const TOOLTIP_SEP: React.CSSProperties = {
-  height: 1,
-  background: "var(--line-2)",
-  margin: "4px 0",
 };

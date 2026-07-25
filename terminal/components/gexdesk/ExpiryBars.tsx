@@ -15,45 +15,23 @@ import React from "react";
 import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload, GreekLens } from "./GexDeskView";
+import { dteLabelFor, expLabel } from "@/lib/dte";
+import { fmtMn } from "@/lib/gexLadder";
 
 type ExpiryRow = NonNullable<GexPayload["by_expiry"]>[number];
 
 interface ExpiryBarsProps {
   byExpiry: GexPayload["by_expiry"] | null;
   greek: GreekLens;
+  /** as-of of the snapshot — anchors DTE captions (T-A / B7: never the wall clock). */
+  asOf?: string | null;
   lang: Lang;
 }
 
 // ─── Helpers (mirror StrikeLadder formatting) ───────────────────────────────────
-
-function fmtGexVal(v: number): string {
-  if (!Number.isFinite(v)) return "—";
-  const sign = v >= 0 ? "+" : "-";
-  const abs = Math.abs(v);
-  if (abs >= 1) return `${sign}${abs.toFixed(2)}B`;
-  if (abs >= 0.001) return `${sign}${(abs * 1000).toFixed(1)}M`;
-  return `${sign}${(abs * 1e6).toFixed(0)}K`;
-}
-
-function dteDays(expStr: string): number {
-  try {
-    const now = Date.now();
-    const exp = new Date(expStr + "T20:00:00Z").getTime();
-    return Math.max(0, Math.round((exp - now) / 86_400_000));
-  } catch {
-    return 0;
-  }
-}
-
-function dteLabelStr(exp: string): string {
-  const d = dteDays(exp);
-  return d === 0 ? "0DTE" : `${d}d`;
-}
-
-/** MM-DD label — language-neutral, matches the ladder's expiry dropdown. */
-function expLabel(exp: string): string {
-  return exp.length >= 10 ? exp.slice(5) : exp;
-}
+// Values and DTE both come from shared modules now: `by_expiry` is $mn like `by_strike`
+// (engine/options_hub.py divides by 1e6), and every DTE on the desk is anchored to the
+// snapshot's own session day.
 
 /** Net exposure for an expiry under the active lens. by_expiry carries gamma+delta only. */
 function expiryNet(r: ExpiryRow, greek: GreekLens): number | null {
@@ -64,7 +42,7 @@ function expiryNet(r: ExpiryRow, greek: GreekLens): number | null {
 
 // ─── Component ──────────────────────────────────────────────────────────────────
 
-export function ExpiryBars({ byExpiry, greek, lang }: ExpiryBarsProps) {
+export function ExpiryBars({ byExpiry, greek, asOf = null, lang }: ExpiryBarsProps) {
   const t = makeGexT(lang);
 
   // Vanna/charm aren't available per-expiration — honest state, not faked zeros.
@@ -100,7 +78,7 @@ export function ExpiryBars({ byExpiry, greek, lang }: ExpiryBarsProps) {
           <div key={r.exp} style={ROW}>
             <div style={EXP_COL}>
               <span style={EXP_LABEL}>{expLabel(r.exp)}</span>
-              <span style={DTE_LABEL}>{dteLabelStr(r.exp)}</span>
+              <span style={DTE_LABEL}>{dteLabelFor(r.exp, asOf)}</span>
             </div>
             <div style={BAR_AREA}>
               {!isPos && barW > 0 && (
@@ -111,7 +89,7 @@ export function ExpiryBars({ byExpiry, greek, lang }: ExpiryBarsProps) {
               )}
             </div>
             <span className="num" style={{ ...VAL, color: isPos ? "var(--up)" : "var(--down)" }}>
-              {fmtGexVal(net)}
+              {fmtMn(net)}
             </span>
           </div>
         );
@@ -134,7 +112,7 @@ const CENTER_LINE: React.CSSProperties = {
   top: 0,
   bottom: 0,
   width: 1,
-  background: "rgba(77,130,255,0.13)",
+  background: "rgba(255,255,255,0.10)",
   pointerEvents: "none",
   zIndex: 1,
 };
@@ -182,7 +160,7 @@ const BAR_POS: React.CSSProperties = {
   left: "50%",
   height: 11,
   borderRadius: "0 2px 2px 0",
-  background: "linear-gradient(90deg, rgba(77,130,255,0.45), rgba(77,130,255,0.85))",
+  background: "linear-gradient(90deg, rgba(var(--up-rgb),0.45), rgba(var(--up-rgb),0.85))",
   transition: "width 0.35s cubic-bezier(.22,1,.36,1)",
 };
 
@@ -191,7 +169,7 @@ const BAR_NEG: React.CSSProperties = {
   right: "50%",
   height: 11,
   borderRadius: "2px 0 0 2px",
-  background: "linear-gradient(270deg, rgba(240,86,107,0.45), rgba(240,86,107,0.85))",
+  background: "linear-gradient(270deg, rgba(var(--down-rgb),0.45), rgba(var(--down-rgb),0.85))",
   transition: "width 0.35s cubic-bezier(.22,1,.36,1)",
 };
 
