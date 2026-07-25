@@ -1,0 +1,114 @@
+/**
+ * surfaceStrings.ts — bilingual EN/ZH strings for the Surface + Session panes.
+ * Pattern matches gexStrings.ts (each key → [English, 中文]; makeSurfaceT(lang)).
+ *
+ * HONESTY DOCTRINE (display-tier wording only):
+ *   - The surface is a PREMIUM-FLOW field materialized from OPRA per-strike flow.
+ *     Cadence is shown verbatim from the snapshot store — never claim 1-min if it's 10-min.
+ *   - Greek surfaces (gamma/vanna/charm) are NOT built yet → shown disabled-with-tooltip
+ *     ("accruing — ships with the greeks snapshotter"), never faked.
+ *   - No "validated" / "predictive" / directional-signal language.
+ *   - translated strings MUST NOT appear in HTML title= attributes (CI-guarded) — use
+ *     aria-label / visible spans.
+ */
+
+import type { Lang } from "@/lib/i18n";
+
+const SURFACE_LEX = {
+  // ── Tab / pane header ───────────────────────────────────────────────────────
+  surfaceTab: ["Surface", "曲面"],
+  surfaceTitle: ["Flow Surface", "资金流曲面"],
+  surfaceSubtitle: ["Premium flow painted by strike & time", "按行权价与时间绘制的权利金资金流"],
+
+  // ── Metric tabs (Net Prem live; greeks accruing) ────────────────────────────
+  metricNetPrem: ["Net Prem", "净权利金"],
+  metricGamma: ["Gamma", "伽马"],
+  metricVanna: ["Vanna", "Vanna"],
+  metricCharm: ["Charm", "Charm"],
+  metricAccruing: [
+    "accruing — ships with the greeks snapshotter",
+    "累积中 — 将随希腊值快照器上线",
+  ],
+  metricLensAria: ["Surface metric", "曲面指标"],
+
+  // ── Aggregation ─────────────────────────────────────────────────────────────
+  aggAria: ["Aggregation", "聚合"],
+  agg1m: ["1m", "1分"],
+  agg5m: ["5m", "5分"],
+  agg15m: ["15m", "15分"],
+
+  // ── Controls ────────────────────────────────────────────────────────────────
+  opacity: ["Opacity", "不透明度"],
+  range: ["Range", "范围"],
+  rangeAll: ["All", "全部"],
+  strikeRangeAria: ["Strike range", "行权价范围"],
+  opacityAria: ["Field opacity", "曲面不透明度"],
+
+  // ── Crosshair readout pill ──────────────────────────────────────────────────
+  strike: ["Strike", "行权价"],
+
+  // ── Legend / stamps ─────────────────────────────────────────────────────────
+  legendPos: ["inflow", "流入"],
+  legendNeg: ["outflow", "流出"],
+  asOf: ["as of", "更新于"],
+  cadenceLabel: ["cadence", "频率"],
+  sessionLabel: ["session", "交易日"],
+
+  // ── Empty / loading ─────────────────────────────────────────────────────────
+  surfaceEmpty: ["No surface data yet — accruing.", "暂无曲面数据 — 累积中。"],
+  surfaceLoading: ["Loading surface…", "加载曲面中…"],
+  noFrame: ["No frame for this time.", "该时间点暂无数据。"],
+
+  // ── Replay bar ──────────────────────────────────────────────────────────────
+  replayFirst: ["First frame", "首帧"],
+  replayPrev: ["Previous frame", "上一帧"],
+  replayPlay: ["Play", "播放"],
+  replayPause: ["Pause", "暂停"],
+  replayNext: ["Next frame", "下一帧"],
+  replayLast: ["Latest frame", "最新帧"],
+  replaySpeedAria: ["Playback speed", "播放速度"],
+  replayScrubAria: ["Scrub to frame", "拖动到指定帧"],
+  replayLive: ["LIVE", "实时"],
+  replayFrameOf: ["frame", "帧"],
+  replayNoFrames: ["No frames — accruing.", "暂无帧 — 累积中。"],
+
+  // ── Data honesty note ───────────────────────────────────────────────────────
+  surfaceNote: [
+    "Premium-flow field from OPRA per-strike flow. Display-only; cadence is the store's true cadence — the field is not resampled finer than the data.",
+    "基于 OPRA 逐行权价资金流的权利金场。仅供展示；显示频率为存储的真实频率——不会对数据进行更细粒度的重采样。",
+  ],
+
+  // ── Session Flow pane ───────────────────────────────────────────────────────
+  sessionTab: ["Session", "盘中"],
+  sessionTitle: ["Session Flow", "盘中资金流"],
+  sessionCP: ["C+P", "认购+认沽"],
+  sessionCalls: ["Calls", "认购"],
+  sessionPuts: ["Puts", "认沽"],
+  sessionCumulative: ["cumulative", "累计"],
+  sessionPerMin: ["per-min", "每分钟"],
+  sessionOffOpen: ["off open", "自开盘"],
+  sessionFill: ["Fill", "填充"],
+  sessionAbsolute: ["absolute", "绝对值"],
+  sessionModeAria: ["Series mode", "序列模式"],
+  sessionSideAria: ["Side", "方向"],
+  sessionCallsChip: ["CALLS", "认购"],
+  sessionPutsChip: ["PUTS", "认沽"],
+  sessionFootnote: ["RTH premium since 9:30 ET", "自美东9:30起的常规时段权利金"],
+  sessionPts: ["pts", "点"],
+  sessionEmpty: ["No session flow yet — accruing.", "暂无盘中资金流 — 累积中。"],
+  sessionOffOpenNote: ["Δ since 9:30 ET open", "自美东9:30开盘以来的变化"],
+} as const;
+
+type SurfaceKey = keyof typeof SURFACE_LEX;
+
+export function getSurfaceStr(lang: Lang, key: SurfaceKey): string {
+  const entry = SURFACE_LEX[key];
+  if (!entry) return "";
+  return lang === "zh" ? entry[1] : entry[0];
+}
+
+export function makeSurfaceT(lang: Lang): (key: SurfaceKey) => string {
+  return (key: SurfaceKey) => getSurfaceStr(lang, key);
+}
+
+export type { SurfaceKey };

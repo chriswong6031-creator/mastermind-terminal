@@ -37,12 +37,13 @@ const HUB_KEY: Record<string, TabKey> = {
   vol: "screener",
   screener: "screener", // legacy flow ?tab=screener alias
   gex: "gex",
+  surface: "surface",
   prism: "prism",
   prophet: "prophet",
 };
 
 // The tabs the hub is allowed to render under Research (canonical hub keys).
-const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "prism", "prophet"];
+const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "surface", "prism", "prophet"];
 
 const DEFAULT_TAB: TabKey = "tape";
 
@@ -55,6 +56,7 @@ const TABS: WorkspaceTab[] = [
   { key: "tickers", labelKey: "wtTickers" },
   { key: "vol", labelKey: "wtOptionsScreener" },
   { key: "gex", labelKey: "wtGex" },
+  { key: "surface", labelKey: "tabSurface" },
   { key: "prism", labelKey: "wtPrism" },
   { key: "prophet", labelKey: "wtProphet" },
 ];
@@ -68,7 +70,7 @@ const FUNDAMENTALS_HREF = "/analysis";
 // the canonical entries; `screener` maps back to the `vol` pill).
 const PAGE_KEY: Record<TabKey, string> = {
   tape: "tape", desk: "desk", tide: "tide", tickers: "tickers",
-  screener: "vol", vol: "vol", gex: "gex", prism: "prism", prophet: "prophet",
+  screener: "vol", vol: "vol", gex: "gex", surface: "surface", prism: "prism", prophet: "prophet",
   leaders: "tape", radar: "tape", // never shown here (redirected to Discover)
 };
 
