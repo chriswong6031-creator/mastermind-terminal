@@ -18,6 +18,8 @@ import ChartConductor from "@/components/ChartConductor";
 import { intradayCapable } from "@/components/ChartPanel";
 import { classify } from "@/lib/intradaySources";
 import { DEFAULT_START_TF, TF_CANONICAL_ORDER, readStartTf, resolveStartTf } from "@/lib/startTf";
+import { useMarketPrefs } from "@/lib/useMarketPrefs";
+import { ALL_MARKETS, HOME_MARKET_IDS, type MarketId } from "@/lib/markets";
 import { type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
 import SearchModal, { FLAG_DEFAULT, FLAG_COLORS } from "@/components/SearchModal";
@@ -236,6 +238,14 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       return arrayMove(prev, from, to);
     });
   }, [activeList]);
+  // Market preference — ONE instance for the whole shell, so the Markets settings pane and the
+  // search results are always reading the same object. Backed by Supabase user_metadata, which
+  // is the same store the macro site's onboarding writes, on the same Supabase project.
+  const {
+    prefs: marketPrefs, ready: prefsReady,
+    toggle: toggleMarketPref, setHome: setHomeMarketPref, enableAll: showAllMarkets,
+  } = useMarketPrefs(email);
+
   const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
   const [panes, setPanes] = useState<string[]>([seed0]);
   const [activePane, setActivePane] = useState(0);
@@ -1997,11 +2007,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         onSwitchList={switchList}
         onCreateList={createListNamed}
         onAddToList={addToList}
+        marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
         onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} onRemove={removeSymbol}
         onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
       {/* F3 Add Symbol dialog — mode="add" with trash+crosshair for members */}
       <SearchModal open={addSymOpen} seed="" manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode="add" active={active}
         flags={flags} lastFlagColor={lastFlagColor}
+        marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
         onClose={() => setAddSymOpen(false)} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
         onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
