@@ -476,6 +476,37 @@ describe("run plane stays tight", () => {
     expect(calls).toHaveLength(0);
   });
 
+  // The resolved path is interpolated into the upstream URL, so a "?" inside the id segment
+  // would smuggle a query string into the gateway call rather than just being a bad id.
+  // Next decodes route params, so a client sending `%3F` lands here as a literal "?".
+  it("a run id carrying a query/fragment separator → 404, never interpolated into the URL", async () => {
+    signedIn();
+    for (const bad of ["abc?admin=1", "abc#frag", "abc%2Fx", "a/b", "."]) {
+      const res = await GET(req("GET"), params("runs", bad));
+      expect(res.status).toBe(404);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  // The specific escape this closes: `runs/active?x=1` is not the string "runs/active", so
+  // guestOk's exact-match refusal would miss it while its run-read regex matched — handing a
+  // guest the enumeration route. The charset guard stops it one layer earlier.
+  it("`runs/active?x=1` cannot be smuggled past the runs/active session gate", async () => {
+    anon();
+    const res = await GET(req("GET"), params("runs", "active?x=1"));
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a real uuid4().hex run id is accepted (the guard is not too tight)", async () => {
+    signedIn();
+    const res = await GET(req("GET"), params("runs", "3f2a1b4c5d6e7f8091a2b3c4d5e6f708"));
+    expect(res.status).toBe(200);
+    expect(calls[0].url).toBe(
+      "https://mastermind-x.com/api/brain/runs/3f2a1b4c5d6e7f8091a2b3c4d5e6f708",
+    );
+  });
+
   it("an unknown sub-resource under a run → 404", async () => {
     signedIn();
     const res = await GET(req("GET"), params("runs", "r_x", "secrets"));

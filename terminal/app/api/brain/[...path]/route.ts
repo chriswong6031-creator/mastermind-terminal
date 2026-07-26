@@ -54,11 +54,19 @@ function threadIdPath(segs: string[]): string | null {
   return null;
 }
 
-// `runs/<id>` plus an optional fixed sub-resource — the run plane. <id> gets the same guard
-// as a thread id (single, non-empty, path-safe segment). `tails` is the exact set of
-// sub-resources THIS method may reach: "" is the bare `runs/<id>` status read, "stream" the
-// resume, "cancel" the Stop. Anything else — a deeper path, an unknown tail — returns null
-// and 404s, so widening one method never widens another.
+// A run id as the gateway mints it: `uuid.uuid4().hex`. We validate by CHARSET rather than
+// by banning "/" and ".." the way threadIdPath does, because the resolved path is
+// interpolated into the upstream URL — so a segment containing "?" or "#" would not just be
+// an odd id, it would smuggle a query string (or truncate the path) into the gateway call.
+// Next decodes route params, so `%3F` arrives here as a literal "?"; this charset is what
+// stops it. Kept a little wider than 32 hex chars so a future id format does not 404, but
+// narrow enough that no separator, dot, or percent can ever survive.
+const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+// `runs/<id>` plus an optional fixed sub-resource — the run plane. `tails` is the exact set
+// of sub-resources THIS method may reach: "" is the bare `runs/<id>` status read, "stream"
+// the resume, "cancel" the Stop. Anything else — a deeper path, an unknown tail — returns
+// null and 404s, so widening one method never widens another.
 //
 // The literal id `active` is refused here: `runs/active` is a fixed COLLECTION path resolved
 // separately in resolvePath, and letting it arrive through this helper would quietly make it
@@ -66,7 +74,7 @@ function threadIdPath(segs: string[]): string | null {
 function runIdPath(segs: string[], tails: readonly string[]): string | null {
   if (segs[0] !== "runs") return null;
   const id = segs[1];
-  if (!id || id === "active" || id.includes("/") || id.includes("..")) return null;
+  if (!id || id === "active" || !RUN_ID.test(id)) return null;
   const tail = segs.length === 2 ? "" : segs.length === 3 ? segs[2] : null;
   if (tail === null || !tails.includes(tail)) return null;
   return tail ? `runs/${id}/${tail}` : `runs/${id}`;
