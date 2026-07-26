@@ -13,11 +13,16 @@
  * participate in the replay scrubber and stamps its as-of as EOD. Vanna/charm aren't provided
  * per-expiration → an honest "not per-expiration" state, never faked zeros. Bar/bubble
  * direction (dealer-sign) is an assumption; magnitude is the read.
+ *
+ * T-B: that "does not participate" is now VISIBLE rather than implicit. While the workspace
+ * scrubber is off the live head, the drawer wears EodReplayTag — it keeps showing the close
+ * it actually describes and says outright that it did not travel with the scrubber.
  */
 
 import React, { useMemo, useState } from "react";
 import { makeGexT } from "./gexStrings";
 import { ExpiryBars } from "./ExpiryBars";
+import { EodReplayTag } from "@/components/surface/EodReplayTag";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload, GreekLens } from "./GexDeskView";
 import { byExpiryToTermStructure, type ExpiryRow } from "@/lib/expiryTermStructure";
@@ -62,6 +67,9 @@ export function ExposureExpiryDrawer({ byExpiry, greek, asOf, lang }: Props) {
         <span className="obs-xdrawer-count">
           {count} {t("xdrawerExp")} · {t("dataEod")}
         </span>
+        {/* On the header, not in the body — the tag has to be true whether the drawer is
+            open or collapsed. */}
+        <EodReplayTag lang={lang} />
       </button>
 
       {open && (

@@ -15,6 +15,9 @@ import {
   metricEnabled,
   expiryPanelState,
   buildStrikeSeries,
+  isSessionDate,
+  isSurfaceDates,
+  truncateSessionAt,
   type SurfaceIndex,
   type SurfaceFrame,
   type SessionPoint,
@@ -427,5 +430,112 @@ describe("expiryPanelState — point-in-time gate for the drill modal (B4)", () 
 
   it("treats a negative/garbage count as nothing to show", () => {
     expect(expiryPanelState(-1, true)).toBe("none");
+  });
+});
+
+// ─── Sessions index + replay truncation (OEU T-B) ───────────────────────────
+
+describe("isSessionDate", () => {
+  it("accepts exactly YYYY-MM-DD", () => {
+    expect(isSessionDate("2026-07-02")).toBe(true);
+  });
+  it("rejects anything else", () => {
+    expect(isSessionDate("2026-7-2")).toBe(false);
+    expect(isSessionDate("2026-07-02T10:00:00Z")).toBe(false);
+    expect(isSessionDate("")).toBe(false);
+    expect(isSessionDate(20260702)).toBe(false);
+    expect(isSessionDate(null)).toBe(false);
+  });
+});
+
+describe("isSurfaceDates", () => {
+  const ok = {
+    root: "SPY",
+    dates: ["2026-07-06", "2026-07-02", "2026-07-01"],
+    latest: "2026-07-06",
+    cadenceSec: 300,
+  };
+
+  it("accepts a well-formed sessions index", () => {
+    expect(isSurfaceDates(ok)).toBe(true);
+  });
+
+  it("accepts an empty index with a null latest (no sessions retained yet)", () => {
+    expect(isSurfaceDates({ root: "SPY", dates: [], latest: null, cadenceSec: 300 })).toBe(true);
+  });
+
+  // Each of these must FAIL rather than be coerced: the picker is gated on this validator, and
+  // a payload we half-trust would offer the user a session that isn't really there.
+  it("rejects an oldest-first list", () => {
+    expect(isSurfaceDates({ ...ok, dates: [...ok.dates].reverse(), latest: "2026-07-01" })).toBe(false);
+  });
+  it("rejects a latest that isn't dates[0]", () => {
+    expect(isSurfaceDates({ ...ok, latest: "2026-07-01" })).toBe(false);
+  });
+  it("rejects a non-null latest on an empty list", () => {
+    expect(isSurfaceDates({ ...ok, dates: [], latest: "2026-07-06" })).toBe(false);
+  });
+  it("rejects a non-date entry", () => {
+    expect(isSurfaceDates({ ...ok, dates: ["2026-07-06", "yesterday"], latest: "2026-07-06" })).toBe(false);
+  });
+  it("rejects a missing / mistyped cadence or root", () => {
+    expect(isSurfaceDates({ ...ok, cadenceSec: "300" })).toBe(false);
+    expect(isSurfaceDates({ ...ok, root: undefined })).toBe(false);
+  });
+  it("rejects non-objects and a bare list", () => {
+    expect(isSurfaceDates(null)).toBe(false);
+    expect(isSurfaceDates(ok.dates)).toBe(false);
+    expect(isSurfaceDates("2026-07-06")).toBe(false);
+  });
+});
+
+describe("truncateSessionAt", () => {
+  const series: SessionPoint[] = [
+    { t: "09:31", call: 10, put: -5 },
+    { t: "10:00", call: 25, put: -9 },
+    { t: "12:30", call: 40, put: -20 },
+    { t: "15:56", call: 60, put: -31 },
+  ];
+
+  it("cuts at the stamp, inclusive", () => {
+    expect(truncateSessionAt(series, "1230").map((p) => p.t)).toEqual(["09:31", "10:00", "12:30"]);
+  });
+
+  it("a stamp between points keeps only what had happened", () => {
+    expect(truncateSessionAt(series, "1100").map((p) => p.t)).toEqual(["09:31", "10:00"]);
+  });
+
+  it("the head stamp is a no-op", () => {
+    expect(truncateSessionAt(series, "1556")).toEqual(series);
+  });
+
+  it("a stamp before the first point empties the series (nothing had accrued)", () => {
+    expect(truncateSessionAt(series, "0900")).toEqual([]);
+  });
+
+  it("a null or malformed stamp leaves the series untouched — never blanks a chart", () => {
+    expect(truncateSessionAt(series, null)).toEqual(series);
+    expect(truncateSessionAt(series, "")).toEqual(series);
+    expect(truncateSessionAt(series, "12:30")).toEqual(series);
+    expect(truncateSessionAt(series, "abc")).toEqual(series);
+  });
+
+  it("keeps points whose own time is unparseable rather than dropping feed data", () => {
+    const messy: SessionPoint[] = [{ t: "??", call: 1, put: -1 }, ...series];
+    expect(truncateSessionAt(messy, "1000").map((p) => p.t)).toEqual(["??", "09:31", "10:00"]);
+  });
+
+  it("truncation composes: totals and rebasing describe the replayed moment", () => {
+    const cut = truncateSessionAt(series, "1000");
+    // The pane's running totals read the LAST cumulative point.
+    expect(cut[cut.length - 1]).toEqual({ t: "10:00", call: 25, put: -9 });
+    // Off-open rebasing is relative to the cut series' own open, not the full day's.
+    const rebased = composeSessionSeries(cut, { mode: "cumulative", offOpen: true, absolute: false });
+    expect(rebased[0]).toEqual({ t: "09:31", call: 0, put: 0 });
+    expect(rebased[rebased.length - 1]).toEqual({ t: "10:00", call: 15, put: -4 });
+  });
+
+  it("an empty series stays empty", () => {
+    expect(truncateSessionAt([], "1200")).toEqual([]);
   });
 });

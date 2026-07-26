@@ -2,26 +2,70 @@
 /**
  * ReplayBar — the global-to-the-pane-group replay scrubber.
  *
- * ⏮ ◀ ▶(Space) ⏭ · speeds 1x/2x/4x/8x · scrubber · frame counter · LIVE badge (pulsing
- * obs-live-dot when at head). All state lives in replayContext (lib/replayEngine reducer);
+ * session picker · ⏮ ◀ ▶(Space) ⏭ · speeds 1x/2x/4x/8x · scrubber (with session-structure
+ * bands) · frame counter · LIVE badge (pulsing obs-live-dot at the head of the live session)
+ * or an archived-session badge. All state lives in replayContext (lib/replayEngine reducer);
  * keyboard Home/End/Space/←/→ are bound in the provider. This component is pure display +
  * dispatch — no timers of its own.
+ *
+ * The session picker is rendered only when the caller supplies archived sessions (i.e. the
+ * sessions index resolved and lists a day behind today). With no index the bar is byte-for-byte
+ * the today-only control it always was.
  */
 
 import React from "react";
 import { useReplay } from "./replayContext";
 import { makeSurfaceT } from "./surfaceStrings";
-import { REPLAY_SPEEDS, fmtStamp } from "@/lib/replayEngine";
+import type { SurfaceKey } from "./surfaceStrings";
+import { REPLAY_SPEEDS, fmtStamp, sessionBands, type ScrubberBandKey } from "@/lib/replayEngine";
 import type { Lang } from "@/lib/i18n";
 
-export function ReplayBar({ lang }: { lang: Lang }) {
+/** Label + aria key per session-structure band. */
+const BAND_STR: Record<ScrubberBandKey, { label: SurfaceKey; aria: SurfaceKey }> = {
+  open: { label: "bandOpen", aria: "bandOpenAria" },
+  power: { label: "bandPower", aria: "bandPowerAria" },
+  close: { label: "bandClose", aria: "bandCloseAria" },
+};
+
+export function ReplayBar({
+  lang,
+  sessions = [],
+  onSessionDate,
+}: {
+  lang: Lang;
+  /** Archived session dates, newest first. Empty → no picker (today-only, unchanged). */
+  sessions?: string[];
+  onSessionDate?: (date: string | null) => void;
+}) {
   const t = makeSurfaceT(lang);
-  const { state, dispatch, asOfStamp, live } = useReplay();
+  // `sessionDate` comes from the context, not a prop, so the picker's value and the badge
+  // can never disagree about which session is actually loaded.
+  const { state, dispatch, asOfStamp, live, archived, sessionDate } = useReplay();
   const { stamps, frame, playing, speed } = state;
   const hasFrames = stamps.length > 0;
+  const bands = sessionBands(stamps);
+  const showPicker = sessions.length > 0 && !!onSessionDate;
 
   return (
     <div style={BAR} role="group" aria-label="replay">
+      {/* Session picker — multi-day replay. A native select keeps the keyboard and the
+          mobile pickers for free, and stays out of the replay keybinds (the provider
+          ignores keys while a form control has focus). */}
+      {showPicker && (
+        <select
+          style={SESSION_SELECT}
+          className="num"
+          aria-label={t("sessionPickerAria")}
+          value={sessionDate ?? ""}
+          onChange={(e) => onSessionDate!(e.target.value || null)}
+        >
+          <option value="">{t("sessionToday")}</option>
+          {sessions.map((d) => (
+            <option key={d} value={d}>{d}</option>
+          ))}
+        </select>
+      )}
+
       {/* Transport buttons */}
       <div style={BTN_GROUP}>
         <button style={ICON_BTN} aria-label={t("replayFirst")} disabled={!hasFrames}
@@ -56,20 +100,57 @@ export function ReplayBar({ lang }: { lang: Lang }) {
         ))}
       </div>
 
-      {/* Scrubber */}
-      <input
-        type="range"
-        style={SCRUB}
-        min={0}
-        max={Math.max(0, stamps.length - 1)}
-        step={1}
-        value={frame}
-        disabled={!hasFrames}
-        aria-label={t("replayScrubAria")}
-        onChange={(e) => dispatch({ type: "setFrame", frame: Number(e.target.value) })}
-      />
+      {/* Scrubber + its session-structure rail. The rail is an annotation strip above the
+          track, not an overlay on it: a native range input insets its own track by half a
+          thumb, and a strip that pretended to align pixel-exactly with the handle would be
+          claiming a precision it doesn't have. The exact time always reads out to the right. */}
+      <div style={SCRUB_WRAP}>
+        {hasFrames && bands.length > 0 && (
+          <div style={BAND_RAIL} role="group" aria-label={t("bandsAria")}>
+            {bands.map((b) => {
+              const isSpan = b.to > b.from;
+              const s = BAND_STR[b.key];
+              // Label placement, by what the landmark is and where it sits. A full session
+              // crowds power hour and the bell into the last ~15% of the track, so the three
+              // labels each claim a different side and never stack:
+              //   span   → OUTSIDE its left edge, in the empty pre-15:00 stretch;
+              //   marker past the midpoint (the bell) → left of its tick, inside the rail;
+              //   marker before it (the open) → right of its tick.
+              const labelPos: React.CSSProperties = isSpan
+                ? { right: "100%", marginRight: 3 }
+                : b.from > 0.5
+                ? { right: 0 }
+                : { left: 0 };
+              return (
+                <span
+                  key={b.key}
+                  style={{
+                    ...(isSpan ? BAND_SPAN : BAND_MARK),
+                    left: `${b.from * 100}%`,
+                    ...(isSpan ? { width: `${(b.to - b.from) * 100}%` } : null),
+                  }}
+                  aria-label={t(s.aria)}
+                >
+                  <span style={{ ...BAND_LABEL, ...labelPos }}>{t(s.label)}</span>
+                </span>
+              );
+            })}
+          </div>
+        )}
+        <input
+          type="range"
+          style={SCRUB}
+          min={0}
+          max={Math.max(0, stamps.length - 1)}
+          step={1}
+          value={frame}
+          disabled={!hasFrames}
+          aria-label={t("replayScrubAria")}
+          onChange={(e) => dispatch({ type: "setFrame", frame: Number(e.target.value) })}
+        />
+      </div>
 
-      {/* Time + frame counter + LIVE */}
+      {/* Time + frame counter + LIVE / archived-session badge */}
       <div style={READOUT}>
         {hasFrames ? (
           <>
@@ -77,7 +158,14 @@ export function ReplayBar({ lang }: { lang: Lang }) {
             <span style={FRAME_TXT} className="num">
               {frame + 1}/{stamps.length} {t("replayFrameOf")}
             </span>
-            {live ? (
+            {/* An archived session is never LIVE, at its head or anywhere else — the badge
+                names the day being replayed instead of claiming the present. */}
+            {archived ? (
+              <span style={ARCHIVED_BADGE}>
+                <span className="num" style={{ fontWeight: 800 }}>{sessionDate}</span>
+                <span style={ARCHIVED_WORD}>{t("sessionArchived")}</span>
+              </span>
+            ) : live ? (
               <span style={LIVE_BADGE}>
                 <span className="obs-live-dot" style={{ marginRight: 5 }} />
                 {t("replayLive")}
@@ -85,7 +173,9 @@ export function ReplayBar({ lang }: { lang: Lang }) {
             ) : null}
           </>
         ) : (
-          <span style={{ ...FRAME_TXT, color: "var(--muted)" }}>{t("replayNoFrames")}</span>
+          <span style={{ ...FRAME_TXT, color: "var(--muted)" }}>
+            {archived ? t("sessionEmptyArchive") : t("replayNoFrames")}
+          </span>
         )}
       </div>
     </div>
@@ -141,12 +231,71 @@ const SPEED_GROUP: React.CSSProperties = { display: "flex", gap: 3 };
 
 const SPEED_CHIP: React.CSSProperties = { height: 22, minWidth: 26, fontSize: 10, padding: "0 6px" };
 
-const SCRUB: React.CSSProperties = {
+const SESSION_SELECT: React.CSSProperties = {
+  height: 24,
+  maxWidth: 148,
+  padding: "0 6px",
+  background: "var(--inset)",
+  border: "1px solid var(--line)",
+  borderRadius: "var(--r-sm, 6px)",
+  color: "var(--text)",
+  fontSize: 11,
+  fontWeight: 600,
+  fontVariantNumeric: "tabular-nums",
+  cursor: "pointer",
+};
+
+const SCRUB_WRAP: React.CSSProperties = {
   flex: 1,
   minWidth: 140,
+  display: "flex",
+  flexDirection: "column",
+  gap: 1,
+};
+
+const SCRUB: React.CSSProperties = {
+  width: "100%",
+  margin: 0,
   height: 4,
   accentColor: "var(--brand)",
   cursor: "pointer",
+};
+
+const BAND_RAIL: React.CSSProperties = {
+  position: "relative",
+  height: 11,
+  pointerEvents: "none",
+};
+
+/** A zero-width landmark (open / close): a hairline tick with its label beside it. */
+const BAND_MARK: React.CSSProperties = {
+  position: "absolute",
+  top: 0,
+  bottom: 0,
+  width: 1,
+  background: "color-mix(in srgb, var(--text-2) 55%, transparent)",
+};
+
+/** A spanned window (power hour): a tinted block across its share of the track. */
+const BAND_SPAN: React.CSSProperties = {
+  position: "absolute",
+  top: 2,
+  bottom: 0,
+  background: "color-mix(in srgb, var(--signal) 16%, transparent)",
+  borderLeft: "1px solid color-mix(in srgb, var(--signal) 55%, transparent)",
+  borderRadius: 2,
+};
+
+const BAND_LABEL: React.CSSProperties = {
+  position: "absolute",
+  top: 0,
+  fontSize: 7.5,
+  lineHeight: "10px",
+  fontWeight: 700,
+  letterSpacing: "0.07em",
+  color: "var(--muted)",
+  whiteSpace: "nowrap",
+  padding: "0 3px",
 };
 
 const READOUT: React.CSSProperties = {
@@ -176,4 +325,25 @@ const LIVE_BADGE: React.CSSProperties = {
   fontWeight: 800,
   letterSpacing: "0.08em",
   color: "var(--up)",
+};
+
+/** Replaces the LIVE badge while a past session is loaded. Deliberately NOT a direction
+ *  colour — a replayed day is neither up nor down, and --up/--down flip by language. */
+const ARCHIVED_BADGE: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  fontSize: 10,
+  color: "var(--text-2)",
+  padding: "2px 7px",
+  border: "1px solid var(--line)",
+  borderRadius: "var(--r-sm, 6px)",
+  background: "var(--inset)",
+};
+
+const ARCHIVED_WORD: React.CSSProperties = {
+  fontWeight: 700,
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  color: "var(--muted)",
 };

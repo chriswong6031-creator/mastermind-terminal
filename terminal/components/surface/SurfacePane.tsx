@@ -8,6 +8,13 @@
  *   - surface:{ROOT}:{STAMP} → the realized-so-far field for the scrubbed time
  *   - /api/intraday?sym={ROOT}&tf={agg}m → price candles (Bar6 tuples)
  *
+ * When the replay is on an ARCHIVED session the first two swap to their date-keyed twins
+ * (surface_idx_at / surface_at). Candles do not: /api/intraday has no session parameter and
+ * always answers about now, so on an archived session they are filtered to that date's window
+ * — which yields whatever the deep bar store actually holds for the day, and nothing at all
+ * when it holds none. Drawing today's price under a past day's field is the loudest possible
+ * point-in-time lie, so it is not an option.
+ *
  * Rendering: HeatSeries custom-series (lib/heatSeries) paints the field; a candlestick
  * series draws price on top. The shader's pos/neg RGB are resolved from --up/--down at
  * mount and re-resolved on theme / data-updown change (MutationObserver) — never a
@@ -179,7 +186,7 @@ export function SurfacePane({
 }: SurfacePaneProps) {
   const { lang } = useLang();
   const t = makeSurfaceT(lang);
-  const { state: replayState, dispatch, asOfStamp, live } = useReplay();
+  const { state: replayState, dispatch, asOfStamp, live, sessionDate, archived } = useReplay();
   const sync = useSurfaceSync();
   const isCell = chrome === "cell";
 
@@ -246,11 +253,16 @@ export function SurfacePane({
     } as Partial<HeatSeriesOptions>);
   });
 
-  // ── Seed the replay stamps from the index (once per root) ────────────────────
+  // ── Seed the replay stamps from the index (once per root/session) ────────────
+  // An archived session reads its own dated index; today reads the legacy live path, which
+  // is untouched. A dated index that comes back malformed (or empty) yields no stamps — the
+  // bar says so rather than falling back to another day's frame list.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const data = await flowGet(`surface_idx:${root}`);
+      const data = await flowGet(
+        sessionDate ? `surface_idx_at:${root}:${sessionDate}` : `surface_idx:${root}`,
+      );
       if (cancelled) return;
       if (isSurfaceIndex(data)) {
         dispatch({ type: "setStamps", stamps: data.stamps, keepHead: true });
@@ -260,7 +272,7 @@ export function SurfacePane({
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [root]);
+  }, [root, sessionDate]);
 
   // ── Fetch the frame for the scrubbed stamp ───────────────────────────────────
   // All state writes happen inside the async task (never synchronously in the effect
@@ -273,7 +285,11 @@ export function SurfacePane({
         return;
       }
       setLoading(true);
-      const data = await flowGet(`surface:${root}:${asOfStamp}`);
+      const data = await flowGet(
+        sessionDate
+          ? `surface_at:${root}:${sessionDate}:${asOfStamp}`
+          : `surface:${root}:${asOfStamp}`,
+      );
       if (cancelled) return;
       const nextFrame = isSurfaceFrame(data) ? data : null;
       setFrame(nextFrame);
@@ -289,7 +305,7 @@ export function SurfacePane({
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [root, asOfStamp, fixedMetric]);
+  }, [root, sessionDate, asOfStamp, fixedMetric]);
 
   useEffect(() => { frameRef.current = frame; }, [frame]);
   useEffect(() => { stampsRef.current = replayState.stamps ?? []; }, [replayState.stamps]);
@@ -594,7 +610,7 @@ export function SurfacePane({
   // PIT: the heat field is server-truncated to the scrubbed stamp, so the candles must stop
   // there too. Leaving the full session drawn under a replayed field showed price the user
   // could not have known yet — the same class of point-in-time lie as B4's expiry panel,
-  // and a much louder one. At the head (live) nothing is cut.
+  // and a much louder one. At the head of the LIVE session nothing is cut.
   useEffect(() => {
     const candle = candleSeriesRef.current;
     if (!candle) return;
@@ -605,7 +621,20 @@ export function SurfacePane({
       const e = sessionEpoch(date, `${asOfStamp.slice(0, 2)}:${asOfStamp.slice(2, 4)}`);
       if (Number.isFinite(e)) cutoff = e;
     }
-    const kept = candles.filter((b, i, arr) => i === 0 || b[0] !== arr[i - 1][0]);
+    // Archived session: /api/intraday answered about TODAY, so keep only bars that fall on
+    // the replayed date. The deep bar store may hold them (then they line up with the field,
+    // which anchors on the same session date) or may not (then the field replays alone) —
+    // either is honest; splicing in today's price would not be.
+    let lo = -Infinity;
+    let hi = Infinity;
+    if (archived && date) {
+      const dayLo = sessionEpoch(date, "00:00");
+      const dayHi = sessionEpoch(date, "23:59");
+      if (Number.isFinite(dayLo) && Number.isFinite(dayHi)) { lo = dayLo; hi = dayHi; }
+    }
+    const kept = candles
+      .filter((b, i, arr) => i === 0 || b[0] !== arr[i - 1][0])
+      .filter((b) => b[0] >= lo && b[0] <= hi);
     const data = kept
       .filter((b) => b[0] <= cutoff)
       .map((b) => ({ time: b[0] as unknown as Time, open: b[1], high: b[2], low: b[3], close: b[4] }));
@@ -619,7 +648,7 @@ export function SurfacePane({
     // candlestick series does, so the whitespace lives here.)
     const tail = kept.filter((b) => b[0] > cutoff).map((b) => ({ time: b[0] as unknown as Time }));
     candle.setData([...data, ...tail] as Parameters<typeof candle.setData>[0]);
-  }, [candles, live, asOfStamp, frame?.session_date]);
+  }, [candles, live, archived, asOfStamp, frame?.session_date]);
 
   // ── Stamps / labels ──────────────────────────────────────────────────────────
   // Plain computations — the React Compiler auto-memoizes; a manual useMemo here trips

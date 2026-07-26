@@ -98,6 +98,17 @@
       }
     },
     {
+      "name": "oeu-tb",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3213"],
+      "cwd": "terminal",
+      "port": 3213,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
       "name": "techlab-w5",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3002"],

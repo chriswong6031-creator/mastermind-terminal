@@ -25,6 +25,11 @@
  * — an assumption. Magnitude is the reliable read. Passport caveat is in MarketStateCard.
  * Values are $mn (engine/options_hub.py divides those columns by 1e6); only `net_gex_bn`
  * is billions — hence two formatters, `fmtMn` and `fmtBn`, never one.
+ *
+ * REPLAY (T-B): `by_strike` is a single END-OF-DAY snapshot with no intraday history, so the
+ * ladder cannot time-travel with the workspace scrubber and does not try. When the scrubber is
+ * off the live head it keeps showing the close it genuinely describes and wears EodReplayTag
+ * to say so. Truncating or interpolating this store to a scrubbed minute would be fabrication.
  */
 
 import React, {
@@ -35,6 +40,7 @@ import React, {
   useState,
 } from "react";
 import { makeGexT } from "./gexStrings";
+import { EodReplayTag } from "@/components/surface/EodReplayTag";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload, GreekLens } from "./GexDeskView";
 import { topExpiriesForStrike, type MatrixCell, type ExpiryShare } from "@/lib/surfaceContract";
@@ -781,6 +787,9 @@ export function StrikeLadder({
             </button>
           ))}
         </div>
+        {/* Off-head scrubber → this EOD ladder did not travel with it. Renders nothing while
+            the workspace is live, so an un-replayed desk looks exactly as it always did. */}
+        <EodReplayTag lang={lang} />
       </div>
 
       {/* ── Column headers ──────────────────────────────────────────────────── */}

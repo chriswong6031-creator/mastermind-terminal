@@ -13,8 +13,20 @@
  *
  * All series math is the pure composeSessionSeries (lib/surfaceContract), unit-tested.
  * Sign colors are var(--up)/var(--down) resolved at runtime (East-Asian flip aware) —
- * never a hardcoded hex. Registered as a sub-toggle of the Tide tab (smaller diff than a
- * new top-level tab; see PR body).
+ * never a hardcoded hex. Rendered in two homes: the Tide tab's Session sub-view and under
+ * the Surface tab's replay scrubber.
+ *
+ * REPLAY (T-B, whole-workspace time travel). The pane reads the replay position from the
+ * workspace bus, so BOTH homes behave identically — including the Tide tab, which sits
+ * outside the replay provider's subtree:
+ *   - scrubbed back on the live session → the series is CUT at that minute, so the chart and
+ *     its running totals show what had accrued by then and nothing after.
+ *   - an ARCHIVED session is loaded → the pane withdraws. The per-minute premium tide is a
+ *     live-session artifact (live_flow/tide_current.json); no dated copy of it exists, and the
+ *     surface store's per-strike netprem carries only the call−put DIFFERENCE, so the two legs
+ *     this pane plots cannot be reconstructed for a past day. Truncating TODAY's tide under a
+ *     past date's label would be a straightforward lie, so it says what it hasn't got instead.
+ *   - no replay mounted anywhere → untouched, exactly as before.
  */
 
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
@@ -25,12 +37,14 @@ import {
 import { useLang } from "@/lib/i18n";
 import {
   composeSessionSeries,
+  truncateSessionAt,
   type SessionPoint,
   type SessionMode,
   type SessionSide,
 } from "@/lib/surfaceContract";
 import { sessionEpoch } from "@/lib/intradayShared";
 import { makeSurfaceT } from "./surfaceStrings";
+import { useWorkspaceReplay } from "./replayBus";
 
 interface TideMinuteLite { t: string; ncp: number; npp: number }
 
@@ -57,6 +71,11 @@ export const SessionFlowPane = memo(function SessionFlowPane({
 }) {
   const { lang } = useLang();
   const t = makeSurfaceT(lang);
+  const replay = useWorkspaceReplay();
+  // Cut only while the workspace is genuinely scrubbed back on the LIVE session. At the head
+  // (or with no replay mounted) the stamp is the newest minute and cutting is a no-op anyway,
+  // but keeping the condition explicit means a head-pinned pane never re-derives its series.
+  const replayStamp = replay.active && !replay.live && !replay.archived ? replay.asOfStamp : null;
 
   const [side, setSide] = useState<SessionSide>("cp");
   const [mode, setMode] = useState<SessionMode>("cumulative");
@@ -69,10 +88,13 @@ export const SessionFlowPane = memo(function SessionFlowPane({
   const callRef = useRef<ISeriesApi<"Line" | "Area"> | null>(null);
   const putRef = useRef<ISeriesApi<"Line" | "Area"> | null>(null);
 
-  // Raw cumulative series from the tide minutes.
+  // Raw cumulative series from the tide minutes, cut at the replay stamp when scrubbed back.
+  // Cutting HERE (before compose + before the totals chips) is what makes the whole pane
+  // time-travel: off-open rebasing, per-minute differencing and the running totals all then
+  // describe the replayed moment rather than the live one.
   const cumulative: SessionPoint[] = useMemo(
-    () => minutes.map((m) => ({ t: m.t, call: m.ncp, put: m.npp })),
-    [minutes],
+    () => truncateSessionAt(minutes.map((m) => ({ t: m.t, call: m.ncp, put: m.npp })), replayStamp),
+    [minutes, replayStamp],
   );
 
   const series = useMemo(
@@ -184,6 +206,25 @@ export const SessionFlowPane = memo(function SessionFlowPane({
   const pts = series.length;
   const hasData = pts >= 2;
 
+  // Archived session: withdraw rather than relabel today's tide as another day's.
+  // Same idiom as the evolution modal's expiry panel (B4) — name the thing, say why it
+  // isn't there, don't leave an empty rectangle.
+  if (replay.active && replay.archived) {
+    return (
+      <div style={PANE}>
+        <div style={WITHDRAWN}>
+          <div style={WITHDRAWN_HD}>
+            {t("sessionArchivedTitle")}
+            {replay.sessionDate && (
+              <span style={WITHDRAWN_DATE} className="num">{replay.sessionDate}</span>
+            )}
+          </div>
+          <div style={WITHDRAWN_BODY}>{t("sessionArchivedBody")}</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={PANE}>
       {/* Controls */}
@@ -238,6 +279,11 @@ export const SessionFlowPane = memo(function SessionFlowPane({
       <div style={FOOTNOTE}>
         {t("sessionFootnote")}
         {offOpen && <span style={{ color: "var(--muted)" }}> · {t("sessionOffOpenNote")}</span>}
+        {replayStamp && (
+          <span style={{ color: "var(--signal)" }}>
+            {" "}· {t("sessionReplayNote")} {replayStamp.slice(0, 2)}:{replayStamp.slice(2, 4)}
+          </span>
+        )}
         <span style={{ color: "var(--muted)" }}> · {pts} {t("sessionPts")}</span>
       </div>
     </div>
@@ -260,3 +306,25 @@ const EMPTY: React.CSSProperties = {
 };
 
 const FOOTNOTE: React.CSSProperties = { fontSize: 10, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" };
+
+const WITHDRAWN: React.CSSProperties = {
+  display: "flex", flexDirection: "column", gap: 6,
+  padding: "16px 14px",
+  border: "1px dashed var(--line)", borderRadius: "var(--r-md, 8px)",
+  background: "var(--inset)",
+};
+
+const WITHDRAWN_HD: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+  fontSize: 12, fontWeight: 700, color: "var(--text)",
+};
+
+const WITHDRAWN_DATE: React.CSSProperties = {
+  fontSize: 10.5, fontWeight: 700, color: "var(--muted)",
+  padding: "1px 6px", border: "1px solid var(--line)", borderRadius: 5,
+  fontVariantNumeric: "tabular-nums",
+};
+
+const WITHDRAWN_BODY: React.CSSProperties = {
+  fontSize: 11, lineHeight: 1.5, color: "var(--text-2)", maxWidth: 620,
+};

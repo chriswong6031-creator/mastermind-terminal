@@ -1,0 +1,15 @@
+{
+  "_fixture": true,
+  "_note": "DEV FIXTURE for f=surface_dates:{ROOT} (multi-day surface replay). Shape pinned by the macro materializer scripts/build_flow_surface.py build_dates_index() / is_surface_dates(): dates are YYYY-MM-DD sorted NEWEST FIRST, latest === dates[0], cadenceSec is an int. dates[0] is the fixture's own live session (== surface_idx_fixture.json date), so the session picker offers the two entries behind it as archived sessions. 2026-07-03 is absent on purpose: July 4 2026 falls on a Saturday, the holiday is observed on the Friday, and there is no session to retain.",
+  "SPY": {
+    "root": "SPY",
+    "dates": ["2026-07-06", "2026-07-02", "2026-07-01"],
+    "latest": "2026-07-06",
+    "count": 3,
+    "retain": 10,
+    "cadenceSec": 300,
+    "cadence": "5-min",
+    "asof": "2026-07-06T15:56:00-04:00",
+    "source": "fixture"
+  }
+}

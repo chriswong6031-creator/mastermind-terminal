@@ -6,8 +6,14 @@
  *   root picker + view toggle + Style popover      ← toolbar
  *   pinned-strike chips                            ← only once something is pinned
  *   SurfacePane (the paint field, large)
- *   ReplayBar                                      ← drives everything below it in time
+ *   ReplayBar (session picker + scrubber + bands)  ← drives everything below it in time
  *   SessionFlowPane                                ← the session's premium tide, same width
+ *
+ * Multi-day replay: the sessions index (`surface_dates:{ROOT}`) lists the sessions R2 still
+ * retains. Picking one loads that date's index and frames through the same replay engine; the
+ * LIVE badge becomes an archived-session badge and every pane that can only describe the
+ * present withdraws. If the index is absent or malformed the picker is not rendered at all and
+ * the tab behaves exactly as it did before — today-only.
  *
  * Quad view swaps the single field for a 2×2 of Net Prem / Gamma / Vanna / Charm. All four
  * sit inside ONE ReplayProvider, so the single scrubber time-travels the whole grid, and
@@ -19,10 +25,12 @@
  * anything else lands on a plain "no surface for X yet" state instead of an empty chart.
  */
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useLang } from "@/lib/i18n";
 import { trackSearch } from "@/lib/searchTrack";
 import { useFlowStream } from "@/lib/flowStream";
+import { flowGet } from "@/lib/flowClientCache";
+import { isSurfaceDates, isSurfaceIndex } from "@/lib/surfaceContract";
 import { ReplayProvider, useReplay } from "./replayContext";
 import { SurfacePane } from "./SurfacePane";
 import { ReplayBar } from "./ReplayBar";
@@ -55,7 +63,7 @@ interface TidePayload { minutes?: TideLite[]; session_date?: string }
  * (Space / arrows / Home / End) only fire while this group is engaged.
  */
 function GroupRoot({
-  root, view, aggMin, themeSig, pins, onTogglePin, tideMinutes, tideDate,
+  root, view, aggMin, themeSig, pins, onTogglePin, tideMinutes, tideDate, sessions, onSessionDate,
 }: {
   root: string;
   view: ViewMode;
@@ -65,9 +73,11 @@ function GroupRoot({
   onTogglePin: (strike: number, metric: string, value: number | null) => void;
   tideMinutes: TideLite[];
   tideDate?: string;
+  sessions: string[];
+  onSessionDate: (date: string | null) => void;
 }) {
   const { lang } = useLang();
-  const { bindGroupRef } = useReplay();
+  const { bindGroupRef, archived } = useReplay();
   const [sessionOpen, setSessionOpen] = useState(true);
 
   return (
@@ -100,11 +110,14 @@ function GroupRoot({
         </SurfaceSyncProvider>
       )}
 
-      <ReplayBar lang={lang} />
+      <ReplayBar lang={lang} sessions={sessions} onSessionDate={onSessionDate} />
 
       {/* The session's premium tide, under the same scrubber. Collapsible and capped so the
-          paint field — the reason this tab exists — always keeps the bulk of the height. */}
-      {tideMinutes.length > 0 && (
+          paint field — the reason this tab exists — always keeps the bulk of the height.
+          It reads the replay position from the workspace bus (same as its Tide-tab twin), so
+          scrubbing truncates it and an archived session makes it withdraw. Kept mounted while
+          archived so the withdrawal is visible rather than the pane silently vanishing. */}
+      {(tideMinutes.length > 0 || archived) && (
         <div style={SESSION_WRAP}>
           <button
             style={SESSION_TOGGLE}
@@ -143,6 +156,32 @@ export function SurfaceView() {
   // The session tide feeds the pane under the field. Same stream the Tide tab uses.
   const { data: tide } = useFlowStream<TidePayload>("tide");
   const tideMinutes = Array.isArray(tide?.minutes) ? tide!.minutes! : [];
+
+  // ── Multi-day replay: which sessions can be replayed ─────────────────────────
+  // `sessions` are the ARCHIVED ones — the retained list minus whichever date the live index
+  // is currently on, so "Today · LIVE" and its own date never appear as two options. Both
+  // fetches go through flowGet, which dedupes with SurfacePane's identical index request.
+  // Any failure (absent dates.json, malformed payload, unreachable) leaves `sessions` empty,
+  // the picker unrendered, and the tab on its original today-only behaviour.
+  const [sessions, setSessions] = useState<string[]>([]);
+  const [sessionDate, setSessionDate] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [datesRaw, idxRaw] = await Promise.all([
+        flowGet(`surface_dates:${root}`),
+        flowGet(`surface_idx:${root}`),
+      ]);
+      if (cancelled) return;
+      const liveDate = isSurfaceIndex(idxRaw) ? idxRaw.date : "";
+      setSessions(isSurfaceDates(datesRaw) ? datesRaw.dates.filter((d) => d !== liveDate) : []);
+      // A root switch always returns to the live session — the previous root's archived date
+      // says nothing about this one, and R2 retention is per-root.
+      setSessionDate(null);
+    })();
+    return () => { cancelled = true; };
+  }, [root]);
 
   // ── Theme → CSS custom properties on the surface root ────────────────────────
   // Applied as INLINE STYLE during render, not from an effect. React commits style before
@@ -299,9 +338,11 @@ export function SurfaceView() {
           </div>
         </div>
       ) : (
-        /* Keyed by root AND view so a ticker change re-seeds the replay stamps cleanly and
-           a layout switch gives the new charts a fresh mount. */
-        <ReplayProvider key={`${root}:${view}`}>
+        /* Keyed by root, view AND session so a ticker change re-seeds the replay stamps
+           cleanly, a layout switch gives the new charts a fresh mount, and switching sessions
+           starts the new day pinned to its own head instead of inheriting a frame index from
+           a session with a different stamp count. */
+        <ReplayProvider key={`${root}:${view}:${sessionDate ?? "live"}`} sessionDate={sessionDate}>
           <GroupRoot
             root={root}
             view={view}
@@ -311,6 +352,8 @@ export function SurfaceView() {
             onTogglePin={togglePin}
             tideMinutes={tideMinutes}
             tideDate={tide?.session_date}
+            sessions={sessions}
+            onSessionDate={setSessionDate}
           />
         </ReplayProvider>
       )}
