@@ -26,6 +26,23 @@ const PROPHET_LEX = {
   cadenceLabel:     ["nightly EOD — updates after close", "每日收盘后更新"],
   authorityLabel:   ["display-only — forward ledger accruing", "仅供展示 — 前向账本积累中"],
 
+  // ── Contract structure receipt (OEU T-E) ───────────────────────────────────
+  // The receipt answers the three questions a reader has about a NAMED contract: what the
+  // spread costs, whether anyone else is in the strike, and whether the option is dear for
+  // THIS name. macro (lib/options_context.structure_receipt) ships the plain word and the
+  // Tier-2 sentence pre-translated; only this chrome is local.
+  structTitle:      ["Contract structure", "合约结构"],
+  structAria:       ["Option contract structure receipt", "期权合约结构说明"],
+  // Stated on the chip, because a spread and an OI count read as live numbers otherwise.
+  structVintage:    ["at the close", "收盘时"],
+  structYoung:      ["short IV history", "IV 历史较短"],
+  // Absent-safe: a plan whose build predates the receipt, or a contract macro could not
+  // price. Silence would leave the reader assuming the contract is fine to trade.
+  structAbsent: [
+    "Contract structure not published for this plan.",
+    "该计划未发布合约结构数据。",
+  ],
+
   // ── Sub-tabs ───────────────────────────────────────────────────────────────
   tabSignals:       ["Signals", "信号"],
   tabPerf:          ["PERF", "绩效"],
