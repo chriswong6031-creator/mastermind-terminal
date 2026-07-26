@@ -423,7 +423,8 @@ export interface StructureCell {
  * ATM implied vol → percent, tolerating BOTH unit conventions in the wild.
  *
  * `options_hub/vol/{ROOT}.json` ships atm_iv as a PERCENT in production (SPY 15.89, with
- * iv_52w_hi 26.6) while the checked-in vol fixture still ships a FRACTION (SPY 0.162). This
+ * iv_52w_hi 26.6); the checked-in vol fixture now ships percents too, so dev and prod agree.
+ * The fraction branch stays because callers still hand this reader raw fractions. This
  * is not a heuristic invented here: macro's own `lib/options_context.structure_receipt`
  * carries the identical `iv < 5 → ×100` rule for exactly this reason, so a value that is
  * already a percent is never multiplied twice and a fraction is never printed as "0.6%".
@@ -434,6 +435,78 @@ export function ivPercent(iv: number | null | undefined): number | null {
   const n = num(iv);
   if (n === null || n <= 0) return null;
   return n < 5 ? n * 100 : n;
+}
+
+/** Top-level IV-family fields of options_hub.vol/v1 — every one of them a percent-or-fraction. */
+const VOL_TOP_IV_KEYS = ["atm_iv", "iv_52w_hi", "iv_52w_lo", "rv20", "vrp"];
+
+/**
+ * Normalise an options_hub.vol/v1 payload to PERCENT units.
+ *
+ * The unit regime is decided ONCE per payload from an anchor field (atm_iv, else
+ * iv_52w_hi, else the first term entry) via ivPercent — never per leaf value, so a
+ * smile-tail IV below ivPercent's ×100 threshold (e.g. a 4.9 tail put_iv in a percent
+ * payload) is never re-scaled. The factor is exactly 1 (already percent — live R2) or
+ * 100 (fraction payload — the historical vol fixture).
+ *
+ * Rank fields (iv_rank_252, iv_rank_all, history[].iv_rank) are 0–100 under BOTH
+ * conventions, and strike/close/dte/spot_ref are not vols at all — none are touched.
+ */
+export function normalizeVolUnits<T extends Record<string, unknown>>(payload: T): T {
+  if (payload === null || typeof payload !== "object") return payload;
+  const p = payload as Record<string, unknown>;
+
+  const term = Array.isArray(p.term) ? p.term : null;
+  const term0 =
+    term && term[0] !== null && typeof term[0] === "object"
+      ? (term[0] as Record<string, unknown>)
+      : null;
+
+  const anchor = [p.atm_iv, p.iv_52w_hi, term0?.atm_iv]
+    .map(num)
+    .find((n): n is number => n !== null && n > 0);
+  if (anchor === undefined) return payload;
+
+  const anchorPct = ivPercent(anchor);
+  if (anchorPct === null) return payload;
+  const k = anchorPct / anchor;
+  if (k === 1) return payload;
+
+  /** Scale a leaf, or hand back exactly what came in when it is not a finite number. */
+  const scale = (v: unknown): unknown => {
+    const n = num(v);
+    return n === null ? v : Math.round(n * k * 1e6) / 1e6;
+  };
+
+  /** Copy an object, rescaling the listed keys. Absent keys stay absent — never undefined. */
+  const rescaled = (o: Record<string, unknown>, keys: string[]): Record<string, unknown> => {
+    const out: Record<string, unknown> = { ...o };
+    for (const key of keys) if (key in o) out[key] = scale(o[key]);
+    return out;
+  };
+
+  /** Map an array of row objects through `rescaled`, passing non-objects through. */
+  const rescaledRows = (rows: unknown[], keys: string[]): unknown[] =>
+    rows.map((r) =>
+      r !== null && typeof r === "object" ? rescaled(r as Record<string, unknown>, keys) : r
+    );
+
+  const out = rescaled(p, VOL_TOP_IV_KEYS);
+
+  if (term) out.term = rescaledRows(term, ["atm_iv"]);
+
+  if (Array.isArray(p.smile)) {
+    out.smile = p.smile.map((exp) => {
+      if (exp === null || typeof exp !== "object") return exp;
+      const e = exp as Record<string, unknown>;
+      if (!Array.isArray(e.points)) return e;
+      return { ...e, points: rescaledRows(e.points, ["call_iv", "put_iv"]) };
+    });
+  }
+
+  if (Array.isArray(p.history)) out.history = rescaledRows(p.history, ["atm_iv"]);
+
+  return out as T;
 }
 
 /** Level formatter matching GexSummaryBar's, so the two belts agree digit-for-digit. */
