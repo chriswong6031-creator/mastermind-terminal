@@ -336,6 +336,15 @@ const GEX_LEX = {
   gexHistAria:     ["Net gamma exposure across recent sessions", "近期交易日的净伽马敞口"],
   gexHistLatest:   ["Latest", "最新"],
   gexHistFlip:     ["Flip", "翻转点"],
+  // Slice 2 — session scrubber. The sparkline becomes a scrub track; these label the
+  // per-session read-out. γ-polarity chips are compact forms of the history `regime` field
+  // (long/short γ), shown only alongside the net value + its Δ + the sparkline (never bare).
+  gexHistScrubHint:   ["drag · ← → keys", "拖动 · ← → 键"],
+  gexHistNow:         ["now", "当前"],
+  gexHistRegimeLong:  ["long γ", "多头γ"],
+  gexHistRegimeShort: ["short γ", "空头γ"],
+  gexHistRegimeFlat:  ["flat γ", "中性γ"],
+  gexHistShift:       ["γ-polarity shifted this session", "本交易日γ极性发生切换"],
 } as const;
 
 type GexDeskKey = keyof typeof GEX_LEX;
