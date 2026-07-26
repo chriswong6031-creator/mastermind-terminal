@@ -13,6 +13,7 @@ import { windowGexRows } from "@/lib/windowGexRows.mjs";
 import { flowGet, flowInvalidate, flowPrefetch } from "@/lib/flowClientCache";
 import { useFlowStream } from "@/lib/flowStream";
 import { trackSearch } from "@/lib/searchTrack";
+import { VolRegimeChip } from "@/components/eodcontext/VolRegimeChip";
 import {
   createChart, LineSeries, AreaSeries,
   type IChartApi, type ISeriesApi,
@@ -2028,7 +2029,12 @@ export default function OptionsHubView({
         {(() => {
           const showStrip = !controlled && !hideTabStrip;
           const showLive = (activeTab === "tape" || activeTab === "tide") && !activeUnavailable && !activeDelayed;
-          if (!showStrip && !showLive && !activeAsof) return null;
+          // Vol-regime chip (OEU T-E): hub-wide settled vol weather, so it belongs to the
+          // hub's own header wherever the hub is acting as a HUB — standalone or inside the
+          // workspace. A Discover single-tab embed (one allowed tab) is a bare mount of one
+          // surface, not a hub header, and must stay bare.
+          const showVol = stripTabs.length > 1;
+          if (!showStrip && !showLive && !activeAsof && !showVol) return null;
           return (
         <div style={{ display: "flex", alignItems: "center", padding: "8px 14px", borderBottom: "1px solid var(--line)", flexShrink: 0, gap: 8 }}>
           {showStrip && (
@@ -2047,6 +2053,10 @@ export default function OptionsHubView({
             </nav>
           )}
           <div className="spacer" />
+          {/* Settled vol weather from macro's vol/regime.json — macro's verdict wording and
+              its one-line read, passed through verbatim. Sits BEFORE the live-status cluster
+              so the header reads left-to-right from slowest cadence to fastest. */}
+          {showVol && <VolRegimeChip lang={lang} />}
           {/* Live status area (relocated out of the topbar chrome; view-state coupled) */}
           {showLive && (
             <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-2)" }}>

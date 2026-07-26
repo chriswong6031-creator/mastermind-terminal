@@ -39,11 +39,20 @@ const FLOW_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_i
 const SURFACE_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_idx_fixture.json");
 const SURFACE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_fixture.json");
 const SURFACE_DATES_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_dates_fixture.json");
+// EOD context belt (OEU T-E) — settled-close artifacts mirrored from the macro estate.
+const DARKPOOL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "darkpool_fixture.json");
+const VOLREGIME_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "volregime_fixture.json");
+const MOVES_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "moves_fixture.json");
 
 // Valid f-param values: existing feed|heat|meta, plus hub params.
 // Parameterized sub-types: tide, dte, ticker:{ROOT}, vol:{ROOT}, gex:{ROOT}, oi, hot
 export function isValidF(f: string): boolean {
   if (["feed", "heat", "meta", "tide", "dte", "oi", "hot", "ctx", "oiconf", "chainheat"].includes(f)) return true;
+  // EOD context belt (OEU T-E). `darkpool` and `volregime` are whole-file artifacts the
+  // macro nightly mirrors (scripts/mirror_terminal_context_r2.py); `moves:{ROOT}` is the
+  // per-root expected-move band, already published beside gex/vol in the options_hub plane.
+  if (f === "darkpool" || f === "volregime") return true;
+  if (f.startsWith("moves:") && f.length > 6) return true;
   if (f.startsWith("ticker:") && f.length > 7) return true;
   if (f.startsWith("vol:") && f.length > 4) return true;
   if (f.startsWith("gex:") && f.length > 4) return true;
@@ -88,6 +97,9 @@ export function backendPath(f: string): string {
   if (f === "meta") return "/api/flow/meta";
   if (f === "ctx") return "/api/hub/ctx";
   if (f === "oiconf") return "/api/hub/oiconf";
+  if (f === "darkpool") return "/api/hub/darkpool";
+  if (f === "volregime") return "/api/hub/volregime";
+  if (f.startsWith("moves:")) return `/api/hub/moves/${f.slice(6)}`;
   if (f.startsWith("tctx:")) return `/api/hub/tctx/${f.slice(5)}`;
   if (f === "chainheat") return "/api/flow/chainheat";
   if (f.startsWith("gexstate:")) return `/api/hub/gexstate/${f.slice(9)}`;
@@ -131,6 +143,11 @@ export function r2Key(f: string): string {
   if (f === "hot") return "options_hub/hot_contracts.json";
   if (f === "ctx") return "options_hub/context.json";
   if (f === "oiconf") return "options_hub/oi_confirmed.json";
+  // EOD context belt. darkpool/vol-regime live at the bucket ROOT (macro mirrors whole
+  // files under their own names, not under options_hub/) — see mirror_terminal_context_r2.
+  if (f === "darkpool") return "darkpool/eod.json";
+  if (f === "volregime") return "vol/regime.json";
+  if (f.startsWith("moves:")) return `options_hub/moves/${f.slice(6)}.json`;
   if (f.startsWith("tctx:")) return `options_hub/tickers_ctx/${f.slice(5)}.json`;
   if (f === "chainheat") return "live_flow/chain_heat_current.json";
   if (f.startsWith("gexstate:")) return `options_structure/gex_state/${f.slice(9)}.json`;
@@ -302,6 +319,33 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       return JSON.parse(raw) as Record<string, unknown>;
     } catch { return { schema: "options_flow.chain_heat/v1", campaigns: [] }; }
   }
+  // ── EOD context belt (OEU T-E) ──────────────────────────────────────────────
+  // Each falls back to a SHAPE-VALID EMPTY, never to a neighbouring root's data: the belt
+  // reads "not covered" off an empty universe / absent game_plan, which is exactly what a
+  // pre-first-nightly 404 should look like. Deleting a fixture is therefore a legitimate
+  // way to exercise the absent state in dev.
+  if (f === "darkpool") {
+    try {
+      const raw = await fs.readFile(DARKPOOL_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch { return { schema: "darkpool_eod.v1", tier: "eod", asof: "", universe: [] }; }
+  }
+  if (f === "volregime") {
+    try {
+      const raw = await fs.readFile(VOLREGIME_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch { return { schema: "vol_regime.v1", asof: "", snapshot: null, game_plan: null }; }
+  }
+  // Expected-move bands are keyed by root. An unknown root returns {} rather than SPY's
+  // band — a wrong ticker's expected move is worse than none (gex: fixture convention).
+  if (f.startsWith("moves:")) {
+    const root = f.slice(6).toUpperCase();
+    try {
+      const raw = await fs.readFile(MOVES_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? {};
+    } catch { return {}; }
+  }
   if (f.startsWith("tctx:")) {
     const root = f.slice(5).toUpperCase();
     try {
@@ -310,10 +354,23 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       return all[root] ?? all[Object.keys(all)[0]] ?? {};
     } catch { return {}; }
   }
+  // gex_state is a PER-ROOT store in production (options_structure/gex_state/{ROOT}.json).
+  // The fixture was served root-blind, so every ticker in dev wore SPY's walls, flip and max
+  // pain — invisible until the EOD context belt (OEU T-E) put those numbers beside the
+  // ladder's own and they disagreed. Now: a root-keyed fixture is indexed; a single-root
+  // fixture answers ONLY for the root it declares, and every other ticker gets the honest
+  // empty that production would give it. Consumers already handle the empty (MarketStateCard
+  // renders "state computing"; the belt falls back to the ladder payload and discloses it).
   if (f.startsWith("gexstate:")) {
+    const root = f.slice(9).toUpperCase();
     try {
       const raw = await fs.readFile(GEXSTATE_FIXTURE_FILE, "utf8");
-      return JSON.parse(raw) as Record<string, unknown>;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof parsed.root === "string" || typeof parsed.schema === "string") {
+        return String(parsed.root ?? "").toUpperCase() === root ? parsed : {};
+      }
+      const all = parsed as Record<string, Record<string, unknown>>;
+      return all[root] ?? {};
     } catch { return {}; }
   }
   if (f.startsWith("matrix:")) {
