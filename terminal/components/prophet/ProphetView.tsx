@@ -781,6 +781,7 @@ const PROFIT_ROW: React.CSSProperties = {
 
 const PROFIT_LEVEL: React.CSSProperties = {
   font: "700 13px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text)",
   minWidth: 72,
 };
@@ -856,6 +857,7 @@ const RR_LABEL: React.CSSProperties = {
 
 const RR_VAL: React.CSSProperties = {
   font: "700 14px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text)",
 };
 

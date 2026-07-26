@@ -49,7 +49,7 @@ export default function SeasonalityCard({ symbol, onOpenPane }: { symbol: string
       <div style={{ display: "flex", alignItems: "center", gap: 7, font: "600 10px/1 var(--font-ui)", letterSpacing: ".09em", textTransform: "uppercase", color: "var(--text-2)", marginBottom: 12 }}>
         <svg width="13" height="13" viewBox="0 0 24 24" style={{ stroke: "var(--brand-2)", fill: "none", strokeWidth: 2 }}><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" /></svg>
         {t("seasonalityTitle")}
-        <span style={{ marginLeft: "auto", font: "600 9px/1 var(--font-num)", letterSpacing: ".04em", color: "var(--text-dim)" }}>{MAX_YEARS}y</span>
+        <span style={{ marginLeft: "auto", font: "600 9px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", letterSpacing: ".04em", color: "var(--text-dim)" }}>{MAX_YEARS}y</span>
       </div>
       {/* every bar shares the bottom baseline (align-items:flex-end) and grows up; sign only drives color */}
       <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 66 }}>

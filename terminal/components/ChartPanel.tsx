@@ -2141,13 +2141,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const priceTag = document.createElement("div");
     priceTag.style.cssText = "position:absolute;z-index:5;right:1px;display:none;flex-direction:row;align-items:center;gap:2px;pointer-events:none;transform:translateY(-50%);white-space:nowrap";
     const tagSym = document.createElement("div");
-    tagSym.style.cssText = "padding:2px 5px;border-radius:3px;color:#fff;font:700 10px/1 var(--font-num);letter-spacing:.02em";
+    tagSym.style.cssText = "padding:2px 5px;border-radius:3px;color:#fff;font:700 10px/1 var(--font-num);letter-spacing:.02em;font-variant-numeric:tabular-nums";
     const tagVal = document.createElement("div");
     tagVal.style.cssText = "display:flex;flex-direction:column;align-items:flex-end;padding:2px 6px;border-radius:3px;color:#fff;text-align:right";
     const tagPrice = document.createElement("div");
-    tagPrice.style.cssText = "font:700 11px/1.15 var(--font-num)";
+    tagPrice.style.cssText = "font:700 11px/1.15 var(--font-num);font-variant-numeric:tabular-nums";
     const tagCd = document.createElement("div");
-    tagCd.style.cssText = "font:600 9px/1.15 var(--font-num);opacity:.85";
+    tagCd.style.cssText = "font:600 9px/1.15 var(--font-num);opacity:.85;font-variant-numeric:tabular-nums";
     tagVal.appendChild(tagPrice); tagVal.appendChild(tagCd);
     priceTag.appendChild(tagSym); priceTag.appendChild(tagVal);
     wrap.appendChild(priceTag); priceTagRef.current = priceTag;
@@ -2486,7 +2486,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         g.appendChild(mk("line", { x1: 0, y1: ay, x2: W, y2: ay, stroke: col, "stroke-width": sw, "stroke-dasharray": dash }));
         fat(0, ay, W, ay);
         const label = (d.meta as any)?.label || A.p.toFixed(prec);
-        const tx = mk("text", { x: W - 6, y: ay - 4, fill: col, "font-size": 10, "text-anchor": "end", "font-family": "var(--font-num)" }); tx.textContent = String(label);
+        const tx = mk("text", { x: W - 6, y: ay - 4, fill: col, "font-size": 10, "text-anchor": "end", "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums" }); tx.textContent = String(label);
         g.appendChild(tx); grip([{ x: W / 2, y: ay }]); return g;
       }
       if (d.kind === "vline") {
@@ -2503,13 +2503,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         g.appendChild(mk("line", { x1: ax, y1: ay, x2: ex, y2: ey, stroke: col, "stroke-width": lw(1.6, 0.8), "stroke-dasharray": dash }));
         fat(ax, ay, ex, ey);
         if (d.kind === "arrow") { const an = Math.atan2(by - ay, bx - ax), h = 9; g.appendChild(mk("path", { d: `M${bx} ${by} L${bx + h * Math.cos(an + Math.PI - 0.45)} ${by + h * Math.sin(an + Math.PI - 0.45)} M${bx} ${by} L${bx + h * Math.cos(an + Math.PI + 0.45)} ${by + h * Math.sin(an + Math.PI + 0.45)}`, stroke: col, "stroke-width": lw(1.6, 0.8), fill: "none" })); }
-        if (d.kind === "measure") { const pc = ((B.p - A.p) / A.p) * 100; const di = Math.abs(barIndex(B.t) - barIndex(A.t)); const lab = mk("text", { x: (ax + bx) / 2, y: Math.min(ay, by) - 8, fill: col, "font-size": 11, "text-anchor": "middle", "font-family": "var(--font-num)" }); lab.textContent = `${pc >= 0 ? "+" : ""}${pc.toFixed(2)}% · ${di} bars`; g.appendChild(lab); }
+        if (d.kind === "measure") { const pc = ((B.p - A.p) / A.p) * 100; const di = Math.abs(barIndex(B.t) - barIndex(A.t)); const lab = mk("text", { x: (ax + bx) / 2, y: Math.min(ay, by) - 8, fill: col, "font-size": 11, "text-anchor": "middle", "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums" }); lab.textContent = `${pc >= 0 ? "+" : ""}${pc.toFixed(2)}% · ${di} bars`; g.appendChild(lab); }
         grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
       }
       if (d.kind === "rect") { g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay), fill: col, "fill-opacity": 0.08, stroke: col, "stroke-width": lw(1, 1), "stroke-dasharray": dash })); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g; }
       if (d.kind === "fib") {
         const hi = Math.max(A.p, B.p), lo = Math.min(A.p, B.p), x1 = Math.min(ax, bx);
-        FIB.forEach((f) => { const price = hi - (hi - lo) * f; const y = yOf(price); if (y == null) return; g.appendChild(mk("line", { x1, y1: y, x2: W, y2: y, stroke: col, "stroke-width": 1, "stroke-dasharray": "4 4", opacity: 0.6 })); const tx = mk("text", { x: x1 + 4, y: y - 3, fill: col, "font-size": 9.5, "font-family": "var(--font-num)", opacity: 0.85 }); tx.textContent = `${(f * 100).toFixed(1)}%  ${price.toFixed(prec)}`; g.appendChild(tx); });
+        FIB.forEach((f) => { const price = hi - (hi - lo) * f; const y = yOf(price); if (y == null) return; g.appendChild(mk("line", { x1, y1: y, x2: W, y2: y, stroke: col, "stroke-width": 1, "stroke-dasharray": "4 4", opacity: 0.6 })); const tx = mk("text", { x: x1 + 4, y: y - 3, fill: col, "font-size": 9.5, "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums", opacity: 0.85 }); tx.textContent = `${(f * 100).toFixed(1)}%  ${price.toFixed(prec)}`; g.appendChild(tx); });
         fat(x1, yOf(hi) ?? 0, x1, yOf(lo) ?? 0); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
       }
       return g;

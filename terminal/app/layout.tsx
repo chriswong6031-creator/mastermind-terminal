@@ -7,8 +7,11 @@ import "./onboarding.css";
 import { LangProvider } from "@/lib/i18n";
 import Tracker from "@/components/Tracker";
 
-const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
-const jetbrainsMono = JetBrains_Mono({ variable: "--font-jetbrains-mono", subsets: ["latin"], display: "swap" });
+// Inter carries the whole product now — UI text *and* every numeral (--font-ui / --font-num).
+const inter = Inter({ variable: "--font-inter", subsets: ["latin"], display: "swap" });
+// JetBrains Mono is code-only (--font-code: Pine editor, gutters, console, source dumps), so it
+// no longer needs to preload on pages that never render a character cell.
+const jetbrainsMono = JetBrains_Mono({ variable: "--font-jetbrains-mono", subsets: ["latin"], display: "swap", preload: false });
 
 // Viewport config: device-width, no zoom (full-bleed chart UX), safe-area insets via viewportFit.
 export const viewport: Viewport = {
