@@ -4,6 +4,7 @@ import { useLang, useT } from "@/lib/i18n";
 import { createClient } from "@/lib/supabase/client";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 import { useEntitlement } from "@/lib/useEntitlement";
+import { DEFAULT_START_TF, TF_CANONICAL_ORDER, readStartTf, writeStartTf } from "@/lib/startTf";
 
 // Tier label key, with a "· trial" suffix only while status === "trialing".
 function tierLabelKey(tier: string, status: string): string {
@@ -13,12 +14,14 @@ function tierLabelKey(tier: string, status: string): string {
   return "obTierFree";
 }
 
-// User-settings popover anchored on the top-right avatar: up/down color scheme + language + sign out.
+// User-settings popover anchored on the top-right avatar: up/down color scheme + language +
+// Terminal settings + sign out.
 // The up/down scheme and language auto-initialize from the browser locale (pre-paint script in layout),
 // and any manual choice here is remembered (localStorage) — "auto + remember override".
 export default function SettingsMenu({ email }: { email: string }) {
   const [open, setOpen] = useState(false);
   const [ud, setUd] = useState<"east" | "west">("west");
+  const [startTf, setStartTf] = useState<string>(DEFAULT_START_TF);
   const [firstName, setFirstName] = useState("");
   const { lang, setLang } = useLang();
   const t = useT();
@@ -48,9 +51,18 @@ export default function SettingsMenu({ email }: { email: string }) {
     window.dispatchEvent(new CustomEvent("mm:updown"));
   };
 
+  // Startup timeframe. Deliberately does NOT retime the chart that's already open: this names the
+  // timeframe the Terminal OPENS on, and a live re-time would silently rewrite the active pane of a
+  // deliberate multi-pane layout (MTF is D/3D/W/1M across four panes). The selected chip is the
+  // feedback; TerminalShell reads the value at its next mount.
+  const pickStartTf = (v: string) => { setStartTf(v); writeStartTf(v); };
+
   return (
     <div className="pophost" style={{ position: "relative" }}>
-      <button className="avatar" onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }} title={t("settings")}>{(email || "U")[0].toUpperCase()}</button>
+      {/* startTf is read here rather than in a mount effect: localStorage isn't readable during render
+          (hydration), and re-reading on every open keeps the two mounted SettingsMenus — desktop topbar
+          and mobile drawer — showing the same value after one of them changes it. */}
+      <button className="avatar" onClick={(e) => { e.stopPropagation(); setStartTf(readStartTf()); setOpen((o) => !o); }} title={t("settings")}>{(email || "U")[0].toUpperCase()}</button>
       {open && (
         <div className="pop show settings-pop" style={{ top: 38, right: 0 }} onClick={(e) => e.stopPropagation()}>
           <div className="set-h"><b>{t("settings")}</b></div>
@@ -63,6 +75,13 @@ export default function SettingsMenu({ email }: { email: string }) {
           <div className="set-seg">
             <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>EN</button>
             <button className={lang === "zh" ? "on" : ""} onClick={() => setLang("zh")}>中文</button>
+          </div>
+          <div className="set-grp">{t("setTerminal")}</div>
+          <div className="set-sub">{t("setStartTf")}</div>
+          <div className="set-tfg">
+            {TF_CANONICAL_ORDER.map((tfi) => (
+              <button key={tfi} className={startTf === tfi ? "on" : ""} aria-pressed={startTf === tfi} onClick={() => pickStartTf(tfi)}>{tfi}</button>
+            ))}
           </div>
           <div className="set-sep" />
           {signedIn ? (
