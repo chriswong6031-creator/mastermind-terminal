@@ -142,6 +142,11 @@ export function PrismView() {
     const payload: MatrixPayload | null =
       (data as Record<string, MatrixPayload>)[root] ??
       (data as unknown as MatrixPayload) ?? null;
+    // A payload without a cells array — the fixture's honest {} for an unknown root, or a
+    // malformed upstream doc — must resolve to null: MatrixGrid iterates cells/strikes
+    // unconditionally, and null is what routes to the desk's placeholder states, the same
+    // place a prod 503 for a missing-matrix root lands (GexDeskView convention).
+    if (!Array.isArray(payload?.cells)) return null;
     return payload;
   }, []);
 

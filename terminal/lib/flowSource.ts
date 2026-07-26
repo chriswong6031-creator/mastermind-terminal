@@ -286,11 +286,16 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     return all[root] ?? {};
   }
+  // Per-root IV context, keyed by root. An unknown root returns {} (honest empty), never
+  // the first key's payload: OptionsHubView only renders vol under a root-match guard (the
+  // fallback was fetched-but-never-shown there), but the Exposure Desk's Structure strip
+  // rendered the substituted root's IV percentile under the selected ticker's name — the
+  // wrong-root hazard the ticker:/gex:/moves:/gexstate: branches already refuse.
   if (f.startsWith("vol:")) {
     const root = f.slice(4).toUpperCase();
     const raw = await fs.readFile(VOL_FIXTURE_FILE, "utf8");
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-    return all[root] ?? all[Object.keys(all)[0]] ?? {};
+    return all[root] ?? {};
   }
   // GEX fixtures keyed by root. Unknown roots return {} (empty payload) rather than
   // falling back to SPY — so dev matches prod's honest "no GEX yet" empty state.
@@ -350,12 +355,16 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       return all[root] ?? {};
     } catch { return {}; }
   }
+  // Ticker z-context, keyed by root. Unknown roots return {} — the drill's z-chips then
+  // render their warming "—" state (history_n 0) instead of another ticker's z-scores
+  // wearing the selected root's header (the first-key fallback dressed the QQQ drill in
+  // NVDA's Net-Prem/Vol>OI z-chips).
   if (f.startsWith("tctx:")) {
     const root = f.slice(5).toUpperCase();
     try {
       const raw = await fs.readFile(TCTX_FIXTURE_FILE, "utf8");
       const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-      return all[root] ?? all[Object.keys(all)[0]] ?? {};
+      return all[root] ?? {};
     } catch { return {}; }
   }
   // gex_state is a PER-ROOT store in production (options_structure/gex_state/{ROOT}.json).
@@ -377,12 +386,17 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       return all[root] ?? {};
     } catch { return {}; }
   }
+  // Expiry matrix, keyed by root. In production the store exists only for some roots and
+  // every consumer is built for absence (GexDeskView/SurfacePane gate on an array `cells`;
+  // PrismView nulls a cells-less payload before MatrixGrid). Unknown roots return {} — the
+  // old SPY fallback fed the Prism SPY/QQQ/IWM confluence board the same SPY matrix three
+  // times over, fabricating perfect cross-index alignment in dev.
   if (f.startsWith("matrix:")) {
     const root = f.slice(7).toUpperCase();
     try {
       const raw = await fs.readFile(MATRIX_FIXTURE_FILE, "utf8");
       const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-      return all[root] ?? all["SPY"] ?? all[Object.keys(all)[0]] ?? {};
+      return all[root] ?? {};
     } catch { return {}; }
   }
   if (f === "manifest") {
