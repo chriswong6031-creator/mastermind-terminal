@@ -38,6 +38,7 @@ const ENRICH_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "enrich_f
 const FLOW_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_idx_fixture.json");
 const SURFACE_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_idx_fixture.json");
 const SURFACE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_fixture.json");
+const SURFACE_DATES_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_dates_fixture.json");
 
 // Valid f-param values: existing feed|heat|meta, plus hub params.
 // Parameterized sub-types: tide, dte, ticker:{ROOT}, vol:{ROOT}, gex:{ROOT}, oi, hot
@@ -52,6 +53,14 @@ export function isValidF(f: string): boolean {
   // Surface replay store: surface_idx:{ROOT} (frame index) + surface:{ROOT}:{STAMP} (one frame).
   if (f.startsWith("surface_idx:") && f.length > 12) return true;
   if (f.startsWith("surface:") && f.split(":").length === 3 && f.length > 10) return true;
+  // Multi-day replay (macro #3499): the sessions index + the date-keyed copies of the two
+  // keys above. `surface_dates:` is one prefix; the dated reads carry an extra DATE segment,
+  // so they are distinct prefixes rather than an overload — `surface_idx_at:` cannot be
+  // mistaken for `surface_idx:` (12th char `_` vs `:`) and `surface_at:` never matches
+  // `surface:`. Legacy today-paths above are untouched and remain the LIVE read.
+  if (f.startsWith("surface_dates:") && f.length > 14) return true;
+  if (f.startsWith("surface_idx_at:") && f.split(":").length === 3 && f.length > 15) return true;
+  if (f.startsWith("surface_at:") && f.split(":").length === 4 && f.length > 13) return true;
   if (f === "manifest") return true;
   if (f === "flow_idx") return true;
   if (f === "prophet_idx") return true;
@@ -62,7 +71,13 @@ export function isValidF(f: string): boolean {
   return false;
 }
 
-function backendPath(f: string): string {
+/**
+ * f-param → Python-hub path. Exported for tests: the surface store now has six f-forms
+ * (today + dated × index/frame/sessions) whose prefixes differ by one character, and a
+ * mis-resolved key fails silently by falling through to R2 and then to null — it would not
+ * throw, it would just show an empty field. Pinning the mapping is the only way to catch that.
+ */
+export function backendPath(f: string): string {
   if (f === "tide") return "/api/flow/tide";
   if (f === "dte") return "/api/flow/dte";
   if (f.startsWith("ticker:")) return `/api/flow/ticker/${f.slice(7)}`;
@@ -78,6 +93,17 @@ function backendPath(f: string): string {
   if (f.startsWith("gexstate:")) return `/api/hub/gexstate/${f.slice(9)}`;
   if (f.startsWith("matrix:")) return `/api/hub/matrix/${f.slice(7)}`;
   // Surface store: /api/flow/surface/{ROOT}/idx  and  /api/flow/surface/{ROOT}/{STAMP}
+  // Dated variants first — the longer prefixes are disjoint from the today-paths, but
+  // matching them ahead of the shorter ones keeps that independent of prefix arithmetic.
+  if (f.startsWith("surface_dates:")) return `/api/flow/surface/${f.slice(14)}/dates`;
+  if (f.startsWith("surface_idx_at:")) {
+    const [, root, date] = f.split(":");
+    return `/api/flow/surface/${root}/${date}/idx`;
+  }
+  if (f.startsWith("surface_at:")) {
+    const [, root, date, stamp] = f.split(":");
+    return `/api/flow/surface/${root}/${date}/${stamp}`;
+  }
   if (f.startsWith("surface_idx:")) return `/api/flow/surface/${f.slice(12)}/idx`;
   if (f.startsWith("surface:")) {
     const [, root, stamp] = f.split(":");
@@ -93,7 +119,8 @@ function backendPath(f: string): string {
   return `/api/flow/${f}`;
 }
 
-function r2Key(f: string): string {
+/** f-param → R2 object key. Exported for tests — see backendPath. */
+export function r2Key(f: string): string {
   if (f === "meta") return "live_flow/meta.json";
   if (f === "tide") return "live_flow/tide_current.json";
   if (f === "dte") return "live_flow/dte_tide_current.json";
@@ -109,6 +136,17 @@ function r2Key(f: string): string {
   if (f.startsWith("gexstate:")) return `options_structure/gex_state/${f.slice(9)}.json`;
   if (f.startsWith("matrix:")) return `options_structure/matrix/${f.slice(7)}.json`;
   // Surface store on R2: live_flow/surface/{ROOT}/idx.json + live_flow/surface/{ROOT}/{STAMP}.json
+  // plus the date-keyed copies the poller writes beside them (macro build_flow_surface.py):
+  // live_flow/surface/{ROOT}/dates.json, {ROOT}/{DATE}/idx.json, {ROOT}/{DATE}/{STAMP}.json.
+  if (f.startsWith("surface_dates:")) return `live_flow/surface/${f.slice(14)}/dates.json`;
+  if (f.startsWith("surface_idx_at:")) {
+    const [, root, date] = f.split(":");
+    return `live_flow/surface/${root}/${date}/idx.json`;
+  }
+  if (f.startsWith("surface_at:")) {
+    const [, root, date, stamp] = f.split(":");
+    return `live_flow/surface/${root}/${date}/${stamp}.json`;
+  }
   if (f.startsWith("surface_idx:")) return `live_flow/surface/${f.slice(12)}/idx.json`;
   if (f.startsWith("surface:")) {
     const [, root, stamp] = f.split(":");
@@ -168,6 +206,47 @@ export function attachFlowScores(f: string, data: Record<string, unknown>): void
     } catch {
       rec.flowScore = { score: 0, tier: "LOW", components: [] };
     }
+  }
+}
+
+// ── Surface fixture helpers (multi-day replay) ───────────────────────────────
+//
+// The fixture family carries ONE canonical full-day session per root. Multi-day replay is
+// exercised by serving that same session under each date the sessions fixture lists, RE-DATED
+// so every stamp the UI shows describes the requested session. A date the sessions fixture
+// does not list is refused (honest empty) — dev must never be able to invent a session that
+// production's retention prune would not have.
+
+const emptySurfaceIndex = (): Record<string, unknown> => ({
+  date: "", stamps: [], latest: null, cadenceSec: 0, source: "fixture-empty",
+});
+
+const emptySurfaceFrame = (): Record<string, unknown> => ({
+  spot: null, price_levels: [], time_steps: [], grids: {}, asof: "", cadence: "",
+});
+
+const emptySurfaceDates = (root: string): Record<string, unknown> => ({
+  root, dates: [], latest: null, count: 0, retain: 0, cadenceSec: 0, cadence: "",
+  asof: "", source: "fixture-empty",
+});
+
+/** Swap the YYYY-MM-DD prefix of an ISO-ish stamp for `date` (passthrough if it has none). */
+function redate(asof: unknown, date: string): string {
+  const s = typeof asof === "string" ? asof : "";
+  if (!/^\d{4}-\d{2}-\d{2}/.test(s) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return s;
+  return date + s.slice(10);
+}
+
+/** True when the sessions fixture lists `date` for `root` (missing fixture → false). */
+async function fixtureHasSession(root: string, date: string): Promise<boolean> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  try {
+    const raw = await fs.readFile(SURFACE_DATES_FIXTURE_FILE, "utf8");
+    const all = JSON.parse(raw) as Record<string, { dates?: unknown }>;
+    const dates = all[root]?.dates;
+    return Array.isArray(dates) && dates.includes(date);
+  } catch {
+    return false;
   }
 }
 
@@ -257,30 +336,57 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       return JSON.parse(raw) as Record<string, unknown>;
     } catch { return { rows: [], as_of: "", source: "fixture-empty" }; }
   }
-  // Surface frame index — keyed by ROOT. Unknown roots return an honest empty index.
-  if (f.startsWith("surface_idx:")) {
-    const root = f.slice(12).toUpperCase();
+  // Sessions index (multi-day replay) — keyed by ROOT. Unknown roots return an honest empty
+  // list, which the Terminal reads as "no archived sessions" and hides the session picker.
+  if (f.startsWith("surface_dates:")) {
+    const root = f.slice(14).toUpperCase();
+    try {
+      const raw = await fs.readFile(SURFACE_DATES_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? emptySurfaceDates(root);
+    } catch {
+      return emptySurfaceDates(root);
+    }
+  }
+  // Surface frame index — keyed by ROOT (today) or by ROOT+DATE (an archived session).
+  // Unknown roots — and dates the sessions index doesn't list — return an honest empty
+  // index rather than re-serving today's stamps under someone else's date.
+  if (f.startsWith("surface_idx:") || f.startsWith("surface_idx_at:")) {
+    const dated = f.startsWith("surface_idx_at:");
+    const [, rootRaw, dateRaw] = f.split(":");
+    const root = (dated ? rootRaw : f.slice(12)).toUpperCase();
+    const date = dated ? dateRaw : "";
+    if (dated && !(await fixtureHasSession(root, date))) return emptySurfaceIndex();
     try {
       const raw = await fs.readFile(SURFACE_IDX_FIXTURE_FILE, "utf8");
       const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-      return all[root] ?? { date: "", stamps: [], latest: null, cadenceSec: 0, source: "fixture-empty" };
+      const idx = all[root];
+      if (!idx) return emptySurfaceIndex();
+      // One canonical fixture session stands in for every retained date: re-date it so the
+      // archived index describes the requested session, not the fixture's own.
+      return dated ? { ...idx, date, asof: redate(idx.asof, date) } : idx;
     } catch {
-      return { date: "", stamps: [], latest: null, cadenceSec: 0, source: "fixture-empty" };
+      return emptySurfaceIndex();
     }
   }
   // Surface frame for a given stamp — the fixture stores ONE canonical full-day frame per
   // root; we truncate time_steps + each metric grid to the realized-so-far window for the
   // requested stamp (replay = the surface as it existed at that time). Unknown root/stamp →
-  // empty frame (honest "no surface data" state), never fabricated.
-  if (f.startsWith("surface:")) {
-    const [, rootRaw, stamp] = f.split(":");
-    const root = (rootRaw ?? "").toUpperCase();
-    const empty = { spot: null, price_levels: [], time_steps: [], grids: {}, asof: "", cadence: "" };
+  // empty frame (honest "no surface data" state), never fabricated. The `surface_at:` form
+  // carries an explicit session DATE; it serves the same truncated frame re-dated to that
+  // session, and refuses any date the sessions index doesn't list.
+  if (f.startsWith("surface:") || f.startsWith("surface_at:")) {
+    const dated = f.startsWith("surface_at:");
+    const parts = f.split(":");
+    const root = (parts[1] ?? "").toUpperCase();
+    const date = dated ? parts[2] ?? "" : "";
+    const stamp = dated ? parts[3] ?? "" : parts[2] ?? "";
+    if (dated && !(await fixtureHasSession(root, date))) return emptySurfaceFrame();
     try {
       const raw = await fs.readFile(SURFACE_FIXTURE_FILE, "utf8");
       const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
       const full = all[root];
-      if (!full) return empty;
+      if (!full) return emptySurfaceFrame();
       const stamps = (full.stamps as string[]) ?? [];
       const times = (full.time_steps as string[]) ?? [];
       const idx = stamps.indexOf(stamp);
@@ -289,19 +395,20 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       const grids: Record<string, number[][]> = {};
       for (const [m, g] of Object.entries(gridsFull)) grids[m] = g.map((row) => row.slice(0, upto));
       const spotPath = (full.spot_path as number[] | undefined) ?? null;
+      const sessionDate = dated ? date : (full.session_date as string | undefined);
       return {
         spot: spotPath ? spotPath[Math.max(0, upto - 1)] ?? full.spot : full.spot,
         price_levels: full.price_levels,
         time_steps: times.slice(0, upto),
         grids,
-        asof: full.asof,
+        asof: dated ? redate(full.asof, date) : full.asof,
         cadence: full.cadence,
         metrics: full.metrics,
         root,
-        session_date: full.session_date,
+        session_date: sessionDate,
       } as Record<string, unknown>;
     } catch {
-      return empty;
+      return emptySurfaceFrame();
     }
   }
   if (f === "prophet_idx") {

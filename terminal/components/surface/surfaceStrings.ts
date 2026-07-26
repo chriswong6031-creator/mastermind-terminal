@@ -73,6 +73,28 @@ const SURFACE_LEX = {
   replayFrameOf: ["frame", "帧"],
   replayNoFrames: ["No frames — accruing.", "暂无帧 — 累积中。"],
 
+  // ── Multi-day replay: session picker + archived-session badge ───────────────
+  sessionPickerAria: ["Replay session", "回放交易日"],
+  sessionToday: ["Today · LIVE", "今日 · 实时"],
+  sessionArchived: ["archived session", "历史交易日"],
+  sessionArchivedNote: [
+    "Replaying a past session. Everything below the scrubber describes that day, not today.",
+    "正在回放历史交易日。滚动条以下的内容描述的是该交易日，而非今日。",
+  ],
+  sessionEmptyArchive: [
+    "No frames stored for this session.",
+    "该交易日没有保存的帧。",
+  ],
+
+  // ── Scrubber annotations: session structure ─────────────────────────────────
+  bandsAria: ["Session structure", "交易时段结构"],
+  bandOpen: ["OPEN", "开盘"],
+  bandPower: ["POWER HOUR", "尾盘时段"],
+  bandClose: ["CLOSE", "收盘"],
+  bandOpenAria: ["Regular-hours open, 9:30 ET", "常规时段开盘，美东9:30"],
+  bandPowerAria: ["Power hour, 15:00–16:00 ET", "尾盘时段，美东15:00–16:00"],
+  bandCloseAria: ["Regular-hours close, 16:00 ET", "常规时段收盘，美东16:00"],
+
   // ── Data honesty note ───────────────────────────────────────────────────────
   surfaceNote: [
     "Premium-flow field from OPRA per-strike flow. Display-only; cadence is the store's true cadence — the field is not resampled finer than the data.",
@@ -98,6 +120,21 @@ const SURFACE_LEX = {
   sessionPts: ["pts", "点"],
   sessionEmpty: ["No session flow yet — accruing.", "暂无盘中资金流 — 累积中。"],
   sessionOffOpenNote: ["Δ since 9:30 ET open", "自美东9:30开盘以来的变化"],
+  // Replay-aware session flow: truncated to the scrubbed stamp, or withdrawn on a past
+  // session (the per-minute tide is stored for the live session only — see PR body).
+  sessionReplayNote: ["truncated to the replay time", "已截断至回放时点"],
+  sessionArchivedTitle: ["Session flow is live-session only", "盘中资金流仅覆盖当日"],
+  sessionArchivedBody: [
+    "The per-minute premium tide is stored for today's session only — it is not kept for past dates, so there is nothing honest to draw here.",
+    "逐分钟权利金资金流仅保存当日数据，历史交易日未保留，因此此处没有可如实呈现的内容。",
+  ],
+
+  // ── EOD stores under a replayed workspace (they must not pretend to time-travel) ──
+  eodNotReplayed: ["EOD structure — not replayed", "收盘结构 — 不参与回放"],
+  eodNotReplayedNote: [
+    "This is the end-of-day structural snapshot. It has no intraday history, so it stays on its own as-of while the scrubber moves.",
+    "这是收盘时点的结构快照，没有盘中历史数据，因此在拖动回放时仍停留在自身的更新时点。",
+  ],
 
   // ── Strike hover popover + Intraday-Evolution modal (Wave 2E, RECON §4.2) ────
   popFromSpot: ["from spot", "距现价"],

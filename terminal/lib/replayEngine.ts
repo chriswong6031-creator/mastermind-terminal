@@ -157,3 +157,149 @@ export function fmtStamp(stamp: string | null): string {
   if (/^\d{4}$/.test(stamp)) return `${stamp.slice(0, 2)}:${stamp.slice(2)}`;
   return stamp;
 }
+
+/** "HHMM" → minutes past midnight, or NaN when it isn't a stamp. */
+export function stampMinutes(stamp: string): number {
+  if (!/^\d{4}$/.test(stamp)) return NaN;
+  const h = Number(stamp.slice(0, 2));
+  const m = Number(stamp.slice(2));
+  if (h > 23 || m > 59) return NaN;
+  return h * 60 + m;
+}
+
+// ─── Scrubber annotations: session structure ────────────────────────────────
+//
+// The three session landmarks the replay track can annotate WITHOUT any extra data: the RTH
+// open, the closing hour, and the bell. They are properties of the US equity session itself,
+// not a feed — so they are always true and never need a payload.
+//
+// Macro-event markers (FOMC/CPI) were scoped for this rail and deliberately NOT shipped. A
+// dated macro calendar IS reachable — the macro repo publishes feeds/event_calendar.json to
+// the same R2 bucket lib/upstreams R2_BASE already reads, with per-event {date, time_et,
+// label, label_zh, impact} — but it is a FORWARD calendar: horizon_days 21, earliest entry
+// asof+1. This track only ever shows sessions that have already happened (today's realized
+// frames, or one of the retained PAST sessions), so the overlap with a forward-only feed is
+// structurally empty, not merely rare. Marking events here needs a calendar with history;
+// until one exists the rail carries session structure only. Event dates are never hardcoded.
+
+export const RTH_OPEN_MIN = 9 * 60 + 30; // 09:30 ET
+export const POWER_HOUR_MIN = 15 * 60; // 15:00 ET
+export const RTH_CLOSE_MIN = 16 * 60; // 16:00 ET
+
+/**
+ * How close the newest frame must be to the bell before the close is annotated. Mid-session
+ * there is no close to mark yet — drawing one would claim a session had ended when it hadn't.
+ */
+export const CLOSE_GRACE_MIN = 10;
+
+export type ScrubberBandKey = "open" | "power" | "close";
+
+export interface ScrubberBand {
+  key: ScrubberBandKey;
+  /** Fraction [0,1] of the track where the band starts. */
+  from: number;
+  /** Fraction [0,1] where it ends; `from === to` is a marker line, not a span. */
+  to: number;
+}
+
+/**
+ * Session-structure bands for a stamp list, as track fractions.
+ *
+ * Positions are interpolated on the CLOCK, not on frame indices, so a session with a gap in
+ * its snapshots still puts 15:00 where 15:00 belongs. Landmarks outside the realized window
+ * clamp to the track ends — the open genuinely precedes the first frame, so its marker sits at
+ * the left edge rather than being dropped.
+ *
+ * What is emitted is gated on what actually happened:
+ *   - open   — whenever there are ≥2 frames (an RTH session always has an open behind it).
+ *   - power  — only once the newest frame has reached 15:00.
+ *   - close  — only once the newest frame is within CLOSE_GRACE_MIN of the bell.
+ * Pure + DOM-free so the geometry is unit-testable without a scrubber.
+ */
+export function sessionBands(stamps: string[]): ScrubberBand[] {
+  if (stamps.length < 2) return [];
+  const mins = stamps.map(stampMinutes).filter((m) => Number.isFinite(m));
+  if (mins.length < 2) return [];
+  const first = Math.min(...mins);
+  const last = Math.max(...mins);
+  if (last <= first) return [];
+  const frac = (m: number) => Math.min(1, Math.max(0, (m - first) / (last - first)));
+
+  const bands: ScrubberBand[] = [];
+  const open = frac(RTH_OPEN_MIN);
+  bands.push({ key: "open", from: open, to: open });
+  if (last >= POWER_HOUR_MIN) {
+    bands.push({ key: "power", from: frac(POWER_HOUR_MIN), to: frac(RTH_CLOSE_MIN) });
+  }
+  if (last >= RTH_CLOSE_MIN - CLOSE_GRACE_MIN) {
+    const close = frac(RTH_CLOSE_MIN);
+    bands.push({ key: "close", from: close, to: close });
+  }
+  return bands;
+}
+
+// ─── Group engagement (B5): hover/focus tracking with symmetric teardown ────
+//
+// The replay keybinds (Space / arrows / Home / End) must only fire while the pane group is
+// engaged, or they hijack the page. Two bugs lived in the original binder:
+//   1. `focusin` set the flag and NOTHING ever cleared it — one click inside the group left
+//      Space and the arrows captured page-wide for the rest of the session.
+//   2. the handlers were re-created on every bind invocation, so removeEventListener was
+//      always handed a different function object than addEventListener had received and never
+//      matched — listeners accumulated on every rebind.
+// Both are fixed by owning ONE handler set per tracker for its whole life, and by pairing
+// focusin with focusout. Kept DOM-free (the element is only ever used through the two
+// listener methods plus an optional `contains`) so accumulation is provable in a plain unit
+// test — lib/__tests__/replayEngine.test.ts — with no jsdom in the harness.
+
+type EngagementListener = (ev?: unknown) => void;
+
+export interface EngagementTarget {
+  addEventListener(type: string, fn: EngagementListener): void;
+  removeEventListener(type: string, fn: EngagementListener): void;
+  /** DOM `Node.contains`. Used to ignore focus moving BETWEEN children of the group. */
+  contains?(node: unknown): boolean;
+}
+
+export interface EngagementTracker {
+  /** Attach to `el`, detaching from any previous element. `null` detaches. */
+  bind(el: EngagementTarget | null): void;
+  /** True while the pointer is over the group OR focus is inside it. */
+  engaged(): boolean;
+  /** The currently bound element (test/debug aid). */
+  target(): EngagementTarget | null;
+}
+
+export function createEngagementTracker(): EngagementTracker {
+  let el: EngagementTarget | null = null;
+  let hovered = false;
+  let focused = false;
+
+  // Created ONCE, so every removeEventListener is handed the exact function addEventListener got.
+  const handlers: [string, EngagementListener][] = [
+    ["mouseenter", () => { hovered = true; }],
+    ["mouseleave", () => { hovered = false; }],
+    ["focusin", () => { focused = true; }],
+    ["focusout", (ev) => {
+      // Tabbing from one control in the group to another fires focusout→focusin; the group
+      // never actually lost focus, so don't disengage on an internal hop.
+      const next = (ev as { relatedTarget?: unknown } | undefined)?.relatedTarget ?? null;
+      if (next != null && el?.contains?.(next)) return;
+      focused = false;
+    }],
+  ];
+
+  return {
+    bind(next: EngagementTarget | null) {
+      if (next === el) return; // re-binding the same node is a no-op, not a second attach
+      if (el) for (const [type, fn] of handlers) el.removeEventListener(type, fn);
+      el = next;
+      // A fresh element starts disengaged; nothing carries over from the old one.
+      hovered = false;
+      focused = false;
+      if (el) for (const [type, fn] of handlers) el.addEventListener(type, fn);
+    },
+    engaged: () => hovered || focused,
+    target: () => el,
+  };
+}

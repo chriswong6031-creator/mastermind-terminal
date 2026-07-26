@@ -8,6 +8,9 @@ import {
   keyToAction,
   tickIntervalMs,
   fmtStamp,
+  stampMinutes,
+  sessionBands,
+  createEngagementTracker,
   type ReplayState,
 } from "@/lib/replayEngine";
 
@@ -178,5 +181,228 @@ describe("tickIntervalMs", () => {
     expect(tickIntervalMs(2)).toBe(350);
     expect(tickIntervalMs(4)).toBe(175);
     expect(tickIntervalMs(8)).toBe(88);
+  });
+});
+
+// ─── Scrubber annotations (OEU T-B) ──────────────────────────────────────────
+//
+// The bands are drawn from the stamp list alone. Two properties matter: positions come from
+// the CLOCK (so a session with gaps still puts 15:00 where 15:00 belongs), and a landmark is
+// only emitted once it has actually happened — mid-session there is no close to mark.
+
+describe("stampMinutes", () => {
+  it("parses HHMM to minutes past midnight", () => {
+    expect(stampMinutes("0930")).toBe(570);
+    expect(stampMinutes("1600")).toBe(960);
+    expect(stampMinutes("0000")).toBe(0);
+  });
+  it("rejects malformed / out-of-range stamps", () => {
+    expect(stampMinutes("930")).toBeNaN();
+    expect(stampMinutes("09:30")).toBeNaN();
+    expect(stampMinutes("2500")).toBeNaN();
+    expect(stampMinutes("0999")).toBeNaN();
+    expect(stampMinutes("")).toBeNaN();
+  });
+});
+
+describe("sessionBands", () => {
+  /** A full RTH day, 5-min cadence 09:31 → 15:56 (the surface store's shape). */
+  const fullDay = (() => {
+    const out: string[] = [];
+    for (let m = 9 * 60 + 31; m <= 15 * 60 + 56; m += 5) {
+      out.push(String(Math.floor(m / 60)).padStart(2, "0") + String(m % 60).padStart(2, "0"));
+    }
+    return out;
+  })();
+
+  const byKey = (bands: ReturnType<typeof sessionBands>) =>
+    Object.fromEntries(bands.map((b) => [b.key, b]));
+
+  it("returns nothing for a degenerate index", () => {
+    expect(sessionBands([])).toEqual([]);
+    expect(sessionBands(["0931"])).toEqual([]);
+    expect(sessionBands(["bad", "worse"])).toEqual([]);
+  });
+
+  it("a completed session gets all three landmarks", () => {
+    const keys = sessionBands(fullDay).map((b) => b.key);
+    expect(keys).toEqual(["open", "power", "close"]);
+  });
+
+  it("the open clamps to the left edge (09:30 precedes the first frame)", () => {
+    const { open } = byKey(sessionBands(fullDay));
+    expect(open.from).toBe(0);
+    expect(open.to).toBe(0); // a marker, not a span
+  });
+
+  it("power hour spans 15:00 → 16:00 by clock position, not frame count", () => {
+    const { power } = byKey(sessionBands(fullDay));
+    // first=571 (09:31), last=956 (15:56) → 15:00 sits at (900-571)/(956-571).
+    expect(power.from).toBeCloseTo((900 - 571) / (956 - 571), 6);
+    expect(power.to).toBe(1); // 16:00 is past the last frame → clamped to the right edge
+    expect(power.to).toBeGreaterThan(power.from);
+  });
+
+  it("mid-session: no power hour and no close yet", () => {
+    const morning = fullDay.filter((s) => stampMinutes(s) <= 11 * 60);
+    const keys = sessionBands(morning).map((b) => b.key);
+    expect(keys).toEqual(["open"]);
+  });
+
+  it("into power hour but before the bell: power band, still no close", () => {
+    const upTo1520 = fullDay.filter((s) => stampMinutes(s) <= 15 * 60 + 20);
+    const keys = sessionBands(upTo1520).map((b) => b.key);
+    expect(keys).toEqual(["open", "power"]);
+  });
+
+  it("within the grace window of the bell: the close is marked", () => {
+    const upTo1551 = fullDay.filter((s) => stampMinutes(s) <= 15 * 60 + 51);
+    expect(sessionBands(upTo1551).map((b) => b.key)).toContain("close");
+    const upTo1549 = fullDay.filter((s) => stampMinutes(s) <= 15 * 60 + 49);
+    expect(sessionBands(upTo1549).map((b) => b.key)).not.toContain("close");
+  });
+
+  it("every fraction stays inside the track", () => {
+    for (const stamps of [fullDay, fullDay.slice(0, 20), fullDay.slice(0, 70)]) {
+      for (const b of sessionBands(stamps)) {
+        expect(b.from).toBeGreaterThanOrEqual(0);
+        expect(b.to).toBeLessThanOrEqual(1);
+        expect(b.to).toBeGreaterThanOrEqual(b.from);
+      }
+    }
+  });
+
+  it("a gappy session still positions by the clock", () => {
+    // 09:31, then a hole, then 15:00 and 15:56. Power hour must start ~85% along by clock,
+    // NOT at 1/3 of the way (which is where frame-index positioning would put it).
+    const { power } = byKey(sessionBands(["0931", "1500", "1556"]));
+    expect(power.from).toBeCloseTo((900 - 571) / (956 - 571), 6);
+    expect(power.from).toBeGreaterThan(0.8);
+  });
+});
+
+// ─── B5: group engagement — symmetric teardown, no listener accumulation ─────
+//
+// The provider's binder used to (a) set the hover flag on `focusin` with nothing ever
+// clearing it — so one click inside the group hijacked Space and the arrows page-wide for the
+// rest of the session — and (b) build a NEW handler pair on every bind invocation, so
+// removeEventListener was always handed a different function object than addEventListener had
+// received and listeners piled up. Both are asserted here against a fake element; the harness
+// has no DOM, which is exactly why the logic lives in this pure module.
+
+/** Minimal EventTarget stand-in that records what is currently attached. */
+function fakeEl(children: object[] = []) {
+  const listeners = new Map<string, Set<(ev?: unknown) => void>>();
+  return {
+    listeners,
+    count: () => [...listeners.values()].reduce((n, s) => n + s.size, 0),
+    addEventListener(type: string, fn: (ev?: unknown) => void) {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(fn);
+    },
+    removeEventListener(type: string, fn: (ev?: unknown) => void) {
+      listeners.get(type)?.delete(fn);
+    },
+    contains: (n: unknown) => children.includes(n as object),
+    fire(type: string, ev?: unknown) {
+      for (const fn of [...(listeners.get(type) ?? [])]) fn(ev);
+    },
+  };
+}
+
+describe("createEngagementTracker", () => {
+  it("starts disengaged", () => {
+    expect(createEngagementTracker().engaged()).toBe(false);
+  });
+
+  it("hover engages and disengages", () => {
+    const tr = createEngagementTracker();
+    const el = fakeEl();
+    tr.bind(el);
+    el.fire("mouseenter");
+    expect(tr.engaged()).toBe(true);
+    el.fire("mouseleave");
+    expect(tr.engaged()).toBe(false);
+  });
+
+  it("focusout clears what focusin set (the hijack bug)", () => {
+    const tr = createEngagementTracker();
+    const el = fakeEl();
+    tr.bind(el);
+    el.fire("focusin");
+    expect(tr.engaged()).toBe(true);
+    el.fire("focusout", { relatedTarget: null });
+    expect(tr.engaged()).toBe(false);
+  });
+
+  it("focus moving between the group's own controls does not disengage", () => {
+    const inner = {};
+    const tr = createEngagementTracker();
+    const el = fakeEl([inner]);
+    tr.bind(el);
+    el.fire("focusin");
+    el.fire("focusout", { relatedTarget: inner }); // tab from one control to another
+    expect(tr.engaged()).toBe(true);
+    el.fire("focusout", { relatedTarget: {} }); // out of the group entirely
+    expect(tr.engaged()).toBe(false);
+  });
+
+  it("hover survives focus leaving, and vice versa", () => {
+    const tr = createEngagementTracker();
+    const el = fakeEl();
+    tr.bind(el);
+    el.fire("mouseenter");
+    el.fire("focusin");
+    el.fire("focusout", { relatedTarget: null });
+    expect(tr.engaged()).toBe(true); // still hovered
+    el.fire("mouseleave");
+    expect(tr.engaged()).toBe(false);
+  });
+
+  it("attaches exactly one handler per event and never accumulates on rebinds", () => {
+    const tr = createEngagementTracker();
+    const a = fakeEl();
+    tr.bind(a);
+    const afterFirst = a.count();
+    expect(afterFirst).toBe(4); // mouseenter, mouseleave, focusin, focusout
+
+    // Re-binding the SAME node is a no-op, not a second attach.
+    for (let i = 0; i < 20; i++) tr.bind(a);
+    expect(a.count()).toBe(afterFirst);
+
+    // Binding a different node detaches cleanly from the old one — the accumulation bug.
+    const b = fakeEl();
+    tr.bind(b);
+    expect(a.count()).toBe(0);
+    expect(b.count()).toBe(4);
+
+    // Many alternations leave exactly one handler set on the live node and none behind.
+    for (let i = 0; i < 50; i++) tr.bind(i % 2 === 0 ? a : b);
+    expect(a.count() + b.count()).toBe(4);
+
+    tr.bind(null);
+    expect(a.count()).toBe(0);
+    expect(b.count()).toBe(0);
+    expect(tr.target()).toBeNull();
+  });
+
+  it("a fresh element starts disengaged even if the old one was engaged", () => {
+    const tr = createEngagementTracker();
+    const a = fakeEl();
+    const b = fakeEl();
+    tr.bind(a);
+    a.fire("mouseenter");
+    expect(tr.engaged()).toBe(true);
+    tr.bind(b);
+    expect(tr.engaged()).toBe(false);
+  });
+
+  it("a detached element's events no longer reach the tracker", () => {
+    const tr = createEngagementTracker();
+    const a = fakeEl();
+    tr.bind(a);
+    tr.bind(null);
+    a.fire("mouseenter"); // nothing is listening
+    expect(tr.engaged()).toBe(false);
   });
 });

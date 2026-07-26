@@ -37,7 +37,53 @@ export interface SurfaceFrame {
   root?: string;
 }
 
+/**
+ * The sessions index for multi-day replay — `surface_dates:{ROOT}` → R2
+ * live_flow/surface/{ROOT}/dates.json. Written by the macro poller alongside the dated
+ * copies of the index and frames; the legacy today-paths are unchanged and stay the LIVE
+ * read. Dates are NEWEST FIRST (the opposite of `SurfaceIndex.stamps`, which ascend) and
+ * are trimmed to `retain`, so the list never promises a session R2 has already pruned.
+ */
+export interface SurfaceDates {
+  root: string;
+  dates: string[]; // "YYYY-MM-DD", NEWEST FIRST
+  latest: string | null; // === dates[0] (null when empty)
+  count?: number;
+  retain?: number;
+  cadenceSec: number;
+  cadence?: string;
+  asof?: string;
+  source?: string;
+}
+
 // ─── Contract validators ────────────────────────────────────────────────────
+
+const SESSION_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** True for an exact YYYY-MM-DD session-date string (the dated-prefix shape). */
+export function isSessionDate(s: unknown): s is string {
+  return typeof s === "string" && SESSION_DATE_RE.test(s);
+}
+
+/**
+ * Validator for the sessions index — the TS twin of the macro materializer's
+ * `is_surface_dates()` (scripts/build_flow_surface.py), checking the same three things:
+ * every entry is a session date, the list is sorted newest-first, and `latest` is dates[0]
+ * (null when empty). A payload that fails any of them is not trusted as a session list, so
+ * the picker stays hidden and the Terminal keeps its today-only behaviour.
+ */
+export function isSurfaceDates(x: unknown): x is SurfaceDates {
+  if (!x || typeof x !== "object") return false;
+  const o = x as Record<string, unknown>;
+  const dates = o.dates;
+  if (!Array.isArray(dates) || !dates.every(isSessionDate)) return false;
+  // Newest first — compare against a descending copy (ISO dates sort lexicographically).
+  const desc = [...dates].sort().reverse();
+  if (dates.some((d, i) => d !== desc[i])) return false;
+  if (dates.length > 0 ? o.latest !== dates[0] : o.latest !== null) return false;
+  return typeof o.cadenceSec === "number" && typeof o.root === "string";
+}
+
 
 export function isSurfaceIndex(x: unknown): x is SurfaceIndex {
   if (!x || typeof x !== "object") return false;
@@ -391,6 +437,27 @@ export function buildStrikeSeries(
     nowValue: last ? last.v : null,
     total,
   };
+}
+
+/**
+ * Truncate a session series at a replay stamp — the session-flow pane's half of whole-desk
+ * time travel. `stamp` is the replay's "HHMM"; points are the tide's "HH:MM" minutes.
+ *
+ * Cutting (rather than masking) is what makes this honest: the pane then plots exactly the
+ * premium that had accrued by that minute, and its running totals are the totals as of then.
+ * A null/blank/malformed stamp returns the series untouched — a stamp we can't parse must not
+ * silently blank a chart. Points whose own time is unparseable are kept in place: they came
+ * from the feed, and dropping feed data on a formatting quibble would understate the tide.
+ */
+export function truncateSessionAt(series: SessionPoint[], stamp: string | null): SessionPoint[] {
+  if (!stamp || !/^\d{4}$/.test(stamp)) return series;
+  const cut = Number(stamp.slice(0, 2)) * 60 + Number(stamp.slice(2));
+  if (!Number.isFinite(cut)) return series;
+  return series.filter((p) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(p.t);
+    if (!m) return true;
+    return Number(m[1]) * 60 + Number(m[2]) <= cut;
+  });
 }
 
 /**
