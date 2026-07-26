@@ -477,6 +477,26 @@ const LEX: Record<string, [string, string]> = {
   optSharePct: ["0DTE share %", "0DTE 占比 %"],
   optWillFire: ["Will fire", "将触发"],
   gateOptAlert: ["Create a free account to set options alerts.", "注册免费账户即可设置期权提醒。"],
+  // surface hot-pocket alert (OEU T-D)
+  condOptPocket: ["A strike lights up hot", "某个行权价异常放量"],
+  optPocketK: ["heat ×", "热度倍数"],
+  optNearPct: ["near spot %", "接近平值 %"],
+  // alerts list: honest signed-out state + delete confirm (OEU T-D)
+  alertsSignedOutTitle: ["You're signed out", "您尚未登录"],
+  alertsSignedOutBody: [
+    "Your alerts live with your account — sign in to see and manage them. Alerts keep running server-side while you're away.",
+    "提醒与您的账户绑定 —— 登录后即可查看和管理。您离开期间，提醒仍在服务器端持续运行。",
+  ],
+  deleteAlertQ: ["Delete this alert?", "删除此提醒？"],
+  deleteConfirm: ["Delete", "删除"],
+  deleteCancel: ["Keep", "保留"],
+  loadingTab: ["Loading…", "加载中…"],
+  // scanner belts + highlights (OEU T-D)
+  beltIndex: ["Index", "指数"],
+  beltSector: ["Sector", "板块"],
+  highlights: ["Highlights", "重点"],
+  hlBiggest: ["Biggest prints", "最大单笔"],
+  hlRepeats: ["Repeat hitters", "反复出手"],
   // misc utility
   cancel: ["Cancel", "取消"],
   undo: ["Undo", "撤销"],
