@@ -49,6 +49,7 @@ import { ExposureExpiryDrawer } from "./ExposureExpiryDrawer";
 import { MarketStateCard } from "./MarketStateCard";
 import type { GexStatePayload } from "./MarketStateCard";
 import { GexGuide } from "./GexGuide";
+import { EodContextBelt } from "@/components/eodcontext/EodContextBelt";
 import {
   LENS_ALL,
   matrixExpiryCoverage,
@@ -449,6 +450,19 @@ export function GexDeskView() {
       {/* ── GEX history strip — net-GEX trend over recent sessions, from the EOD
              surface we already own (first slice of historical playback) ────── */}
       <GexHistory history={gexPayload?.history} lang={lang} />
+
+      {/* ── EOD context belt (OEU T-E) ───────────────────────────────────────
+          Settled-close structure + off-exchange positioning for the SAME root, sitting
+          between the live-transport summary bar and the ladder. It reads different stores
+          than the bar above it (gex_state, options_hub/moves, options_hub/vol) and stamps
+          every value with that store's own session, so the cadence boundary between the
+          desk's live spine and macro's nightly close is visible rather than assumed. */}
+      <EodContextBelt
+        root={ticker}
+        gexState={statePayload}
+        gex={gexPayload}
+        lang={lang}
+      />
 
       {/* ── Body (two-pane) ──────────────────────────────────────────────── */}
       <div style={BODY_ROW}>
