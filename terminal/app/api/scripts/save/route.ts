@@ -15,6 +15,9 @@ export async function POST(req: Request) {
   const res = id
     ? await supabase.from("saved_scripts").update({ name, source, params, updated_at: new Date().toISOString() }).eq("id", id).select("id").single()
     : await supabase.from("saved_scripts").insert({ user_id: user.id, name, source, lang, params }).select("id").single();
-  if (res.error) return NextResponse.json({ error: res.error.message }, { status: 400 });
+  if (res.error) {
+    console.error("scripts/save POST failed:", res.error);
+    return NextResponse.json({ error: "Could not save script" }, { status: 400 });
+  }
   return NextResponse.json({ ok: true, id: res.data.id });
 }

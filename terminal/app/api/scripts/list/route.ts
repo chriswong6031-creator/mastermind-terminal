@@ -12,6 +12,9 @@ export async function GET() {
     .from("saved_scripts")
     .select("id,name,source,lang,params,updated_at")
     .order("updated_at", { ascending: false });
-  if (error) return NextResponse.json({ scripts: [], error: error.message }, { status: 400 });
+  if (error) {
+    console.error("scripts/list GET failed:", error);
+    return NextResponse.json({ scripts: [], error: "Could not load scripts" }, { status: 400 });
+  }
   return NextResponse.json({ scripts: data || [] });
 }

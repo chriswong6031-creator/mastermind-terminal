@@ -20,7 +20,10 @@ export async function POST(req: Request) {
   const { symbol, condition } = await req.json();
   if (!symbol || !condition) return NextResponse.json({ error: "bad request" }, { status: 400 });
   const { data, error } = await supabase.from("alerts").insert({ user_id: user.id, symbol, condition }).select("*").single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) {
+    console.error("alerts POST failed:", error);
+    return NextResponse.json({ error: "Could not create alert" }, { status: 400 });
+  }
   return NextResponse.json({ alert: data });
 }
 
@@ -37,7 +40,10 @@ export async function PATCH(req: Request) {
   delete cond.triggered;
   const { data, error } = await supabase.from("alerts").update({ active: true, condition: cond })
     .eq("id", id).eq("user_id", user.id).select("*").single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) {
+    console.error("alerts PATCH failed:", error);
+    return NextResponse.json({ error: "Could not update alert" }, { status: 400 });
+  }
   return NextResponse.json({ alert: data });
 }
 

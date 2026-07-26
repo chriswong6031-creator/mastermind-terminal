@@ -25,8 +25,8 @@ const GATEWAY = process.env.BRAIN_GATEWAY_URL || "https://mastermind-x.com";
 const MAX_MSG_LEN = 2000;
 
 export async function POST(req: Request) {
-  // Rate-limit at the edge before we do any work.
-  const rl = rateLimit(req, { name: "copilot", max: 30 });
+  // Rate-limit at the edge before we do any work — tight per-IP ceiling for a paid-LLM route.
+  const rl = rateLimit(req, { name: "copilot", max: 20 });
   if (!rl.ok) return tooMany(rl);
 
   // Auth gate: obtain the user's access token to forward to the gateway.
