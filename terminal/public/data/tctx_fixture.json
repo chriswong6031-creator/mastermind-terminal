@@ -31,5 +31,16 @@
       "vol_gt_oi_share_z252": -0.1,
       "block_share_z252": 0.7
     }
+  },
+  "QQQ": {
+    "asof": "2026-07-05T16:00:00Z",
+    "history_n": 21,
+    "z": {
+      "net_signed_premium_z252": 0.9,
+      "zerodte_share_z252": 1.5,
+      "short_dated_otm_call_share_z252": 0.4,
+      "vol_gt_oi_share_z252": -0.2,
+      "block_share_z252": 0.5
+    }
   }
 }
