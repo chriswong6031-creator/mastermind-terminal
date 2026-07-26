@@ -54,6 +54,7 @@ import {
   LENS_ALL,
   matrixExpiryCoverage,
   matrixLensByStrike,
+  matrixSessionsAgree,
   type ExpiryLens,
   type GexMatrix,
 } from "@/lib/gexLadder";
@@ -294,17 +295,32 @@ export function GexDeskView() {
     [gexPayload?.by_strike]
   );
 
+  // Honesty gate: the matrix and the gex payload disagree on which session they describe
+  // by more than a routine cadence gap — the documented "two weeks behind" drift (see
+  // lib/gexLadder.ts). Treat the matrix as covering nothing so every narrow-lens control
+  // goes dark (existing honest-unavailable state) instead of letting the user select a
+  // lens that would sum — or mislabel 0DTE — across two different sessions.
+  const matrixSessionOk = matrixSessionsAgree(matrix?.asof, asof);
+
   // Which expiries the matrix can actually answer for THIS ladder (see lib/gexLadder.ts —
   // it demands a real strike overlap, so two stores on different sessions read as "no
   // coverage" rather than producing a ladder of dashes).
   const lensCoverage = useMemo(
-    () => matrixExpiryCoverage(matrix, ladderStrikes),
-    [matrix, ladderStrikes]
+    () => (matrixSessionOk ? matrixExpiryCoverage(matrix, ladderStrikes) : new Set<string>()),
+    [matrix, ladderStrikes, matrixSessionOk]
   );
 
   const lensValues = useMemo(
     () => matrixLensByStrike(matrix, lens, asof),
     [matrix, lens, asof]
+  );
+
+  // Strike-window disclosure for the summary bar's scoped Net GEX (bug: the hero used to
+  // swap strike universe under a narrow lens while naming only the expiry scope). N of the
+  // ladder's own strikes the lens actually covers, out of the ladder's full strike count.
+  const lensCoveredStrikeCount = useMemo(
+    () => ladderStrikes.filter((k) => lensValues.covered.has(k)).length,
+    [ladderStrikes, lensValues]
   );
 
   // Walls / flip are gamma-specific constructs. When a non-gamma lens is active,
@@ -444,6 +460,8 @@ export function GexDeskView() {
         putOI={(statePayload as unknown as Record<string, number | null | undefined>)?.put_oi ?? null}
         lens={lens}
         lensNetMn={lensValues.cellCount > 0 ? lensValues.totalMn : null}
+        lensCoveredStrikes={lensCoveredStrikeCount}
+        lensTotalStrikes={ladderStrikes.length}
         lang={lang}
       />
 

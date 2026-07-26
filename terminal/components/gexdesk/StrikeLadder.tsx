@@ -109,6 +109,32 @@ interface StrikeLadderProps {
   matrixCells?: MatrixCell[] | null;
 }
 
+/**
+ * Stable DOM hook for the current-price ("spot") row, used by the auto-center effect
+ * below. Kept as a data-attribute rather than the rendered ▶ marker glyph so a future
+ * restyle of the marker (a different glyph, an icon, moving it out of the row) cannot
+ * silently disable auto-centering with nothing anywhere signaling this query depends on
+ * it — the failure mode is a ladder that opens at the top, the exact bug this effect was
+ * written to fix in the first place.
+ */
+export const SPOT_ROW_ATTR = "data-spot-row";
+const SPOT_ROW_VAL = "1";
+
+/**
+ * Locate the spot row's index among a scroll container's children via the stable
+ * data-hook above — never via the marker glyph's rendered text. Accepts anything
+ * duck-typed like a DOM Element (`getAttribute`) so the lookup stays unit-testable
+ * without a DOM. Returns -1 when no child carries the hook.
+ */
+export function findSpotRowIndex(
+  children: ArrayLike<{ getAttribute(name: string): string | null }>
+): number {
+  for (let i = 0; i < children.length; i++) {
+    if (children[i].getAttribute(SPOT_ROW_ATTR) === SPOT_ROW_VAL) return i;
+  }
+  return -1;
+}
+
 /** Signed net exposure for a strike row under the active greek lens (all-expiry, $mn). */
 function rowNet(s: StrikeRow, greek: GreekLens): number {
   switch (greek) {
@@ -355,6 +381,12 @@ export function StrikeLadder({
   //      (LEFT_PANE: maxHeight:"100%"). Guard retained: isScrollable() still rejects this.
   //   C. VISIBILITY FLIP: harness iframe sets visibilityState='hidden'. A visibilitychange
   //      event unblocks the data fetch. We re-attempt centering on that event.
+  //   D. PRESENTATION-COUPLED QUERY: the DOM-query below used to find the spot row by
+  //      scanning rendered text for the ▶ marker glyph — any change to the marker (a
+  //      different glyph, an icon, moving it out of the row) would silently disable
+  //      centering with no signal anywhere that this query depended on it, reintroducing
+  //      bug A/B's symptom with none of its cause. Now keyed on SPOT_ROW_ATTR, a stable
+  //      data-hook on the row itself (see findSpotRowIndex).
   //
   // Implementation: DOM-query approach avoids the early-return ref problem.
   // spotRowRef/scrollRef are only valid after the FULL render path (rows.length>0).
@@ -379,15 +411,10 @@ export function StrikeLadder({
       const container = containerRef.current?.querySelector<HTMLDivElement>(".obs-scroll") ?? null;
       if (!container || !isScrollable(container)) return false;
 
-      // Find the spot row by the ▶ marker span (always rendered on isCurrent rows)
+      // Find the spot row by its stable data-hook (never the marker glyph's text).
       const rows = container.children;
-      let spotRow: Element | null = null;
-      for (let i = 0; i < rows.length; i++) {
-        if (rows[i].textContent?.includes("▶")) {
-          spotRow = rows[i];
-          break;
-        }
-      }
+      const spotIdx = findSpotRowIndex(rows);
+      const spotRow: Element | null = spotIdx >= 0 ? rows[spotIdx] : null;
       if (!spotRow) return false;
 
       const elTop = (spotRow as HTMLElement).offsetTop;
@@ -415,14 +442,9 @@ export function StrikeLadder({
     function centerViaAncestor(): boolean {
       const container = containerRef.current?.querySelector<HTMLDivElement>(".obs-scroll") ?? null;
       if (!container) return false;
-      let spotRow: Element | null = null;
       const rows = container.children;
-      for (let i = 0; i < rows.length; i++) {
-        if (rows[i].textContent?.includes("▶")) {
-          spotRow = rows[i];
-          break;
-        }
-      }
+      const spotIdx = findSpotRowIndex(rows);
+      const spotRow: Element | null = spotIdx >= 0 ? rows[spotIdx] : null;
       if (!spotRow) return false;
       (spotRow as HTMLElement).scrollIntoView({ block: "center", inline: "nearest" });
       const r = (spotRow as HTMLElement).getBoundingClientRect();
@@ -851,6 +873,7 @@ export function StrikeLadder({
 
               <div
                 ref={isCurrent ? spotRowRef : undefined}
+                {...(isCurrent ? { [SPOT_ROW_ATTR]: SPOT_ROW_VAL } : {})}
                 style={{
                   ...STRIKE_ROW,
                   gridTemplateColumns: gridTemplate,

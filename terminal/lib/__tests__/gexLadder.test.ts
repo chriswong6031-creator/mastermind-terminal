@@ -9,11 +9,14 @@ import {
   lensValueForStrike,
   matrixExpiryCoverage,
   matrixLensByStrike,
+  MAX_SESSION_GAP_DAYS,
+  matrixSessionsAgree,
   matrixStrikeSet,
   maxAbs,
   normExp,
   scaleBases,
   zeroDteExpiry,
+  type ExpiryLens,
   type GexMatrix,
 } from "@/lib/gexLadder";
 
@@ -142,6 +145,125 @@ describe("matrixLensByStrike — the lens sums, in $mn", () => {
     const v = matrixLensByStrike(dirty, { kind: "zero" }, ASOF);
     expect(v.cellCount).toBe(1);
     expect(v.totalMn).toBe(10);
+  });
+});
+
+describe("matrixSessionsAgree — the drift gate", () => {
+  it("agrees same-day", () => {
+    expect(matrixSessionsAgree("2026-07-10T21:04:11Z", "2026-07-10T20:15:00Z")).toBe(true);
+  });
+  it("agrees across a routine weekend gap (Fri matrix, Mon payload)", () => {
+    expect(matrixSessionsAgree("2026-07-10T21:00:00Z", "2026-07-13T20:15:00Z")).toBe(true);
+  });
+  it("disagrees across the documented two-week drift", () => {
+    expect(matrixSessionsAgree("2026-07-10T21:00:00Z", "2026-07-24T20:15:00Z")).toBe(false);
+  });
+  it("disagrees when either side is unknown or unparseable", () => {
+    expect(matrixSessionsAgree(null, "2026-07-10T20:15:00Z")).toBe(false);
+    expect(matrixSessionsAgree("2026-07-10T21:00:00Z", null)).toBe(false);
+    expect(matrixSessionsAgree(undefined, undefined)).toBe(false);
+    expect(matrixSessionsAgree("not-a-date", "2026-07-10T20:15:00Z")).toBe(false);
+  });
+  it("is inclusive exactly at the tolerance boundary, exclusive one day past it", () => {
+    const base = "2026-07-10T21:00:00Z";
+    const atBound = new Date(Date.parse("2026-07-10T00:00:00Z") + MAX_SESSION_GAP_DAYS * 86_400_000)
+      .toISOString();
+    const pastBound = new Date(
+      Date.parse("2026-07-10T00:00:00Z") + (MAX_SESSION_GAP_DAYS + 1) * 86_400_000
+    ).toISOString();
+    expect(matrixSessionsAgree(base, atBound)).toBe(true);
+    expect(matrixSessionsAgree(base, pastBound)).toBe(false);
+  });
+});
+
+describe("matrixLensByStrike — session drift guard (the exact bug this lens ships to prevent)", () => {
+  // Matrix captured 2026-07-10; the live gex payload has moved on to 2026-07-24 — the
+  // documented "two weeks behind" drift. From TODAY's (07-24) vantage, the 07-10/07-13/
+  // 07-17 legs are already expired; only 07-31 genuinely survives tonight.
+  const DRIFTED: GexMatrix = {
+    asof: "2026-07-10T21:04:11Z",
+    expiries: ["2026-07-10", "2026-07-13", "2026-07-17", "2026-07-24", "2026-07-31"],
+    strikes: [750],
+    cells: [
+      { strike: 750, expiry: "2026-07-10", gex: 40_000_000 },
+      { strike: 750, expiry: "2026-07-13", gex: 30_000_000 },
+      { strike: 750, expiry: "2026-07-17", gex: 20_000_000 },
+      { strike: 750, expiry: "2026-07-24", gex: 90_000_000 }, // priced at 14 DTE by the stale matrix
+      { strike: 750, expiry: "2026-07-31", gex: 10_000_000 }, // the only leg that truly survives
+    ],
+  };
+  const GEX_ASOF = "2026-07-24T20:15:00Z"; // the LIVE payload's session — 14 days ahead
+
+  /** The OLD (pre-fix) anchor: the gex payload's asof, no drift guard, no DTE filter —
+   *  reproduced inline (not imported) so this test proves what the bug actually did. */
+  function oldMatrixLensByStrike(matrix: GexMatrix, lens: ExpiryLens, gexAsOf: string) {
+    const zeroDay = zeroDteExpiry(matrix.expiries ?? [], gexAsOf);
+    let totalMn = 0;
+    let cellCount = 0;
+    const used: string[] = [];
+    for (const c of matrix.cells ?? []) {
+      const e = normExp(c.expiry);
+      if (lens.kind === "zero" && e !== zeroDay) continue;
+      if (lens.kind === "ex-zero" && e === zeroDay) continue;
+      totalMn += (c.gex ?? 0) / 1e6;
+      cellCount++;
+      used.push(e);
+    }
+    return { zeroDay, totalMn, cellCount, used };
+  }
+
+  it("REGRESSION: the old (gex-anchored) lens summed already-expired legs and mislabeled a stale leg 0DTE", () => {
+    const oldZero = oldMatrixLensByStrike(DRIFTED, { kind: "zero" }, GEX_ASOF);
+    expect(oldZero.zeroDay).toBe("2026-07-24"); // borrowed from TODAY, not the matrix's own session
+    expect(oldZero.totalMn).toBe(90); // the 14-DTE-priced leg, mislabeled "0DTE"
+
+    const oldExZero = oldMatrixLensByStrike(DRIFTED, { kind: "ex-zero" }, GEX_ASOF);
+    expect(oldExZero.used).toEqual(["2026-07-10", "2026-07-13", "2026-07-17", "2026-07-31"]);
+    expect(oldExZero.cellCount).toBe(4); // three of these four legs are already EXPIRED
+  });
+
+  it("FIX: drift beyond the tolerance disables every narrow lens (honest dash, never a fabricated sum)", () => {
+    const lenses: ExpiryLens[] = [
+      { kind: "zero" },
+      { kind: "ex-zero" },
+      { kind: "one", exp: "2026-07-31" },
+    ];
+    for (const lens of lenses) {
+      const v = matrixLensByStrike(DRIFTED, lens, GEX_ASOF);
+      expect(v.cellCount).toBe(0);
+      expect(v.covered.size).toBe(0); // strikes read as the honest dash, never a fabricated 0
+      expect(v.totalMn).toBe(0);
+    }
+  });
+
+  it("FIX: when the two stores agree on session, the anchor is the MATRIX's own day", () => {
+    const v = matrixLensByStrike(DRIFTED, { kind: "zero" }, "2026-07-10T20:15:00Z");
+    expect(v.totalMn).toBe(40); // the 07-10 leg — the matrix's OWN session day
+    expect(v.cellCount).toBe(1);
+    const x = matrixLensByStrike(DRIFTED, { kind: "ex-zero" }, "2026-07-10T20:15:00Z");
+    // Every other expiry survives under the aligned anchor — none are pre-anchor here.
+    expect(x.cellCount).toBe(4);
+    expect(x.totalMn).toBe(30 + 20 + 90 + 10);
+  });
+});
+
+describe("matrixLensByStrike — DTE>=0 filter drops cells before the matrix's own anchor", () => {
+  it("a cell for an expiry strictly before the matrix's own session never counts, in any narrow lens", () => {
+    const withStaleLeg: GexMatrix = {
+      asof: "2026-07-17T21:00:00Z",
+      expiries: ["2026-07-10", "2026-07-17", "2026-07-24"],
+      strikes: [750],
+      cells: [
+        { strike: 750, expiry: "2026-07-10", gex: 999_000_000 }, // already expired when the matrix was built
+        { strike: 750, expiry: "2026-07-17", gex: 40_000_000 },
+        { strike: 750, expiry: "2026-07-24", gex: 10_000_000 },
+      ],
+    };
+    const exZero = matrixLensByStrike(withStaleLeg, { kind: "ex-zero" }, "2026-07-17T20:15:00Z");
+    expect(exZero.totalMn).toBe(10); // 07-24 only — the pre-anchor 07-10 cell never leaks in
+    expect(exZero.cellCount).toBe(1);
+    const zero = matrixLensByStrike(withStaleLeg, { kind: "zero" }, "2026-07-17T20:15:00Z");
+    expect(zero.totalMn).toBe(40); // 07-17, the matrix's own session day
   });
 });
 

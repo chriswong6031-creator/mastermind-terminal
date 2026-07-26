@@ -23,6 +23,7 @@ import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload } from "./GexDeskView";
 import { fmtBn, fmtMn, type ExpiryLens } from "@/lib/gexLadder";
+import { Tip } from "@/components/ui/Tip";
 
 interface GexSummaryBarProps {
   payload: GexPayload | null;
@@ -33,6 +34,11 @@ interface GexSummaryBarProps {
   lens?: ExpiryLens;
   /** Σ of the active lens across covered strikes, $mn. null → lens has no data. */
   lensNetMn?: number | null;
+  /** How many of the ladder's own strikes the lens actually covers, out of the total —
+   *  the scoped Net GEX swaps STRIKE UNIVERSE as well as unit/store, and the chip must
+   *  disclose that, not just the expiry it's scoped to. */
+  lensCoveredStrikes?: number | null;
+  lensTotalStrikes?: number | null;
   lang: Lang;
 }
 
@@ -62,14 +68,23 @@ interface MetricCellProps {
   suffix?: string;
   /** Scope tag beside the label — e.g. "all exp" while an expiry lens is active. */
   tag?: string | null;
+  /** Hover disclosure for `tag` — e.g. the strike-window fact a bare expiry tag omits. */
+  tagTip?: string | null;
 }
 
-function MetricCell({ label, value, valueColor, suffix, tag }: MetricCellProps) {
+function MetricCell({ label, value, valueColor, suffix, tag, tagTip }: MetricCellProps) {
+  const tagEl = tag ? <span style={{ ...CELL_TAG, cursor: tagTip ? "help" : undefined }}>{tag}</span> : null;
   return (
     <div style={CELL}>
       <span style={CELL_LABEL}>
         {label}
-        {tag && <span style={CELL_TAG}>{tag}</span>}
+        {tagEl && tagTip ? (
+          <Tip label={tagTip} side="top" size="card">
+            {tagEl}
+          </Tip>
+        ) : (
+          tagEl
+        )}
       </span>
       <span style={{ ...CELL_VALUE, color: valueColor ?? "var(--text)" }}>
         {value}
@@ -87,6 +102,8 @@ export function GexSummaryBar({
   putOI,
   lens,
   lensNetMn = null,
+  lensCoveredStrikes = null,
+  lensTotalStrikes = null,
   lang,
 }: GexSummaryBarProps) {
   const t = makeGexT(lang);
@@ -114,6 +131,16 @@ export function GexSummaryBar({
     : (lens!.exp ?? "").slice(5, 10);
   const allExpTag = scoped ? t("sumAllExpTag") : null;
 
+  // Strike-window disclosure: a scoped Net GEX sums over the MATRIX's narrower strike
+  // window, not the full ladder — toggling All → 0DTE changes the number for the expiry
+  // scope AND the strike universe, but the tag alone only ever named the former.
+  const netGexTip =
+    scoped && lensTotalStrikes != null && lensTotalStrikes > 0
+      ? t("sumLensScopeTip")
+          .replace("{n}", String(lensCoveredStrikes ?? 0))
+          .replace("{m}", String(lensTotalStrikes))
+      : null;
+
   const netGexVal = scoped ? lensNetMn : payload.net_gex_bn;
   const netGexStr = scoped ? fmtMn(lensNetMn) : fmtBn(payload.net_gex_bn);
   const netGexColor =
@@ -139,6 +166,7 @@ export function GexSummaryBar({
       <MetricCell
         label={t("sumNetGex")}
         tag={lensTag}
+        tagTip={netGexTip}
         value={netGexStr}
         valueColor={netGexColor}
       />
