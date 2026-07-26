@@ -349,7 +349,9 @@ export function FlowDeskView() {
   const fetchTickerCtx = useCallback(async (root: string) => {
     setTickerCtx(null);
     const data = await safeFetch<TickerPayload>(`/api/flow?f=ticker:${root}`);
-    if (data) setTickerCtx(data);
+    // Fixture honest-empty {} (unknown root) has no `day`; InspectorPane derefs
+    // day.gross behind a truthiness check, so a day-less payload must stay null.
+    if (data?.day) setTickerCtx(data);
   }, []);
 
   // ── Mount: initial fetch + polling ───────────────────────────────────────────

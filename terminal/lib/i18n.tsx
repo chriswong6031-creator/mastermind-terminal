@@ -593,6 +593,7 @@ const LEX: Record<string, [string, string]> = {
   tickersTitle: ["Ticker Drill", "个股详情"],
   tickersSearch: ["Search ticker…", "搜索代码…"],
   tickersSelectPrompt: ["Select a ticker from the list or search above", "从列表选择或搜索代码"],
+  tickersNoData: ["No flow data for this ticker yet", "该代码暂无期权流数据"],
   tickersDayGross: ["Day Gross", "当日总权利金"],
   tickersNetSoft: ["Net (~soft)", "净值（~软性）"],
   tickersCallShare: ["Call Share", "认购占比"],
