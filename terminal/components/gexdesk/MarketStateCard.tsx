@@ -149,25 +149,41 @@ function fmtLevel(val: number | null | undefined): string {
   return val % 1 === 0 ? String(val) : val.toFixed(1);
 }
 
+/** Which fixed scale a pin-probability FIELD is documented in — see `normalizePinProbability`. */
+export type ProbabilityScale = "percent" | "fraction" | "auto";
+
 /**
- * Pin probability — shape guard (bug B6).
+ * Pin probability — shape guard (bug B6; scale-per-field fix follow-up).
  *
  * Two producers publish this field on two scales: the fixture's `pin_target.probability`
  * is 0-100 (documented on the interface above) while the live schema's `pin_probability`
- * is a 0..1 fraction. The card multiplied by 100 unconditionally, so the day the live
- * feed switched to whole percents a 55% pin rendered as "5500% prob".
+ * is a 0..1 fraction. The scale is a property of the FIELD, never of the value in hand —
+ * so callers that know which field they are reading MUST say so via `scale`:
+ *   - `"percent"`  — `pin_target.probability`. Never multiplied.
+ *   - `"fraction"` — `pin_probability`. Always ×100.
  *
- * Rule: a value at or below 1 is a fraction and scales up; anything above 1 is already a
- * percent and is left alone. Everything is clamped to 0-100, and an absent/garbage value
- * returns null so the caller can print an em dash instead of a confident "0%".
+ * `scale: "auto"` (the default) is reserved for an UNFORESEEN third producer whose scale
+ * isn't documented anywhere yet. It applies the old value-shape heuristic (>1 ⇒ already a
+ * percent) but — unlike the original bug — never GUESSES inside the ambiguous (0, 1] seam:
+ * a percent-scale reading of 1 (meaning 1%, e.g. a low-confidence far magnet) and a
+ * fraction-scale reading of 1 (meaning 100%) are indistinguishable by value alone, and the
+ * old code silently picked the fraction reading every time — turning a 1% confidence read
+ * into a confident "100%". That range now returns null (an honest "can't tell") instead of
+ * a guess; only an explicit `scale` can resolve it.
  *
- * The 1.0 boundary maps to 100% either way (a fraction of 1.0 IS 100%), so the ambiguity
- * at the seam is harmless.
+ * Every result is clamped to 0-100; an absent/garbage/negative value returns null so the
+ * caller can print an em dash instead of a confident "0%".
  */
-export function normalizePinProbability(raw: number | null | undefined): number | null {
+export function normalizePinProbability(
+  raw: number | null | undefined,
+  scale: ProbabilityScale = "auto",
+): number | null {
   if (raw == null || !Number.isFinite(raw) || raw < 0) return null;
-  const pct = raw <= 1 ? raw * 100 : raw;
-  return Math.max(0, Math.min(100, Math.round(pct)));
+  if (scale === "fraction") return Math.max(0, Math.min(100, Math.round(raw * 100)));
+  if (scale === "percent") return Math.max(0, Math.min(100, Math.round(raw)));
+  // auto: unforeseen-producer heuristic — never guesses inside the ambiguous seam.
+  if (raw > 0 && raw <= 1) return null;
+  return Math.max(0, Math.min(100, Math.round(raw)));
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -414,14 +430,16 @@ export function MarketStateCard({
         ? ((spotRef - flipLevel) / spotRef) * 100
         : null);
 
-  // Pin target: strike from either schema; probability through the B6 shape guard, which
-  // keeps a 0..1 fraction and a 0-100 percent from ever being multiplied by the same 100.
-  // `probability: null` is a real state (strike known, confidence not published) and
-  // renders as an em dash rather than a fabricated 0%.
+  // Pin target: strike from either schema; probability through the B6 shape guard, keyed
+  // per FIELD (never guessed from the value) so a low-confidence percent-scale reading in
+  // (0, 1] can never be multiplied into a false near-100% read. `probability: null` is a
+  // real state (strike known, confidence not published) and renders as an em dash rather
+  // than a fabricated 0%.
   const pinStrike = statePayload.pin_target?.strike ?? statePayload.magnet ?? null;
-  const pinProbability = normalizePinProbability(
-    statePayload.pin_target?.probability ?? statePayload.pin_probability
-  );
+  const pinProbability =
+    statePayload.pin_target?.probability != null
+      ? normalizePinProbability(statePayload.pin_target.probability, "percent")
+      : normalizePinProbability(statePayload.pin_probability, "fraction");
   const pin = pinStrike != null ? { strike: pinStrike, probability: pinProbability } : null;
 
   const range = statePayload.structural_range ?? (
@@ -625,13 +643,17 @@ export function MarketStateCard({
               <span style={METRIC_BLOCK_CAPTION}>
                 {t("statePinCaption")}
               </span>
-              <span
-                className="num"
-                style={{ fontSize: 10, color: "var(--muted)" }}
-              >
-                {pin.probability == null ? t("statePinNone") : `${pin.probability}%`}{" "}
-                {t("statePinProb")}
-              </span>
+              {/* Not a calibrated probability — see statePinProbTip. The glance-tier
+                  number stays; the hover carries the honesty disclosure. */}
+              <Tip label={t("statePinProbTip")} side="left" size="card">
+                <span
+                  className="num"
+                  style={{ fontSize: 10, color: "var(--muted)", cursor: "help" }}
+                >
+                  {pin.probability == null ? t("statePinNone") : `${pin.probability}%`}{" "}
+                  {t("statePinProb")}
+                </span>
+              </Tip>
             </>
           ) : (
             <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("statePinNone")}</span>

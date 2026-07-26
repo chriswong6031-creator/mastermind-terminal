@@ -26,6 +26,15 @@
  *        the ladder shows. Two stores built by two nightly jobs drift (the live matrix ran
  *        two weeks behind the gex payload while this was written) — when they disagree the
  *        control goes dark with a reason instead of quietly lying.
+ *      - "0DTE" is always relative to the MATRIX's own session (`matrix.asof`), never the
+ *        gex payload's — the matrix's cells were computed as of its own snapshot, so a
+ *        drifted matrix must not borrow "today" from the newer payload and relabel a
+ *        14-DTE leg "0DTE". `matrixSessionsAgree` gates this: when the two stores disagree
+ *        by more than a routine cadence gap, every narrow lens (zero / ex-zero / one) goes
+ *        dark rather than summing — or mislabeling — across two different sessions. A cell
+ *        for an expiry strictly before the matrix's own anchor day is dropped outright: it
+ *        was already expired from the matrix's own vantage point and can be neither "0DTE"
+ *        nor "what survives tonight".
  *
  * 2. THE BAR SCALE (bug B1). PEAK used to divide per-strike bars ($mn, per strike) by
  *    `max |history[].net_gex_bn|` — the SESSION's aggregate net in BILLIONS. Two different
@@ -143,30 +152,80 @@ export interface LensStrikeValues {
 }
 
 /**
+ * Calendar-day gap tolerated between the matrix's own session and the gex payload's
+ * session before the narrow lenses are treated as untrustworthy. 4 covers a routine
+ * long weekend plus a single Monday holiday (Fri close → Tue open); anything wider is
+ * the documented drift failure mode ("two weeks behind"), not ordinary cadence.
+ */
+export const MAX_SESSION_GAP_DAYS = 4;
+
+/**
+ * Whether the matrix's own session and the gex payload's session are close enough that
+ * summing the matrix under a narrow expiry lens is still honest. Date-part only (no
+ * trading-calendar dependency); either side missing/unparseable is treated as disagreeing
+ * — we cannot vouch for a session we cannot read.
+ */
+export function matrixSessionsAgree(
+  matrixAsOf: string | null | undefined,
+  gexAsOf: string | null | undefined,
+): boolean {
+  const m = normExp(matrixAsOf);
+  const g = normExp(gexAsOf);
+  if (!m || !g) return false;
+  const mMs = Date.parse(`${m}T00:00:00Z`);
+  const gMs = Date.parse(`${g}T00:00:00Z`);
+  if (!Number.isFinite(mMs) || !Number.isFinite(gMs)) return false;
+  return Math.abs(gMs - mMs) / 86_400_000 <= MAX_SESSION_GAP_DAYS;
+}
+
+/**
  * Sum the matrix cells selected by `lens` down to one value per strike, in $mn.
  *
- * `asOf` anchors the 0DTE test to the snapshot's own session day (see lib/dte.ts) — with
- * a wall-clock test, yesterday's payload grows a phantom 0DTE bucket.
+ * `gexAsOf` is the GEX PAYLOAD's as-of — used only to check the matrix isn't stale
+ * relative to it (`matrixSessionsAgree`). The 0DTE anchor itself is always the MATRIX's
+ * own `asof` (see header): the matrix's cells were computed as of that session, so
+ * "0DTE" must mean 0 DTE from there, never from a newer payload's "today".
+ *
+ * Two honesty guards, both new (this lens used to anchor on `gexAsOf` directly, with
+ * neither guard — see the header's "two weeks behind" note):
+ *   1. DRIFT: when the matrix and the gex payload disagree on session by more than
+ *      `MAX_SESSION_GAP_DAYS`, every narrow lens returns empty/unavailable (cellCount 0,
+ *      covered empty — the same "honest dash" every strike gets when the matrix never
+ *      covered it at all) instead of summing across two different sessions.
+ *   2. DTE>=0: a cell for an expiry strictly before the matrix's OWN anchor day is
+ *      already expired from the matrix's own vantage point — dropped from every narrow
+ *      lens, so it can never leak into "ex-zero" ("what survives tonight") nor be
+ *      mislabeled "0DTE".
  */
 export function matrixLensByStrike(
   matrix: GexMatrix | null | undefined,
   lens: ExpiryLens,
-  asOf: string | null | undefined,
+  gexAsOf: string | null | undefined,
 ): LensStrikeValues {
-  const covered = matrixStrikeSet(matrix);
   const byStrike = new Map<number, number>();
   let totalMn = 0;
   let cellCount = 0;
+
   if (!matrix?.cells?.length || lens.kind === "all") {
-    return { byStrike, covered, totalMn, cellCount };
+    return { byStrike, covered: matrixStrikeSet(matrix), totalMn, cellCount };
   }
 
-  const zeroDay = zeroDteExpiry(matrix.expiries ?? [], asOf);
+  const matrixAsOf = matrix.asof ?? null;
+  if (!matrixSessionsAgree(matrixAsOf, gexAsOf)) {
+    // Drift beyond the tolerance: treat the matrix as if it covers nothing rather than
+    // let a stale snapshot masquerade as today's — or "what survives tonight" — cut.
+    return { byStrike, covered: new Set<number>(), totalMn, cellCount };
+  }
+
+  const covered = matrixStrikeSet(matrix);
+  const zeroDay = zeroDteExpiry(matrix.expiries ?? [], matrixAsOf);
   const wantExp = lens.kind === "one" ? normExp(lens.exp) : null;
+  const anchorDay = normExp(matrixAsOf);
 
   for (const c of matrix.cells) {
     const e = normExp(c.expiry);
     if (!e) continue;
+    if (anchorDay && e < anchorDay) continue; // DTE>=0: already expired at capture time
     if (lens.kind === "one" && e !== wantExp) continue;
     if (lens.kind === "zero" && e !== zeroDay) continue;
     if (lens.kind === "ex-zero" && e === zeroDay) continue;

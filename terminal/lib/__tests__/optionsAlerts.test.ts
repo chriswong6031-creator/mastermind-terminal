@@ -189,22 +189,53 @@ describe("sessionSlopeStats — z-math on cumulative series", () => {
     expect(s.baseMean).toBeCloseTo(1.5 * M, 3); // mean of the 20 calm deltas only
     expect(s.baseStd).toBeCloseTo(0.5 * M, 3);
     expect(s.winMean).toBe(10 * M);
-    // se = baseStd/√w = 0.5M/√3 ; z = (10M − 1.5M)/se
-    expect(s.se).toBeCloseTo((0.5 * M) / Math.sqrt(3), 3);
-    expect(s.z).toBeCloseTo(29.444864, 5);
+    // Two-sample SE of (winMean − baseMean): baseStd·√(1/w + 1/baseN).
+    const se = 0.5 * M * Math.sqrt(1 / 3 + 1 / 20);
+    expect(s.se).toBeCloseTo(se, 3);
+    expect(s.z).toBeCloseTo((10 * M - 1.5 * M) / se, 5);
+    expect(s.z).toBeCloseTo(27.457477, 5);
     expect(s.why).toBe("");
   });
 
-  it("the √w correction is applied — halving nothing but w changes z by √w", () => {
-    // Same baseline, same window mean, but w=1 vs w=4 must differ by exactly √4/√1.
+  it("REGRESSION: the old one-sample SE (baseStd/√w) inflated z by omitting the baseline's own sampling error", () => {
+    // At the guard's minimum admitted baseline (baseN = MIN_BASELINE_MULT·w = 2w), the
+    // true SE is baseStd·√(1/w + 1/2w) = baseStd·√(1.5/w) — exactly √1.5 ≈ 1.2247× the old
+    // baseStd/√w. A "2σ" alert built on the old form was truly firing at 2/√1.5 ≈ 1.633σ.
+    const base = rep([1, 2], 5); // 10 calm deltas, baseStd 0.5
+    const atMin = sessionSlopeStats(seriesOf(tideFromDeltas(base.concat([9, 9, 9, 9, 9]))), 5);
+    expect(atMin.baseN).toBe(10); // exactly MIN_BASELINE_MULT(2) × w(5)
+    const oldSe = (atMin.baseStd as number) / Math.sqrt(atMin.w);
+    const oldZ = ((atMin.winMean as number) - (atMin.baseMean as number)) / oldSe;
+    expect((atMin.z as number) / oldZ).toBeCloseTo(1 / Math.sqrt(1.5), 6);
+    expect(oldZ / (atMin.z as number)).toBeCloseTo(Math.sqrt(1.5), 6);
+  });
+
+  it("the SE reflects BOTH sample sizes — not just the window (what the fix corrects)", () => {
+    // Same baseline (40 calm deltas, baseStd 0.5), two window sizes. The OLD formula
+    // (baseStd/√w) implied z scales by EXACTLY √(w2/w1) between them; the correct
+    // two-sample SE also carries a 1/baseN term shared by both, so the true ratio is
+    // smaller than that old identity.
     const base = rep([1, 2], 20); // 40 calm deltas, baseStd 0.5
     const s1 = sessionSlopeStats(seriesOf(tideFromDeltas(base.concat([9]))), 1);
     const s4 = sessionSlopeStats(seriesOf(tideFromDeltas(base.concat([9, 9, 9, 9]))), 4);
-    expect(s1.winMean).toBe(9);
-    expect(s4.winMean).toBe(9);
-    expect(s1.baseMean).toBeCloseTo(1.5, 9);
-    expect(s4.baseMean).toBeCloseTo(1.5, 9);
-    expect((s4.z as number) / (s1.z as number)).toBeCloseTo(2, 6); // √4 / √1
+    expect(s1.baseN).toBe(40);
+    expect(s4.baseN).toBe(40);
+    const se1 = 0.5 * Math.sqrt(1 / 1 + 1 / 40);
+    const se4 = 0.5 * Math.sqrt(1 / 4 + 1 / 40);
+    expect(s1.se).toBeCloseTo(se1, 9);
+    expect(s4.se).toBeCloseTo(se4, 9);
+    expect((s4.z as number) / (s1.z as number)).toBeCloseTo(se1 / se4, 9);
+    // REGRESSION: the old w-only correction claimed exactly √4 = 2× here.
+    expect((s4.z as number) / (s1.z as number)).not.toBeCloseTo(2, 2);
+  });
+
+  it("as the baseline grows much larger than the window, the SE converges to the old w-only form", () => {
+    // With baseN >> w, 1/baseN → 0 and baseStd·√(1/w + 1/baseN) → baseStd/√w — the old
+    // formula was a large-baseline SPECIAL CASE of the correct one, not a separate idea.
+    const hugeBase = rep([1, 2], 5000); // 10,000 calm deltas
+    const s = sessionSlopeStats(seriesOf(tideFromDeltas(hugeBase.concat([9, 9, 9]))), 3);
+    const oldSe = 0.5 / Math.sqrt(3);
+    expect(s.se as number).toBeCloseTo(oldSe, 3);
   });
 
   it("min-sample guard: baseline shorter than 2× the window → z null, not a guess", () => {
@@ -236,7 +267,7 @@ describe("evalPremiumBurst — pace alert", () => {
     expect(r.note).toContain("unusual pace");
     expect(r.note).toContain("net-call premium");
     expect(r.note).toContain("intraday tape");
-    expect(r.value).toBeCloseTo(29.44, 2);
+    expect(r.value).toBeCloseTo(27.46, 2);
     // the note states the baseline it was judged against, not just the window
     expect(r.note).toContain("vs the 20m before it");
   });
@@ -260,7 +291,7 @@ describe("evalPremiumBurst — pace alert", () => {
     const tide = tideFromDeltas(CONTAM);
     const r = evalPremiumBurst({ ...cond, window_min: 5 }, tide, {});
     expect(r.fired).toBe(true);
-    expect(r.value).toBeCloseTo(441.64, 1);
+    expect(r.value).toBeCloseTo(382.47, 1);
     // Proof: including the burst in its own baseline capped the old z below the gate.
     // The old form is bounded ABOVE by √((n−w)/w) — here √(15/5) = √3 ≈ 1.7321 — no matter
     // how violent the burst. (The bound is approached, not reached, when the baseline has
@@ -284,6 +315,27 @@ describe("evalPremiumBurst — pace alert", () => {
     expect(first.fired).toBe(true);
     const again = evalPremiumBurst(cond, tide, first.nextState);
     expect(again.fired).toBe(false); // same latest T
+  });
+
+  it("REGRESSION (multiplicity): a burst that stays hot for several NEW minutes fires ONCE, not once per poll", () => {
+    // Before the fix, `lastFiredT` advanced to the latest stamp on every evaluation that
+    // met the z bar (fired or not) — so the very next new minute always looked "unfired"
+    // against the just-updated state, and a burst that stayed hot for K minutes fired K
+    // times (once per poll of the session).
+    const first = evalPremiumBurst(cond, tideFromDeltas(HOT), {});
+    expect(first.fired).toBe(true);
+
+    // One minute later the tape is STILL hot (z still ≫ 2) — this is exactly where the
+    // old code fired again.
+    const persistent = HOT.concat([10 * M]);
+    const second = evalPremiumBurst(cond, tideFromDeltas(persistent), first.nextState);
+    expect(second.fired).toBe(false); // suppressed — inside the cooldown (< windowMin=3)
+
+    // Once a full fresh window (3 minutes) has elapsed since the first fire, a tape
+    // that is STILL hot can fire again — the guard is a cooldown, not a one-shot latch.
+    const later = HOT.concat([10 * M, 10 * M, 10 * M]);
+    const third = evalPremiumBurst(cond, tideFromDeltas(later), second.nextState);
+    expect(third.fired).toBe(true);
   });
 
   it("REGRESSION (short history): too little baseline → fired:null, never a guess", () => {
@@ -357,6 +409,43 @@ describe("eval0dteShare — 0DTE net-premium share", () => {
   it("no buckets at all → fired:null", () => {
     expect(eval0dteShare(cond, {}, {}).fired).toBeNull();
     expect(eval0dteShare(cond, { buckets: {} }, {}).fired).toBeNull();
+  });
+
+  it("REGRESSION: an EMPTY non-0d bucket (e.g. '90p' with no flow yet) no longer collapses the whole intersection to zero", () => {
+    // Mirrors the real dte_fixture bucket set ('0d','1_7d','8_30d','31_90d','90p') with the
+    // longest-dated bucket still empty — routine early in a session. Before the fix, ONE
+    // empty bucket zeroed the common-stamp intersection and pinned the alert at
+    // fired:null for the rest of the session, indistinguishable from "feed absent".
+    const withEmptyBucket: DtePayload = {
+      asof: "x",
+      buckets: {
+        ...bigShare().buckets,
+        "90p": [],
+      },
+    };
+    const r = eval0dteShare(cond, withEmptyBucket, {});
+    expect(r.fired).toBe(true); // same reading as bigShare() alone — the empty bucket contributed nothing
+    expect(r.value).toBeGreaterThanOrEqual(55);
+  });
+
+  it("an empty '0d' bucket (present, no 0DTE flow yet) is evaluable, not null — a real 0% share", () => {
+    const emptyZero: DtePayload = {
+      asof: "x",
+      buckets: {
+        "0d": [],
+        "1_7d": [{ t: "09:40", ncp: 100, npp: 0 }],
+      },
+    };
+    const r = eval0dteShare(cond, emptyZero, {});
+    expect(r.fired).toBe(false); // 0% share, honestly computed — not "cannot evaluate"
+    expect(r.value).toBe(0);
+  });
+
+  it("every bucket empty (including '0d') → fired:null (nothing to evaluate, honestly)", () => {
+    const allEmpty: DtePayload = { asof: "x", buckets: { "0d": [], "1_7d": [] } };
+    const r = eval0dteShare(cond, allEmpty, {});
+    expect(r.fired).toBeNull();
+    expect(r.note).toContain("0DTE split unavailable");
   });
 
   it("idempotent per stamp", () => {

@@ -67,6 +67,13 @@ const GEX_LEX = {
   // Tag on the summary bar's LEVEL cells while a narrower expiry lens is active: walls,
   // flip and magnet are all-expiry constructs and do not re-derive per expiration.
   sumAllExpTag:   ["all exp", "全到期"],
+  // Hover disclosure on the scoped Net GEX tag: a narrower expiry lens sums over the
+  // per-expiration snapshot's own (narrower) strike window, not the full ladder — this
+  // states that second swap explicitly instead of leaving it implied by the expiry word.
+  sumLensScopeTip: [
+    "Net GEX for this expiration, summed over the {n} of {m} ladder strikes the per-expiration snapshot covers — a narrower strike window than the full ladder, not just a narrower expiration.",
+    "本到期日的净GEX，基于按到期日快照覆盖的梯图 {n}/{m} 个行权价汇总——行权价范围比完整梯图更窄，不仅是到期日范围更窄。",
+  ],
 
   // ── Expiry lens (dropdown + 0DTE chip) ─────────────────────────────────────
   expiryDropdownLabel: ["All expirations", "全部到期日"],
@@ -169,6 +176,12 @@ const GEX_LEX = {
   stateHedgeAbs:      ["|net γ|", "|净伽马|"],
   // Pin target block
   statePinCaption:    ["Strike dealers pin toward.", "做市商倾向锁定的行权价。"],
+  // Hover disclosure on the pin probability — a bare "{n}% prob" reads as a calibrated
+  // forecast; this states plainly that it is not one yet.
+  statePinProbTip: [
+    "Model output, not a calibrated probability — display-only until scored against realized pins through a pre-registered gate. No accuracy track record exists yet.",
+    "模型输出，并非经过校准的概率——在通过预注册验证并对照实际锁定结果评分之前，仅供展示。目前尚无准确性记录。",
+  ],
   stateDistToFlipTip: [
     "Spot's distance from the gamma-flip level, as % of spot. Above the flip = long-gamma (dealers dampen moves — pinning / mean-reversion); below = short-gamma (dealers amplify — trend / cascade risk). The smaller the number, the closer to a regime change.",
     "现价距伽马翻转位的距离（占现价百分比）。翻转位上方=多头伽马（做市商抑制波动——锁定/均值回归）；下方=空头伽马（做市商放大波动——趋势/瀑布风险）。数值越小，越接近状态切换。",

@@ -16,6 +16,14 @@
  * Display-tier law: every `note` carries the payload's as-of + a cadence word and
  * uses NO "signal"/"buy"/"sell"/"validated" vocabulary — only "crosses"/"reaches"/
  * "unusual pace"/"map"/"level". The wall note says walls are EOD levels.
+ *
+ * STATISTICAL ASSUMPTIONS (premium burst, `sessionSlopeStats`): per-minute deltas of the
+ * cumulative premium series are treated as IID — no serial-correlation / HAC correction,
+ * despite the well-known intraday autocorrelation and U-shaped intraday variance profile
+ * real tape carries. The z is therefore a rough, not exact, standardized distance. A
+ * session also re-runs the evaluator on every poll (~390 looks on a 1-minute tape); the
+ * multiplicity this implies is handled by a per-fire COOLDOWN (see evalPremiumBurst), not
+ * by raising the z threshold — the threshold itself is an unadjusted single-look bar.
  */
 
 export type GexState = {
@@ -160,17 +168,26 @@ export type SlopeStats = {
 /**
  * Slope statistics for a CUMULATIVE series. Deltas d[i]=series[i]-series[i-1] are
  * the per-step slope. The trailing `window` deltas are the TEST window; the deltas
- * BEFORE it are the baseline. Because the test statistic is a MEAN of w deltas, it
- * is compared against the standard error of that mean — baseStd/√w — not against a
- * single-observation std.
+ * BEFORE it are the baseline. The test statistic is winMean − baseMean, a comparison
+ * of TWO sample means, so it is judged against the standard error of THAT difference —
+ * baseStd·√(1/w + 1/baseN) — not against a one-sample baseStd/√w, which omits the
+ * baseline mean's own sampling variance entirely.
  *
- * Three properties this fixes (see the OEU T-D PR body for the fail-then-pass table):
+ * Four properties this fixes (see the OEU T-D PR body for the fail-then-pass table on
+ * items 1-3; item 4 is the OEU bugwave follow-up):
  *  1. the baseline no longer contains the window it is judging, so a burst can no
  *     longer inflate the very yardstick it is measured against. The old form was
  *     bounded by z ≤ √((n−w)/w) no matter how violent the burst — at the default
  *     w=10 / z=2 that made ANY burst unable to fire until ~51 minutes of tape;
- *  2. the √w correction restores the units of a mean-vs-mean comparison;
- *  3. too little baseline yields null, not a guess.
+ *  2. a √w-only correction restores the RIGHT UNITS for a mean comparison but is still
+ *     missing a term — see 4;
+ *  3. too little baseline yields null, not a guess;
+ *  4. the SE now carries BOTH sample sizes. baseStd/√w alone treats the baseline mean as
+ *     a known constant with no sampling error of its own; at the minimum baseline this
+ *     guard admits (baseN = 2w), that omission inflates z by exactly √1.5 ≈ 22.5% — a
+ *     "2σ" alert was truly firing at 1.63σ. The two-sample SE is what a mean-vs-mean
+ *     comparison actually requires; the single-sample form is the special case where
+ *     baseN → ∞ (see the vitest for the convergence).
  * Exposed so the vitest can assert the z-math directly on synthetic series.
  */
 export function sessionSlopeStats(series: number[], window: number): SlopeStats {
@@ -193,8 +210,22 @@ export function sessionSlopeStats(series: number[], window: number): SlopeStats 
   const variance = base.reduce((a, b) => a + (b - baseMean) * (b - baseMean), 0) / baseN; // population
   const baseStd = Math.sqrt(variance);
   if (!(baseStd > 0)) return { ...blank, winMean, baseMean, baseStd, why: "flat baseline" };
-  const se = baseStd / Math.sqrt(w);
+  // Two-sample SE of (winMean − baseMean): baseStd·√(1/w + 1/baseN). The 1/baseN term is
+  // the piece the old baseStd/√w form dropped — see property 4 above.
+  const se = baseStd * Math.sqrt(1 / w + 1 / baseN);
   return { winMean, baseMean, baseStd, se, z: (winMean - baseMean) / se, n, w, baseN, why: "" };
+}
+
+/** Minutes since midnight for an "HH:MM" tape stamp, or null if unparseable. Callers fall
+ *  back to exact-stamp dedupe when the clock can't be read — see evalPremiumBurst. */
+function minutesOfDay(t: string | null | undefined): number | null {
+  if (typeof t !== "string") return null;
+  const m = /^(\d{1,2}):(\d{2})/.exec(t);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const mi = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(mi)) return null;
+  return h * 60 + mi;
 }
 
 export function evalPremiumBurst(
@@ -225,13 +256,27 @@ export function evalPremiumBurst(
   const latestT = mins[mins.length - 1]?.t ?? "";
   // ONE-SIDED: a burst is a HOT tape. The old two-sided |z| also fired on a tape that
   // had gone unusually QUIET, which is the opposite of what the alert promises.
-  const fires = stats.z >= zThresh;
-  const alreadyFired = p.lastFiredT === latestT;
+  const meetsBar = stats.z >= zThresh;
+
+  // Multiplicity guard: the evaluator re-runs on every poll of the session (~390 looks on
+  // a 1-minute tape). Per-stamp dedupe alone is too fine — `lastFiredT` used to advance to
+  // the LATEST stamp on every evaluation that met the bar (fired or not), so the very next
+  // new minute always looked "unfired" and a burst that stayed hot for K minutes fired K
+  // times. Re-arm only once a full fresh window (`windowMin` minutes of NEW tape) has
+  // elapsed since the last actual fire — a coarser key than the latest stamp, without
+  // moving the z threshold itself.
+  const lastFiredMin = minutesOfDay(typeof p.lastFiredT === "string" ? p.lastFiredT : null);
+  const nowMin = minutesOfDay(latestT);
+  const cooldownElapsed =
+    lastFiredMin == null || nowMin == null
+      ? p.lastFiredT !== latestT // clock unparseable: fall back to exact-stamp dedupe
+      : nowMin - lastFiredMin >= windowMin;
+  const fires = meetsBar && cooldownElapsed;
   const nextState: Record<string, unknown> = fires
     ? { lastFiredT: latestT, lastZ: round(stats.z, 2) }
     : { lastFiredT: p.lastFiredT, lastZ: p.lastZ };
 
-  if (fires && !alreadyFired) {
+  if (fires) {
     const root = cond.root || "the underlying";
     const legWord = leg === "npp" ? "net-put premium" : "net-call premium";
     const note = `${root} ${legWord} moving at an unusual pace (z ${stats.z.toFixed(1)}, last ${windowMin}m vs the ${stats.baseN}m before it) · intraday tape ${asOf(tide?.asof)}`;
@@ -257,8 +302,15 @@ export function eval0dteShare(
   }
   const sharePct = isNum(cond.share_pct) ? cond.share_pct : 55;
 
-  // Latest common stamp = the newest t present in EVERY bucket (honest cross-section).
-  const bucketKeys = Object.keys(buckets).filter((k) => Array.isArray(buckets[k]));
+  // Latest common stamp = the newest t present in every bucket that actually carries
+  // rows (an honest cross-section). An EMPTY bucket (e.g. "90p" with no flow yet — routine
+  // early in a session) has nothing to disagree with the others about; it must not
+  // collapse the whole intersection to zero the way a genuinely MISSING bucket would. An
+  // absent bucket already returns null above; an empty one now just contributes 0 to the
+  // share's denominator, same as a bucket that was never wired at all.
+  const bucketKeys = Object.keys(buckets).filter(
+    (k) => Array.isArray(buckets[k]) && buckets[k].length > 0
+  );
   const stampSets = bucketKeys.map((k) => new Set(buckets[k].map((r) => r.t)));
   let common: string[] = stampSets.length ? [...stampSets[0]] : [];
   for (let i = 1; i < stampSets.length; i++) common = common.filter((t) => stampSets[i].has(t));
