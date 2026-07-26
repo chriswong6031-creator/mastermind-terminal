@@ -37,6 +37,7 @@ import {
   fmtEodDay,
   fmtLevel,
   fmtOiCompact,
+  normalizeVolUnits,
   oiConfRead,
   ordinal,
   pickDarkPoolRow,
@@ -436,6 +437,147 @@ describe("structure cells — source preference, fallback, vintage", () => {
     });
     expect(structureIsEmpty(cells)).toBe(false);
     expect(cells.find((c) => c.key === "oiConf")!.value).toBe("0");
+  });
+});
+
+// ─── 5. IV UNIT REGIME ────────────────────────────────────────────────────────
+//
+// options_hub/vol ships every IV-family field as a PERCENT in production. A reader that
+// assumes fractions prints a live SPY at 1588.9%; one that assumes percents prints the
+// fraction-shipping fixture at 0.2%. The subtler failure is the obvious fix: applying
+// ivPercent's `iv < 5 → ×100` rule PER LEAF rescues the headline and wrecks the smile,
+// because a real chain's tails live near that threshold (live SPY bottoms at 6.25) and a
+// tail that dips under 5 would be blown up to 490, taking the chart's y-scale with it.
+// So the regime is decided ONCE per payload and every leaf moves by that single factor.
+
+describe("normalizeVolUnits", () => {
+  /** Live-shaped: options_hub/vol/SPY.json as R2 actually serves it — percents throughout. */
+  const percentPayload = () => ({
+    schema: "options_hub.vol/v1",
+    asof: "2026-07-23",
+    root: "SPY",
+    iv_rank_252: 72.2,
+    atm_iv: 15.8893,
+    iv_52w_hi: 26.6,
+    iv_52w_lo: 12.6743,
+    rv20: 12.2318,
+    vrp: 3.6575,
+    term: [{ dte: 0, exp: "2026-07-23", atm_iv: 10.405 }],
+    smile: [{ exp: "2026-07-27", points: [{ strike: 520, call_iv: 6.25, put_iv: 18.4 }] }],
+    history: [{ date: "2026-07-22", iv_rank: 71.0, atm_iv: 19.79, close: 738.1 }],
+  });
+
+  /** The same schema in fraction units — what the vol fixture shipped before this lane. */
+  const fractionPayload = () => ({
+    schema: "options_hub.vol/v1",
+    root: "SPY",
+    iv_rank_252: 38.1,
+    atm_iv: 0.162,
+    iv_52w_hi: 0.481,
+    iv_52w_lo: 0.088,
+    rv20: 0.141,
+    vrp: 0.021,
+    term: [{ dte: 4, exp: "2026-07-11", atm_iv: 0.178 }],
+    smile: [{ exp: "2026-07-11", points: [{ strike: 520, call_iv: 0.198, put_iv: 0.265 }] }],
+    history: [{ date: "2026-04-07", iv_rank: 91.8, atm_iv: 0.481, close: 491.2 }],
+  });
+
+  it("leaves a percent payload exactly as it found it", () => {
+    const out = normalizeVolUnits(percentPayload());
+    expect(out).toEqual(percentPayload());
+    expect(out.atm_iv).toBe(15.8893);
+    expect(out.term[0].atm_iv).toBe(10.405);
+    expect(out.history[0].atm_iv).toBe(19.79);
+    expect(out.vrp).toBe(3.6575);
+    expect(out.iv_rank_252).toBe(72.2);
+  });
+
+  it("leaves a smile tail alone even when the tail alone would read as a fraction", () => {
+    // The pin that separates per-PAYLOAD from per-LEAF. 6.25 is a real live SPY tail; 4.9 is
+    // the same tail one bad session lower, and a per-leaf ivPercent would print it as 490%.
+    const out = normalizeVolUnits(percentPayload());
+    expect(out.smile[0].points[0].call_iv).toBe(6.25);
+
+    const deepTail = normalizeVolUnits({
+      ...percentPayload(),
+      smile: [{ exp: "2026-07-27", points: [{ strike: 400, call_iv: 4.9, put_iv: 3.2 }] }],
+    });
+    expect(deepTail.smile[0].points[0].call_iv).toBe(4.9);
+    expect(deepTail.smile[0].points[0].put_iv).toBe(3.2);
+  });
+
+  it("scales every IV-family field of a fraction payload by one hundred", () => {
+    const out = normalizeVolUnits(fractionPayload());
+    expect(out.atm_iv).toBe(16.2);
+    expect(out.iv_52w_hi).toBe(48.1);
+    expect(out.iv_52w_lo).toBe(8.8);
+    expect(out.rv20).toBe(14.1);
+    expect(out.vrp).toBe(2.1);
+    expect(out.term[0].atm_iv).toBe(17.8);
+    expect(out.smile[0].points[0].call_iv).toBe(19.8);
+    expect(out.smile[0].points[0].put_iv).toBe(26.5);
+    expect(out.history[0].atm_iv).toBe(48.1);
+  });
+
+  it("never touches a rank, a strike, a close or a DTE", () => {
+    // Ranks are 0–100 under BOTH conventions and the rest are not vols at all.
+    const out = normalizeVolUnits(fractionPayload());
+    expect(out.iv_rank_252).toBe(38.1);
+    expect(out.history[0].iv_rank).toBe(91.8);
+    expect(out.history[0].close).toBe(491.2);
+    expect(out.smile[0].points[0].strike).toBe(520);
+    expect(out.term[0].dte).toBe(4);
+    expect(out.root).toBe("SPY");
+  });
+
+  it("reads the regime off iv_52w_hi when atm_iv is absent", () => {
+    const out = normalizeVolUnits({ ...fractionPayload(), atm_iv: null });
+    expect(out.atm_iv).toBeNull();
+    expect(out.iv_52w_hi).toBe(48.1);
+    expect(out.term[0].atm_iv).toBe(17.8);
+    expect(out.smile[0].points[0].call_iv).toBe(19.8);
+  });
+
+  it("reads the regime off the first term entry when both top-level anchors are absent", () => {
+    const out = normalizeVolUnits({ ...fractionPayload(), atm_iv: null, iv_52w_hi: null });
+    expect(out.term[0].atm_iv).toBe(17.8);
+    expect(out.history[0].atm_iv).toBe(48.1);
+  });
+
+  it("returns the payload untouched when nothing can anchor the regime", () => {
+    // Nothing to decide from, so nothing is guessed — iv_52w_lo keeps whatever it shipped.
+    const p = {
+      schema: "options_hub.vol/v1", root: "SPY",
+      atm_iv: null, iv_52w_hi: null, iv_52w_lo: 0.088,
+      term: [], smile: [], history: [],
+    };
+    const out = normalizeVolUnits(p);
+    expect(out).toBe(p);
+    expect(out.iv_52w_lo).toBe(0.088);
+  });
+
+  it("passes a null leaf through as null rather than scaling it to zero", () => {
+    const out = normalizeVolUnits({
+      ...fractionPayload(),
+      smile: [{
+        exp: "2026-07-11",
+        points: [{ strike: 520, call_iv: 0.198, put_iv: null as number | null }],
+      }],
+    });
+    expect(out.smile[0].points[0].put_iv).toBeNull();
+    expect(out.smile[0].points[0].call_iv).toBe(19.8);
+  });
+
+  it("does not mutate the payload it was handed", () => {
+    const p = fractionPayload();
+    const out = normalizeVolUnits(p);
+    expect(p.atm_iv).toBe(0.162);
+    expect(p.term[0].atm_iv).toBe(0.178);
+    expect(p.smile[0].points[0].call_iv).toBe(0.198);
+    expect(p.history[0].atm_iv).toBe(0.481);
+    expect(out).not.toBe(p);
+    expect(out.term).not.toBe(p.term);
+    expect(out.smile[0].points).not.toBe(p.smile[0].points);
   });
 });
 

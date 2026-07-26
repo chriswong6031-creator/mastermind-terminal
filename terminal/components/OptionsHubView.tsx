@@ -13,6 +13,7 @@ import { windowGexRows } from "@/lib/windowGexRows.mjs";
 import { flowGet, flowInvalidate, flowPrefetch } from "@/lib/flowClientCache";
 import { useFlowStream } from "@/lib/flowStream";
 import { trackSearch } from "@/lib/searchTrack";
+import { normalizeVolUnits } from "@/lib/eodContext";
 import { VolRegimeChip } from "@/components/eodcontext/VolRegimeChip";
 import {
   createChart, LineSeries, AreaSeries,
@@ -1071,7 +1072,7 @@ const TermStructureChart = memo(function TermStructureChart({ term }: { term: Vo
         return (
           <g key={i}>
             <line x1={PAD.l - 4} y1={y} x2={W - PAD.r} y2={y} stroke="var(--line)" strokeWidth="0.5" />
-            <text x={PAD.l - 6} y={y + 3} textAnchor="end" fill="var(--muted)" fontSize={9}>{(iv * 100).toFixed(0)}%</text>
+            <text x={PAD.l - 6} y={y + 3} textAnchor="end" fill="var(--muted)" fontSize={9}>{iv.toFixed(0)}%</text>
           </g>
         );
       })}
@@ -1114,7 +1115,7 @@ const SmileChart = memo(function SmileChart({ points, spotRef }: { points: VolSm
         return (
           <g key={i}>
             <line x1={PAD.l} y1={y} x2={W - PAD.r} y2={y} stroke="var(--line)" strokeWidth="0.5" />
-            <text x={PAD.l - 4} y={y + 3} textAnchor="end" fill="var(--muted)" fontSize={9}>{(iv * 100).toFixed(0)}%</text>
+            <text x={PAD.l - 4} y={y + 3} textAnchor="end" fill="var(--muted)" fontSize={9}>{iv.toFixed(0)}%</text>
           </g>
         );
       })}
@@ -1861,8 +1862,8 @@ export default function OptionsHubView({
   const fetchVol = useCallback(async (root: string) => {
     setVolLoading(true); setVolData(null);
     try {
-      const d = await flowGet(`vol:${root}`);
-      if (d) setVolData(d as VolPayload);
+      const d = (await flowGet(`vol:${root}`)) as Record<string, unknown> | null;
+      if (d) setVolData(normalizeVolUnits(d) as unknown as VolPayload);
     } catch {}
     setVolLoading(false);
   }, []);
@@ -2780,7 +2781,7 @@ export default function OptionsHubView({
                           <>
                             <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
                               <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t("tickersAtmIv", "ATM IV")}</div>
-                              <div style={{ fontWeight: 650, fontSize: 13, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{(volData.atm_iv * 100).toFixed(1)}%</div>
+                              <div style={{ fontWeight: 650, fontSize: 13, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{volData.atm_iv.toFixed(1)}%</div>
                             </div>
                             <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
                               <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t("tickersIvRank", "IV Rank")}</div>
