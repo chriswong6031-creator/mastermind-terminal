@@ -201,6 +201,38 @@ const LEX: Record<string, [string, string]> = {
   // search
   searchPlaceholder: ["Search symbol or company…", "搜索代码或公司…"],
   noSymbolMatch: ["No supported symbol matches", "没有匹配的代码"],
+  // watchlist sections + list menu
+  thisList: ["This list", "当前列表"],
+  addSection: ["Add section", "添加分组"],
+  addSectionPrompt: ["Name this section", "为分组命名"],
+  renameSection: ["Rename section", "重命名分组"],
+  renameSectionPrompt: ["Rename section", "重命名分组"],
+  deleteSection: ["Remove section", "删除分组"],
+  collapseSection: ["Collapse / expand", "折叠 / 展开"],
+  copyWatchlist: ["Make a copy", "创建副本"],
+  copyWatchlistPrompt: ["Name for the copy", "副本名称"],
+  clearWatchlist: ["Clear list", "清空列表"],
+  clearWatchlistConfirm: ["Remove every symbol from this list? Sections are kept.", "从此列表中移除所有代码？分组将保留。"],
+  sortAZ: ["Sort A → Z", "按 A → Z 排序"],
+  exportCsv: ["Export CSV", "导出 CSV"],
+  importCsv: ["Import CSV", "导入 CSV"],
+  // market names — used by the search filter notice and the Markets settings pane
+  mktUs: ["United States", "美国"],
+  mktCn: ["China A-shares", "中国 A 股"],
+  mktHk: ["Hong Kong", "香港"],
+  mktCa: ["Canada", "加拿大"],
+  mktIntl: ["International", "国际"],
+  mktCrypto: ["Crypto", "加密货币"],
+  // market filter — shown when a switched-off market is holding results back, so a hidden
+  // market always reads as a setting the user owns rather than as missing data
+  mktHiddenLead: ["Hidden by your market settings:", "已被你的市场设置隐藏："],
+  mktHiddenMore: ["more in", "个结果来自"],
+  mktShowAll: ["Show all markets", "显示所有市场"],
+  mktSettingsTitle: ["Markets", "市场"],
+  mktSettingsSub: ["Turn a market off and its symbols stop appearing in search.", "关闭某个市场后，其代码将不再出现在搜索中。"],
+  mktHome: ["Home market", "主市场"],
+  mktHomeNote: ["Ranked first in search and used for your default watchlists.", "在搜索中优先排序，并用于默认自选列表。"],
+  mktAutoNarrowed: ["You signed up for US markets only, so other markets start hidden. Turn any of them on here.", "你注册时只选择了美国市场，因此其他市场默认隐藏。可在此随时开启。"],
   // indicators modal
   indicatorsTitle: ["Indicators, metrics & strategies", "指标、度量与策略"],
   library: ["Library", "指标库"],

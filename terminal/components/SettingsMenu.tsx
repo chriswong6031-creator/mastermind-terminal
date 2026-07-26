@@ -5,6 +5,9 @@ import { createClient } from "@/lib/supabase/client";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 import { useEntitlement } from "@/lib/useEntitlement";
 import { DEFAULT_START_TF, TF_CANONICAL_ORDER, readStartTf, writeStartTf } from "@/lib/startTf";
+import { useMarketPrefs } from "@/lib/useMarketPrefs";
+import { ALL_MARKETS, HOME_MARKET_IDS } from "@/lib/markets";
+import { MARKET_TKEY } from "@/components/SearchModal";
 
 // Tier label key, with a "· trial" suffix only while status === "trialing".
 function tierLabelKey(tier: string, status: string): string {
@@ -28,6 +31,9 @@ export default function SettingsMenu({ email }: { email: string }) {
   const onboarding = useOnboarding();
   const signedIn = !!email;
   const ent = useEntitlement(email);
+  // Shared module store — the same object SearchModal filters against, so this pane and the
+  // search results can never disagree about which markets are on.
+  const { prefs, toggle, setHome } = useMarketPrefs(email);
 
   useEffect(() => { const v = document.documentElement.getAttribute("data-updown"); setUd(v === "east" ? "east" : "west"); }, []);
   useEffect(() => { if (!open) return; const close = () => setOpen(false); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [open]);
@@ -83,6 +89,41 @@ export default function SettingsMenu({ email }: { email: string }) {
               <button key={tfi} className={startTf === tfi ? "on" : ""} aria-pressed={startTf === tfi} onClick={() => pickStartTf(tfi)}>{tfi}</button>
             ))}
           </div>
+
+          {/* ── Markets ──────────────────────────────────────────────────────────────────
+              Which markets exist for this user at all. Turning one off removes its symbols
+              from search entirely — the operator's requirement that a China-only trader can
+              stop seeing US names. The home market is the ranking/seed market and is rendered
+              as a radio; it cannot be switched off, so the user can never strand themselves
+              with an empty universe. */}
+          <div className="set-grp">{t("mktSettingsTitle")}</div>
+          <div className="set-note">{t("mktSettingsSub")}</div>
+          {prefs.autoNarrowed && <div className="set-note set-note-hint">{t("mktAutoNarrowed")}</div>}
+          {ALL_MARKETS.map((m) => {
+            const on = prefs.enabled.includes(m);
+            const isHome = prefs.home === m;
+            return (
+              <div
+                key={m}
+                className={`set-row${on ? " on" : ""}${isHome ? " set-row-home" : ""}`}
+                aria-disabled={isHome}
+                onClick={() => { if (!isHome) toggle(m); }}
+                title={isHome ? t("mktHomeNote") : undefined}
+              >
+                <span className="cbx"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>
+                {t(MARKET_TKEY[m])}
+                {isHome && <span className="set-row-tag">{t("mktHome")}</span>}
+              </div>
+            );
+          })}
+          <div className="set-grp">{t("mktHome")}</div>
+          <div className="set-note">{t("mktHomeNote")}</div>
+          {HOME_MARKET_IDS.map((m) => (
+            <div key={m} className={`set-row${prefs.home === m ? " on" : ""}`} onClick={() => setHome(m)}>
+              <span className="rdo" />{t(MARKET_TKEY[m])}
+            </div>
+          ))}
+
           <div className="set-sep" />
           {signedIn ? (
             <>

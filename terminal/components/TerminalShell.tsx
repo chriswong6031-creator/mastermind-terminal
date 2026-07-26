@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useIsMobile } from "@/lib/useMediaQuery";
 import MobileSheet from "@/components/ui/MobileSheet";
-import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, PointerSensor, KeyboardSensor, useDroppable, useSensor, useSensors, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
@@ -18,6 +18,7 @@ import ChartConductor from "@/components/ChartConductor";
 import { intradayCapable } from "@/components/ChartPanel";
 import { classify } from "@/lib/intradaySources";
 import { DEFAULT_START_TF, TF_CANONICAL_ORDER, readStartTf, resolveStartTf } from "@/lib/startTf";
+import { useMarketPrefs } from "@/lib/useMarketPrefs";
 import { type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
 import SearchModal, { FLAG_DEFAULT, FLAG_COLORS } from "@/components/SearchModal";
@@ -111,6 +112,52 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
     base.chg = q.prevSessionChg;
   }
   return base;
+}
+
+// Section headers double as drop targets. Their droppable ids are namespaced so a section can
+// never collide with a ticker of the same name (a list with a "GOLD" section and a GOLD symbol
+// would otherwise share an id and drop into itself).
+const SEC_DROP_PREFIX = "__sec__:";
+
+// A watchlist section divider: collapse toggle, name, count, and — matching the operator's
+// TradingView reference — rename + trash affordances that appear on hover. Deleting removes the
+// DIVIDER only; the symbols survive in the section above (see deleteSection).
+function WlSectionHeader({ name, count, collapsed, minWidth, onToggle, onRename, onDelete, labels }: {
+  name: string;
+  count: number;
+  collapsed: boolean;
+  minWidth: number;
+  onToggle: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  labels: { rename: string; remove: string; collapse: string };
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: SEC_DROP_PREFIX + name });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`wl-sec${collapsed ? " collapsed" : ""}${isOver ? " over" : ""}`}
+      style={{ minWidth }}
+      onClick={onToggle}
+      role="button"
+      tabIndex={0}
+      aria-expanded={!collapsed}
+      title={labels.collapse}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+    >
+      <svg className="wl-sec-car" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+      <span className="wl-sec-nm">{name}</span>
+      <span className="wl-sec-ct">{count}</span>
+      <span className="wl-sec-acts">
+        <span className="wl-sec-ic" title={labels.rename} onClick={(e) => { e.stopPropagation(); onRename(); }}>
+          <svg viewBox="0 0 24 24"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3M13.5 6.5l3 3" /></svg>
+        </span>
+        <span className="wl-sec-ic del" title={labels.remove} onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>
+        </span>
+      </span>
+    </div>
+  );
 }
 
 // Drag-sortable wrapper for a watchlist row. Whole-row draggable with a distance
@@ -215,9 +262,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // named watchlists — client-side + localStorage-backed so switching / creating lists works for guests
   // (no auth needed). The server-provided `symbols` seed becomes the "Default" list.
   const [lists, setLists] = useState<Record<string, { symbol: string; section: string }[]>>({ Default: symbols });
+  // Per-list section metadata (order + collapsed). Kept OUT of `lists` so old mm.wls saves,
+  // which store `lists` as plain row arrays, keep loading unchanged.
+  const [listMeta, setListMeta] = useState<Record<string, { sections: string[]; collapsed: string[] }>>({});
+  const [secCreating, setSecCreating] = useState(false);   // inline "add section" input open
+  const [secName, setSecName] = useState("");
   const [activeList, setActiveList] = useState("Default");
   const [wlMenuOpen, setWlMenuOpen] = useState(false);
-  const wl = lists[activeList] || [];
+  // Memoized so its identity is stable: `lists[activeList] || []` allocated a fresh [] on every
+  // render whenever the list was missing, which re-ran every useMemo downstream of `wl`.
+  const wl = useMemo(() => lists[activeList] || [], [lists, activeList]);
   const setWl = (updater: any) => setLists((l) => ({ ...l, [activeList]: typeof updater === "function" ? updater(l[activeList] || []) : updater }));
   // Drag-to-reorder sensors: 6px activation distance so clicks still select rows.
   const dndSensors = useSensors(
@@ -231,11 +285,38 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (!over || active.id === over.id) return;
     setWl((prev: { symbol: string; section: string }[]) => {
       const from = prev.findIndex((x) => x.symbol === active.id);
-      const to = prev.findIndex((x) => x.symbol === over.id);
-      if (from < 0 || to < 0 || prev[from].section !== prev[to].section) return prev;
-      return arrayMove(prev, from, to);
+      if (from < 0) return prev;
+      // Dropping ON a section header re-files the row into that section and parks it at the end
+      // of that group. Sections are user-made now, so a row must be able to LEAVE the section it
+      // was born in — previously any cross-section drop was rejected outright.
+      const overId = String(over.id);
+      if (overId.startsWith(SEC_DROP_PREFIX)) {
+        const sec = overId.slice(SEC_DROP_PREFIX.length);
+        if (prev[from].section === sec) return prev;
+        const row = { ...prev[from], section: sec };
+        const rest = prev.filter((_, i) => i !== from);
+        const lastOfSec = rest.map((r) => r.section).lastIndexOf(sec);
+        rest.splice(lastOfSec + 1, 0, row);
+        return rest;
+      }
+      const to = prev.findIndex((x) => x.symbol === overId);
+      if (to < 0) return prev;
+      // Same section → plain reorder. Different section → adopt the target's section, so
+      // dragging a row into another group does what it looks like it does.
+      if (prev[from].section === prev[to].section) return arrayMove(prev, from, to);
+      const moved = arrayMove(prev, from, to);
+      const at = moved.findIndex((x) => x.symbol === active.id);
+      moved[at] = { ...moved[at], section: prev[to].section };
+      return moved;
     });
   }, [activeList]);
+  // Market preference — ONE instance for the whole shell, so the Markets settings pane and the
+  // search results are always reading the same object. Backed by Supabase user_metadata, which
+  // is the same store the macro site's onboarding writes, on the same Supabase project.
+  // Read-only here: the editing controls live in SettingsMenu, which subscribes to the same
+  // module store, so both always see identical state.
+  const { prefs: marketPrefs, ready: prefsReady, enableAll: showAllMarkets } = useMarketPrefs(email);
+
   const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
   const [panes, setPanes] = useState<string[]>([seed0]);
   const [activePane, setActivePane] = useState(0);
@@ -533,6 +614,19 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       }
       setLists(restored);
       setActiveList(saved.active && restored[saved.active] ? saved.active : (loggedIn ? "Default" : Object.keys(restored)[0]));
+      // Section metadata is additive: saves written before sections existed simply have no
+      // `meta` key and fall back to derived first-appearance order.
+      if (saved.meta && typeof saved.meta === "object") {
+        const clean: Record<string, { sections: string[]; collapsed: string[] }> = {};
+        for (const [k, v] of Object.entries(saved.meta as Record<string, unknown>)) {
+          const m = v as { sections?: unknown; collapsed?: unknown };
+          clean[k] = {
+            sections: Array.isArray(m?.sections) ? m.sections.filter((x): x is string => typeof x === "string") : [],
+            collapsed: Array.isArray(m?.collapsed) ? m.collapsed.filter((x): x is string => typeof x === "string") : [],
+          };
+        }
+        setListMeta(clean);
+      }
     }
     // F1 flags: stored alongside wls (additive — old saves without flags load fine)
     const savedFlags = load("mm.flags", {});
@@ -544,7 +638,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // transition is handled by the prevEmailRef effect below).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList })); }, [lists, activeList]);
+  useEffect(() => { if (Object.keys(lists).length) localStorage.setItem("mm.wls", JSON.stringify({ lists, active: activeList, meta: listMeta })); }, [lists, activeList, listMeta]);
   // ── TRAP 1: guest → signed-in reconciliation (AuthSheet router.refresh delivers a real `email`
   //    + the server's Default symbols, but client `lists` was seeded from the guest state in the
   //    useState initializer and never re-seeds on its own; stale mm.wls also shadows the server list).
@@ -915,7 +1009,34 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const closeAll = () => { setWlSetOpen(false); setTfOpen(false); setCtOpen(false); setDetectOpen(false); setLayoutOpen(false); setWlMenuOpen(false); setSnapOpen(false); };
   useEffect(() => { const h = () => closeAll(); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
 
-  const sections = useMemo(() => { const o: Record<string, string[]> = {}; wl.forEach((s) => { (o[s.section] ||= []).push(s.symbol); }); return o; }, [wl]);
+  // ── Sections ────────────────────────────────────────────────────────────────────────────
+  // A section used to be purely DERIVED from the rows' `section` field, which meant a section
+  // could not exist without a symbol in it — you could not create one, name one, or keep an
+  // empty one. `listMeta` gives each list an explicit section ORDER (so an empty section holds
+  // its slot) and a collapsed set. Rows remain the source of truth for membership; meta only
+  // adds the things membership cannot express. Lists saved before this existed have no meta,
+  // and fall back to first-appearance order exactly as before.
+  const activeMeta = listMeta[activeList];
+
+  // Section order: declared order first, then any section that only exists on rows (a list
+  // created before meta, or a symbol added with a fresh `sec` from the manifest).
+  const sectionOrder = useMemo(() => {
+    const out: string[] = [];
+    for (const s of activeMeta?.sections ?? []) if (!out.includes(s)) out.push(s);
+    for (const r of wl) if (!out.includes(r.section)) out.push(r.section);
+    return out;
+  }, [wl, activeMeta]);
+
+  const collapsed = useMemo(() => new Set(activeMeta?.collapsed ?? []), [activeMeta]);
+
+  // sec → symbols, in declared section order, INCLUDING empty sections (an empty section still
+  // renders its header so the user can drop symbols into the thing they just created).
+  const sections = useMemo(() => {
+    const o: Record<string, string[]> = {};
+    for (const s of sectionOrder) o[s] = [];
+    for (const r of wl) (o[r.section] ||= []).push(r.symbol);
+    return o;
+  }, [wl, sectionOrder]);
   const inWl = useMemo(() => new Set(wl.map((s) => s.symbol)), [wl]);
   const activeIsComposite = isComposite(active);
   const activeLegs = activeIsComposite ? (parseComposite(active) ?? []) : [];
@@ -1126,7 +1247,147 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (Object.keys(lists).length <= 1) return;
     if (typeof window !== "undefined" && !window.confirm(t("deleteWatchlistConfirm"))) return;
     setLists((l) => { const n = { ...l }; delete n[name]; return n; });
+    setListMeta((m) => { const n = { ...m }; delete n[name]; return n; });
     if (activeList === name) setActiveList(Object.keys(lists).filter((k) => k !== name)[0] || "Default");
+  }
+
+  // ── list menu: copy / clear / sort ─────────────────────────────────────────────────────
+  // Duplicate a list under a new name, sections and all. TradingView's "Make a copy".
+  function copyList(name: string) {
+    const raw = typeof window !== "undefined" ? window.prompt(t("copyWatchlistPrompt"), `${name} (2)`) : "";
+    const next = raw?.trim();
+    setWlMenuOpen(false);
+    if (!next || lists[next]) return;
+    setLists((l) => ({ ...l, [next]: (l[name] || []).map((r) => ({ ...r })) }));
+    setListMeta((m) => (m[name] ? { ...m, [next]: { sections: [...m[name].sections], collapsed: [...m[name].collapsed] } } : m));
+    setActiveList(next);
+  }
+
+  // Empty a list without deleting it. Section structure is kept — you cleared the symbols, not
+  // the organisation you built.
+  function clearList(name: string) {
+    if (typeof window !== "undefined" && !window.confirm(t("clearWatchlistConfirm"))) return;
+    setWlMenuOpen(false);
+    setLists((l) => ({ ...l, [name]: [] }));
+    if (name === "Default") {
+      for (const r of lists[name] || []) {
+        fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", symbol: r.symbol }) }).catch(() => {});
+      }
+    }
+  }
+
+  // Sort symbols A→Z WITHIN each section, so sorting never silently reorganises the list.
+  function sortActiveList() {
+    setWlMenuOpen(false);
+    setWl((prev: { symbol: string; section: string }[]) => {
+      const order = new Map(sectionOrder.map((s, i) => [s, i]));
+      return [...prev].sort((a, b) =>
+        (order.get(a.section) ?? 0) - (order.get(b.section) ?? 0) || (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));
+    });
+  }
+
+  // ── import / export ────────────────────────────────────────────────────────────────────
+  // CSV carries the SECTION alongside the symbol, so a list survives a round-trip with its
+  // organisation intact rather than arriving as one flat block.
+  function exportList(name: string) {
+    setWlMenuOpen(false);
+    const rows = lists[name] || [];
+    const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    const csv = ["symbol,section", ...rows.map((r) => `${esc(r.symbol)},${esc(r.section || "")}`)].join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name.replace(/[^\w.-]+/g, "_")}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // Import appends into the ACTIVE list, skipping duplicates. Accepts a bare symbol list too
+  // (one per line, no header) because that is what most exports elsewhere actually produce.
+  function importList() {
+    setWlMenuOpen(false);
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".csv,.txt,text/csv,text/plain";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      file.text().then((text) => {
+        const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (!lines.length) return;
+        if (/^symbol\s*(,|$)/i.test(lines[0])) lines.shift();     // drop a header row if present
+        const parsed: { symbol: string; section: string }[] = [];
+        for (const line of lines) {
+          const [rawSym, rawSec] = line.split(",");
+          const symbol = (rawSym || "").trim().replace(/^"|"$/g, "").toUpperCase();
+          if (!symbol) continue;
+          parsed.push({ symbol, section: (rawSec || "").trim().replace(/^"|"$/g, "") || "Watchlist" });
+        }
+        if (!parsed.length) return;
+        setWl((prev: { symbol: string; section: string }[]) => {
+          const have = new Set(prev.map((r) => r.symbol));
+          const add = parsed.filter((r) => !have.has(r.symbol));
+          if (!add.length) return prev;
+          if (activeList === "Default") {
+            for (const r of add) {
+              fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", symbol: r.symbol, section: r.section }) }).catch(() => {});
+            }
+          }
+          return [...prev, ...add];
+        });
+      }).catch(() => {});
+    };
+    input.click();
+  }
+
+  // ── sections ───────────────────────────────────────────────────────────────────────────
+  // Write meta for the active list, seeding `sections` from what is on screen right now so the
+  // existing visual order survives the very first edit (before meta existed, order was implicit).
+  function editMeta(fn: (m: { sections: string[]; collapsed: string[] }) => { sections: string[]; collapsed: string[] }) {
+    setListMeta((all) => {
+      const cur = all[activeList] ?? { sections: [...sectionOrder], collapsed: [] };
+      return { ...all, [activeList]: fn(cur) };
+    });
+  }
+
+  // Inline input rather than window.prompt: a browser prompt is modal, unstyleable, and looks
+  // nothing like the rest of the app. Returns true when the section was created so the caller
+  // can close its input.
+  function addSection(raw: string): boolean {
+    const name = raw.trim();
+    if (!name || sectionOrder.includes(name)) return false;
+    editMeta((m) => ({ ...m, sections: [...m.sections.filter((s) => s !== name), name] }));
+    return true;
+  }
+
+  function renameSection(from: string) {
+    const to = (typeof window !== "undefined" ? window.prompt(t("renameSectionPrompt"), from) : "")?.trim();
+    if (!to || to === from || sectionOrder.includes(to)) return;
+    setWl((prev: { symbol: string; section: string }[]) => prev.map((r) => (r.section === from ? { ...r, section: to } : r)));
+    editMeta((m) => ({
+      sections: m.sections.map((s) => (s === from ? to : s)),
+      collapsed: m.collapsed.map((s) => (s === from ? to : s)),
+    }));
+  }
+
+  // Delete the DIVIDER, not the symbols. TradingView behaves the same way, and silently deleting
+  // a section's holdings because the user removed a label would be a data-loss trap. The rows
+  // fall back to the section above (or the first remaining one).
+  function deleteSection(name: string) {
+    const idx = sectionOrder.indexOf(name);
+    const fallback = sectionOrder[idx - 1] ?? sectionOrder.find((s) => s !== name) ?? "Watchlist";
+    setWl((prev: { symbol: string; section: string }[]) => prev.map((r) => (r.section === name ? { ...r, section: fallback } : r)));
+    editMeta((m) => ({
+      sections: m.sections.filter((s) => s !== name),
+      collapsed: m.collapsed.filter((s) => s !== name),
+    }));
+  }
+
+  function toggleSection(name: string) {
+    editMeta((m) => ({
+      ...m,
+      collapsed: m.collapsed.includes(name) ? m.collapsed.filter((s) => s !== name) : [...m.collapsed, name],
+    }));
   }
   const toggleInd = (k: string) => {
     // Anon cap: toggling OFF is always fine; block ADDING past the cap + nudge.
@@ -1800,6 +2061,31 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                   </div>
                 ))}
                 <div className="menu-row wl-new" onClick={() => newList()}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>{t("newWatchlist")}</div>
+                {/* Actions on the ACTIVE list — the operator's reference puts sections and the
+                    list-level commands behind the watchlist-name dropdown, not the gear. */}
+                <div className="set-grp">{t("thisList")}</div>
+                {secCreating ? (
+                  <div className="wl-sec-new">
+                    <input
+                      autoFocus
+                      value={secName}
+                      placeholder={t("addSectionPrompt")}
+                      onChange={(e) => setSecName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { if (addSection(secName)) { setSecName(""); setSecCreating(false); } }
+                        else if (e.key === "Escape") { setSecName(""); setSecCreating(false); }
+                      }}
+                    />
+                    <button onClick={() => { if (addSection(secName)) { setSecName(""); setSecCreating(false); } }}>{t("addSection")}</button>
+                  </div>
+                ) : (
+                  <div className="menu-row" onClick={() => { setSecName(""); setSecCreating(true); }}><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h16" /></svg>{t("addSection")}</div>
+                )}
+                <div className="menu-row" onClick={() => copyList(activeList)}><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>{t("copyWatchlist")}</div>
+                <div className="menu-row" onClick={() => sortActiveList()}><svg viewBox="0 0 24 24"><path d="M4 6h10M4 12h7M4 18h4M17 4v16M17 20l3-3M17 20l-3-3" /></svg>{t("sortAZ")}</div>
+                <div className="menu-row" onClick={() => exportList(activeList)}><svg viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4M4 19h16" /></svg>{t("exportCsv")}</div>
+                <div className="menu-row" onClick={() => importList()}><svg viewBox="0 0 24 24"><path d="M12 15V3M8 7l4-4 4 4M4 19h16" /></svg>{t("importCsv")}</div>
+                <div className="menu-row danger" onClick={() => clearList(activeList)}><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>{t("clearWatchlist")}</div>
               </div>
               <div className="wl-acts">
                 <button title={t("addSymbol")} onClick={(e) => { e.stopPropagation(); setSeed(""); setAddSymOpen(true); }}><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
@@ -1827,9 +2113,22 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               </div>
               <div className="wl-list">
                 <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onWlDragEnd} modifiers={[restrictToVerticalAxis, restrictToParentElement]}>
-                {Object.entries(sections).map(([sec, rows]) => (
+                {sectionOrder.map((sec) => {
+                  const rows = sections[sec] ?? [];
+                  const isCollapsed = collapsed.has(sec);
+                  return (
                   <div key={sec}>
-                    <div className="wl-sec" style={{ minWidth: wlMinW }}>{sec}</div>
+                    <WlSectionHeader
+                      name={sec}
+                      count={rows.length}
+                      collapsed={isCollapsed}
+                      minWidth={wlMinW}
+                      onToggle={() => toggleSection(sec)}
+                      onRename={() => renameSection(sec)}
+                      onDelete={() => deleteSection(sec)}
+                      labels={{ rename: t("renameSection"), remove: t("deleteSection"), collapse: t("collapseSection") }}
+                    />
+                    {!isCollapsed && (
                     <SortableContext items={rows} strategy={verticalListSortingStrategy}>
                     {rows.map((sym) => {
                       const isCompSym = isComposite(sym);
@@ -1881,8 +2180,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                         </SortableWlRow>
                       ); })}
                     </SortableContext>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
                 </DndContext>
               </div>
             </div>
@@ -1997,11 +2298,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         onSwitchList={switchList}
         onCreateList={createListNamed}
         onAddToList={addToList}
+        marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
         onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} onRemove={removeSymbol}
         onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
       {/* F3 Add Symbol dialog — mode="add" with trash+crosshair for members */}
       <SearchModal open={addSymOpen} seed="" manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode="add" active={active}
         flags={flags} lastFlagColor={lastFlagColor}
+        marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
         onClose={() => setAddSymOpen(false)} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
         onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
       <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}

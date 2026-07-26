@@ -260,7 +260,29 @@ svg{display:block}
 .wl-list::-webkit-scrollbar-track{background:transparent}
 .wl-list::-webkit-scrollbar-thumb{background:var(--line-3);border-radius:99px;border:2px solid transparent;background-clip:content-box;transition:background .15s}
 .wl-list::-webkit-scrollbar-thumb:hover{background:var(--panel-3);background-clip:content-box}
-.wl-sec{padding:8px 12px 4px;font:600 10px/1 var(--font-ui);letter-spacing:.09em;text-transform:uppercase;color:var(--text-dim)}
+/* Section divider — now an interactive row: collapse caret, name, count, and hover actions.
+   Keeps the original type treatment so existing lists look unchanged until you touch one. */
+.wl-sec{display:flex;align-items:center;gap:7px;padding:8px 12px 4px;font:600 10px/1 var(--font-ui);letter-spacing:.09em;text-transform:uppercase;color:var(--text-dim);cursor:pointer;user-select:none}
+.wl-sec:hover{color:var(--text-2)}
+.wl-sec.over{background:rgba(41,98,255,.14);color:var(--text)}
+.wl-sec-car{width:11px;height:11px;flex:none;stroke:currentColor;fill:none;stroke-width:2.6;transform:rotate(90deg);transition:transform var(--t)}
+.wl-sec.collapsed .wl-sec-car{transform:rotate(0deg)}
+.wl-sec-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wl-sec-ct{opacity:.6;font-weight:500;letter-spacing:0}
+/* Actions stay out of the way until the row is hovered or keyboard-focused — a divider is
+   scenery most of the time, and three always-on icons per section would be noise. */
+.wl-sec-acts{margin-left:auto;display:flex;gap:2px;opacity:0;transition:opacity var(--t)}
+.wl-sec:hover .wl-sec-acts,.wl-sec:focus-visible .wl-sec-acts{opacity:1}
+.wl-sec-ic{display:grid;place-items:center;width:20px;height:20px;border-radius:var(--r)}
+.wl-sec-ic svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.9}
+.wl-sec-ic:hover{background:var(--panel-3);color:var(--text)}
+.wl-sec-ic.del:hover{background:rgba(242,54,69,.16);color:#f23645}
+.menu-row.danger:hover{background:rgba(242,54,69,.14);color:#f23645}
+/* Inline "add section" input inside the watchlist dropdown. */
+.wl-sec-new{display:flex;gap:6px;padding:6px 11px 8px}
+.wl-sec-new input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line-3);border-radius:var(--r);padding:6px 8px;font:500 12px/1.2 var(--font-ui);color:var(--text)}
+.wl-sec-new input:focus{outline:none;border-color:var(--brand)}
+.wl-sec-new button{flex:none;background:var(--brand);border:0;border-radius:var(--r);padding:6px 10px;font:600 11.5px/1.2 var(--font-ui);color:#fff;cursor:pointer}
 .wl-row{display:grid;grid-template-columns:1fr 80px 70px;gap:8px;align-items:center;padding:0 12px;height:46px;cursor:pointer;border-bottom:1px solid var(--line-2);transition:background var(--t)}
 .wl-row:hover{background:var(--panel-2)}.wl-row.on{background:rgba(41,98,255,.08)}
 .wl-row .s{display:flex;align-items:center;gap:9px;min-width:0}
@@ -578,6 +600,18 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .set-row{display:flex;align-items:center;gap:9px;padding:7px 12px;font-size:12.5px;color:var(--text-2);cursor:pointer}.set-row:hover{color:var(--text)}
 .cbx{width:16px;height:16px;border-radius:var(--r);border:1.5px solid var(--line-3);display:grid;place-items:center;flex:none}.cbx svg{width:10px;height:10px;stroke:#fff;fill:none;stroke-width:3;opacity:0}.set-row.on .cbx{background:var(--brand);border-color:var(--brand)}.set-row.on .cbx svg{opacity:1}
 .rdo{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--line-3);flex:none;position:relative}.set-row.on .rdo{border-color:var(--brand)}.set-row.on .rdo::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--brand)}
+/* Markets pane — explanatory sub-labels under a set-grp heading. Wraps (unlike set-grp, which is
+   a single-line uppercase eyebrow) because these are sentences, not labels. */
+.set-note{padding:0 12px 6px;font:400 11px/1.45 var(--font-ui);color:var(--text-dim);white-space:normal;max-width:270px}
+.set-note-hint{color:var(--text-2)}
+/* The home market is a fixed row: it may not be switched off, so it must not offer a hover
+   affordance that implies it can be. */
+.set-row-home{cursor:default}.set-row-home:hover{color:var(--text-2)}
+.set-row-tag{margin-left:auto;font:600 9px/1 var(--font-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--brand);border:1px solid var(--brand);border-radius:999px;padding:3px 6px}
+/* Search: "hidden by your market settings" disclosure + its one-click undo. */
+.s-mkt-hidden{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 14px;margin-top:2px;border-top:1px solid var(--line);font:400 11.5px/1.45 var(--font-ui);color:var(--text-dim)}
+.s-mkt-show{flex:none;background:none;border:1px solid var(--line-3);border-radius:var(--r);padding:4px 9px;font:600 11px/1 var(--font-ui);color:var(--text-2);cursor:pointer}
+.s-mkt-show:hover{color:var(--text);border-color:var(--brand)}
 .tfgrid{position:absolute;top:34px;left:0;z-index:40;width:220px;max-height:60vh;overflow-y:auto;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:5px;display:none;box-shadow:0 16px 34px -10px rgba(0,0,0,.7)}
 .tfgrid.show{display:block}
 .tfgrid .g{font:600 9px/1 var(--font-ui);letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);padding:8px 9px 4px}

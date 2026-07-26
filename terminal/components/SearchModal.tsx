@@ -1,5 +1,5 @@
 "use client";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { CMP_PALETTE, CmpMode, CmpCfg } from "@/lib/compare";
 import { parseComposite, compositeExpr, validateLegs } from "@/lib/composite";
@@ -7,6 +7,10 @@ import { getHistory } from "@/lib/searchHistory";
 import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
+import {
+  isSymbolVisible, scoreSymbol, marketOf, ALL_MARKETS,
+  DEFAULT_PREFS, type MarketId, type MarketPrefs,
+} from "@/lib/markets";
 
 type Row = { name: string; col: string; verdict: string | null; vts?: string | null; mkt?: string; zh?: string; sec?: string };
 type ListInfo = { name: string; count: number; symbols: { symbol: string; section: string }[] };
@@ -20,6 +24,11 @@ const CAT_OF: Record<string, string> = { Funds: "Funds", Crypto: "Crypto", Indic
 // that category has real coverage (and lights up instead of rendering disabled). Heuristics
 // beyond this fixed set are intentionally out of scope — extend the set, don't guess.
 const FUND_TICKERS = new Set(["SPY", "QQQ", "IWM", "DIA", "SOXL", "GLD", "TLT"]);
+
+// MarketId → i18n key, so the filter notice and the settings pane name markets identically.
+export const MARKET_TKEY: Record<MarketId, string> = {
+  us: "mktUs", cn: "mktCn", hk: "mktHk", ca: "mktCa", intl: "mktIntl", crypto: "mktCrypto",
+};
 const tabOf = (sym: string, sec?: string): string => (FUND_TICKERS.has(sym) ? "Funds" : (sec && CAT_OF[sec]) || "Stocks");
 
 // Category tab order + their i18n keys (bilingual labels — no hardcoded English in JSX).
@@ -52,6 +61,7 @@ export default function SearchModal({
   open, seed, manifest, inWatchlist, mode = "go", compare = [], active = "",
   flags = {}, lastFlagColor = FLAG_DEFAULT,
   email, lists = [], activeList = "", onSwitchList, onCreateList, onAddToList,
+  marketPrefs = DEFAULT_PREFS, prefsReady = false, onShowAllMarkets,
   onClose, onPick, onAdd, onRemove, onToggleCompare, compareCfg,
 }: {
   open: boolean; seed: string; manifest: Record<string, Row>; inWatchlist: Set<string>;
@@ -64,6 +74,11 @@ export default function SearchModal({
   onSwitchList?: (name: string) => void;
   onCreateList?: (name: string) => string | null;   // returns created name, or null on empty/dup
   onAddToList?: (sym: string, listName: string) => void;
+  // Owned by TerminalShell (one instance) and passed down, so the settings toggles and the
+  // search results can never disagree about which markets are on.
+  marketPrefs?: MarketPrefs;
+  prefsReady?: boolean;
+  onShowAllMarkets?: () => void;         // one-click undo from the filter notice
   onClose: () => void; onPick: (s: string) => void;
   onAdd: (s: string) => void;
   onRemove?: (s: string) => void;
@@ -127,22 +142,61 @@ export default function SearchModal({
     return { legs, valid: validation.valid, unknown: (validation as any).unknown as string[] | undefined };
   }, [deferredQ, manifest]);
 
+  // Markets the user has switched off are not in the universe as far as search is concerned —
+  // a disabled market's symbols are unreachable by ticker, by name, and out of history. `ready`
+  // gates the filter so the very first paint (before the account answers) never hides a symbol
+  // that is in fact enabled.
+  const marketVisible = useCallback(
+    (s: string, r: Row | undefined) => !prefsReady || !r || isSymbolVisible(s, r, marketPrefs),
+    [prefsReady, marketPrefs],
+  );
+
+  // Ranked, not merely filtered. This was `.filter(...).slice(0, 30)` over Object.entries, so the
+  // order was manifest insertion order — typing "AA" could bury Alcoa under anything whose NAME
+  // contained "aa", and the 30-cap then cut the exact match off entirely. scoreSymbol ranks
+  // exact ticker > ticker prefix > name prefix > substring, with a home-market boost that is
+  // deliberately smaller than one tier so personalization only ever breaks ties.
   const results = useMemo(() => {
     const ql = deferredQ.trim().toLowerCase();
     if (!ql) return [];
-    return Object.entries(manifest)
-      .filter(([s, r]) => (!cmp || s !== active) && (cat === "All" || tabOf(s, r.sec) === cat) && (s.toLowerCase().includes(ql) || r.name.toLowerCase().includes(ql) || (!!r.zh && r.zh.toLowerCase().includes(ql))))
-      .slice(0, 30);
-  }, [deferredQ, manifest, cmp, active, cat]);
+    const scored: [string, Row, number][] = [];
+    for (const [s, r] of Object.entries(manifest)) {
+      if (cmp && s === active) continue;
+      if (cat !== "All" && tabOf(s, r.sec) !== cat) continue;
+      if (!marketVisible(s, r)) continue;
+      const score = scoreSymbol(s, r, ql, marketPrefs.home);
+      if (score >= 0) scored.push([s, r, score]);
+    }
+    // Ties broken by ticker length then alphabetically, so ordering is stable across renders
+    // (Object.entries order is not a guarantee we want leaking into the UI).
+    scored.sort((a, b) => b[2] - a[2] || a[0].length - b[0].length || (a[0] < b[0] ? -1 : 1));
+    return scored.slice(0, 30).map(([s, r]) => [s, r] as [string, Row]);
+  }, [deferredQ, manifest, cmp, active, cat, marketVisible, marketPrefs.home]);
 
   // History rows when no query (most recent first, filtered against manifest).
   const historyResults = useMemo((): [string, Row][] => {
     if (deferredQ.trim()) return [];
     return history
-      .filter((s) => manifest[s] && (cat === "All" || tabOf(s, manifest[s].sec) === cat))
+      .filter((s) => manifest[s] && (cat === "All" || tabOf(s, manifest[s].sec) === cat) && marketVisible(s, manifest[s]))
       .map((s) => [s, manifest[s]] as [string, Row])
       .slice(0, 30);
-  }, [deferredQ, history, manifest, cat]);
+  }, [deferredQ, history, manifest, cat, marketVisible]);
+
+  // How many matches the market filter is holding back, and from where. Shown as a one-line
+  // footer so a hidden market reads as a setting the user owns, not as missing data — the
+  // difference between "personalized" and "broken". Only computed when something is off.
+  const hiddenByMarket = useMemo(() => {
+    const ql = deferredQ.trim().toLowerCase();
+    if (!ql || !prefsReady || marketPrefs.enabled.length === ALL_MARKETS.length) return null;
+    let n = 0;
+    const from = new Set<MarketId>();
+    for (const [s, r] of Object.entries(manifest)) {
+      if (isSymbolVisible(s, r, marketPrefs)) continue;
+      if (scoreSymbol(s, r, ql, null) < 0) continue;
+      n++; from.add(marketOf(s, r));
+    }
+    return n ? { n, from: Array.from(from) } : null;
+  }, [deferredQ, manifest, prefsReady, marketPrefs]);
 
   // Which asset-class tabs actually have symbols in the universe (others render disabled).
   const availCats = useMemo(() => { const s = new Set<string>(); for (const [sym, r] of Object.entries(manifest)) s.add(tabOf(sym, r.sec)); return s; }, [manifest]);
@@ -537,6 +591,21 @@ export default function SearchModal({
             {/* Empty state */}
             {!showCompositeRow && displayRows.length === 0 && !showHistory && (
               <div className="empty">{t("noSymbolMatch")} "{q}".</div>
+            )}
+
+            {/* Market-filter disclosure. A user who cannot find 0700.HK must be told it is their
+                own setting doing it — and be able to undo it right here, without hunting through
+                settings. Renders only when a switched-off market actually has matches. */}
+            {hiddenByMarket && (
+              <div className="s-mkt-hidden">
+                <span>
+                  {t("mktHiddenLead")} {hiddenByMarket.n} {t("mktHiddenMore")}{" "}
+                  {hiddenByMarket.from.map((m) => t(MARKET_TKEY[m])).join(" · ")}
+                </span>
+                {onShowAllMarkets && (
+                  <button type="button" className="s-mkt-show" onClick={onShowAllMarkets}>{t("mktShowAll")}</button>
+                )}
+              </div>
             )}
             {(cmp || isAdd) && showHistory && historyResults.length === 0 && (
               <div className="empty">{t("searchHistoryEmpty")}</div>

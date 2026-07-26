@@ -1,0 +1,199 @@
+{
+ "002594.SZ": {
+  "mkt": "SZSE",
+  "name": "BYD Company Limited",
+  "sec": "Equities",
+  "zh": "比亚迪"
+ },
+ "005930.KS": {
+  "mkt": "South Korea",
+  "name": "Samsung Electronics Ltd",
+  "sec": "Equities"
+ },
+ "0700.HK": {
+  "mkt": "HKEX",
+  "name": "Tencent",
+  "sec": "Equities",
+  "zh": "腾讯控股"
+ },
+ "2330.TW": {
+  "mkt": "Taiwan",
+  "name": "Taiwan Semiconductor Manufacturing",
+  "sec": "Equities"
+ },
+ "300308.SZ": {
+  "mkt": "SZSE",
+  "name": "Zhongji Innolight Co., Ltd.",
+  "sec": "Equities",
+  "zh": "中际旭创"
+ },
+ "300750.SZ": {
+  "mkt": "SZSE",
+  "name": "Contemporary Amperex Technology Co., Limited",
+  "sec": "Equities",
+  "zh": "宁德时代"
+ },
+ "3690.HK": {
+  "mkt": "HKEX",
+  "name": "Meituan",
+  "sec": "Equities",
+  "zh": "美团-W"
+ },
+ "600519.SS": {
+  "mkt": "SSE",
+  "name": "Kweichow Moutai Co., Ltd.",
+  "sec": "Equities",
+  "zh": "贵州茅台"
+ },
+ "600941.SS": {
+  "mkt": "SSE",
+  "name": "China Mobile Limited",
+  "sec": "Equities",
+  "zh": "中国移动"
+ },
+ "601288.SS": {
+  "mkt": "SSE",
+  "name": "Agricultural Bank of China Limited",
+  "sec": "Equities",
+  "zh": "农业银行"
+ },
+ "601398.SS": {
+  "mkt": "SSE",
+  "name": "Industrial and Commercial Bank of China Limited",
+  "sec": "Equities",
+  "zh": "工商银行"
+ },
+ "601939.SS": {
+  "mkt": "SSE",
+  "name": "China Construction Bank Corporation",
+  "sec": "Equities",
+  "zh": "建设银行"
+ },
+ "8035.T": {
+  "mkt": "Japan",
+  "name": "Tokyo Electron Ltd",
+  "sec": "Equities"
+ },
+ "8306.T": {
+  "mkt": "Japan",
+  "name": "Mitsubishi Ufj Financial Group Inc",
+  "sec": "Equities"
+ },
+ "9618.HK": {
+  "mkt": "HKEX",
+  "name": "JD.com",
+  "sec": "Equities",
+  "zh": "京东集团-SW"
+ },
+ "9988.HK": {
+  "mkt": "HKEX",
+  "name": "Alibaba",
+  "sec": "Equities",
+  "zh": "阿里巴巴-W"
+ },
+ "AAPL": {
+  "mkt": "NASDAQ",
+  "name": "Apple Inc",
+  "sec": "Equities"
+ },
+ "AZN.L": {
+  "mkt": "United Kingdom",
+  "name": "Astrazeneca Plc",
+  "sec": "Equities"
+ },
+ "BHB": {
+  "mkt": "AMEX",
+  "name": "Bar Harbor Bankshares",
+  "sec": "Equities"
+ },
+ "BTC-USD": {
+  "mkt": "Crypto",
+  "name": "Bitcoin",
+  "sec": "Crypto"
+ },
+ "CRM": {
+  "mkt": "NYSE",
+  "name": "Salesforce Inc",
+  "sec": "Equities"
+ },
+ "ETH-USD": {
+  "mkt": "Crypto",
+  "name": "Ethereum",
+  "sec": "Crypto"
+ },
+ "GOOGL": {
+  "mkt": "NASDAQ",
+  "name": "Alphabet Inc",
+  "sec": "Equities"
+ },
+ "HDFCBANK.NS": {
+  "mkt": "India",
+  "name": "Hdfc Bank Ltd",
+  "sec": "Equities"
+ },
+ "HSBA.L": {
+  "mkt": "United Kingdom",
+  "name": "Hsbc Holdings Plc",
+  "sec": "Equities"
+ },
+ "IWM": {
+  "mkt": "US",
+  "name": "iShares Russell 2000",
+  "sec": "Funds"
+ },
+ "JPM": {
+  "mkt": "NYSE",
+  "name": "JPMorgan Chase",
+  "sec": "Equities"
+ },
+ "MSFT": {
+  "mkt": "NASDAQ",
+  "name": "Microsoft Corp",
+  "sec": "Equities"
+ },
+ "NVDA": {
+  "mkt": "NASDAQ",
+  "name": "NVIDIA Corp",
+  "sec": "Equities"
+ },
+ "QQQ": {
+  "mkt": "US",
+  "name": "Invesco QQQ Trust",
+  "sec": "Funds"
+ },
+ "RY.TO": {
+  "mkt": "TSX",
+  "name": "Royal Bank Of Canada",
+  "sec": "Equities"
+ },
+ "SHOP.TO": {
+  "mkt": "TSX",
+  "name": "Shopify Subordinate Voting Inc Cla",
+  "sec": "Equities"
+ },
+ "SOL-USD": {
+  "mkt": "Crypto",
+  "name": "Solana",
+  "sec": "Crypto"
+ },
+ "SPY": {
+  "mkt": "US",
+  "name": "SPDR S&P 500 ETF",
+  "sec": "Funds"
+ },
+ "TD.TO": {
+  "mkt": "TSX",
+  "name": "Toronto Dominion",
+  "sec": "Equities"
+ },
+ "V": {
+  "mkt": "NYSE",
+  "name": "Visa Inc",
+  "sec": "Equities"
+ },
+ "XRP-USD": {
+  "mkt": "Crypto",
+  "name": "XRP",
+  "sec": "Crypto"
+ }
+}
