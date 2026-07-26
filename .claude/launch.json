@@ -4,14 +4,21 @@
     {
       "name": "macro-landing",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8899"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8899"
+      ],
       "cwd": "macro-site-link",
       "port": 8899
     },
     {
       "name": "terminal-flow",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:fixture"],
+      "runtimeArgs": [
+        "run",
+        "dev:fixture"
+      ],
       "cwd": "terminal",
       "port": 3000,
       "autoPort": true,
@@ -25,14 +32,20 @@
     {
       "name": "terminal-revamp",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "cwd": "terminal",
       "port": 3016
     },
     {
       "name": "pass4-i-fixture",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:fixture"],
+      "runtimeArgs": [
+        "run",
+        "dev:fixture"
+      ],
       "cwd": "terminal",
       "port": 3018,
       "env": {
@@ -45,7 +58,13 @@
     {
       "name": "pass6-p1",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3023"],
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3023"
+      ],
       "cwd": "terminal",
       "port": 3023,
       "env": {
@@ -56,7 +75,13 @@
     {
       "name": "pass6-p2",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3026"],
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3026"
+      ],
       "cwd": "terminal",
       "port": 3026,
       "env": {
@@ -67,7 +92,13 @@
     {
       "name": "pass6-p6",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3033"],
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3033"
+      ],
       "cwd": "terminal",
       "port": 3033,
       "env": {
@@ -78,7 +109,13 @@
     {
       "name": "pass6-p7",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3034"],
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3034"
+      ],
       "cwd": "terminal",
       "port": 3034,
       "env": {
@@ -89,7 +126,13 @@
     {
       "name": "pass6-p4a",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3036"],
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3036"
+      ],
       "cwd": "terminal",
       "port": 3036,
       "env": {
@@ -100,7 +143,13 @@
     {
       "name": "oeu-tb",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3213"],
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3213"
+      ],
       "cwd": "terminal",
       "port": 3213,
       "env": {
@@ -111,10 +160,34 @@
     {
       "name": "techlab-w5",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:fixture", "--", "-p", "3002"],
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3002"
+      ],
       "cwd": "terminal",
       "port": 3002,
       "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
+      "name": "matrix-conf",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3241"
+      ],
+      "cwd": "terminal",
+      "port": 3241,
+      "env": {
+        "FLOW_FIXTURE": "1",
         "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
       }
