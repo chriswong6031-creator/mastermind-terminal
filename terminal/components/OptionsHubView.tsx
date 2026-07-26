@@ -1572,7 +1572,9 @@ export default function OptionsHubView({
     setTickerLoading(true); setTickerData(null);
     try {
       const d = await flowGet(`ticker:${root}`);
-      if (d) setTickerData(d as TickerPayload);
+      // A payload without `day` (fixture honest-empty {}, malformed upstream) is
+      // "no drill data", not a renderable drill — the render path derefs day.gross.
+      if (d && (d as TickerPayload).day) setTickerData(d as TickerPayload);
     } catch {}
     setTickerLoading(false);
   }, []);
@@ -2748,6 +2750,9 @@ export default function OptionsHubView({
                 )}
                 {selectedTicker && (tickerLoading && !tickerData) && (
                   <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
+                )}
+                {selectedTicker && !tickerLoading && !tickerData && (
+                  <div className="fin-empty" role="status">{t("tickersNoData", "No flow data for this ticker yet")}</div>
                 )}
                 {selectedTicker && tickerData && (
                   <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 14 }}>

@@ -276,11 +276,15 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     const raw = await fs.readFile(DTE_FIXTURE_FILE, "utf8");
     return JSON.parse(raw) as Record<string, unknown>;
   }
+  // Ticker drills are keyed by root. An unknown root returns {} (honest empty) rather
+  // than the first key's payload — another ticker's tape wearing the wrong header is
+  // worse than none (gex:/moves: convention). Consumers gate on payload.day before
+  // rendering, so {} lands in the same "no drill data" state a prod 503 produces.
   if (f.startsWith("ticker:")) {
     const root = f.slice(7);
     const raw = await fs.readFile(TICKER_FIXTURE_FILE, "utf8");
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-    return all[root] ?? all[Object.keys(all)[0]] ?? {};
+    return all[root] ?? {};
   }
   if (f.startsWith("vol:")) {
     const root = f.slice(4).toUpperCase();
