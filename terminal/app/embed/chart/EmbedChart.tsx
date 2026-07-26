@@ -10,7 +10,7 @@
  * so the client bundle never pulls the AppShell, flow desks, pine engine, or auth.
  *
  * Aesthetic is locked to the Terminal's own chart (app/globals.css v5 tokens): #131722 plot bg,
- * #26c281 / #f0566b candles, Inter labels + JetBrains-Mono numerals. See lib/embed/theme.ts.
+ * #26c281 / #f0566b candles, Inter labels + Inter tabular numerals. See lib/embed/theme.ts.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -564,7 +564,7 @@ function StyleTag({ pal }: { pal: EmbedPalette }) {
     font-family:var(--font-inter),-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     -webkit-font-smoothing:antialiased; letter-spacing:.005em;
   }
-  .embed-root .num{font-family:var(--font-jetbrains-mono),ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;}
+  .embed-root .num{font-family:var(--font-inter),-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;}
   .embed-root *{box-sizing:border-box;}
 
   /* Header — one compact line, wraps to two on narrow phones. */

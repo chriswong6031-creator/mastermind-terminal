@@ -63,8 +63,9 @@ async function diagnose(host: PineHost, src: string, params: Record<string, any>
 const DIAG_SLOT = "@diag";   // shared supersession slot for editor diagnostics (compile + dry-run)
 
 // Code-layer font metrics (must mirror .code / .code-wrap textarea in globals.css: 12.5px/1.65
-// JetBrains-Mono, 12px top pad, 14px left pad) so the error line-tint + column caret register
-// exactly over the highlighted source.
+// var(--font-code) — JetBrains Mono — 12px top pad, 14px left pad) so the error line-tint +
+// column caret register exactly over the highlighted source. This is why the editor stays on
+// --font-code and never --font-num: the caret math needs a fixed character advance.
 const LINE_H = 12.5 * 1.65;        // px per line
 const COL_W = 12.5 * 0.6;          // px per mono char (JetBrains Mono advance ≈ 0.6em)
 

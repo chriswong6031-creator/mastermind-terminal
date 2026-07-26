@@ -167,7 +167,7 @@ export function GeometryRail({
                 <span style={{ font: "600 9.5px/1 var(--font-ui)", color: lv.color, minWidth: 38 }}>
                   {lv.label}
                 </span>
-                <span style={{ font: "600 11px/1 var(--font-num)", color: "var(--text)" }}>
+                <span style={{ font: "600 11px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
                   ${lv.price.toFixed(2)}
                 </span>
               </div>
@@ -210,7 +210,7 @@ function StatRow({ label, value, valueColor }: { label: string; value: string; v
   return (
     <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
       <span style={{ font: "500 10px/1 var(--font-ui)", color: "var(--muted)" }}>{label}</span>
-      <span style={{ font: "600 10.5px/1 var(--font-num)", color: valueColor }}>{value}</span>
+      <span style={{ font: "600 10.5px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: valueColor }}>{value}</span>
     </div>
   );
 }
@@ -240,6 +240,7 @@ const SECTION_LABEL: React.CSSProperties = {
 
 const RR_CHIP: React.CSSProperties = {
   font: "600 9.5px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text-2)",
   border: "1px solid var(--line-2)",
   borderRadius: "var(--r-pill)",

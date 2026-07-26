@@ -232,6 +232,7 @@
   font-weight: 650;
   font-family: var(--font-num);
   letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums;
 }
 
 /* sm: 34px outer, 26px inner */
@@ -256,7 +257,8 @@
 /*
  * .num  — already defined in globals.css; re-exported here for documentation.
  *          font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1
- *          Combine with var(--font-num) for monospace numerals.
+ *          Pair it with var(--font-num) — that token is the UI grotesque, so tabular
+ *          figures (not a fixed advance) are what keeps numeric columns aligned.
  */
 
 /* ─── Live dot ───────────────────────────────────────────────────────────── */
@@ -624,6 +626,7 @@
   color: var(--text-2);
   letter-spacing: 0.04em;
   flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 .obs-fd-search {
   flex: 1;
@@ -717,6 +720,7 @@
   letter-spacing: 0.02em;
   margin-left: auto;
   flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 /* Line 1 inline ring */
 .obs-fc-ring-inline {
@@ -852,6 +856,7 @@
   color: var(--text-2);
   flex: 0 0 24px;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .obs-fc-detail-note {
   margin-top: 8px;
@@ -1191,11 +1196,13 @@
   font-weight: 700;
   color: var(--text);
   font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
 }
 .obs-surf-pop-pct {
   font-size: 10px;
   color: var(--muted);
   font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
 }
 .obs-surf-pop-row {
   display: flex;
@@ -1270,6 +1277,7 @@
   font-weight: 700;
   color: var(--text);
   font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
 }
 .obs-modal-close {
   height: 26px;

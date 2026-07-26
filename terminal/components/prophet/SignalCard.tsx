@@ -268,7 +268,7 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
           <span style={{ ...FACT_VAL, color: "var(--muted)" }}>{days}{t("daysActive")}</span>
         </span>
         {pnlPct != null && (
-          <span style={{ marginLeft: "auto", font: "600 11px/1 var(--font-num)", color: pnlPct >= 0 ? "var(--up)" : "var(--down)" }}>
+          <span style={{ marginLeft: "auto", font: "600 11px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: pnlPct >= 0 ? "var(--up)" : "var(--down)" }}>
             {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%
             <span style={{ font: "500 9px/1 var(--font-ui)", color: "var(--muted)", marginLeft: 3 }}>
               vs plan
@@ -385,6 +385,7 @@ const FACT_LABEL: React.CSSProperties = {
 
 const FACT_VAL: React.CSSProperties = {
   font: "600 11px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text)",
 };
 

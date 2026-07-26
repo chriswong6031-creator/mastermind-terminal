@@ -377,6 +377,7 @@ const FIELD_VAL: React.CSSProperties = {
 
 const VAL_STYLE: React.CSSProperties = {
   font: "600 11.5px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text)",
 };
 

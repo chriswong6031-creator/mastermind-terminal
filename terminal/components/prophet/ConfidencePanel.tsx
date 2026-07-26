@@ -307,6 +307,7 @@ const BAR_LABEL: React.CSSProperties = {
 
 const BAR_VAL: React.CSSProperties = {
   font: "600 10px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
   color: "var(--text)",
 };
 

@@ -4,7 +4,8 @@ import type { Metadata, Viewport } from "next";
  * Embed layout — the subtree under /embed is an iframe widget, NOT part of the Terminal app.
  *
  * It nests inside the root layout (app/layout.tsx), so it inherits the Inter + JetBrains-Mono
- * font CSS variables and globals.css — which is what makes the widget read as the same product.
+ * font CSS variables (UI *and* numerals are Inter; the mono is code-only) and globals.css —
+ * which is what makes the widget read as the same product.
  * What it must NOT carry is the app chrome: the first-party analytics Tracker mounted in the root
  * layout early-returns on /embed/* (see components/Tracker.tsx) so iframed widget loads don't emit
  * pageviews, and LangProvider is inert here (the widget sets its language from the ?lang= param and
