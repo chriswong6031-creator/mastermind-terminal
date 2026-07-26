@@ -28,6 +28,7 @@ const OPT_TYPES: { v: OptKind; tkey: string }[] = [
   { v: "opt_wall_touch", tkey: "condOptWall" },
   { v: "opt_premium_burst", tkey: "condOptBurst" },
   { v: "opt_0dte_spike", tkey: "condOpt0dte" },
+  { v: "opt_surface_pocket", tkey: "condOptPocket" },
 ];
 // Index roots that always carry gex/gexstate structure payloads (the picker offers these plus the
 // manifest symbols). SPY default.
@@ -54,6 +55,12 @@ export default function AlertsView({ email }: { email: string }) {
   };
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // 401 from the list endpoint means NO SESSION — a real signed-out state, not an empty list.
+  // Coercing it to {alerts:[]} showed anon visitors the signed-in "no alerts yet" copy, which
+  // reads as "you have none" when the truth is "we can't see yours".
+  const [signedOut, setSignedOut] = useState(false);
+  // two-step delete: first click arms the row, second confirms (touch + keyboard safe)
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [syms, setSyms] = useState<string[]>([]);
   const [sym, setSym] = useState("NVDA");
   const [ctype, setCtype] = useState("signal_buy");
@@ -72,6 +79,8 @@ export default function AlertsView({ email }: { email: string }) {
     z: 2,
     leg: "ncp",
     share_pct: 55,
+    k: 4,
+    near_pct: 5,
   });
   // ── anon gate toast (AlertsView is its own page, not under TerminalShell) ────
   const [gateNudge, setGateNudge] = useState<string | null>(null);
@@ -84,8 +93,18 @@ export default function AlertsView({ email }: { email: string }) {
 
   useEffect(() => {
     let alive = true;
-    // 401 = no session — treat as empty list (calm, no console error).
-    fetch("/api/alerts").then((r) => r.status === 401 ? { alerts: [] } : r.json()).then((d) => { if (alive) setAlerts(d.alerts || []); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); });
+    // 401 = no session → render the signed-out state, never a fake empty list.
+    fetch("/api/alerts")
+      .then((r) => {
+        if (r.status === 401) {
+          if (alive) setSignedOut(true);
+          return { alerts: [] };
+        }
+        return r.json();
+      })
+      .then((d) => { if (alive) setAlerts(d.alerts || []); })
+      .catch(() => {})
+      .finally(() => { if (alive) setLoaded(true); });
     // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
     getJSON("/data/manifest.json").then((m) => { if (alive) setSyms(Object.keys(m?.symbols || {})); }).catch(() => {});
     // D1: prefill from ?sym= ?price= ?type= query params (set by terminal "Add alert" context menu)
@@ -142,6 +161,7 @@ export default function AlertsView({ email }: { email: string }) {
     }
   }
   async function del(id: string) {
+    setConfirmDel(null);
     const removed = alerts.find((x) => x.id === id);
     setAlerts((a) => a.filter((x) => x.id !== id));     // optimistic
     try {
@@ -209,6 +229,12 @@ export default function AlertsView({ email }: { email: string }) {
                 {optKind === "opt_0dte_spike" && (
                   <label className="opt-field">{t("optSharePct")}<input aria-label={t("optSharePct")} type="number" step="1" min="0" max="100" value={optParams.share_pct ?? ""} onChange={(e) => setP({ share_pct: parseFloat(e.target.value) })} style={numStyle} /></label>
                 )}
+                {optKind === "opt_surface_pocket" && (
+                  <>
+                    <label className="opt-field">{t("optPocketK")}<input aria-label={t("optPocketK")} type="number" step="0.5" min="1" value={optParams.k ?? ""} onChange={(e) => setP({ k: parseFloat(e.target.value) })} style={numStyle} /></label>
+                    <label className="opt-field">{t("optNearPct")}<input aria-label={t("optNearPct")} type="number" step="1" min="1" max="50" value={optParams.near_pct ?? ""} onChange={(e) => setP({ near_pct: parseFloat(e.target.value) })} style={numStyle} /></label>
+                  </>
+                )}
               </>
             )}
 
@@ -224,11 +250,21 @@ export default function AlertsView({ email }: { email: string }) {
           )}
         </div>
         <div className="panel">
-          <div className="ph">{t("activeAlerts")}<span className="sub">{alerts.length} {t("total")}</span></div>
+          <div className="ph">{t("activeAlerts")}{!signedOut && <span className="sub">{alerts.length} {t("total")}</span>}</div>
           {!loaded && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("loadingAlerts")}</div>}
-          {loaded && alerts.length === 0 && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("noAlertsYet")}</div>}
-          {alerts.map((a) => {
+          {/* Signed out: say so plainly. "No alerts yet" would be a lie — we cannot see theirs. */}
+          {loaded && signedOut && (
+            <div className="alerts-signedout">
+              <div className="alerts-signedout-h">{t("alertsSignedOutTitle")}</div>
+              <p className="alerts-signedout-p">{t("alertsSignedOutBody")}</p>
+              <a className="btn btn-primary" href="/login">{t("gateSignupCta")}</a>
+            </div>
+          )}
+          {loaded && !signedOut && alerts.length === 0 && <div style={{ padding: "26px 15px", color: "var(--muted)", fontSize: 13 }}>{t("noAlertsYet")}</div>}
+          {!signedOut && alerts.map((a) => {
             const trig = !a.active && a.condition?.triggered; // engine one-shot: fired -> disarmed + stamped
+            const note = trig ? String(a.condition.triggered.note ?? "") : "";
+            const tval = trig ? a.condition.triggered.value : null;
             return (
               <div key={a.id} className="arow">
                 <span className={`dot${a.active ? "" : " off"}`} style={trig ? { background: "var(--signal)" } : undefined} />
@@ -236,13 +272,28 @@ export default function AlertsView({ email }: { email: string }) {
                 {trig ? <button className="btn" style={{ height: 26, fontSize: 11.5, justifySelf: "end" }} onClick={() => rearm(a.id)}>{t("rearm")}</button> : <span />}
                 <span style={{ color: "var(--muted)", fontSize: 11.5 }}>{fmtDate(a.created_at)}</span>
                 {trig ? (
-                  <span style={{ color: "var(--signal)", fontSize: 11.5 }} title={`${a.condition.triggered.note ?? ""}${a.condition.triggered.value != null ? ` · ${a.condition.triggered.value}` : ""}`}>
+                  <span style={{ color: "var(--signal)", fontSize: 11.5 }}>
                     {t("triggeredAt")} {fmtDate(a.condition.triggered.at)}
                   </span>
                 ) : (
                   <span style={{ color: a.active ? "var(--up)" : "var(--muted)", fontSize: 11.5 }}>{a.active ? t("armed") : t("paused")}</span>
                 )}
-                <button className="icbtn" onClick={() => del(a.id)} title={t("remove")}><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13" /></svg></button>
+                <button className="icbtn" aria-label={t("remove")} onClick={() => setConfirmDel((c) => (c === a.id ? null : a.id))}><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13" /></svg></button>
+                {/* WHY it fired — was title=-only, invisible to touch and keyboard.
+                    The note is composed server-side by ingest/alerts_engine.py and stored
+                    as one English string, so it does NOT follow the UI language. Tagged
+                    lang="en" so assistive tech reads it correctly in the ZH view; making
+                    the engine emit a translated note is a separate contract change. */}
+                {trig && note && (
+                  <span className="arow-note" lang="en">{note}{tval != null ? ` · ${tval}` : ""}</span>
+                )}
+                {confirmDel === a.id && (
+                  <span className="arow-confirm" role="group" aria-label={t("deleteAlertQ")}>
+                    <span className="arow-confirm-q">{t("deleteAlertQ")}</span>
+                    <button className="btn btn-danger" onClick={() => del(a.id)}>{t("deleteConfirm")}</button>
+                    <button className="btn" onClick={() => setConfirmDel(null)}>{t("deleteCancel")}</button>
+                  </span>
+                )}
               </div>
             );
           })}

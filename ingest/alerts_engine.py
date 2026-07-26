@@ -27,15 +27,26 @@ Condition contract (see terminal/components/AlertsView.tsx COND_TYPES):
                                                     arms; re-arms on leave. State on cond._wp={inside}.
                                                     Reads Flow.gex(root).
   {type:"opt_premium_burst", root, leg, window_min?, z?}  fires when the trailing-window per-minute
-                                                    slope of the cumulative ncp|npp leg is ≥ z σ
-                                                    (defaults window 10, z 2). Fire-once per minute
-                                                    stamp on cond._pb={lastFiredT,lastZ}. Reads
-                                                    Flow.tide().
+                                                    slope of the cumulative ncp|npp leg runs ≥ z
+                                                    standard errors ABOVE the baseline that PRECEDES
+                                                    that window (defaults window 10, z 2). One-sided
+                                                    (hot only); baseline must be ≥ MIN_BASELINE_MULT×
+                                                    the window or the result is an honest null.
+                                                    Fire-once per minute stamp on cond._pb=
+                                                    {lastFiredT,lastZ}. Reads Flow.tide().
   {type:"opt_0dte_spike", root, share_pct?}         fires when the 0d bucket's share of tracked net
                                                     premium at the latest common stamp ≥ share_pct
                                                     (default 55). Missing "0d" bucket → SKIP (honest
                                                     disable). Fire-once per stamp on cond._zd. Reads
                                                     Flow.dte().
+  {type:"opt_surface_pocket", root, k?, near_pct?, metric?}  fires when a single strike × interval
+                                                    cell on the newest Flow-Surface snapshot, at a
+                                                    strike within near_pct% of spot (default 5),
+                                                    carries |net premium| ≥ k× (default 4) the mean
+                                                    |cell| over the SAME strikes in the intervals
+                                                    before it. No surface for the root → SKIP.
+                                                    Fire-once per interval on cond._sp. Reads
+                                                    Flow.surface(root).
 
 Data sources (all local to the VPS): terminal/public/data/manifest.json (verdict/regime/EOD),
 <SYM>.slice.json (flagship signals), <SYM>.json (daily bars), Quote-Hub :HUB_PORT/quotes (live US+crypto),
@@ -248,6 +259,51 @@ class Flow:
         fx = self._load("dte_fixture.json")
         return fx if isinstance(fx, dict) else None
 
+    def surface(self, root: str):
+        """Latest Flow-Surface frame for a root, via the store's own chain:
+        surface_idx:{ROOT} → latest stamp → surface:{ROOT}:{STAMP}.
+
+        Mirrors terminal/lib/flowSource.ts fixtureFor(): the fixture holds ONE canonical
+        full-day frame per root, truncated to the intervals realized as of the requested
+        stamp. Unknown root (or an index with no stamps) → None → the evaluator's honest
+        'no surface for this root yet' null.
+        """
+        if not root:
+            return None
+        key = root.upper()
+        idx_all = self._load("surface_idx_fixture.json")
+        idx = idx_all.get(key) if isinstance(idx_all, dict) else None
+        if not isinstance(idx, dict):
+            return None
+        stamps = idx.get("stamps") if isinstance(idx.get("stamps"), list) else []
+        latest = idx.get("latest")
+        if not latest or not stamps:
+            return None
+        surf_all = self._load("surface_fixture.json")
+        full = surf_all.get(key) if isinstance(surf_all, dict) else None
+        if not isinstance(full, dict):
+            return None
+        frame_stamps = full.get("stamps") if isinstance(full.get("stamps"), list) else []
+        times = full.get("time_steps") if isinstance(full.get("time_steps"), list) else []
+        i = frame_stamps.index(latest) if latest in frame_stamps else -1
+        upto = i + 1 if i >= 0 else len(times)  # unknown stamp → full day (flowSource parity)
+        grids_full = full.get("grids") if isinstance(full.get("grids"), dict) else {}
+        grids = {m: [row[:upto] for row in g] for m, g in grids_full.items() if isinstance(g, list)}
+        spot_path = full.get("spot_path") if isinstance(full.get("spot_path"), list) else None
+        spot = full.get("spot")
+        if spot_path and 0 <= upto - 1 < len(spot_path):
+            spot = spot_path[upto - 1]
+        return {
+            "spot": spot,
+            "price_levels": full.get("price_levels"),
+            "time_steps": times[:upto],
+            "grids": grids,
+            "asof": full.get("asof"),
+            "cadence": full.get("cadence"),
+            "root": key,
+            "session_date": full.get("session_date"),
+        }
+
 
 def _finite(x) -> bool:
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(float(x))
@@ -257,22 +313,47 @@ def _as_of(asof) -> str:
     return f"as of {asof}" if asof else "as of unknown time"
 
 
+# The baseline must be at least this multiple of the test window before a pace can be called
+# "unusual" (mirrors optionsAlerts.ts MIN_BASELINE_MULT).
+MIN_BASELINE_MULT = 2
+# Intervals of trailing surface history required before a hot pocket can be scored.
+MIN_SURFACE_COLS = 3
+
+
 def _session_slope_stats(series: list[float], window: int):
-    """Slope stats for a CUMULATIVE series (ports optionsAlerts.ts sessionSlopeStats). Per-step
-    deltas d[i]=series[i]-series[i-1]; trailing `window` deltas → recent mean; ALL deltas → session
-    mean + POPULATION std; z=(recentMean-mean)/std. std==0 → z=None (un-z-scoreable flat tape)."""
+    """Slope stats for a CUMULATIVE series (ports optionsAlerts.ts sessionSlopeStats).
+
+    Per-step deltas d[i]=series[i]-series[i-1]. The trailing `window` deltas are the TEST
+    window; the deltas STRICTLY BEFORE it are the baseline. The statistic is a MEAN of w
+    deltas, so it is compared against the standard error of that mean — baseStd/sqrt(w) —
+    not a single-observation std. z=None (with `why`) whenever it is not scoreable:
+    too little baseline, or a flat baseline.
+    """
     deltas = [series[i] - series[i - 1] for i in range(1, len(series))]
     n = len(deltas)
     if n == 0:
-        return {"recentMean": None, "mean": None, "std": None, "z": None, "n": 0}
-    mean = sum(deltas) / n
-    var = sum((d - mean) ** 2 for d in deltas) / n  # population
-    std = math.sqrt(var)
-    w = max(1, min(window, n))
-    recent = deltas[n - w:]
-    recent_mean = sum(recent) / len(recent)
-    z = None if std == 0 else (recent_mean - mean) / std
-    return {"recentMean": recent_mean, "mean": mean, "std": std, "z": z, "n": n}
+        return {"winMean": None, "baseMean": None, "baseStd": None, "se": None, "z": None,
+                "n": 0, "w": 0, "baseN": 0, "why": "no tape"}
+    w = max(1, min(int(window) or 1, n))
+    base_n = max(0, n - w)
+    blank = {"winMean": None, "baseMean": None, "baseStd": None, "se": None, "z": None,
+             "n": n, "w": w, "baseN": base_n}
+    # Min-sample guard — an honest null beats a z off a handful of samples.
+    if base_n < MIN_BASELINE_MULT * w:
+        return {**blank, "why": "not enough baseline before the window"}
+
+    base = deltas[:base_n]
+    win = deltas[base_n:]
+    win_mean = sum(win) / w
+    base_mean = sum(base) / base_n
+    var = sum((d - base_mean) ** 2 for d in base) / base_n  # population
+    base_std = math.sqrt(var)
+    if not base_std > 0:
+        return {**blank, "winMean": win_mean, "baseMean": base_mean, "baseStd": base_std,
+                "why": "flat baseline"}
+    se = base_std / math.sqrt(w)
+    return {"winMean": win_mean, "baseMean": base_mean, "baseStd": base_std, "se": se,
+            "z": (win_mean - base_mean) / se, "n": n, "w": w, "baseN": base_n, "why": ""}
 
 
 def _eval_gamma_flip(cond: dict, gs, prev: dict):
@@ -323,12 +404,18 @@ def _eval_wall(cond: dict, gx, prev: dict):
 
 
 def _eval_premium_burst(cond: dict, tide, prev: dict):
-    """Ports evalPremiumBurst — per-minute-delta z on the cumulative leg, fire-once per stamp."""
+    """Ports evalPremiumBurst — per-minute-delta z on the cumulative leg, fire-once per stamp.
+
+    ONE-SIDED: only a HOT pace fires. The old two-sided abs(z) also fired on a tape that had
+    gone unusually QUIET, which is the opposite of what the alert promises.
+    """
     leg = "npp" if cond.get("leg") == "npp" else "ncp"
-    window_min = int(cond["window_min"]) if _finite(cond.get("window_min")) else 10
+    window_min = max(1, int(cond["window_min"])) if _finite(cond.get("window_min")) else 10
     z_thresh = cond["z"] if _finite(cond.get("z")) else 2
     mins = tide.get("minutes") if isinstance(tide, dict) else None
-    if not isinstance(mins, list) or len(mins) < window_min + 2:
+    # Window + baseline: (1+MIN_BASELINE_MULT)*w deltas → one more sample than that.
+    need = (1 + MIN_BASELINE_MULT) * window_min + 1
+    if not isinstance(mins, list) or len(mins) < need:
         return None, None, "not enough tape for pace check", prev
     series = []
     for m in mins:
@@ -337,11 +424,11 @@ def _eval_premium_burst(cond: dict, tide, prev: dict):
             return None, None, "not enough tape for pace check", prev
         series.append(float(v))
     stats = _session_slope_stats(series, window_min)
-    if stats["std"] is None or not math.isfinite(stats["std"]) or stats["std"] == 0:
-        return None, None, "flat tape", prev
     z = stats["z"]
+    if z is None or not math.isfinite(z):
+        return None, None, stats.get("why") or "pace not scoreable", prev
     latest_t = (mins[-1].get("t") if isinstance(mins[-1], dict) else None) or ""
-    fires = abs(z) >= z_thresh
+    fires = z >= z_thresh
     already = prev.get("lastFiredT") == latest_t
     zval = round(z, 2)
     if fires:
@@ -351,9 +438,83 @@ def _eval_premium_burst(cond: dict, tide, prev: dict):
     if fires and not already:
         root = cond.get("root") or "the underlying"
         legw = "net-put premium" if leg == "npp" else "net-call premium"
-        note = f"{root} {legw} moving at an unusual pace (z {z:.1f}, last {window_min}m) · intraday tape {_as_of(tide.get('asof'))}"
+        note = (f"{root} {legw} moving at an unusual pace (z {z:.1f}, last {window_min}m vs the "
+                f"{stats['baseN']}m before it) · intraday tape {_as_of(tide.get('asof'))}")
         return True, zval, note, nxt
     return False, zval, "", nxt
+
+
+def _eval_surface_pocket(cond: dict, frame, prev: dict):
+    """Ports evalSurfaceHotPocket — a single strike x interval cell on the Flow-Surface that is
+    running hot near spot.
+
+    Scale = MEAN |cell| over the same near-spot strikes in the intervals STRICTLY BEFORE the
+    newest one (same baseline-exclusion discipline as the premium-burst z). Tri-state null when
+    there is no surface for the root, too few intervals, no strikes in the band, or a zero scale.
+    """
+    metric = cond.get("metric") if isinstance(cond.get("metric"), str) and cond.get("metric") else "netprem"
+    k = cond["k"] if _finite(cond.get("k")) and cond["k"] > 0 else 4
+    near_pct = cond["near_pct"] if _finite(cond.get("near_pct")) and cond["near_pct"] > 0 else 5
+    levels = frame.get("price_levels") if isinstance(frame, dict) else None
+    steps = frame.get("time_steps") if isinstance(frame, dict) else None
+    grids = frame.get("grids") if isinstance(frame, dict) else None
+    grid = grids.get(metric) if isinstance(grids, dict) else None
+    spot = frame.get("spot") if isinstance(frame, dict) else None
+    if (not isinstance(levels, list) or not isinstance(steps, list) or not isinstance(grid, list)
+            or not _finite(spot) or spot <= 0):
+        return None, None, "no surface for this root yet", prev
+    t_last = len(steps) - 1
+    if t_last < MIN_SURFACE_COLS:
+        return None, None, "not enough surface history to scale", prev
+    rows = [i for i, lv in enumerate(levels) if _finite(lv) and (abs(lv - spot) / spot) * 100 <= near_pct]
+    if not rows:
+        return None, None, "no strikes near spot on the surface", prev
+
+    total = 0.0
+    cnt = 0
+    for r in rows:
+        row = grid[r] if r < len(grid) else None
+        if not isinstance(row, list):
+            continue
+        for t in range(min(t_last, len(row))):
+            v = row[t]
+            if _finite(v):
+                total += abs(v)
+                cnt += 1
+    if cnt == 0 or total == 0:
+        return None, None, "surface too sparse to scale", prev
+    scale = total / cnt
+
+    hot = 0.0
+    hot_level = None
+    for r in rows:
+        row = grid[r] if r < len(grid) else None
+        v = row[t_last] if isinstance(row, list) and t_last < len(row) else None
+        if not _finite(v):
+            continue
+        if hot_level is None or abs(v) > abs(hot):
+            hot, hot_level = float(v), levels[r]
+    if hot_level is None:
+        return None, None, "no surface reading at the latest interval", prev
+
+    ratio = abs(hot) / scale
+    stamp = steps[t_last] or ""
+    fires = ratio >= k
+    already = prev.get("lastFiredT") == stamp
+    rval = round(ratio, 2)
+    if fires:
+        nxt = {"lastFiredT": stamp, "lastRatio": rval, "lastStrike": hot_level}
+    else:
+        nxt = {"lastFiredT": prev.get("lastFiredT"), "lastRatio": prev.get("lastRatio"),
+               "lastStrike": prev.get("lastStrike")}
+    if fires and not already:
+        root = cond.get("root") or (frame.get("root") if isinstance(frame, dict) else None) or "the underlying"
+        side = "call-side" if hot >= 0 else "put-side"
+        note = (f"{root} {hot_level} strike lit up {ratio:.1f}× its usual cell on the surface "
+                f"({side} net premium at {stamp}, strikes within {near_pct}% of spot) · "
+                f"{_as_of(frame.get('asof'))}")
+        return True, rval, note, nxt
+    return False, rval, "", nxt
 
 
 def _eval_0dte(cond: dict, dte, prev: dict):
@@ -402,6 +563,7 @@ _OPT_EVALUATORS = {
     "opt_wall_touch": ("_wp", _eval_wall, lambda cond, flow: flow.gex(cond.get("root") or "")),
     "opt_premium_burst": ("_pb", _eval_premium_burst, lambda cond, flow: flow.tide()),
     "opt_0dte_spike": ("_zd", _eval_0dte, lambda cond, flow: flow.dte()),
+    "opt_surface_pocket": ("_sp", _eval_surface_pocket, lambda cond, flow: flow.surface(cond.get("root") or "")),
 }
 
 

@@ -125,8 +125,17 @@ export function evalWallProximity(
 
 // ─── (c) premium burst ───────────────────────────────────────────────────────
 // cond {type:"opt_premium_burst", root, leg:"ncp"|"npp", window_min?, z?}
-// ncp/npp are CUMULATIVE → the honest slope is the per-minute delta. Trailing
-// window slope vs the session delta distribution, z-scored.
+// ncp/npp are CUMULATIVE → the honest slope is the per-minute delta. The trailing
+// `window` deltas are the TEST window; the deltas STRICTLY BEFORE it are the
+// baseline the window is judged against.
+
+/**
+ * The baseline must be at least this multiple of the test window before we are
+ * entitled to call a pace "unusual". Below it the evaluators return the honest
+ * null tri-state rather than a z computed off a handful of samples.
+ */
+export const MIN_BASELINE_MULT = 2;
+
 export type PremiumBurstCond = {
   type: "opt_premium_burst";
   root?: string;
@@ -135,28 +144,57 @@ export type PremiumBurstCond = {
   z?: number;
 };
 
+export type SlopeStats = {
+  winMean: number | null;
+  baseMean: number | null;
+  baseStd: number | null;
+  se: number | null;
+  /** null = not scoreable; `why` says which guard tripped. */
+  z: number | null;
+  n: number; // total deltas
+  w: number; // test-window deltas actually used
+  baseN: number; // baseline deltas (strictly before the window)
+  why: string; // "" when z is computable
+};
+
 /**
  * Slope statistics for a CUMULATIVE series. Deltas d[i]=series[i]-series[i-1] are
- * the per-step slope; the trailing `window` deltas form the recent mean; ALL
- * deltas form the session distribution (population mean + std). Exposed so the
- * vitest can assert the z-math directly on synthetic series.
+ * the per-step slope. The trailing `window` deltas are the TEST window; the deltas
+ * BEFORE it are the baseline. Because the test statistic is a MEAN of w deltas, it
+ * is compared against the standard error of that mean — baseStd/√w — not against a
+ * single-observation std.
+ *
+ * Three properties this fixes (see the OEU T-D PR body for the fail-then-pass table):
+ *  1. the baseline no longer contains the window it is judging, so a burst can no
+ *     longer inflate the very yardstick it is measured against. The old form was
+ *     bounded by z ≤ √((n−w)/w) no matter how violent the burst — at the default
+ *     w=10 / z=2 that made ANY burst unable to fire until ~51 minutes of tape;
+ *  2. the √w correction restores the units of a mean-vs-mean comparison;
+ *  3. too little baseline yields null, not a guess.
+ * Exposed so the vitest can assert the z-math directly on synthetic series.
  */
-export function sessionSlopeStats(
-  series: number[],
-  window: number,
-): { recentMean: number; mean: number; std: number; z: number; n: number } {
+export function sessionSlopeStats(series: number[], window: number): SlopeStats {
   const deltas: number[] = [];
   for (let i = 1; i < series.length; i++) deltas.push(series[i] - series[i - 1]);
   const n = deltas.length;
-  if (n === 0) return { recentMean: NaN, mean: NaN, std: NaN, z: NaN, n: 0 };
-  const mean = deltas.reduce((a, b) => a + b, 0) / n;
-  const variance = deltas.reduce((a, b) => a + (b - mean) * (b - mean), 0) / n; // population
-  const std = Math.sqrt(variance);
-  const w = Math.max(1, Math.min(window, n));
-  const recentSlice = deltas.slice(n - w);
-  const recentMean = recentSlice.reduce((a, b) => a + b, 0) / recentSlice.length;
-  const z = std === 0 ? NaN : (recentMean - mean) / std;
-  return { recentMean, mean, std, z, n };
+  if (n === 0) {
+    return { winMean: null, baseMean: null, baseStd: null, se: null, z: null, n: 0, w: 0, baseN: 0, why: "no tape" };
+  }
+  const w = Math.max(1, Math.min(Math.floor(window) || 1, n));
+  const baseN = Math.max(0, n - w);
+  const blank = { winMean: null, baseMean: null, baseStd: null, se: null, z: null, n, w, baseN };
+  // Min-sample guard — an honest null beats a z off a handful of samples.
+  if (baseN < MIN_BASELINE_MULT * w) return { ...blank, why: "not enough baseline before the window" };
+
+  const base = deltas.slice(0, baseN);
+  const win = deltas.slice(baseN);
+  const winMean = win.reduce((a, b) => a + b, 0) / w;
+  const baseMean = base.reduce((a, b) => a + b, 0) / baseN;
+  const variance = base.reduce((a, b) => a + (b - baseMean) * (b - baseMean), 0) / baseN; // population
+  const baseStd = Math.sqrt(variance);
+  if (!(baseStd > 0)) return { ...blank, winMean, baseMean, baseStd, why: "flat baseline" };
+  const se = baseStd / Math.sqrt(w);
+  return { winMean, baseMean, baseStd, se, z: (winMean - baseMean) / se, n, w, baseN, why: "" };
 }
 
 export function evalPremiumBurst(
@@ -166,10 +204,12 @@ export function evalPremiumBurst(
 ): EvalResult {
   const p = prev || {};
   const leg = cond.leg === "npp" ? "npp" : "ncp";
-  const windowMin = isNum(cond.window_min) ? cond.window_min : 10;
+  const windowMin = isNum(cond.window_min) ? Math.max(1, Math.floor(cond.window_min)) : 10;
   const zThresh = isNum(cond.z) ? cond.z : 2;
   const mins = tide?.minutes;
-  if (!Array.isArray(mins) || mins.length < windowMin + 2) {
+  // Window + baseline: (1+MIN_BASELINE_MULT)·w deltas → one more sample than that.
+  const needSamples = (1 + MIN_BASELINE_MULT) * windowMin + 1;
+  if (!Array.isArray(mins) || mins.length < needSamples) {
     return { fired: null, value: null, note: "not enough tape for pace check", nextState: p };
   }
   const series: number[] = [];
@@ -179,12 +219,13 @@ export function evalPremiumBurst(
     series.push(v);
   }
   const stats = sessionSlopeStats(series, windowMin);
-  if (!Number.isFinite(stats.std) || stats.std === 0) {
-    return { fired: null, value: null, note: "flat tape", nextState: p };
+  if (stats.z === null || !Number.isFinite(stats.z)) {
+    return { fired: null, value: null, note: stats.why || "pace not scoreable", nextState: p };
   }
   const latestT = mins[mins.length - 1]?.t ?? "";
-  // Fire-once per stamp: identical latest minute → do not refire on repeat eval.
-  const fires = Math.abs(stats.z) >= zThresh;
+  // ONE-SIDED: a burst is a HOT tape. The old two-sided |z| also fired on a tape that
+  // had gone unusually QUIET, which is the opposite of what the alert promises.
+  const fires = stats.z >= zThresh;
   const alreadyFired = p.lastFiredT === latestT;
   const nextState: Record<string, unknown> = fires
     ? { lastFiredT: latestT, lastZ: round(stats.z, 2) }
@@ -193,7 +234,7 @@ export function evalPremiumBurst(
   if (fires && !alreadyFired) {
     const root = cond.root || "the underlying";
     const legWord = leg === "npp" ? "net-put premium" : "net-call premium";
-    const note = `${root} ${legWord} moving at an unusual pace (z ${stats.z.toFixed(1)}, last ${windowMin}m) · intraday tape ${asOf(tide?.asof)}`;
+    const note = `${root} ${legWord} moving at an unusual pace (z ${stats.z.toFixed(1)}, last ${windowMin}m vs the ${stats.baseN}m before it) · intraday tape ${asOf(tide?.asof)}`;
     return { fired: true, value: round(stats.z, 2), note, nextState };
   }
   return { fired: false, value: round(stats.z, 2), note: "", nextState };
@@ -253,8 +294,132 @@ export function eval0dteShare(
   return { fired: false, value: round(share, 1), note: "", nextState };
 }
 
+// ─── (e) surface hot pocket ──────────────────────────────────────────────────
+// cond {type:"opt_surface_pocket", root, k?, near_pct?, metric?}
+// The Flow-Surface snapshot is a strike × interval grid of net premium
+// (grids[metric][levelIdx][timeIdx]). A "hot pocket" is a single cell in the
+// NEWEST interval, at a strike near spot, carrying |value| ≥ k × the trailing
+// session cell-scale.
+//
+// Scale = the MEAN |cell| over the same near-spot strikes in the intervals
+// STRICTLY BEFORE the newest one — the same baseline-exclusion discipline as the
+// premium-burst z, so a hot cell cannot inflate the yardstick it is measured
+// against. Mean-abs (not median) is deliberate: it is the conservative choice
+// here, since one earlier outlier RAISES the bar rather than lowering it.
+//
+// Tri-state null when: no surface store for the root, too few intervals to scale
+// against, no strikes inside the band, or a scale of zero.
+
+/** Intervals of trailing history required before a pocket can be scored. */
+export const MIN_SURFACE_COLS = 3;
+
+export type SurfacePocketCond = {
+  type: "opt_surface_pocket";
+  root?: string;
+  k?: number; // multiple of the trailing cell-scale (default 4)
+  near_pct?: number; // ± band around spot, in % (default 5)
+  metric?: string; // grid metric (default "netprem")
+};
+
+/** The subset of SurfaceFrame (lib/surfaceContract.ts) this evaluator reads. */
+export type SurfaceFramePayload = {
+  spot?: number | null;
+  price_levels?: number[];
+  time_steps?: string[];
+  grids?: Record<string, (number | null)[][]>;
+  asof?: string;
+  root?: string;
+};
+
+export function evalSurfaceHotPocket(
+  cond: SurfacePocketCond,
+  frame: SurfaceFramePayload | null | undefined,
+  prev: Record<string, unknown> | null | undefined,
+): EvalResult {
+  const p = prev || {};
+  const metric = typeof cond.metric === "string" && cond.metric.length ? cond.metric : "netprem";
+  const k = isNum(cond.k) && cond.k > 0 ? cond.k : 4;
+  const nearPct = isNum(cond.near_pct) && cond.near_pct > 0 ? cond.near_pct : 5;
+  const levels = frame?.price_levels;
+  const steps = frame?.time_steps;
+  const grid = frame?.grids?.[metric];
+  const spot = frame?.spot;
+  if (!Array.isArray(levels) || !Array.isArray(steps) || !Array.isArray(grid) || !isNum(spot) || spot <= 0) {
+    return { fired: null, value: null, note: "no surface for this root yet", nextState: p };
+  }
+  const tLast = steps.length - 1;
+  if (tLast < MIN_SURFACE_COLS) {
+    return { fired: null, value: null, note: "not enough surface history to scale", nextState: p };
+  }
+  // Near-spot strikes only: |strike − spot| / spot ≤ near_pct%.
+  const rows: number[] = [];
+  for (let i = 0; i < levels.length; i++) {
+    const lv = levels[i];
+    if (isNum(lv) && (Math.abs(lv - spot) / spot) * 100 <= nearPct) rows.push(i);
+  }
+  if (rows.length === 0) {
+    return { fired: null, value: null, note: "no strikes near spot on the surface", nextState: p };
+  }
+  // Trailing cell-scale over the intervals BEFORE the newest one.
+  let sum = 0;
+  let cnt = 0;
+  for (const r of rows) {
+    const row = grid[r];
+    if (!Array.isArray(row)) continue;
+    for (let t = 0; t < tLast; t++) {
+      const v = row[t];
+      if (isNum(v)) {
+        sum += Math.abs(v);
+        cnt++;
+      }
+    }
+  }
+  if (cnt === 0 || sum === 0) {
+    return { fired: null, value: null, note: "surface too sparse to scale", nextState: p };
+  }
+  const scale = sum / cnt;
+  // Hottest near-spot cell in the NEWEST interval.
+  let hot = 0;
+  let hotLevel: number | null = null;
+  let found = false;
+  for (const r of rows) {
+    const v = grid[r]?.[tLast];
+    if (!isNum(v)) continue;
+    if (!found || Math.abs(v) > Math.abs(hot)) {
+      hot = v;
+      hotLevel = levels[r];
+      found = true;
+    }
+  }
+  if (!found || hotLevel === null) {
+    return { fired: null, value: null, note: "no surface reading at the latest interval", nextState: p };
+  }
+  const ratio = Math.abs(hot) / scale;
+  const stamp = steps[tLast] ?? "";
+  const fires = ratio >= k;
+  const alreadyFired = p.lastFiredT === stamp;
+  const nextState: Record<string, unknown> = fires
+    ? { lastFiredT: stamp, lastRatio: round(ratio, 2), lastStrike: hotLevel }
+    : { lastFiredT: p.lastFiredT, lastRatio: p.lastRatio, lastStrike: p.lastStrike };
+
+  if (fires && !alreadyFired) {
+    const root = cond.root || frame?.root || "the underlying";
+    const side = hot >= 0 ? "call-side" : "put-side";
+    const note =
+      `${root} ${hotLevel} strike lit up ${ratio.toFixed(1)}× its usual cell on the surface ` +
+      `(${side} net premium at ${stamp}, strikes within ${nearPct}% of spot) · ${asOf(frame?.asof)}`;
+    return { fired: true, value: round(ratio, 2), note, nextState };
+  }
+  return { fired: false, value: round(ratio, 2), note: "", nextState };
+}
+
 // ─── UI helpers: creation preview + condition builder (shared with AlertsView) ──
-export type OptKind = "opt_gamma_flip" | "opt_wall_touch" | "opt_premium_burst" | "opt_0dte_spike";
+export type OptKind =
+  | "opt_gamma_flip"
+  | "opt_wall_touch"
+  | "opt_premium_burst"
+  | "opt_0dte_spike"
+  | "opt_surface_pocket";
 
 export type OptParams = {
   band_pct?: number;
@@ -264,6 +429,8 @@ export type OptParams = {
   z?: number;
   leg?: "ncp" | "npp";
   share_pct?: number;
+  k?: number;
+  near_pct?: number;
 };
 
 /**
@@ -288,6 +455,12 @@ export function buildOptCondition(kind: OptKind, root: string, params: OptParams
     const c: Record<string, unknown> = { type: kind, root: r, leg: params.leg === "npp" ? "npp" : "ncp" };
     if (isNum(params.window_min)) c.window_min = params.window_min;
     if (isNum(params.z)) c.z = params.z;
+    return c;
+  }
+  if (kind === "opt_surface_pocket") {
+    const c: Record<string, unknown> = { type: kind, root: r };
+    if (isNum(params.k)) c.k = params.k;
+    if (isNum(params.near_pct)) c.near_pct = params.near_pct;
     return c;
   }
   // opt_0dte_spike
@@ -324,6 +497,12 @@ export function optAlertPreview(cond: Record<string, unknown>, lang: "en" | "zh"
     }
     const lw = leg === "npp" ? "net-put premium" : "net-call premium";
     return `Alert me when ${root} ${lw} moves at an unusual pace`;
+  }
+  if (type === "opt_surface_pocket") {
+    const near = isNum(cond.near_pct) ? (cond.near_pct as number) : 5;
+    return zh
+      ? `当 ${root} 平值附近（±${near}%）某个行权价在期权面上异常放量时提醒我`
+      : `Alert me when a strike lights up hot on the ${root} surface (within ${near}% of spot)`;
   }
   // opt_0dte_spike
   const share = isNum(cond.share_pct) ? (cond.share_pct as number) : 55;

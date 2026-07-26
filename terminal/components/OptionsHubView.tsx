@@ -21,8 +21,11 @@ import {
 // ── Code-split heavy tab sub-views (ssr:false — client-only, chart/canvas heavy) ──
 // Each tab is lazy-loaded on first visit; subsequent switches are instant (keep-alive).
 function TabSkeleton() {
-  return <div className="fin-empty" role="status" style={{ color: "var(--muted)" }}>Loading…</div>;
+  const t = useT();
+  return <div className="fin-empty" role="status" style={{ color: "var(--muted)" }}>{t("loadingTab")}</div>;
 }
+/** Index belt roots — the three the flow store always carries structure for. */
+const INDEX_ROOTS = ["SPY", "QQQ", "IWM"];
 const FlowDeskView = dynamic(
   () => import("@/components/flowdesk/FlowDeskView").then((m) => ({ default: m.FlowDeskView })),
   { ssr: false, loading: () => <TabSkeleton /> },
@@ -1716,6 +1719,23 @@ export default function OptionsHubView({
   const heatGroups = heat?.groups ?? [];
   const unusualNames = feed?.unusual_names ?? [];
 
+  // ── Highlights: the session's loudest events, DISPLAY-ONLY ────────────────────
+  // Pure ordering over fields the feed already carries — `premium` (biggest single
+  // prints) and `n_prints` (the repeat-hitters, a field the payload has always shipped
+  // but nothing rendered). No scoring, no ranking model, nothing fused. Computed off the
+  // RAW feed, not the filtered rows, so it stays a stable read on the whole session.
+  const highlights = useMemo(() => {
+    const all = feed?.events ?? [];
+    if (!all.length) return { biggest: [] as FlowEvent[], repeats: [] as FlowEvent[] };
+    const biggest = [...all].sort((a, b) => b.premium - a.premium).slice(0, 3);
+    const repeats = all
+      .filter((e) => (e.n_prints ?? 0) > 1)
+      .sort((a, b) => (b.n_prints ?? 0) - (a.n_prints ?? 0))
+      .slice(0, 3);
+    return { biggest, repeats };
+  }, [feed]);
+  const hasHighlights = highlights.biggest.length > 0 || highlights.repeats.length > 0;
+
   // ── Live-feed health — distinguish an outage/delay from a genuinely quiet tape
   // so an empty Tape/Tide isn't silently shown as "no events match these filters".
   const rawTapeCount = feed?.events?.length ?? 0;
@@ -1783,6 +1803,46 @@ export default function OptionsHubView({
 
   // ── Screener preset view state ────────────────────────────────────────────
   const [screenerPreset, setScreenerPreset] = useState<ScreenerPreset>("top_prem");
+  // Screener belt filters (index root / sector group). ΔOI + Hot Contracts rows carry no
+  // `group`, so the sector half of the belt is hidden — and cleared — on those views rather
+  // than sitting there as a control that silently does nothing.
+  const [scrRoot, setScrRoot] = useState("");
+  const [scrGroup, setScrGroup] = useState("");
+  const scrHasGroups = ["top_prem", "unusual_z", "fresh", "zerodte"].includes(screenerPreset);
+  const scrFilter = useCallback(
+    <T extends { root: string; group?: string }>(rows: T[]): T[] =>
+      rows.filter((r) => (!scrRoot || r.root === scrRoot) && (!scrGroup || r.group === scrGroup)),
+    [scrRoot, scrGroup],
+  );
+  const scrBeltOn = Boolean(scrRoot || scrGroup);
+  /**
+   * Empty-row copy for a belt-filtered table. Once a chip can empty a table, the old
+   * copy ("No data yet this session") becomes a false statement about the SESSION when
+   * the truth is "your filter matched nothing". `had` is the UNFILTERED count: >0 means
+   * the belt is the reason, so say that and offer the way out. Otherwise the session
+   * copy stands, unchanged.
+   */
+  // Plain function, deliberately NOT useCallback: it renders at most one row per pass and
+  // memoizing it only blocks the React Compiler (its inferred deps read scrRoot/scrGroup,
+  // not the derived scrBeltOn, so a manual dep array cannot be preserved).
+  const scrEmptyRow = (cols: number, sessionEn: string, sessionZh: string, had: number) => (
+    <tr>
+      <td colSpan={cols} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
+        {scrBeltOn && had > 0 ? (
+          <>
+            {t("scrNoMatch")}
+            <button
+              className="chip"
+              style={{ height: 24, fontSize: 11, marginLeft: 8 }}
+              onClick={() => { setScrRoot(""); setScrGroup(""); }}
+            >
+              {t("clearFilter")}
+            </button>
+          </>
+        ) : (lang === "zh" ? sessionZh : sessionEn)}
+      </td>
+    </tr>
+  );
   // Sort state for screener preset tables
   const [scrSortKey, setScrSortKey] = useState<string>("");
   const [scrSortDir, setScrSortDir] = useState<1 | -1>(-1);
@@ -2054,8 +2114,23 @@ export default function OptionsHubView({
           {/* ═══ TAPE TAB ═══════════════════════════════════════════════════ */}
           {activeTab === "tape" && (
             <>
-              {/* Heat strip */}
+              {/* Belt: index roots, then sector groups. Both drive the SAME table below —
+                  index chips reuse drillTicker (per-root), sector chips groupFilter, and the
+                  two are mutually exclusive by construction. */}
               <div className="flow-heat-strip">
+                <span className="belt-cap">{t("beltIndex")}</span>
+                {INDEX_ROOTS.map((r) => (
+                  <button
+                    key={r}
+                    className={`chip${drillTicker === r ? " on" : ""}`}
+                    onClick={() => { setGroupFilter(""); setTapeTickerSearch(""); setDrillTicker((d) => (d === r ? null : r)); }}
+                    aria-pressed={drillTicker === r}
+                  >
+                    {r}
+                  </button>
+                ))}
+                <span className="belt-div" aria-hidden="true" />
+                <span className="belt-cap">{t("beltSector")}</span>
                 {heatGroups.length === 0 && !fetchError && (
                   <span style={{ color: "var(--muted)", fontSize: 12 }}>
                     {t("loadingHeat", "Loading group data…")}
@@ -2086,6 +2161,36 @@ export default function OptionsHubView({
                   <button className="chip" onClick={() => setGroupFilter("")} style={{ marginLeft: 4, color: "var(--muted)" }} aria-label={t("clearFilter")} title={t("clearFilter")}>✕</button>
                 )}
               </div>
+
+              {/* Highlights — the session's loudest events. Display-only: an ordering over
+                  fields the feed already ships, never a score. Click drills the tape. */}
+              {hasHighlights && (
+                <div className="flow-highlights">
+                  <span className="belt-cap">{t("highlights")}</span>
+                  {highlights.biggest.length > 0 && (
+                    <span className="hl-group">
+                      <span className="hl-lbl">{t("hlBiggest")}</span>
+                      {highlights.biggest.map((e) => (
+                        <button key={`b-${e.id}`} className="chip hl-chip" onClick={() => { setGroupFilter(""); setDrillTicker((d) => (d === e.root ? null : e.root)); }}>
+                          <span className="hl-tk">{e.root}</span>
+                          <span className="hl-v">{fmtPremium(e.premium)}</span>
+                        </button>
+                      ))}
+                    </span>
+                  )}
+                  {highlights.repeats.length > 0 && (
+                    <span className="hl-group">
+                      <span className="hl-lbl">{t("hlRepeats")}</span>
+                      {highlights.repeats.map((e) => (
+                        <button key={`r-${e.id}`} className="chip hl-chip" onClick={() => { setGroupFilter(""); setDrillTicker((d) => (d === e.root ? null : e.root)); }}>
+                          <span className="hl-tk">{e.root}</span>
+                          <span className="hl-v">×{e.n_prints}</span>
+                        </button>
+                      ))}
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Filter bar */}
               <div className="flow-filter-bar">
@@ -2893,7 +2998,13 @@ export default function OptionsHubView({
                         key={p.key}
                         className={`chip${screenerPreset === p.key ? " on" : ""}`}
                         style={{ height: 28, fontSize: 12 }}
-                        onClick={() => { setScreenerPreset(p.key); setScrSortKey(""); setScrSortDir(-1); }}
+                        onClick={() => {
+                          setScreenerPreset(p.key);
+                          setScrSortKey(""); setScrSortDir(-1);
+                          // ΔOI / Hot rows have no group — drop a sector pick rather than
+                          // leave it armed and invisible.
+                          if (!["top_prem", "unusual_z", "fresh", "zerodte"].includes(p.key)) setScrGroup("");
+                        }}
                       >
                         {lang === "zh" ? p.zh : p.en}
                       </button>
@@ -2905,9 +3016,54 @@ export default function OptionsHubView({
                 );
               })()}
 
+              {/* Belt — index roots + sector groups, filtering the table below. */}
+              {(feed || oiData || hotData) && (
+                <div className="flow-heat-strip scr-belt">
+                  <span className="belt-cap">{t("beltIndex")}</span>
+                  {INDEX_ROOTS.map((r) => (
+                    <button
+                      key={r}
+                      className={`chip${scrRoot === r ? " on" : ""}`}
+                      style={{ height: 26, fontSize: 11 }}
+                      aria-pressed={scrRoot === r}
+                      onClick={() => setScrRoot((v) => (v === r ? "" : r))}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                  {scrHasGroups && heatGroups.length > 0 && (
+                    <>
+                      <span className="belt-div" aria-hidden="true" />
+                      <span className="belt-cap">{t("beltSector")}</span>
+                      {heatGroups.map((g) => (
+                        <button
+                          key={g.group}
+                          className={`chip${scrGroup === g.group ? " on" : ""}`}
+                          style={{ height: 26, fontSize: 11 }}
+                          aria-pressed={scrGroup === g.group}
+                          onClick={() => setScrGroup((v) => (v === g.group ? "" : g.group))}
+                        >
+                          {lang === "zh" ? g.group_zh : abbrevSector(g.group)}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                  {(scrRoot || scrGroup) && (
+                    <button
+                      className="chip"
+                      style={{ height: 26, fontSize: 11, marginLeft: 4, color: "var(--muted)" }}
+                      onClick={() => { setScrRoot(""); setScrGroup(""); }}
+                      aria-label={t("clearFilter")}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* ── Top Premium view — unusual_names sorted by gross_premium_today ── */}
               {screenerPreset === "top_prem" && feed && (() => {
-                const rows = [...(feed.unusual_names ?? [])].sort((a, b) => {
+                const rows = [...scrFilter(feed.unusual_names ?? [])].sort((a, b) => {
                   if (scrSortKey === "gross") return (a.gross_premium_today - b.gross_premium_today) * scrSortDir;
                   if (scrSortKey === "z") return ((a.prem_z ?? -999) - (b.prem_z ?? -999)) * scrSortDir;
                   if (scrSortKey === "call_share") return (a.call_prem_share - b.call_prem_share) * scrSortDir;
@@ -2959,11 +3115,8 @@ export default function OptionsHubView({
                               </td>
                             </tr>
                           ))}
-                          {rows.length === 0 && (
-                            <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
-                              {lang === "zh" ? "本时段暂无数据" : "No data yet this session"}
-                            </td></tr>
-                          )}
+                          {rows.length === 0 &&
+                            scrEmptyRow(5, "No data yet this session", "本时段暂无数据", (feed.unusual_names ?? []).length)}
                         </tbody>
                       </table>
                     </div>
@@ -2976,7 +3129,7 @@ export default function OptionsHubView({
 
               {/* ── Unusual (z) view — sorted by prem_z descending ── */}
               {screenerPreset === "unusual_z" && feed && (() => {
-                const rows = [...(feed.unusual_names ?? [])]
+                const rows = [...scrFilter(feed.unusual_names ?? [])]
                   .filter((u) => u.prem_z != null)
                   .sort((a, b) => {
                     if (scrSortKey === "gross") return (a.gross_premium_today - b.gross_premium_today) * scrSortDir;
@@ -3033,11 +3186,9 @@ export default function OptionsHubView({
                               </tr>
                             );
                           })}
-                          {rows.length === 0 && (
-                            <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
-                              {lang === "zh" ? "基线积累中，暂无z值" : "Baselines warming — no z-scores yet"}
-                            </td></tr>
-                          )}
+                          {rows.length === 0 &&
+                            scrEmptyRow(5, "Baselines warming — no z-scores yet", "基线积累中，暂无z值",
+                              (feed.unusual_names ?? []).filter((u) => u.prem_z != null).length)}
                         </tbody>
                       </table>
                     </div>
@@ -3053,7 +3204,7 @@ export default function OptionsHubView({
                 // "Fresh" = vol>OI events per ticker today, from feed.events
                 const freshCounts: Record<string, number> = {};
                 const freshPrem: Record<string, number> = {};
-                for (const ev of feed.events ?? []) {
+                for (const ev of scrFilter(feed.events ?? [])) {
                   if (ev.vol_gt_oi) {
                     freshCounts[ev.root] = (freshCounts[ev.root] ?? 0) + 1;
                     freshPrem[ev.root] = (freshPrem[ev.root] ?? 0) + ev.premium;
@@ -3103,11 +3254,9 @@ export default function OptionsHubView({
                               <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(r.prem)}</td>
                             </tr>
                           ))}
-                          {rows.length === 0 && (
-                            <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
-                              {lang === "zh" ? "本时段暂无 vol>OI 信号" : "No vol>OI signals this session"}
-                            </td></tr>
-                          )}
+                          {rows.length === 0 &&
+                            scrEmptyRow(4, "No vol>OI signals this session", "本时段暂无 vol>OI 信号",
+                              (feed.events ?? []).filter((e) => e.vol_gt_oi).length)}
                         </tbody>
                       </table>
                     </div>
@@ -3120,7 +3269,7 @@ export default function OptionsHubView({
 
               {/* ── ΔOI Builds view — oiData.movers ── */}
               {screenerPreset === "doi" && oiData && (() => {
-                const rows = [...oiData.movers].sort((a, b) => {
+                const rows = [...scrFilter(oiData.movers)].sort((a, b) => {
                   if (scrSortKey === "doi") return (Math.abs(a.d_oi) - Math.abs(b.d_oi)) * scrSortDir;
                   if (scrSortKey === "oi") return (a.oi - b.oi) * scrSortDir;
                   if (scrSortKey === "mid") return ((a.mid ?? 0) - (b.mid ?? 0)) * scrSortDir;
@@ -3174,6 +3323,8 @@ export default function OptionsHubView({
                               </tr>
                             );
                           })}
+                          {rows.length === 0 &&
+                            scrEmptyRow(7, "No open-interest builds to show", "暂无持仓变动数据", oiData.movers.length)}
                         </tbody>
                       </table>
                     </div>
@@ -3190,7 +3341,7 @@ export default function OptionsHubView({
                 const zdPrem: Record<string, number> = {};
                 const totalPrem: Record<string, number> = {};
                 const nameMap2: Record<string, { group: string; group_zh: string }> = {};
-                for (const ev of feed.events ?? []) {
+                for (const ev of scrFilter(feed.events ?? [])) {
                   totalPrem[ev.root] = (totalPrem[ev.root] ?? 0) + ev.premium;
                   if (ev.zerodte) zdPrem[ev.root] = (zdPrem[ev.root] ?? 0) + ev.premium;
                   nameMap2[ev.root] = { group: ev.group, group_zh: ev.group_zh };
@@ -3239,11 +3390,9 @@ export default function OptionsHubView({
                               </td>
                             </tr>
                           ))}
-                          {rows.length === 0 && (
-                            <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
-                              {lang === "zh" ? "本时段暂无0DTE事件" : "No 0DTE events this session"}
-                            </td></tr>
-                          )}
+                          {rows.length === 0 &&
+                            scrEmptyRow(4, "No 0DTE events this session", "本时段暂无0DTE事件",
+                              (feed.events ?? []).filter((e) => e.zerodte).length)}
                         </tbody>
                       </table>
                     </div>
@@ -3293,7 +3442,7 @@ export default function OptionsHubView({
                         </tr>
                       </thead>
                       <tbody>
-                        {(hotData[hotView] ?? []).map((c, i) => (
+                        {scrFilter(hotData[hotView] ?? []).map((c, i) => (
                           <tr key={i} style={{ cursor: "pointer" }} onClick={() => { switchTab("tickers"); setSelectedTicker(c.root); }}>
                             <td style={{ textAlign: "left", fontWeight: 700 }}>{c.root}</td>
                             <td style={{ textAlign: "left" }}>
@@ -3311,6 +3460,8 @@ export default function OptionsHubView({
                             </td>
                           </tr>
                         ))}
+                        {scrFilter(hotData[hotView] ?? []).length === 0 &&
+                          scrEmptyRow(8, "No hot contracts to show", "暂无活跃合约", (hotData[hotView] ?? []).length)}
                       </tbody>
                     </table>
                   </div>
