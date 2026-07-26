@@ -15,7 +15,10 @@ export async function GET(req: Request) {
   let q = supabase.from("drawings").select("*").eq("user_id", user.id);
   if (symbol) q = q.eq("symbol", symbol);
   const { data, error } = await q;
-  if (error) return NextResponse.json({ drawings: [], error: error.message });
+  if (error) {
+    console.error("drawings GET failed:", error);
+    return NextResponse.json({ drawings: [], error: "Could not load drawings" });
+  }
   const drawings = (data || []).map((r: any) => ({ id: r.id, kind: r.kind, ...(r.data || {}) }));
   return NextResponse.json({ drawings });
 }
@@ -32,7 +35,10 @@ export async function PUT(req: Request) {
     .map((d: any) => ({ user_id: user.id, symbol, kind: d.kind, data: { points: d.points, color: d.color, text: d.text, width: d.width, dash: d.dash, fontSize: d.fontSize, meta: d.meta } }));
   if (rows.length) {
     const { error } = await supabase.from("drawings").insert(rows);
-    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+    if (error) {
+      console.error("drawings PUT failed:", error);
+      return NextResponse.json({ ok: false, error: "Could not save drawings" }, { status: 400 });
+    }
   }
   return NextResponse.json({ ok: true });
 }
