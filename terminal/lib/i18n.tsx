@@ -494,6 +494,7 @@ const LEX: Record<string, [string, string]> = {
   // scanner belts + highlights (OEU T-D)
   beltIndex: ["Index", "指数"],
   beltSector: ["Sector", "板块"],
+  scrNoMatch: ["Nothing matches this filter.", "没有符合此筛选的内容。"],
   highlights: ["Highlights", "重点"],
   hlBiggest: ["Biggest prints", "最大单笔"],
   hlRepeats: ["Repeat hitters", "反复出手"],

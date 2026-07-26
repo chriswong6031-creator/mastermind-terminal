@@ -279,9 +279,13 @@ export default function AlertsView({ email }: { email: string }) {
                   <span style={{ color: a.active ? "var(--up)" : "var(--muted)", fontSize: 11.5 }}>{a.active ? t("armed") : t("paused")}</span>
                 )}
                 <button className="icbtn" aria-label={t("remove")} onClick={() => setConfirmDel((c) => (c === a.id ? null : a.id))}><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13" /></svg></button>
-                {/* WHY it fired — was title=-only, invisible to touch and keyboard. */}
+                {/* WHY it fired — was title=-only, invisible to touch and keyboard.
+                    The note is composed server-side by ingest/alerts_engine.py and stored
+                    as one English string, so it does NOT follow the UI language. Tagged
+                    lang="en" so assistive tech reads it correctly in the ZH view; making
+                    the engine emit a translated note is a separate contract change. */}
                 {trig && note && (
-                  <span className="arow-note">{note}{tval != null ? ` · ${tval}` : ""}</span>
+                  <span className="arow-note" lang="en">{note}{tval != null ? ` · ${tval}` : ""}</span>
                 )}
                 {confirmDel === a.id && (
                   <span className="arow-confirm" role="group" aria-label={t("deleteAlertQ")}>

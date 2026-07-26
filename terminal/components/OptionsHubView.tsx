@@ -1814,6 +1814,35 @@ export default function OptionsHubView({
       rows.filter((r) => (!scrRoot || r.root === scrRoot) && (!scrGroup || r.group === scrGroup)),
     [scrRoot, scrGroup],
   );
+  const scrBeltOn = Boolean(scrRoot || scrGroup);
+  /**
+   * Empty-row copy for a belt-filtered table. Once a chip can empty a table, the old
+   * copy ("No data yet this session") becomes a false statement about the SESSION when
+   * the truth is "your filter matched nothing". `had` is the UNFILTERED count: >0 means
+   * the belt is the reason, so say that and offer the way out. Otherwise the session
+   * copy stands, unchanged.
+   */
+  // Plain function, deliberately NOT useCallback: it renders at most one row per pass and
+  // memoizing it only blocks the React Compiler (its inferred deps read scrRoot/scrGroup,
+  // not the derived scrBeltOn, so a manual dep array cannot be preserved).
+  const scrEmptyRow = (cols: number, sessionEn: string, sessionZh: string, had: number) => (
+    <tr>
+      <td colSpan={cols} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
+        {scrBeltOn && had > 0 ? (
+          <>
+            {t("scrNoMatch")}
+            <button
+              className="chip"
+              style={{ height: 24, fontSize: 11, marginLeft: 8 }}
+              onClick={() => { setScrRoot(""); setScrGroup(""); }}
+            >
+              {t("clearFilter")}
+            </button>
+          </>
+        ) : (lang === "zh" ? sessionZh : sessionEn)}
+      </td>
+    </tr>
+  );
   // Sort state for screener preset tables
   const [scrSortKey, setScrSortKey] = useState<string>("");
   const [scrSortDir, setScrSortDir] = useState<1 | -1>(-1);
@@ -3086,11 +3115,8 @@ export default function OptionsHubView({
                               </td>
                             </tr>
                           ))}
-                          {rows.length === 0 && (
-                            <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
-                              {lang === "zh" ? "本时段暂无数据" : "No data yet this session"}
-                            </td></tr>
-                          )}
+                          {rows.length === 0 &&
+                            scrEmptyRow(5, "No data yet this session", "本时段暂无数据", (feed.unusual_names ?? []).length)}
                         </tbody>
                       </table>
                     </div>
@@ -3160,11 +3186,9 @@ export default function OptionsHubView({
                               </tr>
                             );
                           })}
-                          {rows.length === 0 && (
-                            <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
-                              {lang === "zh" ? "基线积累中，暂无z值" : "Baselines warming — no z-scores yet"}
-                            </td></tr>
-                          )}
+                          {rows.length === 0 &&
+                            scrEmptyRow(5, "Baselines warming — no z-scores yet", "基线积累中，暂无z值",
+                              (feed.unusual_names ?? []).filter((u) => u.prem_z != null).length)}
                         </tbody>
                       </table>
                     </div>
@@ -3230,11 +3254,9 @@ export default function OptionsHubView({
                               <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(r.prem)}</td>
                             </tr>
                           ))}
-                          {rows.length === 0 && (
-                            <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
-                              {lang === "zh" ? "本时段暂无 vol>OI 信号" : "No vol>OI signals this session"}
-                            </td></tr>
-                          )}
+                          {rows.length === 0 &&
+                            scrEmptyRow(4, "No vol>OI signals this session", "本时段暂无 vol>OI 信号",
+                              (feed.events ?? []).filter((e) => e.vol_gt_oi).length)}
                         </tbody>
                       </table>
                     </div>
@@ -3301,6 +3323,8 @@ export default function OptionsHubView({
                               </tr>
                             );
                           })}
+                          {rows.length === 0 &&
+                            scrEmptyRow(7, "No open-interest builds to show", "暂无持仓变动数据", oiData.movers.length)}
                         </tbody>
                       </table>
                     </div>
@@ -3366,11 +3390,9 @@ export default function OptionsHubView({
                               </td>
                             </tr>
                           ))}
-                          {rows.length === 0 && (
-                            <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
-                              {lang === "zh" ? "本时段暂无0DTE事件" : "No 0DTE events this session"}
-                            </td></tr>
-                          )}
+                          {rows.length === 0 &&
+                            scrEmptyRow(4, "No 0DTE events this session", "本时段暂无0DTE事件",
+                              (feed.events ?? []).filter((e) => e.zerodte).length)}
                         </tbody>
                       </table>
                     </div>
@@ -3438,6 +3460,8 @@ export default function OptionsHubView({
                             </td>
                           </tr>
                         ))}
+                        {scrFilter(hotData[hotView] ?? []).length === 0 &&
+                          scrEmptyRow(8, "No hot contracts to show", "暂无活跃合约", (hotData[hotView] ?? []).length)}
                       </tbody>
                     </table>
                   </div>
