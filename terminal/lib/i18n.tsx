@@ -12,6 +12,8 @@ const LEX: Record<string, [string, string]> = {
   greenUp: ["Green up", "绿涨红跌"],
   redUp: ["Red up", "红涨绿跌"],
   language: ["Language", "语言"],
+  setTerminal: ["Terminal", "终端"],
+  setStartTf: ["Default timeframe on open", "启动时的默认周期"],
   signOut: ["Sign out", "退出登录"],
   // nav — Wave-2 five workspaces (navigate by job). chart/portfolio kept; screener/scripts/
   // alerts/analyst survive only as sub-tab or legacy labels below.

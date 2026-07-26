@@ -563,6 +563,13 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .set-seg button:hover{color:var(--text);border-color:var(--line-3)}
 .set-seg button.on{border-color:rgba(41,98,255,.5);color:var(--brand-2);background:rgba(41,98,255,.12)}
 .set-seg button i{width:9px;height:9px;border-radius:2px;display:block}
+/* sub-label under a .set-grp header — sentence case, for a setting that needs naming beyond its group */
+.set-sub{padding:1px 12px 5px;font:500 11px/1.3 var(--font-ui);color:var(--text-2)}
+/* startup-timeframe picker: same chip idiom as .set-seg, wrapped to a grid (14 timeframes) */
+.set-tfg{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;padding:0 12px 8px}
+.set-tfg button{height:27px;border-radius:var(--r-md);border:1px solid var(--line);background:var(--panel-2);color:var(--text-2);font:600 11px/1 var(--font-num);cursor:pointer;transition:color var(--t),border-color var(--t),background var(--t)}
+.set-tfg button:hover{color:var(--text);border-color:var(--line-3)}
+.set-tfg button.on{border-color:rgba(41,98,255,.5);color:var(--brand-2);background:rgba(41,98,255,.12)}
 .set-sep{height:1px;background:var(--line);margin:6px 0}
 .set-acct-name{padding:2px 13px 0;font:600 12.5px/1.2 var(--font-ui);color:var(--text)}
 .set-acct{padding:2px 13px 6px;font-size:11px;color:var(--text-dim);font-variant-numeric:tabular-nums}
@@ -1637,6 +1644,9 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   /* ── tap targets: min 40×40 CSS px ── */
   /* timeframe seg buttons */
   .tfbtn{min-height:40px;min-width:40px}
+  /* startup-timeframe chips (settings popover) — 4-up so each chip clears the 40px floor */
+  .set-tfg{grid-template-columns:repeat(4,1fr)}
+  .set-tfg button{min-height:40px}
   /* chart toolbar buttons */
   .tbtn{min-height:40px;padding-top:6px;padding-bottom:6px}
   /* mobile icon buttons */
