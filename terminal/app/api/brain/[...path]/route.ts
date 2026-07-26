@@ -7,13 +7,23 @@
 // needs are forwarded; everything else 404s. Thread rename (PATCH) and delete (DELETE)
 // target `threads/<id>` ONLY and are session-required — never guest-eligible.
 //
+// RUN PLANE (macro PR #3574): a chat turn is a server-side RUN, so it outlives its socket.
+// The widget re-attaches with `GET runs/<id>/stream?cursor=N` after a dropped connection,
+// reads status with `GET runs/<id>`, recovers a lost run id with `GET runs/active`, and
+// cancels with `POST runs/<id>/cancel`. Until these were allowlisted here the Terminal 404'd
+// all four, so the live re-attach never worked on this surface (the widget degraded to
+// re-reading the thread tail — which a GUEST does not have, leaving them with "The reply
+// didn't make it through.").
+//
 // GUEST LANE: the gateway has an admin-toggled guest mode (a free Fast lane, N/day per
-// device cookie+IP). For `GET me` and `POST stream` ONLY, a missing/invalid session no
+// device cookie+IP). For `GET me`, `POST stream` and the run-resume READS
+// (`GET runs/<id>`, `GET runs/<id>/stream`) ONLY, a missing/invalid session no
 // longer 401s here — we forward WITHOUT any Authorization header and let the GATEWAY be
 // the sole authority: guest mode on → it serves tier "guest"; off → it 401s itself and we
 // pass that through unchanged. The device-identity headers (x-mm-aid / x-mm-ip /
-// x-mm-proxy-secret) still ride along so the gateway can meter the per-device pool, and
-// the rate limit + body caps still apply. All other paths stay session-required 401s.
+// x-mm-proxy-secret) still ride along so the gateway can meter the per-device pool AND so
+// the run's guest owner resolves to the same principal that started it; the rate limit +
+// body caps still apply. All other paths stay session-required 401s.
 //
 // Required env: BRAIN_GATEWAY_URL (default https://mastermind-x.com; VPS co-located http://127.0.0.1:8000)
 // The gateway expects Authorization: Bearer <supabase access token> and does its own tier/quota checks.
@@ -26,10 +36,11 @@ import { rateLimit, tooMany } from "@/lib/rateLimit";
 
 const GATEWAY = process.env.BRAIN_GATEWAY_URL || "https://mastermind-x.com";
 
-// Allowlist of forwarded upstream paths, keyed by HTTP method. `stream` is the only POST;
-// `me` / `threads` / `threads/<id>` are GET reads; `threads/<id>` is also the ONLY
-// PATCH (rename) and DELETE target. A thread id is a single path segment (no slashes) so
-// `threads/abc/../secret` can never slip through.
+// Allowlist of forwarded upstream paths, keyed by HTTP method. `stream` and
+// `runs/<id>/cancel` are the POSTs; `me` / `threads` / `threads/<id>` / `runs/active` /
+// `runs/<id>` / `runs/<id>/stream` are GET reads; `threads/<id>` is also the ONLY
+// PATCH (rename) and DELETE target. A thread or run id is a single path segment (no
+// slashes) so `threads/abc/../secret` can never slip through.
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
 // `threads/<id>` where <id> is a single, non-empty, path-safe segment — the sole
@@ -43,19 +54,39 @@ function threadIdPath(segs: string[]): string | null {
   return null;
 }
 
+// `runs/<id>` plus an optional fixed sub-resource — the run plane. <id> gets the same guard
+// as a thread id (single, non-empty, path-safe segment). `tails` is the exact set of
+// sub-resources THIS method may reach: "" is the bare `runs/<id>` status read, "stream" the
+// resume, "cancel" the Stop. Anything else — a deeper path, an unknown tail — returns null
+// and 404s, so widening one method never widens another.
+//
+// The literal id `active` is refused here: `runs/active` is a fixed COLLECTION path resolved
+// separately in resolvePath, and letting it arrive through this helper would quietly make it
+// guest-eligible along with the rest of the run reads (see guestOk).
+function runIdPath(segs: string[], tails: readonly string[]): string | null {
+  if (segs[0] !== "runs") return null;
+  const id = segs[1];
+  if (!id || id === "active" || id.includes("/") || id.includes("..")) return null;
+  const tail = segs.length === 2 ? "" : segs.length === 3 ? segs[2] : null;
+  if (tail === null || !tails.includes(tail)) return null;
+  return tail ? `runs/${id}/${tail}` : `runs/${id}`;
+}
+
 function resolvePath(method: Method, segs: string[]): string | null {
   const joined = segs.join("/");
   if (method === "POST") {
     // `stream` = SSE chat turn; `chart/state` = the Chart Bus v2 state-mirror POST (CMX W1) —
     // a small JSON body carrying the terminal's chart session + drawing acks for the gateway.
     if (joined === "stream" || joined === "chart/state") return joined;
-    return null;
+    // `runs/<id>/cancel` = the Stop button, so an abandoned turn is not re-attached to.
+    return runIdPath(segs, ["cancel"]);
   }
   // PATCH (rename) and DELETE target a single thread and nothing else.
   if (method === "PATCH" || method === "DELETE") return threadIdPath(segs);
   // GET
-  if (joined === "me" || joined === "threads") return joined;
-  return threadIdPath(segs);
+  if (joined === "me" || joined === "threads" || joined === "runs/active") return joined;
+  // Run status read and run resume; NOT `cancel`, which is a POST.
+  return runIdPath(segs, ["", "stream"]) ?? threadIdPath(segs);
 }
 
 // Identity forwarding for the co-located gateway's device-linked free-credit pool.
@@ -81,10 +112,32 @@ function idHeaders(req: Request): Record<string, string> {
   return h;
 }
 
-// Upstream paths served through the gateway's guest lane: `GET me` and `POST stream` ONLY.
-// For these, a missing/invalid session is forwarded (no Authorization) so the gateway can
-// decide; every other allowlisted path stays session-required.
+// Upstream paths served through the gateway's guest lane: `GET me`, `POST stream`, and the
+// run-resume READS `GET runs/<id>` + `GET runs/<id>/stream`. For these, a missing/invalid
+// session is forwarded (no Authorization) so the gateway can decide; every other allowlisted
+// path stays session-required.
+//
+// The run reads are guest-eligible because a guest has NO thread-store fallback — guests
+// write no thread rows at all — so the server-side run buffer is a guest's ONLY way to get
+// an answer back after a dropped connection. The gateway still owns the check: it resolves
+// the run's owner from the guest principal our x-mm-aid / x-mm-ip headers carry, and 404s a
+// run that principal does not own.
+//
+// `runs/active` is deliberately NOT guest-eligible, and the explicit refusal below is what
+// keeps it that way. The gateway returns an empty list to guests on purpose: a guest
+// principal is `guest:<mm_aid cookie>` or `guest:ip:<hash>`, so every anonymous visitor
+// behind one CGNAT/office egress IP is the SAME principal. Enumerating run ids to it would
+// hand one visitor another's question and answer. A run's 128-bit id is the guest's whole
+// capability; keeping this session-required means we never even ask on their behalf.
+// `runs/<id>/cancel` also stays session-required — it is cleanup, not a recovery path, and
+// the widget clears its stored run id locally either way.
 const GUEST_OK = new Set(["me", "stream"]);
+const GUEST_OK_RUN_READ = /^runs\/[^/]+(\/stream)?$/;
+
+function guestOk(upstreamPath: string): boolean {
+  if (upstreamPath === "runs/active") return false; // never — see note above
+  return GUEST_OK.has(upstreamPath) || GUEST_OK_RUN_READ.test(upstreamPath);
+}
 
 // Verify the session and return the access token, or null when there is no valid session.
 // The caller decides what null means per path. We NEVER read or forward a client-supplied
@@ -105,13 +158,13 @@ async function sessionToken(): Promise<string | null> {
 // Resolve auth for a resolved upstream path: return the outbound headers to attach
 // (device identity always; Authorization only when we hold a token), or a 401 Response to
 // relay when the path requires a session and none is present. Anonymous callers to a
-// GUEST_OK path get device headers but NO Authorization — the gateway does the rest.
+// guestOk path get device headers but NO Authorization — the gateway does the rest.
 async function authHeaders(
   req: Request,
   upstreamPath: string,
 ): Promise<{ headers: Record<string, string> } | { error: Response }> {
   const token = await sessionToken();
-  if (!token && !GUEST_OK.has(upstreamPath)) {
+  if (!token && !guestOk(upstreamPath)) {
     return {
       error: NextResponse.json({ error: "unauthenticated" }, { status: 401 }),
     };
@@ -152,8 +205,28 @@ export async function GET(
   const auth = await authHeaders(req, upstreamPath);
   if ("error" in auth) return auth.error;
 
+  // The resume cursor is the ONE query param that crosses to the gateway. This handler used
+  // to drop the query string wholesale, which on `runs/<id>/stream` is not a no-op: the
+  // gateway defaults `cursor` to 0 and replays the run buffer from the beginning, so every
+  // re-attach would paint the whole answer into the bubble a SECOND time. Everything else in
+  // the query is still discarded — the allowlist covers the query as well as the path.
+  //
+  // A cursor that is not a short run of digits cannot come from the widget, so it fails loudly
+  // as a 400 rather than silently degrading into that replay-from-0. The length cap bounds
+  // what we hand the gateway's int parser; real cursors are event counts in the thousands.
+  let query = "";
+  if (/^runs\/[^/]+\/stream$/.test(upstreamPath)) {
+    const cursor = new URL(req.url).searchParams.get("cursor");
+    if (cursor !== null) {
+      if (!/^\d{1,12}$/.test(cursor)) {
+        return NextResponse.json({ error: "bad_cursor" }, { status: 400 });
+      }
+      query = `?cursor=${cursor}`;
+    }
+  }
+
   try {
-    const upstream = await fetch(`${GATEWAY}/api/brain/${upstreamPath}`, {
+    const upstream = await fetch(`${GATEWAY}/api/brain/${upstreamPath}${query}`, {
       headers: auth.headers,
       signal: req.signal,
     });
@@ -189,8 +262,13 @@ export async function POST(
   // an abusive client can make this proxy buffer.
   const contentType = req.headers.get("content-type") || "application/json";
   // Path-specific body caps: the chat `stream` carries vision data URIs (up to ~8MB); the Chart Bus
-  // `chart/state` mirror is a small JSON session snapshot — cap it tight at 64KB.
-  const maxBody = upstreamPath === "chart/state" ? 64_000 : 8_000_000;
+  // `chart/state` mirror is a small JSON session snapshot — cap it tight at 64KB; `runs/<id>/cancel`
+  // carries nothing at all (the run id is in the path), so it gets the tightest cap of the three.
+  const maxBody = upstreamPath.endsWith("/cancel")
+    ? 1_000
+    : upstreamPath === "chart/state"
+      ? 64_000
+      : 8_000_000;
   const cl = req.headers.get("content-length");
   if (cl && /^\d+$/.test(cl) && parseInt(cl, 10) > maxBody) {
     return NextResponse.json({ error: "payload_too_large" }, { status: 413 });
