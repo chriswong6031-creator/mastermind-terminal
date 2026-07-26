@@ -44,6 +44,7 @@ import type { GexDeskKey } from "./gexStrings";
 import { GexSummaryBar } from "./GexSummaryBar";
 import { StrikeLadder } from "./StrikeLadder";
 import { ExpiryBars } from "./ExpiryBars";
+import { GexHistory } from "./GexHistory";
 import { ExposureExpiryDrawer } from "./ExposureExpiryDrawer";
 import { MarketStateCard } from "./MarketStateCard";
 import type { GexStatePayload } from "./MarketStateCard";
@@ -445,6 +446,10 @@ export function GexDeskView() {
         lensNetMn={lensValues.cellCount > 0 ? lensValues.totalMn : null}
         lang={lang}
       />
+
+      {/* ── GEX history strip — net-GEX trend over recent sessions, from the EOD
+             surface we already own (first slice of historical playback) ────── */}
+      <GexHistory history={gexPayload?.history} lang={lang} />
 
       {/* ── EOD context belt (OEU T-E) ───────────────────────────────────────
           Settled-close structure + off-exchange positioning for the SAME root, sitting

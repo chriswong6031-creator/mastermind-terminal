@@ -329,6 +329,13 @@ const GEX_LEX = {
     "Vanna 与 Charm 暂未提供按到期日数据 — 仅伽马与德尔塔。",
   ],
   xdrawerEmpty:    ["No expiration breakdown for this ticker yet.", "该品种暂无按到期日数据。"],
+
+  // ── GEX history strip (net-GEX trend over recent sessions, from the EOD surface) ──
+  gexHistTitle:    ["Net GEX — history", "净GEX — 历史"],
+  gexHistSessions: ["sessions", "个交易日"],
+  gexHistAria:     ["Net gamma exposure across recent sessions", "近期交易日的净伽马敞口"],
+  gexHistLatest:   ["Latest", "最新"],
+  gexHistFlip:     ["Flip", "翻转点"],
 } as const;
 
 type GexDeskKey = keyof typeof GEX_LEX;
