@@ -82,6 +82,7 @@ function req(
   method: "GET" | "POST" | "PATCH" | "DELETE",
   extra: Record<string, string> = {},
   body?: string,
+  url = "https://app.mastermind-x.com/api/brain",
 ): Request {
   ipCounter += 1;
   const ip = `203.0.113.${ipCounter}`;
@@ -90,11 +91,17 @@ function req(
     cookie: "mm_aid=aid-123; other=x",
     ...extra,
   };
-  return new Request("https://app.mastermind-x.com/api/brain", {
+  return new Request(url, {
     method,
     headers,
     body,
   });
+}
+
+/** A GET whose URL carries a query string — the only way to exercise cursor forwarding,
+ *  since the route reads it off req.url and not off the path params. */
+function getWithQuery(qs: string, extra: Record<string, string> = {}): Request {
+  return req("GET", extra, undefined, `https://app.mastermind-x.com/api/brain${qs}`);
 }
 
 const params = (...path: string[]) => ({ params: Promise.resolve({ path }) });
@@ -263,6 +270,266 @@ describe("allowlist unchanged: unknown paths 404 before auth", () => {
     anon();
     const res = await GET(req("GET"), params("some", "other"));
     expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RUN PLANE (macro PR #3574). The widget re-attaches to a server-side run after a
+// dropped connection. All four routes 404'd on the Terminal before this allowlist
+// widening, so the live re-attach never worked on this surface.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("run plane: GET runs/<id> (status)", () => {
+  it("signed-in → forwarded with Bearer", async () => {
+    signedIn("sess-run-status");
+    const res = await GET(req("GET"), params("runs", "r_abc123"));
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://mastermind-x.com/api/brain/runs/r_abc123");
+    expect(calls[0].headers["authorization"]).toBe("Bearer sess-run-status");
+  });
+
+  it("anonymous → forwarded with NO Authorization (guest lane), device identity attached", async () => {
+    anon();
+    const res = await GET(req("GET"), params("runs", "r_guest1"));
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://mastermind-x.com/api/brain/runs/r_guest1");
+    expect("authorization" in calls[0].headers).toBe(false);
+    // The gateway resolves the run's guest owner from these — without them it cannot
+    // match the principal that started the run, and every guest resume 404s.
+    expect(calls[0].headers["x-mm-aid"]).toBe("aid-123");
+    expect(calls[0].headers["x-mm-proxy-secret"]).toBe("test-secret");
+  });
+});
+
+describe("run plane: GET runs/<id>/stream (resume) forwards the cursor", () => {
+  it("forwards ?cursor=N verbatim — dropping it would replay from 0 and double the answer", async () => {
+    signedIn("sess-resume");
+    const res = await GET(getWithQuery("?cursor=7"), params("runs", "r_xyz", "stream"));
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(
+      "https://mastermind-x.com/api/brain/runs/r_xyz/stream?cursor=7",
+    );
+    expect(calls[0].headers["authorization"]).toBe("Bearer sess-resume");
+  });
+
+  it("cursor=0 is forwarded explicitly (not dropped as falsy)", async () => {
+    signedIn();
+    await GET(getWithQuery("?cursor=0"), params("runs", "r_xyz", "stream"));
+    expect(calls[0].url).toBe(
+      "https://mastermind-x.com/api/brain/runs/r_xyz/stream?cursor=0",
+    );
+  });
+
+  it("no cursor → no query string; the gateway's own default applies", async () => {
+    signedIn();
+    await GET(req("GET"), params("runs", "r_xyz", "stream"));
+    expect(calls[0].url).toBe("https://mastermind-x.com/api/brain/runs/r_xyz/stream");
+  });
+
+  it("only `cursor` crosses — other query params are discarded", async () => {
+    signedIn();
+    await GET(
+      getWithQuery("?cursor=3&admin=1&user_id=someone-else"),
+      params("runs", "r_xyz", "stream"),
+    );
+    expect(calls[0].url).toBe(
+      "https://mastermind-x.com/api/brain/runs/r_xyz/stream?cursor=3",
+    );
+  });
+
+  it("a malformed cursor is a 400, never a silent replay-from-0", async () => {
+    signedIn();
+    const res = await GET(getWithQuery("?cursor=abc"), params("runs", "r_xyz", "stream"));
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a negative cursor is a 400 (the digits guard rejects the sign)", async () => {
+    signedIn();
+    const res = await GET(getWithQuery("?cursor=-1"), params("runs", "r_xyz", "stream"));
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("an absurdly long cursor is a 400 (bounds the gateway's int parse)", async () => {
+    signedIn();
+    const res = await GET(
+      getWithQuery(`?cursor=${"9".repeat(40)}`),
+      params("runs", "r_xyz", "stream"),
+    );
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("anonymous → forwarded with NO Authorization: the guest's only recovery path", async () => {
+    anon();
+    const res = await GET(getWithQuery("?cursor=2"), params("runs", "r_guest2", "stream"));
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(
+      "https://mastermind-x.com/api/brain/runs/r_guest2/stream?cursor=2",
+    );
+    expect("authorization" in calls[0].headers).toBe(false);
+    expect(calls[0].headers["x-mm-aid"]).toBe("aid-123");
+  });
+
+  it("the cursor is only read on the resume path — a thread id of 'stream' gets no query", async () => {
+    // `threads/stream` ends with "/stream" too; the resolved-path regex must not treat it
+    // as a resume, or a stray param would ride along to an unrelated upstream route.
+    signedIn();
+    await GET(getWithQuery("?cursor=5"), params("threads", "stream"));
+    expect(calls[0].url).toBe("https://mastermind-x.com/api/brain/threads/stream");
+  });
+});
+
+describe("run plane: GET runs/active is SESSION-REQUIRED (never guest-eligible)", () => {
+  it("signed-in → forwarded with Bearer", async () => {
+    signedIn("sess-active");
+    const res = await GET(req("GET"), params("runs", "active"));
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://mastermind-x.com/api/brain/runs/active");
+    expect(calls[0].headers["authorization"]).toBe("Bearer sess-active");
+  });
+
+  // The invariant: a guest principal is shared by everyone behind one egress IP, so
+  // enumerating run ids to it would hand one visitor another's question and answer.
+  // The gateway returns [] for guests on purpose; we must not even ask on their behalf.
+  it("anonymous → 401, gateway never contacted", async () => {
+    anon();
+    const res = await GET(req("GET"), params("runs", "active"));
+    expect(res.status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("run plane: POST runs/<id>/cancel (Stop)", () => {
+  it("signed-in → forwarded with POST + Bearer", async () => {
+    signedIn("sess-cancel");
+    const res = await POST(req("POST", { "content-type": "application/json" }, ""), params("runs", "r_stop", "cancel"));
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://mastermind-x.com/api/brain/runs/r_stop/cancel");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].headers["authorization"]).toBe("Bearer sess-cancel");
+  });
+
+  it("anonymous → 401 (cleanup, not a recovery path), gateway never contacted", async () => {
+    anon();
+    const res = await POST(req("POST", { "content-type": "application/json" }, ""), params("runs", "r_stop", "cancel"));
+    expect(res.status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("carries no body, and a stuffed one is 413 before any gateway call", async () => {
+    signedIn();
+    const res = await POST(
+      req("POST", { "content-type": "application/json" }, "z".repeat(1_001)),
+      params("runs", "r_stop", "cancel"),
+    );
+    expect(res.status).toBe(413);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+// ── The widening must not become an open proxy: method scoping + traversal ──
+
+describe("run plane stays tight", () => {
+  it("GET runs/<id>/cancel → 404 (cancel is POST-only)", async () => {
+    signedIn();
+    const res = await GET(req("GET"), params("runs", "r_x", "cancel"));
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("POST runs/<id> and POST runs/<id>/stream → 404 (reads are GET-only)", async () => {
+    signedIn();
+    const a = await POST(req("POST", {}, ""), params("runs", "r_x"));
+    expect(a.status).toBe(404);
+    const b = await POST(req("POST", {}, ""), params("runs", "r_x", "stream"));
+    expect(b.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("POST runs/active → 404 (not a POST target)", async () => {
+    signedIn();
+    const res = await POST(req("POST", {}, ""), params("runs", "active"));
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("GET runs → 404 (bare collection is not allowlisted)", async () => {
+    signedIn();
+    const res = await GET(req("GET"), params("runs"));
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a traversal run id → 404, gateway never contacted", async () => {
+    signedIn();
+    const res = await GET(req("GET"), params("runs", ".."));
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  // The resolved path is interpolated into the upstream URL, so a "?" inside the id segment
+  // would smuggle a query string into the gateway call rather than just being a bad id.
+  // Next decodes route params, so a client sending `%3F` lands here as a literal "?".
+  it("a run id carrying a query/fragment separator → 404, never interpolated into the URL", async () => {
+    signedIn();
+    for (const bad of ["abc?admin=1", "abc#frag", "abc%2Fx", "a/b", "."]) {
+      const res = await GET(req("GET"), params("runs", bad));
+      expect(res.status).toBe(404);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  // The specific escape this closes: `runs/active?x=1` is not the string "runs/active", so
+  // guestOk's exact-match refusal would miss it while its run-read regex matched — handing a
+  // guest the enumeration route. The charset guard stops it one layer earlier.
+  it("`runs/active?x=1` cannot be smuggled past the runs/active session gate", async () => {
+    anon();
+    const res = await GET(req("GET"), params("runs", "active?x=1"));
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a real uuid4().hex run id is accepted (the guard is not too tight)", async () => {
+    signedIn();
+    const res = await GET(req("GET"), params("runs", "3f2a1b4c5d6e7f8091a2b3c4d5e6f708"));
+    expect(res.status).toBe(200);
+    expect(calls[0].url).toBe(
+      "https://mastermind-x.com/api/brain/runs/3f2a1b4c5d6e7f8091a2b3c4d5e6f708",
+    );
+  });
+
+  it("an unknown sub-resource under a run → 404", async () => {
+    signedIn();
+    const res = await GET(req("GET"), params("runs", "r_x", "secrets"));
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a deeper run path → 404", async () => {
+    signedIn();
+    const res = await GET(req("GET"), params("runs", "r_x", "stream", "extra"));
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("PATCH/DELETE never reach a run", async () => {
+    signedIn();
+    const p = await PATCH(
+      req("PATCH", { "content-type": "application/json" }, "{}"),
+      params("runs", "r_x"),
+    );
+    expect(p.status).toBe(404);
+    const d = await DELETE(req("DELETE"), params("runs", "r_x"));
+    expect(d.status).toBe(404);
     expect(calls).toHaveLength(0);
   });
 });
