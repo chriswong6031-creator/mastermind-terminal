@@ -26,11 +26,19 @@ function expDate(exp: string): string {
 // ─── Type (matches options_structure.matrix/v1 heat_seeker field) ─────────────
 
 export interface HeatSeekerPick {
-  strike: number;
+  strike: number | null;
   expiry: string;
   lens: string;
-  standout_ratio: number;
-  confidence: number;
+  standout_ratio: number | null;
+  /**
+   * A 0..1 FRACTION, never a "low"/"medium"/"high" tier. The builder
+   * (macro `engine/options_matrix.py` `_heat_seeker`) emits
+   * `round(min(1, (standout_ratio - 1) / 3), 2)`, and the contract dataclass
+   * `MatrixHeatSeeker.confidence` is `float | None` — so absent is legal, but a
+   * string never is. A tier string means a malformed payload: it reads as absent
+   * rather than being mapped to an invented number.
+   */
+  confidence: number | null;
   note?: string;
 }
 
@@ -72,24 +80,22 @@ function spotPct(strike: number, spot: number): string {
   return `${sign}${pct.toFixed(1)}%`;
 }
 
-function confBar(conf: number): React.ReactNode {
-  const pct = Math.round(Math.min(1, Math.max(0, conf)) * 100);
-  return (
-    <div style={CONF_BAR_TRACK}>
-      <div
-        style={{
-          ...CONF_BAR_FILL,
-          width: `${pct}%`,
-          background:
-            pct >= 60
-              ? "rgba(232,179,57,0.75)"
-              : pct >= 30
-              ? "rgba(77,130,255,0.65)"
-              : "rgba(120,120,140,0.5)",
-        }}
-      />
-    </div>
-  );
+/** The contract's `float | None` fields arrive as null in real payloads. */
+function finite(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * Confidence fraction → ring percent, or null when there is no usable number.
+ *
+ * Returning null (rather than 0) is load-bearing: RingGauge maps a NaN value to a
+ * displayed "0" in the weak/"down" tone, so an unusable confidence would render as
+ * a confident-looking reading of zero instead of showing nothing.
+ */
+export function heatSeekerConfPct(confidence: unknown): number | null {
+  const n = finite(confidence);
+  if (n === null) return null;
+  return Math.round(Math.min(1, Math.max(0, n)) * 100);
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -115,8 +121,10 @@ export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
   }
 
   const dte = dteDays(pick.expiry);
-  const pct = spot != null ? spotPct(pick.strike, spot) : null;
-  const confPct = Math.round(pick.confidence * 100);
+  const strike = finite(pick.strike);
+  const ratio = finite(pick.standout_ratio);
+  const pct = spot != null && strike != null ? spotPct(strike, spot) : null;
+  const confPct = heatSeekerConfPct(pick.confidence);
 
   return (
     <div className="obs-card" style={CARD_OUTER}>
@@ -134,17 +142,19 @@ export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
 
       {/* Confidence ring + pick cells */}
       <div style={PICK_BODY}>
-        <RingGauge
-          value={confPct}
-          size="md"
-          tone="auto"
-          label={t("heatSeekerConf")}
-        />
+        {confPct != null && (
+          <RingGauge
+            value={confPct}
+            size="md"
+            tone="auto"
+            label={t("heatSeekerConf")}
+          />
+        )}
         <div style={PICK_GRID}>
           <div style={PICK_CELL}>
             <span className="obs-lbl">{t("heatSeekerStrike")}</span>
             <span className="num" style={PICK_VALUE}>
-              {fmtStrike(pick.strike)}
+              {strike != null ? fmtStrike(strike) : "—"}
               {pct != null && (
                 <span style={PCT_FROM_SPOT}> {pct}</span>
               )}
@@ -159,7 +169,7 @@ export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
           </div>
           <div style={PICK_CELL}>
             <span className="obs-lbl">{t("heatSeekerRatio")}</span>
-            <span className="num" style={PICK_VALUE}>{pick.standout_ratio.toFixed(2)}×</span>
+            <span className="num" style={PICK_VALUE}>{ratio != null ? `${ratio.toFixed(2)}×` : "—"}</span>
           </div>
         </div>
       </div>
@@ -290,17 +300,4 @@ const DTE_CHIP: React.CSSProperties = {
   border: "1px solid var(--line)",
   borderRadius: 3,
   padding: "0 3px",
-};
-
-const CONF_BAR_TRACK: React.CSSProperties = {
-  height: 3,
-  background: "var(--line-2)",
-  borderRadius: 2,
-  overflow: "hidden",
-};
-
-const CONF_BAR_FILL: React.CSSProperties = {
-  height: "100%",
-  borderRadius: 2,
-  transition: "width 0.3s",
 };
