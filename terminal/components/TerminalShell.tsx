@@ -50,6 +50,7 @@ import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 import DrawingSidebar from "@/components/DrawingSidebar";
 import DayRange from "@/components/DayRange";
 import { useT, useLang } from "@/lib/i18n";
+import { displayName } from "@/lib/markets";
 import { useFromMacro, backToMacro } from "@/lib/originNav";
 import { getJSON, prefetch, loadCoverage } from "@/lib/dataCache";
 import { type CmpCfg, type CmpMode, defaultCmpCfg, cmpKey, isCmpKey, cmpSymOf } from "@/lib/compare";
@@ -64,6 +65,9 @@ import { listTemplates, saveTemplate } from "@/lib/chartTemplates";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
+// /api/ext-quote entry. extSession mirrors the Quote Hub's own window classification.
+type ExtSession = "pre" | "post" | "overnight";
+type ExtQuote = { extPrice: number; extChg: number; extTs: number; extSession?: ExtSession };
 
 const fmt = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const vol = (v: number | null | undefined) => (v == null || !isFinite(v) ? "—" : v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : String(v));
@@ -237,8 +241,12 @@ const TFG_TKEY: Record<string, string> = { Minutes: "tfMinutes", Hours: "tfHours
 const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "autoFib", sr: "srHeatmap", mtfa: "mtfSR", clear: "clearDetected" };
 
 // watchlist column widths (px). The symbol column + every visible data column is user-resizable.
-const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80, ext: 72 };
-// item-26: ext = Extended Hours chg% vs close; dash when no ext print.
+// `ext` matches `last` (82, not the old 72): the column now carries a PRICE of the same
+// magnitude as Last rather than a two-digit percentage, so the narrower default clipped it.
+// A user who has already dragged the column keeps their own width (set.colW wins).
+const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80, ext: 82 };
+// item-26: ext = the extended/overnight PRICE, tinted by the ext move, session + % in the
+// tooltip; dash when no ext print.
 type WLSet = { tableView: boolean; cols: { last: boolean; changePct: boolean; change: boolean; volume: boolean; ext: boolean }; disp: string; logo: boolean; colW: Record<string, number> };
 const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: true, change: false, volume: false, ext: true }, disp: "symbol", logo: true, colW: {} };
 
@@ -377,8 +385,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // batched /api/quote?syms= poll), so the detail pane and the watchlist can't disagree on a price.
   const [quotes, setQuotes] = useState<Record<string, any>>({});
   // item-26/27: symbol-keyed extended/overnight ext prints — polled from /api/ext-quote (separate
-  // from the main quote poll so the Quote Hub lane surface stays clean). Each entry: { extPrice, extChg, extTs } | null.
-  const [extQuotes, setExtQuotes] = useState<Record<string, { extPrice: number; extChg: number; extTs: number } | null>>({});
+  // from the main quote poll so the Quote Hub lane surface stays clean).
+  // Each entry: { extPrice, extChg, extTs, extSession? } | null. `extSession` ('pre'|'post'|
+  // 'overnight') is the hub's classification of the window; absent when the hub does not say.
+  const [extQuotes, setExtQuotes] = useState<Record<string, ExtQuote | null>>({});
   const [slice, setSlice] = useState<any>(null);
   const [fund, setFund] = useState<Fund | null>(null);
   const [fundLoading, setFundLoading] = useState(true);   // true from symbol reset until getFund settles — MegaPane/ForecastPage skeleton gate
@@ -1686,6 +1696,18 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   function delLayout(id: string) { fetch(`/api/layouts?id=${id}`, { method: "DELETE" }).then(() => setLayouts((ls) => ls.filter((x) => x.id !== id))); }
 
   const colList = (): [string, string][] => { const a: [string, string][] = [["last", t("colLast")]]; if (set.cols.change) a.push(["change", t("colChgShort")]); if (set.cols.changePct) a.push(["changePct", t("colChgPctShort")]); if (set.cols.volume) a.push(["volume", t("colVolShort")]); if (set.cols.ext) a.push(["ext", t("colExtShort")]); return a; };
+  // Plain-word label for an ext window. The hub's classification when it has one; "Overnight"
+  // is both the third value and the honest fallback when the hub does not say which window.
+  const extSessionLabel = (s?: ExtSession) =>
+    s === "pre" ? t("extSessionPre") : s === "post" ? t("extSessionPost") : t("overnight");
+  // Ext column tooltip: which session, and the move — the % the cell no longer prints itself.
+  const extTitle = (sym: string): string | undefined => {
+    const eq = extQuotes[sym];
+    if (!eq || eq.extPrice == null || !isFinite(eq.extPrice)) return undefined;
+    const label = extSessionLabel(eq.extSession);
+    if (eq.extChg == null || !isFinite(eq.extChg)) return label;
+    return `${label} · ${eq.extChg >= 0 ? "+" : ""}${fmt(eq.extChg)}%`;
+  };
   // item-26: ext column reads from extQuotes (separate poll); dash when closed or no ext print.
   const colVal = (sym: string, r: Row | undefined, key: string) => {
     if (!r) return "—";
@@ -1697,11 +1719,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (key === "change") { const prev = r.chg > -100 ? r.last / (1 + r.chg / 100) : r.last; const d = r.last - prev; return (d >= 0 ? "+" : "") + fmt(d, 2); }
     if (key === "changePct") return (u ? "+" : "") + fmt(r.chg) + "%";
     if (key === "volume") return vol(r.vol);
+    // Ext shows the overnight/extended PRICE, formatted exactly like Last — the number a trader
+    // reads off the tape — with the % move moved into the cell's tooltip alongside the session
+    // name. Dash when there is no ext print; never a fabricated value.
     if (key === "ext") {
       const eq = extQuotes[sym];
-      if (!eq || eq.extChg == null) return "—";
-      const eu = eq.extChg >= 0;
-      return (eu ? "+" : "") + fmt(eq.extChg) + "%";
+      if (!eq || eq.extPrice == null || !isFinite(eq.extPrice)) return "—";
+      return fmt(eq.extPrice, eq.extPrice < 10 ? 4 : 2);
     }
     return "";
   };
@@ -1710,7 +1734,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const dataCols = colList();
   const wlGrid = `${colw("sym")}px ${dataCols.map(([k]) => colw(k) + "px").join(" ")} 18px`;
   const wlMinW = colw("sym") + dataCols.reduce((s, [k]) => s + colw(k), 0) + 18 + (dataCols.length + 1) * 8;
-  const nameOf = (r?: Row) => (r?.zh || r?.name || "");   // Chinese stocks carry a `zh` proper name
+  // Language-aware: EN shows the English name, ZH shows the Chinese one, each falling back to the
+  // other when a row carries only one. (This used to be `zh || name`, which showed every Chinese
+  // name to English users.)
+  const nameOf = (r?: Row) => displayName(r, lang);
   const startResize = (key: string, e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startW = colw(key);
@@ -2174,7 +2201,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                             const eq = isExt ? extQuotes[sym] : null;
                             const extUp = eq && eq.extChg != null ? eq.extChg >= 0 : null;
                             const cls = isChg ? (u ? "up" : "down") : isExt && extUp != null ? (extUp ? "up" : "down") : "";
-                            return <span key={k} className={`c num ${cls}`}>{colVal(sym, r, k)}</span>;
+                            return <span key={k} className={`c num ${cls}`} title={isExt ? extTitle(sym) : undefined}>{colVal(sym, r, k)}</span>;
                           })}
                           <span className="rm" title={t("remove")} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeSymbol(sym); }}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></span>
                         </SortableWlRow>
@@ -2212,7 +2239,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                     1. Hub-emitted afterHours field on the live quote (existing leg).
                     2. ext-quote poll result from /api/ext-quote (Yahoo grey fallback).
                   Disappears at market open (mktClosed gate) — TV's "Overnight via BOATS" mechanic.
-                  We label by our actual source, never a borrowed brand. */}
+                  We label by our actual source, never a borrowed brand.
+                  The label follows the hub's extSession ('pre'/'post'/'overnight') rather than
+                  saying "Overnight" over an 08:15 ET pre-market print; the hub afterHours leg
+                  carries no session, so it keeps the neutral "Overnight" wording. */}
               {(() => {
                 if (!mktClosed) return null;
                 // Prefer hub afterHours print; fall back to ext-quote poll
@@ -2220,6 +2250,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                   price: ahPrint,
                   chg: ahChg,
                   ts: null as number | null,
+                  session: undefined as ExtSession | undefined,
                   source: "hub",
                 } : null;
                 const pollExt = !isComposite(active) && classify(active) === "us"
@@ -2229,10 +2260,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                   price: pollExt.extPrice,
                   chg: pollExt.extChg,
                   ts: pollExt.extTs,
+                  session: pollExt.extSession,
                   source: "ext-quote",
                 } : null);
                 if (!extData) return null;
-                const { price, chg, ts } = extData;
+                const { price, chg, ts, session } = extData;
                 const eu = (chg ?? 0) >= 0;
                 const tsStr = ts
                   ? new Date(ts * 1000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
@@ -2248,7 +2280,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                       )}
                     </div>
                     <div className="ah-meta">
-                      <span>{t("overnight")}</span>
+                      <span>{extSessionLabel(session)}</span>
                       {tsStr && <span> · {t("extLastUpdate").replace("{time}", tsStr)}</span>}
                     </div>
                   </div>

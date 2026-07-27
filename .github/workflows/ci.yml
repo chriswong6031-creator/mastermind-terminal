@@ -4,6 +4,22 @@ on:
   pull_request:
 
 jobs:
+  hub:
+    name: Quote Hub tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm test
+
   terminal:
     name: Terminal typecheck + tests
     runs-on: ubuntu-latest
@@ -23,3 +39,28 @@ jobs:
       - run: npx next typegen
       - run: npx tsc --noEmit
       - run: npm test
+
+  python:
+    name: Ingest + signal-layer tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # The MINIMAL import closure of tests/ + the ingest/signal_layer modules they pull in,
+      # verified in a clean venv — the whole suite passes there with ZERO skips (a skip here
+      # would mean a dependency is missing and a test is silently not running):
+      #   numpy, pandas  — signal_layer.confluence / confluence_v2 and the tests directly
+      #   pyarrow        — pandas' parquet engine, used by tests/test_golden_gate.py
+      #   jsonschema     — tests/test_seasonal_regime.py. NOT optional: it is guarded by an
+      #                    importorskip, so omitting it turns a real assertion into a silent
+      #                    SKIP and the job goes green having tested nothing there.
+      # requirements.txt additionally carries fastapi/uvicorn/pyyaml, which nothing under
+      # tests/ imports — installing them would only slow the job down.
+      - run: pip install numpy pandas pyarrow jsonschema pytest
+      # Run as `python -m pytest` from the repo root: that is what puts the root on sys.path,
+      # which is how `import ingest.…` / `import signal_layer.…` resolve (there is no
+      # conftest.py and no installed package).
+      - run: python -m pytest tests/ -q

@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, startTransition, useDeferredValue, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useT } from "@/lib/i18n";
+import { useT, useLang } from "@/lib/i18n";
+import { displayName } from "@/lib/markets";
 import { getJSON } from "@/lib/dataCache";
 import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
@@ -38,6 +39,7 @@ const shimmerColWidths = ["160px", "80px", "70px", "80px", "80px", "60px", "60px
 export default function ScreenerView({ email }: { email: string }) {
   const router = useRouter();
   const t = useT();
+  const { lang } = useLang();
 
   // ── data state ─────────────────────────────────────────────────────────
   const [rows, setRows] = useState<Row[]>([]);
@@ -313,7 +315,7 @@ export default function ScreenerView({ email }: { email: string }) {
                         <span className="ic" style={{ background: r.col }}>{r.sym[0]}</span>
                         <div>
                           <div className="tk">{r.sym}</div>
-                          <div className="nm">{r.zh || r.name}</div>
+                          <div className="nm">{displayName(r, lang)}</div>
                         </div>
                       </div>
                     </td>

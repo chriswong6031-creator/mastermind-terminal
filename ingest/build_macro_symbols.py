@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -75,7 +77,7 @@ def fetch_quotes(syms: list[str]) -> dict[str, dict]:
     return out
 
 
-def fetch_ohlc(sym: str) -> list[dict]:
+def fetch_ohlc(sym: str) -> list[list]:
     """Daily OHLC in the same shape chart.js already reads for equities."""
     url = f"{CHART}/{urllib.parse.quote(sym)}?range=5y&interval=1d"
     try:
@@ -87,22 +89,50 @@ def fetch_ohlc(sym: str) -> list[dict]:
     ts = res.get("timestamp") or []
     q = ((res.get("indicators") or {}).get("quote") or [{}])[0]
     o, h, l, c, v = (q.get(k) or [] for k in ("open", "high", "low", "close", "volume"))
-    bars: list[dict] = []
+    # POSITIONAL rows [date, o, h, l, c, v] — the house OHLC contract (AAPL.json et al).
+    # Every consumer indexes positionally (ChartPanel b[0..5], gen_slices_all b[4],
+    # hydrate_prices last[4]); the dict-bar shape this function originally wrote rendered
+    # no daily chart at all for macro symbols and KeyError'd the hydrate pass (found 2026-07-27).
+    bars: list[list] = []
     for i, t in enumerate(ts):
         # A null close means the session did not print — skip rather than forward-fill, so a
         # holiday never appears as a real flat bar.
         if i >= len(c) or c[i] is None:
             continue
         day = time.strftime("%Y-%m-%d", time.gmtime(t))
-        bars.append({
-            "t": day,
-            "o": round(float(o[i]), 6) if i < len(o) and o[i] is not None else None,
-            "h": round(float(h[i]), 6) if i < len(h) and h[i] is not None else None,
-            "l": round(float(l[i]), 6) if i < len(l) and l[i] is not None else None,
-            "c": round(float(c[i]), 6),
-            "v": int(v[i]) if i < len(v) and v[i] is not None else 0,
-        })
+        cv = round(float(c[i]), 6)
+        bars.append([
+            day,
+            round(float(o[i]), 6) if i < len(o) and o[i] is not None else cv,
+            round(float(h[i]), 6) if i < len(h) and h[i] is not None else cv,
+            round(float(l[i]), 6) if i < len(l) and l[i] is not None else cv,
+            cv,
+            int(v[i]) if i < len(v) and v[i] is not None else 0,
+        ])
     return bars
+
+
+def write_atomic(path: Path, payload: dict) -> None:
+    """tmp + os.replace inside the destination dir — identical to fetch_fred_daily.write_atomic.
+
+    The manifest write below is a FULL rewrite of the whole staging universe (8.7k equity rows
+    plus ours). A bare write_text truncates the file first, so a crash, a kill, or a full disk
+    mid-write leaves a half-written manifest where a complete one used to be — the same class of
+    failure as the 2026-07-11 "8,740 -> 34" incident, only irrecoverable. os.replace is atomic on
+    POSIX: a concurrent reader sees either the previous manifest or the new one, never a prefix.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".macro.tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        # mkstemp creates 0600; this file is SERVED out of terminal/public/data, so it must be
+        # world-readable like every other writer's output or the web server 403s on it.
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def main() -> int:
@@ -119,7 +149,13 @@ def main() -> int:
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    mpath = out_dir / "manifest.json"
+    # Honor the nightly's staging manifest ($TERMINAL_MANIFEST). Writing to the live
+    # manifest mid-run is exactly how these rows died every night: terminal-data builds
+    # the universe into a STAGING file and atomically swaps it over live at the very end,
+    # discarding anything merged into live in between (found 2026-07-27; fetch_fred_daily
+    # got this right from day one — keep the two resolutions identical).
+    env_manifest = os.environ.get("TERMINAL_MANIFEST")
+    mpath = Path(env_manifest) if env_manifest else out_dir / "manifest.json"
 
     if mpath.exists():
         manifest = json.loads(mpath.read_text())
@@ -149,7 +185,7 @@ def main() -> int:
             symbols[sym] = row
             added += 1
 
-    mpath.write_text(json.dumps(manifest, ensure_ascii=False, separators=(",", ":")))
+    write_atomic(mpath, manifest)
     print(f"manifest: {before} -> {len(symbols)} symbols (+{added} new, {updated} enriched)")
 
     if not args.no_ohlc:
@@ -158,7 +194,9 @@ def main() -> int:
             bars = fetch_ohlc(sym)
             if not bars:
                 continue
-            (out_dir / f"{sym}.json").write_text(json.dumps({"symbol": sym, "bars": bars}, separators=(",", ":")))
+            (out_dir / f"{sym}.json").write_text(json.dumps(
+                {"t": sym, "o": 1, "src": "yahoo", "bar_quality": "real_ohlc", "bars": bars},
+                separators=(",", ":")))
             wrote += 1
             time.sleep(0.25)
         print(f"ohlc: wrote {wrote}/{len(yahoo_symbols())} series")

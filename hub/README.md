@@ -1,8 +1,9 @@
 # Mastermind Quote Hub
 
 Localhost-only (127.0.0.1:3100) WebSocket fan-out + REST quote server for the
-Mastermind Terminal. Serves crypto (Coinbase/OKX) and delayed-US (Polygon AM feed)
-quotes to the Next.js frontend via loopback proxy.
+Mastermind Terminal. Serves crypto (Coinbase/OKX), delayed-US (Polygon AM feed) and
+macro (futures / indices / FX, near-live via Sina) quotes to the Next.js frontend via
+loopback proxy.
 
 ## VPS deploy path
 
@@ -15,6 +16,9 @@ quotes to the Next.js frontend via loopback proxy.
     okx.js
     polygon.js
     store.js
+    extfeed.js              ← extended/overnight equity prints (alpaca / webull / yahoo)
+    macrofeed.js            ← macro quotes: sina near-live + yahoo-spark delayed (new 2026-07-27)
+    quotes.js               ← symbol routing + /quotes response assembly (new 2026-07-27)
     log.js
   package.json
   node_modules/             ← npm ci after deploy; ws only dependency
@@ -34,6 +38,11 @@ Env vars come from `/opt/terminal/.env` (EnvironmentFile in the unit):
 | `ALPACA_API_KEY` | optional | Alpaca free plan key — enables overnight/ext ws feed |
 | `ALPACA_API_SECRET` | optional | Alpaca free plan secret |
 | `EXT_FEED_DISABLE` | optional | set to `1` to disable the entire ext-hours feed |
+| `WEBULL_DISABLE` | optional | set to `1` to disable **only** the Webull ext leg (Alpaca + Yahoo legs unaffected) |
+| `MACRO_FEED_DISABLE` | optional | set to `1` to disable the macro feed — futures/indices/FX drop out of `/quotes` entirely |
+
+Both new feeds are **keyless**: no credentials are required for the Sina, Yahoo-spark or
+Webull legs.
 
 ## systemd unit
 
@@ -121,15 +130,37 @@ a secondary subtle "AH <price>" line when present.
 
 **Feed selection (automatic):**
 
-| Mode | Condition | Coverage |
-|---|---|---|
-| Alpaca overnight ws | `ALPACA_API_KEY` + `ALPACA_API_SECRET` set | All ext windows; true overnight via `v1beta1/overnight` feed (UNCONFIRMED — entitlement depends on Alpaca plan; contact Alpaca support to verify) |
-| Yahoo unofficial fallback | No Alpaca keys (or Alpaca auth fails) | Pre-market + post-market only (04:00–09:30, 16:00–20:00 ET); no true overnight |
+Serve priority is **Alpaca → Webull → Yahoo/R2 relay**, evaluated per symbol on every read.
+A leg is skipped when it has no usable print, so an empty Alpaca map no longer blanks the
+ext block.
+
+| Priority | Leg | Condition | Coverage |
+|---|---|---|---|
+| 1 | Alpaca overnight ws | `ALPACA_API_KEY` + `ALPACA_API_SECRET` set and auth succeeded | All ext windows; true overnight via `v1beta1/overnight` feed (UNCONFIRMED — entitlement depends on Alpaca plan) |
+| 2 | Webull keyless REST | always, unless `WEBULL_DISABLE=1` | Pre-market + post-market **confirmed**; true overnight **best-effort** — accepted only when the print passes the session gate below |
+| 3 | Yahoo unofficial / R2 relay | always (last resort) | Pre-market + post-market only; never overnight |
+
+**Webull leg detail** (`extSource: "webull"`):
+
+- `quotes-gw.webullfintech.com` — `search/pc/tickers` resolves `sym → tickerId` once (cached
+  for the process lifetime; misses cached 1 h), then `stock/tickerRealTime/getQuote` is polled
+  every 60 s, **only outside RTH**, sequentially with a 150 ms stagger. LRU cap 30.
+- The ext print is taken from an explicit overnight field (`ovnPrice`/`overnightPrice`/…) when
+  Webull exposes one — the discovered key name is logged once — otherwise from `pPrice` with
+  `tradeTime` as its timestamp. Every numeric field arrives as a **string** and is `Number()`d.
+- **Session gate (the honesty rule).** A print is cached only when its own timestamp classifies
+  into the *same* session that is currently being served, and is under 90 minutes old. Webull
+  keeps serving Friday's last post-market print all weekend; without this gate that stale number
+  would be published as live Sunday-overnight data. A rejected print writes **nothing** — the
+  previous (honest) cache entry survives untouched.
+- Whether Webull carries true overnight (20:00–04:00 ET, Blue Ocean) prints through
+  `pPrice`/`tradeTime` is **unverified** — only pre-market was testable from the VPS. The gate
+  decides at runtime rather than trusting the source blindly.
 
 > **Note:** The 30-symbol free-plan websocket cap and overnight feed entitlement on Alpaca's
 > Basic (free) plan are not confirmed in Alpaca's primary public documentation. Both may require
 > a paid plan. If `ALPACA_API_KEY` / `ALPACA_API_SECRET` are set but auth returns 402/403, the
-> hub automatically falls back to the keyless Yahoo leg for pre/post windows.
+> hub automatically degrades to Webull and then the keyless Yahoo leg.
 
 **Multi-user note:** The hub is a singleton. The 30-symbol LRU budget is shared across ALL users. A
 `/quotes` request for symbol X from any user advances X to MRU. The oldest symbol is unsubscribed when
@@ -142,22 +173,117 @@ extPrice     number   — latest ext trade price
 extChg       number|null — (extPrice − closeRef) / closeRef × 100; closeRef = officialClose when daily file has rolled, else prevClose (prior-session close); null only when neither is available
 extTs        number   — Unix seconds of the ext bar
 extSession   string   — 'pre' | 'post' | 'overnight'
-extSource    string   — 'alpaca_overnight' | 'yahoo_unofficial'
+extSource    string   — 'alpaca_overnight' | 'webull' | 'yahoo_unofficial' | 'yahoo-relay'
 ```
 
 These fields are absent (never emitted) during RTH. They are also stripped if the cached ext print ages past 90 minutes.
+
+A cache entry missing a finite `price`/`ts` is discarded at serve time rather than emitted —
+a populated `extSource` with a missing `extPrice` is worse than no ext block at all.
+
+## Macro feed (futures / indices / FX)
+
+`lib/macrofeed.js` answers macro symbols through the same `GET /quotes` contract. Before this,
+the terminal fetched them itself from Yahoo spark at `DELAYED_15M`; the hub now serves the
+liquid contracts near-live.
+
+**Routing.** `isMacroSymbol()` claims a symbol before the `us`/`crypto` classifier ever sees it:
+literal `DX-Y.NYB`, `^INDEX` (caret), `*=F` (futures), `*=X` (FX). Macro symbols bypass the
+Store, Polygon and the AnchorCache entirely — they carry their own `prevClose`/`chg` and have no
+manifest or daily file to anchor against.
+
+**Legs.**
+
+| Leg | Source | Cadence | Labels | Coverage |
+|---|---|---|---|---|
+| Sina | `hq.sinajs.cn/list=<codes>` — one batched GET for every demanded code | 3 s | `source: "sina"`, `basis: "LIVE"`, `live: true` | The 13 mapped contracts below (~seconds behind) |
+| Yahoo spark | `query1.finance.yahoo.com/v7/finance/spark` — chunked ≤18 symbols (Yahoo 400s above ~20) | 15 s | `source: "yahoo-spark"`, `basis: "DELAYED_15M"`, `live: false` | **Every** demanded macro symbol — the only source for what Sina lacks (`^GSPC`, `^TNX`, `^VIX`, FX pairs, `PL=F`, `PA=F`, `RTY=F`) *and* the standby a Sina-mapped symbol falls back to when that leg goes stale |
+
+A delayed source is **never** labelled `LIVE`. Sina requests need `Referer: https://finance.sina.com.cn`
+and a `Mozilla/5.0` User-Agent; the GBK response is decoded as latin1 (every field we read is ASCII —
+only the Chinese contract name, which we ignore, is affected).
+
+**Symbol map.**
+
+| Symbol | Sina code | Contract | Symbol | Sina code | Contract |
+|---|---|---|---|---|---|
+| `CL=F` | `hf_CL` | WTI crude | `ZC=F` | `hf_C` | CBOT corn |
+| `BZ=F` | `hf_OIL` | Brent crude | `ZS=F` | `hf_S` | CBOT soybeans |
+| `NG=F` | `hf_NG` | Henry Hub nat gas | `ZW=F` | `hf_W` | CBOT wheat |
+| `GC=F` | `hf_GC` | COMEX gold | `ES=F` | `hf_ES` | E-mini S&P 500 |
+| `SI=F` | `hf_SI` | COMEX silver | `NQ=F` | `hf_NQ` | E-mini Nasdaq 100 |
+| `HG=F` | `hf_HG` | COMEX copper ⚠️ | `YM=F` | `hf_YM` | E-mini Dow |
+| `DX-Y.NYB` | `DINIW` | ICE dollar index | | | |
+
+`hf_PL` (platinum), `hf_PA` (palladium) and `hf_RTY` (Russell 2000) return **empty strings** on
+Sina and are deliberately absent from the map — those symbols fall to the Yahoo leg.
+
+> ⚠️ **HG=F unit quirk.** Sina quotes COMEX copper in **US cents per pound** (`640.013`), while
+> Yahoo `HG=F` — what the terminal charts and what the nightly daily files store — quotes **USD
+> per pound** (`6.40013`). Every price field (`last`/`open`/`high`/`low`/`prevClose`) is scaled by
+> `0.01` for this symbol **only**. Serving the raw number would make the live price look 100× the
+> chart. `chg` is scale-invariant and unaffected.
+
+**Row layouts** (0-indexed, verified live 2026-07-27). `hf_*`: `[0]` last, `[2]` bid, `[3]` ask,
+`[4]` high, `[5]` low, `[6]` `HH:MM:SS` Beijing, `[7]` prior settle → `prevClose`, `[8]` open,
+`[12]` `YYYY-MM-DD` Beijing, `[13]` name. `DINIW` differs: `[0]` time, `[1]` last, `[3]` prev
+close, `[5]` open, `[6]` high, `[7]` low, `[10]` date. Timestamps are Beijing wall-clock (UTC+8,
+no DST) converted to epoch seconds; the row's own clock is used, never ours.
+
+**Demand + budget.** `demand(sym)` on every `/quotes` request drives an LRU with cap **64**,
+shared globally across all users (same singleton model as the ext feed). The cap must stay above
+the catalog's macro count (49) — one below it and the last symbol rotates through eviction
+forever, never holding a cached quote. Symbols idle for 30 min are dropped along with their
+cached quotes. A poll cycle with nothing demanded on its leg is skipped entirely — no request is
+made.
+
+**Staleness.** Each entry carries its own honest `ts`, and both legs cover every demanded symbol,
+so `getQuote()` serves whichever entry carries the later print (ties go to Sina — the near-live
+leg, which also carries session high/low the spark row lacks). A served **Sina** print older than
+15 minutes is demoted to `basis: "DELAYED_15M"` / `live: false`: past that point it is the last
+print before a session break, not a live one. The price and its `ts` are untouched — on a weekend
+Friday's settle *is* the right answer, and labelling it `LIVE` until Monday is not.
+
+**Backoff.** A failed poll logs (rate-limited), bumps a consecutive-error counter and leaves the
+last good cache in place — it never throws out of the timer. The next poll is armed at
+`interval × 2^min(errors, 5)`, capped at **60 s** (Sina) and **300 s** (Yahoo), and returns to the
+base interval on the first success. This VPS's IP is already Yahoo-429-prone; re-arming a fixed
+15 s timer into an upstream that is refusing us is how a soft rate-limit becomes a hard block.
+
+**Macro quote shape:**
+
+```
+sym, last, chg, prevClose, open, high, low,
+vol: null, amount: null,          — Sina's global-futures rows carry no usable volume
+ts, live, source, market: "macro", basis
+```
 
 ## HTTP API
 
 ```
 GET /health
 → { ok, port, quotes, manifest:{path,mtime,symbols}, anchorCache:{size,dataDir},
-    cryptoPrimary, coinbase, okx, polygon, extFeed, ts }
+    cryptoPrimary, coinbase, okx, polygon, extFeed, macroFeed, ts }
 
-GET /quotes?syms=NVDA,AAPL,BTC-USD
+GET /quotes?syms=NVDA,AAPL,BTC-USD,CL=F,^GSPC
 → { NVDA: { sym, last, chg, prevClose, close?, afterHours?, open, high, low, vol,
              ts, live, source, market, basis, anchor_source, stale_anchor?,
              extPrice?, extChg?, extTs?, extSession?, extSource? }, ... }
+```
+
+The response is always a **flat `{ SYM: quote }` object carrying present entries only** —
+merging the macro feed did not change that contract. Symbols with no quote are simply absent
+(never `null`), and `cn`/`hk`/`ca` listings are still never served.
+
+`extFeed.health()` gained a `webull` block, and `/health` gained a top-level `macroFeed` block:
+
+```
+extFeed.webull  → { subs, cacheSize, tickerIds, lastPollAt, consecutiveErrors, lruCap }
+                  or { disabled: true } when WEBULL_DISABLE=1
+
+macroFeed       → { sinaSubs, yahooSubs, cacheSize, lastSinaPollAt, lastYahooPollAt,
+                    sinaConsecutiveErrors, yahooConsecutiveErrors, lruCap }
+                  or { disabled: true } when MACRO_FEED_DISABLE=1
 ```
 
 `anchor_source` is one of `"daily_file"`, `"polygon_prev"`, `"manifest"`, `"quote_partial"`.
@@ -188,3 +314,62 @@ GET /quotes?syms=NVDA,AAPL,BTC-USD
   }
 }
 ```
+
+**Sample /quotes response for macro symbols (`syms=CL=F,HG=F,^GSPC`):**
+
+```json
+{
+  "CL=F": {
+    "sym": "CL=F",
+    "last": 82.543,
+    "chg": -7.577,
+    "prevClose": 89.31,
+    "open": 86.12, "high": 86.2, "low": 82.46,
+    "vol": null, "amount": null,
+    "ts": 1785144763,
+    "live": true,
+    "source": "sina",
+    "market": "macro",
+    "basis": "LIVE"
+  },
+  "HG=F": {
+    "sym": "HG=F",
+    "last": 6.40013,
+    "chg": 0.6705,
+    "prevClose": 6.3575,
+    "open": 6.362, "high": 6.4065, "low": 6.34,
+    "vol": null, "amount": null,
+    "ts": 1785144760,
+    "live": true,
+    "source": "sina",
+    "market": "macro",
+    "basis": "LIVE"
+  },
+  "^GSPC": {
+    "sym": "^GSPC",
+    "last": 7501.25,
+    "chg": 0.7217,
+    "prevClose": 7447.5,
+    "open": null, "high": null, "low": null,
+    "vol": null, "amount": null,
+    "ts": 1785144699,
+    "live": false,
+    "source": "yahoo-spark",
+    "market": "macro",
+    "basis": "DELAYED_15M"
+  }
+}
+```
+
+Note `HG=F` is already rescaled to USD/lb — the raw Sina row read `640.013` cents.
+
+## Tests
+
+```bash
+cd hub && npm ci && npm test        # 183 tests, node:test, fully offline
+```
+
+Every HTTP transport in the macro and Webull suites is injected, so the tests make no network
+calls. Note that on Node ≥ 22 the positional argument to `--test` is a **glob, not a directory**:
+use `node --test "hub/tests/*.test.js"` (or `npm test` from `hub/`). A bare `node --test hub/tests/`
+fails with `MODULE_NOT_FOUND`.

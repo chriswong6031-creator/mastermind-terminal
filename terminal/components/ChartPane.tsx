@@ -6,6 +6,8 @@ import ChartSettingsModal from "@/components/ChartSettingsModal";
 import { type Drawing } from "@/lib/drawings";
 import { type CmpCfg } from "@/lib/compare";
 import { type IChartApi } from "lightweight-charts";
+import { useLang } from "@/lib/i18n";
+import { displayName } from "@/lib/markets";
 
 const f = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 
@@ -28,6 +30,7 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
     /** B3: forwarded to ChartPanel to notify TerminalShell of sub-pane count changes. */
     onPaneCount?: (n: number) => void;
   }) {
+  const { lang } = useLang();
   const [auto, setAuto] = useState<Drawing[]>([]);
   const [chartSettings, setChartSettings] = useState<ChartSettings>(DEFAULT_CHART_SETTINGS);
   const [chartApi, setChartApi] = useState<IChartApi | null>(null);
@@ -109,7 +112,7 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         <span className={`cg num ${up ? "up" : "down"}`}>{up ? "+" : ""}{f(row?.chg)}%</span>
       </div>
       <ChartPanel
-        symbol={symbol} companyName={row?.zh || row?.name || ""} chartType={chartType} indicators={inds} timeframe={tf}
+        symbol={symbol} companyName={displayName(row, lang)} chartType={chartType} indicators={inds} timeframe={tf}
         replayIdx={isActive ? replayIdx : null} onMeta={isActive ? onMeta : undefined}
         tool={isActive ? tool : null} drawStyle={drawStyle} drawings={merged}
         onDrawingsChange={handleChange} detectCmd={isActive ? detectCmd : null}
