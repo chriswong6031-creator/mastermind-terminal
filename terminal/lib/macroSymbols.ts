@@ -66,6 +66,46 @@ export function macroKind(sym: string): MacroKind | null {
   return null;
 }
 
+// ── Intraday display timezone ──────────────────────────────────────────────────────────────
+// The intraday chart's convention is a "display epoch": the market-local wall clock read AS IF
+// it were UTC (see sessionEpoch in intradayShared / etDisplay in intradaySources). For US
+// instruments that local clock is US Eastern — but an international index's session runs on
+// ITS market's clock, and stamping a Nikkei bar with the ET reading plots the Tokyo session
+// as 20:00–02:00 and lets Day Trade Mode paint US RTH bands over it. This map carries the
+// HOME timezone of every macro symbol whose market does not run on US Eastern wall clock.
+// Everything else — US indices, benchmark yields, FX, futures, DX-Y.NYB, and ^GSPTSE
+// (Toronto trades on the same Eastern wall clock, 09:30–16:00) — defaults to ET.
+//
+// KEEP IN SYNC with _INDICES in ingest/macro_catalog.py: adding an international index there
+// means adding its home timezone here, or its intraday axis silently comes out in ET.
+const ET_TZ = "America/New_York";
+const MACRO_TZ: Record<string, string> = {
+  "^N225": "Asia/Tokyo",
+  "^KS11": "Asia/Seoul",
+  "^TWII": "Asia/Taipei",
+  "^HSI": "Asia/Hong_Kong",
+  "^HSCE": "Asia/Hong_Kong",
+  "^FTSE": "Europe/London",
+  "^GDAXI": "Europe/Berlin",
+  "^FCHI": "Europe/Paris",
+  "^STOXX50E": "Europe/Amsterdam",
+  "^BSESN": "Asia/Kolkata",
+  "^AXJO": "Australia/Sydney",
+};
+
+/** IANA timezone whose wall clock is this macro symbol's intraday display axis. */
+export function macroDisplayTz(sym: string): string {
+  return MACRO_TZ[String(sym ?? "").trim().toUpperCase()] ?? ET_TZ;
+}
+
+/**
+ * True when this symbol's intraday axis runs on US Eastern wall clock — the precondition for
+ * painting US RTH session bands (premarket/after-hours) over its bars in Day Trade Mode.
+ */
+export function macroOnEtAxis(sym: string): boolean {
+  return macroDisplayTz(sym) === ET_TZ;
+}
+
 // Yahoo's spark endpoint HTTP-400s a symbol list longer than ~20 (20 OK, 21 fails) — the same
 // cliff the macro repo's quotes worker documents, and confirmed again here: a 23-symbol request
 // returns zero results rather than a partial answer. Chunk under it; the chunks run in parallel.

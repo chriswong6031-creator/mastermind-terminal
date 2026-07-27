@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isMacroSymbol, macroKind } from "../macroSymbols";
+import { isMacroSymbol, macroKind, macroDisplayTz, macroOnEtAxis } from "../macroSymbols";
 import { classify } from "../intradayShared";
 import { marketOf } from "../markets";
 
@@ -34,6 +34,61 @@ describe("isMacroSymbol — shape routing", () => {
     expect(macroKind("EURUSD=X")).toBe("fx");
     expect(macroKind("DX-Y.NYB")).toBe("fx");
     expect(macroKind("NVDA")).toBe(null);
+  });
+});
+
+/** Every index whose session runs on a clock other than US Eastern. */
+const INTL = [
+  "^N225", "^KS11", "^TWII", "^HSI", "^HSCE", "^FTSE",
+  "^GDAXI", "^FCHI", "^STOXX50E", "^BSESN", "^AXJO",
+];
+
+describe("macroDisplayTz — which wall clock a symbol's intraday axis runs on", () => {
+  // The chart's display epoch is the market-local wall clock read AS IF it were UTC. Stamping a
+  // Nikkei bar with the ET reading plotted the Tokyo session at 20:00–02:00 on its own axis.
+  //
+  // Spelled out longhand rather than looped over the source map: this list is the SYNC PIN
+  // against _INDICES in ingest/macro_catalog.py — an international index added there with no
+  // timezone here should fail a test, not silently render in US Eastern time.
+  it("maps every international index to its home zone", () => {
+    expect(macroDisplayTz("^N225")).toBe("Asia/Tokyo");
+    expect(macroDisplayTz("^KS11")).toBe("Asia/Seoul");
+    expect(macroDisplayTz("^TWII")).toBe("Asia/Taipei");
+    expect(macroDisplayTz("^HSI")).toBe("Asia/Hong_Kong");
+    expect(macroDisplayTz("^HSCE")).toBe("Asia/Hong_Kong");
+    expect(macroDisplayTz("^FTSE")).toBe("Europe/London");
+    expect(macroDisplayTz("^GDAXI")).toBe("Europe/Berlin");
+    expect(macroDisplayTz("^FCHI")).toBe("Europe/Paris");
+    expect(macroDisplayTz("^STOXX50E")).toBe("Europe/Amsterdam");
+    expect(macroDisplayTz("^BSESN")).toBe("Asia/Kolkata");
+    expect(macroDisplayTz("^AXJO")).toBe("Australia/Sydney");
+  });
+
+  it("defaults US indices, yields, FX and futures to Eastern time", () => {
+    // ^GSPTSE is deliberately UNMAPPED, not overlooked: Toronto trades the same Eastern wall
+    // clock as New York (09:30–16:00), so the TSX composite belongs on the ET axis.
+    for (const s of ["^GSPC", "^VIX", "^TNX", "GC=F", "ES=F", "EURUSD=X", "DX-Y.NYB", "^GSPTSE"]) {
+      expect(macroDisplayTz(s), s).toBe("America/New_York");
+      expect(macroOnEtAxis(s), s).toBe(true);
+    }
+  });
+
+  it("reports every international index as OFF the ET axis, so US session bands stay off it", () => {
+    // macroOnEtAxis is the precondition ChartPanel checks before painting US RTH shading; a
+    // `true` here would tint arbitrary slices of the Tokyo or London session.
+    for (const s of INTL) expect(macroOnEtAxis(s), s).toBe(false);
+  });
+
+  it("names only real IANA zones", () => {
+    // A typo'd zone must fail HERE, not throw a RangeError inside the intraday fetch in prod.
+    for (const s of INTL) {
+      expect(() => new Intl.DateTimeFormat("en-US", { timeZone: macroDisplayTz(s) }), s).not.toThrow();
+    }
+  });
+
+  it("looks up trim- and case-insensitively", () => {
+    expect(macroDisplayTz("^n225")).toBe("Asia/Tokyo");
+    expect(macroDisplayTz(" ^N225 ")).toBe("Asia/Tokyo");
   });
 });
 

@@ -29,6 +29,7 @@ import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataC
 import { parseComposite, alignAndSum } from "@/lib/composite";
 import { CMP_PALETTE, type CmpCfg, defaultCmpCfg, cmpKey } from "@/lib/compare";
 import { isIntradayTf, classify, tfMinutes, type Market } from "@/lib/intradaySources";
+import { isMacroSymbol, macroOnEtAxis } from "@/lib/macroSymbols";
 import { sessionVwap, openingRange, sessionLevels, pivotLevels, rvolSeries, ttmSqueeze, adx as calcAdx, cvdApprox, type Bar as IMBar, type DailyBar } from "@/lib/intradayMath";
 import { attachSessionShading, detachSessionShading, type SessionShadingPrimitive } from "@/lib/sessionShading";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
@@ -4074,7 +4075,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const priceS = priceSeriesRef.current;
     const market = classify(symbol);
     const isIntraday = isIntradayTf(timeframe);
-    const canShade = dayMode && isIntraday && market !== "crypto";
+    // US-session shading assumes the bars' display axis runs on US Eastern wall clock. An
+    // international macro index (^N225, ^FTSE, ^HSI, …) plots on its HOME market's clock
+    // (macroDisplayTz), so ET RTH bands would tint arbitrary slices of the Tokyo or London
+    // session — suppress shading instead. classify() cannot see this: every macro shape
+    // falls through its "us" default.
+    const canShade = dayMode && isIntraday && market !== "crypto"
+      && !(isMacroSymbol(symbol) && !macroOnEtAxis(symbol));
 
     // Detach any existing shading primitive first
     if (shadingPrimRef.current && priceS) {
