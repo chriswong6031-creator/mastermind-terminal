@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { fetchIntraday, isIntradayTf, classify } from "@/lib/intradaySources";
+import { isMacroSymbol } from "@/lib/macroSymbols";
 import { withStoredHistory } from "@/lib/intradayStore";
 import type { Bar6 } from "@/lib/intradayShared";
 import { intradayFixture } from "@/lib/flowSource";
@@ -45,8 +46,14 @@ export async function GET(req: Request) {
   // basis:'utc' — a bare `sym|tf|ext` key would then serve a warm cross-provider / cross-basis entry
   // after an entitlement flip (databento-readiness audit, finding #6). Keying on source|basis makes
   // a provider cutover a cache MISS rather than a silent stale-bar hazard.
+  // isMacroSymbol FIRST: a macro symbol falls through classify()'s "us" default, so a bare
+  // classify() computed "polygon" for the ^/=F/=X symbols fetchIntraday actually serves from
+  // Yahoo — the one thing this key exists to prevent. A cutover between those two providers
+  // must be a cache MISS, and it only is if the key names the provider that will really serve.
   const market = classify(sym);
-  const source = market === "ca" ? "none" : (market === "us" || market === "crypto") ? "polygon" : "tencent";
+  const source = isMacroSymbol(sym)
+    ? "yahoo-macro"
+    : market === "ca" ? "none" : (market === "us" || market === "crypto") ? "polygon" : "tencent";
   const basis = "display"; // all current providers emit the display-epoch convention; UTC feeds bump this
   // serve a warm cache without re-auth (it's public market data); only a fresh upstream fetch is gated
   const ckey = `${sym}|${tf}|${ext ? 1 : 0}|${source}|${basis}`;

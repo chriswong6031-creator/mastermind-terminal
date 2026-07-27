@@ -10,6 +10,9 @@
 //   (a) crypto: Coinbase exchange ws-feed (keyless) primary, OKX fallback (one writer at a time)
 //   (b) US: Polygon AM.* dynamic per-symbol subs (delayed cluster by default; HUB_POLYGON_CLUSTER=live
 //       when RT-entitled, auto-demotes back on denial), LRU 500, chg vs session anchor
+//   (c) macro: futures / caret indices / FX / DX-Y.NYB via lib/macrofeed.js — Sina global-futures
+//       snapshot (near-live, basis LIVE) with a Yahoo-spark leg (DELAYED_15M) for what Sina does
+//       not carry. Macro symbols bypass the Store, Polygon and the AnchorCache entirely.
 //
 // prevClose fix (2026-07-09): the manifest baseline is stale all day (swaps at ~03:00 UTC).
 // An AnchorCache keyed by (sym, ET-session-date) resolves prevClose from:
@@ -29,6 +32,14 @@ const { Coinbase } = require("./lib/coinbase");
 const { OKX } = require("./lib/okx");
 const { Polygon } = require("./lib/polygon");
 const { ExtFeed } = require("./lib/extfeed");
+const { MacroFeed } = require("./lib/macrofeed");
+const {
+  classify,
+  isMacroSymbol,
+  isDailyOnlySymbol,
+  applyDemand,
+  buildQuotesResponse,
+} = require("./lib/quotes");
 
 const HOST = "127.0.0.1";
 const PORT = parseInt(process.env.HUB_PORT || "3100", 10);
@@ -49,6 +60,10 @@ const extFeed = new ExtFeed({
   alpacaKey: process.env.ALPACA_API_KEY || "",
   alpacaSecret: process.env.ALPACA_API_SECRET || "",
 });
+
+// Macro feed (futures / indices / FX / dollar index). Keyless — no env required.
+// Kill-switch: MACRO_FEED_DISABLE=1 (read inside the constructor).
+const macroFeed = new MacroFeed();
 
 const MAX_SYMS_PER_REQUEST = 200;
 const FAILOVER_MS = 60 * 1000; // Coinbase down/backoff > 60s → OKX
@@ -73,14 +88,8 @@ let coinbase = null;
 let okx = null;
 let polygon = null;
 
-// classify() taxonomy mirrored from intradaySources.ts — only crypto & us are served here.
-function classify(sym) {
-  if (/\.(SS|SZ)$/i.test(sym)) return "cn";
-  if (/\.HK$/i.test(sym)) return "hk";
-  if (/\.TO$/i.test(sym)) return "ca";
-  if (/-USD$/i.test(sym)) return "crypto";
-  return "us";
-}
+// classify() / isMacroSymbol() / buildQuotesResponse() live in lib/quotes.js so the
+// response contract can be unit-tested (this file boots servers at require time).
 
 // ── Crypto failover supervisor ──
 // Watches Coinbase health; promotes OKX when Coinbase is unhealthy past FAILOVER_MS, demotes it
@@ -138,6 +147,7 @@ function handleHealth(res) {
     okx: okx ? okx.health() : { disabled: DISABLE_CRYPTO },
     polygon: polygon ? polygon.health() : { disabled: DISABLE_US },
     extFeed: extFeed.health(),
+    macroFeed: macroFeed.health(),
     ts: Math.floor(Date.now() / 1000),
   });
 }
@@ -153,27 +163,20 @@ function handleQuotes(res, url) {
 
   const now = Date.now();
 
-  // Ensure US syms are subscribed so a first-time request seeds a placeholder + starts the AM sub.
-  // Also kick off async anchor resolution so the next request has a cache hit.
-  // Also demand ext subscriptions so the LRU budget tracks what users are actively watching.
-  if (!DISABLE_US && polygon && polygon.isHealthy()) {
-    for (const sym of syms) {
-      if (classify(sym) === "us") {
-        polygon.ensureSubscribed(sym);
-        // Fire-and-forget: resolve anchor so the cache is warm for the next request.
-        anchorCache.resolve(sym, now).catch(() => {});
-        // Demand ext subscription (LRU tracking, no-op when feed is disabled or RTH).
-        extFeed.demand(sym);
-      }
-    }
-  }
-
-  // crypto → served from map; us → served from map (placeholder or AM); cn/hk/ca → absent.
-  const wanted = syms.filter((s) => {
-    const m = classify(s);
-    return m === "crypto" || m === "us";
+  // Demand pass (routing lives in lib/quotes.js so it can be unit-tested).
+  //   daily-only → nothing at all. A FRED series id must never reach polygon.ensureSubscribed /
+  //                anchorCache.resolve / extFeed.demand / macroFeed.demand: no leg carries it,
+  //                and each one would spend a globally-shared LRU slot on a once-a-day print.
+  //   macro      → MacroFeed only (Polygon has no futures/index/FX entitlement here, and the
+  //                AnchorCache has no daily file for them).
+  //   us         → Polygon sub + warm the anchor cache + ext LRU tracking.
+  applyDemand(syms, now, {
+    polygon, anchorCache, extFeed, macroFeed, disableUS: DISABLE_US,
   });
-  const out = store.getQuotes(wanted, now, extFeed);
+
+  // macro → served from MacroFeed; crypto/us → served from the Store; cn/hk/ca → absent.
+  // Response contract is unchanged: a flat { SYM: quote } object, present entries only.
+  const out = buildQuotesResponse(syms, now, { store, macroFeed, extFeed });
   sendJSON(res, 200, out);
 }
 
@@ -237,8 +240,11 @@ function boot() {
     log.warn("HUB_DISABLE_US=1 — US feed off");
   }
 
-  // Extended-hours feed (alpaca overnight ws or yahoo fallback).
+  // Extended-hours feed (alpaca overnight ws / webull / yahoo fallback).
   extFeed.start();
+
+  // Macro feed (sina near-live + yahoo-spark delayed). No subs until first /quotes demand.
+  macroFeed.start();
 
   server.listen(PORT, HOST, () => {
     log.info("hub READY", `listening on ${HOST}:${PORT}`);
@@ -265,4 +271,6 @@ process.on("unhandledRejection", (e) => {
 
 boot();
 
-module.exports = { classify }; // exported for potential test harnesses
+// Re-exported for test harnesses; the implementations live in lib/quotes.js because
+// requiring this file boots the HTTP server and every feed timer.
+module.exports = { classify, isMacroSymbol, isDailyOnlySymbol, applyDemand, buildQuotesResponse };

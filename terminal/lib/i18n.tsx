@@ -739,6 +739,10 @@ const LEX: Record<string, [string, string]> = {
   extColumns: ["Extended Hours", "盘后/盘前"],
   overnight: ["Overnight", "隔夜"],
   overnightPrice: ["Overnight price", "隔夜价格"],
+  // Which out-of-hours window an ext print came from (hub's extSession). "Overnight" above is
+  // the third value and the fallback when the hub does not classify the print.
+  extSessionPre: ["Pre-market", "盘前"],
+  extSessionPost: ["After hours", "盘后"],
   extLastUpdate: ["Last update at {time}", "最后更新于 {time}"],
   extNoData: ["—", "—"],
   // ─── F3 smart dialogs ─────────────────────────────────────────────────────

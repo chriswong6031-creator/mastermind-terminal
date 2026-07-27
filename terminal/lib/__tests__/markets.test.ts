@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   marketOf, readMarketPrefs, defaultEnabledFor, toggleMarket, setHomeMarket,
-  isSymbolVisible, scoreSymbol, serializeMarketPrefs, MARKET_IDS, type MarketPrefs,
+  isSymbolVisible, scoreSymbol, serializeMarketPrefs, displayName, MARKET_IDS, type MarketPrefs,
 } from "../markets";
 import { classify } from "../intradayShared";
 
@@ -199,5 +199,42 @@ describe("scoreSymbol — ranking", () => {
 
   it("matches Chinese names", () => {
     expect(scoreSymbol("600519.SS", row("Kweichow Moutai", "SSE", "贵州茅台"), "贵州", null)).toBeGreaterThan(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// displayName — the language pick every row-rendering surface shares.
+//
+// The bug this replaces: every surface rendered `zh || name`, which prefers Chinese
+// UNCONDITIONALLY. An English user looking at the watchlist, the screener, the portfolio
+// table or a chart pane header saw "WTI原油" on a row whose `name` plainly read "WTI Crude
+// Oil" — and every A-share and HK name the same way. The fix is one shared helper, so a
+// component cannot drift back to preferring one language on its own.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("displayName — language-aware row names", () => {
+  const both = { name: "WTI Crude Oil", zh: "WTI原油" };
+
+  it("shows the English name in English and the Chinese name in Chinese", () => {
+    expect(displayName(both, "en")).toBe("WTI Crude Oil");
+    expect(displayName(both, "zh")).toBe("WTI原油");
+  });
+
+  it("falls back to the other language rather than rendering a blank", () => {
+    // Most US equities carry no zh; a handful of rows carry only zh.
+    expect(displayName({ name: "NVIDIA" }, "zh")).toBe("NVIDIA");
+    expect(displayName({ zh: "贵州茅台" }, "en")).toBe("贵州茅台");
+  });
+
+  it("returns an empty string for a missing row or a row with neither name", () => {
+    expect(displayName(undefined, "en")).toBe("");
+    expect(displayName(null, "zh")).toBe("");
+    expect(displayName({}, "en")).toBe("");
+    expect(displayName({ name: "", zh: "" }, "zh")).toBe("");
+  });
+
+  it("treats any non-'zh' language as the English branch", () => {
+    // The Lang union is en|zh today; an unknown value must not silently flip to Chinese.
+    expect(displayName(both, "")).toBe("WTI Crude Oil");
+    expect(displayName(both, "fr")).toBe("WTI Crude Oil");
   });
 });

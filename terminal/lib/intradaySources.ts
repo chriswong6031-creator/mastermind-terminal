@@ -16,14 +16,22 @@ export type { Bar6, Market } from "./intradayShared";
 export { INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
 import type { Bar6, Market } from "./intradayShared";
 import { isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
-import { isMacroSymbol, fetchMacroQuotes } from "./macroSymbols";
+import { isMacroSymbol, isDailyOnlySymbol, fetchMacroQuotes } from "./macroSymbols";
 
 // ── US / crypto → Polygon ──
 const ET_FMT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York", hourCycle: "h23",
   year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
 });
-function etDisplay(ms: number): { epoch: number; minOfDay: number } {
+/**
+ * Epoch-ms → the app's DISPLAY EPOCH (ET wall clock read AS IF it were UTC) plus the ET
+ * minute-of-day. See the file header and `sessionEpoch` in intradayShared for why every
+ * US-axis provider must emit this and not the true UTC instant.
+ *
+ * Exported so the Polygon and Yahoo legs share ONE implementation — a second, subtly
+ * different copy is how a series ends up plotted hours away from its own candles.
+ */
+export function etDisplay(ms: number): { epoch: number; minOfDay: number } {
   const p: Record<string, string> = {};
   for (const part of ET_FMT.formatToParts(ms)) p[part.type] = part.value;
   const hh = +p.hour % 24;
@@ -59,6 +67,76 @@ async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolea
     out.push([epoch, b.o, b.h, b.l, b.c, b.v]);
   }
   return out;
+}
+
+// ── Macro (indices / rates / FX / futures) → Yahoo v8 chart ──
+// Polygon's stocks aggregates have no ticker for "CL=F", "^GSPC" or "EURUSD=X". Before this leg
+// every macro symbol fell through classify()'s `us` default into fetchPolygon under its literal
+// Yahoo-shaped ticker, which returns an empty result set — that is the chart's long-standing
+// "No intraday data for CL=F on 1h". Yahoo's v8 chart endpoint serves all four macro shapes with
+// one response shape, keyless, from a server-side fetch.
+//
+// Native intervals are 1m 2m 5m 15m 30m 60m. The app's INTRADAY_TFS also include 3m/10m/45m/2h/
+// 3h/4h, which are built by resampling the LARGEST native interval that divides the requested tf
+// (3m←1m, 10m←5m, 45m←15m, 2h/3h/4h←60m); an exactly-native tf is fetched natively and not
+// resampled. Depth is capped per base interval by the upstream — the short-history 1m/2m scales
+// only carry a few days.
+//
+// NO RTH filter here. Futures and FX trade nearly 24h and index futures print overnight, so
+// dropping everything outside 09:30–16:00 ET would delete most of a crude or gold session. The
+// caller's `ext` flag is therefore accepted and ignored for macro symbols.
+const YAHOO_NATIVE_MIN = [60, 30, 15, 5, 2, 1];
+
+/** Upstream history window for a base interval — Yahoo rejects/thins ranges beyond these. */
+function yahooRange(baseMin: number): string {
+  return baseMin <= 2 ? "5d" : baseMin <= 30 ? "1mo" : "3mo";
+}
+
+// null/absent → null (NOT 0). `Number(null) === 0` and Number.isFinite(0) is true, so a bare
+// finite check would turn Yahoo's gap padding into a $0 print.
+function _num(x: unknown): number | null {
+  if (x == null) return null;
+  const n = Number(x);
+  return Number.isFinite(n) ? n : null;
+}
+
+// The slice of the v8 chart body we read. Typed rather than `any` so a field rename upstream
+// surfaces as a compile error here instead of silently yielding an empty chart.
+type YahooChartQuote = { open?: unknown; high?: unknown; low?: unknown; close?: unknown; volume?: unknown };
+type YahooChartResult = { timestamp?: unknown; indicators?: { quote?: YahooChartQuote[] } };
+type YahooChartBody = { chart?: { result?: YahooChartResult[] | null } };
+const _arr = (a: unknown): unknown[] => (Array.isArray(a) ? a : []);
+
+export async function fetchYahooMacroIntraday(sym: string, tf: string): Promise<Bar6[]> {
+  const minutes = tfMinutes(tf);
+  if (minutes <= 0) return [];
+  const base = YAHOO_NATIVE_MIN.find((b) => b <= minutes && minutes % b === 0) ?? 1;
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}`
+    + `?interval=${base}m&range=${yahooRange(base)}&includePrePost=true`;
+  const r = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(8000),
+  });
+  // Thrown, not swallowed: the route turns an upstream error into "Intraday feed unavailable"
+  // (a live-feed problem), which is a different message from the honest empty below.
+  if (!r.ok) throw new Error("yahoo " + r.status);
+  const j = (await r.json()) as YahooChartBody;
+  const res = j?.chart?.result?.[0];
+  const ts = _arr(res?.timestamp);
+  const q: YahooChartQuote = res?.indicators?.quote?.[0] ?? {};
+  const [O, H, L, C, V] = [q.open, q.high, q.low, q.close, q.volume].map(_arr);
+  const baseBars: Bar6[] = [];
+  for (let i = 0; i < ts.length; i++) {
+    const close = _num(C[i]);
+    const t = _num(ts[i]);
+    if (close == null || t == null) continue;   // Yahoo pads non-trading minutes with nulls
+    const open = _num(O[i]) ?? close;
+    const high = _num(H[i]) ?? Math.max(open, close);
+    const low = _num(L[i]) ?? Math.min(open, close);
+    baseBars.push([etDisplay(t * 1000).epoch, open, high, low, close, _num(V[i]) ?? 0]);
+  }
+  return base === minutes ? baseBars : resample(baseBars, minutes);
 }
 
 // ── China / Hong Kong → Tencent (free) ──
@@ -153,13 +231,26 @@ async function fetchTencentHK(sym: string, tf: string): Promise<Bar6[]> {
 
 export async function fetchIntraday(sym: string, tf: string, ext: boolean): Promise<Bar6[]> {
   if (!isIntradayTf(tf)) return [];
-  const market = classify(sym);
-  if (market === "ca") return []; // .TO has no Polygon intraday leg on this plan — avoid garbage
-  const bars = (market === "us" || market === "crypto")
-    ? await fetchPolygon(sym, market, tf, ext)
-    : market === "hk"
-      ? await fetchTencentHK(sym, tf)
-      : await fetchTencent(sym, market, tf);
+  // FRED daily series (DFII10, T10YIE, …) print once a day and have no intraday leg anywhere.
+  // Returned empty BEFORE any fetch: the honest "No intraday data" is the correct answer, and
+  // there is no upstream to ask — a bare series id would otherwise fall through classify()'s
+  // "us" default into Polygon's stocks aggregates under a ticker that market does not carry.
+  if (isDailyOnlySymbol(sym)) return [];
+  let bars: Bar6[];
+  // Macro instruments are checked BEFORE classify(): ^GSPC / CL=F / EURUSD=X / DX-Y.NYB all fall
+  // through classify()'s default to "us", so without this branch they went to Polygon's stocks
+  // aggregates under a ticker that market has never heard of.
+  if (isMacroSymbol(sym)) {
+    bars = await fetchYahooMacroIntraday(sym, tf);
+  } else {
+    const market = classify(sym);
+    if (market === "ca") return []; // .TO has no Polygon intraday leg on this plan — avoid garbage
+    bars = (market === "us" || market === "crypto")
+      ? await fetchPolygon(sym, market, tf, ext)
+      : market === "hk"
+        ? await fetchTencentHK(sym, tf)
+        : await fetchTencent(sym, market, tf);
+  }
   bars.sort((a, b) => a[0] - b[0]);
   const out: Bar6[] = [];
   let last = -1;
@@ -172,8 +263,10 @@ export async function fetchIntraday(sym: string, tf: string, ext: boolean): Prom
 // (last / prev-close / open / day high-low / cumulative volume / turnover / change%), ~3-6s
 // cadence, keyless, same trusted host family as the kline leg. A-share is genuinely live; HK
 // is typically ~15-min delayed at source. Both markets share the same field layout.
-// US + crypto: served by the localhost Quote Hub (Coinbase live crypto, delayed-15m Polygon US);
-// hub down/timeout → null → manifest EOD fallback (see fetchQuote).
+// US + crypto + macro: served by the localhost Quote Hub (Coinbase live crypto, delayed-15m
+// Polygon US, near-live Sina macro with a Yahoo-spark leg of its own); a macro symbol the hub
+// misses falls back here to one batched Yahoo spark call, and a total miss → null → manifest
+// EOD fallback (see fetchQuote).
 export type Quote = {
   sym: string; last: number; prevClose: number | null; chg: number | null;
   open: number | null; high: number | null; low: number | null;
@@ -300,19 +393,26 @@ function chunk<T>(a: T[], n: number): T[][] {
 }
 
 // Batch live quotes for many symbols with the fewest upstream calls: one Quote-Hub call for all
-// US+crypto, chunked Tencent calls for all CN+HK. Symbol-keyed map (failed/missing symbols simply
-// absent → the caller falls back to manifest EOD). This is the single source of truth behind BOTH
-// the live header and the live watchlist, so a symbol can never show two prices (see TerminalShell).
+// US+crypto+macro, chunked Tencent calls for all CN+HK, then ONE Yahoo spark call for whichever
+// macro symbols the hub did not answer. Symbol-keyed map (failed/missing symbols simply absent →
+// the caller falls back to manifest EOD). This is the single source of truth behind BOTH the live
+// header and the live watchlist, so a symbol can never show two prices (see TerminalShell).
 export async function fetchQuotes(syms: string[]): Promise<Record<string, Quote>> {
   const uniq = Array.from(new Set(syms.map((s) => s.trim()).filter(Boolean)));
   const hub: string[] = [];
   const tencent: string[] = [];
   const macro: string[] = [];
   for (const s of uniq) {
-    // Macro instruments (^GSPC, GC=F, EURUSD=X, DX-Y.NYB) are checked FIRST: their shapes would
-    // otherwise fall through classify()'s default and be sent to the Quote Hub, which knows only
-    // US equities and crypto and would silently return nothing for every one of them.
-    if (isMacroSymbol(s)) { macro.push(s); continue; }
+    // FRED daily series are routed NOWHERE — not the hub, not spark. They print once a day, so
+    // every live leg would either miss them (spark has no DFII10) or invent freshness for them
+    // (the hub's store placeholder stamps ts:now / DELAYED_15M). Staying absent is what makes
+    // the caller fall back to the manifest's honest daily close.
+    if (isDailyOnlySymbol(s)) continue;
+    // Macro instruments (^GSPC, GC=F, EURUSD=X, DX-Y.NYB) are checked FIRST — their shapes fall
+    // through classify()'s default and must not be mistaken for US equities. They go to the hub
+    // TOO (it now carries a near-live Sina macro leg), and are tracked separately so the ones the
+    // hub does not answer can fall back to the delayed Yahoo spark below.
+    if (isMacroSymbol(s)) { macro.push(s); hub.push(s); continue; }
     const mk = classify(s);
     // CN/HK index codes (000001.SS, 000300.SS, 399001.SZ, 399006.SZ) need no special case: they
     // match the A-share pattern and Tencent serves indices under the same sh######/sz###### codes.
@@ -325,21 +425,28 @@ export async function fetchQuotes(syms: string[]): Promise<Record<string, Quote>
     // 30/chunk (not 60): one slow/aborted Tencent response blanks its whole chunk, so smaller
     // chunks halve the blast radius of a single bad request (chunks run in parallel anyway).
     ...chunk(tencent, 30).map((c) => fetchTencentQuotes(c).then((mp) => { Object.assign(out, mp); }).catch(() => {})),
-    macro.length
-      ? fetchMacroQuotes(macro).then((mp) => {
-          for (const [sym, q] of Object.entries(mp)) {
-            out[sym] = {
-              sym, last: q.last, prevClose: q.prevClose, chg: q.chg,
-              open: null, high: null, low: null, vol: null, amount: null, ts: q.ts,
-              // DELAYED, not live: this source runs behind the exchange, and real-time
-              // index/CME/ICE data requires a licensed feed we do not hold. Marking these LIVE
-              // would print a claim we cannot back.
-              live: false, source: "yahoo-spark", market: "us", basis: "DELAYED_15M",
-            };
-          }
-        }).catch(() => {})
-      : Promise.resolve(),
   ]);
+  // Hub-first, spark-fallback. A hub-served macro quote passes through UNCHANGED (it is already
+  // Quote-shaped and carries its own source/basis — near-live Sina prints must keep saying LIVE).
+  // Only the macro symbols the hub did NOT answer go to the delayed Yahoo spark, in ONE batched
+  // call. This is what keeps local dev (no hub on :3100) working and what covers the hub's macro
+  // leg being down in production; a symbol both legs miss stays absent → manifest EOD upstream.
+  const macroMissing = macro.filter((s) => !out[s]);
+  if (macroMissing.length) {
+    try {
+      const mp = await fetchMacroQuotes(macroMissing);
+      for (const [sym, q] of Object.entries(mp)) {
+        out[sym] = {
+          sym, last: q.last, prevClose: q.prevClose, chg: q.chg,
+          open: null, high: null, low: null, vol: null, amount: null, ts: q.ts,
+          // DELAYED, not live: this source runs behind the exchange, and real-time
+          // index/CME/ICE data requires a licensed feed we do not hold. Marking these LIVE
+          // would print a claim we cannot back.
+          live: false, source: "yahoo-spark", market: "us", basis: "DELAYED_15M",
+        };
+      }
+    } catch { /* spark down → those symbols stay absent → manifest EOD */ }
+  }
   return out;
 }
 

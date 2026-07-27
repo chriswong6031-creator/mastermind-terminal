@@ -19,6 +19,10 @@ DATA HONESTY
     exchange. Quotes are therefore published with basis DELAYED_15M. The genuinely-live legs
     of the Terminal remain: China A-shares and CN/HK indices (Tencent), and crypto (Coinbase).
 
+    The FRED rows (real yields, breakevens) are neither real-time nor delayed quotes: they are
+    the official DAILY prints, published once per session with no intraday value at all. One
+    number a day is the whole series — see fetch_fred_daily.py for how that is encoded.
+
     Mainland-China indices are listed with their .SS/.SZ codes on purpose — they match the
     existing A-share classifier and Tencent serves indices under the same sh######/sz######
     codes, so they arrive on the LIVE Tencent leg rather than the delayed one.
@@ -76,6 +80,36 @@ _RATES: list[MacroSymbol] = [
     MacroSymbol("^FVX", "US 5-Year Yield", "美国5年期收益率", "Bonds", "US", "#8b93a1"),
     MacroSymbol("^TNX", "US 10-Year Yield", "美国10年期收益率", "Bonds", "US", "#f8b500"),
     MacroSymbol("^TYX", "US 30-Year Yield", "美国30年期收益率", "Bonds", "US", "#8b93a1"),
+]
+
+# ── Real yields + breakeven inflation (FRED) ───────────────────────────────────────────────
+# The ^ ladder above is the NOMINAL curve. A nominal yield alone cannot say whether a move was
+# growth or inflation — that split is the TIPS real yield and the breakeven (nominal − real)
+# sitting next to it, and no free quote feed carries either: Yahoo has no DFII10/T10YIE.
+# FRED publishes all four daily and KEYLESSLY, so ingest/fetch_fred_daily.py fills them.
+#
+# Also quoted in PERCENT, so they belong in Bonds beside the ^ ladder, never next to a price.
+# DFII10 carries ^TNX's accent because it is the 10-year headline in the real-rate family; the
+# rest stay on the ladder grey rather than inventing a colour meaning the UI does not define.
+#
+# The syms are bare FRED series ids: they match none of yahoo_symbols()' shape filters (no ^
+# prefix, no =F/=X suffix), so the Yahoo leg skips them automatically — see fred_symbols().
+#
+# THE RUNTIME ROUTERS DO NOT INFER THIS. Matching no shape means matching no *live* leg either,
+# and both routers' fallthrough is "us" — which quietly bought a Polygon AM.* subscription, an
+# extended-hours slot, and a placeholder quote stamped ts:now / DELAYED_15M on a series that
+# prints once a day. Each router therefore carries an EXPLICIT daily-only set:
+#
+#     ADDING A FRED SERIES HERE = add it to DAILY_ONLY in
+#         terminal/lib/macroSymbols.ts   (fetchQuotes / fetchIntraday routing)
+#         hub/lib/quotes.js              (demand pass + /quotes response)
+#
+# Miss either one and the new series silently gets a fabricated intraday freshness claim.
+_FRED_RATES: list[MacroSymbol] = [
+    MacroSymbol("DFII10", "US 10-Year Real Yield (TIPS)", "美国10年期实际收益率", "Bonds", "US", "#f8b500"),
+    MacroSymbol("DFII5", "US 5-Year Real Yield (TIPS)", "美国5年期实际收益率", "Bonds", "US", "#8b93a1"),
+    MacroSymbol("T10YIE", "US 10-Year Breakeven Inflation", "美国10年期盈亏平衡通胀率", "Bonds", "US", "#8b93a1"),
+    MacroSymbol("T5YIE", "US 5-Year Breakeven Inflation", "美国5年期盈亏平衡通胀率", "Bonds", "US", "#8b93a1"),
 ]
 
 # ── FX ─────────────────────────────────────────────────────────────────────────────────────
@@ -151,7 +185,7 @@ _CRYPTO: list[MacroSymbol] = [
     ]
 ]
 
-CATALOG: list[MacroSymbol] = [*_INDICES, *_RATES, *_FX, *_FUTURES, *_CRYPTO]
+CATALOG: list[MacroSymbol] = [*_INDICES, *_RATES, *_FRED_RATES, *_FX, *_FUTURES, *_CRYPTO]
 
 
 def iter_catalog() -> Iterator[MacroSymbol]:
@@ -168,6 +202,16 @@ def yahoo_symbols() -> list[str]:
         s.sym for s in CATALOG
         if s.sym == "DX-Y.NYB" or s.sym.startswith("^") or s.sym.endswith("=F") or s.sym.endswith("=X")
     ]
+
+
+def fred_symbols() -> list[str]:
+    """Symbols whose daily series comes from FRED — the source of truth for fetch_fred_daily.py.
+
+    Read off the _FRED_RATES section rather than pattern-matched, because a FRED series id has
+    no distinguishing shape: adding a row to the section is the only way onto this leg, and a
+    typo can never silently promote some other catalog row into it.
+    """
+    return [s.sym for s in _FRED_RATES]
 
 
 def manifest_rows() -> dict[str, dict]:

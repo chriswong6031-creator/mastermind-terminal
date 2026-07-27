@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useT } from "@/lib/i18n";
+import { useT, useLang } from "@/lib/i18n";
+import { displayName } from "@/lib/markets";
 import { getJSON } from "@/lib/dataCache";
 import { verdictIsStale } from "@/lib/signalVerdict";
 
@@ -14,6 +15,7 @@ const GUEST_SEED = ["BTC-USD", "ETH-USD", "NVDA", "AAPL", "MSFT", "QQQ"];
 export default function PortfolioView({ symbols, email }: { symbols: string[]; email: string }) {
   const router = useRouter();
   const t = useT();
+  const { lang } = useLang();
   const [man, setMan] = useState<Record<string, Row>>({});
   const [loaded, setLoaded] = useState(false);
   // The whole prod base is guest right now (login disabled), so the server watchlist
@@ -72,7 +74,7 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
               {rows.map((r) => { const u = (r.chg || 0) >= 0; const buy = isBuy(r.verdict);
                 return (
                   <tr key={r.sym} onClick={() => router.push(`/terminal?sym=${r.sym}`)}>
-                    <td><div className="sym-cell"><span className="ic" style={{ background: r.col }}>{r.sym[0]}</span><div><div className="tk">{r.sym}</div><div className="nm">{r.zh || r.name}</div></div></div></td>
+                    <td><div className="sym-cell"><span className="ic" style={{ background: r.col }}>{r.sym[0]}</span><div><div className="tk">{r.sym}</div><div className="nm">{displayName(r, lang)}</div></div></div></td>
                     <td>{fmt(r.last, r.last < 10 ? 4 : 2)}</td>
                     <td className={u ? "up" : "down"}>{u ? "+" : ""}{fmt(r.chg)}%</td>
                     <td>{r.verdict ? <span className={`pill ${buy ? "buy" : "sell"}${verdictIsStale((r as any).vts) ? " stale" : ""}`} title={(r as any).vts ? `${r.verdict} · ${(r as any).vts}` : undefined}>{r.verdict}</span> : "—"}</td>

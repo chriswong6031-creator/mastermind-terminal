@@ -30,6 +30,30 @@ const DXY = "DX-Y.NYB";
 // under Bonds rather than Indices. ^IRX 13-week, ^FVX 5-year, ^TNX 10-year, ^TYX 30-year.
 const RATE_TICKERS = new Set(["^IRX", "^FVX", "^TNX", "^TYX"]);
 
+/**
+ * FRED series that print ONCE A DAY and have no live or intraday leg anywhere.
+ *
+ * These are bare series ids — no `^`, no `=F`/`=X` — so they match no shape above and used to
+ * fall through to the `us` default, which is a fabrication in three places at once: the hub
+ * polygon-subscribed `AM.DFII10` (a Polygon LRU slot on a ticker that market has never heard
+ * of), burned one of the 30 SHARED ext slots, and served a manifest placeholder stamped
+ * `source: "polygon-delayed"` / `basis: "DELAYED_15M"` / `ts: now` — a 15-minute-freshness
+ * claim on a number FRED publishes once a day, which then spliced a synthetic flat bar dated
+ * today onto the chart.
+ *
+ * Routed NOWHERE instead. Absent from every live response, the caller falls back to the
+ * manifest's EOD row: the real daily close, no splice, no invented freshness.
+ *
+ * KEEP IN SYNC with hub/lib/quotes.js DAILY_ONLY — adding a FRED series means adding it to
+ * BOTH routers (see the pointer beside _FRED_RATES in ingest/macro_catalog.py).
+ */
+export const DAILY_ONLY = new Set(["DFII10", "DFII5", "T10YIE", "T5YIE"]);
+
+/** True when this symbol is a daily-print-only series with no live/intraday leg at all. */
+export function isDailyOnlySymbol(sym: string): boolean {
+  return DAILY_ONLY.has(String(sym ?? "").trim().toUpperCase());
+}
+
 /** True when this symbol is a macro instrument routed to the Yahoo leg. */
 export function isMacroSymbol(sym: string): boolean {
   return sym === DXY || RE_CARET.test(sym) || RE_FUT.test(sym) || RE_FX.test(sym);

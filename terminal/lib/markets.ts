@@ -236,3 +236,25 @@ export function scoreSymbol(
   if (home && marketOf(sym, row) === home) base += 60;
   return base;
 }
+
+/**
+ * The display name for a manifest row in the ACTIVE UI language.
+ *
+ * Rows carry both an English `name` and, for the names that have one, a Chinese `zh`. Every
+ * surface used to render `zh || name`, which unconditionally preferred Chinese — so an English
+ * user saw "WTI原油" where the row plainly carried "WTI Crude Oil", and the same for every
+ * A-share and HK name. The pick is by language, with the other language as the fallback so a
+ * row that carries only one of the two still shows something rather than a blank.
+ *
+ * Pure and hook-free so it can be shared by client components (which pass useLang()'s value)
+ * and by imperative code reading the <html data-lang> attribute.
+ */
+export function displayName(
+  row: { name?: string | null; zh?: string | null } | null | undefined,
+  lang: string,
+): string {
+  if (!row) return "";
+  const en = row.name || "";
+  const zh = row.zh || "";
+  return lang === "zh" ? (zh || en) : (en || zh);
+}
