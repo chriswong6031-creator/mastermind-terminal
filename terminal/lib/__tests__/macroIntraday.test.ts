@@ -9,9 +9,11 @@
 //      reaches api.polygon.io. The second half is the regression guard — a future edit that
 //      widens the macro branch must not quietly take NVDA off Polygon.
 //   2. THE DISPLAY-EPOCH CONVENTION. Bars come back as [displayEpoch, o, h, l, c, v] where
-//      displayEpoch is the ET wall clock read AS IF it were UTC (see etDisplay / sessionEpoch).
-//      Emitting the true UTC instant instead would plot every macro series 4–5 hours away from
-//      its own time axis.
+//      displayEpoch is the symbol's HOME-market wall clock read AS IF it were UTC (see
+//      localDisplay / macroDisplayTz / sessionEpoch) — ET for the US rows, Tokyo for ^N225,
+//      London for ^FTSE. Emitting the true UTC instant instead would plot every macro series
+//      hours away from its own time axis; emitting ET for ALL of them put the Tokyo session
+//      at 20:00–02:00 on its own axis.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fetchIntraday, fetchYahooMacroIntraday } from "@/lib/intradaySources";
 
@@ -25,6 +27,14 @@ const utcSec = (y: number, mo: number, d: number, h: number, mi: number) =>
  * instead of mirroring the implementation.
  */
 const etDisplaySec = (y: number, mo: number, d: number, h: number, mi: number) =>
+  Date.UTC(y, mo - 1, d, h, mi) / 1000;
+
+/**
+ * The expected DISPLAY epoch for a MARKET-LOCAL wall clock — the local components rebuilt as UTC.
+ * Numerically the same function as etDisplaySec (both just rebuild wall-clock components as UTC);
+ * the separate name is the point — the LABEL says WHICH market's clock the expectation pins.
+ */
+const localDisplaySec = (y: number, mo: number, d: number, h: number, mi: number) =>
   Date.UTC(y, mo - 1, d, h, mi) / 1000;
 
 type Row = [number, number | null, number | null, number | null, number | null, number | null];
@@ -187,6 +197,69 @@ describe("fetchYahooMacroIntraday — resampling a non-native timeframe", () => 
     expect(bars).toEqual([
       [etDisplaySec(2026, 7, 27, 9, 30), 65.0, 65.8, 64.9, 65.7, 300],
       [etDisplaySec(2026, 7, 27, 9, 40), 65.7, 66.2, 65.3, 66.1, 700],
+    ]);
+  });
+});
+
+describe("fetchYahooMacroIntraday — international indices plot on their HOME market clock", () => {
+  // Every macro symbol used to be stamped with the ET reading, which put a Tokyo session on the
+  // axis at 20:00–02:00 and let Day Trade Mode paint US RTH bands over it. Each index now carries
+  // ITS market's wall clock, exactly like the Tencent CN/HK legs.
+  it("stamps ^N225 with the Tokyo clock (00:00 UTC = 09:00 JST)", async () => {
+    serve(chartBody([[utcSec(2026, 7, 27, 0, 0), 41000, 41200, 40900, 41100, 0]], "^N225"));
+    const bars = await fetchYahooMacroIntraday("^N225", "5m");
+    expect(bars).toEqual([[localDisplaySec(2026, 7, 27, 9, 0), 41000, 41200, 40900, 41100, 0]]);
+  });
+
+  it("stamps ^HSI with the Hong Kong clock (01:30 UTC = 09:30 HKT)", async () => {
+    serve(chartBody([[utcSec(2026, 7, 27, 1, 30), 25000, 25100, 24950, 25050, 0]], "^HSI"));
+    const bars = await fetchYahooMacroIntraday("^HSI", "5m");
+    expect(bars[0][0]).toBe(localDisplaySec(2026, 7, 27, 9, 30));
+  });
+
+  // IST is UTC+5:30. A whole-hour offset assumption anywhere in the chain would land this bar
+  // at 09:00 or 10:00 — half an hour off its own opening print.
+  it("carries India's half-hour offset (04:00 UTC = 09:30 IST)", async () => {
+    serve(chartBody([[utcSec(2026, 7, 27, 4, 0), 82000, 82300, 81900, 82150, 0]], "^BSESN"));
+    const bars = await fetchYahooMacroIntraday("^BSESN", "5m");
+    expect(bars[0][0]).toBe(localDisplaySec(2026, 7, 27, 9, 30));
+  });
+
+  // The offset is a real DST lookup, not a stored constant: London is UTC+1 in July and UTC+0 in
+  // January, and the FTSE opens at 08:00 local in both.
+  it("follows ^FTSE across the BST/GMT boundary", async () => {
+    serve(chartBody([[utcSec(2026, 7, 27, 7, 0), 9100, 9120, 9090, 9110, 0]], "^FTSE"));
+    expect((await fetchYahooMacroIntraday("^FTSE", "5m"))[0][0])
+      .toBe(localDisplaySec(2026, 7, 27, 8, 0));   // BST, UTC+1
+    serve(chartBody([[utcSec(2026, 1, 15, 8, 0), 9000, 9020, 8990, 9010, 0]], "^FTSE"));
+    expect((await fetchYahooMacroIntraday("^FTSE", "5m"))[0][0])
+      .toBe(localDisplaySec(2026, 1, 15, 8, 0));   // GMT, UTC+0
+  });
+
+  // ^GSPTSE is deliberately UNMAPPED, not overlooked: Toronto trades the same Eastern wall clock
+  // as New York (09:30–16:00), so the TSX composite belongs on the ET axis with the US rows.
+  it("leaves ^GSPTSE on the ET axis (13:30 UTC = 09:30 in Toronto and New York alike)", async () => {
+    serve(chartBody([[utcSec(2026, 7, 27, 13, 30), 27000, 27100, 26950, 27050, 0]], "^GSPTSE"));
+    const bars = await fetchYahooMacroIntraday("^GSPTSE", "5m");
+    expect(bars[0][0]).toBe(localDisplaySec(2026, 7, 27, 9, 30));
+  });
+
+  // resample() buckets on the DISPLAY epoch, so a local-clock stamp buckets on the local clock
+  // for free — 10m buckets open at 09:00 and 09:10 Tokyo, not on an ET boundary.
+  it("buckets a resampled ^N225 timeframe on the Tokyo clock", async () => {
+    serve(
+      chartBody([
+        [utcSec(2026, 7, 27, 0, 0), 41000, 41200, 40900, 41100, 100],    // 09:00 JST ┐ 09:00 bucket
+        [utcSec(2026, 7, 27, 0, 5), 41100, 41400, 41050, 41350, 200],    // 09:05 JST ┘
+        [utcSec(2026, 7, 27, 0, 10), 41350, 41500, 41300, 41320, 300],   // 09:10 JST ┐ 09:10 bucket
+        [utcSec(2026, 7, 27, 0, 15), 41320, 41600, 41200, 41550, 400],   // 09:15 JST ┘
+      ], "^N225"),
+    );
+    const bars = await fetchYahooMacroIntraday("^N225", "10m");
+    expect(calls[0]).toContain("interval=5m");   // base fetched natively, coarsened locally
+    expect(bars).toEqual([
+      [localDisplaySec(2026, 7, 27, 9, 0), 41000, 41400, 40900, 41350, 300],
+      [localDisplaySec(2026, 7, 27, 9, 10), 41350, 41600, 41200, 41550, 700],
     ]);
   });
 });

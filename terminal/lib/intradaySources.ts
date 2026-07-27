@@ -16,27 +16,42 @@ export type { Bar6, Market } from "./intradayShared";
 export { INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
 import type { Bar6, Market } from "./intradayShared";
 import { isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
-import { isMacroSymbol, isDailyOnlySymbol, fetchMacroQuotes } from "./macroSymbols";
+import { isMacroSymbol, isDailyOnlySymbol, fetchMacroQuotes, macroDisplayTz } from "./macroSymbols";
 
 // ── US / crypto → Polygon ──
-const ET_FMT = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York", hourCycle: "h23",
-  year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-});
+// One Intl formatter per display timezone — construction is expensive, formatToParts is not.
+const TZ_FMT = new Map<string, Intl.DateTimeFormat>();
+function tzFmt(tz: string): Intl.DateTimeFormat {
+  let f = TZ_FMT.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+    });
+    TZ_FMT.set(tz, f);
+  }
+  return f;
+}
+
 /**
- * Epoch-ms → the app's DISPLAY EPOCH (ET wall clock read AS IF it were UTC) plus the ET
- * minute-of-day. See the file header and `sessionEpoch` in intradayShared for why every
- * US-axis provider must emit this and not the true UTC instant.
+ * Epoch-ms → the app's DISPLAY EPOCH (the `tz` wall clock read AS IF it were UTC) plus that
+ * clock's minute-of-day. See the file header and `sessionEpoch` in intradayShared for why
+ * every provider must emit this and not the true UTC instant.
  *
- * Exported so the Polygon and Yahoo legs share ONE implementation — a second, subtly
- * different copy is how a series ends up plotted hours away from its own candles.
+ * ONE implementation for every leg — a second, subtly different copy is how a series ends up
+ * plotted hours away from its own candles.
  */
-export function etDisplay(ms: number): { epoch: number; minOfDay: number } {
+export function localDisplay(ms: number, tz: string): { epoch: number; minOfDay: number } {
   const p: Record<string, string> = {};
-  for (const part of ET_FMT.formatToParts(ms)) p[part.type] = part.value;
+  for (const part of tzFmt(tz).formatToParts(ms)) p[part.type] = part.value;
   const hh = +p.hour % 24;
   const epoch = Date.UTC(+p.year, +p.month - 1, +p.day, hh, +p.minute) / 1000;
   return { epoch, minOfDay: hh * 60 + +p.minute };
+}
+
+/** The ET specialization — what the US-axis providers (Polygon, US macro rows) emit. */
+export function etDisplay(ms: number): { epoch: number; minOfDay: number } {
+  return localDisplay(ms, "America/New_York");
 }
 
 async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolean): Promise<Bar6[]> {
@@ -85,6 +100,11 @@ async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolea
 // NO RTH filter here. Futures and FX trade nearly 24h and index futures print overnight, so
 // dropping everything outside 09:30–16:00 ET would delete most of a crude or gold session. The
 // caller's `ext` flag is therefore accepted and ignored for macro symbols.
+//
+// Bars are stamped with the symbol's HOME-market wall clock via macroDisplayTz — ET for the US
+// rows (^GSPC, ^TNX, CL=F, EURUSD=X, DX-Y.NYB), Tokyo for ^N225, London for ^FTSE, and so on —
+// mirroring how the Tencent CN/HK legs emit market-local epochs. Stamping every macro symbol
+// with the ET reading plots the Tokyo session as 20:00–02:00 on its own axis.
 const YAHOO_NATIVE_MIN = [60, 30, 15, 5, 2, 1];
 
 /** Upstream history window for a base interval — Yahoo rejects/thins ranges beyond these. */
@@ -110,6 +130,7 @@ const _arr = (a: unknown): unknown[] => (Array.isArray(a) ? a : []);
 export async function fetchYahooMacroIntraday(sym: string, tf: string): Promise<Bar6[]> {
   const minutes = tfMinutes(tf);
   if (minutes <= 0) return [];
+  const tz = macroDisplayTz(sym);
   const base = YAHOO_NATIVE_MIN.find((b) => b <= minutes && minutes % b === 0) ?? 1;
   const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}`
     + `?interval=${base}m&range=${yahooRange(base)}&includePrePost=true`;
@@ -134,7 +155,7 @@ export async function fetchYahooMacroIntraday(sym: string, tf: string): Promise<
     const open = _num(O[i]) ?? close;
     const high = _num(H[i]) ?? Math.max(open, close);
     const low = _num(L[i]) ?? Math.min(open, close);
-    baseBars.push([etDisplay(t * 1000).epoch, open, high, low, close, _num(V[i]) ?? 0]);
+    baseBars.push([localDisplay(t * 1000, tz).epoch, open, high, low, close, _num(V[i]) ?? 0]);
   }
   return base === minutes ? baseBars : resample(baseBars, minutes);
 }

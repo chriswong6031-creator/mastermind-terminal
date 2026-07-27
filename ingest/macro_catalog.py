@@ -60,7 +60,9 @@ _INDICES: list[MacroSymbol] = [
     MacroSymbol("^HSI", "Hang Seng", "恒生指数", "Indices", "HKEX", "#f23645"),
     MacroSymbol("^HSCE", "Hang Seng China Enterprises", "国企指数", "Indices", "HKEX", "#f23645"),
     MacroSymbol("^GSPTSE", "S&P/TSX Composite", "标普/多伦多综合", "Indices", "TSX", "#d33"),
-    # International
+    # International — the intraday chart plots each of these on its HOME market's clock.
+    # ADDING A ROW HERE = add its timezone to MACRO_TZ in terminal/lib/macroSymbols.ts,
+    # or the new index's intraday axis silently comes out in US Eastern time.
     MacroSymbol("^N225", "Nikkei 225", "日经225", "Indices", "Japan", "#bc002d"),
     MacroSymbol("^KS11", "KOSPI", "韩国综合", "Indices", "South Korea", "#2962ff"),
     MacroSymbol("^TWII", "TAIEX", "台湾加权", "Indices", "Taiwan", "#089981"),
