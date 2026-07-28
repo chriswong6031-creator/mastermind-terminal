@@ -30,9 +30,13 @@
 //       symbol once (cached for the process lifetime), then polls getQuote every 60 s
 //       outside RTH. Serves pPrice + tradeTime — the only fields verified against a live
 //       payload. Candidate "overnight price" key names are logged once each as discovery
-//       telemetry and never served. Whether Webull carries TRUE overnight (20:00–04:00 ET,
-//       Blue Ocean) prints is UNVERIFIED — the session gate in webullExtractPrint() decides
-//       at runtime and never trusts blindly. extSource="webull".
+//       telemetry and never served. VERIFIED ABSENT 2026-07-27: a live probe from the VPS
+//       (20:33–20:37 ET, during an active Blue Ocean overnight session) showed getQuote does
+//       NOT carry true overnight (20:00–04:00 ET) prints — pPrice/pChange/tradeTime stayed
+//       frozen at the final post-market print (~19:59 ET) across samples 65 s apart
+//       (NVDA/SOFI/TSLA). The session gate in webullExtractPrint() therefore rejects the
+//       stale post print overnight, and this leg serves nothing 20:00–04:00 ET by design;
+//       the overnight unlock is Alpaca keys (leg (a)). extSource="webull".
 //   (d) Keyless Yahoo fallback (legacy, kept for local dev) — direct REST polling of
 //       query1.finance.yahoo.com/v8/finance/chart/<SYM>?interval=1m&range=1d&includePrePost=true
 //       every ~60 s for the demanded symbols. Covers pre-market and post-market only.
@@ -455,11 +459,15 @@ const WEBULL_MISS_TTL_MS = 60 * 60 * 1000; // negative tickerId cache — don't 
 
 // Candidate key names for an explicit overnight print. DISCOVERY TELEMETRY ONLY — never served.
 //
-// Webull has never been observed emitting any of these from this VPS (only pre-market was ever
-// testable), so every one of them is a guess. Serving a guessed field in preference to the
-// VERIFIED pPrice would mean the first time Webull ships an unrelated key that happens to match
-// one of these names, an unvalidated number silently becomes the price on the tape. The names
-// are logged once each so a real one can be confirmed from the journal and promoted deliberately.
+// VERIFIED ABSENT 2026-07-27: a live VPS probe during an active Blue Ocean overnight session
+// (20:33–20:37 ET) found NONE of these keys in the getQuote payload (NVDA/SOFI/TSLA) — the
+// telemetry line below never fired. The payload DOES carry a literal `overnight` field, but it
+// is an integer FLAG (observed 0), not a price, and appending &overnight=1 to getQuote changes
+// nothing — worth re-probing if that flag ever reads non-zero. Every name here remains a guess.
+// Serving a guessed field in preference to the VERIFIED pPrice would mean the first time Webull
+// ships an unrelated key that happens to match one of these names, an unvalidated number
+// silently becomes the price on the tape. The names are logged once each so a real one can be
+// confirmed from the journal and promoted deliberately.
 const WEBULL_OVERNIGHT_PRICE_KEYS = ["ovnPrice", "overnightPrice", "ovPrice", "overnightPx"];
 
 // Key names already logged — one line per name per process, not one per poll.
@@ -774,8 +782,9 @@ class ExtFeed {
       return;
     }
 
-    // Webull leg — keyless, covers pre/post for sure and overnight best-effort
-    // (behind the session gate in webullExtractPrint). Independent kill-switch.
+    // Webull leg — keyless, covers pre/post only; true overnight verified absent
+    // 2026-07-27 (the session gate in webullExtractPrint rejects the stale post
+    // print it keeps serving). Independent kill-switch.
     this.webullDisabled = process.env.WEBULL_DISABLE === "1";
     this.webull = this.webullDisabled ? null : new WebullFeed();
     if (this.webullDisabled) log.warn("WEBULL_DISABLE=1 — webull ext leg off");
@@ -820,8 +829,9 @@ class ExtFeed {
       // Start the Yahoo polling loop.
       this._scheduleYahooPoll();
     }
-    // Webull runs in both modes — it is the only leg with a shot at true overnight
-    // when Alpaca keys are absent or unentitled.
+    // Webull runs in both modes — but it does NOT carry true overnight prints
+    // (verified 2026-07-27), so without Alpaca keys the hub serves no ext data
+    // 20:00–04:00 ET.
     if (this.webull) this.webull.start();
   }
 
@@ -880,9 +890,9 @@ class ExtFeed {
       entry = validExtEntry(this._extMap.get(sym));
     }
 
-    // (2) Webull — keyless; pre/post confirmed, overnight best-effort. Its own
-    //     session gate already rejected any print that does not belong to the
-    //     session we are serving into.
+    // (2) Webull — keyless; pre/post confirmed, overnight verified absent
+    //     (2026-07-27). Its own session gate already rejected any print that does
+    //     not belong to the session we are serving into.
     if (!entry && this.webull) {
       entry = validExtEntry(this.webull.get(sym));
       if (entry) log.every("webull-serve", "INFO", "serving ext data from webull leg", sym);
