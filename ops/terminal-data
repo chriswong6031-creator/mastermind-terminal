@@ -93,12 +93,26 @@ run "$PY" ingest/backfill_ohlc.py --market all
 # majors. Runs AFTER build_universe/expand_universe because the merge is ADDITIVE: an existing
 # equity row always wins on every key it already carries, so this pass can never shrink or
 # overwrite the universe those two own (cf. the 2026-07-11 manifest 8,740 -> 34 incident).
-# NOTE this line previously lived only in the macro repo's app/deploy/terminal-refresh.sh copy —
-# every terminal deploy reinstalls THIS file over /usr/local/bin/terminal-data, which is how the
-# macro rows kept vanishing from the nightly (found 2026-07-27). Keep both copies in sync.
+# ⚠️ TWO COPIES OF THIS SCRIPT INSTALL /usr/local/bin/terminal-data, and the LAST WRITER WINS:
+#     * THIS file (charting-app ops/terminal-data) — reinstalled by step 7 of EVERY
+#       /opt/terminal/terminal-build.sh deploy, so in practice it wins most often;
+#     * macro app/deploy/terminal-refresh.sh — installed by macro app/deploy/terminal-data-setup.sh,
+#       which only runs when someone runs it.
+#   ingest/terminal-refresh.sh is a stub that calls the macro copy "the single canonical source".
+#   That is aspirational, not true: this file overwrites it on every deploy. A pass added to only
+#   ONE copy therefore disappears at the next deploy or setup run — which is exactly how the macro
+#   rows kept vanishing from the nightly (2026-07-27) and how the crypto OHLC pass below would have
+#   vanished (2026-07-28). ANY change to the nightly goes in BOTH files, in the same PR.
 run "$PY" ingest/build_macro_symbols.py
 # FRED real rates + breakevens — keyless daily series (DFII10/DFII5/T10YIE/T5YIE)
 run "$PY" ingest/fetch_fred_daily.py
+# crypto OHLC from Coinbase daily candles — backfills new pairs, appends recent bars to the rest.
+# backfill_ohlc (above) skips every "-USD" row — market_of returns None for a dashed ticker — and
+# refresh_ohlc is US-equity grouped-daily only, so crypto had NO ohlc lane at all: the majors added
+# to macro_catalog in July 2026 were searchable with a 404 on <SYM>.json from the day they landed.
+# MUST run after build_macro_symbols, which writes the crypto manifest rows this pass reads, and
+# before the final hydrate, so a newly listed pair's LAST/CHG lands in the manifest the same night.
+run "$PY" ingest/refresh_crypto_ohlc.py --write
 # broad-universe confluence slices
 run "$PY" ingest/gen_slices_all.py
 # artifact freshness conformance
