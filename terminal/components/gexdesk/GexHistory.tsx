@@ -23,18 +23,22 @@ import { makeGexT } from "./gexStrings";
 import type { GexPayload } from "./GexDeskView";
 
 const WRAP: React.CSSProperties = {
-  display: "flex", flexDirection: "column", gap: 6,
-  padding: "8px 12px", border: "1px solid var(--line)", borderRadius: 8,
-  background: "var(--surface-1)",
+  display: "flex", flexDirection: "column", gap: 9,
+  padding: "11px 14px 12px", border: "1px solid var(--line)", borderRadius: 12,
+  background: "linear-gradient(180deg, color-mix(in srgb, var(--brand) 4%, var(--panel)), var(--surface-1))",
 };
 const HEADER: React.CSSProperties = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 };
 const LABEL: React.CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", color: "var(--text-2)", textTransform: "uppercase" };
 const HEADER_RIGHT: React.CSSProperties = { display: "flex", alignItems: "baseline", gap: 8 };
 const SESSIONS: React.CSSProperties = { fontSize: 10, color: "var(--text-3)", fontVariantNumeric: "tabular-nums" };
 const HINT: React.CSSProperties = { fontSize: 10, color: "var(--text-3)", opacity: 0.8 };
-const ROW: React.CSSProperties = { display: "flex", alignItems: "center", gap: 14 };
-const TRACK: React.CSSProperties = { display: "block", flex: 1, minWidth: 120, cursor: "ew-resize", outlineOffset: 2, touchAction: "none" };
-const READOUT: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 3, flexShrink: 0, minWidth: 152 };
+const ROW: React.CSSProperties = { display: "flex", alignItems: "stretch", gap: 18 };
+const TRACK: React.CSSProperties = { display: "block", flex: 1, minWidth: 300, cursor: "ew-resize", outlineOffset: 2, touchAction: "none" };
+const READOUT: React.CSSProperties = {
+  display: "grid", gridTemplateColumns: "1fr", alignContent: "center", gap: 4,
+  flexShrink: 0, width: 210, padding: "8px 10px",
+  border: "1px solid var(--line-2)", borderRadius: 9, background: "rgba(255,255,255,.025)",
+};
 const READOUT_HEAD: React.CSSProperties = { display: "flex", alignItems: "baseline", gap: 6, marginBottom: 1 };
 const RDATE: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: "var(--text-1)", fontVariantNumeric: "tabular-nums" };
 const NOW_BADGE: React.CSSProperties = {
@@ -78,12 +82,13 @@ export const GexHistory = memo(function GexHistory({
   const mn = Math.min(...vals, 0);
   const mx = Math.max(...vals, 0);
   const range = mx - mn || 1;
-  const W = 240;
-  const H = 40;
+  const W = 720;
+  const H = 88;
   const px = (i: number) => (i / lastIdx) * W;
   const py = (v: number) => H - ((v - mn) / range) * (H - 6) - 3;
   const zeroY = py(0);
   const pts = rows.map((h, i) => `${px(i).toFixed(1)},${py(h.net_gex_bn).toFixed(1)}`).join(" ");
+  const areaPts = `0,${zeroY.toFixed(1)} ${pts} ${W},${zeroY.toFixed(1)}`;
 
   const pick = (clientX: number, el: SVGSVGElement) => {
     const r = el.getBoundingClientRect();
@@ -110,7 +115,7 @@ export const GexHistory = memo(function GexHistory({
   const regimeShifted = !!prev && prev.regime !== cur.regime;
 
   return (
-    <div style={WRAP} className="obs">
+    <div style={WRAP} className="obs obs-gex-history">
       <div style={HEADER}>
         <span style={LABEL}>{t("gexHistTitle")}</span>
         <span style={HEADER_RIGHT}>
@@ -119,7 +124,7 @@ export const GexHistory = memo(function GexHistory({
         </span>
       </div>
 
-      <div style={ROW}>
+      <div style={ROW} className="obs-gex-history-row">
         <svg
           viewBox={`0 0 ${W} ${H}`}
           width="100%"
@@ -138,18 +143,36 @@ export const GexHistory = memo(function GexHistory({
           onPointerLeave={() => setSel(null)}
           onKeyDown={onKeyDown}
         >
+          <defs>
+            <linearGradient id="gex-history-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--brand-2)" stopOpacity="0.26" />
+              <stop offset="100%" stopColor="var(--brand-2)" stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          {[0.25, 0.5, 0.75].map((p) => (
+            <line
+              key={p}
+              x1="0"
+              y1={H * p}
+              x2={W}
+              y2={H * p}
+              stroke="rgba(255,255,255,.055)"
+              strokeWidth="0.7"
+            />
+          ))}
           {/* zero reference */}
-          <line x1="0" y1={zeroY} x2={W} y2={zeroY} stroke="var(--line)" strokeWidth="0.6" strokeDasharray="2,2" />
+          <line x1="0" y1={zeroY} x2={W} y2={zeroY} stroke="var(--line-3)" strokeWidth="0.9" strokeDasharray="4,4" />
+          <polygon points={areaPts} fill="url(#gex-history-fill)" />
           {/* net-GEX trend (neutral brand — sign is a dealer-convention assumption, not direction) */}
-          <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.4" points={pts} />
+          <polyline fill="none" stroke="var(--brand-2)" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" points={pts} />
           {/* scrub cursor + selected session */}
-          <line x1={px(selIdx)} y1="0" x2={px(selIdx)} y2={H} stroke="var(--brand-2)" strokeWidth="0.8" strokeOpacity="0.5" />
-          <circle cx={px(selIdx)} cy={py(cur.net_gex_bn)} r={3} fill="var(--brand-2)" />
+          <line x1={px(selIdx)} y1="0" x2={px(selIdx)} y2={H} stroke="var(--brand-2)" strokeWidth="1" strokeOpacity="0.48" />
+          <circle cx={px(selIdx)} cy={py(cur.net_gex_bn)} r={4.2} fill="var(--panel)" stroke="var(--brand-2)" strokeWidth="2.2" />
           {/* faint marker on the latest point when the cursor is parked in the past */}
           {!isNow && <circle cx={px(lastIdx)} cy={py(rows[lastIdx].net_gex_bn)} r={1.8} fill="none" stroke="var(--brand-2)" strokeWidth="0.8" strokeOpacity="0.6" />}
         </svg>
 
-        <div style={READOUT}>
+        <div style={READOUT} className="obs-gex-history-readout">
           <div style={READOUT_HEAD}>
             <span style={RDATE}>{cur.date}</span>
             {isNow && <span style={NOW_BADGE}>{t("gexHistNow")}</span>}

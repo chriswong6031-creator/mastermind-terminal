@@ -77,7 +77,7 @@ const FLOW_LEX = {
   badgeWhaleDesc:   ["Premium ≥$1M single event", "单笔权利金≥100万美元"],
   badgeClusterDesc: ["Repeat-root: multiple prints on this underlying this session (not a $-sized campaign)", "重复标的：本时段该标的多次成交（非按金额的集群）"],
   badgeSweepDesc:   ["Multi-exchange heuristic — labeled, not confirmed aggressor", "多交易所启发式扫单 — 标记，非确认主动方"],
-  badgeUnusualDesc: ["z-score ≥2 vs 252-session baseline", "z值≥2（相对252交易日基线）"],
+  badgeUnusualDesc: ["Premium activity is much higher than its typical one-year level", "权利金活跃度显著高于过去一年的常态"],
   badgeBlockDesc:   ["Large single-print block; size ≥500 contracts", "单笔大宗；规模≥500张"],
 
   // ── Flow Gauge labels ──────────────────────────────────────────────────────
@@ -90,8 +90,8 @@ const FLOW_LEX = {
 
   // ── Smart Money Radar ──────────────────────────────────────────────────────
   radarTitle:     ["Smart Money Radar", "聪明钱雷达"],
-  radarSubtitle:  ["Ranked by relative premium activity vs 252d baseline", "按权利金活动相对基线（252日）排名"],
-  radarPremZ:     ["Prem z", "权利金z值"],
+  radarSubtitle:  ["Ranked by premium activity versus the past trading year", "按权利金活动相对过去一年排名"],
+  radarPremZ:     ["Activity", "活跃度"],
   radarGrossPrem: ["Gross prem", "总权利金"],
   radarCallShare: ["Call share", "认购占比"],
   radarNEvents:   ["Events", "事件数"],

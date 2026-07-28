@@ -88,8 +88,9 @@ const AGGS: { min: number; labelKey: SurfaceKey }[] = [
   { min: 30, labelKey: "agg30m" },
 ];
 
-// Range slider stops (± strikes/points around spot); 0 = All.
-const RANGE_STOPS = [10, 20, 40, 0];
+// Range slider stops (± strikes/points around spot); 0 = All. Eighty points keeps the
+// field contextual without letting remote LEAPS strikes flatten the useful chart.
+const RANGE_STOPS = [20, 40, 80, 0];
 
 /**
  * The CSS custom properties each metric's swatches read — the same pair the shader
@@ -196,7 +197,7 @@ export function SurfacePane({
   const metric: Metric = fixedMetric ?? metricState;
   const [aggMin, setAggMin] = useState<number>(5);
   const [opacity, setOpacity] = useState<number>(1);
-  const [rangeQ, setRangeQ] = useState<number>(0); // 0 = All
+  const [rangeQ, setRangeQ] = useState<number>(80);
   const [frame, setFrame] = useState<SurfaceFrame | null>(null);
   const [candles, setCandles] = useState<Bar6[]>([]);
   const [readout, setReadout] = useState<Readout | null>(null);
@@ -224,6 +225,10 @@ export function SurfacePane({
   // B9: the viewport is set ONCE per root and never again — never on a replay scrub or a
   // metric/range toggle, which used to yank the user's zoom back on every step.
   const fittedForRootRef = useRef<string | null>(null);
+  // The vertical viewport is set on first paint and when the user explicitly changes the
+  // strike range. Replay frames and metric switches must not re-enable autoscale and crush
+  // the useful strikes back into a thin line.
+  const priceRangeKeyRef = useRef<string | null>(null);
   // The session's full stamp list, so the axis can be pinned to the WHOLE day.
   const stampsRef = useRef<string[]>([]);
   // Live price lines for pinned strikes, by pin id (send-to-chart).
@@ -532,6 +537,23 @@ export function SurfacePane({
     const bars: HeatData[] = buildHeatBars(shown, metric, anchor);
     heat.setData(bars);
     applyShaderRef.current();
+    const levelValues = shown.price_levels.filter((v) => Number.isFinite(v));
+    const rangeKey = `${root}:${frame.session_date ?? ""}:${rangeQ}`;
+    if (levelValues.length > 0 && priceRangeKeyRef.current !== rangeKey) {
+      const min = Math.min(...levelValues);
+      const max = Math.max(...levelValues);
+      const span = Math.max(max - min, Math.max(2, Math.abs(frame.spot ?? max) * 0.01));
+      const padding = span * 0.055;
+      const scale = chartRef.current?.priceScale("right");
+      try {
+        scale?.setVisibleRange({ from: min - padding, to: max + padding });
+        scale?.setAutoScale(false);
+        priceRangeKeyRef.current = rangeKey;
+      } catch {
+        // The chart may still be completing its first layout. A later frame retries because
+        // the key is intentionally not committed on failure.
+      }
+    }
     // B9: fit ONCE per root. Re-fitting on every [frame, metric, rangeQ] change threw away
     // any zoom or pan on the very next replay step. Safe to do once now that the whitespace
     // padding above keeps the bar count constant across scrubs — there is nothing left for a

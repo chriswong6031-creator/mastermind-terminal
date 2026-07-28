@@ -215,7 +215,7 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
 
   return (
     <div
-      className={`obs-card${selected ? " sel" : ""}`}
+      className={`obs-card obs-prophet-signal${selected ? " sel" : ""}`}
       style={{
         ...CARD_STYLE,
         opacity: isInvalidated ? 0.6 : 1,
@@ -345,9 +345,9 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
 
 const CARD_STYLE: React.CSSProperties = {
   position: "relative",
-  padding: "10px 12px",
+  padding: "12px 13px",
   cursor: "pointer",
-  marginBottom: 6,
+  marginBottom: 8,
 };
 
 const ROW: React.CSSProperties = {
@@ -358,7 +358,7 @@ const ROW: React.CSSProperties = {
 };
 
 const TICKER_STYLE: React.CSSProperties = {
-  font: "700 13px/1 var(--font-ui)",
+  font: "750 15px/1 var(--font-ui)",
   color: "var(--text)",
   letterSpacing: ".01em",
 };

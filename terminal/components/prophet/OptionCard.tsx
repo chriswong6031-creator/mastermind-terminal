@@ -95,7 +95,7 @@ export function OptionCard({ contract, lang, liveMark, liveMarkForced }: OptionC
     : null;
 
   return (
-    <div className="obs-card" style={CARD_STYLE}>
+    <div className="obs-card obs-prophet-option" style={CARD_STYLE}>
       {/* Header row */}
       <div style={HEADER_ROW}>
         <span style={DIAMOND}>◆</span>

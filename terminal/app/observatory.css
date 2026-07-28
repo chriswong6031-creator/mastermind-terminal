@@ -303,6 +303,247 @@
   background-clip: content-box;
 }
 
+/* ─── Prophet workspace ─────────────────────────────────────────────────────
+ * A calm, editorial command surface: one luminous masthead, three clearly ranked panes,
+ * and enough depth that the managed plan feels like a product rather than a raw data dump.
+ */
+.obs-prophet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 12px;
+  padding: 12px;
+  overflow: hidden;
+  background:
+    radial-gradient(900px 440px at 48% -12%, rgba(77,130,255,.12), transparent 64%),
+    radial-gradient(620px 360px at 93% 14%, rgba(157,134,255,.085), transparent 68%),
+    var(--bg);
+}
+.obs-prophet-masthead {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-height: 74px;
+  padding: 12px 15px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.105);
+  border-radius: 17px;
+  background:
+    linear-gradient(112deg, rgba(41,98,255,.14), rgba(157,134,255,.055) 46%, rgba(255,255,255,.026)),
+    rgba(13,15,19,.88);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.055), 0 18px 48px rgba(0,0,0,.26);
+}
+.obs-prophet-masthead::after {
+  content: "";
+  position: absolute;
+  width: 320px;
+  height: 120px;
+  right: -70px;
+  top: -80px;
+  border-radius: 50%;
+  background: rgba(77,130,255,.11);
+  filter: blur(36px);
+  pointer-events: none;
+}
+.obs-prophet-orb {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #dce6ff;
+  background: radial-gradient(circle at 35% 30%, #719cff, #365de0 48%, #182349 76%);
+  border: 1px solid rgba(153,180,255,.62);
+  box-shadow: 0 0 0 5px rgba(77,130,255,.08), 0 0 28px rgba(77,130,255,.32);
+}
+.obs-prophet-orb::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border: 1px dashed rgba(157,134,255,.30);
+  border-radius: 50%;
+}
+.obs-prophet-orb span {
+  font-size: 17px;
+  filter: drop-shadow(0 0 7px rgba(255,255,255,.55));
+}
+.obs-prophet-brand {
+  min-width: 0;
+}
+.obs-prophet-eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  font: 700 9px/1 var(--font-ui);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: #8caaff;
+}
+.obs-prophet-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.obs-prophet-title-row h2 {
+  margin: 0;
+  font: 760 23px/1 var(--font-ui);
+  letter-spacing: -.025em;
+  color: var(--text);
+}
+.obs-prophet-title-row > span {
+  font: 500 11px/1 var(--font-ui);
+  color: var(--muted);
+}
+.obs-prophet-status {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: stretch;
+  gap: 7px;
+  margin-left: auto;
+}
+.obs-prophet-stat {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 92px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 10px;
+  background: rgba(5,7,12,.32);
+}
+.obs-prophet-stat span {
+  font: 600 8px/1 var(--font-ui);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.obs-prophet-stat b {
+  font: 700 12px/1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.obs-prophet-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(270px, 300px) minmax(420px, 1fr) minmax(280px, 320px);
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+.obs-prophet-pane {
+  border-radius: 17px;
+  background: linear-gradient(180deg, rgba(255,255,255,.042), rgba(255,255,255,.022));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025), 0 18px 48px rgba(0,0,0,.17);
+}
+.obs-prophet-center {
+  border-color: rgba(77,130,255,.18);
+  background:
+    radial-gradient(520px 220px at 42% 0%, rgba(77,130,255,.065), transparent 68%),
+    linear-gradient(180deg, rgba(255,255,255,.044), rgba(255,255,255,.02));
+}
+.obs-prophet-right {
+  border-color: rgba(157,134,255,.16);
+}
+.obs-prophet-signal {
+  overflow: hidden;
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(255,255,255,.04), rgba(255,255,255,.018));
+  transition: transform var(--t-med) var(--ease-out), border-color var(--t-fast) var(--ease-out), background var(--t-fast) var(--ease-out);
+}
+.obs-prophet-signal::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: transparent;
+}
+.obs-prophet-signal:hover {
+  transform: translateY(-1px);
+}
+.obs-prophet-signal.sel::before {
+  background: linear-gradient(var(--brand-2), #9d86ff);
+  box-shadow: 0 0 14px rgba(77,130,255,.55);
+}
+.obs-prophet-section {
+  position: relative;
+  overflow: hidden;
+}
+.obs-prophet-section::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: rgba(157,134,255,.48);
+}
+.obs-prophet-section-primary::before {
+  background: var(--brand-2);
+  box-shadow: 0 0 14px rgba(77,130,255,.48);
+}
+.obs-prophet-geometry {
+  border-radius: 14px;
+  background:
+    linear-gradient(120deg, rgba(77,130,255,.075), rgba(157,134,255,.035)),
+    rgba(255,255,255,.02);
+}
+.obs-prophet-confidence {
+  border-radius: 14px;
+  border-color: rgba(157,134,255,.18);
+  background:
+    radial-gradient(180px 140px at 50% 25%, rgba(157,134,255,.10), transparent 70%),
+    rgba(255,255,255,.025);
+}
+.obs-prophet-option {
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(25,194,194,.055), rgba(255,255,255,.018));
+}
+@media (max-width: 1180px) {
+  .obs-prophet-grid {
+    grid-template-columns: 270px minmax(390px, 1fr);
+    overflow-y: auto;
+  }
+  .obs-prophet-right {
+    grid-column: 2;
+    min-height: 520px;
+  }
+}
+@media (max-width: 760px) {
+  .obs-prophet {
+    overflow-y: auto;
+  }
+  .obs-prophet-masthead {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .obs-prophet-status {
+    width: 100%;
+    margin-left: 0;
+    overflow-x: auto;
+  }
+  .obs-prophet-stat {
+    flex: 1 0 96px;
+  }
+  .obs-prophet-grid {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+  .obs-prophet-left,
+  .obs-prophet-center,
+  .obs-prophet-right {
+    min-height: 520px;
+  }
+}
+
 /* ─── Flow Desk surface-specific overrides ───────────────────────────────── */
 /*
  * Scoped under .obs-flowdesk so they don't leak into the chart app.
@@ -324,7 +565,7 @@
 
 /* Left rail — widened to host FlowGauge + WatchlistRail + SmartMoneyRadar */
 .obs-fd-left {
-  width: 260px;
+  width: 300px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -419,7 +660,7 @@
   padding: 8px 10px 20px;
   /* auto-fit: ≥750px center → 3-up; ≥490px → 2-up; else 1-up */
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 6px;
   align-content: start;
   max-height: none; /* no cap — obs-scroll handles overflow */
@@ -553,6 +794,19 @@
   display: flex;            /* FIX: card must be a flex container so that     */
   flex-direction: column;   /* inner .obs-fd-radar-rows flex:1 actually works */
 }
+.obs-fd-radar .obs-card-hd {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  padding: 10px 12px 8px;
+}
+.obs-fd-radar-note {
+  flex: 1 1 100%;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--muted);
+  font-style: italic;
+}
 .obs-fd-radar-rows {
   padding: 4px 8px 10px;
   display: flex;
@@ -563,40 +817,56 @@
   min-height: 0;
 }
 .obs-fd-radar-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(88px, 1.25fr) 68px 62px 38px;
   align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
+  gap: 6px;
+  padding: 8px 6px;
   border-radius: 8px;
   transition: background var(--t);
 }
 .obs-fd-radar-row:hover {
   background: rgba(255, 255, 255, 0.03);
 }
+.obs-fd-radar-name {
+  min-width: 0;
+}
 .obs-fd-radar-ticker {
   font: 650 12px/1 var(--font-ui);
   color: var(--text);
-  flex: 0 0 44px;
+}
+.obs-fd-radar-group {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.25;
+  color: var(--muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .obs-fd-radar-z {
-  font: 600 12px/1 var(--font-num);
-  font-variant-numeric: tabular-nums;
-  flex: 0 0 40px;
+  font: 650 9.5px/1.15 var(--font-ui);
   text-align: right;
+  white-space: nowrap;
 }
 .obs-fd-radar-prem {
   font: 600 11.5px/1 var(--font-num);
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
-  margin-left: auto;
   text-align: right;
 }
+.obs-fd-radar-call {
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
 .obs-fd-radar-col-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(88px, 1.25fr) 68px 62px 38px;
   align-items: center;
-  gap: 8px;
-  padding: 2px 8px 5px;
-  font-size: 10px;
+  gap: 6px;
+  padding: 3px 14px 6px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--muted);
   letter-spacing: 0.04em;
@@ -667,7 +937,7 @@
  * Compact 3-line layout: line1=ticker+CP+ring+lean+time, line2=strike+prem, line3=size+badges
  */
 .obs-fc-card {
-  padding: 9px 11px;
+  padding: 11px 12px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -753,9 +1023,9 @@
 /* Line 3 — size/OI + badges inline */
 .obs-fc-line3 {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
   min-width: 0;
 }
 /* Meta inside line 3 */
@@ -767,7 +1037,7 @@
   align-items: center;
   gap: 4px;
   flex-wrap: nowrap;
-  overflow: hidden;
+  overflow: visible;
   min-width: 0;
 }
 .obs-fc-meta-sep {
@@ -778,11 +1048,12 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 /* Inline badges variant (inside line3) */
 .obs-fc-badges-inline {
-  flex-shrink: 0;
+  width: calc(100% - 22px);
+  min-height: 16px;
 }
 .obs-fc-badge {
   font: 700 8.5px/1 var(--font-ui);
@@ -1386,6 +1657,8 @@
 }
 .obs-xdrawer-body {
   padding: 6px 14px 12px;
+  max-height: min(310px, 42vh);
+  overflow-y: auto;
 }
 .obs-xdrawer-toolbar {
   display: flex;
@@ -1396,8 +1669,11 @@
 }
 .obs-xdrawer-plot {
   width: 100%;
-  height: 168px;
+  height: 204px;
   position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
 }
 .obs-xdrawer-note {
   margin-top: 8px;
@@ -1408,6 +1684,16 @@
   font-size: 12px;
   color: var(--muted);
   line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .obs-gex-history-row {
+    flex-direction: column;
+  }
+  .obs-gex-history-readout {
+    width: 100% !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
 }
 
 /* ─── OEU T-C: surface flagship — pins, quad, style popover, drill actions ────

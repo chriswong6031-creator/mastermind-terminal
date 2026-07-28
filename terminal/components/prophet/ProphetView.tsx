@@ -184,6 +184,19 @@ export function ProphetView() {
   const plans       = payload?.plans ?? [];
   const sortedPlans = sortPlans(plans, sortMode);
   const selected    = sortedPlans.find((p) => p.id === selectedId) ?? sortedPlans[0] ?? null;
+  const activePlans = sortedPlans.filter((p) => planPhase(p) !== "invalidated").length;
+  const asofLabel = (() => {
+    if (!payload?.asof) return lang === "zh" ? "等待更新" : "Awaiting close";
+    try {
+      return new Date(payload.asof).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US", {
+        month: "short",
+        day: "numeric",
+        timeZone: "America/New_York",
+      });
+    } catch {
+      return payload.asof.slice(0, 10);
+    }
+  })();
 
   // ── Render helpers ─────────────────────────────────────────────────────────
 
@@ -217,9 +230,37 @@ export function ProphetView() {
   // ── Layout ─────────────────────────────────────────────────────────────────
 
   return (
-    <div style={OUTER}>
+    <div className="obs obs-ambient obs-prophet">
+      <header className="obs-prophet-masthead">
+        <div className="obs-prophet-orb" aria-hidden>
+          <span>✦</span>
+        </div>
+        <div className="obs-prophet-brand">
+          <span className="obs-prophet-eyebrow">{t("mastheadEyebrow")}</span>
+          <div className="obs-prophet-title-row">
+            <h2>{t("tabProphet")}</h2>
+            <span>{t("tabSubtitle")}</span>
+          </div>
+        </div>
+        <div className="obs-prophet-status">
+          <div className="obs-prophet-stat">
+            <span>{t("mastheadActive")}</span>
+            <b>{activePlans}</b>
+          </div>
+          <div className="obs-prophet-stat">
+            <span>{t("mastheadFocus")}</span>
+            <b>{selected?.asset ?? "—"}</b>
+          </div>
+          <div className="obs-prophet-stat">
+            <span>{t("mastheadUpdated")}</span>
+            <b>{asofLabel}</b>
+          </div>
+        </div>
+      </header>
+
+      <div className="obs-prophet-grid">
       {/* ── LEFT — alert stream ── */}
-      <div className="obs-card" style={LEFT_PANE}>
+      <div className="obs-card obs-prophet-pane obs-prophet-left" style={LEFT_PANE}>
         {/* Sub-tabs */}
         <div style={SUBTAB_ROW}>
           <nav className="obs-pillnav" style={{ padding: "3px", gap: 2 }}>
@@ -245,7 +286,7 @@ export function ProphetView() {
               <SortButton mode="best"    label={t("sortBest")} />
               <SortButton mode="gainers" label={t("sortGainers")} />
             </div>
-            <div style={CARD_LIST}>
+            <div style={CARD_LIST} className="obs-scroll">
               {sortedPlans.length === 0 ? (
                 <div style={EMPTY_STATE}>{t("noPlans")}</div>
               ) : (
@@ -272,7 +313,7 @@ export function ProphetView() {
       </div>
 
       {/* ── CENTER — analysis ── */}
-      <div className="obs-card" style={CENTER_PANE}>
+      <div className="obs-card obs-prophet-pane obs-prophet-center" style={CENTER_PANE}>
         {!selected ? (
           <div style={FULL_CENTER}>{t("noPlans")}</div>
         ) : (
@@ -281,12 +322,13 @@ export function ProphetView() {
       </div>
 
       {/* ── RIGHT — confidence index ── */}
-      <div className="obs-card" style={RIGHT_PANE}>
+      <div className="obs-card obs-prophet-pane obs-prophet-right" style={RIGHT_PANE}>
         {!selected ? (
           <div style={FULL_CENTER}>{t("noPlans")}</div>
         ) : (
           <ConfidenceColumn plan={selected} lang={lang} t={t} marks={marks} />
         )}
+      </div>
       </div>
     </div>
   );
@@ -347,7 +389,7 @@ function AnalysisPanel({
   const thesis = (lang === "zh" && _planAny.thesis_zh) ? _planAny.thesis_zh : _planAny.thesis;
 
   return (
-    <div style={ANALYSIS_SCROLL}>
+    <div style={ANALYSIS_SCROLL} className="obs-scroll obs-prophet-analysis">
       {/* ── Ticker header ── */}
       <div style={ANALYSIS_HEADER}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -380,7 +422,7 @@ function AnalysisPanel({
 
       {/* ── WHAT TO DO NOW ── */}
       {whatToDo && whatToDo.length > 0 && (
-        <div style={SECTION_BOX}>
+        <div style={SECTION_BOX} className="obs-prophet-section obs-prophet-section-primary">
           <div style={SECTION_HDR_ROW}>
             <span style={SECTION_LABEL}>{t("briefLabel")}</span>
             <span style={SECTION_CAPTION}>{t("briefCaption")}</span>
@@ -398,7 +440,7 @@ function AnalysisPanel({
 
       {/* ── PROFIT TAKING PLAN ── */}
       {profitPlan && profitPlan.length > 0 && (
-        <div style={SECTION_BOX}>
+        <div style={SECTION_BOX} className="obs-prophet-section">
           <div style={SECTION_HDR_ROW}>
             <span style={SECTION_LABEL}>{t("profitPlanLabel")}</span>
             <span style={SECTION_CAPTION}>{t("profitPlanCaption")}</span>
@@ -413,7 +455,7 @@ function AnalysisPanel({
 
       {/* ── SIGNAL THESIS ── */}
       {thesis && (
-        <div style={SECTION_BOX}>
+        <div style={SECTION_BOX} className="obs-prophet-section">
           <div style={SECTION_HDR_ROW}>
             <span style={SECTION_LABEL}>{t("thesisLabel")}</span>
             <span style={SECTION_CAPTION}>{t("thesisCaption")}</span>
@@ -491,7 +533,7 @@ function ConfidenceColumn({
       : null;
 
   return (
-    <div style={CONFIDENCE_SCROLL}>
+    <div style={CONFIDENCE_SCROLL} className="obs-scroll obs-prophet-confidence-column">
       {/* Section label */}
       <div style={CONF_HDR}>
         <span style={CONF_HDR_LABEL}>{t("confidenceTitle")}</span>
@@ -554,16 +596,6 @@ function ConfidenceColumn({
 }
 
 // ── Style constants ───────────────────────────────────────────────────────────
-
-const OUTER: React.CSSProperties = {
-  display: "grid",
-  // 3 columns: LEFT fixed 280px, CENTER flex, RIGHT fixed 260px
-  gridTemplateColumns: "280px 1fr 260px",
-  gap: 10,
-  height: "100%",
-  minHeight: 0,
-  overflow: "hidden",
-};
 
 const LEFT_PANE: React.CSSProperties = {
   display: "flex",
@@ -671,7 +703,7 @@ const ANALYSIS_HEADER: React.CSSProperties = {
 };
 
 const ANALYSIS_TICKER: React.CSSProperties = {
-  font: "700 20px/1 var(--font-ui)",
+  font: "750 28px/1 var(--font-ui)",
   color: "var(--text)",
   letterSpacing: ".01em",
 };
@@ -706,11 +738,12 @@ const AUTH_CHIP: React.CSSProperties = {
 };
 
 const SECTION_BOX: React.CSSProperties = {
-  background: "rgba(255,255,255,0.026)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "var(--r-lg)",
-  padding: "11px 13px",
-  marginBottom: 10,
+  background: "linear-gradient(145deg, rgba(255,255,255,.045), rgba(255,255,255,.018))",
+  border: "1px solid rgba(255,255,255,0.095)",
+  borderRadius: 14,
+  padding: "14px 15px",
+  marginBottom: 12,
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,.035)",
 };
 
 const SECTION_HDR_ROW: React.CSSProperties = {
@@ -773,8 +806,8 @@ const PROFIT_ROW: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
-  padding: "7px 10px",
-  background: "rgba(255,255,255,0.026)",
+  padding: "9px 10px",
+  background: "rgba(255,255,255,0.035)",
   border: "1px solid rgba(255,255,255,0.07)",
   borderRadius: "var(--r-md)",
 };

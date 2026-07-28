@@ -44,7 +44,9 @@ type View = "bubbles" | "bars";
 
 export function ExposureExpiryDrawer({ byExpiry, greek, asOf, lang }: Props) {
   const t = makeGexT(lang);
-  const [open, setOpen] = useState(true);
+  // Keep the high-value ladder and Market State card full-height on entry. The term
+  // structure remains one click away and owns its own scroll region when expanded.
+  const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>("bubbles");
 
   const ts = useMemo(
@@ -127,12 +129,15 @@ export function ExposureExpiryDrawer({ byExpiry, greek, asOf, lang }: Props) {
 // metrics. Colours via var(--up)/var(--down) (East-Asian flip aware) — no direction hex.
 
 function BubbleField({ ts }: { ts: ReturnType<typeof byExpiryToTermStructure> }) {
-  const W = 680;
-  const H = 150;
-  const padL = 20;
-  const padR = 20;
-  const padT = 16;
-  const padB = 26;
+  // Give every expiry a real slot. A fixed 680px viewBox put 20–30 labels on top of
+  // one another; this expands horizontally and lets the drawer scroll instead.
+  const slotW = 68;
+  const W = Math.max(840, ts.nodes.length * slotW);
+  const H = 190;
+  const padL = 34;
+  const padR = 34;
+  const padT = 24;
+  const padB = 34;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   const n = ts.nodes.length;
@@ -144,12 +149,17 @@ function BubbleField({ ts }: { ts: ReturnType<typeof byExpiryToTermStructure> })
     return midY - (net / ts.maxAbs) * (plotH / 2 - 10);
   };
   const xFor = (i: number) => (n <= 1 ? padL + plotW / 2 : padL + (i / (n - 1)) * plotW);
-  const rFor = (frac: number) => 4 + Math.sqrt(Math.max(0, frac)) * 16;
+  const rFor = (frac: number) => 5 + Math.sqrt(Math.max(0, frac)) * 17;
 
   return (
-    <div className="obs-xdrawer-plot">
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="100%" preserveAspectRatio="xMidYMid meet" role="img"
+    <div className="obs-xdrawer-plot obs-scroll">
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height="100%" preserveAspectRatio="none" role="img"
         aria-label="Exposure by expiry term structure">
+        {/* Quiet horizontal guides keep positive/negative distance legible. */}
+        {[0.25, 0.75].map((p) => (
+          <line key={p} x1={padL} y1={padT + plotH * p} x2={W - padR} y2={padT + plotH * p}
+            stroke="rgba(214,218,227,.07)" strokeWidth={1} />
+        ))}
         {/* Zero line */}
         <line x1={padL} y1={midY} x2={W - padR} y2={midY} stroke="rgba(214,218,227,.18)" strokeWidth={1} strokeDasharray="3 3" />
         {ts.nodes.map((node, i) => {
@@ -166,8 +176,8 @@ function BubbleField({ ts }: { ts: ReturnType<typeof byExpiryToTermStructure> })
               />
               {/* value label above/below the bubble depending on sign */}
               <text
-                x={cx} y={node.isPos ? cy - r - 3 : cy + r + 9}
-                textAnchor="middle" fontSize={9} fill={col}
+                x={cx} y={node.isPos ? Math.max(12, cy - r - 5) : Math.min(H - padB + 4, cy + r + 12)}
+                textAnchor="middle" fontSize={10} fontWeight={650} fill={col}
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
                 {fmtMn(node.net)}
@@ -175,7 +185,7 @@ function BubbleField({ ts }: { ts: ReturnType<typeof byExpiryToTermStructure> })
               {/* DTE label on the x axis */}
               <text
                 x={cx} y={H - 9}
-                textAnchor="middle" fontSize={9} fill="var(--muted)"
+                textAnchor="middle" fontSize={10} fill="var(--muted)"
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
                 {node.dteLabel}

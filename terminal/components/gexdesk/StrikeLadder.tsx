@@ -1163,7 +1163,7 @@ const WALL_CHIP_VAL: React.CSSProperties = { fontSize: 12, fontWeight: 700, font
 
 const RANGE_PRESET_GROUP: React.CSSProperties = { display: "flex", gap: 3, marginLeft: "auto" };
 
-const RANGE_CHIP: React.CSSProperties = { height: 22, minWidth: 34, fontSize: 10, padding: "0 7px" };
+const RANGE_CHIP: React.CSSProperties = { height: 27, minWidth: 42, fontSize: 10.5, padding: "0 9px" };
 
 const SCALE_FOOTER: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
@@ -1172,7 +1172,7 @@ const SCALE_FOOTER: React.CSSProperties = {
 
 const SCALE_TOGGLE: React.CSSProperties = { display: "flex", gap: 3 };
 
-const SCALE_CHIP: React.CSSProperties = { height: 20, fontSize: 9.5, padding: "0 8px", fontVariantNumeric: "tabular-nums" };
+const SCALE_CHIP: React.CSSProperties = { height: 24, fontSize: 10, padding: "0 9px", fontVariantNumeric: "tabular-nums" };
 
 const LADDER_EMPTY: React.CSSProperties = {
   padding: 24,
@@ -1204,7 +1204,7 @@ const LENS_NOTE: React.CSSProperties = {
 
 const SIDE_GROUP: React.CSSProperties = { display: "flex", gap: 3 };
 
-const SIDE_CHIP: React.CSSProperties = { height: 22, fontSize: 10, padding: "0 8px" };
+const SIDE_CHIP: React.CSSProperties = { height: 27, fontSize: 10.5, padding: "0 10px" };
 
 // Dropdown trigger
 const DD_TRIGGER: React.CSSProperties = {
@@ -1309,14 +1309,14 @@ const COL_HEADER_ROW: React.CSSProperties = {
 };
 
 const COL_STRIKE_HDR: React.CSSProperties = {
-  fontSize: 9,
+  fontSize: 10,
   color: "var(--muted)",
   textTransform: "uppercase",
   letterSpacing: "0.06em",
 };
 
 const COL_BAR_HDR: React.CSSProperties = {
-  fontSize: 9,
+  fontSize: 10,
   color: "var(--muted)",
   textTransform: "uppercase",
   letterSpacing: "0.06em",
@@ -1326,7 +1326,7 @@ const COL_BAR_HDR: React.CSSProperties = {
 const COL_TAG_HDR: React.CSSProperties = {};
 
 const COL_VAL_HDR: React.CSSProperties = {
-  fontSize: 9,
+  fontSize: 10,
   color: "var(--muted)",
   textTransform: "uppercase",
   letterSpacing: "0.06em",
@@ -1356,7 +1356,7 @@ const CENTER_LINE: React.CSSProperties = {
 const STRIKE_ROW: React.CSSProperties = {
   display: "grid",
   alignItems: "center",
-  height: 22,
+  height: 28,
   borderBottom: "1px solid rgba(255,255,255,0.04)",
   cursor: "default",
   position: "relative",
@@ -1391,13 +1391,13 @@ const STRIKE_COL: React.CSSProperties = {
 };
 
 const STRIKE_PRICE: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: 12,
   fontVariantNumeric: "tabular-nums",
   flexShrink: 0,
 };
 
 const PCT_DIST: React.CSSProperties = {
-  fontSize: 9,
+  fontSize: 10,
   color: "var(--muted)",
   fontVariantNumeric: "tabular-nums",
   flexShrink: 0,
@@ -1422,7 +1422,7 @@ const BAR_AREA: React.CSSProperties = {
 const BAR_POS: React.CSSProperties = {
   position: "absolute",
   left: "50%",
-  height: 11,
+  height: 14,
   borderRadius: "0 2px 2px 0",
   background:
     "linear-gradient(90deg, rgba(var(--up-rgb),0.45), rgba(var(--up-rgb),0.85))",
@@ -1432,7 +1432,7 @@ const BAR_POS: React.CSSProperties = {
 const BAR_NEG: React.CSSProperties = {
   position: "absolute",
   right: "50%",
-  height: 11,
+  height: 14,
   borderRadius: "2px 0 0 2px",
   background:
     "linear-gradient(270deg, rgba(var(--down-rgb),0.45), rgba(var(--down-rgb),0.85))",
@@ -1448,7 +1448,7 @@ const TAG_COL: React.CSSProperties = {
 };
 
 const LEVEL_TAG: React.CSSProperties = {
-  fontSize: 8,
+  fontSize: 8.5,
   fontWeight: 800,
   letterSpacing: "0.08em",
   padding: "1px 4px",
@@ -1460,7 +1460,7 @@ const LEVEL_TAG: React.CSSProperties = {
 };
 
 const GEX_VAL: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: 11,
   fontVariantNumeric: "tabular-nums",
   fontWeight: 600,
   textAlign: "right",
