@@ -17,6 +17,7 @@ Offline only. The network-facing selection rule lives in the generator, which is
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,8 @@ from ingest.macro_catalog import CATALOG, RETIRED, retired_symbols, manifest_row
 from ingest import refresh_crypto_ohlc as rc
 
 CRYPTO = [s for s in CATALOG if s.sec == "Crypto"]
+ROOT = Path(__file__).resolve().parents[1]
+NIGHTLY = ROOT / "ops" / "terminal-data"
 
 
 # ── catalog shape ──────────────────────────────────────────────────────────────────────────
@@ -167,6 +170,35 @@ def test_dropping_the_current_day_leaves_completed_history_intact():
     today = dt.date(2026, 7, 28)
     bars = [["2026-07-26", 1, 2, 1, 2, 5]]
     assert rc.drop_incomplete(bars, today) == bars
+
+
+# ── the nightly wiring ─────────────────────────────────────────────────────────────────────
+# ops/terminal-data is reinstalled over /usr/local/bin/terminal-data by step 7 of EVERY
+# terminal-build.sh deploy, so a pass that exists only in the macro repo's vendored copy is
+# erased by the next deploy. That is how the macro rows kept vanishing from the nightly
+# (2026-07-27) and how this crypto pass nearly did (2026-07-28). These two guards make the
+# omission a red test instead of a silent regression discovered weeks later.
+def _nightly_text() -> str:
+    assert NIGHTLY.exists(), f"{NIGHTLY} is missing — the nightly this guard protects is gone"
+    return NIGHTLY.read_text()
+
+
+def test_the_nightly_in_this_repo_runs_the_crypto_ohlc_pass():
+    """Catalog rows without this pass = searchable symbols with a 404 for their chart."""
+    assert CRYPTO, "no crypto rows — this guard assumes the catalog carries some"
+    assert "refresh_crypto_ohlc.py" in _nightly_text(), (
+        "ops/terminal-data does not run refresh_crypto_ohlc.py, so every crypto row it "
+        "publishes will 404 on <SYM>.json. Add the pass to BOTH nightly copies."
+    )
+
+
+def test_the_crypto_pass_is_ordered_between_the_rows_it_reads_and_the_hydrate_that_uses_it():
+    text = _nightly_text()
+    rows = text.index("build_macro_symbols.py")     # writes the crypto manifest rows
+    crypto = text.index("refresh_crypto_ohlc.py")   # reads them, writes OHLC
+    hydrate = text.rindex("hydrate_prices.py")      # reads the OHLC into manifest last/chg
+    assert rows < crypto, "the crypto pass reads manifest rows build_macro_symbols has not written yet"
+    assert crypto < hydrate, "a new pair's LAST/CHG would wait a full extra night"
 
 
 # ── manifest selection ─────────────────────────────────────────────────────────────────────
