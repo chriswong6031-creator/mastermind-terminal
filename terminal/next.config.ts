@@ -203,15 +203,17 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // Wave-3 IA: the workspace shells (now chart/analysis/discover/options/scripts/alerts/
-        // portfolio) need the same 5-minute edge cap or EdgeOne pins their prerendered HTML for
-        // a year (the exact stale-shell class behind the Wave-1 module-factory crash).
-        source: "/(discover|analysis|options|scripts|alerts|portfolio|login)",
+        // Auth-aware shells must never be shared by EdgeOne. Caching these as
+        // public can replay a signed-out redirect or another session's shell.
+        source: "/(terminal|discover|analysis|options|scripts|alerts|portfolio|admin|login)",
         headers: [
           {
             key: "Cache-Control",
-            value: "public, s-maxage=300, stale-while-revalidate=600",
+            value: "private, no-cache, no-store, must-revalidate, max-age=0",
           },
+          { key: "Expires", value: "0" },
+          { key: "Pragma", value: "no-cache" },
+          { key: "Vary", value: "Cookie" },
         ],
       },
     ];
