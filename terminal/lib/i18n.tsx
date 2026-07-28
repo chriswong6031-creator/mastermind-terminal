@@ -315,6 +315,15 @@ const LEX: Record<string, [string, string]> = {
   gateIndCap: ["Free plan: 3 indicators max.", "免费版最多 3 个指标"],
   gateWatchlist: ["Create a free account to build a watchlist.", "注册免费账户即可创建自选列表"],
   gateSignupCta: ["Sign up free →", "免费注册 →"],
+  // Options paywall (/options — the terminal_live_options entitlement gate)
+  opwTitle: ["Unlock the Options desk", "解锁期权终端"],
+  opwBody: ["Live options flow, chains, exposure (GEX) and unusual activity — part of Insider & Pro.", "实时期权流、期权链、Gamma 敞口 (GEX) 与异动侦测 —— Insider 与 Pro 专享。"],
+  opwF1: ["Live order-flow tape", "实时期权流水"],
+  opwF2: ["Option chains & greeks", "期权链与希腊字母"],
+  opwF3: ["Gamma exposure (GEX)", "Gamma 敞口 (GEX)"],
+  opwF4: ["Unusual & sweep detection", "异动与扫单侦测"],
+  opwCta: ["Start 7-day free trial", "开启 7 天免费试用"],
+  opwSub: ["Insider & Pro · cancel anytime", "Insider 与 Pro · 随时取消"],
   emptyWatchlist: ["No symbols yet — use + to add.", "暂无标的 —— 点击 + 添加。"],
   // compare
   compareTitle: ["Compare — overlay symbols", "对比 —— 叠加标的"],
