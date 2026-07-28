@@ -1,6 +1,6 @@
 "use client";
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { useT } from "@/lib/i18n";
+import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useLang, useT } from "@/lib/i18n";
 import { CMP_PALETTE, CmpMode, CmpCfg } from "@/lib/compare";
 import { parseComposite, compositeExpr, validateLegs } from "@/lib/composite";
 import { getHistory } from "@/lib/searchHistory";
@@ -8,28 +8,19 @@ import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 import {
-  isSymbolVisible, scoreSymbol, marketOf, ALL_MARKETS,
+  isSymbolVisible, scoreSymbol, marketOf, displayName, ALL_MARKETS,
   DEFAULT_PREFS, type MarketId, type MarketPrefs,
 } from "@/lib/markets";
+import { categoryBrowse, tabOf } from "@/lib/searchCategory";
 
 type Row = { name: string; col: string; verdict: string | null; vts?: string | null; mkt?: string; zh?: string; sec?: string };
 type ListInfo = { name: string; count: number; symbols: { symbol: string; section: string }[] };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY" || v === "RECLAIM";
 
-// Asset-class → search-tab mapping. `sec` in the manifest is the asset class
-// (Equities / Funds / Crypto / …); anything unmapped (incl. stocks) falls under "Stocks".
-const CAT_OF: Record<string, string> = { Funds: "Funds", Crypto: "Crypto", Indices: "Indices", Bonds: "Bonds", Futures: "Futures", Forex: "Forex", Economy: "Economy", Options: "Options" };
-// The manifest tags ETFs as "Equities" today, so a pure `sec` map would file SPY/QQQ under
-// Stocks. This explicit ticker set routes the common broad-market/sector ETFs into "Funds" so
-// that category has real coverage (and lights up instead of rendering disabled). Heuristics
-// beyond this fixed set are intentionally out of scope — extend the set, don't guess.
-const FUND_TICKERS = new Set(["SPY", "QQQ", "IWM", "DIA", "SOXL", "GLD", "TLT"]);
-
 // MarketId → i18n key, so the filter notice and the settings pane name markets identically.
 export const MARKET_TKEY: Record<MarketId, string> = {
   us: "mktUs", cn: "mktCn", hk: "mktHk", ca: "mktCa", intl: "mktIntl", crypto: "mktCrypto",
 };
-const tabOf = (sym: string, sec?: string): string => (FUND_TICKERS.has(sym) ? "Funds" : (sec && CAT_OF[sec]) || "Stocks");
 
 // Category tab order + their i18n keys (bilingual labels — no hardcoded English in JSX).
 const CATS: { id: string; key: string }[] = [
@@ -86,6 +77,7 @@ export default function SearchModal({
   compareCfg?: Record<string, CmpCfg>;
 }) {
   const t = useT();
+  const { lang } = useLang();
   const onboarding = useOnboarding();
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
@@ -182,6 +174,19 @@ export default function SearchModal({
       .slice(0, 30);
   }, [deferredQ, history, manifest, cat, marketVisible]);
 
+  // Category BROWSE rows: what a selected category tab lists when the query is still empty.
+  // Without this an empty query rendered history and nothing else, so tapping "Crypto" on a
+  // fresh session showed only whichever coins were in RECENT — which is exactly how 24 crypto
+  // rows in the manifest read to a user as "only BTC and ETH are in Crypto" (2026-07-27).
+  // Ordering + capping live in lib/searchCategory.ts, where they are testable.
+  const browseResults = useMemo((): [string, Row][] => {
+    if (deferredQ.trim() || cat === "All") return [];
+    return categoryBrowse(manifest, cat, {
+      exclude: [...historyResults.map(([s]) => s), ...(cmp && active ? [active] : [])],
+      marketPrefs, prefsReady,
+    }).map((s) => [s, manifest[s]] as [string, Row]);
+  }, [deferredQ, cat, manifest, historyResults, cmp, active, marketPrefs, prefsReady]);
+
   // How many matches the market filter is holding back, and from where. Shown as a one-line
   // footer so a hidden market reads as a setting the user owns, not as missing data — the
   // difference between "personalized" and "broken". Only computed when something is off.
@@ -202,7 +207,10 @@ export default function SearchModal({
   const availCats = useMemo(() => { const s = new Set<string>(); for (const [sym, r] of Object.entries(manifest)) s.add(tabOf(sym, r.sec)); return s; }, [manifest]);
 
   const showHistory = !deferredQ.trim();
-  const displayRows: [string, Row][] = showHistory ? historyResults : results;
+  // RECENT first, then the rest of the category — one flat list so arrow-key nav and the `sel`
+  // index stay a single sequence across the section header that separates them.
+  const displayRows: [string, Row][] = showHistory ? [...historyResults, ...browseResults] : results;
+  const catLabelKey = CATS.find((c) => c.id === cat)?.key;
 
   // Active list's symbols joined against the manifest (HOME body). Symbols missing from the
   // manifest still render (neutral placeholder) — never silently dropped.
@@ -348,7 +356,11 @@ export default function SearchModal({
         )}
         <div className="meta">
           <div className="tk">{s}</div>
-          <div className="nm">{r ? `${r.name}${r.zh && r.zh !== r.name ? ` · ${r.zh}` : ""}` : s}</div>
+          {/* ONE language, never both. This used to render `name · zh`, so an English user read
+              "Dogecoin · 狗狗币" and "Palladium · 钯金" — the last surface still doing it after
+              displayName() landed (reported 2026-07-27). Chinese stays SEARCHABLE either way:
+              scoreSymbol matches the zh field regardless of the display language. */}
+          <div className="nm">{r ? displayName(r, lang) || s : s}</div>
         </div>
         <div className="vr">
           {r?.mkt && <span className="mkt">{r.mkt}</span>}
@@ -583,8 +595,9 @@ export default function SearchModal({
               <div className="sres-section-hd">{t("searchRecentHeader")}</div>
             )}
 
-            {/* Type-to-search hint (F): only when there is no history to show and no query yet. */}
-            {!cmp && !isAdd && showHistory && historyResults.length === 0 && (
+            {/* Type-to-search hint (F): only when there is nothing at all to show and no query
+                yet — a category browse listing is content, so it replaces the hint. */}
+            {!cmp && !isAdd && showHistory && displayRows.length === 0 && (
               <div className="s-type-hint">{t("typeToSearch")}</div>
             )}
 
@@ -607,21 +620,32 @@ export default function SearchModal({
                 )}
               </div>
             )}
-            {(cmp || isAdd) && showHistory && historyResults.length === 0 && (
+            {(cmp || isAdd) && showHistory && displayRows.length === 0 && (
               <div className="empty">{t("searchHistoryEmpty")}</div>
             )}
 
             {displayRows.map(([s, r], i) => {
               const rowSel = showCompositeRow ? i + 1 : i;
+              // The category-browse block gets its own header, at the seam after the RECENT rows
+              // (index 0 when there is no history). Rendered inside the map so one flat row list
+              // keeps driving `sel`/arrow-key nav across the seam.
+              const seamHd = showHistory && browseResults.length > 0 && i === historyResults.length && catLabelKey
+                ? <div className="sres-section-hd">{t(catLabelKey)}</div>
+                : null;
               // compare/add modes keep their bespoke row actions; go mode uses the shared symRow w/ add.
-              if (!cmp && !isAdd) return symRow(s, r, rowSel, true);
+              if (!cmp && !isAdd) {
+                return seamHd
+                  ? <Fragment key={`seam-${s}`}>{seamHd}{symRow(s, r, rowSel, true)}</Fragment>
+                  : symRow(s, r, rowSel, true);
+              }
               const buy = isBuy(r.verdict);
               const inCmp = cmp && compare.includes(s);
               const inWl = inWatchlist.has(s);
               const flagColor = flags[s];
               return (
+                <Fragment key={s}>
+                {seamHd}
                 <div
-                  key={s}
                   className={`r${rowSel === sel ? " sel" : ""}${inCmp ? " r-on" : ""}`}
                   onMouseEnter={() => setSel(rowSel)}
                   onClick={(e) => choose(s, e.shiftKey)}
@@ -635,7 +659,7 @@ export default function SearchModal({
                   <span className="ic" style={{ background: r.col }}>{s[0]}</span>
                   <div className="meta">
                     <div className="tk">{s}</div>
-                    <div className="nm">{r.name}{r.zh && r.zh !== r.name ? ` · ${r.zh}` : ""}</div>
+                    <div className="nm">{displayName(r, lang) || s}</div>
                   </div>
                   <div className="vr">
                     {r.mkt && <span className="mkt">{r.mkt}</span>}
@@ -670,6 +694,7 @@ export default function SearchModal({
                     }
                   </div>
                 </div>
+                </Fragment>
               );
             })}
           </div>

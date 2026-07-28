@@ -34,7 +34,9 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from macro_catalog import CATALOG, duplicates, manifest_rows, yahoo_symbols  # noqa: E402
+from macro_catalog import (  # noqa: E402
+    CATALOG, duplicates, manifest_rows, retired_symbols, yahoo_symbols,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "terminal" / "public" / "data"
@@ -185,8 +187,17 @@ def main() -> int:
             symbols[sym] = row
             added += 1
 
+    # The one exception to "purely additive": rows this catalog itself retired (macro_catalog
+    # RETIRED — currently the delisted MATIC-USD). Without this, dropping a symbol from the
+    # catalog leaves it in the manifest forever as a dead search row that can never price or
+    # chart. Only exact names from that explicit list, and only ones no longer in the catalog.
+    removed = [s for s in retired_symbols() if symbols.pop(s, None) is not None]
+    if removed:
+        print(f"retired: removed {len(removed)} row(s) {removed}")
+
     write_atomic(mpath, manifest)
-    print(f"manifest: {before} -> {len(symbols)} symbols (+{added} new, {updated} enriched)")
+    print(f"manifest: {before} -> {len(symbols)} symbols "
+          f"(+{added} new, {updated} enriched, -{len(removed)} retired)")
 
     if not args.no_ohlc:
         wrote = 0
