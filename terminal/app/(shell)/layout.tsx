@@ -13,11 +13,15 @@ import AppShell from "@/components/chrome/AppShell";
  * scripts seeding, admin gate) still resolve it themselves — this read is for
  * the chrome only and is cheap/deduped by supabase's per-request client.
  *
- * supabase reads cookies → Next auto-detects this layout as dynamic; the child
- * pages keep their own revalidate/dynamic behavior.
+ * This shell is explicitly dynamic and private because it contains auth state.
  */
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export default async function ShellLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  return <AppShell email={user?.email || ""}>{children}</AppShell>;
+  const { data } = await supabase.auth.getClaims();
+  const email =
+    typeof data?.claims?.email === "string" ? data.claims.email : "";
+  return <AppShell email={email}>{children}</AppShell>;
 }

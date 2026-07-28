@@ -10,11 +10,6 @@ import AnalysisWorkspace from "@/components/workspaces/AnalysisWorkspace";
 // The (shell) layout reads auth cookies (auto-dynamic); this page adds nothing
 // server-side.
 //
-// Mirrors app/(shell)/options/page.tsx: the revalidate export documents the 5min
-// edge-cache cap (belt-and-suspenders vs the EdgeOne year-long s-maxage pin) and
-// keeps it if the layout's dynamic cookie read or next.config headers ever change.
-export const revalidate = 300;
-
 export const metadata: Metadata = { title: "Analysis · Mastermind Terminal" };
 
 export default function AnalysisPage() {

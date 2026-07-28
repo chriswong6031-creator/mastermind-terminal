@@ -13,12 +13,6 @@ import { hasLiveOptions } from "@/lib/entitlement";
 // server payload to cache — the page is a thin server shell. The (shell) layout
 // reads auth cookies (auto-dynamic); this page adds nothing server-side.
 
-// Belt-and-suspenders vs the EdgeOne year-long s-maxage pin (the Wave-1 crash class):
-// the (shell) layout's cookie read already makes this route dynamic, and next.config
-// headers cap the edge cache at 5min — this export documents the cap and keeps it if
-// either of those ever changes. (Old /screener|/heatmap|/flow pages carried the same.)
-export const revalidate = 300;
-
 export const metadata: Metadata = { title: "Options · Mastermind Terminal" };
 
 export default async function OptionsPage() {

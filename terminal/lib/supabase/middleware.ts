@@ -1,5 +1,35 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import {
+  applyAuthResponseHeaders,
+  applySupabaseResponseCookies,
+  authCookieOptions,
+} from "@/lib/supabase/cookies";
+
+const PROTECTED = [
+  "/terminal",
+  "/analysis",
+  "/discover",
+  "/options",
+  "/scripts",
+  "/alerts",
+  "/portfolio",
+  "/admin",
+  "/flow",
+  "/heatmap",
+  "/screener",
+];
+
+function redirectWithAuthState(url: URL, source: NextResponse) {
+  const redirect = NextResponse.redirect(url);
+  const getSetCookie = (
+    source.headers as Headers & { getSetCookie?: () => string[] }
+  ).getSetCookie;
+  const setCookies = getSetCookie?.call(source.headers) ?? [];
+  setCookies.forEach((cookie) => redirect.headers.append("Set-Cookie", cookie));
+  applyAuthResponseHeaders(redirect.headers);
+  return redirect;
+}
 
 // Refreshes the auth session on every request and guards the /terminal area.
 export async function updateSession(request: NextRequest) {
@@ -25,43 +55,41 @@ export async function updateSession(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      cookieOptions: authCookieOptions(),
       cookies: {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet, headers) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
           response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options),
-          );
+          applySupabaseResponseCookies(response.headers, cookiesToSet, headers);
         },
       },
     },
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // getClaims verifies the JWT signature/expiry locally and only goes to Auth
+  // when a refresh is actually due. A transient Auth API hiccup must not turn
+  // every ordinary page navigation into an apparent sign-out.
+  const { data, error } = await supabase.auth.getClaims();
+  const signedIn = !error && typeof data?.claims?.sub === "string";
 
-  // Wave-3 IA: chart + the six workspaces (old /research, /automate URLs 308 to these
-  // before reaching here) PLUS the prerendered surfaces (/flow /heatmap /screener) —
-  // the 2026-07-24 lockdown gates the whole app. /embed stays public: the landing's
-  // product showcase renders it to signed-out visitors by design. NOTE: EdgeOne pins
-  // prerendered pages ~1yr, so already-cached copies of /flow|/heatmap|/screener can
-  // serve from the edge until the operator purges — the gate is origin-enforced.
-  const PROTECTED = ["/terminal", "/analysis", "/discover", "/options", "/scripts", "/alerts", "/portfolio", "/flow", "/heatmap", "/screener"];
+  // Every auth-aware origin response is private. In particular, never allow a
+  // CDN to replay a previously cached /login redirect to a signed-in user.
+  applyAuthResponseHeaders(response.headers);
+
   // protect the app area; bounce unauthenticated users to /login
-  if (!user && PROTECTED.some((p) => path.startsWith(p))) {
+  if (!signedIn && PROTECTED.some((p) => path.startsWith(p))) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    return NextResponse.redirect(url);
+    return redirectWithAuthState(url, response);
   }
   // bounce signed-in users away from / and /login
-  if (user && (path === "/login" || path === "/")) {
+  if (signedIn && (path === "/login" || path === "/")) {
     const url = request.nextUrl.clone();
     url.pathname = "/terminal";
-    return NextResponse.redirect(url);
+    return redirectWithAuthState(url, response);
   }
   return response;
 }

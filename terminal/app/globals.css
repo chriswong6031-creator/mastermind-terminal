@@ -585,7 +585,8 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   background:var(--pop-bg);border:1px solid var(--pop-edge);
   box-shadow:var(--pop-shadow),var(--pop-sheen);
   backdrop-filter:var(--pop-blur);-webkit-backdrop-filter:var(--pop-blur);
-  transform-origin:top right;animation:popDrop .17s cubic-bezier(.2,.9,.25,1.06)}
+  transform-origin:top right;animation:popDrop .17s cubic-bezier(.2,.9,.25,1.06);
+  z-index:100;max-height:calc(100dvh - 58px);overflow-y:auto;overscroll-behavior:contain}
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.settings-pop{background:rgba(18,21,30,.97)}}
 @keyframes popDrop{from{opacity:0;transform:translateY(-9px) scale(.95)}to{opacity:1;transform:none}}
 .settings-pop .set-h{padding:11px 13px 4px}.settings-pop .set-h b{font:650 13px/1 var(--font-ui)}
