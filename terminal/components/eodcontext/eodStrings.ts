@@ -74,8 +74,8 @@ const EOD_LEX = {
     "使最多未平仓合约到期归零的行权价。由结构快照发布；仅供展示。",
   ],
   tipIvPct: [
-    "Where this name's at-the-money implied vol sits in its own trailing 252-session range. High = its options are dear for this name, not dear in absolute terms.",
-    "该标的平值隐含波动率在其自身过去252个交易日区间中的位置。数值高=相对该股自身而言期权偏贵，并非绝对昂贵。",
+    "Where this name's at-the-money implied vol sits within its own range over the past trading year. High = its options are dear for this name, not dear in absolute terms.",
+    "该标的平值隐含波动率在其过去一个交易年区间中的位置。数值高=相对该股自身而言期权偏贵，并非绝对昂贵。",
   ],
   tipOiConf: [
     "How many of the prior session's large trades were backed by an overnight open-interest build — i.e. new positions, not closed ones.",

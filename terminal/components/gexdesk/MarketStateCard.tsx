@@ -449,7 +449,7 @@ export function MarketStateCard({
   );
 
   return (
-    <div className="obs-card" style={CARD_OUTER} data-tut="gex-state-card">
+    <div className="obs-card obs-scroll" style={CARD_OUTER} data-tut="gex-state-card">
       {/* ── Header: title + regime chip ─────────────────────────────────────── */}
       <div className="obs-card-hd" style={CARD_HEADER}>
         <span className="obs-lbl">{t("stateTitle")}</span>
@@ -718,10 +718,11 @@ const CARD_OUTER: React.CSSProperties = {
   /* 340px rail on desktop; on a phone the row has already wrapped, so cap at the track
      width instead of demanding 300px minimum and pushing a horizontal scrollbar. */
   minWidth: 0,
-  width: 340,
+  width: 360,
   maxWidth: "100%",
   flexShrink: 0,
   overflowY: "auto",
+  overscrollBehavior: "contain",
   scrollbarWidth: "thin" as const,
   scrollbarColor: "rgba(255,255,255,0.13) transparent",
 };
@@ -877,7 +878,7 @@ const WHATIF_WRAP: React.CSSProperties = {
 };
 
 const WHATIF_TITLE: React.CSSProperties = {
-  fontSize: 8.5,
+  fontSize: 9.5,
   fontWeight: 700,
   letterSpacing: "0.1em",
   textTransform: "uppercase",
@@ -897,7 +898,7 @@ const WHATIF_BOX: React.CSSProperties = {
   flexDirection: "column",
   alignItems: "center",
   gap: 2,
-  padding: "5px 4px",
+  padding: "7px 5px",
   background: "rgba(255,255,255,0.03)",
   border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: "var(--r-sm, 6px)",

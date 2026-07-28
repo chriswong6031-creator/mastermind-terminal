@@ -418,6 +418,7 @@ export function GexDeskView() {
         {/* Greek exposure lens — GEX / DEX / VEX / CHEX. Switches which per-strike
             greek the ladder renders from the by_strike payload (data already present). */}
         <div style={GREEK_GROUP} role="group" aria-label={t("greekLensAria")}>
+          <span className="obs-lbl" style={{ marginRight: 2 }}>{t("greekLensAria")}</span>
           {GREEK_LENSES.map((g) => (
             <button
               key={g.key}
@@ -615,13 +616,19 @@ const SPOT_DISPLAY: React.CSSProperties = {
 
 const GREEK_GROUP: React.CSSProperties = {
   display: "flex",
-  gap: 4,
+  gap: 5,
   alignItems: "center",
+  padding: "3px 5px 3px 9px",
+  border: "1px solid var(--line)",
+  borderRadius: "var(--r-md)",
+  background: "var(--inset)",
 };
 
 const GREEK_CHIP: React.CSSProperties = {
-  height: 24,
-  fontSize: 11,
+  height: 30,
+  minWidth: 50,
+  padding: "0 11px",
+  fontSize: 11.5,
   fontWeight: 700,
   letterSpacing: "0.04em",
 };

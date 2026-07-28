@@ -2028,8 +2028,14 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .flow-heat-strip{display:flex;align-items:center;gap:6px;padding:9px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap;flex:none}
 .flow-filter-bar{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap;flex:none;overflow-x:auto}
 .flow-drill-card{padding:10px 14px;border-bottom:1px solid var(--line);background:rgba(41,98,255,.06);display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:none}
-.flow-unusual-rail{width:210px;flex:none;border-left:1px solid var(--line);display:flex;flex-direction:column;padding:12px 10px;gap:4px;overflow-y:auto;min-height:0}
-.flow-unusual-row{display:flex;flex-direction:column;padding:8px 9px;border-radius:var(--r-md);background:none;border:0;text-align:left;cursor:pointer;color:var(--text);transition:background var(--t)}
+.flow-unusual-rail{width:252px;flex:none;border-left:1px solid var(--line);display:flex;flex-direction:column;padding:12px 10px;gap:5px;overflow-y:auto;min-height:0}
+.flow-unusual-heading{display:flex;flex-direction:column;gap:4px;margin:0 2px 8px;font:700 10px/1 var(--font-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--text-2)}
+.flow-unusual-heading small{font:500 9.5px/1.25 var(--font-ui);letter-spacing:0;text-transform:none;color:var(--muted)}
+.flow-unusual-row{display:grid;grid-template-columns:46px minmax(0,1fr);gap:3px 8px;padding:9px 10px;border-radius:var(--r-md);background:none;border:0;text-align:left;cursor:pointer;color:var(--text);transition:background var(--t)}
+.flow-unusual-symbol{font:700 13px/1.2 var(--font-ui)}
+.flow-unusual-group{min-width:0;font:500 11px/1.25 var(--font-ui);color:var(--text-2);white-space:normal;overflow-wrap:anywhere}
+.flow-unusual-meta{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:3px;font:500 10.5px/1.2 var(--font-ui);color:var(--muted)}
+.flow-unusual-band{font-weight:650;color:var(--signal)}
 .flow-unusual-row:hover{background:var(--panel-2)}
 .flow-unusual-row.on{background:rgba(41,98,255,.1);outline:1px solid rgba(41,98,255,.3)}
 /* Belt (index roots | sector groups) + Highlights burst row — Tape & Screener (OEU T-D) */

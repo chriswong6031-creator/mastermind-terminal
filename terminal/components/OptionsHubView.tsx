@@ -443,6 +443,16 @@ function fmtPremium(n: number): string {
   return `$${n.toFixed(0)}`;
 }
 
+/** Plain-language presentation of the premium z-score used by the data contract. */
+function activityBand(z: number | null, lang: Lang): string {
+  if (z == null) return lang === "zh" ? "积累中" : "Warming";
+  const az = Math.abs(z);
+  if (az >= 3) return lang === "zh" ? "极异常" : "Extreme";
+  if (az >= 2) return lang === "zh" ? "很异常" : "Very unusual";
+  if (az >= 1) return lang === "zh" ? "偏高" : "Elevated";
+  return lang === "zh" ? "正常" : "Typical";
+}
+
 // GICS sector name → its SPDR ETF ticker. sector_etf_flows (ctx) is keyed by ETF
 // ticker, but the Tide sector cards key by group NAME — so the proxy chip never
 // matched. Covers the live GICS names + the fixture/abbrev variants.
@@ -2308,7 +2318,7 @@ export default function OptionsHubView({
                           {t("tapeRunningPrem", "Running prem")} <strong>{fmtPremium(drillUnusual.gross_premium_today)}</strong>
                         </span>
                         <span style={{ color: "var(--text-2)", fontSize: 12 }}>
-                          {drillUnusual.prem_z != null ? `z=${drillUnusual.prem_z.toFixed(1)}` : t("tapeBaselineWarm", "baseline warming")}
+                          {activityBand(drillUnusual.prem_z, lang)}
                         </span>
                         {drillUnusual.top_contracts.length > 0 && (
                           <span style={{ color: "var(--muted)", fontSize: 11 }}>
@@ -2430,8 +2440,9 @@ export default function OptionsHubView({
                 {/* Unusual names rail */}
                 {unusualNames.length > 0 && (
                   <div className="flow-unusual-rail">
-                    <div style={{ fontWeight: 700, fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 10 }}>
-                      {lang === "zh" ? "异常活跃（启发式）" : "Notable Activity (Heuristic)"}
+                    <div className="flow-unusual-heading">
+                      <span>{lang === "zh" ? "活跃度领先" : "Activity Leaders"}</span>
+                      <small>{lang === "zh" ? "对比过去一年" : "vs the past trading year"}</small>
                     </div>
                     {unusualNames.map((u) => (
                       <button
@@ -2439,11 +2450,11 @@ export default function OptionsHubView({
                         className={`flow-unusual-row${drillTicker === u.root ? " on" : ""}`}
                         onClick={() => setDrillTicker((d) => (d === u.root ? null : u.root))}
                       >
-                        <span style={{ fontWeight: 700, fontSize: 13 }}>{u.root}</span>
-                        <span style={{ color: "var(--text-2)", fontSize: 11, marginLeft: 4 }}>{lang === "zh" ? u.group_zh : u.group}</span>
-                        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>
-                          {fmtPremium(u.gross_premium_today)}{" "}
-                          {u.prem_z != null ? `· z=${u.prem_z.toFixed(1)} (${u.baseline_source})` : `· ${t("tapeBaselineWarm", "baseline warming")}`}
+                        <span className="flow-unusual-symbol">{u.root}</span>
+                        <span className="flow-unusual-group">{lang === "zh" ? u.group_zh : u.group}</span>
+                        <div className="flow-unusual-meta">
+                          <span>{fmtPremium(u.gross_premium_today)}</span>
+                          <span className="flow-unusual-band">{activityBand(u.prem_z, lang)}</span>
                         </div>
                       </button>
                     ))}
@@ -2774,7 +2785,7 @@ export default function OptionsHubView({
                           { lk: "tickersDayGross", lb: "Day Gross", v: fmtPremium(tickerData.day.gross) },
                           { lk: "tickersNetSoft", lb: "Net", v: fmtPremSigned(tickerData.day.net_soft), color: tickerData.day.net_soft >= 0 ? "var(--up)" : "var(--down)" },
                           { lk: "tickersCallShare", lb: "Call%", v: `${(tickerData.day.call_share * 100).toFixed(1)}%`, color: tickerData.day.call_share > 0.5 ? "var(--up)" : "var(--down)" },
-                          { lk: "tickersPremZ", lb: "Prem z", v: tickerData.day.prem_z != null ? tickerData.day.prem_z.toFixed(1) : (lang === "zh" ? "积累中" : "—") },
+                          { lk: "tickersPremZ", lb: "Activity", v: activityBand(tickerData.day.prem_z, lang) },
                         ].map((kv) => (
                           <div key={kv.lk} style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
                             <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t(kv.lk, kv.lb)}</div>
@@ -2801,14 +2812,14 @@ export default function OptionsHubView({
                         )}
                       </div>
 
-                      {/* Tctx z-score chips */}
+                      {/* Ticker context compared with its recent one-year norm */}
                       {tctxData && (() => {
                         const histN = tctxData.history_n ?? 0;
                         const minN = 20;
                         const warming = histN < minN;
                         const chips: { labelKey: string; label: string; zKey: keyof NonNullable<TctxPayload["z"]> }[] = [
-                          { labelKey: "tctxNetPremZ", label: "Net z", zKey: "net_signed_premium_z252" },
-                          { labelKey: "tctxVolGtOiShare", label: "vol>OI z", zKey: "vol_gt_oi_share_z252" },
+                          { labelKey: "tctxNetPremZ", label: "Net activity", zKey: "net_signed_premium_z252" },
+                          { labelKey: "tctxVolGtOiShare", label: "New-position activity", zKey: "vol_gt_oi_share_z252" },
                         ];
                         return chips.map((c) => {
                           const zVal = tctxData.z?.[c.zKey];
@@ -2818,7 +2829,7 @@ export default function OptionsHubView({
                               <div style={{ fontSize: 13, fontWeight: 650, fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
                                 {warming || zVal == null
                                   ? <span style={{ fontSize: 10, color: "var(--text-dim)" }}>—</span>
-                                  : `${zVal >= 0 ? "+" : ""}${zVal.toFixed(2)}`}
+                                  : activityBand(zVal, lang)}
                               </div>
                             </div>
                           );
@@ -2997,7 +3008,7 @@ export default function OptionsHubView({
                 type PresetDef = { key: ScreenerPreset; en: string; zh: string; needsFeed?: boolean; needsOi?: boolean; needsHot?: boolean };
                 const PRESET_DEFS: PresetDef[] = [
                   { key: "top_prem",  en: "Top Premium",       zh: "保费最大",     needsFeed: true },
-                  { key: "unusual_z", en: "Unusual (z)",        zh: "异常（z值）",  needsFeed: true },
+                  { key: "unusual_z", en: "Unusual Activity",   zh: "异常活跃",     needsFeed: true },
                   { key: "fresh",     en: "Fresh Positioning",  zh: "新建仓位",     needsFeed: true },
                   { key: "doi",       en: "ΔOI Builds",         zh: "持仓增长",     needsOi: true },
                   { key: "zerodte",   en: "0DTE Heavy",         zh: "高0DTE占比",   needsFeed: true },
@@ -3108,7 +3119,7 @@ export default function OptionsHubView({
                             <th style={{ textAlign: "left" }}>{lang === "zh" ? "代码" : "Ticker"}</th>
                             <th style={{ textAlign: "left" }}>{t("screenerColSector", "Sector")}</th>
                             {hdr("gross", "Gross Prem", "总保费", "Total premium across all flow events today")}
-                            {hdr("z", "Prem z", "保费z值", "z-score vs historical baseline (blank = baseline warming)")}
+                            {hdr("z", "Activity", "活跃度", "Premium activity compared with roughly one trading year")}
                             {hdr("call_share", "Call%", "认购占比", "Call premium share of total")}
                           </tr>
                         </thead>
@@ -3123,8 +3134,8 @@ export default function OptionsHubView({
                                 {lang === "zh" ? u.group_zh : abbrevSector(u.group)}
                               </td>
                               <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(u.gross_premium_today)}</td>
-                              <td style={{ fontVariantNumeric: "tabular-nums", color: u.prem_z != null && Math.abs(u.prem_z) > 2 ? "var(--warn)" : "var(--text)" }}>
-                                {u.prem_z != null ? u.prem_z.toFixed(1) : <span style={{ color: "var(--text-dim)" }}>—</span>}
+                              <td style={{ color: u.prem_z != null && Math.abs(u.prem_z) > 2 ? "var(--warn)" : "var(--text)" }}>
+                                {activityBand(u.prem_z, lang)}
                               </td>
                               <td style={{ fontVariantNumeric: "tabular-nums", color: u.call_prem_share > 0.6 ? "var(--up)" : u.call_prem_share < 0.4 ? "var(--down)" : "var(--text)" }}>
                                 {(u.call_prem_share * 100).toFixed(1)}%
@@ -3137,7 +3148,7 @@ export default function OptionsHubView({
                       </table>
                     </div>
                     <div style={{ padding: "6px 14px", fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--line)" }}>
-                      {lang === "zh" ? "点击行跳转至个股详情。z值为启发式基线估算。" : "Click row to open Tickers drill. z-score is a heuristic baseline estimate."}
+                      {lang === "zh" ? "活跃度将今日权利金与约一年的交易历史比较。点击行查看详情。" : "Activity compares today’s premium with roughly one trading year. Click a row for details."}
                     </div>
                   </div>
                 );
@@ -3162,7 +3173,7 @@ export default function OptionsHubView({
                 return (
                   <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
                     <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13, display: "flex", alignItems: "center", gap: 12 }}>
-                      <span>{lang === "zh" ? "异常活跃（z值排序）" : "Unusual Activity — by z-score"}</span>
+                      <span>{lang === "zh" ? "异常活跃度" : "Unusual Activity"}</span>
                       {warming.length > 0 && (
                         <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
                           {lang === "zh" ? `${warming.length} 基线积累中（未显示）` : `${warming.length} warming baselines hidden`}
@@ -3175,7 +3186,7 @@ export default function OptionsHubView({
                           <tr>
                             <th style={{ textAlign: "left" }}>{lang === "zh" ? "代码" : "Ticker"}</th>
                             <th style={{ textAlign: "left" }}>{t("screenerColSector", "Sector")}</th>
-                            {hdr("z", "Prem z", "保费z值", "Signed z-score: |z|>2 = unusual")}
+                            {hdr("z", "Activity", "活跃度", "Premium activity compared with roughly one trading year")}
                             {hdr("gross", "Gross", "总保费", "Total premium today")}
                             {hdr("call_share", "Call%", "认购占比")}
                           </tr>
@@ -3190,10 +3201,10 @@ export default function OptionsHubView({
                                   {lang === "zh" ? u.group_zh : abbrevSector(u.group)}
                                 </td>
                                 <td style={{
-                                  fontVariantNumeric: "tabular-nums", fontWeight: absZ > 2 ? 700 : 400,
+                                  fontWeight: absZ > 2 ? 700 : 400,
                                   color: absZ > 3 ? "var(--warn)" : absZ > 2 ? "var(--text)" : "var(--text-2)",
                                 }}>
-                                  {(u.prem_z ?? 0) >= 0 ? "+" : ""}{(u.prem_z ?? 0).toFixed(1)}
+                                  {activityBand(u.prem_z, lang)}
                                 </td>
                                 <td style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPremium(u.gross_premium_today)}</td>
                                 <td style={{ fontVariantNumeric: "tabular-nums", color: u.call_prem_share > 0.6 ? "var(--up)" : u.call_prem_share < 0.4 ? "var(--down)" : "var(--text)" }}>
@@ -3203,13 +3214,13 @@ export default function OptionsHubView({
                             );
                           })}
                           {rows.length === 0 &&
-                            scrEmptyRow(5, "Baselines warming — no z-scores yet", "基线积累中，暂无z值",
+                            scrEmptyRow(5, "Activity baseline is still building", "活跃度基线仍在积累",
                               (feed.unusual_names ?? []).filter((u) => u.prem_z != null).length)}
                         </tbody>
                       </table>
                     </div>
                     <div style={{ padding: "6px 14px", fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--line)" }}>
-                      {lang === "zh" ? "|z|>2 为统计显著（启发式）；点击行跳转详情。" : "|z|>2 = statistically notable (heuristic). Click row → Tickers drill."}
+                      {lang === "zh" ? "“很异常”和“极异常”表示今日活动明显高于一年常态。点击行查看详情。" : "Very unusual and Extreme mean today’s activity is well above its one-year norm. Click a row for details."}
                     </div>
                   </div>
                 );
@@ -3648,7 +3659,7 @@ export default function OptionsHubView({
                               )}
                               {leadersBoard === "a" && (
                                 <th style={{ textAlign: "right", minWidth: 56 }}>
-                                  {t("leadersFlowZ", "flow z")}
+                                  {t("leadersFlowZ", "Flow activity")}
                                 </th>
                               )}
                               <th style={{ textAlign: "center", minWidth: 80 }}>
@@ -3676,7 +3687,7 @@ export default function OptionsHubView({
                               // Leg definitions for Board A
                               const aLegs: [string, boolean | null][] = [
                                 ["A1 flow recur", row.A1_flow_recur],
-                                ["A2 flow z hot", row.A2_flow_z_hot],
+                                ["A2 flow activity hot", row.A2_flow_z_hot],
                                 ["A3 OI conf", row.A3_oi_confirmed as boolean | null],
                                 ["A4 breadth", row.A4_ts_breadth],
                                 ["A5 price lead", row.A5_price_leader],
@@ -3738,7 +3749,7 @@ export default function OptionsHubView({
                                     </td>
                                   )}
 
-                                  {/* Flow z (Board A only) */}
+                                  {/* Flow activity compared with its recent norm (Board A only) */}
                                   {isA && (
                                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                                       {row.flow_z !== null && row.flow_z !== undefined
@@ -3748,7 +3759,7 @@ export default function OptionsHubView({
                                             background: "var(--panel-3)", fontSize: 11,
                                             color: Math.abs(row.flow_z) >= 2 ? "var(--warn)" : "var(--text-2)",
                                           }}>
-                                            {row.flow_z.toFixed(1)}
+                                            {activityBand(row.flow_z, lang)}
                                           </span>
                                         )
                                         : <span style={{ color: "var(--muted)" }}>—</span>}

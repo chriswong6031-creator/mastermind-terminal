@@ -89,6 +89,20 @@ function sideLean(side: Side, zh: boolean): string {
   return pick(zh, "~Sell lean", "~偏空");
 }
 
+function activityBand(z: number, zh: boolean): string {
+  const az = Math.abs(z);
+  if (az < 0.75) return pick(zh, "Typical", "正常");
+  if (az < 1.5) return pick(zh, "Elevated", "偏高");
+  if (az < 2.5) return pick(zh, "Very high", "很高");
+  return pick(zh, "Extreme", "极高");
+}
+
+function plainBaseline(source: string): string {
+  return source
+    .replace(/EOD[-\s]?252/gi, "past trading year")
+    .replace(/252[-\s]?(session|day|trading day)s?/gi, "past trading year");
+}
+
 const TICK_CAVEAT_EN = "Lean is tick-rule derived — magnitude is the reliable read. Display-only; forward ledger accruing.";
 const TICK_CAVEAT_ZH = "方向倾向基于逐笔规则推断——大小才是可靠的读取。仅供参考；前瞻账本累积中。";
 
@@ -174,8 +188,8 @@ function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh:
             </div>
             {tickerCtx.day.prem_z != null && (
               <div>
-                <span className="obs-lbl">{pick(zh, "Day Z", "日Z值")}</span>
-                <span className="obs-insp-kv-val num">{tickerCtx.day.prem_z.toFixed(2)}</span>
+                <span className="obs-lbl">{pick(zh, "Day activity", "当日活跃度")}</span>
+                <span className="obs-insp-kv-val">{activityBand(tickerCtx.day.prem_z, zh)}</span>
               </div>
             )}
           </div>
@@ -233,9 +247,9 @@ function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh:
         <FieldRow k={pick(zh, "Avg Price", "均价")} v={`$${event.avg_price.toFixed(2)}`} />
         <FieldRow k={pick(zh, "Premium", "权利金")} v={fmtPrem(event.premium)} />
         <FieldRow
-          k={pick(zh, "Premium Z", "权利金Z值")}
-          v={event.premium_z != null ? event.premium_z.toFixed(2) : "—"}
-          note={event.baseline_source}
+          k={pick(zh, "Premium activity", "权利金活跃度")}
+          v={event.premium_z != null ? activityBand(event.premium_z, zh) : "—"}
+          note={plainBaseline(event.baseline_source)}
         />
         <FieldRow
           k={pick(zh, "Vol > OI", "成交量>持仓")}

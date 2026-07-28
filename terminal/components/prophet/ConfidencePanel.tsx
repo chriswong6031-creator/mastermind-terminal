@@ -124,7 +124,7 @@ export function ConfidencePanel({
     : "var(--text-2)";
 
   return (
-    <div className="obs-card" style={PANEL_STYLE}>
+    <div className="obs-card obs-prophet-confidence" style={PANEL_STYLE}>
       {/* Header — VERBATIM label required by spec */}
       <div style={HEADER}>
         <span style={HEADER_LABEL}>{t("confidenceHeader")}</span>

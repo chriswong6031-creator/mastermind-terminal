@@ -161,10 +161,10 @@ export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, o
         <span className="obs-fc-prem">{fmtPremium(ev.premium)}</span>
       </div>
 
-      {/* ── Line 3: size / OI + badges ── */}
+      {/* ── Line 3: size / OI followed by a wrapping badge rail ── */}
       <div className="obs-fc-line3">
         <span className="obs-fc-meta">
-          <span className="num">{zh ? "张" : "Sz"} {ev.size.toLocaleString()}</span>
+          <span className="num">{zh ? "张数" : "Size"} {ev.size.toLocaleString()}</span>
           {ev.oi != null && (
             <>
               <span className="obs-fc-meta-sep">·</span>

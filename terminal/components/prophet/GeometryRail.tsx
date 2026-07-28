@@ -88,7 +88,7 @@ export function GeometryRail({
   const horizPct = hasGeom ? geometry!.horizon_pct_used : null;
 
   return (
-    <div className="obs-card" style={WRAPPER}>
+    <div className="obs-card obs-prophet-geometry" style={WRAPPER}>
       <div style={TITLE_ROW}>
         <span style={SECTION_LABEL}>{t("geometryTitle")}</span>
         {/* R/R summary */}

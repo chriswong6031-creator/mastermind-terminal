@@ -21,6 +21,10 @@ const PROPHET_LEX = {
   // ── Tab / surface header ───────────────────────────────────────────────────
   tabProphet:       ["Prophet", "预言台"],
   tabSubtitle:      ["Managed-pick desk", "主动选股台"],
+  mastheadEyebrow:  ["Managed signal intelligence", "主动信号智能"],
+  mastheadActive:   ["Active plans", "活跃计划"],
+  mastheadFocus:    ["In focus", "当前焦点"],
+  mastheadUpdated:  ["Model close", "模型收盘"],
 
   // ── Cadence / authority chips ──────────────────────────────────────────────
   cadenceLabel:     ["nightly EOD — updates after close", "每日收盘后更新"],

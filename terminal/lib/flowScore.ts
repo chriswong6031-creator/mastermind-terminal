@@ -248,7 +248,7 @@ export function computeFlowScore(ev: ScorerInput): FlowScoreResult {
     },
     {
       key: "unusualness",
-      label: "Unusualness (z-score)",
+      label: "Activity vs one-year norm",
       value: Math.round(cUnusual * 10) / 10,
       weight: W_UNUSUAL,
     },

@@ -82,8 +82,8 @@ const TUT_LEX = {
 
   m1s3Title:   ["Score & size context", "评分与规模参考"],
   m1s3Body:    [
-    "The flow score is a magnitude-based composite (premium size, z-score vs baseline, structure). Tiers — ELITE / STRONG / HIGH / MEDIUM — are descriptive labels. A high score means this print is large and structured relative to baseline. It does not predict direction or outcome.",
-    "资金流评分是基于规模的综合指标（权利金规模、相对基线的z值、结构）。等级 — 顶级/强势/较高/中等 — 是描述性标签。高分表示该笔成交相对基线规模大且结构清晰，不预测方向或结果。",
+    "The flow score combines premium size, activity versus the ticker's usual one-year level, and trade structure. Tiers — ELITE / STRONG / HIGH / MEDIUM — are descriptive labels. A high score means this print is large and structured compared with normal. It does not predict direction or outcome.",
+    "资金流评分综合权利金规模、相对该代码过去一年常态的活跃度及交易结构。等级 — 顶级/强势/较高/中等 — 是描述性标签。高分表示该笔成交相对常态规模大且结构清晰，不预测方向或结果。",
   ],
 
   m1s4Title:   ["OI & DTE: context clues", "持仓量与到期天数：背景线索"],
@@ -107,8 +107,8 @@ const TUT_LEX = {
 
   m2s1Title:   ["Score components", "评分分项"],
   m2s1Body:    [
-    "The flow score combines: (1) raw premium size, (2) premium z-score vs a 252-session baseline per ticker, (3) structural badges (cluster, sweep, vol>OI). Each component is printed in the Inspector so you can see exactly what drove the score. There is no hidden weighting.",
-    "资金流评分结合：(1)原始权利金规模，(2)权利金相对各代码252日基线的z值，(3)结构标记（集群、扫单、量超持仓）。每个分项在详情面板中都有显示，让你清楚了解评分的驱动因素，没有隐藏的权重。",
+    "The flow score combines: (1) raw premium size, (2) premium activity versus each ticker's usual level over the past trading year, and (3) structural badges (cluster, sweep, vol>OI). Each component appears in the Inspector so you can see exactly what drove the score. There is no hidden weighting.",
+    "资金流评分结合：(1)原始权利金规模，(2)相对各代码过去一年常态的权利金活跃度，(3)结构标记（集群、扫单、量超持仓）。每个分项都显示在详情面板中，让你清楚了解评分的驱动因素，没有隐藏权重。",
   ],
 
   m2s2Title:   ["Tiers: descriptive, not predictive", "等级：描述性而非预测性"],
@@ -119,8 +119,8 @@ const TUT_LEX = {
 
   m2s3Title:   ["Baseline warming caveat", "基线积累期说明"],
   m2s3Body:    [
-    "A ticker flagged \"baseline warming\" has fewer than 30 sessions of history. Its z-score is unreliable — the baseline hasn't stabilized. The raw premium is still real, but the z-score tier may be inflated. We label it honestly rather than hiding it.",
-    "标记\"基线积累中\"的代码历史不足30个交易日。其z值不可靠 — 基线尚未稳定。原始权利金仍然真实，但z值等级可能偏高。我们如实标注而不加掩盖。",
+    "A ticker flagged \"baseline warming\" has fewer than 30 sessions of history, so its normal activity level is not stable yet. The raw premium is still real, but its activity tier may look higher than it should. We label it honestly rather than hiding it.",
+    "标记“基线积累中”的代码历史不足30个交易日，因此正常活跃度尚未稳定。原始权利金仍然真实，但活跃度等级可能偏高。我们会如实标注。",
   ],
 
   m2s4Title:   ["Cluster badge: campaign evidence", "集群标记：活动证据"],
@@ -243,8 +243,8 @@ const TUT_LEX = {
 
   m6s3Title:   ["Why we cap confidence displays", "我们为何限制信心显示"],
   m6s3Body:    [
-    "Our scores and tiers top out at descriptive labels — not win probabilities. We don't display \"85% probability of up\" because that number requires a calibrated forward return distribution we don't have. What we show: premium magnitude, structure, persistence, z-score context. These are observations, not forecasts. A high-tier print in a favorable tape is a better-than-average setup to investigate — not a guaranteed trade.",
-    "我们的评分和等级止步于描述性标签 — 不是胜率。我们不显示\"上涨概率85%\"，因为这个数字需要我们没有的校准前向收益分布。我们显示的是：权利金规模、结构、持续性、z值背景。这些是观察，不是预测。有利记录中的高等级成交是值得研究的好于平均水平的机会 — 不是保证的交易。",
+    "Our scores and tiers top out at descriptive labels — not win probabilities. We don't display \"85% probability of up\" because that number requires a calibrated forward return distribution we don't have. What we show: premium magnitude, structure, persistence, and activity versus normal. These are observations, not forecasts. A high-tier print in a favorable tape is a better-than-average setup to investigate — not a guaranteed trade.",
+    "我们的评分和等级止步于描述性标签 — 不是胜率。我们不显示“上涨概率85%”，因为这需要我们尚未拥有的校准前向收益分布。我们显示的是权利金规模、结构、持续性及相对常态的活跃度。这些是观察，不是预测。有利行情中的高等级成交值得进一步研究，但并非保证成功的交易。",
   ],
 
   m6s4Title:   ["The streak problem", "连败问题"],

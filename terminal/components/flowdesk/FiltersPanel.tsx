@@ -129,7 +129,7 @@ const BADGE_OPTIONS: { key: BadgeFlag; label: string; zh: string; tip: string }[
     key: "unusual",
     label: "Unusual",
     zh: "异常",
-    tip: "Premium z-score vs 252-day baseline ≥2σ",
+    tip: "Premium activity is much higher than its typical level over the past trading year.",
   },
   {
     key: "block",
@@ -179,9 +179,9 @@ const DETECTION_OPTIONS: { key: DetectionFlag; label: string; zh: string; tip: s
   },
   {
     key: "Z_OUTLIER",
-    label: "Z-outlier",
-    zh: "Z值异常",
-    tip: "Root-level premium z-score ≥2σ vs 252-day baseline — ticker running hot.",
+    label: "Activity spike",
+    zh: "活跃度飙升",
+    tip: "Ticker-level premium activity is much higher than its typical level over the past trading year.",
   },
 ];
 
