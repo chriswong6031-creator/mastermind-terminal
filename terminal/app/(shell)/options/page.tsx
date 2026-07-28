@@ -26,6 +26,8 @@ export default async function OptionsPage() {
   // same gate as /api/flow). Non-entitled callers get the upgrade paywall instead
   // of a would-be-empty workspace (the data API already 403s). The entitlement
   // read (auth cookies via billingAuth) forces per-request dynamic rendering.
-  if (!(await hasLiveOptions())) return <OptionsPaywall />;
+  // FLOW_FIXTURE=1 (dev/CI) is exempt, mirroring /api/flow — fixture sessions
+  // preview the workspace without auth; the var is never set in prod.
+  if (process.env.FLOW_FIXTURE !== "1" && !(await hasLiveOptions())) return <OptionsPaywall />;
   return <OptionsWorkspace />;
 }
