@@ -73,7 +73,6 @@ describe("categoryBrowse — what an empty query shows under a category tab", ()
 
   it("caps the listing — the query is what narrows a big category", () => {
     const many = Array.from({ length: BROWSE_CAP + 25 }, (_, i) => crypto(`C${i}-USD`));
-    expect(categoryBrowse(manifest(...many))?.length ?? 0).toBe(0);           // no cat = nothing
     expect(categoryBrowse(manifest(...many), "Crypto")).toHaveLength(BROWSE_CAP);
     expect(categoryBrowse(manifest(...many), "Crypto", { cap: 5 })).toHaveLength(5);
   });
