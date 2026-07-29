@@ -325,7 +325,7 @@ export function PrismView() {
             disabled={mode === "confluence"}
           />
           {matrix?.spot != null && mode === "single" && (
-            <span style={SPOT_DISPLAY}>
+            <span className="num" style={SPOT_DISPLAY}>
               {t("spotLabel")} {matrix.spot.toFixed(2)}
             </span>
           )}
@@ -351,7 +351,7 @@ export function PrismView() {
         {/* Right: asof + status */}
         <div style={CONTROLS_RIGHT}>
           {asofStr && mode === "single" && (
-            <span style={asofStale ? ASOF_BADGE_STALE : ASOF_BADGE}>
+            <span className="num" style={asofStale ? ASOF_BADGE_STALE : ASOF_BADGE}>
               {t("asOf")} {asofStr}
               {asofStale && <span style={{ marginLeft: 5, fontWeight: 600 }}>· {asofAgeStr}</span>}
             </span>
@@ -571,8 +571,10 @@ const MODE_BTN: React.CSSProperties = {
   transition: "background 0.1s, color 0.1s",
 };
 
+/** Brand-tinted active state (foundation recipe), not a flat fill. */
 const MODE_BTN_ACTIVE: React.CSSProperties = {
-  background: "rgba(77,130,255,0.15)",
+  background: "color-mix(in srgb, var(--brand) 17%, transparent)",
+  boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--brand) 36%, transparent)",
   color: "var(--brand-2)",
 };
 

@@ -18,6 +18,8 @@ import { FlowCard } from "./FlowCard";
 import { FiltersPanel, DEFAULT_FILTERS } from "./FiltersPanel";
 import type { FlowFilters } from "./FiltersPanel";
 import { trackSearch } from "@/lib/searchTrack";
+import { pick } from "@/lib/finFormat";
+import { FD } from "@/lib/flowdeskStrings";
 
 // ── Re-export shared types so FlowCard / FiltersPanel import from one place ──
 
@@ -509,7 +511,10 @@ export function FeedPane({
           </span>{" "}
           {zh ? "信号" : "SIGNALS"}
           {feed?.stale && (
-            <span style={{ marginLeft: 6, color: "var(--warn)", fontSize: 10 }}>
+            <span
+              className="obs-tag"
+              style={{ "--c": "var(--warn)", marginLeft: 6 } as React.CSSProperties}
+            >
               {zh ? "数据较旧" : "STALE"}
             </span>
           )}
@@ -566,7 +571,6 @@ export function FeedPane({
           className="obs-chip"
           onClick={() => setFiltersOpen((v) => !v)}
           aria-expanded={filtersOpen}
-          style={{ fontSize: 11, padding: "5px 12px" }}
         >
           {zh ? "筛选" : "Filters"}
           {isFiltersDirty(filters) && (
@@ -582,7 +586,6 @@ export function FeedPane({
             key={p}
             className={`obs-chip${preset === p ? " on" : ""}`}
             onClick={() => updatePrefs({ preset: p })}
-            style={{ fontSize: 11, padding: "5px 12px" }}
           >
             {p === "ALL"    ? (zh ? "全部" : "ALL")
               : p === "ELITE"  ? (zh ? "精英 — 磁带前2%" : "Elite — top 2% of tape")
@@ -609,7 +612,11 @@ export function FeedPane({
 
         {/* Empty state */}
         {feed !== null && filtered.length === 0 && (
-          <EmptyState zh={zh} hasFilters={isFiltersDirty(effectiveFilters) || search.length > 0} />
+          <EmptyState
+            zh={zh}
+            hasFilters={isFiltersDirty(effectiveFilters) || search.length > 0}
+            stale={feed.stale === true}
+          />
         )}
 
         {/* Cards — capped to visibleCount; sentinel triggers Load-more */}
@@ -650,33 +657,63 @@ export function FeedPane({
 
 // ── Empty / loading states ────────────────────────────────────────────────────
 
+/**
+ * Display-only read of the US options session clock in ET. Pure — no fetch, no
+ * state; it exists so the empty state can name the real reason ("market closed"
+ * vs "session open but quiet") instead of a bare "no data".
+ * Holidays are not modelled, so the copy for an open session stays hedged.
+ */
+function isMarketOpenET(now: Date = new Date()): boolean {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(now);
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+    const wd = get("weekday");
+    if (wd === "Sat" || wd === "Sun") return false;
+    const mins = Number(get("hour")) * 60 + Number(get("minute"));
+    if (!Number.isFinite(mins)) return true;
+    return mins >= 9 * 60 + 30 && mins < 16 * 60; // 09:30–16:00 ET
+  } catch {
+    return true; // never claim "closed" on an environment we can't read
+  }
+}
+
 function LoadingState({ zh }: { zh: boolean }) {
   return (
-    <div style={EMPTY_STYLE}>
-      <div style={EMPTY_ICON}>⋯</div>
-      <div style={EMPTY_HEAD}>
-        {zh ? "加载中…" : "Loading feed…"}
+    <>
+      <div className="obs-fd-feed-state obs-fd-feed-status" role="status" aria-live="polite">
+        {pick(zh, FD.feedLoading.en, FD.feedLoading.zh)}
       </div>
-    </div>
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="fin-skel obs-fd-card-skel" aria-hidden="true" />
+      ))}
+    </>
   );
 }
 
-function EmptyState({ zh, hasFilters }: { zh: boolean; hasFilters: boolean }) {
+function EmptyState({ zh, hasFilters, stale }: { zh: boolean; hasFilters: boolean; stale: boolean }) {
+  // Honest "why": the component states which of the three it can actually tell —
+  // filters exclude everything / the payload is stale / the tape is closed or quiet.
+  const title = hasFilters ? FD.feedEmptyFiltered : FD.feedEmptyQuiet;
+  const why = hasFilters
+    ? FD.feedEmptyFilteredWhy
+    : stale
+    ? FD.feedEmptyStaleWhy
+    : isMarketOpenET()
+    ? FD.feedEmptyOpenWhy
+    : FD.feedEmptyClosedWhy;
+
   return (
-    <div style={EMPTY_STYLE}>
-      <div style={EMPTY_ICON}>◌</div>
-      <div style={EMPTY_HEAD}>
-        {hasFilters
-          ? (zh ? "无符合条件的信号" : "No signals match your filters")
-          : (zh ? "暂无信号" : "No signals yet")}
-      </div>
-      {!hasFilters && (
-        <div style={EMPTY_BODY}>
-          {zh
-            ? "此列表基于当日RTH（美东时间9:30–16:00）盘中期权流数据，每约120秒轮询一次。开盘后信号将逐步出现。"
-            : "This feed is session-based — it populates from live options prints during US regular trading hours (09:30–16:00 ET) and polls every ~120 s. Signals appear as the session progresses."}
-        </div>
-      )}
+    <div className="obs-fd-feed-state fin-empty fin-empty-lg">
+      <svg className="fin-empty-icon" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+        <circle cx="28" cy="28" r="19" stroke="currentColor" strokeWidth="2" />
+        <circle cx="28" cy="28" r="7" stroke="currentColor" strokeWidth="2" />
+        <path d="M28 9v10M28 37v10M9 28h10M37 28h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+      <div className="fin-empty-title">{pick(zh, title.en, title.zh)}</div>
+      <div className="fin-empty-why">{pick(zh, why.en, why.zh)}</div>
     </div>
   );
 }
@@ -709,48 +746,25 @@ const FILTER_DOT_STYLE: React.CSSProperties = {
   verticalAlign: "middle",
 };
 
-const EMPTY_STYLE: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  justifyContent: "center",
-  gap: 10,
-  padding: "48px 24px",
-  textAlign: "center",
-};
-
-const EMPTY_ICON: React.CSSProperties = {
-  fontSize: 28,
-  color: "var(--text-dim)",
-  lineHeight: 1,
-};
-
-const EMPTY_HEAD: React.CSSProperties = {
-  font: "600 13px/1.3 var(--font-ui)",
-  color: "var(--text-2)",
-};
-
-const EMPTY_BODY: React.CSSProperties = {
-  font: "500 11.5px/1.55 var(--font-ui)",
-  color: "var(--muted)",
-  maxWidth: 320,
-};
+// Empty / loading states now ride the shared primitives (.fin-empty*, .fin-skel)
+// plus the .obs-fd-feed-state grid-span helper — no bespoke inline shells.
 
 // ── Load-more sentinel ────────────────────────────────────────────────────────
 
 const LOAD_MORE_STYLE: React.CSSProperties = {
-  padding: "10px 0 4px",
+  padding: "var(--sp-3) 0 var(--sp-1)",
   display: "flex",
   justifyContent: "center",
   alignItems: "center",
 };
 
 const LOAD_MORE_BTN: React.CSSProperties = {
-  padding: "6px 16px",
+  padding: "var(--sp-2) var(--sp-4)",
   borderRadius: "var(--r-pill)",
   border: "1px solid var(--line-2)",
   background: "transparent",
   color: "var(--text-2)",
-  font: "500 11px/1 var(--font-ui)",
+  font: "500 var(--fs-label)/1 var(--font-ui)",
+  fontVariantNumeric: "tabular-nums",
   cursor: "pointer",
 };

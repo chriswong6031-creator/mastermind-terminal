@@ -1935,3 +1935,28 @@
 .obs-asof .dot{width:6px;height:6px;border-radius:50%;background:var(--up);flex:none;animation:obs-asof-pulse 2.2s var(--ease) infinite}
 @keyframes obs-asof-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @media (prefers-reduced-motion:reduce){.obs-asof .dot{animation:none}}
+
+/* ─── v7 wave — recovered lane patches (F-lanes died before reporting) ───── */
+/* FlowCard hierarchy: ONE primary number (premium) + ONE primary reason (the
+   call/put read tag); everything else demoted to a muted meta line. */
+.obs-fc-head{display:flex;align-items:center;gap:10px;margin-bottom:6px;min-width:0}
+.obs-fc-read{font-size:11px;padding:4px 10px}
+.obs-fc-meta-flagwrap{display:inline-flex;align-items:baseline;gap:6px}
+.obs-fc-metaflag{font:600 10px/1.4 var(--font-ui);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.obs-fc-metaflag-tip{cursor:help;text-decoration:underline dotted color-mix(in srgb,var(--muted) 60%,transparent);text-underline-offset:3px;position:relative}
+
+/* FeedPane states: the feed body is a grid — state rows span every column. */
+.obs-fd-feed-state{grid-column:1/-1}
+.obs-fd-feed-status{padding:14px 0 6px;font:500 12px/1.4 var(--font-ui);color:var(--muted);text-align:center}
+.obs-fd-card-skel{height:96px;border-radius:15px}
+
+/* Inspector empty state: what selecting will show, not a blank pane. */
+.obs-insp-empty-title{font-size:11.5px;color:var(--text-2)}
+.obs-insp-empty-why{font:500 11px/1.5 var(--font-ui);color:var(--muted);max-width:300px;text-transform:none;letter-spacing:0}
+
+/* Prophet columns: semantic hooks added by the restyle — structural minimum. */
+.obs-prophet-analysis,.obs-prophet-confidence-column{min-height:0}
+
+/* Hub filter caption (pre-existing markup, never had a rule; obs-lbl carries
+   the look — this keeps captions from wrapping inside control rows). */
+.hub-cap{white-space:nowrap}

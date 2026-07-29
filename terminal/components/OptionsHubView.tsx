@@ -872,9 +872,9 @@ const StrikeLadder = memo(function StrikeLadder({ strikes, lang, spotRef }: { st
   const fmtMoney = (k: number) => { const m = moneyness(k); return `${m >= 0 ? "+" : ""}${m.toFixed(1)}%`; };
 
   const Chip = ({ label, val, color }: { label: string; val: string; color: string }) => (
-    <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-      <span style={{ fontSize: 8.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
-      <span style={{ fontSize: 12, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{val}</span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+      <span className="obs-lbl">{label}</span>
+      <span className="num" style={{ fontSize: 12, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{val}</span>
     </div>
   );
 
@@ -907,7 +907,7 @@ const StrikeLadder = memo(function StrikeLadder({ strikes, lang, spotRef }: { st
       </div>
 
       {/* Column header — 5-col montage: [call $] [call bar] [strike] [put bar] [put $] */}
-      <div style={{ display: "grid", gridTemplateColumns: LADDER_COLS, fontSize: 9.5, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--muted)", padding: "0 2px", alignItems: "center" }}>
+      <div className="obs-lbl" style={{ display: "grid", gridTemplateColumns: LADDER_COLS, padding: "0 2px", alignItems: "center" }}>
         <span />
         <span style={{ textAlign: "right", color: "var(--up)", fontWeight: 600, paddingRight: 4 }}>{zh ? "认购$" : "Call $"}</span>
         <span style={{ textAlign: "center" }}>{zh ? "行权价" : "Strike"}</span>
@@ -931,9 +931,9 @@ const StrikeLadder = memo(function StrikeLadder({ strikes, lang, spotRef }: { st
               style={{
                 display: "grid", gridTemplateColumns: LADDER_COLS, alignItems: "center",
                 height: ROW_H,
-                background: isHover ? "var(--panel-2)" : isSpot ? "rgba(245,177,63,.07)" : "transparent",
-                borderTop: isSpot ? "1px solid rgba(245,177,63,.35)" : "1px solid transparent",
-                borderBottom: isSpot ? "1px solid rgba(245,177,63,.35)" : "1px solid transparent",
+                background: isHover ? "var(--panel-2)" : isSpot ? "color-mix(in srgb, var(--warn) 7%, transparent)" : "transparent",
+                borderTop: isSpot ? "1px solid color-mix(in srgb, var(--warn) 35%, transparent)" : "1px solid transparent",
+                borderBottom: isSpot ? "1px solid color-mix(in srgb, var(--warn) 35%, transparent)" : "1px solid transparent",
                 transition: "background .12s ease",
               }}>
               {/* Call premium value */}
@@ -944,7 +944,7 @@ const StrikeLadder = memo(function StrikeLadder({ strikes, lang, spotRef }: { st
               <div style={{ display: "flex", justifyContent: "flex-end", overflow: "hidden" }}>
                 <div style={{
                   width: `${barPct(s.call_prem)}%`, height: 12, borderRadius: "3px 0 0 3px", flexShrink: 0,
-                  background: `linear-gradient(90deg, rgba(38,194,129,${(0.10 + 0.28 * cRaw).toFixed(3)}) 0%, rgba(38,194,129,${(0.4 + 0.5 * cRaw).toFixed(3)}) 100%)`,
+                  background: `linear-gradient(90deg, color-mix(in srgb, var(--up) ${((0.10 + 0.28 * cRaw) * 100).toFixed(1)}%, transparent) 0%, color-mix(in srgb, var(--up) ${((0.4 + 0.5 * cRaw) * 100).toFixed(1)}%, transparent) 100%)`,
                   boxShadow: isCallWall ? "inset 0 0 0 1px var(--up)" : "none",
                 }} />
               </div>
@@ -966,7 +966,7 @@ const StrikeLadder = memo(function StrikeLadder({ strikes, lang, spotRef }: { st
               <div style={{ display: "flex", justifyContent: "flex-start", overflow: "hidden" }}>
                 <div style={{
                   width: `${barPct(s.put_prem)}%`, height: 12, borderRadius: "0 3px 3px 0", flexShrink: 0,
-                  background: `linear-gradient(90deg, rgba(240,86,107,${(0.4 + 0.5 * pRaw).toFixed(3)}) 0%, rgba(240,86,107,${(0.10 + 0.28 * pRaw).toFixed(3)}) 100%)`,
+                  background: `linear-gradient(90deg, color-mix(in srgb, var(--down) ${((0.4 + 0.5 * pRaw) * 100).toFixed(1)}%, transparent) 0%, color-mix(in srgb, var(--down) ${((0.10 + 0.28 * pRaw) * 100).toFixed(1)}%, transparent) 100%)`,
                   boxShadow: isPutWall ? "inset 0 0 0 1px var(--down)" : "none",
                 }} />
               </div>
@@ -1013,8 +1013,8 @@ function ExpiryBars({ expiries, lang }: { expiries: ExpiryRow[]; lang: string })
               {expShort}
             </span>
             <div style={{ flex: 1, display: "flex", gap: 3, alignItems: "center" }}>
-              <div style={{ height: 8, width: `${cw}%`, background: "rgba(38,194,129,.4)", borderRadius: 2, minWidth: 1 }} />
-              <div style={{ height: 8, width: `${pw}%`, background: "rgba(240,86,107,.35)", borderRadius: 2, minWidth: 1 }} />
+              <div style={{ height: 8, width: `${cw}%`, background: "color-mix(in srgb, var(--up) 40%, transparent)", borderRadius: 2, minWidth: 1 }} />
+              <div style={{ height: 8, width: `${pw}%`, background: "color-mix(in srgb, var(--down) 35%, transparent)", borderRadius: 2, minWidth: 1 }} />
             </div>
             <span style={{ color: "var(--muted)", width: 60, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
               {fmtPremium(e.call_prem + e.put_prem)}
@@ -1024,11 +1024,11 @@ function ExpiryBars({ expiries, lang }: { expiries: ExpiryRow[]; lang: string })
       })}
       <div style={{ display: "flex", gap: 16, fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
         <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ display: "inline-block", width: 10, height: 6, background: "rgba(38,194,129,.4)", borderRadius: 1 }} />
+          <span style={{ display: "inline-block", width: 10, height: 6, background: "color-mix(in srgb, var(--up) 40%, transparent)", borderRadius: 1 }} />
           {lang === "zh" ? "认购" : "Call"}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ display: "inline-block", width: 10, height: 6, background: "rgba(240,86,107,.35)", borderRadius: 1 }} />
+          <span style={{ display: "inline-block", width: 10, height: 6, background: "color-mix(in srgb, var(--down) 35%, transparent)", borderRadius: 1 }} />
           {lang === "zh" ? "认沽" : "Put"}
         </span>
       </div>
@@ -1321,20 +1321,20 @@ const GexStrikeLadder = memo(function GexStrikeLadder({ rows, greek, spotRef, ga
                 {/* Net bar */}
                 {isPos ? (
                   <rect x={MID - netW} y={y + 3} width={netW} height={ROW_H - 10}
-                    fill="rgba(38,194,129,.35)" rx={2} />
+                    style={{ fill: "color-mix(in srgb, var(--up) 35%, transparent)" }} rx={2} />
                 ) : (
                   <rect x={MID + 60} y={y + 3} width={netW} height={ROW_H - 10}
-                    fill="rgba(240,86,107,.3)" rx={2} />
+                    style={{ fill: "color-mix(in srgb, var(--down) 30%, transparent)" }} rx={2} />
                 )}
                 {/* Call overlay (gamma only — call split) */}
                 {greek === "gamma" && call > 0 && (
                   <rect x={MID - callW} y={y + 3} width={callW} height={ROW_H - 10}
-                    fill="rgba(38,194,129,.15)" rx={2} />
+                    style={{ fill: "color-mix(in srgb, var(--up) 15%, transparent)" }} rx={2} />
                 )}
                 {/* Put overlay (gamma only — put split, grows right from center) */}
                 {greek === "gamma" && put < 0 && (
                   <rect x={MID + 60} y={y + 3} width={putW} height={ROW_H - 10}
-                    fill="rgba(240,86,107,.12)" rx={2} />
+                    style={{ fill: "color-mix(in srgb, var(--down) 12%, transparent)" }} rx={2} />
                 )}
                 {/* Strike label */}
                 <text x={MID + 30} y={y + ROW_H / 2 + 2} textAnchor="middle"
@@ -1389,7 +1389,9 @@ const GexExpiryBars = memo(function GexExpiryBars({ rows, greek, lang }: { rows:
             <div style={{ flex: 1, height: 8, borderRadius: 4, background: "var(--panel-3)", overflow: "hidden" }}>
               <div style={{
                 height: "100%", width: `${w}%`,
-                background: isPos ? "rgba(38,194,129,.5)" : "rgba(240,86,107,.45)",
+                background: isPos
+                  ? "color-mix(in srgb, var(--up) 50%, transparent)"
+                  : "color-mix(in srgb, var(--down) 45%, transparent)",
                 borderRadius: 4,
               }} />
             </div>
@@ -1401,11 +1403,11 @@ const GexExpiryBars = memo(function GexExpiryBars({ rows, greek, lang }: { rows:
       })}
       <div style={{ display: "flex", gap: 16, fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
         <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ display: "inline-block", width: 10, height: 6, background: "rgba(38,194,129,.5)", borderRadius: 1 }} />
+          <span style={{ display: "inline-block", width: 10, height: 6, background: "color-mix(in srgb, var(--up) 50%, transparent)", borderRadius: 1 }} />
           {lang === "zh" ? "正值（认购端）" : "Positive (call-side)"}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ display: "inline-block", width: 10, height: 6, background: "rgba(240,86,107,.45)", borderRadius: 1 }} />
+          <span style={{ display: "inline-block", width: 10, height: 6, background: "color-mix(in srgb, var(--down) 45%, transparent)", borderRadius: 1 }} />
           {lang === "zh" ? "负值（认沽端）" : "Negative (put-side)"}
         </span>
       </div>
@@ -1844,16 +1846,39 @@ export default function OptionsHubView({
       <td colSpan={cols} style={{ textAlign: "center", color: "var(--muted)", padding: "30px 0" }}>
         {scrBeltOn && had > 0 ? (
           <>
-            {t("scrNoMatch")}
+            <div className="fin-empty-title" style={{ fontSize: 12.5 }}>{t("scrNoMatch")}</div>
+            <div className="fin-empty-why" style={{ margin: "6px auto 9px" }}>
+              {lang === "zh"
+                ? `筛选前共 ${had.toLocaleString("en-US")} 行 — 当前的指数／板块筛选把它们全部排除了。`
+                : `${had.toLocaleString("en-US")} rows before filtering — the index/sector chips exclude every one of them.`}
+            </div>
             <button
               className="chip"
-              style={{ height: 24, fontSize: 11, marginLeft: 8 }}
+              style={{ height: 24, fontSize: 11 }}
               onClick={() => { setScrRoot(""); setScrGroup(""); }}
             >
               {t("clearFilter")}
             </button>
           </>
-        ) : (lang === "zh" ? sessionZh : sessionEn)}
+        ) : (
+          <>
+            <div className="fin-empty-title" style={{ fontSize: 12.5 }}>{lang === "zh" ? sessionZh : sessionEn}</div>
+            {/* Why: nightly dataset vs a live-but-quiet session vs a closed market. */}
+            <div className="fin-empty-why" style={{ margin: "6px auto 0" }}>
+              {screenerPreset === "doi" || screenerPreset === "hot"
+                ? (lang === "zh"
+                    ? "该视图来自夜间收盘构建，今晚运行后刷新。"
+                    : "This view is built from the nightly close — it refreshes after tonight’s run.")
+                : marketOpenNow
+                ? (lang === "zh"
+                    ? "本时段进行中 — 达标成交出现后即会显示。"
+                    : "The session is live — rows appear as qualifying prints arrive.")
+                : (lang === "zh"
+                    ? "市场休市 — 实时盘口 9:30 ET 恢复。"
+                    : "Market closed — the live tape resumes at 9:30 ET.")}
+            </div>
+          </>
+        )}
       </td>
     </tr>
   );
@@ -2243,7 +2268,7 @@ export default function OptionsHubView({
 
                 {/* Min premium */}
                 <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  <span className="hub-cap">{t("minPrem", "Min prem")}</span>
+                  <span className="hub-cap obs-lbl">{t("minPrem", "Min prem")}</span>
                   <select
                     value={minPrem}
                     onChange={(e) => setMinPrem(Number(e.target.value))}
@@ -2256,7 +2281,7 @@ export default function OptionsHubView({
 
                 {/* DTE buckets */}
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span className="hub-cap">{t("dte", "DTE")}</span>
+                  <span className="hub-cap obs-lbl">{t("dte", "DTE")}</span>
                   <button className={`chip${dteMidOn ? " on" : ""}`} style={{ height: 26, fontSize: 11 }} onClick={toggleDteMid} title={lang === "zh" ? "8–90天快选" : "8–90d preset"}>8–90d</button>
                   {DTE_BUCKETS.map((b) => (
                     <button
@@ -2272,7 +2297,7 @@ export default function OptionsHubView({
 
                 {/* Moneyness */}
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span className="hub-cap">{t("mny", "Mny")}</span>
+                  <span className="hub-cap obs-lbl">{t("mny", "Mny")}</span>
                   {MNY_BUCKETS.map((b) => (
                     <button
                       key={b.key}
@@ -2339,8 +2364,15 @@ export default function OptionsHubView({
               <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
                 <div className="scr-table" style={{ flex: 1 }}>
                   {fetchError && !feed && (
-                    <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
-                      {lang === "zh" ? "数据暂时不可用，请稍后重试。" : "Feed unavailable — retrying…"}
+                    <div className="fin-empty fin-empty-lg" role="status">
+                      <div className="fin-empty-title">
+                        {lang === "zh" ? "数据暂时不可用，请稍后重试。" : "Feed unavailable — retrying…"}
+                      </div>
+                      <div className="fin-empty-why">
+                        {lang === "zh"
+                          ? "无法连接期权盘口数据流，本时段尚无缓存数据。"
+                          : "Can’t reach the options tape stream, and nothing is cached for this session yet."}
+                      </div>
                     </div>
                   )}
                   {!fetchError && !feed && (
@@ -2370,14 +2402,33 @@ export default function OptionsHubView({
                       <tbody>
                         {events.length === 0 && (
                           <tr className="empty-row">
-                            <td colSpan={11} style={{ textAlign: "center", color: "var(--muted)", padding: "40px 16px", fontSize: 13 }}>
-                              {rawTapeCount > 0
-                                ? (lang === "zh" ? "暂无符合条件的记录。" : "No events match these filters.")
-                                : feedDelayed && marketOpenNow
-                                ? (lang === "zh" ? "实时盘口暂未刷新。" : "Live feed isn’t updating right now.")
-                                : feedDelayed
-                                ? (lang === "zh" ? "市场休市 — 实时盘口 9:30 ET 恢复。" : "Market closed — live tape resumes at 9:30 ET.")
-                                : (lang === "zh" ? "本时段暂无异常期权流。" : "No unusual options flow yet this session.")}
+                            <td colSpan={11} style={{ textAlign: "center", padding: "40px 16px" }}>
+                              <div className="fin-empty-title">
+                                {rawTapeCount > 0
+                                  ? (lang === "zh" ? "暂无符合条件的记录。" : "No events match these filters.")
+                                  : feedDelayed && marketOpenNow
+                                  ? (lang === "zh" ? "实时盘口暂未刷新。" : "Live feed isn’t updating right now.")
+                                  : feedDelayed
+                                  ? (lang === "zh" ? "市场休市 — 实时盘口 9:30 ET 恢复。" : "Market closed — live tape resumes at 9:30 ET.")
+                                  : (lang === "zh" ? "本时段暂无异常期权流。" : "No unusual options flow yet this session.")}
+                              </div>
+                              {/* Why: every empty tape states which of filters / stalled feed /
+                                  closed market / quiet session is responsible. */}
+                              <div className="fin-empty-why" style={{ margin: "6px auto 0" }}>
+                                {rawTapeCount > 0
+                                  ? (lang === "zh"
+                                      ? `本时段共 ${rawTapeCount.toLocaleString("en-US")} 笔 — 请放宽或重置筛选条件。`
+                                      : `${rawTapeCount.toLocaleString("en-US")} prints in this session’s tape — loosen a filter or reset.`)
+                                  : feedDelayed && marketOpenNow
+                                  ? (lang === "zh"
+                                      ? `最近更新 ${activeUpdatedLabel}。`
+                                      : `Last update ${activeUpdatedLabel}.`)
+                                  : feedDelayed
+                                  ? (lang === "zh" ? "显示上一完整交易时段。" : "Showing the last completed session.")
+                                  : (lang === "zh"
+                                      ? "盘口正常，只是暂时清淡 — 达标大单出现后即时显示。"
+                                      : "The tape is live and quiet — qualifying prints appear as they cross.")}
+                              </div>
                             </td>
                           </tr>
                         )}
@@ -2416,9 +2467,9 @@ export default function OptionsHubView({
                                   {e.zerodte && <span className="flow-flag-chip">{lang === "zh" ? "当日" : "0DTE"}</span>}
                                   {e.vol_gt_oi && <span className="flow-flag-chip">{lang === "zh" ? "量超持仓" : "vol>OI"}</span>}
                                   {e.repeated && <span className="flow-flag-chip">{lang === "zh" ? "重复" : "repeat"}</span>}
-                                  {e.swept && <span className="flow-flag-chip" style={{ color: "var(--warn)", borderColor: "rgba(232,163,61,.4)" }}>{lang === "zh" ? "扫单" : "swept"}</span>}
+                                  {e.swept && <span className="flow-flag-chip" style={{ color: "var(--warn)", borderColor: "color-mix(in srgb, var(--warn) 40%, transparent)" }}>{lang === "zh" ? "扫单" : "swept"}</span>}
                                   {oiConfSet.has(`${e.root}|${e.right}|${e.exp}|${e.strike}`) && (
-                                    <span className="flow-flag-chip" style={{ color: "var(--brand-2)", borderColor: "rgba(41,98,255,.35)" }}>{t("tapeOiConfirmed", "OI-confirmed")}</span>
+                                    <span className="flow-flag-chip" style={{ color: "var(--brand-2)", borderColor: "color-mix(in srgb, var(--brand) 35%, transparent)" }}>{t("tapeOiConfirmed", "OI-confirmed")}</span>
                                   )}
                                 </span>
                               </td>
@@ -2453,12 +2504,29 @@ export default function OptionsHubView({
                         <span className="flow-unusual-symbol">{u.root}</span>
                         <span className="flow-unusual-group">{lang === "zh" ? u.group_zh : u.group}</span>
                         <div className="flow-unusual-meta">
-                          <span>{fmtPremium(u.gross_premium_today)}</span>
+                          <span className="num">{fmtPremium(u.gross_premium_today)}</span>
                           <span className="flow-unusual-band">{activityBand(u.prem_z, lang)}</span>
                         </div>
                       </button>
                     ))}
                   </div>
+                )}
+              </div>
+
+              {/* Provenance — the tape says what it is, where it came from and when it was cut. */}
+              <div className="obs-asof" style={{ padding: "6px 14px", borderTop: "1px solid var(--line)", flex: "none" }}>
+                {!activeUnavailable && !activeDelayed && activeAsof && <span className="obs-live-dot" />}
+                <span>
+                  {lang === "zh"
+                    ? `期权逐笔 · 方向为启发式推断（~） · ${activeUpdatedLabel || "等待首个快照"}`
+                    : `Options tape · direction ~inferred · ${activeUpdatedLabel || "awaiting first snapshot"}`}
+                </span>
+                {rawTapeCount > 0 && (
+                  <span className="num" style={{ marginLeft: "auto", fontVariantNumeric: "tabular-nums" }}>
+                    {lang === "zh"
+                      ? `${events.length.toLocaleString("en-US")} / ${rawTapeCount.toLocaleString("en-US")} 笔`
+                      : `${events.length.toLocaleString("en-US")} of ${rawTapeCount.toLocaleString("en-US")} prints`}
+                  </span>
                 )}
               </div>
             </>
@@ -2467,8 +2535,23 @@ export default function OptionsHubView({
           {/* ═══ TIDE TAB ═══════════════════════════════════════════════════ */}
           {activeTab === "tide" && (
             <div style={{ flex: 1, overflow: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 20 }}>
+              {/* Honest wait-state: a tide stream that ERRORED used to sit on "Loading…"
+                  forever. Say which of unreachable-stream / still-loading it is. */}
               {tideLoading && !tideData && (
-                <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
+                tideUnavailable ? (
+                  <div className="fin-empty fin-empty-lg" role="status">
+                    <div className="fin-empty-title">
+                      {lang === "zh" ? "实时市场潮汐不可用。" : "Live market tide unavailable."}
+                    </div>
+                    <div className="fin-empty-why">
+                      {lang === "zh"
+                        ? "无法连接盘中潮汐数据流，本时段尚无缓存序列。"
+                        : "Can’t reach the intraday tide stream, and no series is cached for this session yet."}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
+                )
               )}
               {tideData && (
                 <>
@@ -2514,18 +2597,28 @@ export default function OptionsHubView({
                   {/* Main tide chart — explicit height so LWC canvas isn't clipped.
                       Session view swaps in the quanted-style Session Flow pane. */}
                   {tideView === "tide" ? (
-                    <div data-tut="tide-chart" style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 4px 4px", height: 240, boxSizing: "border-box" }}>
+                    <div data-tut="tide-chart" className="obs-card" style={{ padding: "12px 4px 4px", height: 240, boxSizing: "border-box" }}>
                       <TideChart minutes={tideData.minutes} spy={tideData.spy} height={216} sessionDate={tideData.session_date} />
                     </div>
                   ) : (
-                    <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "12px 12px 8px" }}>
+                    <div className="obs-card" style={{ padding: "12px 12px 8px" }}>
                       <SessionFlowPane minutes={tideData.minutes} sessionDate={tideData.session_date} height={240} />
                     </div>
                   )}
 
+                  {/* Provenance for the hero series */}
+                  <div className="obs-asof" style={{ marginTop: -12 }}>
+                    {!tideDelayed && !tideUnavailable && tideAsof && <span className="obs-live-dot" />}
+                    <span>
+                      {lang === "zh"
+                        ? `盘中净权利金潮汐 · 逐分钟累计（方向为启发式推断 ~） · ${activeUpdatedLabel || "等待首个快照"}`
+                        : `Intraday net-premium tide · per-minute cumulative (direction ~inferred) · ${activeUpdatedLabel || "awaiting first snapshot"}`}
+                    </span>
+                  </div>
+
                   {/* Sector tide grid */}
                   <div data-tut="tide-sector">
-                    <div style={{ fontWeight: 650, fontSize: 13, marginBottom: 12 }}>{t("tideSectorTitle", "Sector Tide")}</div>
+                    <div className="obs-lbl" style={{ marginBottom: 10 }}>{t("tideSectorTitle", "Sector Tide")}</div>
                     <div
                       style={{
                         display: "grid",
@@ -2541,21 +2634,15 @@ export default function OptionsHubView({
                         return (
                           <button
                             key={s.group}
+                            className="obs-card"
                             onClick={() => { switchTab("tape"); setGroupFilter(s.group); }}
-                            style={{
-                              border: "1px solid var(--line)", borderRadius: "var(--r-lg)",
-                              background: "var(--panel)", padding: "10px 12px",
-                              textAlign: "left", cursor: "pointer",
-                              transition: "background var(--t), border-color var(--t)",
-                            }}
-                            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel-2)")}
-                            onMouseLeave={(e) => (e.currentTarget.style.background = "var(--panel)")}
+                            style={{ padding: "10px 12px", textAlign: "left", cursor: "pointer" }}
                           >
                             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                               <span style={{ fontWeight: 600, fontSize: 12 }}>
                                 {lang === "zh" ? s.group_zh : abbrevSector(s.group)}
                               </span>
-                              <span style={{ marginLeft: "auto", color, fontSize: 12, fontWeight: 700 }}>
+                              <span className="num" style={{ marginLeft: "auto", color, fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
                                 {fmtPremSigned(net)}
                               </span>
                             </div>
@@ -2586,7 +2673,7 @@ export default function OptionsHubView({
                   {/* Top net impact */}
                   <div data-tut="tide-impact">
                     <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
-                      <span style={{ fontWeight: 650, fontSize: 13 }}>{t("tideImpactTitle", "Top Net Impact")}</span>
+                      <span className="obs-lbl">{t("tideImpactTitle", "Top Net Impact")}</span>
                       {/* Legend — resolves the "why is the #1 name red?" confusion (semantic, honors theme up/down swap) */}
                       <span style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "var(--muted)" }}>
                         <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -2602,7 +2689,7 @@ export default function OptionsHubView({
                         </span>
                       </span>
                     </div>
-                    <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
+                    <div className="obs-card" style={{ overflow: "hidden" }}>
                       {(() => {
                         // Hoisted once — bar scale is the max |net_prem_soft| across the set.
                         const maxNet = Math.max(...tideData.top_net_impact.map((x) => Math.abs(x.net_prem_soft)), 1);
@@ -2620,12 +2707,14 @@ export default function OptionsHubView({
                             }}
                           >
                             <span style={{ fontWeight: 700 }}>{item.root}</span>
-                            <div style={{ height: 8, borderRadius: 4, background: "var(--panel-3)", overflow: "hidden" }}>
+                            <div style={{ height: 8, borderRadius: 999, background: "var(--panel-3)", overflow: "hidden" }}>
                               <div
                                 style={{
                                   height: "100%", width: `${barW}%`,
-                                  background: isPos ? "rgba(38,194,129,.5)" : "rgba(240,86,107,.45)",
-                                  borderRadius: 4,
+                                  background: isPos
+                                    ? "color-mix(in srgb, var(--up) 50%, transparent)"
+                                    : "color-mix(in srgb, var(--down) 45%, transparent)",
+                                  borderRadius: 999,
                                 }}
                               />
                             </div>
@@ -2645,7 +2734,7 @@ export default function OptionsHubView({
                   {/* DTE Tide */}
                   {dteTide && (
                     <div data-tut="tide-dte">
-                      <div style={{ fontWeight: 650, fontSize: 13, marginBottom: 12 }}>{t("tideDteTitle", "DTE Buckets")}</div>
+                      <div className="obs-lbl" style={{ marginBottom: 10 }}>{t("tideDteTitle", "DTE Buckets")}</div>
                       <div
                         style={{
                           display: "grid",
@@ -2660,16 +2749,10 @@ export default function OptionsHubView({
                           const color = last > 0 ? "var(--up)" : last < 0 ? "var(--down)" : "var(--muted)";
                           const lbl = lang === "zh" ? DTE_LABELS[bk].zh : DTE_LABELS[bk].en;
                           return (
-                            <div
-                              key={bk}
-                              style={{
-                                border: "1px solid var(--line)", borderRadius: "var(--r-lg)",
-                                background: "var(--panel)", padding: "10px 12px",
-                              }}
-                            >
+                            <div key={bk} className="obs-card" style={{ padding: "10px 12px" }}>
                               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
                                 <span style={{ fontWeight: 600, fontSize: 12 }}>{lbl}</span>
-                                <span style={{ color, fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+                                <span className="num" style={{ color, fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
                                   {fmtPremSigned(last * 1_000_000)}
                                 </span>
                               </div>
@@ -2677,6 +2760,12 @@ export default function OptionsHubView({
                             </div>
                           );
                         })}
+                      </div>
+                      {/* DTE tide is its own cut — say so rather than inherit the hero clock. */}
+                      <div className="obs-asof">
+                        {lang === "zh"
+                          ? `按到期分桶的净权利金 · 截至 ${fmtAsof(dteTide.asof)} ET`
+                          : `Net premium by DTE bucket · as of ${fmtAsof(dteTide.asof)} ET`}
                       </div>
                     </div>
                   )}
@@ -2728,7 +2817,7 @@ export default function OptionsHubView({
                           width: "100%", padding: "8px 12px", textAlign: "left",
                           fontSize: 13, fontWeight: selectedTicker === root ? 700 : 400,
                           color: selectedTicker === root ? "var(--text)" : "var(--text-2)",
-                          background: selectedTicker === root ? "rgba(41,98,255,.1)" : "none",
+                          background: selectedTicker === root ? "color-mix(in srgb, var(--brand) 10%, transparent)" : "none",
                           borderRadius: "var(--r)", cursor: "pointer",
                           transition: "background var(--t)",
                         }}
@@ -2745,8 +2834,20 @@ export default function OptionsHubView({
                     );
                   })}
                   {filteredCandidates.length === 0 && (
-                    <div style={{ padding: "20px 12px", color: "var(--muted)", fontSize: 12 }}>
-                      {lang === "zh" ? "无结果" : "No results"}
+                    <div style={{ padding: "20px 12px" }}>
+                      <div className="fin-empty-title" style={{ fontSize: 12 }}>
+                        {lang === "zh" ? "无结果" : "No results"}
+                      </div>
+                      {/* Why: the list is session-scoped, not a universe search. */}
+                      <div className="fin-empty-why" style={{ marginTop: 5 }}>
+                        {tickerCandidates.length === 0
+                          ? (lang === "zh"
+                              ? "本时段尚无带期权流的标的。"
+                              : "No names have carried options flow this session yet.")
+                          : (lang === "zh"
+                              ? `仅列出本时段有期权流的 ${tickerCandidates.length} 个标的。`
+                              : `Only the ${tickerCandidates.length} names with flow this session are listed.`)}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2755,15 +2856,40 @@ export default function OptionsHubView({
               {/* Main area — fills remaining width */}
               <div style={{ flex: 1, overflow: "auto", minWidth: 0 }}>
                 {!selectedTicker && (
-                  <div style={{ color: "var(--muted)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
-                    {t("tickersSelectPrompt", "Select a ticker from the list or search above")}
+                  <div style={{ padding: "24px 16px" }}>
+                    <div className="fin-empty fin-empty-lg">
+                      <div className="fin-empty-title">
+                        {t("tickersSelectPrompt", "Select a ticker from the list or search above")}
+                      </div>
+                      <div className="fin-empty-why">
+                        {lang === "zh"
+                          ? "左侧按今日净权利金影响排序，仅列出本时段有期权流的标的。"
+                          : "The list is ranked by today’s net premium impact, and only names with flow this session appear."}
+                      </div>
+                    </div>
                   </div>
                 )}
                 {selectedTicker && (tickerLoading && !tickerData) && (
                   <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
                 )}
                 {selectedTicker && !tickerLoading && !tickerData && (
-                  <div className="fin-empty" role="status">{t("tickersNoData", "No flow data for this ticker yet")}</div>
+                  <div style={{ padding: "24px 16px" }}>
+                    <div className="fin-empty fin-empty-lg" role="status">
+                      <div className="fin-empty-title">
+                        {t("tickersNoData", "No flow data for this ticker yet")}
+                      </div>
+                      {/* Why: quiet name vs closed market — both derivable from state already here. */}
+                      <div className="fin-empty-why">
+                        {marketOpenNow
+                          ? (lang === "zh"
+                              ? `${selectedTicker} 本时段暂无达标的期权成交；一旦出现即会显示。`
+                              : `${selectedTicker} has no qualifying options prints this session — the drill fills in as they cross.`)
+                          : (lang === "zh"
+                              ? `市场休市 — ${selectedTicker} 在上一交易时段没有达标的期权成交。`
+                              : `Market closed — ${selectedTicker} carried no qualifying options prints in the last session.`)}
+                      </div>
+                    </div>
+                  </div>
                 )}
                 {selectedTicker && tickerData && (
                   <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -2774,10 +2900,10 @@ export default function OptionsHubView({
                       borderBottom: "1px solid var(--line)", paddingBottom: 12,
                     }}>
                       <div>
-                        <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em" }}>
+                        <div className="obs-lbl">
                           {lang === "zh" ? tickerData.group_zh : abbrevSector(tickerData.group)}
                         </div>
-                        <div style={{ fontWeight: 700, fontSize: 22, lineHeight: 1.1 }}>{tickerData.root}</div>
+                        <div style={{ fontWeight: 700, fontSize: 22, lineHeight: 1.1, marginTop: 5 }}>{tickerData.root}</div>
                       </div>
                       {/* Flow stats chips */}
                       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -2787,21 +2913,21 @@ export default function OptionsHubView({
                           { lk: "tickersCallShare", lb: "Call%", v: `${(tickerData.day.call_share * 100).toFixed(1)}%`, color: tickerData.day.call_share > 0.5 ? "var(--up)" : "var(--down)" },
                           { lk: "tickersPremZ", lb: "Activity", v: activityBand(tickerData.day.prem_z, lang) },
                         ].map((kv) => (
-                          <div key={kv.lk} style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
-                            <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t(kv.lk, kv.lb)}</div>
-                            <div style={{ fontWeight: 650, fontSize: 13, color: (kv as any).color ?? "var(--text)", fontVariantNumeric: "tabular-nums" }}>{kv.v}</div>
+                          <div key={kv.lk} style={{ border: "1px solid var(--line)", borderRadius: "var(--r-tile)", padding: "5px 10px", background: "var(--panel)" }}>
+                            <div className="obs-lbl">{t(kv.lk, kv.lb)}</div>
+                            <div className="num" style={{ fontWeight: 650, fontSize: 13, marginTop: 4, color: (kv as any).color ?? "var(--text)", fontVariantNumeric: "tabular-nums" }}>{kv.v}</div>
                           </div>
                         ))}
                         {/* IV30 and IV rank chips from vol data */}
                         {volData && volData.root === selectedTicker && (
                           <>
-                            <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
-                              <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t("tickersAtmIv", "ATM IV")}</div>
-                              <div style={{ fontWeight: 650, fontSize: 13, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{volData.atm_iv.toFixed(1)}%</div>
+                            <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-tile)", padding: "5px 10px", background: "var(--panel)" }}>
+                              <div className="obs-lbl">{t("tickersAtmIv", "ATM IV")}</div>
+                              <div className="num" style={{ fontWeight: 650, fontSize: 13, marginTop: 4, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{volData.atm_iv.toFixed(1)}%</div>
                             </div>
-                            <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
-                              <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t("tickersIvRank", "IV Rank")}</div>
-                              <div style={{ fontWeight: 650, fontSize: 13, fontVariantNumeric: "tabular-nums",
+                            <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-tile)", padding: "5px 10px", background: "var(--panel)" }}>
+                              <div className="obs-lbl">{t("tickersIvRank", "IV Rank")}</div>
+                              <div className="num" style={{ fontWeight: 650, fontSize: 13, marginTop: 4, fontVariantNumeric: "tabular-nums",
                                 color: volData.iv_rank_252 == null ? "var(--text-dim)"
                                   : volData.iv_rank_252 > 75 ? "var(--down)"
                                   : volData.iv_rank_252 > 50 ? "var(--warn)" : "var(--up)" }}>
@@ -2824,9 +2950,9 @@ export default function OptionsHubView({
                         return chips.map((c) => {
                           const zVal = tctxData.z?.[c.zKey];
                           return (
-                            <div key={c.zKey} style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "4px 10px", background: "var(--panel)" }}>
-                              <div style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>{t(c.labelKey, c.label)}</div>
-                              <div style={{ fontSize: 13, fontWeight: 650, fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
+                            <div key={c.zKey} style={{ border: "1px solid var(--line)", borderRadius: "var(--r-tile)", padding: "5px 10px", background: "var(--panel)" }}>
+                              <div className="obs-lbl">{t(c.labelKey, c.label)}</div>
+                              <div className="num" style={{ fontSize: 13, fontWeight: 650, marginTop: 4, fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
                                 {warming || zVal == null
                                   ? <span style={{ fontSize: 10, color: "var(--text-dim)" }}>—</span>
                                   : activityBand(zVal, lang)}
@@ -2835,6 +2961,19 @@ export default function OptionsHubView({
                           );
                         });
                       })()}
+                    </div>
+
+                    {/* Provenance — the drill fuses a live intraday cut with a nightly vol build. */}
+                    <div className="obs-asof" style={{ marginTop: -6 }}>
+                      {!activeUnavailable && !activeDelayed && <span className="obs-live-dot" />}
+                      <span>
+                        {lang === "zh"
+                          ? `盘中期权流 · 截至 ${fmtAsof(tickerData.asof)} ET`
+                          : `Intraday options flow · as of ${fmtAsof(tickerData.asof)} ET`}
+                        {volData && volData.root === selectedTicker && (lang === "zh"
+                          ? ` · 波动率面为夜间构建（${volData.asof.slice(0, 10)}）`
+                          : ` · vol surface from the nightly build (${volData.asof.slice(0, 10)})`)}
+                      </span>
                     </div>
 
                     {/* ── Two-column body ── */}
@@ -2847,13 +2986,13 @@ export default function OptionsHubView({
 
                       {/* LEFT: intraday flow */}
                       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                        <div style={{ fontWeight: 650, fontSize: 12, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: ".05em" }}>
+                        <div className="obs-lbl" style={{ color: "var(--text-2)" }}>
                           {t("tickersIntraday", "Intraday Flow")}
                         </div>
 
                         {/* Minute net-premium chart */}
-                        <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
-                          <div style={{ fontWeight: 600, fontSize: 11, color: "var(--text-2)", marginBottom: 6 }}>
+                        <div className="obs-card" style={{ padding: "12px 13px" }}>
+                          <div className="obs-lbl" style={{ marginBottom: 8 }}>
                             {t("tickersMinChart", "Minute Net Prem")}
                           </div>
                           <MinuteNetChart minutes={tickerData.minutes} height={80} />
@@ -2861,8 +3000,8 @@ export default function OptionsHubView({
 
                         {/* Top contracts list */}
                         {tickerData.top_contracts.length > 0 && (
-                          <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                            <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--line)", fontWeight: 600, fontSize: 11, color: "var(--text-2)" }}>
+                          <div className="obs-card" style={{ overflow: "hidden" }}>
+                            <div className="obs-lbl" style={{ padding: "11px 13px 9px", borderBottom: "1px solid var(--line)" }}>
                               {t("tickersTopContracts", "Top Contracts")}
                             </div>
                             <table className="scr" style={{ fontSize: 11 }}>
@@ -2900,8 +3039,8 @@ export default function OptionsHubView({
 
                         {/* Expiry bars */}
                         {tickerData.expiries.length > 0 && (
-                          <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
-                            <div style={{ fontWeight: 600, fontSize: 11, color: "var(--text-2)", marginBottom: 8 }}>
+                          <div className="obs-card" style={{ padding: "12px 13px" }}>
+                            <div className="obs-lbl" style={{ marginBottom: 8 }}>
                               {t("tickersExpBars", "By Expiry")}
                             </div>
                             <ExpiryBars expiries={tickerData.expiries} lang={lang} />
@@ -2911,13 +3050,13 @@ export default function OptionsHubView({
 
                       {/* RIGHT: strike ladder + vol surface below */}
                       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                        <div style={{ fontWeight: 650, fontSize: 12, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: ".05em" }}>
+                        <div className="obs-lbl" style={{ color: "var(--text-2)" }}>
                           {t("tickersStrikeLadder", "Strike Ladder")} · {t("tickersIvSurface", "Vol Surface")}
                         </div>
 
                         {/* Strike ladder — fills full column width */}
                         {tickerData.strikes.length > 0 && (
-                          <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
+                          <div className="obs-card" style={{ padding: "12px 13px" }}>
                             <StrikeLadder
                               strikes={tickerData.strikes}
                               lang={lang}
@@ -2932,8 +3071,8 @@ export default function OptionsHubView({
 
                             {/* IV rank history sparkline */}
                             {volData.history.length >= 2 && (
-                              <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
-                                <div style={{ fontWeight: 600, fontSize: 11, color: "var(--text-2)", marginBottom: 6 }}>
+                              <div className="obs-card" style={{ padding: "12px 13px" }}>
+                                <div className="obs-lbl" style={{ marginBottom: 8 }}>
                                   {t("tickersIvRankHistory", "IV Rank History")}
                                 </div>
                                 <IvRankHistory history={volData.history} />
@@ -2942,8 +3081,8 @@ export default function OptionsHubView({
 
                             {/* Term structure */}
                             {volData.term.length >= 2 && (
-                              <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
-                                <div style={{ fontWeight: 600, fontSize: 11, color: "var(--text-2)", marginBottom: 6 }}>
+                              <div className="obs-card" style={{ padding: "12px 13px" }}>
+                                <div className="obs-lbl" style={{ marginBottom: 8 }}>
                                   {t("volTermTitle", "Term Structure")}
                                 </div>
                                 <TermStructureChart term={volData.term} />
@@ -2952,8 +3091,8 @@ export default function OptionsHubView({
 
                             {/* Skew (first two expiries) */}
                             {volData.smile.length > 0 && (
-                              <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", padding: "10px 12px" }}>
-                                <div style={{ fontWeight: 600, fontSize: 11, color: "var(--text-2)", marginBottom: 6 }}>
+                              <div className="obs-card" style={{ padding: "12px 13px" }}>
+                                <div className="obs-lbl" style={{ marginBottom: 8 }}>
                                   {t("volSmileTitle", "Volatility Smile")}
                                 </div>
                                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -3001,6 +3140,19 @@ export default function OptionsHubView({
             <div style={{ flex: 1, overflow: "auto", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
               {screenerLoading && !oiData && !hotData && !feed && (
                 <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
+              )}
+              {/* Both lanes empty AND not loading — say so instead of an empty page. */}
+              {!screenerLoading && !oiData && !hotData && !feed && (
+                <div className="fin-empty fin-empty-lg" role="status">
+                  <div className="fin-empty-title">
+                    {lang === "zh" ? "暂无可筛选的数据" : "Nothing to screen yet"}
+                  </div>
+                  <div className="fin-empty-why">
+                    {lang === "zh"
+                      ? "盘中期权流与夜间收盘构建当前均无法读取。"
+                      : "Neither the intraday options tape nor the nightly close build could be read right now."}
+                  </div>
+                </div>
               )}
 
               {/* Preset view chip bar */}
@@ -3088,6 +3240,31 @@ export default function OptionsHubView({
                 </div>
               )}
 
+              {/* Source + as-of for the ACTIVE preset — intraday tape and nightly-close
+                  views live side by side here, so the provenance has to say which. */}
+              {(feed || oiData || hotData) && (() => {
+                const nightly = screenerPreset === "doi" || screenerPreset === "hot";
+                const stamp = nightly
+                  ? (screenerPreset === "doi" ? oiData?.asof : hotData?.asof)
+                  : feed?.asof;
+                if (!stamp) return null;
+                const cov = screenerPreset === "doi" ? oiData?.coverage : screenerPreset === "hot" ? hotData?.coverage : undefined;
+                return (
+                  <div className="obs-asof" style={{ marginTop: -8 }}>
+                    {!nightly && !activeUnavailable && !activeDelayed && <span className="obs-live-dot" />}
+                    <span>
+                      {nightly
+                        ? (lang === "zh"
+                            ? `夜间收盘构建 · 截至 ${stamp.slice(0, 10)}${cov?.n_days ? ` · ${cov.n_days} 个交易日` : ""}`
+                            : `Nightly close build · as of ${stamp.slice(0, 10)}${cov?.n_days ? ` · ${cov.n_days} sessions` : ""}`)
+                        : (lang === "zh"
+                            ? `盘中期权流 · 截至 ${fmtAsof(stamp)} ET`
+                            : `Intraday options tape · as of ${fmtAsof(stamp)} ET`)}
+                    </span>
+                  </div>
+                );
+              })()}
+
               {/* ── Top Premium view — unusual_names sorted by gross_premium_today ── */}
               {screenerPreset === "top_prem" && feed && (() => {
                 const rows = [...scrFilter(feed.unusual_names ?? [])].sort((a, b) => {
@@ -3108,9 +3285,9 @@ export default function OptionsHubView({
                   </th>
                 );
                 return (
-                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13 }}>
-                      {lang === "zh" ? "保费最大（今日）" : "Top Premium — Today"}
+                  <div className="obs-card" style={{ overflow: "hidden" }}>
+                    <div className="obs-card-hd" style={{ borderBottom: "1px solid var(--line)" }}>
+                      <span className="obs-lbl">{lang === "zh" ? "保费最大（今日）" : "Top Premium — Today"}</span>
                     </div>
                     <div style={{ overflowX: "auto" }}>
                       <table className="scr" style={{ fontSize: 12 }}>
@@ -3171,9 +3348,9 @@ export default function OptionsHubView({
                   </th>
                 );
                 return (
-                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13, display: "flex", alignItems: "center", gap: 12 }}>
-                      <span>{lang === "zh" ? "异常活跃度" : "Unusual Activity"}</span>
+                  <div className="obs-card" style={{ overflow: "hidden" }}>
+                    <div className="obs-card-hd" style={{ borderBottom: "1px solid var(--line)" }}>
+                      <span className="obs-lbl">{lang === "zh" ? "异常活跃度" : "Unusual Activity"}</span>
                       {warming.length > 0 && (
                         <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
                           {lang === "zh" ? `${warming.length} 基线积累中（未显示）` : `${warming.length} warming baselines hidden`}
@@ -3256,9 +3433,9 @@ export default function OptionsHubView({
                   </th>
                 );
                 return (
-                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13 }}>
-                      {lang === "zh" ? "新建仓位（vol>OI 信号）" : "Fresh Positioning — vol > OI signals"}
+                  <div className="obs-card" style={{ overflow: "hidden" }}>
+                    <div className="obs-card-hd" style={{ borderBottom: "1px solid var(--line)" }}>
+                      <span className="obs-lbl">{lang === "zh" ? "新建仓位（vol>OI 信号）" : "Fresh Positioning — vol > OI signals"}</span>
                     </div>
                     <div style={{ overflowX: "auto" }}>
                       <table className="scr" style={{ fontSize: 12 }}>
@@ -3309,9 +3486,9 @@ export default function OptionsHubView({
                   </th>
                 );
                 return (
-                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13, display: "flex", alignItems: "center", gap: 12 }}>
-                      <span>{lang === "zh" ? "持仓增长（ΔOI）" : "OI Builds — ΔOI"}</span>
+                  <div className="obs-card" style={{ overflow: "hidden" }}>
+                    <div className="obs-card-hd" style={{ borderBottom: "1px solid var(--line)" }}>
+                      <span className="obs-lbl">{lang === "zh" ? "持仓增长（ΔOI）" : "OI Builds — ΔOI"}</span>
                       <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
                         {lang === "zh" ? "截至上一交易日" : "as of previous session"}
                       </span>
@@ -3390,9 +3567,9 @@ export default function OptionsHubView({
                   </th>
                 );
                 return (
-                  <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", fontWeight: 650, fontSize: 13 }}>
-                      {lang === "zh" ? "高0DTE占比" : "0DTE Heavy"}
+                  <div className="obs-card" style={{ overflow: "hidden" }}>
+                    <div className="obs-card-hd" style={{ borderBottom: "1px solid var(--line)" }}>
+                      <span className="obs-lbl">{lang === "zh" ? "高0DTE占比" : "0DTE Heavy"}</span>
                     </div>
                     <div style={{ overflowX: "auto" }}>
                       <table className="scr" style={{ fontSize: 12 }}>
@@ -3432,9 +3609,9 @@ export default function OptionsHubView({
 
               {/* ── Hot Contracts view — hotData by_premium / by_volume ── */}
               {screenerPreset === "hot" && hotData && (
-                <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-lg)", background: "var(--panel)", overflow: "hidden" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: "1px solid var(--line)" }}>
-                    <span style={{ fontWeight: 650, fontSize: 13 }}>
+                <div className="obs-card" style={{ overflow: "hidden" }}>
+                  <div className="obs-card-hd" style={{ borderBottom: "1px solid var(--line)", alignItems: "center" }}>
+                    <span className="obs-lbl">
                       {lang === "zh" ? "热门合约" : "Hot Contracts"}
                     </span>
                     <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
@@ -3786,7 +3963,7 @@ export default function OptionsHubView({
                                             background: val === true
                                               ? "var(--up)"
                                               : val === false
-                                              ? "rgba(240,86,107,.4)"
+                                              ? "color-mix(in srgb, var(--down) 40%, transparent)"
                                               : "var(--panel-3)",
                                             border: "1px solid var(--line-3)",
                                           }}
@@ -3802,7 +3979,7 @@ export default function OptionsHubView({
                                         {row.macd_2w_state && row.macd_2w_state !== "none" && (
                                           <span style={{
                                             fontSize: 10, padding: "1px 5px", borderRadius: 3,
-                                            background: row.macd_2w_state === "crossed" ? "rgba(38,194,129,.2)" : "rgba(232,163,61,.15)",
+                                            background: row.macd_2w_state === "crossed" ? "color-mix(in srgb, var(--up) 20%, transparent)" : "color-mix(in srgb, var(--warn) 15%, transparent)",
                                             color: row.macd_2w_state === "crossed" ? "var(--up)" : "var(--warn)",
                                           }}>
                                             {row.macd_2w_state === "crossed"
@@ -3811,7 +3988,7 @@ export default function OptionsHubView({
                                           </span>
                                         )}
                                         {row.stochrsi_2w_oversold === true && (
-                                          <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(38,194,129,.15)", color: "var(--up)" }}>
+                                          <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "color-mix(in srgb, var(--up) 15%, transparent)", color: "var(--up)" }}>
                                             {t("leadersOversoldChip", "oversold")}
                                           </span>
                                         )}
@@ -3828,22 +4005,22 @@ export default function OptionsHubView({
                                   <td>
                                     <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                                       {warnEarnings && (
-                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.15)", color: "var(--down)" }}>
+                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "color-mix(in srgb, var(--down) 15%, transparent)", color: "var(--down)" }}>
                                           {t("leadersWarnEarningsShort", "earns")}
                                         </span>
                                       )}
                                       {warnVol && (
-                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(232,163,61,.15)", color: "var(--warn)" }}>
+                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "color-mix(in srgb, var(--warn) 15%, transparent)", color: "var(--warn)" }}>
                                           {t("leadersWarnVolShort", "vol")}
                                         </span>
                                       )}
                                       {warnPut && (
-                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.12)", color: "var(--down)" }}>
+                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "color-mix(in srgb, var(--down) 12%, transparent)", color: "var(--down)" }}>
                                           {t("leadersWarnPutShort", "put hedge")}
                                         </span>
                                       )}
                                       {warnGamma && (
-                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(232,163,61,.12)", color: "var(--warn)" }}>
+                                        <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "color-mix(in srgb, var(--warn) 12%, transparent)", color: "var(--warn)" }}>
                                           {t("leadersWarnGammaShort", "gamma")}
                                         </span>
                                       )}
@@ -3938,14 +4115,14 @@ export default function OptionsHubView({
                   NONE:                 "var(--muted)",
                 };
                 const stateBg: Record<string, string> = {
-                  CROWDED:              "rgba(38,194,129,.25)",
-                  LEADERSHIP:           "rgba(38,194,129,.18)",
-                  BREAKAWAY:            "rgba(38,194,129,.12)",
-                  CATALYST_WINDOW:      "rgba(232,163,61,.18)",
-                  QUIET_ACCUMULATION:   "rgba(91,156,246,.12)",
-                  SUPPRESSED:           "rgba(120,120,120,.12)",
-                  FAILED:               "rgba(240,86,107,.15)",
-                  NONE:                 "rgba(120,120,120,.07)",
+                  CROWDED:              "color-mix(in srgb, var(--up) 25%, transparent)",
+                  LEADERSHIP:           "color-mix(in srgb, var(--up) 18%, transparent)",
+                  BREAKAWAY:            "color-mix(in srgb, var(--up) 12%, transparent)",
+                  CATALYST_WINDOW:      "color-mix(in srgb, var(--warn) 18%, transparent)",
+                  QUIET_ACCUMULATION:   "color-mix(in srgb, var(--accent, #5b9cf6) 12%, transparent)",
+                  SUPPRESSED:           "color-mix(in srgb, var(--muted) 14%, transparent)",
+                  FAILED:               "color-mix(in srgb, var(--down) 15%, transparent)",
+                  NONE:                 "color-mix(in srgb, var(--muted) 9%, transparent)",
                 };
 
                 // Group rows by state
@@ -3967,7 +4144,7 @@ export default function OptionsHubView({
                       background: val === true
                         ? "var(--up)"
                         : val === false
-                        ? "rgba(240,86,107,.4)"
+                        ? "color-mix(in srgb, var(--down) 40%, transparent)"
                         : "var(--panel-3)",
                       border: "1px solid var(--line-3)",
                       flexShrink: 0,
@@ -4136,7 +4313,7 @@ export default function OptionsHubView({
                                           {deEntries.map(([k]) => (
                                             <span key={k} style={{
                                               fontSize: 10, padding: "1px 5px", borderRadius: 3,
-                                              background: "rgba(240,86,107,.15)", color: "var(--down)",
+                                              background: "color-mix(in srgb, var(--down) 15%, transparent)", color: "var(--down)",
                                             }}>
                                               {k.replace(/_/g, " ")}
                                             </span>
@@ -4150,7 +4327,7 @@ export default function OptionsHubView({
                                           {row.fire_precipice && (
                                             <span style={{
                                               fontSize: 10, padding: "1px 5px", borderRadius: 3,
-                                              background: "rgba(232,163,61,.2)", color: "var(--warn)", fontWeight: 600,
+                                              background: "color-mix(in srgb, var(--warn) 20%, transparent)", color: "var(--warn)", fontWeight: 600,
                                             }}>
                                               {t("radarFireWatch", "watch-window entry")}
                                             </span>
@@ -4158,7 +4335,7 @@ export default function OptionsHubView({
                                           {row.fire_onset && (
                                             <span style={{
                                               fontSize: 10, padding: "1px 5px", borderRadius: 3,
-                                              background: "rgba(38,194,129,.2)", color: "var(--up)", fontWeight: 600,
+                                              background: "color-mix(in srgb, var(--up) 20%, transparent)", color: "var(--up)", fontWeight: 600,
                                             }}>
                                               {t("radarFireOnset", "onset entry")}
                                             </span>
@@ -4171,22 +4348,22 @@ export default function OptionsHubView({
                                         {hasOscSignal && (
                                           <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                                             {tf.macd_cross_up && (
-                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(38,194,129,.15)", color: "var(--up)" }}>
+                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "color-mix(in srgb, var(--up) 15%, transparent)", color: "var(--up)" }}>
                                                 {t("radarOscMacdCrossUp", "MACD cross up")}
                                               </span>
                                             )}
                                             {tf.macd_approaching_up && tf.macd_bars_to_cross !== null && (
-                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(232,163,61,.15)", color: "var(--warn)" }}>
+                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "color-mix(in srgb, var(--warn) 15%, transparent)", color: "var(--warn)" }}>
                                                 {t("radarOscMacdApproachUp", "MACD approaching up {b}").replace("{b}", `${tf.macd_bars_to_cross.toFixed(1)}b`)}
                                               </span>
                                             )}
                                             {tf.stoch_cross_up && (
-                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(38,194,129,.12)", color: "var(--up)" }}>
+                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "color-mix(in srgb, var(--up) 12%, transparent)", color: "var(--up)" }}>
                                                 {t("radarOscStochCrossUp", "Stoch cross up")}
                                               </span>
                                             )}
                                             {tf.stoch_cross_dn && (
-                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.12)", color: "var(--down)" }}>
+                                              <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "color-mix(in srgb, var(--down) 12%, transparent)", color: "var(--down)" }}>
                                                 {t("radarOscStochCrossDn", "Stoch cross dn")}
                                               </span>
                                             )}
@@ -4299,7 +4476,7 @@ export default function OptionsHubView({
                                   {/* earnings_within_14d — CAUTION style only when true */}
                                   <td style={{ textAlign: "center" }}>
                                     {rr.chips.earnings_within_14d === true ? (
-                                      <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(240,86,107,.15)", color: "var(--down)" }}>
+                                      <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "color-mix(in srgb, var(--down) 15%, transparent)", color: "var(--down)" }}>
                                         {t("radarReratingEarningsCaution", "caution")}
                                       </span>
                                     ) : (

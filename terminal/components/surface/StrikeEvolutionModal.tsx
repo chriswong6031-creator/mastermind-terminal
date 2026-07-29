@@ -159,8 +159,10 @@ export function StrikeEvolutionModal({
 
     // The line color follows sign at NOW (up when the current value is ≥0, else down) — a
     // directional read of the strike's exposure, so it honors the East-Asian flip via tokens.
+    // The fallback is deliberately NEUTRAL: a hardcoded green/red here would survive a
+    // failed resolve and paint the wrong side under html[data-updown="east"].
     const nowVal = series.nowValue ?? 0;
-    const lineColor = nowVal >= 0 ? (css("--up") || "#26c281") : (css("--down") || "#f0566b");
+    const lineColor = css(nowVal >= 0 ? "--up" : "--down") || css("--text-2") || "#9ba3b4";
     const line: ISeriesApi<"Line"> = chart.addSeries(LineSeries, {
       color: lineColor, lineWidth: 2 as never, priceLineVisible: false, lastValueVisible: true, title: metricLabel,
     });
@@ -239,14 +241,16 @@ export function StrikeEvolutionModal({
         aria-modal="true"
         aria-label={`${t("evoTitle")} — ${t("evoStrike")} ${strikeDisp}`}
       >
-        {/* Header */}
+        {/* Header — three ranked steps: eyebrow (what this drill is) → the strike as the
+            hero numeral → a muted caption naming the metric being drilled. */}
         <div className="obs-modal-hd">
           <div className="obs-modal-title">
             <span className="obs-lbl">{t("evoTitle")}</span>
-            <b>{strikeDisp}</b>
-            <span style={{ fontSize: 11, color: "var(--muted)" }}>{metricLabel} {t("evoMetricAt")}</span>
+            <b className="num">{strikeDisp}</b>
+            <span style={HD_CAPTION}>{metricLabel} {t("evoMetricAt")}</span>
           </div>
-          <button ref={closeRef} className="obs-modal-close" onClick={onClose} aria-label={t("evoCloseAria")}>
+          <button ref={closeRef} className="obs-modal-close" style={CLOSE_BTN}
+            onClick={onClose} aria-label={t("evoCloseAria")}>
             {t("evoClose")}
           </button>
         </div>
@@ -256,7 +260,11 @@ export function StrikeEvolutionModal({
           {series.points.length > 0 ? (
             <div className="obs-modal-chart" ref={chartWrap} />
           ) : (
-            <div className="obs-xdrawer-empty">{t("evoNoSeries")}</div>
+            /* Honest empty: name the state and why it is empty for THIS strike. */
+            <div className="obs-xdrawer-empty">
+              <div style={EMPTY_TITLE}>{t("evoNoSeries")}</div>
+              <div style={EMPTY_WHY}>{t("evoNoSeriesWhy")}</div>
+            </div>
           )}
 
           {/* B4 — Expiry breakdown. The matrix is a single head-of-day fetch, so it is a
@@ -283,7 +291,7 @@ export function StrikeEvolutionModal({
                 const isPos = e.gex >= 0;
                 return (
                   <div className="obs-modal-exp-row" key={e.exp}>
-                    <span className="obs-modal-exp-lbl">{e.exp.length >= 10 ? e.exp.slice(5, 10) : e.exp}</span>
+                    <span className="obs-modal-exp-lbl num">{e.exp.length >= 10 ? e.exp.slice(5, 10) : e.exp}</span>
                     <span className="obs-modal-exp-track">
                       <span
                         className="obs-modal-exp-bar"
@@ -295,8 +303,8 @@ export function StrikeEvolutionModal({
                         }}
                       />
                     </span>
-                    <span className="obs-modal-exp-val" style={{ color: isPos ? "var(--up)" : "var(--down)" }}>
-                      {fmtDollarSigned(e.gex)} <span style={{ color: "var(--muted)", fontWeight: 400 }}>{(e.share * 100).toFixed(0)}%</span>
+                    <span className="obs-modal-exp-val num" style={{ color: isPos ? "var(--up)" : "var(--down)" }}>
+                      {fmtDollarSigned(e.gex)} <span className="num" style={{ color: "var(--muted)", fontWeight: 400 }}>{(e.share * 100).toFixed(0)}%</span>
                     </span>
                   </div>
                 );
@@ -310,7 +318,7 @@ export function StrikeEvolutionModal({
               <button
                 type="button"
                 className={`obs-chip${pinned ? " on" : ""}`}
-                style={{ height: 26, fontSize: 11, fontWeight: 600, padding: "0 10px" }}
+                style={ACTION_CHIP}
                 aria-pressed={!!pinned}
                 onClick={() => onTogglePin(series.strike, metric, series.nowValue)}
               >
@@ -321,7 +329,7 @@ export function StrikeEvolutionModal({
             <button
               type="button"
               className="obs-chip"
-              style={{ height: 26, fontSize: 11, fontWeight: 600, padding: "0 10px" }}
+              style={ACTION_CHIP}
               disabled={alertState === "busy" || alertState === "done"}
               onClick={createStrikeAlert}
             >
@@ -355,10 +363,11 @@ export function StrikeEvolutionModal({
           </div>
         </div>
 
-        {/* Footer: spot · stamp count · Esc */}
+        {/* Footer: provenance (source · spot · stamp count · as-of) then the Esc hint */}
         <div className="obs-modal-foot">
+          <span style={{ color: "var(--muted)" }}>{t("sourceOpra")}</span>
           {spotDisp != null && (
-            <span>{t("evoSpot")} <b className="num" style={{ color: "var(--text)" }}>{spotDisp}</b></span>
+            <span>· {t("evoSpot")} <b className="num" style={{ color: "var(--text)" }}>{spotDisp}</b></span>
           )}
           <span>· <b className="num" style={{ color: "var(--text)" }}>{series.total}</b> {t("evoSnapshots")}</span>
           {asofLabel && <span style={{ color: "var(--muted)" }}>· {t("asOf")} {asofLabel}</span>}
@@ -368,3 +377,25 @@ export function StrikeEvolutionModal({
     </div>
   );
 }
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const HD_CAPTION: React.CSSProperties = { fontSize: "var(--fs-label)", color: "var(--muted)" };
+
+/** Close affordance sized for a real pointer/thumb, not just for a mouse. */
+const CLOSE_BTN: React.CSSProperties = {
+  height: 40, minWidth: 44, padding: "0 var(--sp-4)",
+  borderRadius: "var(--r-tile)", fontSize: "var(--fs-ui)", fontWeight: 600,
+};
+
+const ACTION_CHIP: React.CSSProperties = {
+  height: 32, fontSize: "var(--fs-label)", fontWeight: 600, padding: "0 var(--sp-3)",
+};
+
+const EMPTY_TITLE: React.CSSProperties = {
+  fontSize: "var(--fs-body)", fontWeight: 600, color: "var(--text-2)",
+};
+
+const EMPTY_WHY: React.CSSProperties = {
+  marginTop: "var(--sp-1)", fontSize: "var(--fs-label)", lineHeight: 1.55, color: "var(--muted)",
+};

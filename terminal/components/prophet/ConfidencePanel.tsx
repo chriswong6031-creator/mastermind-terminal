@@ -55,14 +55,14 @@ function scoreToOffset(score: number): number {
 }
 
 function scoreToColor(score: number): string {
-  if (score >= 75) return "#26c281"; // strong — green
-  if (score >= 55) return "#e8a33d"; // moderate — amber
-  return "var(--down)";              // weak — red
+  if (score >= 75) return "var(--up)";   // strong — rides the direction token (east-flip aware)
+  if (score >= 55) return "var(--warn)"; // moderate
+  return "var(--down)";                  // weak
 }
 
 function barColor(val: number): string {
-  if (val >= 70) return "#26c281";
-  if (val >= 40) return "#e8a33d";
+  if (val >= 70) return "var(--up)";
+  if (val >= 40) return "var(--warn)";
   return "var(--down)";
 }
 

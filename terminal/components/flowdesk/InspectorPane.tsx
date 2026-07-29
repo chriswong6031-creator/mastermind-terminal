@@ -112,10 +112,17 @@ export function InspectorPane({ event, tickerCtx, enrichEv, lang }: InspectorPan
   const zh = lang === "zh";
 
   if (!event) {
+    // Blank-until-selection is a real state, so it says what a selection buys you
+    // rather than sitting mute.
     return (
       <div className="obs-card obs-fd-inspector" data-tut="flow-inspector">
         <div className="obs-insp-empty">
-          {pick(zh, FD.inspectorEmpty.en, FD.inspectorEmpty.zh)}
+          <span className="obs-lbl obs-insp-empty-title">
+            {pick(zh, FD.inspectorEmpty.en, FD.inspectorEmpty.zh)}
+          </span>
+          <span className="obs-insp-empty-why">
+            {pick(zh, FD.inspectorEmptyWhy.en, FD.inspectorEmptyWhy.zh)}
+          </span>
         </div>
       </div>
     );
@@ -149,10 +156,12 @@ function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh:
       {/* ── Header ── */}
       <div className="obs-insp-head">
         <span className="obs-insp-head-ticker">{event.root}</span>
-        <span className="obs-insp-head-ct">{event.strike}{event.right} · {fmtExp(event.exp)} · {premStr}</span>
+        <span className="obs-insp-head-ct num">{event.strike}{event.right} · {fmtExp(event.exp)} · {premStr}</span>
+        {/* Tier chip rides the universal tint formula (--c → text/bg/ring).
+            Tones are MAGNITUDE hues, never up/down — a tier is not a direction. */}
         <span
-          className="obs-insp-tier"
-          style={{ background: tierBg(tier), color: "var(--text)" }}
+          className="obs-insp-tier obs-tag"
+          style={{ "--c": tierTone(tier) } as React.CSSProperties}
         >
           {tier}
         </span>
@@ -212,7 +221,7 @@ function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh:
       {/* ── Detections section (v2 enrich badges with why strings) ── */}
       {enrichEv && enrichEv.badges.length > 0 && (
         <div className="obs-insp-section">
-          <div className="obs-insp-section-label">
+          <div className="obs-insp-section-label obs-lbl">
             {pick(zh, "Detections", "检测信号")}
           </div>
           {enrichEv.badges.map((badge) => (
@@ -232,7 +241,7 @@ function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh:
 
       {/* ── Event field breakdown ── */}
       <div className="obs-insp-section">
-        <div className="obs-insp-section-label">{pick(zh, "Event Fields", "事件字段")}</div>
+        <div className="obs-insp-section-label obs-lbl">{pick(zh, "Event Fields", "事件字段")}</div>
 
         <FieldRow k={pick(zh, "Time (ET)", "时间(ET)")} v={fmtTs(event.ts)} />
         <FieldRow k={pick(zh, "Ticker", "标的")} v={event.root} />
@@ -271,7 +280,7 @@ function EventDetail({ event, zh, tickerCtx, enrichEv }: { event: FlowEvent; zh:
       {/* ── Ticker context (top contracts) ── */}
       {tickerCtx && tickerCtx.top_contracts.length > 0 && (
         <div className="obs-insp-section">
-          <div className="obs-insp-section-label">
+          <div className="obs-insp-section-label obs-lbl">
             {pick(zh, `${tickerCtx.root} — Top Contracts`, `${tickerCtx.root} — 主要合约`)}
           </div>
           {tickerCtx.top_contracts.slice(0, 5).map((c, i) => (
@@ -328,14 +337,17 @@ function FieldRow({ k, v, note }: { k: string; v: string; note?: string }) {
   );
 }
 
-// ─── Tier background helpers ───────────────────────────────────────────────
+// ─── Tier tone helper ──────────────────────────────────────────────────────
+// Magnitude hues only — the tier says how big the event is, never which way it
+// points, so --up/--down never appear here. The chip derives text, fill and ring
+// from this one token via the .obs-tag tint formula.
 
-function tierBg(tier: string): string {
-  if (tier === "ELITE")  return "rgba(157,134,255,0.15)";
-  if (tier === "STRONG") return "rgba(232,163,61,0.13)";
-  if (tier === "HIGH")   return "rgba(77,130,255,0.13)";
-  if (tier === "MEDIUM") return "rgba(134,141,156,0.1)";
-  return "rgba(90,97,111,0.08)";
+function tierTone(tier: string): string {
+  if (tier === "ELITE")  return "var(--code-fn)";  // violet accent
+  if (tier === "STRONG") return "var(--warn)";
+  if (tier === "HIGH")   return "var(--brand-2)";
+  if (tier === "MEDIUM") return "var(--text-2)";
+  return "var(--muted)";
 }
 
 // ─── Detection row styles ──────────────────────────────────────────────────
@@ -343,14 +355,14 @@ function tierBg(tier: string): string {
 const DETECTION_ROW_STYLE: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 2,
-  padding: "5px 0",
+  gap: "var(--sp-1)",
+  padding: "var(--sp-1) 0",
   borderBottom: "1px solid var(--line-2)",
 };
 
 const DETECTION_BADGE_STYLE: React.CSSProperties = {
-  fontSize: 9,
-  fontWeight: 800,
+  fontSize: "var(--fs-micro)",
+  fontWeight: 700,
   letterSpacing: "0.06em",
   color: "var(--brand-2)",
   textTransform: "uppercase" as const,

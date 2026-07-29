@@ -45,6 +45,18 @@ function fmtPrem(v: number): string {
   return `$${v.toFixed(0)}`;
 }
 
+/**
+ * Categorical violet for the put side.
+ *
+ * `--cat-2` is the house categorical-2 token used across the options suite, but
+ * it is NOT defined in globals.css (see report: repo-wide gap), so a bare
+ * var(--cat-2) is invalid-at-computed-value-time and the put bar renders
+ * invisible. The fallback defers to `--cat-2` the moment it is defined and
+ * meanwhile resolves to the same violet the observatory already uses for the
+ * ELITE tier / Prophet accent. Non-directional by design — never --up/--down.
+ */
+const TONE_PUT = "var(--cat-2, var(--code-fn))";
+
 type Tone = "CALL_HEAVY" | "PUT_HEAVY" | "MIXED";
 
 function deriveTone(callShare: number): Tone {
@@ -63,7 +75,7 @@ function toneColor(tone: Tone): string {
   if (tone === "MIXED") return "var(--text-2)";
   // Both call-heavy and put-heavy are signaled in the same brand-accent spectrum —
   // we deliberately avoid green/red here per honesty doctrine.
-  return tone === "CALL_HEAVY" ? "var(--brand-2)" : "var(--cat-2)";
+  return tone === "CALL_HEAVY" ? "var(--brand-2)" : TONE_PUT;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────
@@ -102,16 +114,20 @@ export function FlowGauge({ feed, lang }: FlowGaugeProps) {
       </div>
 
       {/* ── Total premium (big number) ── */}
-      <div style={styles.totalPrem}>{fmtPrem(total)}</div>
+      <div className="num" style={styles.totalPrem}>{fmtPrem(total)}</div>
 
       {/* ── Split bar ── */}
       <div style={styles.splitRow}>
-        <span style={{ fontSize: 10, color: "var(--brand-2)", minWidth: 28 }}>{callPct}% C</span>
+        <span className="num" style={{ ...styles.splitPct, color: "var(--brand-2)" }}>
+          {callPct}% {pick(zh, "C", "认购")}
+        </span>
         <div style={styles.barTrack}>
           <div style={{ ...styles.callBar, width: `${callPct}%` }} />
           <div style={{ ...styles.putBar, width: `${putPct}%` }} />
         </div>
-        <span style={{ fontSize: 10, color: "var(--cat-2)", minWidth: 28, textAlign: "right" }}>{putPct}% P</span>
+        <span className="num" style={{ ...styles.splitPct, color: TONE_PUT, textAlign: "right" }}>
+          {putPct}% {pick(zh, "P", "认沽")}
+        </span>
       </div>
 
       {/* ── Stats row ── */}
@@ -145,7 +161,7 @@ export function FlowGauge({ feed, lang }: FlowGaugeProps) {
 
 const styles: Record<string, React.CSSProperties> = {
   gauge: {
-    padding: "10px 12px",
+    padding: "var(--sp-3)",
     borderBottom: "1px solid var(--line)",
     background: "var(--panel)",
     flexShrink: 0,
@@ -154,41 +170,56 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "baseline",
     justifyContent: "space-between",
-    marginBottom: 6,
+    gap: "var(--sp-2)",
+    marginBottom: "var(--sp-2)",
   },
   label: {
-    fontSize: 10,
+    fontSize: "var(--fs-micro)",
     fontWeight: 700,
     color: "var(--muted)",
-    letterSpacing: "0.07em",
+    letterSpacing: "0.1em",
     textTransform: "uppercase",
+    lineHeight: 1,
   },
   sessionPct: {
-    fontSize: 10,
+    fontSize: "var(--fs-micro)",
     color: "var(--muted)",
+    fontFamily: "var(--font-num)",
+    fontVariantNumeric: "tabular-nums",
   },
+  // The desk's single largest numeral — hero step of the v6 ramp.
   totalPrem: {
-    fontSize: 24,
+    fontSize: "var(--fs-num-lg)",
     fontWeight: 700,
     color: "var(--text)",
+    fontFamily: "var(--font-num)",
     fontVariantNumeric: "tabular-nums",
+    letterSpacing: "-0.02em",
     lineHeight: 1.1,
-    marginBottom: 8,
+    marginBottom: "var(--sp-2)",
   },
   splitRow: {
     display: "flex",
     alignItems: "center",
-    gap: 6,
-    marginBottom: 10,
+    gap: "var(--sp-2)",
+    marginBottom: "var(--sp-3)",
+  },
+  splitPct: {
+    fontSize: "var(--fs-micro)",
+    fontFamily: "var(--font-num)",
+    fontVariantNumeric: "tabular-nums",
+    minWidth: 30,
   },
   barTrack: {
     flex: 1,
     height: 6,
-    borderRadius: 3,
+    borderRadius: "var(--r-pill)",
     overflow: "hidden",
     display: "flex",
     background: "var(--panel-3)",
   },
+  // Call/put bars are NON-directional on purpose (honesty doctrine): the brand
+  // accent and the categorical violet, never --up/--down.
   callBar: {
     height: "100%",
     background: "var(--brand-2)",
@@ -196,30 +227,31 @@ const styles: Record<string, React.CSSProperties> = {
   },
   putBar: {
     height: "100%",
-    background: "var(--cat-2)",
+    background: TONE_PUT,
     transition: "width 0.4s ease",
   },
   statsRow: {
     display: "grid",
     gridTemplateColumns: "repeat(4, 1fr)",
-    gap: 8,
+    gap: "var(--sp-2)",
   },
   statCell: {
     display: "flex",
     flexDirection: "column",
-    gap: 2,
+    gap: "var(--sp-1)",
   },
   statK: {
-    fontSize: 10,
+    fontSize: "var(--fs-micro)",
     color: "var(--text-2)",
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
   statV: {
-    fontSize: 12,
+    fontSize: "var(--fs-ui)",
     fontWeight: 650,
     color: "var(--text)",
+    fontFamily: "var(--font-num)",
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
   },

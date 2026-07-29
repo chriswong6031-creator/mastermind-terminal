@@ -226,22 +226,28 @@ function estimateStep(strikes: StrikeRow[]): number {
   return diffs[Math.floor(diffs.length / 2)];
 }
 
-/** Badge color by tone */
+/**
+ * Flip violet. `--cat-2` is referenced across this desk but defined nowhere in the token
+ * set, so `color:var(--cat-2)` was silently dropped and every flip surface rendered in the
+ * inherited text colour. `--ai` IS defined and is the identical hue (#9d86ff) — the same
+ * one this file hardcodes as rgba(157,134,255,…) two hundred lines down. Kept behind
+ * --cat-2 so a real definition would still win.
+ */
+const FLIP_VIOLET = "var(--cat-2, var(--ai))";
+
+/**
+ * Badge hue by tone. This single value now drives the whole level tag — text, fill and
+ * ring — through the `.obs-tag` tint formula (`--c`). The old pairing carried a second,
+ * hardcoded rgba border table, and the fill was derived from it by string-replacing
+ * "0.35" with "0.08": the put-support tone was a literal red that stayed red under
+ * html[data-updown="east"] while its text token flipped to green.
+ */
 function toneColor(tone: BadgeTone): string {
   switch (tone) {
     case "cyan":   return "var(--brand-2)";
     case "red":    return "var(--down)";
     case "amber":  return "var(--signal)";
-    case "purple": return "var(--cat-2)";
-  }
-}
-
-function toneBorderColor(tone: BadgeTone): string {
-  switch (tone) {
-    case "cyan":   return "rgba(77,130,255,0.35)";
-    case "red":    return "rgba(240,86,107,0.35)";
-    case "amber":  return "rgba(232,179,57,0.35)";
-    case "purple": return "rgba(157,134,255,0.35)";
+    case "purple": return FLIP_VIOLET;
   }
 }
 
@@ -793,7 +799,7 @@ export function StrikeLadder({
               color={(lens.kind === "all" ? (netGexBn ?? 0) : lensValues.totalMn) >= 0 ? "var(--up)" : "var(--down)"}
               show={lens.kind === "all" ? netGexBn != null : lensValues.cellCount > 0} />
             <WallChip label={t("ladderWallsFlip")} value={levels.gammaFlip != null ? fmtStrike(levels.gammaFlip) : "—"}
-              color="var(--cat-2)" show={levels.gammaFlip != null} />
+              color={FLIP_VIOLET} show={levels.gammaFlip != null} />
             <WallChip label={t("ladderWallsCall")} value={levels.callWall != null ? fmtStrike(levels.callWall) : "—"}
               color="var(--brand-2)" show={levels.callWall != null} />
             <WallChip label={t("ladderWallsPut")} value={levels.putWall != null ? fmtStrike(levels.putWall) : "—"}
@@ -816,12 +822,14 @@ export function StrikeLadder({
 
       {/* ── Column headers ──────────────────────────────────────────────────── */}
       <div style={{ ...COL_HEADER_ROW, gridTemplateColumns: gridTemplate }}>
-        <span style={COL_STRIKE_HDR}>{t("ladderStrike")}</span>
-        <span style={COL_BAR_HDR}>
+        <span className="obs-lbl">{t("ladderStrike")}</span>
+        <span className="obs-lbl" style={COL_BAR_HDR}>
           {effSide === "split" ? `${t("ladderPutGex")} · ${t("ladderCallGex")}` : netLabel}
         </span>
         <span style={COL_TAG_HDR}>{/* level tag column — no header */}</span>
-        <span style={COL_VAL_HDR}>{effSide === "split" ? t("sideSplit") : netLabel}</span>
+        <span className="obs-lbl" style={COL_VAL_HDR}>
+          {effSide === "split" ? t("sideSplit") : netLabel}
+        </span>
       </div>
 
       {/* ── Scrollable chart body ─────────────────────────────────────────────── */}
@@ -857,7 +865,7 @@ export function StrikeLadder({
             : badge?.tone === "amber"
             ? "var(--signal)"
             : badge?.tone === "purple"
-            ? "var(--cat-2)"
+            ? FLIP_VIOLET
             : "var(--text-2)";
 
           return (
@@ -931,16 +939,12 @@ export function StrikeLadder({
                   )}
                 </div>
 
-                {/* Right-edge level tag */}
+                {/* Right-edge level tag — tint formula, one hue in via --c */}
                 <div style={TAG_COL}>
                   {badge && (
                     <span
-                      style={{
-                        ...LEVEL_TAG,
-                        color: toneColor(badge.tone),
-                        borderColor: toneBorderColor(badge.tone),
-                        background: `${toneBorderColor(badge.tone).replace("0.35", "0.08")}`,
-                      }}
+                      className="obs-tag sm"
+                      style={{ "--c": toneColor(badge.tone) } as React.CSSProperties}
                     >
                       {badgeLabel(badge.kind, t, narrow)}
                     </span>
@@ -1087,7 +1091,7 @@ export function StrikeLadder({
                     </span>
                     <span
                       className="v"
-                      style={{ color: "var(--muted)", fontSize: 9.5, minWidth: 26, textAlign: "right" }}
+                      style={{ color: "var(--muted)", fontSize: "var(--fs-micro)", minWidth: 28, textAlign: "right" }}
                     >
                       {(e.share * 100).toFixed(0)}%
                     </span>
@@ -1112,7 +1116,7 @@ export function StrikeLadder({
           </button>
         </div>
         {!narrow && (
-          <span style={{ fontSize: 9, color: "var(--muted)" }}>{t("scalePeakNote")}</span>
+          <span style={{ fontSize: "var(--fs-micro)", color: "var(--muted)" }}>{t("scalePeakNote")}</span>
         )}
       </div>
     </div>
@@ -1143,41 +1147,51 @@ const LADDER_OUTER: React.CSSProperties = {
 };
 
 const WALLS_ROW: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-  padding: "5px 10px", borderBottom: "1px solid var(--line-2)", background: "var(--panel)", flexShrink: 0,
+  display: "flex", alignItems: "center", gap: "var(--sp-2)", flexWrap: "wrap",
+  padding: "var(--sp-1) var(--sp-3)", borderBottom: "1px solid var(--line-2)",
+  background: "var(--panel)", flexShrink: 0,
 };
 
-const WALLS_CHIPS: React.CSSProperties = { display: "flex", gap: 6, flexWrap: "wrap" };
+const WALLS_CHIPS: React.CSSProperties = { display: "flex", gap: "var(--sp-2)", flexWrap: "wrap" };
 
 const WALL_CHIP: React.CSSProperties = {
   display: "flex", flexDirection: "column", gap: 1,
-  padding: "2px 8px", borderRadius: "var(--r-sm, 6px)",
-  border: "1px solid var(--line-2)", background: "var(--inset)", minWidth: 54,
+  padding: "var(--sp-1) var(--sp-2)", borderRadius: "var(--r-tile)",
+  border: "1px solid var(--line-2)", background: "var(--inset)", minWidth: 56,
 };
 
 const WALL_CHIP_LBL: React.CSSProperties = {
-  fontSize: 8, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700,
+  fontSize: "var(--fs-micro)", color: "var(--muted)", textTransform: "uppercase",
+  letterSpacing: "0.08em", fontWeight: 700, lineHeight: 1.3,
 };
 
-const WALL_CHIP_VAL: React.CSSProperties = { fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" };
+const WALL_CHIP_VAL: React.CSSProperties = {
+  fontSize: "var(--fs-ui)", fontWeight: 700,
+  fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
+};
 
-const RANGE_PRESET_GROUP: React.CSSProperties = { display: "flex", gap: 3, marginLeft: "auto" };
+const RANGE_PRESET_GROUP: React.CSSProperties = { display: "flex", gap: "var(--sp-1)", marginLeft: "auto" };
 
-const RANGE_CHIP: React.CSSProperties = { height: 27, minWidth: 42, fontSize: 10.5, padding: "0 9px" };
+const RANGE_CHIP: React.CSSProperties = { height: 28, minWidth: 44, fontSize: "var(--fs-micro)", padding: "0 var(--sp-2)" };
 
 const SCALE_FOOTER: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-  padding: "4px 10px", borderTop: "1px solid var(--line-2)", background: "var(--panel)", flexShrink: 0,
+  display: "flex", alignItems: "center", gap: "var(--sp-2)", flexWrap: "wrap",
+  padding: "var(--sp-1) var(--sp-3)", borderTop: "1px solid var(--line-2)",
+  background: "var(--panel)", flexShrink: 0,
 };
 
-const SCALE_TOGGLE: React.CSSProperties = { display: "flex", gap: 3 };
+const SCALE_TOGGLE: React.CSSProperties = { display: "flex", gap: "var(--sp-1)" };
 
-const SCALE_CHIP: React.CSSProperties = { height: 24, fontSize: 10, padding: "0 9px", fontVariantNumeric: "tabular-nums" };
+const SCALE_CHIP: React.CSSProperties = {
+  height: 24, fontSize: "var(--fs-micro)", padding: "0 var(--sp-2)",
+  fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
+};
 
 const LADDER_EMPTY: React.CSSProperties = {
-  padding: 24,
+  padding: "var(--sp-6)",
   color: "var(--muted)",
-  fontSize: 12,
+  fontSize: "var(--fs-ui)",
+  lineHeight: 1.5,
   textAlign: "center",
 };
 
@@ -1185,8 +1199,8 @@ const LADDER_EMPTY: React.CSSProperties = {
 const EXPIRY_BAR: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 6,
-  padding: "5px 10px",
+  gap: "var(--sp-2)",
+  padding: "var(--sp-1) var(--sp-3)",
   borderBottom: "1px solid var(--line-2)",
   background: "var(--panel)",
   flexShrink: 0,
@@ -1194,7 +1208,7 @@ const EXPIRY_BAR: React.CSSProperties = {
 };
 
 const LENS_NOTE: React.CSSProperties = {
-  fontSize: 9.5,
+  fontSize: "var(--fs-micro)",
   color: "var(--muted)",
   marginLeft: 2,
   flex: "1 1 160px",
@@ -1202,47 +1216,49 @@ const LENS_NOTE: React.CSSProperties = {
   lineHeight: 1.35,
 };
 
-const SIDE_GROUP: React.CSSProperties = { display: "flex", gap: 3 };
+const SIDE_GROUP: React.CSSProperties = { display: "flex", gap: "var(--sp-1)" };
 
-const SIDE_CHIP: React.CSSProperties = { height: 27, fontSize: 10.5, padding: "0 10px" };
+const SIDE_CHIP: React.CSSProperties = { height: 28, fontSize: "var(--fs-micro)", padding: "0 var(--sp-3)" };
 
 // Dropdown trigger
 const DD_TRIGGER: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  gap: 4,
-  padding: "4px 8px",
-  fontSize: 11,
+  gap: "var(--sp-1)",
+  padding: "var(--sp-1) var(--sp-2)",
+  fontSize: "var(--fs-label)",
   fontWeight: 600,
   color: "var(--text)",
   background: "var(--inset)",
   border: "1px solid var(--line)",
-  borderRadius: "var(--r-md)",
+  borderRadius: "var(--r-tile)",
   cursor: "pointer",
   whiteSpace: "nowrap",
 };
 
 const DD_CARET: React.CSSProperties = {
   marginLeft: "auto",
-  fontSize: 10,
+  fontSize: "var(--fs-micro)",
   color: "var(--muted)",
-  transition: "transform 0.15s",
+  transition: "transform var(--t-fast) var(--ease-out)",
   display: "inline-block",
 };
 
+// Glass menu — the house popover tokens rather than a one-off blur + panel fill.
 const DD_MENU: React.CSSProperties = {
   position: "absolute",
-  top: "calc(100% + 4px)",
+  top: "calc(100% + var(--sp-1))",
   left: 0,
   zIndex: 50,
-  background: "var(--panel-2)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-md)",
+  background: "var(--pop-bg)",
+  border: "1px solid var(--pop-edge)",
+  borderRadius: "var(--r-tile)",
   maxHeight: 300,
   overflowY: "auto",
   minWidth: 208,
-  boxShadow: "var(--shadow-1)",
-  backdropFilter: "blur(8px)",
+  boxShadow: "var(--pop-shadow), var(--pop-sheen)",
+  backdropFilter: "var(--pop-blur)",
+  WebkitBackdropFilter: "var(--pop-blur)",
 };
 
 const DD_OPT: React.CSSProperties = {
@@ -1250,20 +1266,20 @@ const DD_OPT: React.CSSProperties = {
   justifyContent: "space-between",
   alignItems: "center",
   width: "100%",
-  padding: "6px 12px",
-  fontSize: 11,
+  padding: "var(--sp-2) var(--sp-3)",
+  fontSize: "var(--fs-label)",
   fontWeight: 500,
   color: "var(--text-2)",
   background: "none",
   border: "none",
   cursor: "pointer",
   textAlign: "left",
-  gap: 8,
+  gap: "var(--sp-2)",
 };
 
 const DD_OPT_ACTIVE: React.CSSProperties = {
   color: "var(--signal)",
-  background: "rgba(232,179,57,0.09)",
+  background: "color-mix(in srgb, var(--signal) 9%, transparent)",
 };
 
 /** An expiry the per-strike snapshot cannot answer for — visible, but not selectable. */
@@ -1273,33 +1289,35 @@ const DD_OPT_OFF: React.CSSProperties = {
 };
 
 const DD_OPT_DTE: React.CSSProperties = {
-  fontSize: 9,
+  fontSize: "var(--fs-micro)",
   color: "var(--muted)",
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
   flexShrink: 0,
 };
 
 const DD_GROUP_LBL: React.CSSProperties = {
-  padding: "6px 12px 3px",
-  fontSize: 8.5,
+  padding: "var(--sp-2) var(--sp-3) var(--sp-1)",
+  fontSize: "var(--fs-micro)",
   fontWeight: 700,
   letterSpacing: "0.1em",
   textTransform: "uppercase",
   color: "var(--muted)",
   borderTop: "1px solid var(--line-2)",
-  marginTop: 3,
+  marginTop: "var(--sp-1)",
 };
 
 const QUICK_CHIP: React.CSSProperties = {
-  padding: "3px 8px",
-  fontSize: 10,
-  borderRadius: 8,
+  padding: "var(--sp-1) var(--sp-2)",
+  fontSize: "var(--fs-micro)",
+  borderRadius: "var(--r-tile)",
 };
 
-// Column headers
+// Column headers — labels ride .obs-lbl; these carry alignment only.
 const COL_HEADER_ROW: React.CSSProperties = {
   display: "grid",
-  padding: "3px 8px",
+  alignItems: "center",
+  padding: "var(--sp-2)",
   borderBottom: "1px solid var(--line-2)",
   background: "var(--panel)",
   position: "sticky",
@@ -1308,28 +1326,13 @@ const COL_HEADER_ROW: React.CSSProperties = {
   flexShrink: 0,
 };
 
-const COL_STRIKE_HDR: React.CSSProperties = {
-  fontSize: 10,
-  color: "var(--muted)",
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
-};
-
 const COL_BAR_HDR: React.CSSProperties = {
-  fontSize: 10,
-  color: "var(--muted)",
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
   textAlign: "center",
 };
 
 const COL_TAG_HDR: React.CSSProperties = {};
 
 const COL_VAL_HDR: React.CSSProperties = {
-  fontSize: 10,
-  color: "var(--muted)",
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
   textAlign: "right",
 };
 
@@ -1348,7 +1351,7 @@ const CENTER_LINE: React.CSSProperties = {
   top: 0,
   bottom: 0,
   width: 1,
-  background: "rgba(255,255,255,0.10)",
+  background: "var(--hairline-strong)",
   pointerEvents: "none",
   zIndex: 1,
 };
@@ -1357,48 +1360,51 @@ const STRIKE_ROW: React.CSSProperties = {
   display: "grid",
   alignItems: "center",
   height: 28,
-  borderBottom: "1px solid rgba(255,255,255,0.04)",
+  borderBottom: "1px solid var(--grid)",
   cursor: "default",
   position: "relative",
-  transition: "background 0.1s",
+  transition: "background var(--t-fast) var(--ease-out)",
 };
 
 const CURRENT_ROW: React.CSSProperties = {
-  background: "rgba(232,179,57,0.07)",
-  borderTop: "1px solid rgba(232,179,57,0.22)",
-  borderBottom: "1px solid rgba(232,179,57,0.22)",
+  background: "color-mix(in srgb, var(--signal) 7%, transparent)",
+  borderTop: "1px solid color-mix(in srgb, var(--signal) 22%, transparent)",
+  borderBottom: "1px solid color-mix(in srgb, var(--signal) 22%, transparent)",
 };
 
-// Zone tints (only on relevant rows)
+// Zone tints (only on relevant rows). The put-support tint was a hardcoded red that did
+// not flip with html[data-updown="east"] — its row's text and bar did.
 const ZONE_CW: React.CSSProperties = {
-  background: "rgba(77,130,255,0.04)",
+  background: "color-mix(in srgb, var(--brand-2) 4%, transparent)",
 };
 
 const ZONE_HVL: React.CSSProperties = {
-  background: "rgba(232,179,57,0.04)",
+  background: "color-mix(in srgb, var(--signal) 4%, transparent)",
 };
 
 const ZONE_PS: React.CSSProperties = {
-  background: "rgba(240,86,107,0.04)",
+  background: "color-mix(in srgb, var(--down) 4%, transparent)",
 };
 
 const STRIKE_COL: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 3,
-  padding: "0 6px",
+  gap: "var(--sp-1)",
+  padding: "0 var(--sp-2)",
   overflow: "hidden",
 };
 
 const STRIKE_PRICE: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--fs-ui)",
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
   flexShrink: 0,
 };
 
 const PCT_DIST: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: "var(--fs-micro)",
   color: "var(--muted)",
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
   flexShrink: 0,
 };
@@ -1447,24 +1453,13 @@ const TAG_COL: React.CSSProperties = {
   overflow: "hidden",
 };
 
-const LEVEL_TAG: React.CSSProperties = {
-  fontSize: 8.5,
-  fontWeight: 800,
-  letterSpacing: "0.08em",
-  padding: "1px 4px",
-  borderRadius: 3,
-  border: "1px solid",
-  flexShrink: 0,
-  whiteSpace: "nowrap",
-  lineHeight: 1.4,
-};
-
 const GEX_VAL: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--fs-label)",
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
   fontWeight: 600,
   textAlign: "right",
-  paddingRight: 8,
+  paddingRight: "var(--sp-2)",
   letterSpacing: "0.01em",
 };
 
@@ -1473,33 +1468,36 @@ const SPLIT_VAL_COL: React.CSSProperties = {
   flexDirection: "column",
   alignItems: "flex-end",
   justifyContent: "center",
-  paddingRight: 8,
+  paddingRight: "var(--sp-2)",
   overflow: "hidden",
 };
 
+/* 8.5px: two stacked legs inside a 28px row — the only sub-ramp size on the ladder, and
+   the split column is measured to it (TRACKS.wideSplit.val). */
 const SPLIT_VAL: React.CSSProperties = {
   fontSize: 8.5,
   lineHeight: 1.25,
   fontWeight: 600,
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
 };
 
 const FLIP_LINE: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
-  padding: "3px 8px",
+  gap: "var(--sp-2)",
+  padding: "var(--sp-1) var(--sp-2)",
   height: 24,
-  background: "rgba(157,134,255,0.08)",
-  borderTop: "1px solid rgba(157,134,255,0.32)",
-  borderBottom: "1px solid rgba(157,134,255,0.32)",
+  background: "color-mix(in srgb, var(--ai) 8%, transparent)",
+  borderTop: "1px solid color-mix(in srgb, var(--ai) 32%, transparent)",
+  borderBottom: "1px solid color-mix(in srgb, var(--ai) 32%, transparent)",
   zIndex: 2,
 };
 
 const FLIP_LABEL: React.CSSProperties = {
-  fontSize: 9,
+  fontSize: "var(--fs-micro)",
   fontWeight: 900,
-  color: "var(--cat-2)",
+  color: FLIP_VIOLET,
   letterSpacing: "0.18em",
   textTransform: "uppercase",
   flexShrink: 0,
@@ -1509,12 +1507,13 @@ const FLIP_GRADIENT: React.CSSProperties = {
   flex: 1,
   height: 1,
   background:
-    "linear-gradient(90deg, rgba(157,134,255,0.6) 0%, rgba(157,134,255,0.05) 100%)",
+    "linear-gradient(90deg, rgba(var(--ai-rgb),0.6) 0%, rgba(var(--ai-rgb),0.05) 100%)",
 };
 
 const FLIP_PRICE: React.CSSProperties = {
-  fontSize: 9,
-  color: "var(--cat-2)",
+  fontSize: "var(--fs-micro)",
+  color: FLIP_VIOLET,
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
   flexShrink: 0,
 };

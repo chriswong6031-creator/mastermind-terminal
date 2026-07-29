@@ -146,20 +146,35 @@ function t1Progress(entry: number | null, t1: number | null, last: number | null
   return Math.max(0, Math.min(100, (done / total) * 100));
 }
 
+/** One token per archetype — `.obs-tag` derives fill and ring from it. */
 function archetypeColor(tag: string): string {
   const t = tag.toLowerCase();
-  if (t === "resumption") return "#e8a33d";
-  if (t === "recovery")   return "#19c2c2";
-  if (t === "breakout")   return "#9d86ff";
-  return "var(--text-2)";
+  if (t === "resumption") return "var(--warn)";
+  if (t === "recovery")   return "var(--brand-2)";
+  if (t === "breakout")   return "var(--ai)";
+  return "var(--muted)";
 }
 
-function archetypeBg(tag: string): string {
-  const t = tag.toLowerCase();
-  if (t === "resumption") return "rgba(232,163,61,.15)";
-  if (t === "recovery")   return "rgba(25,194,194,.14)";
-  if (t === "breakout")   return "rgba(157,134,255,.15)";
-  return "rgba(134,141,156,.1)";
+/**
+ * Lifecycle-phase tint, shared by every Prophet surface that shows a phase chip
+ * (this card, the analysis header, the confidence panel) so one state never wears
+ * three colours. Directional states ride --up/--down and flip with data-updown.
+ *
+ *   pre_trigger      → muted     (armed, nothing has happened)
+ *   triggered_pre_t1 → brand-2   (live, working)
+ *   at_t1/T1→T2/T2   → up        (at or past target)
+ *   overtime         → warn      (past its horizon — caution, not direction)
+ *   invalidated      → down      (thesis broken)
+ */
+export function phaseTone(phase: string | null | undefined): string {
+  if (!phase) return "var(--text-2)";
+  if (phase === "invalidated") return "var(--down)";
+  if (phase === "overtime") return "var(--warn)";
+  if (phase.includes("t1") || phase.includes("t2")) {
+    return phase === "triggered_pre_t1" ? "var(--brand-2)" : "var(--up)";
+  }
+  if (phase === "pre_trigger") return "var(--muted)";
+  return "var(--text-2)";
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -180,7 +195,7 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
     : null;
   const isLocked    = minPct != null && minPct < 100;
   const holdLabel   = isLocked ? t("locked") : t("eligible");
-  const holdColor   = isLocked ? "var(--text-dim)" : "var(--up)";
+  const holdColor   = isLocked ? "var(--muted)" : "var(--up)";
 
   // P&L vs plan
   let pnlPct: number | null = null;
@@ -202,16 +217,9 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
   };
   const phaseDisplay = currentPhase ? (phaseMap[currentPhase] ?? currentPhase) : null;
   const isInvalidated = currentPhase === "invalidated";
-  const phaseColor = isInvalidated
-    ? "var(--down)"
-    : currentPhase?.includes("t1") || currentPhase?.includes("t2")
-    ? "var(--up)"
-    : "var(--text-2)";
+  const phaseColor = phaseTone(currentPhase);
 
   const dirColor = isBear ? "var(--down)" : "var(--up)";
-  const dirBg    = isBear
-    ? "color-mix(in srgb, var(--down) 15%, transparent)"
-    : "color-mix(in srgb, var(--up) 15%, transparent)";
 
   return (
     <div
@@ -229,18 +237,18 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
         <span style={TICKER_STYLE}>{plan.asset}</span>
 
         {/* Direction badge */}
-        <span style={{ ...CHIP_BASE, background: dirBg, color: dirColor, fontWeight: 700 }}>
+        <span
+          className="obs-tag"
+          style={{ ...CHIP_BASE, "--c": dirColor, fontWeight: 700 } as React.CSSProperties}
+        >
           {isBear ? `▼ ${t("bear")}` : `▲ ${t("bull")}`}
         </span>
 
         {/* Archetype tag */}
         {plan.archetype && (
           <span
-            style={{
-              ...CHIP_BASE,
-              background: archetypeBg(plan.archetype),
-              color: archetypeColor(plan.archetype),
-            }}
+            className="obs-tag"
+            style={{ ...CHIP_BASE, "--c": archetypeColor(plan.archetype) } as React.CSSProperties}
           >
             {plan.archetype}
           </span>
@@ -249,9 +257,12 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Phase chip */}
+        {/* Phase chip — lifecycle state, tinted by phaseTone() */}
         {phaseDisplay && (
-          <span style={{ ...CHIP_BASE, color: phaseColor, border: `1px solid ${phaseColor}22`, fontSize: 9 }}>
+          <span
+            className="obs-tag"
+            style={{ ...CHIP_BASE, "--c": phaseColor, fontSize: 9 } as React.CSSProperties}
+          >
             {phaseDisplay}
           </span>
         )}
@@ -260,15 +271,15 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
       {/* Row 2: entry / days / P&L */}
       <div style={{ ...ROW, marginTop: 6, gap: 12, fontSize: 10.5 }}>
         <span style={FACT}>
-          <span style={FACT_LABEL}>{t("entryLabel")}</span>
-          <span style={FACT_VAL}>{plan.entry != null ? `$${plan.entry.toFixed(2)}` : "—"}</span>
+          <span className="obs-lbl" style={FACT_LABEL}>{t("entryLabel")}</span>
+          <span className="num" style={FACT_VAL}>{plan.entry != null ? `$${plan.entry.toFixed(2)}` : "—"}</span>
         </span>
         <span style={FACT}>
           <span style={FACT_LABEL}></span>
-          <span style={{ ...FACT_VAL, color: "var(--muted)" }}>{days}{t("daysActive")}</span>
+          <span className="num" style={{ ...FACT_VAL, color: "var(--muted)" }}>{days}{t("daysActive")}</span>
         </span>
         {pnlPct != null && (
-          <span style={{ marginLeft: "auto", font: "600 11px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: pnlPct >= 0 ? "var(--up)" : "var(--down)" }}>
+          <span className="num" style={{ marginLeft: "auto", font: "600 11px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: pnlPct >= 0 ? "var(--up)" : "var(--down)" }}>
             {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%
             <span style={{ font: "500 9px/1 var(--font-ui)", color: "var(--muted)", marginLeft: 3 }}>
               vs plan
@@ -281,7 +292,7 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
       {t1pct != null && (
         <div style={{ marginTop: 7 }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-            <span style={{ font: "500 9.5px/1 var(--font-ui)", color: "var(--muted)" }}>{t1pct.toFixed(0)}% {t("t1Progress")}</span>
+            <span className="num" style={{ font: "500 9.5px/1 var(--font-ui)", fontVariantNumeric: "tabular-nums", color: "var(--muted)" }}>{t1pct.toFixed(0)}% {t("t1Progress")}</span>
           </div>
           <div style={PROGRESS_TRACK}>
             <div
@@ -301,7 +312,7 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
       {minPct != null && (
         <div style={{ marginTop: 5 }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3, alignItems: "center" }}>
-            <span style={{ font: "500 9.5px/1 var(--font-ui)", color: "var(--muted)" }}>
+            <span className="num" style={{ font: "500 9.5px/1 var(--font-ui)", fontVariantNumeric: "tabular-nums", color: "var(--muted)" }}>
               {days}d / {minHold}d {t("minHold")}
             </span>
             <span style={{ font: "600 9px/1 var(--font-ui)", color: holdColor }}>
@@ -328,6 +339,7 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
           style={EXPAND_BTN}
           onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
           aria-expanded={expanded}
+          aria-label={expanded ? t("optionCollapse") : t("optionExpand")}
         >
           {expanded ? "▲" : "▼"}
         </button>
@@ -363,13 +375,12 @@ const TICKER_STYLE: React.CSSProperties = {
   letterSpacing: ".01em",
 };
 
+/** Dense overrides for `.obs-tag` in the card's chip row; the tint rides `--c`. */
 const CHIP_BASE: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  font: "600 10px/1 var(--font-ui)",
-  borderRadius: "var(--r-pill)",
-  padding: "3px 7px",
-  whiteSpace: "nowrap",
+  fontSize: 10,
+  fontWeight: 600,
+  padding: "3px 8px",
+  gap: 3,
 };
 
 const FACT: React.CSSProperties = {

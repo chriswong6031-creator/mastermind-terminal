@@ -723,7 +723,7 @@ export function SurfacePane({
 
         {/* Opacity */}
         <label style={SLIDER_WRAP}>
-          <span style={SLIDER_LBL}>{t("opacity")}</span>
+          <span className="obs-lbl">{t("opacity")}</span>
           <input type="range" min={0} max={100} step={5} value={Math.round(opacity * 100)}
             aria-label={t("opacityAria")} style={SLIDER}
             onChange={(e) => setOpacity(Number(e.target.value) / 100)} />
@@ -732,7 +732,7 @@ export function SurfacePane({
 
         {/* Strike range */}
         <label style={SLIDER_WRAP}>
-          <span style={SLIDER_LBL}>{t("range")}</span>
+          <span className="obs-lbl">{t("range")}</span>
           <input type="range" min={0} max={RANGE_STOPS.length - 1} step={1}
             value={Math.max(0, RANGE_STOPS.indexOf(rangeQ))}
             aria-label={t("strikeRangeAria")} style={SLIDER}
@@ -743,8 +743,8 @@ export function SurfacePane({
         {/* Legend — reads the ACTIVE metric's theme pair, so it keeps telling the truth
             after a preset switch (and still flips with --up/--down on the default). */}
         <div style={LEGEND}>
-          <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].pos})` }} />{t("legendPos")}</span>
-          <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].neg})` }} />{t("legendNeg")}</span>
+          <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].pos})` }} /><span className="obs-lbl">{t("legendPos")}</span></span>
+          <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].neg})` }} /><span className="obs-lbl">{t("legendNeg")}</span></span>
         </div>
       </div>
       )}
@@ -755,7 +755,7 @@ export function SurfacePane({
 
         {/* Quad cell: the metric name lives on the cell itself (no tab strip here). */}
         {isCell && (
-          <div style={CELL_BADGE}>
+          <div className="obs-lbl" style={CELL_BADGE}>
             <span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].pos})`, marginRight: 5 }} />
             {metricLabel}
             {cellAccruing && <span style={CELL_ACCRUING}>{t("quadAccruing")}</span>}
@@ -774,20 +774,32 @@ export function SurfacePane({
           </div>
         )}
 
-        {/* As-of + cadence stamp (bottom-right) — full pane only; in a quad the shared
-            replay bar carries one stamp for all four cells. */}
+        {/* Provenance row (bottom-right) — source · as-of · cadence · session date, from
+            the frame's own fields. Full pane only; in a quad the shared replay bar carries
+            one stamp for all four cells. The dot is the standard live marker and appears
+            only at the live head, never on a scrubbed or archived read. */}
         {hasData && !isCell && (
-          <div style={STAMP_PILL}>
-            {asofLabel && <span>{t("asOf")} {asofLabel}</span>}
-            {frame?.cadence && <span style={{ color: "var(--muted)", marginLeft: 8 }}>· {frame.cadence} {t("cadenceLabel")}</span>}
-            {frame?.session_date && <span style={{ color: "var(--muted)", marginLeft: 8 }}>· {frame.session_date}</span>}
+          <div className="obs-asof" style={STAMP_PILL}>
+            {live && !archived && <span className="dot" aria-hidden />}
+            <span>{t("sourceOpra")}</span>
+            {asofLabel && <span style={{ color: "var(--text-2)" }}>· {t("asOf")} {asofLabel}</span>}
+            {frame?.cadence && <span>· {frame.cadence} {t("cadenceLabel")}</span>}
+            {frame?.session_date && <span>· {frame.session_date}</span>}
           </div>
         )}
 
-        {/* Empty / loading */}
+        {/* Empty / loading — never a bare "no data": the second line names WHICH of
+            still-loading / greek-not-carried / nothing-painted-yet applies. */}
         {!hasData && (
           <div style={EMPTY}>
-            {loading ? t("surfaceLoading") : cellAccruing ? t("metricAccruing") : t("surfaceEmpty")}
+            <span style={EMPTY_TITLE}>
+              {loading ? t("surfaceLoading") : cellAccruing ? t("metricAccruing") : t("surfaceEmpty")}
+            </span>
+            {!isCell && (
+              <span style={EMPTY_WHY}>
+                {loading ? t("surfaceLoadingWhy") : t("surfaceEmptyWhy")}
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -882,68 +894,90 @@ export function SurfacePane({
 
 const PANE: React.CSSProperties = { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" };
 
+// 16px horizontal padding is the family's shared left rail (toolbar → controls → replay
+// bar → session strip all stack on one vertical edge).
 const CONTROLS: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
-  padding: "8px 14px", borderBottom: "1px solid var(--line)", background: "var(--panel)", flexShrink: 0,
+  display: "flex", alignItems: "center", gap: "var(--sp-3)", flexWrap: "wrap",
+  padding: "var(--sp-2) var(--sp-4)", borderBottom: "1px solid var(--line)",
+  background: "var(--panel)", flexShrink: 0,
 };
 
-const GROUP: React.CSSProperties = { display: "flex", gap: 3, alignItems: "center" };
+const GROUP: React.CSSProperties = { display: "flex", gap: "var(--sp-1)", alignItems: "center" };
 
-const CHIP: React.CSSProperties = { height: 24, minWidth: 30, fontSize: 11, fontWeight: 600, padding: "0 8px" };
+const CHIP: React.CSSProperties = {
+  height: 28, minWidth: 34, justifyContent: "center",
+  fontSize: "var(--fs-label)", fontWeight: 600, padding: "0 var(--sp-2)",
+};
 
 const DISABLED_CHIP: React.CSSProperties = { opacity: 0.4, cursor: "not-allowed" };
 
 const ACCRUING_DOT: React.CSSProperties = { marginLeft: 3, color: "var(--signal)", fontWeight: 900 };
 
-const SLIDER_WRAP: React.CSSProperties = { display: "flex", alignItems: "center", gap: 5 };
+const SLIDER_WRAP: React.CSSProperties = { display: "flex", alignItems: "center", gap: "var(--sp-2)" };
 
-const SLIDER_LBL: React.CSSProperties = { fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" };
+const SLIDER: React.CSSProperties = { width: 64, height: 4, accentColor: "var(--brand)", cursor: "pointer" };
 
-const SLIDER: React.CSSProperties = { width: 64, height: 3, accentColor: "var(--brand)", cursor: "pointer" };
+const SLIDER_VAL: React.CSSProperties = {
+  fontSize: "var(--fs-micro)", color: "var(--text-2)", minWidth: 30,
+  fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
+};
 
-const SLIDER_VAL: React.CSSProperties = { fontSize: 10, color: "var(--text-2)", minWidth: 30, fontVariantNumeric: "tabular-nums" };
+const LEGEND: React.CSSProperties = {
+  display: "flex", gap: "var(--sp-3)", marginLeft: "auto", alignItems: "center",
+};
 
-const LEGEND: React.CSSProperties = { display: "flex", gap: 10, marginLeft: "auto", fontSize: 10, color: "var(--text-2)" };
-
-const LEGEND_ITEM: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 4 };
+const LEGEND_ITEM: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: "var(--sp-1)" };
 
 const SWATCH: React.CSSProperties = { display: "inline-block", width: 10, height: 8, borderRadius: 2 };
 
 const CHART_AREA: React.CSSProperties = { position: "relative", flex: 1, minHeight: 260 };
 
 const READOUT_PILL: React.CSSProperties = {
-  position: "absolute", top: 10, left: 10, zIndex: 5,
-  display: "flex", alignItems: "center", gap: 7,
-  padding: "5px 10px", fontSize: 11,
+  position: "absolute", top: "var(--sp-3)", left: "var(--sp-3)", zIndex: 5,
+  display: "flex", alignItems: "center", gap: "var(--sp-2)",
+  padding: "5px var(--sp-3)", fontSize: "var(--fs-label)",
   background: "color-mix(in srgb, var(--panel) 88%, transparent)",
-  border: "1px solid var(--line-2, var(--line))", borderRadius: "var(--r-md, 8px)",
+  border: "1px solid var(--line-2, var(--line))", borderRadius: "var(--r-tile)",
   backdropFilter: "blur(6px)", pointerEvents: "none",
   fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
 };
 
+/** Provenance row over the field: .obs-asof owns the type, this holds it to the corner
+ *  and keeps it legible against the paint. .obs-asof's font shorthand resets numeric
+ *  variants, so tabular-nums is re-declared (doctrine law 1). */
 const STAMP_PILL: React.CSSProperties = {
-  position: "absolute", bottom: 8, right: 10, zIndex: 5,
-  fontSize: 10, color: "var(--text-2)",
-  padding: "3px 8px",
+  position: "absolute", bottom: "var(--sp-2)", right: "var(--sp-3)", zIndex: 5,
+  margin: 0, flexWrap: "wrap", gap: "var(--sp-1)",
+  padding: "3px var(--sp-2)",
   background: "color-mix(in srgb, var(--panel) 80%, transparent)",
-  borderRadius: "var(--r-sm, 6px)", pointerEvents: "none",
+  borderRadius: "var(--r-tile)", pointerEvents: "none",
   fontVariantNumeric: "tabular-nums",
 };
 
 const EMPTY: React.CSSProperties = {
-  position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-  color: "var(--muted)", fontSize: 13, pointerEvents: "none",
+  position: "absolute", inset: 0,
+  display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+  gap: "var(--sp-2)", padding: "0 var(--sp-6)", textAlign: "center", pointerEvents: "none",
 };
 
-const NOTE: React.CSSProperties = { margin: "8px 14px", flexShrink: 0 };
+const EMPTY_TITLE: React.CSSProperties = {
+  fontSize: "var(--fs-emph)", fontWeight: 600, color: "var(--text-2)",
+};
 
+const EMPTY_WHY: React.CSSProperties = {
+  fontSize: "var(--fs-label)", lineHeight: 1.55, color: "var(--muted)", maxWidth: 440,
+};
+
+const NOTE: React.CSSProperties = { margin: "var(--sp-2) var(--sp-4)", flexShrink: 0 };
+
+/** .obs-lbl supplies the micro-label type; only the pill chrome and the brighter
+ *  on-canvas colour are set here (muted would sink into the heat field). */
 const CELL_BADGE: React.CSSProperties = {
-  position: "absolute", top: 6, left: 8, zIndex: 5,
+  position: "absolute", top: "var(--sp-2)", left: "var(--sp-2)", zIndex: 5,
   display: "inline-flex", alignItems: "center",
-  fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase",
-  color: "var(--text-2)", padding: "2px 7px",
+  color: "var(--text-2)", padding: "3px var(--sp-2)",
   background: "color-mix(in srgb, var(--panel) 82%, transparent)",
-  borderRadius: "var(--r-sm, 6px)", pointerEvents: "none",
+  borderRadius: "var(--r-tile)", pointerEvents: "none",
 };
 
 const CELL_ACCRUING: React.CSSProperties = {

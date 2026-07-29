@@ -119,7 +119,7 @@ export function SurfaceStylePopover({ lang, theme, open, onOpenChange, onChange 
       <button
         ref={btnRef}
         className={`obs-chip${open ? " on" : ""}`}
-        style={{ height: 24, fontSize: 11, fontWeight: 600, padding: "0 10px" }}
+        style={TRIGGER}
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => {
@@ -183,7 +183,7 @@ export function SurfaceStylePopover({ lang, theme, open, onOpenChange, onChange 
             ))}
           </div>
 
-          <div className="obs-lbl" style={{ margin: "12px 0 3px" }}>{t("stylePerMetric")}</div>
+          <div className="obs-lbl" style={{ margin: "var(--sp-3) 0 var(--sp-1)" }}>{t("stylePerMetric")}</div>
           {THEME_METRICS.map((metric) => {
             const pair = effectivePair(theme, metric);
             const inherit = INHERIT_VAR[metric];
@@ -219,3 +219,10 @@ export function SurfaceStylePopover({ lang, theme, open, onOpenChange, onChange 
     </div>
   );
 }
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+/** Level with the toolbar chips it sits beside (view / agg / root shortcuts). */
+const TRIGGER: React.CSSProperties = {
+  height: 28, fontSize: "var(--fs-label)", fontWeight: 600, padding: "0 var(--sp-3)",
+};

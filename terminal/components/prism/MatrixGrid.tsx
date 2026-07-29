@@ -172,6 +172,12 @@ function tier(mag: number, breaks: [number, number, number, number]): 0 | 1 | 2 
   return 5;
 }
 
+/**
+ * Heat fill. Signed lenses ride the --up-rgb / --down-rgb triplets so the
+ * East-Asian red-up flip (html[data-updown="east"]) repaints the whole matrix;
+ * the unsigned lenses (OI / VOL) ride the neutral brand accent because a
+ * magnitude-only reading must never look directional.
+ */
 function cellBg(
   value: number | null,
   t5: 0 | 1 | 2 | 3 | 4 | 5,
@@ -184,44 +190,48 @@ function cellBg(
     const alphas = [0, 0.06, 0.14, 0.26, 0.44, 0.70];
     const a = alphas[t5];
     return isPos
-      ? `rgba(77,210,120,${a})`
-      : `rgba(240,86,107,${a})`;
+      ? `rgba(var(--up-rgb),${a})`
+      : `rgba(var(--down-rgb),${a})`;
   }
 
-  const alphas = [0, 0.07, 0.15, 0.27, 0.45, 0.72];
-  return `rgba(77,210,200,${alphas[t5]})`;
+  const pcts = [0, 7, 15, 27, 45, 72];
+  return `color-mix(in srgb, var(--brand-2) ${pcts[t5]}%, transparent)`;
 }
 
 function cellTextColor(value: number | null, lens: ActiveLens, t5: number): string {
   if (t5 === 0) return "var(--text-3)";
   if (lens === "GEX" || lens === "DOI") {
     return (value ?? 0) >= 0
-      ? "rgba(100,230,150,0.95)"
-      : "rgba(240,120,130,0.95)";
+      ? "color-mix(in srgb, #fff 26%, var(--up))"
+      : "color-mix(in srgb, #fff 26%, var(--down))";
   }
-  return "rgba(77,210,200,0.95)";
+  return "color-mix(in srgb, #fff 26%, var(--brand-2))";
 }
 
-type BadgeInfo = { tag: string; tone: "cyan" | "red" | "amber" | "purple" | "orange" };
+/** `tagKey` is a prismStrings key — the badge text is bilingual, never baked English. */
+type BadgeInfo = {
+  tagKey: "levelFlip" | "levelWall" | "levelSupport" | "levelMagnet" | "levelMaxPain";
+  tone: "brand" | "down" | "signal" | "ai" | "neutral";
+};
 
 function strikeBadge(strike: number, levels: MatrixLevels, step: number): BadgeInfo | null {
   const prox = step * 1.2;
   const { gamma_flip, call_wall, put_support, hvl, max_pain } = levels;
 
   if (gamma_flip != null && Math.abs(strike - gamma_flip) < prox) {
-    return { tag: "FLIP", tone: "purple" };
+    return { tagKey: "levelFlip", tone: "ai" };
   }
   if (call_wall != null && Math.abs(strike - call_wall) < prox) {
-    return { tag: "WALL", tone: "cyan" };
+    return { tagKey: "levelWall", tone: "brand" };
   }
   if (put_support != null && Math.abs(strike - put_support) < prox) {
-    return { tag: "SUPPORT", tone: "red" };
+    return { tagKey: "levelSupport", tone: "down" };
   }
   if (hvl != null && Math.abs(strike - hvl) < prox) {
-    return { tag: "MAGNET", tone: "amber" };
+    return { tagKey: "levelMagnet", tone: "signal" };
   }
   if (max_pain != null && Math.abs(strike - max_pain) < prox) {
-    return { tag: "MAX PAIN", tone: "orange" };
+    return { tagKey: "levelMaxPain", tone: "neutral" };
   }
   return null;
 }
@@ -235,25 +245,29 @@ function estimateStep(strikes: number[]): number {
   return diffs[Math.floor(diffs.length / 2)];
 }
 
+/**
+ * One token per tone — `.obs-tag` derives the badge's fill and ring from it, so a
+ * badge can never drift out of the palette. (`--cat-2` used to sit here for FLIP and
+ * is defined nowhere: the property fell back to inherit, so FLIP rendered untinted.)
+ */
 function badgeColor(tone: BadgeInfo["tone"]): string {
   switch (tone) {
-    case "cyan":   return "var(--brand-2)";
-    case "red":    return "var(--down)";
-    case "amber":  return "var(--signal)";
-    case "purple": return "var(--cat-2)";
-    case "orange": return "rgba(240,140,60,0.9)";
+    case "brand":   return "var(--brand-2)";
+    case "down":    return "var(--down)";
+    case "signal":  return "var(--signal)";
+    case "ai":      return "var(--ai)";
+    case "neutral": return "var(--text-2)";
   }
 }
 
-function badgeBorder(tone: BadgeInfo["tone"]): string {
-  switch (tone) {
-    case "cyan":   return "rgba(77,130,255,0.35)";
-    case "red":    return "rgba(240,86,107,0.35)";
-    case "amber":  return "rgba(232,179,57,0.35)";
-    case "purple": return "rgba(157,134,255,0.35)";
-    case "orange": return "rgba(240,140,60,0.3)";
-  }
-}
+/** The five level markers, in badge precedence order — drives the legend under the grid. */
+const LEGEND_ITEMS: BadgeInfo[] = [
+  { tagKey: "levelFlip",    tone: "ai" },
+  { tagKey: "levelWall",    tone: "brand" },
+  { tagKey: "levelSupport", tone: "down" },
+  { tagKey: "levelMagnet",  tone: "signal" },
+  { tagKey: "levelMaxPain", tone: "neutral" },
+];
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -439,7 +453,7 @@ export function MatrixGrid({
           <thead>
             <tr>
               {/* Strike header */}
-              <th style={TH_STRIKE}>{t("colStrike")}</th>
+              <th className="obs-lbl" style={TH_STRIKE}>{t("colStrike")}</th>
               {/* Level badge header */}
               <th style={TH_BADGE} />
               {/* Expiry column headers */}
@@ -504,16 +518,16 @@ export function MatrixGrid({
                     {/* Strike label cell */}
                     <td style={{
                       ...TD_STRIKE,
-                      background: isSpot ? "rgba(77,130,255,0.06)" : "var(--bg)",
+                      background: isSpot ? SPOT_TINT : "var(--bg)",
                     }}>
                       {isSpot ? (
-                        // Spot row: teal chip with spot price
+                        // Spot row: brand-tinted chip carrying the live spot price
                         <div style={SPOT_CHIP_WRAP}>
-                          <span style={SPOT_CHIP_LABEL}>
+                          <span className="num" style={SPOT_CHIP_LABEL}>
                             {fmtStrike(strike)}
                           </span>
                           {spot != null && (
-                            <span style={SPOT_PRICE_CHIP}>
+                            <span className="obs-tag num" style={SPOT_PRICE_CHIP}>
                               {spot.toFixed(2)}
                             </span>
                           )}
@@ -521,6 +535,7 @@ export function MatrixGrid({
                       ) : (
                         <div style={STRIKE_WRAP}>
                           <span
+                            className="num"
                             style={{
                               ...STRIKE_NUM,
                               color: badge
@@ -532,7 +547,7 @@ export function MatrixGrid({
                             {fmtStrike(strike)}
                           </span>
                           {spotPctStr && (
-                            <span style={SPOT_PCT}>{spotPctStr}</span>
+                            <span className="num" style={SPOT_PCT}>{spotPctStr}</span>
                           )}
                         </div>
                       )}
@@ -541,17 +556,14 @@ export function MatrixGrid({
                     {/* Badge cell */}
                     <td style={{
                       ...TD_BADGE,
-                      background: isSpot ? "rgba(77,130,255,0.06)" : "var(--bg)",
+                      background: isSpot ? SPOT_TINT : "var(--bg)",
                     }}>
                       {badge && (
                         <span
-                          style={{
-                            ...BADGE,
-                            color: badgeColor(badge.tone),
-                            borderColor: badgeBorder(badge.tone),
-                          }}
+                          className="obs-tag"
+                          style={{ ...BADGE, "--c": badgeColor(badge.tone) } as React.CSSProperties}
                         >
-                          {badge.tag}
+                          {t(badge.tagKey)}
                         </span>
                       )}
                     </td>
@@ -582,6 +594,7 @@ export function MatrixGrid({
                         >
                           {showText && (
                             <span
+                              className="num"
                               style={{
                                 ...CELL_TEXT,
                                 color: textColor,
@@ -604,6 +617,7 @@ export function MatrixGrid({
                     >
                       {sigmaT5 >= 1 && sigmaVal != null && sigmaVal !== 0 && (
                         <span
+                          className="num"
                           style={{
                             ...CELL_TEXT,
                             color: cellTextColor(sigmaVal, activeLens, sigmaT5),
@@ -623,6 +637,26 @@ export function MatrixGrid({
         </table>
       </div>
 
+      {/* Level-marker legend — the badge key, so a WALL/FLIP tag never needs decoding */}
+      <div style={LEGEND_ROW}>
+        <span className="obs-lbl">{t("legendTitle")}</span>
+        {LEGEND_ITEMS.map((item) => (
+          <span
+            key={item.tagKey}
+            className="obs-tag"
+            style={{ ...BADGE, "--c": badgeColor(item.tone) } as React.CSSProperties}
+          >
+            {t(item.tagKey)}
+          </span>
+        ))}
+        <span
+          className="obs-tag"
+          style={{ ...BADGE, "--c": "var(--brand-2)" } as React.CSSProperties}
+        >
+          {t("levelSpot")}
+        </span>
+      </div>
+
       {/* Hover tooltip */}
       {tooltip && (
         <div
@@ -632,7 +666,7 @@ export function MatrixGrid({
             top: Math.max(8, tooltip.y),
           }}
         >
-          <div style={TIP_TITLE}>
+          <div className="num" style={TIP_TITLE}>
             ${fmtStrike(tooltip.strike)}{" "}
             <span style={TIP_EXP}>{fmtExpShort(tooltip.expiry)}</span>{" "}
             <span style={TIP_DTE}>
@@ -647,8 +681,11 @@ export function MatrixGrid({
           <TipRow
             label={t("tipNetGex")}
             value={fmtVal(tooltip.cell.gex ?? null, "GEX")}
+            /* Matches the grid's own signed fill: positive reads up, negative reads
+               down. (It used to read brand-blue for positive, which said "neutral"
+               about the exact number the cell had just painted green.) */
             highlight={
-              (tooltip.cell.gex ?? 0) >= 0 ? "var(--brand-2)" : "var(--down)"
+              (tooltip.cell.gex ?? 0) >= 0 ? "var(--up)" : "var(--down)"
             }
           />
           {tooltip.cell.delta_oi && (
@@ -686,8 +723,8 @@ function TipRow({
 }) {
   return (
     <div style={TIP_ROW}>
-      <span style={TIP_KEY}>{label}</span>
-      <span style={{ ...TIP_VAL, ...(highlight ? { color: highlight } : {}) }}>
+      <span className="obs-lbl">{label}</span>
+      <span className="num" style={{ ...TIP_VAL, ...(highlight ? { color: highlight } : {}) }}>
         {value}
       </span>
     </div>
@@ -722,6 +759,7 @@ const TABLE: React.CSSProperties = {
   fontVariantNumeric: "tabular-nums",
 };
 
+/** Type/colour come from `.obs-lbl` — only geometry stays inline. */
 const TH_STRIKE: React.CSSProperties = {
   position: "sticky",
   left: 0,
@@ -729,13 +767,8 @@ const TH_STRIKE: React.CSSProperties = {
   background: "var(--panel)",
   padding: "4px 8px",
   borderBottom: "1px solid var(--line)",
-  fontSize: 9,
-  color: "var(--muted)",
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
   textAlign: "left",
   minWidth: 62,
-  fontWeight: 600,
 };
 
 const TH_BADGE: React.CSSProperties = {
@@ -806,10 +839,13 @@ const STRIKE_ROW: React.CSSProperties = {
   transition: "background 0.06s",
 };
 
-/** Spot row: subtle teal ambient */
+/** Spot row: subtle brand ambient */
 const SPOT_ROW: React.CSSProperties = {
-  outline: "1px solid rgba(77,130,255,0.28)",
+  outline: "1px solid color-mix(in srgb, var(--brand-2) 28%, transparent)",
 };
+
+/** Sticky first/second column fill on the spot row (keeps them opaque while scrolling). */
+const SPOT_TINT = "color-mix(in srgb, var(--brand-2) 6%, var(--bg))";
 
 // ── Strike cell ──────────────────────────────────────────────────────────────
 
@@ -854,18 +890,14 @@ const SPOT_CHIP_LABEL: React.CSSProperties = {
   fontVariantNumeric: "tabular-nums",
 };
 
-/** Spot price chip — brand-teal token, matches competitor pattern */
+/** Spot price chip — `.obs-tag` supplies the tint; only the dense metrics are inline. */
 const SPOT_PRICE_CHIP: React.CSSProperties = {
+  "--c": "var(--brand-2)",
   fontSize: 8,
   fontWeight: 700,
-  color: "var(--brand-2)",
-  background: "rgba(77,130,255,0.14)",
-  border: "1px solid rgba(77,130,255,0.35)",
-  borderRadius: 3,
-  padding: "0 4px",
-  fontVariantNumeric: "tabular-nums",
+  padding: "1px 5px",
   letterSpacing: "0.01em",
-};
+} as React.CSSProperties;
 
 // ── Badge cell ───────────────────────────────────────────────────────────────
 
@@ -880,15 +912,25 @@ const TD_BADGE: React.CSSProperties = {
   verticalAlign: "middle",
 };
 
+/** Dense override for `.obs-tag` inside a 24px matrix row (and in the legend). */
 const BADGE: React.CSSProperties = {
-  fontSize: 7,
-  fontWeight: 900,
+  fontSize: 7.5,
+  fontWeight: 800,
   letterSpacing: "0.06em",
-  padding: "1px 3px",
-  borderRadius: 2,
-  border: "1px solid",
-  display: "inline-block",
-  whiteSpace: "nowrap",
+  padding: "2px 5px",
+  gap: 3,
+};
+
+/** Legend strip under the grid — the level-badge key. */
+const LEGEND_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--sp-2)",
+  flexWrap: "wrap",
+  padding: "var(--sp-2) 14px",
+  borderTop: "1px solid var(--line-2)",
+  background: "var(--panel)",
+  flexShrink: 0,
 };
 
 // ── Data cells ───────────────────────────────────────────────────────────────
@@ -924,12 +966,12 @@ const CELL_TEXT: React.CSSProperties = {
   letterSpacing: "-0.01em",
 };
 
-// ── Spot separator (thin teal accent line) ───────────────────────────────────
+// ── Spot separator (thin brand accent line) ──────────────────────────────────
 
 const SPOT_SEPARATOR: React.CSSProperties = {
   padding: 0,
   height: 2,
-  background: "rgba(77,130,255,0.45)",
+  background: "color-mix(in srgb, var(--brand-2) 45%, transparent)",
 };
 
 // ── Tooltip ──────────────────────────────────────────────────────────────────
@@ -938,10 +980,10 @@ const TOOLTIP: React.CSSProperties = {
   position: "absolute",
   background: "var(--panel-2)",
   border: "1px solid var(--line-3)",
-  borderRadius: "var(--r-md)",
-  padding: "8px 10px",
+  borderRadius: "var(--r-tile)",
+  padding: "10px 12px",
   fontSize: 11,
-  boxShadow: "var(--shadow-1)",
+  boxShadow: "var(--shadow-2)",
   pointerEvents: "none",
   zIndex: 100,
   minWidth: 200,
@@ -975,12 +1017,9 @@ const TIP_SEP: React.CSSProperties = {
 const TIP_ROW: React.CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
+  alignItems: "baseline",
   gap: 12,
-  marginTop: 2,
-};
-
-const TIP_KEY: React.CSSProperties = {
-  color: "var(--muted)",
+  marginTop: 3,
 };
 
 const TIP_VAL: React.CSSProperties = {

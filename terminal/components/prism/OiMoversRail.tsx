@@ -148,7 +148,7 @@ export function OiMoversRail({ movers, lang }: OiMoversRailProps) {
     <div className="obs-card" style={RAIL_OUTER}>
       <div className="obs-card-hd" style={RAIL_HEADER}>
         <span className="obs-lbl">{t("oiMoversTitle")}</span>
-        <span style={RAIL_COUNT}>{processed.length}</span>
+        <span className="num" style={RAIL_COUNT}>{processed.length}</span>
       </div>
 
       <div style={ROW_LIST}>
@@ -162,40 +162,50 @@ export function OiMoversRail({ movers, lang }: OiMoversRailProps) {
               {/* Left: root + right + strike */}
               <div style={LEFT_COL}>
                 <span style={ROOT_LABEL}>{m.root}</span>
+                {/*
+                  Call/put keep their existing NON-directional reading: the word names
+                  the contract right, not an asserted trade direction — only the tint
+                  formula changed (`--c` → `.obs-tag`), never the semantics.
+                */}
                 <span
+                  className="obs-tag"
                   style={{
                     ...SIDE_CHIP,
-                    color: isCall ? "var(--brand-2)" : "var(--down)",
-                    borderColor: isCall ? "rgba(77,130,255,0.3)" : "rgba(240,86,107,0.3)",
-                    background: isCall
-                      ? "rgba(77,130,255,0.08)"
-                      : "rgba(240,86,107,0.08)",
-                  }}
+                    "--c": isCall ? "var(--brand-2)" : "var(--down)",
+                  } as React.CSSProperties}
                 >
                   {isCall ? t("oiMoversCall") : t("oiMoversPut")}
                 </span>
-                <span style={STRIKE_LABEL}>{m.strike}</span>
-                <span style={EXP_LABEL}>{fmtExpiry(m.exp)}</span>
+                <span className="num" style={STRIKE_LABEL}>{m.strike}</span>
+                <span className="num" style={EXP_LABEL}>{fmtExpiry(m.exp)}</span>
               </div>
 
               {/* Right: NEW badge or ΔOI + pct */}
               <div style={RIGHT_COL}>
                 {m.isNew ? (
-                  <span style={NEW_BADGE}>{t("oiMoversNew")}</span>
+                  <span
+                    className="obs-tag"
+                    style={{ ...NEW_BADGE, "--c": "var(--signal)" } as React.CSSProperties}
+                  >
+                    {t("oiMoversNew")}
+                  </span>
                 ) : (
                   <>
-                    <span style={{ ...DOI_VAL, color: dirColor }}>
+                    <span
+                      className="obs-tag num"
+                      style={{ ...DOI_VAL, "--c": dirColor } as React.CSSProperties}
+                    >
                       {isUp ? t("oiMoversUp") : t("oiMoversDown")}{" "}
                       {fmtDoi(m.d_oi)}
                     </span>
                     {m.d_pct != null && (
-                      <span style={{ ...PCT_LABEL, color: dirColor }}>
+                      <span className="num" style={{ ...PCT_LABEL, color: dirColor }}>
                         {m.d_pct >= 0 ? "+" : ""}{m.d_pct.toFixed(0)}%
                       </span>
                     )}
                   </>
                 )}
-                <span style={OI_LABEL}>{fmtOi(m.oi)}</span>
+                <span className="num" style={OI_LABEL}>{fmtOi(m.oi)}</span>
               </div>
             </div>
           );
@@ -221,8 +231,8 @@ const RAIL_COUNT: React.CSSProperties = {
   fontSize: 9,
   color: "var(--muted)",
   background: "var(--panel-3)",
-  borderRadius: 10,
-  padding: "0 5px",
+  borderRadius: "var(--r-pill)",
+  padding: "0 6px",
   fontVariantNumeric: "tabular-nums",
 };
 
@@ -269,13 +279,12 @@ const ROOT_LABEL: React.CSSProperties = {
   letterSpacing: "0.03em",
 };
 
+/** Dense overrides for `.obs-tag` in a compact rail row. */
 const SIDE_CHIP: React.CSSProperties = {
   fontSize: 8,
   fontWeight: 800,
   letterSpacing: "0.06em",
-  padding: "1px 4px",
-  borderRadius: 3,
-  border: "1px solid",
+  padding: "2px 6px",
 };
 
 const STRIKE_LABEL: React.CSSProperties = {
@@ -293,18 +302,15 @@ const EXP_LABEL: React.CSSProperties = {
 const NEW_BADGE: React.CSSProperties = {
   fontSize: 8,
   fontWeight: 900,
-  color: "rgba(232,179,57,0.9)",
-  background: "rgba(232,179,57,0.12)",
-  border: "1px solid rgba(232,179,57,0.3)",
-  borderRadius: 3,
-  padding: "1px 5px",
+  padding: "2px 7px",
   letterSpacing: "0.08em",
 };
 
 const DOI_VAL: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: 9.5,
   fontWeight: 700,
-  fontVariantNumeric: "tabular-nums",
+  padding: "2px 7px",
+  gap: 3,
 };
 
 const PCT_LABEL: React.CSSProperties = {

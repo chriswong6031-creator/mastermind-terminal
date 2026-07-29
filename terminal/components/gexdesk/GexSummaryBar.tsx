@@ -89,7 +89,7 @@ function MetricCell({ label, value, valueColor, suffix, tag, tagTip }: MetricCel
       <span style={{ ...CELL_VALUE, color: valueColor ?? "var(--text)" }}>
         {value}
         {suffix && value !== "—" && (
-          <span style={{ fontSize: 10, opacity: 0.6, marginLeft: 2 }}>{suffix}</span>
+          <span style={CELL_SUFFIX}>{suffix}</span>
         )}
       </span>
     </div>
@@ -196,7 +196,11 @@ export function GexSummaryBar({
         label={t("sumFlip")}
         tag={allExpTag}
         value={fmtLevel(payload.gamma_flip)}
-        valueColor="var(--cat-2)"
+        /* --cat-2 is never defined anywhere in the token set, so this cell rendered in
+           plain text colour. var(--ai) IS defined and is the exact same violet the desk's
+           other flip surfaces hardcode (#9d86ff) — kept as a fallback so a future --cat-2
+           definition still wins. */
+        valueColor="var(--cat-2, var(--ai))"
       />
       {/* 6. P/C Ratio — omit gracefully when absent */}
       {pcRatioStr !== "—" && (
@@ -248,38 +252,50 @@ const BAR_OUTER: React.CSSProperties = {
 const CELL: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 2,
-  padding: "7px 14px",
+  gap: "var(--sp-1)",
+  padding: "var(--sp-2) var(--sp-4)",
   borderRight: "1px solid var(--line-2)",
-  minWidth: 90,
+  minWidth: 96,
 };
 
+// Uppercase tracked micro-label — the framework's eyebrow, inline (this file is
+// deliberately className-free; the recipe is transcribed, not classified).
 const CELL_LABEL: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: "var(--fs-micro)",
   color: "var(--muted)",
   textTransform: "uppercase",
-  letterSpacing: "0.05em",
-  fontWeight: 600,
+  letterSpacing: "0.1em",
+  fontWeight: 700,
   whiteSpace: "nowrap",
   display: "flex",
   alignItems: "center",
-  gap: 4,
+  gap: "var(--sp-1)",
 };
 
+// Scope tag ("all exp" / "0DTE"): the universal tint formula written out — one hue
+// drives text, fill and ring, so the pill can never drift from its label.
 const CELL_TAG: React.CSSProperties = {
-  fontSize: 8,
-  fontWeight: 700,
+  fontSize: "var(--fs-micro)",
+  fontWeight: 600,
   letterSpacing: "0.06em",
-  color: "var(--text-dim)",
-  border: "1px solid var(--line-2)",
+  color: "var(--muted)",
+  background: "color-mix(in srgb, var(--muted) 12%, transparent)",
+  boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--muted) 30%, transparent)",
   borderRadius: "var(--r-pill)",
-  padding: "0 5px",
-  lineHeight: 1.6,
+  padding: "1px 6px",
+  lineHeight: 1.5,
 };
 
 const CELL_VALUE: React.CSSProperties = {
-  fontSize: 13,
+  fontSize: "var(--fs-body)",
   fontWeight: 700,
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
   letterSpacing: "0.01em",
+};
+
+const CELL_SUFFIX: React.CSSProperties = {
+  fontSize: "var(--fs-micro)",
+  opacity: 0.6,
+  marginLeft: "var(--sp-1)",
 };

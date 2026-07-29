@@ -511,6 +511,16 @@ export function GexDeskView() {
           </div>
           {loading && !gexPayload ? (
             <div style={LADDER_LOADING}>{t("loadingGex")}</div>
+          ) : error && !gexPayload ? (
+            /* Honest empty: the nightly options build re-pulls index anchors first, so a
+               missing single name is a COVERAGE gap, not a broken desk. Name which one it
+               is instead of leaving a bare "could not load". */
+            <div style={LADDER_EMPTY}>
+              <div style={LADDER_EMPTY_TITLE}>{t("gexNoSnapshot")}</div>
+              <div style={LADDER_EMPTY_WHY}>
+                {t("gexNoSnapshotWhy").replace("{sym}", ticker)}
+              </div>
+            </div>
           ) : view === "strike" ? (
             <StrikeLadder
               strikes={gexPayload?.by_strike ?? []}
@@ -572,8 +582,8 @@ const DESK_OUTER: React.CSSProperties = {
 const CONTROLS_BAR: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 12,
-  padding: "8px 14px",
+  gap: "var(--sp-3)",
+  padding: "var(--sp-2) var(--sp-4)",
   borderBottom: "1px solid var(--line)",
   background: "var(--panel)",
   flexShrink: 0,
@@ -706,6 +716,30 @@ const LADDER_LOADING: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  fontSize: 12,
+  fontSize: "var(--fs-ui)",
   color: "var(--muted)",
+};
+
+const LADDER_EMPTY: React.CSSProperties = {
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "var(--sp-2)",
+  padding: "var(--sp-6) var(--sp-5)",
+  textAlign: "center",
+};
+
+const LADDER_EMPTY_TITLE: React.CSSProperties = {
+  fontSize: "var(--fs-body)",
+  fontWeight: 700,
+  color: "var(--text-2)",
+};
+
+const LADDER_EMPTY_WHY: React.CSSProperties = {
+  fontSize: "var(--fs-label)",
+  color: "var(--muted)",
+  lineHeight: 1.5,
+  maxWidth: 380,
 };
