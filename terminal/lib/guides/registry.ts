@@ -4,6 +4,20 @@
 type GuideDoc = { en?: string; zh?: string };
 
 const LOADERS: Record<string, () => Promise<GuideDoc>> = {
+  "macdx/div": () => import("./macdx/div"),
+  "macdx/eng": () => import("./macdx/eng"),
+  "macdx/hist": () => import("./macdx/hist"),
+  "macdx/sig": () => import("./macdx/sig"),
+  "macdx/trend": () => import("./macdx/trend"),
+  "pulse/div": () => import("./pulse/div"),
+  "pulse/flow": () => import("./pulse/flow"),
+  "pulse/sig": () => import("./pulse/sig"),
+  "pulse/vmap": () => import("./pulse/vmap"),
+  "pulse/wave": () => import("./pulse/wave"),
+  "rsix/chan": () => import("./rsix/chan"),
+  "rsix/div": () => import("./rsix/div"),
+  "rsix/eng": () => import("./rsix/eng"),
+  "rsix/sig": () => import("./rsix/sig"),
   "structure/fvg": () => import("./structure/fvg"),
   "structure/liq": () => import("./structure/liq"),
   "structure/ms": () => import("./structure/ms"),

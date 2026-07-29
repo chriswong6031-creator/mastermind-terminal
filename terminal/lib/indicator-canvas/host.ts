@@ -190,7 +190,7 @@ function warnOnce(seen: Set<string>, id: string, msg: string, extra?: unknown): 
 
 // ─────────────────────────────────────────────────────────────────────────────────── memo cache
 
-const MEMO_MAX = 12;
+const MEMO_MAX = 32;
 const MEMO = new Map<string, SuiteComputeResult>();
 
 /** Stable, order-independent signature of the flat params that belong to THIS suite's modules. */
@@ -296,6 +296,15 @@ export function computeSuite(
   const haveTier = tierRank(tier);
   let totalPrims = 0;
 
+  // Full flat blob (module-prefixed, defaults merged for EVERY module) — ctx.suite. Satellites use
+  // this to follow their producer's user settings instead of silently re-assuming defaults (W2 review).
+  const suiteFlat: Record<string, any> = {};
+  for (const mm of def.modules) {
+    suiteFlat[`${mm.key}.on`] = flatParams?.[`${mm.key}.on`] ?? mm.defaultOn;
+    const ms = moduleSettings(mm, flatParams);
+    for (const fk in ms) { if (Object.prototype.hasOwnProperty.call(ms, fk)) suiteFlat[`${mm.key}.${fk}`] = ms[fk]; }
+  }
+
   for (const m of def.modules) {
     if (!m || typeof m.compute !== "function") continue;
 
@@ -318,6 +327,7 @@ export function computeSuite(
       symbol: input.symbol,
       isIntraday: input.isIntraday,
       s: moduleSettings(m, flatParams),
+      suite: suiteFlat,
       colors,
       lang: input.lang,
     };
