@@ -106,7 +106,7 @@
 .fin-row:hover{background:var(--panel-2)}
 .fin-row:hover .fin-cell-sticky{background:var(--panel-2)}
 .fin-row-b .fin-cell{font-weight:650;color:var(--text)}
-.fin-row-hl{background:rgba(41,98,255,.07)}
+.fin-row-hl{background:color-mix(in srgb,var(--brand) 7%,transparent)}
 .fin-cell{padding:7px 10px;text-align:right;color:var(--text);border-bottom:1px solid var(--line-2);white-space:nowrap;font-feature-settings:"tnum"}
 .fin-cell-sticky{position:sticky;left:0;z-index:1;text-align:left;background:var(--panel);color:var(--text-2);font-weight:500;max-width:180px}
 .fin-row-hl .fin-cell-sticky{background:var(--panel-2)}
@@ -407,14 +407,14 @@
 .od-sig-table td{padding:8px 10px;border-bottom:1px solid var(--line-2);vertical-align:middle;white-space:nowrap}
 .od-sig-table tr:last-child td{border-bottom:none}
 .od-sig-row{transition:background var(--t)}
-.od-sig-row-hov{background:rgba(41,98,255,.06)}
+.od-sig-row-hov{background:color-mix(in srgb,var(--brand) 6%,transparent)}
 .od-badge{display:inline-flex;align-items:center;justify-content:center;padding:3px 7px;border-radius:var(--r-pill);font:700 10px/1 var(--font-ui);color:#fff;letter-spacing:.04em}
 .od-sig-date{color:var(--text-2);font-family:var(--font-num);font-variant-numeric:tabular-nums}
 .od-sig-price{font-family:var(--font-num);font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}
 .od-sig-str{font-family:var(--font-num);color:var(--muted);font-variant-numeric:tabular-nums}
 .od-chips{display:flex;flex-wrap:wrap;gap:4px;max-width:200px}
 .od-jump-cell{padding:4px 8px}
-.od-jump-btn{font:600 11px/1 var(--font-ui);color:var(--brand);background:none;border:1px solid rgba(41,98,255,.3);border-radius:var(--r-pill);padding:5px 10px;cursor:pointer;white-space:nowrap;transition:background var(--t),color var(--t)}
+.od-jump-btn{font:600 11px/1 var(--font-ui);color:var(--brand);background:none;border:1px solid color-mix(in srgb,var(--brand) 30%,transparent);border-radius:var(--r-pill);padding:5px 10px;cursor:pointer;white-space:nowrap;transition:background var(--t),color var(--t)}
 .od-jump-btn:hover{background:var(--brand);color:#fff}
 
 /* footer note */
@@ -592,7 +592,7 @@
 .fin-doc-cell{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:52px;flex:1}
 .fin-doc-per{font:500 9.5px/1 var(--font-num);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .fin-doc-icon{width:22px;height:22px;display:grid;place-items:center;background:none;border:1px solid var(--line);border-radius:var(--r);color:var(--text-2);cursor:pointer;transition:color var(--t),border-color var(--t),background var(--t)}
-.fin-doc-icon:hover{color:var(--brand);border-color:var(--brand);background:rgba(41,98,255,.08)}
+.fin-doc-icon:hover{color:var(--brand);border-color:var(--brand);background:color-mix(in srgb,var(--brand) 8%,transparent)}
 .fin-doc-icon svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .fin-doc-none{color:var(--line-3);font:400 12px/1 var(--font-ui);height:22px;display:grid;place-items:center}
 
@@ -777,7 +777,7 @@
 .fin-adv-table td.sm{font-size:10px}
 .fin-adv-table td.wr{text-align:left}
 .fin-adv-yr{color:var(--text-dim);font-size:8.5px;margin-left:3px}
-.fin-adv-trow.now{background:rgba(77,130,255,.07)}
+.fin-adv-trow.now{background:color-mix(in srgb,var(--brand-2) 7%,transparent)}
 .fin-adv-trow.now td.l{color:var(--brand-2);border-left:2px solid var(--brand-2)}
 .fin-adv-trow.lowN td{opacity:.62}
 .fin-adv-nowchip{display:inline-block;margin-left:5px;font:700 8px/1 var(--font-ui);letter-spacing:.04em;padding:2px 4px;border-radius:3px;background:var(--brand-2);color:#fff;vertical-align:middle}
@@ -1051,9 +1051,9 @@
 @media (prefers-reduced-motion: reduce){ .fin-seas-yearpop{animation:none} .fin-seas-yearpop-caret{transition:none} }
 
 /* windowed monthly table — aggregate footer rows + scope/show-all foot */
-.fin-seas-aggrow .fin-cell{background:rgba(41,98,255,.05);font-weight:700}
+.fin-seas-aggrow .fin-cell{background:color-mix(in srgb,var(--brand) 5%,transparent);font-weight:700}
 .fin-seas-aggrow .fin-cell-sticky{color:var(--text-2);text-transform:uppercase;letter-spacing:.04em;font:700 var(--fs-micro)/1.2 var(--font-ui)}
-.fin-seas-hitrow .fin-cell{background:rgba(41,98,255,.03);border-bottom:1px solid var(--hairline-strong)}
+.fin-seas-hitrow .fin-cell{background:color-mix(in srgb,var(--brand) 3%,transparent);border-bottom:1px solid var(--hairline-strong)}
 .fin-seas-cell.dim{color:var(--muted);font-weight:600}
 .fin-seas-tablefoot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:10px}
 .fin-seas-tablescope{font:600 var(--fs-label)/1.3 var(--font-ui);color:var(--muted)}
@@ -1061,7 +1061,7 @@
 .fin-seas-showall:hover{color:var(--text);border-color:var(--brand-2)}
 
 /* advanced deck — plain-word window scope beside the title */
-.fin-adv-scope{font:650 var(--fs-label)/1 var(--font-ui);letter-spacing:.02em;text-transform:none;color:var(--text);background:rgba(41,98,255,.12);border:1px solid rgba(41,98,255,.22);border-radius:var(--r-pill);padding:3px 9px}
+.fin-adv-scope{font:650 var(--fs-label)/1 var(--font-ui);letter-spacing:.02em;text-transform:none;color:var(--text);background:color-mix(in srgb,var(--brand) 12%,transparent);border:1px solid color-mix(in srgb,var(--brand) 22%,transparent);border-radius:var(--r-pill);padding:3px 9px}
 
 /* ===========================================================================
  * === TECHLAB === TechLabPanel (Lab tab) — .fin-tl-* (v7 wave)
