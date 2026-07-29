@@ -1218,7 +1218,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // ────────────────────────────────────────────────────────────────────────────
 
   async function addSymbol(sym: string) {
-    if (!loggedIn) { showGateNudge(t("gateWatchlist")); return; }
+    // OnboardingProvider is a DESCENDANT of this component, so useOnboarding() here is the
+    // no-op context — the `mm:onboard` window event is the only way up to the real sheet.
+    if (!loggedIn) { showGateNudge(t("gateWatchlist")); window.dispatchEvent(new CustomEvent("mm:onboard", { detail: { mode: "signup" } })); return; }
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
     if (!inWl.has(sym)) {
       setWl((w: any[]) => [...w, { symbol: sym, section: sec }]);
@@ -1245,7 +1247,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Add a symbol to a NAMED list (search-hub multi-list picker). Mirrors addSymbol's dedupe +
   // Default-only server sync, but targets an explicit list instead of the active one.
   function addToList(sym: string, listName: string) {
-    if (!loggedIn) { showGateNudge(t("gateWatchlist")); return; }
+    // Same descendant-provider constraint as addSymbol — reach the sheet via the window event.
+    if (!loggedIn) { showGateNudge(t("gateWatchlist")); window.dispatchEvent(new CustomEvent("mm:onboard", { detail: { mode: "signup" } })); return; }
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
     setLists((l) => {
       const cur = l[listName] || [];

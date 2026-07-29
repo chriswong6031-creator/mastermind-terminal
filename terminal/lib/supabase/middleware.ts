@@ -20,6 +20,49 @@ const PROTECTED = [
   "/screener",
 ];
 
+// Supabase writes its session as `sb-<project-ref>-auth-token` (chunked into
+// `.0`/`.1` suffixes when large). Name matching is the only way to know whether a
+// visitor *might* carry a session without paying for a Supabase client.
+function hasAuthCookie(request: NextRequest) {
+  return request.cookies
+    .getAll()
+    .some((c) => c.name.startsWith("sb-") && c.name.includes("-auth-token"));
+}
+
+// Token refresh for the PUBLIC path: the same getClaims() + cookie-rotation machinery
+// as the gated branch below, with ZERO redirects — nobody is ever bounced off a public
+// page. Kept as its own function (rather than shared with the gated branch) so the
+// TERMINAL_REQUIRE_AUTH lockdown path stays exactly as it was.
+async function refreshPublicSession(request: NextRequest) {
+  let response = NextResponse.next({ request });
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookieOptions: authCookieOptions(),
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet, headers) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          response = NextResponse.next({ request });
+          applySupabaseResponseCookies(response.headers, cookiesToSet, headers);
+        },
+      },
+    },
+  );
+
+  // Result deliberately unused: the point is the refresh-token rotation (and the
+  // Set-Cookie it writes through setAll), not an access decision.
+  await supabase.auth.getClaims();
+
+  // Auth-aware origin response — never let a CDN replay one visitor's page to another.
+  applyAuthResponseHeaders(response.headers);
+  return response;
+}
+
 function redirectWithAuthState(url: URL, source: NextResponse) {
   const redirect = NextResponse.redirect(url);
   const getSetCookie = (
@@ -37,14 +80,18 @@ export async function updateSession(request: NextRequest) {
   // Login is disabled — the whole app is public. Set TERMINAL_REQUIRE_AUTH=1 to re-gate everything.
   const requireAuth = process.env.TERMINAL_REQUIRE_AUTH === "1";
 
-  // Fast path: when auth is off, skip the Supabase getUser() round-trip entirely.
-  // All we need is the / → /terminal redirect; everything else passes straight through.
+  // Auth off = the app is open to guests. `/` still lands on the chart workspace.
+  // Signed-in visitors must keep getting their server-side token refresh here, or a
+  // long session silently expires while they browse; pure guests (no session cookie)
+  // keep the fast path and never pay the Supabase round-trip. No redirect either way —
+  // member surfaces gate themselves in-page with a sign-up card.
   if (!requireAuth) {
     if (path === "/") {
       const url = request.nextUrl.clone();
       url.pathname = "/terminal";
       return NextResponse.redirect(url);
     }
+    if (hasAuthCookie(request)) return await refreshPublicSession(request);
     return NextResponse.next({ request });
   }
 

@@ -54,6 +54,20 @@ export function OnboardingProvider({ email, children }: { email: string; childre
   // open/close are useCallback-stable, so this recomputes never.
   const api = useMemo<OnboardingApi>(() => ({ open, close }), [open, close]);
 
+  // ── Window-event bridge ───────────────────────────────────────────────────────
+  //    Some hosts render this provider as a DESCENDANT of the component that needs to
+  //    open it (TerminalShell mounts <OnboardingProvider> inside its own JSX), so their
+  //    useOnboarding() resolves to NOOP_API and the context is unreachable upward. Those
+  //    call sites dispatch `mm:onboard` instead; the detail mirrors open()'s signature.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<{ mode?: OnboardMode; plan?: PlanKey; period?: Period }>).detail;
+      open(d?.mode === "signin" ? "signin" : "signup", { plan: d?.plan, period: d?.period });
+    };
+    window.addEventListener("mm:onboard", onOpen);
+    return () => window.removeEventListener("mm:onboard", onOpen);
+  }, [open]);
+
   // ── Remount resilience: router.refresh() at the signup step-1→2 boundary flips
   //    app/terminal/page.tsx from its guest branch to its signed-in branch, which
   //    remounts this provider. Restore the open-state stash so the sheet carries on
