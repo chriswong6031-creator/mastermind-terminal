@@ -45,6 +45,10 @@ export interface ModuleCtx {
   symbol: string;
   isIntraday: boolean;
   s: Record<string, any>;  // this module's settings, UNPREFIXED keys, defaults merged
+  /** The WHOLE suite's flat params (module-prefixed keys, defaults merged). Satellite modules that
+   *  re-derive another module's series (signals over the engine's curve, divergences over the wave)
+   *  MUST read the producer's settings from here — never re-assume its defaults. */
+  suite: Record<string, any>;
   colors: SuiteColors;
   lang: "en" | "zh";
 }
@@ -142,6 +146,13 @@ export interface ProfilePrim extends PrimBase { // horizontal volume-at-price ba
   maxPx?: number;                            // max bar length in px (default 120)
 }
 
+export interface ColumnsPrim extends PrimBase { // vertical bars in y-space (oscillator histograms)
+  kind: "columns";
+  items: Array<{ i: number; v: number; color: string; alpha?: number }>; // sorted by i ascending
+  base?: number;        // bar baseline value (default 0)
+  widthFrac?: number;   // bar width as a fraction of barW (default 0.6, clamp 0.1..1)
+}
+
 export interface BgShadePrim extends PrimBase { // background column tint (trend background)
   kind: "bgshade";
   i1: number; i2: XRef;
@@ -150,7 +161,7 @@ export interface BgShadePrim extends PrimBase { // background column tint (trend
 
 export type Prim =
   | ZonePrim | LinePrim | PolyPrim | CloudPrim | GradLinePrim
-  | LabelPrim | MarkerPrim | ProfilePrim | BgShadePrim;
+  | LabelPrim | MarkerPrim | ProfilePrim | BgShadePrim | ColumnsPrim;
 
 // --------------------------------------------------------------------------------- module results
 
@@ -211,7 +222,9 @@ export interface SuiteDef {
   label: string;    // "Structure Core"
   tag: string;      // "SC"
   tkey?: string;    // LEX key for the localized suite name
-  kind: "overlay";
+  kind: "overlay" | "pane";  // pane = suite renders into its own sub-pane in suite y-space
+  /** pane suites only: fixed autoscale range + optional static guide lines (e.g. RSI 30/70). */
+  pane?: { min: number; max: number; lines?: Array<{ p: number; dashed?: boolean; label?: string }> };
   modules: SuiteModuleDef[];
 }
 

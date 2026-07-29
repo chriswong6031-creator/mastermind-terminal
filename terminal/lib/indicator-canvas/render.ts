@@ -7,6 +7,9 @@
 //   • Culling: a prim whose entire x-extent falls outside [-40, m.W+40] px is skipped, as is any
 //     prim with minPxPerBar > m.barW. Any null/NaN coordinate skips that prim (or that point,
 //     for multi-point kinds — clouds/gradlines break the run and resume after the gap).
+//     "columns" culls in INDEX space instead: its items are contract-sorted by i, so a binary
+//     search narrows a full-history histogram to the visible slice [i0-2, i1+2] before any
+//     coordinate work — a 20k-item series costs only what is on screen per frame.
 //   • Clamping: zone/bgshade rect x-edges are clamped to [-40, m.W+40]; line endpoints are
 //     clamped to the same window with y linearly interpolated so the slope is preserved.
 //   • Z-order: stable sort by (z ?? 0); "bgshade" is always forced behind everything else.
@@ -18,7 +21,7 @@
 
 import type {
   Prim, ZonePrim, LinePrim, PolyPrim, CloudPrim, GradLinePrim, LabelPrim, MarkerPrim,
-  ProfilePrim, BgShadePrim, XRef, CoordMapper, SuiteRenderBundle, TooltipDef,
+  ProfilePrim, BgShadePrim, ColumnsPrim, XRef, CoordMapper, SuiteRenderBundle, TooltipDef,
 } from "./types";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -529,20 +532,92 @@ function drawBgShade(f: DocumentFragment, b: BgShadePrim, m: CoordMapper): Eleme
   return rect;
 }
 
+/** First index whose `.i` is >= target. Items are contract-guaranteed sorted by i ascending. */
+function lowerBoundByI(items: Array<{ i: number }>, target: number): number {
+  let lo = 0, hi = items.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (items[mid].i < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * Oscillator histogram: one vertical rect per item, from `base` (default 0) to `v`, in whatever
+ * y-space the mapper carries (pane suites map their own min..max range). Bars are centered on
+ * xi(i) and are `clamp(widthFrac, 0.1, 1) × barW` wide.
+ *
+ * Cost is proportional to the VISIBLE slice, not to items.length: the items are sorted by i, so
+ * two binary searches bracket [i0-2, i1+2] and everything outside is never touched. Full-history
+ * histograms (20k+ bars) therefore stay a per-frame no-op off-screen.
+ */
+function drawColumns(f: DocumentFragment, cp: ColumnsPrim, m: CoordMapper): Element | null {
+  const items = cp.items;
+  if (!items || items.length === 0) return null;
+  // Index-space cull (inclusive [lo, hi] → exclusive end at hi+1; bar indices are integers).
+  const lo = fin(m.i0) ? Math.floor(m.i0) - 2 : -Infinity;
+  const hi = fin(m.i1) ? Math.ceil(m.i1) + 2 : Infinity;
+  const s = lowerBoundByI(items, lo);
+  const e = lowerBoundByI(items, hi + 1);
+  if (e <= s) return null;
+
+  const base = fin(cp.base) ? cp.base : 0;
+  const yBase = m.y(base);
+  if (!fin(yBase)) return null;
+  const barW = fin(m.barW) ? m.barW : 1;
+  // Sub-pixel bars smear into an unreadable haze when zoomed all the way out — floor at 1px.
+  const w = Math.max(1, clamp(cp.widthFrac ?? 0.6, 0.1, 1) * barW);
+  const half = w / 2;
+
+  const g = mk("g", {});
+  for (let k = s; k < e; k++) {
+    const it = items[k];
+    if (!it || !fin(it.v)) continue;
+    const x = m.xi(it.i), yv = m.y(it.v);
+    if (!fin(x) || !fin(yv)) continue;
+    const rect = mk("rect", {
+      x: x - half, y: Math.min(yv, yBase),
+      width: w, height: Math.max(Math.abs(yv - yBase), 0.5), // flat bars still print a hairline
+      fill: it.color,
+    });
+    if (it.alpha != null) rect.setAttribute("fill-opacity", String(clamp(it.alpha, 0, 1)));
+    g.appendChild(rect);
+  }
+  if (!g.firstChild) return null;
+  f.appendChild(g);
+  return g;
+}
+
 // ------------------------------------------------------------------------------------ entry point
 
 /**
  * Draw every prim in the bundle into svgEl. APPEND-ONLY — the caller clears the layer each frame.
  * Builds a DocumentFragment and appends once. Prims are stable-sorted by (z ?? 0) with bgshade
  * forced behind everything. Prims with tooltipId get pointer-events:auto and drive the shared
- * ".ic-tip" host inside svgEl's parent wrapper.
+ * ".ic-tip" host inside the chart wrapper (the parent of the owning <svg>).
+ *
+ * The target may be the overlay <svg> itself (overlay suites) or a <g> inside it (pane suites pass
+ * a clip-wrapped group so their sub-pane content cannot bleed past the pane). Children are appended
+ * generically either way.
  */
-export function renderPrims(svgEl: SVGSVGElement, bundle: SuiteRenderBundle, m: CoordMapper): void {
+export function renderPrims(
+  svgEl: SVGSVGElement | SVGGElement, bundle: SuiteRenderBundle, m: CoordMapper,
+): void {
   const prims = bundle.prims;
   if (!prims.length) return;
-  const wrap = svgEl.parentElement;
+  // closest("svg") returns the element itself when it IS the <svg>, so this is identical to
+  // svgEl.parentElement for overlay callers and resolves the wrapper for a <g> target.
+  const wrap = svgEl.closest("svg")?.parentElement ?? null;
   if (wrap) {
-    TIP_DEFS.set(wrap, bundle.tooltips);
+    {
+    // MERGE per wrapper: several suites render into the same chart wrap each frame; replacing the
+    // map would leave only the last suite's tooltips resolvable (review W2-2). Ids are suite-scoped,
+    // so collisions cannot occur; stale ids from disabled suites are inert.
+    const existing = TIP_DEFS.get(wrap);
+    if (!existing) TIP_DEFS.set(wrap, new Map(bundle.tooltips));
+    else for (const [tid, tdef] of bundle.tooltips) existing.set(tid, tdef);
+  }
     if (bundle.tooltips.size) ensureTooltipHost(wrap);
   }
 
@@ -565,6 +640,7 @@ export function renderPrims(svgEl: SVGSVGElement, bundle: SuiteRenderBundle, m: 
       case "poly": el = drawPoly(frag, p, m); break;
       case "gradline": el = drawGradLine(frag, p, m); break;
       case "profile": el = drawProfile(frag, p, m); break;
+      case "columns": el = drawColumns(frag, p, m); break;
       case "marker": el = drawMarker(frag, p, m); break;
       case "label": el = drawLabel(frag, p, m); break;
     }

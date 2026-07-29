@@ -1,4 +1,4 @@
-// suiteModules.test.ts — deterministic tests for the premium suite modules (W0 + W1).
+// suiteModules.test.ts — deterministic tests for the premium suite modules (W0 + W1 + W2).
 //
 // W0 (Structure Core): pivots (exact fractals / ties / body-vs-wick), Market Structure (BOS,
 // CHoCH, NON-REPAINT), Order Blocks (zone bounds, mitigation, breaker flip, grade monotonicity),
@@ -9,6 +9,20 @@
 // Flow Band (HMA vs a reference WMA-of-WMA, HTF no-lookahead).
 // Plus contract hygiene (prim ids, finite numbers, zero hex literals, token-only colors, settings
 // schema) and drawn-density caps.
+//
+// W2 (PANE suites — Pulse Oscillator, RSI Ultimate, MACD Ultimate): the shared oscillator math
+// (Wilder RSI vs an independent reference, no-lookahead normalization, resampling), the shared
+// 4-class divergence detector on a crafted known divergence, and each pane suite's modules —
+// crafted signal fixtures, histogram column contract, phase hysteresis, channel models, draw caps.
+// Every pane module's y-values are additionally asserted to live inside its SuiteDef pane range.
+//
+// W2 tolerances (deliberate): the shared math is checked against independent references at 1e-8
+// (RSI, per the brief) and 1e-9..1e-12 elsewhere, because those are closed-form recurrences. The
+// pane modules' own values are NOT hand-computed — a ±100 reading is the output of a trailing-window
+// normalization, so a literal would encode float noise rather than behaviour. Those tests instead
+// assert SHAPE against the module's own engine (`computePulseWave` / `computeUltimateRsi` /
+// `computeUltimateMacd`): the drawn point IS the series value (exact ===), and every signal is
+// re-derived from that series and compared as a set.
 //
 // All inputs are crafted or generated from a seeded LCG — no Date.now, no Math.random.
 //
@@ -33,12 +47,45 @@ import { VOLT_BANDS_MODULE } from "../suites/trend/voltixBands";
 import { CANDLE_PAINTER_MODULE } from "../suites/trend/candlePainter";
 import { FLOW_BAND_MODULE } from "../suites/trend/flowBand";
 import {
+  emaArr,
+  normalizeSigned,
+  resampleOhlcv,
+  rollingPercentile,
+  rsiArr,
+  wilderRma,
+} from "../suites/shared/oscUtils";
+import {
+  divergenceStrength,
+  findDivergences,
+  type DivergenceEvent,
+} from "../suites/shared/divergence";
+import { PULSE_WAVE_MODULE, computePulseWave } from "../suites/pulse/pulseWave";
+import { PULSE_SIGNALS_MODULE } from "../suites/pulse/pulseSignals";
+import { PULSE_DIVERGENCE_MODULE } from "../suites/pulse/divergences";
+import { VOLUME_MAPPING_MODULE } from "../suites/pulse/volumeMapping";
+import { FLOWS_MODULE } from "../suites/pulse/flows";
+import { RSI_ENGINE_MODULE, RSI_DEFAULTS, computeUltimateRsi } from "../suites/rsix/rsiEngine";
+import { RSI_SIGNALS_MODULE } from "../suites/rsix/rsiSignals";
+import { RSI_DIVERGENCE_MODULE } from "../suites/rsix/rsiDivergence";
+import { RSI_CHANNELS_MODULE } from "../suites/rsix/rsiChannels";
+import {
+  MACD_ENGINE_MODULE,
+  MACDX_ENGINE_DEFAULTS,
+  computeUltimateMacd,
+} from "../suites/macdx/macdEngine";
+import { MACD_SIGNALS_MODULE } from "../suites/macdx/macdSignals";
+import { MACD_DIVERGENCE_MODULE } from "../suites/macdx/macdDivergence";
+import { MACD_HISTOGRAM_MODULE } from "../suites/macdx/macdHistogram";
+import { MACD_TREND_MODULE } from "../suites/macdx/macdTrend";
+import { SUITE_DEFS, SUITE_ORDER } from "../suites/registry";
+import {
   MAX_PRIMS_PER_MODULE,
   type ModuleCtx,
   type ModuleResult,
   type Prim,
   type SuiteBar,
   type SuiteColors,
+  type SuiteDef,
   type SuiteEvent,
   type SuiteModuleDef,
 } from "../indicator-canvas/types";
@@ -58,11 +105,40 @@ const COLORS: SuiteColors = {
   neutral: "var(--text-dim)",
 };
 
+/** The suite a module belongs to, by object identity (module keys repeat across suites). */
+function suiteOf(mod: SuiteModuleDef): SuiteDef | undefined {
+  for (const k of SUITE_ORDER) if (SUITE_DEFS[k].modules.includes(mod)) return SUITE_DEFS[k];
+  return undefined;
+}
+
+/**
+ * `ctx.suite` exactly as host.ts assembles it: every module of the owning suite, module-prefixed,
+ * defaults merged — then this module's own `overrides` under its own prefix, then any explicit
+ * `flat` params. `flat` is how a test retunes a PRODUCER module (e.g. { "eng.len": 4 }) while
+ * computing one of its satellites.
+ */
+function suiteFlatFor(
+  mod: SuiteModuleDef,
+  overrides: Record<string, any>,
+  flat: Record<string, any>,
+): Record<string, any> {
+  const out: Record<string, any> = {};
+  const def = suiteOf(mod);
+  for (const m of def ? def.modules : [mod]) {
+    out[`${m.key}.on`] = m.defaultOn;
+    for (const k of Object.keys(m.defaults ?? {})) out[`${m.key}.${k}`] = m.defaults[k];
+  }
+  for (const k of Object.keys(overrides)) out[`${mod.key}.${k}`] = overrides[k];
+  for (const k of Object.keys(flat)) out[k] = flat[k];
+  return out;
+}
+
 function ctxFor(
   mod: SuiteModuleDef,
   bars: SuiteBar[],
   overrides: Record<string, any> = {},
   lang: "en" | "zh" = "en",
+  flat: Record<string, any> = {},
 ): ModuleCtx {
   return {
     bars,
@@ -70,13 +146,19 @@ function ctxFor(
     symbol: "TEST",
     isIntraday: false,
     s: { ...mod.defaults, ...overrides },
+    suite: suiteFlatFor(mod, overrides, flat),
     colors: COLORS,
     lang,
   };
 }
 
-const run = (mod: SuiteModuleDef, bars: SuiteBar[], overrides: Record<string, any> = {}, lang: "en" | "zh" = "en"):
-  ModuleResult => mod.compute(ctxFor(mod, bars, overrides, lang));
+const run = (
+  mod: SuiteModuleDef,
+  bars: SuiteBar[],
+  overrides: Record<string, any> = {},
+  lang: "en" | "zh" = "en",
+  flat: Record<string, any> = {},
+): ModuleResult => mod.compute(ctxFor(mod, bars, overrides, lang, flat));
 
 /** Explicit OHLCV rows -> SuiteBar[] with a monotonic synthetic time axis. */
 function mkBars(rows: Array<[number, number, number, number, number?]>): SuiteBar[] {
@@ -1747,6 +1829,1649 @@ describe("drawn-density caps", () => {
   it("stays deterministic on the pathological fixture", () => {
     for (const mod of MODULES) {
       expect(run(mod, PATHOLOGICAL)).toEqual(run(mod, PATHOLOGICAL));
+    }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// W2 — PANE SUITES (Pulse Oscillator, RSI Ultimate, MACD Ultimate)
+// ══════════════════════════════════════════════════════════════════════════════
+
+const clampTo = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+
+// ─── 14. shared/oscUtils ──────────────────────────────────────────────────────
+
+/** Independent Wilder RSI: SMA seed over the first `len` deltas, then the classic recurrence. */
+function rsiRef(closes: number[], len: number): Array<number | null> {
+  const out: Array<number | null> = new Array(closes.length).fill(null);
+  const g: number[] = [];
+  const l: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    g.push(d > 0 ? d : 0);
+    l.push(d < 0 ? -d : 0);
+  }
+  if (g.length < len) return out;
+  let ag = 0;
+  let al = 0;
+  for (let k = 0; k < len; k++) {
+    ag += g[k];
+    al += l[k];
+  }
+  ag /= len;
+  al /= len;
+  const rsi = () => (al > 0 ? 100 - 100 / (1 + ag / al) : ag > 0 ? 100 : 50);
+  out[len] = rsi(); // g[len-1] belongs to bar `len`
+  for (let k = len; k < g.length; k++) {
+    ag = (ag * (len - 1) + g[k]) / len;
+    al = (al * (len - 1) + l[k]) / len;
+    out[k + 1] = rsi();
+  }
+  return out;
+}
+
+/** Independent seeded EMA (SMA seed then the k-recurrence), matching the oscUtils convention. */
+function emaRef(vals: number[], len: number): Array<number | null> {
+  const out: Array<number | null> = new Array(vals.length).fill(null);
+  if (vals.length < len) return out;
+  const k = 2 / (len + 1);
+  let sum = 0;
+  for (let i = 0; i < len; i++) sum += vals[i];
+  let prev = sum / len;
+  out[len - 1] = prev;
+  for (let i = len; i < vals.length; i++) {
+    prev = vals[i] * k + prev * (1 - k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+/** A deterministic, non-monotonic close path — real gains AND losses in every window. */
+function oscCloses(n: number, seed = 4242): number[] {
+  const rnd = lcg(seed);
+  const out: number[] = [];
+  let p = 100;
+  for (let i = 0; i < n; i++) {
+    p = Math.max(5, p + (rnd() - 0.48) * 2 + Math.sin(i / 7) * 0.9);
+    out.push(p);
+  }
+  return out;
+}
+
+describe("oscUtils — smoothers", () => {
+  it("matches an independent 20-bar Wilder RSI to 1e-8, with an honest NaN warm-up", () => {
+    const closes = oscCloses(300);
+    const ref = rsiRef(closes, 20);
+    const got = rsiArr(closes, 20);
+    expect(got.length).toBe(closes.length);
+    let checked = 0;
+    for (let i = 0; i < closes.length; i++) {
+      if (ref[i] === null) {
+        expect(Number.isFinite(got[i]), `bar ${i} should be warm-up NaN`).toBe(false);
+        continue;
+      }
+      expect(got[i], `bar ${i}`).toBeCloseTo(ref[i] as number, 8);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(250);
+    expect(Number.isFinite(got[19])).toBe(false); // seed completes on bar 20, not 19
+    expect(Number.isFinite(got[20])).toBe(true);
+  });
+
+  it("uses the neutral-50 / pure-advance-100 conventions on degenerate series", () => {
+    const flat = new Array(60).fill(100);
+    const rising = Array.from({ length: 60 }, (_, i) => 100 + i);
+    const falling = Array.from({ length: 60 }, (_, i) => 200 - i);
+    expect(rsiArr(flat, 14)[40]).toBe(50);
+    expect(rsiArr(rising, 14)[40]).toBe(100);
+    expect(rsiArr(falling, 14)[40]).toBe(0);
+    expect(rsiArr([], 14).length).toBe(0);
+    expect(rsiArr([1, 2], 14).every((v) => !Number.isFinite(v))).toBe(true);
+  });
+
+  it("skips holes instead of zeroing them (a NaN delays the seed, never corrupts it)", () => {
+    const closes = oscCloses(120);
+    const holed = closes.slice();
+    holed[50] = NaN;
+    const got = rsiArr(holed, 14);
+    expect(Number.isFinite(got[50])).toBe(false); // the hole itself has no reading
+    expect(Number.isFinite(got[52])).toBe(true); // the smoother resumes from its own state
+    // bars before the hole are untouched by it
+    const clean = rsiArr(closes, 14);
+    for (let i = 0; i < 49; i++) expect(got[i]).toBe(clean[i]);
+  });
+
+  it("seeds wilderRma from the SMA of the first len usable samples", () => {
+    const vals = [2, 4, 6, 8, 10, 12, 14, 16];
+    const out = wilderRma(vals, 4);
+    expect(Number.isFinite(out[2])).toBe(false);
+    expect(out[3]).toBeCloseTo((2 + 4 + 6 + 8) / 4, 12); // 5
+    expect(out[4]).toBeCloseTo((5 * 3 + 10) / 4, 12); // 6.25
+    expect(out[5]).toBeCloseTo((6.25 * 3 + 12) / 4, 12);
+    expect(wilderRma([], 4).length).toBe(0);
+  });
+
+  it("matches an independent seeded EMA", () => {
+    const vals = oscCloses(200, 7);
+    for (const len of [5, 14, 34]) {
+      const ref = emaRef(vals, len);
+      const got = emaArr(vals, len);
+      for (let i = 0; i < vals.length; i++) {
+        if (ref[i] === null) expect(Number.isFinite(got[i]), `len=${len} bar ${i}`).toBe(false);
+        else expect(got[i], `len=${len} bar ${i}`).toBeCloseTo(ref[i] as number, 9);
+      }
+    }
+  });
+});
+
+describe("oscUtils — window statistics", () => {
+  it("returns the neutral 50 below the minimum sample count and ranks above it", () => {
+    const vals = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    expect(rollingPercentile(vals, 5, 20, 3)).toBe(50); // only 6 usable samples
+    expect(rollingPercentile(vals, 11, 12, 12)).toBe(100); // window max
+    expect(rollingPercentile(vals, 11, 12, 0)).toBe(0); // below every sample
+    expect(rollingPercentile(vals, 11, 12, 6)).toBeCloseTo(50, 9); // 6 of 12 at or below
+    expect(rollingPercentile(vals, 99, 12, 6)).toBe(50); // out of range
+    expect(rollingPercentile(vals, 11, 12, NaN)).toBe(50);
+    const holed = [1, 2, NaN, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    expect(rollingPercentile(holed, 11, 12, 12)).toBe(100); // the NaN is skipped, not counted
+  });
+
+  it("bounds normalizeSigned to -100..100 and never looks ahead", () => {
+    const src = new Float64Array(400);
+    const rnd = lcg(99);
+    for (let i = 0; i < src.length; i++) src[i] = (rnd() - 0.5) * (1 + i / 40);
+    for (let i = 0; i < src.length; i++) {
+      const v = normalizeSigned(src, i, 50);
+      expect(v).toBeGreaterThanOrEqual(-100);
+      expect(v).toBeLessThanOrEqual(100);
+      // the reading at i must not change when the future is truncated away
+      expect(normalizeSigned(src.slice(0, i + 1), i, 50), `bar ${i}`).toBe(v);
+    }
+    // the running |max| bar always reads exactly ±100
+    const ramp = new Float64Array([1, -2, 3, -4, 5]);
+    expect(normalizeSigned(ramp, 4, 10)).toBe(100);
+    expect(normalizeSigned(ramp, 3, 10)).toBe(-100);
+    expect(normalizeSigned(new Float64Array([0, 0, 0]), 2, 10)).toBe(0); // no scale -> 0, never NaN
+    expect(normalizeSigned(new Float64Array(0), 0, 10)).toBe(0);
+    const withHole = new Float64Array([4, NaN, 2]);
+    expect(normalizeSigned(withHole, 1, 10)).toBe(0);
+    expect(normalizeSigned(withHole, 2, 10)).toBe(50);
+  });
+});
+
+describe("oscUtils — resampleOhlcv", () => {
+  const SRC = mkBars([
+    [10, 12, 9, 11, 100], [11, 15, 10, 14, 200], [14, 16, 8, 9, 300],
+    [9, 11, 7, 10, 400], [10, 13, 10, 12, 500], [12, 12, 6, 7, 600],
+    [7, 9, 5, 8, 700],
+  ]);
+
+  it("aggregates complete groups only, anchored at index 0", () => {
+    const { groups, lastSrc } = resampleOhlcv(SRC, 3);
+    expect(groups.length).toBe(2); // the trailing partial group is dropped on purpose
+    expect(groups[0]).toEqual({ t: SRC[0].t, o: 10, h: 16, l: 8, c: 9, v: 600 });
+    expect(groups[1]).toEqual({ t: SRC[3].t, o: 9, h: 13, l: 6, c: 7, v: 1500 });
+    expect(Array.from(lastSrc)).toEqual([2, 5]); // a group is knowable at its LAST source bar
+  });
+
+  it("treats factor <= 1 as the identity and survives an empty series", () => {
+    for (const f of [1, 0, -3, NaN]) {
+      const r = resampleOhlcv(SRC, f);
+      expect(r.groups).toBe(SRC); // same reference, no copy
+      expect(Array.from(r.lastSrc)).toEqual(SRC.map((_, i) => i));
+    }
+    const e = resampleOhlcv([], 4);
+    expect(e.groups).toEqual([]);
+    expect(e.lastSrc.length).toBe(0);
+  });
+
+  it("is prefix-stable: appending bars never edits an earlier group", () => {
+    const full = walkBars(840, 991);
+    for (const f of [2, 4, 7]) {
+      const a = resampleOhlcv(full.slice(0, 800), f);
+      const b = resampleOhlcv(full, f);
+      expect(a.groups.length).toBeGreaterThan(50);
+      for (let g = 0; g < a.groups.length; g++) {
+        expect(b.groups[g], `factor=${f} group ${g}`).toEqual(a.groups[g]);
+        expect(b.lastSrc[g]).toBe(a.lastSrc[g]);
+        expect(a.lastSrc[g], `factor=${f} group ${g} peeks`).toBe((g + 1) * f - 1);
+      }
+    }
+  });
+
+  it("emits NaN OHLC (not a fabricated zero) for an all-missing group", () => {
+    const dirty = SRC.map((b, i) => (i < 3 ? { ...b, o: NaN, h: NaN, l: NaN, c: NaN, v: NaN } : b));
+    const { groups } = resampleOhlcv(dirty, 3);
+    expect(Number.isNaN(groups[0].o)).toBe(true);
+    expect(Number.isNaN(groups[0].c)).toBe(true);
+    expect(groups[0].v).toBe(0);
+    expect(groups[1].c).toBe(7);
+  });
+});
+
+// ─── 15. shared/divergence ────────────────────────────────────────────────────
+
+/**
+ * Crafted oscillator with EXACTLY two swing lows (wing 2) — at bars 3 and 9, values supplied by the
+ * caller — and exactly one swing high (bar 6, value 50), so only ONE same-kind pair can ever form:
+ *
+ *   osc: 50 40 30 [A] 30 40 50 45 40 [B] 35 45 55       (A < 30, B < 35)
+ *
+ * The class is then selected purely by the price printed at those two bars (bar lows, since both
+ * pivots are oscillator LOWS). Beyond bar 12 the filler is a flat 60 — no further pivots.
+ */
+function divOsc(oscA: number, oscB: number, n = 13): Float64Array {
+  const head = [50, 40, 30, oscA, 30, 40, 50, 45, 40, oscB, 35, 45, 55];
+  return Float64Array.from(Array.from({ length: n }, (_, i) => (i < head.length ? head[i] : 60)));
+}
+
+function divBars(lowAt3: number, lowAt9: number, n = 13): SuiteBar[] {
+  return Array.from({ length: n }, (_, i) => {
+    const l = i === 3 ? lowAt3 : i === 9 ? lowAt9 : 120;
+    return { t: 86400 * (i + 1), o: l + 1, h: l + 2, l, c: l + 1, v: 1000 };
+  });
+}
+
+describe("shared divergence detector", () => {
+  it("finds the crafted regular BULL divergence and nothing else", () => {
+    // price lower-low (100 -> 95) while the oscillator prints a higher low (20 -> 25)
+    const evs = findDivergences(divBars(100, 95), divOsc(20, 25), { wing: 2, maxSpan: 60 });
+    expect(evs.length).toBe(1);
+    const e = evs[0];
+    expect(e.kind).toBe("bull");
+    expect([e.iA, e.iB, e.confirmedAt]).toEqual([3, 9, 11]); // confirmedAt = iB + wing
+    expect([e.oscA, e.oscB]).toEqual([20, 25]);
+    expect([e.priceA, e.priceB]).toEqual([100, 95]); // read at the pivot bars' LOWS
+  });
+
+  it("needs BOTH legs: an agreeing pair is not a divergence", () => {
+    // price lower-low AND oscillator lower-low — momentum agrees, so nothing fires
+    expect(findDivergences(divBars(100, 95), divOsc(25, 20), { wing: 2 })).toEqual([]);
+  });
+
+  it("classifies price-HL + osc-LL as a HIDDEN bull and honours the toggle", () => {
+    const bars = divBars(100, 105);
+    const osc = divOsc(25, 20);
+    const hid = findDivergences(bars, osc, { wing: 2 });
+    expect(hid.length).toBe(1);
+    expect(hid[0].kind).toBe("hiddenBull");
+    expect([hid[0].iA, hid[0].iB, hid[0].confirmedAt]).toEqual([3, 9, 11]);
+    expect(findDivergences(bars, osc, { wing: 2, hidden: false })).toEqual([]);
+  });
+
+  it("rejects a pair wider than maxSpan", () => {
+    const bars = divBars(100, 95);
+    expect(findDivergences(bars, divOsc(20, 25), { wing: 2, maxSpan: 5 })).toEqual([]); // span is 6
+    expect(findDivergences(bars, divOsc(20, 25), { wing: 2, maxSpan: 6 }).length).toBe(1);
+  });
+
+  it("never grows a pivot out of a NaN warm-up window", () => {
+    const osc = divOsc(20, 25);
+    osc[1] = NaN; // poisons the left wing of the bar-3 low
+    expect(findDivergences(divBars(100, 95), osc, { wing: 2 })).toEqual([]);
+  });
+
+  it("emits nothing for degenerate inputs", () => {
+    expect(findDivergences([], new Float64Array(0), {})).toEqual([]);
+    expect(findDivergences(divBars(100, 95).slice(0, 2), divOsc(20, 25, 2), {})).toEqual([]);
+  });
+
+  it("is non-repainting: appending bars never edits a settled event", () => {
+    const key = (e: DivergenceEvent) => `${e.kind}|${e.iA}|${e.iB}|${e.confirmedAt}|${e.oscA}|${e.oscB}`;
+    const a = findDivergences(divBars(100, 95, 13), divOsc(20, 25, 13), { wing: 2 }).map(key);
+    const b = findDivergences(divBars(100, 95, 53), divOsc(20, 25, 53), { wing: 2 })
+      .filter((e) => e.confirmedAt <= 11)
+      .map(key);
+    expect(a.length).toBe(1);
+    expect(b).toEqual(a);
+  });
+
+  it("scores 0..100 and stays bounded on real series", () => {
+    const bars = walkBars(600, 77, 29);
+    const { rsi } = computeUltimateRsi(bars, 14, "close", 14, "ema");
+    const evs = findDivergences(bars, rsi, {});
+    expect(evs.length).toBeGreaterThan(3);
+    for (const e of evs) {
+      const s = divergenceStrength(e, bars);
+      expect(Number.isFinite(s)).toBe(true);
+      expect(s).toBeGreaterThanOrEqual(0);
+      expect(s).toBeLessThanOrEqual(100);
+    }
+    expect(divergenceStrength(evs[0], [])).toBe(0);
+    expect(divergenceStrength({ ...evs[0], iB: 1e9 }, bars)).toBe(0);
+  });
+});
+
+// ─── 16. Pulse Oscillator suite ───────────────────────────────────────────────
+
+/** Append `n` bars stepping by `step` from the running last value. */
+function seg(p: number[], n: number, step: number): number[] {
+  let last = p.length ? p[p.length - 1] : 100;
+  for (let i = 0; i < n; i++) {
+    last += step;
+    p.push(last);
+  }
+  return p;
+}
+
+/**
+ * Two-dip path, hand-tuned so the pulse wave prints a genuine V-trough INSIDE the oversold zone:
+ *   0..59    quiet grind        1..59   (+0.05)
+ *   60..84   first decline      (-1.20) — sets the trailing |momentum| ceiling, so the wave pins
+ *                                         at -100 here and cannot form a trough
+ *   85..124  recovery           (+1.00) — the wave peaks above +60 (a Pulse Sell)
+ *   125..149 second decline     (-1.15) — SHALLOWER than the first, so the wave bottoms at ~-73
+ *   150..189 recovery           (+1.00) — bar 150 is the trough, bar 151 confirms it
+ */
+function pulseDipPath(): number[] {
+  const p = [100];
+  seg(p, 59, 0.05);
+  seg(p, 25, -1.2);
+  seg(p, 40, 1.0);
+  seg(p, 25, -1.15);
+  seg(p, 40, 1.0);
+  return p;
+}
+const PULSE_DIP = pathBars(pulseDipPath());
+const PULSE_NOISE = walkBars(600, 77, 29);
+
+describe("pulseWave", () => {
+  it("draws the wave inside the pane and honours the companion-line toggles", () => {
+    const res = run(PULSE_WAVE_MODULE, PULSE_NOISE);
+    const wave = primOf(res, "pw-wave");
+    expect(wave.kind).toBe("gradline");
+    expect(wave.pts.length).toBeGreaterThan(300);
+    expect(wave.colors.length).toBe(wave.pts.length);
+    for (const q of wave.pts) {
+      expect(q.p).toBeGreaterThanOrEqual(-100);
+      expect(q.p).toBeLessThanOrEqual(100);
+    }
+    expect(primOf(res, "pw-gapped")).toBeDefined();
+    expect(primOf(res, "pw-fill")).toBeDefined();
+
+    const bare = run(PULSE_WAVE_MODULE, PULSE_NOISE, { gapped: false });
+    expect(bare.prims.map((p) => p.id)).toEqual(["pw-wave"]);
+    const noFill = run(PULSE_WAVE_MODULE, PULSE_NOISE, { fillGaps: false });
+    expect(noFill.prims.map((p) => p.id)).toEqual(["pw-gapped", "pw-wave"]);
+    // the tape never depends on what is drawn
+    expect(bare.events).toEqual(res.events);
+    expect(noFill.events).toEqual(res.events);
+  });
+
+  it("reports exactly the zero / ±60 transitions the wave actually made", () => {
+    const { wave } = computePulseWave(PULSE_DIP, "day");
+    const want: Array<[string, string, number]> = [];
+    let prev = NaN;
+    for (let i = 0; i < PULSE_DIP.length; i++) {
+      const cur = wave[i];
+      if (!Number.isFinite(cur)) continue;
+      if (Number.isFinite(prev)) {
+        if (prev <= 0 && cur > 0) want.push(["pw_cross_zero", "bull", i]);
+        else if (prev >= 0 && cur < 0) want.push(["pw_cross_zero", "bear", i]);
+        if (prev > -60 && cur <= -60) want.push(["pw_extreme_enter", "bull", i]);
+        if (prev < 60 && cur >= 60) want.push(["pw_extreme_enter", "bear", i]);
+        if (prev <= -60 && cur > -60) want.push(["pw_extreme_exit", "bull", i]);
+        if (prev >= 60 && cur < 60) want.push(["pw_extreme_exit", "bear", i]);
+      }
+      prev = cur;
+    }
+    const got = (run(PULSE_WAVE_MODULE, PULSE_DIP).events ?? []).map((e) => [e.type, e.dir, e.i]);
+    expect(want.length).toBeGreaterThan(3);
+    expect(got).toEqual(want);
+  });
+
+  it("survives a profile switch and stays deterministic", () => {
+    for (const profile of ["scalper", "day", "swing"]) {
+      const a = run(PULSE_WAVE_MODULE, PULSE_NOISE, { profile });
+      expect(a).toEqual(run(PULSE_WAVE_MODULE, PULSE_NOISE, { profile }));
+      expect(a.prims.length, `${profile} drew nothing`).toBeGreaterThan(0);
+    }
+    expect(run(PULSE_WAVE_MODULE, PULSE_NOISE, { profile: "scalper" }).prims)
+      .not.toEqual(run(PULSE_WAVE_MODULE, PULSE_NOISE, { profile: "swing" }).prims);
+  });
+});
+
+describe("pulseSignals", () => {
+  it("prints the crafted oversold turn as a Pulse Buy on the confirming bar", () => {
+    const { wave } = computePulseWave(PULSE_DIP, "day");
+    const buys = evOf(run(PULSE_SIGNALS_MODULE, PULSE_DIP), "pulse_buy");
+    expect(buys.length).toBe(1);
+    expect(buys[0].i).toBe(151); // the CONFIRMING bar; the trough itself is 150
+    expect(buys[0].dir).toBe("bull");
+    expect(buys[0].p).toBe(wave[150]);
+    expect(buys[0].p!).toBeLessThanOrEqual(-60); // …and it happened inside the oversold zone
+    expect(wave[151]).toBeGreaterThan(wave[150]); // the turn is real
+    expect(wave[149]).toBeGreaterThan(wave[150]);
+    expect(buys[0].strength).toBe(Math.round(Math.abs(wave[150])));
+
+    // the marker sits 8 wave-units BELOW the trough, anchored on the trough bar
+    const m = primOf(run(PULSE_SIGNALS_MODULE, PULSE_DIP), "ps-bs-150-m");
+    expect(m.shape).toBe("triple-lines");
+    expect(m.i).toBe(150);
+    expect(m.p).toBeCloseTo(wave[150] - 8, 9);
+    expect(m.fill).toBe(COLORS.up);
+    expect(m.tooltipId).toBe("ps-bs-150");
+  });
+
+  it("mirrors it into a Pulse Sell on the overbought peak", () => {
+    const sells = evOf(run(PULSE_SIGNALS_MODULE, PULSE_DIP), "pulse_sell");
+    expect(sells.length).toBe(1);
+    expect(sells[0].dir).toBe("bear");
+    expect(sells[0].p!).toBeGreaterThanOrEqual(60);
+    const m = primOf(run(PULSE_SIGNALS_MODULE, PULSE_DIP), `ps-bs-${sells[0].i - 1}-m`);
+    expect(m.fill).toBe(COLORS.down);
+    expect(m.p).toBeCloseTo(sells[0].p! + 8, 9);
+  });
+
+  it("gates prims — never the tape — on the family toggles and showLast", () => {
+    const all = run(PULSE_SIGNALS_MODULE, PULSE_NOISE, { peaks: true, gappedCross: true });
+    const none = run(PULSE_SIGNALS_MODULE, PULSE_NOISE, {
+      buySell: false, dipDiamonds: false, peaks: false, gappedCross: false,
+    });
+    expect(none.prims).toEqual([]);
+    expect(none.events).toEqual(all.events); // the alert bridge keeps firing
+    for (const showLast of [4, 8, 16, 40]) {
+      const res = run(PULSE_SIGNALS_MODULE, PULSE_NOISE, { showLast, peaks: true, gappedCross: true });
+      for (const fam of ["ps-bs-", "ps-dip-", "ps-pk-", "ps-gc-"]) {
+        const n = res.prims.filter((p) => p.id.startsWith(fam)).length;
+        expect(n, `${fam} showLast=${showLast}`).toBeLessThanOrEqual(showLast);
+      }
+      expect(res.events).toEqual(all.events);
+    }
+  });
+
+  it("honours the 5-bar per-family cooldown", () => {
+    const byFam = new Map<string, number[]>();
+    for (const e of run(PULSE_SIGNALS_MODULE, PULSE_NOISE, { peaks: true, gappedCross: true }).events ?? []) {
+      const fam = `${e.type}|${e.dir}`;
+      if (!byFam.has(fam)) byFam.set(fam, []);
+      byFam.get(fam)!.push(e.i);
+    }
+    expect(byFam.size).toBeGreaterThan(2);
+    for (const [fam, idxs] of byFam) {
+      for (let k = 1; k < idxs.length; k++) {
+        expect(idxs[k] - idxs[k - 1], `${fam} fired twice inside the cooldown`).toBeGreaterThanOrEqual(5);
+      }
+    }
+  });
+});
+
+describe("pulse divergences", () => {
+  it("detects on the pulse wave and draws one label per group, fan capped at 2", () => {
+    const res = run(PULSE_DIVERGENCE_MODULE, PULSE_NOISE);
+    const evs = evOf(res, "pulse_div");
+    expect(evs.length, "the detector row contract regressed — nothing was read").toBeGreaterThan(2);
+
+    const labels = res.prims.filter((p) => p.kind === "label") as any[];
+    const conns = res.prims.filter((p) => p.kind === "poly") as any[];
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.length).toBeLessThanOrEqual(8); // default showLast
+    expect(conns.length).toBeLessThanOrEqual(labels.length * 2);
+    expect((res.tooltips ?? []).length).toBe(labels.length);
+    for (const l of labels) expect(/^(Bull Div|Bear Div|H Bull|H Bear)( ×\d+)?$/.test(l.text)).toBe(true);
+    for (const c of conns) {
+      expect(c.pts.length).toBe(2);
+      expect(c.pts[1].i).toBeGreaterThan(c.pts[0].i);
+      for (const q of c.pts) {
+        expect(q.p).toBeGreaterThanOrEqual(-100);
+        expect(q.p).toBeLessThanOrEqual(100);
+      }
+    }
+  });
+
+  it("windows the drawing by showLast without touching the tape", () => {
+    const few = run(PULSE_DIVERGENCE_MODULE, PULSE_NOISE, { showLast: 2 });
+    const many = run(PULSE_DIVERGENCE_MODULE, PULSE_NOISE, { showLast: 16 });
+    expect(few.events).toEqual(many.events);
+    expect(few.prims.filter((p) => p.kind === "label").length).toBeLessThanOrEqual(2);
+    expect(few.prims.length).toBeLessThan(many.prims.length);
+  });
+
+  it("drops the hidden classes when the toggle is off", () => {
+    const on = run(PULSE_DIVERGENCE_MODULE, PULSE_NOISE);
+    const off = run(PULSE_DIVERGENCE_MODULE, PULSE_NOISE, { hidden: false });
+    const dashed = (r: ModuleResult) => r.prims.filter((p: any) => p.kind === "poly" && p.dash).length;
+    expect(dashed(on)).toBeGreaterThan(0);
+    expect(dashed(off)).toBe(0);
+    expect((off.events ?? []).length).toBeLessThan((on.events ?? []).length);
+  });
+});
+
+/**
+ * ONE profile knob per pane. The Wave module owns `profile`; Signals and Divergences must read it
+ * out of ctx.suite instead of carrying a private duplicate — a private copy silently detects on a
+ * wave nobody is looking at.
+ */
+describe("pulse satellites follow the Wave module's profile", () => {
+  it("re-detects divergences under the suite profile, on the wave that profile draws", () => {
+    const scalper = run(PULSE_DIVERGENCE_MODULE, PULSE_NOISE, {}, "en", { "wave.profile": "scalper" });
+    const swing = run(PULSE_DIVERGENCE_MODULE, PULSE_NOISE, {}, "en", { "wave.profile": "swing" });
+    expect((scalper.events ?? []).length).toBeGreaterThan(0);
+    expect((swing.events ?? []).length).toBeGreaterThan(0);
+    expect(scalper.events, "the module ignored the suite profile").not.toEqual(swing.events);
+    for (const [profile, res] of [["scalper", scalper], ["swing", swing]] as const) {
+      const { wave } = computePulseWave(PULSE_NOISE, profile);
+      const conns = res.prims.filter((p) => p.kind === "poly") as any[];
+      expect(conns.length, `${profile} drew no connectors`).toBeGreaterThan(0);
+      for (const c of conns) for (const q of c.pts) expect(q.p).toBeCloseTo(wave[q.i], 6);
+    }
+  });
+
+  it("moves Pulse Signals with the suite profile and no longer honours a private one", () => {
+    const scalper = run(PULSE_SIGNALS_MODULE, PULSE_NOISE, {}, "en", { "wave.profile": "scalper" });
+    const swing = run(PULSE_SIGNALS_MODULE, PULSE_NOISE, {}, "en", { "wave.profile": "swing" });
+    expect((scalper.events ?? []).length).toBeGreaterThan(0);
+    expect(scalper.events, "the module ignored the suite profile").not.toEqual(swing.events);
+    const { wave } = computePulseWave(PULSE_NOISE, "scalper");
+    for (const e of evOf(scalper, "pulse_buy")) expect(e.p).toBeCloseTo(wave[e.i - 1], 6);
+    // the removed per-module knob must steer nothing, even if a stale params blob still carries it
+    expect(run(PULSE_SIGNALS_MODULE, PULSE_NOISE, { profile: "scalper" }).events)
+      .toEqual(run(PULSE_SIGNALS_MODULE, PULSE_NOISE).events);
+    expect(PULSE_SIGNALS_MODULE.fields.some((f) => f.key === "profile")).toBe(false);
+    expect(PULSE_DIVERGENCE_MODULE.fields.some((f) => f.key === "profile")).toBe(false);
+  });
+});
+
+describe("volumeMapping", () => {
+  it("emits one sorted, pane-pinned column series", () => {
+    const res = run(VOLUME_MAPPING_MODULE, PULSE_NOISE);
+    expect(res.prims.length).toBe(1);
+    const col = res.prims[0] as any;
+    expect(col.kind).toBe("columns");
+    expect(col.base).toBe(-108);
+    expect(col.widthFrac).toBe(0.6);
+    expect(col.items.length).toBeGreaterThan(400);
+    let prevI = -1;
+    for (const it of col.items) {
+      expect(it.i, "columns items must be sorted by bar index").toBeGreaterThan(prevI);
+      prevI = it.i;
+      expect(it.v).toBeGreaterThan(-108); // above the baseline …
+      expect(it.v).toBeLessThanOrEqual(-82); // … and never into the wave's lane
+      expect(it.alpha).toBeLessThanOrEqual(1);
+      expect([COLORS.flowBuy, COLORS.flowSell, COLORS.muted]).toContain(it.color);
+    }
+    // the tallest column is the window's volume maximum
+    expect(Math.max(...col.items.map((x: any) => x.v))).toBeCloseTo(-82, 9);
+  });
+
+  it("keeps the dominance tape hysteretic (alternating sides, 5-bar cooldown)", () => {
+    const evs = evOf(run(VOLUME_MAPPING_MODULE, PULSE_NOISE), "vmap_flip");
+    expect(evs.length).toBeGreaterThan(3);
+    for (let k = 1; k < evs.length; k++) {
+      expect(evs[k].dir, "two flips to the same side in a row").not.toBe(evs[k - 1].dir);
+      expect(evs[k].i - evs[k - 1].i).toBeGreaterThanOrEqual(5);
+    }
+    for (const e of evs) {
+      expect(e.strength).toBeGreaterThanOrEqual(0);
+      expect(e.strength).toBeLessThanOrEqual(100);
+      expect(Math.abs(e.p!)).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("shrinks the rail when the volume window is widened past a spike", () => {
+    const spiky = PULSE_NOISE.map((b, i) => (i === 100 ? { ...b, v: 500000 } : b));
+    const short = run(VOLUME_MAPPING_MODULE, spiky, { window: 50 }).prims[0] as any;
+    const long = run(VOLUME_MAPPING_MODULE, spiky, { window: 400 }).prims[0] as any;
+    const at = (c: any, i: number) => c.items.find((x: any) => x.i === i)?.v;
+    expect(at(long, 300)).toBeLessThan(at(short, 300)); // the memory of the spike keeps scaling it
+  });
+});
+
+describe("money flows", () => {
+  it("draws the selected line(s) inside the pane", () => {
+    const mfi = run(FLOWS_MODULE, PULSE_NOISE);
+    const cvd = run(FLOWS_MODULE, PULSE_NOISE, { source: "cvd" });
+    const both = run(FLOWS_MODULE, PULSE_NOISE, { source: "both" });
+    expect(primOf(mfi, "flow-mfi")).toBeDefined();
+    expect(primOf(mfi, "flow-cvd")).toBeUndefined();
+    expect(primOf(cvd, "flow-cvd")).toBeDefined();
+    expect(primOf(both, "flow-mfi")).toBeDefined();
+    expect(primOf(both, "flow-cvd").dash).toBe("4 3"); // separable when they share the pane
+    for (const id of ["flow-mfi", "flow-cvd"]) {
+      const line = primOf(both, id);
+      expect(line.pts.length).toBeGreaterThan(100);
+      for (const q of line.pts) expect(Math.abs(q.p)).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("labels divergences D / H and keeps the tape independent of the toggle", () => {
+    const on = run(FLOWS_MODULE, PULSE_NOISE);
+    const off = run(FLOWS_MODULE, PULSE_NOISE, { divergences: false });
+    expect(evOf(on, "flow_div").length).toBeGreaterThan(2);
+    expect(off.events).toEqual(on.events);
+    expect(off.prims.every((p) => !p.id.startsWith("flow-div-"))).toBe(true);
+
+    const labels = on.prims.filter((p) => p.id.startsWith("flow-div-") && p.kind === "label") as any[];
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.length).toBeLessThanOrEqual(6); // default showLast
+    for (const l of labels) expect(["D", "H"]).toContain(l.text);
+    expect((on.tooltips ?? []).length).toBe(labels.length);
+  });
+
+  it("windows the drawing by showLast", () => {
+    for (const showLast of [2, 6, 12]) {
+      const res = run(FLOWS_MODULE, PULSE_NOISE, { showLast });
+      const labels = res.prims.filter((p) => p.id.endsWith("-l") && p.kind === "label");
+      expect(labels.length).toBeLessThanOrEqual(showLast);
+    }
+  });
+});
+
+// ─── 17. RSI Ultimate suite ───────────────────────────────────────────────────
+
+const RSI_BARS = walkBars(600, 77, 29);
+const rsiOf = (bars: SuiteBar[]) =>
+  computeUltimateRsi(bars, RSI_DEFAULTS.len, RSI_DEFAULTS.source, RSI_DEFAULTS.smoothLen, RSI_DEFAULTS.smoothType);
+
+describe("rsiEngine", () => {
+  it("draws the RSI itself, inside 0..100, colored by band", () => {
+    const { rsi } = rsiOf(RSI_BARS);
+    const res = run(RSI_ENGINE_MODULE, RSI_BARS);
+    const wave = primOf(res, "rsi-wave");
+    expect(wave.pts.length).toBeGreaterThan(500);
+    for (let k = 0; k < wave.pts.length; k++) {
+      const { i, p } = wave.pts[k];
+      expect(p).toBe(rsi[i]); // the pane draws the series, not a re-derivation
+      expect(p).toBeGreaterThanOrEqual(0);
+      expect(p).toBeLessThanOrEqual(100);
+      const want =
+        p >= 65 ? COLORS.down : p <= 35 ? COLORS.up : Math.abs(p - 50) < 8 ? COLORS.muted : COLORS.brand;
+      expect(wave.colors[k], `bar ${i} @ ${p}`).toBe(want);
+    }
+    expect(primOf(res, "rsi-smooth")).toBeDefined();
+    expect(primOf(run(RSI_ENGINE_MODULE, RSI_BARS, { smooth: false }), "rsi-smooth")).toBeUndefined();
+  });
+
+  it("fills only OUTSIDE the 65/35 band, pinned to the level it broke", () => {
+    const fills = run(RSI_ENGINE_MODULE, RSI_BARS).prims.filter((p) => p.id.startsWith("rsi-fill-")) as any[];
+    expect(fills.length).toBeGreaterThan(3);
+    for (const f of fills) {
+      expect(f.kind).toBe("cloud");
+      expect(f.upper.length).toBe(f.lower.length);
+      expect(f.fillAlpha).toBeLessThanOrEqual(0.18);
+      const ob = f.segColors[0] === COLORS.down;
+      const level = ob ? 65 : 35;
+      const flat = ob ? f.lower : f.upper; // the rail side is pinned to the level
+      const free = ob ? f.upper : f.lower;
+      for (const q of flat) expect(q.p).toBe(level);
+      let outside = 0;
+      for (const q of free) {
+        if (ob) expect(q.p).toBeGreaterThanOrEqual(level);
+        else expect(q.p).toBeLessThanOrEqual(level);
+        if (q.p !== level) outside++;
+      }
+      expect(outside, "a fill run with no excursion in it").toBeGreaterThan(0);
+    }
+  });
+
+  it("reports exactly the 65 / 35 / 50 transitions the series made", () => {
+    const { rsi } = rsiOf(RSI_BARS);
+    const want: Array<[string, string, number]> = [];
+    let prev = NaN;
+    for (let i = 0; i < RSI_BARS.length; i++) {
+      const v = rsi[i];
+      if (!Number.isFinite(v)) continue;
+      if (Number.isFinite(prev)) {
+        if (prev < 65 && v >= 65) want.push(["rsi_ob_enter", "bear", i]);
+        else if (prev > 35 && v <= 35) want.push(["rsi_os_enter", "bull", i]);
+        if (prev < 50 && v >= 50) want.push(["rsi_mid_cross", "bull", i]);
+        else if (prev > 50 && v <= 50) want.push(["rsi_mid_cross", "bear", i]);
+      }
+      prev = v;
+    }
+    const got = (run(RSI_ENGINE_MODULE, RSI_BARS).events ?? []).map((e) => [e.type, e.dir, e.i]);
+    expect(want.length).toBeGreaterThan(20);
+    expect(got).toEqual(want.slice(-80)); // the tape is tail-capped at MAX_EVENTS
+  });
+
+  it("responds to length and source without leaving the pane", () => {
+    const fast = run(RSI_ENGINE_MODULE, RSI_BARS, { len: 4 });
+    const slow = run(RSI_ENGINE_MODULE, RSI_BARS, { len: 34 });
+    expect(primOf(fast, "rsi-wave").pts).not.toEqual(primOf(slow, "rsi-wave").pts);
+    for (const src of ["close", "hl2", "hlc3"]) {
+      for (const q of primOf(run(RSI_ENGINE_MODULE, RSI_BARS, { source: src }), "rsi-wave").pts) {
+        expect(q.p).toBeGreaterThanOrEqual(0);
+        expect(q.p).toBeLessThanOrEqual(100);
+      }
+    }
+  });
+});
+
+describe("rsiSignals", () => {
+  const { rsi, smooth } = rsiOf(RSI_BARS);
+
+  it("fires at most one reversal per excursion into a zone", () => {
+    const revs = evOf(run(RSI_SIGNALS_MODULE, RSI_BARS), "rsix_reversal");
+    expect(revs.length).toBeGreaterThan(4);
+    for (const e of revs) {
+      expect(e.p).toBe(rsi[e.i]);
+      if (e.dir === "bull") expect(e.p!).toBeLessThanOrEqual(35);
+      else expect(e.p!).toBeGreaterThanOrEqual(65);
+    }
+    // between two same-side signals the RSI must have left the zone (the re-arm rule)
+    for (let k = 1; k < revs.length; k++) {
+      const a = revs[k - 1];
+      const b = revs[k];
+      if (a.dir !== b.dir) continue;
+      let left = false;
+      for (let i = a.i + 1; i < b.i; i++) {
+        const v = rsi[i];
+        if (!Number.isFinite(v)) continue;
+        if (a.dir === "bull" ? v > 35 : v < 65) left = true;
+      }
+      expect(left, `two ${a.dir} reversals at ${a.i}/${b.i} without leaving the zone`).toBe(true);
+    }
+  });
+
+  it("projects the deviation levels 12 and 24 points out and dates their first touch", () => {
+    const res = run(RSI_SIGNALS_MODULE, RSI_BARS);
+    const revs = evOf(res, "rsix_reversal");
+    const touches = evOf(res, "rsix_dev_touch");
+    expect(touches.length).toBeGreaterThan(2);
+    for (const t of touches) {
+      expect([50, 100]).toContain(t.strength);
+      const step = t.strength === 50 ? 1 : 2;
+      const sig = revs.find((r) => r.dir === t.dir && r.i < t.i && t.i - r.i <= 12);
+      expect(sig, `dev touch at ${t.i} has no parent signal`).toBeDefined();
+      const want = sig!.p! + (t.dir === "bull" ? 1 : -1) * 12 * step;
+      expect(t.p).toBeCloseTo(want, 9);
+      // the touch is the FIRST bar that reached it
+      for (let j = sig!.i + 1; j < t.i; j++) {
+        const v = rsi[j];
+        if (!Number.isFinite(v)) continue;
+        expect(t.dir === "bull" ? v < want : v > want, `bar ${j} touched first`).toBe(true);
+      }
+    }
+    const line = res.prims.find((p) => /^rsix-dev-\d+-1$/.test(p.id)) as any;
+    expect(line.kind).toBe("line");
+    expect(line.b.i - line.a.i).toBe(12); // carried 12 bars, then dropped
+    expect(line.a.p).toBe(line.b.p);
+  });
+
+  it("plots crossover dots only outside the 45–55 neutral band", () => {
+    const res = run(RSI_SIGNALS_MODULE, RSI_BARS);
+    const dots = res.prims.filter((p) => p.id.startsWith("rsix-x-")) as any[];
+    expect(dots.length).toBeGreaterThan(3);
+    for (const d of dots) {
+      expect(d.p === rsi[d.i]).toBe(true);
+      expect(d.p < 45 || d.p > 55, `dot at ${d.i} sits in the neutral band`).toBe(true);
+      // it really is a cross of the two series
+      const prev = (() => {
+        for (let j = d.i - 1; j >= 0; j--) if (Number.isFinite(rsi[j]) && Number.isFinite(smooth[j])) return j;
+        return -1;
+      })();
+      expect((rsi[prev] - smooth[prev]) * (rsi[d.i] - smooth[d.i])).toBeLessThan(0);
+    }
+    expect(run(RSI_SIGNALS_MODULE, RSI_BARS, { crossDots: false }).prims.some((p) => p.id.startsWith("rsix-x-"))).toBe(false);
+  });
+
+  it("gates prims — never the tape — on the toggles and showLast", () => {
+    const all = run(RSI_SIGNALS_MODULE, RSI_BARS);
+    const none = run(RSI_SIGNALS_MODULE, RSI_BARS, { signals: false, deviations: false, crossDots: false });
+    expect(none.prims).toEqual([]);
+    expect(none.events).toEqual(all.events);
+    for (const showLast of [4, 12, 30]) {
+      const res = run(RSI_SIGNALS_MODULE, RSI_BARS, { showLast, crossDots: false });
+      expect(res.prims.filter((p) => /^rsix-sig-\d+-m$/.test(p.id)).length).toBeLessThanOrEqual(showLast);
+      expect(res.events).toEqual(all.events);
+    }
+  });
+});
+
+describe("rsiChannels", () => {
+  const { rsi } = rsiOf(RSI_BARS);
+  const railsOf = (res: ModuleResult) => ({
+    up: primOf(res, "rsix-ch-up").pts as Array<{ i: number; p: number }>,
+    lo: primOf(res, "rsix-ch-lo").pts as Array<{ i: number; p: number }>,
+    mid: primOf(res, "rsix-ch-mid").pts as Array<{ i: number; p: number }>,
+  });
+
+  it("keeps the three rails ordered and the models genuinely distinct", () => {
+    const seen: string[] = [];
+    for (const model of ["bollinger", "keltner", "donchian"]) {
+      const { up, lo, mid } = railsOf(run(RSI_CHANNELS_MODULE, RSI_BARS, { model }));
+      expect(up.length).toBeGreaterThan(400);
+      expect(lo.length).toBe(up.length);
+      expect(mid.length).toBe(up.length);
+      for (let k = 0; k < up.length; k++) {
+        expect(up[k].i).toBe(lo[k].i);
+        expect(up[k].p, `${model} bar ${up[k].i}`).toBeGreaterThanOrEqual(mid[k].p - 1e-9);
+        expect(mid[k].p).toBeGreaterThanOrEqual(lo[k].p - 1e-9);
+      }
+      seen.push(JSON.stringify(up.slice(0, 40)));
+    }
+    expect(new Set(seen).size, "two channel models produced identical rails").toBe(3);
+  });
+
+  it("builds the Donchian staircase from the bars BEFORE i, so a break is possible", () => {
+    const { up, lo } = railsOf(run(RSI_CHANNELS_MODULE, RSI_BARS, { model: "donchian", length: 20 }));
+    const finite: number[] = [];
+    const idx: number[] = [];
+    for (let i = 0; i < RSI_BARS.length; i++) if (Number.isFinite(rsi[i])) { finite.push(rsi[i]); idx.push(i); }
+    const at = new Map(idx.map((i, k) => [i, k]));
+    let checked = 0;
+    for (const q of up.slice(0, 120)) {
+      const k = at.get(q.i)!;
+      const win = finite.slice(k - 20, k); // the 20 DEFINED values strictly before this bar
+      expect(q.p, `up rail at ${q.i}`).toBeCloseTo(Math.max(...win), 9);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(100);
+    for (const q of lo.slice(0, 40)) {
+      const k = at.get(q.i)!;
+      expect(q.p).toBeCloseTo(Math.min(...finite.slice(k - 20, k)), 9);
+    }
+    expect(evOf(run(RSI_CHANNELS_MODULE, RSI_BARS, { model: "donchian" }), "rsix_chan_break").length).toBeGreaterThan(0);
+  });
+
+  it("pins the break dots to the opposite pane margin and respects the cooldown", () => {
+    for (const model of ["bollinger", "keltner", "donchian"]) {
+      const res = run(RSI_CHANNELS_MODULE, RSI_BARS, { model, length: 20 });
+      const evs = evOf(res, "rsix_chan_break");
+      const dots = res.prims.filter((p) => /^rsix-chb-\d+-m$/.test(p.id)) as any[];
+      expect(dots.length, `${model} drew no break dots`).toBeGreaterThan(0);
+      expect(dots.length).toBeLessThanOrEqual(evs.length);
+      for (const d of dots) {
+        const ev = evs.find((e) => e.i === d.i)!;
+        expect(ev).toBeDefined();
+        expect(d.p).toBe(ev.dir === "bull" ? 4 : 96); // up-break pinned low, down-break pinned high
+        expect(d.fill).toBe(ev.dir === "bull" ? COLORS.up : COLORS.down);
+      }
+      const perDir: Record<string, number> = {};
+      for (const e of evs) {
+        const last = perDir[e.dir];
+        if (last !== undefined) expect(e.i - last, `${model} ${e.dir} cooldown`).toBeGreaterThanOrEqual(10);
+        perDir[e.dir] = e.i;
+      }
+    }
+  });
+
+  it("returns an empty result when the series is shorter than the window", () => {
+    expect(run(RSI_CHANNELS_MODULE, RSI_BARS.slice(0, 25), { length: 60 }).prims).toEqual([]);
+  });
+});
+
+describe("rsiDivergence", () => {
+  it("draws one label per group with the fan capped at 2 connectors", () => {
+    const res = run(RSI_DIVERGENCE_MODULE, RSI_BARS);
+    expect(evOf(res, "rsix_div").length).toBeGreaterThan(2);
+    const labels = res.prims.filter((p) => p.kind === "label") as any[];
+    const conns = res.prims.filter((p) => p.kind === "poly") as any[];
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.length).toBeLessThanOrEqual(8);
+    expect(conns.length).toBeLessThanOrEqual(labels.length * 2);
+    expect((res.tooltips ?? []).length).toBe(labels.length);
+    const { rsi } = rsiOf(RSI_BARS);
+    for (const c of conns) for (const q of c.pts) expect(q.p).toBe(rsi[q.i]);
+  });
+
+  it("windows the drawing by showLast and honours the hidden toggle", () => {
+    const few = run(RSI_DIVERGENCE_MODULE, RSI_BARS, { showLast: 2 });
+    const many = run(RSI_DIVERGENCE_MODULE, RSI_BARS, { showLast: 16 });
+    expect(few.events).toEqual(many.events);
+    expect(few.prims.filter((p) => p.kind === "label").length).toBeLessThanOrEqual(2);
+    const off = run(RSI_DIVERGENCE_MODULE, RSI_BARS, { hidden: false });
+    expect((off.events ?? []).length).toBeLessThan((many.events ?? []).length);
+    expect(off.prims.some((p: any) => p.kind === "poly" && p.dash)).toBe(false);
+  });
+});
+
+/**
+ * The Engine owns the RSI; the satellites must DRAW ON IT. Each case retunes the Engine through the
+ * suite-wide flat params (what host.ts hands a module as ctx.suite) and asserts the satellite's
+ * geometry lands on the retuned curve — the regression guard for satellites recomputing from
+ * RSI_DEFAULTS, which detached every glyph from the wave the moment a user changed the length.
+ */
+describe("rsix satellites follow the Engine's user settings", () => {
+  const TUNE = { len: 4, smoothLen: 3, smoothType: "wma" };
+  const FLAT = { "eng.len": 4, "eng.smoothLen": 3, "eng.smoothType": "wma" };
+  /** bar index -> the Engine's own drawn RSI under TUNE. */
+  const engineCurve = () =>
+    new Map<number, number>(
+      (primOf(run(RSI_ENGINE_MODULE, RSI_BARS, TUNE), "rsi-wave").pts as Array<{ i: number; p: number }>)
+        .map((q) => [q.i, q.p] as [number, number]),
+    );
+
+  it("pins every RSI Signals glyph to the retuned Engine curve", () => {
+    const curve = engineCurve();
+    const tuned = run(RSI_SIGNALS_MODULE, RSI_BARS, {}, "en", FLAT);
+    expect(tuned.events, "the retune did not move the module — it is still on RSI_DEFAULTS")
+      .not.toEqual(run(RSI_SIGNALS_MODULE, RSI_BARS).events);
+
+    // crossover dots sit ON the curve: marker y IS the Engine's value at that bar
+    const dots = tuned.prims.filter((p) => /^rsix-x-\d+$/.test(p.id)) as any[];
+    expect(dots.length).toBeGreaterThan(3);
+    for (const d of dots) expect(d.p).toBeCloseTo(curve.get(d.i)!, 6);
+
+    const revs = evOf(tuned, "rsix_reversal");
+    expect(revs.length).toBeGreaterThan(2);
+    for (const e of revs) {
+      expect(e.p).toBeCloseTo(curve.get(e.i)!, 6);
+      const m = tuned.prims.find((p) => p.id === `rsix-sig-${e.i}-m`) as any;
+      if (!m) continue; // outside showLast
+      expect(m.p).toBeCloseTo(clampTo(curve.get(e.i)! + (e.dir === "bull" ? -6 : 6), 2, 98), 6);
+    }
+  });
+
+  it("re-detects RSI Divergence and RSI Channels on the retuned curve", () => {
+    const curve = engineCurve();
+    const div = run(RSI_DIVERGENCE_MODULE, RSI_BARS, {}, "en", FLAT);
+    expect(div.events).not.toEqual(run(RSI_DIVERGENCE_MODULE, RSI_BARS).events);
+    const conns = div.prims.filter((p) => p.kind === "poly") as any[];
+    expect(conns.length).toBeGreaterThan(0);
+    for (const c of conns) for (const q of c.pts) expect(q.p).toBeCloseTo(curve.get(q.i)!, 6);
+
+    const chan = run(RSI_CHANNELS_MODULE, RSI_BARS, {}, "en", FLAT);
+    expect(chan.events).not.toEqual(run(RSI_CHANNELS_MODULE, RSI_BARS).events);
+    const breaks = evOf(chan, "rsix_chan_break");
+    expect(breaks.length).toBeGreaterThan(0);
+    for (const b of breaks) expect(b.p).toBeCloseTo(curve.get(b.i)!, 6);
+  });
+
+  it("falls back to the Engine defaults when ctx.suite is absent", () => {
+    for (const mod of [RSI_SIGNALS_MODULE, RSI_DIVERGENCE_MODULE, RSI_CHANNELS_MODULE]) {
+      const bare: any = { ...ctxFor(mod, RSI_BARS) };
+      delete bare.suite;
+      expect(mod.compute(bare), `${mod.key} without ctx.suite`).toEqual(run(mod, RSI_BARS));
+    }
+  });
+});
+
+// ─── 18. MACD Ultimate suite ──────────────────────────────────────────────────
+
+/**
+ * Deterministic multi-period wave. The three sines put the normalized MACD against BOTH saturation
+ * rails several times, which is what makes the extreme-zone signal gate testable; the path is not
+ * piecewise-linear anywhere, so the ±100 normalization never degenerates into a constant.
+ */
+function macdWavePath(n: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push(100 + 20 * Math.sin(i / 17) + 8 * Math.sin(i / 5) + 3 * Math.sin(i / 41) + i * 0.01);
+  }
+  return out;
+}
+const MACD_BARS = pathBars(macdWavePath(400));
+const macdOf = (bars: SuiteBar[]) => {
+  const d = MACDX_ENGINE_DEFAULTS;
+  return computeUltimateMacd(bars, d.fast, d.slow, d.signalLen, d.oscMa, d.sigMa);
+};
+
+describe("macdEngine", () => {
+  it("draws the normalized curve and its signal line on one ±100 scale", () => {
+    const { macd, signal } = macdOf(MACD_BARS);
+    const res = run(MACD_ENGINE_MODULE, MACD_BARS);
+    const curve = primOf(res, "mx-eng-macd");
+    const sig = primOf(res, "mx-eng-signal");
+    expect(curve.pts.length).toBeGreaterThan(300);
+    for (const q of curve.pts) {
+      expect(q.p).toBe(macd[q.i]);
+      expect(Math.abs(q.p)).toBeLessThanOrEqual(100);
+    }
+    for (const q of sig.pts) {
+      expect(q.p).toBe(signal[q.i]);
+      expect(Math.abs(q.p)).toBeLessThanOrEqual(100);
+    }
+    expect(curve.pts.some((q: any) => Math.abs(q.p) >= 99)).toBe(true); // the rails are reached
+  });
+
+  it("caps the pane with OB/OS strips inside the alpha discipline", () => {
+    const res = run(MACD_ENGINE_MODULE, MACD_BARS);
+    const ob = primOf(res, "mx-eng-ob");
+    const os = primOf(res, "mx-eng-os");
+    expect([ob.p1, ob.p2]).toEqual([100, 120]);
+    expect([os.p1, os.p2]).toEqual([-100, -120]);
+    expect(ob.i2).toBe("right");
+    expect(ob.fillAlpha).toBeLessThanOrEqual(0.18);
+    expect(ob.fill).toBe(COLORS.down);
+    expect(os.fill).toBe(COLORS.up);
+  });
+
+  it("separates the heatmap and slope color modes", () => {
+    const heat = primOf(run(MACD_ENGINE_MODULE, MACD_BARS), "mx-eng-macd");
+    const slope = primOf(run(MACD_ENGINE_MODULE, MACD_BARS, { colorMode: "slope" }), "mx-eng-macd");
+    expect(slope.colors).not.toEqual(heat.colors);
+    heat.pts.forEach((q: any, k: number) => {
+      const a = Math.abs(q.p);
+      expect(heat.colors[k], `bar ${q.i}`).toBe(
+        a < 40 ? COLORS.muted : a <= 80 ? COLORS.brand : q.p < 0 ? COLORS.up : COLORS.down,
+      );
+    });
+    for (const c of slope.colors) expect([COLORS.up, COLORS.down, COLORS.muted]).toContain(c);
+  });
+
+  it("reports exactly the zero crosses the curve made", () => {
+    const { macd } = macdOf(MACD_BARS);
+    const want: Array<[string, number]> = [];
+    let prev = NaN;
+    for (let i = 0; i < MACD_BARS.length; i++) {
+      const v = macd[i];
+      if (!Number.isFinite(v)) continue;
+      if (Number.isFinite(prev) && ((prev < 0 && v > 0) || (prev > 0 && v < 0))) {
+        want.push([v > 0 ? "bull" : "bear", i]);
+      }
+      prev = v;
+    }
+    const got = (run(MACD_ENGINE_MODULE, MACD_BARS).events ?? []).map((e) => [e.dir, e.i]);
+    expect(want.length).toBeGreaterThan(5);
+    expect(got).toEqual(want.slice(-80));
+  });
+});
+
+describe("macdSignals", () => {
+  /** Every macd × signal cross, with the side it happened on — the reference the gate is read against. */
+  function crossesOf(bars: SuiteBar[]): Array<{ i: number; bull: boolean; m: number }> {
+    const { macd, signal } = macdOf(bars);
+    const out: Array<{ i: number; bull: boolean; m: number }> = [];
+    let pm = NaN;
+    let ps = NaN;
+    for (let i = 0; i < bars.length; i++) {
+      const m = macd[i];
+      const g = signal[i];
+      if (!Number.isFinite(m) || !Number.isFinite(g)) continue;
+      if (Number.isFinite(pm) && Number.isFinite(ps)) {
+        if (pm <= ps && m > g) out.push({ i, bull: true, m });
+        else if (pm >= ps && m < g) out.push({ i, bull: false, m });
+      }
+      pm = m;
+      ps = g;
+    }
+    return out;
+  }
+
+  it("fires only on a cross that happens inside its own extreme zone", () => {
+    const all = crossesOf(MACD_BARS);
+    expect(all.length).toBeGreaterThan(20); // most crosses are mid-range noise …
+    for (const threshold of [60, 80, 95]) {
+      const want = all
+        .filter((c) => (c.bull ? c.m <= -threshold : c.m >= threshold))
+        .map((c) => [c.bull ? "bull" : "bear", c.i]);
+      const got = (run(MACD_SIGNALS_MODULE, MACD_BARS, { threshold }).events ?? []).map((e) => [e.dir, e.i]);
+      expect(got, `threshold=${threshold}`).toEqual(want);
+    }
+    const at80 = (run(MACD_SIGNALS_MODULE, MACD_BARS, { threshold: 80 }).events ?? []);
+    expect(at80.length, "the fixture no longer exercises the extreme zone").toBeGreaterThan(0);
+    for (const e of at80) {
+      expect(Math.abs(e.p!)).toBeGreaterThanOrEqual(80);
+      expect(e.dir).toBe(e.p! < 0 ? "bull" : "bear"); // ▲ out of oversold, ▼ out of overbought
+      expect(e.strength).toBe(Math.round(Math.abs(e.p!)));
+    }
+  });
+
+  it("shrinks monotonically as the zone is deepened", () => {
+    const key = (r: ModuleResult) => (r.events ?? []).map((e) => `${e.dir}|${e.i}`);
+    const wide = new Set(key(run(MACD_SIGNALS_MODULE, MACD_BARS, { threshold: 60 })));
+    const mid = key(run(MACD_SIGNALS_MODULE, MACD_BARS, { threshold: 80 }));
+    const deep = key(run(MACD_SIGNALS_MODULE, MACD_BARS, { threshold: 95 }));
+    expect(mid.every((k) => wide.has(k))).toBe(true);
+    expect(deep.every((k) => mid.includes(k))).toBe(true);
+    expect(mid.length).toBeLessThan(wide.size);
+  });
+
+  it("stands the triangle off the curve, inside the pane, capped by showLast", () => {
+    const res = run(MACD_SIGNALS_MODULE, MACD_BARS, { threshold: 60 });
+    const evs = res.events ?? [];
+    for (const m of res.prims as any[]) {
+      const ev = evs.find((e) => `mx-sig-${e.i}-m` === m.id)!;
+      expect(ev).toBeDefined();
+      expect(m.shape).toBe(ev.dir === "bull" ? "tri-up" : "tri-down");
+      expect(m.p).toBeCloseTo(ev.p! + (ev.dir === "bull" ? -10 : 10), 9);
+      expect(m.p).toBeGreaterThanOrEqual(-118);
+      expect(m.p).toBeLessThanOrEqual(118);
+    }
+    for (const showLast of [4, 8, 24]) {
+      const r = run(MACD_SIGNALS_MODULE, MACD_BARS, { threshold: 60, showLast });
+      expect(r.prims.length).toBeLessThanOrEqual(showLast);
+      expect(r.events).toEqual(evs); // the tape is never gated by the draw cap
+    }
+  });
+});
+
+describe("macdHistogram", () => {
+  it("emits sorted columns off a zero baseline, in pane units", () => {
+    const { hist } = macdOf(MACD_BARS);
+    const col = primOf(run(MACD_HISTOGRAM_MODULE, MACD_BARS), "mx-hist-cols");
+    expect(col.kind).toBe("columns");
+    expect(col.base).toBe(0);
+    expect(col.items.length).toBeGreaterThan(300);
+    let prevI = -1;
+    for (const it of col.items) {
+      expect(it.i, "columns items must be sorted by bar index").toBeGreaterThan(prevI);
+      prevI = it.i;
+      expect(it.v).toBe(clampTo(hist[it.i], -100, 100));
+      expect(Math.abs(it.v)).toBeLessThanOrEqual(100);
+      expect(it.color).toBe(hist[it.i] > 0 ? COLORS.up : COLORS.down);
+    }
+  });
+
+  it("encodes momentum as an expanding / contracting alpha tier", () => {
+    const { hist } = macdOf(MACD_BARS);
+    const items = primOf(run(MACD_HISTOGRAM_MODULE, MACD_BARS), "mx-hist-cols").items as any[];
+    const tiers = new Set(items.map((x) => x.alpha));
+    expect([...tiers].sort()).toEqual([0.35, 0.8]); // exactly two tiers, both under 1
+    expect(items[0].alpha).toBe(0.8); // nothing to shrink from yet
+    for (let k = 1; k < items.length; k++) {
+      const a = Math.abs(hist[items[k].i]);
+      const b = Math.abs(hist[items[k - 1].i]);
+      expect(items[k].alpha, `bar ${items[k].i}`).toBe(a >= b ? 0.8 : 0.35);
+    }
+  });
+
+  it("publishes a flip only once the new side survives a second bar", () => {
+    const { hist } = macdOf(MACD_BARS);
+    const res = run(MACD_HISTOGRAM_MODULE, MACD_BARS);
+    const flips = evOf(res, "macdx_hist_flip");
+    expect(flips.length).toBeGreaterThan(5);
+    const sideAt = (i: number) => (hist[i] > 0 ? 1 : hist[i] < 0 ? -1 : 0);
+    for (const f of flips) {
+      const want = f.dir === "bull" ? 1 : -1;
+      expect(sideAt(f.i)).toBe(want);
+      // the next defined bar holds the same side — that is the confirmation
+      let next = -1;
+      for (let j = f.i + 1; j < MACD_BARS.length; j++) if (Number.isFinite(hist[j])) { next = j; break; }
+      expect(sideAt(next), `flip at ${f.i} was not confirmed`).toBe(want);
+      expect(f.label, "the prior side's length rides in the label").toMatch(/\d+ bars$/);
+    }
+    for (let k = 1; k < flips.length; k++) {
+      expect(flips[k].dir, "two flips to the same side in a row").not.toBe(flips[k - 1].dir);
+    }
+    const marks = res.prims.filter((p) => p.kind === "label") as any[];
+    expect(marks.length).toBeLessThanOrEqual(40);
+    for (const m of marks) expect(m.text).toBe("+"); // language-neutral microcopy
+    expect(run(MACD_HISTOGRAM_MODULE, MACD_BARS, { flips: false }).prims.length).toBe(1);
+    expect(run(MACD_HISTOGRAM_MODULE, MACD_BARS, { flips: false }).events).toEqual(res.events);
+  });
+});
+
+describe("macdTrend — phase hysteresis", () => {
+  it("commits a phase only on 3 aligned bars past the signal line", () => {
+    const { macd, signal } = macdOf(MACD_BARS);
+    const commits = evOf(run(MACD_TREND_MODULE, MACD_BARS), "macdx_phase");
+    expect(commits.length).toBeGreaterThan(4);
+    for (const c of commits) {
+      const bull = c.dir === "bull";
+      expect(bull ? macd[c.i] > signal[c.i] : macd[c.i] < signal[c.i], `commit ${c.i} is on the wrong side`).toBe(true);
+      // three consecutive moves in the phase's direction ending on the commit bar
+      const seq: number[] = [];
+      for (let j = c.i; j >= 0 && seq.length < 4; j--) if (Number.isFinite(macd[j])) seq.unshift(macd[j]);
+      expect(seq.length).toBe(4);
+      for (let k = 1; k < 4; k++) {
+        expect(bull ? seq[k] > seq[k - 1] : seq[k] < seq[k - 1], `commit ${c.i} step ${k}`).toBe(true);
+      }
+    }
+  });
+
+  it("never flips on a one-bar wiggle (the lane is a regime, not an event stream)", () => {
+    // the noisy fixture is the one that chops: it is full of single counter-trend bars inside a
+    // committed phase, and NONE of them may move the lane.
+    const bars = walkBars(600, 77, 29);
+    const { macd } = macdOf(bars);
+    const commits = evOf(run(MACD_TREND_MODULE, bars), "macdx_phase");
+    expect(commits.length).toBeGreaterThan(4);
+    for (let k = 1; k < commits.length; k++) {
+      expect(commits[k].dir, "two commits to the same side in a row").not.toBe(commits[k - 1].dir);
+    }
+    const fin: number[] = [];
+    for (let i = 0; i < bars.length; i++) if (Number.isFinite(macd[i])) fin.push(i);
+    const commitAt = new Map(commits.map((c) => [c.i, c.dir]));
+
+    // Walk the phase timeline and measure how long each counter-trend excursion lasted. A run of
+    // 1 or 2 bars is a wiggle and must leave the lane alone; only a run reaching STREAK (3) that is
+    // ALSO on the far side of the signal line may commit — and when it does, the module must have
+    // published exactly that commit on that bar.
+    let phase = 0;
+    let counterRun = 0;
+    let wiggles = 0;
+    for (let x = 1; x < fin.length; x++) {
+      const i = fin[x];
+      const moved = macd[i] - macd[fin[x - 1]];
+      const dir = commitAt.get(i);
+      if (phase !== 0) {
+        const counter = phase > 0 ? moved < 0 : moved > 0;
+        if (counter) {
+          counterRun++;
+          if (counterRun < 3) {
+            expect(dir, `a ${counterRun}-bar wiggle at ${i} flipped the phase`).toBeUndefined();
+            wiggles++;
+          }
+        } else counterRun = 0;
+      }
+      if (dir) phase = dir === "bull" ? 1 : -1;
+    }
+    expect(wiggles, "the fixture no longer exercises the hysteresis").toBeGreaterThan(20);
+  });
+
+  it("paints one dotted lane, outside the ±100 rails, for the last 300 bars only", () => {
+    const res = run(MACD_TREND_MODULE, MACD_BARS);
+    const sq = res.prims.filter((p) => p.kind === "marker") as any[];
+    expect(sq.length).toBeGreaterThan(20);
+    for (const s of sq) {
+      expect([-112, 112]).toContain(s.p);
+      expect(s.p === -112 ? s.fill === COLORS.up : s.fill === COLORS.down).toBe(true);
+      expect(s.i % 2).toBe(0); // STRIDE 2
+      expect(s.i).toBeGreaterThanOrEqual(MACD_BARS.length - 300);
+      expect(s.alpha).toBeLessThanOrEqual(1);
+    }
+    // exactly one lane per bar, and the tooltip only rides the first square of each run
+    expect(new Set(sq.map((s) => s.i)).size).toBe(sq.length);
+    expect((res.tooltips ?? []).length).toBe(sq.filter((s) => s.tooltipId).length);
+  });
+});
+
+describe("macdDivergence", () => {
+  it("draws one label per group with the fan capped at 2 connectors", () => {
+    const res = run(MACD_DIVERGENCE_MODULE, MACD_BARS);
+    const { macd } = macdOf(MACD_BARS);
+    expect(evOf(res, "macdx_div").length).toBeGreaterThan(2);
+    const labels = res.prims.filter((p) => p.kind === "label") as any[];
+    const conns = res.prims.filter((p) => p.kind === "poly") as any[];
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.length).toBeLessThanOrEqual(8);
+    expect(conns.length).toBeLessThanOrEqual(labels.length * 2);
+    for (const c of conns) for (const q of c.pts) expect(q.p).toBe(macd[q.i]);
+  });
+
+  it("windows the drawing by showLast and honours the hidden toggle", () => {
+    const few = run(MACD_DIVERGENCE_MODULE, MACD_BARS, { showLast: 2 });
+    const many = run(MACD_DIVERGENCE_MODULE, MACD_BARS, { showLast: 16 });
+    expect(few.events).toEqual(many.events);
+    expect(few.prims.filter((p) => p.kind === "label").length).toBeLessThanOrEqual(2);
+    const off = run(MACD_DIVERGENCE_MODULE, MACD_BARS, { hidden: false });
+    expect((off.events ?? []).length).toBeLessThan((many.events ?? []).length);
+    expect(off.prims.some((p: any) => p.kind === "poly" && p.dash)).toBe(false);
+  });
+});
+
+/**
+ * Same guard for the MACD pane: the four satellites build their series through
+ * `sharedMacd(bars, ctx.suite)`, so retuning the Engine's fast/slow must move the histogram, the
+ * triangles, the connectors and the phase lane with the curve — not leave them on the defaults.
+ */
+describe("macdx satellites follow the Engine's user settings", () => {
+  const TUNE = { fast: 4, slow: 60 };
+  const FLAT = { "eng.fast": 4, "eng.slow": 60 };
+  const tuned = () => {
+    const d = MACDX_ENGINE_DEFAULTS;
+    return computeUltimateMacd(MACD_BARS, TUNE.fast, TUNE.slow, d.signalLen, d.oscMa, d.sigMa);
+  };
+
+  it("draws the histogram of the retuned Engine, column for column", () => {
+    const { hist } = tuned();
+    const res = run(MACD_HISTOGRAM_MODULE, MACD_BARS, {}, "en", FLAT);
+    const items = primOf(res, "mx-hist-cols").items as any[];
+    expect(items.length).toBeGreaterThan(200);
+    expect(primOf(run(MACD_HISTOGRAM_MODULE, MACD_BARS), "mx-hist-cols").items,
+      "the retune did not move the columns — they are still on MACDX_ENGINE_DEFAULTS").not.toEqual(items);
+    for (const it of items) expect(it.v).toBeCloseTo(clampTo(hist[it.i], -100, 100), 6);
+  });
+
+  it("pins the MACD Signals triangles to the retuned Engine curve", () => {
+    const curve = new Map<number, number>(
+      (primOf(run(MACD_ENGINE_MODULE, MACD_BARS, TUNE), "mx-eng-macd").pts as Array<{ i: number; p: number }>)
+        .map((q) => [q.i, q.p] as [number, number]),
+    );
+    const res = run(MACD_SIGNALS_MODULE, MACD_BARS, { threshold: 60 }, "en", FLAT);
+    expect(res.events).not.toEqual(run(MACD_SIGNALS_MODULE, MACD_BARS, { threshold: 60 }).events);
+    const evs = res.events ?? [];
+    expect(evs.length).toBeGreaterThan(0);
+    for (const e of evs) expect(e.p).toBeCloseTo(curve.get(e.i)!, 6);
+    for (const m of res.prims as any[]) {
+      const e = evs.find((x) => `mx-sig-${x.i}-m` === m.id)!;
+      expect(e, `stray marker ${m.id}`).toBeDefined();
+      expect(m.p).toBeCloseTo(curve.get(e.i)! + (e.dir === "bull" ? -10 : 10), 6);
+    }
+  });
+
+  it("re-detects MACD Divergence and the phase lane on the retuned curve", () => {
+    const { macd } = tuned();
+    const div = run(MACD_DIVERGENCE_MODULE, MACD_BARS, {}, "en", FLAT);
+    expect(div.events).not.toEqual(run(MACD_DIVERGENCE_MODULE, MACD_BARS).events);
+    const conns = div.prims.filter((p) => p.kind === "poly") as any[];
+    expect(conns.length).toBeGreaterThan(0);
+    for (const c of conns) for (const q of c.pts) expect(q.p).toBeCloseTo(macd[q.i], 6);
+
+    const trend = run(MACD_TREND_MODULE, MACD_BARS, {}, "en", FLAT);
+    expect(trend.events).not.toEqual(run(MACD_TREND_MODULE, MACD_BARS).events);
+    const phases = evOf(trend, "macdx_phase");
+    expect(phases.length).toBeGreaterThan(0);
+    for (const e of phases) expect(e.p).toBeCloseTo(macd[e.i], 6);
+  });
+
+  it("falls back to the Engine defaults when ctx.suite is absent", () => {
+    for (const mod of [MACD_SIGNALS_MODULE, MACD_HISTOGRAM_MODULE, MACD_DIVERGENCE_MODULE, MACD_TREND_MODULE]) {
+      const bare: any = { ...ctxFor(mod, MACD_BARS) };
+      delete bare.suite;
+      expect(mod.compute(bare), `${mod.key} without ctx.suite`).toEqual(run(mod, MACD_BARS));
+    }
+  });
+});
+
+// ─── 19. W2 contract hygiene, pane geometry, non-repaint ──────────────────────
+
+const W2_SRC_FILES = [
+  "shared/oscUtils.ts", "shared/divergence.ts",
+  "pulse/pulseWave.ts", "pulse/pulseSignals.ts", "pulse/divergences.ts",
+  "pulse/volumeMapping.ts", "pulse/flows.ts",
+  "rsix/rsiEngine.ts", "rsix/rsiSignals.ts", "rsix/rsiDivergence.ts", "rsix/rsiChannels.ts",
+  "macdx/macdEngine.ts", "macdx/macdSignals.ts", "macdx/macdDivergence.ts",
+  "macdx/macdHistogram.ts", "macdx/macdTrend.ts",
+];
+
+/** Every pane module with a settings blob that switches its optional surfaces ON. */
+const W2_CASES: Array<{ suite: string; mod: SuiteModuleDef; opts: Record<string, any> }> = [
+  { suite: "pulse", mod: PULSE_WAVE_MODULE, opts: {} },
+  { suite: "pulse", mod: PULSE_SIGNALS_MODULE, opts: { peaks: true, gappedCross: true, showLast: 40 } },
+  { suite: "pulse", mod: PULSE_DIVERGENCE_MODULE, opts: { showLast: 16 } },
+  { suite: "pulse", mod: VOLUME_MAPPING_MODULE, opts: {} },
+  { suite: "pulse", mod: FLOWS_MODULE, opts: { source: "both", showLast: 12 } },
+  { suite: "rsix", mod: RSI_ENGINE_MODULE, opts: {} },
+  { suite: "rsix", mod: RSI_SIGNALS_MODULE, opts: { showLast: 30 } },
+  { suite: "rsix", mod: RSI_DIVERGENCE_MODULE, opts: { showLast: 16 } },
+  { suite: "rsix", mod: RSI_CHANNELS_MODULE, opts: { model: "keltner" } },
+  { suite: "macdx", mod: MACD_ENGINE_MODULE, opts: {} },
+  { suite: "macdx", mod: MACD_SIGNALS_MODULE, opts: { threshold: 60, showLast: 24 } },
+  { suite: "macdx", mod: MACD_HISTOGRAM_MODULE, opts: {} },
+  { suite: "macdx", mod: MACD_DIVERGENCE_MODULE, opts: { showLast: 16 } },
+  { suite: "macdx", mod: MACD_TREND_MODULE, opts: {} },
+];
+const W2_MODULES = W2_CASES.map((c) => c.mod);
+
+/** Exercise every W2 module on both noisy fixtures, in both languages. */
+function w2Results(): Array<{ mod: string; suite: string; res: ModuleResult }> {
+  const out: Array<{ mod: string; suite: string; res: ModuleResult }> = [];
+  for (const bars of [PULSE_NOISE, MACD_BARS]) {
+    for (const lang of ["en", "zh"] as const) {
+      for (const c of W2_CASES) {
+        out.push({ mod: `${c.suite}/${c.mod.key}/${lang}`, suite: c.suite, res: run(c.mod, bars, c.opts, lang) });
+      }
+    }
+  }
+  return out;
+}
+
+/** Every y-value a prim addresses, in the suite's own pane units. */
+function paneYs(p: any): number[] {
+  const out: number[] = [];
+  const add = (v: any) => { if (typeof v === "number") out.push(v); };
+  switch (p.kind) {
+    case "zone": add(p.p1); add(p.p2); break;
+    case "line": add(p.a?.p); add(p.b?.p); break;
+    case "poly": case "gradline": for (const q of p.pts ?? []) add(q.p); break;
+    case "cloud": for (const q of [...(p.upper ?? []), ...(p.lower ?? [])]) add(q.p); break;
+    case "label": case "marker": add(p.p); break;
+    case "columns": add(p.base ?? 0); for (const it of p.items ?? []) add(it.v); break;
+    case "profile": for (const b of p.bins ?? []) { add(b.p1); add(b.p2); } break;
+    default: break;
+  }
+  return out;
+}
+
+describe("W2 contract hygiene", () => {
+  it("every prim carries a unique, non-empty id and only finite numbers", () => {
+    for (const { mod, res } of w2Results()) {
+      expect(res.prims.length, `${mod}: drew nothing — the fixture no longer exercises it`).toBeGreaterThan(0);
+      const seen = new Set<string>();
+      for (const p of res.prims) {
+        expect(typeof p.id).toBe("string");
+        expect(p.id.length, `${mod}: empty prim id`).toBeGreaterThan(0);
+        expect(seen.has(p.id), `${mod}: duplicate prim id ${p.id}`).toBe(false);
+        seen.add(p.id);
+        const bad: string[] = [];
+        scanNumbers(p, `${mod}:${p.id}`, bad);
+        expect(bad, `${mod}: non-finite numbers`).toEqual([]);
+      }
+      for (const e of res.events ?? []) {
+        const bad: string[] = [];
+        scanNumbers(e, `${mod}:event`, bad);
+        expect(bad, `${mod}: non-finite event numbers`).toEqual([]);
+      }
+      const tips = (res.tooltips ?? []).map((t) => t.id);
+      expect(new Set(tips).size, `${mod}: duplicate tooltip ids`).toBe(tips.length);
+      const tipSet = new Set(tips);
+      for (const p of res.prims) {
+        const tid = (p as any).tooltipId;
+        if (tid) expect(tipSet.has(tid), `${mod}: dangling tooltipId ${tid}`).toBe(true);
+      }
+    }
+  });
+
+  it("keeps every drawn value inside its suite's declared pane range", () => {
+    for (const { mod, suite, res } of w2Results()) {
+      const pane = SUITE_DEFS[suite].pane!;
+      expect(pane).toBeDefined();
+      const slack = (pane.max - pane.min) * 0.1;
+      for (const p of res.prims) {
+        for (const y of paneYs(p)) {
+          expect(y, `${mod}:${p.id} below the pane`).toBeGreaterThanOrEqual(pane.min - slack);
+          expect(y, `${mod}:${p.id} above the pane`).toBeLessThanOrEqual(pane.max + slack);
+        }
+      }
+      for (const e of res.events ?? []) {
+        if (e.p === undefined) continue;
+        expect(e.p, `${mod}: event p out of pane`).toBeGreaterThanOrEqual(pane.min - slack);
+        expect(e.p, `${mod}: event p out of pane`).toBeLessThanOrEqual(pane.max + slack);
+      }
+    }
+  });
+
+  it("keeps columns items sorted and every alpha inside 0..1", () => {
+    for (const { mod, res } of w2Results()) {
+      for (const p of res.prims as any[]) {
+        if (p.kind === "columns") {
+          let prev = -Infinity;
+          for (const it of p.items) {
+            expect(it.i, `${mod}:${p.id} unsorted columns`).toBeGreaterThan(prev);
+            prev = it.i;
+            if (it.alpha !== undefined) {
+              expect(it.alpha).toBeGreaterThan(0);
+              expect(it.alpha).toBeLessThanOrEqual(1);
+            }
+          }
+          if (p.widthFrac !== undefined) {
+            expect(p.widthFrac).toBeGreaterThanOrEqual(0.1);
+            expect(p.widthFrac).toBeLessThanOrEqual(1);
+          }
+        }
+        if (p.alpha !== undefined) {
+          expect(p.alpha, `${mod}:${p.id} alpha`).toBeGreaterThan(0);
+          expect(p.alpha, `${mod}:${p.id} alpha`).toBeLessThanOrEqual(1);
+        }
+        if (p.kind === "zone" && p.fillAlpha !== undefined) expect(p.fillAlpha).toBeLessThanOrEqual(0.18);
+        if (p.kind === "cloud" && p.fillAlpha !== undefined) expect(p.fillAlpha).toBeLessThanOrEqual(0.18);
+        if (p.kind === "bgshade") expect(p.alpha).toBeLessThanOrEqual(0.1);
+        if (p.kind === "label" && p.fs !== undefined) {
+          expect(p.fs).toBeGreaterThanOrEqual(8);
+          expect(p.fs).toBeLessThanOrEqual(20);
+        }
+      }
+    }
+  });
+
+  it("emits only host-resolved colour tokens", () => {
+    for (const { mod, res } of w2Results()) {
+      const bad: string[] = [];
+      scanColors(res.prims, `${mod}:prims`, bad);
+      scanColors(res.tooltips ?? [], `${mod}:tooltips`, bad);
+      scanColors(res.candlePaint ?? [], `${mod}:paint`, bad);
+      expect(bad, `${mod}: non-token colours`).toEqual([]);
+    }
+  });
+
+  it("W2 sources contain zero colour literals, no clock and no randomness", () => {
+    const NAMED = /\b(?:red|green|blue|white|black|gray|grey|orange|yellow|purple|cyan|magenta|lime|teal|navy|silver|gold|pink|brown|maroon|olive|aqua|fuchsia|transparent|currentColor)\b\s*['"]/i;
+    for (const f of W2_SRC_FILES) {
+      const src = readFileSync(join(__dirname, "..", "suites", f), "utf8");
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+      expect(code.match(/#[0-9a-fA-F]{3,8}\b/g) ?? [], `${f} hex literals`).toEqual([]);
+      expect(code.match(/\brgba?\s*\(/g) ?? [], `${f} rgb()/rgba() literals`).toEqual([]);
+      expect(code.includes("Date.now"), `${f}: Date.now`).toBe(false);
+      expect(code.includes("Math.random"), `${f}: Math.random`).toBe(false);
+      expect(code.includes("new Date"), `${f}: new Date`).toBe(false);
+      const strings = code.match(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g) ?? [];
+      const hits = strings.filter((s) => NAMED.test(`${s.slice(1, -1)}"`) || /^["'`]#/.test(s));
+      expect(hits, `${f}: literal colour strings`).toEqual([]);
+    }
+  });
+
+  it("ships a complete settings schema and the registered identity for every W2 module", () => {
+    for (const m of W2_MODULES) {
+      const fieldKeys = m.fields.map((f) => f.key).sort();
+      expect(Object.keys(m.defaults).sort(), `${m.key}: fields vs defaults`).toEqual(fieldKeys);
+      expect(new Set(fieldKeys).size, `${m.key}: duplicate field keys`).toBe(fieldKeys.length);
+      for (const f of m.fields) {
+        expect(f.key, `${m.key}.${f.key}: prefixed key`).not.toContain(".");
+        expect(f.label.length).toBeGreaterThan(0);
+        if (f.type === "number") {
+          expect(typeof f.min).toBe("number");
+          expect(typeof f.max).toBe("number");
+          expect(m.defaults[f.key]).toBeGreaterThanOrEqual(f.min!);
+          expect(m.defaults[f.key]).toBeLessThanOrEqual(f.max!);
+        }
+        if (f.type === "select") {
+          expect(f.options?.some((o) => o.v === m.defaults[f.key]), `${m.key}.${f.key}`).toBe(true);
+        }
+        if (f.showIf) expect(fieldKeys, `${m.key}.${f.key}: showIf target`).toContain(f.showIf.key);
+      }
+    }
+    const idOf = (m: SuiteModuleDef) => [m.key, m.label, m.tag, m.tier, m.defaultOn];
+    expect(W2_MODULES.map(idOf)).toEqual([
+      ["wave", "Pulse Wave", "PW", "insider", true],
+      ["sig", "Pulse Signals", "PS", "insider", true],
+      ["div", "Divergences", "DV", "pro", true],
+      ["vmap", "Volume Mapping", "VM", "pro", false],
+      ["flow", "Money Flows", "MF", "pro", false],
+      ["eng", "RSI Engine", "RE", "insider", true],
+      ["sig", "RSI Signals", "RS", "insider", true],
+      ["div", "RSI Divergence", "RD", "pro", true],
+      ["chan", "RSI Channels", "RC", "pro", false],
+      ["eng", "MACD Engine", "ME", "insider", true],
+      ["sig", "MACD Signals", "MS", "insider", true],
+      ["hist", "Histogram", "MH", "insider", true],
+      ["div", "MACD Divergence", "MD", "pro", true],
+      ["trend", "Phase Trend", "MT", "pro", false],
+    ]);
+  });
+
+  it("registers each pane suite with a sane pane range and unique module keys", () => {
+    const paneKeys = SUITE_ORDER.filter((k) => SUITE_DEFS[k].kind === "pane");
+    expect(paneKeys).toEqual(["pulse", "rsix", "macdx"]);
+    for (const k of paneKeys) {
+      const def = SUITE_DEFS[k];
+      expect(def.pane, `${k}: pane suite without a range`).toBeDefined();
+      expect(def.pane!.max).toBeGreaterThan(def.pane!.min);
+      for (const l of def.pane!.lines ?? []) {
+        expect(l.p).toBeGreaterThanOrEqual(def.pane!.min);
+        expect(l.p).toBeLessThanOrEqual(def.pane!.max);
+      }
+      const keys = def.modules.map((m) => m.key);
+      expect(new Set(keys).size, `${k}: duplicate module keys`).toBe(keys.length);
+      const tags = def.modules.map((m) => m.tag);
+      expect(new Set(tags).size, `${k}: duplicate module tags`).toBe(tags.length);
+    }
+    // Tags are unique WITHIN a suite (asserted above). Across suites exactly one collision exists
+    // and it is pinned here on purpose: Market Structure (structure) and MACD Signals (macdx) both
+    // ship the tag "MS". Both identities were specified by the program, so the legend must qualify a
+    // module chip by its suite — this assertion exists to stop the collision list growing silently.
+    const allTags = SUITE_ORDER.flatMap((k) => SUITE_DEFS[k].modules.map((m) => m.tag));
+    const dupes = allTags.filter((t, i) => allTags.indexOf(t) !== i);
+    expect(dupes.sort()).toEqual(["MS"]);
+  });
+});
+
+describe("W2 robustness & i18n", () => {
+  it("survives zero / NaN / zero-range bars and degenerate inputs", () => {
+    const dirty = dirtyBars();
+    for (const c of W2_CASES) {
+      let res!: ModuleResult;
+      expect(() => { res = run(c.mod, dirty, c.opts); }, `${c.suite}/${c.mod.key} threw`).not.toThrow();
+      for (const p of res.prims) {
+        const bad: string[] = [];
+        scanNumbers(p, `${c.mod.key}:${p.id}`, bad);
+        expect(bad, `${c.suite}/${c.mod.key}: non-finite prim geometry`).toEqual([]);
+      }
+      for (const t of res.tooltips ?? []) {
+        for (const r of t.rows) expect(r.v.includes("NaN"), `${c.mod.key}: NaN in ${t.id}/${r.k}`).toBe(false);
+      }
+      for (const e of res.events ?? []) expect(e.label?.includes("NaN") ?? false).toBe(false);
+      for (const bars of [[], walkBars(2), walkBars(11), walkBars(40)]) {
+        const r = run(c.mod, bars, c.opts);
+        expect(Array.isArray(r.prims), `${c.mod.key}`).toBe(true);
+        for (const p of r.prims) {
+          const bad: string[] = [];
+          scanNumbers(p, `${c.mod.key}:${p.id}`, bad);
+          expect(bad, `${c.suite}/${c.mod.key}: warm-up geometry`).toEqual([]);
+        }
+      }
+    }
+  });
+
+  it("localizes tooltips and event copy without leaking the other language", () => {
+    for (const c of W2_CASES) {
+      const en = run(c.mod, PULSE_NOISE, c.opts, "en");
+      const zh = run(c.mod, PULSE_NOISE, c.opts, "zh");
+      const pair: Array<[any, any]> = [[en.tooltips ?? [], zh.tooltips ?? []], [en.events ?? [], zh.events ?? []]];
+      let compared = 0;
+      for (const [a, b] of pair) {
+        if (!a.length) continue;
+        const at = JSON.stringify(a);
+        const bt = JSON.stringify(b);
+        expect(/[一-鿿]/.test(at), `${c.mod.key}: CJK leaked into the en output`).toBe(false);
+        expect(/[一-鿿]/.test(bt), `${c.mod.key}: zh output has no CJK`).toBe(true);
+        compared++;
+      }
+      expect(compared, `${c.suite}/${c.mod.key}: nothing localized to compare`).toBeGreaterThan(0);
+      // geometry and chart microcopy are language-independent
+      expect(zh.prims).toEqual(en.prims);
+    }
+  });
+});
+
+describe("W2 non-repaint & density", () => {
+  const FULL = walkBars(380, 77, 29);
+  const SHORT = FULL.slice(0, 340);
+  const CUT = 310; // events at or before this bar are settled 30 bars before the short series ends
+  const key = (e: SuiteEvent) => `${e.type}|${e.dir}|${e.i}|${e.p}|${e.strength}`;
+
+  it("keeps every settled event identical when 40 future bars are appended", () => {
+    for (const c of W2_CASES) {
+      const a = (run(c.mod, SHORT, c.opts).events ?? []).filter((e) => e.i <= CUT).map(key);
+      const b = (run(c.mod, FULL, c.opts).events ?? []).filter((e) => e.i <= CUT).map(key);
+      expect(a.length, `${c.suite}/${c.mod.key}: nothing settled to compare`).toBeGreaterThan(0);
+      expect(b.length, `${c.suite}/${c.mod.key}: the longer run lost its settled tape`).toBeGreaterThan(0);
+      // the tape is tail-capped, so the longer run's settled events are a SUFFIX of the short one's
+      expect(a.slice(a.length - b.length), `${c.suite}/${c.mod.key}`).toEqual(b);
+    }
+  });
+
+  it("keeps every module under MAX_PRIMS_PER_MODULE on a 5000-bar series", () => {
+    const PATHOLOGICAL = walkBars(5000, 991, 37);
+    for (const c of W2_CASES) {
+      const res = run(c.mod, PATHOLOGICAL, c.opts);
+      expect(res.prims.length, `${c.suite}/${c.mod.key} drew nothing`).toBeGreaterThan(0);
+      expect(res.prims.length, `${c.suite}/${c.mod.key} prim count`).toBeLessThanOrEqual(MAX_PRIMS_PER_MODULE);
+      expect((res.tooltips ?? []).length).toBeLessThanOrEqual(MAX_PRIMS_PER_MODULE);
+      expect(run(c.mod, PATHOLOGICAL, c.opts), `${c.mod.key} determinism`).toEqual(res);
+    }
+  });
+
+  it("bounds the drawn glyph families by showLast", () => {
+    const bars = walkBars(5000, 991, 37);
+    const cases: Array<[SuiteModuleDef, number[], (r: ModuleResult) => number, number]> = [
+      [PULSE_SIGNALS_MODULE, [4, 16, 40], (r) => r.prims.filter((p) => p.id.startsWith("ps-bs-")).length, 1],
+      [PULSE_DIVERGENCE_MODULE, [2, 8, 16], (r) => r.prims.filter((p) => p.kind === "label").length, 1],
+      [RSI_SIGNALS_MODULE, [4, 12, 30], (r) => r.prims.filter((p) => /^rsix-sig-\d+-m$/.test(p.id)).length, 1],
+      [RSI_DIVERGENCE_MODULE, [2, 8, 16], (r) => r.prims.filter((p) => p.kind === "label").length, 1],
+      [MACD_SIGNALS_MODULE, [4, 12, 24], (r) => r.prims.length, 1],
+      [MACD_DIVERGENCE_MODULE, [2, 8, 16], (r) => r.prims.filter((p) => p.kind === "label").length, 1],
+      [FLOWS_MODULE, [2, 6, 12], (r) => r.prims.filter((p) => p.kind === "label").length, 1],
+    ];
+    for (const [mod, showLasts, count, per] of cases) {
+      for (const showLast of showLasts) {
+        const res = run(mod, bars, { showLast, threshold: 60, peaks: true, gappedCross: true });
+        expect(count(res), `${mod.key} showLast=${showLast} drew nothing`).toBeGreaterThan(0);
+        expect(count(res), `${mod.key} showLast=${showLast}`).toBeLessThanOrEqual(showLast * per);
+      }
     }
   });
 });
