@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useT } from "@/lib/i18n";
 import { type UserScript } from "@/lib/userScripts";
+import { SUITE_DEFS, SUITE_ORDER } from "@/lib/suites/registry";
 
 const CATS: Record<string, { key: string; label: string; mm?: boolean; tkey?: string }[]> = {
   Mastermind: [{ key: "_oracle", label: "Golden Oracle Confluence", mm: true }],
@@ -24,12 +25,31 @@ const CATS: Record<string, { key: string; label: string; mm?: boolean; tkey?: st
 };
 const CAT_TKEY: Record<string, string> = { Mastermind: "catMastermind", Trend: "catTrend", Momentum: "catMomentum", "Price Action": "catPriceAction", Volume: "catVolume", daytrade: "catDaytrade" };
 const MY_SCRIPTS = "__scripts__";   // synthetic category key for the My Scripts section
+const PRO_SUITES = "__suites__";    // synthetic category key for the premium suites band
 
-export default function IndicatorsModal({ open, active, onClose, onToggle, scripts = [], enabled, onToggleScript, onRenameScript, onDeleteScript }:
+type Tier = "free" | "insider" | "pro";
+const TIER_RANK: Record<Tier, number> = { free: 0, insider: 1, pro: 2 };
+/** A suite is addable at the lowest tier that unlocks ANY of its modules; deeper modules lock in Settings. */
+const suiteMinTier = (k: string): Tier => {
+  const def = SUITE_DEFS[k]; if (!def) return "pro";
+  let min: Tier = "pro";
+  for (const m of def.modules) if (TIER_RANK[m.tier] < TIER_RANK[min]) min = m.tier;
+  return min;
+};
+/** Highest module tier — shown on the row chip so the packaging reads honestly. */
+const suiteTopTier = (k: string): Tier => {
+  const def = SUITE_DEFS[k]; if (!def) return "pro";
+  let top: Tier = "free";
+  for (const m of def.modules) if (TIER_RANK[m.tier] > TIER_RANK[top]) top = m.tier;
+  return top;
+};
+
+export default function IndicatorsModal({ open, active, onClose, onToggle, scripts = [], enabled, onToggleScript, onRenameScript, onDeleteScript, userTier = "free" }:
   { open: boolean; active: Set<string>; onClose: () => void; onToggle: (k: string) => void;
-    scripts?: UserScript[]; enabled?: Set<string>; onToggleScript?: (id: string) => void; onRenameScript?: (id: string, name: string) => void; onDeleteScript?: (id: string) => void }) {
+    scripts?: UserScript[]; enabled?: Set<string>; onToggleScript?: (id: string) => void; onRenameScript?: (id: string, name: string) => void; onDeleteScript?: (id: string) => void;
+    userTier?: Tier }) {
   const t = useT();
-  const [cat, setCat] = useState("Mastermind");
+  const [cat, setCat] = useState<string>(PRO_SUITES);
   const [renaming, setRenaming] = useState<string | null>(null);   // scriptId being inline-renamed
   const [draft, setDraft] = useState("");
   // close on Escape, matching SearchModal's behavior
@@ -50,6 +70,7 @@ export default function IndicatorsModal({ open, active, onClose, onToggle, scrip
         <div className="ib">
           <div className="inav">
             <div className="grp">{t("library")}</div>
+            <a className={`${cat === PRO_SUITES ? "on" : ""} mm`} onClick={() => setCat(PRO_SUITES)}>★ {t("catProSuites", "Pro Suites")}</a>
             {Object.keys(CATS).map((c) => <a key={c} className={`${cat === c ? "on" : ""}${c === "Mastermind" ? " mm" : ""}`} onClick={() => setCat(c)}>{t(CAT_TKEY[c] || c, c)}</a>)}
             <a className={cat === MY_SCRIPTS ? "on" : ""} onClick={() => setCat(MY_SCRIPTS)}>{t("myScripts")}</a>
           </div>
@@ -82,6 +103,27 @@ export default function IndicatorsModal({ open, active, onClose, onToggle, scrip
                     </span>
                   </div>
                 ); })
+            ) : cat === PRO_SUITES ? (
+              SUITE_ORDER.map((k) => {
+                const def = SUITE_DEFS[k]; if (!def) return null;
+                const on = active.has(k);
+                const locked = TIER_RANK[userTier] < TIER_RANK[suiteMinTier(k)];
+                const top = suiteTopTier(k);
+                return (
+                  <div key={k} className={`li${on ? " on" : ""}${locked ? " li-locked" : ""}`}
+                    onClick={() => { if (!locked) onToggle(k); }}
+                    title={locked ? t("suiteLockedHint", "Included with a paid plan — upgrade to unlock") : undefined}>
+                    <span className="mmdot" />{def.tkey ? t(def.tkey, def.label) : def.label}
+                    <span className="li-tag" style={{ marginLeft: 6 }}>{top === "pro" ? "PRO" : "INSIDER"}</span>
+                    <span className="li-mods">{def.modules.length} {t("suiteModulesWord", "modules")}</span>
+                    {locked
+                      ? <span className="li-lock" aria-label={t("suiteLockedHint", "Included with a paid plan — upgrade to unlock")}>
+                          <svg viewBox="0 0 24 24" style={{ width: 13, height: 13, stroke: "currentColor", fill: "none", strokeWidth: 1.8 }}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+                        </span>
+                      : <span className="chk"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg></span>}
+                  </div>
+                );
+              })
             ) : CATS[cat].map((it) => { const on = active.has(it.key);
               return (
                 <div key={it.key} className={`li${on ? " on" : ""}`} onClick={() => onToggle(it.key)}>

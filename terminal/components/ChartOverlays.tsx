@@ -18,6 +18,7 @@ export type LegendEntry = {
   isPine: boolean;
   isCompare?: boolean;  // compare symbol pseudo-indicator — no read-only source view
   noParams?: boolean;   // signal-style row (e.g. Golden Oracle) — no Settings / Source, just eye + remove
+  noSource?: boolean;   // premium suite row — Settings works but there is no pseudo-Pine source view
   color?: string;       // line color (used for the compare row's swatch dot)
 };
 
@@ -73,7 +74,7 @@ const ICONS = {
   maximize: "M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5",
 };
 
-type MoreState = { key: string; label: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; noParams: boolean; x: number; y: number; rowTop: number };
+type MoreState = { key: string; label: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; noParams: boolean; noSource: boolean; x: number; y: number; rowTop: number };
 
 export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: string | null; legendOpen: boolean; onToggleLegend: () => void; coarse?: boolean } & OverlayActions) {
   const coarse = !!props.coarse;
@@ -135,7 +136,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
 
   const stop = (fn: () => void) => (ev: React.MouseEvent) => { ev.stopPropagation(); ev.preventDefault(); fn(); };
   const openMore = (e: LegendEntry, paneIndex: number, rect: DOMRect) =>
-    setMore({ key: e.key, label: e.label, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: rect.left, y: rect.bottom + 4, rowTop: rect.top });
+    setMore({ key: e.key, label: e.label, paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, noSource: !!e.noSource, x: rect.left, y: rect.bottom + 4, rowTop: rect.top });
 
   // B5: total entries count across all panes (for the count chip)
   const totalEntries = props.panes.reduce((s, p) => s + p.entries.length, 0);
@@ -187,14 +188,14 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
                             ev.stopPropagation(); ev.preventDefault();
                             const rowEl = (ev.currentTarget as HTMLElement).closest(".lg-row") as HTMLElement | null;
                             const r = (rowEl ?? (ev.currentTarget as HTMLElement)).getBoundingClientRect();
-                            setMore({ key: e.key, label: e.label, paneIndex: p.paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, x: r.left, y: r.bottom + 4, rowTop: r.top });
+                            setMore({ key: e.key, label: e.label, paneIndex: p.paneIndex, isPane: e.kind === "pane", hidden: e.hidden, isCompare: !!e.isCompare, noParams: !!e.noParams, noSource: !!e.noSource, x: r.left, y: r.bottom + 4, rowTop: r.top });
                           }}>{I(ICONS.more, 2.4)}</button>
                         </span>
                       ) : !coarse ? (
                         <span className="lg-menu">
                           <button className="lg-ic eye" data-tip={e.hidden ? "Show" : "Hide"} onClick={stop(() => props.onEye(e.key))} aria-label={e.hidden ? "Show" : "Hide"}><EyeIcon off={e.hidden} /></button>
                           {!e.noParams && <button className="lg-ic" data-tip="Settings" onClick={stop(() => props.onSettings(e.key))} aria-label="Settings">{I(ICONS.settings, 1.6)}</button>}
-                          {!e.isCompare && !e.noParams && <button className="lg-ic" data-tip="Source code" onClick={stop(() => props.onSource(e.key))} aria-label="Source code">{I(ICONS.source)}</button>}
+                          {!e.isCompare && !e.noParams && !e.noSource && <button className="lg-ic" data-tip="Source code" onClick={stop(() => props.onSource(e.key))} aria-label="Source code">{I(ICONS.source)}</button>}
                           <button className="lg-ic" data-tip="Remove" onClick={stop(() => props.onRemove(e.key))} aria-label="Remove">{I(ICONS.remove)}</button>
                           <button className="lg-ic" data-tip="More" onClick={(ev) => { ev.stopPropagation(); ev.preventDefault(); openMore(e, p.paneIndex, (ev.currentTarget as HTMLElement).getBoundingClientRect()); }} aria-label="More">{I(ICONS.more, 2.4)}</button>
                         </span>
@@ -240,7 +241,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
         <div ref={moreRef} className="lg-more" style={{ left: more.x, top: more.y }} onPointerDown={(e) => e.stopPropagation()}>
           <div className="lg-more-row" onClick={stop(() => { props.onEye(more.key); done(); })}><span className="mi"><EyeIcon off={more.hidden} /></span>{more.hidden ? "Show" : "Hide"}</div>
           {!more.noParams && <div className="lg-more-row" onClick={stop(() => { props.onSettings(more.key); done(); })}><span className="mi">{I(ICONS.settings, 1.6)}</span>Settings…</div>}
-          {!more.isCompare && !more.noParams && <div className="lg-more-row" onClick={stop(() => { props.onSource(more.key); done(); })}><span className="mi">{I(ICONS.source)}</span>Source code…</div>}
+          {!more.isCompare && !more.noParams && !more.noSource && <div className="lg-more-row" onClick={stop(() => { props.onSource(more.key); done(); })}><span className="mi">{I(ICONS.source)}</span>Source code…</div>}
           {more.isPane && <>
             <div className="lg-more-sep" />
             <div className={`lg-more-row${props.canMoveUp(more.paneIndex) ? "" : " dis"}`} onClick={stop(() => { if (props.canMoveUp(more.paneIndex)) { props.onMoveUp(more.paneIndex); done(); } })}><span className="mi">{I(ICONS.up)}</span>Move pane up</div>

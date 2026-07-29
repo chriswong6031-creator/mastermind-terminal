@@ -106,6 +106,43 @@ describe("plotshape series-bool semantics", () => {
   });
 });
 
+// The honesty patch: deferred builtins draw nothing, so they must SAY so. Before this, a pasted
+// SMC script full of box/label/fill calls reported "✓ Compiled successfully" and rendered nothing.
+describe("deferred builtins are reported, never silently swallowed", () => {
+  it("NOOP-namespace calls and fill/bgcolor/barcolor/alertcondition each warn exactly once per name", () => {
+    const src = [
+      "//@version=6",
+      'indicator("Honesty", overlay=true)',
+      "up = close > close[1]",
+      'label.new(bar_index, high, "x")',
+      "box.new(bar_index, high, bar_index, low)",
+      "p1 = plot(close)",
+      "p2 = plot(open)",
+      "fill(p1, p2, color=color.new(color.blue, 90))",
+      "bgcolor(up ? color.new(color.green, 90) : na)",
+      "barcolor(up ? color.green : color.red)",
+      'alertcondition(up, "Up", "up bar")',
+      "",
+    ].join("\n");
+    const out = runPine(src, genBars(40), {});
+    expect(out.ok, "run errors: " + JSON.stringify(out.errors)).toBe(true);
+    const w = out.result!.warnings;
+    const dump = " | warnings=" + JSON.stringify(w);
+    for (const fn of ["label.new", "box.new", "fill", "bgcolor", "barcolor", "alertcondition"]) {
+      // exactly one — deduped per (namespace.method) even though every one of the 40 bars called it
+      expect(w.filter((x) => x === `${fn}() is not supported yet — its output is suppressed`).length, fn + dump).toBe(1);
+    }
+    // member READS of the same namespaces stay silent, and return values are unchanged (plots intact)
+    expect(w.some((x) => /^label\.style_/.test(x)), dump).toBe(false);
+    expect(out.result!.plots.length).toBe(2);
+  });
+
+  it("a script using only supported builtins stays warning-free", () => {
+    const out = runPine(SMA, genBars(40), {});
+    expect(out.result!.warnings).toEqual([]);
+  });
+});
+
 describe("columnar bar packing round-trips (transferable worker payload)", () => {
   it("barsToColumns → columnsToBars reproduces the bars and lists transferable buffers", () => {
     const bars = genBars(12);
