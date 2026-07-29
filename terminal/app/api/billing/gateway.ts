@@ -13,6 +13,7 @@
 //
 // BASE env = BILLING_GATEWAY_BASE (default https://www.mastermind-x.com).
 
+import { cache } from "react";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
@@ -33,8 +34,18 @@ export function isInterval(v: unknown): v is ValidInterval {
   return typeof v === "string" && (VALID_INTERVALS as readonly string[]).includes(v);
 }
 
-/** Resolve the verified user + access token, or null when unauthed. */
-export async function billingAuth(): Promise<{ token: string } | null> {
+/**
+ * Resolve the verified user + access token, or null when unauthed.
+ *
+ * Memoized PER REQUEST with React `cache()`: several gates in one render (page
+ * gate + billing read + entitlement check) collapse onto a single
+ * getSession()+getUser() pair instead of repeating the Supabase round trip for
+ * each. The memo never spans requests, so the verification below still runs on
+ * every inbound request and a revoked session is caught immediately. Outside a
+ * React request scope (e.g. a plain route handler) `cache()` degrades to a
+ * direct call, so behaviour there is byte-for-byte what it was before.
+ */
+export const billingAuth = cache(async (): Promise<{ token: string } | null> => {
   const supabase = await createClient();
   // getUser() verifies the JWT with Supabase Auth (getSession alone is cookie-trusted);
   // pairing the two catches expired/revoked sessions before we forward.
@@ -45,7 +56,7 @@ export async function billingAuth(): Promise<{ token: string } | null> {
   const session = sessionData.session;
   if (!session || !userData.user) return null;
   return { token: session.access_token };
-}
+});
 
 /** Forward to the gateway and pipe its status + JSON back verbatim. */
 export async function forward(

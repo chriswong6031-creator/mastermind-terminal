@@ -384,6 +384,10 @@ function TargetBand({
   const pos = (v: number | null) => (v == null ? null : Math.max(0, Math.min(100, ((v - low) / span) * 100)));
   const meanPos = pos(mean);
   const curPos = pos(cur);
+  // The "Now" tag rides a reserved lane ABOVE the track, centred over its dot.
+  // Near either end a centred tag would overhang the card, so it flips to
+  // edge-aligned instead of being allowed to spill.
+  const curEdge = curPos == null ? "" : curPos <= 14 ? " at-lo" : curPos >= 86 ? " at-hi" : "";
   return (
     <div className="fin-fc-band" role="group" aria-label={pick(zh, "Analyst target range", "分析师目标区间")}>
       <div className="fin-fc-band-track">
@@ -391,9 +395,12 @@ function TargetBand({
         {meanPos != null && <span className="fin-fc-band-mean" style={{ left: `${meanPos}%` }} />}
         {/* current-price marker */}
         {curPos != null && (
-          <span className="fin-fc-band-cur" style={{ left: `${curPos}%` }}>
+          <span className={"fin-fc-band-cur" + curEdge} style={{ left: `${curPos}%` }}>
             <span className="dot" />
-            <span className="tag">{pick(zh, "Now", "现价")} {fmtNum(cur)}</span>
+            <span className="tag">
+              <span className="k">{pick(zh, "Now", "现价")}</span>
+              <span className="v num">{fmtNum(cur)}</span>
+            </span>
           </span>
         )}
       </div>

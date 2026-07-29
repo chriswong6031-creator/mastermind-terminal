@@ -509,46 +509,73 @@ export function GexDeskView() {
               {t("viewByExpiry")}
             </button>
           </div>
-          {loading && !gexPayload ? (
-            <div style={LADDER_LOADING}>{t("loadingGex")}</div>
-          ) : error && !gexPayload ? (
-            /* Honest empty: the nightly options build re-pulls index anchors first, so a
-               missing single name is a COVERAGE gap, not a broken desk. Name which one it
-               is instead of leaving a bare "could not load". */
-            <div style={LADDER_EMPTY}>
-              <div style={LADDER_EMPTY_TITLE}>{t("gexNoSnapshot")}</div>
-              <div style={LADDER_EMPTY_WHY}>
-                {t("gexNoSnapshotWhy").replace("{sym}", ticker)}
+          {/* Ladder region — the ONLY part of the left column that flexes. It owns its own
+              overflow, so the drawer below can expand without pushing anything out of the
+              desk (and, crucially, without changing the RIGHT column's height at all). */}
+          <div style={LADDER_REGION}>
+            {loading && !gexPayload ? (
+              <div style={LADDER_LOADING}>{t("loadingGex")}</div>
+            ) : error && !gexPayload ? (
+              /* Honest empty: the nightly options build re-pulls index anchors first, so a
+                 missing single name is a COVERAGE gap, not a broken desk. Name which one it
+                 is instead of leaving a bare "could not load". */
+              <div style={LADDER_EMPTY}>
+                <div style={LADDER_EMPTY_TITLE}>{t("gexNoSnapshot")}</div>
+                <div style={LADDER_EMPTY_WHY}>
+                  {t("gexNoSnapshotWhy").replace("{sym}", ticker)}
+                </div>
               </div>
-            </div>
-          ) : view === "strike" ? (
-            <StrikeLadder
-              strikes={gexPayload?.by_strike ?? []}
-              spot={spot}
-              levels={ladderLevels}
-              greek={greek}
+            ) : view === "strike" ? (
+              <StrikeLadder
+                strikes={gexPayload?.by_strike ?? []}
+                spot={spot}
+                levels={ladderLevels}
+                greek={greek}
+                byExpiry={gexPayload?.by_expiry ?? null}
+                lens={lens}
+                onLens={setLens}
+                lensValues={lensValues}
+                lensCoverage={lensCoverage}
+                asOf={asof}
+                matrixAsOf={matrix?.asof ?? null}
+                lang={lang}
+                netGexBn={gexPayload?.net_gex_bn ?? null}
+                matrixCells={matrixCells}
+              />
+            ) : (
+              <ExpiryBars
+                byExpiry={gexPayload?.by_expiry ?? null}
+                greek={greek}
+                asOf={asof}
+                lang={lang}
+              />
+            )}
+          </div>
+
+          {/* ── Exposure-by-Expiry term-structure drawer (RECON §4.5) ──────────
+              CONTAINMENT: the drawer lives INSIDE the left column, below the ladder it
+              annotates. It used to be a sibling of BODY_ROW in the desk's outer column,
+              which meant opening it stole height from the whole two-pane row: the Market
+              State card was squeezed until its own overflow:auto kicked in, the user
+              scrolled inside it, and collapsing the drawer left that scrollTop parked —
+              the card came back "pushed up" with its header off-screen and no obvious way
+              to recover. Scoped here, expanding/collapsing can only ever re-flow the
+              ladder (which has its own internal scroll and self-restores), and the right
+              column's height never changes. */}
+          <div style={XDRAWER_SLOT}>
+            <ExposureExpiryDrawer
               byExpiry={gexPayload?.by_expiry ?? null}
-              lens={lens}
-              onLens={setLens}
-              lensValues={lensValues}
-              lensCoverage={lensCoverage}
-              asOf={asof}
-              matrixAsOf={matrix?.asof ?? null}
-              lang={lang}
-              netGexBn={gexPayload?.net_gex_bn ?? null}
-              matrixCells={matrixCells}
-            />
-          ) : (
-            <ExpiryBars
-              byExpiry={gexPayload?.by_expiry ?? null}
               greek={greek}
-              asOf={asof}
+              asOf={gexPayload?.asof ?? null}
               lang={lang}
             />
-          )}
+          </div>
         </div>
 
-        {/* ── Right pane: Market state ──────────────────────────────────── */}
+        {/* ── Right pane: Market state ──────────────────────────────────────
+            An independent min-height:0 / overflow-y:auto region (see CARD_OUTER in
+            MarketStateCard) — it derives its scroll geometry from BODY_ROW's height alone,
+            never from what the left column is doing. */}
         <MarketStateCard
           statePayload={statePayload}
           gexPayload={gexPayload}
@@ -556,14 +583,6 @@ export function GexDeskView() {
           lang={lang}
         />
       </div>
-
-      {/* ── Exposure-by-Expiry term-structure drawer (RECON §4.5) ──────────── */}
-      <ExposureExpiryDrawer
-        byExpiry={gexPayload?.by_expiry ?? null}
-        greek={greek}
-        asOf={gexPayload?.asof ?? null}
-        lang={lang}
-      />
     </div>
   );
 }
@@ -709,6 +728,33 @@ const LEFT_PANE: React.CSSProperties = {
   flexDirection: "column",
   overflow: "hidden",
   maxHeight: "100%",   /* cap at BODY_ROW cross-axis height in wrapping flex */
+};
+
+/**
+ * The flexing part of the left column. Everything above it (guide, view toggle) and below it
+ * (the expiry drawer) is flex-shrink:0, so this is the single region that gives up room when
+ * the drawer opens — and it clips internally rather than pushing the desk taller.
+ */
+const LADDER_REGION: React.CSSProperties = {
+  flex: "1 1 0px",
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+};
+
+/**
+ * Height budget for the expanded drawer INSIDE the left column. Without a cap a tall drawer
+ * on a short viewport would drive the ladder region to 0 and then overflow the column itself
+ * — the same failure this fix removes, one level down. 58% leaves the ladder a usable band at
+ * every viewport height; the drawer body scrolls inside whatever it is given.
+ */
+const XDRAWER_SLOT: React.CSSProperties = {
+  flexShrink: 0,
+  minHeight: 0,
+  maxHeight: "58%",
+  display: "flex",
+  flexDirection: "column",
 };
 
 const LADDER_LOADING: React.CSSProperties = {

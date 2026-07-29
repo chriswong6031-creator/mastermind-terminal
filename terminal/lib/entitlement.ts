@@ -1,3 +1,5 @@
+import { cache } from "react";
+import { createHash } from "node:crypto";
 import { billingAuth, BILLING_BASE } from "@/app/api/billing/gateway";
 
 /**
@@ -14,12 +16,58 @@ import { billingAuth, BILLING_BASE } from "@/app/api/billing/gateway";
  */
 type Entitlement = { tier: string; features: string[] };
 
-async function fetchEntitlement(): Promise<Entitlement | null> {
-  const auth = await billingAuth();
-  if (!auth) return null;
+/**
+ * Short-TTL, POSITIVE-ONLY entitlement cache.
+ *
+ * WHY: one cold /options load resolves entitlement SEVEN times — the page render
+ * (app/(shell)/options/page.tsx), five /api/flow GETs and the /api/flow/stream
+ * open. Each resolution is a cross-origin `GET {BILLING_BASE}/api/me` measured at
+ * ~0.5 s TTFB, and because the client's fetch waves are serial those six
+ * duplicates land directly on the critical path.
+ *
+ * THE AUTHORITY DOES NOT MOVE. macro-api still decides; this only stops us asking
+ * it the same question about the same access token six more times inside one page
+ * load. The contract that keeps that safe:
+ *
+ *   - keyed by SHA-256 of the caller's access token, so one user's answer can
+ *     never satisfy another user's gate — and no raw JWT is retained in the map;
+ *   - only a POSITIVE answer is stored. A null (unauthed / non-2xx / network
+ *     error) and an answer that fails the calling gate are never cached, so a
+ *     fail-closed "no" is always re-derived from the authority and a freshly
+ *     upgraded user is never stuck behind the paywall;
+ *   - TTL 45 s (inside the specced 30–60 s band): a revocation can lag by at most
+ *     one TTL, the same bound the /api/flow payload cache already runs on;
+ *   - in-flight dedup collapses the concurrent gates of one page load onto a
+ *     single upstream call;
+ *   - `isPaidTier()` — the Pine-script SAVE gate — deliberately does NOT use it.
+ *     Write paths keep resolving fresh.
+ */
+const ENT_TTL_MS = 45_000;
+/** Bound the map so a long-lived process with many signed-in users cannot grow it forever. */
+const ENT_MAX_KEYS = 512;
+
+type CacheEntry = { ent: Entitlement; ts: number };
+const CACHE = new Map<string, CacheEntry>();
+const INFLIGHT = new Map<string, Promise<Entitlement | null>>();
+
+function tokenKey(token: string): string {
+  return createHash("sha256").update(token).digest("base64url");
+}
+
+/** Drop expired keys once oversized; hard-reset if that was not enough. */
+function sweep(now: number): void {
+  if (CACHE.size <= ENT_MAX_KEYS) return;
+  for (const [k, v] of CACHE) {
+    if (now - v.ts >= ENT_TTL_MS) CACHE.delete(k);
+  }
+  if (CACHE.size > ENT_MAX_KEYS) CACHE.clear();
+}
+
+/** One `/api/me` round trip. null on non-2xx / parse / network error (fail-closed). */
+async function fetchEntitlementFor(token: string): Promise<Entitlement | null> {
   try {
     const r = await fetch(`${BILLING_BASE}/api/me`, {
-      headers: { Authorization: `Bearer ${auth.token}`, Accept: "application/json" },
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
       cache: "no-store",
     });
     if (!r.ok) return null;
@@ -33,10 +81,77 @@ async function fetchEntitlement(): Promise<Entitlement | null> {
   }
 }
 
+/**
+ * Uncached resolution: one auth pair (itself memoized per request by
+ * `billingAuth`) plus one live `/api/me`. React `cache()` dedupes repeat gates
+ * inside a single render; outside a React request scope it degrades to a plain
+ * call, so this is exactly the pre-existing behaviour.
+ */
+const fetchEntitlement = cache(async (): Promise<Entitlement | null> => {
+  const auth = await billingAuth();
+  if (!auth) return null;
+  return fetchEntitlementFor(auth.token);
+});
+
+/**
+ * Cached resolution for ONE gate. `gate.ok` is that gate's own predicate: only an
+ * entitlement that SATISFIES it is worth remembering, so every "no" is re-asked.
+ *
+ * The key carries the gate id as well as the token so the positive-only rule can
+ * never be subverted by a second gate: if gate A cached an entitlement that gate
+ * B reads as "no", B would be serving a cached negative. Separate lanes keep the
+ * invariant local. Only `hasLiveOptions` uses this path today, so the extra lane
+ * costs nothing.
+ */
+async function fetchEntitlementCached(
+  gate: { id: string; ok: (e: Entitlement) => boolean },
+): Promise<Entitlement | null> {
+  const auth = await billingAuth();
+  if (!auth) return null; // unauthed → fail-closed, never cached
+
+  const key = `${gate.id}:${tokenKey(auth.token)}`;
+  const now = Date.now();
+
+  const hit = CACHE.get(key);
+  if (hit) {
+    if (now - hit.ts < ENT_TTL_MS) return hit.ent;
+    CACHE.delete(key); // expired — go back to the authority
+  }
+
+  const pending = INFLIGHT.get(key);
+  if (pending) return pending;
+
+  const p = fetchEntitlementFor(auth.token).then(
+    (ent) => {
+      INFLIGHT.delete(key);
+      if (ent && gate.ok(ent)) {
+        CACHE.set(key, { ent, ts: Date.now() });
+        sweep(Date.now());
+      } else {
+        CACHE.delete(key); // never pin a negative or an error
+      }
+      return ent;
+    },
+    () => {
+      INFLIGHT.delete(key);
+      CACHE.delete(key);
+      return null;
+    },
+  );
+  INFLIGHT.set(key, p);
+  return p;
+}
+
+/** The live-options feature flag (config/plans.yml — insider + pro, incl. trial). */
+const LIVE_OPTIONS = {
+  id: "live_options",
+  ok: (e: Entitlement) => e.features.includes("terminal_live_options"),
+};
+
 /** Live-options surface — the `terminal_live_options` feature (insider + pro, incl. trial). */
 export async function hasLiveOptions(): Promise<boolean> {
-  const e = await fetchEntitlement();
-  return !!e && e.features.includes("terminal_live_options");
+  const e = await fetchEntitlementCached(LIVE_OPTIONS);
+  return !!e && LIVE_OPTIONS.ok(e);
 }
 
 /**
@@ -44,6 +159,9 @@ export async function hasLiveOptions(): Promise<boolean> {
  * isn't broken out as its own feature in config/plans.yml — e.g. Pine-script
  * save — matching the legacy `is_pro` boolean's "any paid" semantics. If a
  * surface should be pro-ONLY, gate on `tier === "pro"` instead.
+ *
+ * Deliberately UNCACHED beyond the per-request memo: its callers include a write
+ * path (app/api/scripts/save), and a write gate resolves fresh every time.
  */
 export async function isPaidTier(): Promise<boolean> {
   const e = await fetchEntitlement();

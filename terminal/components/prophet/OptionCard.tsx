@@ -100,6 +100,9 @@ export function OptionCard({ contract, lang, liveMark, liveMarkForced }: OptionC
       <div style={HEADER_ROW}>
         <span style={DIAMOND}>◆</span>
         <span style={TITLE_STYLE}>{t("optionCardTitle")}</span>
+        {/* Provenance: the contract is a suggested overlay on a stock signal. Options data
+            never entered the selection, the conviction score or the targets. */}
+        <span className="obs-prophet-overlay-tag">{t("optionOverlayTag")}</span>
         {/* Freshness chip: LIVE (green) or EOD (muted) */}
         {isLive && (
           <span
@@ -297,19 +300,19 @@ const CARD_STYLE: React.CSSProperties = {
 const HEADER_ROW: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: 6,
   marginBottom: 8,
 };
 
 const DIAMOND: React.CSSProperties = {
-  color: "#19c2c2",
+  color: "var(--obs-prophet-cyan, #19c2c2)",
   fontSize: 11,
 };
 
 const TITLE_STYLE: React.CSSProperties = {
   font: "600 11px/1 var(--font-ui)",
   color: "var(--text-2)",
-  flex: 1,
 };
 
 const EOD_CHIP: React.CSSProperties = {
@@ -350,7 +353,8 @@ const TIP_STYLE: React.CSSProperties = {
   color: "var(--text-2)",
   zIndex: 50,
   pointerEvents: "none",
-  boxShadow: "var(--shadow-1)",
+  // --shadow-1 was never defined by globals.css — the tooltip had no elevation at all.
+  boxShadow: "var(--shadow-2)",
 };
 
 const GRID_STYLE: React.CSSProperties = {

@@ -7,15 +7,20 @@
  *   • Path Fan-Cone (typical trajectory + where this year sits),
  *   • Month Edge table (avg / median / win-rate w/ Wilson CI / best-worst / n),
  *   • Optimal Holding-Window matrix (best contiguous month span to hold),
- *   • Quarter contribution + Share-of-Return donut (the pie),
+ *   • Quarter contribution,
  *   • Year-Agreement sign matrix (outlier-immune, visibly respects the toggle).
  *
  * All math lives in lib/seasonal.ts; small N is surfaced honestly (N shown,
  * Wilson intervals, hatched thin-sample cells, permutation-tested best window).
+ *
+ * Removed 2026-07-28 (D4 review): the Share-of-Return donut. Its weight was
+ * Σ|monthly return|, which conflates volatility with drift, and its "top 3 mo"
+ * centre stat has a ~25% structural floor — a constant dressed as an insight.
+ * Concentration is answered honestly by the month-edge and quarter panels.
  */
 import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent, type CSSProperties, type ReactNode } from "react";
 import { fmtNum, fmtPct, pick } from "../../lib/finFormat";
-import { Donut, FinTip, useFinTip } from "./FinCharts";
+import { FinTip, useFinTip } from "./FinCharts";
 import {
   HORIZON,
   MONTHS_EN,
@@ -30,7 +35,6 @@ import {
   fullYearStats,
   fanCone,
   runway,
-  shareOfReturn,
   signAgreement,
   overfitGuard,
   currentMonthIdx,
@@ -81,6 +85,18 @@ export function AdvancedSeasonality({ years, active, win, zh = false }: Props) {
   const isActive = useMemo(() => (yr: string) => active.has(yr), [active]);
   const activeList = years.filter((y) => active.has(y.year));
   const nActive = activeList.length;
+
+  // Permutation overfit guard: heavier, so it is computed in a deferred effect and
+  // never blocks paint. Lifted to the deck root so the SAME verdict reaches both the
+  // headline card and the holding matrix — the 66-window search it corrects for lives
+  // in the matrix, so the matrix must state it too.
+  const guardKey = years.map((y) => y.year).join(",") + "|" + activeList.map((y) => y.year).join(",");
+  const [guard, setGuard] = useState<ReturnType<typeof overfitGuard> | null>(null);
+  useEffect(() => {
+    const id = setTimeout(() => setGuard(overfitGuard(years, isActive, 200)), 0);
+    return () => clearTimeout(id);
+  }, [guardKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (nActive === 0) {
     return (
       <div className="fin-adv">
@@ -105,15 +121,14 @@ export function AdvancedSeasonality({ years, active, win, zh = false }: Props) {
         <span className="fin-adv-scope">{scope}</span>
         {span && <span className="fin-adv-n">{span} · N={nActive}</span>}
       </div>
-      <HeadlineCards years={years} isActive={isActive} zh={zh} />
+      <HeadlineCards years={years} isActive={isActive} guard={guard} zh={zh} />
       <FanConePanel years={years} isActive={isActive} zh={zh} />
       <div className="fin-adv-row2">
         <MonthEdgePanel years={years} isActive={isActive} zh={zh} />
-        <HoldingMatrixPanel years={years} isActive={isActive} zh={zh} />
+        <HoldingMatrixPanel years={years} isActive={isActive} guard={guard} zh={zh} />
       </div>
       <div className="fin-adv-row3">
         <QuarterPanel years={years} isActive={isActive} zh={zh} />
-        <ShareDonutPanel years={years} isActive={isActive} zh={zh} />
         <YearAgreementPanel years={years} isActive={isActive} zh={zh} />
       </div>
       {/* provenance: the sample every panel above recomputes over */}
@@ -131,26 +146,34 @@ export function AdvancedSeasonality({ years, active, win, zh = false }: Props) {
 }
 
 /* ── headline insight cards ──────────────────────────────────────────────── */
-function HeadlineCards({ years, isActive, zh }: { years: YearData[]; isActive: (y: string) => boolean; zh: boolean }) {
+type Guard = ReturnType<typeof overfitGuard> | null;
+
+/**
+ * Minimum years a window must actually contain before it is allowed to win the
+ * 66-window search. Two years crowning a "best window to hold" is not a finding,
+ * it is a coin flip; 5 is the floor once the active set is deep enough to pay it.
+ */
+const searchMinN = (nActive: number) => Math.max(2, Math.min(5, nActive));
+
+/** The permutation verdict, rendered identically wherever the best window is claimed. */
+function VerdictFlag({ guard, zh }: { guard: Guard; zh: boolean }) {
+  if (!guard?.verdict) return null;
+  const tone = guard.verdict === "NOTABLE" ? "up" : guard.verdict === "WEAK" ? "warn" : "down";
+  const txt =
+    guard.verdict === "NOTABLE" ? pick(zh, "notable", "显著") : guard.verdict === "WEAK" ? pick(zh, "weak", "偏弱") : pick(zh, "likely noise", "疑似噪声");
+  return <span className={"fin-adv-flag " + tone}>{txt}</span>;
+}
+
+function HeadlineCards({ years, isActive, guard, zh }: { years: YearData[]; isActive: (y: string) => boolean; guard: Guard; zh: boolean }) {
   const monthsL = zh ? MONTHS_ZH : MONTHS_EN;
   const curM = currentMonthIdx(years);
   const ms = useMemo(() => monthlyStats(years, isActive), [years, isActive]);
   const edge = ms[curM];
   const grid = useMemo(() => holdingWindows(years, isActive), [years, isActive]);
-  const best = useMemo(() => bestWindow(grid, "hold", 2), [grid]);
+  const nActive = years.filter((y) => isActive(y.year)).length;
+  const minN = searchMinN(nActive);
+  const best = useMemo(() => bestWindow(grid, "hold", minN), [grid, minN]);
   const rw = useMemo(() => runway(years, isActive), [years, isActive]);
-
-  // overfit guard is heavier — compute in an effect so it never blocks paint
-  const key = years.map((y) => y.year).join(",") + "|" + years.filter((y) => isActive(y.year)).map((y) => y.year).join(",");
-  const [guard, setGuard] = useState<ReturnType<typeof overfitGuard> | null>(null);
-  useEffect(() => {
-    const id = setTimeout(() => setGuard(overfitGuard(years, isActive, 200)), 0);
-    return () => clearTimeout(id);
-  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const verdictTone = guard?.verdict === "NOTABLE" ? "up" : guard?.verdict === "WEAK" ? "warn" : guard?.verdict === "NOISE" ? "down" : "";
-  const verdictTxt =
-    guard?.verdict === "NOTABLE" ? pick(zh, "notable", "显著") : guard?.verdict === "WEAK" ? pick(zh, "weak", "偏弱") : guard?.verdict === "NOISE" ? pick(zh, "likely noise", "疑似噪声") : "";
 
   return (
     <div className="fin-adv-cards">
@@ -174,7 +197,7 @@ function HeadlineCards({ years, isActive, zh }: { years: YearData[]; isActive: (
           <>
             <div className="fin-adv-card-v up">{monthsL[best.start]}→{monthsL[best.end]}<span className="fin-adv-holdlen"> · {best.end - best.start + 1}{pick(zh, "mo", "月")}</span></div>
             <div className="fin-adv-card-s">{P(best.mean)} {pick(zh, "avg", "平均")} · {best.wr != null ? WRp(best.wr) : "—"} {pick(zh, "WR", "胜率")}
-              {verdictTxt && <span className={"fin-adv-flag " + verdictTone}>{verdictTxt}</span>}
+              <VerdictFlag guard={guard} zh={zh} />
             </div>
           </>
         ) : (
@@ -206,15 +229,55 @@ function HeadlineCards({ years, isActive, zh }: { years: YearData[]; isActive: (
   );
 }
 
+/**
+ * E[max(k, n−k)/n] for k ~ Binomial(n, ½) — what "sign agreement" reads on PURE
+ * NOISE at sample size n. It is strongly n-dependent (≈.62 at n=10 but ≈.69 at
+ * n=5 and .75 at n=3), so the old fixed 0.72/0.60 thresholds sat BELOW the noise
+ * expectation for thin samples: random data graded "MIXED"→"CONSISTENT" exactly
+ * when the sample was weakest. Everything the card claims is now stated as
+ * EXCESS over this baseline.
+ */
+const noiseShareCache = new Map<number, number>();
+function noiseMaxShare(n: number): number {
+  if (n <= 0) return 1;
+  const memo = noiseShareCache.get(n);
+  if (memo != null) return memo;
+  let c = 1; // C(n,0), advanced by the Pascal recurrence
+  let acc = 0;
+  for (let k = 0; k <= n; k++) {
+    acc += (Math.max(k, n - k) / n) * c;
+    c = (c * (n - k)) / (k + 1);
+  }
+  const v = acc / 2 ** n;
+  noiseShareCache.set(n, v);
+  return v;
+}
+
 function CoherenceCard({ years, isActive, zh }: { years: YearData[]; isActive: (y: string) => boolean; zh: boolean }) {
   const sa = useMemo(() => signAgreement(years, isActive), [years, isActive]);
-  const tone = sa.label === "CONSISTENT" ? "up" : sa.label === "MIXED" ? "warn" : "down";
-  const txt = sa.label === "CONSISTENT" ? pick(zh, "Consistent", "一致") : sa.label === "MIXED" ? pick(zh, "Mixed", "混合") : sa.label === "WEAK" ? pick(zh, "Weak", "弱") : "—";
+  // Same inclusion rule as signAgreement (months with n ≥ 2), so score and its
+  // chance baseline are computed over exactly the same months.
+  const e0 = useMemo(() => {
+    const ns = monthlyStats(years, isActive).filter((s) => s.n >= 2).map((s) => noiseMaxShare(s.n));
+    return ns.length ? ns.reduce((a, b) => a + b, 0) / ns.length : null;
+  }, [years, isActive]);
+  const excess = sa.score != null && e0 != null ? sa.score - e0 : null;
+  const thin = sa.nYears < 5;
+  const label = thin || excess == null ? null : excess >= 0.1 ? "CONSISTENT" : excess >= 0.04 ? "MIXED" : "WEAK";
+  const tone = label === "CONSISTENT" ? "up" : label === "MIXED" ? "warn" : "down";
+  const txt = label === "CONSISTENT" ? pick(zh, "Consistent", "一致") : label === "MIXED" ? pick(zh, "Mixed", "混合") : label === "WEAK" ? pick(zh, "Weak", "弱") : "—";
+  const pctTxt = (v: number) => `${Math.round(v * 100)}%`;
   return (
     <div className="fin-adv-card">
       <div className="fin-adv-card-t">{pick(zh, "How much to trust it", "可信度")}</div>
-      <div className={"fin-adv-card-v " + (sa.score == null ? "muted" : tone)}>{txt}</div>
-      <div className="fin-adv-card-s">{sa.score != null ? `${pick(zh, "sign agreement ", "同向占比 ")}${Math.round(sa.score * 100)}%` : "—"}</div>
+      <div className={"fin-adv-card-v " + (label == null ? "muted" : tone)}>{txt}</div>
+      <div className="fin-adv-card-s">
+        {thin
+          ? pick(zh, "needs ≥5 years", "需≥5年")
+          : sa.score != null && e0 != null
+            ? pick(zh, `sign agreement ${pctTxt(sa.score)} vs ${pctTxt(e0)} by chance`, `同向占比 ${pctTxt(sa.score)} · 随机基线 ${pctTxt(e0)}`)
+            : "—"}
+      </div>
     </div>
   );
 }
@@ -347,7 +410,7 @@ function MonthEdgePanel({ years, isActive, zh }: { years: YearData[]; isActive: 
                 <tr key={s.month} className={"fin-adv-trow" + (isNow ? " now" : "") + (s.n < 4 ? " lowN" : "")}>
                   <td className="l">
                     {monthsL[s.month]}
-                    {isNow && <span className="fin-adv-nowchip">NOW</span>}
+                    {isNow && <span className="fin-adv-nowchip">{pick(zh, "NOW", "本月")}</span>}
                   </td>
                   <td className={"r " + (num(s.mean) ? (s.mean! >= 0 ? "up" : "down") : "")}>{num(s.mean) ? P(s.mean!) : "—"}</td>
                   <td className={"r " + (num(s.median) ? (s.median! >= 0 ? "up" : "down") : "")}>{num(s.median) ? P(s.median!) : "—"}</td>
@@ -374,13 +437,14 @@ function MonthEdgePanel({ years, isActive, zh }: { years: YearData[]; isActive: 
 }
 
 /* ── Optimal Holding-Window matrix ───────────────────────────────────────── */
-function HoldingMatrixPanel({ years, isActive, zh }: { years: YearData[]; isActive: (y: string) => boolean; zh: boolean }) {
+function HoldingMatrixPanel({ years, isActive, guard, zh }: { years: YearData[]; isActive: (y: string) => boolean; guard: Guard; zh: boolean }) {
   const { tip, show, hide } = useFinTip();
   const monthsL = zh ? MONTHS_ZH : MONTHS_EN;
   const grid = useMemo(() => holdingWindows(years, isActive), [years, isActive]);
-  const best = useMemo(() => bestWindow(grid, "hold", 2), [grid]);
-  const bestSharpe = useMemo(() => bestWindow(grid, "sharpe", 2), [grid]);
   const nActive = years.filter((y) => isActive(y.year)).length;
+  const minN = searchMinN(nActive);
+  const best = useMemo(() => bestWindow(grid, "hold", minN), [grid, minN]);
+  const bestSharpe = useMemo(() => bestWindow(grid, "sharpe", minN), [grid, minN]);
 
   let maxAbs = 0;
   for (let s = 0; s < 12; s++) for (let e = s; e < 12; e++) { const w = grid[s][e]; if (w && num(w.mean)) maxAbs = Math.max(maxAbs, Math.abs(w.mean!)); }
@@ -406,6 +470,8 @@ function HoldingMatrixPanel({ years, isActive, zh }: { years: YearData[]; isActi
           <span className="fin-adv-bestcall-w">{monthsL[best.start]} → {monthsL[best.end]} <span className="fin-adv-holdlen">· {best.end - best.start + 1}{pick(zh, "mo", "月")}</span></span>
           <span className="fin-adv-bestcall-v up">{P(best.mean)}</span>
           <span className="fin-adv-bestcall-s">{best.wr != null ? `${WRp(best.wr)} ${pick(zh, "WR", "胜率")}` : ""} · N={best.n}</span>
+          {/* the 66-window search lives HERE, so its permutation verdict belongs here too */}
+          <VerdictFlag guard={guard} zh={zh} />
         </div>
       ) : null}
       <div className="fin-adv-matrixbox">
@@ -443,7 +509,8 @@ function HoldingMatrixPanel({ years, isActive, zh }: { years: YearData[]; isActi
         </svg>
       </div>
       <div className="fin-adv-mx-key">
-        <span><i className="fin-adv-mx-crownkey" />{pick(zh, "Best avg", "最高平均")}</span>
+        {/* the crown marks the hold-SCORE winner (mean/√len × WR), not the highest average */}
+        <span><i className="fin-adv-mx-crownkey" />{pick(zh, "Best window", "最佳区间")}</span>
         <span><i className="fin-adv-mx-sharpekey" />{pick(zh, "Best risk-adj", "最佳风险调整")}</span>
         <span className="dim">{pick(zh, "faint = thin sample", "浅色=样本少")}</span>
       </div>
@@ -484,37 +551,6 @@ function QuarterPanel({ years, isActive, zh }: { years: YearData[]; isActive: (y
           <span className="fin-adv-qwr">{fy.wr != null ? WRp(fy.wr) : "—"}</span>
         </div>
       </div>
-    </Panel>
-  );
-}
-
-/* ── Share-of-Return donut (the pie) ─────────────────────────────────────── */
-function ShareDonutPanel({ years, isActive, zh }: { years: YearData[]; isActive: (y: string) => boolean; zh: boolean }) {
-  const monthsL = zh ? MONTHS_ZH : MONTHS_EN;
-  const sr = useMemo(() => shareOfReturn(years, isActive), [years, isActive]);
-  const slices = sr.slices
-    .filter((s) => s.weight > 0)
-    .map((s) => ({ label: monthsL[s.month], value: s.weight, color: (s.netMean ?? 0) >= 0 ? "var(--up)" : "var(--down)", month: s.month }));
-  const top = sr.slices.slice().sort((a, b) => b.weight - a.weight).slice(0, 6);
-  return (
-    <Panel title={pick(zh, "Share of movement", "波动占比")} subtitle={pick(zh, "where the year's move concentrates", "全年波动集中于哪些月")}>
-      {sr.total > 0 ? (
-        <div className="fin-adv-donutwrap">
-          <Donut slices={slices} centerValue={`${Math.round(sr.top3 * 100)}%`} centerLabel={pick(zh, "top 3 mo", "前3月")} legend={false} size={132} zh={zh} />
-          <div className="fin-adv-donutleg">
-            {top.map((s) => (
-              <div className="fin-adv-donutleg-row" key={s.month}>
-                <i className="fin-seas-chip-dot" style={{ background: (s.netMean ?? 0) >= 0 ? "var(--up)" : "var(--down)" }} />
-                <span className="fin-adv-donutleg-m">{monthsL[s.month]}</span>
-                <span className="fin-adv-donutleg-p">{Math.round((s.weight / sr.total) * 100)}%</span>
-                <span className={"fin-adv-donutleg-n " + ((s.netMean ?? 0) >= 0 ? "up" : "down")}>{num(s.netMean) ? P(s.netMean!) : "—"}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="fin-adv-panel-empty">{pick(zh, "No data", "暂无数据")}</div>
-      )}
     </Panel>
   );
 }

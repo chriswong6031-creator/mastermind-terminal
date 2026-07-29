@@ -21,10 +21,26 @@ const PROPHET_LEX = {
   // ── Tab / surface header ───────────────────────────────────────────────────
   tabProphet:       ["Prophet", "预言台"],
   tabSubtitle:      ["Managed-pick desk", "主动选股台"],
-  mastheadEyebrow:  ["Managed signal intelligence", "主动信号智能"],
+  // Reworded (D3 honesty pass): "Managed signal intelligence" implied options provenance
+  // this desk does not have. The eyebrow now states what it is and how often it moves.
+  mastheadEyebrow:  ["Signal desk · nightly EOD", "信号台 · 每日收盘"],
   mastheadActive:   ["Active plans", "活跃计划"],
   mastheadFocus:    ["In focus", "当前焦点"],
   mastheadUpdated:  ["Model close", "模型收盘"],
+  mastheadMarks:    ["Option marks", "期权报价"],
+  mastheadMarksLive:["Live", "实时"],
+
+  // ── Provenance (D3 honesty pass) ───────────────────────────────────────────
+  // The desk is mounted in the Options Hub but the signals come from the stock factor
+  // engine. Saying so is the whole point of this line — never soften it.
+  provenanceLine: [
+    "Source: Mastermind factor engine — nightly EOD standouts. Options shown as context overlays, not signal input.",
+    "来源：Mastermind 因子引擎 — 每日收盘精选。期权仅为背景叠加信息，不参与信号生成。",
+  ],
+  provSource:       ["Mastermind factor engine", "Mastermind 因子引擎"],
+  provCadence:      ["nightly EOD", "每日收盘"],
+  provAuthority:    ["display only", "仅供展示"],
+  tagDisplayOnly:   ["Display only", "仅供展示"],
 
   // ── Cadence / authority chips ──────────────────────────────────────────────
   cadenceLabel:     ["nightly EOD — updates after close", "每日收盘后更新"],
@@ -85,7 +101,7 @@ const PROPHET_LEX = {
   phaseOvertime:    ["Overtime", "超时"],
   phaseInvalidated: ["Invalidated", "已失效"],
 
-  // ── Geometry rail ──────────────────────────────────────────────────────────
+  // ── Geometry ladder ────────────────────────────────────────────────────────
   geometryTitle:    ["Trade Geometry", "交易结构"],
   stop:             ["STOP", "止损"],
   entry:            ["ENTRY", "入场"],
@@ -97,8 +113,23 @@ const PROPHET_LEX = {
   horizonPct:       ["horizon used", "持有进度"],
   geometryEmpty:    ["Insufficient geometry data", "结构数据不足"],
   geometryEmptyWhy: [
-    "Entry, stop and at least one target are required to draw the rail.",
-    "绘制价格轴需要入场价、止损价和至少一个目标价。",
+    "Entry, stop and at least one target are required to draw the ladder.",
+    "绘制价格阶梯需要入场价、止损价和至少一个目标价。",
+  ],
+  ladderCaption: [
+    "Plan levels on one price axis. R is the entry-to-stop distance.",
+    "同一价格轴上的计划价位。R 为入场价至止损价的距离。",
+  ],
+  // Wide-geometry display guard (D3 fix_spec 1). {r} = R in dollars, {pct} = R as % of entry.
+  wideGeomTag:      ["Wide geometry", "结构过宽"],
+  wideGeomBody: [
+    "Targets are projected from a structural base-low stop (R = {r}, {pct}% of entry). Treat T1/T2 as geometry, not forecasts.",
+    "目标价由结构性低点止损推算得出（R = {r}，为入场价的 {pct}%）。请将 T1/T2 视为几何推算，而非预测。",
+  ],
+  // Live payloads carry no last_price — say so rather than letting plan levels read as current.
+  noLastNote: [
+    "No intraday price in this payload — entry, stop and targets are plan levels, marked nightly.",
+    "此数据包不含盘中价格 — 入场、止损与目标均为计划价位，按每日收盘更新。",
   ],
 
   // ── Confidence panel ────────────────────────────────────────────────────────
@@ -153,10 +184,15 @@ const PROPHET_LEX = {
   optionPut:        ["PUT", "认沽"],
   optionExpand:     ["Show option contract", "显示期权合约"],
   optionCollapse:   ["Hide option contract", "隐藏期权合约"],
+  // The contract is a suggested overlay on a stock signal — it never generated the signal.
+  optionOverlayTag: ["Overlay — not signal input", "叠加信息 — 非信号来源"],
 
   // ── Analysis center / thesis ──────────────────────────────────────────────
   thesisLabel:      ["Signal Thesis", "信号论点"],
   thesisCaption:    ["Machine-generated from engine fields — display only", "由引擎字段自动生成 — 仅供展示"],
+  // The dealer-positioning sentence is context appended by the options overlay, not a
+  // driver of the signal — it is lifted out of the prose so it cannot read as one.
+  positioningLabel: ["Dealer positioning — context overlay", "做市商持仓 — 背景叠加"],
   briefLabel:       ["What To Do Now", "当前操作建议"],
   briefCaption:     ["Phase-keyed action guide — display only", "阶段动作指南 — 仅供展示"],
   profitPlanLabel:  ["Profit Taking Plan", "利润获取计划"],
@@ -164,11 +200,35 @@ const PROPHET_LEX = {
   profitStatusActive:["ACTIVE", "进行中"],
   profitStatusPending:["PENDING", "待定"],
   profitStatusDone: ["DONE", "完成"],
+  profitColLevel:   ["Level", "价位"],
+  profitColAction:  ["Action", "操作"],
+  profitColStatus:  ["Status", "状态"],
   rrLabel:          ["R/R at Entry", "入场风险收益比"],
   rrRisk:           ["Risk", "风险"],
   rrReward:         ["Reward (T1)", "收益(T1)"],
+  rrRiskTile:       ["Risk to stop", "至止损风险"],
+  rrRewardTile:     ["Reward to T1", "至 T1 收益"],
+  horizonMeter:     ["Horizon used", "持有进度"],
   analysisTitle:    ["Analysis", "分析"],
   confidenceTitle:  ["Confidence Index", "置信度指标"],
+  confidenceEyebrow:["Confidence", "置信度"],
+  // Dossier meta line + per-plan provenance row.
+  dossierSignalOn:  ["Signal", "信号日"],
+  dossierConviction:["Conviction", "信心分"],
+  // Component surfaces are honest about absence — the live payload publishes neither.
+  verdictNoScore: [
+    "No management score in this payload.",
+    "此数据包未提供管理评分。",
+  ],
+  componentMixLabel:  ["Component mix", "分项构成"],
+  componentMixCaption:[
+    "Segment width is each component's share of the five component scores.",
+    "分段宽度为各分项占五项分数之和的比重。",
+  ],
+  componentsAbsent: [
+    "Component scores are not published in this payload — only the headline score is.",
+    "此数据包未发布分项评分 — 仅提供总分。",
+  ],
 
   // ── PERF sub-tab placeholder ───────────────────────────────────────────────
   perfPlaceholderTitle:  ["Outcome Ledger", "结果账本"],

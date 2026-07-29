@@ -45,6 +45,20 @@ const SURFACE_LEX = {
   strikeRangeAria: ["Strike range", "行权价范围"],
   opacityAria: ["Field opacity", "曲面不透明度"],
 
+  // ── Price-axis framing (the y window is price-anchored, not strike-anchored) ─
+  // The field spans every strike the range slider keeps; price spans a few dollars of
+  // it. Framing the axis on the STRIKES squeezed the candles into a hairline, so the
+  // default now frames PRICE and lets the field overflow — with both fits one click away.
+  yFitPrice: ["Fit price", "贴合价格"],
+  yFitStrikes: ["Fit strikes", "贴合行权价"],
+  yFitAria: ["Price axis fit", "价格轴范围"],
+  yFitPriceNone: ["no candles loaded for this session", "该交易日暂无K线数据"],
+  yFitStrikesNone: ["no field painted yet", "尚未绘制曲面"],
+  yZoomHint: [
+    "shift + wheel — or wheel over the price axis — zooms price",
+    "Shift + 滚轮（或在价格轴上滚动）缩放价格轴",
+  ],
+
   // ── Crosshair readout pill ──────────────────────────────────────────────────
   strike: ["Strike", "行权价"],
 

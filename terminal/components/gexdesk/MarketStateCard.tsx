@@ -406,7 +406,7 @@ export function MarketStateCard({
 
   if (!statePayload) {
     return (
-      <div className="obs-card obs-scroll" style={CARD_OUTER} data-tut="gex-state-card">
+      <div className="obs-card obs-scroll obs-gex-state" style={CARD_OUTER} data-tut="gex-state-card">
         <div className="obs-card-hd" style={CARD_HEADER}>
           <span className="obs-lbl">{t("stateTitle")}</span>
         </div>
@@ -462,7 +462,7 @@ export function MarketStateCard({
   );
 
   return (
-    <div className="obs-card obs-scroll" style={CARD_OUTER} data-tut="gex-state-card">
+    <div className="obs-card obs-scroll obs-gex-state" style={CARD_OUTER} data-tut="gex-state-card">
       {/* ── Header: title only ──────────────────────────────────────────────── */}
       <div className="obs-card-hd" style={CARD_HEADER}>
         <span className="obs-lbl">{t("stateTitle")}</span>
@@ -742,6 +742,15 @@ const CARD_OUTER: React.CSSProperties = {
   width: 360,
   maxWidth: "100%",
   flexShrink: 0,
+  /* CONTAINMENT (v7b): this card is its OWN scroll region, sized only by the desk's
+     two-pane row. `minHeight:0` lets it actually shrink to the row instead of forcing the
+     row taller; `alignSelf:stretch` + `maxHeight:100%` pin it to the row's cross size in a
+     wrapping flex container. Nothing here reads a sibling's height, so a drawer opening in
+     the left column can no longer change this card's scroll geometry — that was what left
+     it "pushed up" with its header parked off-screen after a collapse. */
+  minHeight: 0,
+  alignSelf: "stretch",
+  maxHeight: "100%",
   overflowY: "auto",
   overscrollBehavior: "contain",
   scrollbarWidth: "thin" as const,

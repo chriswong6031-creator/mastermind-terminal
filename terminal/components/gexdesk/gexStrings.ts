@@ -369,6 +369,14 @@ const GEX_LEX = {
   gexHistRegimeShort: ["short γ", "空头γ"],
   gexHistRegimeFlat:  ["flat γ", "中性γ"],
   gexHistShift:       ["γ-polarity shifted this session", "本交易日γ极性发生切换"],
+  // Honest-thin state. The strip used to return null and vanish from the page when the
+  // archive held fewer than two sessions — it now keeps its header and names the condition.
+  gexHistThin:        ["Only {n} settled session on file", "仅有 {n} 个已结算交易日"],
+  gexHistThinNone:    ["No settled sessions on file yet", "暂无已结算交易日"],
+  gexHistThinWhy:     [
+    "The history strip needs at least two archived sessions to draw a trend.",
+    "历史条形图需要至少两个已归档交易日才能绘制趋势。",
+  ],
 } as const;
 
 type GexDeskKey = keyof typeof GEX_LEX;

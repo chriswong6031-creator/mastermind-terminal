@@ -108,6 +108,24 @@ function saveWatchlist(list: string[]) {
   try { localStorage.setItem(WATCHLIST_KEY, JSON.stringify(list)); } catch {}
 }
 
+/**
+ * Run `cb` once the browser is idle (or after a short delay when
+ * requestIdleCallback is unavailable). Used to keep the 3.2 MB enrich artifact
+ * off the desk's first-paint request batch.
+ */
+function whenIdle(cb: () => void): () => void {
+  const w = window as Window & {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    cancelIdleCallback?: (handle: number) => void;
+  };
+  if (typeof w.requestIdleCallback === "function") {
+    const h = w.requestIdleCallback(cb, { timeout: 4000 });
+    return () => w.cancelIdleCallback?.(h);
+  }
+  const h = setTimeout(cb, 900);
+  return () => clearTimeout(h);
+}
+
 async function safeFetch<T>(url: string): Promise<T | null> {
   try {
     const f = new URL(url, "http://x").searchParams.get("f") ?? url;
@@ -357,33 +375,45 @@ export function FlowDeskView() {
   // ── Mount: initial fetch + polling ───────────────────────────────────────────
 
   useEffect(() => {
-    // Initial fetches (bypass visibility guard on mount)
+    // Initial fetches (bypass visibility guard on mount).
+    // feed is streamed via useFlowStream — bootstrap only the still-polled feeds.
+    //
+    // PERF (v7b): the enrich artifact is deliberately NOT in this batch. It is
+    // 3.2 MB in production and is a pure ENHANCEMENT layer (tier chips + v2
+    // detections; fetchEnrich below documents the v1 fallback when it is absent),
+    // yet it used to compete for bandwidth with the desk's own ~2 MB feed SSE
+    // frame — i.e. the artifact nobody needs for the first cards delayed the one
+    // that draws them. It now loads on the first idle slice after mount, once the
+    // feed has had the pipe to itself.
     void (async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      // feed is streamed via useFlowStream — bootstrap only the still-polled feeds.
-      const [ti, ch, en] = await Promise.all([
+      const [ti, ch] = await Promise.all([
         safeFetch<TidePayload>("/api/flow?f=tide"),
         safeFetch<ChainHeatPayload>("/api/flow?f=chainheat"),
-        safeFetch<any>("/api/flow?f=enrich"),
       ]);
       if (ti) setTide(ti);
       if (ch) setChainHeat(ch);
-      // Enrich: stale check (same logic as fetchEnrich callback)
-      if (en) {
+    })();
+
+    // Deferred enrich bootstrap — same stale gate as the fetchEnrich poll, minus
+    // the visibility guard (this is the one-shot bootstrap).
+    const cancelIdle = whenIdle(() => {
+      void (async () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const en = await safeFetch<any>("/api/flow?f=enrich");
+        if (!en) return;
         let normalizedEn: EnrichPayload | null = null;
         try { normalizedEn = normalizeEnrichPayload(en); } catch { /* ignore */ }
-        if (normalizedEn) {
-          const src = (en as Record<string, unknown>).source as string | undefined;
-          if (src === "fixture") {
-            setEnrich(normalizedEn);
-          } else {
-            const asof = normalizedEn.asof ? new Date(normalizedEn.asof).getTime() : 0;
-            const ageH = asof > 0 ? (Date.now() - asof) / 3_600_000 : 0;
-            if (ageH <= 16) setEnrich(normalizedEn);
-          }
+        if (!normalizedEn) return;
+        const src = (en as Record<string, unknown>).source as string | undefined;
+        if (src === "fixture") {
+          setEnrich(normalizedEn);
+          return;
         }
-      }
-    })();
+        const asof = normalizedEn.asof ? new Date(normalizedEn.asof).getTime() : 0;
+        const ageH = asof > 0 ? (Date.now() - asof) / 3_600_000 : 0;
+        if (ageH <= 16) setEnrich(normalizedEn);
+      })();
+    });
 
     tideTimerRef.current   = setInterval(fetchTide,      TIDE_POLL_MS);
     chainTimerRef.current  = setInterval(fetchChainHeat, CHAIN_POLL_MS);
@@ -391,6 +421,7 @@ export function FlowDeskView() {
     enrichTimerRef.current = setInterval(fetchEnrich, 5 * 60_000);
 
     return () => {
+      cancelIdle();
       if (tideTimerRef.current)   clearInterval(tideTimerRef.current);
       if (chainTimerRef.current)  clearInterval(chainTimerRef.current);
       if (enrichTimerRef.current) clearInterval(enrichTimerRef.current);
@@ -539,8 +570,10 @@ export function FlowDeskView() {
         />
       </div>
 
-      {/* ═══ RIGHT RAIL — Chain Heat FIRST, then Inspector ═══════════════════ */}
-      <div className="obs-fd-right">
+      {/* ═══ RIGHT RAIL — Chain Heat FIRST, then Inspector ═══════════════════
+          `has-sel` hands the height budget to the Inspector once an event is
+          selected (Chain Heat keeps the rail when nothing is). */}
+      <div className={`obs-fd-right${selectedEvent ? " has-sel" : ""}`}>
         {/* Chain Heat Rail — top of right column, scrollable */}
         <ChainHeatRail data={chainHeat} lang={lang} />
 

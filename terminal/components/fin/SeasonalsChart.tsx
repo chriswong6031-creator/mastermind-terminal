@@ -391,7 +391,13 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
 
       {/* legend — inline chips when few, an "N years" chip + popover past 12 */}
       <div className="fin-seas-legend">
-        <div className="fin-seas-legend-years">
+        {/* `.collapsed` un-clips the row: the un-collapsed legend caps its height
+            and scrolls, and that scroll container was clipping the year-picker
+            popover (an abspos box can never escape an ancestor's overflow, no
+            matter its z-index) — so the "N of M years" chip appeared dead. In
+            the collapsed case the row is a single line of chips, so dropping
+            the cap costs nothing. */}
+        <div className={"fin-seas-legend-years" + (collapseLegend ? " collapsed" : "")}>
           <span className="fin-seas-legkey"><i className="fin-seas-legkey-mean" />{pick(zh, "Mean", "平均")}</span>
           {years.some((y) => y.isCurrent) && <span className="fin-seas-legkey"><i className="fin-seas-legkey-cur" />{pick(zh, "This year", "今年")}</span>}
           {collapseLegend ? (
