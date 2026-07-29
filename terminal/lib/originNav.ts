@@ -8,9 +8,57 @@ const MACRO_HOSTS = new Set(["mastermind-x.com", "www.mastermind-x.com"]);
 const MACRO_ORIGIN = "https://mastermind-x.com";
 const KEY = "mm.fromMacro";   // sessionStorage: "1" once detected (survives in-app SPA navigation)
 const HREF = "mm.macroHref";  // sessionStorage: best-known dashboard URL to return to
+const EMBED_KEY = "mm.embeddedDashboard"; // "1" while this tab is hosted by the dashboard iframe
 
 function isMacroHost(host: string) {
   return MACRO_HOSTS.has(host) || host.endsWith(".github.io");
+}
+
+export function isAllowedMacroOrigin(origin: string): boolean {
+  try {
+    const u = new URL(origin);
+    if (u.protocol === "https:" && MACRO_HOSTS.has(u.hostname)) return true;
+    if (process.env.NODE_ENV !== "production"
+        && u.protocol === "http:"
+        && (u.hostname === "localhost" || u.hostname === "127.0.0.1")) return true;
+  } catch {}
+  return false;
+}
+
+/**
+ * Detect and remember the first-party embedded lifecycle. The referrer check is
+ * intentionally mandatory: `?embed=dashboard` by itself must not turn an arbitrary
+ * same-origin frame into a privileged dashboard bridge.
+ */
+export function ensureEmbeddedTerminalSession(): boolean {
+  if (typeof window === "undefined" || window.parent === window) return false;
+  try {
+    if (sessionStorage.getItem(EMBED_KEY) === "1") return true;
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("embed") === "dashboard" || params.get("embed") === "1";
+    let trustedParent = false;
+    try {
+      trustedParent = !!document.referrer && isAllowedMacroOrigin(new URL(document.referrer).origin);
+    } catch {}
+    if (requested && trustedParent) sessionStorage.setItem(EMBED_KEY, "1");
+    return trustedParent && sessionStorage.getItem(EMBED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function postToMacroDashboard(type: string, payload: Record<string, unknown> = {}): boolean {
+  if (!ensureEmbeddedTerminalSession()) return false;
+  const candidates = [document.referrer, sessionStorage.getItem(HREF) || ""];
+  for (const candidate of candidates) {
+    try {
+      const origin = new URL(candidate).origin;
+      if (!isAllowedMacroOrigin(origin)) continue;
+      window.parent.postMessage({ source: "mastermind-terminal", type, ...payload }, origin);
+      return true;
+    } catch {}
+  }
+  return false;
 }
 
 /**
@@ -51,13 +99,18 @@ function safeMacroHref(raw: string | null | undefined): string {
  * → screener → options → …) where the referrer/param are no longer present.
  */
 export function useFromMacro() {
-  const [fromMacro, setFromMacro] = useState(false);
-  const [macroHref, setMacroHref] = useState<string>(MACRO_ORIGIN);
+  const [context, setContext] = useState({
+    fromMacro: false,
+    macroHref: MACRO_ORIGIN,
+    embedded: false,
+  });
 
   useEffect(() => {
+    let nextContext: typeof context | null = null;
     try {
       const params = new URLSearchParams(window.location.search);
       const flagged = params.get("from") === "macro" || params.get("ref") === "macro";
+      const embeddedNow = ensureEmbeddedTerminalSession();
       const retHref = safeMacroHref(params.get("ret") || params.get("return"));
       let refHref = "";
       try {
@@ -68,24 +121,32 @@ export function useFromMacro() {
       } catch {}
 
       // Any of these means "this load came from the dashboard" — a fresh signal that refreshes the target.
-      if (flagged || retHref || refHref) {
+      if (flagged || retHref || refHref || embeddedNow) {
         const href = retHref || refHref || MACRO_ORIGIN;
         sessionStorage.setItem(KEY, "1");
         sessionStorage.setItem(HREF, href);
-        setFromMacro(true);
-        setMacroHref(href);
-        return;
+        nextContext = { fromMacro: true, macroHref: href, embedded: embeddedNow };
       }
 
       // No fresh signal on this load — restore the remembered dashboard context (SPA in-app navigation).
-      if (sessionStorage.getItem(KEY) === "1") {
-        setFromMacro(true);
-        setMacroHref(safeMacroHref(sessionStorage.getItem(HREF)) || MACRO_ORIGIN);
+      if (!nextContext && sessionStorage.getItem(KEY) === "1") {
+        nextContext = {
+          fromMacro: true,
+          macroHref: safeMacroHref(sessionStorage.getItem(HREF)) || MACRO_ORIGIN,
+          embedded: ensureEmbeddedTerminalSession(),
+        };
       }
     } catch {}
+
+    // Defer the client-only context update to the next task. This keeps the
+    // server snapshot deterministic and avoids a synchronous effect cascade.
+    if (!nextContext) return;
+    const resolvedContext = nextContext;
+    const timer = window.setTimeout(() => setContext(resolvedContext), 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
-  return { fromMacro, macroHref };
+  return context;
 }
 
 /**
@@ -94,6 +155,10 @@ export function useFromMacro() {
  * there's nothing to pop (opened in a fresh tab) we hard-navigate to the captured dashboard URL.
  */
 export function backToMacro(macroHref: string) {
+  // Embedded Terminal: the dashboard owns browser history + scroll state. Ask the
+  // parent shell to close instead of navigating the iframe to another website.
+  if (postToMacroDashboard("terminal:close")) return;
+
   // Always hard-navigate to the captured dashboard URL. A history.back() shortcut looked tempting
   // (bfcache-instant in the pure macro→terminal→back flow), but after ANY in-app navigation
   // (chart → analyst → options → screener → …) the previous history entry is another Terminal page,

@@ -1643,7 +1643,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   };
   const removeFlag = (sym: string) => { setFlags((f) => { const n = { ...f }; delete n[sym]; return n; }); };
 
-  const pick = (sym: string) => {
+  const pick = useCallback((sym: string) => {
     // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
     // re-clicking the active symbol is a no-op rather than jumping focus to the first matching pane.
     const existing = panes[activePane] === sym ? activePane : panes.findIndex((s) => s === sym);
@@ -1653,8 +1653,20 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // F3: record navigation in history ring buffer (skip composites — SearchModal filters
     // history via manifest keys, so composite exprs would silently vanish from the Recent list).
     if (!isComposite(sym)) pushHistory(sym);
-  };
+  }, [activePane, panes]);
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
+
+  // The dashboard keeps one warm iframe alive between launches. A later ticker click
+  // therefore switches the existing Terminal instance through the bridge instead of
+  // reloading the whole Next app and chart runtime.
+  useEffect(() => {
+    const onEmbeddedSymbol = (event: Event) => {
+      const symbol = (event as CustomEvent<{ symbol?: string }>).detail?.symbol;
+      if (symbol) pick(symbol);
+    };
+    window.addEventListener("mm:embedded-symbol", onEmbeddedSymbol);
+    return () => window.removeEventListener("mm:embedded-symbol", onEmbeddedSymbol);
+  }, [pick]);
 
   // ── Chart Bus v2 (CMX W1) ──────────────────────────────────────────────────────────────────
   // The v2 typed drawing/command vocabulary. v1 envelopes stay on handleBrainCommand below; a v:2

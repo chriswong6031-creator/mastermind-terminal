@@ -1,13 +1,14 @@
 "use client";
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext } from "react";
 import { usePathname } from "next/navigation";
-import { BrandLockup } from "@/components/BrandMark";
+import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import MobileNav from "@/components/MobileNav";
 import SettingsButton from "@/components/settings/SettingsButton";
 import { SettingsProvider } from "@/components/settings/SettingsProvider";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 import { useT } from "@/lib/i18n";
+import { backToMacro, useFromMacro } from "@/lib/originNav";
 
 /**
  * AppShell — the ONE shared chrome for every non-chart workspace (Wave-2 IA).
@@ -59,6 +60,8 @@ export default function AppShell({
   const path = usePathname();
   const hit = TITLE_MAP.find(([p]) => path.startsWith(p));
   const title = hit ? t(hit[1], hit[2]) : t("flow", "Options");
+  const { fromMacro, macroHref } = useFromMacro();
+  const onBack = useCallback(() => backToMacro(macroHref), [macroHref]);
 
   return (
     <AppShellEmailCtx.Provider value={email}>
@@ -68,9 +71,15 @@ export default function AppShell({
           guest path both hand off to the signup sheet. */}
       <SettingsProvider email={email}>
       <div className="app2 obs obs-ambient">
-        <MobileNav email={email} />
+        <MobileNav email={email} fromMacro={fromMacro} onBack={onBack} />
         <header className="topbar">
-          <BrandLockup />
+          {fromMacro
+            ? <button className="brand-back" onClick={onBack} title={t("backToDashboard")} aria-label={t("backToDashboard")}>
+                <span className="bb-chev"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></span>
+                <BrandMark />
+                <span className="wm"><b>MASTERMIND</b><small>← {t("dashboard")}</small></span>
+              </button>
+            : <BrandLockup />}
           <div className="tdiv" />
           <span className="page-title">{title}</span>
           <div className="spacer" />
