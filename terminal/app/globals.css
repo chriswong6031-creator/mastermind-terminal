@@ -17,7 +17,11 @@
   --regime-up:#26c281; --warn:#e8a33d; --danger:#f0566b; --code-fn:#9d86ff;
   /* Chart Bus v2 (CMX W1): AI drawing-layer accent — violet, distinct from the user's blue (--brand-2). */
   --ai:#9d86ff; --ai-rgb:157,134,255;
-  --font-ui:var(--font-inter),-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  /* v7b type refresh: UI chrome rides San Francisco on Apple hardware
+     (-apple-system → SF Pro Text/Display with automatic optical sizing) and
+     falls back to the Inter webfont everywhere else. Numerals stay Inter-first
+     (--font-num below) — tabular figures must be identical cross-platform. */
+  --font-ui:-apple-system,BlinkMacSystemFont,var(--font-inter),"Segoe UI",Roboto,sans-serif;
   /* Numerals ride the SAME modern grotesque as the UI — a code face made every price, date and
      quarter label read as a machine dump. Column alignment now comes from tabular figures, not
      from a fixed advance: Inter's DEFAULT digits are proportional (the "1" is ~63% the width of
@@ -105,7 +109,9 @@ html[data-updown="east"]{
 }
 *{box-sizing:border-box}
 html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 var(--font-ui);-webkit-font-smoothing:antialiased;letter-spacing:.005em}
+/* letter-spacing 0: SF carries its own optical spacing; the old .005em was an
+   Inter-era tune and reads loose under SF. Micro-labels keep their explicit tracking. */
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 var(--font-ui);-webkit-font-smoothing:antialiased;letter-spacing:0}
 .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
 .up{color:var(--up)} .down{color:var(--down)}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
