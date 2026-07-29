@@ -598,17 +598,19 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
             {(drivers.length > 0 || cautions.length > 0) && (
               <div className="sig-card">
                 <div className="sig-card-h">{pick(zh, "Drivers & Cautions", "驱动与警示")}</div>
+                {/* v7: the universal tint tag (--c) replaces .sa-tag's hardcoded rgba
+                    fills, which never flipped under html[data-updown="east"]. */}
                 {drivers.length > 0 && (
                   <div className="sig-tags">
                     {drivers.slice(0, 6).map((d, i) => (
-                      <span key={"d" + i} className="sa-tag up">{d}</span>
+                      <span key={"d" + i} className="fin-tag" style={{ "--c": "var(--up)" } as React.CSSProperties}>{d}</span>
                     ))}
                   </div>
                 )}
                 {cautions.length > 0 && (
                   <div className="sig-tags">
                     {cautions.slice(0, 6).map((c, i) => (
-                      <span key={"c" + i} className="sa-tag warn">{c}</span>
+                      <span key={"c" + i} className="fin-tag" style={{ "--c": "var(--warn)" } as React.CSSProperties}>{c}</span>
                     ))}
                   </div>
                 )}
@@ -735,7 +737,16 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
               </div>
 
               {sigs.length === 0 ? (
-                <div className="fin-empty">{pick(zh, "No signals", "暂无信号")}</div>
+                <div className="fin-empty od-empty" role="status">
+                  <span className="fin-empty-title">{pick(zh, "No signals", "暂无信号")}</span>
+                  <span className="fin-empty-why">
+                    {pick(
+                      zh,
+                      "Golden Oracle has not printed an entry or exit for this name in the loaded history.",
+                      "在已加载的历史区间内，黄金神谕未对该标的发出过进出场信号。",
+                    )}
+                  </span>
+                </div>
               ) : (
                 <div className="sd-siglist">
                   {sigs.map((sig, i) => {

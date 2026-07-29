@@ -134,10 +134,10 @@ export default function EventEdgePop({ anchor, intel, zh = false, onClose }: Eve
       aria-label={pick(zh, "Event edge details", "事件驱动详情")}
       style={{ left, top, width: POP_W }}
     >
-      {/* trust tier pill */}
+      {/* trust tier pill — tint formula: one --c drives text, fill and ring */}
       {tier && (
         <div className="eep-tier-row">
-          <span className="eep-tier-pill" style={{ borderColor: tierColor(tier), color: tierColor(tier) }}>
+          <span className="eep-tier-pill" style={{ "--c": tierColor(tier) } as React.CSSProperties}>
             {cap(tier)}
           </span>
         </div>

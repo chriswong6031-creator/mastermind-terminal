@@ -45,6 +45,8 @@
 .fin-sec-h.rail{gap:9px}
 .fin-sec-h.rail::before{content:"";flex:none;align-self:center;width:3px;height:15px;border-radius:2px;background:linear-gradient(180deg,var(--rail),color-mix(in srgb,var(--rail) 30%,transparent))}
 .fin-sec-h.rule{padding-bottom:9px;border-bottom:1px solid var(--hairline);margin-bottom:10px}
+/* a .fin-tag inside a baseline-aligned section header centers itself */
+.fin-sec-h .fin-tag{align-self:center}
 .fin-sec-h .chev{color:var(--brand);cursor:pointer}
 .fin-sec-h.link{cursor:pointer}
 .fin-sec-h.link:hover .chev{color:var(--brand-2)}
@@ -421,7 +423,9 @@
 /* ── EventEdgePop popover ── */
 .eep-pop{position:fixed;z-index:97;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid var(--pop-edge);border-radius:var(--pop-r);padding:14px 15px;box-shadow:var(--pop-shadow),var(--pop-sheen);display:flex;flex-direction:column;gap:11px;animation:fin-tip-in .12s ease;max-height:min(420px,80vh);overflow-y:auto;scrollbar-width:thin}
 .eep-tier-row{display:flex;align-items:center;gap:8px}
-.eep-tier-pill{display:inline-flex;align-items:center;padding:5px 11px;border-radius:var(--r-pill);border:1.5px solid;font:700 11px/1 var(--font-ui);letter-spacing:.02em;background:transparent}
+/* trust-tier pill → tint formula. tierColor() returns CSS vars only, so one --c
+   drives text, fill and ring; the old 1.5px border is replaced by the inset ring. */
+.eep-tier-pill{display:inline-flex;align-items:center;padding:5px 11px;border-radius:var(--r-pill);border:none;font:700 11px/1 var(--font-ui);letter-spacing:.02em;color:var(--c,var(--text-2));background:color-mix(in srgb,var(--c,var(--muted)) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c,var(--muted)) 32%,transparent)}
 .eep-prose{font:500 12px/1.6 var(--font-ui);color:var(--text);margin:0;white-space:pre-wrap;word-break:break-word}
 .eep-chips{display:flex;flex-direction:column;gap:7px}
 .eep-chip{display:flex;align-items:baseline;gap:6px;font:500 11.5px/1.3 var(--font-ui)}
@@ -957,7 +961,7 @@
 /* Age-aware dimming: trades older than a year read fainter. */
 .fin-insider-stale{color:var(--muted)}
 .fin-insider-lasttrade{font:500 11px/1 var(--font-ui);color:var(--muted)}
-.fin-insider-asof{font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:9px}
+/* (.fin-insider-asof retired — InsiderPage moved to the shared .fin-asof) */
 
 /* ── fin-xlbl font floor at mobile ── */
 @media (max-width:860px){
@@ -1056,3 +1060,43 @@
 
 /* advanced deck — plain-word window scope beside the title */
 .fin-adv-scope{font:650 var(--fs-label)/1 var(--font-ui);letter-spacing:.02em;text-transform:none;color:var(--text);background:rgba(41,98,255,.12);border:1px solid rgba(41,98,255,.22);border-radius:var(--r-pill);padding:3px 9px}
+
+/* ===========================================================================
+ * === TECHLAB === TechLabPanel (Lab tab) — .fin-tl-* (v7 wave)
+ * The panel's .tl-* class names never had ANY stylesheet in this repo (verified:
+ * zero matches across every .css), so the Lab tab rendered as raw flow content.
+ * The .tl-* names stay in the markup for continuity; these .fin-tl-* classes ride
+ * alongside and carry the v7 look. Most of the surface is .fin-card/.fin-kpi/.fin-tag.
+ * ========================================================================== */
+.fin-tl-header{margin-bottom:18px}
+.fin-tl-header .fin-sec-cap{margin-bottom:0;max-width:86ch}
+.fin-tl-header .fin-asof{margin-top:6px}
+.fin-tl-siglist{display:flex;flex-direction:column;gap:10px}
+.fin-tl-firing{border-color:color-mix(in srgb,var(--signal) 34%,transparent)}
+.fin-tl-sighead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.fin-tl-signame{font:650 var(--fs-body)/1.25 var(--font-ui);color:var(--text);min-width:0;overflow-wrap:anywhere}
+.fin-tl-stats{display:flex;flex-direction:column;gap:12px}
+.fin-tl-k{font:600 var(--fs-micro)/1.2 var(--font-ui);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);flex:none}
+.fin-tl-dim{color:var(--muted)}
+.fin-tl-wrpair{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.fin-tl-wr{display:flex;align-items:center;gap:10px;flex:1 1 200px;min-width:0}
+.fin-tl-wr-track{position:relative;flex:1;min-width:0;height:8px;border-radius:var(--r-pill);background:var(--inset);overflow:hidden}
+.fin-tl-wr-fill{position:absolute;left:0;top:0;bottom:0;border-radius:var(--r-pill)}
+.fin-tl-wr-fill.up{background:color-mix(in srgb,var(--up) 62%,transparent)}
+.fin-tl-wr-fill.down{background:color-mix(in srgb,var(--down) 62%,transparent)}
+.fin-tl-wr-base{position:absolute;top:0;bottom:0;width:1.5px;background:var(--text-2);z-index:1}
+.fin-tl-wr-num{font:650 var(--fs-label)/1 var(--font-num);font-variant-numeric:tabular-nums;min-width:46px;text-align:right;flex:none}
+.fin-tl-wr-num.up{color:var(--up)}
+.fin-tl-wr-num.down{color:var(--down)}
+.fin-tl-era{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--hairline);font:500 var(--fs-label)/1.4 var(--font-ui);color:var(--muted)}
+.fin-tl-era-v{color:var(--text-2);font-family:var(--font-num);font-weight:650;font-variant-numeric:tabular-nums}
+.fin-tl-footer{margin-top:4px;padding-top:12px;border-top:1px solid var(--hairline)}
+.fin-tl-footer-link{font:600 var(--fs-label)/1 var(--font-ui);color:var(--brand-2);text-decoration:none;transition:color var(--t)}
+.fin-tl-footer-link:hover{color:var(--brand)}
+
+/* ── Insider lane additions (v7 wave) ── */
+.fin-insider-tradehdr{flex-wrap:wrap}
+
+/* ── FE2d additions (v7 wave) ── */
+.od-empty{flex-direction:column;gap:5px;min-height:72px;padding:16px 14px}
+.od-sig-table th{letter-spacing:.06em;text-transform:uppercase}

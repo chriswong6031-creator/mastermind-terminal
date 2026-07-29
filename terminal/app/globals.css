@@ -1467,8 +1467,8 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .sa-dc-lbl.up{color:var(--up)}.sa-dc-lbl.warn{color:var(--warn)}
 .sa-dc-tags{display:flex;flex-wrap:wrap;gap:6px}
 .sa-tag{font:600 11px/1.35 var(--font-ui);padding:5px 9px;border-radius:var(--r);border:1px solid var(--line)}
-.sa-tag.up{color:var(--up);background:rgba(38,194,129,.08);border-color:rgba(38,194,129,.2)}
-.sa-tag.warn{color:var(--warn);background:rgba(232,163,61,.08);border-color:rgba(232,163,61,.22)}
+.sa-tag.up{color:var(--up);background:color-mix(in srgb,var(--up) 9%,transparent);border-color:color-mix(in srgb,var(--up) 22%,transparent)}
+.sa-tag.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,transparent);border-color:color-mix(in srgb,var(--warn) 22%,transparent)}
 
 /* section card */
 .sa-sec{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:12px 13px}
