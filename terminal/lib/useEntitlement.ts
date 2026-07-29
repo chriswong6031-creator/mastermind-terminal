@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 // public UI never spends a request establishing "you're free". The proxy also softens
 // unauthed to a 200 free default, so a stale cookie degrades gracefully either way.
 //
-// This is a READ surface for gating labels (SettingsMenu tier line). It is deliberately
+// This is a READ surface for gating labels. It is deliberately
 // NOT the live-options gate — that is a separate lane.
 
 export type Tier = "free" | "insider" | "pro";

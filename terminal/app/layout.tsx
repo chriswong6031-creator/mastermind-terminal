@@ -4,6 +4,7 @@ import "./globals.css";
 import "./fin.css";
 import "./observatory.css";
 import "./onboarding.css";
+import "./settings.css";
 import { LangProvider } from "@/lib/i18n";
 import Tracker from "@/components/Tracker";
 
