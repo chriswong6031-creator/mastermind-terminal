@@ -395,14 +395,17 @@ export function run(source: string | ParseResult, bars: Bar[], opts: { timeframe
       if (name === "nz") { const { pos } = evalArgs(n.args, ctx); return isNa(pos[0]) ? (pos[1] !== undefined ? pos[1] : 0) : pos[0]; }
       if (name === "na") { const { pos } = evalArgs(n.args, ctx); return isNa(pos[0]); }
       if (name === "fixnan") { const { pos } = evalArgs(n.args, ctx); const key = "#fix" + n.id; const st = taState.get(key) || { last: NA }; if (!isNa(pos[0])) st.last = pos[0]; taState.set(key, st); return st.last; }
-      // Deferred global drawing/alert builtins: parsed, then dropped — nothing is emitted (and, as
-      // before, their args are not even evaluated). Warn once per name instead of returning na
+      // Deferred global drawing/alert builtins: nothing is emitted, but the args are still
+      // EVALUATED (then dropped) so any stateful builtin inside them — ta.*, a nested plot(),
+      // `expr[n]` history — advances its per-call-site state on every bar, the same rule the
+      // and/or/ternary paths follow (see evalBinary). Skipping them would desync any series that
+      // appears only inside these calls' arguments. Warn once per name instead of returning na
       // silently, so the editor can't report a bare "✓ Compiled" over a script that draws nothing.
-      if (name === "fill" || name === "bgcolor" || name === "barcolor" || name === "alertcondition" || name === "alert" || name === "bgColor") { warn(unsupportedMsg(name)); return NA; }
+      if (name === "fill" || name === "bgcolor" || name === "barcolor" || name === "alertcondition" || name === "alert" || name === "bgColor") { evalArgs(n.args, ctx); warn(unsupportedMsg(name)); return NA; }
       if (name === "input") { const { pos, named } = evalArgs(n.args, ctx); return inputDispatch(typeof pos[0] === "boolean" ? "bool" : typeof pos[0] === "string" ? "string" : "float", pos, named); }
-      if (name === "timestamp") return NA;
-      if (NOOP_NS.has(name)) { warn(unsupportedMsg(name)); return NA; }
-      warn(`unsupported function '${name}()' (na)`); return NA;
+      if (name === "timestamp") { evalArgs(n.args, ctx); return NA; }
+      if (NOOP_NS.has(name)) { evalArgs(n.args, ctx); warn(unsupportedMsg(name)); return NA; }
+      evalArgs(n.args, ctx); warn(`unsupported function '${name}()' (na)`); return NA;
     }
 
     // ── plot / plotshape / hline collectors ──
