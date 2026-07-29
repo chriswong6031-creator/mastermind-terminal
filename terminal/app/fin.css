@@ -615,7 +615,7 @@
 .fin-tx-date{font:500 11px/1 var(--font-num);color:var(--text-2);font-variant-numeric:tabular-nums}
 .fin-tx-body{scroll-behavior:smooth}
 .fin-tx-section{font:650 12px/1.2 var(--font-ui);color:var(--text);margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--line-2)}
-.fin-tx-status{font:500 12px/1.5 var(--font-ui);color:var(--muted);padding:20px 0;text-align:center}
+/* (.fin-tx-status retired — TranscriptDrawer states moved to .fin-skel / .fin-empty) */
 .fin-tx-seg{font:500 12.5px/1.62 var(--font-ui);color:var(--text-2);margin:0 0 14px}
 .fin-tx-speaker{color:var(--text);font-weight:650}
 .fin-tx-text{color:var(--text-2)}
@@ -1135,3 +1135,16 @@
 .fin-ro-title{display:inline-flex;align-items:center;gap:9px}
 .fin-ro-title::before{content:"";flex:none;width:3px;height:14px;border-radius:2px;
   background:linear-gradient(180deg,var(--rail),color-mix(in srgb,var(--rail) 30%,transparent))}
+
+/* ── FE2a additions (v7 wave) ── */
+/* Statistics page header: title + A/Q toggle share one flex row, so the hairline
+   rides the ROW — `.rule` on the flex-item title would stop under the word. */
+.fin-stats-hdr.rule{padding-bottom:9px;border-bottom:1px solid var(--hairline)}
+/* KPI tiles: a prose value (Sector, Website) is not a numeral — it drops to the
+   UI face at --fs-emph and wraps instead of overflowing the 128px tile. */
+.fin-kpi .v.txt{font:600 var(--fs-emph)/1.3 var(--font-ui);letter-spacing:-.01em;overflow-wrap:anywhere}
+.fin-kpi .v.fin-fact-link{color:var(--brand-2)}
+/* TranscriptDrawer type ramp — crumb joins the eyebrow scale, title reads at the
+   section-title step. Colour/uppercase stay on the base rules. */
+.fin-tx-crumb{font:700 var(--fs-micro)/1 var(--font-ui);letter-spacing:.14em}
+.fin-tx-title{font:650 var(--fs-title)/1.25 var(--font-ui);letter-spacing:-.01em}

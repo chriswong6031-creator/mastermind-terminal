@@ -15,7 +15,7 @@
  */
 import { useMemo, useState } from "react";
 import { useLang } from "../../lib/i18n";
-import { pick, fmtNum } from "../../lib/finFormat";
+import { pick, fmtNum, fmtDate } from "../../lib/finFormat";
 import type { Fund, StatementPeriodSet } from "../../lib/fund";
 import { Bars, MiniTable, type Series, type MiniRow } from "./FinCharts";
 
@@ -59,7 +59,13 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
     return (
       <div className="fin-empty fin-empty-lg" role="status">
         <div className="fin-empty-title">{pick(zh, "No statements yet", "暂无财务报表")}</div>
-        <div>{pick(zh, `Financial statements for ${sym} haven't been collected yet.`, `${sym} 的财务报表尚未采集。`)}</div>
+        <div className="fin-empty-why">
+          {pick(
+            zh,
+            `Financial statements for ${sym} haven't been collected yet. Coverage is extended nightly by dollar volume.`,
+            `${sym} 的财务报表尚未采集。覆盖范围每夜按成交额扩展。`,
+          )}
+        </div>
       </div>
     );
   }
@@ -99,10 +105,31 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
   const curLabel = `${pick(zh, "Currency:", "货币:")} ${fund.stmt_currency || "USD"}`;
   const isEps = (label: string) => label.toLowerCase().includes("eps") || label.includes("每股");
 
+  // Header title tracks the selected statement so the chart above the pills is
+  // never an unlabelled strip; the basis (A/Q + currency + as-of) rides the
+  // single provenance row at the foot — one meta line, not two.
+  const stmtTitle =
+    stmt === "income"
+      ? pick(zh, "Income statement", "利润表")
+      : stmt === "balance"
+        ? pick(zh, "Balance sheet", "资产负债表")
+        : pick(zh, "Cash flow", "现金流量表");
+  const asofD = fund.asof ? fmtDate(fund.asof) : "";
+  const ccy = fund.stmt_currency || "USD";
+  const basisLine = pick(
+    zh,
+    `${aq === "annual" ? "Annual" : "Quarterly"} statements · ${ccy}${asofD ? ` · as of ${asofD}` : ""}`,
+    `${aq === "annual" ? "年度" : "季度"}报表 · ${ccy}${asofD ? ` · 截至 ${asofD}` : ""}`,
+  );
+
   return (
     <div className="fin-stmts">
       {/* ── 1. MINI CHART STRIP ── */}
       <section className="fin-sec">
+        <div className="fin-eyebrow">{pick(zh, "FINANCIALS", "财务数据")}</div>
+        <div className="fin-sec-h rail rule" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
+          {stmtTitle}
+        </div>
         <div className="fin-card">
           <Bars labels={chartPeriods} series={chartSeries} fmtY={fmtNum} zh={zh} height={170} />
         </div>
@@ -167,6 +194,9 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
 
       {/* ── 3. DATA TABLE ── */}
       <section className="fin-sec">
+        <div className="fin-sec-h rail rule" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
+          {pick(zh, "Full history", "完整历史")}
+        </div>
         {showCumNote && (
           <div className="fin-chart-note" style={{ marginBottom: 8, marginTop: 0 }}>
             {pick(zh,
@@ -186,7 +216,9 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
         />
       </section>
 
-      <div className="fin-ov-cur">{curLabel}</div>
+      {/* single provenance row — the old right-aligned currency line, upgraded to
+          carry basis + currency + as-of instead of currency alone */}
+      <div className="fin-asof">{basisLine}</div>
     </div>
   );
 }

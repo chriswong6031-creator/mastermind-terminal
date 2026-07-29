@@ -87,19 +87,41 @@ export default function TranscriptDrawer({ sym, id, name, onClose }: TranscriptD
           </button>
         </div>
         <div className="fin-drawer-body fin-tx-body">
+          {/* skeleton, not an unexplained blank — the shimmer blocks stand in for
+              the transcript paragraphs that are on their way */}
           {state === "loading" && (
-            <div className="fin-tx-status">{pick(zh, "Loading transcript…", "正在加载记录…")}</div>
+            <div role="status" aria-busy="true">
+              <span className="fin-skel-sr">{pick(zh, "Loading transcript…", "正在加载记录…")}</span>
+              <div className="fin-skel fin-skel-rows fin-tx-seg" aria-hidden />
+              <div className="fin-skel fin-skel-rows fin-tx-seg" aria-hidden />
+            </div>
           )}
           {state === "error" && (
-            <div className="fin-tx-status">
-              {pick(zh, "Transcript unavailable for this period.", "该期无可用记录。")}
+            <div className="fin-empty fin-empty-lg" role="status">
+              <div className="fin-empty-title">{pick(zh, "Transcript unavailable", "无可用记录")}</div>
+              <div className="fin-empty-why">
+                {pick(
+                  zh,
+                  `No transcript document is stored for ${id}; the filing index lists the call but the text hasn't been archived.`,
+                  `未存储 ${id} 的记录文档；申报索引列出了该次电话会，但正文尚未归档。`,
+                )}
+              </div>
             </div>
           )}
           {state === "ok" && tx && (
             <>
               <div className="fin-tx-section">{pick(zh, "Call transcript", "电话会记录")}</div>
               {tx.segments.length === 0 && (
-                <div className="fin-tx-status">{pick(zh, "Empty transcript.", "记录为空。")}</div>
+                <div className="fin-empty fin-empty-lg" role="status">
+                  <div className="fin-empty-title">{pick(zh, "Empty transcript", "记录为空")}</div>
+                  <div className="fin-empty-why">
+                    {pick(
+                      zh,
+                      `The ${id} transcript document exists but carries no spoken segments.`,
+                      `${id} 的记录文档存在，但不含任何发言段落。`,
+                    )}
+                  </div>
+                </div>
               )}
               {tx.segments.map((s, i) => (
                 <p className="fin-tx-seg" key={i}>

@@ -40,23 +40,35 @@ export interface OverviewPageProps {
 
 type AQ = "annual" | "quarterly";
 
-/* section header with optional `›` jump to a sibling tab */
+/**
+ * Section header with optional uppercase eyebrow above and a `›` jump to a
+ * sibling tab. v7 framework transfer: rail + hairline rule on every header.
+ * Rail stays `var(--brand)` (analytical) across this page — no section on the
+ * Overview is a directional call or a caution block, and a static `--warn` rail
+ * on "Financial health" would read as a verdict on every company alike.
+ */
 function SecH({
   title,
+  eyebrow,
   cap,
   page,
   onNavigate,
+  rail = "var(--brand)",
 }: {
   title: string;
+  eyebrow?: string;
   cap?: string;
   page?: FinPage;
   onNavigate?: (p: FinPage) => void;
+  rail?: string;
 }) {
   const clickable = !!page && !!onNavigate;
   return (
     <>
+      {eyebrow && <div className="fin-eyebrow">{eyebrow}</div>}
       <div
-        className={"fin-sec-h" + (clickable ? " link" : "")}
+        className={"fin-sec-h rail rule" + (clickable ? " link" : "")}
+        style={{ "--rail": rail } as React.CSSProperties}
         onClick={clickable ? () => onNavigate!(page!) : undefined}
         role={clickable ? "button" : undefined}
         tabIndex={clickable ? 0 : undefined}
@@ -92,11 +104,11 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
     return (
       <div className="fin-empty fin-empty-lg" role="status">
         <div className="fin-empty-title">{pick(zh, "No fundamentals yet", "暂无基本面数据")}</div>
-        <div>
+        <div className="fin-empty-why">
           {pick(
             zh,
-            `Fundamental data for ${sym} hasn't been collected yet.`,
-            `${sym} 的基本面数据尚未采集。`,
+            `Fundamental data for ${sym} hasn't been collected yet. Coverage is extended nightly by dollar volume.`,
+            `${sym} 的基本面数据尚未采集。覆盖范围每夜按成交额扩展。`,
           )}
         </div>
       </div>
@@ -109,31 +121,57 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
   const ann = fund.statements?.annual;
   const qtr = fund.statements?.quarterly;
 
-  // ── Key facts ──
-  const facts: { k: string; v: string; ext?: string }[] = [
-    { k: pick(zh, "Market capitalization", "市值"), v: s?.mktcap != null ? fmtNum(s.mktcap) + " " + quoteCur : "—" },
+  // ── provenance helpers (every data section dates itself — v7 honest chrome) ──
+  // Everything here comes from the single fund snapshot, so `fund.asof` is the
+  // one truthful date; the leading basis names WHICH slice the row covers.
+  const asofD = fund.asof ? fmtDate(fund.asof) : "";
+  const asofLine = (en: string, cn: string) => pick(zh, `${en} · as of ${asofD}`, `${cn} · 截至 ${asofD}`);
+  const aqEn = (a: AQ) => (a === "annual" ? "Annual" : "Quarterly");
+  const aqZh = (a: AQ) => (a === "annual" ? "年度" : "季度");
+  /** "Annual statements 2020–2025 · as of …" — the period span is real data. */
+  const stmtAsof = (a: AQ, set?: StatementPeriodSet) => {
+    const ps = set?.periods ?? [];
+    const rg = ps.length > 1 ? ` ${ps[0]}–${ps[ps.length - 1]}` : ps.length === 1 ? ` ${ps[0]}` : "";
+    return asofLine(`${aqEn(a)} statements${rg}`, `${aqZh(a)}报表${rg}`);
+  };
+
+  // ── Key stats (headline KPI strip) ──
+  // `s` carries the qualifier that used to live in parentheses inside the label
+  // so the tile label stays legible at KPI width. Two qualifiers were also WRONG
+  // before and are corrected here: dividends.yield_ttm is trailing, not
+  // "indicated"; basic EPS is the latest ANNUAL figure, not TTM.
+  const facts: { k: string; v: string; s?: string; ext?: string; txt?: boolean }[] = [
     {
-      k: pick(zh, "Dividend yield (indicated)", "股息率（指示）"),
+      k: pick(zh, "Market cap", "市值"),
+      v: s?.mktcap != null ? fmtNum(s.mktcap) : "—",
+      s: s?.mktcap != null ? quoteCur : undefined,
+    },
+    {
+      k: pick(zh, "Dividend yield", "股息率"),
       v: fund.dividends?.yield_ttm != null ? fmtPct(fund.dividends.yield_ttm) : "—",
+      s: "TTM",
     },
     {
-      k: pick(zh, "Price to earnings ratio (TTM)", "市盈率（TTM）"),
+      k: pick(zh, "P/E ratio", "市盈率"),
       v: r?.current?.pe_ttm != null ? fmtNum(r.current.pe_ttm) : "—",
+      s: "TTM",
     },
     {
-      k: pick(zh, "Basic EPS (TTM)", "基本每股收益（TTM）"),
+      k: pick(zh, "Basic EPS", "基本每股收益"),
       v: latestEps(ann) != null ? fmtNum(latestEps(ann)!) : "—",
+      s: pick(zh, "Latest FY", "最近财年"),
     },
     { k: pick(zh, "Founded", "成立"), v: p?.founded || "—" },
     {
       k: pick(zh, "Employees", "员工人数"),
       v: p?.employees == null ? "—" : Math.round(p.employees).toLocaleString("en-US"),
     },
-    { k: pick(zh, "Sector", "板块"), v: p?.sector || "—" },
+    { k: pick(zh, "Sector", "板块"), v: p?.sector || "—", txt: true },
     {
       k: pick(zh, "Website", "网站"),
       v: p?.website ? domainOf(p.website) : "—",
       ext: p?.website || undefined,
+      txt: true,
     },
   ];
 
@@ -199,6 +237,8 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
 
   // ── Revenue breakdown (R6: empty unless fund.segments present) ──
   const seg = fund.segments;
+  const segPeriods = seg?.by_source?.periods ?? seg?.by_country?.periods ?? [];
+  const segLast = segPeriods[segPeriods.length - 1];
 
   // ── Estimates: revenue + earnings actual-vs-estimate ──
   const revDots: DumbbellPoint[] = (fund.earnings?.fy ?? []).map((f) => ({
@@ -249,23 +289,32 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
 
   return (
     <div className="fin-ov">
-      {/* ── KEY FACTS ── */}
+      {/* ── KEY FACTS (headline KPI strip) ── */}
       <section className="fin-sec">
-        <SecH title={pick(zh, "Key facts", "关键数据")} />
-        <div className="fin-grid4">
+        <SecH eyebrow={pick(zh, "FUNDAMENTALS", "基本面")} title={pick(zh, "Key facts", "关键数据")} />
+        <div className="fin-kpis">
           {facts.map((f, i) => (
-            <div className="fin-fact" key={i}>
+            <div className="fin-kpi" key={i}>
               <span className="k">{f.k}</span>
               {f.ext ? (
-                <a className="v fin-fact-link" href={f.ext} target="_blank" rel="noopener noreferrer">
+                <a
+                  className={"v fin-fact-link" + (f.txt ? " txt" : " num")}
+                  href={f.ext}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   {f.v} ↗
                 </a>
               ) : (
-                <span className="v">{f.v}</span>
+                <span className={"v" + (f.txt ? " txt" : " num")}>{f.v}</span>
               )}
+              {f.s && <span className="s">{f.s}</span>}
             </div>
           ))}
         </div>
+        {fund.asof && (
+          <div className="fin-asof">{asofLine("Company profile & market data", "公司资料与市场数据")}</div>
+        )}
       </section>
 
       {/* ── ABOUT ── */}
@@ -297,13 +346,25 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
                 zh={zh}
               />
             ) : (
-              <div className="fin-empty">{pick(zh, "No ownership data", "暂无股权数据")}</div>
+              <div className="fin-empty fin-empty-lg" role="status">
+                <div className="fin-empty-title">{pick(zh, "No ownership data", "暂无股权数据")}</div>
+                <div className="fin-empty-why">
+                  {pick(
+                    zh,
+                    `The fundamentals feed carries no free-float or closely-held split for ${sym}.`,
+                    `基本面数据源未提供 ${sym} 的自由流通股或内部持股拆分。`,
+                  )}
+                </div>
+              </div>
             )}
           </div>
           <div className="fin-card">
             <div className="fin-card-h">{pick(zh, "Capital structure", "资本结构")}</div>
             {crossCur ? (
-              <div className="fin-empty">{crossCurMsg}</div>
+              <div className="fin-empty fin-empty-lg" role="status">
+                <div className="fin-empty-title">{pick(zh, "Comparison suppressed", "该对比已隐藏")}</div>
+                <div className="fin-empty-why">{crossCurMsg}</div>
+              </div>
             ) : (
               <CapitalStructure
                 marketCap={s?.mktcap ?? null}
@@ -315,6 +376,9 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
             )}
           </div>
         </div>
+        {fund.asof && (
+          <div className="fin-asof">{asofLine("Ownership & balance sheet", "股权与资产负债表")}</div>
+        )}
       </section>
 
       {/* ── VALUATION ── */}
@@ -330,7 +394,10 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
             {pick(zh, "Valuation ratios", "估值比率")} <AQToggle v={valAQ} onChange={setValAQ} zh={zh} />
           </div>
           {crossCur ? (
-            <div className="fin-empty">{crossCurMsg}</div>
+            <div className="fin-empty fin-empty-lg" role="status">
+              <div className="fin-empty-title">{pick(zh, "Comparison suppressed", "该对比已隐藏")}</div>
+              <div className="fin-empty-why">{crossCurMsg}</div>
+            </div>
           ) : (
             <>
               <LineSeries labels={psLabels} series={psSeries} fmtY={(v) => fmtNum(v)} markers zh={zh} height={190} />
@@ -344,11 +411,13 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
             </>
           )}
         </div>
+        {fund.asof && !crossCur && <div className="fin-asof">{stmtAsof(valAQ, valSet)}</div>}
       </section>
 
       {/* ── GROWTH & PROFITABILITY ── */}
       <section className="fin-sec">
         <SecH
+          eyebrow={pick(zh, "PERFORMANCE", "经营表现")}
           title={pick(zh, "Growth and Profitability", "增长与盈利能力")}
           cap={pick(zh, "Company's recent performance and margins", "公司近期业绩与利润率")}
           page="statements"
@@ -377,15 +446,26 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
             {wfSteps.length > 0 ? (
               <Waterfall steps={wfSteps} fmtY={fmtNum} zh={zh} height={210} />
             ) : (
-              <div className="fin-empty">{pick(zh, "No income statement", "暂无利润表")}</div>
+              <div className="fin-empty fin-empty-lg" role="status">
+                <div className="fin-empty-title">{pick(zh, "No income statement", "暂无利润表")}</div>
+                <div className="fin-empty-why">
+                  {pick(
+                    zh,
+                    `No ${aqEn(wfAQ).toLowerCase()} period on record carries revenue for ${sym}, so the conversion bridge has nothing to walk down.`,
+                    `${sym} 没有任何带营收的${aqZh(wfAQ)}期间记录，因此无法绘制利润转换瀑布图。`,
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </div>
+        {fund.asof && <div className="fin-asof">{stmtAsof(perfAQ, perfSet)}</div>}
       </section>
 
       {/* ── REVENUE BREAKDOWN (R6 empty state) ── */}
       <section className="fin-sec">
         <SecH
+          eyebrow={pick(zh, "SEGMENTS", "分部")}
           title={pick(zh, "Revenue breakdown", "收入构成")}
           cap={pick(zh, "Revenue streams and regions a business earns money from", "企业收入来源与地区分布")}
           page="revenue"
@@ -407,19 +487,26 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
             )}
           </div>
         ) : (
-          <div className="fin-empty">
-            {pick(
-              zh,
-              "Segment breakdown is not available for this company.",
-              "该公司暂无分部收入构成数据。",
-            )}
+          <div className="fin-empty fin-empty-lg" role="status">
+            <div className="fin-empty-title">{pick(zh, "No segment breakdown", "暂无分部数据")}</div>
+            <div className="fin-empty-why">
+              {pick(
+                zh,
+                `The source filing for ${sym} publishes no by-business or by-region revenue split.`,
+                `${sym} 的数据源未披露分业务或分地区的收入拆分。`,
+              )}
+            </div>
           </div>
+        )}
+        {fund.asof && segLast && (
+          <div className="fin-asof">{asofLine(`Segment disclosure ${segLast}`, `分部披露 ${segLast}`)}</div>
         )}
       </section>
 
       {/* ── ESTIMATES ── */}
       <section className="fin-sec">
         <SecH
+          eyebrow={pick(zh, "CONSENSUS", "一致预期")}
           title={pick(zh, "Estimates", "预测")}
           cap={pick(zh, "Revenue and Earnings forecasts and estimates accuracy", "营收与盈利预测及预测准确度")}
           page="earnings"
@@ -431,14 +518,23 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
             {revDots.some((d) => d.actual != null || d.estimate != null) ? (
               <Dumbbell points={revDots} fmtY={fmtNum} zh={zh} height={200} />
             ) : (
-              <div className="fin-empty">{pick(zh, "No revenue estimates", "暂无营收预测")}</div>
+              <div className="fin-empty fin-empty-lg" role="status">
+                <div className="fin-empty-title">{pick(zh, "No revenue estimates", "暂无营收预测")}</div>
+                <div className="fin-empty-why">
+                  {pick(
+                    zh,
+                    `No fiscal year on record carries a revenue actual or a consensus estimate for ${sym}.`,
+                    `${sym} 无任何财年记录带有营收实际值或一致预期。`,
+                  )}
+                </div>
+              </div>
             )}
           </div>
           <div className="fin-card">
             <div className="fin-card-h">
               {pick(zh, "Earnings", "盈利")}
               {fund.earnings?.next_date && (
-                <span className="fin-next-lbl">
+                <span className="fin-tag fin-next-lbl" style={{ "--c": "var(--brand-2)" } as React.CSSProperties}>
                   {pick(zh, "Next:", "下次:")} {fmtDate(fund.earnings.next_date)}
                 </span>
               )}
@@ -446,15 +542,26 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
             {epsDots.some((d) => d.actual != null || d.estimate != null) ? (
               <Dumbbell points={epsDots} fmtY={(v) => fmtNum(v, { decimals: 2 })} zh={zh} height={200} />
             ) : (
-              <div className="fin-empty">{pick(zh, "No earnings estimates", "暂无盈利预测")}</div>
+              <div className="fin-empty fin-empty-lg" role="status">
+                <div className="fin-empty-title">{pick(zh, "No earnings estimates", "暂无盈利预测")}</div>
+                <div className="fin-empty-why">
+                  {pick(
+                    zh,
+                    `No fiscal year on record carries an EPS actual or a consensus estimate for ${sym}.`,
+                    `${sym} 无任何财年记录带有每股盈利实际值或一致预期。`,
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </div>
+        {fund.asof && <div className="fin-asof">{asofLine("Consensus estimates", "一致预期数据")}</div>}
       </section>
 
       {/* ── DIVIDENDS ── */}
       <section className="fin-sec">
         <SecH
+          eyebrow={pick(zh, "CAPITAL RETURNS", "资本回报")}
           title={pick(zh, "Dividends", "股息")}
           cap={pick(zh, "Dividend yield, history and sustainability", "股息率、历史及可持续性")}
           page="dividends"
@@ -468,12 +575,20 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
             </svg>
             <div>
               <div className="fin-div-empty-t">{pick(zh, "No dividends", "无股息")}</div>
+              {/* The two cases are NOT the same fact: never_paid is an issuer
+                  statement; an empty event list only means nothing is on file. */}
               <div className="fin-div-empty-s">
-                {pick(
-                  zh,
-                  `${sym} has never paid dividends and has no current plans to do so.`,
-                  `${sym} 从未派发股息，目前也无相关计划。`,
-                )}
+                {fund.dividends?.never_paid
+                  ? pick(
+                      zh,
+                      `${sym} has never paid dividends and has no current plans to do so.`,
+                      `${sym} 从未派发股息，目前也无相关计划。`,
+                    )
+                  : pick(
+                      zh,
+                      `No dividend event is on file for ${sym} in this dataset.`,
+                      `本数据集中没有 ${sym} 的任何派息记录。`,
+                    )}
               </div>
             </div>
           </div>
@@ -495,11 +610,13 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
             </div>
           </div>
         )}
+        {fund.asof && <div className="fin-asof">{asofLine("Dividend history", "股息历史")}</div>}
       </section>
 
       {/* ── FINANCIAL HEALTH ── */}
       <section className="fin-sec">
         <SecH
+          eyebrow={pick(zh, "BALANCE SHEET", "资产负债")}
           title={pick(zh, "Financial health", "财务健康")}
           cap={pick(zh, "Financial position and solvency of the company", "公司财务状况与偿债能力")}
           page="statistics"
@@ -518,10 +635,20 @@ export default function OverviewPage({ sym, fund, name, onNavigate }: OverviewPa
             {posBars.length > 0 ? (
               <Bars labels={posLabels} series={posBars} fmtY={fmtNum} zh={zh} height={200} />
             ) : (
-              <div className="fin-empty">{pick(zh, "No balance sheet", "暂无资产负债表")}</div>
+              <div className="fin-empty fin-empty-lg" role="status">
+                <div className="fin-empty-title">{pick(zh, "No balance sheet", "暂无资产负债表")}</div>
+                <div className="fin-empty-why">
+                  {pick(
+                    zh,
+                    `No ${aqEn(healthAQ).toLowerCase()} period on record splits current from non-current assets for ${sym}.`,
+                    `${sym} 没有任何${aqZh(healthAQ)}期间记录区分流动与非流动资产。`,
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </div>
+        {fund.asof && <div className="fin-asof">{stmtAsof(healthAQ, hSet)}</div>}
       </section>
 
       <div className="fin-ov-cur">
