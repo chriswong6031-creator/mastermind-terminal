@@ -24,9 +24,10 @@
 /* ── tab pill bar ── */
 .fin-tabs{display:flex;align-items:center;gap:4px;padding:8px 16px;border-bottom:1px solid var(--line);overflow-x:auto;flex:none;scrollbar-width:none}
 .fin-tabs::-webkit-scrollbar{display:none}
-.fin-tab{font:600 12px/1 var(--font-ui);color:var(--text-2);background:transparent;border:none;border-radius:var(--r-pill);padding:7px 13px;cursor:pointer;white-space:nowrap;transition:color var(--t),background var(--t)}
-.fin-tab:hover{color:var(--text)}
-.fin-tab.on{background:var(--text);color:var(--bg)}
+.fin-tab{font:600 12px/1 var(--font-ui);color:var(--text-2);background:transparent;border:none;border-radius:var(--r-pill);padding:7px 13px;cursor:pointer;white-space:nowrap;transition:color var(--t),background var(--t),box-shadow var(--t)}
+.fin-tab:hover{color:var(--text);background:rgba(255,255,255,.05)}
+/* v7: active = brand tint (matches .obs-pillnav-tab.on — one active language across suites) */
+.fin-tab.on{background:color-mix(in srgb,var(--brand) 18%,transparent);color:color-mix(in srgb,var(--brand-2) 100%,#fff 30%);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brand) 35%,transparent)}
 
 /* ── body / sections ── */
 .fin-body{flex:1;overflow-y:auto;padding:18px 16px 60px;scroll-behavior:smooth;scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
@@ -34,8 +35,16 @@
 .fin-body::-webkit-scrollbar-track{background:transparent}
 .fin-body::-webkit-scrollbar-thumb{background:var(--line-3);border-radius:99px;border:2px solid transparent;background-clip:content-box;transition:background .15s}
 .fin-body::-webkit-scrollbar-thumb:hover{background:var(--panel-3);background-clip:content-box}
-.fin-sec{margin-bottom:26px}
-.fin-sec-h{display:flex;align-items:baseline;gap:7px;font:650 15px/1.2 var(--font-ui);color:var(--text);margin-bottom:3px}
+.fin-sec{margin-bottom:28px}
+.fin-sec-h{display:flex;align-items:baseline;gap:7px;font:650 var(--fs-title)/1.25 var(--font-ui);letter-spacing:-.01em;color:var(--text);margin-bottom:3px}
+/* v7 section-header system (macro-framework transfer): eyebrow above, optional
+ * 3px gradient rail + hairline rule on the title. Rail color rides --rail —
+ * brand = analytical (default); var(--up)/var(--down) ONLY on genuinely
+ * directional sections; var(--warn) for caution blocks. */
+.fin-eyebrow{font:700 var(--fs-micro)/1 var(--font-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.fin-sec-h.rail{gap:9px}
+.fin-sec-h.rail::before{content:"";flex:none;align-self:center;width:3px;height:15px;border-radius:2px;background:linear-gradient(180deg,var(--rail),color-mix(in srgb,var(--rail) 30%,transparent))}
+.fin-sec-h.rule{padding-bottom:9px;border-bottom:1px solid var(--hairline);margin-bottom:10px}
 .fin-sec-h .chev{color:var(--brand);cursor:pointer}
 .fin-sec-h.link{cursor:pointer}
 .fin-sec-h.link:hover .chev{color:var(--brand-2)}
@@ -62,7 +71,7 @@
   .fin-grid2,.fin-grid3,.fin-grid4{grid-template-columns:1fr}
   .fin-body{padding:14px 12px 60px}
   /* ensure cards never bleed past viewport */
-  .fin-card{max-width:100%;box-sizing:border-box;overflow:hidden}
+  .fin-card{max-width:100%;box-sizing:border-box;overflow:hidden;padding:13px 14px}
   /* inner overflow scrolling for wide tables/charts inside cards */
   .fin-card .fin-table-scroll,.fin-card .fin-svg-box,.fin-card table{overflow-x:auto;max-width:100%}
   /* x-axis font floors */
@@ -70,10 +79,10 @@
   .fin-xaxis-xs{font-size:9px}
 }
 
-/* ── card ── */
-/* NOTE: --sp-3 is not defined in globals.css — a bare var(--sp-3) computed to
- * 0px padding, leaving card text touching the card border. Keep the fallback. */
-.fin-card{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:var(--sp-3,14px);box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
+/* ── card (v7: macro-framework surface — 14px radius, roomier pad, layered shadow) ──
+ * --sp-* is defined for real since the v7 globals block; the old undefined-token
+ * trap (var(--sp-3) → 0 padding) is closed at the source. */
+.fin-card{border:1px solid var(--line);border-radius:var(--r-card);background:var(--panel);padding:var(--sp-4) 18px;box-shadow:var(--shadow-card)}
 .fin-card-h{font:600 12px/1.2 var(--font-ui);color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:6px;min-width:0;overflow-wrap:break-word}
 .fin-card-h .q{width:12px;height:12px;border-radius:50%;border:1px solid var(--line-3);color:var(--muted);font:600 8px/12px var(--font-ui);text-align:center;cursor:help}
 
@@ -92,13 +101,15 @@
 .fin-table-scroll{overflow-x:auto;scrollbar-width:thin}
 .fin-table{width:100%;border-collapse:collapse;font:500 12px/1.3 var(--font-ui)}
 .fin-row{transition:background var(--t)}
+.fin-row:hover{background:var(--panel-2)}
+.fin-row:hover .fin-cell-sticky{background:var(--panel-2)}
 .fin-row-b .fin-cell{font-weight:650;color:var(--text)}
 .fin-row-hl{background:rgba(41,98,255,.07)}
 .fin-cell{padding:7px 10px;text-align:right;color:var(--text);border-bottom:1px solid var(--line-2);white-space:nowrap;font-feature-settings:"tnum"}
 .fin-cell-sticky{position:sticky;left:0;z-index:1;text-align:left;background:var(--panel);color:var(--text-2);font-weight:500;max-width:180px}
 .fin-row-hl .fin-cell-sticky{background:var(--panel-2)}
 .fin-cell-corner{background:var(--panel)}
-.fin-cell-head{color:var(--muted);font:600 11px/1 var(--font-num);font-weight:600;font-variant-numeric:tabular-nums}
+.fin-cell-head{color:var(--muted);font:600 10px/1 var(--font-num);letter-spacing:.06em;text-transform:uppercase;font-variant-numeric:tabular-nums}
 .fin-cell-num{font-family:var(--font-num);font-variant-numeric:tabular-nums}
 .fin-cell-v{display:inline-flex;align-items:center;gap:5px;justify-content:flex-end}
 .fin-cell-chg{display:block;font:500 9.5px/1.2 var(--font-num);margin-top:1px;font-variant-numeric:tabular-nums}
@@ -108,11 +119,15 @@
 
 /* ── chips / toggles / pills / segments ── */
 .fin-chip{display:inline-flex;align-items:center;gap:5px;font:600 10.5px/1 var(--font-ui);color:var(--text-2);background:var(--panel-2);border:1px solid var(--line);padding:5px 9px;border-radius:var(--r-pill);white-space:nowrap}
-.fin-chip.up{color:var(--up);border-color:rgba(38,194,129,.25)}
-.fin-chip.down{color:var(--down);border-color:rgba(240,86,107,.25)}
+.fin-chip.up{color:var(--up);border-color:color-mix(in srgb,var(--up) 30%,transparent)}
+.fin-chip.down{color:var(--down);border-color:color-mix(in srgb,var(--down) 30%,transparent)}
+/* v7 tint tag — the universal one-var chip formula (macro framework). Set the
+ * base color per state via --c: var(--up)/var(--down)/var(--warn)/var(--brand-2)/
+ * var(--muted). East-mode flip rides the token automatically. */
+.fin-tag{display:inline-flex;align-items:center;gap:5px;font:600 10.5px/1 var(--font-ui);letter-spacing:.02em;color:var(--c,var(--text-2));background:color-mix(in srgb,var(--c,var(--muted)) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c,var(--muted)) 30%,transparent);border-radius:var(--r-pill);padding:4px 9px;white-space:nowrap}
 .fin-toggle{display:inline-flex;max-width:100%;flex:none;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);padding:2px}
 .fin-toggle button{font:600 11px/1 var(--font-ui);color:var(--text-2);background:none;border:none;border-radius:var(--r-pill);padding:5px 11px;cursor:pointer;transition:color var(--t),background var(--t)}
-.fin-toggle button.on{color:var(--bg);background:var(--text)}
+.fin-toggle button.on{color:color-mix(in srgb,var(--brand-2) 100%,#fff 30%);background:color-mix(in srgb,var(--brand) 18%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brand) 32%,transparent)}
 .fin-seg{display:inline-flex;gap:14px;align-items:center}
 .fin-seg button{font:600 12px/1 var(--font-ui);color:var(--text-2);background:none;border:none;padding:4px 0;cursor:pointer;border-bottom:2px solid transparent;transition:color var(--t)}
 .fin-seg button.on{color:var(--brand);border-bottom-color:var(--brand)}
@@ -224,11 +239,26 @@
 .fin-tip-lbl{color:var(--text-2);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fin-tip-val{color:var(--text);font-family:var(--font-num);font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
 
-/* ── empty placeholder ── */
-.fin-empty{display:flex;align-items:center;justify-content:center;min-height:80px;padding:18px;font:500 11.5px/1.4 var(--font-ui);color:var(--muted);text-align:center;border:1px dashed var(--line);border-radius:var(--r-md);background:var(--panel-2)}
+/* ── empty placeholder (v7: an empty state explains itself — .fin-empty-why
+ * carries WHICH of: market closed / dataset building / no qualifying rows /
+ * not covered for this symbol. Never a bare "No data".) ── */
+.fin-empty{display:flex;align-items:center;justify-content:center;min-height:80px;padding:20px;font:500 11.5px/1.4 var(--font-ui);color:var(--muted);text-align:center;border:1px dashed var(--line);border-radius:var(--r-tile);background:var(--panel-2)}
 .fin-empty-lg{min-height:220px;flex-direction:column;gap:12px}
 .fin-empty-icon{width:56px;height:56px;color:var(--line-3)}
 .fin-empty-title{font:600 14px/1.2 var(--font-ui);color:var(--text-2)}
+.fin-empty-why{font:500 11px/1.5 var(--font-ui);color:var(--muted);max-width:420px}
+/* v7 provenance row — every data section dates itself; .dot marks a live feed */
+.fin-asof{display:flex;align-items:center;gap:6px;font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:10px}
+.fin-asof .dot{width:6px;height:6px;border-radius:50%;background:var(--up);flex:none;animation:fin-asof-pulse 2.2s var(--ease) infinite}
+@keyframes fin-asof-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.fin-asof .dot{animation:none}}
+/* v7 KPI strip — generalized headline stat cells (od-stat/fin-adv-card unified) */
+.fin-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px}
+.fin-kpi{display:flex;flex-direction:column;gap:4px;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-tile);padding:10px 12px;min-width:0}
+.fin-kpi .k{font:600 var(--fs-micro)/1.2 var(--font-ui);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fin-kpi .v{font:650 var(--fs-num)/1.05 var(--font-num);color:var(--text);font-variant-numeric:tabular-nums}
+.fin-kpi .v.up{color:var(--up)}.fin-kpi .v.down{color:var(--down)}
+.fin-kpi .s{font:500 10.5px/1.3 var(--font-ui);color:var(--text-2)}
 
 /* ── drawer (transcript slide-in; FE2a hosts, foundation here) ── */
 .fin-drawer{position:fixed;top:0;right:0;bottom:0;z-index:96;width:min(560px,94vw);background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-18px 0 40px -20px rgba(0,0,0,.7);animation:fin-drawer-in .18s var(--ease)}
@@ -488,8 +518,8 @@
 /* ── Technicals: TF pill row ── */
 .fin-tf-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
 .fin-tf-pill{font:600 12px/1 var(--font-ui);color:var(--text-2);background:transparent;border:1px solid transparent;border-radius:var(--r-pill);padding:7px 12px;cursor:pointer;transition:color var(--t),background var(--t)}
-.fin-tf-pill:hover{color:var(--text)}
-.fin-tf-pill.on{background:var(--text);color:var(--bg)}
+.fin-tf-pill:hover{color:var(--text);background:rgba(255,255,255,.05)}
+.fin-tf-pill.on{background:color-mix(in srgb,var(--brand) 18%,transparent);color:color-mix(in srgb,var(--brand-2) 100%,#fff 30%);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brand) 35%,transparent)}
 
 /* ── Technicals: source gauges ── */
 .fin-tech-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:start;justify-items:center}
@@ -590,7 +620,7 @@
 .sig-dim-k{font:600 9.5px/1 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
 .sig-dim-v{font:700 14px/1 var(--font-num);color:var(--text);font-variant-numeric:tabular-nums}
 .sig-dim-v i{font:600 9.5px/1 var(--font-ui);color:var(--muted);font-style:normal;margin-left:1px}
-.sig-conflict{margin-top:9px;padding:8px 10px;border-radius:var(--r-md);background:rgba(232,179,57,.08);border:1px solid rgba(232,179,57,.28);color:var(--signal);font:500 11.5px/1.5 var(--font-ui)}
+.sig-conflict{margin-top:9px;padding:8px 10px;border-radius:var(--r-md);background:color-mix(in srgb,var(--signal) 9%,transparent);border:1px solid color-mix(in srgb,var(--signal) 28%,transparent);color:var(--signal);font:500 11.5px/1.5 var(--font-ui)}
 /* research desk */
 .sig-desk{display:flex;gap:13px;align-items:flex-start}
 .sig-ring{position:relative;width:56px;height:56px;flex:0 0 56px}
@@ -606,8 +636,8 @@
 .sig-desk-tech-k{color:var(--muted);flex:none}
 .sig-desk-tech-v{font-weight:700}
 .sig-desk-tech-score{font:600 10px/1 var(--font-num);opacity:.8;font-variant-numeric:tabular-nums}
-.sig-caution-chip{margin-top:6px;font:600 10.5px/1 var(--font-ui);color:var(--warn);background:rgba(232,163,61,.08);border:1px solid rgba(232,163,61,.22);border-radius:var(--r);padding:4px 9px}
-.sig-context-chip{margin-top:6px;font:600 10.5px/1 var(--font-ui);color:var(--up);background:rgba(38,194,129,.06);border:1px solid rgba(38,194,129,.2);border-radius:var(--r);padding:4px 9px}
+.sig-caution-chip{margin-top:6px;font:600 10.5px/1 var(--font-ui);color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,transparent);border:1px solid color-mix(in srgb,var(--warn) 22%,transparent);border-radius:var(--r);padding:4px 9px}
+.sig-context-chip{margin-top:6px;font:600 10.5px/1 var(--font-ui);color:var(--up);background:color-mix(in srgb,var(--up) 8%,transparent);border:1px solid color-mix(in srgb,var(--up) 22%,transparent);border-radius:var(--r);padding:4px 9px}
 /* drivers / cautions */
 .sig-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .sig-tags:first-of-type{margin-top:0}
@@ -697,9 +727,9 @@
 .fin-adv-card-v.muted{color:var(--muted)}
 .fin-adv-card-s{font:500 10.5px/1.35 var(--font-ui);color:var(--text-2);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .fin-adv-flag{display:inline-block;font:700 8.5px/1 var(--font-ui);letter-spacing:.03em;text-transform:uppercase;padding:2px 5px;border-radius:var(--r-pill);background:var(--line-2);color:var(--muted)}
-.fin-adv-flag.up{background:rgba(38,194,129,.16);color:var(--up)}
-.fin-adv-flag.warn{background:rgba(232,163,61,.16);color:var(--warn)}
-.fin-adv-flag.down{background:rgba(240,86,107,.16);color:var(--down)}
+.fin-adv-flag.up{background:color-mix(in srgb,var(--up) 16%,transparent);color:var(--up)}
+.fin-adv-flag.warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.fin-adv-flag.down{background:color-mix(in srgb,var(--down) 16%,transparent);color:var(--down)}
 
 /* panels + layout rows */
 .fin-adv-panel{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:13px 14px;min-width:0}
@@ -756,7 +786,7 @@
 .fin-adv-wrtxt{position:absolute;right:4px;top:0;line-height:14px;font:700 9.5px/14px var(--font-num);color:var(--text);font-variant-numeric:tabular-nums}
 
 /* holding-window matrix */
-.fin-adv-bestcall{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:10px;padding:7px 10px;border-radius:var(--r-md);background:rgba(232,163,61,.08);border:1px solid rgba(232,163,61,.24)}
+.fin-adv-bestcall{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:10px;padding:7px 10px;border-radius:var(--r-md);background:color-mix(in srgb,var(--warn) 9%,transparent);border:1px solid color-mix(in srgb,var(--warn) 24%,transparent)}
 .fin-adv-bestcall-w{font:700 12.5px/1 var(--font-num);color:var(--text);font-variant-numeric:tabular-nums}
 .fin-adv-holdlen{font-weight:600;font-size:.72em;color:var(--muted)}
 .fin-adv-bestcall-v{font:700 13px/1 var(--font-num);font-variant-numeric:tabular-nums}
@@ -834,14 +864,14 @@
 /* header */
 .fin-ro-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
 .fin-ro-title{font:650 13px/1.2 var(--font-ui);color:var(--text)}
-.fin-ro-pill{display:inline-flex;align-items:center;font:600 9.5px/1 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--warn);background:rgba(232,163,61,.1);border:1px solid rgba(232,163,61,.28);border-radius:var(--r-pill);padding:3px 7px}
+.fin-ro-pill{display:inline-flex;align-items:center;font:600 9.5px/1 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--warn);background:color-mix(in srgb,var(--warn) 11%,transparent);border:1px solid color-mix(in srgb,var(--warn) 28%,transparent);border-radius:var(--r-pill);padding:3px 7px}
 
 /* regime badge row */
 .fin-ro-badge-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
 .fin-ro-regime-badge{display:inline-flex;align-items:center;gap:0;font:600 11.5px/1 var(--font-ui);color:var(--text-2);background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 12px;flex-wrap:wrap;gap:4px}
 .fin-ro-sep{color:var(--line-3);margin:0 2px}
 .fin-ro-flag-rec{color:var(--down);font-weight:700}
-.fin-ro-provisional{display:inline-flex;margin-left:6px;font:600 9px/1 var(--font-ui);color:var(--warn);background:rgba(232,163,61,.1);border:1px solid rgba(232,163,61,.22);border-radius:var(--r-pill);padding:2px 6px;cursor:help}
+.fin-ro-provisional{display:inline-flex;margin-left:6px;font:600 9px/1 var(--font-ui);color:var(--warn);background:color-mix(in srgb,var(--warn) 11%,transparent);border:1px solid color-mix(in srgb,var(--warn) 22%,transparent);border-radius:var(--r-pill);padding:2px 6px;cursor:help}
 .fin-ro-toggle{flex:none}
 
 /* timeline */
@@ -978,7 +1008,7 @@
 
 /* lookback segmented control — the epistemics control (5Y | 10Y | 15Y | Max) */
 .fin-seas-win button{font:650 var(--fs-label)/1 var(--font-num);letter-spacing:.01em;padding:5px 11px;transition:color var(--t-fast) var(--ease-out),background var(--t-fast) var(--ease-out);font-variant-numeric:tabular-nums}
-.fin-seas-win button.on{color:#fff;background:var(--brand)}
+.fin-seas-win button.on{color:color-mix(in srgb,var(--brand-2) 100%,#fff 30%);background:color-mix(in srgb,var(--brand) 18%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brand) 35%,transparent)}
 
 /* per-year context lines: cheap hit target, smooth opacity/width lift */
 .fin-seas-yline{vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round;cursor:pointer;transition:stroke-opacity var(--t-fast) var(--ease-out),stroke-width var(--t-fast) var(--ease-out)}

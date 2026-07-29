@@ -71,6 +71,23 @@
   --fs-title:16px;   /* section titles */
   --fs-num:20px;     /* headline numerals */
   --fs-num-lg:28px;  /* hero numerals */
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     v7 — institutional-SaaS surface tokens (2026-07-28 wave). Rounding,
+     spacing and shadow scale transferred from the macro/landing framework
+     (Macro Dashboard templates/theme.css + dashboard.html.j2 page-macro
+     layer). This defines the previously-undefined --sp-*/--shadow-* names
+     for real: fin.css sites that carried literal fallbacks now resolve here,
+     and bare var(--shadow-3) sites (.sd-cont) gain their intended shadow.
+     v5 --r/--r-md/--r-lg stay untouched — the chart shell depends on them;
+     new rounding rides --r-card/--r-tile only.
+     ═══════════════════════════════════════════════════════════════════════ */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-8:32px;
+  --r-card:14px; --r-tile:10px;
+  --shadow-card:inset 0 1px 0 rgba(255,255,255,.045),0 1px 1px rgba(0,0,0,.22),0 12px 28px -18px rgba(0,0,0,.5);
+  --shadow-2:0 8px 24px rgba(0,0,0,.45);
+  --shadow-3:0 18px 44px -14px rgba(0,0,0,.6);
+  --rail:var(--brand);
 }
 /* East-Asian convention: red = up / green = down (CN/HK/TW/MO). Flips the up/down semantics only;
    accent colors (brand/signal/warn) are unchanged. Set on <html data-updown="east"> pre-paint. */
