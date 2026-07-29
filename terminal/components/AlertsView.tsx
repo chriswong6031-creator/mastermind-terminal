@@ -8,8 +8,20 @@ import {
   type OptKind,
   type OptParams,
 } from "@/lib/optionsAlerts";
+import { SUITE_ALERT_EVENTS, suiteAlertPreview, type SuiteAlertCondition, type SuiteAlertEventDef } from "@/lib/suiteAlerts";
+import { SUITE_DEFS } from "@/lib/suites/registry";
+import { useEntitlement } from "@/lib/useEntitlement";
 
 type Alert = { id: string; symbol: string; condition: any; active: boolean; created_at: string };
+
+// ── suite-event catalog (lib/suiteAlerts.ts is the authority for events + tiers) ──
+type Tier = "free" | "insider" | "pro";
+type CatalogEvt = SuiteAlertEventDef;
+const TIER_RANK: Record<Tier, number> = { free: 0, insider: 1, pro: 2 };
+/** Unrecognized tier → "pro": an event never renders as free on a typo. */
+const evtTier = (e: CatalogEvt): Tier => (e.tier === "free" || e.tier === "insider" ? e.tier : "pro");
+/** Distinct suites in catalog order (the picker's first cascade step). */
+const SUITE_KEYS = Array.from(new Set(SUITE_ALERT_EVENTS.map((e) => e.suite)));
 
 const COND_TYPES = [
   { v: "signal_buy", tkey: "condSignalBuy", cond: { type: "signal", target: "BUY" }, needsVal: false },
@@ -51,6 +63,8 @@ export default function AlertsView({ email }: { email: string }) {
     if (c?.type === "rsi") return `${t("condRsiBelow")} ${c.value}`;
     // options-flow types: reuse the plain-word preview (already display-tier + bilingual)
     if (typeof c?.type === "string" && c.type.startsWith("opt_")) return optAlertPreview(c, lang === "zh" ? "zh" : "en");
+    // suite events: same treatment — one bilingual sentence from the bridge
+    if (c?.type === "suite_event") return suiteAlertPreview(c, lang === "zh" ? "zh" : "en");
     return JSON.stringify(c);
   };
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -68,7 +82,7 @@ export default function AlertsView({ email }: { email: string }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // ── options-flow sub-form state ─────────────────────────────────────────────
-  const [cat, setCat] = useState<"signal" | "options">("signal"); // condition category
+  const [cat, setCat] = useState<"signal" | "options" | "suite">("signal"); // condition category
   const [optKind, setOptKind] = useState<OptKind>("opt_gamma_flip");
   const [optRoot, setOptRoot] = useState("SPY");
   const [optParams, setOptParams] = useState<OptParams>({
@@ -82,6 +96,19 @@ export default function AlertsView({ email }: { email: string }) {
     k: 4,
     near_pct: 5,
   });
+  // ── suite-event sub-form state ──────────────────────────────────────────────
+  // Entitlement drives which catalog events are selectable. useEntitlement returns the free
+  // default for a guest AND on any read failure, so the picker fails CLOSED by construction;
+  // the route re-checks server-side against the billing authority (this is display only).
+  const ent = useEntitlement(email);
+  const userTier: Tier = ent.tier === "insider" || ent.tier === "pro" ? ent.tier : "free";
+  const isLockedEvt = (e: CatalogEvt) => TIER_RANK[userTier] < TIER_RANK[evtTier(e)];
+  const [suiteKey, setSuiteKey] = useState<string>(SUITE_KEYS[0] ?? "");
+  const [suiteEvent, setSuiteEvent] = useState<string>(
+    SUITE_ALERT_EVENTS.find((e) => e.suite === (SUITE_KEYS[0] ?? ""))?.event ?? "",
+  );
+  const [suiteDir, setSuiteDir] = useState<"any" | "bull" | "bear">("any");
+  const [suiteMinStr, setSuiteMinStr] = useState("");
   // ── anon gate toast (AlertsView is its own page, not under TerminalShell) ────
   const [gateNudge, setGateNudge] = useState<string | null>(null);
   const gateTimer = useRef<any>(null);
@@ -124,10 +151,41 @@ export default function AlertsView({ email }: { email: string }) {
   const optCondition = buildOptCondition(optKind, optRoot, optParams);
   const setP = (patch: Partial<OptParams>) => setOptParams((p) => ({ ...p, ...patch }));
 
+  // ── suite cascade: suite → event → optional dir / min-strength ──────────────
+  const suiteEvts = SUITE_ALERT_EVENTS.filter((e) => e.suite === suiteKey);
+  const curEvt = suiteEvts.find((e) => e.event === suiteEvent) ?? suiteEvts[0] ?? null;
+  const suiteHasLocked = suiteEvts.some(isLockedEvt);
+  const curLocked = !!curEvt && isLockedEvt(curEvt);
+  // Changing suite re-points the event at the first one this account can actually use.
+  const pickSuite = (k: string) => {
+    setSuiteKey(k);
+    const evts = SUITE_ALERT_EVENTS.filter((e) => e.suite === k);
+    setSuiteEvent((evts.find((e) => !isLockedEvt(e)) ?? evts[0])?.event ?? "");
+  };
+  const minStrNum = parseFloat(suiteMinStr);
+  const suiteCondition: SuiteAlertCondition | null = curEvt
+    ? {
+        type: "suite_event",
+        suite: curEvt.suite,
+        event: curEvt.event,
+        ...(curEvt.dirs && suiteDir !== "any" ? { dir: suiteDir } : {}),
+        ...(curEvt.strength && Number.isFinite(minStrNum)
+          ? { minStrength: Math.max(0, Math.min(100, minStrNum)) }
+          : {}),
+      }
+    : null;
+
   async function create() {
     if (busy) return;
     // account gate: options alerts require a free account (RLS 401s anyway, but nudge first)
     if (cat === "options" && !email) { showGate(t("gateOptAlert")); return; }
+    // suite alerts: account first, then tier. Locked events are unselectable, so this is the
+    // belt to that suspenders (and the route re-checks against the billing authority anyway).
+    if (cat === "suite") {
+      if (!email) { showGate(t("gateSuiteAlert")); return; }
+      if (!suiteCondition) return;
+      if (curLocked) { setErr(t("suiteLockedHint")); return; }
+    }
     setBusy(true); setErr(null);
     try {
       let symbol: string;
@@ -135,6 +193,9 @@ export default function AlertsView({ email }: { email: string }) {
       if (cat === "options") {
         symbol = optRoot;
         condition = optCondition;
+      } else if (cat === "suite") {
+        symbol = sym;
+        condition = suiteCondition!;
       } else {
         const ct = COND_TYPES.find((x) => x.v === ctype)!;
         symbol = sym;
@@ -187,13 +248,55 @@ export default function AlertsView({ email }: { email: string }) {
         <div className="panel">
           <div className="ph">{t("newAlert")}</div>
           <div className="alert-form">
-            {/* category picker: signal/regime (legacy 6) vs options flow (4) */}
-            <select aria-label={t("newAlert")} value={cat} onChange={(e) => setCat(e.target.value as "signal" | "options")}>
+            {/* category picker: signal/regime (legacy 6) · options flow (5) · suite events (catalog) */}
+            <select aria-label={t("newAlert")} value={cat} onChange={(e) => setCat(e.target.value as "signal" | "options" | "suite")}>
               <option value="signal">{t("condCatSignal")}</option>
               <option value="options">{t("condCatOptions")}</option>
+              <option value="suite">{t("condCatSuite")}</option>
             </select>
 
-            {cat === "signal" ? (
+            {cat === "suite" ? (
+              <>
+                <select aria-label={t("symbol")} value={sym} onChange={(e) => setSym(e.target.value)}>{symOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+                <select aria-label={t("condCatSuite")} value={suiteKey} onChange={(e) => pickSuite(e.target.value)}>
+                  {SUITE_KEYS.map((k) => {
+                    const def = SUITE_DEFS[k];
+                    return <option key={k} value={k}>{def ? (def.tkey ? t(def.tkey, def.label) : def.label) : k}</option>;
+                  })}
+                </select>
+                {/* Locked events stay VISIBLE but disabled, tier chip inline — same honesty rule
+                    as the indicator picker: never a silent absence. */}
+                <select aria-label={t("suiteEventLabel")} value={curEvt?.event ?? ""} onChange={(e) => setSuiteEvent(e.target.value)}>
+                  {suiteEvts.map((e) => {
+                    const locked = isLockedEvt(e);
+                    const label = t(e.tkey, e.en);
+                    return (
+                      <option key={e.event} value={e.event} disabled={locked}>
+                        {locked ? `${label} · ${evtTier(e) === "pro" ? "PRO" : "INSIDER"}` : label}
+                      </option>
+                    );
+                  })}
+                </select>
+                {curEvt?.dirs && (
+                  <select aria-label={t("suiteDir")} value={suiteDir} onChange={(e) => setSuiteDir(e.target.value as "any" | "bull" | "bear")}>
+                    <option value="any">{t("suiteDirAny")}</option>
+                    <option value="bull">{t("suiteDirBull")}</option>
+                    <option value="bear">{t("suiteDirBear")}</option>
+                  </select>
+                )}
+                {curEvt?.strength && (
+                  <label className="opt-field">{t("suiteMinStrength")}<input aria-label={t("suiteMinStrength")} type="number" step="5" min="0" max="100" value={suiteMinStr} onChange={(ev) => setSuiteMinStr(ev.target.value)} style={numStyle} /></label>
+                )}
+                {suiteHasLocked && (
+                  <span className="opt-field" style={{ color: "var(--muted)", fontSize: 11.5, gap: 5 }} title={t("suiteLockedHint")}>
+                    <svg viewBox="0 0 24 24" aria-hidden="true" style={{ width: 12, height: 12, stroke: "currentColor", fill: "none", strokeWidth: 1.8 }}>
+                      <rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" />
+                    </svg>
+                    {t("suiteLockedHint")}
+                  </span>
+                )}
+              </>
+            ) : cat === "signal" ? (
               <>
                 <select aria-label={t("symbol")} value={sym} onChange={(e) => setSym(e.target.value)}>{symOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select>
                 <select aria-label={t("newAlert")} value={ctype} onChange={(e) => setCtype(e.target.value)}>{COND_TYPES.map((c) => <option key={c.v} value={c.v}>{t(c.tkey)}</option>)}</select>
@@ -241,11 +344,17 @@ export default function AlertsView({ email }: { email: string }) {
             <button className="btn btn-primary" style={{ height: 34 }} onClick={create} disabled={busy}>{busy ? t("creating") : t("createAlert")}</button>
             {err && <span style={{ color: "var(--danger)", fontSize: 12.5 }}>{err}</span>}
           </div>
-          {/* plain-word "what will fire" preview — options only */}
+          {/* plain-word "what will fire" preview — options + suite events */}
           {cat === "options" && (
             <div className="opt-preview">
               <span className="opt-preview-lbl">{t("optWillFire")}</span>
               <span className="opt-preview-txt">{optAlertPreview(optCondition, lang === "zh" ? "zh" : "en")}</span>
+            </div>
+          )}
+          {cat === "suite" && suiteCondition && (
+            <div className="opt-preview">
+              <span className="opt-preview-lbl">{t("optWillFire")}</span>
+              <span className="opt-preview-txt">{suiteAlertPreview(suiteCondition, lang === "zh" ? "zh" : "en")}</span>
             </div>
           )}
         </div>

@@ -324,10 +324,19 @@ def _session_slope_stats(series: list[float], window: int):
     """Slope stats for a CUMULATIVE series (ports optionsAlerts.ts sessionSlopeStats).
 
     Per-step deltas d[i]=series[i]-series[i-1]. The trailing `window` deltas are the TEST
-    window; the deltas STRICTLY BEFORE it are the baseline. The statistic is a MEAN of w
-    deltas, so it is compared against the standard error of that mean — baseStd/sqrt(w) —
-    not a single-observation std. z=None (with `why`) whenever it is not scoreable:
-    too little baseline, or a flat baseline.
+    window; the deltas STRICTLY BEFORE it are the baseline. The statistic is winMean −
+    baseMean, a comparison of TWO sample means, so it is judged against the standard error
+    of THAT difference — base_std*sqrt(1/w + 1/base_n) — not the one-sample base_std/sqrt(w),
+    which treats the baseline mean as a known constant and drops its own sampling error.
+    At the minimum baseline this guard admits (base_n = 2w) that omission inflates z by
+    exactly sqrt(1.5) ~ 22.5%: a "2 sigma" alert really fired at 1.63 sigma. The one-sample
+    form is only the baseN -> infinity special case.
+
+    This SE must stay byte-for-byte equivalent to optionsAlerts.ts (the TS is the source of
+    truth and drives the same alerts client-side); tests/test_alerts_options.py mirrors the
+    vitest expectations verbatim as the parity guard.
+
+    z=None (with `why`) whenever it is not scoreable: too little baseline, or a flat baseline.
     """
     deltas = [series[i] - series[i - 1] for i in range(1, len(series))]
     n = len(deltas)
@@ -351,7 +360,9 @@ def _session_slope_stats(series: list[float], window: int):
     if not base_std > 0:
         return {**blank, "winMean": win_mean, "baseMean": base_mean, "baseStd": base_std,
                 "why": "flat baseline"}
-    se = base_std / math.sqrt(w)
+    # Two-sample SE of (win_mean − base_mean): base_std*sqrt(1/w + 1/base_n). The 1/base_n
+    # term is the piece the old base_std/sqrt(w) form dropped (optionsAlerts.ts:215).
+    se = base_std * math.sqrt(1 / w + 1 / base_n)
     return {"winMean": win_mean, "baseMean": base_mean, "baseStd": base_std, "se": se,
             "z": (win_mean - base_mean) / se, "n": n, "w": w, "baseN": base_n, "why": ""}
 

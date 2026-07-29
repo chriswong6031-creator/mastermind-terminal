@@ -32,6 +32,10 @@ import { MACD_DIVERGENCE_MODULE } from "./macdx/macdDivergence";
 import { MACD_HISTOGRAM_MODULE } from "./macdx/macdHistogram";
 import { MACD_TREND_MODULE } from "./macdx/macdTrend";
 import { VOLT_BANDS_MODULE } from "./trend/voltixBands";
+import { MARKET_DASHBOARD_MODULE } from "./trend/marketDashboard";
+import { PULSE_MTF_MODULE } from "./pulse/mtfDash";
+import { RSIX_MTF_MODULE } from "./rsix/mtfDash";
+import { MACDX_MTF_MODULE } from "./macdx/mtfDash";
 import { CANDLE_PAINTER_MODULE } from "./trend/candlePainter";
 import { FLOW_BAND_MODULE } from "./trend/flowBand";
 
@@ -62,6 +66,7 @@ export const TREND_SUITE: SuiteDef = {
     FLOW_BAND_MODULE,
     VOLT_BANDS_MODULE,
     CANDLE_PAINTER_MODULE,
+    MARKET_DASHBOARD_MODULE,
   ],
 };
 
@@ -72,7 +77,7 @@ export const PULSE_SUITE: SuiteDef = {
   tkey: "suitePulse",
   kind: "pane",
   pane: { min: -110, max: 110, lines: [{ p: 0 }, { p: 60, dashed: true }, { p: -60, dashed: true }] },
-  modules: [PULSE_WAVE_MODULE, PULSE_SIGNALS_MODULE, PULSE_DIVERGENCE_MODULE, VOLUME_MAPPING_MODULE, FLOWS_MODULE],
+  modules: [PULSE_WAVE_MODULE, PULSE_SIGNALS_MODULE, PULSE_DIVERGENCE_MODULE, VOLUME_MAPPING_MODULE, FLOWS_MODULE, PULSE_MTF_MODULE],
 };
 
 export const RSIX_SUITE: SuiteDef = {
@@ -82,7 +87,7 @@ export const RSIX_SUITE: SuiteDef = {
   tkey: "suiteRsix",
   kind: "pane",
   pane: { min: 0, max: 100, lines: [{ p: 30, dashed: true }, { p: 50 }, { p: 70, dashed: true }] },
-  modules: [RSI_ENGINE_MODULE, RSI_SIGNALS_MODULE, RSI_DIVERGENCE_MODULE, RSI_CHANNELS_MODULE],
+  modules: [RSI_ENGINE_MODULE, RSI_SIGNALS_MODULE, RSI_DIVERGENCE_MODULE, RSI_CHANNELS_MODULE, RSIX_MTF_MODULE],
 };
 
 export const MACDX_SUITE: SuiteDef = {
@@ -92,7 +97,7 @@ export const MACDX_SUITE: SuiteDef = {
   tkey: "suiteMacdx",
   kind: "pane",
   pane: { min: -120, max: 120, lines: [{ p: 0 }, { p: 100, dashed: true }, { p: -100, dashed: true }] },
-  modules: [MACD_ENGINE_MODULE, MACD_SIGNALS_MODULE, MACD_HISTOGRAM_MODULE, MACD_DIVERGENCE_MODULE, MACD_TREND_MODULE],
+  modules: [MACD_ENGINE_MODULE, MACD_SIGNALS_MODULE, MACD_HISTOGRAM_MODULE, MACD_DIVERGENCE_MODULE, MACD_TREND_MODULE, MACDX_MTF_MODULE],
 };
 
 export const SUITE_DEFS: Record<string, SuiteDef> = {

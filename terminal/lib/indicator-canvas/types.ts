@@ -174,6 +174,29 @@ export interface TooltipDef {
 
 export interface CandlePaintEntry { i: number; color?: string; borderColor?: string; wickColor?: string }
 
+// ------------------------------------------------------------------------------- chart tables (W3)
+
+/** On-chart dashboard table, rendered as positioned DOM by ChartTables.tsx (never SVG/canvas). */
+export interface TableSpec {
+  id: string;                       // stable per module (one table per id; last writer wins)
+  pos: "tl" | "tr" | "bl" | "br";   // corner anchor within the price pane area
+  title?: string;
+  compact?: boolean;                // tighter paddings + smaller type
+  columns: Array<{ key: string; label?: string; num?: boolean }>;
+  rows: Array<{
+    label: string;                  // left header cell
+    cells: Array<{
+      text: string;
+      color?: string;               // token/text color (design tokens only)
+      bg?: string;                  // tint background (renderer applies alpha)
+      bold?: boolean;
+      fade?: number;                // 0..1 recency fade (0 = fresh/bright)
+      tip?: string;                 // title-attr tooltip
+    }>;
+  }>;
+  footnote?: string;                // honest-basis line (e.g. "MTF rows = resampled from chart bars")
+}
+
 export interface SuiteEvent {
   type: string;              // e.g. "bos", "choch", "ob_created", "ob_touch", "fvg_retest"
   dir: "bull" | "bear" | "neutral";
@@ -187,6 +210,7 @@ export interface ModuleResult {
   candlePaint?: CandlePaintEntry[];
   tooltips?: TooltipDef[];
   events?: SuiteEvent[];
+  tables?: TableSpec[];
 }
 
 export type ModuleCompute = (ctx: ModuleCtx) => ModuleResult;
@@ -244,6 +268,7 @@ export interface SuiteRenderBundle {
   tooltips: Map<string, TooltipDef>;
   candlePaint: CandlePaintEntry[];
   events: SuiteEvent[];
+  tables: TableSpec[];
 }
 
 // Hard caps enforced by the host (drop excess, single console.warn per module per session).

@@ -30,3 +30,6 @@ web/ohlc/*.json
 !contracts/samples/*.json
 
 .DS_Store
+
+# suite-alerts sidecar bundle — built on the box by terminal-build.sh step 9
+ingest/dist/

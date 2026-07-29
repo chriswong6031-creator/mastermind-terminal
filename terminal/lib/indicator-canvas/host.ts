@@ -289,6 +289,7 @@ export function computeSuite(
   const lockedModules: Array<{ key: string; label: string; tier: SuiteTier }> = [];
   const prims: Prim[] = [];
   const tooltips = new Map<string, TooltipDef>();
+  const tablesById = new Map<string, import("./types").TableSpec>();
   const paintByIndex = new Map<number, CandlePaintEntry>();
   const events: SuiteEvent[] = [];
 
@@ -378,6 +379,7 @@ export function computeSuite(
       }
     }
     if (Array.isArray(res.events)) for (const e of res.events) if (e) events.push(e);
+    if (Array.isArray(res.tables)) for (const tb of res.tables) if (tb && tb.id) tablesById.set(tb.id, tb);
   }
 
   // z-sort is stable (ES2019+ engines): equal-z prims keep module order, so a later module still
@@ -391,7 +393,9 @@ export function computeSuite(
   const idxs = Array.from(paintByIndex.keys()).sort((a, b) => a - b);
   for (const i of idxs) candlePaint.push(paintByIndex.get(i)!);
 
-  const out: SuiteComputeResult = { prims: sorted, tooltips, candlePaint, events, lockedModules };
+  const tables = Array.from(tablesById.values()).slice(0, 6); // sanity cap — dashboards are few by design
+
+  const out: SuiteComputeResult = { prims: sorted, tooltips, candlePaint, events, lockedModules, tables };
   memoSet(key, out);
   return out;
 }
