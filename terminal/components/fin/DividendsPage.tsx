@@ -65,7 +65,7 @@ export default function DividendsPage({ sym, fund, zh }: DividendsPageProps) {
       <div className="fin-body">
         <div className="fin-empty fin-empty-lg" role="status">
           <span className="fin-empty-title">{pick(!!zh, "Fundamentals not yet covered", "尚未覆盖基本面数据")}</span>
-          <span>{pick(!!zh,
+          <span className="fin-empty-why">{pick(!!zh,
             `Dividend data for ${sym} hasn't been collected yet.`,
             `${sym} 的股息数据尚未采集。`
           )}</span>
@@ -80,14 +80,14 @@ export default function DividendsPage({ sym, fund, zh }: DividendsPageProps) {
   if (!div || div.never_paid) {
     return (
       <div className="fin-body">
-        <div className="fin-div-empty" role="status">
+        <div className="fin-empty fin-empty-lg" role="status">
           <NoDivIcon />
-          <div className="fin-empty-title">{pick(!!zh, "No dividends", "无股息")}</div>
-          <div className="fin-div-empty-body">
+          <div className="fin-empty-title">{pick(!!zh, "No dividends on record", "无股息记录")}</div>
+          <div className="fin-empty-why">
             {pick(
               !!zh,
-              `${sym} has never paid dividends and has no current plans to do so.`,
-              `${sym} 从未派发股息，且目前没有派息计划。`
+              `${sym} has never declared a dividend, and no distribution is currently planned. This is a company policy, not a gap in the data.`,
+              `${sym} 从未宣派股息，目前也没有派息计划。这是公司政策，并非数据缺失。`
             )}
           </div>
         </div>
@@ -114,41 +114,58 @@ export default function DividendsPage({ sym, fund, zh }: DividendsPageProps) {
 
   return (
     <div className="fin-body">
-      {/* ── Summary cards ── */}
+      {/* ── Summary KPI tiles ── */}
       <div className="fin-sec">
-        <div className="fin-sec-h">{pick(!!zh, "Dividends", "股息")}</div>
-        <div className="fin-grid4 fin-div-cards">
-          <div className="fin-card">
-            <div className="fin-card-h">{pick(!!zh, "Dividend yield (TTM)", "股息率（近12月）")}</div>
-            <div className="fin-fact">
-              <span className="v">{yieldFmt(div.yield_ttm)}</span>
-            </div>
+        <div className="fin-eyebrow">{pick(!!zh, "SHAREHOLDER YIELD", "股东回报")}</div>
+        <div
+          className="fin-sec-h rail rule"
+          style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+        >
+          {pick(!!zh, "Dividends", "股息")}
+        </div>
+        <div className="fin-kpis fin-div-cards">
+          <div className="fin-kpi">
+            <span className="k">{pick(!!zh, "Dividend yield (TTM)", "股息率（近12月）")}</span>
+            <span className="v">{yieldFmt(div.yield_ttm)}</span>
           </div>
-          <div className="fin-card">
-            <div className="fin-card-h">{pick(!!zh, "Annual dividend", "年度股息")}</div>
-            <div className="fin-fact">
-              <span className="v">{annualDiv > 0 ? fmtNum(annualDiv) + " " + ccy : "—"}</span>
-            </div>
+          <div className="fin-kpi">
+            <span className="k">{pick(!!zh, "Annual dividend", "年度股息")}</span>
+            <span className="v">{annualDiv > 0 ? fmtNum(annualDiv) : "—"}</span>
+            {annualDiv > 0 && <span className="s">{ccy}</span>}
           </div>
-          <div className="fin-card">
-            <div className="fin-card-h">{pick(!!zh, "Payout ratio", "派息比率")}</div>
-            <div className="fin-fact">
-              <span className="v">{payoutFmt(div.payout_ratio)}</span>
-            </div>
+          <div className="fin-kpi">
+            <span className="k">{pick(!!zh, "Payout ratio", "派息比率")}</span>
+            <span className="v">{payoutFmt(div.payout_ratio)}</span>
           </div>
-          <div className="fin-card">
-            <div className="fin-card-h">{pick(!!zh, "Next ex-date", "下次除息日")}</div>
-            <div className="fin-fact">
-              <span className="v">{nextEx ? fmtDate(nextEx.ex) : "—"}</span>
-            </div>
+          <div className="fin-kpi">
+            <span className="k">{pick(!!zh, "Next ex-date", "下次除息日")}</span>
+            <span className="v">{nextEx ? fmtDate(nextEx.ex) : "—"}</span>
+            {nextEx?.amount != null && (
+              <span className="s">
+                {pick(!!zh, `${fmtNum(nextEx.amount, { decimals: 4 })} ${ccy} per share`, `每股 ${fmtNum(nextEx.amount, { decimals: 4 })} ${ccy}`)}
+              </span>
+            )}
           </div>
         </div>
+        {fund.asof && (
+          <div className="fin-asof">
+            {pick(!!zh,
+              `Dividend record · as of ${fmtDate(fund.asof)}`,
+              `股息记录 · 截至 ${fmtDate(fund.asof)}`
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Events table ── */}
       {events.length > 0 && (
         <div className="fin-sec">
-          <div className="fin-sec-h">{pick(!!zh, "Dividend history", "股息历史")}</div>
+          <div
+            className="fin-sec-h rail rule"
+            style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+          >
+            {pick(!!zh, "Dividend history", "股息历史")}
+          </div>
           <div className="fin-table-scroll">
             <table className="fin-table">
               <thead>
@@ -202,7 +219,12 @@ export default function DividendsPage({ sym, fund, zh }: DividendsPageProps) {
       {/* ── Splits table (if any) ── */}
       {div.splits && div.splits.length > 0 && (
         <div className="fin-sec">
-          <div className="fin-sec-h">{pick(!!zh, "Stock splits", "股票分拆")}</div>
+          <div
+            className="fin-sec-h rail rule"
+            style={{ "--rail": "var(--brand)" } as React.CSSProperties}
+          >
+            {pick(!!zh, "Stock splits", "股票分拆")}
+          </div>
           <div className="fin-table-scroll">
             <table className="fin-table">
               <thead>

@@ -302,16 +302,23 @@
 /* Current column highlight */
 .fin-cell-current{color:var(--text);font-weight:650}
 
-/* ── Dividends ── */
-.fin-div-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:260px;padding:32px 24px;text-align:center}
-.fin-div-empty-body{font:500 13px/1.55 var(--font-ui);color:var(--text-2);max-width:360px}
+/* ── Dividends ──
+ * (v7: the FE2b column-layout .fin-div-empty + -body are retired — DividendsPage
+ * moved to .fin-empty.fin-empty-lg. The FE2a row-layout .fin-div-empty later in
+ * this file stays: OverviewPage still renders it.) */
 .fin-div-cards{margin-bottom:0}
 .fin-div-type{color:var(--text-2);text-transform:capitalize}
 .fin-div-more{font:500 10.5px/1.3 var(--font-ui);color:var(--muted);margin-top:8px;text-align:center}
 
 /* ── Earnings ── */
 .fin-earn-strip{margin-bottom:20px}
-.fin-earn-days{font:500 10.5px/1 var(--font-num);color:var(--muted);margin-left:4px;font-variant-numeric:tabular-nums}
+/* next-report countdown is a .fin-tag now — color rides --c, not muted */
+.fin-earn-days{font:600 10.5px/1 var(--font-num);color:var(--c,var(--muted));margin-left:0;font-variant-numeric:tabular-nums}
+.fin-fact .v.fin-earn-next{display:flex;align-items:center;gap:8px;min-width:0;overflow:visible}
+.fin-fact .v.fin-earn-next>span:first-child{overflow:hidden;text-overflow:ellipsis}
+.fin-earn-module-hdr.rule{padding-bottom:9px;border-bottom:1px solid var(--hairline)}
+.fin-earn-module-hdr .fin-sec-h{margin-bottom:0}
+.fin-earn-module-title.rail::before{height:13px}
 .fin-earn-module{border:1px solid var(--line);border-radius:var(--r-card);padding:14px;background:var(--panel-2);margin-bottom:20px;overflow:hidden}
 .fin-earn-module-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px}
 .fin-earn-module-title{font:650 13px/1.2 var(--font-ui);color:var(--text)}
@@ -328,7 +335,6 @@
 /* ── Revenue ── */
 .fin-seg-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;flex:none;vertical-align:middle}
 .fin-rev-deferred{text-align:center}
-.fin-rev-deferred-body{font:500 12px/1.55 var(--font-ui);color:var(--text-2);margin-top:6px;padding:12px 0 4px}
 .fin-rev-growth{display:flex;align-items:center;gap:10px;margin-top:12px;font:500 11px/1.3 var(--font-ui)}
 .fin-rev-growth-lbl{color:var(--text-2)}
 
@@ -447,22 +453,25 @@
 
 /* ── Forecast: price-target header + fan ── */
 .fin-fc-top{margin-bottom:22px}
-.fin-fc-lbl{font:600 11px/1 var(--font-ui);color:var(--text-2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
-.fin-fc-price{font:650 30px/1.05 var(--font-num);color:var(--text);font-feature-settings:"tnum"}
+.fin-fc-price{font:650 30px/1.05 var(--font-num);color:var(--text);font-feature-settings:"tnum";font-variant-numeric:tabular-nums}
 .fin-fc-ccy{font:600 13px/1 var(--font-ui);color:var(--text-2)}
-.fin-fc-chg{display:flex;gap:12px;margin-top:5px;font:600 14px/1 var(--font-num);font-feature-settings:"tnum"}
+.fin-fc-chg{display:flex;align-items:center;gap:12px;margin-top:5px;font:600 14px/1 var(--font-num);font-feature-settings:"tnum"}
+.fin-fc-chg .fin-tag{font-family:var(--font-num);font-size:12.5px;padding:5px 10px;font-variant-numeric:tabular-nums}
+.fin-fc-sec-head.rule{padding-bottom:9px;border-bottom:1px solid var(--hairline);margin-bottom:12px}
+.fin-fc-sec-head .fin-sec-h{margin-bottom:0}
 .fin-fc-summary{margin-top:12px;font:500 12px/1.5 var(--font-ui);color:var(--text-2);max-width:420px}
 .fin-fc-fanwrap{display:flex;gap:12px;align-items:stretch;margin-top:14px}
 .fin-fc-fanwrap .fin-chart{flex:1;min-width:0}
 .fin-fc-brackets{display:flex;flex-direction:column;justify-content:center;gap:6px;flex:none;width:132px}
-.fin-fc-bracket{display:flex;border-radius:var(--r);overflow:hidden;font:600 11px/1 var(--font-num);font-feature-settings:"tnum"}
-.fin-fc-bracket .lbl{flex:1;padding:5px 7px;color:#fff;display:flex;flex-direction:column;gap:2px}
-.fin-fc-bracket .lbl .pct{font-size:10px;opacity:.92}
+/* v7: tint formula replaces the solid fills + #fff text (flat SaaS, east-safe) */
+.fin-fc-bracket{display:flex;border-radius:var(--r-tile);overflow:hidden;font:600 11px/1 var(--font-num);font-variant-numeric:tabular-nums}
+.fin-fc-bracket .lbl{flex:1;padding:5px 7px;display:flex;flex-direction:column;gap:2px;color:var(--c,var(--text-2));background:color-mix(in srgb,var(--c,var(--muted)) 15%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c,var(--muted)) 26%,transparent)}
+.fin-fc-bracket .lbl .pct{font-size:10px;opacity:.85}
 .fin-fc-bracket .val{padding:5px 7px;background:var(--panel-3);color:var(--text);display:flex;align-items:center}
-.fin-fc-bracket.t-up .lbl{background:var(--up)}
-.fin-fc-bracket.t-avg .lbl{background:var(--warn)}
-.fin-fc-bracket.t-cur .lbl{background:var(--brand)}
-.fin-fc-bracket.t-down .lbl{background:var(--down)}
+.fin-fc-bracket.t-up{--c:var(--up)}
+.fin-fc-bracket.t-avg{--c:var(--warn)}
+.fin-fc-bracket.t-cur{--c:var(--brand)}
+.fin-fc-bracket.t-down{--c:var(--down)}
 
 /* Forecast band annotation: positioned at the right ~16% of the chart area */
 /* right:56px clears the LineSeries y-tick gutter (rPad ≈46-54 for price-scale
@@ -488,9 +497,9 @@
 /* ── Forecast: consensus forward-growth chips (EPS / Revenue YoY) ── */
 .fin-fc-growth{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px}
 .fin-fc-growth-lbl{font:600 10px/1 var(--font-ui);color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-.fin-fc-growth-chip{display:inline-flex;align-items:baseline;gap:6px;padding:4px 9px;border-radius:var(--r-pill);background:var(--panel-2);border:1px solid var(--hairline)}
-.fin-fc-growth-chip .k{font:500 10.5px/1 var(--font-ui);color:var(--text-2)}
-.fin-fc-growth-chip .v{font:650 12.5px/1 var(--font-num);font-feature-settings:"tnum"}
+/* v7: growth chips retired onto .fin-tag (direction-tinted, east-safe) */
+.fin-fc-growth .fin-tag{font-family:var(--font-num);font-variant-numeric:tabular-nums}
+.fin-fc-growth .fin-tag .k{font:500 10.5px/1 var(--font-ui);opacity:.78}
 
 /* ── Forecast: analyst target-range band (low—mean—high + current marker) ── */
 .fin-fc-band{margin:14px 0 6px}
@@ -516,7 +525,7 @@
 @media (prefers-reduced-motion:reduce){.fin-skel{animation:none}}
 .fin-fc-analyst-empty{flex-direction:column;gap:12px;padding:26px 10px}
 .fin-fc-guidance{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center}
-.fin-fc-guidance .chip{background:var(--brand);color:#fff;font:600 11px/1 var(--font-ui);padding:5px 9px;border-radius:var(--r-pill)}
+/* (.fin-fc-guidance .chip retired — guidance chip is a .fin-tag now) */
 .fin-fc-guidance .txt{font:500 12px/1.4 var(--font-ui);color:var(--text-2)}
 
 /* ── Technicals: TF pill row ── */
