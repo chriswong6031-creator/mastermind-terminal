@@ -116,6 +116,16 @@ export function AdvancedSeasonality({ years, active, win, zh = false }: Props) {
         <ShareDonutPanel years={years} isActive={isActive} zh={zh} />
         <YearAgreementPanel years={years} isActive={isActive} zh={zh} />
       </div>
+      {/* provenance: the sample every panel above recomputes over */}
+      <div className="fin-asof">
+        <span className="num">
+          {pick(
+            zh,
+            `Daily closes · ${scope}${span ? ` (${span})` : ""} · N=${nActive} · all panels above`,
+            `日线收盘价 · ${scope}${span ? `（${span}）` : ""} · N=${nActive} · 适用于以上全部面板`,
+          )}
+        </span>
+      </div>
     </div>
   );
 }

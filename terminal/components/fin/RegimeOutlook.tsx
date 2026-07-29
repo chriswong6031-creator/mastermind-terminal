@@ -235,11 +235,14 @@ function RegimeOutlookInner({ data: d, zh }: { data: SeasonalOutlook; zh: boolea
           <span className="fin-ro-sep">·</span>
           {rateDirLabel(d.current_year.rate_dir, zh)}
           {d.current_year.is_recession && (
-            <span className="fin-ro-flag-rec">{pick(zh, " · Recession", " · 衰退")}</span>
+            <span className="fin-tag fin-ro-flag-rec" style={{ "--c": "var(--down)" } as CSSProperties}>
+              {pick(zh, "Recession", "衰退")}
+            </span>
           )}
           {d.current_year.provisional && (
             <span
-              className="fin-ro-provisional"
+              className="fin-tag fin-ro-provisional"
+              style={{ "--c": "var(--warn)" } as CSSProperties}
               title={pick(
                 zh,
                 "Current-year regime is an as-of estimate while analog years carry full-year hindsight.",

@@ -250,7 +250,7 @@
 .fin-empty-title{font:600 14px/1.2 var(--font-ui);color:var(--text-2)}
 .fin-empty-why{font:500 11px/1.5 var(--font-ui);color:var(--muted);max-width:420px}
 /* v7 provenance row — every data section dates itself; .dot marks a live feed */
-.fin-asof{display:flex;align-items:center;gap:6px;font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:10px}
+.fin-asof{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font:500 10.5px/1.4 var(--font-ui);color:var(--muted);margin-top:10px;font-variant-numeric:tabular-nums}
 .fin-asof .dot{width:6px;height:6px;border-radius:50%;background:var(--up);flex:none;animation:fin-asof-pulse 2.2s var(--ease) infinite}
 @keyframes fin-asof-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @media (prefers-reduced-motion:reduce){.fin-asof .dot{animation:none}}
@@ -875,7 +875,9 @@
 .fin-ro-regime-badge{display:inline-flex;align-items:center;gap:0;font:600 11.5px/1 var(--font-ui);color:var(--text-2);background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 12px;flex-wrap:wrap;gap:4px}
 .fin-ro-sep{color:var(--line-3);margin:0 2px}
 .fin-ro-flag-rec{color:var(--down);font-weight:700}
-.fin-ro-provisional{display:inline-flex;margin-left:6px;font:600 9px/1 var(--font-ui);color:var(--warn);background:color-mix(in srgb,var(--warn) 11%,transparent);border:1px solid color-mix(in srgb,var(--warn) 22%,transparent);border-radius:var(--r-pill);padding:2px 6px;cursor:help}
+/* provisional flag rides .fin-tag in markup; this rule only keeps the size/cursor
+   deltas and re-expresses the tint through --c so the formula stays in charge */
+.fin-ro-provisional{display:inline-flex;margin-left:2px;font:600 9.5px/1 var(--font-ui);padding:3px 8px;border:0;border-radius:var(--r-pill);cursor:help;color:var(--c,var(--warn));background:color-mix(in srgb,var(--c,var(--warn)) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c,var(--warn)) 30%,transparent)}
 .fin-ro-toggle{flex:none}
 
 /* timeline */
@@ -1100,3 +1102,27 @@
 /* ── FE2d additions (v7 wave) ── */
 .od-empty{flex-direction:column;gap:5px;min-height:72px;padding:16px 14px}
 .od-sig-table th{letter-spacing:.06em;text-transform:uppercase}
+
+/* ── FE2c · Technicals (v7 wave) ──
+ * Intraday fetch indicator: the old .fin-sec-cap caption is now a shimmer bar.
+ * REQUIRED, not cosmetic — .fin-skel carries no box, so without this rule the
+ * element renders 0px tall and the loading affordance disappears. */
+.fin-tech-loading{height:15px;width:168px;margin-bottom:13px;border-radius:var(--r-pill)}
+
+/* ── seasonal lane · SeasonalsPage section header (v7 wave) ──
+ * The railed header and the view/window control row share the content column so
+ * the hairline rule lines up with the chart/table beneath it: >=900px caps
+ * .fin-seas>.fin-sec at 1320px while .fin-seas itself is full-bleed. */
+.fin-seas-hdr{margin-bottom:4px}
+@media (min-width:900px){
+  .fin-seas>.fin-seas-hdr,.fin-seas>.fin-seas-head{max-width:1320px}
+}
+
+/* ── seasonal lane · advanced deck title takes the brand rail (v7 wave) ── */
+.fin-adv-title::before{content:"";flex:none;align-self:center;width:3px;height:13px;border-radius:2px;
+  background:linear-gradient(180deg,var(--rail),color-mix(in srgb,var(--rail) 30%,transparent))}
+
+/* ── RegimeOutlook · panel header rail (v7 wave) ── */
+.fin-ro-title{display:inline-flex;align-items:center;gap:9px}
+.fin-ro-title::before{content:"";flex:none;width:3px;height:14px;border-radius:2px;
+  background:linear-gradient(180deg,var(--rail),color-mix(in srgb,var(--rail) 30%,transparent))}
