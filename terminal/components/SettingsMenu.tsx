@@ -4,10 +4,9 @@ import { useLang, useT } from "@/lib/i18n";
 import { createClient } from "@/lib/supabase/client";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 import { useEntitlement } from "@/lib/useEntitlement";
-import { DEFAULT_START_TF, TF_CANONICAL_ORDER, readStartTf, writeStartTf } from "@/lib/startTf";
-import { useMarketPrefs } from "@/lib/useMarketPrefs";
-import { ALL_MARKETS, HOME_MARKET_IDS } from "@/lib/markets";
-import { MARKET_TKEY } from "@/components/SearchModal";
+import { TF_CANONICAL_ORDER } from "@/lib/startTf";
+import { useAccountPrefs } from "@/lib/useMarketPrefs";
+import { ALL_MARKETS, MARKET_TKEY } from "@/lib/markets";
 
 // Tier label key, with a "· trial" suffix only while status === "trialing".
 function tierLabelKey(tier: string, status: string): string {
@@ -20,11 +19,11 @@ function tierLabelKey(tier: string, status: string): string {
 // User-settings popover anchored on the top-right avatar: up/down color scheme + language +
 // Terminal settings + sign out.
 // The up/down scheme and language auto-initialize from the browser locale (pre-paint script in layout),
-// and any manual choice here is remembered (localStorage) — "auto + remember override".
+// and any manual choice here is remembered — "auto + remember override". Remembering now means
+// localStorage AND, for a signed-in user, Supabase user_metadata, so the choice follows the account
+// to another device and to the macro dashboard. lib/useMarketPrefs.ts owns both writes.
 export default function SettingsMenu({ email }: { email: string }) {
   const [open, setOpen] = useState(false);
-  const [ud, setUd] = useState<"east" | "west">("west");
-  const [startTf, setStartTf] = useState<string>(DEFAULT_START_TF);
   const [firstName, setFirstName] = useState("");
   const { lang, setLang } = useLang();
   const t = useT();
@@ -32,10 +31,11 @@ export default function SettingsMenu({ email }: { email: string }) {
   const signedIn = !!email;
   const ent = useEntitlement(email);
   // Shared module store — the same object SearchModal filters against, so this pane and the
-  // search results can never disagree about which markets are on.
-  const { prefs, toggle, setHome } = useMarketPrefs(email);
+  // search results can never disagree about which markets are on. `terminal` carries the live
+  // up/down + startup-timeframe values, so the two mounted SettingsMenus (desktop topbar and
+  // mobile drawer) can never show different ones, and an account value applies without a reload.
+  const { prefs, terminal, toggle, setStartTf, setUpDown, setLangPref } = useAccountPrefs(email);
 
-  useEffect(() => { const v = document.documentElement.getAttribute("data-updown"); setUd(v === "east" ? "east" : "west"); }, []);
   useEffect(() => { if (!open) return; const close = () => setOpen(false); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [open]);
 
   // Signed-in only: pull first_name from user_metadata once (the component is handed just `email`).
@@ -50,25 +50,15 @@ export default function SettingsMenu({ email }: { email: string }) {
     return () => { alive = false; };
   }, [signedIn]);
 
-  const setUpDown = (v: "east" | "west") => {
-    setUd(v);
-    try { localStorage.setItem("mm.updown", v); } catch {}
-    document.documentElement.setAttribute("data-updown", v);
-    window.dispatchEvent(new CustomEvent("mm:updown"));
-  };
+  // Language is two writes: the live UI switch (i18n) and the account record (the macro
+  // dashboard's `prefs.lang`, which it applies on its own sign-in).
+  const pickLang = (l: "en" | "zh") => { setLang(l); setLangPref(l); };
 
-  // Startup timeframe. Deliberately does NOT retime the chart that's already open: this names the
-  // timeframe the Terminal OPENS on, and a live re-time would silently rewrite the active pane of a
-  // deliberate multi-pane layout (MTF is D/3D/W/1M across four panes). The selected chip is the
-  // feedback; TerminalShell reads the value at its next mount.
-  const pickStartTf = (v: string) => { setStartTf(v); writeStartTf(v); };
+  const ud = terminal.updown;
 
   return (
     <div className="pophost" style={{ position: "relative" }}>
-      {/* startTf is read here rather than in a mount effect: localStorage isn't readable during render
-          (hydration), and re-reading on every open keeps the two mounted SettingsMenus — desktop topbar
-          and mobile drawer — showing the same value after one of them changes it. */}
-      <button className="avatar" onClick={(e) => { e.stopPropagation(); setStartTf(readStartTf()); setOpen((o) => !o); }} title={t("settings")}>{(email || "U")[0].toUpperCase()}</button>
+      <button className="avatar" onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }} title={t("settings")}>{(email || "U")[0].toUpperCase()}</button>
       {open && (
         <div className="pop show settings-pop" style={{ top: 38, right: 0 }} onClick={(e) => e.stopPropagation()}>
           <div className="set-h"><b>{t("settings")}</b></div>
@@ -79,23 +69,31 @@ export default function SettingsMenu({ email }: { email: string }) {
           </div>
           <div className="set-grp">{t("language")}</div>
           <div className="set-seg">
-            <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>EN</button>
-            <button className={lang === "zh" ? "on" : ""} onClick={() => setLang("zh")}>中文</button>
+            <button className={lang === "en" ? "on" : ""} onClick={() => pickLang("en")}>EN</button>
+            <button className={lang === "zh" ? "on" : ""} onClick={() => pickLang("zh")}>中文</button>
           </div>
           <div className="set-grp">{t("setTerminal")}</div>
           <div className="set-sub">{t("setStartTf")}</div>
+          {/* Deliberately does NOT retime the chart that's already open: this names the timeframe
+              the Terminal OPENS on, and a live re-time would silently rewrite the active pane of a
+              deliberate multi-pane layout (MTF is D/3D/W/1M across four panes). The selected chip
+              is the feedback; TerminalShell reads the value at its next mount. */}
           <div className="set-tfg">
             {TF_CANONICAL_ORDER.map((tfi) => (
-              <button key={tfi} className={startTf === tfi ? "on" : ""} aria-pressed={startTf === tfi} onClick={() => pickStartTf(tfi)}>{tfi}</button>
+              <button key={tfi} className={terminal.startTf === tfi ? "on" : ""} aria-pressed={terminal.startTf === tfi} onClick={() => setStartTf(tfi)}>{tfi}</button>
             ))}
           </div>
 
           {/* ── Markets ──────────────────────────────────────────────────────────────────
               Which markets exist for this user at all. Turning one off removes its symbols
               from search entirely — the operator's requirement that a China-only trader can
-              stop seeing US names. The home market is the ranking/seed market and is rendered
-              as a radio; it cannot be switched off, so the user can never strand themselves
-              with an empty universe. */}
+              stop seeing US names.
+
+              The HOME MARKET radio that used to sit under this list is gone: ranking now boosts
+              every market the user FOLLOWS (user_metadata.market_focus), which is edited in the
+              account settings panel, not here. `prefs.home` survives as the derived first-followed
+              country — the macro dashboard still reads it — and stays un-hideable so the user can
+              never strand themselves with an empty universe. */}
           <div className="set-grp">{t("mktSettingsTitle")}</div>
           <div className="set-note">{t("mktSettingsSub")}</div>
           {prefs.autoNarrowed && <div className="set-note set-note-hint">{t("mktAutoNarrowed")}</div>}
@@ -116,14 +114,6 @@ export default function SettingsMenu({ email }: { email: string }) {
               </div>
             );
           })}
-          <div className="set-grp">{t("mktHome")}</div>
-          <div className="set-note">{t("mktHomeNote")}</div>
-          {HOME_MARKET_IDS.map((m) => (
-            <div key={m} className={`set-row${prefs.home === m ? " on" : ""}`} onClick={() => setHome(m)}>
-              <span className="rdo" />{t(MARKET_TKEY[m])}
-            </div>
-          ))}
-
           <div className="set-sep" />
           {signedIn ? (
             <>

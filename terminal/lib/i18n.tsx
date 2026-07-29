@@ -1114,6 +1114,21 @@ export function tPlain(key: string, fallback?: string): string {
 
 const Ctx = createContext<{ lang: Lang; setLang: (l: Lang) => void }>({ lang: "en", setLang: () => {} });
 
+/**
+ * Switch the UI language from imperative code (the account-prefs store applies the language saved
+ * on the Supabase account this way, on the same load that reads market prefs).
+ *
+ * Every mounted LangProvider re-reads the attribute on `mm:lang`, so this is not a second source
+ * of truth — it is the same three writes setLang makes, minus the local setState that the event
+ * already covers.
+ */
+export function applyLang(l: Lang) {
+  try { localStorage.setItem("mm.lang", l); } catch { /* storage blocked */ }
+  if (typeof document === "undefined") return;
+  document.documentElement.setAttribute("data-lang", l);
+  window.dispatchEvent(new CustomEvent("mm:lang"));
+}
+
 export function LangProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Lang>("en");
   useEffect(() => {
@@ -1124,9 +1139,7 @@ export function LangProvider({ children }: { children: React.ReactNode }) {
   }, []);
   const setLang = useCallback((l: Lang) => {
     setLangState(l);
-    try { localStorage.setItem("mm.lang", l); } catch {}
-    document.documentElement.setAttribute("data-lang", l);
-    window.dispatchEvent(new CustomEvent("mm:lang"));
+    applyLang(l);
   }, []);
   return <Ctx.Provider value={{ lang, setLang }}>{children}</Ctx.Provider>;
 }

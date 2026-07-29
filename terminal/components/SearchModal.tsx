@@ -8,19 +8,14 @@ import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 import {
-  isSymbolVisible, scoreSymbol, marketOf, displayName, ALL_MARKETS,
-  DEFAULT_PREFS, type MarketId, type MarketPrefs,
+  isSymbolVisible, scoreSymbol, marketOf, displayName, followedMarketSet, ALL_MARKETS,
+  DEFAULT_PREFS, MARKET_TKEY, type MarketId, type MarketPrefs,
 } from "@/lib/markets";
 import { categoryBrowse, tabOf } from "@/lib/searchCategory";
 
 type Row = { name: string; col: string; verdict: string | null; vts?: string | null; mkt?: string; zh?: string; sec?: string };
 type ListInfo = { name: string; count: number; symbols: { symbol: string; section: string }[] };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY" || v === "RECLAIM";
-
-// MarketId → i18n key, so the filter notice and the settings pane name markets identically.
-export const MARKET_TKEY: Record<MarketId, string> = {
-  us: "mktUs", cn: "mktCn", hk: "mktHk", ca: "mktCa", intl: "mktIntl", crypto: "mktCrypto",
-};
 
 // Category tab order + their i18n keys (bilingual labels — no hardcoded English in JSX).
 const CATS: { id: string; key: string }[] = [
@@ -143,10 +138,14 @@ export default function SearchModal({
     [prefsReady, marketPrefs],
   );
 
+  // Markets the user follows, as MarketIds ("global" → intl). Hoisted out of the scoring loop —
+  // it is one Set for the whole sort, not one per manifest row.
+  const boostedMarkets = useMemo(() => followedMarketSet(marketPrefs.followed), [marketPrefs.followed]);
+
   // Ranked, not merely filtered. This was `.filter(...).slice(0, 30)` over Object.entries, so the
   // order was manifest insertion order — typing "AA" could bury Alcoa under anything whose NAME
   // contained "aa", and the 30-cap then cut the exact match off entirely. scoreSymbol ranks
-  // exact ticker > ticker prefix > name prefix > substring, with a home-market boost that is
+  // exact ticker > ticker prefix > name prefix > substring, with a followed-market boost that is
   // deliberately smaller than one tier so personalization only ever breaks ties.
   const results = useMemo(() => {
     const ql = deferredQ.trim().toLowerCase();
@@ -156,14 +155,14 @@ export default function SearchModal({
       if (cmp && s === active) continue;
       if (cat !== "All" && tabOf(s, r.sec) !== cat) continue;
       if (!marketVisible(s, r)) continue;
-      const score = scoreSymbol(s, r, ql, marketPrefs.home);
+      const score = scoreSymbol(s, r, ql, boostedMarkets);
       if (score >= 0) scored.push([s, r, score]);
     }
     // Ties broken by ticker length then alphabetically, so ordering is stable across renders
     // (Object.entries order is not a guarantee we want leaking into the UI).
     scored.sort((a, b) => b[2] - a[2] || a[0].length - b[0].length || (a[0] < b[0] ? -1 : 1));
     return scored.slice(0, 30).map(([s, r]) => [s, r] as [string, Row]);
-  }, [deferredQ, manifest, cmp, active, cat, marketVisible, marketPrefs.home]);
+  }, [deferredQ, manifest, cmp, active, cat, marketVisible, boostedMarkets]);
 
   // History rows when no query (most recent first, filtered against manifest).
   const historyResults = useMemo((): [string, Row][] => {

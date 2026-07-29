@@ -1,9 +1,18 @@
 import { describe, it, expect } from "vitest";
 import {
-  marketOf, readMarketPrefs, defaultEnabledFor, toggleMarket, setHomeMarket,
-  isSymbolVisible, scoreSymbol, serializeMarketPrefs, displayName, MARKET_IDS, type MarketPrefs,
+  marketOf, readMarketPrefs, defaultEnabledFor, toggleMarket, setFollowedMarkets,
+  isSymbolVisible, scoreSymbol, serializeMarketPrefs, displayName, MARKET_IDS,
+  FOLLOW_IDS, sanitizeFollowed, followedMarketSet, homeFromFollowed, marketToFollow,
+  type FollowId, type MarketId, type MarketPrefs,
 } from "../markets";
 import { classify } from "../intradayShared";
+
+/** MarketPrefs literal without repeating `followed: []` in every fixture. */
+const P = (p: Partial<MarketPrefs>): MarketPrefs =>
+  ({ home: null, enabled: [...MARKET_IDS], autoNarrowed: false, followed: [], ...p });
+
+/** The 4th scoreSymbol argument, spelled the way callers build it. */
+const boost = (...f: FollowId[]) => followedMarketSet(f);
 
 describe("marketOf — venue mapping", () => {
   it("maps the production manifest's venue strings to groups", () => {
@@ -116,15 +125,15 @@ describe("readMarketPrefs — legacy market_focus migration", () => {
   });
 });
 
-describe("toggleMarket / setHomeMarket", () => {
-  const base: MarketPrefs = { home: "us", enabled: ["us", "cn", "crypto"], autoNarrowed: true };
+describe("toggleMarket", () => {
+  const base = P({ home: "us", enabled: ["us", "cn", "crypto"], autoNarrowed: true });
 
   it("refuses to disable the home market", () => {
     expect(toggleMarket(base, "us")).toBe(base);
   });
 
   it("refuses to empty the enabled set", () => {
-    const one: MarketPrefs = { home: null, enabled: ["cn"], autoNarrowed: false };
+    const one = P({ home: null, enabled: ["cn"] });
     expect(toggleMarket(one, "cn")).toBe(one);
   });
 
@@ -137,22 +146,152 @@ describe("toggleMarket / setHomeMarket", () => {
     expect(toggleMarket(base, "cn").enabled).not.toContain("cn");
   });
 
-  it("pulls the new home into enabled when it was hidden", () => {
-    const p = setHomeMarket({ home: "us", enabled: ["us"], autoNarrowed: true }, "hk");
-    expect(p.enabled).toContain("hk");
-    expect(p.home).toBe("hk");
+  it("leaves the follow list alone — visibility and follows are separate choices", () => {
+    const p = P({ home: "us", enabled: ["us", "crypto"], followed: ["us", "hk"] });
+    expect(toggleMarket(p, "hk").followed).toEqual(["us", "hk"]);
   });
 
   it("round-trips through serialize → read unchanged", () => {
-    const p: MarketPrefs = { home: "cn", enabled: ["cn", "hk", "crypto"], autoNarrowed: false };
-    const back = readMarketPrefs(serializeMarketPrefs(p) as never);
+    const p = P({ home: "cn", enabled: ["cn", "hk", "crypto"], followed: ["cn"] });
+    const back = readMarketPrefs({ ...serializeMarketPrefs(p), market_focus: p.followed } as never);
     expect(back.home).toBe("cn");
     expect(back.enabled.sort()).toEqual(["cn", "crypto", "hk"]);
+    expect(back.followed).toEqual(["cn"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Followed markets — the `market_focus` contract shared with the macro dashboard.
+// Operator ruling (2026-07-29): the single HOME market is retired. Search boosts every
+// market the user follows; `markets.home` survives only as a derived compat field.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("sanitizeFollowed", () => {
+  it("keeps the macro vocabulary verbatim, INCLUDING 'global' (never 'intl')", () => {
+    expect(sanitizeFollowed(["us", "cn", "hk", "ca", "global"])).toEqual([...FOLLOW_IDS]);
+  });
+
+  it("dedupes and preserves pick order", () => {
+    expect(sanitizeFollowed(["hk", "us", "hk"])).toEqual(["hk", "us"]);
+  });
+
+  it("drops unknown ids and non-strings instead of poisoning the list", () => {
+    expect(sanitizeFollowed(["us", "crypto", "moon", 7, null, { a: 1 }])).toEqual(["us"]);
+  });
+
+  it("normalizes the spellings older onboarding generations wrote", () => {
+    expect(sanitizeFollowed(["China", " canada ", "international"])).toEqual(["cn", "ca", "global"]);
+    expect(sanitizeFollowed(["intl"])).toEqual(["global"]);
+  });
+
+  it("returns [] for anything that is not an array", () => {
+    for (const junk of [null, undefined, "us", 3, {}]) expect(sanitizeFollowed(junk)).toEqual([]);
+  });
+});
+
+describe("followedMarketSet — the global→intl mapping", () => {
+  it("maps 'global' to the intl bucket and the rest 1:1", () => {
+    expect([...followedMarketSet(["global"])]).toEqual(["intl"]);
+    expect([...followedMarketSet(["us", "hk"])].sort()).toEqual(["hk", "us"]);
+  });
+
+  it("never boosts crypto — it is an asset class, not a market you follow", () => {
+    expect(followedMarketSet([...FOLLOW_IDS]).has("crypto")).toBe(false);
+  });
+
+  it("is empty for an empty / absent list", () => {
+    expect(followedMarketSet([]).size).toBe(0);
+    expect(followedMarketSet(null).size).toBe(0);
+  });
+
+  it("round-trips a market back to its follow id", () => {
+    expect(marketToFollow("intl")).toBe("global");
+    expect(marketToFollow("hk")).toBe("hk");
+    expect(marketToFollow("crypto")).toBe(null);
+    expect(marketToFollow(null)).toBe(null);
+  });
+});
+
+describe("readMarketPrefs — the followed read path", () => {
+  it("reads market_focus even when an explicit markets object is present", () => {
+    // markets wins for home/enabled; market_focus is still the live follow list.
+    const p = readMarketPrefs({
+      market_focus: ["hk", "global"],
+      markets: { home: "cn", enabled: ["cn", "hk"], autoNarrowed: false },
+    });
+    expect(p.followed).toEqual(["hk", "global"]);
+    expect(p.enabled.sort()).toEqual(["cn", "hk"]);
+  });
+
+  it("falls back to [home] — mapped back to the macro vocabulary — when market_focus is absent", () => {
+    expect(readMarketPrefs({ markets: { home: "hk", enabled: ["hk"], autoNarrowed: false } }).followed).toEqual(["hk"]);
+    expect(readMarketPrefs({ markets: { home: "intl", enabled: ["intl"], autoNarrowed: false } }).followed).toEqual(["global"]);
+  });
+
+  it("follows nothing when there is no market_focus and no home", () => {
+    expect(readMarketPrefs({ markets: { home: null, enabled: ["us"], autoNarrowed: false } }).followed).toEqual([]);
+    expect(readMarketPrefs(null).followed).toEqual([]);
+    expect(readMarketPrefs({ market_focus: ["nonsense"] }).followed).toEqual([]);
+  });
+
+  it("keeps 'global' followed even though it produces no home", () => {
+    const p = readMarketPrefs({ market_focus: ["global"] });
+    expect(p.followed).toEqual(["global"]);
+    expect(p.home).toBe(null);
+  });
+
+  it("carries the signup follow list through the legacy migration branch", () => {
+    expect(readMarketPrefs({ market_focus: ["us", "hk"] }).followed).toEqual(["us", "hk"]);
+  });
+});
+
+describe("setFollowedMarkets — what gets written back", () => {
+  const narrowed = P({ home: "us", enabled: ["us", "crypto"], autoNarrowed: true, followed: ["us"] });
+
+  it("derives home from the first followed COUNTRY", () => {
+    expect(homeFromFollowed(["hk", "us"])).toBe("hk");
+    expect(setFollowedMarkets(narrowed, ["hk", "us"]).home).toBe("hk");
+  });
+
+  it("derives a NULL home when only 'global' is followed — global is not a country", () => {
+    expect(homeFromFollowed(["global"])).toBe(null);
+    expect(setFollowedMarkets(narrowed, ["global"]).home).toBe(null);
+  });
+
+  it("skips 'global' to reach the first real country", () => {
+    expect(homeFromFollowed(["global", "ca"])).toBe("ca");
+  });
+
+  it("derives a NULL home from an empty list", () => {
+    expect(setFollowedMarkets(narrowed, []).home).toBe(null);
+  });
+
+  it("does NOT rederive enabled from the follows — that is a Terminal-only choice", () => {
+    // The macro dashboard DOES rewrite enabled here. We deliberately diverge: a user who narrowed
+    // their searchable universe must not have it rewritten by editing an unrelated list.
+    const next = setFollowedMarkets(narrowed, ["us", "cn", "hk"]);
+    expect(next.enabled.sort()).toEqual(["crypto", "us"]);
+    expect(next.autoNarrowed).toBe(true);   // the narrowing did not change, so neither does its explanation
+  });
+
+  it("still pulls the derived home into enabled — a hidden home would strand the user", () => {
+    expect(setFollowedMarkets(narrowed, ["hk"]).enabled).toContain("hk");
+  });
+
+  it("sanitizes what it is handed", () => {
+    expect(setFollowedMarkets(narrowed, ["us", "us", "moon"]).followed).toEqual(["us"]);
+  });
+
+  it("serializes to the exact pair of fields the macro dashboard reads", () => {
+    const next = setFollowedMarkets(narrowed, ["hk", "global"]);
+    expect({ market_focus: next.followed, ...serializeMarketPrefs(next) }).toEqual({
+      market_focus: ["hk", "global"],
+      markets: { home: "hk", enabled: ["us", "hk", "crypto"], autoNarrowed: true },
+    });
   });
 });
 
 describe("isSymbolVisible", () => {
-  const usOnly: MarketPrefs = { home: "us", enabled: ["us", "crypto"], autoNarrowed: true };
+  const usOnly = P({ home: "us", enabled: ["us", "crypto"], autoNarrowed: true });
 
   it("hides a disabled market's symbols entirely", () => {
     expect(isSymbolVisible("0700.HK", { mkt: "HKEX" }, usOnly)).toBe(false);
@@ -180,17 +319,50 @@ describe("scoreSymbol — ranking", () => {
     expect(short).toBeGreaterThan(long);
   });
 
-  it("boosts the home market on an otherwise equal match", () => {
-    const home = scoreSymbol("0700.HK", row("Tencent", "HKEX"), "tencent", "hk");
-    const away = scoreSymbol("TCEHY", row("Tencent ADR", "NASDAQ"), "tencent", "hk");
-    expect(home).toBeGreaterThan(away);
+  it("boosts a followed market on an otherwise equal match", () => {
+    const followed = scoreSymbol("0700.HK", row("Tencent", "HKEX"), "tencent", boost("hk"));
+    const away = scoreSymbol("TCEHY", row("Tencent ADR", "NASDAQ"), "tencent", boost("hk"));
+    expect(followed).toBeGreaterThan(away);
   });
 
-  it("does NOT let the home boost outrank what the user literally typed", () => {
-    // A foreign EXACT ticker must still beat a home-market substring hit.
-    const foreignExact = scoreSymbol("NVDA", row("NVIDIA", "NASDAQ"), "nvda", "cn");
-    const homeSubstring = scoreSymbol("300750.SZ", row("CATL nvda-ish", "SZSE"), "nvda", "cn");
-    expect(foreignExact).toBeGreaterThan(homeSubstring);
+  it("boosts EVERY followed market, not just the first — the retired home-market rule", () => {
+    const both = boost("hk", "us");
+    const hk = scoreSymbol("0700.HK", row("Tencent", "HKEX"), "tencent", both);
+    const us = scoreSymbol("TCEHY", row("Tencent ADR", "NASDAQ"), "tencent", both);
+    const cn = scoreSymbol("600519.SS", row("Tencent-ish", "SSE"), "tencent", both);
+    expect(hk).toBe(us);               // following both means neither is demoted
+    expect(hk).toBeGreaterThan(cn);    // an unfollowed market still is
+  });
+
+  it("maps a 'global' follow onto the intl bucket", () => {
+    const g = boost("global");
+    const intl = scoreSymbol("AZN.L", row("AstraZeneca bank", "United Kingdom"), "bank", g);
+    const us = scoreSymbol("JPM", row("JPMorgan bank", "NYSE"), "bank", g);
+    expect(intl).toBeGreaterThan(us);
+    // "global" is a follow id, never a MarketId — a raw 'global' set must boost nothing.
+    expect(scoreSymbol("AZN.L", row("AstraZeneca bank", "United Kingdom"), "bank", new Set(["global"] as unknown as MarketId[])))
+      .toBe(scoreSymbol("JPM", row("JPMorgan bank", "NYSE"), "bank", null));
+  });
+
+  it("never boosts crypto, even for a user who follows everything", () => {
+    const all = followedMarketSet([...FOLLOW_IDS]);
+    expect(scoreSymbol("BTC-USD", row("Bitcoin", undefined), "bitcoin", all))
+      .toBe(scoreSymbol("BTC-USD", row("Bitcoin", undefined), "bitcoin", null));
+  });
+
+  it("does NOT let the follow boost outrank what the user literally typed", () => {
+    // A foreign EXACT ticker must still beat a followed-market substring hit. +60 has to stay
+    // below the tightest tier gap (ticker-substring 400 → name-substring 200).
+    const foreignExact = scoreSymbol("NVDA", row("NVIDIA", "NASDAQ"), "nvda", boost("cn"));
+    const followedSubstring = scoreSymbol("300750.SZ", row("CATL nvda-ish", "SZSE"), "nvda", boost("cn"));
+    expect(foreignExact).toBeGreaterThan(followedSubstring);
+    expect(followedSubstring - scoreSymbol("300750.SZ", row("CATL nvda-ish", "SZSE"), "nvda", null)).toBe(60);
+  });
+
+  it("treats an absent / empty boost set as no personalization at all", () => {
+    const plain = scoreSymbol("0700.HK", row("Tencent", "HKEX"), "tencent", null);
+    expect(scoreSymbol("0700.HK", row("Tencent", "HKEX"), "tencent")).toBe(plain);
+    expect(scoreSymbol("0700.HK", row("Tencent", "HKEX"), "tencent", boost())).toBe(plain);
   });
 
   it("returns -1 for no match", () => {
