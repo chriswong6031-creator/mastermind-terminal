@@ -2,6 +2,24 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "terminal-wt-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/ui-institutional-overhaul/terminal",
+      "port": 3007,
+      "autoPort": true,
+      "env": {
+        "PORT": "3007",
+        "FLOW_FIXTURE": "1",
+        "NW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
       "name": "macro-landing",
       "runtimeExecutable": "python3",
       "runtimeArgs": [
