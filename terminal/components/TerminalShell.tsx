@@ -24,6 +24,7 @@ import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
 import SearchModal, { FLAG_DEFAULT, FLAG_COLORS } from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
 import IndicatorSettings from "@/components/IndicatorSettings";
+import GuidePanel from "@/components/GuidePanel";
 import IndicatorSource from "@/components/IndicatorSource";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
 import { isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
@@ -366,7 +367,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "vol", "macd", "stochrsi"]));
   const [hidden, setHidden] = useState<Set<string>>(new Set());                       // indicators the eye has hidden
   const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());      // per-indicator params (Settings dialog)
-  const [settingsKey, setSettingsKey] = useState<string | null>(null);                 // indicator whose Settings dialog is open
+  const [settingsKey, setSettingsKey] = useState<string | null>(null);
+  const [guide, setGuide] = useState<{ suite: string; mod: string; label: string } | null>(null);                 // indicator whose Settings dialog is open
   const [sourceKey, setSourceKey] = useState<string | null>(null);                     // indicator whose Source view is open
   // ── custom scripts (Pine): the user's saved scripts + which are ENABLED on the chart + param overrides ──
   const [scripts, setScripts] = useState<UserScript[]>([]);
@@ -541,7 +543,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // symbol's functional set, since the workspace restore below can land on a symbol other than seed0.
     const savedStartTf = readStartTf();
     const startTf = resolveStartTf(savedStartTf, functionalSet(seed0));
-    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs([startTf]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); { const sv = load("mm.set", {}); setSet({ ...DEFAULT_SET, ...sv, cols: { ...DEFAULT_SET.cols, ...(sv.cols || {}) }, colW: { ...(sv.colW || {}) } }); } setCompareCfg(load("mm.cmpCfg", {}));
+    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); for (const k of Object.keys(savedP)) if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...savedP[k] }; setIndParams(base); } setPaneTfs([startTf]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); { const sv = load("mm.set", {}); setSet({ ...DEFAULT_SET, ...sv, cols: { ...DEFAULT_SET.cols, ...(sv.cols || {}) }, colW: { ...(sv.colW || {}) } }); } setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
@@ -949,6 +951,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       setInds(new Set(tmpl.indicators));
       const base = allDefaults();
       for (const k of IND_ORDER) { if (tmpl.indParams[k]) base[k] = withDefaults(k, tmpl.indParams[k]); }
+      for (const k of Object.keys(tmpl.indParams || {})) { if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...tmpl.indParams[k] }; }
       setIndParams(base);
     };
     window.addEventListener("mm:apply-template", h);
@@ -2363,8 +2366,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               pine={{ name: scriptById[settingsKey].name, params: mergedParams(scriptById[settingsKey], pineParams) }}
               onPineChange={(patch) => setPineParam(settingsKey, patch)}
               onClose={() => setSettingsKey(null)} />
-          : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} />)}
+          : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} onOpenGuide={(sk, mk, ml) => setGuide({ suite: sk, mod: mk, label: ml })} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
+      {guide && <GuidePanel suiteKey={guide.suite} moduleKey={guide.mod} moduleLabel={guide.label} onClose={() => setGuide(null)} />}
       <BrainWidget
         active={active}
         onCommand={handleBrainCommand}

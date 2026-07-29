@@ -321,10 +321,13 @@ function drawGradLine(f: DocumentFragment, gl: GradLinePrim, m: CoordMapper): El
     if (xVisible(m, first[0], last[0])) {
       let d = `M${first[0]} ${first[1]}`;
       for (let i = s + 1; i <= e; i++) { const p = px[i] as [number, number]; d += `L${p[0]} ${p[1]}`; }
-      g.appendChild(mk("path", {
+      const glAttrs: Record<string, string | number> = {
         d, fill: "none", stroke: color, "stroke-width": gl.w ?? 1.5,
         "stroke-linejoin": "round", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
-      }));
+      };
+      if (gl.dash) glAttrs["stroke-dasharray"] = gl.dash;
+      if (gl.alpha != null && gl.alpha < 1) glAttrs["stroke-opacity"] = Math.max(0, gl.alpha);
+      g.appendChild(mk("path", glAttrs));
     }
     s = e;
   }

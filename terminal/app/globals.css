@@ -2301,3 +2301,67 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .ilist .li .li-mods{margin-left:auto;margin-right:8px;font-size:var(--fs-micro);color:var(--muted);white-space:nowrap}
 .ilist .li .li-lock{display:inline-flex;align-items:center;color:var(--muted)}
 .ilist .li.li-locked .li-tag{color:var(--ai);background:color-mix(in srgb,var(--ai) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ai) 30%,transparent)}
+
+/* ---- Guide panel (premium suites) ----
+   Right-side reading sheet for a suite module's written guide (components/GuidePanel.tsx). It opens
+   BESIDE the dialog that launched it, so the scrim is a transparent click-catcher rather than a dim:
+   dimming the settings dialog would hide the very controls the guide is explaining. The sheet is the
+   only lit surface, lifted off the page by its left hairline plus --shadow-3.
+   Body typography styles markdown injected by lib/md.ts, whose heading levels start at h3
+   (a leading single-hash line becomes h3), so the ramp is declared across h2..h6.
+   Sits above the modal scrim layer (60) and the chart popovers (100). */
+.gp-scrim{position:fixed;inset:0;z-index:120;display:flex;justify-content:flex-end;background:transparent}
+.gp-sheet{position:relative;display:flex;flex-direction:column;width:min(420px,92vw);height:100%;background:var(--panel);border-left:1px solid var(--line-3);box-shadow:var(--shadow-3);outline:none;animation:gpSlideIn 160ms var(--ease-out)}
+@keyframes gpSlideIn{from{transform:translateX(18px);opacity:0}to{transform:none;opacity:1}}
+
+.gp-head{display:flex;align-items:center;gap:8px;flex:none;min-height:44px;padding:0 10px 0 16px;border-bottom:1px solid var(--line-2)}
+.gp-title{flex:1;min-width:0;font:600 var(--fs-emph)/1.3 var(--font-ui);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gp-enchip{flex:none;font:700 9px/1 var(--font-ui);letter-spacing:.09em;color:var(--muted);background:color-mix(in srgb,var(--muted) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--muted) 28%,transparent);border-radius:var(--r-pill);padding:3px 7px;cursor:default}
+.gp-close{flex:none;width:26px;height:26px;display:grid;place-items:center;border:0;background:transparent;border-radius:var(--r);color:var(--muted);cursor:pointer;transition:background var(--t-fast) var(--ease-out),color var(--t-fast) var(--ease-out)}
+.gp-close:hover{background:var(--panel-2);color:var(--text)}
+.gp-close:focus-visible{outline:2px solid var(--brand-2);outline-offset:1px}
+.gp-close svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
+
+.gp-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:14px 16px 28px;scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
+.gp-body::-webkit-scrollbar{width:9px}
+.gp-body::-webkit-scrollbar-thumb{background:var(--line-3);border-radius:99px;border:2px solid transparent;background-clip:content-box}
+.gp-body::-webkit-scrollbar-track{background:transparent}
+
+.gp-body h2{margin:18px 0 7px;font:600 var(--fs-title)/1.35 var(--font-ui);color:var(--text);letter-spacing:-.005em}
+.gp-body h3{margin:16px 0 6px;font:600 var(--fs-emph)/1.35 var(--font-ui);color:var(--text)}
+.gp-body h4{margin:14px 0 5px;font:600 var(--fs-ui)/1.35 var(--font-ui);color:var(--text)}
+.gp-body h5,.gp-body h6{margin:13px 0 5px;font:600 var(--fs-micro)/1.35 var(--font-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--text-2)}
+.gp-body>:first-child{margin-top:0}
+.gp-body p{margin:0 0 10px;font:var(--fs-body)/1.72 var(--font-ui);color:var(--text-2)}
+.gp-body ul,.gp-body ol{margin:0 0 11px;padding-left:19px}
+.gp-body li{margin:4px 0;font:var(--fs-body)/1.66 var(--font-ui);color:var(--text-2)}
+.gp-body strong{color:var(--text);font-weight:600}
+.gp-body em{font-style:italic}
+.gp-body a{color:var(--brand-2);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--brand-2) 40%,transparent)}
+.gp-body a:hover{border-bottom-color:var(--brand-2)}
+.gp-body code{font:11.5px/1.5 var(--font-code);background:var(--panel-2);border:1px solid var(--line-2);border-radius:var(--r);padding:1px 5px;color:var(--text);font-variant-numeric:tabular-nums}
+.gp-body pre{margin:0 0 11px;padding:10px 12px;background:var(--inset);border:1px solid var(--line-2);border-radius:var(--r-md);overflow-x:auto}
+.gp-body pre code{background:none;border:0;padding:0;color:var(--text-2)}
+.gp-body hr{border:0;border-top:1px solid var(--line-2);margin:16px 0}
+.gp-body table.md{width:100%;border-collapse:collapse;margin:0 0 12px;font-size:var(--fs-ui)}
+.gp-body table.md th{text-align:left;padding:6px 9px;background:var(--panel-2);border:1px solid var(--line-2);color:var(--text-2);font:700 var(--fs-micro)/1.3 var(--font-ui);letter-spacing:.05em;text-transform:uppercase}
+.gp-body table.md td{padding:6px 9px;border:1px solid var(--line-2);color:var(--text-2);font-variant-numeric:tabular-nums}
+
+.gp-empty{margin:6px 0 0;font:var(--fs-body)/1.6 var(--font-ui);color:var(--muted)}
+.gp-skel{display:flex;flex-direction:column;gap:11px;padding-top:4px}
+.gp-skel span{display:block;height:10px;border-radius:var(--r);background:var(--panel-2);animation:gpSkelBreathe 1.25s var(--ease-out) infinite}
+.gp-skel span:nth-child(1){width:100%}
+.gp-skel span:nth-child(2){width:86%;animation-delay:.12s}
+.gp-skel span:nth-child(3){width:62%;animation-delay:.24s}
+@keyframes gpSkelBreathe{0%,100%{opacity:.5}50%{opacity:1}}
+
+@media (prefers-reduced-motion:reduce){
+  .gp-sheet{animation:none}
+  .gp-close{transition:none}
+  .gp-skel span{animation:none;opacity:.72}
+}
+
+/* ---- Settings module-header guide button (premium suites) ---- */
+.is-mod-h .is-guide{flex:none;width:16px;height:16px;border-radius:50%;border:1px solid var(--line-3);background:transparent;color:var(--muted);font:600 10px/1 var(--font-ui);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0}
+.is-mod-h .is-guide:hover{color:var(--brand-2);border-color:var(--brand-2)}
+.is-mod-h .is-guide:focus-visible{outline:2px solid var(--brand-2);outline-offset:1px}

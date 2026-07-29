@@ -111,9 +111,9 @@ function SuiteRow({ f, val, onChange }: { f: SuiteField; val: any; onChange: (v:
   );
 }
 
-function ModuleSection({ m, values, locked, expanded, onToggle, onChange, t }:
+function ModuleSection({ m, values, locked, expanded, onToggle, onChange, onGuide, t }:
   { m: SuiteModuleDef; values: Record<string, any>; locked: boolean; expanded: boolean;
-    onToggle: () => void; onChange: (patch: Record<string, any>) => void; t: (k: string, f?: string) => string }) {
+    onToggle: () => void; onChange: (patch: Record<string, any>) => void; onGuide?: () => void; t: (k: string, f?: string) => string }) {
   const on = !!values[`${m.key}.on`] && !locked;
   const setOn = () => { if (!locked) onChange({ [`${m.key}.on`]: !on }); };
   const shown = m.fields.filter((f) => !f.showIf || sameVal(values[`${m.key}.${f.showIf.key}`], f.showIf.eq));
@@ -129,6 +129,8 @@ function ModuleSection({ m, values, locked, expanded, onToggle, onChange, t }:
         <svg className="caret" viewBox="0 0 24 24" style={{ transform: expanded && !locked ? "rotate(90deg)" : "none" }}><path d="M9 5l7 7-7 7" /></svg>
         <span className="is-mod-name">{m.label}</span>
         <span className="is-modtag">{m.tag}</span>
+        {onGuide && <button className="is-guide" title={t("guideOpen", "Guide")} aria-label={t("guideOpen", "Guide")}
+          onClick={(e) => { e.stopPropagation(); onGuide(); }}>?</button>}
         {m.tier !== "free" && <span className="is-tier" style={{ "--c": TIER_COLOR[m.tier] } as CSSProperties}>{TIER_LABEL[m.tier]}</span>}
         {locked && <svg className="is-lock" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 11h12v9H6z" /><path d="M9 11V7.5a3 3 0 0 1 6 0V11" /></svg>}
         <span className={`is-switch${on ? " on" : ""}${locked ? " dis" : ""}`} role="switch" aria-checked={on}
@@ -148,7 +150,7 @@ function ModuleSection({ m, values, locked, expanded, onToggle, onChange, t }:
   );
 }
 
-export default function IndicatorSettings({ indKey, params, onChange, pine, onPineChange, onClose, onReset, userTier = "free" }:
+export default function IndicatorSettings({ indKey, params, onChange, pine, onPineChange, onClose, onReset, userTier = "free", onOpenGuide }:
   { indKey: string;
     params: Record<string, any>;
     onChange: (patch: Record<string, any>) => void;
@@ -156,6 +158,7 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
     onPineChange?: (patch: Record<string, any>) => void;
     onClose: () => void;
     onReset?: () => void;
+    onOpenGuide?: (suiteKey: string, moduleKey: string, moduleLabel: string) => void;
     userTier?: Tier;   // fail closed: unknown/absent entitlement = free
   }) {
   const t = useT();
@@ -217,7 +220,8 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
                   <ModuleSection key={m.key} m={m} values={SV} locked={locked}
                     expanded={!locked && (modOpen[m.key] ?? !!SV[`${m.key}.on`])}
                     onToggle={() => setModOpen((o) => ({ ...o, [m.key]: !(o[m.key] ?? !!SV[`${m.key}.on`]) }))}
-                    onChange={onChange} t={t} />
+                    onChange={onChange} t={t}
+                    onGuide={onOpenGuide ? () => onOpenGuide(indKey, m.key, m.label) : undefined} />
                 );
               })}
             </div>
