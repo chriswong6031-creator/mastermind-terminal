@@ -157,7 +157,9 @@ Fixed in the Wave-1 pass (worker + correctness quick wins):
 
 Remaining known limitations (low blast radius, documented on purpose):
 - **Tables/labels/lines/boxes/`strategy.*` orders/`fill`/`bgcolor`/`alertcondition` still no-op** —
-  parsed and skipped (they aren't chart series). Scripts using them run and plot what they can; the
+  parsed, their arguments evaluated (so a `ta.*` used only inside one still advances per-bar state,
+  same rule as and/or/ternary), and the output dropped (they aren't chart series). Scripts using
+  them run and plot what they can; the
   editor surfaces a warning for the unsupported builtins (they no longer silently dead-chart under a
   bare "✓ Compiled"). Mapping the chart-drawable subset (label/line/box → overlay primitives, bgcolor
   → background rects) is future work.

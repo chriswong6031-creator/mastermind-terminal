@@ -143,6 +143,59 @@ describe("deferred builtins are reported, never silently swallowed", () => {
   });
 });
 
+// No-op builtins must still EVALUATE their arguments: a ta.* that appears only inside
+// fill/bgcolor/… args has per-call-site state that must advance on every bar (the same
+// series-desync class the engine avoids for and/or/ternary). Before this fix the whole
+// argument list was skipped, so such state silently froze.
+describe("deferred builtins still evaluate their arguments (series-state sync)", () => {
+  it("a ta.* used only inside bgcolor() args yields the same series as one at top level", () => {
+    // grab() smuggles the value computed inside bgcolor's args out through a global,
+    // so the test can compare it bar-for-bar against an identical top-level ta.sma.
+    const src = [
+      "//@version=6",
+      'indicator("BgArgs", overlay=false)',
+      "var float captured = na",
+      "grab(x) =>",
+      "    captured := x",
+      "    x",
+      "bgcolor(grab(ta.sma(close, 5)) > 0 ? color.new(color.green, 90) : na)",
+      'plot(captured, "inner")',
+      'plot(ta.sma(close, 5), "ref")',
+      "",
+    ].join("\n");
+    const out = runPine(src, genBars(40), {});
+    expect(out.ok, "run errors: " + JSON.stringify(out.errors)).toBe(true);
+    const inner = out.result!.plots.find((p) => p.title === "inner")!;
+    const ref = out.result!.plots.find((p) => p.title === "ref")!;
+    expect(inner).toBeTruthy();
+    expect(ref).toBeTruthy();
+    // point-for-point identical, including the warm-up gap bars
+    expect(inner.data.map((d) => [d.time, d.value])).toEqual(ref.data.map((d) => [d.time, d.value]));
+    // guard against a trivially-equal pair of all-gap series
+    expect(inner.data.filter((d) => d.value !== undefined).length).toBeGreaterThan(0);
+    // the honesty warning is unchanged: still exactly one, still na-returning no-op
+    expect(out.result!.warnings.filter((w) => w === "bgcolor() is not supported yet — its output is suppressed").length).toBe(1);
+  });
+
+  it("plot() calls nested inside fill() args still register and accumulate their series", () => {
+    const src = [
+      "//@version=6",
+      'indicator("FillArgs", overlay=false)',
+      'fill(plot(ta.sma(close, 3), "a"), plot(close, "b"))',
+      "",
+    ].join("\n");
+    const bars = genBars(30);
+    const out = runPine(src, bars, {});
+    expect(out.ok, "run errors: " + JSON.stringify(out.errors)).toBe(true);
+    const titles = out.result!.plots.map((p) => p.title);
+    expect(titles).toContain("a");
+    expect(titles).toContain("b");
+    const b = out.result!.plots.find((p) => p.title === "b")!;
+    expect(b.data.length).toBe(bars.length);   // accumulated on every bar, not just registered once
+    expect(out.result!.warnings.filter((w) => w === "fill() is not supported yet — its output is suppressed").length).toBe(1);
+  });
+});
+
 describe("columnar bar packing round-trips (transferable worker payload)", () => {
   it("barsToColumns → columnsToBars reproduces the bars and lists transferable buffers", () => {
     const bars = genBars(12);
