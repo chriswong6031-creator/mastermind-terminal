@@ -76,7 +76,7 @@
      v7 — institutional-SaaS surface tokens (2026-07-28 wave). Rounding,
      spacing and shadow scale transferred from the macro/landing framework
      (Macro Dashboard templates/theme.css + dashboard.html.j2 page-macro
-     layer). This defines the previously-undefined --sp-*/--shadow-* names
+     layer). This defines the previously-undefined --sp- and --shadow- names
      for real: fin.css sites that carried literal fallbacks now resolve here,
      and bare var(--shadow-3) sites (.sd-cont) gain their intended shadow.
      v5 --r/--r-md/--r-lg stay untouched — the chart shell depends on them;
