@@ -118,7 +118,7 @@ export default function DividendsPage({ sym, fund, zh }: DividendsPageProps) {
       <div className="fin-sec">
         <div className="fin-eyebrow">{pick(!!zh, "SHAREHOLDER YIELD", "股东回报")}</div>
         <div
-          className="fin-sec-h rail rule"
+          className="fin-sec-h fin-rail fin-rule"
           style={{ "--rail": "var(--brand)" } as React.CSSProperties}
         >
           {pick(!!zh, "Dividends", "股息")}
@@ -161,7 +161,7 @@ export default function DividendsPage({ sym, fund, zh }: DividendsPageProps) {
       {events.length > 0 && (
         <div className="fin-sec">
           <div
-            className="fin-sec-h rail rule"
+            className="fin-sec-h fin-rail fin-rule"
             style={{ "--rail": "var(--brand)" } as React.CSSProperties}
           >
             {pick(!!zh, "Dividend history", "股息历史")}
@@ -220,7 +220,7 @@ export default function DividendsPage({ sym, fund, zh }: DividendsPageProps) {
       {div.splits && div.splits.length > 0 && (
         <div className="fin-sec">
           <div
-            className="fin-sec-h rail rule"
+            className="fin-sec-h fin-rail fin-rule"
             style={{ "--rail": "var(--brand)" } as React.CSSProperties}
           >
             {pick(!!zh, "Stock splits", "股票分拆")}

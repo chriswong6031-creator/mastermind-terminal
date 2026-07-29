@@ -167,7 +167,7 @@ function TechnicalsPage({ sym, bars = [], zh = false }: TechnicalsPageProps) {
       {/* The aggregate summary duplicated the two underlying signal groups. */}
       <div className="fin-sec">
         <div className="fin-eyebrow">{pick(zh, "SIGNAL SUMMARY", "信号总览")}</div>
-        <div className="fin-sec-h rail rule" style={RAIL}>
+        <div className="fin-sec-h fin-rail fin-rule" style={RAIL}>
           {pick(zh, "Technical rating", "技术评级")}
         </div>
         <div className="fin-tech-summary">
@@ -270,7 +270,7 @@ function RatingTable({
   const voteLabel = (v: Vote) => pick(zh, v, v === "Buy" ? "买入" : v === "Sell" ? "卖出" : "中性");
   return (
     <div className="fin-card fin-tech-tbl">
-      <div className="fin-sec-h rail rule" style={RAIL}>
+      <div className="fin-sec-h fin-rail fin-rule" style={RAIL}>
         {title}
       </div>
       <table className="fin-table fin-tech-table">
@@ -324,7 +324,7 @@ function PivotsTable({ pivots, zh }: { pivots: Ratings["pivots"] | undefined; zh
   ];
   return (
     <div className="fin-sec">
-      <div className="fin-sec-h rail rule" style={RAIL}>
+      <div className="fin-sec-h fin-rail fin-rule" style={RAIL}>
         {pick(zh, "Pivots", "枢轴点")}
       </div>
       <div className="fin-table-scroll">

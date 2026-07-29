@@ -249,7 +249,7 @@ function PriceTargetTab({
         <div className="fin-card">
           <div className="fin-eyebrow">{pick(zh, "PRICE TARGETS", "目标价")}</div>
           <div
-            className="fin-sec-h rail rule"
+            className="fin-sec-h fin-rail fin-rule"
             style={{ "--rail": "var(--brand)" } as React.CSSProperties}
           >
             {pick(zh, "12-month consensus", "12个月一致目标")}
@@ -297,7 +297,7 @@ function PriceTargetTab({
         <div className="fin-card">
           <div className="fin-eyebrow">{pick(zh, "SELL-SIDE CONSENSUS", "卖方一致预期")}</div>
           <div
-            className="fin-sec-h rail rule"
+            className="fin-sec-h fin-rail fin-rule"
             style={{ "--rail": "var(--brand)" } as React.CSSProperties}
           >
             {pick(zh, "Analyst rating", "分析师评级")}
@@ -698,9 +698,9 @@ function EstimateBarSection({
 
   return (
     <div className="fin-sec">
-      <div className="fin-fc-sec-head rule">
+      <div className="fin-fc-sec-head fin-rule">
         <div
-          className="fin-sec-h rail"
+          className="fin-sec-h fin-rail"
           style={{ "--rail": "var(--brand)" } as React.CSSProperties}
         >
           {pick(zh, title, titleZh)}
@@ -892,7 +892,7 @@ function ActualsTab({
         <div className="fin-sec">
           {/* Heading so the naked line chart is legible as the EPS estimate trend */}
           <div
-            className="fin-sec-h rail rule"
+            className="fin-sec-h fin-rail fin-rule"
             style={{ "--rail": "var(--brand)" } as React.CSSProperties}
           >
             {pick(zh, "EPS estimate trend", "每股收益预期走势")}
@@ -911,9 +911,9 @@ function ActualsTab({
       )}
       {/* Statement toggle bound to the TABLE it controls (not the EPS chart above) */}
       <div className="fin-sec">
-        <div className="fin-fc-sec-head rule">
+        <div className="fin-fc-sec-head fin-rule">
           <div
-            className="fin-sec-h rail"
+            className="fin-sec-h fin-rail"
             style={{ "--rail": "var(--brand)" } as React.CSSProperties}
           >
             {pick(zh, "Estimates table", "预期数据表")}
@@ -1070,7 +1070,7 @@ export function Disclaimer({ zh }: { zh: boolean }) {
   return (
     <div className="fin-sec fin-disclaimer">
       <div
-        className="fin-sec-h rail"
+        className="fin-sec-h fin-rail"
         style={{ "--rail": "var(--warn)" } as React.CSSProperties}
       >
         {pick(zh, "Disclaimer", "免责声明")}

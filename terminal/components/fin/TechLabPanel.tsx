@@ -338,7 +338,7 @@ function TechLabPanel({ sym, intel = null, zh = false }: TechLabPanelProps) {
       <div className="fin-sec">
         <div className="fin-eyebrow">{pick(zh, "Active state", "当前状态")}</div>
         <div
-          className="fin-sec-h rail rule"
+          className="fin-sec-h fin-rail fin-rule"
           style={{ "--rail": "var(--brand)" } as React.CSSProperties}
         >
           {pick(zh, "Firing now", "当前触发")}
@@ -382,7 +382,7 @@ function TechLabPanel({ sym, intel = null, zh = false }: TechLabPanelProps) {
         <div className="fin-sec">
           <div className="fin-eyebrow">{pick(zh, "Research", "研究")}</div>
           <div
-            className="fin-sec-h rail rule"
+            className="fin-sec-h fin-rail fin-rule"
             style={{ "--rail": "var(--brand)" } as React.CSSProperties}
           >
             {pick(zh, "Signal profiles", "信号档案")}

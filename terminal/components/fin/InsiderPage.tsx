@@ -280,7 +280,7 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
       <div className="fin-sec">
         <div className="fin-eyebrow">{pick(zh, "Form 4 · open market", "Form 4 · 公开市场")}</div>
         <div
-          className="fin-sec-h rail rule"
+          className="fin-sec-h fin-rail fin-rule"
           style={{ "--rail": verdictRail } as React.CSSProperties}
         >
           {pick(zh, "Insider Power", "内部人操作力度")}
@@ -340,7 +340,7 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
       <div className="fin-sec">
         <div className="fin-eyebrow">{pick(zh, "Activity", "交易活动")}</div>
         <div
-          className="fin-sec-h rail rule"
+          className="fin-sec-h fin-rail fin-rule"
           style={{ "--rail": "var(--brand)" } as React.CSSProperties}
         >
           {pick(zh, "Insider buy / sell volume vs price", "内部买卖量 vs 价格")}
@@ -368,7 +368,7 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
       <div className="fin-sec">
         <div className="fin-eyebrow">{pick(zh, "Filings", "申报记录")}</div>
         <div
-          className="fin-sec-h rail rule fin-insider-tradehdr"
+          className="fin-sec-h fin-rail fin-rule fin-insider-tradehdr"
           style={{ "--rail": "var(--brand)" } as React.CSSProperties}
         >
           {pick(zh, "Insider trades — last 18 months", "内部交易 — 近18个月")}

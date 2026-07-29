@@ -42,9 +42,9 @@
  * brand = analytical (default); var(--up)/var(--down) ONLY on genuinely
  * directional sections; var(--warn) for caution blocks. */
 .fin-eyebrow{font:700 var(--fs-micro)/1 var(--font-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
-.fin-sec-h.rail{gap:9px}
-.fin-sec-h.rail::before{content:"";flex:none;align-self:center;width:3px;height:15px;border-radius:2px;background:linear-gradient(180deg,var(--rail),color-mix(in srgb,var(--rail) 30%,transparent))}
-.fin-sec-h.rule{padding-bottom:9px;border-bottom:1px solid var(--hairline);margin-bottom:10px}
+.fin-sec-h.fin-rail{gap:9px}
+.fin-sec-h.fin-rail::before{content:"";flex:none;align-self:center;width:3px;height:15px;border-radius:2px;background:linear-gradient(180deg,var(--rail),color-mix(in srgb,var(--rail) 30%,transparent))}
+.fin-sec-h.fin-rule{padding-bottom:9px;border-bottom:1px solid var(--hairline);margin-bottom:10px}
 /* a .fin-tag inside a baseline-aligned section header centers itself */
 .fin-sec-h .fin-tag{align-self:center}
 .fin-sec-h .chev{color:var(--brand);cursor:pointer}
@@ -316,9 +316,9 @@
 .fin-earn-days{font:600 10.5px/1 var(--font-num);color:var(--c,var(--muted));margin-left:0;font-variant-numeric:tabular-nums}
 .fin-fact .v.fin-earn-next{display:flex;align-items:center;gap:8px;min-width:0;overflow:visible}
 .fin-fact .v.fin-earn-next>span:first-child{overflow:hidden;text-overflow:ellipsis}
-.fin-earn-module-hdr.rule{padding-bottom:9px;border-bottom:1px solid var(--hairline)}
+.fin-earn-module-hdr.fin-rule{padding-bottom:9px;border-bottom:1px solid var(--hairline)}
 .fin-earn-module-hdr .fin-sec-h{margin-bottom:0}
-.fin-earn-module-title.rail::before{height:13px}
+.fin-earn-module-title.fin-rail::before{height:13px}
 .fin-earn-module{border:1px solid var(--line);border-radius:var(--r-card);padding:14px;background:var(--panel-2);margin-bottom:20px;overflow:hidden}
 .fin-earn-module-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px}
 .fin-earn-module-title{font:650 13px/1.2 var(--font-ui);color:var(--text)}
@@ -457,7 +457,7 @@
 .fin-fc-ccy{font:600 13px/1 var(--font-ui);color:var(--text-2)}
 .fin-fc-chg{display:flex;align-items:center;gap:12px;margin-top:5px;font:600 14px/1 var(--font-num);font-feature-settings:"tnum"}
 .fin-fc-chg .fin-tag{font-family:var(--font-num);font-size:12.5px;padding:5px 10px;font-variant-numeric:tabular-nums}
-.fin-fc-sec-head.rule{padding-bottom:9px;border-bottom:1px solid var(--hairline);margin-bottom:12px}
+.fin-fc-sec-head.fin-rule{padding-bottom:9px;border-bottom:1px solid var(--hairline);margin-bottom:12px}
 .fin-fc-sec-head .fin-sec-h{margin-bottom:0}
 .fin-fc-summary{margin-top:12px;font:500 12px/1.5 var(--font-ui);color:var(--text-2);max-width:420px}
 .fin-fc-fanwrap{display:flex;gap:12px;align-items:stretch;margin-top:14px}
@@ -1139,7 +1139,7 @@
 /* ── FE2a additions (v7 wave) ── */
 /* Statistics page header: title + A/Q toggle share one flex row, so the hairline
    rides the ROW — `.rule` on the flex-item title would stop under the word. */
-.fin-stats-hdr.rule{padding-bottom:9px;border-bottom:1px solid var(--hairline)}
+.fin-stats-hdr.fin-rule{padding-bottom:9px;border-bottom:1px solid var(--hairline)}
 /* KPI tiles: a prose value (Sector, Website) is not a numeral — it drops to the
    UI face at --fs-emph and wraps instead of overflowing the 128px tile. */
 .fin-kpi .v.txt{font:600 var(--fs-emph)/1.3 var(--font-ui);letter-spacing:-.01em;overflow-wrap:anywhere}

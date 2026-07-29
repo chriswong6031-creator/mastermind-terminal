@@ -149,8 +149,8 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
       {/* `rule` rides the ROW (not the title) so the hairline spans the header
           width instead of stopping under the word — same shape the Earnings
           module header uses for a title+control row. */}
-      <div className="fin-stats-hdr rule">
-        <div className="fin-sec-h rail" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
+      <div className="fin-stats-hdr fin-rule">
+        <div className="fin-sec-h fin-rail" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
           {pick(!!zh, "Statistics", "统计数据")}
         </div>
         <div className="fin-toggle">

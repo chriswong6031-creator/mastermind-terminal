@@ -79,7 +79,7 @@ function SeasonalsPage({ sym, bars = [], zh = false }: SeasonalsPageProps) {
       {/* section header — brand rail + hairline rule over the whole seasonal read.
           No eyebrow: the tab is already titled "Seasonals" (doctrine: never echo it). */}
       <div className="fin-seas-hdr">
-        <div className="fin-sec-h rail rule" style={{ "--rail": "var(--brand)" } as CSSProperties}>
+        <div className="fin-sec-h fin-rail fin-rule" style={{ "--rail": "var(--brand)" } as CSSProperties}>
           {view === "chart"
             ? pick(zh, "Multi-year overlay", "多年叠加")
             : pick(zh, "Monthly returns by year", "逐年月度收益")}

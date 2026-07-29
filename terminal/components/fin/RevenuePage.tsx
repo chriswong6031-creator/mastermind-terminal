@@ -67,7 +67,7 @@ function SegmentModule({
     <div className="fin-sec">
       <div className="fin-eyebrow">{eyebrow}</div>
       <div
-        className="fin-sec-h rail rule"
+        className="fin-sec-h fin-rail fin-rule"
         style={{ "--rail": "var(--brand)" } as React.CSSProperties}
       >
         {title}
@@ -147,7 +147,7 @@ function EstimatesSection({
     <div className="fin-sec">
       <div className="fin-eyebrow">{pick(!!zh, "SELL-SIDE CONSENSUS", "卖方一致预期")}</div>
       <div
-        className="fin-sec-h rail rule"
+        className="fin-sec-h fin-rail fin-rule"
         style={{ "--rail": "var(--brand)" } as React.CSSProperties}
       >
         {pick(!!zh, "Revenue estimates", "营收预期")}
@@ -301,7 +301,7 @@ export default function RevenuePage({ fund, zh, sym }: RevenuePageProps) {
       <div className="fin-sec">
         <div className="fin-eyebrow">{pick(!!zh, "REVENUE MIX", "营收构成")}</div>
         <div
-          className="fin-sec-h rail rule"
+          className="fin-sec-h fin-rail fin-rule"
           style={{ "--rail": "var(--brand)" } as React.CSSProperties}
         >
           {pick(!!zh, "Revenue breakdown", "营收分部")}

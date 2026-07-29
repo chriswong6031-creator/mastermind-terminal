@@ -67,7 +67,7 @@ function SecH({
     <>
       {eyebrow && <div className="fin-eyebrow">{eyebrow}</div>}
       <div
-        className={"fin-sec-h rail rule" + (clickable ? " link" : "")}
+        className={"fin-sec-h fin-rail fin-rule" + (clickable ? " link" : "")}
         style={{ "--rail": rail } as React.CSSProperties}
         onClick={clickable ? () => onNavigate!(page!) : undefined}
         role={clickable ? "button" : undefined}

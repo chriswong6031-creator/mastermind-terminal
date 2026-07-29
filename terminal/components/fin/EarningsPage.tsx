@@ -147,9 +147,9 @@ function RevenueModule({
   if (allRevNull && !estimates?.rev_fy) {
     return (
       <div className="fin-sec fin-earn-module">
-        <div className="fin-earn-module-hdr rule">
+        <div className="fin-earn-module-hdr fin-rule">
           <div
-            className="fin-sec-h rail fin-earn-module-title"
+            className="fin-sec-h fin-rail fin-earn-module-title"
             style={{ "--rail": "var(--brand)" } as React.CSSProperties}
           >
             {pick(!!zh, "Revenue", "营收")}
@@ -179,9 +179,9 @@ function RevenueModule({
 
   return (
     <div className="fin-sec fin-earn-module">
-      <div className="fin-earn-module-hdr rule">
+      <div className="fin-earn-module-hdr fin-rule">
         <div
-          className="fin-sec-h rail fin-earn-module-title"
+          className="fin-sec-h fin-rail fin-earn-module-title"
           style={{ "--rail": "var(--brand)" } as React.CSSProperties}
         >
           {pick(!!zh, "Revenue", "营收")}
@@ -398,7 +398,7 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
       <div className="fin-sec">
         <div className="fin-eyebrow">{pick(!!zh, "EARNINGS CALENDAR", "财报日历")}</div>
         <div
-          className="fin-sec-h rail rule"
+          className="fin-sec-h fin-rail fin-rule"
           style={{ "--rail": "var(--brand)" } as React.CSSProperties}
         >
           {pick(!!zh, "Next report", "下次财报")}
@@ -437,9 +437,9 @@ export default function EarningsPage({ fund, zh, sym }: EarningsPageProps) {
 
       {/* ── EPS Module ── */}
       <div className="fin-sec fin-earn-module">
-        <div className="fin-earn-module-hdr rule">
+        <div className="fin-earn-module-hdr fin-rule">
           <div
-            className="fin-sec-h rail fin-earn-module-title"
+            className="fin-sec-h fin-rail fin-earn-module-title"
             style={{ "--rail": "var(--brand)" } as React.CSSProperties}
           >
             {pick(!!zh, "EPS", "每股盈利")}

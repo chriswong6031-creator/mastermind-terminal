@@ -127,7 +127,7 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
       {/* ── 1. MINI CHART STRIP ── */}
       <section className="fin-sec">
         <div className="fin-eyebrow">{pick(zh, "FINANCIALS", "财务数据")}</div>
-        <div className="fin-sec-h rail rule" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
+        <div className="fin-sec-h fin-rail fin-rule" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
           {stmtTitle}
         </div>
         <div className="fin-card">
@@ -194,7 +194,7 @@ export default function StatementsPage({ sym, fund, onOpenTx }: StatementsPagePr
 
       {/* ── 3. DATA TABLE ── */}
       <section className="fin-sec">
-        <div className="fin-sec-h rail rule" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
+        <div className="fin-sec-h fin-rail fin-rule" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
           {pick(zh, "Full history", "完整历史")}
         </div>
         {showCumNote && (
