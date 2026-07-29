@@ -125,8 +125,14 @@ export const SessionFlowPane = memo(function SessionFlowPane({
     const toTs = (hhmm: string): Time => sessionEpoch(date, hhmm) as unknown as Time;
 
     // Directional tokens (East-Asian flip aware) — never a hardcoded direction hex.
+    // The area fills need ALPHA, and appending "44"/"05" to the resolved hex only works
+    // while --up/--down happen to be 6-digit hex. The RGB triplet tokens are the supported
+    // channel for canvas alpha math, so the fills are built from those instead.
     const up = css("--up");
     const down = css("--down");
+    const upRgb = css("--up-rgb");
+    const downRgb = css("--down-rgb");
+    const tint = (rgb: string, a: number) => `rgba(${rgb},${a})`;
 
     if (chartRef.current) { try { chartRef.current.remove(); } catch {} }
     const chart = createChart(el, {
@@ -156,7 +162,7 @@ export const SessionFlowPane = memo(function SessionFlowPane({
     if (showCall) {
       if (fill) {
         const s = chart.addSeries(AreaSeries, {
-          lineColor: up, topColor: `${up}44`, bottomColor: `${up}05`,
+          lineColor: up, topColor: tint(upRgb, 0.27), bottomColor: tint(upRgb, 0.02),
           lineWidth: 2 as never, priceLineVisible: false, lastValueVisible: true, title: t("sessionCalls"),
         });
         s.setData(valid.map((p) => ({ time: toTs(p.t), value: p.call })));
@@ -172,7 +178,7 @@ export const SessionFlowPane = memo(function SessionFlowPane({
     if (showPut) {
       if (fill) {
         const s = chart.addSeries(AreaSeries, {
-          lineColor: down, topColor: `${down}05`, bottomColor: `${down}44`,
+          lineColor: down, topColor: tint(downRgb, 0.02), bottomColor: tint(downRgb, 0.27),
           lineWidth: 2 as never, priceLineVisible: false, lastValueVisible: true, title: t("sessionPuts"),
           invertFilledArea: !absolute, // puts are ≤0 (fill downward) unless in absolute mode
         });
@@ -258,13 +264,16 @@ export const SessionFlowPane = memo(function SessionFlowPane({
           {t("sessionAbsolute")}
         </button>
 
-        {/* Totals chips */}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10, fontSize: 11 }}>
-          <span style={{ color: "var(--up)", fontVariantNumeric: "tabular-nums" }}>
-            {t("sessionCallsChip")} {fmtPrem(totals.call)}
+        {/* Running totals — the tint formula on one variable, label as a micro-label and
+            the figure tabular. Direction rides --up/--down, so east-mode flips both. */}
+        <div style={TOTALS}>
+          <span className="obs-tag" style={{ "--c": "var(--up)" } as React.CSSProperties}>
+            <span className="obs-lbl" style={TOTAL_LBL}>{t("sessionCallsChip")}</span>
+            <b className="num" style={TOTAL_VAL}>{fmtPrem(totals.call)}</b>
           </span>
-          <span style={{ color: "var(--down)", fontVariantNumeric: "tabular-nums" }}>
-            {t("sessionPutsChip")} {fmtPrem(totals.put)}
+          <span className="obs-tag" style={{ "--c": "var(--down)" } as React.CSSProperties}>
+            <span className="obs-lbl" style={TOTAL_LBL}>{t("sessionPutsChip")}</span>
+            <b className="num" style={TOTAL_VAL}>{fmtPrem(totals.put)}</b>
           </span>
         </div>
       </div>
@@ -272,19 +281,29 @@ export const SessionFlowPane = memo(function SessionFlowPane({
       {/* Chart */}
       <div style={{ position: "relative", flex: 1, minHeight: height }}>
         <div ref={wrapRef} style={{ width: "100%", height }} />
-        {!hasData && <div style={EMPTY}>{t("sessionEmpty")}</div>}
+        {/* Honest empty: the tide is accruing, and the reason it can't draw yet is stated. */}
+        {!hasData && (
+          <div style={EMPTY}>
+            <span style={EMPTY_TITLE}>{t("sessionEmpty")}</span>
+            <span style={EMPTY_WHY}>{t("sessionEmptyWhy")}</span>
+          </div>
+        )}
       </div>
 
-      {/* Footnote */}
-      <div style={FOOTNOTE}>
-        {t("sessionFootnote")}
-        {offOpen && <span style={{ color: "var(--muted)" }}> · {t("sessionOffOpenNote")}</span>}
+      {/* Provenance row: source · window · replay basis · sample count */}
+      <div className="obs-asof" style={FOOTNOTE}>
+        {/* The dot claims "live" only when the pane is genuinely on the present: the bus's
+            idle snapshot is live:true, a scrubbed-back or archived position is not. */}
+        {replay.live && <span className="dot" aria-hidden />}
+        <span>{t("sourceTide")}</span>
+        <span style={{ color: "var(--muted)" }}>· {t("sessionFootnote")}</span>
+        {offOpen && <span style={{ color: "var(--muted)" }}>· {t("sessionOffOpenNote")}</span>}
         {replayStamp && (
           <span style={{ color: "var(--signal)" }}>
-            {" "}· {t("sessionReplayNote")} {replayStamp.slice(0, 2)}:{replayStamp.slice(2, 4)}
+            · {t("sessionReplayNote")} {replayStamp.slice(0, 2)}:{replayStamp.slice(2, 4)}
           </span>
         )}
-        <span style={{ color: "var(--muted)" }}> · {pts} {t("sessionPts")}</span>
+        <span style={{ color: "var(--muted)" }}>· <span className="num">{pts}</span> {t("sessionPts")}</span>
       </div>
     </div>
   );
@@ -292,39 +311,69 @@ export const SessionFlowPane = memo(function SessionFlowPane({
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const PANE: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 8 };
+const PANE: React.CSSProperties = { display: "flex", flexDirection: "column", gap: "var(--sp-2)" };
 
-const CONTROLS: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" };
-
-const GROUP: React.CSSProperties = { display: "flex", gap: 3 };
-
-const CHIP: React.CSSProperties = { height: 24, fontSize: 11, fontWeight: 600, padding: "0 9px" };
-
-const EMPTY: React.CSSProperties = {
-  position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-  color: "var(--muted)", fontSize: 12, pointerEvents: "none",
+const CONTROLS: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: "var(--sp-2)", flexWrap: "wrap",
 };
 
-const FOOTNOTE: React.CSSProperties = { fontSize: 10, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" };
+const GROUP: React.CSSProperties = { display: "flex", gap: "var(--sp-1)" };
+
+const CHIP: React.CSSProperties = {
+  height: 28, fontSize: "var(--fs-label)", fontWeight: 600, padding: "0 var(--sp-3)",
+};
+
+const TOTALS: React.CSSProperties = {
+  marginLeft: "auto", display: "flex", alignItems: "center", gap: "var(--sp-2)",
+};
+
+const TOTAL_LBL: React.CSSProperties = { color: "inherit", opacity: 0.75 };
+
+const TOTAL_VAL: React.CSSProperties = {
+  fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
+  fontSize: "var(--fs-label)", fontWeight: 700,
+};
+
+const EMPTY: React.CSSProperties = {
+  position: "absolute", inset: 0,
+  display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+  gap: "var(--sp-1)", padding: "0 var(--sp-5)", textAlign: "center", pointerEvents: "none",
+};
+
+const EMPTY_TITLE: React.CSSProperties = {
+  fontSize: "var(--fs-body)", fontWeight: 600, color: "var(--text-2)",
+};
+
+const EMPTY_WHY: React.CSSProperties = {
+  fontSize: "var(--fs-label)", lineHeight: 1.5, color: "var(--muted)", maxWidth: 400,
+};
+
+/** Provenance row — .obs-asof owns the type; margin is zeroed because the pane already
+ *  has its own vertical rhythm. The font shorthand in .obs-asof resets numeric variants,
+ *  so tabular-nums is re-declared here (doctrine law 1). */
+const FOOTNOTE: React.CSSProperties = {
+  marginTop: 0, flexWrap: "wrap", gap: "var(--sp-1)",
+  fontVariantNumeric: "tabular-nums",
+};
 
 const WITHDRAWN: React.CSSProperties = {
-  display: "flex", flexDirection: "column", gap: 6,
-  padding: "16px 14px",
-  border: "1px dashed var(--line)", borderRadius: "var(--r-md, 8px)",
+  display: "flex", flexDirection: "column", gap: "var(--sp-2)",
+  padding: "var(--sp-4)",
+  border: "1px dashed var(--line)", borderRadius: "var(--r-tile)",
   background: "var(--inset)",
 };
 
 const WITHDRAWN_HD: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-  fontSize: 12, fontWeight: 700, color: "var(--text)",
+  display: "flex", alignItems: "center", gap: "var(--sp-2)", flexWrap: "wrap",
+  fontSize: "var(--fs-body)", fontWeight: 700, color: "var(--text)",
 };
 
 const WITHDRAWN_DATE: React.CSSProperties = {
-  fontSize: 10.5, fontWeight: 700, color: "var(--muted)",
-  padding: "1px 6px", border: "1px solid var(--line)", borderRadius: 5,
-  fontVariantNumeric: "tabular-nums",
+  fontSize: "var(--fs-micro)", fontWeight: 700, color: "var(--muted)",
+  padding: "2px 6px", border: "1px solid var(--line)", borderRadius: 5,
+  fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
 };
 
 const WITHDRAWN_BODY: React.CSSProperties = {
-  fontSize: 11, lineHeight: 1.5, color: "var(--text-2)", maxWidth: 620,
+  fontSize: "var(--fs-label)", lineHeight: 1.55, color: "var(--text-2)", maxWidth: 620,
 };

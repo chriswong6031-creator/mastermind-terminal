@@ -77,6 +77,9 @@ const PRISM_LEX = {
   colStrike:    ["Strike", "行权价"],
   colSpotPct:   ["% from Spot", "距现价%"],
 
+  // ── Matrix legend (the level-badge key under the grid) ────────────────────
+  legendTitle:  ["Level markers", "关键价位标记"],
+
   // ── Tooltip labels ─────────────────────────────────────────────────────────
   tipCallOi:    ["Call OI", "认购持仓"],
   tipPutOi:     ["Put OI", "认沽持仓"],
@@ -164,6 +167,10 @@ const PRISM_LEX = {
   heatSeekerExpiry:     ["Expiry", "到期日"],
   heatSeekerRatio:      ["Standout ratio", "突出比率"],
   heatSeekerConf:       ["Confidence", "置信度"],
+  // The engine field is a 0..1 FRACTION rendered as a percent — the unit rides the
+  // label so the bare ring numeral can never be misread as a tier or a raw score.
+  heatSeekerConfUnit:   ["Confidence %", "置信度 %"],
+  heatSeekerFromSpot:   ["from spot", "距现价"],
   heatSeekerNull:       [
     "No standout pick — load is shared across levels.",
     "无突出精选 — 仓位分布于多个价位。",

@@ -74,7 +74,7 @@ export function LensBar({ activeLens, onLens, lang }: LensBarProps) {
               aria-pressed={isActive}
             >
               <span>{t(labelKey)}</span>
-              <span style={SHORTCUT_HINT}>{shortcut}</span>
+              <span className="num" style={SHORTCUT_HINT}>{shortcut}</span>
             </button>
             {isDoi && (
               <span style={DOI_CAPTION}>{t("doiCaption")}</span>

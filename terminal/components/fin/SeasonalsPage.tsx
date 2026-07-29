@@ -10,7 +10,7 @@
  *
  * Null-safe: bars=[] → empty state for both views.
  */
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { Bar } from "../../lib/fund";
 import { fmtPct, pick } from "../../lib/finFormat";
 import {
@@ -76,6 +76,16 @@ function SeasonalsPage({ sym, bars = [], zh = false }: SeasonalsPageProps) {
 
   return (
     <div className="fin-seas">
+      {/* section header — brand rail + hairline rule over the whole seasonal read.
+          No eyebrow: the tab is already titled "Seasonals" (doctrine: never echo it). */}
+      <div className="fin-seas-hdr">
+        <div className="fin-sec-h fin-rail fin-rule" style={{ "--rail": "var(--brand)" } as CSSProperties}>
+          {view === "chart"
+            ? pick(zh, "Multi-year overlay", "多年叠加")
+            : pick(zh, "Monthly returns by year", "逐年月度收益")}
+        </div>
+      </div>
+
       {/* header: view toggle + lookback window (the epistemics control) */}
       <div className="fin-seas-head">
         <div className="fin-toggle fin-seas-view">
@@ -91,7 +101,7 @@ function SeasonalsPage({ sym, bars = [], zh = false }: SeasonalsPageProps) {
 
       {view === "chart" ? (
         years.length === 0 ? (
-          <div className="fin-empty">{pick(zh, "No data", "暂无数据")}</div>
+          <div className="fin-empty">{pick(zh, "No daily price history loaded for this symbol yet.", "该标的尚未加载日线历史数据。")}</div>
         ) : (
           <>
             <div className="fin-sec">
@@ -133,7 +143,7 @@ function MonthlyGrid({ years, active, win, zh }: { years: YearData[]; active: Se
   // remounted (via key={win}) when the window changes, so this starts collapsed
   const [showAll, setShowAll] = useState(false);
 
-  if (years.length === 0) return <div className="fin-empty">{pick(zh, "No data", "暂无数据")}</div>;
+  if (years.length === 0) return <div className="fin-empty">{pick(zh, "No daily price history loaded for this symbol yet.", "该标的尚未加载日线历史数据。")}</div>;
   const months = zh ? MONTHS_ZH : MONTHS_EN;
 
   const windowed = years.filter((y) => active.has(y.year));

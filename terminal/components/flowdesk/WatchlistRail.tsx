@@ -103,12 +103,12 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
   const watchlistTickers = watchlist.filter((t) => t in tickerBestScore);
 
   return (
-    <aside style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <aside style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
       {/* ── Session stats card ── */}
       <div className="obs-card obs-fd-session" data-tut="session-overview">
         <div className="obs-card-hd">
           <span className="obs-lbl">{pick(zh, FD.sessionOverview.en, FD.sessionOverview.zh)}</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
             <span className="obs-lbl" style={{ color: "var(--muted)" }}>
               {pick(zh, "nightly + live", "夜盘+实时")}
             </span>
@@ -147,8 +147,10 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
             />
           </div>
           <div className="obs-fd-bar-labels">
-            <span style={{ color: "var(--brand)" }}>C</span>
-            <span>P</span>
+            <span className="obs-lbl" style={{ color: "var(--brand-2)" }}>
+              {pick(zh, "Calls", "认购")}
+            </span>
+            <span className="obs-lbl">{pick(zh, "Puts", "认沽")}</span>
           </div>
         </div>
       </div>
@@ -157,7 +159,9 @@ export function WatchlistRail({ feed, tide, lang, watchlist, onToggleTicker, onP
       <div className="obs-card obs-fd-wl" data-tut="watchlist">
         <div className="obs-card-hd">
           <span className="obs-lbl">{pick(zh, FD.watchlist.en, FD.watchlist.zh)}</span>
-          <span className="obs-lbl" style={{ color: "var(--muted)" }}>score</span>
+          <span className="obs-lbl" style={{ color: "var(--muted)" }}>
+            {pick(zh, FD.watchlistScoreCol.en, FD.watchlistScoreCol.zh)}
+          </span>
         </div>
         <div className="obs-card-hr" />
         <div className="obs-fd-wl-rows obs-scroll">
@@ -229,10 +233,10 @@ const TUT_ICON_BTN: React.CSSProperties = {
   width: 18,
   height: 18,
   borderRadius: "50%",
-  border: "1px solid rgba(77,130,255,0.4)",
-  background: "rgba(77,130,255,0.10)",
+  border: "1px solid color-mix(in srgb, var(--brand) 40%, transparent)",
+  background: "color-mix(in srgb, var(--brand) 10%, transparent)",
   color: "var(--brand-2)",
-  font: "700 10px/1 var(--font-ui)",
+  font: "700 var(--fs-micro)/1 var(--font-ui)",
   cursor: "pointer",
   display: "inline-flex",
   alignItems: "center",
@@ -241,13 +245,22 @@ const TUT_ICON_BTN: React.CSSProperties = {
   padding: 0,
 };
 
+const WATCH_ROW_BTN: React.CSSProperties = {
+  flex: 1,
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--sp-2)",
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  minWidth: 0,
+  padding: 0,
+};
+
 function WatchRow({ root, score, inFeed, zh, onPick, onRemove, isWatch = true }: WatchRowProps) {
   return (
     <div className="obs-fd-wl-row">
-      <button
-        style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", minWidth: 0, padding: 0 }}
-        onClick={onPick}
-      >
+      <button style={WATCH_ROW_BTN} onClick={onPick}>
         <span className="obs-fd-wl-ticker">{root}</span>
         {!inFeed && (
           <span className="obs-fd-wl-inactive">{pick(zh, "no events", "无事件")}</span>

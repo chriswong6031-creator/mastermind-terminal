@@ -120,11 +120,12 @@ function GroupRoot({
       {(tideMinutes.length > 0 || archived) && (
         <div style={SESSION_WRAP}>
           <button
+            className="obs-lbl"
             style={SESSION_TOGGLE}
             aria-expanded={sessionOpen}
             onClick={() => setSessionOpen((v) => !v)}
           >
-            <span style={{ transform: sessionOpen ? "rotate(90deg)" : "none", transition: "transform 120ms" }} aria-hidden>›</span>
+            <span style={{ transform: sessionOpen ? "rotate(90deg)" : "none", transition: "transform var(--t-fast) var(--ease-out)" }} aria-hidden>›</span>
             {makeSurfaceT(lang)("sessionTitle")}
           </button>
           {sessionOpen && (
@@ -284,10 +285,10 @@ export function SurfaceView() {
             <datalist id="surface-roots">
               {SURFACE_ROOTS.map((r) => <option key={r} value={r} />)}
             </datalist>
-            <div style={{ display: "flex", gap: 4 }}>
+            <div style={{ display: "flex", gap: "var(--sp-1)" }}>
               {SURFACE_ROOTS.map((r) => (
                 <button key={r} className={`chip${root === r && !missingRoot ? " on" : ""}`}
-                  style={{ height: 24, fontSize: 11, fontWeight: 700, letterSpacing: "0.03em" }}
+                  style={ROOT_CHIP}
                   onClick={() => selectRoot(r)}>
                   {r}
                 </button>
@@ -329,9 +330,7 @@ export function SurfaceView() {
           <div className="obs-surf-noroot-sub">{t("rootNoSurfaceHint")}</div>
           <div className="obs-surf-noroot-roots">
             {SURFACE_ROOTS.map((r) => (
-              <button key={r} className="chip"
-                style={{ height: 26, fontSize: 11.5, fontWeight: 700, letterSpacing: "0.03em" }}
-                onClick={() => selectRoot(r)}>
+              <button key={r} className="chip" style={ROOT_CHIP_LG} onClick={() => selectRoot(r)}>
                 {r}
               </button>
             ))}
@@ -367,28 +366,49 @@ const OUTER: React.CSSProperties = {
   display: "flex", flexDirection: "column", flex: 1, height: "100%", overflow: "hidden", background: "var(--bg)",
 };
 
+// 16px horizontal padding is the family's shared left rail — the toolbar, the pane
+// controls, the replay bar and the session strip all stack on one vertical edge.
 const HEAD: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-  padding: "8px 14px", borderBottom: "1px solid var(--line)", background: "var(--panel)", flexShrink: 0, flexWrap: "wrap",
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-3)",
+  padding: "var(--sp-2) var(--sp-4)", borderBottom: "1px solid var(--line)",
+  background: "var(--panel)", flexShrink: 0, flexWrap: "wrap",
 };
 
-const TOOLS: React.CSSProperties = { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" };
+const TOOLS: React.CSSProperties = { display: "flex", alignItems: "center", gap: "var(--sp-3)", flexWrap: "wrap" };
 
-const GROUP: React.CSSProperties = { display: "flex", gap: 3, alignItems: "center" };
+const GROUP: React.CSSProperties = { display: "flex", gap: "var(--sp-1)", alignItems: "center" };
 
-const CHIP: React.CSSProperties = { height: 24, minWidth: 30, fontSize: 11, fontWeight: 600, padding: "0 9px" };
+const CHIP: React.CSSProperties = {
+  height: 28, minWidth: 34, justifyContent: "center",
+  fontSize: "var(--fs-label)", fontWeight: 600, padding: "0 var(--sp-3)",
+};
 
-const TITLE: React.CSSProperties = { fontSize: 14, fontWeight: 700, color: "var(--text)", letterSpacing: "0.01em" };
+/** The materialised-root shortcuts, sized to sit level with the toolbar chips. */
+const ROOT_CHIP: React.CSSProperties = {
+  height: 28, fontSize: "var(--fs-label)", fontWeight: 700, letterSpacing: "0.03em",
+  fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
+};
 
-const SUBTITLE: React.CSSProperties = { fontSize: 10.5, color: "var(--muted)" };
+/** Same chip, one step up, in the empty "no surface for X" state where it is the CTA. */
+const ROOT_CHIP_LG: React.CSSProperties = {
+  height: 32, fontSize: "var(--fs-ui)", fontWeight: 700, letterSpacing: "0.03em",
+  fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
+};
 
-const TICKER_GROUP: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const TITLE: React.CSSProperties = {
+  fontSize: "var(--fs-emph)", fontWeight: 700, color: "var(--text)", letterSpacing: "0.01em",
+};
+
+const SUBTITLE: React.CSSProperties = { fontSize: "var(--fs-micro)", color: "var(--muted)" };
+
+const TICKER_GROUP: React.CSSProperties = { display: "flex", alignItems: "center", gap: "var(--sp-2)" };
 
 const TICKER_INPUT: React.CSSProperties = {
-  width: 110, height: 30, padding: "0 10px",
-  background: "var(--inset)", border: "1px solid var(--line)", borderRadius: "var(--r-md)",
-  color: "var(--text)", fontSize: 13, fontWeight: 700, textTransform: "uppercase",
-  letterSpacing: "0.06em", outline: "none", fontVariantNumeric: "tabular-nums",
+  width: 110, height: 32, padding: "0 var(--sp-3)",
+  background: "var(--inset)", border: "1px solid var(--line)", borderRadius: "var(--r-tile)",
+  color: "var(--text)", fontSize: "var(--fs-body)", fontWeight: 700, textTransform: "uppercase",
+  letterSpacing: "0.06em", outline: "none",
+  fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
 };
 
 const GROUP_ROOT: React.CSSProperties = { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, outline: "none" };
@@ -397,9 +417,10 @@ const SESSION_WRAP: React.CSSProperties = {
   flexShrink: 0, borderTop: "1px solid var(--line)", background: "var(--panel)",
 };
 
+/** .obs-lbl owns the micro-label type; this is the button reset + the shared left rail.
+ *  36px keeps the collapse control on the tap-target floor. */
 const SESSION_TOGGLE: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 7, width: "100%",
-  padding: "6px 14px", border: 0, background: "none", cursor: "pointer",
-  font: "700 9.5px/1 var(--font-ui)", letterSpacing: "0.09em", textTransform: "uppercase",
-  color: "var(--muted)", textAlign: "left",
+  display: "flex", alignItems: "center", gap: "var(--sp-2)", width: "100%", minHeight: 36,
+  padding: "var(--sp-2) var(--sp-4)", border: 0, background: "none", cursor: "pointer",
+  textAlign: "left",
 };

@@ -4,6 +4,7 @@
  */
 "use client";
 import { useMemo } from "react";
+import type React from "react";
 import { pick } from "../../lib/finFormat";
 import type { Lang } from "../../lib/i18n";
 import { FD } from "../../lib/flowdeskStrings";
@@ -76,6 +77,17 @@ function readableBaseline(note: string): string {
 
 const MAX_ROWS = 8;
 
+/** Hairline magnitude track under each ticker — neutral line token, never a
+ *  direction color (the fill's accent is a magnitude hue from zAccent). */
+const BAR_TRACK: React.CSSProperties = {
+  height: 2,
+  background: "var(--line)",
+  borderRadius: "var(--r-pill)",
+  marginTop: "var(--sp-1)",
+  overflow: "hidden",
+  width: "100%",
+};
+
 // ─── Component ────────────────────────────────────────────────────────────
 
 export function RadarStrip({ feed, lang }: RadarStripProps) {
@@ -97,7 +109,11 @@ export function RadarStrip({ feed, lang }: RadarStripProps) {
   const note = zh ? rawNote : readableBaseline(rawNote);
 
   return (
-    <section className="obs-card obs-fd-radar obs-scroll" data-tut="flow-radar" style={{ borderRadius: 0, border: "none", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+    <section
+      className="obs-card obs-fd-radar obs-scroll"
+      data-tut="flow-radar"
+      style={{ borderRadius: 0, border: "none", borderBottom: "1px solid var(--line)" }}
+    >
       {/* Header */}
       <div className="obs-card-hd">
         <span className="obs-lbl">{pick(zh, FD.smartMoneyRadar.en, FD.smartMoneyRadar.zh)}</span>
@@ -105,7 +121,7 @@ export function RadarStrip({ feed, lang }: RadarStripProps) {
       </div>
 
       {/* Column headers */}
-      <div className="obs-fd-radar-col-head">
+      <div className="obs-fd-radar-col-head obs-lbl">
         <span>{pick(zh, "Ticker", "标的")}</span>
         <Tip label={pick(zh, "How unusual today's premium is compared with roughly one trading year", "今日权利金相对约一年交易历史的异常程度")} side="top" size="card">
           <span style={{ textAlign: "right", cursor: "help" }}>{pick(zh, "Activity", "活跃度")}</span>
@@ -118,10 +134,11 @@ export function RadarStrip({ feed, lang }: RadarStripProps) {
         </Tip>
       </div>
 
-      {/* Rows */}
+      {/* Rows — the empty state names the reason instead of a bare "no data" */}
       {rows.length === 0 && (
-        <div style={{ padding: "12px", fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
-          {pick(zh, "No unusual activity", "暂无异常活动")}
+        <div className="fin-empty" style={{ margin: "var(--sp-3)", flexDirection: "column", gap: "var(--sp-1)" }}>
+          <span className="fin-empty-title">{pick(zh, FD.radarEmpty.en, FD.radarEmpty.zh)}</span>
+          <span className="fin-empty-why">{pick(zh, FD.radarEmptyWhy.en, FD.radarEmptyWhy.zh)}</span>
         </div>
       )}
 
@@ -149,8 +166,8 @@ function RadarRow({ row, zh }: { row: UnusualName; zh: boolean }) {
           {group}
         </div>
         {/* Magnitude bar */}
-        <div style={{ height: 2, background: "rgba(255,255,255,0.07)", borderRadius: 1, marginTop: 3, overflow: "hidden", width: "100%" }}>
-          <div style={{ height: "100%", borderRadius: 1, background: accent, width: `${barW}%` }} />
+        <div style={BAR_TRACK}>
+          <div style={{ height: "100%", borderRadius: "var(--r-pill)", background: accent, width: `${barW}%` }} />
         </div>
       </div>
 

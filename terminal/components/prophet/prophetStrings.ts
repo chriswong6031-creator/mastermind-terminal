@@ -54,6 +54,12 @@ const PROPHET_LEX = {
   // ── Signal stream ──────────────────────────────────────────────────────────
   signalStreamTitle:["Signal Stream", "信号流"],
   noPlans:          ["No active prophecies — ledger accruing.", "暂无活跃预测 — 账本积累中。"],
+  // An empty desk must say WHICH empty it is: the run happened and published nothing,
+  // rather than "still loading" or "broken".
+  noPlansWhy: [
+    "The nightly EOD run published no active plans. The forward ledger keeps accruing.",
+    "每日收盘运行未发布活跃计划。前向账本持续积累。",
+  ],
   sortNew:          ["NEW", "最新"],
   sortBest:         ["BEST", "最优"],
   sortGainers:      ["GAINERS", "涨幅"],
@@ -89,6 +95,11 @@ const PROPHET_LEX = {
   rUnit:            ["R", "R"],
   distAway:         ["away", "距离"],
   horizonPct:       ["horizon used", "持有进度"],
+  geometryEmpty:    ["Insufficient geometry data", "结构数据不足"],
+  geometryEmptyWhy: [
+    "Entry, stop and at least one target are required to draw the rail.",
+    "绘制价格轴需要入场价、止损价和至少一个目标价。",
+  ],
 
   // ── Confidence panel ────────────────────────────────────────────────────────
   confidenceHeader:    ["Management confidence — trade state, not a pick rank", "管理置信度 — 交易状态分，非选股排名"],
@@ -140,6 +151,8 @@ const PROPHET_LEX = {
   optionEodMark:    ["EOD mark", "收盘标记"],
   optionCall:       ["CALL", "认购"],
   optionPut:        ["PUT", "认沽"],
+  optionExpand:     ["Show option contract", "显示期权合约"],
+  optionCollapse:   ["Hide option contract", "隐藏期权合约"],
 
   // ── Analysis center / thesis ──────────────────────────────────────────────
   thesisLabel:      ["Signal Thesis", "信号论点"],

@@ -53,9 +53,12 @@ interface BucketRow {
   nearestStrikes: Record<ConfIndex, number | null>;
 }
 
+/** prismStrings keys for the five structural level markers (shared with MatrixGrid). */
+type LevelKey = "levelFlip" | "levelWall" | "levelSupport" | "levelMagnet";
+
 interface AlignmentChip {
   pct: number;
-  level: string;
+  level: LevelKey;
   indices: ConfIndex[];
   count: number;
 }
@@ -124,11 +127,12 @@ function computeBucketRows(payloads: Record<ConfIndex, MatrixPayload | null>): B
 
 function detectAlignments(payloads: Record<ConfIndex, MatrixPayload | null>): AlignmentChip[] {
   const chips: AlignmentChip[] = [];
-  const levelTypes: { key: keyof MatrixPayload["levels"]; label: string }[] = [
-    { key: "gamma_flip",   label: "FLIP" },
-    { key: "call_wall",    label: "WALL" },
-    { key: "put_support",  label: "SUPPORT" },
-    { key: "hvl",          label: "MAGNET" },
+  // `label` is a prismStrings key so the chip text is bilingual, never baked English.
+  const levelTypes: { key: keyof MatrixPayload["levels"]; label: LevelKey }[] = [
+    { key: "gamma_flip",   label: "levelFlip" },
+    { key: "call_wall",    label: "levelWall" },
+    { key: "put_support",  label: "levelSupport" },
+    { key: "hvl",          label: "levelMagnet" },
   ];
 
   for (const { key, label } of levelTypes) {
@@ -215,13 +219,15 @@ export function ConfluenceView({ fetchMatrix, activeLens, lang }: ConfluenceView
   ).filter((v) => v > 0);
   const maxGex = allGex.length > 0 ? Math.max(...allGex) : 1;
 
+  // Signed fill rides the --up-rgb / --down-rgb triplets so the East-Asian red-up
+  // flip (html[data-updown="east"]) repaints the confluence grid with it.
   function cellColor(v: number | null): string {
     if (v == null) return "transparent";
     const intensity = Math.min(1, Math.abs(v) / maxGex);
     const a = 0.08 + intensity * 0.55;
     return v >= 0
-      ? `rgba(77,210,120,${a.toFixed(2)})`
-      : `rgba(240,86,107,${a.toFixed(2)})`;
+      ? `rgba(var(--up-rgb),${a.toFixed(2)})`
+      : `rgba(var(--down-rgb),${a.toFixed(2)})`;
   }
 
   // Build alignment map: band -> AlignmentChip[]
@@ -241,27 +247,29 @@ export function ConfluenceView({ fetchMatrix, activeLens, lang }: ConfluenceView
         {anyLoading && <span style={LOADING_CHIP}>{t("loading")}</span>}
       </div>
 
-      {/* Honesty banner */}
-      <div style={HONESTY_BANNER}>
+      {/* Honesty banner — same amber `.obs-note` the SINGLE-mode matrix uses */}
+      <div className="obs-note" style={HONESTY_BANNER}>
         {t("magnitudeFirst")}
       </div>
 
       {/* Spot prices row */}
       <div style={SPOT_ROW_HEADER}>
-        <div style={LABEL_COL} />
+        <div style={LABEL_COL}>
+          <span className="obs-lbl">{t("colSpotPct")}</span>
+        </div>
         {CONF_INDICES.map((idx) => {
           const spot = payloads[idx]?.spot;
           return (
             <div key={idx} style={IDX_COL_HEADER}>
               <span style={IDX_LABEL}>{idx}</span>
               {spot != null && (
-                <span style={IDX_SPOT}>{spot.toFixed(2)}</span>
+                <span className="num" style={IDX_SPOT}>{spot.toFixed(2)}</span>
               )}
             </div>
           );
         })}
         <div style={ALIGN_COL_HEADER}>
-          <span style={ALIGN_HDR_TEXT}>{t("confluenceAligned")}</span>
+          <span className="obs-lbl" style={ALIGN_HDR_TEXT}>{t("confluenceAligned")}</span>
         </div>
       </div>
 
@@ -284,6 +292,7 @@ export function ConfluenceView({ fetchMatrix, activeLens, lang }: ConfluenceView
               {/* % label */}
               <div style={LABEL_COL}>
                 <span
+                  className="num"
                   style={{
                     ...PCT_LABEL,
                     color: isSpot ? "var(--signal)" : "var(--text-2)",
@@ -307,20 +316,21 @@ export function ConfluenceView({ fetchMatrix, activeLens, lang }: ConfluenceView
                     }}
                   >
                     <span
+                      className="num"
                       style={{
                         ...CELL_VAL,
                         color:
                           v == null
                             ? "var(--muted)"
                             : v >= 0
-                            ? "rgba(100,230,150,0.95)"
-                            : "rgba(240,120,130,0.95)",
+                            ? "color-mix(in srgb, #fff 26%, var(--up))"
+                            : "color-mix(in srgb, #fff 26%, var(--down))",
                       }}
                     >
                       {fmtGex(v)}
                     </span>
                     {strike != null && (
-                      <span style={STRIKE_HINT}>${strike}</span>
+                      <span className="num" style={STRIKE_HINT}>${strike}</span>
                     )}
                   </div>
                 );
@@ -331,14 +341,15 @@ export function ConfluenceView({ fetchMatrix, activeLens, lang }: ConfluenceView
                 {chips.map((chip, ci) => (
                   <span
                     key={ci}
+                    className="obs-tag"
                     style={{
                       ...ALIGN_CHIP,
-                      ...(chip.count >= 3 ? ALIGN_CHIP_3OF3 : ALIGN_CHIP_2OF3),
-                    }}
+                      "--c": chip.count >= 3 ? "var(--up)" : "var(--brand-2)",
+                    } as React.CSSProperties}
                   >
                     {chip.count >= 3 ? t("confluence3of3") : t("confluence2of3")}
                     {" "}
-                    {chip.level}
+                    {t(chip.level)}
                   </span>
                 ))}
               </div>
@@ -400,12 +411,15 @@ const LOADING_CHIP: React.CSSProperties = {
   color: "var(--brand-2)",
 };
 
+/** `.obs-note` supplies the amber tint; this only flattens it into the header stack. */
 const HONESTY_BANNER: React.CSSProperties = {
+  margin: 0,
+  borderRadius: 0,
+  borderLeft: "none",
+  borderRight: "none",
+  borderTop: "none",
   padding: "5px 14px",
-  background: "rgba(157,134,255,0.06)",
-  borderBottom: "1px solid rgba(157,134,255,0.15)",
   fontSize: 9,
-  color: "rgba(157,134,255,0.9)",
   letterSpacing: "0.02em",
   flexShrink: 0,
 };
@@ -453,11 +467,10 @@ const ALIGN_COL_HEADER: React.CSSProperties = {
   alignItems: "center",
 };
 
+/** Type comes from `.obs-lbl`; only the dense size override stays inline. */
 const ALIGN_HDR_TEXT: React.CSSProperties = {
-  fontSize: 8,
-  color: "var(--muted)",
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
+  fontSize: 8.5,
+  lineHeight: 1.25,
 };
 
 const MATRIX_BODY: React.CSSProperties = {
@@ -475,13 +488,13 @@ const BUCKET_ROW: React.CSSProperties = {
 };
 
 const SPOT_BAND: React.CSSProperties = {
-  background: "rgba(232,179,57,0.06)",
-  borderTop: "1px solid rgba(232,179,57,0.22)",
-  borderBottom: "1px solid rgba(232,179,57,0.22)",
+  background: "color-mix(in srgb, var(--signal) 6%, transparent)",
+  borderTop: "1px solid color-mix(in srgb, var(--signal) 22%, transparent)",
+  borderBottom: "1px solid color-mix(in srgb, var(--signal) 22%, transparent)",
 };
 
 const ALIGNED_BAND: React.CSSProperties = {
-  background: "rgba(77,130,255,0.04)",
+  background: "color-mix(in srgb, var(--brand-2) 4%, transparent)",
 };
 
 const PCT_LABEL: React.CSSProperties = {
@@ -522,26 +535,16 @@ const ALIGN_COL: React.CSSProperties = {
   gap: 2,
 };
 
+/**
+ * Dense override for `.obs-tag` in a 24px band row. The tint itself rides `--c`:
+ * 3/3 alignment = var(--up), 2/3 = var(--brand-2).
+ */
 const ALIGN_CHIP: React.CSSProperties = {
-  fontSize: 7,
+  fontSize: 7.5,
   fontWeight: 800,
   letterSpacing: "0.04em",
-  padding: "1px 4px",
-  borderRadius: 3,
-  border: "1px solid",
-  whiteSpace: "nowrap",
-};
-
-const ALIGN_CHIP_2OF3: React.CSSProperties = {
-  color: "rgba(77,130,255,0.8)",
-  borderColor: "rgba(77,130,255,0.3)",
-  background: "rgba(77,130,255,0.06)",
-};
-
-const ALIGN_CHIP_3OF3: React.CSSProperties = {
-  color: "rgba(77,210,120,0.95)",
-  borderColor: "rgba(77,210,120,0.4)",
-  background: "rgba(77,210,120,0.12)",
+  padding: "2px 6px",
+  gap: 3,
 };
 
 const NO_ALIGNMENT: React.CSSProperties = {

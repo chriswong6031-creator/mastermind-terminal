@@ -57,7 +57,7 @@ export function GeometryRail({
   if (entry != null) levels.push({ label: t("entry"), price: entry, color: "var(--text-2)" });
   if (last != null)  levels.push({ label: t("last"),  price: last,  color: "#19c2c2", isLast: true });
   if (t1 != null)    levels.push({ label: t("t1"),    price: t1,    color: "var(--up)" });
-  if (t2 != null)    levels.push({ label: t("t2"),    price: t2,    color: "rgba(38,194,129,.6)" });
+  if (t2 != null)    levels.push({ label: t("t2"),    price: t2,    color: "color-mix(in srgb,var(--up) 60%,transparent)" });
 
   if (levels.length < 2) {
     return (

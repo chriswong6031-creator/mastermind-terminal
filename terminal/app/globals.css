@@ -71,6 +71,23 @@
   --fs-title:16px;   /* section titles */
   --fs-num:20px;     /* headline numerals */
   --fs-num-lg:28px;  /* hero numerals */
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     v7 — institutional-SaaS surface tokens (2026-07-28 wave). Rounding,
+     spacing and shadow scale transferred from the macro/landing framework
+     (Macro Dashboard templates/theme.css + dashboard.html.j2 page-macro
+     layer). This defines the previously-undefined --sp- and --shadow- names
+     for real: fin.css sites that carried literal fallbacks now resolve here,
+     and bare var(--shadow-3) sites (.sd-cont) gain their intended shadow.
+     v5 --r/--r-md/--r-lg stay untouched — the chart shell depends on them;
+     new rounding rides --r-card/--r-tile only.
+     ═══════════════════════════════════════════════════════════════════════ */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-8:32px;
+  --r-card:14px; --r-tile:10px;
+  --shadow-card:inset 0 1px 0 rgba(255,255,255,.045),0 1px 1px rgba(0,0,0,.22),0 12px 28px -18px rgba(0,0,0,.5);
+  --shadow-2:0 8px 24px rgba(0,0,0,.45);
+  --shadow-3:0 18px 44px -14px rgba(0,0,0,.6);
+  --rail:var(--brand);
 }
 /* East-Asian convention: red = up / green = down (CN/HK/TW/MO). Flips the up/down semantics only;
    accent colors (brand/signal/warn) are unchanged. Set on <html data-updown="east"> pre-paint. */
@@ -1450,8 +1467,8 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .sa-dc-lbl.up{color:var(--up)}.sa-dc-lbl.warn{color:var(--warn)}
 .sa-dc-tags{display:flex;flex-wrap:wrap;gap:6px}
 .sa-tag{font:600 11px/1.35 var(--font-ui);padding:5px 9px;border-radius:var(--r);border:1px solid var(--line)}
-.sa-tag.up{color:var(--up);background:rgba(38,194,129,.08);border-color:rgba(38,194,129,.2)}
-.sa-tag.warn{color:var(--warn);background:rgba(232,163,61,.08);border-color:rgba(232,163,61,.22)}
+.sa-tag.up{color:var(--up);background:color-mix(in srgb,var(--up) 9%,transparent);border-color:color-mix(in srgb,var(--up) 22%,transparent)}
+.sa-tag.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,transparent);border-color:color-mix(in srgb,var(--warn) 22%,transparent)}
 
 /* section card */
 .sa-sec{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);padding:12px 13px}

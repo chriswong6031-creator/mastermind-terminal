@@ -26,7 +26,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { flowGet } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
 import { makeProphetT } from "./prophetStrings";
-import { SignalCard, planAsof, planConfidence, planPhase, planRecommendedAction } from "./SignalCard";
+import { SignalCard, phaseTone, planAsof, planConfidence, planPhase, planRecommendedAction } from "./SignalCard";
 import type { PlanSummary } from "./SignalCard";
 import { ConfidencePanel } from "./ConfidencePanel";
 import type { ConfidenceComponents } from "./ConfidencePanel";
@@ -288,7 +288,7 @@ export function ProphetView() {
             </div>
             <div style={CARD_LIST} className="obs-scroll">
               {sortedPlans.length === 0 ? (
-                <div style={EMPTY_STATE}>{t("noPlans")}</div>
+                <EmptyColumn t={t} />
               ) : (
                 sortedPlans.map((plan) => (
                   <SignalCard
@@ -315,7 +315,7 @@ export function ProphetView() {
       {/* ── CENTER — analysis ── */}
       <div className="obs-card obs-prophet-pane obs-prophet-center" style={CENTER_PANE}>
         {!selected ? (
-          <div style={FULL_CENTER}>{t("noPlans")}</div>
+          <EmptyColumn t={t} center />
         ) : (
           <AnalysisPanel plan={selected} lang={lang} t={t} />
         )}
@@ -324,12 +324,33 @@ export function ProphetView() {
       {/* ── RIGHT — confidence index ── */}
       <div className="obs-card obs-prophet-pane obs-prophet-right" style={RIGHT_PANE}>
         {!selected ? (
-          <div style={FULL_CENTER}>{t("noPlans")}</div>
+          <EmptyColumn t={t} center />
         ) : (
           <ConfidenceColumn plan={selected} lang={lang} t={t} marks={marks} />
         )}
       </div>
       </div>
+    </div>
+  );
+}
+
+// ── EmptyColumn ───────────────────────────────────────────────────────────────
+//
+// An empty desk column has to say WHICH empty it is. All three columns are empty for
+// the same reason — the nightly run published no plans — so they say the same thing
+// instead of leaving the analysis panes looking merely unselected.
+
+function EmptyColumn({
+  t,
+  center,
+}: {
+  t: ReturnType<typeof makeProphetT>;
+  center?: boolean;
+}) {
+  return (
+    <div style={center ? EMPTY_STATE_CENTER : EMPTY_STATE}>
+      <div style={EMPTY_TITLE}>{t("noPlans")}</div>
+      <div style={EMPTY_WHY}>{t("noPlansWhy")}</div>
     </div>
   );
 }
@@ -347,9 +368,6 @@ function AnalysisPanel({
 }) {
   const isBear   = plan.direction === "BEAR";
   const dirColor = isBear ? "var(--down)" : "var(--up)";
-  const dirBg    = isBear
-    ? "color-mix(in srgb, var(--down) 15%, transparent)"
-    : "color-mix(in srgb, var(--up) 15%, transparent)";
 
   const phase      = planPhase(plan);
   const state      = plan.state;
@@ -368,13 +386,8 @@ function AnalysisPanel({
     invalidated:       t("phaseInvalidated"),
   };
   const phaseLabel = phase ? (phaseMap[phase] ?? phase) : null;
-  const phaseColor = phase === "invalidated"
-    ? "var(--down)"
-    : phase?.includes("t1") || phase?.includes("t2")
-    ? "var(--up)"
-    : phase === "triggered_pre_t1"
-    ? "var(--warn)"
-    : "var(--text-2)";
+  // Shared with SignalCard + ConfidencePanel — one phase, one colour, everywhere.
+  const phaseColor = phaseTone(phase);
 
   // What-to-do-now from payload — prefer ZH variant when lang is zh.
   const whatToDo = (lang === "zh" && plan.what_to_do_now_zh?.length)
@@ -394,11 +407,17 @@ function AnalysisPanel({
       <div style={ANALYSIS_HEADER}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={ANALYSIS_TICKER}>{plan.asset}</span>
-          <span style={{ ...DIR_BADGE, background: dirBg, color: dirColor }}>
+          <span
+            className="obs-tag"
+            style={{ ...DIR_BADGE, "--c": dirColor } as React.CSSProperties}
+          >
             {isBear ? `▼ ${t("bear")}` : `▲ ${t("bull")}`}
           </span>
           {phaseLabel && (
-            <span style={{ ...PHASE_BADGE, color: phaseColor, borderColor: `${phaseColor}44` }}>
+            <span
+              className="obs-tag"
+              style={{ ...PHASE_BADGE, "--c": phaseColor } as React.CSSProperties}
+            >
               {phaseLabel}
             </span>
           )}
@@ -422,9 +441,9 @@ function AnalysisPanel({
 
       {/* ── WHAT TO DO NOW ── */}
       {whatToDo && whatToDo.length > 0 && (
-        <div style={SECTION_BOX} className="obs-prophet-section obs-prophet-section-primary">
+        <div style={SECTION_BOX} className="obs-card obs-prophet-section obs-prophet-section-primary">
           <div style={SECTION_HDR_ROW}>
-            <span style={SECTION_LABEL}>{t("briefLabel")}</span>
+            <span className="obs-lbl" style={SECTION_LABEL}>{t("briefLabel")}</span>
             <span style={SECTION_CAPTION}>{t("briefCaption")}</span>
           </div>
           <ol style={BULLET_LIST}>
@@ -440,9 +459,9 @@ function AnalysisPanel({
 
       {/* ── PROFIT TAKING PLAN ── */}
       {profitPlan && profitPlan.length > 0 && (
-        <div style={SECTION_BOX} className="obs-prophet-section">
+        <div style={SECTION_BOX} className="obs-card obs-prophet-section">
           <div style={SECTION_HDR_ROW}>
-            <span style={SECTION_LABEL}>{t("profitPlanLabel")}</span>
+            <span className="obs-lbl" style={SECTION_LABEL}>{t("profitPlanLabel")}</span>
             <span style={SECTION_CAPTION}>{t("profitPlanCaption")}</span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -455,9 +474,9 @@ function AnalysisPanel({
 
       {/* ── SIGNAL THESIS ── */}
       {thesis && (
-        <div style={SECTION_BOX} className="obs-prophet-section">
+        <div style={SECTION_BOX} className="obs-card obs-prophet-section">
           <div style={SECTION_HDR_ROW}>
-            <span style={SECTION_LABEL}>{t("thesisLabel")}</span>
+            <span className="obs-lbl" style={SECTION_LABEL}>{t("thesisLabel")}</span>
             <span style={SECTION_CAPTION}>{t("thesisCaption")}</span>
           </div>
           <p style={THESIS_TEXT}>{thesis}</p>
@@ -536,7 +555,7 @@ function ConfidenceColumn({
     <div style={CONFIDENCE_SCROLL} className="obs-scroll obs-prophet-confidence-column">
       {/* Section label */}
       <div style={CONF_HDR}>
-        <span style={CONF_HDR_LABEL}>{t("confidenceTitle")}</span>
+        <span className="obs-lbl" style={CONF_HDR_LABEL}>{t("confidenceTitle")}</span>
       </div>
 
       {/* Confidence panel (arc + bars) */}
@@ -661,6 +680,30 @@ const EMPTY_STATE: React.CSSProperties = {
   font: "500 12px/1.5 var(--font-ui)",
   color: "var(--muted)",
   textAlign: "center",
+};
+
+/* center-column variant: fills the pane and stacks title over the why-line */
+const EMPTY_STATE_CENTER: React.CSSProperties = {
+  ...EMPTY_STATE,
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 6,
+  padding: "48px 24px",
+};
+
+const EMPTY_TITLE: React.CSSProperties = {
+  font: "600 14px/1.25 var(--font-ui)",
+  color: "var(--text-2)",
+};
+
+const EMPTY_WHY: React.CSSProperties = {
+  font: "500 11px/1.5 var(--font-ui)",
+  color: "var(--muted)",
+  maxWidth: 420,
+  margin: "0 auto",
 };
 
 const PERF_PLACEHOLDER: React.CSSProperties = {

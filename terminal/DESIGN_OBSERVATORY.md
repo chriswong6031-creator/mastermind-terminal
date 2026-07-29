@@ -138,6 +138,22 @@ Green pulsing dot for "live" status.  Color = `var(--up)` (East-Asian flip aware
 <span className="obs-live-dot" />
 ```
 
+### 4.7b `.obs-tag` (v7)
+The universal one-var tint chip (mirrors `.fin-tag`; macro-framework formula).
+Set the base color per state — east-mode flip rides the token automatically.
+
+```tsx
+<span className="obs-tag" style={{ "--c": "var(--up)" } as React.CSSProperties}>Calls</span>
+```
+
+### 4.7c `.obs-asof` (v7)
+Provenance row under a data section: source + as-of; add `<span className="dot"/>`
+when the feed is live.
+
+```tsx
+<div className="obs-asof"><span className="dot" />Live tape · as of 14:32 ET</div>
+```
+
 ### 4.8 `.num`
 Already defined in `globals.css`.  Re-exported here as a reminder: use on every
 numeral element, together with `var(--font-num)`.  Numerals are set in the UI

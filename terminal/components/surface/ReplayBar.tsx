@@ -45,6 +45,9 @@ export function ReplayBar({
   const hasFrames = stamps.length > 0;
   const bands = sessionBands(stamps);
   const showPicker = sessions.length > 0 && !!onSessionDate;
+  // Transport geometry, dimmed when there is nothing to step through. The .obs-chip
+  // primitive has no :disabled state of its own, so the affordance is carried here.
+  const btn: React.CSSProperties = hasFrames ? ICON_BTN : { ...ICON_BTN, ...ICON_BTN_OFF };
 
   return (
     <div style={BAR} role="group" aria-label="replay">
@@ -66,25 +69,29 @@ export function ReplayBar({
         </select>
       )}
 
-      {/* Transport buttons */}
+      {/* Transport buttons — .obs-chip shell at a 36px tap target. Play carries the
+          primary-action tint at rest and goes fully brand-filled (.on) while running,
+          so "is it playing?" is answerable from across the desk. */}
       <div style={BTN_GROUP}>
-        <button style={ICON_BTN} aria-label={t("replayFirst")} disabled={!hasFrames}
+        <button className="obs-chip" style={btn} aria-label={t("replayFirst")} disabled={!hasFrames}
           onClick={() => dispatch({ type: "toFirst" })}>
           <Icon d="M18 6l-6 6 6 6M8 6v12" />
         </button>
-        <button style={ICON_BTN} aria-label={t("replayPrev")} disabled={!hasFrames}
+        <button className="obs-chip" style={btn} aria-label={t("replayPrev")} disabled={!hasFrames}
           onClick={() => dispatch({ type: "stepBack" })}>
           <Icon d="M15 6l-6 6 6 6" />
         </button>
-        <button style={{ ...ICON_BTN, ...PLAY_BTN }} aria-label={playing ? t("replayPause") : t("replayPlay")}
+        <button className={`obs-chip${playing ? " on" : ""}`}
+          style={{ ...btn, ...(playing ? undefined : PLAY_BTN) }}
+          aria-label={playing ? t("replayPause") : t("replayPlay")}
           disabled={!hasFrames} onClick={() => dispatch({ type: "togglePlay" })}>
           {playing ? <Icon d="M7 5h3v14H7zM14 5h3v14h-3z" fill /> : <Icon d="M7 5l12 7-12 7z" fill />}
         </button>
-        <button style={ICON_BTN} aria-label={t("replayNext")} disabled={!hasFrames}
+        <button className="obs-chip" style={btn} aria-label={t("replayNext")} disabled={!hasFrames}
           onClick={() => dispatch({ type: "stepFwd" })}>
           <Icon d="M9 6l6 6-6 6" />
         </button>
-        <button style={ICON_BTN} aria-label={t("replayLast")} disabled={!hasFrames}
+        <button className="obs-chip" style={btn} aria-label={t("replayLast")} disabled={!hasFrames}
           onClick={() => dispatch({ type: "toLast" })}>
           <Icon d="M6 6l6 6-6 6M16 6v12" />
         </button>
@@ -161,20 +168,24 @@ export function ReplayBar({
             {/* An archived session is never LIVE, at its head or anywhere else — the badge
                 names the day being replayed instead of claiming the present. */}
             {archived ? (
-              <span style={ARCHIVED_BADGE}>
+              <span className="obs-tag" style={ARCHIVED_BADGE}>
                 <span className="num" style={{ fontWeight: 800 }}>{sessionDate}</span>
                 <span style={ARCHIVED_WORD}>{t("sessionArchived")}</span>
               </span>
             ) : live ? (
-              <span style={LIVE_BADGE}>
-                <span className="obs-live-dot" style={{ marginRight: 5 }} />
+              <span className="obs-tag" style={LIVE_BADGE}>
+                <span className="obs-live-dot" style={{ width: 6, height: 6 }} />
                 {t("replayLive")}
               </span>
             ) : null}
           </>
         ) : (
-          <span style={{ ...FRAME_TXT, color: "var(--muted)" }}>
-            {archived ? t("sessionEmptyArchive") : t("replayNoFrames")}
+          /* Honest empty: name the state AND why the scrubber has nothing to move over. */
+          <span style={NO_FRAMES}>
+            <span style={{ ...FRAME_TXT, color: "var(--text-2)", fontWeight: 600 }}>
+              {archived ? t("sessionEmptyArchive") : t("replayNoFrames")}
+            </span>
+            <span style={NO_FRAMES_WHY}>{t("replayNoFramesWhy")}</span>
           </span>
         )}
       </div>
@@ -184,7 +195,7 @@ export function ReplayBar({
 
 function Icon({ d, fill }: { d: string; fill?: boolean }) {
   return (
-    <svg viewBox="0 0 24 24" width="14" height="14"
+    <svg viewBox="0 0 24 24" width="16" height="16"
       fill={fill ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2"
       strokeLinecap="round" strokeLinejoin="round">
       <path d={d} />
@@ -194,69 +205,82 @@ function Icon({ d, fill }: { d: string; fill?: boolean }) {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
+// The bar shares the family's 16px left rail with the toolbar above it and the session
+// strip below, so the whole tab stacks on one vertical edge.
 const BAR: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 12,
-  padding: "6px 12px",
+  gap: "var(--sp-3)",
+  padding: "var(--sp-2) var(--sp-4)",
   borderTop: "1px solid var(--line)",
   background: "var(--panel)",
   flexShrink: 0,
   flexWrap: "wrap",
 };
 
-const BTN_GROUP: React.CSSProperties = { display: "flex", alignItems: "center", gap: 2 };
+const BTN_GROUP: React.CSSProperties = { display: "flex", alignItems: "center", gap: "var(--sp-1)" };
 
+/** 36px square: the transport is the one control on this bar people hit repeatedly and
+ *  on a trackpad mid-scrub, so it clears the tap-target floor rather than sitting at it. */
 const ICON_BTN: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  width: 28,
-  height: 26,
-  borderRadius: "var(--r-sm, 6px)",
-  border: "1px solid var(--line)",
-  background: "var(--inset)",
-  color: "var(--text-2)",
+  width: 36,
+  height: 36,
+  padding: 0,
+  borderRadius: "var(--r-tile)",
   cursor: "pointer",
 };
 
+const ICON_BTN_OFF: React.CSSProperties = { opacity: 0.38, cursor: "not-allowed" };
+
+/** Resting play: brand-tinted primary action (not a white fill — see doctrine). */
 const PLAY_BTN: React.CSSProperties = {
-  color: "var(--text)",
-  background: "color-mix(in srgb, var(--brand) 18%, transparent)",
-  borderColor: "color-mix(in srgb, var(--brand) 40%, transparent)",
-  width: 32,
+  color: "var(--brand-2)",
+  background: "color-mix(in srgb, var(--brand) 17%, transparent)",
+  borderColor: "color-mix(in srgb, var(--brand) 36%, transparent)",
 };
 
-const SPEED_GROUP: React.CSSProperties = { display: "flex", gap: 3 };
+/* Playing needs no override — .obs-chip.on carries the full brand fill. */
 
-const SPEED_CHIP: React.CSSProperties = { height: 22, minWidth: 26, fontSize: 10, padding: "0 6px" };
+const SPEED_GROUP: React.CSSProperties = { display: "flex", gap: "var(--sp-1)" };
+
+const SPEED_CHIP: React.CSSProperties = {
+  height: 28, minWidth: 32, justifyContent: "center",
+  fontSize: "var(--fs-micro)", fontWeight: 600, padding: "0 var(--sp-2)",
+  fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
+};
 
 const SESSION_SELECT: React.CSSProperties = {
-  height: 24,
-  maxWidth: 148,
-  padding: "0 6px",
+  height: 32,
+  maxWidth: 152,
+  padding: "0 var(--sp-2)",
   background: "var(--inset)",
   border: "1px solid var(--line)",
-  borderRadius: "var(--r-sm, 6px)",
+  borderRadius: "var(--r-tile)",
   color: "var(--text)",
-  fontSize: 11,
+  fontSize: "var(--fs-label)",
   fontWeight: 600,
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
   cursor: "pointer",
 };
 
 const SCRUB_WRAP: React.CSSProperties = {
   flex: 1,
-  minWidth: 140,
+  minWidth: 160,
   display: "flex",
   flexDirection: "column",
-  gap: 1,
+  gap: 2,
 };
 
+// Behaviour untouched (native range, same min/max/step/handlers) — a slightly taller
+// track just makes the session easier to land on.
 const SCRUB: React.CSSProperties = {
   width: "100%",
   margin: 0,
-  height: 4,
+  height: 6,
   accentColor: "var(--brand)",
   cursor: "pointer",
 };
@@ -301,45 +325,50 @@ const BAND_LABEL: React.CSSProperties = {
 const READOUT: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 10,
-  fontSize: 11,
+  gap: "var(--sp-2)",
+  fontSize: "var(--fs-label)",
   whiteSpace: "nowrap",
 };
 
+/** The replay clock is the readout's anchor: tabular, in the numeral face, one step up. */
 const STAMP_TXT: React.CSSProperties = {
   color: "var(--text)",
+  fontSize: "var(--fs-ui)",
   fontWeight: 700,
+  letterSpacing: "0.01em",
   fontVariantNumeric: "tabular-nums",
   fontFamily: "var(--font-num)",
 };
 
 const FRAME_TXT: React.CSSProperties = {
   color: "var(--text-2)",
+  fontFamily: "var(--font-num)",
   fontVariantNumeric: "tabular-nums",
 };
 
+const NO_FRAMES: React.CSSProperties = {
+  display: "flex", flexDirection: "column", gap: 2, whiteSpace: "normal", maxWidth: 300,
+};
+
+const NO_FRAMES_WHY: React.CSSProperties = {
+  fontSize: "var(--fs-micro)", lineHeight: 1.45, color: "var(--muted)",
+};
+
+/** Tint tag on --up: the one place on this bar where direction colour is the meaning
+ *  (a live feed), and it rides the token so east-mode flips it with everything else. */
 const LIVE_BADGE: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  fontSize: 10,
+  "--c": "var(--up)",
   fontWeight: 800,
   letterSpacing: "0.08em",
-  color: "var(--up)",
-};
+} as React.CSSProperties;
 
 /** Replaces the LIVE badge while a past session is loaded. Deliberately NOT a direction
  *  colour — a replayed day is neither up nor down, and --up/--down flip by language. */
 const ARCHIVED_BADGE: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 5,
-  fontSize: 10,
+  "--c": "var(--muted)",
   color: "var(--text-2)",
-  padding: "2px 7px",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-sm, 6px)",
-  background: "var(--inset)",
-};
+  gap: "var(--sp-1)",
+} as React.CSSProperties;
 
 const ARCHIVED_WORD: React.CSSProperties = {
   fontWeight: 700,

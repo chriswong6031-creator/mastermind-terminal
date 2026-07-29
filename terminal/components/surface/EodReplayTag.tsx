@@ -27,31 +27,30 @@ export function EodReplayTag({ lang }: { lang: Lang }) {
   if (!replay.active || !replay.offHead) return null;
   const t = makeSurfaceT(lang);
   return (
-    <span style={TAG} aria-label={t("eodNotReplayedNote")}>
+    <span className="obs-tag" style={TAG} aria-label={t("eodNotReplayedNote")}>
       <span style={DOT} aria-hidden />
       {t("eodNotReplayed")}
     </span>
   );
 }
 
+/**
+ * The universal tint formula (.obs-tag) driven by one variable. `--warn` is a HEALTH
+ * colour, not a direction one: it never flips under html[data-updown="east"], which is
+ * exactly right for a caveat that is neither bullish nor bearish. Same amber vocabulary
+ * as .obs-note, so the whole honesty layer reads as one language.
+ */
 const TAG: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 5,
-  fontSize: 9.5,
-  fontWeight: 600,
+  "--c": "var(--warn)",
   letterSpacing: "0.04em",
-  color: "var(--muted)",
-  padding: "1px 7px",
-  border: "1px dashed var(--line)",
-  borderRadius: 5,
   whiteSpace: "nowrap",
-};
+} as React.CSSProperties;
 
+/** Inherits the tag's tint — no second colour to keep in sync. */
 const DOT: React.CSSProperties = {
   width: 5,
   height: 5,
   borderRadius: "50%",
-  background: "var(--signal)",
+  background: "currentColor",
   flexShrink: 0,
 };

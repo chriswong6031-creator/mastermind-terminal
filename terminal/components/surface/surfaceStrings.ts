@@ -217,6 +217,34 @@ const SURFACE_LEX = {
     "The field is materialised for these roots only. Others are not built yet — nothing is hidden.",
     "目前仅为以下标的生成曲面数据，其余尚未构建 — 并非隐藏内容。",
   ],
+
+  // ── Provenance row (institutional pass, 2026-07-28) ─────────────────────────
+  // Every data surface names its source next to its as-of. These are the two stores
+  // this family actually reads — nothing here claims a feed we don't have.
+  sourceOpra: ["OPRA per-strike flow", "OPRA 逐行权价资金流"],
+  sourceTide: ["OPRA premium tide", "OPRA 权利金资金流"],
+
+  // ── Honest empty / building states: name the reason, never a bare "no data" ──
+  // The existing one-liners stay as the TITLE; each `…Why` adds the second line stating
+  // WHICH of: still accruing / needs a session / not stored — from state the component
+  // already has.
+  surfaceEmptyWhy: [
+    "Stamps are written as the session runs — until the materializer has painted one there is nothing to shade. Nothing is hidden.",
+    "曲面时点在交易时段内逐帧写入 — 物化程序绘制之前没有可着色的数据，并非隐藏内容。",
+  ],
+  surfaceLoadingWhy: ["Fetching the frame for this stamp.", "正在获取该时点的数据帧。"],
+  replayNoFramesWhy: [
+    "The scrubber needs a session with stored stamps; this root has none for the selected day.",
+    "回放滚动条需要有已保存时点的交易日；该标的在所选日期没有可用时点。",
+  ],
+  sessionEmptyWhy: [
+    "The tide accrues from the 9:30 ET open and needs at least two minutes before a line can be drawn.",
+    "资金流自美东9:30开盘起累积，至少需要两分钟才能绘制曲线。",
+  ],
+  evoNoSeriesWhy: [
+    "This strike carries no value in any realized stamp of the loaded session.",
+    "在本交易日已实现的时点中，该行权价没有任何数值。",
+  ],
 } as const;
 
 type SurfaceKey = keyof typeof SURFACE_LEX;

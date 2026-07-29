@@ -251,9 +251,9 @@ function ChainCampaignRow({
 
       {/* Ask share bar */}
       <div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "var(--sp-1)" }}>
           <span className="obs-fd-chain-stat-key">{t("chainHeatAskShare")}</span>
-          <span className="num" style={{ fontSize: 10, color: "var(--text-2)" }}>{askBarW}%</span>
+          <span className="num" style={{ fontSize: "var(--fs-micro)", color: "var(--text-2)" }}>{askBarW}%</span>
         </div>
         <div className="obs-fd-chain-askbar-track">
           <div className="obs-fd-chain-askbar-fill" style={{ width: `${askBarW}%` }} />
@@ -516,7 +516,7 @@ export function FlowDeskView() {
             onOpenTutorial={() => setTutOpen(true)}
           />
         )}
-        {!feedForWatchlist && <div style={RAIL_LOADING} />}
+        {!feedForWatchlist && <div className="fin-skel" style={RAIL_LOADING} aria-hidden="true" />}
 
         {/* Smart Money Radar — fills remaining left-rail height, obs-scroll inside */}
         {feedForRadar.unusual_names.length > 0 && (
@@ -567,9 +567,12 @@ export function FlowDeskView() {
 
 // ─── Layout styles ────────────────────────────────────────────────────────────
 
+// Left-rail placeholder while the first feed payload lands — a shimmer skeleton
+// rather than an unexplained blank panel (doctrine: never a mute blank).
 const RAIL_LOADING: React.CSSProperties = {
-  height: "100%",
-  background: "var(--panel)",
+  height: 220,
+  margin: "var(--sp-2) 0",
+  borderRadius: "var(--r-card)",
 };
 
 // ChainHeat styles moved to observatory.css (.obs-fd-chain-*)

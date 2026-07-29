@@ -11,7 +11,7 @@
  */
 import { useState } from "react"
 import type { Fund, RatiosCurrent } from "../../lib/fund"
-import { fmtNum, fmtPct, pick } from "../../lib/finFormat"
+import { fmtDate, fmtNum, fmtPct, pick } from "../../lib/finFormat"
 import { Bars, type Series } from "./FinCharts"
 
 // ── prop types ──────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
       <div className="fin-body">
         <div className="fin-empty fin-empty-lg" role="status">
           <span className="fin-empty-title">{pick(!!zh, "Fundamentals not yet covered", "尚未覆盖基本面数据")}</span>
-          <span>{pick(!!zh,
+          <span className="fin-empty-why">{pick(!!zh,
             `Fundamental data for ${sym ?? "this symbol"} hasn't been collected yet. Coverage is extended nightly by dollar volume.`,
             `${sym ?? "该标的"} 的基本面数据尚未采集。覆盖范围每夜按成交额扩展。`
           )}</span>
@@ -139,12 +139,20 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
 
   // Currency label
   const ccy = fund.stmt_currency ?? "USD"
+  // Provenance: every table on this page dates itself off the one snapshot date.
+  const asofD = fund.asof ? fmtDate(fund.asof) : ""
+  const asofTxt = asofD ? pick(!!zh, `as of ${asofD}`, `截至 ${asofD}`) : ""
 
   return (
     <div className="fin-body">
       {/* ── Header + toggle ── */}
-      <div className="fin-stats-hdr">
-        <div className="fin-sec-h">{pick(!!zh, "Statistics", "统计数据")}</div>
+      {/* `rule` rides the ROW (not the title) so the hairline spans the header
+          width instead of stopping under the word — same shape the Earnings
+          module header uses for a title+control row. */}
+      <div className="fin-stats-hdr fin-rule">
+        <div className="fin-sec-h fin-rail" style={{ "--rail": "var(--brand)" } as React.CSSProperties}>
+          {pick(!!zh, "Statistics", "统计数据")}
+        </div>
         <div className="fin-toggle">
           <button className={mode === "annual" ? "on" : ""} onClick={() => setMode("annual")}>
             {pick(!!zh, "Annual", "年度")}
@@ -180,11 +188,6 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
 
       {/* ── Key stats ── */}
       <div className="fin-sec">
-        <div className="fin-stats-meta">
-          <span>{pick(!!zh, "Metrics", "指标")}</span>
-          <span className="fin-stats-ccy">{pick(!!zh, "Currency: " + ccy, "货币: " + ccy)}</span>
-        </div>
-
         <div className="fin-table-scroll">
           <table className="fin-table fin-stats-tbl">
             <thead>
@@ -230,14 +233,28 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
             </tbody>
           </table>
         </div>
+        {/* the old header meta line reads as provenance — it now sits below the
+            data it describes, as the standard as-of row */}
+        <div className="fin-stats-meta fin-asof">
+          <span className="fin-stats-ccy">{pick(!!zh, "Currency: " + ccy, "货币: " + ccy)}</span>
+          {asofTxt && <span>{asofTxt}</span>}
+        </div>
       </div>
 
       {/* ── Valuation ratios (annual series + live Current column) ── */}
       <div className="fin-sec">
         {/* v1 has no quarterly ratio series — show honest empty state in quarterly mode */}
         {!isAnnual ? (
-          <div className="fin-empty" role="status">
-            {pick(!!zh, "Quarterly valuation ratios are not available.", "季度估值比率暂不可用。")}
+          <div className="fin-empty fin-empty-lg" role="status">
+            <span className="fin-empty-title">
+              {pick(!!zh, "No quarterly valuation ratios", "暂无季度估值比率")}
+            </span>
+            <span className="fin-empty-why">
+              {pick(!!zh,
+                "The fundamentals feed publishes valuation ratios on annual fiscal periods only — switch to Annual to see the series.",
+                "基本面数据源仅按年度财季发布估值比率 — 切换到年度视图即可查看该序列。"
+              )}
+            </span>
           </div>
         ) : (
           <div className="fin-table-scroll">
@@ -261,7 +278,7 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
                   <th colSpan={(hasHistoricalRatios ? annualPeriods.slice(-6).length : 0) + 2} className="fin-cell fin-cell-grp" scope="rowgroup">
                     {pick(!!zh, "Valuation ratios", "估值比率")}
                     {!hasHistoricalRatios && (
-                      <span style={{ fontWeight: 500, fontSize: "10px", color: "var(--muted)", marginLeft: "8px" }}>
+                      <span style={{ fontWeight: 500, fontSize: "var(--fs-micro)", color: "var(--muted)", marginLeft: "8px" }}>
                         {pick(!!zh, "— historical series not yet available", "— 历史数据暂不可用")}
                       </span>
                     )}
@@ -287,6 +304,12 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+        {isAnnual && asofTxt && (
+          <div className="fin-stats-meta fin-asof">
+            <span>{pick(!!zh, "Annual fiscal periods", "年度财季")}</span>
+            <span>{asofTxt}</span>
           </div>
         )}
       </div>
@@ -320,6 +343,12 @@ export default function StatisticsPage({ fund, quote, zh, sym }: StatisticsPageP
             </tbody>
           </table>
         </div>
+        {asofTxt && (
+          <div className="fin-stats-meta fin-asof">
+            <span>{pick(!!zh, "Latest reported ratios", "最新报告比率")}</span>
+            <span>{asofTxt}</span>
+          </div>
+        )}
       </div>
     </div>
   )

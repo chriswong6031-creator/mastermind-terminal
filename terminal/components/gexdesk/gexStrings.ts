@@ -51,6 +51,9 @@ const GEX_LEX = {
     "Vanna 与 Charm 暂未提供按到期日数据 — 仅伽马与德尔塔。",
   ],
   expiryNoData:   ["No expiration breakdown for this ticker yet.", "该品种暂无按到期日数据。"],
+  // Column headers for the by-expiration bars (the table shipped without any).
+  expiryColExp:   ["Expiration", "到期日"],
+  expiryColNet:   ["Net exposure", "净敞口"],
 
   // ── Summary bar labels ─────────────────────────────────────────────────────
   sumNetGex:      ["Net GEX", "净GEX"],
@@ -289,6 +292,14 @@ const GEX_LEX = {
   errorRetry:      ["Retry", "重试"],
   noGexData:       ["No GEX data for this ticker", "该品种暂无GEX数据"],
   stateAbsent:     ["State computing — nightly", "状态计算中 — 每日更新"],
+  // An empty desk must name WHICH emptiness it is. Upstream reality: the nightly
+  // options build re-pulls the index anchors first, so a single name can be missing
+  // from a snapshot outright — that is a coverage gap, not a broken ticker.
+  gexNoSnapshot:   ["No strike snapshot for this name yet", "该品种暂无逐行权价快照"],
+  gexNoSnapshotWhy: [
+    "{sym} isn't in this nightly build — index anchors and the most liquid single names publish first.",
+    "本次夜间构建中没有 {sym} — 指数锚定品种与流动性最高的个股优先发布。",
+  ],
 
   // ── Tooltip / hover labels ─────────────────────────────────────────────────
   tooltipNetGex:   ["Net GEX", "净GEX"],

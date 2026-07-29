@@ -1,10 +1,15 @@
 "use client";
 /**
  * FlowCard — single event card in the Flow Desk center feed.
- * Observatory restyle: glass obs-card, RingGauge md, lean dashed pill.
+ *
+ * v7 hierarchy (institutional pass): every card leads with ONE primary number
+ * (premium) and ONE primary read (the contract-type tag + soft lean pill).
+ * Identity (ticker / score ring / time) sits above it; the contract line and a
+ * single muted meta line — which now absorbs the former badge rail — sit below.
  *
  * HONESTY DOCTRINE (non-negotiable):
  *  - Colors are by MAGNITUDE (score tier) — never green/red by asserted buy/sell.
+ *    The tinted read tag carries CONTRACT TYPE (call/put), not an asserted side.
  *  - Direction "lean" is a SOFT chip with neutral styling + explicit tooltip.
  *  - No "validated", no predictive-edge claims in copy.
  *  - Sweep badge carries "heuristic" tooltip — aggressor is UNVERIFIED without NBBO.
@@ -102,6 +107,23 @@ export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, o
 
   const isCall = ev.right === "C";
 
+  // Secondary detail flags — v2 detections when enrich is fresh, else the v1
+  // client-derived set. Same gating as before; they now render as muted words
+  // on the meta line instead of a colored badge rail.
+  const flags: MetaFlagSpec[] = [];
+  if (hasEnrich) {
+    for (const b of v2Badges) {
+      const labels = V2_BADGE_LABELS[b] ?? { en: b, zh: b };
+      flags.push({ key: b, label: zh ? labels.zh : labels.en });
+    }
+  } else {
+    if (badges.whale)   flags.push({ key: "whale",   label: zh ? "巨单" : "WHALE",   tip: t("badgeWhaleDesc") });
+    if (badges.cluster) flags.push({ key: "cluster", label: zh ? "集群" : "CLUSTER", tip: t("badgeClusterDesc") });
+    if (badges.sweep)   flags.push({ key: "sweep",   label: zh ? "扫单≈" : "SWEEP≈", tip: t("badgeSweepDesc") });
+    if (badges.unusual) flags.push({ key: "unusual", label: zh ? "异常" : "UNUSUAL", tip: t("badgeUnusualDesc") });
+    if (badges.block)   flags.push({ key: "block",   label: zh ? "大宗" : "BLOCK",   tip: t("badgeBlockDesc") });
+  }
+
   return (
     <div
       className={`obs-card obs-fc-card${selected ? " sel" : ""}`}
@@ -111,18 +133,31 @@ export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, o
       data-tut="flow-card"
       style={{ position: "relative" }}
     >
-      {/* ── Line 1: ticker / C|P / score ring / lean / time ── */}
+      {/* ── Identity row: ticker / score ring / time ── */}
       <div className="obs-fc-row1">
         <span className="obs-fc-ticker">{ev.root}</span>
 
-        {/* C/P chip — East-Asian flip aware via var(--up)/var(--down) */}
-        <span className={`obs-fc-cp ${isCall ? "call" : "put"}`}>
-          {isCall ? (zh ? "认购" : "C") : (zh ? "认沽" : "P")}
-        </span>
-
-        {/* Score ring — compact sm size on line 1 */}
+        {/* Score ring — compact sm size, magnitude tone (never asserted side) */}
         <span className="obs-fc-ring-wrap obs-fc-ring-inline">
           <RingGauge value={score} size="sm" tone="auto" />
+        </span>
+
+        <span className="obs-fc-time num">{fmtTime(ev.ts)}</span>
+      </div>
+
+      {/* ── Headline: the one primary number, then the one primary read ──
+          Premium leads. The tinted tag carries CONTRACT TYPE (call/put) via the
+          up/down tokens — the same recipe the old C/P chip used, so the
+          East-Asian flip still rides the token. The lean pill next to it stays
+          neutral: direction is never asserted with color. */}
+      <div className="obs-fc-head">
+        <span className="obs-fc-prem num">{fmtPremium(ev.premium)}</span>
+
+        <span
+          className="obs-tag obs-fc-read"
+          style={{ "--c": isCall ? "var(--up)" : "var(--down)" } as React.CSSProperties}
+        >
+          {isCall ? t("typeCall") : t("typePut")}
         </span>
 
         {/* Lean chip — dashed border, neutral color.
@@ -151,17 +186,14 @@ export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, o
             )}
           </span>
         )}
-
-        <span className="obs-fc-time">{fmtTime(ev.ts)}</span>
       </div>
 
-      {/* ── Line 2: strike / exp / DTE + premium prominent ── */}
+      {/* ── Contract line: strike / exp / DTE ── */}
       <div className="obs-fc-line2">
         <span className="obs-fc-subtitle num">${ev.strike} · {ev.exp} · {ev.dte}d</span>
-        <span className="obs-fc-prem">{fmtPremium(ev.premium)}</span>
       </div>
 
-      {/* ── Line 3: size / OI followed by a wrapping badge rail ── */}
+      {/* ── One muted meta line: size / OI / IV, then the demoted flags ── */}
       <div className="obs-fc-line3">
         <span className="obs-fc-meta">
           <span className="num">{zh ? "张数" : "Size"} {ev.size.toLocaleString()}</span>
@@ -177,32 +209,12 @@ export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, o
               <span className="num">IV {((ev.iv as number) * 100).toFixed(1)}%</span>
             </>
           )}
-        </span>
-        <span className="obs-fc-badges-row obs-fc-badges-inline">
-          {/* v2 detection badges (compact tokens) — only when enrich present */}
-          {hasEnrich && v2Badges.map((b) => (
-            <V2Badge key={b} badge={b} zh={zh} />
+          {flags.map((f) => (
+            <span key={f.key} className="obs-fc-meta-flagwrap">
+              <span className="obs-fc-meta-sep">·</span>
+              <MetaFlag label={f.label} tip={f.tip} />
+            </span>
           ))}
-          {/* v1 badges shown when enrich absent (graceful fallback) */}
-          {!hasEnrich && (
-            <>
-              {badges.whale && (
-                <Badge cls="whale" label={zh ? "巨单" : "WHALE"} tip={t("badgeWhaleDesc")} />
-              )}
-              {badges.cluster && (
-                <Badge cls="cluster" label={zh ? "集群" : "CLUSTER"} tip={t("badgeClusterDesc")} />
-              )}
-              {badges.sweep && (
-                <Badge cls="sweep" label={zh ? "扫单≈" : "SWEEP≈"} tip={t("badgeSweepDesc")} />
-              )}
-              {badges.unusual && (
-                <Badge cls="unusual" label={zh ? "异常" : "UNUSUAL"} tip={t("badgeUnusualDesc")} />
-              )}
-              {badges.block && (
-                <Badge cls="block" label={zh ? "大宗" : "BLOCK"} tip={t("badgeBlockDesc")} />
-              )}
-            </>
-          )}
         </span>
       </div>
 
@@ -250,16 +262,25 @@ export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, o
   );
 });
 
-// ── Badge sub-component ───────────────────────────────────────────────────────
+// ── Meta flag sub-component ───────────────────────────────────────────────────
+// v7: the former colored badge rail is demoted to muted words on the meta line.
+// The honesty tooltips (sweep is heuristic, cluster is repeat-root, …) survive.
 
-function Badge({ cls, label, tip }: { cls: string; label: string; tip: string }) {
+interface MetaFlagSpec {
+  key: string;
+  label: string;
+  tip?: string;
+}
+
+function MetaFlag({ label, tip }: { label: string; tip?: string }) {
   const [vis, setVis] = useState(false);
+  if (!tip) return <span className="obs-fc-metaflag">{label}</span>;
   return (
     <span
-      className={`obs-fc-badge obs-fc-badge-${cls}`}
+      className="obs-fc-metaflag obs-fc-metaflag-tip"
       onMouseEnter={() => setVis(true)}
       onMouseLeave={() => setVis(false)}
-      style={{ position: "relative" }}
+      aria-label={tip}
     >
       {label}
       {vis && (
@@ -269,7 +290,7 @@ function Badge({ cls, label, tip }: { cls: string; label: string; tip: string })
   );
 }
 
-// ── V2 Badge sub-component (compact token from enrich artifact) ───────────────
+// ── V2 detection labels (compact token from enrich artifact) ──────────────────
 
 const V2_BADGE_LABELS: Record<string, { en: string; zh: string }> = {
   MULTI_LEG:    { en: "MULTI-LEG", zh: "多腿" },
@@ -280,34 +301,6 @@ const V2_BADGE_LABELS: Record<string, { en: string; zh: string }> = {
   FRESH:        { en: "FRESH",     zh: "新仓" },
   Z_OUTLIER:    { en: "Z-OUT",     zh: "Z异常" },
   OI_CONFIRMED: { en: "OI✓",      zh: "OI确认" },
-};
-
-type EnrichBadgeKey = keyof typeof V2_BADGE_LABELS;
-
-function V2Badge({ badge, zh }: { badge: EnrichBadgeKey; zh: boolean }) {
-  const labels = V2_BADGE_LABELS[badge] ?? { en: badge, zh: badge };
-  return (
-    <span
-      className={`obs-fc-badge obs-fc-badge-v2 obs-fc-badge-${badge.toLowerCase().replace(/_/g, "-")}`}
-      style={V2_BADGE_STYLE}
-    >
-      {zh ? labels.zh : labels.en}
-    </span>
-  );
-}
-
-const V2_BADGE_STYLE: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  fontSize: 8,
-  fontWeight: 800,
-  letterSpacing: "0.06em",
-  padding: "1px 4px",
-  borderRadius: 3,
-  border: "1px solid var(--line-2)",
-  background: "rgba(77,130,255,0.08)",
-  color: "var(--brand-2)",
-  whiteSpace: "nowrap" as const,
 };
 
 // ── Tooltip styles ────────────────────────────────────────────────────────────

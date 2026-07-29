@@ -124,6 +124,7 @@ export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
   const strike = finite(pick.strike);
   const ratio = finite(pick.standout_ratio);
   const pct = spot != null && strike != null ? spotPct(strike, spot) : null;
+  const above = spot != null && strike != null ? strike >= spot : null;
   const confPct = heatSeekerConfPct(pick.confidence);
 
   return (
@@ -132,7 +133,7 @@ export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
       <div className="obs-card-hd" style={CARD_HEADER}>
         <span style={PICK_STAR}>★</span>
         <span className="obs-lbl" style={{ flex: 1 }}>{t("heatSeekerTitle")}</span>
-        <span style={CARD_LENS}>{pick.lens}</span>
+        <span className="obs-tag" style={CARD_LENS}>{pick.lens}</span>
       </div>
 
       {/* Disclaimer — verbatim, non-removable, always amber */}
@@ -140,38 +141,54 @@ export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
         {t("heatSeekerDisclaimer")}
       </div>
 
-      {/* Confidence ring + pick cells */}
+      {/*
+        One number, one reason: the STRIKE is the pick and carries the headline;
+        its distance from spot is the direction tag; the standout ratio is the single
+        reason the strike was chosen; everything else drops to one muted line below.
+        Confidence is a 0..1 engine fraction — the ring shows it as a percent.
+      */}
       <div style={PICK_BODY}>
+        <div style={HEADLINE_COL}>
+          <div style={HEADLINE_ROW}>
+            <span className="num" style={HEADLINE_VALUE}>
+              {strike != null ? fmtStrike(strike) : "—"}
+            </span>
+            {pct != null && (
+              <span
+                className="obs-tag num"
+                style={{
+                  ...DIR_TAG,
+                  "--c": above ? "var(--up)" : "var(--down)",
+                } as React.CSSProperties}
+                aria-label={`${pct} ${t("heatSeekerFromSpot")}`}
+              >
+                {pct}
+              </span>
+            )}
+          </div>
+          <div style={REASON_ROW}>
+            <span className="obs-lbl">{t("heatSeekerRatio")}</span>
+            <span className="num" style={REASON_VALUE}>
+              {ratio != null ? `${ratio.toFixed(2)}×` : "—"}
+            </span>
+          </div>
+        </div>
         {confPct != null && (
           <RingGauge
             value={confPct}
-            size="md"
+            size="sm"
             tone="auto"
-            label={t("heatSeekerConf")}
+            label={t("heatSeekerConfUnit")}
           />
         )}
-        <div style={PICK_GRID}>
-          <div style={PICK_CELL}>
-            <span className="obs-lbl">{t("heatSeekerStrike")}</span>
-            <span className="num" style={PICK_VALUE}>
-              {strike != null ? fmtStrike(strike) : "—"}
-              {pct != null && (
-                <span style={PCT_FROM_SPOT}> {pct}</span>
-              )}
-            </span>
-          </div>
-          <div style={PICK_CELL}>
-            <span className="obs-lbl">{t("heatSeekerExpiry")}</span>
-            <span className="num" style={PICK_VALUE}>
-              {fmtExpiry(pick.expiry)}
-              <span style={DTE_CHIP}>{dte === 0 ? "0DTE" : `${dte}d`}</span>
-            </span>
-          </div>
-          <div style={PICK_CELL}>
-            <span className="obs-lbl">{t("heatSeekerRatio")}</span>
-            <span className="num" style={PICK_VALUE}>{ratio != null ? `${ratio.toFixed(2)}×` : "—"}</span>
-          </div>
-        </div>
+      </div>
+
+      {/* Metadata — one muted line, never competing with the headline */}
+      <div style={META_LINE}>
+        {t("heatSeekerExpiry")}{" "}
+        <span className="num">
+          {fmtExpiry(pick.expiry)} · {dte === 0 ? "0DTE" : `${dte}d`}
+        </span>
       </div>
     </div>
   );
@@ -216,7 +233,7 @@ const CARD_HEADER: React.CSSProperties = {
 const DISCLAIMER_NOTE: React.CSSProperties = {
   margin: "0 10px 0",
   padding: "6px 10px",
-  borderRadius: 8,
+  borderRadius: "var(--r-tile)",
   fontSize: 10,
   lineHeight: 1.4,
 };
@@ -224,80 +241,70 @@ const DISCLAIMER_NOTE: React.CSSProperties = {
 const PICK_BODY: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 12,
-  padding: "10px 12px 12px",
+  justifyContent: "space-between",
+  gap: "var(--sp-3)",
+  padding: "10px 12px 8px",
 };
 
 const PICK_STAR: React.CSSProperties = {
   fontSize: 13,
-  color: "rgba(232,179,57,0.9)",
+  color: "var(--signal)",
 };
 
-const CARD_TITLE: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: "var(--text)",
-  letterSpacing: "0.04em",
-  flex: 1,
-};
-
+/** `.obs-tag` supplies the tint; only the dense metrics stay inline. */
 const CARD_LENS: React.CSSProperties = {
+  "--c": "var(--brand-2)",
   fontSize: 9,
   fontWeight: 800,
-  color: "var(--brand-2)",
   letterSpacing: "0.09em",
-  background: "rgba(77,130,255,0.12)",
-  border: "1px solid rgba(77,130,255,0.25)",
-  borderRadius: 3,
-  padding: "1px 5px",
-};
+  padding: "2px 7px",
+} as React.CSSProperties;
 
-const DISCLAIMER: React.CSSProperties = {
-  fontSize: 9,
-  color: "var(--muted)",
-  fontStyle: "italic",
-  letterSpacing: "0.01em",
-};
-
-const PICK_GRID: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: "5px 8px",
-};
-
-const PICK_CELL: React.CSSProperties = {
+const HEADLINE_COL: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 1,
+  gap: "var(--sp-2)",
+  minWidth: 0,
 };
 
-const PICK_LABEL: React.CSSProperties = {
-  fontSize: 8,
-  color: "var(--muted)",
-  letterSpacing: "0.06em",
-  textTransform: "uppercase",
+const HEADLINE_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--sp-2)",
+  flexWrap: "wrap",
 };
 
-const PICK_VALUE: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 700,
+/** The pick itself — the one number the card exists to show. */
+const HEADLINE_VALUE: React.CSSProperties = {
+  fontSize: "var(--fs-num)",
+  fontWeight: 750,
   color: "var(--text)",
-  fontVariantNumeric: "tabular-nums",
+  letterSpacing: "-.01em",
+  lineHeight: 1,
 };
 
-const PCT_FROM_SPOT: React.CSSProperties = {
-  fontSize: 9,
-  fontWeight: 400,
-  color: "var(--muted)",
-  marginLeft: 2,
+const DIR_TAG: React.CSSProperties = {
+  fontSize: 9.5,
+  fontWeight: 700,
+  padding: "2px 7px",
 };
 
-const DTE_CHIP: React.CSSProperties = {
-  fontSize: 8,
-  marginLeft: 4,
+const REASON_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  gap: 6,
+};
+
+const REASON_VALUE: React.CSSProperties = {
+  fontSize: "var(--fs-emph)",
+  fontWeight: 700,
+  color: "var(--text-2)",
+};
+
+/** Everything that is not the pick or its reason lives on this one line. */
+const META_LINE: React.CSSProperties = {
+  padding: "0 12px 11px",
+  fontSize: 10,
   color: "var(--muted)",
-  background: "var(--panel-3)",
-  border: "1px solid var(--line)",
-  borderRadius: 3,
-  padding: "0 3px",
+  letterSpacing: "0.02em",
 };
