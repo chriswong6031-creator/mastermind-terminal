@@ -28,16 +28,21 @@ const DEPLOYMENT_ID =
 //     is no longer in connect-src.)
 //   - CN/HK quote hosts are fetched SERVER-side today, but are allowed in connect-src as a safe
 //     superset so a client fallback path can't silently break live quotes.
-// frame-ancestors 'self' + X-Frame-Options block competitors from iframing/rehosting the UI.
+// frame-ancestors allows only the first-party Macro Dashboard (apex + www) to host the
+// full-screen Terminal workspace. Every other origin remains blocked, so the integration
+// does not create a general-purpose rehosting surface.
 // In dev, Turbopack HMR needs 'unsafe-eval'; production stays strict.
 //   - Mastermind Brain widget bundle: components/BrainWidget.tsx loads
 //     https://www.mastermind-x.com/mm_brain.js on the Terminal, so that origin is allowed in script-src.
 const scriptSrc = ["'self'", "'unsafe-inline'", "https://www.mastermind-x.com", ...(isProd ? [] : ["'unsafe-eval'"])].join(" ");
+const dashboardFrameAncestors =
+  "'self' https://mastermind-x.com https://www.mastermind-x.com" +
+  (isProd ? "" : " http://localhost:* http://127.0.0.1:*");
 const CSP = [
   "default-src 'self'",
   "base-uri 'self'",
   "object-src 'none'",
-  "frame-ancestors 'self'",
+  `frame-ancestors ${dashboardFrameAncestors}`,
   "form-action 'self'",
   `script-src ${scriptSrc}`,
   "style-src 'self' 'unsafe-inline'",
@@ -54,7 +59,9 @@ const CSP = [
 // its CORP/nosniff headers live in the Caddyfile (app/deploy/Caddyfile, macro repo).
 const securityHeaders = [
   { key: "Content-Security-Policy", value: CSP },
-  { key: "X-Frame-Options", value: "SAMEORIGIN" },
+  // No X-Frame-Options: the legacy header cannot express an exact cross-origin
+  // allowlist and would veto the first-party dashboard frame. CSP frame-ancestors
+  // above is the modern, narrower authority.
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), interest-cohort=()" },
@@ -64,23 +71,17 @@ const securityHeaders = [
 
 // ── Embeddable widget headers (/embed/*) ──────────────────────────────────────
 // The /embed/chart widget is iframed by the ~1,500 SEO stock dossier pages on
-// https://mastermind-x.com/stocks/<TICKER>.html, so it must be FRAMEABLE by that origin — the
-// opposite of every other route (which stays locked with frame-ancestors 'self' + X-Frame-Options
-// to stop competitors rehosting the UI). This header set:
-//   - swaps frame-ancestors to allow the dossier host (apex + www), keeping everything else strict;
-//   - OMITS X-Frame-Options entirely (that legacy header only understands SAMEORIGIN/DENY, so its
-//     presence would veto the cross-origin frame regardless of CSP — X-Frame-Options ⇒ no framing);
+// https://mastermind-x.com/stocks/<TICKER>.html. The full Terminal and this widget now share the
+// same exact first-party frame allowlist; this subtree keeps its separate noindex/cache policy:
+//   - CSP stays strict and frameable only by the dossier/dashboard hosts (apex + www);
+//   - X-Frame-Options remains omitted because the legacy header cannot express that allowlist;
 //   - keeps nosniff / referrer / HSTS / permissions / COOP unchanged;
 //   - adds X-Robots-Tag: noindex so search engines never index the widget shells directly;
 //   - caps edge caching at 5 min (SWR 10 min) like the other prerendered shells.
 // COEP is deliberately not set (an embedded third-party widget must stay cross-origin embeddable).
 // In dev, also allow localhost parents on any port so the dossier repo's local
 // preview (a plain static server on a random port) can frame the widget end-to-end.
-const embedCSP = CSP.replace(
-  "frame-ancestors 'self'",
-  "frame-ancestors 'self' https://mastermind-x.com https://www.mastermind-x.com" +
-    (isProd ? "" : " http://localhost:* http://127.0.0.1:*"),
-);
+const embedCSP = CSP;
 const embedHeaders = [
   { key: "Content-Security-Policy", value: embedCSP },
   // NB: no X-Frame-Options here (its presence would block the cross-origin iframe).
@@ -167,9 +168,10 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
-      // Security headers on every route EXCEPT the /embed subtree (framing, CSP, sniffing, referrer,
-      // HSTS). The negative-lookahead keeps EXACTLY today's strict set on everything else; /embed
-      // gets its own frameable set below. Regex is applied to the path without the leading slash.
+      // Security headers on every route EXCEPT the /embed subtree (CSP, sniffing, referrer,
+      // HSTS). Every app route is frameable only by the exact first-party dashboard origins so
+      // users can move between Terminal workspaces without the frame being rejected mid-session.
+      // /embed gets the same framing policy plus its own noindex/cache headers below.
       {
         source: "/((?!embed).*)",
         headers: securityHeaders,
