@@ -1,10 +1,55 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { isPaidTier } from "@/lib/entitlement";
+import { billingAuth, BILLING_BASE } from "@/app/api/billing/gateway";
+import { SUITE_ALERT_EVENTS, validateSuiteCondition } from "@/lib/suiteAlerts";
 
 async function uid() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   return { supabase, user };
+}
+
+// ── condition allow-list ──────────────────────────────────────────────────────
+// Anything not named here is rejected at the door: the engine (ingest/alerts_engine.py)
+// and the suite lane (Node) only know these types, so an unknown one is a row that can
+// never fire — silent dead weight in the user's list.
+const LEGACY_TYPES = new Set(["signal", "regime", "price", "rsi"]);
+const OPT_TYPES = new Set([
+  "opt_gamma_flip", "opt_wall_touch", "opt_premium_burst", "opt_0dte_spike", "opt_surface_pocket",
+]);
+const SUITE_TYPE = "suite_event";
+
+const MAX_ALERTS_PER_USER = 50;
+
+/** Owning tier of a catalog event; unknown event → "pro" so an unlisted event fails CLOSED. */
+function eventTier(suite: unknown, event: unknown): "free" | "insider" | "pro" {
+  const hit = SUITE_ALERT_EVENTS.find((e) => e.suite === suite && e.event === event);
+  if (!hit) return "pro";
+  return hit.tier === "free" || hit.tier === "insider" ? hit.tier : "pro";
+}
+
+/**
+ * Pro-ONLY gate. lib/entitlement.ts exposes isPaidTier() (any paid tier) but no tier reader;
+ * its doc comment says a pro-only surface must gate on `tier === "pro"`, so this reads the SAME
+ * authority (macro-api /api/me via the billing gateway) with the same FAIL-CLOSED rule —
+ * no session / non-2xx / throw → false. See the report note: fold into entitlement.ts as
+ * isProTier() once that file is free.
+ */
+async function isProTier(): Promise<boolean> {
+  const auth = await billingAuth();
+  if (!auth) return false;
+  try {
+    const r = await fetch(`${BILLING_BASE}/api/me`, {
+      headers: { Authorization: `Bearer ${auth.token}`, Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!r.ok) return false;
+    const d = await r.json();
+    return d?.tier === "pro";
+  } catch {
+    return false;
+  }
 }
 
 export async function GET() {
@@ -17,8 +62,35 @@ export async function GET() {
 export async function POST(req: Request) {
   const { supabase, user } = await uid();
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  const { symbol, condition } = await req.json();
-  if (!symbol || !condition) return NextResponse.json({ error: "bad request" }, { status: 400 });
+  const body = (await req.json().catch(() => ({}))) as { symbol?: unknown; condition?: unknown };
+  const symbol = body.symbol;
+  const condition = body.condition as Record<string, unknown> | undefined;
+  if (!symbol || typeof symbol !== "string" || !condition || typeof condition !== "object")
+    return NextResponse.json({ error: "bad request" }, { status: 400 });
+
+  const type = condition.type;
+  if (typeof type !== "string" || (!LEGACY_TYPES.has(type) && !OPT_TYPES.has(type) && type !== SUITE_TYPE))
+    return NextResponse.json({ error: `Unknown alert condition: ${String(type)}` }, { status: 400 });
+
+  if (type === SUITE_TYPE) {
+    // validateSuiteCondition: reason string when malformed, null when well-formed.
+    const why = validateSuiteCondition(condition);
+    if (why) return NextResponse.json({ error: `Invalid suite alert: ${why}` }, { status: 400 });
+    const tier = eventTier(condition.suite, condition.event);
+    if (tier !== "free") {
+      // FAIL-CLOSED: uncertainty about entitlement is a refusal, never a grant.
+      if (!(await isPaidTier()))
+        return NextResponse.json({ error: "This suite alert is included with a paid plan — upgrade to unlock." }, { status: 403 });
+      if (tier === "pro" && !(await isProTier()))
+        return NextResponse.json({ error: "This suite alert is included with the Pro plan — upgrade to unlock." }, { status: 403 });
+    }
+  }
+
+  // Per-user cap — a runaway client (or a bored user) must not turn the 5-min cron into a crawl.
+  const { count } = await supabase.from("alerts").select("id", { count: "exact", head: true }).eq("user_id", user.id);
+  if ((count ?? 0) >= MAX_ALERTS_PER_USER)
+    return NextResponse.json({ error: `Alert limit reached (${MAX_ALERTS_PER_USER}). Delete one to add another.` }, { status: 400 });
+
   const { data, error } = await supabase.from("alerts").insert({ user_id: user.id, symbol, condition }).select("*").single();
   if (error) {
     console.error("alerts POST failed:", error);

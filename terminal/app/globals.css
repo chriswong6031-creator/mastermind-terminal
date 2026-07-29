@@ -2331,3 +2331,46 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .is-mod-h .is-guide{flex:none;width:16px;height:16px;border-radius:50%;border:1px solid var(--line-3);background:transparent;color:var(--muted);font:600 10px/1 var(--font-ui);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0}
 .is-mod-h .is-guide:hover{color:var(--brand-2);border-color:var(--brand-2)}
 .is-mod-h .is-guide:focus-visible{outline:2px solid var(--brand-2);outline-offset:1px}
+
+/* ---- Chart dashboards (premium suites) ---- */
+/* Corner-anchored DOM dashboards drawn over the chart by components/ChartTables.tsx (TableSpec[]).
+   Layer law: a corner stack shrinks to its content and never takes pointer input, so a chart drag
+   that starts outside a card rect is untouched; only the card itself is interactive (hover + the
+   per-cell title tooltip). Dark-only, design tokens only, numerals always --font-num + tabular. */
+.ct-corner{position:absolute;z-index:6;display:flex;flex-direction:column;gap:var(--sp-2);pointer-events:none;max-width:min(260px,calc(100% - 16px));max-height:calc(100% - 16px);overflow:hidden;font-family:var(--font-ui)}
+/* top-left clears the statusline / pane legend that already own that corner */
+.ct-corner-tl{top:64px;left:var(--sp-2);align-items:flex-start}
+.ct-corner-tr{top:var(--sp-2);right:var(--sp-2);align-items:flex-end}
+.ct-corner-bl{bottom:var(--sp-2);left:var(--sp-2);align-items:flex-start}
+.ct-corner-br{bottom:var(--sp-2);right:var(--sp-2);align-items:flex-end}
+
+.ct-card{pointer-events:auto;width:max-content;max-width:100%;padding:var(--sp-2);background:var(--panel);opacity:.95;border:1px solid var(--line-3);border-radius:var(--r-tile);box-shadow:var(--shadow-card);overflow:hidden;transition:opacity var(--t-fast) var(--ease-out),border-color var(--t-fast) var(--ease-out)}
+.ct-title{margin:0 0 var(--sp-1);padding:0 var(--sp-1);font:700 var(--fs-micro)/1.25 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.ct-tbl{width:100%;border-collapse:collapse}
+.ct-col-lbl{}
+.ct-hcell{padding:0 var(--sp-1) 3px;text-align:left;font:700 var(--fs-micro)/1.25 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ct-hcell.is-num{text-align:right}
+.ct-lbl{padding:2px var(--sp-1);text-align:left;font:500 var(--fs-label)/1.35 var(--font-ui);color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ct-cell{padding:2px var(--sp-1);text-align:left;font:600 var(--fs-ui)/1.35 var(--font-num);font-variant-numeric:tabular-nums;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ct-cell.is-num{text-align:right}
+/* tint = the fin-tag formula, driven by the inline --ct-c the cell's bg token sets */
+.ct-cell.has-bg{background:color-mix(in srgb,var(--ct-c,var(--muted)) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ct-c,var(--muted)) 28%,transparent);border-radius:4px}
+.ct-foot{margin-top:var(--sp-1);padding:0 var(--sp-1);font:500 var(--fs-micro)/1.4 var(--font-ui);color:var(--text-dim);overflow-wrap:anywhere}
+
+.ct-card.is-compact{padding:var(--sp-1) 6px}
+.ct-card.is-compact .ct-title{margin-bottom:2px;padding:0 3px}
+.ct-card.is-compact .ct-hcell{padding:0 3px 2px}
+.ct-card.is-compact .ct-lbl,.ct-card.is-compact .ct-cell{padding:1px 3px}
+.ct-card.is-compact .ct-lbl,.ct-card.is-compact .ct-cell,.ct-card.is-compact .ct-foot{font-size:var(--fs-micro)}
+
+@media (hover:hover){
+  .ct-card:hover{opacity:1;border-color:color-mix(in srgb,var(--brand) 34%,var(--line-3))}
+}
+@media (max-width:860px){
+  .ct-corner{max-width:min(56vw,220px);gap:6px}
+  .ct-corner-tl{top:30px}
+}
+@media (prefers-reduced-motion:reduce){
+  .ct-card{transition:none}
+}

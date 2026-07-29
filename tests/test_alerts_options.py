@@ -218,17 +218,45 @@ def test_slope_stats_baseline_excludes_the_window():
     assert abs(s["baseMean"] - 1.5 * M) < 1e-6
     assert abs(s["baseStd"] - 0.5 * M) < 1e-6
     assert s["winMean"] == 10 * M
-    assert abs(s["se"] - (0.5 * M) / math.sqrt(3)) < 1e-6
-    assert abs(s["z"] - 29.444864) < 1e-5
+    # Two-sample SE of the mean DIFFERENCE — baseStd*sqrt(1/w + 1/baseN), not baseStd/sqrt(w).
+    se = 0.5 * M * math.sqrt(1 / 3 + 1 / 20)
+    assert abs(s["se"] - se) < 1e-6
+    assert abs(s["z"] - (10 * M - 1.5 * M) / se) < 1e-6
+    assert abs(s["z"] - 27.457477) < 1e-5  # vitest: optionsAlerts.test.ts
     assert s["why"] == ""
 
 
-def test_slope_stats_sqrt_w_correction():
+def test_slope_stats_one_sample_se_inflated_z_regression():
+    """At the minimum baseline the guard admits (baseN = 2w), the OLD one-sample SE
+    (baseStd/sqrt(w)) inflated z by exactly sqrt(1.5) — a '2 sigma' alert fired at 1.63."""
+    base = _rep([1, 2], 5)  # 10 calm deltas, baseStd 0.5
+    at_min = ae._session_slope_stats(_series(_tide(base + [9] * 5)), 5)
+    assert at_min["baseN"] == 2 * at_min["w"]
+    old_se = at_min["baseStd"] / math.sqrt(at_min["w"])
+    z_old = (at_min["winMean"] - at_min["baseMean"]) / old_se
+    assert abs(at_min["z"] / z_old - 1 / math.sqrt(1.5)) < 1e-9
+    assert abs(z_old / at_min["z"] - math.sqrt(1.5)) < 1e-9
+
+
+def test_slope_stats_two_sample_se_scaling():
+    """The old baseStd/sqrt(w) form made z scale by EXACTLY sqrt(w2/w1) between two windows;
+    the two-sample SE does not, because each window carries its own baseline size."""
     base = _rep([1, 2], 20)  # 40 calm deltas, baseStd 0.5
     s1 = ae._session_slope_stats(_series(_tide(base + [9])), 1)
     s4 = ae._session_slope_stats(_series(_tide(base + [9, 9, 9, 9])), 4)
     assert s1["winMean"] == s4["winMean"] == 9
-    assert abs(s4["z"] / s1["z"] - 2) < 1e-9  # sqrt(4)/sqrt(1)
+    se1 = 0.5 * math.sqrt(1 / 1 + 1 / 40)
+    se4 = 0.5 * math.sqrt(1 / 4 + 1 / 40)
+    assert abs(s1["se"] - se1) < 1e-9
+    assert abs(s4["se"] - se4) < 1e-9
+    assert abs(s4["z"] / s1["z"] - se1 / se4) < 1e-9
+    assert abs(s4["z"] / s1["z"] - 2) > 0.01  # NOT the old sqrt(4)/sqrt(1)
+
+
+def test_slope_stats_converges_to_one_sample_on_a_huge_baseline():
+    """Sanity: baseN -> infinity is where the one-sample form is right, and the two agree."""
+    s = ae._session_slope_stats(_series(_tide(_rep([1, 2], 5000) + [9, 9, 9])), 3)
+    assert abs(s["se"] - 0.5 / math.sqrt(3)) < 1e-3
 
 
 def test_slope_stats_min_sample_guard_null():
@@ -260,7 +288,7 @@ def test_premium_burst_hot_fires():
     assert "unusual pace" in note
     assert "net-call premium" in note
     assert "intraday tape" in note
-    assert abs(val - 29.44) < 0.01
+    assert abs(val - 27.46) < 0.01  # vitest parity
     assert "vs the 20m before it" in note
 
 
@@ -287,7 +315,7 @@ def test_premium_burst_contaminated_baseline_regression():
     tide = _tide(CONTAM)
     fired, val, _, _ = _eval(_burst_cond(window_min=5), StubFlow(tide=tide))
     assert fired is True
-    assert abs(val - 441.64) < 0.1
+    assert abs(val - 382.47) < 0.1  # vitest parity
     ceiling = math.sqrt((20 - 5) / 5)
     z_old = _old_z(_series(tide), 5)
     assert z_old < ceiling

@@ -24,6 +24,15 @@
 // `computeUltimateMacd`): the drawn point IS the series value (exact ===), and every signal is
 // re-derived from that series and compared as a set.
 //
+// W3 (DASHBOARD modules — Market Dashboard + the three MTF dashboards): these draw NO prims; their
+// output is `ModuleResult.tables` (the W3 addition to the frozen contract). Tested here: the shared
+// `buildMtfTable` plumbing (padding/trimming/sanitizing/the mandatory footnote), the Market
+// Dashboard's arithmetic on a fixture where every row is hand-computable, the MTF columns' exclusion
+// of the trailing PARTIAL resample block (the non-repaint rule that makes the dashboards honest),
+// and the W2 satellite law — every dashboard recomputes its producer's series at the producer's LIVE
+// settings from ctx.suite. ChartTables.tsx is DOM and is NOT tested here (no jsdom in this suite);
+// only the TableSpec these modules emit is.
+//
 // All inputs are crafted or generated from a seeded LCG — no Date.now, no Math.random.
 //
 // Fixture note: several W1 fixtures are built by `levelBars`, whose bars have a true range of
@@ -77,6 +86,25 @@ import { MACD_SIGNALS_MODULE } from "../suites/macdx/macdSignals";
 import { MACD_DIVERGENCE_MODULE } from "../suites/macdx/macdDivergence";
 import { MACD_HISTOGRAM_MODULE } from "../suites/macdx/macdHistogram";
 import { MACD_TREND_MODULE } from "../suites/macdx/macdTrend";
+import { MARKET_DASHBOARD_MODULE } from "../suites/trend/marketDashboard";
+import { PULSE_MTF_MODULE } from "../suites/pulse/mtfDash";
+import { RSIX_MTF_MODULE } from "../suites/rsix/mtfDash";
+import { MACDX_MTF_MODULE } from "../suites/macdx/mtfDash";
+import {
+  EM_DASH,
+  MTF_COLUMN_KEYS,
+  MTF_COLUMN_LABELS,
+  MTF_FACTORS,
+  MTF_SIGNAL_WINDOW,
+  buildMtfTable,
+  mtfAgo,
+  mtfBasisTip,
+  mtfBool,
+  mtfFade,
+  mtfFootnote,
+  mtfPos,
+  mtfSlope,
+} from "../suites/shared/mtfTable";
 import { SUITE_DEFS, SUITE_ORDER } from "../suites/registry";
 import {
   MAX_PRIMS_PER_MODULE,
@@ -88,6 +116,7 @@ import {
   type SuiteDef,
   type SuiteEvent,
   type SuiteModuleDef,
+  type TableSpec,
 } from "../indicator-canvas/types";
 
 // ─── Harness ──────────────────────────────────────────────────────────────────
@@ -3369,13 +3398,18 @@ describe("W2 contract hygiene", () => {
       const tags = def.modules.map((m) => m.tag);
       expect(new Set(tags).size, `${k}: duplicate module tags`).toBe(tags.length);
     }
-    // Tags are unique WITHIN a suite (asserted above). Across suites exactly one collision exists
-    // and it is pinned here on purpose: Market Structure (structure) and MACD Signals (macdx) both
-    // ship the tag "MS". Both identities were specified by the program, so the legend must qualify a
-    // module chip by its suite — this assertion exists to stop the collision list growing silently.
+    // Tags are unique WITHIN a suite (asserted above). Across suites the collision list is pinned
+    // here on purpose — every entry is a program-specified identity, and this assertion exists to
+    // stop the list growing silently:
+    //   "MS"  — Market Structure (structure) vs MACD Signals (macdx).
+    //   "MTF" — the three pane suites each ship the SAME concept, an MTF Dashboard (W3). Giving
+    //           them per-suite tags would invent three names for one thing; the legend qualifies a
+    //           module chip by its suite, so the shared tag is the honest one.
+    // W3 note: Market Dashboard was accidentally a fourth collision ("MD", already MACD
+    // Divergence's) and was retagged "DSH" at the source rather than accepted here.
     const allTags = SUITE_ORDER.flatMap((k) => SUITE_DEFS[k].modules.map((m) => m.tag));
     const dupes = allTags.filter((t, i) => allTags.indexOf(t) !== i);
-    expect(dupes.sort()).toEqual(["MS"]);
+    expect(dupes.sort()).toEqual(["MS", "MTF", "MTF"]);
   });
 });
 
@@ -3473,5 +3507,842 @@ describe("W2 non-repaint & density", () => {
         expect(count(res), `${mod.key} showLast=${showLast}`).toBeLessThanOrEqual(showLast * per);
       }
     }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// W3 — DASHBOARD MODULES (Market Dashboard + the three MTF dashboards)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── 20. Fixtures + table helpers ─────────────────────────────────────────────
+
+/**
+ * A strictly linear price path through `pathBars`, which makes every dashboard statistic exact:
+ *   - true range is EXACTLY 0.7 on every bar after the first (h−l = 0.7 dominates both gap terms),
+ *     so ATR(14) settles on 0.7 and ATR/close is strictly monotone in the close;
+ *   - EMA20 vs EMA50 and close vs EMA200 never flip;
+ *   - the Trend Engine's ATR trailing stop seeds on bar 0 in the path's direction and never flips;
+ *   - Bollinger σ over any 20-bar window is constant, so bandwidth = 4σ/mean moves ONLY with the
+ *     mean — monotonically DOWN on the up ramp and UP on the down ramp.
+ * Hence Trend Score = 5·(±1) + 3·(±1) + 2·(±1) = ±10 exactly, and the percentile rows sit on their
+ * rails. 320 bars clears the EMA200 warm-up.
+ */
+function rampBars(n: number, from: number, step: number): SuiteBar[] {
+  return pathBars(Array.from({ length: n }, (_, i) => from + i * step));
+}
+const DASH_UP = rampBars(320, 100, 0.3);
+const DASH_DOWN = rampBars(320, 200, -0.3);
+
+const tableOf = (res: ModuleResult, id: string): TableSpec =>
+  (res.tables ?? []).find((t) => t.id === id) as TableSpec;
+const rowOf = (tb: TableSpec, label: string) => tb.rows.find((r) => r.label === label)!;
+const cellText = (tb: TableSpec, label: string, k = 0) => rowOf(tb, label).cells[k]?.text;
+
+// ─── 21. Market Dashboard ─────────────────────────────────────────────────────
+
+describe("marketDashboard — hand-computed rows", () => {
+  it("reads every row off a pure linear uptrend", () => {
+    const res = run(MARKET_DASHBOARD_MODULE, DASH_UP);
+    expect(res.prims).toEqual([]); // the table IS the drawing
+    const tb = tableOf(res, "trend-dash");
+    expect(tb).toBeDefined();
+    expect(tb.pos).toBe("tr"); // module default
+    expect(tb.title).toBe("Market Dashboard");
+    expect(tb.rows.map((r) => r.label)).toEqual([
+      "Volatility", "Compression", "Trend", "Pressure", "Rating", "MTF",
+    ]);
+
+    // ATR/close = 0.7/close is at its 320-bar MINIMUM on the last bar: 1 of 252 samples at or
+    // below it -> 100/252 = 0.397% -> "0%", and nowhere near the 80% warn line.
+    expect(cellText(tb, "Volatility")).toBe("0%");
+    expect(rowOf(tb, "Volatility").cells[0].color).toBe(COLORS.muted);
+    expect(rowOf(tb, "Volatility").cells[0].bold).toBe(false); // below the 80% warn line
+
+    // bandwidth 4σ/mean is likewise at its minimum -> percentile 0.397 -> (100−0.397)/10 = 9.96.
+    expect(cellText(tb, "Compression")).toBe("10.0/10");
+    expect(rowOf(tb, "Compression").cells[0].color).toBe(COLORS.brand); // >= 8 -> squeeze watch
+    expect(rowOf(tb, "Compression").cells[0].bold).toBe(true);
+
+    // 5·(+1 engine) + 3·(EMA20 > EMA50) + 2·(close > EMA200)
+    expect(cellText(tb, "Trend")).toBe("+10");
+    expect(rowOf(tb, "Trend").cells[0].color).toBe(COLORS.up);
+    expect(rowOf(tb, "Trend").cells[0].bold).toBe(true);
+
+    // every bar contributes the same v·body/range, so the 20-bar sum ranks at the top: (100−50)/5.
+    expect(cellText(tb, "Pressure")).toBe("+10.0");
+    expect(rowOf(tb, "Pressure").cells[0].color).toBe(COLORS.flowBuy); // aggressor family, never flips
+
+    // |Trend| >= 7 and pressure agrees, but Compression 9.96 >= 8 is a squeeze -> STRONG is blocked.
+    expect(cellText(tb, "Rating")).toBe("BUY");
+    expect(rowOf(tb, "Rating").cells[0].bold).toBe(false); // bold is reserved for the STRONG bands
+
+    expect(rowOf(tb, "MTF").cells.map((c) => c.text)).toEqual(["chart ▲", "2× ▲", "4× ▲"]);
+    expect(rowOf(tb, "MTF").cells.every((c) => c.color === COLORS.up)).toBe(true);
+  });
+
+  it("flips every sign on the mirrored downtrend", () => {
+    const tb = tableOf(run(MARKET_DASHBOARD_MODULE, DASH_DOWN), "trend-dash");
+    // ATR/close now RISES with the falling close: the last bar is the 252-window maximum.
+    expect(cellText(tb, "Volatility")).toBe("100%");
+    expect(rowOf(tb, "Volatility").cells[0].color).toBe(COLORS.warn);
+    expect(rowOf(tb, "Volatility").cells[0].bold).toBe(true);
+    // bandwidth rises with the falling mean -> widest on the last bar -> no compression at all.
+    expect(cellText(tb, "Compression")).toBe("0.0/10");
+    expect(rowOf(tb, "Compression").cells[0].color).toBe(COLORS.muted);
+
+    expect(cellText(tb, "Trend")).toBe("-10");
+    expect(rowOf(tb, "Trend").cells[0].color).toBe(COLORS.down);
+    // Pressure is a RANK of the 20-bar delta against its own history; every window is identical, so
+    // it ranks top even though the deltas are negative. The rating vote therefore sees pressure
+    // DISAGREEING with the down trend and honestly refuses to call it STRONG.
+    expect(cellText(tb, "Rating")).toBe("SELL");
+    expect(rowOf(tb, "Rating").cells[0].color).toBe(COLORS.down);
+    expect(rowOf(tb, "MTF").cells.map((c) => c.text)).toEqual(["chart ▼", "2× ▼", "4× ▼"]);
+  });
+
+  it("localizes the labels and the copy without leaking either language", () => {
+    const en = tableOf(run(MARKET_DASHBOARD_MODULE, DASH_UP, {}, "en"), "trend-dash");
+    const zh = tableOf(run(MARKET_DASHBOARD_MODULE, DASH_UP, {}, "zh"), "trend-dash");
+    expect(/[一-鿿]/.test(JSON.stringify(en)), "CJK leaked into the en table").toBe(false);
+    expect(/[一-鿿]/.test(JSON.stringify(zh)), "zh table has no CJK").toBe(true);
+    expect(zh.title).toBe("市场仪表盘");
+    expect(cellText(zh, "综合评级")).toBe("买入");
+    // the numbers are language-independent
+    expect(cellText(zh, "趋势分")).toBe(cellText(en, "Trend"));
+    expect(cellText(zh, "多周期", 1)).toBe("2× ▲"); // the resample labels are not translated
+  });
+});
+
+describe("marketDashboard — rows, settings and shape", () => {
+  const ROWS: Array<[string, string]> = [
+    ["volatility", "Volatility"], ["compression", "Compression"], ["trendScore", "Trend"],
+    ["pressure", "Pressure"], ["rating", "Rating"], ["mtf", "MTF"],
+  ];
+
+  it("drops exactly the row whose toggle is off", () => {
+    for (const [key, label] of ROWS) {
+      const tb = tableOf(run(MARKET_DASHBOARD_MODULE, DASH_UP, { [key]: false }), "trend-dash");
+      const labels = tb.rows.map((r) => r.label);
+      expect(labels, `${key} off`).not.toContain(label);
+      expect(labels.length, `${key} off`).toBe(ROWS.length - 1);
+    }
+  });
+
+  it("emits no table at all when every row is off, but keeps the event tape alive", () => {
+    const off = Object.fromEntries(ROWS.map(([k]) => [k, false]));
+    const res = run(MARKET_DASHBOARD_MODULE, DASH_UP, off);
+    expect(res.tables).toEqual([]);
+    expect(res.prims).toEqual([]);
+    // The alert bridge must keep firing when the row is hidden (voltixBands/fvg precedent), so the
+    // tape is computed from the settings-independent vote, not from the drawn rows.
+    const noisy = walkBars(900, 4242, 31);
+    const hidden = run(MARKET_DASHBOARD_MODULE, noisy, off).events ?? [];
+    const shown = run(MARKET_DASHBOARD_MODULE, noisy).events ?? [];
+    expect(shown.length, "the fixture prints no rating changes").toBeGreaterThan(0);
+    expect(hidden, "hiding the rating row silenced the alert tape").toEqual(shown);
+  });
+
+  it("carries the honest resample footnote only while the MTF row is shown", () => {
+    const on = tableOf(run(MARKET_DASHBOARD_MODULE, DASH_UP), "trend-dash");
+    expect(on.footnote).toBe("2× / 4× = the loaded chart bars resampled — not fetched higher timeframes.");
+    expect(tableOf(run(MARKET_DASHBOARD_MODULE, DASH_UP, { mtf: false }), "trend-dash").footnote).toBeUndefined();
+  });
+
+  it("honours pos and compact", () => {
+    for (const pos of ["tl", "tr", "bl", "br"] as const) {
+      expect(tableOf(run(MARKET_DASHBOARD_MODULE, DASH_UP, { pos }), "trend-dash").pos).toBe(pos);
+    }
+    expect(tableOf(run(MARKET_DASHBOARD_MODULE, DASH_UP, { pos: "nope" }), "trend-dash").pos).toBe("tr");
+    // (this module always states `compact` explicitly; the MTF tables omit it when false)
+    expect(tableOf(run(MARKET_DASHBOARD_MODULE, DASH_UP), "trend-dash").compact).toBe(false);
+    expect(tableOf(run(MARKET_DASHBOARD_MODULE, DASH_UP, { compact: true }), "trend-dash").compact).toBe(true);
+    expect(tableOf(run(MARKET_DASHBOARD_MODULE, DASH_UP, { compact: "yes" }), "trend-dash").compact).toBe(false);
+  });
+
+  it("ships a self-consistent TableSpec (no row wider than the column set)", () => {
+    for (const bars of [DASH_UP, DASH_DOWN, walkBars(600, 77, 29)]) {
+      const tb = tableOf(run(MARKET_DASHBOARD_MODULE, bars), "trend-dash");
+      expect(tb.columns.map((c) => c.key)).toEqual(["a", "b", "c"]);
+      expect(new Set(tb.columns.map((c) => c.key)).size).toBe(tb.columns.length);
+      for (const r of tb.rows) {
+        expect(r.label.length, "empty row label").toBeGreaterThan(0);
+        expect(r.cells.length, `${r.label}: no cells`).toBeGreaterThan(0);
+        expect(r.cells.length, `${r.label}: more cells than columns`).toBeLessThanOrEqual(tb.columns.length);
+        for (const c of r.cells) {
+          expect(typeof c.text).toBe("string");
+          expect(c.text.length, `${r.label}: empty cell`).toBeGreaterThan(0);
+          expect(c.text.includes("NaN"), `${r.label}: NaN leaked`).toBe(false);
+          expect(c.text.includes("undefined"), `${r.label}: undefined leaked`).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("returns an empty result below the minimum bar count and survives dirty bars", () => {
+    for (const bars of [[], walkBars(2), walkBars(24)]) {
+      const res = run(MARKET_DASHBOARD_MODULE, bars);
+      expect(res.tables).toEqual([]);
+      expect(res.events).toEqual([]);
+    }
+    expect(() => run(MARKET_DASHBOARD_MODULE, dirtyBars())).not.toThrow();
+    const dirty = tableOf(run(MARKET_DASHBOARD_MODULE, dirtyBars()), "trend-dash");
+    for (const r of dirty.rows) for (const c of r.cells) expect(c.text.includes("NaN")).toBe(false);
+  });
+
+  it("is deterministic across repeated computes", () => {
+    for (const bars of [DASH_UP, walkBars(600, 77, 29)]) {
+      expect(run(MARKET_DASHBOARD_MODULE, bars)).toEqual(run(MARKET_DASHBOARD_MODULE, bars));
+    }
+  });
+});
+
+describe("marketDashboard — rating tape", () => {
+  const BARS = walkBars(900, 4242, 31);
+
+  it("publishes rating changes with a 10-bar cooldown and a bounded tape", () => {
+    const evs = evOf(run(MARKET_DASHBOARD_MODULE, BARS), "dash_rating_change");
+    expect(evs.length, "the fixture no longer exercises the tape").toBeGreaterThan(2);
+    const RATINGS = ["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"];
+    const seen = new Set<string>();
+    let prevI = -Infinity;
+    for (const e of evs) {
+      expect(e.i - prevI, "cooldown violated").toBeGreaterThanOrEqual(10);
+      prevI = e.i;
+      const label = (e.label ?? "").replace("Rating → ", "");
+      expect(RATINGS, `unknown rating ${label}`).toContain(label);
+      seen.add(label);
+      expect(e.strength).toBeGreaterThanOrEqual(0);
+      expect(e.strength).toBeLessThanOrEqual(100);
+      const sign = label.includes("BUY") ? "bull" : label.includes("SELL") ? "bear" : "neutral";
+      expect(e.dir, `${label}: dir disagrees with the rating`).toBe(sign);
+    }
+    expect(seen.size, "the tape never changed rating").toBeGreaterThan(1);
+    expect(evs.length).toBeLessThanOrEqual(60);
+  });
+
+  it("never repaints a settled rating change when future bars arrive", () => {
+    const short = BARS.slice(0, 800);
+    const key = (e: SuiteEvent) => `${e.type}|${e.dir}|${e.i}|${e.p}|${e.strength}|${e.label}`;
+    const a = (run(MARKET_DASHBOARD_MODULE, short).events ?? []).map(key);
+    const b = (run(MARKET_DASHBOARD_MODULE, BARS).events ?? []).filter((e) => e.i <= 799).map(key);
+    expect(a.length).toBeGreaterThan(0);
+    expect(b, "appending 100 bars rewrote settled history").toEqual(a);
+  });
+});
+
+describe("marketDashboard follows the Trend Engine's live sensitivity", () => {
+  const BARS = walkBars(700, 991, 37);
+  /** The engine's own regime at the last bar = the direction of its most recent flip. */
+  const engineDir = (sens: number): "bull" | "bear" | null => {
+    const flips = evOf(run(TREND_ENGINE_MODULE, BARS, { sensitivity: sens }), "te_flip");
+    return flips.length ? (flips[flips.length - 1].dir as "bull" | "bear") : null;
+  };
+  const chartArrow = (sens: number) =>
+    cellText(tableOf(run(MARKET_DASHBOARD_MODULE, BARS, {}, "en", { "te.sensitivity": sens }), "trend-dash"), "MTF");
+
+  it("agrees with the Trend Engine's regime at both ends of the sensitivity range", () => {
+    for (const sens of [1, 3, 5, 8, 10]) {
+      const dir = engineDir(sens);
+      expect(dir, `sensitivity ${sens}: the engine never flipped`).not.toBeNull();
+      expect(chartArrow(sens), `sensitivity ${sens}`).toBe(`chart ${dir === "bull" ? "▲" : "▼"}`);
+    }
+  });
+
+  it("moves the whole dashboard when the producer is retuned", () => {
+    const at = (sens: number) => run(MARKET_DASHBOARD_MODULE, BARS, {}, "en", { "te.sensitivity": sens });
+    expect(JSON.stringify(at(1)), "the retune did not reach the dashboard").not.toBe(JSON.stringify(at(10)));
+  });
+
+  it("falls back to the engine default (5) when ctx.suite is absent", () => {
+    const bare: any = { ...ctxFor(MARKET_DASHBOARD_MODULE, BARS) };
+    delete bare.suite;
+    expect(MARKET_DASHBOARD_MODULE.compute(bare)).toEqual(
+      run(MARKET_DASHBOARD_MODULE, BARS, {}, "en", { "te.sensitivity": 5 }),
+    );
+  });
+});
+
+// ─── 22. shared/mtfTable ──────────────────────────────────────────────────────
+
+describe("buildMtfTable", () => {
+  const base = { id: "t", pos: "br" as const, footnote: "F" };
+
+  it("fixes the column set to the three honest labels", () => {
+    const tb = buildMtfTable({ ...base, rows: [] });
+    expect(MTF_FACTORS).toEqual([1, 2, 4]);
+    expect(tb.columns.map((c) => c.key)).toEqual([...MTF_COLUMN_KEYS]);
+    expect(tb.columns.map((c) => c.label)).toEqual([...MTF_COLUMN_LABELS]);
+    expect(tb.columns.map((c) => c.label)).toEqual(["chart", "2×", "4×"]);
+  });
+
+  it("pads short rows and trims long ones so a cell can never sit under the wrong header", () => {
+    const tb = buildMtfTable({
+      ...base,
+      rows: [
+        { label: "short", cells: [{ text: "a" }] },
+        { label: "long", cells: [{ text: "a" }, { text: "b" }, { text: "c" }, { text: "d" }] },
+      ],
+    });
+    expect(tb.rows[0].cells.map((c) => c.text)).toEqual(["a", EM_DASH, EM_DASH]);
+    expect(tb.rows[1].cells.map((c) => c.text)).toEqual(["a", "b", "c"]);
+  });
+
+  it("sanitizes cells: blank text dashes out, fade clamps, empty extras are dropped", () => {
+    const tb = buildMtfTable({
+      ...base,
+      rows: [{
+        label: "  padded  ",
+        cells: [
+          { text: "   ", color: "", bg: "", fade: -1 },
+          { text: " x ", fade: 5, bold: false, tip: "   " },
+          { text: "y", color: COLORS.up, bg: COLORS.down, bold: true, fade: 0.4, tip: " why " },
+        ],
+      }],
+    });
+    const [a, b, c] = tb.rows[0].cells;
+    expect(tb.rows[0].label).toBe("padded");
+    expect(a).toEqual({ text: EM_DASH });         // blank text + blank colors + negative fade
+    expect(b).toEqual({ text: "x", fade: 1 });    // trimmed, fade clamped to 1, falsy extras dropped
+    expect(c).toEqual({ text: "y", color: COLORS.up, bg: COLORS.down, bold: true, fade: 0.4, tip: "why" });
+  });
+
+  it("never lets the honest-basis footnote go missing", () => {
+    const EN = "Rows are resampled from the loaded bars — not independent timeframe feeds.";
+    expect(buildMtfTable({ ...base, footnote: "  ", rows: [] }).footnote).toBe(EN);
+    expect(buildMtfTable({ ...base, footnote: undefined as any, rows: [] }).footnote).toBe(EN);
+    expect(mtfFootnote("en")).toBe(EN);
+    expect(/[一-鿿]/.test(mtfFootnote("zh"))).toBe(true);
+  });
+
+  it("caps the row list and sanitizes id / pos / title / compact", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ label: `r${i}`, cells: [] }));
+    expect(buildMtfTable({ ...base, rows: many }).rows.length).toBe(8);
+    expect(buildMtfTable({ ...base, id: "  ", rows: [] }).id).toBe("mtf");
+    expect(buildMtfTable({ ...base, pos: "nope" as any, rows: [] }).pos).toBe("br");
+    expect(buildMtfTable({ ...base, title: "  T  ", rows: [] }).title).toBe("T");
+    expect(buildMtfTable({ ...base, title: "   ", rows: [] }).title).toBeUndefined();
+    expect(buildMtfTable({ ...base, compact: false, rows: [] }).compact).toBeUndefined();
+    expect(buildMtfTable({ ...base, compact: true, rows: [] }).compact).toBe(true);
+    expect(buildMtfTable({ ...base, rows: [{ label: "  ", cells: [] }] }).rows[0].label).toBe(EM_DASH);
+  });
+
+  it("is pure — same opts, same spec", () => {
+    const opts = { ...base, title: "x", rows: [{ label: "a", cells: [{ text: "1" }] }] };
+    expect(buildMtfTable(opts)).toEqual(buildMtfTable(opts));
+  });
+});
+
+describe("mtfTable microcopy helpers", () => {
+  it("prints the basis line with the block size and the disclosed lag", () => {
+    expect(mtfBasisTip(1, 0, "en")).toBe("Chart timeframe · 1 bar per cell (the last bar may still be forming)");
+    expect(mtfBasisTip(4, 3, "en")).toBe("4× resample · 4 chart bars per cell · last complete block sits 3 chart bars behind");
+    expect(mtfBasisTip(2, 1, "en")).toContain("sits 1 chart bar behind"); // singular
+    expect(/[一-鿿]/.test(mtfBasisTip(4, 3, "zh"))).toBe(true);
+    expect(mtfBasisTip(NaN as any, -5, "en")).toBe(mtfBasisTip(1, 0, "en")); // sanitized
+  });
+
+  it("reads ages in words and fades linearly to a readable floor", () => {
+    expect(mtfAgo(0, "en")).toBe("now");
+    expect(mtfAgo(4, "en")).toBe("4 ago");
+    expect(mtfAgo(-3, "en")).toBe("now");
+    expect(mtfAgo(0, "zh")).toBe("当前");
+    expect(mtfFade(0, 30)).toBe(0);
+    expect(mtfFade(15, 30)).toBeCloseTo(0.35, 12);
+    expect(mtfFade(30, 30)).toBeCloseTo(0.7, 12);  // oldest in-window cell stays readable
+    expect(mtfFade(99, 30)).toBeCloseTo(0.7, 12);
+    expect(mtfFade(5, 0)).toBe(0);
+    expect(mtfFade(NaN, 30)).toBe(0);
+  });
+
+  it("keeps the slope glyph language-neutral and sanitizes the settings readers", () => {
+    expect(mtfSlope(2, 1)).toBe("▲");
+    expect(mtfSlope(1, 2)).toBe("▼");
+    expect(mtfSlope(1, 1)).toBe("·");
+    expect(mtfSlope(1, NaN)).toBe("·");
+    expect(mtfPos("tl")).toBe("tl");
+    expect(mtfPos("nope")).toBe("br");
+    expect(mtfPos(undefined, "tr")).toBe("tr");
+    expect(mtfBool(true, false)).toBe(true);
+    expect(mtfBool("yes", false)).toBe(false);
+  });
+});
+
+// ─── 23. MTF dashboards (pulse / rsix / macdx) ────────────────────────────────
+
+const MTF_CASES: Array<{ suite: string; mod: SuiteModuleDef; id: string; title: string; rows: string[] }> = [
+  { suite: "pulse", mod: PULSE_MTF_MODULE, id: "pulse-mtf", title: "Pulse MTF", rows: ["State", "Signal", "Divergence"] },
+  { suite: "rsix", mod: RSIX_MTF_MODULE, id: "rsix-mtf", title: "RSI MTF", rows: ["RSI", "Signal", "Divergence"] },
+  { suite: "macdx", mod: MACDX_MTF_MODULE, id: "macdx-mtf", title: "MACD MTF", rows: ["MACD", "Signal", "Phase"] },
+];
+
+/** The lag the cell tip discloses, i.e. how far behind the column's last COMPLETE block sits. */
+function tipLag(tip: string | undefined): number {
+  const m = (tip ?? "").match(/sits (\d+) chart bar/);
+  return m ? Number(m[1]) : 0;
+}
+
+describe("MTF dashboards — table shape", () => {
+  const BARS = walkBars(600, 77, 29);
+
+  it("emits exactly one well-formed table and zero prims", () => {
+    for (const c of MTF_CASES) {
+      const res = run(c.mod, BARS);
+      expect(res.prims, `${c.suite}: drew prims`).toEqual([]);
+      expect(res.events ?? [], `${c.suite}: a dashboard has no event tape`).toEqual([]);
+      expect((res.tables ?? []).length, c.suite).toBe(1);
+      const tb = tableOf(res, c.id);
+      expect(tb.title).toBe(c.title);
+      expect(tb.pos).toBe("br");
+      expect(tb.columns.map((x) => x.label)).toEqual(["chart", "2×", "4×"]);
+      expect(tb.rows.map((r) => r.label)).toEqual(c.rows);
+      for (const r of tb.rows) {
+        expect(r.cells.length, `${c.suite}/${r.label}`).toBe(3);
+        for (const cell of r.cells) {
+          expect(cell.text.length, `${c.suite}/${r.label}: empty cell`).toBeGreaterThan(0);
+          expect(cell.text.includes("NaN"), `${c.suite}/${r.label}: NaN leaked`).toBe(false);
+          expect(cell.tip ?? "", `${c.suite}/${r.label}: NaN in the tip`).not.toContain("NaN");
+          if (cell.fade !== undefined) {
+            expect(cell.fade).toBeGreaterThan(0);
+            expect(cell.fade).toBeLessThanOrEqual(0.7);
+          }
+        }
+      }
+      expect(tb.footnote, `${c.suite}: missing basis footnote`).toBe(mtfFootnote("en"));
+    }
+  });
+
+  it("discloses each column's resample basis in every cell tip", () => {
+    for (const c of MTF_CASES) {
+      const tb = tableOf(run(c.mod, BARS), c.id);
+      for (const r of tb.rows) {
+        expect(r.cells[0].tip, `${c.suite}/${r.label}`).toContain("Chart timeframe");
+        expect(r.cells[1].tip, `${c.suite}/${r.label}`).toContain("2× resample");
+        expect(r.cells[2].tip, `${c.suite}/${r.label}`).toContain("4× resample");
+      }
+    }
+  });
+
+  it("honours pos / compact and stays deterministic", () => {
+    for (const c of MTF_CASES) {
+      for (const pos of ["tl", "tr", "bl", "br"] as const) {
+        expect(tableOf(run(c.mod, BARS, { pos }), c.id).pos).toBe(pos);
+      }
+      expect(tableOf(run(c.mod, BARS, { pos: "nope" }), c.id).pos).toBe("br");
+      expect(tableOf(run(c.mod, BARS, { compact: true }), c.id).compact).toBe(true);
+      expect(run(c.mod, BARS), c.suite).toEqual(run(c.mod, BARS));
+    }
+  });
+
+  it("returns an empty result below the minimum bar count and survives dirty bars", () => {
+    for (const c of MTF_CASES) {
+      for (const bars of [[], walkBars(2), walkBars(11)]) {
+        const res = run(c.mod, bars);
+        expect(res.prims, c.suite).toEqual([]);
+        expect(res.tables ?? [], `${c.suite}: table below MIN_BARS`).toEqual([]);
+      }
+      expect(run(c.mod, walkBars(12)).tables?.length, `${c.suite}: 12 bars is enough`).toBe(1);
+      expect(() => run(c.mod, dirtyBars()), `${c.suite} threw on dirty bars`).not.toThrow();
+      for (const r of tableOf(run(c.mod, dirtyBars()), c.id).rows) {
+        for (const cell of r.cells) expect(cell.text.includes("NaN"), `${c.suite}/${r.label}`).toBe(false);
+      }
+    }
+  });
+
+  it("localizes the table without leaking either language, and keeps the columns neutral", () => {
+    for (const c of MTF_CASES) {
+      const en = tableOf(run(c.mod, BARS, {}, "en"), c.id);
+      const zh = tableOf(run(c.mod, BARS, {}, "zh"), c.id);
+      expect(/[一-鿿]/.test(JSON.stringify(en)), `${c.suite}: CJK leaked into the en table`).toBe(false);
+      expect(/[一-鿿]/.test(JSON.stringify(zh)), `${c.suite}: zh table has no CJK`).toBe(true);
+      expect(zh.footnote).toBe(mtfFootnote("zh"));
+      expect(zh.columns.map((x) => x.label)).toEqual(en.columns.map((x) => x.label));
+      expect(zh.rows.length).toBe(en.rows.length);
+    }
+  });
+});
+
+describe("MTF dashboards — the trailing PARTIAL block is never read", () => {
+  // Review W3-8 semantics: a block is only READ once it is closed AND the next bar has opened.
+  // With 400 bars (divisible by 4), the count-complete last 4× block still CONTAINS the live bar
+  // 399, so the column steps back to the block ending at 395 (lag 4). At 401 bars, block 396..399
+  // is genuinely closed (bar 400 is live) → lag 1; then 2, 3, and back to 4 at 404.
+  const FULL = walkBars(403, 20260728, 29);
+  const at = (mod: SuiteModuleDef, n: number, id: string) => tableOf(run(mod, FULL.slice(0, n)), id);
+
+  it("keeps the 4× column frozen while its next block is still forming", () => {
+    for (const c of MTF_CASES) {
+      const base = at(c.mod, 401, c.id); // first run where block 396..399 is safely closed
+      for (const n of [402, 403]) {
+        const tb = at(c.mod, n, c.id);
+        for (let r = 0; r < base.rows.length; r++) {
+          expect(tb.rows[r].cells[2].text, `${c.suite}/${base.rows[r].label} @${n} bars`)
+            .toBe(base.rows[r].cells[2].text);
+        }
+      }
+    }
+  });
+
+  it("discloses the growing staleness instead of hiding it — and never reads a block holding the live bar", () => {
+    for (const c of MTF_CASES) {
+      for (const [n, lag] of [[400, 4], [401, 1], [402, 2], [403, 3]] as const) {
+        const tb = at(c.mod, n, c.id);
+        expect(tipLag(tb.rows[0].cells[2].tip), `${c.suite}: 4× lag @${n} bars`).toBe(lag);
+        expect(tipLag(tb.rows[0].cells[0].tip), `${c.suite}: the chart column never lags`).toBe(0);
+      }
+      // 2×: the live-bar rule makes the cycle 2,1 instead of 0,1 — a count-complete block ending on
+      // the live bar is skipped (n=400,402 → lag 2), a closed block with one live bar after → lag 1.
+      for (const [n, lag] of [[400, 2], [401, 1], [402, 2], [403, 1]] as const) {
+        expect(tipLag(at(c.mod, n, c.id).rows[0].cells[1].tip), `${c.suite}: 2× lag @${n} bars`).toBe(lag);
+      }
+    }
+  });
+
+  it("advances the 4× column only once the next block CLOSES and a new bar opens", () => {
+    const LONGER = walkBars(405, 20260728, 29); // bars 400..403 close a block; bar 404 is the live one
+    expect(LONGER.slice(0, 403)).toEqual(FULL);
+    for (const c of MTF_CASES) {
+      const closed = tableOf(run(c.mod, LONGER), c.id);
+      expect(tipLag(closed.rows[0].cells[2].tip), `${c.suite}: the new block reads with lag 1`).toBe(1);
+      // the column is now reading bars 400..403, which the 403-bar run could not see at all
+      const forming = at(c.mod, 403, c.id);
+      expect(tipLag(forming.rows[0].cells[2].tip)).toBe(3);
+      expect(closed.rows[0].cells[2].tip).not.toBe(forming.rows[0].cells[2].tip);
+    }
+  });
+});
+
+describe("MTF dashboards follow their producer's live settings (W2 law)", () => {
+  const BARS = walkBars(600, 77, 29);
+  /** The numeric head of a cell — the part that must equal the producer's own series. */
+  const num = (s: string) => parseFloat(s.replace(/^[^\d+-]*/, ""));
+
+  it("pulse: the State row is the Wave module's series at the Wave module's profile", () => {
+    const tuned = tableOf(run(PULSE_MTF_MODULE, BARS, {}, "en", { "wave.profile": "scalper" }), "pulse-mtf");
+    const base = tableOf(run(PULSE_MTF_MODULE, BARS), "pulse-mtf");
+    expect(cellText(tuned, "State"), "the retune never reached the dashboard")
+      .not.toBe(cellText(base, "State"));
+    // the chart column is the identity resample, so its last block IS the last bar
+    const { wave } = computePulseWave(BARS, "scalper");
+    expect(num(cellText(tuned, "State")!)).toBe(Math.round(wave[BARS.length - 1]));
+    const { wave: dayWave } = computePulseWave(BARS, "day");
+    expect(num(cellText(base, "State")!)).toBe(Math.round(dayWave[BARS.length - 1]));
+  });
+
+  /** The exact "<value> <slope>" a value row renders for a series' last entry. */
+  const levelCell = (series: Float64Array): string => {
+    const g = series.length - 1;
+    let prev = NaN;
+    for (let k = g - 1; k >= 0; k--) if (Number.isFinite(series[k])) { prev = series[k]; break; }
+    return `${series[g].toFixed(1)} ${mtfSlope(series[g], prev)}`;
+  };
+
+  it("rsix: the RSI row is the Engine's curve at the Engine's length", () => {
+    const p = RSI_DEFAULTS;
+    const seen = new Set<string>();
+    for (const len of [5, 14, 30]) {
+      const tb = tableOf(run(RSIX_MTF_MODULE, BARS, {}, "en", { "eng.len": len }), "rsix-mtf");
+      const { rsi } = computeUltimateRsi(BARS, len, p.source, p.smoothLen, p.smoothType);
+      expect(cellText(tb, "RSI"), `len=${len}`).toBe(levelCell(rsi)); // value AND slope glyph
+      seen.add(cellText(tb, "RSI")!);
+    }
+    expect(seen.size, "the length retune never reached the dashboard").toBe(3);
+    expect(cellText(tableOf(run(RSIX_MTF_MODULE, BARS), "rsix-mtf"), "RSI"), "default is len 14")
+      .toBe(levelCell(computeUltimateRsi(BARS, p.len, p.source, p.smoothLen, p.smoothType).rsi));
+  });
+
+  it("macdx: the MACD row is the Engine's curve at the Engine's fast/slow", () => {
+    const d = MACDX_ENGINE_DEFAULTS;
+    const tb = tableOf(run(MACDX_MTF_MODULE, BARS, {}, "en", { "eng.fast": 4, "eng.slow": 60 }), "macdx-mtf");
+    expect(cellText(tb, "MACD")).toBe(levelCell(computeUltimateMacd(BARS, 4, 60, d.signalLen, d.oscMa, d.sigMa).macd));
+    const base = tableOf(run(MACDX_MTF_MODULE, BARS), "macdx-mtf");
+    expect(cellText(base, "MACD"))
+      .toBe(levelCell(computeUltimateMacd(BARS, d.fast, d.slow, d.signalLen, d.oscMa, d.sigMa).macd));
+    expect(cellText(tb, "MACD"), "the retune never reached the dashboard").not.toBe(cellText(base, "MACD"));
+  });
+
+  it("macdx: the Signal row uses the Signals module's live extreme zone", () => {
+    const wide = tableOf(run(MACDX_MTF_MODULE, BARS, {}, "en", { "sig.threshold": 60 }), "macdx-mtf");
+    const tight = tableOf(run(MACDX_MTF_MODULE, BARS, {}, "en", { "sig.threshold": 95 }), "macdx-mtf");
+    expect(JSON.stringify(rowOf(wide, "Signal")), "the zone retune did not reach the Signal row")
+      .not.toBe(JSON.stringify(rowOf(tight, "Signal")));
+    for (const cell of rowOf(tight, "Signal").cells) {
+      if (cell.text === EM_DASH) expect(cell.tip).toContain("±95");
+      else expect(cell.tip).toContain("zone ±95");
+    }
+  });
+
+  it("pulse / rsix: the Divergence row honours the Divergence module's hidden toggle", () => {
+    // seed chosen because BOTH panes print a hidden (continuation) divergence inside the window here
+    const DIVBARS = walkBars(300, 991, 29);
+    for (const [mod, id] of [[PULSE_MTF_MODULE, "pulse-mtf"], [RSIX_MTF_MODULE, "rsix-mtf"]] as const) {
+      const on = tableOf(run(mod, DIVBARS, {}, "en", { "div.hidden": true }), id);
+      const off = tableOf(run(mod, DIVBARS, {}, "en", { "div.hidden": false }), id);
+      expect(JSON.stringify(rowOf(off, "Divergence")), `${id}: the toggle changed nothing`)
+        .not.toBe(JSON.stringify(rowOf(on, "Divergence")));
+      // with the producer's toggle off, a continuation class can never be reported
+      for (const bars of [DIVBARS, BARS, walkBars(900, 4242, 31)]) {
+        const cells = rowOf(tableOf(run(mod, bars, {}, "en", { "div.hidden": false }), id), "Divergence");
+        expect(cells.cells.map((c) => c.text).join("|"), `${id}: a hidden divergence survived the toggle`)
+          .not.toContain("H ");
+      }
+    }
+  });
+
+  it("falls back to the producer defaults when ctx.suite is absent", () => {
+    for (const c of MTF_CASES) {
+      const bare: any = { ...ctxFor(c.mod, BARS) };
+      delete bare.suite;
+      expect(c.mod.compute(bare), `${c.suite} without ctx.suite`).toEqual(run(c.mod, BARS));
+    }
+  });
+
+  it("keeps the recency window honest — nothing older than the window is ever shown", () => {
+    for (const c of MTF_CASES) {
+      const tb = tableOf(run(c.mod, BARS), c.id);
+      for (const cell of rowOf(tb, "Signal").cells) {
+        if (cell.text === EM_DASH) continue;
+        const m = cell.text.match(/(\d+) ago$/);
+        const ago = m ? Number(m[1]) : 0; // "now"
+        expect(ago, `${c.suite}: signal older than the window`).toBeLessThanOrEqual(MTF_SIGNAL_WINDOW);
+        expect(cell.fade ?? 0).toBeCloseTo(mtfFade(ago, MTF_SIGNAL_WINDOW), 12);
+      }
+    }
+  });
+});
+
+// ─── 24. W3 contract hygiene ──────────────────────────────────────────────────
+
+const W3_MODULES: SuiteModuleDef[] = [
+  MARKET_DASHBOARD_MODULE, PULSE_MTF_MODULE, RSIX_MTF_MODULE, MACDX_MTF_MODULE,
+];
+
+const W3_SRC_FILES = [
+  "shared/mtfTable.ts", "trend/marketDashboard.ts",
+  "pulse/mtfDash.ts", "rsix/mtfDash.ts", "macdx/mtfDash.ts",
+];
+
+/** Every W3 module on both fixtures, in both languages, with the optional rows switched around. */
+function w3Results(): Array<{ mod: string; res: ModuleResult }> {
+  const out: Array<{ mod: string; res: ModuleResult }> = [];
+  for (const bars of [DASH_UP, walkBars(600, 77, 29), dirtyBars()]) {
+    for (const lang of ["en", "zh"] as const) {
+      out.push({ mod: `dash/${lang}`, res: run(MARKET_DASHBOARD_MODULE, bars, { pos: "bl", compact: true }, lang) });
+      for (const c of MTF_CASES) {
+        out.push({ mod: `${c.suite}/mtf/${lang}`, res: run(c.mod, bars, { compact: true }, lang) });
+      }
+    }
+  }
+  return out;
+}
+
+describe("W3 contract hygiene", () => {
+  it("emits only host-resolved colour tokens in every table cell", () => {
+    for (const { mod, res } of w3Results()) {
+      const bad: string[] = [];
+      scanColors(res.tables ?? [], `${mod}:tables`, bad);
+      expect(bad, `${mod}: non-token colours`).toEqual([]);
+    }
+  });
+
+  it("W3 sources contain zero colour literals, no clock and no randomness", () => {
+    const NAMED = /\b(?:red|green|blue|white|black|gray|grey|orange|yellow|purple|cyan|magenta|lime|teal|navy|silver|gold|pink|brown|maroon|olive|aqua|fuchsia|transparent|currentColor)\b\s*['"]/i;
+    for (const f of W3_SRC_FILES) {
+      const src = readFileSync(join(__dirname, "..", "suites", f), "utf8");
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+      expect(code.match(/#[0-9a-fA-F]{3,8}\b/g) ?? [], `${f} hex literals`).toEqual([]);
+      expect(code.match(/\brgba?\s*\(/g) ?? [], `${f} rgb()/rgba() literals`).toEqual([]);
+      expect(code.includes("Date.now"), `${f}: Date.now`).toBe(false);
+      expect(code.includes("Math.random"), `${f}: Math.random`).toBe(false);
+      expect(code.includes("new Date"), `${f}: new Date`).toBe(false);
+      const strings = code.match(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g) ?? [];
+      const hits = strings.filter((s) => NAMED.test(`${s.slice(1, -1)}"`) || /^["'`]#/.test(s));
+      expect(hits, `${f}: literal colour strings`).toEqual([]);
+    }
+  });
+
+  it("keeps every emitted TableSpec structurally valid and uniquely identified", () => {
+    const POS = ["tl", "tr", "bl", "br"];
+    for (const { mod, res } of w3Results()) {
+      const ids = (res.tables ?? []).map((t) => t.id);
+      expect(new Set(ids).size, `${mod}: duplicate table ids`).toBe(ids.length);
+      for (const tb of res.tables ?? []) {
+        expect(tb.id.length, `${mod}: empty table id`).toBeGreaterThan(0);
+        expect(POS, `${mod}: bad pos`).toContain(tb.pos);
+        expect(tb.columns.length, `${mod}: no columns`).toBeGreaterThan(0);
+        expect(new Set(tb.columns.map((c) => c.key)).size).toBe(tb.columns.length);
+        expect(tb.rows.length, `${mod}: no rows`).toBeGreaterThan(0);
+        for (const r of tb.rows) {
+          expect(r.cells.length, `${mod}/${r.label}`).toBeLessThanOrEqual(tb.columns.length);
+          for (const c of r.cells) {
+            expect(typeof c.text, `${mod}/${r.label}`).toBe("string");
+            expect(c.text.length, `${mod}/${r.label}: empty cell text`).toBeGreaterThan(0);
+            if (c.fade !== undefined) {
+              expect(c.fade, `${mod}/${r.label}: fade`).toBeGreaterThan(0);
+              expect(c.fade, `${mod}/${r.label}: fade`).toBeLessThanOrEqual(1);
+            }
+          }
+        }
+      }
+      // a dashboard draws no prims and never paints candles
+      expect(res.prims, `${mod}: prims`).toEqual([]);
+      expect(res.candlePaint, `${mod}: candlePaint`).toBeUndefined();
+      for (const e of res.events ?? []) {
+        const bad: string[] = [];
+        scanNumbers(e, `${mod}:event`, bad);
+        expect(bad, `${mod}: non-finite event numbers`).toEqual([]);
+      }
+    }
+  });
+
+  it("ships a complete settings schema and the registered identity for every W3 module", () => {
+    for (const m of W3_MODULES) {
+      const fieldKeys = m.fields.map((f) => f.key).sort();
+      expect(Object.keys(m.defaults).sort(), `${m.key}: fields vs defaults`).toEqual(fieldKeys);
+      expect(new Set(fieldKeys).size, `${m.key}: duplicate field keys`).toBe(fieldKeys.length);
+      for (const f of m.fields) {
+        expect(f.key, `${m.key}.${f.key}: prefixed key`).not.toContain(".");
+        expect(f.label.length, `${m.key}.${f.key}: empty label`).toBeGreaterThan(0);
+        expect(/[一-鿿]/.test(f.label), `${m.key}.${f.key}: CJK in a field label`).toBe(false);
+        if (f.type === "select") {
+          expect(f.options?.some((o) => o.v === m.defaults[f.key]), `${m.key}.${f.key}`).toBe(true);
+        }
+        if (f.showIf) expect(fieldKeys, `${m.key}.${f.key}: showIf target`).toContain(f.showIf.key);
+      }
+    }
+    // the three MTF modules must not SHARE their field objects (the settings UI mutates per module)
+    const [a, b, c] = [PULSE_MTF_MODULE, RSIX_MTF_MODULE, MACDX_MTF_MODULE];
+    expect(a.fields).not.toBe(b.fields);
+    expect(b.fields).not.toBe(c.fields);
+    expect(a.fields[0]).not.toBe(b.fields[0]);
+    expect(a.defaults).not.toBe(b.defaults);
+
+    const idOf = (m: SuiteModuleDef) => [m.key, m.label, m.tag, m.tier, m.defaultOn];
+    expect(W3_MODULES.map(idOf)).toEqual([
+      ["dash", "Market Dashboard", "DSH", "pro", false],
+      ["mtf", "MTF Dashboard", "MTF", "pro", false],
+      ["mtf", "MTF Dashboard", "MTF", "pro", false],
+      ["mtf", "MTF Dashboard", "MTF", "pro", false],
+    ]);
+    // every W3 module is registered in the suite it claims, and none is on by default (a table
+    // that appears uninvited on every chart is a regression, not a feature)
+    for (const [suite, mod] of [["trend", MARKET_DASHBOARD_MODULE], ["pulse", PULSE_MTF_MODULE],
+      ["rsix", RSIX_MTF_MODULE], ["macdx", MACDX_MTF_MODULE]] as const) {
+      expect(SUITE_DEFS[suite].modules.includes(mod), `${suite}: module not registered`).toBe(true);
+      expect(mod.defaultOn, `${suite}: dashboard defaults ON`).toBe(false);
+    }
+  });
+
+  it("stays cheap and deterministic on a 5000-bar series", () => {
+    const PATHOLOGICAL = walkBars(5000, 991, 37);
+    for (const m of W3_MODULES) {
+      const res = run(m, PATHOLOGICAL);
+      expect(res.prims.length, `${m.key}: prims on a dashboard`).toBe(0);
+      expect((res.tables ?? []).length, `${m.key}: table count`).toBe(1);
+      for (const tb of res.tables ?? []) expect(tb.rows.length, `${m.key}: runaway row list`).toBeLessThanOrEqual(8);
+      expect((res.events ?? []).length, `${m.key}: unbounded tape`).toBeLessThanOrEqual(60);
+      expect(run(m, PATHOLOGICAL), `${m.key}: determinism`).toEqual(res);
+    }
+  });
+});
+
+// ─── 25. Mirror fidelity: the chart column vs the pane module it copies ───────
+//
+// Each MTF dashboard re-implements its pane's detector (those modules export no scanner). The
+// chart column is the IDENTITY resample, so on that column the dashboard and the pane module must
+// describe the same event — otherwise the table quietly contradicts the glyphs drawn beside it.
+
+describe("MTF dashboards agree with the pane modules they mirror", () => {
+  const FIXTURES = [walkBars(600, 77, 29), walkBars(300, 991, 29), walkBars(900, 4242, 31)];
+
+  /** "BUY 4 ago" / "▲ now" -> { bull, ago } (null when the cell is an honest dash). */
+  const parseSignal = (text: string): { bull: boolean; ago: number } | null => {
+    if (text === EM_DASH) return null;
+    const bull = text.startsWith("BUY") || text.startsWith("▲");
+    const m = text.match(/(\d+) ago$/);
+    return { bull, ago: m ? Number(m[1]) : 0 };
+  };
+
+  it("pulse: the chart Signal cell is the pane's own newest Pulse Buy/Sell", () => {
+    let checked = 0;
+    for (const bars of FIXTURES) {
+      const cell = parseSignal(cellText(tableOf(run(PULSE_MTF_MODULE, bars), "pulse-mtf"), "Signal", 0)!);
+      // pulseSignals dates the event on the CONFIRM bar, which is what the dashboard counts back from
+      const evs = (run(PULSE_SIGNALS_MODULE, bars).events ?? [])
+        .filter((e) => e.type === "pulse_buy" || e.type === "pulse_sell");
+      const last = evs.length ? evs[evs.length - 1] : null;
+      const ago = last ? bars.length - 1 - last.i : Infinity;
+      if (!last || ago > MTF_SIGNAL_WINDOW) {
+        expect(cell, "the dashboard invented a signal the pane never drew").toBeNull();
+        continue;
+      }
+      expect(cell, "the dashboard dashed out a signal the pane drew").not.toBeNull();
+      expect(cell!.ago, "signal age disagrees with the pane").toBe(ago);
+      expect(cell!.bull, "signal direction disagrees with the pane").toBe(last.type === "pulse_buy");
+      checked++;
+    }
+    expect(checked, "no fixture exercised the agreement").toBeGreaterThan(0);
+  });
+
+  it("macdx: the chart Signal cell is the pane's own newest extreme-zone cross", () => {
+    let checked = 0;
+    for (const bars of FIXTURES) {
+      for (const threshold of [60, 80]) {
+        const tb = tableOf(run(MACDX_MTF_MODULE, bars, {}, "en", { "sig.threshold": threshold }), "macdx-mtf");
+        const cell = parseSignal(cellText(tb, "Signal", 0)!);
+        const evs = evOf(run(MACD_SIGNALS_MODULE, bars, { threshold }), "macdx_signal");
+        const last = evs.length ? evs[evs.length - 1] : null;
+        const ago = last ? bars.length - 1 - last.i : Infinity;
+        if (!last || ago > MTF_SIGNAL_WINDOW) {
+          expect(cell, `threshold ${threshold}: invented a signal`).toBeNull();
+          continue;
+        }
+        expect(cell, `threshold ${threshold}: dashed out a drawn signal`).not.toBeNull();
+        expect(cell!.ago, `threshold ${threshold}: age`).toBe(ago);
+        expect(cell!.bull, `threshold ${threshold}: direction`).toBe(last.dir === "bull");
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("rsix: the chart Signal cell is the pane's own newest in-zone reversal", () => {
+    let checked = 0;
+    for (const bars of FIXTURES) {
+      const cell = parseSignal(cellText(tableOf(run(RSIX_MTF_MODULE, bars), "rsix-mtf"), "Signal", 0)!);
+      // rsiSignals dates its event on the PIVOT; the dashboard counts from the confirming bar, which
+      // is at or after it — so the pane's age is the upper bound on the dashboard's.
+      const evs = evOf(run(RSI_SIGNALS_MODULE, bars), "rsix_reversal");
+      const last = evs.length ? evs[evs.length - 1] : null;
+      const pivotAgo = last ? bars.length - 1 - last.i : Infinity;
+      if (!last || pivotAgo > MTF_SIGNAL_WINDOW) {
+        if (cell) expect(cell.ago, "the dashboard outran the pane's tape").toBeLessThanOrEqual(pivotAgo);
+        continue;
+      }
+      expect(cell, "the dashboard dashed out a reversal the pane drew").not.toBeNull();
+      expect(cell!.bull, "reversal direction disagrees with the pane").toBe(last.dir === "bull");
+      expect(cell!.ago).toBeLessThanOrEqual(pivotAgo);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("macdx: the chart Phase cell is the pane's own locked regime", () => {
+    let checked = 0;
+    for (const bars of FIXTURES) {
+      const text = cellText(tableOf(run(MACDX_MTF_MODULE, bars), "macdx-mtf"), "Phase", 0)!;
+      const phases = evOf(run(MACD_TREND_MODULE, bars), "macdx_phase");
+      if (!phases.length) {
+        expect(text, "the dashboard committed a phase the pane never did").toBe(EM_DASH);
+        continue;
+      }
+      const last = phases[phases.length - 1];
+      expect(text.startsWith(last.dir === "bull" ? "▲" : "▼"), "phase disagrees with the pane").toBe(true);
+      // "▲ 12" — the held count must reach back to (but not past) the commit bar
+      const held = Number(text.slice(2));
+      expect(held).toBeGreaterThan(0);
+      expect(held, "held count outruns the pane's commit").toBe(bars.length - last.i);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 });

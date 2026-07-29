@@ -37,7 +37,8 @@ import { computeSuite, resolveSuiteColors } from "@/lib/indicator-canvas/host";
 import { renderPrims, ensureTooltipHost } from "@/lib/indicator-canvas/render";
 import { paintCandleData } from "@/lib/indicator-canvas/candlePaint";
 import { SUITE_DEFS, getSuiteDef, isSuiteKey as isSuiteKeyReg, paneSuiteKeys } from "@/lib/suites/registry";
-import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper } from "@/lib/indicator-canvas/types";
+import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper, TableSpec } from "@/lib/indicator-canvas/types";
+import ChartTables from "@/components/ChartTables";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
 import { SOFT_Q, anchorSignal } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
@@ -399,6 +400,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const userTierRef = useRef<SuiteTier>(userTier); userTierRef.current = userTier;
   const suiteColorsRef = useRef<SuiteColors | null>(null);          // resolved once per mount + on updown flip
   const suitePaintKeyRef = useRef<string>("");                      // last applied suite candle-paint signature
+  const suiteTablesSigRef = useRef<string>("");                     // dashboard tables change-signature
+  const [suiteTables, setSuiteTables] = useState<TableSpec[]>([]);  // rendered by <ChartTables> (DOM, not SVG)
   const wrapElRef = useRef<HTMLElement | null>(null);
   const paneLayoutRef = useRef<PaneInfo[]>([]);
   const hoveredKeyRef = useRef<string | null>(null);   // pane under cursor, tracked by stable key
@@ -2855,6 +2858,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const renderIndOverlays = () => {
       const svgEl = indSvgRef.current; if (!svgEl) return;
       while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+      // dashboards collected from every suite bundle this frame; flushed to React only on change
+      const collectedTables: TableSpec[] = [];
+      const flushTables = () => {
+        const sig = collectedTables.length ? JSON.stringify(collectedTables) : "";
+        if (sig === suiteTablesSigRef.current) return;
+        suiteTablesSigRef.current = sig;
+        setSuiteTables(collectedTables.slice());
+      };
       // ── premium PANE suites — pane-local coordinate space, clipped per pane; must run even while a
       //    sub-pane is maximized (that is exactly when the user is looking at the suite pane) ──
       {
@@ -2893,11 +2904,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
               const g = mk("g", { "clip-path": `url(#${clipId})` }) as SVGGElement;
               svgEl.appendChild(defsEl); svgEl.appendChild(g);
               renderPrims(g, bundle, { xi: xiP, y: yP, W: WP, H: paneH, i0: lrP ? lrP.from : 0, i1: lrP ? lrP.to : barsRef.current.length - 1, barW: barWP });
+              if (bundle.tables.length) collectedTables.push(...bundle.tables);
             } catch (e) { console.warn(`[suite:${k}] pane render skipped:`, e); }
           }
         }
       }
-      if (priceProjHidden()) return;   // sub-pane maximized → price-anchored fills stay cleared
+      if (priceProjHidden()) { flushTables(); return; }   // sub-pane maximized → price-anchored fills stay cleared
       const inds = indicatorsRef.current;
       const W = el!.clientWidth, H = el!.clientHeight;
       const priceS = priceSeriesRef.current;
@@ -3149,11 +3161,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
                 isIntraday: isIntradayRef.current, lang,
               }, userTierRef.current, suiteColorsRef.current);
               renderPrims(svgEl, bundle, m);
+              if (bundle.tables.length) collectedTables.push(...bundle.tables);
             } catch (e) { console.warn(`[suite:${k}] render skipped:`, e); }
           }
         }
         applySuitePaint();   // key-guarded no-op unless suite candle paint actually changed
       }
+      flushTables();
     };
 
     const renderDraw = () => {
@@ -4334,6 +4348,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         </span>}
       </div>
       <div ref={ref} style={{ position: "absolute", inset: 0 }} />
+      <ChartTables tables={suiteTables} />
       <ChartOverlays
         panes={paneLayout} hoveredKey={hoveredKey} legendOpen={legendOpen} onToggleLegend={() => setLegendOpen((o) => !o)}
         onEye={(k) => onToggleHidden?.(k)} onSettings={(k) => onOpenSettings?.(k)} onSource={(k) => onOpenSource?.(k)} onRemove={(k) => onRemoveInd?.(k)}

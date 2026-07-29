@@ -49,6 +49,7 @@ stay on the previous state.
 | `hub/` | `/opt/terminal/hub` | overlay + `npm ci` if lockfile changed + `systemctl restart quote-hub` **only if changed** |
 | `ops/terminal-data` | `/usr/local/bin/terminal-data` | install (the nightly-cron wrapper) |
 | `ops/terminal-build.sh` | `/opt/terminal/terminal-build.sh` | install — takes effect on the **next** deploy |
+| `ingest/suite_alerts.ts` | `/opt/terminal/ingest/dist/suite_alerts.mjs` | esbuild bundle (step 9) — 5-min cron, reads `public/data`, fires `suite_event` alerts |
 
 **Overlay = `git archive origin/master <dirs> \| tar -x`: tracked files are overwritten; box-only
 untracked files are preserved.** As of 2026-07-10 every cron-run script in `ingest/` and the whole
@@ -57,6 +58,24 @@ of truth for all deployed code**. The only box-only files left are runtime cache
 (`ingest/hk_universe_cache.json`, `ingest/zh_cache.json`, `ingest/.polygon_*.json`) and `*.bak-*`
 backups (all gitignored so a stale copy can't be committed and clobber the box) — that is why the
 sync must never become `rsync --delete`.
+
+### Suite-event alerts cron (`ingest/suite_alerts.ts` → `ingest/dist/suite_alerts.mjs`)
+
+The Node sidecar that fires `{type:"suite_event"}` alerts by running the REAL premium-suite
+modules (`terminal/lib/suites`) over daily bars — zero algorithm duplication with the chart.
+Because it imports `terminal/lib`, the cron consumes an **esbuild bundle** that step 9 of
+`terminal-build.sh` rebuilds on every deploy into `/opt/terminal/ingest/dist/suite_alerts.mjs`
+(the `dist/` output is untracked, so the step-7 overlay preserves it; a bundle failure is
+non-fatal — the cron keeps the previous bundle). Evaluation basis is honest-by-design: module
+defaults only (user chart params are client-side), daily bars only, one-shot disarm semantics
+identical to `alerts_engine.py`.
+
+**Box-side, install once** (not managed by the deploy — same as the other cron lines).
+Offset +4 min so each run follows the 5-min data/flagship refresh:
+
+```cron
+4-59/5 * * * * cd /opt/terminal && /usr/bin/node ingest/dist/suite_alerts.mjs >> /var/log/suite-alerts.log 2>&1
+```
 
 ### Deliberately NOT deployed
 
