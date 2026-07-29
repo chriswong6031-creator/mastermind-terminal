@@ -47,7 +47,8 @@ import { computeTrendState } from "@/lib/trend";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
-import SettingsMenu from "@/components/SettingsMenu";
+import SettingsButton from "@/components/settings/SettingsButton";
+import { SettingsProvider } from "@/components/settings/SettingsProvider";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 import DrawingSidebar from "@/components/DrawingSidebar";
 import DayRange from "@/components/DayRange";
@@ -323,7 +324,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Market preference — ONE instance for the whole shell, so the Markets settings pane and the
   // search results are always reading the same object. Backed by Supabase user_metadata, which
   // is the same store the macro site's onboarding writes, on the same Supabase project.
-  // Read-only here: the editing controls live in SettingsMenu, which subscribes to the same
+  // Read-only here: the editing controls live in the settings panel's Terminal section, which subscribes to the same
   // module store, so both always see identical state.
   const { prefs: marketPrefs, ready: prefsReady, enableAll: showAllMarkets } = useMarketPrefs(email);
   // premium-suite UI gate — client hint only, fail-closed to "free" (server authority stays macro-api)
@@ -1784,6 +1785,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   return (
     <OnboardingProvider email={email}>
+    {/* Inside OnboardingProvider so the settings panel (and the avatar button)
+        can call useOnboarding() directly. Note this provider is a DESCENDANT of
+        TerminalShell, so useSettings() *here* would be the no-op — the buttons
+        below are children of it, which is what matters. */}
+    <SettingsProvider email={email}>
     <div className={`app${fullChart ? " fs" : ""}`} style={{ ["--rail-w" as any]: `${railW}px` }}>
       <header className="topbar">
         {fromMacro
@@ -1815,7 +1821,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         })()}
         <div className="spacer" />
         <button className="ai" onClick={() => (window as any).MMBrain?.toggle()}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
-        <SettingsMenu email={email} />
+        <SettingsButton email={email} />
       </header>
 
       {/* ── mobile top bar + drawer (shared component) ── */}
@@ -2446,6 +2452,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       )}
 
     </div>
+    </SettingsProvider>
     </OnboardingProvider>
   );
 }

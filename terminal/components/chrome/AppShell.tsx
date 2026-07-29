@@ -4,7 +4,8 @@ import { usePathname } from "next/navigation";
 import { BrandLockup } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
 import MobileNav from "@/components/MobileNav";
-import SettingsMenu from "@/components/SettingsMenu";
+import SettingsButton from "@/components/settings/SettingsButton";
+import { SettingsProvider } from "@/components/settings/SettingsProvider";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 import { useT } from "@/lib/i18n";
 
@@ -62,6 +63,10 @@ export default function AppShell({
   return (
     <AppShellEmailCtx.Provider value={email}>
       <OnboardingProvider email={email}>
+      {/* Inside OnboardingProvider so the settings panel (and the avatar button)
+          can call useOnboarding() directly — Billing's "choose a plan" and the
+          guest path both hand off to the signup sheet. */}
+      <SettingsProvider email={email}>
       <div className="app2 obs obs-ambient">
         <MobileNav email={email} />
         <header className="topbar">
@@ -70,13 +75,14 @@ export default function AppShell({
           <span className="page-title">{title}</span>
           <div className="spacer" />
           {/* Desktop settings/sign-out — the old per-view topbars each carried an avatar
-              sign-out form; MobileNav's SettingsMenu is display:none on desktop, so the
+              sign-out form; MobileNav's settings button is display:none on desktop, so the
               shell must render its own (review P1: dropped desktop sign-out). */}
-          <SettingsMenu email={email} />
+          <SettingsButton email={email} />
         </header>
         <AppNav />
         {children}
       </div>
+      </SettingsProvider>
       </OnboardingProvider>
     </AppShellEmailCtx.Provider>
   );

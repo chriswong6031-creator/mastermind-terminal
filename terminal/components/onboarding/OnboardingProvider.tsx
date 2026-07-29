@@ -14,7 +14,7 @@ interface OnboardingApi {
   close: () => void;
 }
 
-// No-op fallback for provider-less hosts. SettingsMenu (via MobileNav) is also rendered inside
+// No-op fallback for provider-less hosts. SettingsButton (via MobileNav) is also rendered inside
 // the transient route-loading skeleton (components/RouteSkeleton.tsx, used by the loading.tsx
 // files), which sits OUTSIDE any provider by design — a throwing hook would crash every route
 // transition. The skeleton's onboarding buttons are non-interactive placeholders, so a no-op is

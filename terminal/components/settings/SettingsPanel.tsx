@@ -1,0 +1,258 @@
+"use client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useLang, useT } from "@/lib/i18n";
+import type { AcsUser, SettingsSection } from "./SettingsProvider";
+import { SETTINGS_SECTIONS } from "./SettingsProvider";
+import type { AcsPlan, AcsUsage, SectionProps } from "./types";
+import {
+  IconAccount, IconBilling, IconPrefs, IconSignOut, IconSync, IconTerminal, IconUsage, IconX,
+} from "./icons";
+import SectionAccount from "./SectionAccount";
+import SectionBilling from "./SectionBilling";
+import SectionUsage from "./SectionUsage";
+import SectionPreferences from "./SectionPreferences";
+import SectionTerminal from "./SectionTerminal";
+import SectionSync from "./SectionSync";
+
+// ── The settings dashboard shell ─────────────────────────────────────────────
+// Ported from the Macro Dashboard's `_buildSDash` / `_wireSDash` / `_sdShow` /
+// `_openSDash`. Same card (min(1140px,94vw) × min(772px,100dvh-40px), r22), same
+// 238px rail, same one-shot laser sweep, same ≤640px full-sheet collapse.
+//
+// Two upstream bugs are deliberately NOT reproduced:
+//   1. macro's desktop header close button (`.sd-x`) has no click handler — ours
+//      is wired (see icons.tsx SectionHead).
+//   2. macro's SD_PLAN_FEATURES has no `unlimited` key, so unlimited users saw
+//      the FREE feature list — see ACS_PLAN_FEATURES in types.ts.
+
+const NAV: { id: SettingsSection; icon: React.ReactNode; key: string }[] = [
+  { id: "account", icon: <IconAccount />, key: "acsAccount" },
+  { id: "billing", icon: <IconBilling />, key: "acsBilling" },
+  { id: "usage", icon: <IconUsage />, key: "acsUsage" },
+  { id: "prefs", icon: <IconPrefs />, key: "acsPrefs" },
+  { id: "terminal", icon: <IconTerminal />, key: "acsTerminal" },
+  { id: "sync", icon: <IconSync />, key: "acsSyncT" },
+];
+
+const HEAD_KEY: Record<SettingsSection, string> = {
+  account: "acsAccount",
+  billing: "acsBilling",
+  usage: "acsUsage",
+  prefs: "acsPrefs",
+  terminal: "acsTerminal",
+  sync: "acsSyncT",
+};
+
+export interface SettingsPanelProps {
+  visible: boolean;
+  /** Increments on every open() — re-keys the laser so its sweep replays. */
+  openSeq: number;
+  section: SettingsSection;
+  onSection: (s: SettingsSection) => void;
+  onClose: () => void;
+  email: string;
+  user: AcsUser | null;
+  onPatchMeta: (patch: Record<string, unknown>) => void;
+  onRefreshUser: () => Promise<void>;
+  /** Dev-harness seams (app/dev/settings): supply the payloads directly instead
+   *  of fetching them. Local dev has no Supabase session, so this is the only
+   *  way to exercise the paid/unlimited plan states and the usage meters. */
+  devPlan?: AcsPlan;
+  devUsage?: AcsUsage;
+}
+
+export default function SettingsPanel(props: SettingsPanelProps) {
+  const t = useT();
+  const { lang } = useLang();
+  const { visible, openSeq, section, onSection, onClose, email, user } = props;
+
+  // No SSR mount gate is needed: SettingsProvider loads this module with
+  // `dynamic(..., { ssr: false })`, so it only ever renders on the client.
+
+  // ── page scroll-lock + focus restore ──────────────────────────────────────
+  const lastFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!visible) return;
+    lastFocus.current = document.activeElement as HTMLElement | null;
+    const root = document.documentElement;
+    root.classList.add("acs-lock");
+    return () => {
+      root.classList.remove("acs-lock");
+      const el = lastFocus.current;
+      if (el && typeof el.focus === "function" && document.contains(el)) {
+        try { el.focus({ preventScroll: true }); } catch { /* detached */ }
+      }
+    };
+  }, [visible]);
+
+  // ── Escape closes (only while visible — a hidden mounted panel must not eat keys)
+  useEffect(() => {
+    if (!visible) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [visible, onClose]);
+
+  // ── focus the active rail tab on open (keyboard entry point) ──────────────
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!visible) return;
+    const id = setTimeout(() => {
+      const el = cardRef.current?.querySelector<HTMLElement>(".acs-nav-b.active")
+        || cardRef.current?.querySelector<HTMLElement>(".acs-nav-b");
+      if (el) { try { el.focus({ preventScroll: true }); } catch { el.focus(); } }
+    }, 90);
+    return () => clearTimeout(id);
+  }, [visible]);
+
+  // ── focus trap (Tab cycle within the card) ────────────────────────────────
+  const onCardKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Tab") return;
+    const card = cardRef.current;
+    if (!card) return;
+    const all = card.querySelectorAll<HTMLElement>(
+      'button:not([disabled]),input:not([disabled]),a[href],select:not([disabled]),[tabindex="0"]',
+    );
+    const f = Array.prototype.filter.call(all, (el: HTMLElement) => el.offsetParent !== null) as HTMLElement[];
+    if (!f.length) return;
+    const first = f[0];
+    const last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }, []);
+
+  // ── shared entitlement payload (Billing hero + Usage fallback) ────────────
+  // GET /api/me is piped through verbatim by app/api/me/route.ts, so tier,
+  // status, current_period_end, source, interval and chat_budget all arrive.
+  const [fetchedPlan, setPlan] = useState<AcsPlan | null>(null);
+  const [planErr, setPlanErr] = useState(false);
+  const planFor = useRef<string | null>(null);
+  const plan = props.devPlan ?? fetchedPlan;
+  useEffect(() => {
+    if (props.devPlan) return;
+    if (!visible || !email) return;
+    if (planFor.current === email) return;
+    planFor.current = email;
+    let alive = true;
+    fetch("/api/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((j) => { if (alive) { setPlan(j || {}); setPlanErr(false); } })
+      .catch(() => { if (alive) { planFor.current = null; setPlanErr(true); } });
+    return () => { alive = false; };
+  }, [visible, email, props.devPlan]);
+
+  // ── usage payload, fetched lazily the first time Usage is shown ───────────
+  const [fetchedUsage, setUsage] = useState<AcsUsage | null>(null);
+  const [usageErr, setUsageErr] = useState(false);
+  const usageFor = useRef<string | null>(null);
+  const usage = props.devUsage ?? fetchedUsage;
+  useEffect(() => {
+    if (props.devUsage) return;
+    if (!visible || section !== "usage" || !email) return;
+    if (usageFor.current === email) return;
+    usageFor.current = email;
+    let alive = true;
+    fetch("/api/brain/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((j) => { if (alive) { setUsage(j || {}); setUsageErr(false); } })
+      .catch(() => { if (alive) { usageFor.current = null; setUsageErr(true); } });
+    return () => { alive = false; };
+  }, [visible, section, email, props.devUsage]);
+
+  const shared: SectionProps = {
+    t,
+    lang,
+    email,
+    user,
+    onClose,
+    onPatchMeta: props.onPatchMeta,
+    onRefreshUser: props.onRefreshUser,
+  };
+
+  const displayName =
+    (typeof user?.meta?.display_name === "string" && (user.meta.display_name as string)) ||
+    [user?.meta?.first_name, user?.meta?.last_name].filter((v) => typeof v === "string" && v).join(" ") ||
+    email;
+  const avatarChar = (displayName || email || "U").trim().charAt(0).toUpperCase() || "U";
+
+  const node = (
+    <div
+      className={`acs-overlay${visible ? " open" : ""}`}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      aria-hidden={visible ? undefined : true}
+    >
+      <div
+        className="acs-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t(HEAD_KEY[section])}
+        ref={cardRef}
+        onKeyDown={onCardKeyDown}
+      >
+        <span className="acs-laser" aria-hidden="true" key={openSeq} />
+
+        <aside className="acs-rail">
+          <div className="acs-me">
+            <span className="acs-me-av">{avatarChar}</span>
+            <span className="acs-me-main">
+              <span className="acs-me-name">{displayName || "—"}</span>
+              <span className="acs-me-sub">{t("acsRailSub")}</span>
+            </span>
+          </div>
+
+          <nav className="acs-nav" role="tablist" aria-label={t("acsSections")}>
+            {NAV.map((n) => (
+              <button
+                key={n.id}
+                type="button"
+                role="tab"
+                className={`acs-nav-b${section === n.id ? " active" : ""}`}
+                aria-selected={section === n.id}
+                onClick={() => onSection(n.id)}
+              >
+                {n.icon}
+                {t(n.key)}
+              </button>
+            ))}
+          </nav>
+
+          <span className="acs-rail-spacer" />
+
+          {/* The Terminal's established sign-out idiom: a POST form, not a fetch. */}
+          <form action="/auth/signout" method="post">
+            <button type="submit" className="acs-signout">
+              <IconSignOut />
+              {t("signOut")}
+            </button>
+          </form>
+
+          <button type="button" className="acs-x-m" aria-label={t("acsClose")} onClick={onClose}>
+            <IconX />
+          </button>
+        </aside>
+
+        <section className="acs-pane">
+          {/* Only the active section is mounted: that gives the acsRise entry
+              animation for free on every switch, and keeps the six sections
+              from all fetching at once. The payloads they share (plan, usage)
+              are cached above, so switching back is free. */}
+          <div className="acs-sect on" key={section}>
+            {section === "account" && <SectionAccount {...shared} />}
+            {section === "billing" && <SectionBilling {...shared} plan={plan} planErr={planErr} />}
+            {section === "usage" && <SectionUsage {...shared} plan={plan} usage={usage} usageErr={usageErr} />}
+            {section === "prefs" && <SectionPreferences {...shared} />}
+            {section === "terminal" && <SectionTerminal {...shared} />}
+            {section === "sync" && <SectionSync {...shared} />}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+
+  return createPortal(node, document.body);
+}
+
+export { SETTINGS_SECTIONS };

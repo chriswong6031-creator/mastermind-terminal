@@ -1,8 +1,8 @@
 // ── Startup timeframe ────────────────────────────────────────────────────────
 // The timeframe the Terminal opens on. Ships as 3D; the user can change it in
-// Settings → Terminal (SettingsMenu writes it, TerminalShell reads it at mount).
+// Settings → Terminal (the settings panel writes it, TerminalShell reads it at mount).
 //
-// This lives in its own module rather than in TerminalShell because SettingsMenu
+// This lives in its own module rather than in TerminalShell because the settings panel
 // renders on EVERY page through AppShell — importing TerminalShell there would
 // drag the whole chart bundle onto pages that have no chart.
 //

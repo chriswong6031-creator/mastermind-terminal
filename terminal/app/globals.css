@@ -159,7 +159,7 @@ svg{display:block}
 
 @media (prefers-reduced-motion:reduce){
   .brand-back,.brand-back .bb-chev,.breathe{animation:none}
-  .copilot,.settings-pop{transition:opacity .12s linear;animation:none}
+  .copilot{transition:opacity .12s linear;animation:none}
 }
 
 /* ===== terminal shell ===== */
@@ -605,45 +605,14 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .set-h{display:flex;align-items:center;justify-content:space-between;padding:11px 12px}.set-h b{font:600 13px/1 var(--font-ui)}
 .switch{width:36px;height:20px;border-radius:var(--r-pill);background:var(--panel);border:1px solid var(--line-3);position:relative;cursor:pointer}.switch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--muted);transition:transform var(--t)}.switch.on{background:var(--brand);border-color:var(--brand)}.switch.on::after{transform:translateX(16px);background:#fff}
 .set-grp{font:600 9px/1 var(--font-ui);letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);padding:9px 12px 4px;border-top:1px solid var(--line)}
-/* user-settings popover (avatar) — glassy card that drops in from its top-right anchor */
-.settings-pop{min-width:244px;padding:0 0 7px;border-radius:var(--pop-r);
-  background:var(--pop-bg);border:1px solid var(--pop-edge);
-  box-shadow:var(--pop-shadow),var(--pop-sheen);
-  backdrop-filter:var(--pop-blur);-webkit-backdrop-filter:var(--pop-blur);
-  transform-origin:top right;animation:popDrop .17s cubic-bezier(.2,.9,.25,1.06);
-  z-index:100;max-height:calc(100dvh - 58px);overflow-y:auto;overscroll-behavior:contain}
-@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.settings-pop{background:rgba(18,21,30,.97)}}
-@keyframes popDrop{from{opacity:0;transform:translateY(-9px) scale(.95)}to{opacity:1;transform:none}}
-.settings-pop .set-h{padding:11px 13px 4px}.settings-pop .set-h b{font:650 13px/1 var(--font-ui)}
-.settings-pop .set-grp:first-of-type{border-top:0}
 .set-seg{display:flex;gap:6px;padding:4px 12px 8px}
 .set-seg button{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;border-radius:var(--r-md);border:1px solid var(--line);background:var(--panel-2);color:var(--text-2);font:600 12px/1 var(--font-ui);cursor:pointer;transition:color var(--t),border-color var(--t),background var(--t)}
 .set-seg button:hover{color:var(--text);border-color:var(--line-3)}
 .set-seg button.on{border-color:rgba(41,98,255,.5);color:var(--brand-2);background:rgba(41,98,255,.12)}
 .set-seg button i{width:9px;height:9px;border-radius:2px;display:block}
-/* sub-label under a .set-grp header — sentence case, for a setting that needs naming beyond its group */
-.set-sub{padding:1px 12px 5px;font:500 11px/1.3 var(--font-ui);color:var(--text-2)}
-/* startup-timeframe picker: same chip idiom as .set-seg, wrapped to a grid (14 timeframes) */
-.set-tfg{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;padding:0 12px 8px}
-.set-tfg button{height:27px;border-radius:var(--r-md);border:1px solid var(--line);background:var(--panel-2);color:var(--text-2);font:600 11px/1 var(--font-num);cursor:pointer;transition:color var(--t),border-color var(--t),background var(--t);font-variant-numeric:tabular-nums}
-.set-tfg button:hover{color:var(--text);border-color:var(--line-3)}
-.set-tfg button.on{border-color:rgba(41,98,255,.5);color:var(--brand-2);background:rgba(41,98,255,.12)}
-.set-sep{height:1px;background:var(--line);margin:6px 0}
-.set-acct-name{padding:2px 13px 0;font:600 12.5px/1.2 var(--font-ui);color:var(--text)}
-.set-acct{padding:2px 13px 6px;font-size:11px;color:var(--text-dim);font-variant-numeric:tabular-nums}
-.settings-pop form{display:block}.settings-pop form .menu-row{width:100%}
-.settings-pop>.menu-row{width:100%}
 .set-row{display:flex;align-items:center;gap:9px;padding:7px 12px;font-size:12.5px;color:var(--text-2);cursor:pointer}.set-row:hover{color:var(--text)}
 .cbx{width:16px;height:16px;border-radius:var(--r);border:1.5px solid var(--line-3);display:grid;place-items:center;flex:none}.cbx svg{width:10px;height:10px;stroke:#fff;fill:none;stroke-width:3;opacity:0}.set-row.on .cbx{background:var(--brand);border-color:var(--brand)}.set-row.on .cbx svg{opacity:1}
 .rdo{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--line-3);flex:none;position:relative}.set-row.on .rdo{border-color:var(--brand)}.set-row.on .rdo::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--brand)}
-/* Markets pane — explanatory sub-labels under a set-grp heading. Wraps (unlike set-grp, which is
-   a single-line uppercase eyebrow) because these are sentences, not labels. */
-.set-note{padding:0 12px 6px;font:400 11px/1.45 var(--font-ui);color:var(--text-dim);white-space:normal;max-width:270px}
-.set-note-hint{color:var(--text-2)}
-/* The home market is a fixed row: it may not be switched off, so it must not offer a hover
-   affordance that implies it can be. */
-.set-row-home{cursor:default}.set-row-home:hover{color:var(--text-2)}
-.set-row-tag{margin-left:auto;font:600 9px/1 var(--font-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--brand);border:1px solid var(--brand);border-radius:999px;padding:3px 6px}
 /* Search: "hidden by your market settings" disclosure + its one-click undo. */
 .s-mkt-hidden{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 14px;margin-top:2px;border-top:1px solid var(--line);font:400 11.5px/1.45 var(--font-ui);color:var(--text-dim)}
 .s-mkt-show{flex:none;background:none;border:1px solid var(--line-3);border-radius:var(--r);padding:4px 9px;font:600 11px/1 var(--font-ui);color:var(--text-2);cursor:pointer}
@@ -1749,9 +1718,6 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   /* ── tap targets: min 40×40 CSS px ── */
   /* timeframe seg buttons */
   .tfbtn{min-height:40px;min-width:40px}
-  /* startup-timeframe chips (settings popover) — 4-up so each chip clears the 40px floor */
-  .set-tfg{grid-template-columns:repeat(4,1fr)}
-  .set-tfg button{min-height:40px}
   /* chart toolbar buttons */
   .tbtn{min-height:40px;padding-top:6px;padding-bottom:6px}
   /* mobile icon buttons */
