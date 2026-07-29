@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { mdToHtml } from "@/lib/md";
+import { loadGuide } from "@/lib/guides/registry";
 import { useLang, useT } from "@/lib/i18n";
 
 export interface GuidePanelProps {
@@ -24,28 +25,6 @@ export interface GuidePanelProps {
 
 type Status = "loading" | "ready" | "missing";
 
-const guideUrl = (suiteKey: string, moduleKey: string, lang: string) =>
-  `/guides/${encodeURIComponent(suiteKey)}/${encodeURIComponent(moduleKey)}.${lang}.md`;
-
-// A missing file under public/ can come back as the app's HTML 404 shell — and an edge cache can hand
-// that shell back with a 200. Anything that opens like markup is therefore treated as "not written
-// yet" rather than rendered as a guide.
-function looksLikeMarkdown(s: string): boolean {
-  const head = s.trimStart().slice(0, 200).toLowerCase();
-  if (!head) return false;
-  return !head.startsWith("<!doctype") && !head.startsWith("<html") && !head.startsWith("<?xml");
-}
-
-async function fetchGuide(url: string, signal: AbortSignal): Promise<string | null> {
-  try {
-    const r = await fetch(url, { signal });
-    if (!r.ok) return null;
-    const txt = await r.text();
-    return looksLikeMarkdown(txt) ? txt : null;
-  } catch {
-    return null; // network error or abort — callers check the abort flag before acting on this
-  }
-}
 
 export default function GuidePanel({ suiteKey, moduleKey, moduleLabel, onClose }: GuidePanelProps) {
   const { lang } = useLang();
@@ -57,26 +36,21 @@ export default function GuidePanel({ suiteKey, moduleKey, moduleLabel, onClose }
   const sheetRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const ac = new AbortController();
+    let alive = true;
     setStatus("loading");
     setHtml(""); setDocTitle(null);
     setEnFallback(false);
     (async () => {
-      let txt = await fetchGuide(guideUrl(suiteKey, moduleKey, lang), ac.signal);
-      let fell = false;
-      if (txt == null && lang !== "en") {
-        txt = await fetchGuide(guideUrl(suiteKey, moduleKey, "en"), ac.signal);
-        fell = txt != null;
-      }
-      if (ac.signal.aborted) return;
-      if (txt == null) { setStatus("missing"); return; }
-      const h1 = /^#\s+(.+)$/m.exec(txt);
+      const doc = await loadGuide(suiteKey, moduleKey, lang);
+      if (!alive) return;
+      if (!doc) { setStatus("missing"); return; }
+      const h1 = /^#\s+(.+)$/m.exec(doc.text);
       setDocTitle(h1 ? h1[1].trim() : null);
-      setHtml(mdToHtml(txt));
-      setEnFallback(fell);
+      setHtml(mdToHtml(doc.text));
+      setEnFallback(doc.fellBack);
       setStatus("ready");
     })();
-    return () => ac.abort();
+    return () => { alive = false; };
   }, [suiteKey, moduleKey, lang]);
 
   // Escape closes. Capture phase + stopPropagation so the dialog underneath (which listens on the
