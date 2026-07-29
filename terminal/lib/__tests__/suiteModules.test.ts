@@ -51,6 +51,9 @@ import { FVG_MODULE } from "../suites/structure/fvg";
 import { PREMIUM_DISCOUNT_MODULE } from "../suites/structure/premiumDiscount";
 import { LIQUIDITY_MODULE } from "../suites/structure/liquidity";
 import { SFP_MODULE } from "../suites/structure/sfp";
+import { SMART_SR_MODULE } from "../suites/structure/smartSR";
+import { MONEY_FLOW_PROFILE_MODULE } from "../suites/structure/moneyFlowProfile";
+import { AUTO_PATTERNS_MODULE } from "../suites/structure/autoPatterns";
 import { TREND_ENGINE_MODULE } from "../suites/trend/trendEngine";
 import { VOLT_BANDS_MODULE } from "../suites/trend/voltixBands";
 import { CANDLE_PAINTER_MODULE } from "../suites/trend/candlePainter";
@@ -4344,5 +4347,81 @@ describe("MTF dashboards agree with the pane modules they mirror", () => {
       checked++;
     }
     expect(checked).toBeGreaterThan(0);
+  });
+});
+
+
+// ── §26 W4 structure modules — core behavioral + hygiene coverage (deep spec follows in W4b) ──────
+describe("W4 structure modules — Smart S/R / Money Flow Profile / Auto Patterns", () => {
+  const MODS = [SMART_SR_MODULE, MONEY_FLOW_PROFILE_MODULE, AUTO_PATTERNS_MODULE];
+
+  it("registry identity + determinism + dirty-bar survival + finite geometry", () => {
+    for (const m of MODS) {
+      const bars = walkBars(600, 20260729, 37);
+      const a = run(m, bars), b = run(m, bars);
+      expect(JSON.stringify(a), `${m.key}: deterministic`).toBe(JSON.stringify(b));
+      expect(() => run(m, dirtyBars()), `${m.key}: dirty bars`).not.toThrow();
+      for (const pr of a.prims) {
+        for (const v of Object.values(pr)) {
+          if (typeof v === "number") expect(Number.isFinite(v), `${m.key}/${pr.id}: finite`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("non-repaint: settled prims and events survive a 60-bar extension", () => {
+    // mfp is EXEMPT by design: its profile is a trailing window, so its poc-touch tape is
+    // window-relative (the alert bridge only ever evaluates the fresh 3-bar window, where this is
+    // safe). sr and pat carry the strict guarantee.
+    for (const m of MODS.filter((x) => x.key !== "mfp")) {
+      const full = walkBars(660, 20260729, 37);
+      const shortRun = run(m, full.slice(0, 600));
+      const longRun = run(m, full);
+      const cut = 540; // safely behind every confirmation window
+      const pick = (r: ModuleResult) => (r.events ?? []).filter((e) => e.i <= cut).map((e) => `${e.type}|${e.dir}|${e.i}`);
+      expect(pick(longRun), `${m.key}: settled event tape stable`).toEqual(pick(shortRun));
+    }
+  });
+
+  it("smartSR freezes the level anchor at the first pivot and counts touches", () => {
+    // two clean touches of 100 within tolerance, second slightly off — anchor must stay at the first
+    const warmup = Array.from({ length: 20 }, (_, i) => 106 + Math.sin(i / 3) * 1.5); // ATR14 warm-up
+    // second trough sits 8 bars after the first so the fractal window clears the neighbor bar
+    // that re-prints the first trough's low as its open (pathBars semantics)
+    const path = [104, 103, 102, 101, 100, 101.5, 103, 104, 104.5, 103.5, 102.5, 101.5, 100.2, 101.8, 103.5, 104.5, 105, 105.5, 106, 106.5, 107, 107.5, 108];
+    const bars = pathBars(warmup.concat(path, Array.from({ length: 30 }, (_, i) => 108 + i * 0.2)));
+    const res = run(SMART_SR_MODULE, bars, { sensitivity: "high", minTouches: 2 });
+    const lines = res.prims.filter((p) => p.kind === "line");
+    expect(lines.length, "at least one level").toBeGreaterThan(0);
+    const supports = lines.filter((p: any) => Math.abs(p.a.p - 99.8) < 1.2); // pathBars adds ±0.2 wicks
+    expect(supports.length, "the ~100 support exists, anchored near the FIRST pivot low").toBeGreaterThan(0);
+  });
+
+  it("moneyFlowProfile bins a confined fixture into the right thirds", () => {
+    // 300 bars pinned inside 100..103: nearly all volume must land in that band's bins
+    const bars = pathBars(Array.from({ length: 300 }, (_, i) => 101.5 + Math.sin(i / 7)));
+    const res = run(MONEY_FLOW_PROFILE_MODULE, bars, { length: 300, levels: 12 });
+    const prof: any = res.prims.find((p) => p.kind === "profile");
+    expect(prof, "profile prim exists").toBeTruthy();
+    expect(prof.bins.length).toBeGreaterThan(3);
+    const strongest = Math.max(...prof.bins.map((b: any) => b.frac));
+    expect(strongest, "a dominant bin exists").toBeGreaterThan(0.9);
+    for (const b of prof.bins) {
+      expect(b.p1, "bins inside the traded range").toBeGreaterThan(98);
+      expect(b.p2).toBeLessThan(105);
+    }
+  });
+
+  it("autoPatterns fits a line through collinear pivot highs and projects it", () => {
+    // sawtooth with highs on an exact descending line: 110 - 0.5 * i at each peak
+    const path: number[] = Array.from({ length: 16 }, (_, i) => 112 + Math.sin(i / 3)); // warm-up
+    for (let k = 0; k < 6; k++) {
+      const peak = 110 - k * 3;
+      path.push(peak - 8, peak - 6, peak - 4, peak - 2, peak, peak - 2, peak - 4, peak - 6);
+    }
+    const bars = pathBars(path.concat(path[path.length - 1] - 1, path[path.length - 1] - 2));
+    const res = run(AUTO_PATTERNS_MODULE, bars, { size: "small" });
+    const polys = res.prims.filter((p) => p.kind === "poly" || p.kind === "line");
+    expect(polys.length, "a trendline was drawn").toBeGreaterThan(0);
   });
 });

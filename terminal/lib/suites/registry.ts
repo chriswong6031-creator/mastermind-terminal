@@ -16,6 +16,9 @@ import { FVG_MODULE } from "./structure/fvg";
 import { PREMIUM_DISCOUNT_MODULE } from "./structure/premiumDiscount";
 import { LIQUIDITY_MODULE } from "./structure/liquidity";
 import { SFP_MODULE } from "./structure/sfp";
+import { SMART_SR_MODULE } from "./structure/smartSR";
+import { MONEY_FLOW_PROFILE_MODULE } from "./structure/moneyFlowProfile";
+import { AUTO_PATTERNS_MODULE } from "./structure/autoPatterns";
 import { TREND_ENGINE_MODULE } from "./trend/trendEngine";
 import { PULSE_WAVE_MODULE } from "./pulse/pulseWave";
 import { PULSE_SIGNALS_MODULE } from "./pulse/pulseSignals";
@@ -52,6 +55,9 @@ export const STRUCTURE_SUITE: SuiteDef = {
     PREMIUM_DISCOUNT_MODULE,
     LIQUIDITY_MODULE,
     SFP_MODULE,
+    SMART_SR_MODULE,
+    MONEY_FLOW_PROFILE_MODULE,
+    AUTO_PATTERNS_MODULE,
   ],
 };
 
