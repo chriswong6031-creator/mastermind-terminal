@@ -96,6 +96,8 @@ export interface GradLinePrim extends PrimBase { // per-segment colored polyline
   pts: Array<{ i: number; p: number }>;
   colors: string[]; // per-point; segment n uses colors[n]
   w?: number;
+  dash?: string;    // optional stroke-dasharray (e.g. dotted midlines)
+  alpha?: number;
 }
 
 export type LabelStyle = "pill" | "tag" | "bare" | "chip";

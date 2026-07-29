@@ -885,7 +885,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
     }
     const last = rows[rows.length - 1];
-    const key = paint.length ? `${rows.length}:${String(last?.time)}:${paint.length}:${paint[0]?.i}:${paint[0]?.color ?? ""}` : "";
+    // djb2 over every entry (index, colors, channel presence) — a mode switch that repaints the same
+    // bars with different colors must produce a different key (review finding W1-1)
+    let ph = 5381;
+    for (let n = 0; n < paint.length; n++) {
+      const e = paint[n];
+      ph = ((ph * 33) ^ e.i) >>> 0;
+      ph = ((ph * 33) ^ ((e.borderColor ? 1 : 0) | (e.wickColor ? 2 : 0))) >>> 0;
+      const c = (e.color ?? "") + (e.borderColor ?? "") + (e.wickColor ?? "");
+      for (let ci = 0; ci < c.length; ci++) ph = ((ph * 33) ^ c.charCodeAt(ci)) >>> 0;
+    }
+    const key = paint.length ? `${rows.length}:${String(last?.time)}:${paint.length}:${ph}` : "";
     if (key === suitePaintKeyRef.current) return;
     const hadPaint = suitePaintKeyRef.current !== "";
     suitePaintKeyRef.current = key;
@@ -1403,7 +1413,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     for (const sk of Object.keys(SUITE_DEFS)) {
       if (!inds.has(sk)) continue;
       const sdef = SUITE_DEFS[sk]; if (!sdef) continue;
-      overlayEntries.push({ key: sk, label: sdef.label, kind: "overlay", isPine: false, noSource: true });
+      overlayEntries.push({ key: sk, label: sdef.tkey ? tPlain(sdef.tkey, sdef.label) : sdef.label, kind: "overlay", isPine: false, noSource: true });
     }
     // compare overlays: append to overlay entries so they appear as real legend rows in the price pane.
     const cmp = compareRef.current || []; const cfgM = compareCfgRef.current || {};
@@ -1502,6 +1512,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Overlays first (pane 0), then sub-panes appended sequentially → assigns paneMapRef.
   const buildAllIndicators = (rows: Bar[], closes: number[]) => {
     const chart = chartRef.current; if (!chart) return; const inds = indicatorsRef.current;
+    suitePaintKeyRef.current = "";   // series data was just (re)set — force suite paint re-evaluation
     // Clear SVG overlay data for overlays being rebuilt
     indOverlayRef.current = {};
     if (inds.has("ema")) indSeriesRef.current.set("ema", buildEma(chart, rows, closes));
