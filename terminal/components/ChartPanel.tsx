@@ -33,6 +33,11 @@ import { isMacroSymbol, macroOnEtAxis } from "@/lib/macroSymbols";
 import { sessionVwap, openingRange, sessionLevels, pivotLevels, rvolSeries, ttmSqueeze, adx as calcAdx, cvdApprox, type Bar as IMBar, type DailyBar } from "@/lib/intradayMath";
 import { attachSessionShading, detachSessionShading, type SessionShadingPrimitive } from "@/lib/sessionShading";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
+import { computeSuite, resolveSuiteColors } from "@/lib/indicator-canvas/host";
+import { renderPrims, ensureTooltipHost } from "@/lib/indicator-canvas/render";
+import { paintCandleData } from "@/lib/indicator-canvas/candlePaint";
+import { SUITE_DEFS, getSuiteDef } from "@/lib/suites/registry";
+import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper } from "@/lib/indicator-canvas/types";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
 import { SOFT_Q, anchorSignal } from "@/lib/signalVerdict";
 import { makeNearestBarIndex } from "@/lib/barSnap";
@@ -246,7 +251,7 @@ const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
-  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "" }:
+  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "", userTier = "free" }:
   { symbol: string; companyName?: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
@@ -267,6 +272,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     dayMode?: boolean;
     /** B3: fires whenever the number of non-price sub-panes changes, so TerminalShell can grow the container. */
     onPaneCount?: (n: number) => void;
+    /** Entitlement tier (UI gate for premium suite modules — authority stays server-side). */
+    userTier?: SuiteTier;
   }) {
   const ref = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -388,6 +395,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const paneCtl = useRef<{ collapsed: Set<string>; maximized: string | null; normal: Map<string, number> }>({ collapsed: new Set(), maximized: null, normal: new Map() });
   const hiddenRef = useRef<Set<string>>(hidden); hiddenRef.current = hidden;
   const indParamsRef = useRef<Record<string, any>>(indParams); indParamsRef.current = indParams;
+  // ── Premium suites (IndicatorCanvas) ── lazy per-frame compute via the host's memo; refs only.
+  const userTierRef = useRef<SuiteTier>(userTier); userTierRef.current = userTier;
+  const suiteColorsRef = useRef<SuiteColors | null>(null);          // resolved once per mount + on updown flip
+  const suitePaintKeyRef = useRef<string>("");                      // last applied suite candle-paint signature
   const wrapElRef = useRef<HTMLElement | null>(null);
   const paneLayoutRef = useRef<PaneInfo[]>([]);
   const hoveredKeyRef = useRef<string | null>(null);   // pane under cursor, tracked by stable key
@@ -490,6 +501,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // rebuild the CHART STYLE (not the chart) when the up/down color scheme flips (Effect 5)
   const [csNonce, setCsNonce] = useState(0);
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
+  // suite colors resolve from CSS tokens — drop the cache on an up/down flip so the next frame re-reads
+  useEffect(() => { const h = () => { suiteColorsRef.current = null; }; window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
   // CMX W3: keep the active-pane coordinate registration in sync with isActive (the chart mount effect
   // only re-runs on symbol/tf changes). Register when active, and clear our entry on deactivate/unmount
   // only if it's still ours (last-writer-wins — never clobber another pane that became active after us).
@@ -848,6 +861,36 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const chartTyp = chartTypeRef.current;
     if (chartTyp === "line" || chartTyp === "area") return;
     try { priceS.setData(priceData(rows) as any); } catch {}
+  };
+
+  // Premium suites: per-bar candle repaint (e.g. Structure Candles). Mirrors the ribbon pattern.
+  // Key-guarded so the per-frame call from renderIndOverlays is a no-op unless the paint changed;
+  // if ribbon colorCandles and a suite paint are both active, last writer wins (documented W0 limit).
+  const applySuitePaint = () => {
+    const priceS = priceSeriesRef.current; if (!priceS) return;
+    const rows = barsRef.current; if (!rows.length) return;
+    const chartTyp = chartTypeRef.current;
+    if (chartTyp === "line" || chartTyp === "area" || chartTyp === "heikin") { suitePaintKeyRef.current = ""; return; }
+    const active = Object.keys(SUITE_DEFS).filter((k) => indicatorsRef.current.has(k) && !hiddenRef.current.has(k));
+    let paint: { i: number; color?: string; borderColor?: string; wickColor?: string }[] = [];
+    if (active.length) {
+      if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
+      const lang = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
+      for (const k of active) {
+        const def = SUITE_DEFS[k]; if (!def) continue;
+        try {
+          const b = computeSuite(def, indParamsRef.current[k], { bars: rows as any, tf: timeframeRef.current, symbol: symbolRef.current, isIntraday: isIntradayRef.current, lang }, userTierRef.current, suiteColorsRef.current!);
+          if (b.candlePaint.length) paint = paint.concat(b.candlePaint);
+        } catch { /* module errors surface via the render path */ }
+      }
+    }
+    const last = rows[rows.length - 1];
+    const key = paint.length ? `${rows.length}:${String(last?.time)}:${paint.length}:${paint[0]?.i}:${paint[0]?.color ?? ""}` : "";
+    if (key === suitePaintKeyRef.current) return;
+    const hadPaint = suitePaintKeyRef.current !== "";
+    suitePaintKeyRef.current = key;
+    if (!paint.length) { if (hadPaint) restoreNormalCandleColors(rows); return; }
+    try { priceS.setData(paintCandleData(rows as any, paint, chartTyp === "bars" ? "bars" : "candles") as any); } catch {}
   };
 
   // SuperTrend: two line series (up/down rails with null gaps at flips).
@@ -1355,6 +1398,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const hasPane = pinePaneMapRef.current.has(s.id);
       if (hasPane) continue;   // sub-pane script → handled in the sub-pane loop
       overlayEntries.push(pineLegendEntry(s, "overlay", series, err));
+    }
+    // premium suites: one legend row per active suite (settings + eye + remove; no pseudo-Pine source view)
+    for (const sk of Object.keys(SUITE_DEFS)) {
+      if (!inds.has(sk)) continue;
+      const sdef = SUITE_DEFS[sk]; if (!sdef) continue;
+      overlayEntries.push({ key: sk, label: sdef.label, kind: "overlay", isPine: false, noSource: true });
     }
     // compare overlays: append to overlay entries so they appear as real legend rows in the price pane.
     const cmp = compareRef.current || []; const cfgM = compareCfgRef.current || {};
@@ -2135,6 +2184,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     wrap.appendChild(sigSvg); sigRef.current = sigSvg;
     const svg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(svg); svgRef.current = svg;
+    ensureTooltipHost(wrap);   // shared hover tooltip for premium-suite prims (ic-tip)
 
     // ── last-price tag (symbol · price · bar-close countdown) on the right axis ──
     // Replaces lightweight-charts' built-in last-value label (disabled on the price series). The
@@ -2996,6 +3046,33 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             }
           }
         }
+      }
+
+      // ── Premium suite draw-lists (IndicatorCanvas) — host-memoized compute, generic renderer ──
+      {
+        const activeSuites = Object.keys(SUITE_DEFS).filter((k) => inds.has(k) && !hiddenRef.current.has(k));
+        if (activeSuites.length && barsRef.current.length) {
+          if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
+          const ts = chart.timeScale();
+          let lr: { from: number; to: number } | null = null;
+          try { const r = ts.getVisibleLogicalRange(); if (r) lr = { from: r.from as number, to: r.to as number }; } catch { /* no range yet */ }
+          const xi = (i: number): number | null => { try { const v = ts.logicalToCoordinate(i as any); return v == null || !isFinite(v as number) ? null : (v as number); } catch { return null; } };
+          const xa = xi(0), xb = xi(1);
+          const barW = xa != null && xb != null ? Math.max(0.5, xb - xa) : 6;
+          const m: CoordMapper = { xi, y: p2y, W, H, i0: lr ? lr.from : 0, i1: lr ? lr.to : barsRef.current.length - 1, barW };
+          const lang = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
+          for (const k of activeSuites) {
+            const def = SUITE_DEFS[k]; if (!def) continue;
+            try {
+              const bundle = computeSuite(def, indParamsRef.current[k], {
+                bars: barsRef.current as any, tf: timeframeRef.current, symbol: symbolRef.current,
+                isIntraday: isIntradayRef.current, lang,
+              }, userTierRef.current, suiteColorsRef.current);
+              renderPrims(svgEl, bundle, m);
+            } catch (e) { console.warn(`[suite:${k}] render skipped:`, e); }
+          }
+        }
+        applySuitePaint();   // key-guarded no-op unless suite candle paint actually changed
       }
     };
 

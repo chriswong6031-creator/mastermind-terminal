@@ -33,6 +33,14 @@ const LEX: Record<string, [string, string]> = {
   // chart toolbar
   priceChart: ["Price chart", "价格图表"],
   indicators: ["Indicators", "指标"],
+  // premium suites (IndicatorCanvas program)
+  catProSuites: ["Pro Suites", "专业套件"],
+  suiteStructure: ["Structure Core", "结构核心"],
+  suiteLockedHint: ["Included with a paid plan — upgrade to unlock", "付费计划专享 — 升级解锁"],
+  suiteModulesWord: ["modules", "个模块"],
+  isSuiteStyleHint: ["Suite styling lives with each module's inputs.", "套件样式在各模块的设置中。"],
+  isSuiteUnlockInsider: ["Unlocks with INSIDER", "订阅 INSIDER 解锁"],
+  isSuiteUnlockPro: ["Unlocks with PRO", "订阅 PRO 解锁"],
   compare: ["Compare", "对比"],
   detect: ["Detect", "智能识别"],
   layouts: ["Layouts", "布局"],

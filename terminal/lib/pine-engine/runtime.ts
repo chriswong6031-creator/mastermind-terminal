@@ -47,6 +47,10 @@ const num = (x: any): number => (typeof x === "number" ? x : typeof x === "boole
 
 const NOOP_NS = new Set(["table", "array", "matrix", "map", "label", "line", "box", "linefill", "polyline", "strategy", "alert", "log", "chart", "ticker", "runtime", "request", "input_enum"]);
 const NAMESPACES = new Set(["ta", "math", "input", "color", "str", "request", "timeframe", "barstate", "syminfo", "plot", "shape", "location", "size", "hline", "line", "barmerge", "display", "format", "position", "xloc", "yloc", "extend", "text", "scale", "math", "dayofweek", "currency", "table", "array", "matrix", "map", "label", "box", "strategy", "alert", "log", "chart", "ticker", "runtime", "session", "adjustment"]);
+// The one honest sentence for every deferred builtin (NOOP_NS calls + fill/bgcolor/barcolor/
+// alertcondition/alert). `what` is `"<ns>.<fn>"` for a namespace call, `"<fn>"` for a global one.
+// Kept module-level so the wording can never drift between the two call paths.
+export const unsupportedMsg = (what: string) => `${what}() is not supported yet — its output is suppressed`;
 const MARKER_SHAPE: Record<string, PineShape["shape"]> = { triangleup: "arrowUp", arrowup: "arrowUp", labelup: "arrowUp", flag: "arrowUp", triangledown: "arrowDown", arrowdown: "arrowDown", labeldown: "arrowDown", circle: "circle", xcross: "square", cross: "square", square: "square", diamond: "square" };
 // Continuous series kinds where a na bar must render as a whitespace GAP (LWC breaks the line),
 // vs discrete kinds (histogram/columns/cross) where a na bar is correctly just absent.
@@ -367,7 +371,11 @@ export function run(source: string | ParseResult, bars: Bar[], opts: { timeframe
           warn(`unsupported timeframe.${method}() (na)`); return NA;
         case "plot": return NA;
         default:
-          if (NOOP_NS.has(ns)) return NA;
+          // A CALL into a deferred namespace (table./label./line./box./array./strategy. orders …)
+          // draws/returns nothing. Say so — a silent na here is what made a pasted SMC script report
+          // "✓ Compiled successfully" and then render an empty chart. Deduped per `ns.method` by warn(),
+          // so a per-bar call warns once; a bare member READ (label.style_none) stays silent by design.
+          if (NOOP_NS.has(ns)) { warn(unsupportedMsg(`${ns}.${method}`)); return NA; }
           warn(`unsupported ${ns}.${method}() (na)`); return NA;
       }
     }
@@ -387,10 +395,13 @@ export function run(source: string | ParseResult, bars: Bar[], opts: { timeframe
       if (name === "nz") { const { pos } = evalArgs(n.args, ctx); return isNa(pos[0]) ? (pos[1] !== undefined ? pos[1] : 0) : pos[0]; }
       if (name === "na") { const { pos } = evalArgs(n.args, ctx); return isNa(pos[0]); }
       if (name === "fixnan") { const { pos } = evalArgs(n.args, ctx); const key = "#fix" + n.id; const st = taState.get(key) || { last: NA }; if (!isNa(pos[0])) st.last = pos[0]; taState.set(key, st); return st.last; }
-      if (name === "fill" || name === "bgcolor" || name === "barcolor" || name === "alertcondition" || name === "alert" || name === "bgColor") return NA;
+      // Deferred global drawing/alert builtins: parsed, then dropped — nothing is emitted (and, as
+      // before, their args are not even evaluated). Warn once per name instead of returning na
+      // silently, so the editor can't report a bare "✓ Compiled" over a script that draws nothing.
+      if (name === "fill" || name === "bgcolor" || name === "barcolor" || name === "alertcondition" || name === "alert" || name === "bgColor") { warn(unsupportedMsg(name)); return NA; }
       if (name === "input") { const { pos, named } = evalArgs(n.args, ctx); return inputDispatch(typeof pos[0] === "boolean" ? "bool" : typeof pos[0] === "string" ? "string" : "float", pos, named); }
       if (name === "timestamp") return NA;
-      if (NOOP_NS.has(name)) return NA;
+      if (NOOP_NS.has(name)) { warn(unsupportedMsg(name)); return NA; }
       warn(`unsupported function '${name}()' (na)`); return NA;
     }
 

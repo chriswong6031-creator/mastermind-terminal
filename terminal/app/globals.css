@@ -88,6 +88,14 @@
   --shadow-2:0 8px 24px rgba(0,0,0,.45);
   --shadow-3:0 18px 44px -14px rgba(0,0,0,.6);
   --rail:var(--brand);
+
+  /* ---- Order-flow semantic pair (premium suites, 2026-07-28) ----
+     Aggressor side: which party crossed the spread. This is a THIRD semantic family, alongside
+     direction (--up/--down) and health (--warn/--signal/--danger). Deliberately NOT flipped by
+     html[data-updown="east"] or [data-red-up=true]: aggressor side is not an up/down direction,
+     so a CN/HK viewer must read the same hues here as a US viewer. Never use these for price
+     direction, and never use --up/--down for aggressor volume. */
+  --flow-buy:#22b8d5; --flow-sell:#a92cce;
 }
 /* East-Asian convention: red = up / green = down (CN/HK/TW/MO). Flips the up/down semantics only;
    accent colors (brand/signal/warn) are unchanged. Set on <html data-updown="east"> pre-paint. */
@@ -2254,3 +2262,42 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
   .appnav .navbtn:active,
   .wtabs .obs-pillnav-tab:active{transform:none}
 }
+
+/* ---- Settings v2 (premium suites) ----
+   Module accordion inside the IndicatorSettings dialog: one collapsible section per suite module,
+   each with a master switch, a compact legend tag, an optional tier chip and (when the viewer's
+   tier is below the module's) a lock glyph plus an unlock note. Chips use the fin.css tint
+   formula (one --c drives text, background and ring) so no bespoke rgba literals appear here.
+   Classic-indicator rows (.is-row/.is-label/.is-stepper/.is-color/.is-switch) are reused as-is. */
+.is-mods{padding-top:2px}
+.is-mod{border-top:1px solid var(--line-2)}
+.is-mod:first-child{border-top:0}
+.is-mod-h{display:flex;align-items:center;gap:7px;min-height:36px;padding:3px 0;cursor:pointer;-webkit-user-select:none;user-select:none;border-radius:var(--r)}
+.is-mod.locked>.is-mod-h{cursor:default}
+.is-mod-h:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
+.is-mod-h .caret{width:12px;height:12px;flex:none;fill:none;stroke:var(--muted);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;transition:transform var(--t-fast) var(--ease-out)}
+.is-mod-name{font:600 12.5px/1.2 var(--font-ui);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.is-mod.off .is-mod-name{color:var(--text-2)}
+.is-modtag{flex:none;font:700 9px/1 var(--font-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:color-mix(in srgb,var(--muted) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--muted) 26%,transparent);border-radius:var(--r);padding:3px 5px;font-variant-numeric:tabular-nums}
+.is-tier{flex:none;font:700 9px/1 var(--font-ui);letter-spacing:.09em;text-transform:uppercase;color:var(--c,var(--muted));background:color-mix(in srgb,var(--c,var(--muted)) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c,var(--muted)) 30%,transparent);border-radius:var(--r-pill);padding:3px 7px;white-space:nowrap}
+.is-lock{width:13px;height:13px;flex:none;fill:none;stroke:var(--muted);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.is-mod-h>.is-switch{margin-left:auto}
+.is-mod-h>.is-lock{margin-left:auto}
+.is-mod-h>.is-lock~.is-switch{margin-left:0}
+.is-switch.dis{opacity:.42;cursor:not-allowed}
+.is-locked-note{font:11px/1.5 var(--font-ui);color:var(--muted);padding:0 0 9px 19px}
+.is-mod-b{padding:0 0 8px 19px}
+.is-mod.off .is-mod-b{opacity:.62}
+.is-tip{font:10.5px/1.5 var(--font-ui);color:var(--muted);margin:-3px 0 7px}
+.is-select{appearance:none;-webkit-appearance:none;-moz-appearance:none;flex:none;max-width:150px;color:var(--text);background-color:var(--panel-2);border:1px solid var(--line-3);border-radius:var(--r);font:12px var(--font-ui);font-variant-numeric:tabular-nums;padding:3px 22px 3px 8px;cursor:pointer;background-image:url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23717a8e' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 5px center;background-size:11px 11px}
+.is-select:hover{background-color:var(--panel-3)}
+.is-select:focus-visible{outline:2px solid var(--brand-2);outline-offset:1px}
+.is-select option{background:var(--panel-2);color:var(--text)}
+@media (prefers-reduced-motion:reduce){.is-mod-h .caret{transition:none}}
+
+/* ---- Indicators modal: Pro Suites band (premium suites program) ---- */
+.ilist .li.li-locked{opacity:.55;cursor:default}
+.ilist .li.li-locked:hover{background:transparent}
+.ilist .li .li-mods{margin-left:auto;margin-right:8px;font-size:var(--fs-micro);color:var(--muted);white-space:nowrap}
+.ilist .li .li-lock{display:inline-flex;align-items:center;color:var(--muted)}
+.ilist .li.li-locked .li-tag{color:var(--ai);background:color-mix(in srgb,var(--ai) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ai) 30%,transparent)}

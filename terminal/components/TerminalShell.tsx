@@ -26,6 +26,8 @@ import IndicatorsModal from "@/components/IndicatorsModal";
 import IndicatorSettings from "@/components/IndicatorSettings";
 import IndicatorSource from "@/components/IndicatorSource";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
+import { isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
+import { useEntitlement } from "@/lib/useEntitlement";
 import { useChartBus } from "@/lib/useChartBus";
 import { isV2Envelope, type IndicatorSpec } from "@/lib/chartBus";
 import SeasonalityCard from "@/components/SeasonalityCard";
@@ -324,6 +326,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Read-only here: the editing controls live in SettingsMenu, which subscribes to the same
   // module store, so both always see identical state.
   const { prefs: marketPrefs, ready: prefsReady, enableAll: showAllMarkets } = useMarketPrefs(email);
+  // premium-suite UI gate — client hint only, fail-closed to "free" (server authority stays macro-api)
+  const ent = useEntitlement(email);
+  // dev-only tier override (localStorage mm.devTier = "insider" | "pro") — read post-mount to avoid
+  // a hydration mismatch; the whole branch constant-folds away in production builds.
+  const [devTier, setDevTier] = useState<"insider" | "pro" | null>(null);
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const v = localStorage.getItem("mm.devTier");
+    if (v === "insider" || v === "pro") setDevTier(v);
+  }, []);
+  const userTier: "free" | "insider" | "pro" = devTier ?? (ent.tier === "insider" || ent.tier === "pro" ? ent.tier : "free");
 
   const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
   const [panes, setPanes] = useState<string[]>([seed0]);
@@ -1404,6 +1417,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // Checked OUTSIDE the setInds updater (no setState side-effect in a reducer).
     if (!loggedIn && !inds.has(k) && inds.size >= MAX_ANON_IND) { showGateNudge(t("gateIndCap")); return; }
     setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+    // premium suites: seed dense defaults on first add (Settings snapshot/Cancel needs a full blob)
+    if (isSuiteKey(k) && !inds.has(k)) setIndParams((p) => (p[k] ? p : { ...p, [k]: suiteDefaults(k) }));
   };
   const toggleCompare = useCallback((s: string, mode: CmpMode = "percent") => {
     if (s === active) return;
@@ -1428,8 +1443,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
     setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
   }, [toggleCompare]);
-  const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...withDefaults(k, p[k]), ...patch } })), []);
-  const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
+  const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...(isSuiteKey(k) ? { ...suiteDefaults(k), ...p[k] } : withDefaults(k, p[k])), ...patch } })), []);
+  const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: isSuiteKey(k) ? suiteDefaults(k) : indDefaults(k) })), []);
   const openSettings = useCallback((k: string) => setSettingsKey(k), []);
 
   // ── Day Trade Mode toggle (D lane §5) ─────────────────────────────────────────
@@ -2003,7 +2018,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawStore[sym] ?? []), ...chartBus.aiDrawingsFor(sym)]} onDrawingsChange={(d) => setSymbolDrawings(sym, d.filter((x) => !x.id.startsWith("ai_")))} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm}
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawStore[sym] ?? []), ...chartBus.aiDrawingsFor(sym)]} onDrawingsChange={(d) => setSymbolDrawings(sym, d.filter((x) => !x.id.startsWith("ai_")))} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}
@@ -2339,7 +2354,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
         onClose={() => setAddSymOpen(false)} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
         onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
-      <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
+      <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} userTier={userTier}
         scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
       {settingsKey && (isCmpKey(settingsKey)
         ? <CompareSettings sym={cmpSymOf(settingsKey)} cfg={compareCfg[cmpSymOf(settingsKey)] || defaultCmpCfg(0)} onChange={(patch) => setCompareCfg((c) => ({ ...c, [cmpSymOf(settingsKey)]: { ...(c[cmpSymOf(settingsKey)] || defaultCmpCfg(0)), ...patch } }))} onClose={() => setSettingsKey(null)} />
@@ -2348,7 +2363,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               pine={{ name: scriptById[settingsKey].name, params: mergedParams(scriptById[settingsKey], pineParams) }}
               onPineChange={(patch) => setPineParam(settingsKey, patch)}
               onClose={() => setSettingsKey(null)} />
-          : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
+          : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
       <BrainWidget
         active={active}
