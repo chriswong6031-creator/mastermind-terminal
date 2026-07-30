@@ -51,9 +51,16 @@ asking the operator to finish it:
    `/opt/terminal/terminal-build.sh`;
 7. verify the expected marker and behavior on `https://app.mastermind-x.com`.
 
+The operator granted standing authorization on 2026-07-30 for this entire
+commit → push → PR → CI → merge → production deploy → live verification chain.
+Do not wait for a separate request to commit, push, merge, or deploy.
+
 Do not stop at a local commit or open PR. The only holds are an explicit operator
 request to hold, a genuine failing check, or a real deployment blocker. Direct
 working-tree rsync/scp is not a deployment; production builds only merged master.
+If a later step is blocked, first commit and push the completed work to a
+recoverable remote branch, then report the exact blocker. Never leave completed
+work only as uncommitted changes in a session.
 
 When an operating standard changes, update the repository's `AGENTS.md`,
 `CLAUDE.md`, and any nested agent guide together so Codex and every Claude account
