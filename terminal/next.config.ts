@@ -9,7 +9,7 @@ const isProd = process.env.NODE_ENV === "production";
 //     inject inline <script> → script-src needs 'unsafe-inline' (a nonce migration is the
 //     follow-up hardening; documented in SECURITY.md).
 //   - React inline style attributes → style-src 'unsafe-inline'.
-//   - shared chart-snapshot <img> served from Cloudflare R2 (app/x/[slug]) → img-src *.r2.dev.
+//   - shared chart snapshots from Cloudflare R2 and asset identity logos from Logo.dev.
 //   - Supabase auth (REST + realtime WS) and the optional live Polygon WS → connect-src.
 //   - CN/HK quote hosts are fetched SERVER-side today, but are allowed in connect-src as a safe
 //     superset so a client fallback path can't silently break live quotes.
@@ -24,7 +24,7 @@ const CSP = [
   "form-action 'self'",
   `script-src ${scriptSrc}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://*.r2.dev",
+  "img-src 'self' data: blob: https://*.r2.dev https://img.logo.dev",
   "font-src 'self'",
   "connect-src 'self' https://*.supabase.co wss://*.supabase.co wss://socket.polygon.io https://qt.gtimg.cn https://web.ifzq.gtimg.cn https://ifzq.gtimg.cn",
   "worker-src 'self' blob:",

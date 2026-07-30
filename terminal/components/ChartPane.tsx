@@ -6,6 +6,7 @@ import ChartSettingsModal from "@/components/ChartSettingsModal";
 import { type Drawing } from "@/lib/drawings";
 import { type CmpCfg } from "@/lib/compare";
 import { type IChartApi } from "lightweight-charts";
+import AssetLogo from "@/components/AssetLogo";
 
 const f = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 
@@ -18,7 +19,7 @@ const load = (d: ChartSettings): ChartSettings => { try { const v = localStorage
 // stay pane-local and are merged in only for this pane's own render.
 export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, chartType, inds, tool, drawStyle, detectCmd, compare, compareCfg, magnet, replayIdx, onMeta, drawings, onDrawingsChange, liveQuote, indParams, hidden, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts,
   onAddAlert, onTableView, onObjectTree, lockedVLine, onSetLockedVLine, onIndRowsAt, dayMode: _dayMode, onPaneCount }:
-  { idx: number; symbol: string; isActive: boolean; onActivate: (i: number) => void; row?: { col?: string; last?: number; chg?: number } | null; tf: string; chartType: string; inds: Set<string>; tool: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; detectCmd: DetectCmd; compare: string[]; compareCfg?: Record<string, CmpCfg>; magnet: boolean; replayIdx: number | null; onMeta: (m: { total: number }) => void; drawings: Drawing[]; onDrawingsChange: (d: Drawing[]) => void; liveQuote?: LiveQuote;
+  { idx: number; symbol: string; isActive: boolean; onActivate: (i: number) => void; row?: { name?: string; zh?: string; sec?: string; mkt?: string; col?: string; last?: number; chg?: number } | null; tf: string; chartType: string; inds: Set<string>; tool: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; detectCmd: DetectCmd; compare: string[]; compareCfg?: Record<string, CmpCfg>; magnet: boolean; replayIdx: number | null; onMeta: (m: { total: number }) => void; drawings: Drawing[]; onDrawingsChange: (d: Drawing[]) => void; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
     onAddAlert?: (price: number) => void; onTableView?: () => void; onObjectTree?: () => void;
     lockedVLine?: string | null; onSetLockedVLine?: (t: string | null) => void;
@@ -79,6 +80,7 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
     if (!sameHand) onDrawingsChange(hand);
   }, [drawings, onDrawingsChange]);
   const up = (row?.chg ?? 0) >= 0;
+  const marketLabel = row?.mkt || row?.sec || "";
 
   // Derive the settings object for ChartPanel (omit extHours — threaded separately)
   const panelSettings = useMemo(() => ({
@@ -102,8 +104,8 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
   return (
     <div className={`pane${isActive ? " on" : ""}`} onPointerDownCapture={() => { if (!isActive) onActivate(idx); }}>
       <div className="pane-hd">
-        <span className="pic" style={{ background: row?.col || "#888" }}>{symbol[0]}</span>
-        <b>{symbol}</b>
+        <AssetLogo className="pic" symbol={symbol} name={row?.zh || row?.name} market={marketLabel} color={row?.col} size={18} />
+        <b>{row?.zh || row?.name || symbol}</b>
         <span className="pane-tf">{tf}</span>
         <span className="px num">{f(row?.last, (row?.last ?? 99) < 10 ? 4 : 2)}</span>
         <span className={`cg num ${up ? "up" : "down"}`}>{up ? "+" : ""}{f(row?.chg)}%</span>
@@ -116,6 +118,9 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         compare={isActive ? compare.filter((c) => c !== symbol) : []} compareCfg={compareCfg}
         magnet={isActive ? magnet : false} isActive={isActive} syncId={idx}
         liveQuote={liveQuote} indParams={indParams} hidden={hidden}
+        instrumentName={row?.zh || row?.name}
+        instrumentMarket={marketLabel}
+        instrumentColor={row?.col}
         onToggleHidden={onToggleHidden} onRemoveInd={onRemoveInd}
         onOpenSettings={onOpenSettings} onOpenSource={onOpenSource}
         pineScripts={pineScripts}
