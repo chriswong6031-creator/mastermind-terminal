@@ -23,8 +23,8 @@
 // a user who follows both HK and the US gets BOTH boosted, which is the whole point.
 //
 // Crypto is a market in the taxonomy (it classifies symbols) but NOT a country: it is not a
-// candidate for `home` or for a follow, and it stays enabled by default even for a US-only
-// signup, because a US equities trader who also holds BTC should not silently lose BTC.
+// candidate for `home` or for a follow. Every market is searchable by default; users can still
+// narrow the enabled set themselves in Terminal settings.
 
 export type MarketId = "us" | "cn" | "hk" | "ca" | "intl" | "crypto";
 
@@ -148,9 +148,8 @@ export type MarketPrefs = {
    *  reads `markets.home`. Search ranking uses `followed`; nothing boosts off this field. */
   home: MarketId | null;
   enabled: MarketId[];        // markets the user can see and search; always contains `home`
-  /** true when `enabled` came from the US-only-signup default rather than an explicit choice.
-   *  The UI uses this to explain WHY other markets are hidden, so the narrowing never reads as
-   *  a bug or a missing-data failure. */
+  /** Legacy migration marker for the retired US-only automatic narrowing. New/default and
+   *  user-edited preferences are always false. */
   autoNarrowed: boolean;
   /** "Markets you follow" — the boosted set. Serialized as `user_metadata.market_focus`, NOT
    *  inside the `markets` object, because that is where the macro dashboard reads it. */
@@ -182,20 +181,11 @@ const LEGACY_CHIP: Record<string, MarketId | "all"> = {
 };
 
 /**
- * Operator rule (2026-07-25): a signup that picks ONLY the US starts with non-US markets off,
- * because most US traders never touch them and the narrower product is the better default.
- * Every OTHER selection — China, HK, Canada, global, or any multi-pick — starts with
- * everything on and must be narrowed by hand in settings.
- *
- * Crypto stays on regardless: it is not a country market, and silently removing BTC from a US
- * trader's search would be a bug, not a personalization.
+ * Operator rule (2026-07-29): home/followed markets affect ranking, not visibility. Every account
+ * starts with the complete searchable universe and can opt into a narrower enabled set later.
  */
 export function defaultEnabledFor(picks: MarketId[]): { enabled: MarketId[]; autoNarrowed: boolean } {
-  const uniq = Array.from(new Set(picks));
-  const countries = uniq.filter((m) => m !== "crypto");
-  if (countries.length === 1 && countries[0] === "us") {
-    return { enabled: ["us", "crypto"], autoNarrowed: true };
-  }
+  void picks; // retained for the onboarding migration call sites; picks now affect ranking only
   return { enabled: [...MARKET_IDS], autoNarrowed: false };
 }
 
@@ -225,13 +215,19 @@ export function readMarketPrefs(meta: MetaShape): MarketPrefs {
   if (m && typeof m === "object") {
     const enabled = Array.isArray(m.enabled) ? m.enabled.filter(isMarketId) : [];
     const home = isMarketId(m.home) ? m.home : null;
+    // `autoNarrowed:true` was written only by the retired US-only system default. A deliberate
+    // settings edit always cleared the marker, so widening this legacy state upgrades old users
+    // without overwriting any market filter they chose themselves.
+    const retireAutoNarrowing = m.autoNarrowed === true;
     // An empty/garbage enabled list would make the whole product unsearchable — fall back to
     // "home only + crypto" if we at least know the home, else everything.
-    const safeEnabled: MarketId[] = enabled.length ? enabled : home ? [home, "crypto"] : [...MARKET_IDS];
+    const safeEnabled: MarketId[] = retireAutoNarrowing
+      ? [...MARKET_IDS]
+      : enabled.length ? enabled : home ? [home, "crypto"] : [...MARKET_IDS];
     return {
       home,
       enabled: withHome(safeEnabled, home),
-      autoNarrowed: m.autoNarrowed === true,
+      autoNarrowed: false,
       followed: followedOrHome(followed, home),
     };
   }

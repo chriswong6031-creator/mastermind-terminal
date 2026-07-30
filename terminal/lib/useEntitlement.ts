@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { normalizeSubscriptionTier, type SubscriptionTier } from "@/lib/subscriptionTier";
 
 // Client hook: fetch the caller's entitlement (/api/me) once per mount. Signed-in
 // only — a guest (no email) returns the free default WITHOUT a network call, so the
@@ -9,7 +10,7 @@ import { useEffect, useState } from "react";
 // This is a READ surface for gating labels. It is deliberately
 // NOT the live-options gate — that is a separate lane.
 
-export type Tier = "free" | "insider" | "pro";
+export type Tier = SubscriptionTier;
 export type EntStatus = "trialing" | "active" | "none" | string;
 
 export interface Entitlement {
@@ -20,10 +21,6 @@ export interface Entitlement {
 }
 
 const FREE: Omit<Entitlement, "loading"> = { tier: "free", status: "none", features: [] };
-
-function coerceTier(v: unknown): Tier {
-  return v === "insider" || v === "pro" ? v : "free";
-}
 
 /** @param email signed-in email ("" = guest → free default, no fetch). */
 export function useEntitlement(email: string): Entitlement {
@@ -36,12 +33,13 @@ export function useEntitlement(email: string): Entitlement {
     setEnt((e) => ({ ...e, loading: true }));
     fetch("/api/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : FREE))
-      .then((d: any) => {
+      .then((d: unknown) => {
         if (!alive) return;
+        const payload = d && typeof d === "object" ? d as Record<string, unknown> : {};
         setEnt({
-          tier: coerceTier(d?.tier),
-          status: typeof d?.status === "string" ? d.status : "none",
-          features: Array.isArray(d?.features) ? d.features : [],
+          tier: normalizeSubscriptionTier(payload.tier),
+          status: typeof payload.status === "string" ? payload.status : "none",
+          features: Array.isArray(payload.features) ? payload.features.filter((v): v is string => typeof v === "string") : [],
           loading: false,
         });
       })

@@ -26,6 +26,8 @@ export default defineConfig({
     timeout: 120_000,
     env: {
       TERMINAL_E2E_FIXTURE: "1",
+      TERMINAL_E2E_EMAIL: "responsive@example.com",
+      TERMINAL_E2E_ENTITLEMENT: "unlimited",
       FLOW_FIXTURE: "1",
       NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
       NEXT_PUBLIC_SUPABASE_ANON_KEY: "fixture-anon-key",
