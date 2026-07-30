@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { pick, fmtPct, fmtDate } from "../../lib/finFormat"
 import { LineSeries } from "./FinCharts"
 import { getJSON } from "../../lib/dataCache"
-import { oracleVerdict, deskVerdict } from "../../lib/signalVerdict"
+import { oracleVerdict, deskVerdict, signalKnownTs } from "../../lib/signalVerdict"
 import { computeTrendState } from "../../lib/trend"
 import { computeRatings, verdictFromScore } from "../../lib/techRating"
 import type { Bar } from "../../lib/fund"
@@ -26,6 +26,19 @@ function intelStaleDays(asof?: string | null): number {
   const asofNoon = new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0, 0)
   const todayNoon = new Date(); todayNoon.setHours(12, 0, 0, 0)
   return Math.max(0, Math.round((todayNoon.getTime() - asofNoon.getTime()) / 86_400_000))
+}
+
+/** Signal-history dates carry a year and obey the active language. */
+function signalHistoryDate(ts: string, zh: boolean): string {
+  if (!zh) return fmtDate(ts)
+  const parsed = Date.parse(ts.length <= 10 ? `${ts}T00:00:00Z` : ts)
+  if (!Number.isFinite(parsed)) return fmtDate(ts)
+  return new Date(parsed).toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  })
 }
 
 /* ── tech verdict → bilingual plain-word label ──────────────────────── */
@@ -51,6 +64,8 @@ interface ManifestRow {
 
 interface Signal {
   ts: string
+  /** session when the signal became observable; ts remains its 3D chart-bar coordinate */
+  known_ts?: string | null
   type: "BUY" | "SELL" | "REBUY" | "CUT" | string
   strength?: number | null
   price?: number | null
@@ -514,7 +529,7 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
   const warnings: Warning[] = slice?.indicator?.warnings ?? []
   const latestWarn: Warning | null = warnings.length ? warnings[warnings.length - 1] : null
   const freshWarn: Warning | null =
-    latestWarn && (!latestSig || latestWarn.ts > latestSig.ts) ? latestWarn : null
+    latestWarn && (!latestSig || latestWarn.ts > (signalKnownTs(latestSig) ?? latestSig.ts)) ? latestWarn : null
 
   const handleJump = (ts: string) => {
     // Dispatch the standard CustomEvent that ChartPanel listens for (R14)
@@ -753,8 +768,18 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                     const isEntry = sig.type === "BUY" || sig.type === "REBUY"
                     const isReclaim = sig.type === "RECLAIM"
                     const q = isEntry ? qualityLabel(sig.quality, zh) : ""
+                    const knownTs = signalKnownTs(sig) ?? sig.ts
+                    const knownDate = signalHistoryDate(knownTs, zh)
+                    const chartDate = signalHistoryDate(sig.ts, zh)
+                    const dateTitle = knownTs !== sig.ts
+                      ? pick(
+                          zh,
+                          `Confirmed ${knownDate} · 3D bar opened ${chartDate}`,
+                          `确认于 ${knownDate} · 3日K线始于 ${chartDate}`,
+                        )
+                      : pick(zh, "Jump to chart", "跳转到图表")
                     return (
-                      <button key={i} className="sd-sigrow" onClick={() => handleJump(sig.ts)} title={isReclaim ? (sig.quality_reason || "") : pick(zh, "Jump to chart", "跳转到图表")}>
+                      <button key={i} className="sd-sigrow" onClick={() => handleJump(sig.ts)} title={isReclaim ? (sig.quality_reason || dateTitle) : dateTitle}>
                         {/* tinted (not solid) pills — the signal color rides --sc; RECLAIM keeps the
                             hollow treatment (glyph law — never the solid entry pill) */}
                         <span
@@ -767,7 +792,7 @@ export default function OracleDash({ sym, row, slice, intel, bars, zh = false, o
                             scored reclaim-lane events are normal position events and need none */}
                         {isReclaim && sig.scored === false && <span className="sd-sig-q">{pick(zh, "unscored", "未计分")}</span>}
                         {q && <span className="sd-sig-q">{q}</span>}
-                        <span className="sd-sig-date">{fmtDate(sig.ts)}</span>
+                        <span className="sd-sig-date">{knownDate}</span>
                         <span className="sd-sig-price">{sig.price != null ? sig.price.toFixed(2) : "—"}</span>
                       </button>
                     )

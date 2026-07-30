@@ -18,7 +18,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { computeRatings, type Row as RatingRow } from "@/lib/techRating";
 import { ema, atr, supertrend, bollingerBands, type Bar } from "@/lib/indicatorMath";
-import { verdictIsStale, ORACLE_STALE_DAYS, anchorSignal } from "@/lib/signalVerdict";
+import { verdictIsStale, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs } from "@/lib/signalVerdict";
 import { isStalePlane, type MarketPlane } from "@/lib/nwPlane";
 // Same upstream topology as app/api/flow/route.ts (Python hub first, R2 mirror second) and
 // app/api/nw/route.ts — the shared endpoint constants live in lib/upstreams (the routes
@@ -376,6 +376,7 @@ export function curateSignals(slice: unknown, nowMs: number = Date.now()): Recor
   const rawSigs = Array.isArray(ind.signals) ? (ind.signals as Record<string, unknown>[]) : [];
   const last_signals = rawSigs.slice(-3).map((s) => ({
     ts: s?.ts ?? null,
+    known_ts: s?.known_ts ?? null,
     type: s?.type ?? null,
     price: rnd(s?.price, 4),
     quality: s?.quality ?? rnd(s?.strength, 3),
@@ -392,7 +393,7 @@ export function curateSignals(slice: unknown, nowMs: number = Date.now()): Recor
   // the SAME helper the rail card runs, which includes unscored-but-real RECLAIMs (decay-class
   // names: last_scored_ts can be months older than the fresh re-entry the rail card shows).
   // Fallback: last_scored_ts.
-  const lastTs = (anchorSignal(rawSigs).anchor?.ts as string | undefined)
+  const lastTs = signalKnownTs(anchorSignal(rawSigs).anchor)
     ?? (state?.last_scored_ts as string | undefined) ?? null;
   const ageDays = lastTs && Number.isFinite(Date.parse(lastTs)) ? Math.floor((nowMs - Date.parse(lastTs)) / 86_400_000) : null;
 

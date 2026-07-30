@@ -239,7 +239,8 @@ def ipo_week_parity(feed_close: pd.Series, symbol: str) -> int:
 
 def compute_signals(daily_close: pd.Series, bar_anchor: int = 0, week_parity: int = 0) -> pd.DataFrame:
     """All trade-driving signals on the 3D timeframe, with a leak-free weekly
-    (confirm-TF) trend gate. Returns a frame indexed by 3D bar OPEN dates.
+    (confirm-TF) trend gate. Returns a frame indexed by 3D bar OPEN dates, with
+    ``known_ts`` carrying the session on which each bar's current value became knowable.
 
     ``bar_anchor`` phases the session-grouped 3D bars to the symbol's full-history (IPO)
     anchor — see ``_resample_3d``. ``week_parity`` phases the 2-week confirm gate the same way
@@ -318,7 +319,13 @@ def compute_signals(daily_close: pd.Series, bar_anchor: int = 0, week_parity: in
     strong_bull = (w_bull_on3 & mo_bull & above200)
 
     return pd.DataFrame({
-        "close": s3, "macd": macd, "sig": sig, "k": k, "d": d, "rsi14": r14,
+        "close": s3,
+        # Keep the OPEN date as the frame index for TradingView chart placement, but retain
+        # the actual closing/current session as a separate availability date. For the live
+        # incomplete 3D bar this advances each session; a signal printed on Jul 28 inside a
+        # Jul 24-opened bar must not be presented as knowable on Jul 24.
+        "known_ts": pd.Series(pd.DatetimeIndex(close_dates), index=open_dates),
+        "macd": macd, "sig": sig, "k": k, "d": d, "rsi14": r14,
         "CB": cb.fillna(False), "CS": cs.fillna(False),
         "revBuy": rev_exit_buy.fillna(False), "revSell": rev_exit_sell.fillna(False),
         "w_bull": w_bull_on3, "above200": above200, "mo_bull": mo_bull,

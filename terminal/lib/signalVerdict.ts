@@ -21,7 +21,7 @@ export interface Verdict {
 // not an opinion — it renders dimmed with its date instead of at full color strength.
 export const ORACLE_STALE_DAYS = 21;
 
-/** shared staleness test for manifest rows carrying `vts` (the scored verdict's date) —
+/** shared staleness test for manifest rows carrying `vts` (the scored verdict's availability date) —
  *  screener/search/portfolio pills demote to the .stale treatment past the threshold */
 export function verdictIsStale(vts?: string | null, now: number = Date.now()): boolean {
   if (!vts) return false; // undated rows keep today's render; only a KNOWN old date demotes
@@ -41,6 +41,17 @@ function fmtDate(ts: string, zh: boolean): string {
   const t = Date.parse(ts);
   if (!Number.isFinite(t)) return ts;
   return new Date(t).toLocaleDateString(zh ? "zh-CN" : "en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+/** Availability-date contract for signal reads. `ts` remains the chart/bar coordinate;
+ *  `known_ts` is when the event was actually observable. Legacy slices fall back to `ts`. */
+export function signalKnownTs(
+  signal?: { ts?: unknown; known_ts?: unknown } | null,
+): string | null {
+  const known = signal?.known_ts;
+  if (typeof known === "string" && known && Number.isFinite(Date.parse(known))) return known;
+  const chartTs = signal?.ts;
+  return typeof chartTs === "string" && chartTs ? chartTs : null;
 }
 
 /** trend state as computed client-side by lib/trend.ts (TrendRow already ships it) */
@@ -64,7 +75,7 @@ interface OracleSlice {
       above200?: boolean | null;
     } | null;
     signals?: Array<{
-      ts: string; type?: string; price?: number | null;
+      ts: string; known_ts?: string | null; type?: string; price?: number | null;
       quality?: string | null; quality_reason?: string | null; scored?: boolean | null;
     }> | null;
   } | null;
@@ -118,6 +129,17 @@ function eventColor(u: string): string {
 
 function eventLabel(u: string, zh: boolean): string {
   if (u === "RECLAIM") return zh ? "重新入场" : "Re-entry";
+  if (zh) {
+    const labels: Record<string, string> = {
+      BUY: "买入",
+      REBUY: "再次买入",
+      ADD: "加仓",
+      SELL: "卖出",
+      CUT: "止损",
+      TRIM: "减仓",
+    };
+    if (labels[u]) return labels[u];
+  }
   return u.charAt(0) + u.slice(1).toLowerCase();
 }
 
@@ -179,7 +201,8 @@ export function oracleVerdict(
     return { label: "—", color: "var(--muted)", raw: null, sub: null, dim: false, note: null };
 
   const horizon = zh ? "3日K线摆动择时信号 — 非投资观点" : "swing-timing overlay on 3D bars — not an investment view";
-  const age = eff ? ageDays(eff.ts, now) : null;
+  const effKnownTs = signalKnownTs(eff);
+  const age = ageDays(effKnownTs, now);
   const effU = eff ? String(eff.type).toUpperCase() : null;
   const stale = age == null || age > ORACLE_STALE_DAYS;
 
@@ -206,7 +229,7 @@ export function oracleVerdict(
       label: eventLabel(effU, zh),
       color: eventColor(effU),
       raw: effU,
-      sub: fmtDate(eff.ts, zh),
+      sub: fmtDate(effKnownTs!, zh),
       dim: false,
       soft,
       note: notes.join(" · "),
@@ -224,7 +247,7 @@ export function oracleVerdict(
       const notes: string[] = [zh ? "姿态来自当前状态 — 非交易信号" : "stance from current regime state — not a trade signal", horizon];
       if (blockedTail) {
         notes.push(
-          `${fmtDate(blockedTail.ts, zh)} ${eventLabel(String(blockedTail.type).toUpperCase(), zh)} ` +
+          `${fmtDate(signalKnownTs(blockedTail)!, zh)} ${eventLabel(String(blockedTail.type).toUpperCase(), zh)} ` +
           (zh ? "已拦截 — 非入场信号" : "blocked — not an entry"),
         );
       }
@@ -235,7 +258,7 @@ export function oracleVerdict(
       if (echoU) {
         notes.push(
           `${zh ? "上次信号" : "last signal"}: ${eventLabel(echoU, zh)}` +
-          (eff ? ` · ${fmtDate(eff.ts, zh)}` : "") +
+          (effKnownTs ? ` · ${fmtDate(effKnownTs, zh)}` : "") +
           (eff?.price != null ? ` @ ${eff.price}` : ""),
         );
       }
@@ -260,7 +283,7 @@ export function oracleVerdict(
     label: eventLabel(u, zh),
     color: eventColor(u),
     raw: u,
-    sub: eff ? fmtDate(eff.ts, zh) : zh ? "无日期" : "undated",
+    sub: effKnownTs ? fmtDate(effKnownTs, zh) : zh ? "无日期" : "undated",
     dim: true,
     note: notes.join(" · "),
   };

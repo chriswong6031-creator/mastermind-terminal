@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, SOFT_Q } from "../signalVerdict";
+import { oracleVerdict, deskVerdict, ORACLE_STALE_DAYS, anchorSignal, signalKnownTs, SOFT_Q } from "../signalVerdict";
 
 // Frozen "today" so ages are deterministic: 2026-07-14 (the NVDA/GOOGL stale-Sell incident date).
 const NOW = Date.parse("2026-07-14T21:00:00Z");
 
-type Sig = { ts: string; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null; scored?: boolean | null };
+type Sig = { ts: string; known_ts?: string | null; type?: string; price?: number | null; quality?: string | null; quality_reason?: string | null; scored?: boolean | null };
 
 function sliceOf(lastSignal: string, signals: Sig[]) {
   return { indicator: { signals, state: { last_signal: lastSignal } } };
@@ -29,6 +29,31 @@ describe("oracleVerdict — age, dimming, provenance", () => {
     expect(v.dim).toBe(false);
     expect(v.sub).toBe("Jul 10");
     expect(v.color).toBe("var(--buy)");
+  });
+
+  it("uses the availability date for Costco while preserving the 3D chart date", () => {
+    const cost = {
+      ts: "2026-07-24",
+      known_ts: "2026-07-28",
+      type: "BUY",
+      price: 966.58,
+      quality: "take",
+    };
+    const v = oracleVerdict(
+      "BUY",
+      sliceOf("BUY", [cost]),
+      false,
+      Date.parse("2026-07-29T21:00:00Z"),
+    );
+    expect(signalKnownTs(cost)).toBe("2026-07-28");
+    expect(v.sub).toBe("Jul 28");
+    expect(v.dim).toBe(false);
+    expect(v.note).toContain("@ 966.58");
+  });
+
+  it("falls back to the chart date for legacy slices without known_ts", () => {
+    expect(signalKnownTs({ ts: "2026-07-24" })).toBe("2026-07-24");
+    expect(signalKnownTs({ ts: "2026-07-24", known_ts: "not-a-date" })).toBe("2026-07-24");
   });
 
   it("dim boundary sits at ORACLE_STALE_DAYS calendar days", () => {
@@ -151,6 +176,7 @@ describe("oracleVerdict — age, dimming, provenance", () => {
 
   it("zh variant localizes the sub-line", () => {
     const v = oracleVerdict("SELL", slice("SELL", "2026-06-03"), true, NOW);
+    expect(v.label).toBe("卖出");
     expect(v.sub).toContain("6月");
   });
 });

@@ -186,6 +186,9 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
             continue
         ev = {
             "ts": ts.strftime("%Y-%m-%d"),
+            # ``ts`` is the 3D bar OPEN and remains the chart/replay coordinate.
+            # ``known_ts`` is the session when this row's value became observable.
+            "known_ts": _iso_date(row.get("known_ts"), ts.strftime("%Y-%m-%d")),
             "bar_index": i,
             "type": kind,
             "strength": _strength(row),
@@ -229,6 +232,7 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
             row = sig.iloc[j]
             out.append({
                 "ts": w["ts"],                              # the confirm event's date
+                "known_ts": _iso_date(w.get("known_ts"), w["ts"]),
                 "bar_index": j,                             # nearest-preceding 3D row
                 "type": "SELL",
                 "strength": _strength(row),                 # of the nearest 3D row
@@ -256,6 +260,7 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
             kind = r.get("kind", "reclaim")
             out.append({
                 "ts": r["ts"],
+                "known_ts": _iso_date(r.get("known_ts"), r["ts"]),
                 "bar_index": j,
                 "type": "RECLAIM",
                 "strength": _strength(row),
@@ -296,8 +301,10 @@ def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
     ``position_hint`` / ``last_scored_signal`` / ``last_scored_ts`` walk the SCORED lane
     only: markers stamped ``quality='regime_blocked'`` are display artifacts the v2 entry
     logic refused ("never treat as an entry") and must not flip the position — a blocked
-    BUY after a SELL leaves the hint flat and the scored verdict SELL. The two fields
-    diverge from ``last_signal`` exactly when the stream tail is a blocked marker."""
+    BUY after a SELL leaves the hint flat and the scored verdict SELL. ``last_scored_ts``
+    is the signal's availability date (``known_ts``), with a legacy fallback to its chart
+    coordinate (``ts``). The scored fields diverge from ``last_signal`` exactly when the
+    stream tail is a blocked marker."""
     last = sig.iloc[-1] if len(sig) else None
     last_sig = signals[-1] if signals else None
     bars_since = (len(sig) - 1 - last_sig["bar_index"]) if last_sig else None
@@ -319,7 +326,10 @@ def _state(sig: pd.DataFrame, signals: list[dict]) -> dict:
         "position_hint": pos,
         "last_signal": last_sig["type"] if last_sig else None,
         "last_scored_signal": last_scored["type"] if last_scored else None,
-        "last_scored_ts": last_scored["ts"] if last_scored else None,
+        "last_scored_ts": (
+            last_scored.get("known_ts") or last_scored["ts"]
+            if last_scored else None
+        ),
         "bars_since_signal": bars_since,
         # DEPRECATED misnomer: carries strong_bull (weekly+monthly bull & above 200d), NOT the
         # Pine "extended" (overbought). Kept verbatim for old readers; use the honest names.
@@ -419,3 +429,13 @@ def _num(v):
     if not np.isfinite(f):
         return None
     return round(f, 6)
+
+
+def _iso_date(value, fallback: str) -> str:
+    """Return an ISO availability date, falling back for legacy/synthetic frames."""
+    try:
+        if value is None or pd.isna(value):
+            return fallback
+        return pd.Timestamp(value).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return fallback
