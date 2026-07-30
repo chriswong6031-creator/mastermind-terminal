@@ -1804,7 +1804,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         can call useOnboarding() directly. Note this provider is a DESCENDANT of
         TerminalShell, so useSettings() *here* would be the no-op — the buttons
         below are children of it, which is what matters. */}
-    <SettingsProvider email={email}>
+    <SettingsProvider email={email} defaultSection="terminal">
     <div className={`app${fullChart ? " fs" : ""}`} style={{ ["--rail-w" as any]: `${railW}px` }}>
       <header className="topbar">
         {fromMacro

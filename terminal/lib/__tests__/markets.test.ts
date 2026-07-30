@@ -53,36 +53,22 @@ describe("marketOf — venue mapping", () => {
   });
 });
 
-describe("defaultEnabledFor — the US-only-signup rule", () => {
-  it("narrows a US-ONLY signup to US + crypto", () => {
-    const r = defaultEnabledFor(["us"]);
-    expect(r.enabled.sort()).toEqual(["crypto", "us"]);
-    expect(r.autoNarrowed).toBe(true);
-  });
-
-  it("keeps crypto for a US-only signup — a US trader who holds BTC must not lose it", () => {
-    expect(defaultEnabledFor(["us"]).enabled).toContain("crypto");
-  });
-
-  it("does NOT narrow China / HK / Canada signups", () => {
-    for (const m of ["cn", "hk", "ca"] as const) {
-      const r = defaultEnabledFor([m]);
+describe("defaultEnabledFor — every market starts searchable", () => {
+  it("enables the complete universe for every signup selection", () => {
+    for (const picks of [["us"], ["cn"], ["hk"], ["ca"], ["us", "hk"], []] as MarketId[][]) {
+      const r = defaultEnabledFor(picks);
       expect(r.enabled).toEqual([...MARKET_IDS]);
       expect(r.autoNarrowed).toBe(false);
     }
   });
-
-  it("does not narrow a multi-market signup that includes the US", () => {
-    expect(defaultEnabledFor(["us", "hk"]).autoNarrowed).toBe(false);
-  });
 });
 
 describe("readMarketPrefs — legacy market_focus migration", () => {
-  it("migrates a US-only signup and applies the narrowing", () => {
+  it("migrates a US-only signup with every market searchable", () => {
     const p = readMarketPrefs({ market_focus: ["us"] });
     expect(p.home).toBe("us");
-    expect(p.enabled.sort()).toEqual(["crypto", "us"]);
-    expect(p.autoNarrowed).toBe(true);
+    expect(p.enabled).toEqual([...MARKET_IDS]);
+    expect(p.autoNarrowed).toBe(false);
   });
 
   it("migrates a China signup with everything left on", () => {
@@ -105,6 +91,24 @@ describe("readMarketPrefs — legacy market_focus migration", () => {
     });
     expect(p.home).toBe("cn");
     expect(p.enabled.sort()).toEqual(["cn", "hk"]);
+  });
+
+  it("widens the retired system-auto-narrowed preference for existing users", () => {
+    const p = readMarketPrefs({
+      market_focus: ["us"],
+      markets: { home: "us", enabled: ["us", "crypto"], autoNarrowed: true },
+    });
+    expect(p.enabled).toEqual([...MARKET_IDS]);
+    expect(p.autoNarrowed).toBe(false);
+  });
+
+  it("preserves a market filter the user chose themselves", () => {
+    const p = readMarketPrefs({
+      market_focus: ["us"],
+      markets: { home: "us", enabled: ["us", "crypto"], autoNarrowed: false },
+    });
+    expect(p.enabled).toEqual(["us", "crypto"]);
+    expect(p.autoNarrowed).toBe(false);
   });
 
   it("degrades to everything-visible on absent or malformed metadata", () => {

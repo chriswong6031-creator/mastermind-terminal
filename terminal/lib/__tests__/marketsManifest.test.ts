@@ -66,13 +66,13 @@ describe("classification over the real manifest", () => {
   });
 });
 
-describe("a US-only signup", () => {
+describe("a US-following signup", () => {
   // The exact state readMarketPrefs produces for someone who ticked only "us" at onboarding.
   const usOnly = readMarketPrefs({ market_focus: ["us"] });
 
-  it("cannot reach Chinese, HK, Canadian or international names at all", () => {
+  it("starts with every market searchable", () => {
     for (const sym of ["600519.SS", "0700.HK", "SHOP.TO", "AZN.L", "8035.T"]) {
-      expect(isSymbolVisible(sym, M[sym], usOnly)).toBe(false);
+      expect(isSymbolVisible(sym, M[sym], usOnly)).toBe(true);
     }
   });
 
@@ -81,9 +81,9 @@ describe("a US-only signup", () => {
     expect(isSymbolVisible("BTC-USD", M["BTC-USD"], usOnly)).toBe(true);
   });
 
-  it("finds nothing when searching a hidden market's company by name", () => {
-    expect(search("tencent", usOnly)).toEqual([]);
-    expect(search("moutai", usOnly)).toEqual([]);
+  it("finds foreign-market companies by name", () => {
+    expect(search("tencent", usOnly)).toEqual(["0700.HK"]);
+    expect(search("moutai", usOnly)).toEqual(["600519.SS"]);
   });
 });
 

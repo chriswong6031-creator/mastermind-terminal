@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { isPaidTier } from "@/lib/entitlement";
-import { billingAuth, BILLING_BASE } from "@/app/api/billing/gateway";
+import { isPaidTier, isProTier } from "@/lib/entitlement";
 import { SUITE_ALERT_EVENTS, validateSuiteCondition, validateSuiteSequence } from "@/lib/suiteAlerts";
 
 async function uid() {
@@ -28,29 +27,6 @@ function eventTier(suite: unknown, event: unknown): "free" | "insider" | "pro" {
   const hit = SUITE_ALERT_EVENTS.find((e) => e.suite === suite && e.event === event);
   if (!hit) return "pro";
   return hit.tier === "free" || hit.tier === "insider" ? hit.tier : "pro";
-}
-
-/**
- * Pro-ONLY gate. lib/entitlement.ts exposes isPaidTier() (any paid tier) but no tier reader;
- * its doc comment says a pro-only surface must gate on `tier === "pro"`, so this reads the SAME
- * authority (macro-api /api/me via the billing gateway) with the same FAIL-CLOSED rule —
- * no session / non-2xx / throw → false. See the report note: fold into entitlement.ts as
- * isProTier() once that file is free.
- */
-async function isProTier(): Promise<boolean> {
-  const auth = await billingAuth();
-  if (!auth) return false;
-  try {
-    const r = await fetch(`${BILLING_BASE}/api/me`, {
-      headers: { Authorization: `Bearer ${auth.token}`, Accept: "application/json" },
-      cache: "no-store",
-    });
-    if (!r.ok) return false;
-    const d = await r.json();
-    return d?.tier === "pro";
-  } catch {
-    return false;
-  }
 }
 
 export async function GET() {

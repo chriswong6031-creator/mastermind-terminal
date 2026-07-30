@@ -10,7 +10,7 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
   const e2eFixture = process.env.TERMINAL_E2E_FIXTURE === "1";
   const guestSymbols: [string, string][] = [["Crypto", "BTC-USD"], ["Crypto", "ETH-USD"], ["Equities", "NVDA"], ["Equities", "AAPL"], ["Equities", "MSFT"], ["Equities", "QQQ"]];
   if (e2eFixture) {
-    return <TerminalShell symbols={guestSymbols.map(([section, symbol]) => ({ symbol, section }))} email="" initialSymbol={sp?.symbol ?? sp?.sym} />;
+    return <TerminalShell symbols={guestSymbols.map(([section, symbol]) => ({ symbol, section }))} email={process.env.TERMINAL_E2E_EMAIL || ""} initialSymbol={sp?.symbol ?? sp?.sym} />;
   }
 
   const supabase = await createClient();

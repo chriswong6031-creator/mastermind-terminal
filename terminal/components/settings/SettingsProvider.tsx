@@ -74,9 +74,12 @@ const SettingsPanel = dynamic(() => import("./SettingsPanel"), { ssr: false });
 
 export function SettingsProvider({
   email,
+  defaultSection = "account",
   children,
 }: {
   email: string;
+  /** Surface-specific landing tab. Explicit open("billing"), etc. still wins. */
+  defaultSection?: SettingsSection;
   children: React.ReactNode;
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -89,11 +92,11 @@ export function SettingsProvider({
   const loadedFor = useRef<string | null>(null);
 
   const open = useCallback<SettingsApi["open"]>((s) => {
-    setSection(s && SETTINGS_SECTIONS.includes(s) ? s : "account");
+    setSection(s && SETTINGS_SECTIONS.includes(s) ? s : defaultSection);
     setIsOpen(true);
     setEverOpened(true);
     setOpenSeq((n) => n + 1);
-  }, []);
+  }, [defaultSection]);
 
   const close = useCallback(() => setIsOpen(false), []);
 

@@ -26,7 +26,7 @@ export default function SettingsButton({ email }: { email: string }) {
       aria-haspopup="dialog"
       onClick={(e) => {
         e.stopPropagation();
-        if (signedIn) settings.open("account");
+        if (signedIn) settings.open();
         else onboarding.open("signup");
       }}
     >
