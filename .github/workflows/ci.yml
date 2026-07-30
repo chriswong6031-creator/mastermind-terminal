@@ -39,6 +39,15 @@ jobs:
       - run: npx next typegen
       - run: npx tsc --noEmit
       - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:responsive
+      - name: Upload responsive QA screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: responsive-qa-${{ github.run_id }}
+          path: terminal/test-results
+          if-no-files-found: ignore
 
   python:
     name: Ingest + signal-layer tests

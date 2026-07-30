@@ -24,8 +24,11 @@ import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
 import SearchModal, { FLAG_DEFAULT, FLAG_COLORS } from "@/components/SearchModal";
 import IndicatorsModal from "@/components/IndicatorsModal";
 import IndicatorSettings from "@/components/IndicatorSettings";
+import GuidePanel from "@/components/GuidePanel";
 import IndicatorSource from "@/components/IndicatorSource";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
+import { isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
+import { useEntitlement } from "@/lib/useEntitlement";
 import { useChartBus } from "@/lib/useChartBus";
 import { isV2Envelope, type IndicatorSpec } from "@/lib/chartBus";
 import SeasonalityCard from "@/components/SeasonalityCard";
@@ -45,7 +48,8 @@ import { computeTrendState } from "@/lib/trend";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import { type Drawing, uid } from "@/lib/drawings";
-import SettingsMenu from "@/components/SettingsMenu";
+import SettingsButton from "@/components/settings/SettingsButton";
+import { SettingsProvider } from "@/components/settings/SettingsProvider";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 import DrawingSidebar from "@/components/DrawingSidebar";
 import DayRange from "@/components/DayRange";
@@ -321,9 +325,20 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Market preference — ONE instance for the whole shell, so the Markets settings pane and the
   // search results are always reading the same object. Backed by Supabase user_metadata, which
   // is the same store the macro site's onboarding writes, on the same Supabase project.
-  // Read-only here: the editing controls live in SettingsMenu, which subscribes to the same
+  // Read-only here: the editing controls live in the settings panel's Terminal section, which subscribes to the same
   // module store, so both always see identical state.
   const { prefs: marketPrefs, ready: prefsReady, enableAll: showAllMarkets } = useMarketPrefs(email);
+  // premium-suite UI gate — client hint only, fail-closed to "free" (server authority stays macro-api)
+  const ent = useEntitlement(email);
+  // dev-only tier override (localStorage mm.devTier = "insider" | "pro") — read post-mount to avoid
+  // a hydration mismatch; the whole branch constant-folds away in production builds.
+  const [devTier, setDevTier] = useState<"insider" | "pro" | null>(null);
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const v = localStorage.getItem("mm.devTier");
+    if (v === "insider" || v === "pro") setDevTier(v);
+  }, []);
+  const userTier: "free" | "insider" | "pro" = devTier ?? (ent.tier === "insider" || ent.tier === "pro" ? ent.tier : "free");
 
   const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
   const [panes, setPanes] = useState<string[]>([seed0]);
@@ -353,7 +368,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [inds, setInds] = useState<Set<string>>(new Set(["ema", "vol", "macd", "stochrsi"]));
   const [hidden, setHidden] = useState<Set<string>>(new Set());                       // indicators the eye has hidden
   const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());      // per-indicator params (Settings dialog)
-  const [settingsKey, setSettingsKey] = useState<string | null>(null);                 // indicator whose Settings dialog is open
+  const [settingsKey, setSettingsKey] = useState<string | null>(null);
+  const [guide, setGuide] = useState<{ suite: string; mod: string; label: string } | null>(null);                 // indicator whose Settings dialog is open
   const [sourceKey, setSourceKey] = useState<string | null>(null);                     // indicator whose Source view is open
   // ── custom scripts (Pine): the user's saved scripts + which are ENABLED on the chart + param overrides ──
   const [scripts, setScripts] = useState<UserScript[]>([]);
@@ -528,7 +544,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // symbol's functional set, since the workspace restore below can land on a symbol other than seed0.
     const savedStartTf = readStartTf();
     const startTf = resolveStartTf(savedStartTf, functionalSet(seed0));
-    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); setIndParams(base); } setPaneTfs([startTf]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); { const sv = load("mm.set", {}); setSet({ ...DEFAULT_SET, ...sv, cols: { ...DEFAULT_SET.cols, ...(sv.cols || {}) }, colW: { ...(sv.colW || {}) } }); } setCompareCfg(load("mm.cmpCfg", {}));
+    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); for (const k of Object.keys(savedP)) if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...savedP[k] }; setIndParams(base); } setPaneTfs([startTf]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); { const sv = load("mm.set", {}); setSet({ ...DEFAULT_SET, ...sv, cols: { ...DEFAULT_SET.cols, ...(sv.cols || {}) }, colW: { ...(sv.colW || {}) } }); } setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
@@ -936,6 +952,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       setInds(new Set(tmpl.indicators));
       const base = allDefaults();
       for (const k of IND_ORDER) { if (tmpl.indParams[k]) base[k] = withDefaults(k, tmpl.indParams[k]); }
+      for (const k of Object.keys(tmpl.indParams || {})) { if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...tmpl.indParams[k] }; }
       setIndParams(base);
     };
     window.addEventListener("mm:apply-template", h);
@@ -1205,7 +1222,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // ────────────────────────────────────────────────────────────────────────────
 
   async function addSymbol(sym: string) {
-    if (!loggedIn) { showGateNudge(t("gateWatchlist")); return; }
+    // OnboardingProvider is a DESCENDANT of this component, so useOnboarding() here is the
+    // no-op context — the `mm:onboard` window event is the only way up to the real sheet.
+    if (!loggedIn) { showGateNudge(t("gateWatchlist")); window.dispatchEvent(new CustomEvent("mm:onboard", { detail: { mode: "signup" } })); return; }
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
     if (!inWl.has(sym)) {
       setWl((w: any[]) => [...w, { symbol: sym, section: sec }]);
@@ -1232,7 +1251,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   // Add a symbol to a NAMED list (search-hub multi-list picker). Mirrors addSymbol's dedupe +
   // Default-only server sync, but targets an explicit list instead of the active one.
   function addToList(sym: string, listName: string) {
-    if (!loggedIn) { showGateNudge(t("gateWatchlist")); return; }
+    // Same descendant-provider constraint as addSymbol — reach the sheet via the window event.
+    if (!loggedIn) { showGateNudge(t("gateWatchlist")); window.dispatchEvent(new CustomEvent("mm:onboard", { detail: { mode: "signup" } })); return; }
     const sec = man?.symbols?.[sym]?.sec || "Watchlist";
     setLists((l) => {
       const cur = l[listName] || [];
@@ -1404,6 +1424,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // Checked OUTSIDE the setInds updater (no setState side-effect in a reducer).
     if (!loggedIn && !inds.has(k) && inds.size >= MAX_ANON_IND) { showGateNudge(t("gateIndCap")); return; }
     setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+    // premium suites: seed dense defaults on first add (Settings snapshot/Cancel needs a full blob)
+    if (isSuiteKey(k) && !inds.has(k)) setIndParams((p) => (p[k] ? p : { ...p, [k]: suiteDefaults(k) }));
   };
   const toggleCompare = useCallback((s: string, mode: CmpMode = "percent") => {
     if (s === active) return;
@@ -1428,8 +1450,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
     setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
   }, [toggleCompare]);
-  const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...withDefaults(k, p[k]), ...patch } })), []);
-  const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: indDefaults(k) })), []);
+  const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...(isSuiteKey(k) ? { ...suiteDefaults(k), ...p[k] } : withDefaults(k, p[k])), ...patch } })), []);
+  const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: isSuiteKey(k) ? suiteDefaults(k) : indDefaults(k) })), []);
   const openSettings = useCallback((k: string) => setSettingsKey(k), []);
 
   // ── Day Trade Mode toggle (D lane §5) ─────────────────────────────────────────
@@ -1621,7 +1643,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   };
   const removeFlag = (sym: string) => { setFlags((f) => { const n = { ...f }; delete n[sym]; return n; }); };
 
-  const pick = (sym: string) => {
+  const pick = useCallback((sym: string) => {
     // prefer the pane the user is viewing (matters in an MTF layout where one symbol fills several panes):
     // re-clicking the active symbol is a no-op rather than jumping focus to the first matching pane.
     const existing = panes[activePane] === sym ? activePane : panes.findIndex((s) => s === sym);
@@ -1631,8 +1653,20 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // F3: record navigation in history ring buffer (skip composites — SearchModal filters
     // history via manifest keys, so composite exprs would silently vanish from the Recent list).
     if (!isComposite(sym)) pushHistory(sym);
-  };
+  }, [activePane, panes]);
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
+
+  // The dashboard keeps one warm iframe alive between launches. A later ticker click
+  // therefore switches the existing Terminal instance through the bridge instead of
+  // reloading the whole Next app and chart runtime.
+  useEffect(() => {
+    const onEmbeddedSymbol = (event: Event) => {
+      const symbol = (event as CustomEvent<{ symbol?: string }>).detail?.symbol;
+      if (symbol) pick(symbol);
+    };
+    window.addEventListener("mm:embedded-symbol", onEmbeddedSymbol);
+    return () => window.removeEventListener("mm:embedded-symbol", onEmbeddedSymbol);
+  }, [pick]);
 
   // ── Chart Bus v2 (CMX W1) ──────────────────────────────────────────────────────────────────
   // The v2 typed drawing/command vocabulary. v1 envelopes stay on handleBrainCommand below; a v:2
@@ -1766,6 +1800,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
 
   return (
     <OnboardingProvider email={email}>
+    {/* Inside OnboardingProvider so the settings panel (and the avatar button)
+        can call useOnboarding() directly. Note this provider is a DESCENDANT of
+        TerminalShell, so useSettings() *here* would be the no-op — the buttons
+        below are children of it, which is what matters. */}
+    <SettingsProvider email={email} defaultSection="terminal">
     <div className={`app${fullChart ? " fs" : ""}`} style={{ ["--rail-w" as any]: `${railW}px` }}>
       <header className="topbar">
         {fromMacro
@@ -1797,7 +1836,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         })()}
         <div className="spacer" />
         <button className="ai" onClick={() => (window as any).MMBrain?.toggle()}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
-        <SettingsMenu email={email} />
+        <SettingsButton email={email} />
       </header>
 
       {/* ── mobile top bar + drawer (shared component) ── */}
@@ -2003,7 +2042,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawStore[sym] ?? []), ...chartBus.aiDrawingsFor(sym)]} onDrawingsChange={(d) => setSymbolDrawings(sym, d.filter((x) => !x.id.startsWith("ai_")))} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm}
+                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawStore[sym] ?? []), ...chartBus.aiDrawingsFor(sym)]} onDrawingsChange={(d) => setSymbolDrawings(sym, d.filter((x) => !x.id.startsWith("ai_")))} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}
@@ -2339,7 +2378,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
         onClose={() => setAddSymOpen(false)} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
         onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
-      <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
+      <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} userTier={userTier}
         scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
       {settingsKey && (isCmpKey(settingsKey)
         ? <CompareSettings sym={cmpSymOf(settingsKey)} cfg={compareCfg[cmpSymOf(settingsKey)] || defaultCmpCfg(0)} onChange={(patch) => setCompareCfg((c) => ({ ...c, [cmpSymOf(settingsKey)]: { ...(c[cmpSymOf(settingsKey)] || defaultCmpCfg(0)), ...patch } }))} onClose={() => setSettingsKey(null)} />
@@ -2348,8 +2387,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               pine={{ name: scriptById[settingsKey].name, params: mergedParams(scriptById[settingsKey], pineParams) }}
               onPineChange={(patch) => setPineParam(settingsKey, patch)}
               onClose={() => setSettingsKey(null)} />
-          : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} />)}
+          : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} onOpenGuide={(sk, mk, ml) => setGuide({ suite: sk, mod: mk, label: ml })} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
+      {guide && <GuidePanel suiteKey={guide.suite} moduleKey={guide.mod} moduleLabel={guide.label} onClose={() => setGuide(null)} />}
       <BrainWidget
         active={active}
         onCommand={handleBrainCommand}
@@ -2428,6 +2468,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       )}
 
     </div>
+    </SettingsProvider>
     </OnboardingProvider>
   );
 }

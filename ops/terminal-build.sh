@@ -159,4 +159,18 @@ rsync -a --delete \
   --exclude='node_modules' --exclude='.env' --exclude='.env.*' --exclude='public/data' \
   "$TSRC/" "$APP/"
 
+# 9) suite-alerts sidecar bundle: ingest/suite_alerts.ts imports terminal/lib (the real suite
+#    modules — zero algorithm duplication), so the 5-min cron consumes an esbuild bundle at
+#    ingest/dist/suite_alerts.mjs (untracked → preserved by the step-7 overlay). Bundled here,
+#    AFTER steps 7+8, so both ingest/ and $APP/lib are already synced to this deploy's SHA.
+#    Non-fatal on purpose: the app is live by now — a bundle failure must not roll it back
+#    (the cron just keeps running the previous bundle).
+log "bundling ingest/suite_alerts.ts -> ingest/dist/suite_alerts.mjs"
+if ( cd "$APP" && npx esbuild ../ingest/suite_alerts.ts --bundle --platform=node --format=esm \
+      --outfile=../ingest/dist/suite_alerts.mjs "--alias:@=." --log-level=warning ); then
+  log "installed ingest/dist/suite_alerts.mjs (suite_event alerts cron)"
+else
+  log "WARN: suite_alerts bundle FAILED — cron keeps the previous bundle"
+fi
+
 log "DONE — live = origin/$BRANCH @ $SHA (app + runtime code, git-gated, healthy)"

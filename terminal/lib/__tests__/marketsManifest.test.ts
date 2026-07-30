@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { marketOf, scoreSymbol, isSymbolVisible, readMarketPrefs, type MarketId, type MarketPrefs } from "../markets";
+import {
+  marketOf, scoreSymbol, isSymbolVisible, readMarketPrefs, followedMarketSet,
+  type FollowId, type MarketId, type MarketPrefs,
+} from "../markets";
 import MANIFEST from "./fixtures/manifestMarkets.json";
 
 // Cross-market behaviour against REAL production manifest rows (venue strings and all), not
@@ -13,18 +16,23 @@ import MANIFEST from "./fixtures/manifestMarkets.json";
 type Row = { name?: string; mkt?: string; sec?: string; zh?: string };
 const M = MANIFEST as Record<string, Row>;
 
+// Mirrors SearchModal's pipeline: filter by `enabled`, rank with the followed-market boost set
+// hoisted once (never rebuilt per row).
 const search = (q: string, prefs: MarketPrefs) => {
   const ql = q.toLowerCase();
+  const boosted = followedMarketSet(prefs.followed);
   return Object.entries(M)
     .filter(([s, r]) => isSymbolVisible(s, r, prefs))
-    .map(([s, r]) => [s, scoreSymbol(s, r, ql, prefs.home)] as const)
+    .map(([s, r]) => [s, scoreSymbol(s, r, ql, boosted)] as const)
     .filter(([, sc]) => sc >= 0)
     .sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)
     .map(([s]) => s);
 };
 
-const prefs = (home: MarketId | null, enabled: MarketId[]): MarketPrefs => ({ home, enabled, autoNarrowed: false });
-const ALL = prefs(null, ["us", "cn", "hk", "ca", "intl", "crypto"]);
+const EVERY: MarketId[] = ["us", "cn", "hk", "ca", "intl", "crypto"];
+const prefs = (followed: FollowId[], enabled: MarketId[] = EVERY): MarketPrefs =>
+  ({ home: null, enabled, autoNarrowed: false, followed });
+const ALL = prefs([]);
 
 describe("classification over the real manifest", () => {
   it("assigns every fixture symbol to the expected group", () => {
@@ -58,13 +66,13 @@ describe("classification over the real manifest", () => {
   });
 });
 
-describe("a US-only signup", () => {
+describe("a US-following signup", () => {
   // The exact state readMarketPrefs produces for someone who ticked only "us" at onboarding.
   const usOnly = readMarketPrefs({ market_focus: ["us"] });
 
-  it("cannot reach Chinese, HK, Canadian or international names at all", () => {
+  it("starts with every market searchable", () => {
     for (const sym of ["600519.SS", "0700.HK", "SHOP.TO", "AZN.L", "8035.T"]) {
-      expect(isSymbolVisible(sym, M[sym], usOnly)).toBe(false);
+      expect(isSymbolVisible(sym, M[sym], usOnly)).toBe(true);
     }
   });
 
@@ -73,30 +81,38 @@ describe("a US-only signup", () => {
     expect(isSymbolVisible("BTC-USD", M["BTC-USD"], usOnly)).toBe(true);
   });
 
-  it("finds nothing when searching a hidden market's company by name", () => {
-    expect(search("tencent", usOnly)).toEqual([]);
-    expect(search("moutai", usOnly)).toEqual([]);
+  it("finds foreign-market companies by name", () => {
+    expect(search("tencent", usOnly)).toEqual(["0700.HK"]);
+    expect(search("moutai", usOnly)).toEqual(["600519.SS"]);
   });
 });
 
-describe("home-market ranking", () => {
-  it("reorders same-tier matches by home market", () => {
-    // "bank" matches several banks only through their NAME (same score tier), so the home boost
+describe("followed-market ranking", () => {
+  it("reorders same-tier matches by the followed markets", () => {
+    // "bank" matches several banks only through their NAME (same score tier), so the follow boost
     // is what decides their relative order. HDFCBANK.NS outranks all of them either way — "bank"
     // is inside its TICKER, a strictly better match — which is the intended precedence and the
     // reason the boost is smaller than one tier.
-    const all: MarketId[] = ["us", "cn", "hk", "ca", "intl", "crypto"];
-    const cnFirst = search("bank", prefs("cn", all));
-    const caFirst = search("bank", prefs("ca", all));
+    const cnFirst = search("bank", prefs(["cn"]));
+    const caFirst = search("bank", prefs(["ca"]));
 
     const rank = (list: string[], sym: string) => list.indexOf(sym);
-    // Agricultural Bank of China (cn) vs Royal Bank of Canada (ca): each leads when it is home.
+    // Agricultural Bank of China (cn) vs Royal Bank of Canada (ca): each leads when it is followed.
     expect(rank(cnFirst, "601288.SS")).toBeLessThan(rank(cnFirst, "RY.TO"));
     expect(rank(caFirst, "RY.TO")).toBeLessThan(rank(caFirst, "601288.SS"));
   });
 
+  it("promotes EVERY followed market over the ones the user does not follow", () => {
+    // The point of retiring the single home market: a CN+CA user gets both banks ahead of the
+    // US one, where the old rule could only ever promote one of them.
+    const both = search("bank", prefs(["cn", "ca"]));
+    const firstUs = both.findIndex((s) => marketOf(s, M[s]) === "us");
+    expect(both.indexOf("601288.SS")).toBeLessThan(firstUs);
+    expect(both.indexOf("RY.TO")).toBeLessThan(firstUs);
+  });
+
   it("ranks a China user's A-share bank above the US bank for the same query", () => {
-    const cn = search("bank", prefs("cn", ["us", "cn", "hk", "ca", "intl", "crypto"]));
+    const cn = search("bank", prefs(["cn"]));
     const firstCn = cn.findIndex((s) => marketOf(s, M[s]) === "cn");
     const firstUs = cn.findIndex((s) => marketOf(s, M[s]) === "us");
     expect(firstCn).toBeGreaterThanOrEqual(0);
@@ -104,10 +120,17 @@ describe("home-market ranking", () => {
     expect(firstCn).toBeLessThan(firstUs);
   });
 
-  it("never lets the home boost beat an exact ticker the user typed", () => {
-    // A China-home user typing NVDA gets NVDA, not a Chinese name.
-    expect(search("nvda", prefs("cn", ["us", "cn", "hk", "ca", "intl", "crypto"]))[0]).toBe("NVDA");
-    expect(search("aapl", prefs("hk", ["us", "cn", "hk", "ca", "intl", "crypto"]))[0]).toBe("AAPL");
+  it("maps a 'global' follow onto the international tail", () => {
+    // "inc" is a NAME substring for Apple/Salesforce/Alphabet/Visa (us), Shopify (ca) and
+    // Mitsubishi UFJ (Japan → intl): one score tier, so the boost alone decides the order.
+    expect(search("inc", prefs(["global"]))[0]).toBe("8306.T");
+    expect(search("inc", ALL)[0]).toBe("V");   // unfollowed, the shortest ticker wins the tie
+  });
+
+  it("never lets the follow boost beat an exact ticker the user typed", () => {
+    // A China-following user typing NVDA gets NVDA, not a Chinese name.
+    expect(search("nvda", prefs(["cn"]))[0]).toBe("NVDA");
+    expect(search("aapl", prefs(["hk"]))[0]).toBe("AAPL");
   });
 
   it("ranks the exact ticker first even when other names contain the string", () => {

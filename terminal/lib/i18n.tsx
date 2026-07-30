@@ -33,6 +33,22 @@ const LEX: Record<string, [string, string]> = {
   // chart toolbar
   priceChart: ["Price chart", "价格图表"],
   indicators: ["Indicators", "指标"],
+  // premium suites (IndicatorCanvas program)
+  catProSuites: ["Pro Suites", "专业套件"],
+  suiteStructure: ["Structure Core", "结构核心"],
+  suiteLockedHint: ["Included with a paid plan — upgrade to unlock", "付费计划专享 — 升级解锁"],
+  suiteModulesWord: ["modules", "个模块"],
+  isSuiteStyleHint: ["Suite styling lives with each module's inputs.", "套件样式在各模块的设置中。"],
+  isSuiteUnlockInsider: ["Unlocks with INSIDER", "订阅 INSIDER 解锁"],
+  isSuiteUnlockPro: ["Unlocks with PRO", "订阅 PRO 解锁"],
+  suiteTrend: ["Trend Waves", "趋势波段"],
+  suitePulse: ["Pulse Oscillator", "脉冲震荡指标"],
+  suiteRsix: ["RSI Ultimate", "RSI 旗舰版"],
+  suiteMacdx: ["MACD Ultimate", "MACD 旗舰版"],
+  guideMissing: ["Guide not written yet.", "指南尚未编写。"],
+  guideOpen: ["Guide", "指南"],
+  guideClose: ["Close", "关闭"],
+  guideEnFallback: ["English guide — no Chinese version yet.", "英文指南 — 暂无中文版。"],
   compare: ["Compare", "对比"],
   detect: ["Detect", "智能识别"],
   layouts: ["Layouts", "布局"],
@@ -317,13 +333,32 @@ const LEX: Record<string, [string, string]> = {
   gateSignupCta: ["Sign up free →", "免费注册 →"],
   // Options paywall (/options — the terminal_live_options entitlement gate)
   opwTitle: ["Unlock the Options desk", "解锁期权终端"],
-  opwBody: ["Live options flow, chains, exposure (GEX) and unusual activity — part of Insider & Pro.", "实时期权流、期权链、Gamma 敞口 (GEX) 与异动侦测 —— Insider 与 Pro 专享。"],
+  opwBody: ["Live options flow, chains, exposure (GEX) and unusual activity. Access requires an Insider or Pro plan — sign up to start the free 7-day trial.", "实时期权流、期权链、Gamma 敞口 (GEX) 与异动侦测。需订阅 Insider 或 Pro 计划方可使用 —— 注册即可开启 7 天免费试用。"],
   opwF1: ["Live order-flow tape", "实时期权流水"],
   opwF2: ["Option chains & greeks", "期权链与希腊字母"],
   opwF3: ["Gamma exposure (GEX)", "Gamma 敞口 (GEX)"],
   opwF4: ["Unusual & sweep detection", "异动与扫单侦测"],
   opwCta: ["Start 7-day free trial", "开启 7 天免费试用"],
   opwSub: ["Insider & Pro · cancel anytime", "Insider 与 Pro · 随时取消"],
+  // Sign-up gate (components/gates/SignupGate.tsx) — shown to signed-out visitors on the
+  // five member workspaces. The chart (/terminal) stays open to guests; these do not.
+  sgEyebrow: ["Free account", "免费账户"],
+  sgTitleAnalysis: ["Sign up to open the Analysis desk", "注册后开启分析终端"],
+  sgBodyAnalysis: ["Per-stock research in one place — fundamentals, valuation, ownership, earnings history and the cross-signal read for any symbol you chart.", "个股研究一站式 —— 基本面、估值、股东结构、财报历史，以及所看标的的交叉信号解读。"],
+  sgTitleDiscover: ["Sign up to open Discover", "注册后开启发现页"],
+  sgBodyDiscover: ["The stock screener, sector heatmap and the day's leaders — the tools for finding a setup rather than looking one up.", "选股器、板块热力图与当日领涨榜 —— 用来主动发现机会，而不只是查询个股。"],
+  sgTitleScripts: ["Sign up to open the Pine editor", "注册后开启 Pine 编辑器"],
+  sgBodyScripts: ["Write and run your own Pine v6 indicators on any chart, alongside the flagship Golden Oracle script. Saving scripts to your account is part of a paid plan.", "在任意图表上编写并运行自己的 Pine v6 指标，并可查看旗舰 Golden Oracle 脚本。将脚本保存到账户属于付费计划。"],
+  sgTitlePortfolio: ["Sign up to track your book", "注册后跟踪你的持仓"],
+  sgBodyPortfolio: ["Keep your holdings and watchlists in one place and watch how they move — stored on your account, on every device you sign in from.", "集中管理持仓与自选列表并跟踪其表现 —— 保存在账户中，任何登录设备均可查看。"],
+  sgTitleAlerts: ["Sign up to set alerts", "注册后设置提醒"],
+  sgBodyAlerts: ["Price and signal alerts on any symbol, evaluated on our servers every five minutes — they keep watching after you close the tab.", "对任意标的设置价格与信号提醒，服务器每 5 分钟评估一次 —— 关闭页面后仍在盯盘。"],
+  sgF1: ["Watchlists synced across your devices", "自选列表多设备同步"],
+  sgF2: ["The full per-stock analysis desk", "完整的个股分析终端"],
+  sgF3: ["Screener, heatmap and market movers", "选股器、热力图与涨跌榜"],
+  sgF4: ["Price and signal alerts", "价格与信号提醒"],
+  sgCta: ["Create your free account", "创建免费账户"],
+  sgSignin: ["Already have an account? Sign in", "已有账户？登录"],
   emptyWatchlist: ["No symbols yet — use + to add.", "暂无标的 —— 点击 + 添加。"],
   // compare
   compareTitle: ["Compare — overlay symbols", "对比 —— 叠加标的"],
@@ -568,6 +603,49 @@ const LEX: Record<string, [string, string]> = {
   condOptPocket: ["A strike lights up hot", "某个行权价异常放量"],
   optPocketK: ["heat ×", "热度倍数"],
   optNearPct: ["near spot %", "接近平值 %"],
+  // premium-suite event alerts (W3 SuiteEvent → alert bridge). Chart microcopy (BOS, CHoCH,
+  // FVG, OB, SFP, RSI, MACD) stays Latin in zh — the chart legend spells it the same way.
+  condCatSuite: ["Suites", "套件"],
+  suiteEventLabel: ["Event", "事件"],
+  suiteDir: ["direction", "方向"],
+  suiteDirAny: ["Any direction", "任意方向"],
+  suiteDirBull: ["Bullish only", "仅看多"],
+  suiteDirBear: ["Bearish only", "仅看空"],
+  suiteMinStrength: ["min strength", "最低强度"],
+  gateSuiteAlert: ["Create a free account to set suite alerts.", "注册免费账户即可设置套件提醒。"],
+  // W4b two-step sequence alerts ("event A then event B within N bars")
+  condSuiteSeq: ["Sequence", "连锁条件"],
+  suiteSeqThen: ["then", "然后"],
+  suiteSeqWithin: ["within", "范围"],
+  suiteSeqBars: ["bars", "根K线"],
+  // One key per CURATED catalog event (lib/suiteAlerts.ts SUITE_ALERT_EVENTS.tkey) — en mirrors
+  // the catalog's `en`, zh mirrors its ZH_EVENT_NAMES, so the picker label and the preview
+  // sentence never drift apart.
+  suiteEvBos: ["Break of structure (BOS)", "结构突破 (BOS)"],
+  suiteEvChoch: ["Change of character (CHoCH)", "结构反转 (CHoCH)"],
+  suiteEvCisd: ["CISD (failed delivery)", "CISD（失败交付）"],
+  suiteEvObTouch: ["Order block touch", "订单块触及"],
+  suiteEvObBreak: ["Order block break", "订单块破位"],
+  suiteEvFvgRetest: ["Fair value gap retest", "公允价值缺口回补"],
+  suiteEvIfvg: ["Inverted FVG", "反转缺口 (iFVG)"],
+  suiteEvLiqGrab: ["Liquidity grab", "流动性掠夺"],
+  suiteEvSfp: ["Swing failure pattern (SFP)", "摆动失败形态 (SFP)"],
+  suiteEvPdGoldenTouch: ["Golden zone touch", "黄金区触及"],
+  suiteEvTeFlip: ["Trend Engine flip", "趋势引擎翻转"],
+  suiteEvTePower: ["Trend Engine power move", "趋势引擎强动能"],
+  suiteEvTeTpHit: ["Trend Engine take-profit hit", "趋势引擎止盈触达"],
+  suiteEvTeSlHit: ["Trend Engine stop hit", "趋势引擎止损触发"],
+  suiteEvFbTurn: ["Flow Band turn", "流向带转向"],
+  suiteEvVbRetest: ["Voltix band retest", "波动带回测"],
+  suiteEvPulseBuy: ["Pulse buy signal", "脉冲买入信号"],
+  suiteEvPulseSell: ["Pulse sell signal", "脉冲卖出信号"],
+  suiteEvPulseDiv: ["Pulse divergence", "脉冲背离"],
+  suiteEvRsixReversal: ["RSI reversal signal", "RSI 反转信号"],
+  suiteEvRsixDiv: ["RSI divergence", "RSI 背离"],
+  suiteEvRsixChanBreak: ["RSI channel break", "RSI 通道突破"],
+  suiteEvMacdxSignal: ["MACD cross signal", "MACD 交叉信号"],
+  suiteEvMacdxDiv: ["MACD divergence", "MACD 背离"],
+  suiteEvMacdxHistFlip: ["MACD histogram flip", "MACD 柱状图翻转"],
   // alerts list: honest signed-out state + delete confirm (OEU T-D)
   alertsSignedOutTitle: ["You're signed out", "您尚未登录"],
   alertsSignedOutBody: [
@@ -1151,6 +1229,161 @@ const LEX: Record<string, [string, string]> = {
   obTierProTrial: ["Pro · trial", "Pro · 试用"],
   // step 3 CTA — replaces the external-link "start trial" for paid
   obContinueBilling: ["Continue to billing", "前往支付"],
+
+  // ── account settings dashboard (components/settings/*) ─────────────────────
+  // One settings dashboard shared with the Macro Dashboard. Every string that
+  // also exists there is copied VERBATIM from its SD_L table (macro repo,
+  // templates/theme.js) — EN and 中文 — so the two products never word the same
+  // control differently. Keys marked NEW are Terminal-only and their 中文 is
+  // written here.
+  // Reused from elsewhere in this file rather than duplicated: settings, signOut,
+  // language, updownColors, greenUp, redUp, setStartTf, mktSettingsSub,
+  // mktAutoNarrowed, mktHome, mktHomeNote, mkt*/obMkt* labels.
+  // section heads
+  acsAccount: ["Account", "账户"],
+  acsAccountSub: ["One identity across the dashboard and the Terminal.", "一个账户，通用于仪表盘与终端。"],
+  acsBilling: ["Billing", "账单"],
+  acsBillingSub: ["Your plan, payment and invoices.", "你的方案、付款与发票。"],
+  acsUsage: ["Usage", "用量"],
+  acsUsageSub: ["What you've used this cycle, and what's left.", "本周期已用与剩余额度。"],
+  acsPrefs: ["Preferences", "偏好"],
+  acsPrefsSub: ["Which markets you follow, and how the dashboard looks.", "你关注哪些市场，以及仪表盘的外观。"],
+  acsTerminal: ["Terminal", "终端"],                                                                        // NEW
+  acsTerminalSub: ["How the Terminal behaves — search markets and chart defaults.", "终端的行为——搜索市场与图表默认设置。"], // NEW
+  acsSyncT: ["Sync", "同步"],
+  acsSyncSub: ["What follows your account across devices.", "跟随账户同步到各设备的内容。"],
+  // rail
+  acsRailSub: ["Synced across devices", "已在各设备同步"],
+  acsSections: ["Settings sections", "设置分区"],
+  acsClose: ["Close", "关闭"],
+  // ID card + chips
+  acsMemberSince: ["Member since", "注册于"],
+  acsProvGoogle: ["Google", "Google"],
+  acsProvX: ["X", "X"],
+  acsProvEmail: ["Email", "邮箱"],
+  // profile group
+  acsProfile: ["Profile", "个人资料"],
+  acsDispName: ["Display name", "显示名称"],
+  acsDispNamePh: ["Your name", "你的名字"],
+  acsEmailPh: ["new@email.com", "new@email.com"],
+  acsEmailNote: ["A confirmation link will be sent to both addresses.", "两个邮箱地址都会收到确认链接。"],
+  acsSendConfirm: ["Send confirmation", "发送确认"],
+  acsEmailSent: ["Confirmation sent to both addresses.", "确认链接已发送至两个邮箱。"],
+  acsPassword: ["Password", "密码"],
+  acsNewPwPh: ["At least 8 characters", "至少 8 个字符"],
+  acsConfirmPwPh: ["Repeat new password", "再次输入新密码"],
+  acsUpdatePw: ["Update password", "更新密码"],
+  acsPwOk: ["Password updated.", "密码已更新。"],
+  acsPwMismatch: ["Passwords don't match.", "两次密码不一致。"],
+  acsPwShort: ["Use at least 8 characters.", "至少 8 个字符。"],
+  acsEdit: ["Edit", "编辑"],
+  acsCancel: ["Cancel", "取消"],
+  acsSave: ["Save", "保存"],
+  acsSaving: ["Saving…", "保存中…"],
+  // security group
+  acsSecurity: ["Security", "安全"],
+  acsLoginMethod: ["Login method", "登录方式"],
+  acsLastSignin: ["Last sign-in", "上次登录"],
+  acsUserId: ["User ID", "用户 ID"],
+  acsUserIdNote: ["Quote it if you ever contact support.", "联系支持时请提供此 ID。"],
+  acsCopy: ["Copy", "复制"],
+  acsCopied: ["Copied", "已复制"],
+  acsErrGen: ["Something went wrong — please try again.", "出错了，请重试。"],
+  acsValidEmail: ["Enter a valid email address.", "请输入有效的邮箱地址。"],
+  // billing
+  acsCurrentPlan: ["Current plan", "当前方案"],
+  acsBilledAnnual: ["billed annually", "按年结算"],
+  acsBilledMonthly: ["billed monthly", "按月结算"],
+  acsPerMo: ["/mo", "/月"],
+  acsTierFree: ["Free", "免费版"],
+  acsTierInsider: ["Insider", "Insider"],
+  acsTierPro: ["Pro", "Pro"],
+  acsPlanTrialUntil: ["Trial until", "试用至"],
+  acsPlanRenews: ["Renews", "续订于"],
+  acsPlanExpires: ["Expires", "到期于"],
+  acsPlanExpired: ["Expired", "已过期"],
+  acsPlanLifetime: ["Lifetime", "永久"],
+  acsUpgradePro: ["Upgrade to Pro", "升级到 Pro"],
+  acsSwitchAnnual: ["Switch to annual — save 30%", "切换年付 — 立省 30%"],
+  acsChoosePlan: ["Choose a plan", "选择套餐"],
+  acsFreePitch: ["The US macro read, the Terminal and 3 signals per daily list. Visitors can preview 1 before signup.", "美国宏观研判、Terminal 与每个每日列表 3 条信号。访客注册前可预览 1 条。"],
+  acsManageBilling: ["Payment & invoices", "付款与发票"],
+  acsManageBillingNote: ["Update your card, download invoices, or cancel.", "更新银行卡、下载发票或取消订阅。"],
+  acsOpenPortal: ["Open", "打开"],
+  acsPortalErr: ["Couldn't open billing — please try again.", "无法打开账单页，请重试。"],
+  acsGrantedPlan: ["Granted access", "已授予的权限"],
+  acsGrantedNote: ["This plan was granted directly — there's no subscription or card to manage.", "此方案为直接授予——没有需要管理的订阅或银行卡。"],
+  acsPortalNone: ["This account has no Stripe billing — nothing to open.", "此账号没有 Stripe 账单——无可打开。"],
+  acsOpening: ["Opening…", "正在打开…"],
+  acsPlanIncludes: ["Your plan includes", "你的方案包含"],
+  // plan highlights (decorative; kept in step with the macro plans table)
+  acsFeatFree1: ["US macro dashboard", "美国宏观仪表盘"],
+  acsFeatFree2: ["The Terminal — 3 indicators", "Terminal — 3 个指标"],
+  acsFeatFree3: ["3 signals per daily list", "每个每日列表 3 条信号"],
+  acsFeatFree4: ["5 Mastermind questions a week", "每周 5 次 Mastermind 提问"],
+  acsFeatInsider1: ["Every dashboard & all research", "全部看板与研究"],
+  acsFeatInsider2: ["Full Terminal + live options", "完整 Terminal + 实时期权"],
+  acsFeatInsider3: ["300 Mastermind questions a month", "每月 300 次 Mastermind 提问"],
+  acsFeatInsider4: ["10 deep research questions a month", "每月 10 次深度研究提问"],
+  acsFeatPro1: ["Everything in Insider", "Insider 全部功能"],
+  acsFeatPro2: ["Unlimited Mastermind questions", "无限量 Mastermind 提问"],
+  acsFeatPro3: ["150 deep research questions a month", "每月 150 次深度研究提问"],
+  acsFeatPro4: ["Priority research answers", "研究问题优先解答"],
+  // usage
+  acsChatLane: ["Mastermind chat", "Mastermind 对话"],
+  acsChatLaneNote: ["Questions to the market analyst.", "向市场分析师提问。"],
+  acsDeepLane: ["Deep research", "深度研究"],
+  acsDeepLaneNote: ["Longer, higher-effort answers.", "更长、更深入的回答。"],
+  acsUsageLeft: ["left", "剩余"],
+  acsResetsMonthly: ["Resets at the start of each month.", "每月月初重置。"],
+  acsResetsWeekly: ["Resets every Monday.", "每周一重置。"],
+  acsUnlimited: ["Unlimited", "无限"],
+  acsUnlimitedNote: ["No monthly cap on your plan.", "你的方案没有每月上限。"],
+  acsDeepLockedFree: ["Included with Insider and Pro.", "Insider 与 Pro 方案包含。"],
+  acsUsageErr: ["Couldn't load usage — please try again.", "无法加载用量，请重试。"],
+  acsCapMonth: ["This month", "本月"],
+  acsCapWeek: ["This week", "本周"],
+  acsCapTrial: ["Trial", "试用期"],
+  acsOfN: ["of {n}", "共 {n} 次"],
+  acsNudgeLowT: ["Running low", "额度不多了"],
+  acsNudgeLowS: ["Upgrade for more questions every month.", "升级即可每月获得更多提问额度。"],
+  acsNudgeGetT: ["Want deeper answers?", "想要更深入的回答？"],
+  acsNudgeGetS: ["Insider and Pro add deep research questions.", "Insider 与 Pro 提供深度研究提问。"],
+  acsUpgrade: ["Upgrade", "升级"],
+  // preferences
+  acsDeskGroup: ["Your desk", "你的台席"],
+  acsMarkets: ["Markets you follow", "你关注的市场"],
+  acsMarketsNote: ["The markets you actually watch. Carried with your account.", "你真正关注的市场，随账户同步。"],
+  acsTrades: ["What you trade", "你交易什么"],
+  acsTradesNote: ["Stocks, options, crypto — pick any.", "股票、期权、加密货币——可多选。"],
+  acsTrStocks: ["Stocks", "股票"],
+  acsTrOptions: ["Options", "期权"],
+  acsTrCrypto: ["Crypto", "加密货币"],
+  acsPrefSaved: ["Saved", "已保存"],
+  acsPrefLocal: ["Saved on this device — sign in to sync.", "已保存在本设备——登录后同步。"],
+  acsPrefErr: ["Couldn't save — please try again.", "保存失败，请重试。"],
+  acsThemeLang: ["Theme & language", "主题与语言"],
+  acsAppearance: ["Appearance", "外观"],
+  // NEW — deliberately NOT macro's appearNote ("Auto follows your local time of
+  // day"): the Terminal has no light mode, so promising one here would be a lie.
+  acsAppearNote: ["Applies to the Macro Dashboard — the Terminal is always dark.", "应用于宏观仪表盘——终端始终为深色。"],
+  acsThemeLight: ["Light", "浅色"],
+  acsThemeAuto: ["Auto", "自动"],
+  acsThemeDark: ["Dark", "深色"],
+  acsLangNote: ["Applies to every page.", "应用于所有页面。"],
+  // terminal section
+  acsMktGroup: ["Markets in the Terminal", "终端中的市场"],                                                   // NEW
+  acsChartGroup: ["Chart", "图表"],                                                                          // NEW
+  // sync
+  acsSyncOn: ["Sync is on", "同步已开启"],
+  acsSyncOff: ["Sync is off", "同步未开启"],
+  acsSignedInAs: ["Signed in as", "已登录："],
+  acsSignInToOn: ["Sign in to turn it on.", "登录后即可开启。"],
+  acsThemeLangN: ["Saved automatically as you change them.", "更改后自动保存。"],
+  acsWatchlists: ["Watchlists & portfolio", "自选与组合"],
+  acsWatchNote: ["Live wherever you sign in.", "登录任意设备即可使用。"],
+  acsTermSettings: ["Terminal settings", "终端设置"],                                                        // NEW
+  acsTermSettingsNote: ["Default timeframe, chart colors and market visibility ride with your account.", "默认周期、图表颜色与市场可见性随账户同步。"], // NEW
 };
 
 // Non-hook LEX lookup for imperative contexts (e.g. chart legend meta assembled outside React render).
@@ -1165,6 +1398,21 @@ export function tPlain(key: string, fallback?: string): string {
 
 const Ctx = createContext<{ lang: Lang; setLang: (l: Lang) => void }>({ lang: "en", setLang: () => {} });
 
+/**
+ * Switch the UI language from imperative code (the account-prefs store applies the language saved
+ * on the Supabase account this way, on the same load that reads market prefs).
+ *
+ * Every mounted LangProvider re-reads the attribute on `mm:lang`, so this is not a second source
+ * of truth — it is the same three writes setLang makes, minus the local setState that the event
+ * already covers.
+ */
+export function applyLang(l: Lang) {
+  try { localStorage.setItem("mm.lang", l); } catch { /* storage blocked */ }
+  if (typeof document === "undefined") return;
+  document.documentElement.setAttribute("data-lang", l);
+  window.dispatchEvent(new CustomEvent("mm:lang"));
+}
+
 export function LangProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Lang>("en");
   useEffect(() => {
@@ -1175,9 +1423,7 @@ export function LangProvider({ children }: { children: React.ReactNode }) {
   }, []);
   const setLang = useCallback((l: Lang) => {
     setLangState(l);
-    try { localStorage.setItem("mm.lang", l); } catch {}
-    document.documentElement.setAttribute("data-lang", l);
-    window.dispatchEvent(new CustomEvent("mm:lang"));
+    applyLang(l);
   }, []);
   return <Ctx.Provider value={{ lang, setLang }}>{children}</Ctx.Provider>;
 }

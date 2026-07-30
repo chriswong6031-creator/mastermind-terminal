@@ -4,8 +4,10 @@ import "./globals.css";
 import "./fin.css";
 import "./observatory.css";
 import "./onboarding.css";
+import "./settings.css";
 import { LangProvider } from "@/lib/i18n";
 import Tracker from "@/components/Tracker";
+import EmbeddedTerminalBridge from "@/components/EmbeddedTerminalBridge";
 
 // Inter carries the whole product now — UI text *and* every numeral (--font-ui / --font-num).
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"], display: "swap" });
@@ -41,7 +43,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en" data-theme="dark" className={`${inter.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <head><script dangerouslySetInnerHTML={{ __html: LOCALE_INIT }} /></head>
-      <body><LangProvider>{children}</LangProvider><Tracker /></body>
+      <body><LangProvider>{children}</LangProvider><EmbeddedTerminalBridge /><Tracker /></body>
     </html>
   );
 }

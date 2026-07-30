@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { createHash } from "node:crypto";
 import { billingAuth, BILLING_BASE } from "@/app/api/billing/gateway";
+import { isPaidSubscriptionTier, normalizeSubscriptionTier } from "@/lib/subscriptionTier";
 
 /**
  * Server-side entitlement checks against the AUTHORITY — macro-api
@@ -165,5 +166,11 @@ export async function hasLiveOptions(): Promise<boolean> {
  */
 export async function isPaidTier(): Promise<boolean> {
   const e = await fetchEntitlement();
-  return !!e && (e.tier === "insider" || e.tier === "pro");
+  return !!e && isPaidSubscriptionTier(e.tier);
+}
+
+/** Pro-equivalent account, including the billing authority's operator/comp `unlimited` tier. */
+export async function isProTier(): Promise<boolean> {
+  const e = await fetchEntitlement();
+  return !!e && normalizeSubscriptionTier(e.tier) === "pro";
 }

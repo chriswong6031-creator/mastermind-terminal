@@ -8,7 +8,7 @@ import AppShell from "@/components/chrome/AppShell";
  *
  * Auth is resolved ONCE here (the same supabase getUser() pattern the old
  * per-page routes used) and the email is handed to the shared AppShell, which
- * forwards it to MobileNav / SettingsMenu and exposes it to client children via
+ * forwards it to MobileNav / SettingsButton and exposes it to client children via
  * useShellEmail(). Pages that need the user for data (portfolio watchlists,
  * scripts seeding, admin gate) still resolve it themselves — this read is for
  * the chrome only and is cheap/deduped by supabase's per-request client.

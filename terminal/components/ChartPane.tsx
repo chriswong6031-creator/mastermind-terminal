@@ -19,7 +19,7 @@ const load = (d: ChartSettings): ChartSettings => { try { const v = localStorage
 // by contrast, are computed against THIS pane's timeframe and are transient (never persisted), so they
 // stay pane-local and are merged in only for this pane's own render.
 export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, chartType, inds, tool, drawStyle, detectCmd, compare, compareCfg, magnet, replayIdx, onMeta, drawings, onDrawingsChange, liveQuote, indParams, hidden, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts,
-  onAddAlert, onTableView, onObjectTree, lockedVLine, onSetLockedVLine, onIndRowsAt, dayMode: _dayMode, onPaneCount }:
+  onAddAlert, onTableView, onObjectTree, lockedVLine, onSetLockedVLine, onIndRowsAt, dayMode: _dayMode, onPaneCount, userTier }:
   { idx: number; symbol: string; isActive: boolean; onActivate: (i: number) => void; row?: { col?: string; last?: number; chg?: number; name?: string; zh?: string } | null; tf: string; chartType: string; inds: Set<string>; tool: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; detectCmd: DetectCmd; compare: string[]; compareCfg?: Record<string, CmpCfg>; magnet: boolean; replayIdx: number | null; onMeta: (m: { total: number }) => void; drawings: Drawing[]; onDrawingsChange: (d: Drawing[]) => void; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
     onAddAlert?: (price: number) => void; onTableView?: () => void; onObjectTree?: () => void;
@@ -29,6 +29,8 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
     dayMode?: boolean;
     /** B3: forwarded to ChartPanel to notify TerminalShell of sub-pane count changes. */
     onPaneCount?: (n: number) => void;
+    /** Entitlement tier — UI gate for premium suite modules. */
+    userTier?: "free" | "insider" | "pro";
   }) {
   const { lang } = useLang();
   const [auto, setAuto] = useState<Drawing[]>([]);
@@ -121,7 +123,7 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         liveQuote={liveQuote} indParams={indParams} hidden={hidden}
         onToggleHidden={onToggleHidden} onRemoveInd={onRemoveInd}
         onOpenSettings={onOpenSettings} onOpenSource={onOpenSource}
-        pineScripts={pineScripts}
+        pineScripts={pineScripts} userTier={userTier}
         chartSettings={panelSettings}
         onChartApi={setChartApi}
         extHours={chartSettings.extHours}
