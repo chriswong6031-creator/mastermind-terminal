@@ -24,6 +24,8 @@ export type LegendEntry = {
 
 export type PaneInfo = {
   key: string;          // stable pane identity ("__price__" | indicator key) — survives reorder
+  /** Optional group key used by the pane-level trash action (individual rows keep their own keys). */
+  removeKey?: string;
   paneIndex: number;
   isPrice: boolean;
   top: number;          // px, relative to the chart-wrap
@@ -146,6 +148,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
       {props.panes.map((p) => {
         const legendTop = p.top + (p.isPrice ? 38 : 4);   // price legend clears the OHLC status line; sub-panes hug the corner (TV-tight)
         const primaryKey = p.entries[0]?.key;
+        const paneRemoveKey = p.removeKey ?? primaryKey;
         const showOps = !p.isPrice && primaryKey != null;
         // B5: on coarse, pane-ops only visible when collapsed or maximized (restore affordance)
         // a maximized PRICE pane renders a restore-only ops strip (it is reachable via double-click/tap,
@@ -225,7 +228,7 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
                 {!coarse && !priceRestoreOnly && <>
                   <button className="po-ic" data-tip="Move pane up" disabled={!props.canMoveUp(p.paneIndex)} onClick={stop(() => { props.onMoveUp(p.paneIndex); doFlip(p.paneIndex + ":up"); })} aria-label="Move pane up">{flip?.key === p.paneIndex + ":up" ? <span key={flip.n} className="po-flip">{I(ICONS.up)}</span> : I(ICONS.up)}</button>
                   <button className="po-ic" data-tip="Move pane down" disabled={!props.canMoveDown(p.paneIndex)} onClick={stop(() => { props.onMoveDown(p.paneIndex); doFlip(p.paneIndex + ":down"); })} aria-label="Move pane down">{flip?.key === p.paneIndex + ":down" ? <span key={flip.n} className="po-flip">{I(ICONS.down)}</span> : I(ICONS.down)}</button>
-                  <button className="po-ic" data-tip="Remove" onClick={stop(() => props.onRemove(primaryKey!))} aria-label="Remove">{I(ICONS.remove)}</button>
+                  <button className="po-ic" data-tip="Remove pane" onClick={stop(() => props.onRemove(paneRemoveKey!))} aria-label="Remove pane">{I(ICONS.remove)}</button>
                 </>}
                 {!priceRestoreOnly && <button className={`po-ic${p.collapsed ? " on" : ""}`} data-tip={p.collapsed ? "Restore pane" : "Collapse pane"} onClick={stop(() => props.onCollapse(p.paneIndex))} aria-label="Collapse pane">{I(ICONS.collapse)}</button>}
                 <button className={`po-ic${p.maximized ? " on" : ""}`} data-tip={p.maximized ? "Restore pane" : "Maximize pane"} onClick={stop(() => props.onMaximize(p.paneIndex))} aria-label="Maximize pane">{I(ICONS.maximize)}</button>

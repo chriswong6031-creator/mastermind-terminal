@@ -1,5 +1,6 @@
-// Premium suite registry — parallel to lib/indicators.ts IND_DEFS (which stays untouched for the
-// classic built-ins). A suite is ONE picker entry whose modules toggle inside Settings.
+// Premium suite runtime registry — parallel to lib/indicators.ts IND_DEFS (which stays untouched
+// for the classic built-ins). Suites remain the shared compute/pane containers and preset units;
+// their modules are independently discoverable through lib/suites/catalog.ts.
 // Contract: lib/indicator-canvas/types.ts. Program docs: docs/PREMIUM_INDICATOR_SUITE_MASTERPLAN_*.
 //
 // mm.inds carries suite keys alongside classic IndKeys (TerminalShell's Set<string> is already

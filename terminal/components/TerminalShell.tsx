@@ -23,6 +23,16 @@ import { type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
 import { isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
+import {
+  enabledModulesForSuite,
+  enabledSuiteModules,
+  getSuiteModuleCatalogEntry,
+  parseSuiteModuleId,
+  setSuiteModuleEnabledParams,
+  setSuiteSurfaceEnabledParams,
+  suiteModuleCatalogFor,
+  suitePresetParams,
+} from "@/lib/suites/catalog";
 import { useEntitlement } from "@/lib/useEntitlement";
 import { useChartBus } from "@/lib/useChartBus";
 import { isV2Envelope, type IndicatorSpec } from "@/lib/chartBus";
@@ -374,6 +384,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [settingsKey, setSettingsKey] = useState<string | null>(null);
   const [guide, setGuide] = useState<{ suite: string; mod: string; label: string } | null>(null);                 // indicator whose Settings dialog is open
   const [sourceKey, setSourceKey] = useState<string | null>(null);                     // indicator whose Source view is open
+  const activeSuiteModuleIds = useMemo(
+    () => new Set(enabledSuiteModules(inds, indParams).map((entry) => entry.id)),
+    [inds, indParams],
+  );
   // ── custom scripts (Pine): the user's saved scripts + which are ENABLED on the chart + param overrides ──
   const [scripts, setScripts] = useState<UserScript[]>([]);
   const [enabledIds, setEnabledIds] = useState<string[]>([]);                           // enabled script ids (persisted 'mm.pineOn')
@@ -605,6 +619,20 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       setTimeout(() => setDtm(true), 0);
     }
   }, []);
+  // Legacy workspaces stored one hidden bit per suite. Expand that bit to the suite's currently
+  // enabled qualified module ids so new module-level eyes preserve the old all-hidden appearance.
+  useEffect(() => {
+    setHidden((current) => {
+      const legacySuites = [...current].filter(isSuiteKey);
+      if (!legacySuites.length) return current;
+      const next = new Set(current);
+      for (const suiteKey of legacySuites) {
+        next.delete(suiteKey);
+        for (const entry of enabledSuiteModules(inds, indParams, suiteKey)) next.add(entry.id);
+      }
+      return next;
+    });
+  }, [inds, indParams]);
   // persist the workspace — but skip the mount-time write (no user intent) and never write during a
   // deep-link (?sym=) session, so following a Screener/Portfolio row can't clobber the saved layout.
   useEffect(() => {
@@ -1451,9 +1479,75 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // Checked OUTSIDE the setInds updater (no setState side-effect in a reducer).
     if (!loggedIn && !inds.has(k) && inds.size >= MAX_ANON_IND) { showGateNudge(t("gateIndCap")); return; }
     setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
-    // premium suites: seed dense defaults on first add (Settings snapshot/Cancel needs a full blob)
-    if (isSuiteKey(k) && !inds.has(k)) setIndParams((p) => (p[k] ? p : { ...p, [k]: suiteDefaults(k) }));
+    // Suite rows are optional one-click presets. Re-adding one restores the recommended module
+    // selection while preserving every customized field value.
+    if (isSuiteKey(k) && !inds.has(k)) {
+      setIndParams((p) => ({ ...p, [k]: suitePresetParams(k, p[k]) }));
+      setHidden((h) => {
+        const next = new Set(h);
+        next.delete(k);
+        for (const entry of suiteModuleCatalogFor(k)) next.delete(entry.id);
+        return next;
+      });
+    }
   };
+  const applySuitePreset = (k: string) => {
+    if (!isSuiteKey(k)) return;
+    const parentActive = inds.has(k);
+    const preset = suitePresetParams(k, indParams[k]);
+    const nextModuleCount = suiteModuleCatalogFor(k).filter(
+      (entry) => preset[`${entry.moduleKey}.on`] ?? entry.defaultOn,
+    ).length;
+    const activeOutsideSuite = [...inds].filter((key) => !isSuiteKey(key)).length
+      + activeSuiteModuleIds.size
+      - (parentActive ? enabledModulesForSuite(k, inds, indParams).length : 0);
+    if (!loggedIn && activeOutsideSuite + nextModuleCount > MAX_ANON_IND) {
+      showGateNudge(t("gateIndCap"));
+      return;
+    }
+    setInds((current) => new Set(current).add(k));
+    setIndParams((current) => ({ ...current, [k]: suitePresetParams(k, current[k]) }));
+    setHidden((current) => {
+      const next = new Set(current);
+      next.delete(k);
+      for (const entry of suiteModuleCatalogFor(k)) next.delete(entry.id);
+      return next;
+    });
+  };
+  const toggleSuiteModule = useCallback((id: string) => {
+    const entry = getSuiteModuleCatalogEntry(id);
+    if (!entry) return;
+    const tierRank = (tier: "free" | "insider" | "pro") => tier === "pro" ? 2 : tier === "insider" ? 1 : 0;
+    if (tierRank(entry.tier) > tierRank(userTier)) return;
+
+    const parentActive = inds.has(entry.suiteKey);
+    const enabled = parentActive && activeSuiteModuleIds.has(entry.id);
+    const nextEnabled = !enabled;
+    const activeStudyCount = [...inds].filter((key) => !isSuiteKey(key)).length + activeSuiteModuleIds.size;
+    if (nextEnabled && !loggedIn && activeStudyCount >= MAX_ANON_IND) {
+      showGateNudge(t("gateIndCap"));
+      return;
+    }
+
+    const nextParams = setSuiteModuleEnabledParams(entry.id, indParams[entry.suiteKey], nextEnabled, parentActive);
+    const hasAnyEnabled = suiteModuleCatalogFor(entry.suiteKey).some(
+      (candidate) => nextParams[`${candidate.moduleKey}.on`] ?? candidate.defaultOn,
+    );
+    setIndParams((current) => ({ ...current, [entry.suiteKey]: nextParams }));
+    setInds((current) => {
+      const next = new Set(current);
+      if (nextEnabled || hasAnyEnabled) next.add(entry.suiteKey);
+      else next.delete(entry.suiteKey);
+      return next;
+    });
+    setHidden((current) => {
+      if (!current.has(entry.id) && !current.has(entry.suiteKey)) return current;
+      const next = new Set(current);
+      next.delete(entry.id);
+      next.delete(entry.suiteKey);
+      return next;
+    });
+  }, [activeSuiteModuleIds, indParams, inds, loggedIn, showGateNudge, t, userTier]);
   const toggleCompare = useCallback((s: string, mode: CmpMode = "percent") => {
     if (s === active) return;
     if (compare.includes(s)) {
@@ -1474,11 +1568,90 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // Object-tree pine entries are keyed as "pine:<id>" — strip the prefix before the ref lookup
     const pineId = k.startsWith("pine:") ? k.slice(5) : k;
     if (scriptByIdRef.current[pineId]) { setEnabledIds((ids) => ids.filter((x) => x !== pineId)); setHidden((s) => { const n = new Set(s); n.delete(k); n.delete(pineId); return n.size === s.size ? s : n; }); return; }
+    const paneSuiteKey = k.startsWith("suite-pane:") ? k.slice("suite-pane:".length) : "";
+    if (paneSuiteKey && isSuiteKey(paneSuiteKey)) {
+      const nextParams = setSuiteSurfaceEnabledParams(paneSuiteKey, "pane", indParams[paneSuiteKey], false);
+      const hasAnyEnabled = suiteModuleCatalogFor(paneSuiteKey).some(
+        (entry) => nextParams[`${entry.moduleKey}.on`] ?? entry.defaultOn,
+      );
+      setIndParams((current) => ({ ...current, [paneSuiteKey]: nextParams }));
+      setInds((current) => {
+        if (hasAnyEnabled || !current.has(paneSuiteKey)) return current;
+        const next = new Set(current);
+        next.delete(paneSuiteKey);
+        return next;
+      });
+      setHidden((current) => {
+        const paneIds = suiteModuleCatalogFor(paneSuiteKey)
+          .filter((entry) => entry.surface === "pane")
+          .map((entry) => entry.id);
+        if (!paneIds.some((id) => current.has(id))) return current;
+        const next = new Set(current);
+        for (const id of paneIds) next.delete(id);
+        return next;
+      });
+      return;
+    }
+    const moduleTarget = parseSuiteModuleId(k);
+    if (moduleTarget) {
+      const nextParams = setSuiteModuleEnabledParams(k, indParams[moduleTarget.suiteKey], false, inds.has(moduleTarget.suiteKey));
+      const hasAnyEnabled = suiteModuleCatalogFor(moduleTarget.suiteKey).some(
+        (entry) => nextParams[`${entry.moduleKey}.on`] ?? entry.defaultOn,
+      );
+      setIndParams((current) => ({ ...current, [moduleTarget.suiteKey]: nextParams }));
+      setInds((current) => {
+        if (hasAnyEnabled || !current.has(moduleTarget.suiteKey)) return current;
+        const next = new Set(current);
+        next.delete(moduleTarget.suiteKey);
+        return next;
+      });
+      setHidden((current) => {
+        if (!current.has(k)) return current;
+        const next = new Set(current);
+        next.delete(k);
+        return next;
+      });
+      return;
+    }
     setInds((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
-    setHidden((s) => { if (!s.has(k)) return s; const n = new Set(s); n.delete(k); return n; });
-  }, [toggleCompare]);
-  const setIndParam = useCallback((k: string, patch: Record<string, any>) => setIndParams((p) => ({ ...p, [k]: { ...(isSuiteKey(k) ? { ...suiteDefaults(k), ...p[k] } : withDefaults(k, p[k])), ...patch } })), []);
-  const resetIndParam = useCallback((k: string) => setIndParams((p) => ({ ...p, [k]: isSuiteKey(k) ? suiteDefaults(k) : indDefaults(k) })), []);
+    setHidden((s) => {
+      const childIds = isSuiteKey(k) ? suiteModuleCatalogFor(k).map((entry) => entry.id) : [];
+      if (!s.has(k) && !childIds.some((id) => s.has(id))) return s;
+      const n = new Set(s);
+      n.delete(k);
+      for (const id of childIds) n.delete(id);
+      return n;
+    });
+  }, [indParams, inds, toggleCompare]);
+  const setIndParam = useCallback((k: string, patch: Record<string, any>) => {
+    const moduleTarget = parseSuiteModuleId(k);
+    const targetKey = moduleTarget?.suiteKey ?? k;
+    setIndParams((p) => ({
+      ...p,
+      [targetKey]: {
+        ...(isSuiteKey(targetKey) ? { ...suiteDefaults(targetKey), ...p[targetKey] } : withDefaults(targetKey, p[targetKey])),
+        ...patch,
+      },
+    }));
+  }, []);
+  const resetIndParam = useCallback((k: string) => {
+    const moduleTarget = parseSuiteModuleId(k);
+    if (!moduleTarget) {
+      setIndParams((p) => ({ ...p, [k]: isSuiteKey(k) ? suiteDefaults(k) : indDefaults(k) }));
+      return;
+    }
+    const entry = getSuiteModuleCatalogEntry(k);
+    if (!entry) return;
+    setIndParams((p) => {
+      const current = { ...suiteDefaults(moduleTarget.suiteKey), ...p[moduleTarget.suiteKey] };
+      const prefix = `${moduleTarget.moduleKey}.`;
+      const on = current[`${moduleTarget.moduleKey}.on`];
+      for (const key of Object.keys(current)) if (key.startsWith(prefix)) delete current[key];
+      current[`${moduleTarget.moduleKey}.on`] = on ?? true;
+      for (const [fieldKey, value] of Object.entries(entry.module.defaults)) current[`${moduleTarget.moduleKey}.${fieldKey}`] = value;
+      return { ...p, [moduleTarget.suiteKey]: current };
+    });
+  }, []);
   const openSettings = useCallback((k: string) => setSettingsKey(k), []);
 
   // ── Day Trade Mode toggle (D lane §5) ─────────────────────────────────────────
@@ -2049,7 +2222,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             symbol={active}
             timeframe={tf}
             bars={bars}
-            indCols={[...inds].filter((k) => !hidden.has(k)).map((k) => {
+            indCols={[...inds].filter((k) => !isSuiteKey(k) && !hidden.has(k)).map((k) => {
               const def = (IND_DEFS as any)[k];
               return { key: k, label: def?.label ?? k, tag: def?.tag ?? k };
             })}
@@ -2126,6 +2299,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                     const def = (IND_DEFS as any)[k];
                     return { key: k, label: def?.label ?? k, tag: def?.tag ?? k, kind: "pane", hidden: hidden.has(k) };
                   }),
+                  // Premium modules are first-class object-tree rows while their five runtime
+                  // containers and three oscillator panes remain shared internally.
+                  ...enabledSuiteModules(inds, indParams).map((entry): OTEntry => ({
+                    key: entry.id,
+                    label: `${entry.suiteTag} · ${entry.label}`,
+                    tag: entry.tag,
+                    kind: entry.surface === "pane" ? "pane" : "overlay",
+                    hidden: hidden.has(entry.id),
+                  })),
                 ]}
                 onEye={toggleHidden}
                 onRemove={removeInd}
@@ -2410,7 +2592,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
       )}
       {indOpen && (
-        <IndicatorsModal open active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} userTier={userTier}
+        <IndicatorsModal open active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
+          onApplyPreset={applySuitePreset} userTier={userTier}
+          activeModules={activeSuiteModuleIds} onToggleModule={toggleSuiteModule} onOpenModuleSettings={openSettings}
+          onOpenGuide={(id) => {
+            const entry = getSuiteModuleCatalogEntry(id);
+            if (entry) setGuide({ suite: entry.suiteKey, mod: entry.moduleKey, label: entry.label });
+          }}
           scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
       )}
       {settingsKey && (isCmpKey(settingsKey)
@@ -2420,7 +2608,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               pine={{ name: scriptById[settingsKey].name, params: mergedParams(scriptById[settingsKey], pineParams) }}
               onPineChange={(patch) => setPineParam(settingsKey, patch)}
               onClose={() => setSettingsKey(null)} />
-          : <IndicatorSettings indKey={settingsKey} params={indParams[settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} onOpenGuide={(sk, mk, ml) => setGuide({ suite: sk, mod: mk, label: ml })} />)}
+          : <IndicatorSettings indKey={settingsKey} params={indParams[parseSuiteModuleId(settingsKey)?.suiteKey ?? settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} onOpenGuide={(sk, mk, ml) => setGuide({ suite: sk, mod: mk, label: ml })} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
       {guide && <GuidePanel suiteKey={guide.suite} moduleKey={guide.mod} moduleLabel={guide.label} onClose={() => setGuide(null)} />}
       <BrainWidget

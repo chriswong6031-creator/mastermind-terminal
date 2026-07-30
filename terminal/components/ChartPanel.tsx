@@ -37,6 +37,12 @@ import { computeSuite, resolveSuiteColors } from "@/lib/indicator-canvas/host";
 import { renderPrims, ensureTooltipHost } from "@/lib/indicator-canvas/render";
 import { paintCandleData } from "@/lib/indicator-canvas/candlePaint";
 import { SUITE_DEFS, getSuiteDef, isSuiteKey as isSuiteKeyReg, paneSuiteKeys } from "@/lib/suites/registry";
+import {
+  enabledModulesForSuite,
+  parseSuiteModuleId,
+  suiteModuleCatalogFor,
+  type SuiteModuleCatalogEntry,
+} from "@/lib/suites/catalog";
 import type { SuiteRenderBundle, SuiteTier, SuiteColors, CoordMapper, TableSpec } from "@/lib/indicator-canvas/types";
 import ChartTables from "@/components/ChartTables";
 import { crossUps, crossDowns, crossUpsBelow, crossDownsAbove } from "@/lib/crossSignals";
@@ -392,7 +398,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ── indicator-legend + pane-management plumbing (grafted onto the persistent-chart model) ──
   // one entry per chart pane (price pane + each sub-pane); pane KEY is the sub-pane store key
   // ("__price__" | "rsi" | "macd" | …) so it survives an incremental sub-pane rebuild / reorder.
-  const panesMeta = useRef<{ key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[]>([]);
+  const panesMeta = useRef<{ key: string; removeKey?: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[]>([]);
   // collapse/maximize/resize state, keyed by pane key — survives reorder + indicator churn
   const paneCtl = useRef<{ collapsed: Set<string>; maximized: string | null; normal: Map<string, number> }>({ collapsed: new Set(), maximized: null, normal: new Map() });
   const hiddenRef = useRef<Set<string>>(hidden); hiddenRef.current = hidden;
@@ -435,6 +441,32 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   );
   const onPaneCountRef = useRef(onPaneCount); onPaneCountRef.current = onPaneCount;
   const lastPaneCountRef = useRef<number>(-1);   // last reported count to avoid redundant calls
+
+  const suiteTierRank = (tier: SuiteTier): number => tier === "pro" ? 2 : tier === "insider" ? 1 : 0;
+  const canRenderSuiteModule = (entry: SuiteModuleCatalogEntry): boolean =>
+    suiteTierRank(userTierRef.current) >= suiteTierRank(entry.tier);
+  const activeSuiteModules = (suiteKey: string): SuiteModuleCatalogEntry[] =>
+    enabledModulesForSuite(suiteKey, indicatorsRef.current, indParamsRef.current).filter(canRenderSuiteModule);
+  const suiteLegendLabel = (entry: SuiteModuleCatalogEntry): string =>
+    `${entry.suiteTag} · ${entry.label}`;
+  const isLegendEntryHidden = (key: string): boolean => {
+    const parsed = parseSuiteModuleId(key);
+    return hiddenRef.current.has(key) || !!parsed && hiddenRef.current.has(parsed.suiteKey);
+  };
+  // Per-module eye state remains UI-only. The suite host still computes one shared context, but
+  // hidden modules are disabled in the render snapshot so their prims, paint, tables and events
+  // disappear together without mutating the user's saved module selection.
+  const suiteRenderParams = (suiteKey: string): Record<string, any> | undefined => {
+    const current = indParamsRef.current[suiteKey] as Record<string, any> | undefined;
+    const hideSuite = hiddenRef.current.has(suiteKey);
+    let next: Record<string, any> | undefined = current;
+    for (const entry of suiteModuleCatalogFor(suiteKey)) {
+      if (!hideSuite && !hiddenRef.current.has(entry.id)) continue;
+      if (next === current) next = { ...(current ?? {}) };
+      next![`${entry.moduleKey}.on`] = false;
+    }
+    return next;
+  };
   // B1: double-tap + synthetic-hover suppression refs
   const lastDblHandledRef = useRef<number>(0);   // performance.now() of last touch-driven double-tap
   const lastTouchTsRef = useRef<number>(0);       // performance.now() of last touch pointerdown
@@ -875,7 +907,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const rows = barsRef.current; if (!rows.length) return;
     const chartTyp = chartTypeRef.current;
     if (chartTyp === "line" || chartTyp === "area" || chartTyp === "heikin") { suitePaintKeyRef.current = ""; return; }
-    const active = Object.keys(SUITE_DEFS).filter((k) => indicatorsRef.current.has(k) && !hiddenRef.current.has(k));
+    const active = Object.keys(SUITE_DEFS).filter((k) => indicatorsRef.current.has(k));
     let paint: { i: number; color?: string; borderColor?: string; wickColor?: string }[] = [];
     if (active.length) {
       if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
@@ -883,7 +915,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       for (const k of active) {
         const def = SUITE_DEFS[k]; if (!def) continue;
         try {
-          const b = computeSuite(def, indParamsRef.current[k], { bars: rows as any, tf: timeframeRef.current, symbol: symbolRef.current, isIntraday: isIntradayRef.current, lang }, userTierRef.current, suiteColorsRef.current!);
+          const b = computeSuite(def, suiteRenderParams(k), { bars: rows as any, tf: timeframeRef.current, symbol: symbolRef.current, isIntraday: isIntradayRef.current, lang }, userTierRef.current, suiteColorsRef.current!);
           if (b.candlePaint.length) paint = paint.concat(b.candlePaint);
         } catch { /* module errors surface via the render path */ }
       }
@@ -1273,8 +1305,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (inds.has("ttmsq")) out.push("ttmsq");
     if (inds.has("adx")) out.push("adx");
     if (inds.has("cvd")) out.push("cvd");
-    // premium pane suites ride the same sub-pane machinery, after the classic panes
-    for (const k of paneSuiteKeys()) if (inds.has(k)) out.push(k);
+    // Premium pane suites still share one runtime pane per family. A table-only MTF dashboard does
+    // not create an empty oscillator pane; as soon as any enabled module draws in the pane, the
+    // family gets its single shared anchor.
+    for (const k of paneSuiteKeys()) {
+      if (inds.has(k) && activeSuiteModules(k).some((entry) => entry.surface === "pane")) out.push(k);
+    }
     return out;
   };
 
@@ -1415,31 +1451,44 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (hasPane) continue;   // sub-pane script → handled in the sub-pane loop
       overlayEntries.push(pineLegendEntry(s, "overlay", series, err));
     }
-    // premium suites: one legend row per active suite (settings + eye + remove; no pseudo-Pine source view)
+    // Premium modules are first-class legend rows. Overlay/candle/dashboard modules live with the
+    // price pane; oscillator-drawing modules are grouped into their suite's one shared sub-pane.
     for (const sk of Object.keys(SUITE_DEFS)) {
       if (!inds.has(sk)) continue;
       const sdef = SUITE_DEFS[sk]; if (!sdef) continue;
-      overlayEntries.push({ key: sk, label: sdef.tkey ? tPlain(sdef.tkey, sdef.label) : sdef.label, kind: "overlay", isPine: false, noSource: true });
+      for (const entry of activeSuiteModules(sk)) {
+        if (sdef.kind === "pane" && entry.surface === "pane") continue;
+        overlayEntries.push({ key: entry.id, label: suiteLegendLabel(entry), kind: "overlay", isPine: false, noSource: true });
+      }
     }
     // compare overlays: append to overlay entries so they appear as real legend rows in the price pane.
     const cmp = compareRef.current || []; const cfgM = compareCfgRef.current || {};
     for (let ci = 0; ci < cmp.length && ci < 4; ci++) { const cs = cmp[ci]; if (!cs || cs === symbol) continue; const cfg = cfgM[cs]; overlayEntries.push({ key: cmpKey(cs), label: cs, kind: "overlay", isPine: false, isCompare: true, color: cfg?.color || CMP_PALETTE[ci % CMP_PALETTE.length] }); }
-    const metas: { key: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[] = [];
+    const metas: { key: string; removeKey?: string; isPrice: boolean; entries: Omit<LegendEntry, "hidden">[]; pane: IPaneApi<any> }[] = [];
     metas.push({ key: "__price__", isPrice: true, entries: overlayEntries, pane: priceS.getPane() });
     for (const key of [...SUBPANE_ORDER, ...paneSuiteKeys()]) {
       const arr = indSeriesRef.current.get(key); if (!arr || !arr.length) continue;
       const sdefPane = getSuiteDef(key);
-      const entries: Omit<LegendEntry, "hidden">[] = [{
+      const entries: Omit<LegendEntry, "hidden">[] = sdefPane
+        ? activeSuiteModules(key)
+            .filter((entry) => entry.surface === "pane")
+            .map((entry) => ({ key: entry.id, label: suiteLegendLabel(entry), kind: "pane" as const, isPine: false, noSource: true }))
+        : [{
+            key,
+            // rvol with an insufficient baseline (<3 prior sessions) carries the honest-null note
+            label: key === "rvol" && indOverlayRef.current["rvol_nobase"]
+              ? `${labelOf(key)} — ${tPlain("rvolNoBase")}`
+              : labelOf(key),
+            kind: "pane" as const, isPine: false,
+          }];
+      if (!entries.length) continue;
+      metas.push({
         key,
-        // rvol with an insufficient baseline (<3 prior sessions) carries the honest-null note
-        label: sdefPane
-          ? (sdefPane.tkey ? tPlain(sdefPane.tkey, sdefPane.label) : sdefPane.label)
-          : key === "rvol" && indOverlayRef.current["rvol_nobase"]
-            ? `${labelOf(key)} — ${tPlain("rvolNoBase")}`
-            : labelOf(key),
-        kind: "pane", isPine: false, ...(sdefPane ? { noSource: true } : {}),
-      }];
-      metas.push({ key, isPrice: false, entries, pane: arr[0].getPane() });
+        ...(sdefPane ? { removeKey: `suite-pane:${key}` } : {}),
+        isPrice: false,
+        entries,
+        pane: arr[0].getPane(),
+      });
     }
     // pine SUB-PANE scripts, in their assigned-pane order
     for (const s of pineScriptsRef.current) {
@@ -2871,7 +2920,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       //    sub-pane is maximized (that is exactly when the user is looking at the suite pane) ──
       {
         const indsP = indicatorsRef.current;
-        const paneKeys = paneSuiteKeys().filter((k) => indsP.has(k) && !hiddenRef.current.has(k));
+        const paneKeys = paneSuiteKeys().filter((k) =>
+          indsP.has(k) && activeSuiteModules(k).some((entry) => entry.surface === "pane")
+        );
         if (paneKeys.length && barsRef.current.length) {
           if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
           const WP = el!.clientWidth;
@@ -2891,7 +2942,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             if (paneH < 12) continue;   // collapsed/hidden pane
             const yP = (pv: number): number | null => { try { const v = anchor.priceToCoordinate(pv); return v == null || !isFinite(v as number) ? null : (v as number) + paneTop; } catch { return null; } };
             try {
-              const bundle = computeSuite(def, indParamsRef.current[k], {
+              const bundle = computeSuite(def, suiteRenderParams(k), {
                 bars: barsRef.current as any, tf: timeframeRef.current, symbol: symbolRef.current,
                 isIntraday: isIntradayRef.current, lang: langP,
               }, userTierRef.current, suiteColorsRef.current!);
@@ -2907,6 +2958,33 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
               renderPrims(g, bundle, { xi: xiP, y: yP, W: WP, H: paneH, i0: lrP ? lrP.from : 0, i1: lrP ? lrP.to : barsRef.current.length - 1, barW: barWP });
               if (bundle.tables.length) collectedTables.push(...bundle.tables);
             } catch (e) { console.warn(`[suite:${k}] pane render skipped:`, e); }
+          }
+        }
+      }
+      // A dashboard can be selected without any oscillator plot from its family. Compute those
+      // table-only suites here so the dashboard remains useful without manufacturing an empty pane.
+      {
+        const tableOnlyKeys = paneSuiteKeys().filter((k) => {
+          if (!indicatorsRef.current.has(k)) return false;
+          const modules = activeSuiteModules(k);
+          return modules.some((entry) => entry.surface === "dashboard")
+            && !modules.some((entry) => entry.surface === "pane");
+        });
+        if (tableOnlyKeys.length && barsRef.current.length) {
+          if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
+          const lang = typeof document !== "undefined" && document.documentElement.getAttribute("data-lang") === "zh" ? "zh" as const : "en" as const;
+          for (const k of tableOnlyKeys) {
+            const def = SUITE_DEFS[k]; if (!def) continue;
+            try {
+              const bundle = computeSuite(def, suiteRenderParams(k), {
+                bars: barsRef.current as any,
+                tf: timeframeRef.current,
+                symbol: symbolRef.current,
+                isIntraday: isIntradayRef.current,
+                lang,
+              }, userTierRef.current, suiteColorsRef.current!);
+              if (bundle.tables.length) collectedTables.push(...bundle.tables);
+            } catch (e) { console.warn(`[suite:${k}] dashboard render skipped:`, e); }
           }
         }
       }
@@ -3143,7 +3221,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       // ── Premium suite draw-lists (IndicatorCanvas) — host-memoized compute, generic renderer ──
       {
-        const activeSuites = Object.keys(SUITE_DEFS).filter((k) => SUITE_DEFS[k]?.kind !== "pane" && inds.has(k) && !hiddenRef.current.has(k));
+        const activeSuites = Object.keys(SUITE_DEFS).filter((k) => SUITE_DEFS[k]?.kind !== "pane" && inds.has(k));
         if (activeSuites.length && barsRef.current.length) {
           if (!suiteColorsRef.current) suiteColorsRef.current = resolveSuiteColors();
           const ts = chart.timeScale();
@@ -3187,7 +3265,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           for (const k of activeSuites) {
             const def = SUITE_DEFS[k]; if (!def) continue;
             try {
-              const bundle = computeSuite(def, indParamsRef.current[k], {
+              const bundle = computeSuite(def, suiteRenderParams(k), {
                 bars: barsRef.current as any, tf: timeframeRef.current, symbol: symbolRef.current,
                 isIntraday: isIntradayRef.current, lang,
               }, userTierRef.current, suiteColorsRef.current);
@@ -3284,7 +3362,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (ctl.maximized && m.key !== ctl.maximized) continue;
         let top = 0, height = 0;
         try { const pe = paneApi.getHTMLElement(); if (pe) { const r = pe.getBoundingClientRect(); top = r.top - wr.top; height = r.height; } } catch {}
-        layout.push({ key: m.key, paneIndex: pi, isPrice: m.isPrice, top, height, collapsed: ctl.collapsed.has(m.key), maximized: ctl.maximized === m.key, entries: m.entries.map((e) => ({ ...e, hidden: hiddenRef.current.has(e.key) })) });
+        layout.push({
+          key: m.key,
+          ...(m.removeKey ? { removeKey: m.removeKey } : {}),
+          paneIndex: pi,
+          isPrice: m.isPrice,
+          top,
+          height,
+          collapsed: ctl.collapsed.has(m.key),
+          maximized: ctl.maximized === m.key,
+          entries: m.entries.map((e) => ({ ...e, hidden: isLegendEntryHidden(e.key) })),
+        });
       }
       layout.sort((a, b) => a.paneIndex - b.paneIndex);
       paneLayoutRef.current = layout; setPaneLayout(layout);
@@ -4015,6 +4103,29 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // eslint-disable-next-line
   }, [indParamsKey]);
 
+  // Entitlements resolve asynchronously after the chart can already be painted. Rebuild when the
+  // tier changes so persisted Insider/Pro modules and their shared panes appear immediately after
+  // `/api/me` upgrades the initial fail-closed Free tier (and disappear on a downgrade).
+  const tierMounted = useRef(false);
+  useEffect(() => {
+    if (!tierMounted.current) { tierMounted.current = true; return; }
+    const chart = chartRef.current; if (!chart || !barsRef.current.length) return;
+    const saved = PRESERVE_VIEW_ON_INDICATOR_TOGGLE ? (() => {
+      try {
+        const range = chart.timeScale().getVisibleLogicalRange();
+        return range ? { from: range.from as number, to: range.to as number } : null;
+      } catch { return null; }
+    })() : null;
+    rebuildIndicators();
+    normalizeStretch();
+    applyHidden();
+    renderSignalsRef.current();
+    renderRef.current();
+    measureRef.current();
+    if (saved) { try { chart.timeScale().setVisibleLogicalRange(saved); } catch {} }
+    // eslint-disable-next-line
+  }, [userTier]);
+
   // ── EFFECT 3-lab — reload lab markers when _lab indicator is toggled ON ──────
   // Effect 2 loads markers on symbol change. When the user enables _lab AFTER data is
   // already on the chart, this effect fires a one-shot fetch to populate labMarkersRef
@@ -4078,8 +4189,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // eslint-disable-next-line
   }, [pineKey]);
 
-  // ── eye toggle / tf-visibility [hidden] → flip series visibility in place (no chart rebuild) ──
-  useEffect(() => { hiddenRef.current = hidden; applyHidden(); renderSignalsRef.current(); measureRef.current(); }, [hidden]); // eslint-disable-line
+  // ── eye toggle / tf-visibility [hidden] → flip native series and immediately refresh suite SVG,
+  // candle-paint and dashboard output. Module eyes are expressed through suiteRenderParams(). ──
+  useEffect(() => {
+    hiddenRef.current = hidden;
+    applyHidden();
+    renderSignalsRef.current();
+    renderRef.current();
+    measureRef.current();
+  }, [hidden]); // eslint-disable-line
 
   // ────────────────────────────────────────────────────────────────────────────
   // EFFECT 4 — replay [replayIdx]. Slice from fullBarsRef; recompute indicators+sigMarks on the slice.

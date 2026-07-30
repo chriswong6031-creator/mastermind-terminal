@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { IND_DEFS, withDefaults, isIndKey, defaultVis, VIS_UNITS, type IndField, type VisUnit, type VisRange } from "@/lib/indicators";
 import { isSuiteKey, getSuiteDef, suiteDefaults } from "@/lib/suites/registry";
+import { getSuiteModuleCatalogEntry, type SuiteModuleCatalogEntry } from "@/lib/suites/catalog";
 import type { SuiteField, SuiteModuleDef, SuiteTier } from "@/lib/indicator-canvas/types";
 import { useT } from "@/lib/i18n";
 
@@ -67,10 +68,10 @@ function VisRow({ label, unitMax, val, onChange }: { label: string; unitMax: num
   );
 }
 
-// ──────────────────────────────────────────────────────────── premium suites (module accordion)
-// A suite is ONE picker entry whose modules toggle inside this dialog. Settings live in the same
-// flat indParams[suiteKey] blob the classic path uses, with "<module>.<field>" keys, so snapshot /
-// cancel-revert / persistence all keep working unchanged.
+// ───────────────────────────────────────── premium suites (direct module + legacy suite editor)
+// Picker modules are first-class settings targets, while the five suite keys remain the runtime /
+// persistence containers. Settings therefore still use the flat indParams[suiteKey] blob with
+// "<module>.<field>" keys. Passing a legacy suite id preserves the original accordion editor.
 
 type Tier = "free" | "insider" | "pro";
 const TIER_RANK: Record<Tier, number> = { free: 0, insider: 1, pro: 2 };
@@ -82,6 +83,67 @@ const SIZE_OPTS = [{ v: 0, label: "Tiny" }, { v: 1, label: "Small" }, { v: 2, la
 const LINESTYLE_OPTS = [{ v: "solid", label: "Solid" }, { v: "dashed", label: "Dashed" }, { v: "dotted", label: "Dotted" }];
 // select values may be numbers stored as numbers but compared to string-typed showIf/option values
 const sameVal = (a: any, b: any) => a === b || (a != null && b != null && String(a) === String(b));
+
+export type IndicatorSettingsModuleTarget =
+  | string
+  | { suiteKey: string; moduleKey: string };
+
+/**
+ * Resolve either a qualified `suite:<suite>/<module>` indicator id or an explicit module target.
+ * The explicit form lets legacy callers keep passing the suite runtime key as `indKey` while they
+ * migrate their selection/settings routing to module-first ids.
+ */
+export function resolveIndicatorSettingsModule(
+  indKey: string,
+  moduleTarget?: IndicatorSettingsModuleTarget,
+): SuiteModuleCatalogEntry | null {
+  if (!moduleTarget) return getSuiteModuleCatalogEntry(indKey);
+  if (typeof moduleTarget !== "string") {
+    return getSuiteModuleCatalogEntry(`suite:${moduleTarget.suiteKey}/${moduleTarget.moduleKey}`);
+  }
+  if (moduleTarget.startsWith("suite:")) return getSuiteModuleCatalogEntry(moduleTarget);
+  const parent = isSuiteKey(indKey) ? indKey : getSuiteModuleCatalogEntry(indKey)?.suiteKey;
+  return parent ? getSuiteModuleCatalogEntry(`suite:${parent}/${moduleTarget}`) : null;
+}
+
+/** Only values owned by one module. Used by direct-mode Cancel so sibling edits survive. */
+export function moduleScopedSnapshot(
+  module: SuiteModuleDef,
+  suiteValues: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const keys = new Set([...Object.keys(module.defaults), ...module.fields.map((f) => f.key)]);
+  for (const key of keys) {
+    const prefixed = `${module.key}.${key}`;
+    if (Object.prototype.hasOwnProperty.call(suiteValues, prefixed)) out[prefixed] = suiteValues[prefixed];
+    else if (Object.prototype.hasOwnProperty.call(module.defaults, key)) out[prefixed] = module.defaults[key];
+  }
+  return out;
+}
+
+/** Registry defaults for one module, deliberately excluding `<module>.on`. */
+export function moduleScopedReset(module: SuiteModuleDef): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(module.defaults)) out[`${module.key}.${key}`] = value;
+  return out;
+}
+
+type CatalogDependencyMetadata = SuiteModuleCatalogEntry & {
+  requires?: string | string[];
+  source?: string;
+};
+
+function moduleSourceLabels(entry: SuiteModuleCatalogEntry): string[] {
+  const meta = entry as CatalogDependencyMetadata;
+  const refs = [
+    ...(Array.isArray(meta.requires) ? meta.requires : meta.requires ? [meta.requires] : []),
+    ...(meta.source ? [meta.source] : []),
+  ];
+  return [...new Set(refs.map((ref) => {
+    const dep = getSuiteModuleCatalogEntry(ref.startsWith("suite:") ? ref : `suite:${entry.suiteKey}/${ref}`);
+    return dep?.label ?? ref;
+  }))];
+}
 
 function SelectField({ value, options, onChange }: { value: any; options: Array<{ v: string | number; label: string }>; onChange: (v: any) => void }) {
   const cur = options.find((o) => sameVal(o.v, value)) ?? options[0];
@@ -150,8 +212,9 @@ function ModuleSection({ m, values, locked, expanded, onToggle, onChange, onGuid
   );
 }
 
-export default function IndicatorSettings({ indKey, params, onChange, pine, onPineChange, onClose, onReset, userTier = "free", onOpenGuide }:
+export default function IndicatorSettings({ indKey, moduleTarget, params, onChange, pine, onPineChange, onClose, onReset, userTier = "free", onOpenGuide }:
   { indKey: string;
+    moduleTarget?: IndicatorSettingsModuleTarget;
     params: Record<string, any>;
     onChange: (patch: Record<string, any>) => void;
     pine?: { name: string; params: Record<string, any> } | null;
@@ -162,6 +225,13 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
     userTier?: Tier;   // fail closed: unknown/absent entitlement = free
   }) {
   const t = useT();
+  const moduleEntry = resolveIndicatorSettingsModule(indKey, moduleTarget);
+  const suiteKey = moduleEntry?.suiteKey ?? (isSuiteKey(indKey) ? indKey : null);
+  const suite = suiteKey ? getSuiteDef(suiteKey) : null;
+  const directModule = moduleEntry?.module ?? null;
+  // Effective suite values: registry defaults under whatever the user has saved. This is also the
+  // value source for a direct module editor because callers continue to pass indParams[suiteKey].
+  const SV: Record<string, any> = suiteKey ? { ...suiteDefaults(suiteKey), ...params } : {};
   const [tab, setTab] = useState<"inputs" | "style" | "visibility">("inputs");
   const [defOpen, setDefOpen] = useState(false);
   // explicit user collapse/expand overrides per suite module; absent = default (expanded iff enabled + unlocked)
@@ -169,6 +239,9 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
   // snapshot the params at open so Cancel can revert this editing session (changes otherwise auto-save live)
   const snap = useRef(params);
   const pineSnap = useRef(pine?.params);
+  const directSnap = useRef<Record<string, unknown> | null>(
+    directModule ? moduleScopedSnapshot(directModule, SV) : null,
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -178,16 +251,18 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
   useEffect(() => { if (!defOpen) return; const close = () => setDefOpen(false); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [defOpen]);
 
   const isPine = indKey === "pine";
-  const suite = isSuiteKey(indKey) ? getSuiteDef(indKey) : null;
-  const def = isIndKey(indKey) ? IND_DEFS[indKey] : null;
-  const title = suite ? (suite.tkey ? t(suite.tkey, suite.label) : suite.label)
+  const def = !moduleEntry && isIndKey(indKey) ? IND_DEFS[indKey] : null;
+  const title = moduleEntry ? moduleEntry.label
+    : suite ? (suite.tkey ? t(suite.tkey, suite.label) : suite.label)
     : isPine ? (pine?.name || "Custom script") : def?.label || indKey;
 
-  // effective suite values: registry defaults under whatever the user has saved (indParams may be
-  // sparse — TerminalShell's withDefaults() has no entry for a suite key)
-  const SV: Record<string, any> = suite ? { ...suiteDefaults(indKey), ...params } : {};
   const rank = TIER_RANK[userTier] ?? 0;
   const isLocked = (m: SuiteModuleDef) => rank < (TIER_RANK[m.tier] ?? 0);
+  const directLocked = directModule ? isLocked(directModule) : false;
+  const directFields = directModule
+    ? directModule.fields.filter((f) => !f.showIf || sameVal(SV[`${directModule.key}.${f.showIf.key}`], f.showIf.eq))
+    : [];
+  const sourceLabels = moduleEntry ? moduleSourceLabels(moduleEntry) : [];
 
   const pineEntries = isPine && pine ? Object.entries(pine.params) : [];
   const inputs = def ? def.fields.filter((f) => f.group === "inputs") : [];
@@ -198,21 +273,47 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
 
   const cancel = () => {
     if (isPine) { /* revert pine inputs to the snapshot */ const cur = pine?.params || {}; const back: Record<string, any> = {}; for (const k of Object.keys(cur)) back[k] = (pineSnap.current as any)?.[k]; onPineChange?.(back); }
+    else if (directModule) onChange(directSnap.current ?? {});
     else onChange(snap.current);   // snapshot has all fields → merge restores the open-time state
     onClose();
   };
 
-  const TABS: ["inputs" | "style" | "visibility", string][] = [["inputs", t("isTabInputs", "Inputs")], ["style", t("isTabStyle", "Style")], ["visibility", t("isTabVisibility", "Visibility")]];
+  // Suite modules currently store visual fields alongside their inputs and only have suite-wide
+  // visibility. Direct mode therefore exposes one honest, module-scoped tab; the legacy suite
+  // editor retains its existing three-tab path.
+  const TABS: ["inputs" | "style" | "visibility", string][] = moduleEntry
+    ? [["inputs", t("isTabInputs", "Inputs")]]
+    : [["inputs", t("isTabInputs", "Inputs")], ["style", t("isTabStyle", "Style")], ["visibility", t("isTabVisibility", "Visibility")]];
+  const activeTab = moduleEntry ? "inputs" : tab;
 
   return (
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="ind-set" onClick={(e) => e.stopPropagation()}>
-        <div className="is-head"><b>{title}</b><span className="x" onClick={onClose} aria-label="Close">✕</span></div>
+        <div className="is-head">
+          <b>{title}</b>
+          <span className="x" onClick={onClose} aria-label="Close">✕</span>
+        </div>
         <div className="is-tabs">
-          {TABS.map(([k, l]) => <button key={k} className={`is-tab${tab === k ? " on" : ""}`} onClick={() => setTab(k)}>{l}</button>)}
+          {TABS.map(([k, l]) => <button key={k} className={`is-tab${activeTab === k ? " on" : ""}`} onClick={() => setTab(k)}>{l}</button>)}
         </div>
         <div className="is-body">
-          {tab === "inputs" && (suite ? (
+          {activeTab === "inputs" && (moduleEntry && directModule ? (
+            directLocked ? (
+              <div className="is-empty">
+                {directModule.tier === "pro" ? t("isSuiteUnlockPro", "Unlocks with PRO") : t("isSuiteUnlockInsider", "Unlocks with INSIDER")}
+              </div>
+            ) : (
+              <div className="is-sec">
+                {sourceLabels.length > 0 && (
+                  <div className="is-tip">{t("isModuleCalculationSource", "Calculation source")}: {sourceLabels.join(", ")}</div>
+                )}
+                {directFields.length
+                  ? directFields.map((f) => <SuiteRow key={f.key} f={f} val={SV[`${directModule.key}.${f.key}`]}
+                    onChange={(v) => onChange({ [`${directModule.key}.${f.key}`]: v })} />)
+                  : <div className="is-empty">{t("isEmptyNoInputs", "No inputs for this indicator.")}</div>}
+              </div>
+            )
+          ) : suite ? (
             <div className="is-mods">
               {suite.modules.map((m) => {
                 const locked = isLocked(m);
@@ -221,7 +322,7 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
                     expanded={!locked && (modOpen[m.key] ?? !!SV[`${m.key}.on`])}
                     onToggle={() => setModOpen((o) => ({ ...o, [m.key]: !(o[m.key] ?? !!SV[`${m.key}.on`]) }))}
                     onChange={onChange} t={t}
-                    onGuide={onOpenGuide ? () => onOpenGuide(indKey, m.key, m.label) : undefined} />
+                    onGuide={onOpenGuide && suiteKey ? () => onOpenGuide(suiteKey, m.key, m.label) : undefined} />
                 );
               })}
             </div>
@@ -242,13 +343,13 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
             inputs.length ? inputs.map((f) => <Row key={f.key} f={f} val={P[f.key]} onChange={(v) => onChange({ [f.key]: v })} />) : <div className="is-empty">{t("isEmptyNoInputs", "No inputs for this indicator.")}</div>
           ) : <div className="is-empty">{t("isEmptyNoSettings", "No settings for this item.")}</div>)}
 
-          {tab === "style" && (suite
+          {activeTab === "style" && (suite
             ? <div className="is-empty">{t("isSuiteStyleHint", "Suite styling lives with each module's inputs.")}</div>
             : def && styles.length
               ? styles.map((f) => <Row key={f.key} f={f} val={P[f.key]} onChange={(v) => onChange({ [f.key]: v })} />)
               : <div className="is-empty">{t("isEmptyNoStyle", "No style options.")}</div>)}
 
-          {tab === "visibility" && (
+          {activeTab === "visibility" && (
             <div className="vis-list">
               <div className="vis-head">{t("isVisHead", "Show this indicator on these timeframes (daily-EOD data — minutes/hours are unavailable).")}</div>
               {VIS_UNITS.map((u) => <VisRow key={u.key} label={u.label} unitMax={u.max} val={vis[u.key]} onChange={(patch) => setVis(u.key, patch)} />)}
@@ -259,7 +360,12 @@ export default function IndicatorSettings({ indKey, params, onChange, pine, onPi
           <div className="is-def pophost" onClick={(e) => e.stopPropagation()}>
             <button className="is-def-btn" onClick={() => setDefOpen((o) => !o)}>{t("isDefaults", "Defaults")} <svg viewBox="0 0 24 24" style={{ width: 12, height: 12, stroke: "currentColor", fill: "none", strokeWidth: 2, transform: defOpen ? "rotate(180deg)" : "none" }}><path d="M6 15l6-6 6 6" /></svg></button>
             {defOpen && <div className="is-def-menu">
-              <div className="is-def-row" onClick={() => { setDefOpen(false); if (isPine) cancel(); else onReset?.(); }}>{t("isResetSettings", "Reset settings")}</div>
+              <div className="is-def-row" onClick={() => {
+                setDefOpen(false);
+                if (isPine) cancel();
+                else if (directModule) onChange(moduleScopedReset(directModule));
+                else onReset?.();
+              }}>{t("isResetSettings", "Reset settings")}</div>
             </div>}
           </div>
           <div className="spacer" />
