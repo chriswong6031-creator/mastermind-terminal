@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useT, useLang } from "@/lib/i18n";
 import { displayName, marketOf, isSymbolVisible, ALL_MARKETS, type MarketId } from "@/lib/markets";
 import { useMarketPrefs } from "@/lib/useMarketPrefs";
-import { MARKET_TKEY } from "@/components/SearchModal";
+import { MARKET_TKEY } from "@/lib/markets";
 import { getJSON, invalidate } from "@/lib/dataCache";
 import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
