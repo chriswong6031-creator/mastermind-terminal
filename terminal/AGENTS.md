@@ -22,4 +22,15 @@ Opus builds and reviews code. Design choices are judgment work — made in the s
 
 ## Repo facts
 Next.js 16 + Supabase; entitlements authority = macro-api (`profiles.is_pro` is a UI hint only); i18n via LEX `[en, zh]` tuples in `lib/i18n.tsx`; tests = vitest, golden fixtures in `lib/__tests__/fixtures/`. The main checkout is often on another agent's branch — ALWAYS `git worktree add` off `origin/master`; never touch the main checkout's git state.
+
+## Responsive product contract
+- This directory is one responsive Next.js application. Desktop, tablet, and mobile share routes,
+  data fetching, chart logic, indicator logic, and settings; breakpoint-specific chrome is allowed,
+  a separate mobile implementation is not.
+- A user-facing change is incomplete until `npm run test:e2e:responsive` passes at the repository's
+  three contract viewports (1440×900, 820×1180, 390×844). Preserve safe-area handling, mobile
+  navigation/sheets, usable touch targets, and zero horizontal document overflow.
+- Never target the retired `feat/mobile-terminal-redesign` branch or `charting-app-mobile`
+  worktree. They are historical recovery references only; canonical work starts from
+  `origin/master`.
 <!-- END:mastermind-agent-laws -->

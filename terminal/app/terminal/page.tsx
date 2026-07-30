@@ -5,13 +5,20 @@ import TerminalShell from "@/components/TerminalShell";
 
 export default async function Terminal({ searchParams }: { searchParams: Promise<{ sym?: string; symbol?: string }> }) {
   const sp = await searchParams;
+  // Browser smoke tests exercise the real responsive shell with checked-in market fixtures. They
+  // deliberately skip remote auth so CI remains deterministic and never depends on Supabase.
+  const e2eFixture = process.env.TERMINAL_E2E_FIXTURE === "1";
+  const guestSymbols: [string, string][] = [["Crypto", "BTC-USD"], ["Crypto", "ETH-USD"], ["Equities", "NVDA"], ["Equities", "AAPL"], ["Equities", "MSFT"], ["Equities", "QQQ"]];
+  if (e2eFixture) {
+    return <TerminalShell symbols={guestSymbols.map(([section, symbol]) => ({ symbol, section }))} email="" initialSymbol={sp?.symbol ?? sp?.sym} />;
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
   // login disabled for now — render an open guest workspace (no server-side persistence)
   if (!user) {
-    const seed: [string, string][] = [["Crypto", "BTC-USD"], ["Crypto", "ETH-USD"], ["Equities", "NVDA"], ["Equities", "AAPL"], ["Equities", "MSFT"], ["Equities", "QQQ"]];
-    return <TerminalShell symbols={seed.map(([section, symbol]) => ({ symbol, section }))} email="" initialSymbol={sp?.symbol ?? sp?.sym} />;
+    return <TerminalShell symbols={guestSymbols.map(([section, symbol]) => ({ symbol, section }))} email="" initialSymbol={sp?.symbol ?? sp?.sym} />;
   }
 
   // load or seed the user's first watchlist (idempotent via unique (user_id,name)).
