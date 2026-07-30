@@ -3,11 +3,14 @@
  * suite_alerts.ts — the suite-event alert firing sidecar (Node lane).
  *
  * The Python engine (ingest/alerts_engine.py) fires signal/regime/price/rsi/options
- * conditions. Suite-event conditions ({type:"suite_event"}) cannot live there without
+ * conditions. Suite conditions ({type:"suite_event"} and the two-step
+ * {type:"suite_sequence"} "A then B within N bars") cannot live there without
  * duplicating 24 TypeScript module algorithms — so this sidecar runs the REAL modules:
  * it bundles terminal/lib/suites via esbuild (ops/terminal-build.sh emits
  * ingest/dist/suite_alerts.mjs) and evaluates each alert with computeSuite() +
- * evalSuiteEvent() — zero algorithm duplication, non-repaint by construction.
+ * evalSuiteEvent()/evalSuiteSequence() — zero algorithm duplication, non-repaint by
+ * construction. Sequences are genuinely stateful: their _sq machine state (armed /
+ * disarmed / dedupe watermark) is persisted on EVERY change, not only on fire.
  *
  * Cron: every 5 minutes on the VPS, offset +4 past the data refresh (see DEPLOY.md).
  *
@@ -46,9 +49,12 @@ import {
   SUITE_ALERT_EVENTS,
   SUITE_EVENT_FRESH_BARS,
   evalSuiteEvent,
+  evalSuiteSequence,
   suiteAlertEventDef,
-  validateSuiteCondition, floorToUtcDayStart } from "../terminal/lib/suiteAlerts";
-import type { SuiteAlertCondition } from "../terminal/lib/suiteAlerts";
+  validateSuiteCondition,
+  validateSuiteSequence,
+  floorToUtcDayStart } from "../terminal/lib/suiteAlerts";
+import type { SuiteAlertCondition, SuiteSequenceCondition } from "../terminal/lib/suiteAlerts";
 
 const DEFAULT_ENV = "/opt/terminal/terminal/.env.local";
 const DEFAULT_DATA = "/opt/terminal/terminal/public/data";
@@ -174,7 +180,9 @@ class Supa {
   }
 
   async activeSuiteAlerts(): Promise<any[]> {
-    const url = `${this.base}/alerts?active=eq.true&condition->>type=eq.suite_event&select=*`;
+    // PostgREST in.() on a JSON-path computed field: `condition->>type=in.(a,b)` — the
+    // ->> extraction composes with any operator; bare identifiers need no quoting.
+    const url = `${this.base}/alerts?active=eq.true&condition->>type=in.(suite_event,suite_sequence)&select=*`;
     const r = await fetch(url, { headers: this.headers });
     if (!r.ok) throw new Error(`GET alerts -> ${r.status}`);
     const rows = await r.json();
@@ -183,12 +191,11 @@ class Supa {
 
   /** Disarm + stamp trigger evidence. The active=eq.true guard makes double-fires a
    *  no-op even if two runs overlap — mirrors alerts_engine.py Supa.fire exactly. */
-  async fire(alert: any, value: number | null, note: string, state?: { lastFiredT: number }): Promise<void> {
-    const cond = { ...(alert?.condition ?? {}) };
+  async fire(alert: any, value: number | null, note: string, statePatch?: Record<string, unknown>): Promise<void> {
+    // Persist the evaluator state ({_se} or {_sq}) WITH the fire — otherwise Re-arm re-fires
+    // the same historical event for up to 3 trading days (review W3-2, the _se-with-fire law).
+    const cond = { ...(alert?.condition ?? {}), ...(statePatch ?? {}) };
     cond.triggered = { at: new Date().toISOString().slice(0, 19) + "+00:00", value, note };
-    // Persist the dedupe watermark WITH the fire — otherwise Re-arm re-fires the same historical
-    // event for up to 3 trading days (review W3-2).
-    if (state) cond._se = state;
     await this.patchActive(alert, { active: false, condition: cond });
   }
 
@@ -291,10 +298,11 @@ async function main(): Promise<number> {
     const eventsCache = new Map<string, SuiteEvent[] | null>(); // null = compute failed
 
     for (const a of rows) {
-      const cond = (a?.condition ?? {}) as SuiteAlertCondition;
+      const cond = (a?.condition ?? {}) as SuiteAlertCondition | SuiteSequenceCondition;
+      const isSeq = (cond as { type?: unknown }).type === "suite_sequence";
       const tag = `${sym} ${JSON.stringify(cond).slice(0, 80)}`;
 
-      const reason = validateSuiteCondition(cond);
+      const reason = isSeq ? validateSuiteSequence(cond) : validateSuiteCondition(cond as SuiteAlertCondition);
       if (reason) {
         skipped++;
         log(`SKIP  ${tag} — malformed condition: ${reason}`);
@@ -323,17 +331,25 @@ async function main(): Promise<number> {
       }
 
       // Floor = alert creation time: old history never fires on first evaluation.
+      // SAME day-floored floorT for both condition types.
       const createdMs = Date.parse(String(a?.created_at ?? ""));
       const floorT = Number.isFinite(createdMs) ? floorToUtcDayStart(createdMs / 1000) : 0;
-      const r = evalSuiteEvent(cond, events, data.barsT, floorT);
+      const r = isSeq
+        ? evalSuiteSequence(cond as SuiteSequenceCondition, events, data.barsT, floorT)
+        : evalSuiteEvent(cond as SuiteAlertCondition, events, data.barsT, floorT);
+      const stateKey = isSeq ? "_sq" : "_se";
 
       if (r.fired) {
         fired++;
-        const note = `${sym} — ${r.note ?? cond.event}`;
+        const fallbackName = isSeq
+          ? (cond as SuiteSequenceCondition).steps?.map((s) => s?.event).join("→")
+          : (cond as SuiteAlertCondition).event;
+        const note = `${sym} — ${r.note ?? fallbackName}`;
         log(`FIRE  ${tag} — ${r.note ?? ""}${args.dryRun ? " [dry-run]" : ""}`);
         if (!args.dryRun) {
           try {
-            await supa.fire(a, typeof r.value === "number" ? r.value : null, note, r.state);
+            // Final state rides WITH the fire (the W3 _se-with-fire law; _sq inherits it).
+            await supa.fire(a, typeof r.value === "number" ? r.value : null, note, r.state ? { [stateKey]: r.state } : undefined);
           } catch (e) {
             log(`PATCH ERROR ${sym} ${a?.id}: ${e instanceof Error ? e.message : e}`);
           }
@@ -341,11 +357,17 @@ async function main(): Promise<number> {
       } else {
         log(`idle  ${tag}`);
         // State change without a fire → persist condition only (active stays true),
-        // mirroring the Python engine's hysteresis path. evalSuiteEvent only emits
-        // state on fire today, so this is a forward-compat no-op most runs.
-        if (r.state && r.state.lastFiredT !== cond._se?.lastFiredT && !args.dryRun) {
+        // mirroring the Python engine's hysteresis path. Sequences are genuinely
+        // stateful: evalSuiteSequence emits state on EVERY arm/disarm change and we
+        // persist each one; evalSuiteEvent only emits state on fire today, so the
+        // _se branch stays a forward-compat no-op most runs.
+        const prevState = isSeq ? (cond as SuiteSequenceCondition)._sq : (cond as SuiteAlertCondition)._se;
+        const changed = isSeq
+          ? !!r.state // evalSuiteSequence's contract: state present ⇔ it differs from _sq
+          : !!r.state && r.state.lastFiredT !== prevState?.lastFiredT;
+        if (changed && !args.dryRun) {
           try {
-            await supa.updateCondition(a, { ...cond, _se: r.state });
+            await supa.updateCondition(a, { ...cond, [stateKey]: r.state });
           } catch (e) {
             log(`PATCH ERROR ${sym} ${a?.id}: ${e instanceof Error ? e.message : e}`);
           }

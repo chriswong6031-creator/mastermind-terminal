@@ -15,6 +15,11 @@
 // only; nothing that is drawn for bar i depends on any bar > i (the "peak" method needs bar j+1 to
 // confirm a local volume maximum, so a peak block simply does not exist until j+1 has closed — a
 // one-bar confirmation delay, never a repaint).
+//
+// Macro blocks (opt-in): the SAME detector run over 4× resampled bars (`resampleOhlcv`), mapped back
+// to source-bar geometry. Honest basis — these are chart bars grouped in fours, not a true HTF feed,
+// and a group only becomes usable once it has CLOSED (the next source bar has opened), so the macro
+// layer trails the 1× layer by up to 4 bars and never repaints. The 1× path is untouched by it.
 
 import type {
   LabelPrim,
@@ -28,6 +33,7 @@ import type {
   XRef,
   ZonePrim,
 } from "@/lib/indicator-canvas/types";
+import { resampleOhlcv } from "@/lib/suites/shared/oscUtils";
 import { findPivotsHL, type Pivot } from "./pivots";
 
 // ------------------------------------------------------------------------------------- constants
@@ -44,6 +50,9 @@ const MAX_EVENTS = 240;
 const DETAIL_GATE = 3; // minPxPerBar for capsules / chips / score bar
 const TIER_GATE = 2; // minPxPerBar for the tier label
 const MIN_BARS = 30;
+const MACRO_FACTOR = 4; // source bars per macro group
+const MACRO_MAX = 3; // macro blocks drawn (capped again by `showLast`)
+const MACRO_PREFIX = "Macro "; // event-label prefix (kept language-neutral, like "BOS"/"CHoCH")
 
 type Dir = "bull" | "bear";
 type Grade = "WEAK" | "BALANCED" | "HIGH" | "STRONG";
@@ -167,225 +176,245 @@ const compute: ModuleCompute = (ctx) => {
   const showRating = boolOf(s.showRating, true);
   const bigTier = strOf(s.sizeDetail, "small") === "large";
   const extendRight = boolOf(s.extendRight, true);
+  const macro = boolOf(s.macro, false);
 
-  // ---- series precomputation (single pass each; prefix sums make every window O(1))
-  const atr = atrSeries(bars, ATR_LEN);
-  const cumV = new Float64Array(n + 1);
-  const cumBuy = new Float64Array(n + 1);
-  for (let i = 0; i < n; i++) {
-    const b = bars[i];
-    const rng = b.h - b.l;
-    const buyFrac = rng > 0 ? clamp01((b.c - b.l) / rng) : 0.5;
-    const v = Number.isFinite(b.v) && b.v > 0 ? b.v : 0;
-    cumV[i + 1] = cumV[i] + v;
-    cumBuy[i + 1] = cumBuy[i] + v * buyFrac;
-  }
-  const winVol = (a: number, b: number) => cumV[b + 1] - cumV[a];
-  const winBuy = (a: number, b: number) => cumBuy[b + 1] - cumBuy[a];
+  /**
+   * The whole detector — series precomputation, detection and lifecycle — over ONE bar series, so
+   * the macro layer can reuse it verbatim on resampled bars. Indices in the result are indices into
+   * `src`; the caller maps them back when `src` is not the chart's own bar array. Pure: reads only
+   * `src` and the settings closed over above.
+   */
+  const detect = (src: SuiteBar[]): { live: OBlock[]; breakers: OBlock[]; evs: SuiteEvent[] } => {
+    const m = src.length;
 
-  // Latest confirmed internal pivot level available AT each bar (no lookahead: a pivot only enters
-  // the series at its confirmedAt bar).
-  const lastPH = new Float64Array(n).fill(NaN);
-  const lastPL = new Float64Array(n).fill(NaN);
-  if (method === "priceAction") {
-    const pivots: Pivot[] = findPivotsHL(bars, PIVOT_LEN, PIVOT_LEN, "wick") ?? [];
-    const phAt = new Float64Array(n).fill(NaN);
-    const plAt = new Float64Array(n).fill(NaN);
-    for (const pv of pivots) {
-      const at = Math.max(0, Math.min(n - 1, Math.round(pv.confirmedAt)));
-      if (pv.kind === "high") phAt[at] = pv.p;
-      else plAt[at] = pv.p;
+    // ---- series precomputation (single pass each; prefix sums make every window O(1))
+    const atr = atrSeries(src, ATR_LEN);
+    const cumV = new Float64Array(m + 1);
+    const cumBuy = new Float64Array(m + 1);
+    for (let i = 0; i < m; i++) {
+      const b = src[i];
+      const rng = b.h - b.l;
+      const buyFrac = rng > 0 ? clamp01((b.c - b.l) / rng) : 0.5;
+      const v = Number.isFinite(b.v) && b.v > 0 ? b.v : 0;
+      cumV[i + 1] = cumV[i] + v;
+      cumBuy[i + 1] = cumBuy[i] + v * buyFrac;
     }
-    let ph = NaN;
-    let pl = NaN;
-    for (let i = 0; i < n; i++) {
-      if (Number.isFinite(phAt[i])) ph = phAt[i];
-      if (Number.isFinite(plAt[i])) pl = plAt[i];
-      lastPH[i] = ph;
-      lastPL[i] = pl;
+    const winVol = (a: number, b: number) => cumV[b + 1] - cumV[a];
+    const winBuy = (a: number, b: number) => cumBuy[b + 1] - cumBuy[a];
+
+    // Latest confirmed internal pivot level available AT each bar (no lookahead: a pivot only enters
+    // the series at its confirmedAt bar).
+    const lastPH = new Float64Array(m).fill(NaN);
+    const lastPL = new Float64Array(m).fill(NaN);
+    if (method === "priceAction") {
+      const pivots: Pivot[] = findPivotsHL(src, PIVOT_LEN, PIVOT_LEN, "wick") ?? [];
+      const phAt = new Float64Array(m).fill(NaN);
+      const plAt = new Float64Array(m).fill(NaN);
+      for (const pv of pivots) {
+        const at = Math.max(0, Math.min(m - 1, Math.round(pv.confirmedAt)));
+        if (pv.kind === "high") phAt[at] = pv.p;
+        else plAt[at] = pv.p;
+      }
+      let ph = NaN;
+      let pl = NaN;
+      for (let i = 0; i < m; i++) {
+        if (Number.isFinite(phAt[i])) ph = phAt[i];
+        if (Number.isFinite(plAt[i])) pl = plAt[i];
+        lastPH[i] = ph;
+        lastPL[i] = pl;
+      }
     }
-  }
 
-  // ---- detection + lifecycle in ONE forward walk (O(n × MAX_LIVE), never O(n²))
-  const live: OBlock[] = [];
-  const breakers: OBlock[] = [];
-  let nextId = 1;
+    // ---- detection + lifecycle in ONE forward walk (O(n × MAX_LIVE), never O(n²))
+    const live: OBlock[] = [];
+    const breakers: OBlock[] = [];
+    const evs: SuiteEvent[] = [];
+    let nextId = 1;
 
-  const pushEvent = (e: SuiteEvent) => {
-    events.push(e);
-    if (events.length > MAX_EVENTS) events.shift();
-  };
+    const pushEvent = (e: SuiteEvent) => {
+      evs.push(e);
+      if (evs.length > MAX_EVENTS) evs.shift();
+    };
 
-  const start = Math.max(ATR_LEN + 2, ANCHOR_SCAN + 1);
-  for (let i = start; i < n; i++) {
-    const bar = bars[i];
+    const start = Math.max(ATR_LEN + 2, ANCHOR_SCAN + 1);
+    for (let i = start; i < m; i++) {
+      const bar = src[i];
+      // An OHLC=0 / non-finite bar is a MISSING print (CN/HK premarket law) — it must neither touch,
+      // mitigate nor break a block; one zero bar would otherwise close-through every bull zone at
+      // once and spray false ob_break alerts (W4 review).
+      if (!(Number.isFinite(bar.o) && Number.isFinite(bar.h) && Number.isFinite(bar.l) && Number.isFinite(bar.c)) || (bar.o === 0 && bar.h === 0 && bar.l === 0 && bar.c === 0)) continue;
 
-    // ---- 1. lifecycle for blocks that already existed BEFORE this bar
-    for (let k = live.length - 1; k >= 0; k--) {
-      const b = live[k];
-      if (b.impulse >= i) continue;
-      const mid = (b.lo + b.hi) / 2;
-      const overlaps = bar.l <= b.hi && bar.h >= b.lo;
+      // ---- 1. lifecycle for blocks that already existed BEFORE this bar
+      for (let k = live.length - 1; k >= 0; k--) {
+        const b = live[k];
+        if (b.impulse >= i) continue;
+        const mid = (b.lo + b.hi) / 2;
+        const overlaps = bar.l <= b.hi && bar.h >= b.lo;
 
-      if (overlaps && (b.lastTouch === null || i - b.lastTouch >= TOUCH_COOLDOWN)) {
-        b.lastTouch = i;
-        b.touches++;
+        if (overlaps && (b.lastTouch === null || i - b.lastTouch >= TOUCH_COOLDOWN)) {
+          b.lastTouch = i;
+          b.touches++;
+          pushEvent({
+            type: "ob_touch",
+            dir: b.dir,
+            i,
+            p: mid,
+            strength: Math.round(b.gradePct),
+            label: lang === "zh" ? `${b.dir === "bull" ? "看涨" : "看跌"}订单块回测` : `${b.dir === "bull" ? "Bullish" : "Bearish"} OB retest`,
+          });
+        }
+
+        let done = false;
+        if (mitigation === "touch") done = overlaps;
+        else if (mitigation === "wick") done = b.dir === "bull" ? bar.l < b.lo : bar.h > b.hi;
+        else if (mitigation === "avg") done = b.dir === "bull" ? bar.c < mid : bar.c > mid;
+        else done = b.dir === "bull" ? bar.c < b.lo : bar.c > b.hi; // "close" (default)
+
+        if (!done) continue;
+        live.splice(k, 1);
+        b.breakIdx = i;
         pushEvent({
-          type: "ob_touch",
+          type: "ob_break",
           dir: b.dir,
           i,
           p: mid,
           strength: Math.round(b.gradePct),
-          label: lang === "zh" ? `${b.dir === "bull" ? "看涨" : "看跌"}订单块回测` : `${b.dir === "bull" ? "Bullish" : "Bearish"} OB retest`,
+          label:
+            lang === "zh"
+              ? `${b.dir === "bull" ? "看涨" : "看跌"}订单块被击穿`
+              : `${b.dir === "bull" ? "Bullish" : "Bearish"} OB mitigated`,
         });
+        if (breakerOn) {
+          b.state = "breaker";
+          breakers.push(b);
+          if (breakers.length > MAX_BREAKERS) breakers.shift();
+        }
       }
 
-      let done = false;
-      if (mitigation === "touch") done = overlaps;
-      else if (mitigation === "wick") done = b.dir === "bull" ? bar.l < b.lo : bar.h > b.hi;
-      else if (mitigation === "avg") done = b.dir === "bull" ? bar.c < mid : bar.c > mid;
-      else done = b.dir === "bull" ? bar.c < b.lo : bar.c > b.hi; // "close" (default)
+      // ---- 2. impulse detection on this (closed) bar
+      const a = atr[i];
+      if (!Number.isFinite(a) || a <= 0) continue;
+      const body = src[i].c - src[i].o;
+      const expanded = Math.abs(body) > kImpulse * a;
 
-      if (!done) continue;
-      live.splice(k, 1);
-      b.breakIdx = i;
+      let dir: Dir | null = null;
+      if (method === "priceAction") {
+        const ph = lastPH[i];
+        const pl = lastPL[i];
+        if (Number.isFinite(ph) && bar.c > ph && src[i - 1].c <= ph) dir = "bull";
+        else if (Number.isFinite(pl) && bar.c < pl && src[i - 1].c >= pl) dir = "bear";
+      } else if (method === "peak") {
+        // Exhaustion flavor: an expansion bar that is the local volume maximum of j-1..j+1 and closes
+        // in the outer quarter of its own range. Needs j+1 → confirms one bar late, by design.
+        if (expanded && i + 1 < m) {
+          const v0 = src[i - 1].v;
+          const v1 = src[i].v;
+          const v2 = src[i + 1].v;
+          const isPeak = v1 >= v0 && v1 >= v2;
+          const rng = bar.h - bar.l;
+          const cp = rng > 0 ? (bar.c - bar.l) / rng : 0.5;
+          if (isPeak && (cp >= 0.75 || cp <= 0.25)) dir = body > 0 ? "bull" : "bear";
+        }
+      } else {
+        // "volume" (default): range expansion confirmed by a high trailing volume percentile.
+        if (expanded) {
+          const vp = pctRank(src[i].v, (k) => src[k].v, Math.max(0, i - VOL_WINDOW), i - 1);
+          if (vp >= pVol) dir = body > 0 ? "bull" : "bear";
+        }
+      }
+      if (!dir) continue;
+
+      // ---- 3. anchor = LAST opposing candle in the 1..5 bars before the impulse
+      let anchor = -1;
+      for (let k = i - 1; k >= Math.max(0, i - ANCHOR_SCAN); k--) {
+        const ob = src[k];
+        const opposing = dir === "bull" ? ob.c < ob.o : ob.c > ob.o;
+        if (opposing) {
+          anchor = k;
+          break;
+        }
+      }
+      if (anchor < 0) continue;
+      if (live.some((b) => b.anchor === anchor)) continue; // one block per origin candle
+
+      const ab = src[anchor];
+      const lo = boundsMode === "body" ? Math.min(ab.o, ab.c) : ab.l;
+      const hi = boundsMode === "body" ? Math.max(ab.o, ab.c) : ab.h;
+      if (!(hi > lo)) continue;
+
+      // ---- 4. volume internals over the formation window [anchor-2 .. impulse]
+      const w0 = Math.max(0, anchor - 2);
+      const W = i - w0 + 1;
+      const total = winVol(w0, i);
+      const buyV = winBuy(w0, i);
+      const sellV = Math.max(0, total - buyV);
+      const delta = buyV - sellV;
+
+      // ---- 5. grade = blended trailing percentile of (window volume, |delta| share, impulse size)
+      const from = Math.max(W - 1, i - VOL_WINDOW);
+      const pTotal = pctRank(total, (k) => winVol(k - W + 1, k), from, i - 1);
+      const dRatio = total > 0 ? Math.abs(delta) / total : 0;
+      const pDelta = pctRank(
+        dRatio,
+        (k) => {
+          const t = winVol(k - W + 1, k);
+          return t > 0 ? Math.abs(2 * winBuy(k - W + 1, k) - t) / t : NaN;
+        },
+        from,
+        i - 1,
+      );
+      const pImp = pctRank(
+        Math.abs(body) / a,
+        (k) => (atr[k] > 0 ? Math.abs(src[k].c - src[k].o) / atr[k] : NaN),
+        Math.max(ATR_LEN, i - VOL_WINDOW),
+        i - 1,
+      );
+      const gradePct = (pTotal + pDelta + pImp) / 3;
+
+      const blk: OBlock = {
+        id: nextId++,
+        dir,
+        anchor,
+        impulse: i,
+        lo,
+        hi,
+        buyV,
+        sellV,
+        total,
+        delta,
+        gradePct,
+        grade: gradeOf(gradePct),
+        state: "active",
+        breakIdx: null,
+        lastTouch: null,
+        touches: 0,
+      };
+      live.push(blk);
+      if (live.length > MAX_LIVE) live.shift();
       pushEvent({
-        type: "ob_break",
-        dir: b.dir,
+        type: "ob_created",
+        dir,
         i,
-        p: mid,
-        strength: Math.round(b.gradePct),
+        p: (lo + hi) / 2,
+        strength: Math.round(gradePct),
         label:
           lang === "zh"
-            ? `${b.dir === "bull" ? "看涨" : "看跌"}订单块被击穿`
-            : `${b.dir === "bull" ? "Bullish" : "Bearish"} OB mitigated`,
+            ? `${dir === "bull" ? "看涨" : "看跌"}订单块 · ${TIER_LEX[blk.grade][1]}`
+            : `${dir === "bull" ? "Bullish" : "Bearish"} OB · ${blk.grade}`,
       });
-      if (breakerOn) {
-        b.state = "breaker";
-        breakers.push(b);
-        if (breakers.length > MAX_BREAKERS) breakers.shift();
-      }
     }
 
-    // ---- 2. impulse detection on this (closed) bar
-    const a = atr[i];
-    if (!Number.isFinite(a) || a <= 0) continue;
-    const body = bars[i].c - bars[i].o;
-    const expanded = Math.abs(body) > kImpulse * a;
+    return { live, breakers, evs };
+  };
 
-    let dir: Dir | null = null;
-    if (method === "priceAction") {
-      const ph = lastPH[i];
-      const pl = lastPL[i];
-      if (Number.isFinite(ph) && bar.c > ph && bars[i - 1].c <= ph) dir = "bull";
-      else if (Number.isFinite(pl) && bar.c < pl && bars[i - 1].c >= pl) dir = "bear";
-    } else if (method === "peak") {
-      // Exhaustion flavor: an expansion bar that is the local volume maximum of j-1..j+1 and closes
-      // in the outer quarter of its own range. Needs j+1 → confirms one bar late, by design.
-      if (expanded && i + 1 < n) {
-        const v0 = bars[i - 1].v;
-        const v1 = bars[i].v;
-        const v2 = bars[i + 1].v;
-        const isPeak = v1 >= v0 && v1 >= v2;
-        const rng = bar.h - bar.l;
-        const cp = rng > 0 ? (bar.c - bar.l) / rng : 0.5;
-        if (isPeak && (cp >= 0.75 || cp <= 0.25)) dir = body > 0 ? "bull" : "bear";
-      }
-    } else {
-      // "volume" (default): range expansion confirmed by a high trailing volume percentile.
-      if (expanded) {
-        const vp = pctRank(bars[i].v, (k) => bars[k].v, Math.max(0, i - VOL_WINDOW), i - 1);
-        if (vp >= pVol) dir = body > 0 ? "bull" : "bear";
-      }
-    }
-    if (!dir) continue;
-
-    // ---- 3. anchor = LAST opposing candle in the 1..5 bars before the impulse
-    let anchor = -1;
-    for (let k = i - 1; k >= Math.max(0, i - ANCHOR_SCAN); k--) {
-      const ob = bars[k];
-      const opposing = dir === "bull" ? ob.c < ob.o : ob.c > ob.o;
-      if (opposing) {
-        anchor = k;
-        break;
-      }
-    }
-    if (anchor < 0) continue;
-    if (live.some((b) => b.anchor === anchor)) continue; // one block per origin candle
-
-    const ab = bars[anchor];
-    const lo = boundsMode === "body" ? Math.min(ab.o, ab.c) : ab.l;
-    const hi = boundsMode === "body" ? Math.max(ab.o, ab.c) : ab.h;
-    if (!(hi > lo)) continue;
-
-    // ---- 4. volume internals over the formation window [anchor-2 .. impulse]
-    const w0 = Math.max(0, anchor - 2);
-    const W = i - w0 + 1;
-    const total = winVol(w0, i);
-    const buyV = winBuy(w0, i);
-    const sellV = Math.max(0, total - buyV);
-    const delta = buyV - sellV;
-
-    // ---- 5. grade = blended trailing percentile of (window volume, |delta| share, impulse size)
-    const from = Math.max(W - 1, i - VOL_WINDOW);
-    const pTotal = pctRank(total, (k) => winVol(k - W + 1, k), from, i - 1);
-    const dRatio = total > 0 ? Math.abs(delta) / total : 0;
-    const pDelta = pctRank(
-      dRatio,
-      (k) => {
-        const t = winVol(k - W + 1, k);
-        return t > 0 ? Math.abs(2 * winBuy(k - W + 1, k) - t) / t : NaN;
-      },
-      from,
-      i - 1,
-    );
-    const pImp = pctRank(
-      Math.abs(body) / a,
-      (k) => (atr[k] > 0 ? Math.abs(bars[k].c - bars[k].o) / atr[k] : NaN),
-      Math.max(ATR_LEN, i - VOL_WINDOW),
-      i - 1,
-    );
-    const gradePct = (pTotal + pDelta + pImp) / 3;
-
-    const blk: OBlock = {
-      id: nextId++,
-      dir,
-      anchor,
-      impulse: i,
-      lo,
-      hi,
-      buyV,
-      sellV,
-      total,
-      delta,
-      gradePct,
-      grade: gradeOf(gradePct),
-      state: "active",
-      breakIdx: null,
-      lastTouch: null,
-      touches: 0,
-    };
-    live.push(blk);
-    if (live.length > MAX_LIVE) live.shift();
-    pushEvent({
-      type: "ob_created",
-      dir,
-      i,
-      p: (lo + hi) / 2,
-      strength: Math.round(gradePct),
-      label:
-        lang === "zh"
-          ? `${dir === "bull" ? "看涨" : "看跌"}订单块 · ${TIER_LEX[blk.grade][1]}`
-          : `${dir === "bull" ? "Bullish" : "Bearish"} OB · ${blk.grade}`,
-    });
-  }
+  const { live, breakers, evs } = detect(bars);
+  for (const e of evs) events.push(e);
 
   // ---- draw set
   const keep = (b: OBlock) =>
     typeFilter === "all" || (typeFilter === "bull" ? b.dir === "bull" : b.dir === "bear");
   const drawn = live.filter(keep).slice(-showLast);
   const drawnBreakers = breakerOn ? breakers.filter(keep).slice(-showLast) : [];
-  if (!drawn.length && !drawnBreakers.length) return { prims, events };
 
   // Population-relative share: recomputed over the VISIBLE blocks (vendor behaviour — the same
   // block reads 54.8% with 2 shown and 34.7% with 3).
@@ -393,6 +422,80 @@ const compute: ModuleCompute = (ctx) => {
 
   const lastIdx = n - 1;
   const dirColor = (d: Dir) => (d === "bull" ? colors.up : colors.down);
+
+  // ---- Macro blocks: the same detector on 4× resampled bars (masterplan §8.1). Drawn UNDER the 1×
+  // layer, deliberately quiet — a fainter fill, a dashed hairline outer edge, an "M-" tier label and
+  // nothing else. No internals: the buy/sell split of a grouped bar is an estimate of an estimate.
+  if (macro) {
+    const { groups, lastSrc } = resampleOhlcv(bars, MACRO_FACTOR);
+    // `resampleOhlcv` already drops a short trailing group, but when n % 4 === 0 the last complete
+    // group still ENDS on the live forming bar. A group is usable only once closed (the next source
+    // bar has opened) — the mtfDash.ts rule — so step back one (see report / guide "Macro blocks").
+    let gLast = groups.length - 1;
+    if (gLast >= 0 && lastSrc[gLast] === n - 1) gLast--;
+    const closed = groups.slice(0, gLast + 1);
+    if (closed.length >= MIN_BARS) {
+      const srcEnd = (g: number) => Math.max(0, Math.min(lastIdx, lastSrc[g]));
+      const srcStart = (g: number) => Math.max(0, srcEnd(g) - MACRO_FACTOR + 1);
+      const mac = detect(closed);
+      for (const e of mac.evs) {
+        events.push({
+          ...e,
+          i: srcEnd(e.i),
+          label: e.label ? `${MACRO_PREFIX}${e.label}` : e.label,
+        });
+      }
+      const macroDrawn = mac.live.filter(keep).slice(-Math.min(MACRO_MAX, showLast));
+      for (const b of macroDrawn) {
+        const c = dirColor(b.dir);
+        const i1 = srcStart(b.anchor);
+        // Non-extending macro bands live 15 MACRO bars, i.e. 15 × 4 source bars — same rule, HTF scale.
+        const endIdx = extendRight
+          ? lastIdx
+          : Math.min(srcEnd(b.impulse) + 15 * MACRO_FACTOR, lastIdx);
+        const rightRef: XRef = extendRight ? "right" : endIdx;
+        prims.push({
+          kind: "zone",
+          id: `obm:${b.id}:z`,
+          i1,
+          i2: rightRef,
+          p1: b.lo,
+          p2: b.hi,
+          fill: c,
+          fillAlpha: 0.06,
+          stroke: c,
+          strokeW: 1,
+          dash: "4 3",
+          edges: [b.dir === "bull" ? "bottom" : "top"],
+          z: 0,
+        } as ZonePrim);
+        prims.push({
+          kind: "label",
+          id: `obm:${b.id}:tier`,
+          i: i1,
+          p: (b.lo + b.hi) / 2,
+          text: `M-${TIER_LEX[b.grade][lang === "zh" ? 1 : 0]}`,
+          place: "right",
+          style: "bare",
+          color: colors.muted,
+          fs: bigTier ? 14 : 9,
+          bold: bigTier,
+          dxPx: 4,
+          dyPx: -7,
+          z: 3,
+          minPxPerBar: TIER_GATE,
+        } as LabelPrim);
+      }
+    }
+    // The macro leg APPENDS its (older, group-end) events after the whole 1× tape, which would
+    // leave the merged stream unordered — consumers read the newest event as the last element —
+    // and would let the tape run to 2 × MAX_EVENTS. Restore the module's one contract: bar-ordered
+    // (stable, so in-bar emission order survives) and bounded by MAX_EVENTS, newest kept.
+    events.sort((a, b) => a.i - b.i);
+    if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
+  }
+
+  if (!drawn.length && !drawnBreakers.length) return { prims, events };
 
   for (const b of drawn) {
     const endIdx = extendRight ? lastIdx : Math.min(b.impulse + 15, lastIdx);
@@ -684,6 +787,7 @@ export const ORDER_BLOCKS_MODULE: SuiteModuleDef = {
     showRating: true,
     sizeDetail: "small",
     extendRight: true,
+    macro: false,
   },
   fields: [
     {
@@ -744,6 +848,7 @@ export const ORDER_BLOCKS_MODULE: SuiteModuleDef = {
       ],
     },
     { key: "extendRight", label: "Extend right", type: "bool", tip: "Off = the zone stops 15 bars after it forms." },
+    { key: "macro", label: "Macro blocks", type: "bool", tip: "Adds larger-scale blocks detected on 4× resampled bars." },
   ],
   compute,
 };

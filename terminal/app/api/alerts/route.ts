@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { isPaidTier } from "@/lib/entitlement";
 import { billingAuth, BILLING_BASE } from "@/app/api/billing/gateway";
-import { SUITE_ALERT_EVENTS, validateSuiteCondition } from "@/lib/suiteAlerts";
+import { SUITE_ALERT_EVENTS, validateSuiteCondition, validateSuiteSequence } from "@/lib/suiteAlerts";
 
 async function uid() {
   const supabase = await createClient();
@@ -19,6 +19,7 @@ const OPT_TYPES = new Set([
   "opt_gamma_flip", "opt_wall_touch", "opt_premium_burst", "opt_0dte_spike", "opt_surface_pocket",
 ]);
 const SUITE_TYPE = "suite_event";
+const SUITE_SEQ_TYPE = "suite_sequence"; // two-step "A then B within N bars" (same suite lane)
 
 const MAX_ALERTS_PER_USER = 50;
 
@@ -69,14 +70,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "bad request" }, { status: 400 });
 
   const type = condition.type;
-  if (typeof type !== "string" || (!LEGACY_TYPES.has(type) && !OPT_TYPES.has(type) && type !== SUITE_TYPE))
+  if (typeof type !== "string" || (!LEGACY_TYPES.has(type) && !OPT_TYPES.has(type) && type !== SUITE_TYPE && type !== SUITE_SEQ_TYPE))
     return NextResponse.json({ error: `Unknown alert condition: ${String(type)}` }, { status: 400 });
 
-  if (type === SUITE_TYPE) {
-    // validateSuiteCondition: reason string when malformed, null when well-formed.
-    const why = validateSuiteCondition(condition);
+  if (type === SUITE_TYPE || type === SUITE_SEQ_TYPE) {
+    // validators: reason string when malformed, null when well-formed.
+    const why = type === SUITE_TYPE ? validateSuiteCondition(condition) : validateSuiteSequence(condition);
     if (why) return NextResponse.json({ error: `Invalid suite alert: ${why}` }, { status: 400 });
-    const tier = eventTier(condition.suite, condition.event);
+    // Gate tier: the single event's tier, or for a sequence the HIGHEST tier across its
+    // step events — a sequence is entitled only when every step is. eventTier fails
+    // CLOSED ("pro") on any unknown event, and the validator already vetted the steps.
+    let tier: "free" | "insider" | "pro";
+    if (type === SUITE_TYPE) {
+      tier = eventTier(condition.suite, condition.event);
+    } else {
+      const rank = { free: 0, insider: 1, pro: 2 } as const;
+      const steps = Array.isArray(condition.steps) ? (condition.steps as Array<{ event?: unknown }>) : [];
+      tier = steps.length ? "free" : "pro"; // empty steps cannot pass validation — fail closed anyway
+      for (const s of steps) {
+        const st = eventTier(condition.suite, s?.event);
+        if (rank[st] > rank[tier]) tier = st;
+      }
+    }
     if (tier !== "free") {
       // FAIL-CLOSED: uncertainty about entitlement is a refusal, never a grant.
       if (!(await isPaidTier()))

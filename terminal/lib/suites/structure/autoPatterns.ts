@@ -266,7 +266,10 @@ interface PatternSet {
 
 /** First bar ≥ from where a close crosses beyond the line (resistance up / support down). */
 function scanBreak(bars: SuiteBar[], line: FitLine, from: number): { i: number; p: number } | null {
-  const n = bars.length;
+  // A line's authority decays: only a break within HIST_EXTEND bars of its newest anchor counts —
+  // an unbounded scan drew stale lines hundreds of bars past their anchors and printed Break pills
+  // on pure extrapolation (W4 review).
+  const n = Math.min(bars.length, line.iN + HIST_EXTEND + 1);
   for (let i = from; i < n; i++) {
     const c = bars[i].c;
     if (!Number.isFinite(c) || !(c > 0)) continue; // OHLC=0 = missing print, never a break
