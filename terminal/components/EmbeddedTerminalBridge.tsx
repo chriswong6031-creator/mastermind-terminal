@@ -7,6 +7,10 @@ import {
   isAllowedMacroOrigin,
   postToMacroDashboard,
 } from "@/lib/originNav";
+import {
+  TERMINAL_VISUAL_READY_EVENT,
+  type TerminalVisualReadyDetail,
+} from "@/lib/terminalBoot";
 
 const SYMBOL_RE = /^[A-Za-z0-9][A-Za-z0-9._=^:/+\-]{0,63}$/;
 
@@ -37,6 +41,15 @@ export default function EmbeddedTerminalBridge() {
         symbol: new URLSearchParams(window.location.search).get("symbol")
           || new URLSearchParams(window.location.search).get("sym")
           || "",
+      });
+    };
+
+    const onVisualReady = (event: Event) => {
+      const detail = (event as CustomEvent<TerminalVisualReadyDetail>).detail;
+      postToMacroDashboard("terminal:visual-ready", {
+        path: window.location.pathname,
+        symbol: detail?.symbol || "",
+        state: detail?.state || "data",
       });
     };
 
@@ -83,12 +96,14 @@ export default function EmbeddedTerminalBridge() {
 
     window.addEventListener("message", onMessage);
     window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener(TERMINAL_VISUAL_READY_EVENT, onVisualReady);
     const readyTimer = window.setTimeout(announceReady, 0);
 
     return () => {
       window.clearTimeout(readyTimer);
       window.removeEventListener("message", onMessage);
       window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener(TERMINAL_VISUAL_READY_EVENT, onVisualReady);
       delete document.documentElement.dataset.mmEmbedded;
     };
   }, []);

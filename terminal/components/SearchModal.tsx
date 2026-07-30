@@ -12,6 +12,9 @@ import {
   DEFAULT_PREFS, MARKET_TKEY, type MarketId, type MarketPrefs,
 } from "@/lib/markets";
 import { categoryBrowse, tabOf } from "@/lib/searchCategory";
+import { FLAG_COLORS, FLAG_DEFAULT } from "@/lib/flagPalette";
+
+export { FLAG_COLORS, FLAG_DEFAULT } from "@/lib/flagPalette";
 
 type Row = { name: string; col: string; verdict: string | null; vts?: string | null; mkt?: string; zh?: string; sec?: string };
 type ListInfo = { name: string; count: number; symbols: { symbol: string; section: string }[] };
@@ -24,17 +27,6 @@ const CATS: { id: string; key: string }[] = [
   { id: "Indices", key: "catIndices" }, { id: "Bonds", key: "catBonds" }, { id: "Economy", key: "catEconomy" },
   { id: "Options", key: "catOptions" },
 ];
-
-// TV flag palette — 6 fixed hex colors matching the spec.
-export const FLAG_COLORS = [
-  "#f23645", // red
-  "#2962ff", // blue (TV default)
-  "#089981", // green
-  "#f8b500", // yellow
-  "#9c27b0", // purple
-  "#00bcd4", // cyan
-];
-export const FLAG_DEFAULT = "#2962ff";
 
 // One dialog, two modes.
 // "go"      = Symbol search / watchlist home. Two macro-states: HOME (empty + unfocused) shows the
