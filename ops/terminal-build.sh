@@ -47,7 +47,8 @@ log "fetching origin/$BRANCH ..."
 git -C "$SRC" fetch -q origin "$BRANCH"
 git -C "$SRC" reset -q --hard "origin/$BRANCH"
 git -C "$SRC" clean -qfd
-SHA=$(git -C "$SRC" rev-parse --short HEAD)
+FULL_SHA=$(git -C "$SRC" rev-parse HEAD)
+SHA=${FULL_SHA:0:12}
 log "GIT-GATED: deploying origin/$BRANCH @ $SHA  (working-tree edits in $APP are IGNORED)"
 
 # 1) deps — from the canonical lockfile. Reuse $APP/node_modules unless the lock changed.
@@ -74,7 +75,11 @@ cp -al "$APP/public/data" "$STAGE/public/data" 2>/dev/null || rsync -a "$APP/pub
 
 # 3) build into the staging tree — the slow part; live site stays up throughout.
 log "next build (staging) ..."
-( cd "$STAGE" && npm run build )
+# next.config.ts is evaluated in more than one build worker. Pin both supported
+# deployment-id inputs to the ONE deployed commit so every HTML/RSC response and
+# every static chunk uses the same ?dpl= value. The Date.now fallback is only for
+# ad-hoc local builds.
+( cd "$STAGE" && GIT_SHA="$FULL_SHA" NEXT_DEPLOYMENT_ID="$FULL_SHA" npm run build )
 
 # 4) verify the new build is complete before touching anything live.
 if [ ! -f "$STAGE/.next/BUILD_ID" ]; then

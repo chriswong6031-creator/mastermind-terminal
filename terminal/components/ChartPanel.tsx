@@ -47,6 +47,7 @@ import ChartOverlays, { type PaneInfo, type LegendEntry } from "@/components/Cha
 import DayStatsStrip from "@/components/DayStatsStrip";
 import { tPlain } from "@/lib/i18n";
 import { listTemplates } from "@/lib/chartTemplates";
+import { announceTerminalVisualReady } from "@/lib/terminalBoot";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
@@ -3579,6 +3580,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           showEmptyRef.current(unavailable
             ? `Intraday feed unavailable for ${symbol} on ${timeframe}. Switch back to the daily timeframe to keep charting.`
             : `No intraday data for ${symbol} on ${timeframe}. Switch back to the daily timeframe to keep charting.`);
+          announceTerminalVisualReady(symbol, "empty");
           return;
         }
         hideEmptyRef.current();                   // data arrived → clear any prior dead-end overlay
@@ -3625,6 +3627,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           priceSeriesRef.current = priceS;
         } else { priceS.applyOptions({ priceFormat: priceFmt() }); }
         priceS!.setData(priceData(onChart) as any);
+        cpMark(`chart-painted[${symbol}]`);
+        announceTerminalVisualReady(symbol);
         clearAllIndicators();
         buildAllIndicators(onChart, closes);
         buildIndDataMap(onChart, closes);
@@ -3663,7 +3667,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           o?.bars?.length ? (o.bars as any[][]).map((b) => ({ time: b[0] as string, o: b[1] as number, h: b[2] as number, l: b[3] as number, c: b[4] as number, v: b[5] as number })) : []
         );
         const summed = alignAndSum(legBars);
-        if (!summed.length) { if (statusRef.current) statusRef.current.textContent = "No shared data for composite."; return; }
+        if (!summed.length) {
+          if (statusRef.current) statusRef.current.textContent = "No shared data for composite.";
+          announceTerminalVisualReady(symbol, "empty");
+          return;
+        }
         daily = summed;
         sliceRef.current = null;
       } else {
@@ -3671,7 +3679,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         cpMark(`ohlc-fetch-done[${symbol}]`);
         if (cancelled || epochRef.current !== epoch) return;
         sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)
-        if (!ohlc?.bars?.length) { if (statusRef.current) statusRef.current.textContent = "No data for this symbol."; return; }
+        if (!ohlc?.bars?.length) {
+          if (statusRef.current) statusRef.current.textContent = "No data for this symbol.";
+          announceTerminalVisualReady(symbol, "empty");
+          return;
+        }
         daily = ohlc.bars.map((b: any[]) => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
       }
       dailyBarsRef.current = daily;         // raw daily source — the R11 splice operates on THIS
@@ -3737,6 +3749,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       priceS!.setData(priceData(onChart) as any);
       cpMark(`chart-painted[${symbol}]`);   // first candle on canvas
+      announceTerminalVisualReady(symbol);
 
       // ── PERF-FIX (a): indicators — on same-symbol TF/chartType switch, update series data in-place
       //    (setData only, no removeSeries/addSeries lifecycle). On symbol change, do a full rebuild. ──

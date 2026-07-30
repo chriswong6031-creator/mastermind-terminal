@@ -21,11 +21,6 @@ import { DEFAULT_START_TF, TF_CANONICAL_ORDER, readStartTf, resolveStartTf } fro
 import { useMarketPrefs } from "@/lib/useMarketPrefs";
 import { type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
-import SearchModal, { FLAG_DEFAULT, FLAG_COLORS } from "@/components/SearchModal";
-import IndicatorsModal from "@/components/IndicatorsModal";
-import IndicatorSettings from "@/components/IndicatorSettings";
-import GuidePanel from "@/components/GuidePanel";
-import IndicatorSource from "@/components/IndicatorSource";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
 import { isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
 import { useEntitlement } from "@/lib/useEntitlement";
@@ -37,6 +32,13 @@ import SeasonalityCard from "@/components/SeasonalityCard";
 // path (each mounts only when opened: paneOpen / signalsOpen / copilot toggle).
 const MegaPane = dynamic(() => import("@/components/fin/MegaPane"), { ssr: false });
 const OracleDash = dynamic(() => import("@/components/fin/OracleDash"), { ssr: false });
+const SearchModal = dynamic(() => import("@/components/SearchModal"), { ssr: false });
+const IndicatorsModal = dynamic(() => import("@/components/IndicatorsModal"), { ssr: false });
+const IndicatorSettings = dynamic(() => import("@/components/IndicatorSettings"), { ssr: false });
+const GuidePanel = dynamic(() => import("@/components/GuidePanel"), { ssr: false });
+const IndicatorSource = dynamic(() => import("@/components/IndicatorSource"), { ssr: false });
+const CompareSettings = dynamic(() => import("@/components/CompareSettings"), { ssr: false });
+const ChartObjectTree = dynamic(() => import("@/components/ChartObjectTree"), { ssr: false });
 // BrainWidget mounts the production Mastermind Brain widget (mm_brain.js) — it renders null
 // and only injects a cross-origin <script>, so ssr:false / dynamic isn't needed.
 import BrainWidget from "@/components/BrainWidget";
@@ -60,12 +62,13 @@ import { getJSON, prefetch, loadCoverage } from "@/lib/dataCache";
 import { type CmpCfg, type CmpMode, defaultCmpCfg, cmpKey, isCmpKey, cmpSymOf } from "@/lib/compare";
 import { isComposite, parseComposite, compositeQuote as calcCompositeQuote } from "@/lib/composite";
 import { pushHistory } from "@/lib/searchHistory";
-import CompareSettings from "@/components/CompareSettings";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
 import { type PineScript } from "@/components/ChartPanel";
 import ChartTableView from "@/components/ChartTableView";
-import ChartObjectTree, { type OTEntry } from "@/components/ChartObjectTree";
+import { type OTEntry } from "@/components/ChartObjectTree";
 import { listTemplates, saveTemplate } from "@/lib/chartTemplates";
+import { FLAG_DEFAULT, FLAG_COLORS } from "@/lib/flagPalette";
+import { TERMINAL_VISUAL_READY_EVENT } from "@/lib/terminalBoot";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -535,10 +538,34 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (add.length) setSymbolDrawings(sym, [...(drawPending.current[sym] ?? drawStore[sym] ?? []), ...add]);
   }, [drawStore, setSymbolDrawings]);
 
-  // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
-  // After the manifest loads, also warm the coverage index so uncovered symbols
-  // never fire a network request for intel/fund/opts files.
-  useEffect(() => { let alive = true; btMark("manifest-fetch-start"); getJSON("/data/manifest.json").then((m) => { if (alive && m) { btMark("manifest-fetch-done"); setMan(m); loadCoverage(Object.keys(m.symbols || {})); } }).catch(() => {}); return () => { alive = false; }; }, []);
+  // The 600KB manifest is important for watchlist metadata, but it is not
+  // chart-blocking. Let OHLC + the first canvas frame win the cold-start
+  // bandwidth race, then hydrate the surrounding workspace immediately after
+  // that real visual-ready signal. The fallback preserves recovery if chart
+  // setup fails before it can emit the event.
+  useEffect(() => {
+    let alive = true;
+    let started = false;
+    const loadManifest = () => {
+      if (started) return;
+      started = true;
+      btMark("manifest-fetch-start");
+      getJSON("/data/manifest.json").then((m) => {
+        if (alive && m) {
+          btMark("manifest-fetch-done");
+          setMan(m);
+          loadCoverage(Object.keys(m.symbols || {}));
+        }
+      }).catch(() => {});
+    };
+    window.addEventListener(TERMINAL_VISUAL_READY_EVENT, loadManifest, { once: true });
+    const fallback = window.setTimeout(loadManifest, 3500);
+    return () => {
+      alive = false;
+      window.clearTimeout(fallback);
+      window.removeEventListener(TERMINAL_VISUAL_READY_EVENT, loadManifest);
+    };
+  }, []);
   useEffect(() => {
     // Settings → Terminal → Default timeframe (3D unless changed). Resolved against the landing
     // symbol's functional set, since the workspace restore below can land on a symbol other than seed0.
@@ -2361,25 +2388,31 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         </div>
       </div>
 
-      <SearchModal open={searchOpen} seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} compareCfg={compareCfg} active={active}
-        flags={flags} lastFlagColor={lastFlagColor}
-        email={email}
-        lists={Object.entries(lists).map(([name, syms]) => ({ name, count: syms.length, symbols: syms }))}
-        activeList={activeList}
-        onSwitchList={switchList}
-        onCreateList={createListNamed}
-        onAddToList={addToList}
-        marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
-        onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} onRemove={removeSymbol}
-        onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
+      {searchOpen && (
+        <SearchModal open seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} compareCfg={compareCfg} active={active}
+          flags={flags} lastFlagColor={lastFlagColor}
+          email={email}
+          lists={Object.entries(lists).map(([name, syms]) => ({ name, count: syms.length, symbols: syms }))}
+          activeList={activeList}
+          onSwitchList={switchList}
+          onCreateList={createListNamed}
+          onAddToList={addToList}
+          marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
+          onClose={() => { setSearchOpen(false); setSearchMode("go"); }} onPick={onSearchPick} onAdd={addSymbol} onRemove={removeSymbol}
+          onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
+      )}
       {/* F3 Add Symbol dialog — mode="add" with trash+crosshair for members */}
-      <SearchModal open={addSymOpen} seed="" manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode="add" active={active}
-        flags={flags} lastFlagColor={lastFlagColor}
-        marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
-        onClose={() => setAddSymOpen(false)} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
-        onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
-      <IndicatorsModal open={indOpen} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} userTier={userTier}
-        scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
+      {addSymOpen && (
+        <SearchModal open seed="" manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode="add" active={active}
+          flags={flags} lastFlagColor={lastFlagColor}
+          marketPrefs={marketPrefs} prefsReady={prefsReady} onShowAllMarkets={showAllMarkets}
+          onClose={() => setAddSymOpen(false)} onPick={pick} onAdd={addSymbol} onRemove={removeSymbol}
+          onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
+      )}
+      {indOpen && (
+        <IndicatorsModal open active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd} userTier={userTier}
+          scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
+      )}
       {settingsKey && (isCmpKey(settingsKey)
         ? <CompareSettings sym={cmpSymOf(settingsKey)} cfg={compareCfg[cmpSymOf(settingsKey)] || defaultCmpCfg(0)} onChange={(patch) => setCompareCfg((c) => ({ ...c, [cmpSymOf(settingsKey)]: { ...(c[cmpSymOf(settingsKey)] || defaultCmpCfg(0)), ...patch } }))} onClose={() => setSettingsKey(null)} />
         : isPineKey(settingsKey)
