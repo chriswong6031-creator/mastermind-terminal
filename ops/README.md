@@ -12,6 +12,12 @@ Every deploy re-installs this file from master onto the box, so an edit to
 `ops/terminal-build.sh` takes effect on the **next** deploy after it merges.
 Never edit the box copy in place — it is overwritten on every run.
 
+The deploy writes the deployed commit to the gitignored
+`terminal/.deployment-id` marker before restarting Next. `next.config.ts` reads
+that marker during `next start`, keeping the runtime deployment ID identical to
+the ID used during `next build` so clients never fetch the same chunks twice
+under build-time and runtime cache keys.
+
 ## terminal-data
 
 VPS path: `/usr/local/bin/terminal-data`

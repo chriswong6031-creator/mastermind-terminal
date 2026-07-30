@@ -1,19 +1,32 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "node:fs";
 import path from "path";
 
 const isProd = process.env.NODE_ENV === "production";
 
 // ── Deployment id (version-skew protection / stale-chunk self-heal) ───────────
-// Each build gets a DISTINCT id: prefer the git sha wired in by scripts/deploy_terminal.sh
-// (GIT_SHA / NEXT_DEPLOYMENT_ID), else fall back to the build timestamp so a local `next build`
-// still stamps a unique id. Next appends `?dpl=<id>` to every static asset URL and injects
+// Each production deploy gets a DISTINCT id: prefer the git sha wired in by
+// ops/terminal-build.sh (GIT_SHA / NEXT_DEPLOYMENT_ID), then read the deploy marker that the
+// same script installs beside this config. The marker is essential because Next evaluates this
+// file once during `next build` and again during `next start`; a Date.now() fallback at runtime
+// creates a second id and makes embedded clients download duplicate chunks. Ad-hoc local builds
+// omit the id rather than inventing a value that cannot remain stable across those two processes.
+// Next appends `?dpl=<id>` to every static asset URL and injects
 // `data-dpl-id` on <html> + an `x-nextjs-deployment-id` response header — so a client holding a
 // stale /flow shell (served inside its SWR window after a deploy) detects the mismatch and does a
 // full reload instead of resolving lazy chunks against purged content-hashed factories. This is the
 // deterministic half of the options-crash fix (the chunk-retention union in deploy_terminal.sh is
 // the belt-and-suspenders half). Keep the id stable ACROSS the containers of a single deploy.
+function readDeploymentMarker(): string | undefined {
+  try {
+    return readFileSync(path.join(__dirname, ".deployment-id"), "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const DEPLOYMENT_ID =
-  process.env.GIT_SHA || process.env.NEXT_DEPLOYMENT_ID || `t${Date.now()}`;
+  process.env.GIT_SHA || process.env.NEXT_DEPLOYMENT_ID || readDeploymentMarker();
 
 // ── Content-Security-Policy ───────────────────────────────────────────────────
 // Derived from an audit of every external resource the BROWSER actually reaches:

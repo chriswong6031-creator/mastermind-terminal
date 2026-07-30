@@ -10,7 +10,7 @@
 # └────────────────────────────────────────────────────────────────────────────┘
 #
 # AUTHORING SOURCE: ops/terminal-build.sh in the repo. The deployed copy at
-# /opt/terminal/terminal-build.sh is installed from master by step 7 of every
+# /opt/terminal/terminal-build.sh is installed from master by step 8 of every
 # deploy (effective the NEXT run) — edit via PR, never in place on the box.
 #
 # One deploy ships TWO kinds of code from the same origin/master SHA (see DEPLOY.md):
@@ -70,6 +70,7 @@ rsync -a --delete \
 cp -al "$APP/node_modules" "$STAGE/node_modules"     # hardlink copy: Turbopack rejects out-of-tree symlinks
 cp -a "$APP/.env" "$STAGE/.env" 2>/dev/null || true
 cp -a "$APP/.env.local" "$STAGE/.env.local" 2>/dev/null || true
+printf '%s\n' "$FULL_SHA" > "$STAGE/.deployment-id"
 mkdir -p "$STAGE/public"
 cp -al "$APP/public/data" "$STAGE/public/data" 2>/dev/null || rsync -a "$APP/public/data/" "$STAGE/public/data/" 2>/dev/null || true
 
@@ -88,13 +89,18 @@ if [ ! -f "$STAGE/.next/BUILD_ID" ]; then
 fi
 log "new build OK: BUILD_ID=$(cat "$STAGE/.next/BUILD_ID")"
 
-# 5) atomic swap (rename within one filesystem is atomic).
+# 5) Pin the same deployment id for `next start`, which evaluates next.config.ts again.
+#    Install it only after the staged build verifies, immediately before the atomic build swap.
+install -m 0644 "$STAGE/.deployment-id" "$APP/.deployment-id.new"
+mv -f "$APP/.deployment-id.new" "$APP/.deployment-id"
+
+# 6) atomic swap (rename within one filesystem is atomic).
 rm -rf "$APP/.next.bak"
 [ -d "$APP/.next" ] && mv "$APP/.next" "$APP/.next.bak"
 mv "$STAGE/.next" "$APP/.next"
 log "swapped .next (previous build kept as .next.bak)"
 
-# 6) restart onto the complete build; auto-rollback if it doesn't come up.
+# 7) restart onto the complete build; auto-rollback if it doesn't come up.
 systemctl restart terminal
 sleep 6
 if curl -fsS http://127.0.0.1:3000/ -o /dev/null -w "[build] localhost:3000 -> %{http_code}\n"; then
@@ -111,7 +117,7 @@ else
   exit 1
 fi
 
-# 7) RUNTIME-CODE SYNC — cron + systemd consume code from /opt/terminal/<dir> that is
+# 8) RUNTIME-CODE SYNC — cron + systemd consume code from /opt/terminal/<dir> that is
 #    NOT part of the Next.js app; without this step, merged changes to those files
 #    silently never reach the box (bit on 2026-07-10: PR #74's pull_macro_intel.py).
 #    OVERLAY semantics (git archive | tar -x): tracked files are overwritten with
@@ -156,18 +162,18 @@ install -m 0755 "$SRC/ops/terminal-build.sh" /opt/terminal/.terminal-build.sh.ne
 mv -f /opt/terminal/.terminal-build.sh.new /opt/terminal/terminal-build.sh
 log "installed ops/terminal-build.sh -> /opt/terminal/terminal-build.sh (effective next run)"
 
-# 8) reflect canonical master into $APP source (so the on-box source == what is live/committed,
+# 9) reflect canonical master into $APP source (so the on-box source == what is live/committed,
 #    and any stray working-tree edits are cleared — enforcing 'master is the source of truth').
 log "syncing $APP source <- origin/$BRANCH:terminal"
 rsync -a --delete \
   --exclude='.next' --exclude='.next.bak' --exclude='.next.broken' --exclude='.stage.*' \
-  --exclude='node_modules' --exclude='.env' --exclude='.env.*' --exclude='public/data' \
+  --exclude='node_modules' --exclude='.env' --exclude='.env.*' --exclude='.deployment-id' --exclude='public/data' \
   "$TSRC/" "$APP/"
 
-# 9) suite-alerts sidecar bundle: ingest/suite_alerts.ts imports terminal/lib (the real suite
+# 10) suite-alerts sidecar bundle: ingest/suite_alerts.ts imports terminal/lib (the real suite
 #    modules — zero algorithm duplication), so the 5-min cron consumes an esbuild bundle at
-#    ingest/dist/suite_alerts.mjs (untracked → preserved by the step-7 overlay). Bundled here,
-#    AFTER steps 7+8, so both ingest/ and $APP/lib are already synced to this deploy's SHA.
+#    ingest/dist/suite_alerts.mjs (untracked → preserved by the step-8 overlay). Bundled here,
+#    AFTER steps 8+9, so both ingest/ and $APP/lib are already synced to this deploy's SHA.
 #    Non-fatal on purpose: the app is live by now — a bundle failure must not roll it back
 #    (the cron just keeps running the previous bundle).
 log "bundling ingest/suite_alerts.ts -> ingest/dist/suite_alerts.mjs"

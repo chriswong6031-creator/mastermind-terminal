@@ -35,9 +35,15 @@ describe("Terminal critical boot path", () => {
     expect(chart).toContain('announceTerminalVisualReady(symbol, "empty")');
   });
 
-  it("pins a single deployment id across every production build worker", () => {
-    const script = readFileSync(path.resolve(process.cwd(), "..", "ops", "terminal-build.sh"), "utf8");
+  it("pins one deployment id across production build and runtime", () => {
+    const root = path.resolve(process.cwd());
+    const script = readFileSync(path.resolve(root, "..", "ops", "terminal-build.sh"), "utf8");
+    const config = readFileSync(path.join(root, "next.config.ts"), "utf8");
     expect(script).toContain('FULL_SHA=$(git -C "$SRC" rev-parse HEAD)');
     expect(script).toContain('GIT_SHA="$FULL_SHA" NEXT_DEPLOYMENT_ID="$FULL_SHA" npm run build');
+    expect(script).toContain('printf \'%s\\n\' "$FULL_SHA" > "$STAGE/.deployment-id"');
+    expect(script).toContain('"$APP/.deployment-id"');
+    expect(config).toContain('readFileSync(path.join(__dirname, ".deployment-id")');
+    expect(config).not.toContain("`t${Date.now()}`");
   });
 });
