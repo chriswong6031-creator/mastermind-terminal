@@ -32,10 +32,12 @@ def _sig_frame(*, strong_bull=True, w_bull=True, above200=True, rsi14=55.0, k=50
     )
 
 
-def _ev(ts, kind, bar_index, quality=None):
+def _ev(ts, kind, bar_index, quality=None, known_ts=None):
     e = {"ts": ts, "type": kind, "bar_index": bar_index, "price": 100.0}
     if quality is not None:
         e["quality"] = quality
+    if known_ts is not None:
+        e["known_ts"] = known_ts
     return e
 
 
@@ -65,6 +67,20 @@ def test_keeper_graded_buy_still_flips_position():
     assert st["position_hint"] == "long"
     assert st["last_scored_signal"] == "BUY"
     assert st["last_scored_ts"] == "2026-07-06"
+
+
+def test_last_scored_ts_prefers_signal_availability_date():
+    signals = [
+        _ev(
+            "2026-07-24",
+            "BUY",
+            2,
+            quality="take",
+            known_ts="2026-07-28",
+        ),
+    ]
+    st = _state(_sig_frame(), signals)
+    assert st["last_scored_ts"] == "2026-07-28"
 
 
 def test_all_blocked_stream_has_no_scored_state():

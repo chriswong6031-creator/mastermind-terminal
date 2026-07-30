@@ -6,7 +6,7 @@ carries a verdict, assert it still agrees with the v2 slice the card reads.
 
   * manifest.verdict == slice state.last_scored_signal (or last_signal for pre-scored slices)
                                                              (verdict lane == the scored truth)
-  * manifest.vts     == slice state.last_scored_ts           (the verdict's date, when the slice has one)
+  * manifest.vts     == slice state.last_scored_ts           (the verdict availability date, when present)
   * manifest.wr/pf   ~= slice.backtest.metrics.win_rate/profit_factor  (metrics == the slice's backtest)
   * a row with a verdict but NO slice on disk                (reconcile should have demoted it)
 
