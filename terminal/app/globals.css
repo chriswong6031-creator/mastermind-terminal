@@ -605,31 +605,163 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .cmp-seg-div{width:1px;align-self:stretch;background:var(--line)}
 .cmp-add-done{width:100%;justify-content:center}
 
+/* Indicator Library — module-first catalog.
+   The five premium suites stay runtime containers; this surface exposes every nested module as
+   a first-class searchable row and keeps whole-suite activation under Systems & Presets only. */
 .imodal{width:560px;max-width:92vw;background:var(--pop-bg-modal);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid var(--pop-edge);border-radius:var(--pop-r);overflow:hidden;box-shadow:var(--pop-shadow),var(--pop-sheen)}
-.imodal .mh{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 12px}.imodal .mh b{font:600 17px/1.2 var(--font-ui)}.imodal .mh .x{color:var(--muted);cursor:pointer}
-.imodal .ib{display:grid;grid-template-columns:170px 1fr;border-top:1px solid var(--line);margin-top:8px;max-height:50vh}
-.imodal .inav{border-right:1px solid var(--line);padding:11px 10px}
-.imodal .inav .grp{font:600 9px/1 var(--font-ui);letter-spacing:.11em;color:var(--text-dim);text-transform:uppercase;padding:12px 8px 6px}
-.imodal .inav a{display:block;padding:8px 9px;border-radius:var(--r);color:var(--text-2);font-size:12.5px;cursor:pointer}.imodal .inav a.on{background:var(--panel-2);color:var(--text)}.imodal .inav a.on.mm{color:var(--brand-2)}
-.imodal .ilist{padding:8px;overflow-y:auto}
-.imodal .li{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:var(--r);font-size:13px;color:var(--text);cursor:pointer}.imodal .li:hover{background:var(--panel-2)}
-.imodal .li .mmdot{width:5px;height:5px;border-radius:50%;background:var(--brand)}
-.imodal .li .chk{margin-left:auto;width:16px;height:16px;border-radius:var(--r);border:1.5px solid var(--line-3);display:grid;place-items:center}.imodal .li.on .chk{background:var(--brand);border-color:var(--brand)}.imodal .li .chk svg{width:11px;height:11px;stroke:#fff;fill:none;stroke-width:3;opacity:0}.imodal .li.on .chk svg{opacity:1}
-.imodal .li .lk{margin-left:auto;color:var(--signal)}
+.imodal-library{width:min(920px,94vw);height:min(78vh,760px);min-height:580px;display:flex;flex-direction:column}
+.imodal .sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+.im-head{display:flex;align-items:center;gap:16px;min-height:66px;padding:14px 18px 10px;flex:none}
+.im-head>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.im-head b{font:650 17px/1.2 var(--font-ui);color:var(--text)}
+.im-head>div>span{font:11.5px/1.3 var(--font-ui);color:var(--muted)}
+.im-close{margin-left:auto;width:36px;height:36px;display:grid;place-items:center;flex:none;border:1px solid transparent;border-radius:var(--r-md);color:var(--muted);cursor:pointer;transition:background var(--t-fast),border-color var(--t-fast),color var(--t-fast)}
+.im-close:hover{background:var(--panel-2);border-color:var(--line);color:var(--text)}
+.im-close svg,.im-search-clear svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
+.im-search{display:flex;align-items:center;gap:10px;height:42px;margin:0 18px 13px;padding:0 11px;border:1px solid var(--line-3);border-radius:var(--r-md);background:color-mix(in srgb,var(--panel-2) 76%,transparent);flex:none;transition:border-color var(--t-fast),box-shadow var(--t-fast)}
+.im-search:focus-within{border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 14%,transparent)}
+.im-search>svg{width:17px;height:17px;fill:none;stroke:var(--muted);stroke-width:1.9;stroke-linecap:round;flex:none}
+.im-search:focus-within>svg{stroke:var(--brand-2)}
+.im-search input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--text);font:13px/1 var(--font-ui)}
+.im-search input::placeholder{color:var(--text-dim)}
+.im-search input::-webkit-search-cancel-button{display:none}
+.im-search-clear{width:28px;height:28px;display:grid;place-items:center;flex:none;border-radius:var(--r);color:var(--muted);cursor:pointer}
+.im-search-clear:hover{color:var(--text);background:var(--panel-3)}
+.imodal .ib{display:grid;grid-template-columns:210px minmax(0,1fr);min-height:0;flex:1;border-top:1px solid var(--line)}
+.imodal .inav{min-height:0;overflow-y:auto;border-right:1px solid var(--line);padding:9px 8px 15px;background:color-mix(in srgb,var(--panel) 54%,transparent)}
+.im-nav-group+.im-nav-group{margin-top:8px;padding-top:5px;border-top:1px solid var(--line-2)}
+.imodal .inav .grp{font:650 9px/1 var(--font-ui);letter-spacing:.11em;color:var(--text-dim);text-transform:uppercase;padding:10px 10px 6px}
+.im-nav-item{display:flex;align-items:center;gap:8px;width:100%;min-height:33px;padding:7px 9px;border:1px solid transparent;border-radius:var(--r);color:var(--text-2);font:500 12px/1.25 var(--font-ui);text-align:left;cursor:pointer;transition:background var(--t-fast),border-color var(--t-fast),color var(--t-fast)}
+.im-nav-item>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.im-nav-item:hover{background:var(--panel-2);color:var(--text)}
+.im-nav-item.on{background:color-mix(in srgb,var(--brand) 12%,var(--panel-2));border-color:color-mix(in srgb,var(--brand) 28%,var(--line));color:var(--text)}
+.im-nav-item.on.mm{color:var(--brand-2)}
+.im-count{margin-left:auto;min-width:21px;padding:2px 5px;border-radius:var(--r-pill);background:var(--panel-3);color:var(--muted);font:600 9.5px/1.2 var(--font-num);font-variant-numeric:tabular-nums;text-align:center}
+.im-nav-item.on .im-count{background:color-mix(in srgb,var(--brand) 18%,var(--panel-3));color:var(--brand-2)}
+.imodal .ilist{min-width:0;min-height:0;padding:13px 14px 22px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.im-list-title{display:flex;align-items:flex-start;gap:12px;padding:2px 3px 12px}
+.im-list-title>span:first-child{display:flex;flex-direction:column;gap:4px;min-width:0}
+.im-list-title strong{font:650 14px/1.2 var(--font-ui);color:var(--text)}
+.im-list-title small{font:11px/1.4 var(--font-ui);color:var(--muted)}
+.im-result-count{margin-left:auto;min-width:28px;padding:4px 7px;border:1px solid var(--line);border-radius:var(--r-pill);color:var(--text-2);font:600 10px/1 var(--font-num);font-variant-numeric:tabular-nums;text-align:center}
+.im-section+.im-section{margin-top:18px}
+.im-section-head{display:flex;align-items:flex-start;gap:9px;margin:0 2px 8px;padding-bottom:8px;border-bottom:1px solid var(--line-2)}
+.im-section-head>span:nth-child(2){display:flex;flex-direction:column;gap:3px;min-width:0}
+.im-section-head strong{font:650 12px/1.2 var(--font-ui);color:var(--text)}
+.im-section-head small{font:10.5px/1.35 var(--font-ui);color:var(--muted)}
+.im-section-tag,.imod-mark,.ipreset-mark,.im-classic-mark{display:grid;place-items:center;flex:none;border-radius:var(--r);background:color-mix(in srgb,var(--brand) 12%,var(--panel-3));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brand) 24%,var(--line));color:var(--brand-2);font:750 9px/1 var(--font-num);font-variant-numeric:tabular-nums;letter-spacing:.04em}
+.im-section-tag{width:25px;height:25px}
+.im-section-count{margin-left:auto;color:var(--muted);font:600 10px/1.4 var(--font-num);font-variant-numeric:tabular-nums}
+.im-search-group{display:flex;align-items:center;gap:8px;padding:0 3px 7px;color:var(--text-2)}
+.im-search-group strong{font:650 10px/1 var(--font-ui);letter-spacing:.08em;text-transform:uppercase}
+.im-search-group span{margin-left:auto;font:600 10px/1 var(--font-num);font-variant-numeric:tabular-nums;color:var(--muted)}
+.im-row-stack{display:flex;flex-direction:column;gap:5px}
+.imod-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;overflow:hidden;border:1px solid var(--line-2);border-radius:var(--r-md);background:color-mix(in srgb,var(--panel-2) 52%,transparent);transition:border-color var(--t-fast),background var(--t-fast),box-shadow var(--t-fast)}
+.imod-row:hover{border-color:var(--line-3);background:var(--panel-2)}
+.imod-row.on{border-color:color-mix(in srgb,var(--brand) 42%,var(--line));background:color-mix(in srgb,var(--brand) 7%,var(--panel-2));box-shadow:inset 3px 0 0 color-mix(in srgb,var(--brand) 84%,transparent)}
+.imod-row.locked{background:color-mix(in srgb,var(--panel-2) 34%,transparent)}
+.imod-main{display:flex;align-items:center;gap:11px;min-width:0;padding:11px 9px 11px 12px;text-align:left;cursor:pointer}
+.imod-main:disabled{cursor:not-allowed}
+.imod-row.locked .imod-copy,.imod-row.locked .imod-mark{opacity:.58}
+.imod-mark{width:32px;height:32px}
+.imod-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.imod-titleline{display:flex;align-items:center;gap:7px;min-width:0}
+.imod-titleline strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:620 12.5px/1.25 var(--font-ui);color:var(--text)}
+.im-tier{--c:var(--muted);display:inline-flex;align-items:center;flex:none;padding:3px 6px;border-radius:var(--r-pill);background:color-mix(in srgb,var(--c) 11%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 27%,transparent);color:var(--c);font:750 8px/1 var(--font-ui);letter-spacing:.08em;text-transform:uppercase}
+.im-tier-insider{--c:var(--signal)}.im-tier-pro{--c:var(--brand-2)}
+.imod-crumb{font:600 9.5px/1.25 var(--font-ui);letter-spacing:.025em;color:var(--text-2)}
+.imod-desc{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font:10.5px/1.35 var(--font-ui);color:var(--muted)}
+.imod-check{width:19px;height:19px;margin-left:auto;display:grid;place-items:center;flex:none;border:1.5px solid var(--line-3);border-radius:var(--r);color:#fff}
+.imod-check svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.8;stroke-linecap:round;stroke-linejoin:round;opacity:0}
+.imod-row.on .imod-check{background:var(--brand);border-color:var(--brand)}
+.imod-row.on .imod-check svg{opacity:1}
+.imod-check.locked{color:var(--muted);border-color:transparent}
+.imod-check.locked svg{width:15px;height:15px;stroke-width:1.8;opacity:1}
+.imod-actions{display:flex;align-items:center;gap:3px;padding:8px 8px 8px 3px}
+.imod-action{height:30px;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:0 8px;border:1px solid transparent;border-radius:var(--r);color:var(--muted);font:600 10px/1 var(--font-ui);cursor:pointer;transition:background var(--t-fast),border-color var(--t-fast),color var(--t-fast)}
+.imod-action.icon{width:30px;padding:0}
+.imod-action:hover{background:var(--panel-3);border-color:var(--line);color:var(--text)}
+.imod-action svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.imodal .li{display:flex;align-items:center;gap:10px;width:100%;min-height:50px;padding:8px 10px;border:1px solid var(--line-2);border-radius:var(--r-md);background:color-mix(in srgb,var(--panel-2) 38%,transparent);color:var(--text);font:13px/1.2 var(--font-ui);text-align:left;cursor:pointer;transition:background var(--t-fast),border-color var(--t-fast)}
+.imodal button.li:hover,.imodal .li-script:hover{background:var(--panel-2);border-color:var(--line-3)}
+.imodal .li.on{border-color:color-mix(in srgb,var(--brand) 36%,var(--line));background:color-mix(in srgb,var(--brand) 7%,var(--panel-2))}
+.im-classic-mark{width:31px;height:31px;color:var(--text-2);background:var(--panel-3);box-shadow:inset 0 0 0 1px var(--line)}
+.im-classic-mark.mastermind{color:var(--brand-2);background:color-mix(in srgb,var(--brand) 12%,var(--panel-3));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brand) 28%,var(--line))}
+.im-classic-mark.script{color:var(--signal);background:color-mix(in srgb,var(--signal) 10%,var(--panel-3));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--signal) 25%,var(--line));font-size:13px}
+.li-main-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.li-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 12.5px/1.2 var(--font-ui);color:var(--text)}
+.li-sub{font:10px/1.2 var(--font-ui);color:var(--muted)}
+.imodal .li .chk{margin-left:auto;width:19px;height:19px;display:grid;place-items:center;flex:none;border:1.5px solid var(--line-3);border-radius:var(--r);color:#fff;cursor:pointer}
+.imodal .li.on .chk{background:var(--brand);border-color:var(--brand)}
+.imodal .li .chk svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.8;stroke-linecap:round;stroke-linejoin:round;opacity:0}
+.imodal .li.on .chk svg{opacity:1}
+.li-script{cursor:default}
+.li-script-main{display:flex;align-items:center;gap:10px;min-width:0;flex:1;text-align:left;cursor:pointer}
+.li-acts{display:flex;align-items:center;gap:3px;margin-left:auto;flex:none}
+.li-ic{width:30px;height:30px;display:grid;place-items:center;border-radius:var(--r);color:var(--muted);cursor:pointer}
+.li-ic:hover{background:var(--panel-3);color:var(--text)}
+.li-ic.del:hover{color:var(--down)}
+.li-ic svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.li-rename{min-width:0;flex:1;height:34px;padding:0 9px;border:1px solid var(--brand);border-radius:var(--r);outline:0;background:var(--panel-2);color:var(--text);font:12.5px/1 var(--font-ui);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 13%,transparent)}
+.li-empty{padding:30px 16px;text-align:center;color:var(--muted);font:12px/1.5 var(--font-ui)}
+.li-link{color:var(--brand-2);text-decoration:none}.li-link:hover{text-decoration:underline}
+.im-empty{display:flex;flex-direction:column;align-items:center;gap:7px;margin-top:34px;padding:32px 20px;border:1px dashed var(--line-3);border-radius:var(--r-md);text-align:center}
+.im-empty strong{font:650 13px/1.2 var(--font-ui);color:var(--text)}
+.im-empty span{max-width:440px;font:11px/1.5 var(--font-ui);color:var(--muted)}
+.ipreset-note{display:flex;flex-direction:column;gap:4px;margin-bottom:11px;padding:11px 12px;border:1px solid color-mix(in srgb,var(--brand) 25%,var(--line));border-radius:var(--r-md);background:color-mix(in srgb,var(--brand) 7%,var(--panel-2))}
+.ipreset-note strong{font:620 11.5px/1.25 var(--font-ui);color:var(--text)}
+.ipreset-note span{font:10.5px/1.4 var(--font-ui);color:var(--muted)}
+.ipreset-stack{display:flex;flex-direction:column;gap:6px}
+.ipreset-row{display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-items:center;gap:11px;padding:11px 12px;border:1px solid var(--line-2);border-radius:var(--r-md);background:color-mix(in srgb,var(--panel-2) 48%,transparent)}
+.ipreset-row.on{border-color:color-mix(in srgb,var(--brand) 34%,var(--line));background:color-mix(in srgb,var(--brand) 6%,var(--panel-2))}
+.ipreset-row.locked{opacity:.66}
+.ipreset-mark{width:36px;height:36px}
+.ipreset-copy{display:flex;flex-direction:column;gap:4px;min-width:0}
+.ipreset-title{display:flex;align-items:center;gap:7px}
+.ipreset-title strong{font:630 12.5px/1.2 var(--font-ui);color:var(--text)}
+.ipreset-copy>span:not(.ipreset-title){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:10.5px/1.3 var(--font-ui);color:var(--muted)}
+.ipreset-copy small{font:600 9.5px/1.2 var(--font-num);font-variant-numeric:tabular-nums;color:var(--text-2)}
+.ipreset-add{min-width:112px;height:32px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 10px;border:1px solid color-mix(in srgb,var(--brand) 38%,var(--line));border-radius:var(--r);background:color-mix(in srgb,var(--brand) 10%,var(--panel-3));color:var(--brand-2);font:650 10px/1 var(--font-ui);cursor:pointer}
+.ipreset-add:hover:not(:disabled){background:color-mix(in srgb,var(--brand) 18%,var(--panel-3));border-color:var(--brand)}
+.ipreset-add:disabled{border-color:var(--line);background:var(--panel-2);color:var(--muted);cursor:default}
+.ipreset-add svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.imodal button:focus-visible,.imodal a:focus-visible,.imodal input:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
 
-/* Indicators modal — single-column layout on narrow screens */
-@media (max-width:640px){
-  .imodal{width:calc(100vw - 32px);max-width:none;max-height:calc(100dvh - 80px)}
-  /* .mh close button gets a larger hit area */
-  .imodal .mh .x{font-size:22px;width:44px;height:44px;display:grid;place-items:center;margin-right:-8px}
-  /* collapse the two-column layout: category nav becomes a horizontal chip row on top */
-  .imodal .ib{display:flex;flex-direction:column;max-height:calc(100dvh - 140px)}
-  .imodal .inav{border-right:0;border-bottom:1px solid var(--line);padding:8px;display:flex;flex-direction:row;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:6px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+/* Tablet keeps the useful category rail; narrow phones turn it into a horizontally scrollable
+   category shelf while the indicator list remains the single vertical scroll container. */
+@media (max-width:700px){
+  .imodal-library{height:86dvh;min-height:0}
+  .im-head{min-height:59px;padding:10px 13px 7px}
+  .im-head>div>span{display:none}
+  .im-close{width:40px;height:40px}
+  .im-search{height:40px;margin:0 12px 10px}
+  .imodal .ib{display:flex;flex-direction:column}
+  .imodal .inav{display:flex;flex-direction:row;gap:6px;flex:none;overflow-x:auto;overflow-y:hidden;padding:8px;border-right:0;border-bottom:1px solid var(--line);scrollbar-width:none;-webkit-overflow-scrolling:touch}
   .imodal .inav::-webkit-scrollbar{display:none}
+  .im-nav-group{display:contents}.im-nav-group+.im-nav-group{margin:0;padding:0;border:0}
   .imodal .inav .grp{display:none}
-  .imodal .inav a{display:inline-flex;align-items:center;white-space:nowrap;padding:7px 12px;border-radius:var(--r-pill);border:1px solid var(--line);font-size:12px;flex:none}
-  .imodal .inav a.on{border-color:var(--brand);background:rgba(41,98,255,.13)}
-  .imodal .ilist{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .im-nav-item{width:auto;min-height:34px;flex:none;padding:7px 10px;border-color:var(--line);border-radius:var(--r-pill);white-space:nowrap}
+  .im-nav-item.on{border-color:var(--brand)}
+  .im-count{min-width:18px;padding:2px 4px}
+  .imodal .ilist{flex:1;padding:11px 10px 18px;scrollbar-gutter:auto;-webkit-overflow-scrolling:touch}
+  .im-list-title{padding-bottom:10px}
+  .imod-main{gap:9px;padding:10px 7px 10px 9px}
+  .imod-mark{width:30px;height:30px}
+  .imod-actions{gap:1px;padding:6px 6px 6px 0}
+  .imod-action{width:32px;height:32px;padding:0}
+  .imod-action span{display:none}
+  .ipreset-row{grid-template-columns:36px minmax(0,1fr)}
+  .ipreset-add{grid-column:1/-1;width:100%}
+}
+@media (max-width:430px){
+  .imod-desc{-webkit-line-clamp:1}
+  .imod-crumb{font-size:9px}
+  .imod-check{width:18px;height:18px}
+  .im-section-head small{display:none}
+  .li-ic{width:32px;height:32px}
+}
+@media (prefers-reduced-motion:reduce){
+  .imodal-library *{scroll-behavior:auto!important;transition:none!important}
 }
 
 /* Mastermind AI — a floating, non-modal panel that "drops in" from beneath the AI button (top-right) */
@@ -1929,7 +2061,7 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 /* armed = same box, deepened scrim + hairline border; geometry (left/height/radius) unchanged */
 .lg-row.is-armed{background:rgba(6,9,14,.88);border-color:rgba(255,255,255,.08)}
 .lg-row.is-armed .lg-ic{display:inline-flex}
-.lg-collapse{pointer-events:auto;display:inline-flex;align-items:center;justify-content:center;width:22px;height:16px;margin-top:1px;border-radius:5px;color:var(--text-2);cursor:pointer;background:rgba(6,9,14,.38);border:1px solid transparent}
+.lg-collapse{pointer-events:auto;position:relative;display:inline-flex;align-items:center;justify-content:center;width:22px;height:16px;margin-top:1px;border-radius:5px;color:var(--text-2);cursor:pointer;background:rgba(6,9,14,.38);border:1px solid transparent}
 .lg-collapse:hover{color:var(--text);background:rgba(6,9,14,.72)}
 /* per-pane top-right ops menu */
 .pane-ops{position:absolute;pointer-events:auto;display:inline-flex;gap:1px;padding:2px;background:rgba(13,15,19,.9);border:1px solid var(--line-3);border-radius:var(--r-md);box-shadow:0 6px 18px -8px rgba(0,0,0,.7)}
@@ -2344,13 +2476,6 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .is-select:focus-visible{outline:2px solid var(--brand-2);outline-offset:1px}
 .is-select option{background:var(--panel-2);color:var(--text)}
 @media (prefers-reduced-motion:reduce){.is-mod-h .caret{transition:none}}
-
-/* ---- Indicators modal: Pro Suites band (premium suites program) ---- */
-.ilist .li.li-locked{opacity:.55;cursor:default}
-.ilist .li.li-locked:hover{background:transparent}
-.ilist .li .li-mods{margin-left:auto;margin-right:8px;font-size:var(--fs-micro);color:var(--muted);white-space:nowrap}
-.ilist .li .li-lock{display:inline-flex;align-items:center;color:var(--muted)}
-.ilist .li.li-locked .li-tag{color:var(--ai);background:color-mix(in srgb,var(--ai) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ai) 30%,transparent)}
 
 /* ---- Guide panel (premium suites) ----
    Right-side reading sheet for a suite module's written guide (components/GuidePanel.tsx). It opens

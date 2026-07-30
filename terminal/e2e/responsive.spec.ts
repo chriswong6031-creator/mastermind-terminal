@@ -54,7 +54,7 @@ test("the canonical Terminal shell works at its supported responsive widths", as
   });
 });
 
-test("a Pro-equivalent entitlement can add every premium suite", async ({ page }, testInfo) => {
+test("a Pro-equivalent entitlement can discover all premium modules and add a suite preset", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "One viewport is sufficient for the shared entitlement contract.");
 
   await page.goto("/terminal?symbol=NVDA");
@@ -62,11 +62,25 @@ test("a Pro-equivalent entitlement can add every premium suite", async ({ page }
 
   const modal = page.locator(".imodal");
   await expect(modal).toBeVisible();
-  await expect(modal.locator(".li-lock")).toHaveCount(0);
+  await expect(modal.locator(".imod-row")).toHaveCount(31);
+  await expect(modal.locator(".imod-row.locked")).toHaveCount(0);
 
-  const structure = modal.locator(".li").filter({ hasText: "Structure Core" });
-  await structure.click();
-  await expect(structure).toHaveClass(/\bon\b/);
+  const marketStructure = modal.locator(".imod-row").filter({ hasText: "Market Structure" });
+  await marketStructure.locator(".imod-main").click();
+  await expect(marketStructure).toHaveClass(/\bon\b/);
+
+  await modal.getByRole("button", { name: "Systems & Presets" }).click();
+  const structurePreset = modal.locator(".ipreset-row").filter({ hasText: "Structure Core" });
+  const reapplyStructure = structurePreset.getByRole("button", { name: /Reapply recommended/ });
+  await expect(reapplyStructure).toBeEnabled();
+  await reapplyStructure.click();
+  await modal.locator(".im-nav-item").filter({ hasText: "Structure Core" }).click();
+  await expect(modal.locator(".imod-row.on")).toHaveCount(3);
+
+  await modal.getByRole("button", { name: "Systems & Presets" }).click();
+  const trendPreset = modal.locator(".ipreset-row").filter({ hasText: "Trend Waves" });
+  await trendPreset.getByRole("button", { name: /Add recommended/ }).click();
+  await expect(trendPreset.getByRole("button", { name: /Reapply recommended/ })).toBeEnabled();
 });
 
 test("Golden Oracle shows the session a 3D signal became knowable", async ({ page }, testInfo) => {
