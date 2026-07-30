@@ -535,6 +535,11 @@ const LEX: Record<string, [string, string]> = {
   suiteDirBear: ["Bearish only", "仅看空"],
   suiteMinStrength: ["min strength", "最低强度"],
   gateSuiteAlert: ["Create a free account to set suite alerts.", "注册免费账户即可设置套件提醒。"],
+  // W4b two-step sequence alerts ("event A then event B within N bars")
+  condSuiteSeq: ["Sequence", "连锁条件"],
+  suiteSeqThen: ["then", "然后"],
+  suiteSeqWithin: ["within", "范围"],
+  suiteSeqBars: ["bars", "根K线"],
   // One key per CURATED catalog event (lib/suiteAlerts.ts SUITE_ALERT_EVENTS.tkey) — en mirrors
   // the catalog's `en`, zh mirrors its ZH_EVENT_NAMES, so the picker label and the preview
   // sentence never drift apart.

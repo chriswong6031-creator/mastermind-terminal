@@ -8,7 +8,14 @@ import {
   type OptKind,
   type OptParams,
 } from "@/lib/optionsAlerts";
-import { SUITE_ALERT_EVENTS, suiteAlertPreview, type SuiteAlertCondition, type SuiteAlertEventDef } from "@/lib/suiteAlerts";
+import {
+  SUITE_ALERT_EVENTS,
+  suiteAlertPreview,
+  suiteSequencePreview,
+  type SuiteAlertCondition,
+  type SuiteAlertEventDef,
+  type SuiteSequenceCondition,
+} from "@/lib/suiteAlerts";
 import { SUITE_DEFS } from "@/lib/suites/registry";
 import { useEntitlement } from "@/lib/useEntitlement";
 
@@ -63,8 +70,9 @@ export default function AlertsView({ email }: { email: string }) {
     if (c?.type === "rsi") return `${t("condRsiBelow")} ${c.value}`;
     // options-flow types: reuse the plain-word preview (already display-tier + bilingual)
     if (typeof c?.type === "string" && c.type.startsWith("opt_")) return optAlertPreview(c, lang === "zh" ? "zh" : "en");
-    // suite events: same treatment — one bilingual sentence from the bridge
+    // suite events + sequences: same treatment — one bilingual sentence from the bridge
     if (c?.type === "suite_event") return suiteAlertPreview(c, lang === "zh" ? "zh" : "en");
+    if (c?.type === "suite_sequence") return suiteSequencePreview(c, lang === "zh" ? "zh" : "en");
     return JSON.stringify(c);
   };
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -109,6 +117,14 @@ export default function AlertsView({ email }: { email: string }) {
   );
   const [suiteDir, setSuiteDir] = useState<"any" | "bull" | "bear">("any");
   const [suiteMinStr, setSuiteMinStr] = useState("");
+  // ── suite SEQUENCE sub-form state (W4b: "event A then event B within N bars") ──
+  const [suiteMode, setSuiteMode] = useState<"single" | "seq">("single");
+  const firstSuiteEvts = SUITE_ALERT_EVENTS.filter((e) => e.suite === (SUITE_KEYS[0] ?? ""));
+  const [seqEventA, setSeqEventA] = useState<string>(firstSuiteEvts[0]?.event ?? "");
+  const [seqEventB, setSeqEventB] = useState<string>((firstSuiteEvts[1] ?? firstSuiteEvts[0])?.event ?? "");
+  const [seqDirA, setSeqDirA] = useState<"any" | "bull" | "bear">("any");
+  const [seqDirB, setSeqDirB] = useState<"any" | "bull" | "bear">("any");
+  const [seqMaxBars, setSeqMaxBars] = useState("10");
   // ── anon gate toast (AlertsView is its own page, not under TerminalShell) ────
   const [gateNudge, setGateNudge] = useState<string | null>(null);
   const gateTimer = useRef<any>(null);
@@ -156,12 +172,33 @@ export default function AlertsView({ email }: { email: string }) {
   const curEvt = suiteEvts.find((e) => e.event === suiteEvent) ?? suiteEvts[0] ?? null;
   const suiteHasLocked = suiteEvts.some(isLockedEvt);
   const curLocked = !!curEvt && isLockedEvt(curEvt);
-  // Changing suite re-points the event at the first one this account can actually use.
+  // Changing suite re-points the event at the first one this account can actually use,
+  // and resets BOTH sequence steps (steps must share one suite). Changing step A alone
+  // never resets B.
   const pickSuite = (k: string) => {
     setSuiteKey(k);
     const evts = SUITE_ALERT_EVENTS.filter((e) => e.suite === k);
-    setSuiteEvent((evts.find((e) => !isLockedEvt(e)) ?? evts[0])?.event ?? "");
+    const usable = evts.filter((e) => !isLockedEvt(e));
+    setSuiteEvent((usable[0] ?? evts[0])?.event ?? "");
+    setSeqEventA((usable[0] ?? evts[0])?.event ?? "");
+    setSeqEventB((usable[1] ?? usable[0] ?? evts[0])?.event ?? "");
   };
+  // ── sequence cascade: step A + step B from the SAME suite, per-step optional dir ──
+  const seqEvtA = suiteEvts.find((e) => e.event === seqEventA) ?? suiteEvts[0] ?? null;
+  const seqEvtB = suiteEvts.find((e) => e.event === seqEventB) ?? suiteEvts[0] ?? null;
+  const seqLocked = (!!seqEvtA && isLockedEvt(seqEvtA)) || (!!seqEvtB && isLockedEvt(seqEvtB));
+  const seqBarsNum = Math.round(parseFloat(seqMaxBars));
+  const seqCondition: SuiteSequenceCondition | null = seqEvtA && seqEvtB
+    ? {
+        type: "suite_sequence",
+        suite: suiteKey,
+        steps: [
+          { event: seqEvtA.event, ...(seqEvtA.dirs && seqDirA !== "any" ? { dir: seqDirA } : {}) },
+          { event: seqEvtB.event, ...(seqEvtB.dirs && seqDirB !== "any" ? { dir: seqDirB } : {}) },
+        ],
+        maxBarsBetween: Number.isFinite(seqBarsNum) ? Math.max(2, Math.min(50, seqBarsNum)) : 10,
+      }
+    : null;
   const minStrNum = parseFloat(suiteMinStr);
   const suiteCondition: SuiteAlertCondition | null = curEvt
     ? {
@@ -183,8 +220,13 @@ export default function AlertsView({ email }: { email: string }) {
     // belt to that suspenders (and the route re-checks against the billing authority anyway).
     if (cat === "suite") {
       if (!email) { showGate(t("gateSuiteAlert")); return; }
-      if (!suiteCondition) return;
-      if (curLocked) { setErr(t("suiteLockedHint")); return; }
+      if (suiteMode === "seq") {
+        if (!seqCondition) return;
+        if (seqLocked) { setErr(t("suiteLockedHint")); return; }
+      } else {
+        if (!suiteCondition) return;
+        if (curLocked) { setErr(t("suiteLockedHint")); return; }
+      }
     }
     setBusy(true); setErr(null);
     try {
@@ -195,7 +237,7 @@ export default function AlertsView({ email }: { email: string }) {
         condition = optCondition;
       } else if (cat === "suite") {
         symbol = sym;
-        condition = suiteCondition!;
+        condition = suiteMode === "seq" ? seqCondition! : suiteCondition!;
       } else {
         const ct = COND_TYPES.find((x) => x.v === ctype)!;
         symbol = sym;
@@ -242,6 +284,26 @@ export default function AlertsView({ email }: { email: string }) {
 
   const numStyle = { width: 84 } as const;
 
+  // Shared event-option list (single event picker + sequence step A/B pickers).
+  // Locked events stay VISIBLE but disabled, tier chip inline — same honesty rule as the
+  // indicator picker: never a silent absence.
+  const suiteEvtOptions = suiteEvts.map((e) => {
+    const locked = isLockedEvt(e);
+    const label = t(e.tkey, e.en);
+    return (
+      <option key={e.event} value={e.event} disabled={locked}>
+        {locked ? `${label} · ${evtTier(e) === "pro" ? "PRO" : "INSIDER"}` : label}
+      </option>
+    );
+  });
+  const dirSelect = (val: "any" | "bull" | "bear", set: (v: "any" | "bull" | "bear") => void, label: string) => (
+    <select aria-label={label} value={val} onChange={(e) => set(e.target.value as "any" | "bull" | "bear")}>
+      <option value="any">{t("suiteDirAny")}</option>
+      <option value="bull">{t("suiteDirBull")}</option>
+      <option value="bear">{t("suiteDirBear")}</option>
+    </select>
+  );
+
   return (
     <main className="main2"><div className="pg">
         <div className="pg-head"><h2>{t("signalRegimeAlerts")}</h2><span className="sub">{t("alertsSub")}</span></div>
@@ -264,28 +326,34 @@ export default function AlertsView({ email }: { email: string }) {
                     return <option key={k} value={k}>{def ? (def.tkey ? t(def.tkey, def.label) : def.label) : k}</option>;
                   })}
                 </select>
-                {/* Locked events stay VISIBLE but disabled, tier chip inline — same honesty rule
-                    as the indicator picker: never a silent absence. */}
-                <select aria-label={t("suiteEventLabel")} value={curEvt?.event ?? ""} onChange={(e) => setSuiteEvent(e.target.value)}>
-                  {suiteEvts.map((e) => {
-                    const locked = isLockedEvt(e);
-                    const label = t(e.tkey, e.en);
-                    return (
-                      <option key={e.event} value={e.event} disabled={locked}>
-                        {locked ? `${label} · ${evtTier(e) === "pro" ? "PRO" : "INSIDER"}` : label}
-                      </option>
-                    );
-                  })}
+                {/* mode toggle: single event vs two-step sequence ("A then B within N bars") */}
+                <select aria-label={t("condSuiteSeq")} value={suiteMode} onChange={(e) => setSuiteMode(e.target.value as "single" | "seq")}>
+                  <option value="single">{t("suiteEventLabel")}</option>
+                  <option value="seq">{t("condSuiteSeq")}</option>
                 </select>
-                {curEvt?.dirs && (
-                  <select aria-label={t("suiteDir")} value={suiteDir} onChange={(e) => setSuiteDir(e.target.value as "any" | "bull" | "bear")}>
-                    <option value="any">{t("suiteDirAny")}</option>
-                    <option value="bull">{t("suiteDirBull")}</option>
-                    <option value="bear">{t("suiteDirBear")}</option>
-                  </select>
-                )}
-                {curEvt?.strength && (
-                  <label className="opt-field">{t("suiteMinStrength")}<input aria-label={t("suiteMinStrength")} type="number" step="5" min="0" max="100" value={suiteMinStr} onChange={(ev) => setSuiteMinStr(ev.target.value)} style={numStyle} /></label>
+                {suiteMode === "single" ? (
+                  <>
+                    <select aria-label={t("suiteEventLabel")} value={curEvt?.event ?? ""} onChange={(e) => setSuiteEvent(e.target.value)}>
+                      {suiteEvtOptions}
+                    </select>
+                    {curEvt?.dirs && dirSelect(suiteDir, setSuiteDir, t("suiteDir"))}
+                    {curEvt?.strength && (
+                      <label className="opt-field">{t("suiteMinStrength")}<input aria-label={t("suiteMinStrength")} type="number" step="5" min="0" max="100" value={suiteMinStr} onChange={(ev) => setSuiteMinStr(ev.target.value)} style={numStyle} /></label>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <select aria-label={`${t("suiteEventLabel")} A`} value={seqEvtA?.event ?? ""} onChange={(e) => setSeqEventA(e.target.value)}>
+                      {suiteEvtOptions}
+                    </select>
+                    {seqEvtA?.dirs && dirSelect(seqDirA, setSeqDirA, `${t("suiteDir")} A`)}
+                    <span className="opt-field" style={{ color: "var(--muted)", fontSize: 12 }}>{t("suiteSeqThen")}</span>
+                    <select aria-label={`${t("suiteEventLabel")} B`} value={seqEvtB?.event ?? ""} onChange={(e) => setSeqEventB(e.target.value)}>
+                      {suiteEvtOptions}
+                    </select>
+                    {seqEvtB?.dirs && dirSelect(seqDirB, setSeqDirB, `${t("suiteDir")} B`)}
+                    <label className="opt-field">{t("suiteSeqWithin")}<input aria-label={`${t("suiteSeqWithin")} ${t("suiteSeqBars")}`} type="number" step="1" min="2" max="50" value={seqMaxBars} onChange={(ev) => setSeqMaxBars(ev.target.value)} style={numStyle} />{t("suiteSeqBars")}</label>
+                  </>
                 )}
                 {suiteHasLocked && (
                   <span className="opt-field" style={{ color: "var(--muted)", fontSize: 11.5, gap: 5 }} title={t("suiteLockedHint")}>
@@ -351,10 +419,14 @@ export default function AlertsView({ email }: { email: string }) {
               <span className="opt-preview-txt">{optAlertPreview(optCondition, lang === "zh" ? "zh" : "en")}</span>
             </div>
           )}
-          {cat === "suite" && suiteCondition && (
+          {cat === "suite" && (suiteMode === "seq" ? seqCondition : suiteCondition) && (
             <div className="opt-preview">
               <span className="opt-preview-lbl">{t("optWillFire")}</span>
-              <span className="opt-preview-txt">{suiteAlertPreview(suiteCondition, lang === "zh" ? "zh" : "en")}</span>
+              <span className="opt-preview-txt">
+                {suiteMode === "seq"
+                  ? suiteSequencePreview(seqCondition!, lang === "zh" ? "zh" : "en")
+                  : suiteAlertPreview(suiteCondition!, lang === "zh" ? "zh" : "en")}
+              </span>
             </div>
           )}
         </div>

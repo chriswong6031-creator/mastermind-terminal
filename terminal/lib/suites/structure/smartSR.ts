@@ -446,11 +446,21 @@ function compute(ctx: ModuleCtx): ModuleResult {
       if (y.rank !== x.rank) return y.rank - x.rank;
       if (y.lv.touches !== x.lv.touches) return y.lv.touches - x.lv.touches;
       return y.lv.lastTouchI - x.lv.lastTouchI;
-    })
-    .slice(0, showLast);
+    });
+  // Proximity dedupe at PUBLISH time: cluster tolerance is ATR-at-ingest while anchors are frozen,
+  // so a volatility expansion can leave two levels far inside one CURRENT tolerance — draw only the
+  // strongest per price area (0.6×ATR at the last bar), the rest keep scoring silently (W4 review).
+  const dedupeTol = 0.6 * (Number.isFinite(atr[last]) && atr[last] > 0 ? atr[last] : 0);
+  const kept: typeof scored = [];
+  for (const e of scored) {
+    if (dedupeTol > 0 && kept.some((k) => Math.abs(k.lv.level - e.lv.level) <= dedupeTol)) continue;
+    kept.push(e);
+    if (kept.length >= showLast) break;
+  }
+  const published = kept;
 
   let maxRank = 0;
-  for (const e of scored) if (e.rank > maxRank) maxRank = e.rank;
+  for (const e of published) if (e.rank > maxRank) maxRank = e.rank;
 
   const L = {
     support: zh ? "支撑" : "Support",
@@ -467,7 +477,7 @@ function compute(ctx: ModuleCtx): ModuleResult {
     brokenSuffix: zh ? " · 已跌破" : " · broken",
   };
 
-  for (const { lv, rank } of scored) {
+  for (const { lv, rank } of published) {
     const broken = lv.brokenAt >= 0;
     const support = lv.level < px;
     const col = support ? colors.up : colors.down;

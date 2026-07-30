@@ -4425,3 +4425,629 @@ describe("W4 structure modules — Smart S/R / Money Flow Profile / Auto Pattern
     expect(polys.length, "a trendline was drawn").toBeGreaterThan(0);
   });
 });
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+//   §27 W4b — the deep spec §26 promised: exact geometry, exact arithmetic, caps
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Everything below is hand-computable. Two fixture builders carry the weight:
+//
+//   `zigBars(turns, leg)` — a linear zigzag through `turns`, `leg` bars per leg, bars built as
+//   o = previous close, h/l = that open/close pair (no extra wick). Two properties make it exact:
+//     • every bar's TRUE RANGE equals the leg step, so ATR(14) is that step EVERYWHERE (a Wilder
+//       RMA of a constant is the constant, and the warm-up mean of equal values matches it) —
+//       bar 0 is seeded with the same range on purpose;
+//     • each turning bar's wick IS the turning price, so `findPivotsHL(..., "wick")` returns the
+//       turn exactly, and the bar after it (whose open re-prints that extreme) disqualifies itself
+//       against its own left window.
+//   With turns [110,100,110,...] at leg 5 the step is 2 → ATR = 2, the S/R cluster tolerance is
+//   0.3×2 = 0.6, the buffer half-height is 0.25×2 = 0.5, and a 5-bar reaction spans the full 10
+//   points = 5×ATR, i.e. exactly REACTION_CAP — so two levels can be compared at EQUAL reaction.
+//
+//   `appendBars(bars, rows)` — explicit continuation bars (optional h/l/v overrides) for the
+//   close-only / volume-percentile branches that need a wick or a volume the zigzag cannot express.
+
+/** Zigzag through `turns`, `leg` bars per leg. See the note above for the exactness properties. */
+function zigBars(turns: number[], leg: number): SuiteBar[] {
+  const closes: number[] = [turns[0]];
+  for (let t = 1; t < turns.length; t++) {
+    const from = turns[t - 1];
+    const to = turns[t];
+    for (let k = 1; k <= leg; k++) closes.push(from + ((to - from) * k) / leg);
+  }
+  const step = Math.abs(closes[1] - closes[0]);
+  return closes.map((c, i) => {
+    const o = i === 0 ? c + step : closes[i - 1]; // seed bar 0 with the same true range
+    return { t: 86400 * (i + 1), o, h: Math.max(o, c), l: Math.min(o, c), c, v: 1000 };
+  });
+}
+
+/** Continuation bars: close is required, h/l default to the open/close pair, v defaults to 1000. */
+function appendBars(
+  bars: SuiteBar[],
+  rows: Array<{ c: number; h?: number; l?: number; v?: number }>,
+): SuiteBar[] {
+  const out = bars.slice();
+  for (const r of rows) {
+    const o = out[out.length - 1].c;
+    out.push({
+      t: 86400 * (out.length + 1),
+      o,
+      c: r.c,
+      h: r.h ?? Math.max(o, r.c),
+      l: r.l ?? Math.min(o, r.c),
+      v: r.v ?? 1000,
+    });
+  }
+  return out;
+}
+
+// ─── 27a. smartSR — scoring order, sensitivity, break restyle, buffers ────────
+
+describe("smartSR — score ordering at equal reaction", () => {
+  // turns: peak 110 at bar 0 (not a pivot — no left wing), then lows at 5/15/25 and highs at 10/20.
+  // Bar 30 is the last bar, so the final peak never confirms → a 3-touch support vs a 2-touch
+  // resistance, both with a 5-bar reaction of exactly 10 points = 5×ATR = REACTION_CAP.
+  const BARS = zigBars([110, 100, 110, 100, 110, 100, 110], 5);
+  const SENS = { sensitivity: "high", minTouches: 2, showLast: 12 };
+  const lines = (r: ModuleResult) => r.prims.filter((p) => p.kind === "line") as any[];
+  const tipRow = (r: ModuleResult, id: string, k: string) =>
+    r.tooltips!.find((t) => t.id === id)!.rows.find((x) => x.k === k)!.v;
+
+  it("builds the fixture the arithmetic assumes", () => {
+    expect(BARS.length).toBe(31);
+    expect(BARS[5].l).toBe(100);
+    expect(BARS[10].h).toBe(110);
+    expect(BARS[25].l).toBe(100);
+    expect(findPivotsHL(BARS, 5, 5, "wick").map((p) => [p.i, p.p, p.kind])).toEqual([
+      [5, 100, "low"], [10, 110, "high"], [15, 100, "low"], [20, 110, "high"], [25, 100, "low"],
+    ]);
+  });
+
+  it("ranks the 3-touch level above the 2-touch one when the reaction is identical", () => {
+    const res = run(SMART_SR_MODULE, BARS, SENS);
+    const ls = lines(res);
+    expect(ls.map((p) => p.a.p), "both levels are drawn, anchored at their FIRST pivot").toEqual([100, 110]);
+    expect(ls.map((p) => p.a.i)).toEqual([5, 10]);
+    // the two levels are compared at the SAME mean reaction — the win is the touch count alone
+    expect(tipRow(res, "sr-l5", "Reaction")).toBe("5.00× ATR");
+    expect(tipRow(res, "sr-h10", "Reaction")).toBe("5.00× ATR");
+    expect(tipRow(res, "sr-l5", "Touches")).toBe("×3");
+    expect(tipRow(res, "sr-h10", "Touches")).toBe("×2");
+    // drawn order IS score order; the winner also carries the full-strength alpha
+    expect(ls[0].id).toBe("sr-l5-l");
+    expect(ls[0].alpha).toBeCloseTo(0.95, 12);
+    expect(ls[1].alpha).toBeLessThan(ls[0].alpha);
+    // ...and it beats the 2-touch level even though the latter's decay is the MILDER one
+    // (last touch bar 25 vs 20 → 0.5^(5/250) vs 0.5^(10/250)); 3×5×0.9862 > 2×5×0.9727.
+    expect(3 * 5 * Math.pow(0.5, 5 / 250)).toBeGreaterThan(2 * 5 * Math.pow(0.5, 10 / 250));
+  });
+
+  it("respects the showLast floor, and widens the line with the touch count", () => {
+    expect(lines(run(SMART_SR_MODULE, BARS, { ...SENS, showLast: 2 })).length).toBe(2);
+    // the field's own minimum is 2 levels — a smaller request is clamped, never honoured silently
+    expect(lines(run(SMART_SR_MODULE, BARS, { ...SENS, showLast: 1 })).length).toBe(2);
+    expect(lines(run(SMART_SR_MODULE, BARS, { ...SENS, showLast: 0 })).length).toBe(2);
+    // minTouches is the honest way to demand the stronger level only
+    const strict = run(SMART_SR_MODULE, BARS, { ...SENS, minTouches: 3 });
+    expect(lines(strict).map((p) => p.a.p)).toEqual([100]);
+    // width = 1 + min(2, touches × 0.4)
+    expect(lines(strict)[0].w).toBeCloseTo(1 + 3 * 0.4, 12);
+  });
+
+  it("moves with the sensitivity wing — the same tape yields 2 / 1 / 0 levels", () => {
+    // The zigzag's extremes are 10 bars apart: at wing 12 every extreme is disqualified by the
+    // identical extreme one cycle back, and at wing 8 each trough is killed by the bar right after
+    // the PREVIOUS trough (whose open re-prints that low). Wing 5 sees all five pivots.
+    const count = (sensitivity: string) =>
+      lines(run(SMART_SR_MODULE, BARS, { ...SENS, sensitivity })).length;
+    expect(count("high")).toBe(2);
+    expect(count("medium")).toBe(1);
+    expect(count("low")).toBe(0);
+    // and on real structure the ordering is monotone: finer wing, never fewer levels
+    for (const seed of [1, 20260729, 777, 31337]) {
+      const bars = walkBars(500, seed, 37);
+      const c = (sensitivity: string) =>
+        lines(run(SMART_SR_MODULE, bars, { sensitivity, showLast: 12 })).length;
+      const [hi, mid, lo] = [c("high"), c("medium"), c("low")];
+      expect(hi, `seed ${seed}: high ≥ medium`).toBeGreaterThanOrEqual(mid);
+      expect(mid, `seed ${seed}: medium ≥ low`).toBeGreaterThanOrEqual(lo);
+    }
+  });
+
+  it("draws a ±0.25×ATR buffer band, frozen at the publication bar, only when asked", () => {
+    const off = run(SMART_SR_MODULE, BARS, SENS);
+    expect(off.prims.filter((p) => p.kind === "zone")).toEqual([]);
+    const on = run(SMART_SR_MODULE, BARS, { ...SENS, bufferZone: true });
+    const zones = on.prims.filter((p) => p.kind === "zone") as any[];
+    expect(zones.map((z) => z.id)).toEqual(["sr-l5-b", "sr-h10-b"]);
+    for (const [z, level] of [[zones[0], 100], [zones[1], 110]] as Array<[any, number]>) {
+      expect((z.p1 + z.p2) / 2, "band centred on the frozen level").toBeCloseTo(level, 12);
+      expect(z.p2 - z.p1, "height = 2 × 0.25 × ATR(=2)").toBeCloseTo(1, 12); // ATR is exactly 2 here
+      expect(z.fillAlpha).toBe(0.05);
+      expect(z.i2).toBe("right");
+    }
+    // the band never displaces the line
+    expect(lines(on).map((p) => p.a.p)).toEqual(lines(off).map((p) => p.a.p));
+  });
+});
+
+describe("smartSR — a broken level restyles, then retires", () => {
+  // The 31-bar zigzag, then a straight walk down through the 100 support and a flat 96/98 tail
+  // (same 2-point true range throughout, so ATR stays exactly 2).
+  const TAIL: Array<{ c: number }> = [];
+  for (let k = 1; k <= 7; k++) TAIL.push({ c: 110 - 2 * k });       // 108 … 96, closing below 100 at bar 36
+  for (let k = 0; k < 40; k++) TAIL.push({ c: k % 2 === 0 ? 98 : 96 });
+  const BARS = appendBars(zigBars([110, 100, 110, 100, 110, 100, 110], 5), TAIL);
+  const SENS = { sensitivity: "high", minTouches: 2, showLast: 12 };
+  const supportLine = (r: ModuleResult) =>
+    r.prims.find((p) => p.kind === "line" && (p as any).a.p === 100) as any;
+
+  it("emits sr_break on the CLOSE through the level, once, on the exact bar", () => {
+    const res = run(SMART_SR_MODULE, BARS.slice(0, 40), SENS);
+    const breaks = evOf(res, "sr_break");
+    expect(BARS[35].c, "bar 35 closes ON the level — not through it").toBe(100);
+    expect(BARS[36].c).toBe(98);
+    expect(breaks.map((e) => [e.i, e.dir, e.p])).toEqual([[36, "bear", 100]]);
+    expect(breaks[0].label).toBe("Support broken · 100.00 ×3");
+  });
+
+  it("restyles the broken level dashed and dimmed instead of deleting it", () => {
+    const res = run(SMART_SR_MODULE, BARS.slice(0, 40), SENS);
+    const l = supportLine(res);
+    expect(l, "the broken level is still drawn").toBeTruthy();
+    expect(l.dash).toBe("4 3");
+    expect(l.alpha).toBe(0.3);
+    // The ROLE is the module's ONE repaint-exempt styling choice: it is read from the LAST close,
+    // so a support price has become a resistance price now that price closed under it. The frozen
+    // history (the break event's own label) still says Support — that is the honest pairing.
+    expect(res.tooltips!.find((t) => t.id === "sr-l5")!.title).toBe("Resistance · broken");
+    expect(evOf(res, "sr_break")[0].label).toBe("Support broken · 100.00 ×3");
+    expect(l.color, "role hue follows the last close too").toBe(COLORS.down);
+    // it also stops competing at full weight (BROKEN_SCORE_MULT) — the intact 110 is drawn first
+    expect((res.prims.filter((p) => p.kind === "line")[0] as any).a.p).toBe(110);
+  });
+
+  it("retires it exactly BROKEN_LINGER bars after the break, keeping the event tape", () => {
+    for (const cut of [40, 50, 56]) {
+      expect(supportLine(run(SMART_SR_MODULE, BARS.slice(0, cut), SENS)), `cut ${cut}`).toBeTruthy();
+    }
+    for (const cut of [57, 60, 70]) {
+      const res = run(SMART_SR_MODULE, BARS.slice(0, cut), SENS);
+      expect(supportLine(res), `cut ${cut}: faded out`).toBeUndefined();
+      // the geometry retires; the history does not
+      expect(evOf(res, "sr_break").map((e) => e.i), `cut ${cut}`).toEqual([36]);
+    }
+    // bar 56 = 36 + 20 is the retirement bar itself (i - brokenAt >= 20)
+    expect(56 - 36).toBe(20);
+  });
+
+  it("never lets a broken level absorb a new touch", () => {
+    const res = run(SMART_SR_MODULE, BARS, SENS);
+    // the 96/98 tail tags 100 from below many times; the spent level must not count them
+    expect(evOf(res, "sr_break").length).toBe(1);
+    for (const e of evOf(res, "sr_hold")) expect(e.i, "no hold after the break").toBeLessThan(36);
+  });
+});
+
+// ─── 27b. moneyFlowProfile — a hand-computed profile ──────────────────────────
+
+describe("moneyFlowProfile — the hand-computed 3-bin fixture", () => {
+  // 12 bins over [100, 136] → binH = 3, bins k = [100+3k, 103+3k). Every bar sits INSIDE one bin,
+  // so the overlap split is trivially 1.0 and every number below is exact arithmetic:
+  //
+  //   bar        bin  v    buyFrac=(c−l)/(h−l)   → bin volume / buy volume
+  //   100–102     0   100  (102−100)/2 = 1         bin0  v=250  buy=100  delta=−50
+  //   100.5–102.5 0   150  (100.5−100.5)/2 = 0
+  //   112.5–114.5 4    60  (114.5−112.5)/2 = 1     bin4  v= 60  buy= 60  delta=+60
+  //   133.5–136  11    40  (134.5−133.5)/2.5 = .4  bin11 v= 40  buy= 16  delta=− 8
+  //
+  //   totals: v = 350, buy = 176 → delta = +2, buy share = 50%; maxV = 250 → fracs 1 / .24 / .16
+  //   money flow per bin = mid × v: 101.5×250 = 25375 ▸ 113.5×60 = 6810 ▸ 134.5×40 = 5380
+  const BARS = mkBars([
+    [101, 102, 100, 102, 100],
+    [102, 102.5, 100.5, 100.5, 150],
+    [113, 114.5, 112.5, 114.5, 60],
+    [134, 136, 133.5, 134.5, 40],
+  ]);
+  const S = { length: 100, levels: 12 };
+  const profileOf = (r: ModuleResult) => r.prims.find((p) => p.kind === "profile") as any;
+  const priceOf = (r: ModuleResult, id: string) => (primOf(r, id) as any)?.a?.p;
+
+  it("bins the volume exactly, with the delta-sign colors and the ≥60% label rule", () => {
+    const prof = profileOf(run(MONEY_FLOW_PROFILE_MODULE, BARS, S));
+    expect(prof.side).toBe("right");
+    expect(prof.bins.length, "empty bins are omitted").toBe(3);
+    expect(prof.bins.map((b: any) => [b.p1, b.p2])).toEqual([[100, 103], [112, 115], [133, 136]]);
+    expect(prof.bins.map((b: any) => b.frac)).toEqual([1, 0.24, 0.16]);
+    // aggressor family, never the locale-flipping up/down pair
+    expect(prof.bins.map((b: any) => b.color)).toEqual([
+      COLORS.flowSell, COLORS.flowBuy, COLORS.flowSell,
+    ]);
+    for (const b of prof.bins) expect(b.overlayColor).toBe(COLORS.flowBuy);
+    // overlay = the buy slice OF THIS BAR: frac × buyShare
+    expect(prof.bins.map((b: any) => b.overlayFrac)).toEqual([0.4, 0.24, 0.064]);
+    // only rows at ≥60% strength carry text
+    expect(prof.bins.map((b: any) => b.label)).toEqual(["100%", undefined, undefined]);
+  });
+
+  it("moves the POC when the metric changes", () => {
+    const poc = (pocMetric: string) => priceOf(run(MONEY_FLOW_PROFILE_MODULE, BARS, { ...S, pocMetric }), "mfp-poc");
+    expect(poc("moneyFlow"), "heaviest money flow = bin0 (25375)").toBe(101.5);
+    expect(poc("strength"), "most volume = bin0").toBe(101.5);
+    expect(poc("deltaNeg"), "most sell-side delta = bin0 (−50)").toBe(101.5);
+    expect(poc("deltaPos"), "most buy-side delta = bin4 (+60) — the POC MOVES").toBe(113.5);
+    // the chip and the tooltip follow the line
+    const dp = run(MONEY_FLOW_PROFILE_MODULE, BARS, { ...S, pocMetric: "deltaPos" });
+    expect((primOf(dp, "mfp-poc-c") as any).p).toBe(113.5);
+    const rows = dp.tooltips![0].rows;
+    expect(rows.find((r) => r.k === "POC")!.v).toBe("113.50");
+    expect(rows.find((r) => r.k === "POC by")!.v).toBe("Delta +");
+    expect(rows.find((r) => r.k === "Buy share")!.v).toBe("50%");   // 176 / 350
+    expect(rows.find((r) => r.k === "Delta")!.v).toBe("+2.00");     // 176 − 174
+    expect(rows.find((r) => r.k === "Window")!.v).toBe("4 bars · 12 × 3.00");
+  });
+
+  it("expands the value area until it holds ≥ vaPct of the window volume, contiguously", () => {
+    const at = (vaPct: number) => {
+      const r = run(MONEY_FLOW_PROFILE_MODULE, BARS, { ...S, vaPct });
+      return { val: priceOf(r, "mfp-val"), vah: priceOf(r, "mfp-vah") };
+    };
+    // 70% of 350 = 245 — the POC bin alone (250) already clears it
+    expect(at(70)).toEqual({ val: 100, vah: 103 });
+    // 90% = 315 — POC + bin4 is 310, still short, so the band grows to bin11
+    expect(at(90)).toEqual({ val: 100, vah: 136 });
+    expect(at(50)).toEqual({ val: 100, vah: 103 });
+    // ...and the same law holds on real structure: the band is contiguous, contains the POC,
+    // and carries at least vaPct of the drawn mass.
+    for (const bars of [walkBars(400, 20260729, 37), walkBars(600, 77, 29)]) {
+      for (const vaPct of [50, 70, 90]) {
+        const r = run(MONEY_FLOW_PROFILE_MODULE, bars, { length: 300, levels: 24, vaPct });
+        const prof = profileOf(r);
+        const poc = priceOf(r, "mfp-poc");
+        const val = priceOf(r, "mfp-val");
+        const vah = priceOf(r, "mfp-vah");
+        expect(val).toBeLessThanOrEqual(poc);
+        expect(vah).toBeGreaterThanOrEqual(poc);
+        const total = prof.bins.reduce((s: number, b: any) => s + b.frac, 0);
+        const inside = prof.bins.filter((b: any) => b.p1 >= val - 1e-9 && b.p2 <= vah + 1e-9);
+        const mass = inside.reduce((s: number, b: any) => s + b.frac, 0);
+        expect(mass / total, `vaPct=${vaPct}: value area holds its mass`).toBeGreaterThanOrEqual(
+          vaPct / 100 - 1e-9,
+        );
+        // contiguity: the kept bins are a consecutive run of the drawn profile
+        const idx = prof.bins.map((b: any, i: number) => (inside.includes(b) ? i : -1)).filter((i: number) => i >= 0);
+        expect(idx[idx.length - 1] - idx[0], "value-area bins are contiguous").toBe(idx.length - 1);
+      }
+    }
+  });
+
+  it("prints the candle-shape honesty note in the user's language, and never mixes them", () => {
+    const en = run(MONEY_FLOW_PROFILE_MODULE, BARS, S, "en");
+    const zh = run(MONEY_FLOW_PROFILE_MODULE, BARS, S, "zh");
+    expect((primOf(en, "mfp-note") as any).text).toBe("delta = candle-shape estimate");
+    expect((primOf(zh, "mfp-note") as any).text).toBe("净量为K线形态估算");
+    expect((primOf(zh, "mfp-note") as any).p, "pinned to the window high").toBe(136);
+    const basis = (r: ModuleResult) => r.tooltips![0].rows.find((x) => x.k === "口径" || x.k === "Basis")!.v;
+    expect(basis(en)).toBe("buy/sell split estimated from candle shape, not trade tape");
+    expect(basis(zh)).toBe("买卖拆分按 (收−低)/(高−低) 估算，非逐笔主动成交");
+    const enText = JSON.stringify([en.prims, en.tooltips]);
+    expect(/[一-鿿]/.test(enText), "CJK leaked into the en profile").toBe(false);
+    expect(zh.tooltips![0].title).toBe("资金流分布");
+  });
+
+  it("says so honestly when the symbol has no volume at all", () => {
+    const noVol = BARS.map((b) => ({ ...b, v: 0 }));
+    const en = run(MONEY_FLOW_PROFILE_MODULE, noVol, S);
+    expect(en.prims.map((p) => p.id)).toEqual(["mfp-novol"]);
+    expect((en.prims[0] as any).text).toBe("no volume data");
+    expect(en.tooltips).toEqual([]);
+    expect(en.events).toEqual([]);
+    expect((run(MONEY_FLOW_PROFILE_MODULE, noVol, S, "zh").prims[0] as any).text).toBe("无成交量数据");
+  });
+});
+
+// ─── 27c. autoPatterns — exact fit, projection, break, target, caps ───────────
+
+describe("autoPatterns — exact geometry on a crafted channel", () => {
+  // Peaks 110/109/108/107 at bars 5/15/25/35 and troughs 100/99/98/97 at 10/20/30/40 — two exactly
+  // collinear anchor sets of slope −0.1/bar:  resistance y = −0.1i + 110.5,  support y = −0.1i + 101.
+  // Parallel (|Δm| = 0) → a CHANNEL of constant height 9.5. The tail stays inside the channel, so
+  // the newest pattern is live and unbroken.
+  const RES = (i: number) => -0.1 * i + 110.5;
+  const SUP = (i: number) => -0.1 * i + 101;
+  const CHANNEL = appendBars(zigBars([100, 110, 100, 109, 99, 108, 98, 107, 97], 5), [
+    { c: 98.5 }, { c: 100 }, { c: 101.5 }, { c: 103 }, { c: 104.5 },
+  ]);
+  const S = { size: "small" as const };
+  const ID = "pat-0-45"; // set 0, existence bar = the newest anchor's confirmedAt (40 + 5)
+
+  it("fits both anchor lines through the collinear pivots to 1e-6", () => {
+    const res = run(AUTO_PATTERNS_MODULE, CHANNEL, S);
+    const poly = (k: string) => primOf(res, `${ID}-${k}`) as any;
+    for (const [k, f] of [["res", RES], ["sup", SUP]] as Array<[string, (i: number) => number]>) {
+      const p = poly(k);
+      expect(p.kind).toBe("poly");
+      expect(p.pts.length).toBe(2);
+      for (const pt of p.pts) expect(pt.p, `${k} @${pt.i}`).toBeCloseTo(f(pt.i), 6);
+    }
+    expect(poly("res").pts[0].i, "line starts at its earliest anchor").toBe(5);
+    expect(poly("sup").pts[0].i).toBe(10);
+    // every crafted pivot sits ON its line (that is what "anchored" means)
+    for (const [i, p] of [[5, 110], [15, 109], [25, 108], [35, 107]] as Array<[number, number]>) {
+      expect(RES(i)).toBeCloseTo(p, 9);
+    }
+    const tip = res.tooltips!.find((t) => t.id === ID)!;
+    expect(tip.title).toBe("Channel");
+    expect(tip.rows.find((r) => r.k === "Anchors")!.v).toBe("4H / 4L");
+    expect(tip.rows.find((r) => r.k === "Height")!.v).toBe("9.50"); // 110.5 − 101
+    expect(tip.rows.find((r) => r.k === "Break")!.v).toBe("none yet");
+  });
+
+  it("projects the confirmed slope past the last bar — exact at +10 bars", () => {
+    const res = run(AUTO_PATTERNS_MODULE, CHANNEL, S);
+    const last = CHANNEL.length - 1;
+    for (const [k, f] of [["res", RES], ["sup", SUP]] as Array<[string, (i: number) => number]>) {
+      const proj = primOf(res, `${ID}-${k}-x`) as any;
+      expect(proj.kind).toBe("line");
+      expect(proj.dash).toBe("4 3");
+      expect(proj.a.i, "the projection starts where the body ends").toBe(last);
+      expect(proj.b.i).toBe(last + 20);
+      expect(proj.a.p).toBeCloseTo(f(last), 6);
+      expect(proj.b.p).toBeCloseTo(f(last + 20), 6);
+      // the value 10 bars out, read off the drawn segment, is the fitted line's value
+      const at10 = proj.a.p + ((proj.b.p - proj.a.p) * 10) / (proj.b.i - proj.a.i);
+      expect(at10, `${k} @ +10 bars`).toBeCloseTo(f(last + 10), 6);
+    }
+    // the dashed midline runs between the two lines
+    const mid = primOf(res, `${ID}-mid`) as any;
+    expect(mid.color).toBe(COLORS.neutral);
+    expect(mid.a.p).toBeCloseTo((RES(mid.a.i) + SUP(mid.a.i)) / 2, 6);
+    expect(mid.b.p).toBeCloseTo((RES(mid.b.i) + SUP(mid.b.i)) / 2, 6);
+  });
+
+  it("breaks on the CLOSE only — a wick through the line is not a break", () => {
+    const i = CHANNEL.length; // the appended bar's index
+    const poke = appendBars(CHANNEL, [{ c: RES(i) - 2, h: RES(i) + 2 }]);
+    const rp = run(AUTO_PATTERNS_MODULE, poke, S);
+    expect(evOf(rp, "pat_break"), "a wick above the line fires nothing").toEqual([]);
+    expect(rp.prims.some((p) => p.id.endsWith("-bk")), "no break pill").toBe(false);
+    expect(rp.tooltips![0].rows.find((r) => r.k === "Break")!.v).toBe("none yet");
+
+    const brk = appendBars(CHANNEL, [{ c: RES(i) + 2.1 }]);
+    const rb = run(AUTO_PATTERNS_MODULE, brk, S);
+    const evs = evOf(rb, "pat_break");
+    expect(evs.map((e) => [e.type, e.dir, e.i])).toEqual([["pat_break", "bull", i]]);
+    expect(evs[0].p, "the event price is the LINE value at the break bar").toBeCloseTo(RES(i), 9);
+    // a broken pattern stops at the break bar, flips dashed, and drops its projection
+    const body = primOf(rb, `${ID}-res`) as any;
+    expect(body.pts[1].i).toBe(i);
+    expect(body.dash).toBe("4 3");
+    expect(body.alpha).toBe(0.4);
+    expect(rb.prims.some((p) => p.id.endsWith("-res-x")), "no projection past a broken line").toBe(false);
+  });
+
+  it("upgrades the break to the Strong tier only on a top-percentile volume bar", () => {
+    const i = CHANNEL.length;
+    const quiet = run(AUTO_PATTERNS_MODULE, appendBars(CHANNEL, [{ c: RES(i) + 2.1, v: 1 }]), S);
+    const loud = run(AUTO_PATTERNS_MODULE, appendBars(CHANNEL, [{ c: RES(i) + 2.1, v: 99999 }]), S);
+    const pill = (r: ModuleResult) => primOf(r, `${ID}-bk`) as any;
+    expect(pill(quiet).text).toBe("▲ Break Up");
+    expect(pill(quiet).bold).toBe(false);
+    expect(evOf(quiet, "pat_break")[0].strength, "0th percentile").toBe(0);
+    expect(pill(loud).text).toBe("▲+ Strong Break Up");
+    expect(pill(loud).bold).toBe(true);
+    expect(evOf(loud, "pat_break")[0].strength, "100th percentile").toBe(100);
+    expect(evOf(loud, "pat_break")[0].label).toBe("Channel break up · vol 100%");
+    // the pill points at the line and sits on the side price came from
+    expect(pill(loud).place).toBe("below");
+    expect(pill(loud).pointer).toBe(true);
+    expect(pill(loud).p).toBeCloseTo(RES(i), 9);
+    // zh keeps the same glyph vocabulary
+    const zh = run(AUTO_PATTERNS_MODULE, appendBars(CHANNEL, [{ c: RES(i) + 2.1, v: 99999 }]), S, "zh");
+    expect((primOf(zh, `${ID}-bk`) as any).text).toBe("▲+ 强势向上突破");
+    expect(evOf(zh, "pat_break")[0].label).toBe("通道向上突破 · 量能 100%");
+  });
+
+  it("projects the measured move by the channel HEIGHT and closes it on the touch", () => {
+    const i = CHANNEL.length;
+    const height = RES(i) - SUP(i); // 9.5 at every bar — the channel is parallel
+    expect(height).toBeCloseTo(9.5, 9);
+    const open = run(AUTO_PATTERNS_MODULE, appendBars(CHANNEL, [{ c: RES(i) + 2.1, v: 99999 }]), S);
+    const tl = primOf(open, `${ID}-tl`) as any;
+    expect(tl.a.p, "target = line value at the break + channel height").toBeCloseTo(RES(i) + height, 6);
+    expect(tl.a.i).toBe(i);
+    expect(tl.b.i, "an unhit target runs to the right edge").toBe("right");
+    expect((primOf(open, `${ID}-tc`) as any).text).toBe(`Target ${(RES(i) + height).toFixed(2)}`);
+    expect(evOf(open, "pat_target_hit"), "not hit yet").toEqual([]);
+    expect(open.tooltips![0].rows.find((r) => r.k === "Target")!.v).toContain("open");
+
+    const hit = run(
+      AUTO_PATTERNS_MODULE,
+      appendBars(CHANNEL, [{ c: RES(i) + 2.1, v: 99999 }, { c: RES(i) + 6 }, { c: RES(i) + height + 2 }]),
+      S,
+    );
+    const hits = evOf(hit, "pat_target_hit");
+    expect(hits.map((e) => e.i), "the first bar whose HIGH reaches the level").toEqual([i + 2]);
+    expect(hits[0].p).toBeCloseTo(RES(i) + height, 6);
+    expect((primOf(hit, `${ID}-tc`) as any).text).toContain("✓");
+    expect((primOf(hit, `${ID}-tl`) as any).b.i, "the level stops at the touch").toBe(i + 2);
+    // targets are a channel-only measured move, and they are opt-out
+    const off = run(AUTO_PATTERNS_MODULE, appendBars(CHANNEL, [{ c: RES(i) + 2.1, v: 99999 }]), { ...S, targets: false });
+    expect(off.prims.some((p) => p.id.endsWith("-tl"))).toBe(false);
+    expect(evOf(off, "pat_target_hit")).toEqual([]);
+  });
+
+  it("refuses the channel when the two slopes disagree by more than 15%", () => {
+    // troughs 100/98/96/94 → support slope −0.2 vs resistance −0.1: |Δm| = 0.1 > 0.15 × 0.2 = 0.03
+    const wedge = appendBars(zigBars([100, 110, 100, 109, 98, 108, 96, 107, 94], 5), [
+      { c: 96 }, { c: 98 }, { c: 100 },
+    ]);
+    const res = run(AUTO_PATTERNS_MODULE, wedge, S);
+    expect(res.prims.some((p) => p.id.endsWith("-mid")), "no midline without a channel").toBe(false);
+    const drawn = res.prims.filter((p) => p.id.endsWith("-res") || p.id.endsWith("-sup"));
+    expect(drawn.length, "only the stronger single line survives").toBe(1);
+    expect(res.tooltips![0].title).toBe("Trendline · Resistance");
+    expect(res.tooltips![0].rows.find((r) => r.k === "Anchors")!.v).toBe("4 H");
+    expect(res.tooltips![0].rows.some((r) => r.k === "Height"), "height is a channel row").toBe(false);
+    // the crafted channel above DOES pass the same gate — the difference is the slope, nothing else
+    expect(run(AUTO_PATTERNS_MODULE, CHANNEL, S).tooltips![0].title).toBe("Channel");
+  });
+
+  it("caps the drawn pattern sets at showLast, newest first", () => {
+    const bars = walkBars(600, 20260729, 37);
+    const setsOf = (showLast: number) =>
+      [...new Set(run(AUTO_PATTERNS_MODULE, bars, { showLast }).prims.map((p) => p.id.split("-").slice(0, 3).join("-")))];
+    const four = setsOf(4);
+    expect(four.length).toBe(4);
+    for (const showLast of [1, 2, 3, 4]) {
+      const got = setsOf(showLast);
+      expect(got.length, `showLast=${showLast}`).toBe(showLast);
+      expect(got, "the kept sets are the newest ones, in order").toEqual(four.slice(0, showLast));
+      expect(got[0], "set 0 is always the live one").toBe(four[0]);
+    }
+    // older sets sit strictly further left (no overlapping spider web)
+    const ends = four.map((id) => Number(id.split("-")[2]));
+    for (let k = 1; k < ends.length; k++) expect(ends[k]).toBeLessThan(ends[k - 1]);
+  });
+});
+
+// ─── 27d. orderBlocks — the opt-in macro (4× resampled) layer ─────────────────
+
+describe("orderBlocks — macro blocks", () => {
+  const BARS = walkBars(400, 20260729, 37);
+  const macroPrims = (r: ModuleResult) => r.prims.filter((p) => p.id.startsWith("obm:"));
+  const macroEvents = (r: ModuleResult) => (r.events ?? []).filter((e) => (e.label ?? "").startsWith("Macro "));
+
+  it("is off by default and leaves the 1× layer byte-identical when on (golden compare)", () => {
+    expect(ORDER_BLOCKS_MODULE.defaults.macro).toBe(false);
+    for (const bars of [BARS, walkBars(400, 4242, 37), walkBars(700, 77, 29)]) {
+      const off = run(ORDER_BLOCKS_MODULE, bars);
+      expect(macroPrims(off), "macro:false draws no macro chrome").toEqual([]);
+      expect(macroEvents(off)).toEqual([]);
+      const on = run(ORDER_BLOCKS_MODULE, bars, { macro: true });
+      // strip the macro layer from the macro:true run — what is left must be the untouched module
+      expect(on.prims.filter((p) => !p.id.startsWith("obm:"))).toEqual(off.prims);
+      expect((on.events ?? []).filter((e) => !(e.label ?? "").startsWith("Macro "))).toEqual(off.events ?? []);
+      expect(on.tooltips ?? []).toEqual(off.tooltips ?? []);
+      expect((off.events ?? []).length, "these fixtures stay under the tape cap").toBeLessThan(240);
+    }
+  });
+
+  it("merges the two legs into ONE bar-ordered, capped tape", () => {
+    // The macro leg is detected separately and appended, so without a merge step the stream would
+    // end on an OLD (group-end) event and could run to twice the module's declared MAX_EVENTS.
+    for (const n of [400, 2000, 5000]) {
+      const evs = run(ORDER_BLOCKS_MODULE, walkBars(n, 20260729, 11), { macro: true }).events ?? [];
+      for (let k = 1; k < evs.length; k++) {
+        expect(evs[k].i, `n=${n}: tape is bar-ordered at ${k}`).toBeGreaterThanOrEqual(evs[k - 1].i);
+      }
+      expect(evs.length, `n=${n}: tape stays bounded`).toBeLessThanOrEqual(240);
+      expect(evs.some((e) => (e.label ?? "").startsWith("Macro ")), `n=${n}: macro leg present`).toBe(true);
+      // the newest event in the tape is a real 1× event, not a stale macro one
+      const last1x = [...evs].reverse().find((e) => !(e.label ?? "").startsWith("Macro "))!;
+      expect(evs[evs.length - 1].i).toBeGreaterThanOrEqual(last1x.i - 3);
+    }
+  });
+
+  it("only reads CLOSED 4-bar groups — the boundary fixture proves the one-group lag", () => {
+    // walkBars is a prefix-stable generator, so bars 0..391 are identical in both runs. At n = 392
+    // the group covering 388..391 ENDS on the live forming bar and must be invisible; one bar later
+    // it has closed and its detection appears, mapped to the group's last source bar (391).
+    const at392 = macroEvents(run(ORDER_BLOCKS_MODULE, walkBars(392, 20260729, 37), { macro: true }));
+    const at393 = macroEvents(run(ORDER_BLOCKS_MODULE, walkBars(393, 20260729, 37), { macro: true }));
+    expect(392 % 4, "the fixture sits exactly on a group boundary").toBe(0);
+    expect(Math.max(...at392.map((e) => e.i)), "nothing from the forming group").toBe(387);
+    expect(at393.length, "one bar later the group is closed and usable").toBe(at392.length + 1);
+    expect(at393[at393.length - 1].i).toBe(391);
+    // the older tape is untouched — a closed group never repaints
+    expect(at393.slice(0, at392.length)).toEqual(at392);
+    // and EVERY macro event lands on a group's last source bar (i ≡ 3 mod 4), never mid-group
+    for (const n of [392, 393, 400, 401, 402, 403]) {
+      const evs = macroEvents(run(ORDER_BLOCKS_MODULE, walkBars(n, 20260729, 37), { macro: true }));
+      for (const e of evs) {
+        expect((e.i + 1) % 4, `n=${n}: event ${e.i} is a group end`).toBe(0);
+        expect(e.i, `n=${n}: never the live bar`).toBeLessThanOrEqual(n - 2);
+      }
+    }
+  });
+
+  it("draws quiet dashed macro bands with an M- tier label, in the user's language", () => {
+    const on = run(ORDER_BLOCKS_MODULE, BARS, { macro: true });
+    const zones = macroPrims(on).filter((p) => p.kind === "zone") as any[];
+    const tiers = macroPrims(on).filter((p) => p.kind === "label") as any[];
+    expect(zones.length).toBeGreaterThan(0);
+    expect(tiers.length).toBe(zones.length);
+    for (const z of zones) {
+      expect(z.fillAlpha, "quieter than the 1× layer").toBe(0.06);
+      expect(z.dash).toBe("4 3");
+      expect(z.strokeW).toBe(1);
+      expect(z.z, "drawn UNDER the 1× blocks").toBe(0);
+      expect(z.edges.length, "one hairline outer edge only").toBe(1);
+      expect(z.edges[0]).toBe(z.fill === COLORS.up ? "bottom" : "top");
+      expect(z.p2).toBeGreaterThan(z.p1);
+      expect(z.i2).toBe("right"); // extendRight default
+    }
+    for (const t of tiers) {
+      expect(t.text.startsWith("M-"), `macro tier label: ${t.text}`).toBe(true);
+      expect(["WEAK", "BALANCED", "HIGH", "STRONG"]).toContain(t.text.slice(2));
+      expect(t.color, "chrome, never a direction color").toBe(COLORS.muted);
+      expect(t.minPxPerBar).toBe(2);
+    }
+    // zh localizes the tier word but keeps the M- prefix (language-neutral, like "BOS")
+    const zh = run(ORDER_BLOCKS_MODULE, BARS, { macro: true }, "zh");
+    for (const t of (zh.prims.filter((p) => p.id.startsWith("obm:") && p.kind === "label") as any[])) {
+      expect(t.text.startsWith("M-")).toBe(true);
+      expect(/[一-鿿]/.test(t.text), `zh tier word missing in ${t.text}`).toBe(true);
+    }
+    // non-extending macro bands live 15 MACRO bars = 60 source bars past their impulse group; the
+    // band starts at the ANCHOR group, up to ANCHOR_SCAN(5) macro bars earlier, so the drawn span
+    // is bounded by 60 + 5×4 + the anchor group's own 4 bars.
+    const noExt = run(ORDER_BLOCKS_MODULE, BARS, { macro: true, extendRight: false });
+    const noExtZones = noExt.prims.filter((p) => p.id.startsWith("obm:") && p.kind === "zone") as any[];
+    expect(noExtZones.length).toBe(zones.length);
+    for (let k = 0; k < noExtZones.length; k++) {
+      const z = noExtZones[k];
+      expect(typeof z.i2).toBe("number");
+      expect(z.i2).toBeGreaterThan(z.i1);
+      expect(z.i2 - z.i1).toBeLessThanOrEqual(15 * 4 + 5 * 4 + 4);
+      expect(z.i2).toBeLessThanOrEqual(BARS.length - 1);
+      // only the right edge moves — the block's identity and price bounds are unchanged
+      expect([z.id, z.i1, z.p1, z.p2]).toEqual([zones[k].id, zones[k].i1, zones[k].p1, zones[k].p2]);
+    }
+  });
+
+  it("caps the macro layer at min(3, showLast)", () => {
+    for (const showLast of [1, 2, 3, 5, 8]) {
+      const zones = macroPrims(run(ORDER_BLOCKS_MODULE, BARS, { macro: true, showLast })).filter((p) => p.kind === "zone");
+      expect(zones.length, `showLast=${showLast}`).toBeLessThanOrEqual(Math.min(3, showLast));
+    }
+    expect(macroPrims(run(ORDER_BLOCKS_MODULE, BARS, { macro: true, showLast: 1 })).filter((p) => p.kind === "zone").length).toBe(1);
+    expect(macroPrims(run(ORDER_BLOCKS_MODULE, BARS, { macro: true, showLast: 8 })).filter((p) => p.kind === "zone").length).toBe(3);
+    // the `type` filter applies to macro blocks too (same `keep` predicate as the 1× layer)
+    for (const [type, col] of [["bull", COLORS.up], ["bear", COLORS.down]] as Array<[string, string]>) {
+      const only = run(ORDER_BLOCKS_MODULE, BARS, { macro: true, type });
+      const zones = macroPrims(only).filter((p) => p.kind === "zone") as any[];
+      expect(zones.length, `type=${type}`).toBeGreaterThan(0);
+      for (const z of zones) expect(z.fill, `type=${type}`).toBe(col);
+    }
+  });
+
+  it("stays deterministic, finite and quiet on a short or dirty series", () => {
+    const a = run(ORDER_BLOCKS_MODULE, BARS, { macro: true });
+    expect(JSON.stringify(run(ORDER_BLOCKS_MODULE, BARS, { macro: true }))).toBe(JSON.stringify(a));
+    // fewer than MIN_BARS closed groups (30 × 4 = 120 source bars) → no macro layer at all
+    expect(macroPrims(run(ORDER_BLOCKS_MODULE, BARS.slice(0, 100), { macro: true }))).toEqual([]);
+    expect(() => run(ORDER_BLOCKS_MODULE, dirtyBars(), { macro: true })).not.toThrow();
+    const dirty = run(ORDER_BLOCKS_MODULE, dirtyBars(), { macro: true });
+    for (const p of macroPrims(dirty)) {
+      const bad: string[] = [];
+      scanNumbers(p, `ob-macro:${p.id}`, bad);
+      expect(bad, "non-finite macro geometry").toEqual([]);
+    }
+    expect(macroPrims(a).every((p) => p.id.startsWith("obm:")), "macro ids are namespaced").toBe(true);
+    expect(new Set(a.prims.map((p) => p.id)).size, "prim ids stay unique with macro on").toBe(a.prims.length);
+    expect(a.prims.length).toBeLessThanOrEqual(MAX_PRIMS_PER_MODULE);
+  });
+});
