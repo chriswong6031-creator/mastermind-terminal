@@ -54,6 +54,20 @@ export function etDisplay(ms: number): { epoch: number; minOfDay: number } {
   return localDisplay(ms, "America/New_York");
 }
 
+/**
+ * Keep Polygon aggregate requests below its 50,000-result cap.
+ *
+ * Polygon truncates oversized aggregate queries from the recent end. A 120-day 4h request for a
+ * US equity can therefore stop weeks before today, making the chart's "last" price look stale
+ * even though the live quote is current. Hourly US bars fit inside 60 days; 24/7 crypto needs the
+ * smaller 30-day window. The minute windows preserve the existing chart depth.
+ */
+export function polygonLookbackDays(minutes: number, market: Market): number {
+  if (minutes <= 5) return 10;
+  if (minutes <= 30) return 25;
+  return market === "crypto" ? 30 : 60;
+}
+
 async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolean): Promise<Bar6[]> {
   const key = process.env.POLYGON_API_KEY || process.env.MASSIVE_API_KEY;
   if (!key) throw new Error("POLYGON_API_KEY not set");
@@ -61,7 +75,7 @@ async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolea
   const mult = parseInt(m[1], 10) || 1;
   const unit = m[2] === "h" ? "hour" : "minute";
   const minutes = tfMinutes(tf);
-  const days = minutes <= 5 ? 10 : minutes <= 30 ? 25 : minutes <= 60 ? 60 : 120;
+  const days = polygonLookbackDays(minutes, market);
   const iso = (d: Date) => d.toISOString().slice(0, 10);
   const to = new Date();
   const from = new Date(to.getTime() - days * 86400000);

@@ -26,6 +26,17 @@ promises or “memory” recorded only inside one chat do not carry to another s
   `.claude/worktrees/<task>/` using a `claude/<task>` branch.
 - Never reuse a squash/merge-completed branch and never use the repo-global stash.
 
+## One responsive Terminal
+
+- `terminal/` is the only product implementation for desktop, tablet, and mobile. Do not create
+  device-specific repositories, long-lived mobile branches, duplicated API routes, or separate
+  business-logic implementations.
+- `feat/mobile-terminal-redesign` and the historical `charting-app-mobile` worktree are retired
+  development artifacts, not delivery targets. New work starts from `origin/master`.
+- Every user-facing Terminal change must be verified at 1440×900 desktop, 820×1180 tablet, and
+  390×844 mobile. Run `npm run test:e2e:responsive` from `terminal/`; update the shared responsive
+  shell and test together when behavior intentionally changes.
+
 ## Definition of done
 
 For every substantive, verified change, complete the full delivery chain without
