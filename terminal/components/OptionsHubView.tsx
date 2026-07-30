@@ -2,6 +2,7 @@
 import {
   memo,
   useCallback, useDeferredValue, useEffect, useMemo, useRef, useState,
+  type CSSProperties, type ReactNode,
 } from "react";
 import dynamic from "next/dynamic";
 import { useLang, useT } from "@/lib/i18n";
@@ -15,10 +16,11 @@ import { useFlowStream } from "@/lib/flowStream";
 import { trackSearch } from "@/lib/searchTrack";
 import { normalizeVolUnits } from "@/lib/eodContext";
 import { VolRegimeChip } from "@/components/eodcontext/VolRegimeChip";
+// Shared SVG chart primitives — measured 1:1 viewBox, nice ticks, pixel-gap label
+// thinning, padded domains. The hygiene rules live in that module's header.
 import {
-  createChart, LineSeries, AreaSeries,
-  type IChartApi, type ISeriesApi,
-} from "lightweight-charts";
+  useChartWidth, niceTicks, fmtTick, thinLabels, padDomain, MIN_CHART_H,
+} from "@/components/charts/svgChart";
 
 // ── Code-split heavy tab sub-views (ssr:false — client-only, chart/canvas heavy) ──
 // Each tab is lazy-loaded on first visit; subsequent switches are instant (keep-alive).
@@ -53,6 +55,25 @@ const PrismView = dynamic(
 const ProphetView = dynamic(
   () => import("@/components/prophet/ProphetView").then((m) => ({ default: m.ProphetView })),
   { ssr: false, loading: () => <TabSkeleton /> },
+);
+/** Tide tab's LWC chart — the hub's ONLY `lightweight-charts` consumer, so it is
+ *  code-split like the desks. Keeping it inline put the whole chart engine on the
+ *  Tape's first download for a surface the Tape never renders. The loading box
+ *  reserves the chart's exact height so nothing reflows when the chunk lands. */
+const TIDE_CHART_H = 216;
+const TideChart = dynamic(
+  () => import("@/components/TideChartLazy"),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        className="fin-skel"
+        role="status"
+        aria-busy="true"
+        style={{ width: "100%", height: TIDE_CHART_H, borderRadius: "var(--r-tile)" }}
+      />
+    ),
+  },
 );
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
@@ -520,31 +541,7 @@ function netToneGlyph(net: number): string {
   if (net > 0) return "~▲"; if (net < 0) return "~▼"; return "·";
 }
 
-/**
- * US-Eastern UTC offset (in hours, negative) for a given YYYY-MM-DD date.
- * DST-aware — computes the actual America/New_York offset via Intl instead of
- * hardcoding -04:00. Returns "-04:00" (EDT) or "-05:00" (EST) as a fixed-offset
- * suffix usable in an ISO timestamp string.
- */
-function etOffsetSuffix(sessionDate: string): string {
-  try {
-    // Noon on the session date sidesteps DST-boundary edge cases at midnight.
-    const noonUtc = new Date(`${sessionDate}T12:00:00Z`);
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York", hour12: false, timeZoneName: "shortOffset",
-    }).formatToParts(noonUtc);
-    const tzName = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
-    // tzName looks like "GMT-4" / "GMT-5"; normalize to "-0H:00".
-    const m = tzName.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);
-    if (m) {
-      const sign = m[1];
-      const hh = m[2].padStart(2, "0");
-      const mm = m[3] ?? "00";
-      return `${sign}${hh}:${mm}`;
-    }
-  } catch {}
-  return "-04:00"; // EDT fallback
-}
+// (etOffsetSuffix moved to components/TideChartLazy.tsx with its only caller.)
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -553,6 +550,12 @@ const PREM_FILTERS = [
   { label: "$500K", value: 500_000 }, { label: "$1M", value: 1_000_000 },
   { label: "$5M", value: 5_000_000 },
 ];
+
+/** Tape loading skeleton: shimmer-bar width per column, in the tape's column order
+ *  (Time · Ticker · Sector · Side · C/P · Contract · DTE · Mny · Size · Prem · Flags).
+ *  Sized so the placeholder reads as the tape rather than as a generic grey block. */
+const TAPE_SKEL_COLS = [38, 42, 56, 40, 14, 74, 28, 34, 40, 48, 30];
+const TAPE_SKEL_ROWS = 12;
 
 const DTE_BUCKETS: { key: DteBucket; en: string; zh: string }[] = [
   { key: "0d", en: "0DTE", zh: "当日" }, { key: "1_7d", en: "1–7d", zh: "1–7天" },
@@ -615,144 +618,11 @@ const PRESETS: Preset[] = [
 ];
 
 // ─── Small LWC chart wrapper (area series for NCP/NPP) ──────────────────────
+// MOVED to components/TideChartLazy.tsx and mounted through next/dynamic (see the
+// TideChart const near the top of this file). It is the hub's only consumer of
+// `lightweight-charts`, so keeping it inline dragged the whole chart engine onto
+// the Tape's critical path for a surface the Tape never renders.
 
-function css(n: string): string {
-  if (typeof document === "undefined") return "#888";
-  return getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-}
-
-interface TideChartProps {
-  minutes: TideMinute[];
-  spy: SpyPoint[];
-  height: number;
-  sessionDate?: string;
-}
-
-const TideChart = memo(function TideChart({ minutes, spy, height, sessionDate }: TideChartProps) {
-  const ref = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<IChartApi | null>(null);
-  const ncpRef = useRef<ISeriesApi<"Area"> | null>(null);
-  const nppRef = useRef<ISeriesApi<"Area"> | null>(null);
-  const spyRef = useRef<ISeriesApi<"Line"> | null>(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    // Unique x-axis: use integer index mapped to time string for intraday minute series
-    // LWC v5 requires time in ascending order with no duplicates.
-    const validMins = minutes.filter(
-      (m, i, arr) => i === 0 || m.t !== arr[i - 1].t
-    );
-    if (validMins.length < 2) return;
-
-    // Convert "HH:MM" to seconds-from-epoch for LWC. Anchor to the payload's
-    // session_date with the DST-aware US-Eastern offset for that date.
-    const date = sessionDate || new Date().toISOString().slice(0, 10);
-    const etOff = etOffsetSuffix(date);
-    const toTs = (hhmm: string) => {
-      const [hh, mm] = hhmm.split(":").map(Number);
-      return Math.floor(new Date(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00${etOff}`).getTime() / 1000);
-    };
-
-    const upColor = css("--up");
-    const downColor = css("--down");
-    const gridColor = css("--grid");
-    const lineColor = css("--line");
-    const textColor = css("--muted");
-    const panel3 = css("--panel-3");
-    const warnColor = css("--warn");
-
-    if (chartRef.current) {
-      try { chartRef.current.remove(); } catch {}
-    }
-
-    const chart = createChart(el, {
-      width: el.clientWidth || 700,
-      height: height,
-      layout: {
-        background: { color: "transparent" },
-        textColor,
-        fontSize: 10,
-        attributionLogo: false,
-      },
-      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
-      crosshair: {
-        vertLine: { color: "rgba(214,218,227,.3)", labelBackgroundColor: panel3 },
-        horzLine: { color: "rgba(214,218,227,.3)", labelBackgroundColor: panel3 },
-      },
-      rightPriceScale: { borderColor: lineColor, scaleMargins: { top: 0.05, bottom: 0.05 } },
-      timeScale: { borderColor: lineColor, timeVisible: true, secondsVisible: false },
-    });
-    chartRef.current = chart;
-
-    const ncpData = validMins.map((m) => ({ time: toTs(m.t) as any, value: m.ncp / 1_000_000 }));
-    const nppData = validMins.map((m) => ({ time: toTs(m.t) as any, value: m.npp / 1_000_000 }));
-
-    const ncpS = chart.addSeries(AreaSeries, {
-      lineColor: upColor,
-      topColor: `${upColor}40`,
-      bottomColor: `${upColor}05`,
-      lineWidth: 1.5 as any,
-      priceLineVisible: false,
-      lastValueVisible: true,
-      title: "NCP",
-    });
-    ncpS.setData(ncpData);
-    ncpRef.current = ncpS;
-
-    const nppS = chart.addSeries(AreaSeries, {
-      lineColor: downColor,
-      topColor: `${downColor}05`,
-      bottomColor: `${downColor}30`,
-      lineWidth: 1.5 as any,
-      priceLineVisible: false,
-      lastValueVisible: true,
-      title: "NPP",
-      invertFilledArea: true,
-    });
-    nppS.setData(nppData);
-    nppRef.current = nppS;
-
-    // SPY overlay on separate scale if provided
-    if (spy.length > 0) {
-      const spyData = spy
-        .filter((s, i, arr) => i === 0 || s.t !== arr[i - 1].t)
-        .map((s) => ({ time: toTs(s.t) as any, value: s.px }));
-      const spyS = chart.addSeries(LineSeries, {
-        color: warnColor,
-        lineWidth: 1,
-        priceScaleId: "spy",
-        priceLineVisible: false,
-        lastValueVisible: true,
-        title: "SPY",
-      });
-      spyS.setData(spyData);
-      chart.priceScale("spy").applyOptions({
-        scaleMargins: { top: 0.7, bottom: 0.02 },
-        borderColor: "transparent",
-      });
-      spyRef.current = spyS;
-    }
-
-    chart.timeScale().fitContent();
-
-    const ro = new ResizeObserver(() => {
-      if (el && chartRef.current) {
-        chartRef.current.applyOptions({ width: el.clientWidth });
-      }
-    });
-    ro.observe(el);
-
-    return () => {
-      ro.disconnect();
-      try { chart.remove(); } catch {}
-      chartRef.current = null;
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [minutes, spy, height, sessionDate]);
-
-  return <div ref={ref} style={{ width: "100%", height }} />;
-});
 
 // ─── Sparkline SVG (sector mini-chart) ──────────────────────────────────────
 
@@ -1038,139 +908,273 @@ function ExpiryBars({ expiries, lang }: { expiries: ExpiryRow[]; lang: string })
 
 // ─── Minute net-prem chart (ticker drill, inline SVG) ──────────────────────
 
-const MinuteNetChart = memo(function MinuteNetChart({ minutes, height = 80 }: { minutes: TickerMinute[]; height?: number }) {
-  if (!minutes || minutes.length < 2) return null;
-  const vals = minutes.map((m) => (m.ncp + m.npp) / 1_000_000);
-  const mn = Math.min(...vals, 0); const mx = Math.max(...vals, 0);
-  const range = mx - mn || 1;
-  const W = 100; // viewBox width
-  const pt = (i: number) => {
-    const x = (i / (vals.length - 1)) * W;
-    const y = height - ((vals[i] - mn) / range) * (height - 4) - 2;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  };
-  const pts = vals.map((_, i) => pt(i)).join(" ");
-  const zeroY = height - ((-mn) / range) * (height - 4) - 2;
-  return (
-    <svg viewBox={`0 0 ${W} ${height}`} width="100%" height={height} preserveAspectRatio="none" style={{ display: "block" }}>
-      <line x1="0" y1={zeroY} x2={W} y2={zeroY} stroke="var(--line)" strokeWidth="0.5" strokeDasharray="2,2" />
-      <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.2" points={pts} />
-    </svg>
-  );
+/** Numeral styling for SVG axis text — Inter + tabular figures (Terminal law 1). */
+const SVG_NUM: CSSProperties = { fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums" };
+
+const MinuteNetChart = memo(function MinuteNetChart({ minutes, height = 160 }: { minutes: TickerMinute[]; height?: number }) {
+  const { lang } = useLang();
+  // The wrapper is ALWAYS rendered so the ResizeObserver has an element from the
+  // first paint — measuring is what makes 1 user unit == 1 CSS px (svgChart R1).
+  const boxRef = useRef<HTMLDivElement>(null);
+  const W = useChartWidth(boxRef, 560);
+
+  const vals = (minutes ?? [])
+    .map((m) => (m.ncp + m.npp) / 1_000_000)
+    .filter((v) => Number.isFinite(v));
+
+  let body: ReactNode = null;
+  if (vals.length < 2) {
+    // Honest empty: say WHY there is no line rather than collapsing to nothing.
+    body = (
+      <div className="obs-lbl" style={{ color: "var(--muted)", padding: "6px 0" }}>
+        {lang === "zh" ? "盘中分钟数据不足，暂无法绘制。" : "Not enough intraday minutes to plot yet."}
+      </div>
+    );
+  } else {
+    // Padded domain, zero unioned only when the session actually straddles it —
+    // a one-sided day now fills the panel instead of hugging one edge (R7).
+    const [mn, mx] = padDomain(Math.min(...vals), Math.max(...vals), { padFrac: 0.08, includeZero: true });
+    const range = mx - mn || 1;
+    const PAD_L = 44;
+    const yOf = (v: number) => height - ((v - mn) / range) * (height - 4) - 2;
+    const pts = vals
+      .map((v, i) => `${(PAD_L + (i / (vals.length - 1)) * (W - PAD_L - 4)).toFixed(2)},${yOf(v).toFixed(2)}`)
+      .join(" ");
+    const straddlesZero = mn < 0 && mx > 0;
+    const fmtM = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}M`;
+    body = (
+      <svg viewBox={`0 0 ${W} ${height}`} width={W} height={height} style={{ display: "block" }}>
+        {straddlesZero && (
+          <line
+            x1={PAD_L} y1={yOf(0)} x2={W - 4} y2={yOf(0)}
+            stroke="var(--line)" strokeWidth="1" strokeDasharray="3,3"
+          />
+        )}
+        <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.2" points={pts} />
+        {/* Scale reference — the chart previously shipped with no y-axis at all. */}
+        <text x={2} y={11} fill="var(--text-dim)" fontSize={9} style={SVG_NUM}>{fmtM(mx)}</text>
+        <text x={2} y={height - 3} fill="var(--text-dim)" fontSize={9} style={SVG_NUM}>{fmtM(mn)}</text>
+      </svg>
+    );
+  }
+
+  return <div ref={boxRef} style={{ width: "100%" }}>{body}</div>;
 });
 
 // ─── Term structure chart (ATM IV vs DTE, dots + line) ──────────────────────
 
 const TermStructureChart = memo(function TermStructureChart({ term }: { term: VolTerm[] }) {
-  if (term.length < 2) return null;
-  const dtes = term.map((p) => p.dte);
-  const ivs = term.map((p) => p.atm_iv);
-  const minDte = Math.min(...dtes); const maxDte = Math.max(...dtes);
-  const minIv = Math.min(...ivs) * 0.98; const maxIv = Math.max(...ivs) * 1.02;
-  const W = 400; const H = 120;
-  const PAD = { l: 40, r: 12, t: 8, b: 24 };
-  const cx = (dte: number) => PAD.l + ((dte - minDte) / (maxDte - minDte)) * (W - PAD.l - PAD.r);
-  const cy = (iv: number) => PAD.t + (1 - (iv - minIv) / (maxIv - minIv)) * (H - PAD.t - PAD.b);
-  const pts = term.map((p) => `${cx(p.dte).toFixed(1)},${cy(p.atm_iv).toFixed(1)}`).join(" ");
-  const nTicks = 4;
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} style={{ display: "block", overflow: "visible" }}>
-      {/* Y axis ticks */}
-      {Array.from({ length: nTicks + 1 }, (_, i) => {
-        const iv = minIv + (i / nTicks) * (maxIv - minIv);
-        const y = cy(iv);
-        return (
-          <g key={i}>
-            <line x1={PAD.l - 4} y1={y} x2={W - PAD.r} y2={y} stroke="var(--line)" strokeWidth="0.5" />
-            <text x={PAD.l - 6} y={y + 3} textAnchor="end" fill="var(--muted)" fontSize={9}>{iv.toFixed(0)}%</text>
-          </g>
-        );
-      })}
-      {/* Line */}
-      <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.5" points={pts} />
-      {/* Dots + DTE labels */}
-      {term.map((p) => {
-        const x = cx(p.dte); const y = cy(p.atm_iv);
-        return (
-          <g key={p.exp}>
-            <circle cx={x} cy={y} r={3} fill="var(--brand-2)" />
-            <text x={x} y={H - 6} textAnchor="middle" fill="var(--text-dim)" fontSize={9}>{p.dte}d</text>
-          </g>
-        );
-      })}
-    </svg>
-  );
+  const { lang } = useLang();
+  const boxRef = useRef<HTMLDivElement>(null);
+  const W = useChartWidth(boxRef, 600);
+  const H = MIN_CHART_H.axis;
+
+  let body: ReactNode = null;
+  const pts0 = (term ?? []).filter((p) => Number.isFinite(p.dte) && Number.isFinite(p.atm_iv));
+  if (pts0.length < 2) {
+    body = (
+      <div className="obs-lbl" style={{ color: "var(--muted)", padding: "6px 0" }}>
+        {lang === "zh" ? "可用到期不足两个，无法绘制期限结构。" : "Fewer than two expiries priced — no term structure to draw."}
+      </div>
+    );
+  } else {
+    const dtes = pts0.map((p) => p.dte);
+    const ivs = pts0.map((p) => p.atm_iv);
+    const minDte = Math.min(...dtes); const maxDte = Math.max(...dtes);
+    const [minIv, maxIv] = padDomain(Math.min(...ivs), Math.max(...ivs), { padFrac: 0.12, clampMin: 0 });
+    const PAD = { l: 48, r: 18, t: 14, b: 34 };
+    // LOG-DTE spacing: a real chain runs [3,8,11,…,683]. Linear-in-DTE crushes the
+    // first six expiries into ~11px and smears their labels into one another.
+    const lg = (d: number) => Math.log(Math.max(1, d));
+    const lgMin = lg(minDte); const lgMax = lg(maxDte);
+    const cx = (dte: number) => PAD.l + ((lg(dte) - lgMin) / ((lgMax - lgMin) || 1)) * (W - PAD.l - PAD.r);
+    const cy = (iv: number) => PAD.t + (1 - (iv - minIv) / ((maxIv - minIv) || 1)) * (H - PAD.t - PAD.b);
+    const pts = pts0.map((p) => `${cx(p.dte).toFixed(1)},${cy(p.atm_iv).toFixed(1)}`).join(" ");
+    const { values: yTicks, step } = niceTicks(minIv, maxIv, 4);
+    // 42px ≈ a 4-char "137d" at fontSize 10 plus an 18px gutter.
+    const labelled = new Set(thinLabels(pts0, (p) => cx(p.dte), 42).map((p) => p.exp));
+    body = (
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} style={{ display: "block" }}>
+        {/* Y axis — nice ticks, precision derived from the step (no duplicate "17% 17%") */}
+        {yTicks.map((iv) => {
+          const y = cy(iv);
+          return (
+            <g key={iv}>
+              <line x1={PAD.l - 4} y1={y} x2={W - PAD.r} y2={y} stroke="var(--line)" strokeWidth="0.7" />
+              <text x={PAD.l - 8} y={y + 3.5} textAnchor="end" fill="var(--muted)" fontSize={10} style={SVG_NUM}>
+                {fmtTick(iv, step)}%
+              </text>
+            </g>
+          );
+        })}
+        {/* Line */}
+        <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.5" points={pts} />
+        {/* Dots + thinned DTE labels; every dot keeps a hover title so unlabelled
+            expiries are still readable. */}
+        {pts0.map((p) => {
+          const x = cx(p.dte); const y = cy(p.atm_iv);
+          return (
+            <g key={p.exp}>
+              <circle cx={x} cy={y} r={3} fill="var(--brand-2)">
+                <title>{`${p.exp} · ${p.dte}d · ${p.atm_iv.toFixed(1)}%`}</title>
+              </circle>
+              {labelled.has(p.exp) && (
+                <text x={x} y={H - 12} textAnchor="middle" fill="var(--text-dim)" fontSize={10} style={SVG_NUM}>
+                  {p.dte}d
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    );
+  }
+
+  return <div ref={boxRef} style={{ width: "100%" }}>{body}</div>;
 });
 
 // ─── Smile chart (call_iv / put_iv vs strike, spot_ref vertical line) ────────
 
+/** A quoted IV: finite AND positive. A zero/undefined leg is a MISSING quote, not
+ *  a 0% vol print — treating it as data floors the whole line (see svgChart R7). */
+const okIv = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
+
 const SmileChart = memo(function SmileChart({ points, spotRef }: { points: VolSmilePoint[]; spotRef: number | null }) {
-  if (points.length < 2) return null;
-  const strikes = points.map((p) => p.strike);
-  const allIvs = points.flatMap((p) => [p.call_iv, p.put_iv]);
-  const minS = Math.min(...strikes); const maxS = Math.max(...strikes);
-  const minIv = Math.min(...allIvs) * 0.98; const maxIv = Math.max(...allIvs) * 1.02;
-  const W = 400; const H = 100;
-  const PAD = { l: 36, r: 8, t: 6, b: 20 };
-  const cx = (s: number) => PAD.l + ((s - minS) / (maxS - minS)) * (W - PAD.l - PAD.r);
-  const cy = (iv: number) => PAD.t + (1 - (iv - minIv) / (maxIv - minIv)) * (H - PAD.t - PAD.b);
-  const callPts = points.map((p) => `${cx(p.strike).toFixed(1)},${cy(p.call_iv).toFixed(1)}`).join(" ");
-  const putPts = points.map((p) => `${cx(p.strike).toFixed(1)},${cy(p.put_iv).toFixed(1)}`).join(" ");
-  const nTicks = 3;
+  const { lang } = useLang();
+  const boxRef = useRef<HTMLDivElement>(null);
+  const W = useChartWidth(boxRef, 600);
+  const H = 200;
+
+  let body: ReactNode = null;
+  const pts0 = (points ?? []).filter((p) => Number.isFinite(p.strike));
+  const allIvs = pts0.flatMap((p) => [p.call_iv, p.put_iv]).filter(okIv);
+  // Strikes missing at least one side — reported honestly under the chart.
+  const gapped = pts0.filter((p) => !(okIv(p.call_iv) && okIv(p.put_iv))).length;
+
+  if (pts0.length < 2 || allIvs.length < 2) {
+    body = (
+      <div className="obs-lbl" style={{ color: "var(--muted)", padding: "6px 0" }}>
+        {lang === "zh" ? "该到期无有效双边报价，无法绘制微笑曲线。" : "No priced quotes on this expiry — nothing to plot."}
+      </div>
+    );
+  } else {
+    const strikes = pts0.map((p) => p.strike);
+    const minS = Math.min(...strikes); const maxS = Math.max(...strikes);
+    const [minIv, maxIv] = padDomain(Math.min(...allIvs), Math.max(...allIvs), { padFrac: 0.10, clampMin: 0 });
+    const PAD = { l: 54, r: 20, t: 16, b: 36 };
+    const cx = (s: number) => PAD.l + ((s - minS) / ((maxS - minS) || 1)) * (W - PAD.l - PAD.r);
+    const cy = (iv: number) => PAD.t + (1 - (iv - minIv) / ((maxIv - minIv) || 1)) * (H - PAD.t - PAD.b);
+    // A missing wing quote becomes a GAP in the line, never a dive to the floor.
+    const segs = (key: "call_iv" | "put_iv"): string[] => {
+      const out: string[] = [];
+      let cur: string[] = [];
+      for (const p of pts0) {
+        const v = p[key];
+        if (okIv(v)) cur.push(`${cx(p.strike).toFixed(1)},${cy(v).toFixed(1)}`);
+        else { if (cur.length > 1) out.push(cur.join(" ")); cur = []; }
+      }
+      if (cur.length > 1) out.push(cur.join(" "));
+      return out;
+    };
+    const { values: yTicks, step } = niceTicks(minIv, maxIv, 4);
+    // 46px ≈ a 5-char strike at fontSize 10 plus a gutter.
+    const labelled = thinLabels(pts0, (p) => cx(p.strike), 46);
+    body = (
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} style={{ display: "block" }}>
+        {yTicks.map((iv) => {
+          const y = cy(iv);
+          return (
+            <g key={iv}>
+              <line x1={PAD.l} y1={y} x2={W - PAD.r} y2={y} stroke="var(--line)" strokeWidth="0.7" />
+              <text x={PAD.l - 8} y={y + 3.5} textAnchor="end" fill="var(--muted)" fontSize={10} style={SVG_NUM}>
+                {fmtTick(iv, step)}%
+              </text>
+            </g>
+          );
+        })}
+        {/* Spot reference vertical line */}
+        {spotRef != null && spotRef >= minS && spotRef <= maxS && (
+          <line
+            x1={cx(spotRef)} y1={PAD.t} x2={cx(spotRef)} y2={H - PAD.b}
+            stroke="var(--warn)" strokeWidth="1" strokeDasharray="3,2"
+          />
+        )}
+        {/* Call IV line (segmented across missing quotes) */}
+        {segs("call_iv").map((s, i) => (
+          <polyline key={`c${i}`} fill="none" stroke="var(--up)" strokeWidth="1.5" points={s} />
+        ))}
+        {/* Put IV dashed line (segmented across missing quotes) */}
+        {segs("put_iv").map((s, i) => (
+          <polyline key={`p${i}`} fill="none" stroke="var(--down)" strokeWidth="1.5" strokeDasharray="4,2" points={s} />
+        ))}
+        {/* Strike labels thinned by RENDERED pixel gap, never by array index —
+            `i % 3` put the densest labels exactly where strikes cluster (ATM). */}
+        {labelled.map((p) => (
+          <text key={p.strike} x={cx(p.strike)} y={H - 12} textAnchor="middle" fill="var(--text-dim)" fontSize={10} style={SVG_NUM}>
+            {p.strike}
+          </text>
+        ))}
+      </svg>
+    );
+  }
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} style={{ display: "block", overflow: "visible" }}>
-      {Array.from({ length: nTicks + 1 }, (_, i) => {
-        const iv = minIv + (i / nTicks) * (maxIv - minIv);
-        const y = cy(iv);
-        return (
-          <g key={i}>
-            <line x1={PAD.l} y1={y} x2={W - PAD.r} y2={y} stroke="var(--line)" strokeWidth="0.5" />
-            <text x={PAD.l - 4} y={y + 3} textAnchor="end" fill="var(--muted)" fontSize={9}>{iv.toFixed(0)}%</text>
-          </g>
-        );
-      })}
-      {/* Spot reference vertical line */}
-      {spotRef != null && spotRef >= minS && spotRef <= maxS && (
-        <line
-          x1={cx(spotRef)} y1={PAD.t} x2={cx(spotRef)} y2={H - PAD.b}
-          stroke="var(--warn)" strokeWidth="1" strokeDasharray="3,2"
-        />
+    <div ref={boxRef} style={{ width: "100%" }}>
+      {body}
+      {/* Honest coverage note — a gap in the curve has to say why it is a gap. */}
+      {gapped > 0 && (
+        <div className="obs-lbl" style={{ color: "var(--text-dim)", marginTop: 4 }}>
+          {lang === "zh" ? `${gapped} 个行权价无双边报价` : `${gapped} ${gapped === 1 ? "strike" : "strikes"} had no two-sided quote`}
+        </div>
       )}
-      {/* Call IV line */}
-      <polyline fill="none" stroke="var(--up)" strokeWidth="1.5" points={callPts} />
-      {/* Put IV dashed line */}
-      <polyline fill="none" stroke="var(--down)" strokeWidth="1.5" strokeDasharray="4,2" points={putPts} />
-      {/* Strike labels (every other) */}
-      {points.filter((_, i) => i % 3 === 0).map((p) => (
-        <text key={p.strike} x={cx(p.strike)} y={H - 4} textAnchor="middle" fill="var(--text-dim)" fontSize={9}>{p.strike}</text>
-      ))}
-    </svg>
+    </div>
   );
 });
 
 // ─── IV Rank history sparkline ────────────────────────────────────────────────
 
 const IvRankHistory = memo(function IvRankHistory({ history }: { history: VolHistPoint[] }) {
-  const withRank = history.filter((h) => h.iv_rank != null);
-  if (withRank.length < 2) return null;
-  const vals = withRank.map((h) => h.iv_rank as number);
-  const mn = 0; const mx = 100;
-  const W = 100; const H = 60;
-  const pt = (i: number) => {
-    const x = (i / (vals.length - 1)) * W;
-    const y = H - ((vals[i] - mn) / (mx - mn)) * (H - 6) - 2;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  };
-  const pts = vals.map((_, i) => pt(i)).join(" ");
-  // 50-line reference
-  const ref50y = H - ((50 - mn) / (mx - mn)) * (H - 6) - 2;
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: "block" }}>
-      <line x1="0" y1={ref50y} x2={W} y2={ref50y} stroke="var(--line)" strokeWidth="0.5" strokeDasharray="2,2" />
-      <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.2" points={pts} />
-      <circle cx={(vals.length - 1) / (vals.length - 1) * W} cy={pt(vals.length - 1).split(",")[1]} r={2.5} fill="var(--brand-2)" />
-    </svg>
-  );
+  const { lang } = useLang();
+  const boxRef = useRef<HTMLDivElement>(null);
+  const W = useChartWidth(boxRef, 560);
+  const H = MIN_CHART_H.spark;
+
+  const vals = (history ?? [])
+    .filter((h) => h.iv_rank != null && Number.isFinite(h.iv_rank))
+    .map((h) => h.iv_rank as number);
+
+  let body: ReactNode = null;
+  if (vals.length < 2) {
+    body = (
+      <div className="obs-lbl" style={{ color: "var(--muted)", padding: "6px 0" }}>
+        {lang === "zh" ? "IV分位基线仍在积累。" : "IV-rank baseline is still building."}
+      </div>
+    );
+  } else {
+    // Domain is fixed 0–100 BY DEFINITION (a rank, not a measurement) — this is the
+    // one case svgChart R7 exempts from padDomain.
+    const PAD_L = 30, PAD_R = 8, PAD_V = 8;
+    const xOf = (i: number) => PAD_L + (i / (vals.length - 1)) * (W - PAD_L - PAD_R);
+    const yOf = (v: number) => H - PAD_V - (v / 100) * (H - PAD_V * 2);
+    const pts = vals.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(" ");
+    body = (
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} style={{ display: "block" }}>
+        {[0, 50, 100].map((v) => (
+          <g key={v}>
+            <line
+              x1={PAD_L} y1={yOf(v)} x2={W - PAD_R} y2={yOf(v)}
+              stroke="var(--line)" strokeWidth="0.7" strokeDasharray={v === 50 ? "3,3" : undefined}
+            />
+            <text x={PAD_L - 6} y={yOf(v) + 3.5} textAnchor="end" fill="var(--muted)" fontSize={10} style={SVG_NUM}>{v}</text>
+          </g>
+        ))}
+        <polyline fill="none" stroke="var(--brand-2)" strokeWidth="1.4" points={pts} />
+        <circle cx={xOf(vals.length - 1)} cy={yOf(vals[vals.length - 1])} r={3} fill="var(--brand-2)" />
+      </svg>
+    );
+  }
+
+  return <div ref={boxRef} style={{ width: "100%" }}>{body}</div>;
 });
 
 // ─── GEX 30-session history sparkline strip ──────────────────────────────────
@@ -1624,18 +1628,22 @@ export default function OptionsHubView({
     return () => clearTimeout(id);
   }, [tapeTickerSearch]);
 
-  // Bootstrap heat + warm secondary feeds; the tape feed bootstraps itself via
-  // useFlowStream (initial SSE snapshot). The 45s poll refreshes heat only.
+  // Bootstrap heat; the tape feed bootstraps itself via useFlowStream (initial SSE
+  // snapshot). The 45s poll refreshes heat only.
+  //
+  // PERF (v7b): nothing else awaits this any more. The old body awaited flowGet
+  // ("heat" — a 2 KB payload) and only THEN started flowPrefetch("tide") +
+  // flowPrefetch("prophet_idx"), which added a whole serial round trip to every
+  // cold load and pulled ~319 KB of production payload for two tabs the visitor
+  // had not opened. Neither is consumable by the Tape: `tide` via flowGet is read
+  // only by FlowDeskView (the Tide tab itself rides SSE) and `prophet_idx` only by
+  // ProphetView. Both are now warmed by the tab-activation effect below.
   useEffect(() => {
-    (async () => {
+    void (async () => {
       try {
         const hj = await flowGet("heat");
         if (hj) setHeat(hj as HeatPayload);
       } catch { /* heat secondary */ }
-      // Warm secondary feeds so first tab switches are fast. manifest (1.9MB) is
-      // only used by ProphetView and is prefetched lazily when that tab activates.
-      flowPrefetch("tide");
-      flowPrefetch("prophet_idx");
     })();
     pollRef.current = setInterval(doFetch, 45_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -1650,10 +1658,14 @@ export default function OptionsHubView({
     void fetchDte();
   }, [activeTab, fetchDte]);
 
-  // Lazy-prefetch manifest only when Prophet tab activates (manifest is ~1.9MB —
-  // prefetching it on every page mount wastes bandwidth for users who never visit Prophet).
+  // Warm a tab's OWN payloads at the moment that tab activates — never on hub mount.
+  //   · manifest (~1.9 MB) and prophet_idx (~136 KB) are ProphetView's.
+  //   · tide via flowGet (~183 KB) is FlowDeskView's — the Tide tab itself rides SSE.
+  // flowClientCache dedupes in-flight keys, so racing the sub-view's own fetch
+  // collapses onto one request rather than doubling it.
   useEffect(() => {
-    if (activeTab === "prophet") flowPrefetch("manifest");
+    if (activeTab === "prophet") { flowPrefetch("prophet_idx"); flowPrefetch("manifest"); }
+    if (activeTab === "desk") flowPrefetch("tide");
   }, [activeTab]);
 
   // Fetch ticker data when selected; also sync vol surface for the merged right column.
@@ -2037,6 +2049,33 @@ export default function OptionsHubView({
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
+  // Tape header row, shared by the real table and by the loading skeleton so the
+  // column widths, the sort affordances and the belt above them are all identical
+  // before and after the first SSE frame — nothing reflows when data lands.
+  // COLUMN ORDER IS LOAD-BEARING: the ≤640px rules hide `.scr-table table.scr`
+  // columns 3/5/6/7/8/9 by nth-child. Never reorder these.
+  const tapeThead = (
+    <thead>
+      <tr>
+        <th style={{ textAlign: "left", cursor: "pointer" }} className={sortKey === "ts" ? "sorted" : ""} onClick={() => handleSort("ts")}>
+          {t("colTime", "Time")} ET{sortKey === "ts" ? (sortDir === -1 ? " ↓" : " ↑") : ""}
+        </th>
+        <th style={{ textAlign: "left" }}>{t("colTicker", "Ticker")}</th>
+        <th style={{ textAlign: "left" }}>{t("colSector", "Sector")}</th>
+        <th>{t("colSide", "Side")}</th>
+        <th>{t("colCP", "C/P")}</th>
+        <th>{t("colContract", "Contract")}</th>
+        <th>{t("colDte", "DTE")}</th>
+        <th>{t("colMny", "Mny")}</th>
+        <th>{t("colSize", "Size")}</th>
+        <th style={{ cursor: "pointer" }} className={sortKey === "premium" ? "sorted" : ""} onClick={() => handleSort("premium")}>
+          {t("colPrem", "Prem")}{sortKey === "premium" ? (sortDir === -1 ? " ↓" : " ↑") : ""}
+        </th>
+        <th>{t("colFlags", "Flags")}</th>
+      </tr>
+    </thead>
+  );
+
   // Wrapper element: STANDALONE (legacy / self-managed) owns its own `.main2`
   // grid cell — the chrome (.app2 grid + topbar + AppNav) is the route layout's.
   // EMBEDDED (controlled by a workspace page) renders a bare flex column instead,
@@ -2375,30 +2414,41 @@ export default function OptionsHubView({
                       </div>
                     </div>
                   )}
+                  {/* Loading: paint the tape's OWN shape — real header row plus shimmer
+                      rows — instead of a one-line "Loading…". The SSE first frame is the
+                      longest leg of a cold load, and a blank stare there reads as broken. */}
                   {!fetchError && !feed && (
-                    <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
+                    <table
+                      className="scr"
+                      style={{ fontSize: 12 }}
+                      role="status"
+                      aria-busy="true"
+                      aria-label={t("loading", "Loading…")}
+                    >
+                      {tapeThead}
+                      <tbody>
+                        {Array.from({ length: TAPE_SKEL_ROWS }, (_, r) => (
+                          <tr key={r} aria-hidden="true">
+                            {TAPE_SKEL_COLS.map((w, c) => (
+                              <td key={c} style={{ textAlign: c < 3 ? "left" : undefined }}>
+                                <span
+                                  className="fin-skel"
+                                  style={{
+                                    display: "inline-block", height: 9, width: w,
+                                    borderRadius: 3, verticalAlign: "middle",
+                                    opacity: 0.85 - r * 0.045,
+                                  }}
+                                />
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
                   {feed && (
                     <table className="scr" style={{ fontSize: 12 }}>
-                      <thead>
-                        <tr>
-                          <th style={{ textAlign: "left", cursor: "pointer" }} className={sortKey === "ts" ? "sorted" : ""} onClick={() => handleSort("ts")}>
-                            {t("colTime", "Time")} ET{sortKey === "ts" ? (sortDir === -1 ? " ↓" : " ↑") : ""}
-                          </th>
-                          <th style={{ textAlign: "left" }}>{t("colTicker", "Ticker")}</th>
-                          <th style={{ textAlign: "left" }}>{t("colSector", "Sector")}</th>
-                          <th>{t("colSide", "Side")}</th>
-                          <th>{t("colCP", "C/P")}</th>
-                          <th>{t("colContract", "Contract")}</th>
-                          <th>{t("colDte", "DTE")}</th>
-                          <th>{t("colMny", "Mny")}</th>
-                          <th>{t("colSize", "Size")}</th>
-                          <th style={{ cursor: "pointer" }} className={sortKey === "premium" ? "sorted" : ""} onClick={() => handleSort("premium")}>
-                            {t("colPrem", "Prem")}{sortKey === "premium" ? (sortDir === -1 ? " ↓" : " ↑") : ""}
-                          </th>
-                          <th>{t("colFlags", "Flags")}</th>
-                        </tr>
-                      </thead>
+                      {tapeThead}
                       <tbody>
                         {events.length === 0 && (
                           <tr className="empty-row">
@@ -2598,7 +2648,7 @@ export default function OptionsHubView({
                       Session view swaps in the quanted-style Session Flow pane. */}
                   {tideView === "tide" ? (
                     <div data-tut="tide-chart" className="obs-card" style={{ padding: "12px 4px 4px", height: 240, boxSizing: "border-box" }}>
-                      <TideChart minutes={tideData.minutes} spy={tideData.spy} height={216} sessionDate={tideData.session_date} />
+                      <TideChart minutes={tideData.minutes} spy={tideData.spy} height={TIDE_CHART_H} sessionDate={tideData.session_date} />
                     </div>
                   ) : (
                     <div className="obs-card" style={{ padding: "12px 12px 8px" }}>
@@ -2995,7 +3045,7 @@ export default function OptionsHubView({
                           <div className="obs-lbl" style={{ marginBottom: 8 }}>
                             {t("tickersMinChart", "Minute Net Prem")}
                           </div>
-                          <MinuteNetChart minutes={tickerData.minutes} height={80} />
+                          <MinuteNetChart minutes={tickerData.minutes} height={160} />
                         </div>
 
                         {/* Top contracts list */}
@@ -3137,23 +3187,24 @@ export default function OptionsHubView({
                Preset chips each render a sortable table; no new endpoints.
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === "screener" && (
-            <div style={{ flex: 1, overflow: "auto", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
-              {screenerLoading && !oiData && !hotData && !feed && (
-                <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
-              )}
-              {/* Both lanes empty AND not loading — say so instead of an empty page. */}
-              {!screenerLoading && !oiData && !hotData && !feed && (
-                <div className="fin-empty fin-empty-lg" role="status">
-                  <div className="fin-empty-title">
-                    {lang === "zh" ? "暂无可筛选的数据" : "Nothing to screen yet"}
-                  </div>
-                  <div className="fin-empty-why">
-                    {lang === "zh"
-                      ? "盘中期权流与夜间收盘构建当前均无法读取。"
-                      : "Neither the intraday options tape nor the nightly close build could be read right now."}
-                  </div>
-                </div>
-              )}
+            /* Screener shell: a fixed filter head over ONE internal scroller.
+               `minHeight:0` is load-bearing here — a flex item defaults to
+               `min-height:auto`, so without it this column refuses to shrink,
+               `overflow` never engages, and a long preset table simply ran off the
+               bottom of the tab with no way to scroll to it. */
+            <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+
+              {/* ── Filter head — presets + belt + provenance stay put while the
+                     results below them scroll. The `maxHeight` cap is the mobile
+                     guard: on a phone the chip rows wrap several lines deep, and an
+                     uncapped pinned head would swallow the results region. At desktop
+                     sizes the head is ~110px, so the cap never engages. ── */}
+              {(feed || oiData || hotData) && (
+              <div style={{
+                flexShrink: 0, display: "flex", flexDirection: "column", gap: 16,
+                padding: "14px 18px 12px", borderBottom: "1px solid var(--line)",
+                maxHeight: "40svh", overflowY: "auto", overscrollBehavior: "contain",
+              }}>
 
               {/* Preset view chip bar */}
               {(feed || oiData || hotData) && (() => {
@@ -3264,6 +3315,35 @@ export default function OptionsHubView({
                   </div>
                 );
               })()}
+
+              </div>
+              )}
+
+              {/* ── Results region — the ONLY scroller on this tab (obs-scroll idiom,
+                     same thin thumb as the flow feed / GEX ladder / watchlist). The
+                     preset tables keep their own horizontal `overflowX:auto` wrappers,
+                     so the ≤640px nth-child column rules are untouched. ── */}
+              <div className="obs-scroll" style={{
+                flex: 1, minHeight: 0, overscrollBehavior: "contain",
+                padding: "14px 18px", display: "flex", flexDirection: "column", gap: 16,
+              }}>
+
+              {screenerLoading && !oiData && !hotData && !feed && (
+                <div className="fin-empty" role="status">{t("loading", "Loading…")}</div>
+              )}
+              {/* Both lanes empty AND not loading — say so instead of an empty page. */}
+              {!screenerLoading && !oiData && !hotData && !feed && (
+                <div className="fin-empty fin-empty-lg" role="status">
+                  <div className="fin-empty-title">
+                    {lang === "zh" ? "暂无可筛选的数据" : "Nothing to screen yet"}
+                  </div>
+                  <div className="fin-empty-why">
+                    {lang === "zh"
+                      ? "盘中期权流与夜间收盘构建当前均无法读取。"
+                      : "Neither the intraday options tape nor the nightly close build could be read right now."}
+                  </div>
+                </div>
+              )}
 
               {/* ── Top Premium view — unusual_names sorted by gross_premium_today ── */}
               {screenerPreset === "top_prem" && feed && (() => {
@@ -3674,6 +3754,7 @@ export default function OptionsHubView({
                   </div>
                 </div>
               )}
+              </div>{/* /results scroller */}
             </div>
           )}
 

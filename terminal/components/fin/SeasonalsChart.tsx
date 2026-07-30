@@ -97,7 +97,11 @@ function niceTicks([lo, hi]: [number, number], count = 4): number[] {
 
 export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = false, height = 420 }: SeasonalsChartProps) {
   const { tip, show, hide } = useFinTip();
-  const [pct, setPct] = useState(true);
+  // Percent-normalized is the ONLY mode (v7b): the raw-price overlay was killed by the
+  // seasonal audit — overlaying absolute price levels from different years shares one
+  // y-axis across regimes and reads as a comparison it isn't. The pct plumbing below is
+  // kept as a constant so the normalization branches stay in one obvious place.
+  const pct = true;
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [hiYear, setHiYear] = useState<string | null>(null); // legend/line hover-highlight
   const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
@@ -268,10 +272,6 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
     <div className="fin-seas-chart">
       {/* controls */}
       <div className="fin-yo-controls">
-        <div className="fin-toggle">
-          <button className={pct ? "on" : ""} onClick={() => setPct(true)}>{pick(zh, "Percent", "百分比")}</button>
-          <button className={!pct ? "on" : ""} onClick={() => setPct(false)}>{pick(zh, "Regular", "原始")}</button>
-        </div>
         <div className="fin-seas-hint">
           {sel ? (
             <button className="fin-seas-clear" onClick={() => setSel(null)}>✕ {pick(zh, "Clear selection", "清除选区")}</button>
@@ -391,7 +391,13 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
 
       {/* legend — inline chips when few, an "N years" chip + popover past 12 */}
       <div className="fin-seas-legend">
-        <div className="fin-seas-legend-years">
+        {/* `.collapsed` un-clips the row: the un-collapsed legend caps its height
+            and scrolls, and that scroll container was clipping the year-picker
+            popover (an abspos box can never escape an ancestor's overflow, no
+            matter its z-index) — so the "N of M years" chip appeared dead. In
+            the collapsed case the row is a single line of chips, so dropping
+            the cap costs nothing. */}
+        <div className={"fin-seas-legend-years" + (collapseLegend ? " collapsed" : "")}>
           <span className="fin-seas-legkey"><i className="fin-seas-legkey-mean" />{pick(zh, "Mean", "平均")}</span>
           {years.some((y) => y.isCurrent) && <span className="fin-seas-legkey"><i className="fin-seas-legkey-cur" />{pick(zh, "This year", "今年")}</span>}
           {collapseLegend ? (

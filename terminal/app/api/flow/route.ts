@@ -35,7 +35,13 @@ export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const f = url.searchParams.get("f") ?? "feed";
   if (!isValidF(f)) {
-    return NextResponse.json({ error: "bad f param" }, { status: 400 });
+    // Every response on this route carries no-store, error branches included:
+    // EdgeOne keys /api/* error responses WITHOUT the auth cookie, so an
+    // uncacheable-marker gap here can be replayed to an entitled caller.
+    return NextResponse.json(
+      { error: "bad f param" },
+      { status: 400, headers: { "Cache-Control": "no-store" } }
+    );
   }
 
   // Dev fixture mode: return static fixture data without touching any upstream.
@@ -47,7 +53,10 @@ export async function GET(req: Request): Promise<Response> {
         headers: { "Cache-Control": "no-store", "X-Flow-Source": "fixture" },
       });
     } catch {
-      return NextResponse.json({ error: "fixture unavailable" }, { status: 503 });
+      return NextResponse.json(
+        { error: "fixture unavailable" },
+        { status: 503, headers: { "Cache-Control": "no-store" } }
+      );
     }
   }
 

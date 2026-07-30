@@ -13,12 +13,21 @@
  *  - Direction "lean" is a SOFT chip with neutral styling + explicit tooltip.
  *  - No "validated", no predictive-edge claims in copy.
  *  - Sweep badge carries "heuristic" tooltip — aggressor is UNVERIFIED without NBBO.
+ *
+ * v7b EXPANSION MODEL (the fix for the sticky/unclosable panel):
+ *  - Expansion state is OWNED BY FeedPane (one card open at a time), not by the
+ *    card's own useState. The card is a controlled component.
+ *  - The detail panel is an ABSOLUTE overlay hanging below the card, so the CSS
+ *    grid row height never changes and neighbours never gape.
+ *  - The affordance is a real 32px chevron button in its own reserved slot on the
+ *    meta row — it no longer floats over the meta text, and it no longer drifts to
+ *    the bottom of a grown card where it was effectively unreachable.
  */
 
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { FlowEvent, EnrichEvent } from "./FeedPane";
 import { fmtNum } from "@/lib/finFormat";
-import { makeFlowT } from "@/lib/flowdeskStrings";
+import { makeFlowT, scoreComponentLabel } from "@/lib/flowdeskStrings";
 import { RingGauge } from "../ui/RingGauge";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -30,6 +39,10 @@ interface FlowCardProps {
   lang: "en" | "zh";
   selected: boolean;
   onSelect: (ev: FlowEvent) => void;
+  /** Controlled expansion — FeedPane keeps at most one card open at a time. */
+  expanded: boolean;
+  /** Toggle expansion for this event id (functional toggle lives in FeedPane). */
+  onToggleExpand: (id: string) => void;
 }
 
 // ── Badge helpers ─────────────────────────────────────────────────────────────
@@ -88,10 +101,21 @@ function fmtTime(iso: string): string {
 
 // Memoized to avoid re-rendering all 200 cards on every poll tick or selection change.
 // Only re-renders when its own event data, selection state, enrich data, or lang changes.
-export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, onSelect }: FlowCardProps) {
+export const FlowCard = memo(function FlowCard({
+  ev, enrichEv, lang, selected, onSelect, expanded, onToggleExpand,
+}: FlowCardProps) {
   const zh = lang === "zh";
-  const [expanded, setExpanded] = useState(false);
   const [tipVisible, setTipVisible] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelId = `fc-detail-${ev.id}`;
+
+  // The panel hangs BELOW the card as an overlay, so a card near the bottom of the
+  // feed viewport would otherwise open off-screen and read as "nothing happened".
+  // block:"nearest" scrolls the feed by the minimum needed and nothing else.
+  useEffect(() => {
+    if (!expanded) return;
+    panelRef.current?.scrollIntoView({ block: "nearest" });
+  }, [expanded]);
 
   // Score is precomputed server-side and attached to the event (ev.flowScore).
   const fs = ev.flowScore;
@@ -126,12 +150,14 @@ export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, o
 
   return (
     <div
-      className={`obs-card obs-fc-card${selected ? " sel" : ""}`}
-      onClick={() => onSelect(ev)}
+      className={`obs-card obs-fc-card${selected ? " sel" : ""}${expanded ? " open" : ""}`}
+      // When the panel is open the card itself is the close affordance (alongside
+      // the chevron, Esc and outside-click). Otherwise a card click selects, as before.
+      onClick={() => { if (expanded) onToggleExpand(ev.id); else onSelect(ev); }}
       role="option"
       aria-selected={selected}
       data-tut="flow-card"
-      style={{ position: "relative" }}
+      data-fc-open={expanded ? "1" : undefined}
     >
       {/* ── Identity row: ticker / score ring / time ── */}
       <div className="obs-fc-row1">
@@ -193,7 +219,9 @@ export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, o
         <span className="obs-fc-subtitle num">${ev.strike} · {ev.exp} · {ev.dte}d</span>
       </div>
 
-      {/* ── One muted meta line: size / OI / IV, then the demoted flags ── */}
+      {/* ── Meta row: the muted facts WRAP inside their own column; the expand
+             chevron owns a reserved 32px slot at the row's right edge so it can
+             never sit on top of the text (the old absolute button did). ── */}
       <div className="obs-fc-line3">
         <span className="obs-fc-meta">
           <span className="num">{zh ? "张数" : "Size"} {ev.size.toLocaleString()}</span>
@@ -216,36 +244,70 @@ export const FlowCard = memo(function FlowCard({ ev, enrichEv, lang, selected, o
             </span>
           ))}
         </span>
+
+        {/* Expand chevron — its own hit area (32×32), never over the meta text. */}
+        <button
+          type="button"
+          className="obs-fc-expand-btn"
+          onClick={(e) => { e.stopPropagation(); onToggleExpand(ev.id); }}
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          aria-label={expanded ? t("cardCollapse") : t("cardExpand")}
+        >
+          <svg viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true">
+            <path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" strokeWidth="1.6"
+                  strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
       </div>
 
-      {/* ── Expand toggle ── */}
-      <button
-        className="obs-fc-expand-btn"
-        onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
-        aria-expanded={expanded}
-      >
-        {expanded ? "▲" : "▼"}
-      </button>
-
-      {/* ── Expanded detail ── */}
+      {/* ── Expanded detail — ABSOLUTE overlay below the card ──
+          It is taken out of flow on purpose: the feed is a CSS grid, so an
+          in-flow panel stretched the whole row and every neighbour gaped. */}
       {expanded && (
-        <div className="obs-fc-detail">
+        <div
+          ref={panelRef}
+          id={panelId}
+          className="obs-card obs-fc-detail"
+          role="region"
+          aria-label={t("inspectorComponents")}
+          onClick={(e) => e.stopPropagation()}
+        >
           <div className="obs-fc-detail-hd">
-            {zh ? "评分组成" : "Score components"}
+            <span className="obs-lbl">{t("inspectorComponents")}</span>
+            <button
+              type="button"
+              className="obs-fc-detail-close"
+              onClick={(e) => { e.stopPropagation(); onToggleExpand(ev.id); }}
+              aria-label={t("inspectorClose")}
+            >
+              <svg viewBox="0 0 12 12" width="11" height="11" fill="none" aria-hidden="true">
+                <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+            </button>
           </div>
-          {components.map((c) => (
-            <div key={c.key} className="obs-fc-comp-row">
-              <span className="obs-fc-comp-label">{c.label}</span>
-              <div className="obs-fc-comp-track">
-                <div
-                  className="obs-fc-comp-fill"
-                  style={{ width: `${Math.min(100, c.value)}%`, opacity: 0.8 }}
-                />
+
+          {components.map((c) => {
+            // The direction-reliability component is a PENALTY (negative). A raw
+            // negative width is an invalid CSS length, so the old bar silently fell
+            // back to full-width — the weakest input read as the strongest. Clamp,
+            // and let the value carry the sign.
+            const neg = c.value < 0;
+            const pct = Math.max(0, Math.min(100, c.value));
+            return (
+              <div key={c.key} className={`obs-fc-comp-row${neg ? " neg" : ""}`}>
+                <span className="obs-fc-comp-label">
+                  {scoreComponentLabel(lang, c.key, c.label)}
+                </span>
+                <div className="obs-fc-comp-track">
+                  <div className="obs-fc-comp-fill" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="obs-fc-comp-val num">{c.value.toFixed(0)}</span>
               </div>
-              <span className="obs-fc-comp-val">{c.value.toFixed(0)}</span>
-            </div>
-          ))}
-          <div className="obs-note" style={{ margin: "8px 0 0" }}>
+            );
+          })}
+
+          <div className="obs-note obs-fc-detail-honesty">
             {zh
               ? "评分反映大小/活跃度/新意，非胜率预测。等级为描述性，在前瞻账本完成之前无历史预测效力。"
               : "Score reflects magnitude/activity/novelty — not a win-rate prediction. Tiers are descriptive; no historical predictive edge until a forward ledger gates authority."}

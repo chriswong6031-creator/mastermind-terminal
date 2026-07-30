@@ -17,7 +17,11 @@
   --regime-up:#26c281; --warn:#e8a33d; --danger:#f0566b; --code-fn:#9d86ff;
   /* Chart Bus v2 (CMX W1): AI drawing-layer accent — violet, distinct from the user's blue (--brand-2). */
   --ai:#9d86ff; --ai-rgb:157,134,255;
-  --font-ui:var(--font-inter),-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  /* v7b type refresh: UI chrome rides San Francisco on Apple hardware
+     (-apple-system → SF Pro Text/Display with automatic optical sizing) and
+     falls back to the Inter webfont everywhere else. Numerals stay Inter-first
+     (--font-num below) — tabular figures must be identical cross-platform. */
+  --font-ui:-apple-system,BlinkMacSystemFont,var(--font-inter),"Segoe UI",Roboto,sans-serif;
   /* Numerals ride the SAME modern grotesque as the UI — a code face made every price, date and
      quarter label read as a machine dump. Column alignment now comes from tabular figures, not
      from a fixed advance: Inter's DEFAULT digits are proportional (the "1" is ~63% the width of
@@ -88,6 +92,11 @@
   --shadow-2:0 8px 24px rgba(0,0,0,.45);
   --shadow-3:0 18px 44px -14px rgba(0,0,0,.6);
   --rail:var(--brand);
+  /* tier aliases for tokens referenced by DayStatsStrip/MatrixGrid but never defined
+     (inside gradients an undefined token invalidates the whole declaration) */
+  --surface-1:var(--panel-2);
+  --text-1:var(--text);
+  --text-3:var(--muted);
 
   /* ---- Order-flow semantic pair (premium suites, 2026-07-28) ----
      Aggressor side: which party crossed the spread. This is a THIRD semantic family, alongside
@@ -113,7 +122,9 @@ html[data-updown="east"]{
 }
 *{box-sizing:border-box}
 html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 var(--font-ui);-webkit-font-smoothing:antialiased;letter-spacing:.005em}
+/* letter-spacing 0: SF carries its own optical spacing; the old .005em was an
+   Inter-era tune and reads loose under SF. Micro-labels keep their explicit tracking. */
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 var(--font-ui);-webkit-font-smoothing:antialiased;letter-spacing:0}
 .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
 .up{color:var(--up)} .down{color:var(--down)}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
@@ -436,7 +447,74 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
 .regchip.up{color:var(--up)} .regchip.warn{color:var(--warn)}
 .bar{display:inline-block;width:48px;height:6px;border-radius:3px;background:var(--panel-3);overflow:hidden;vertical-align:middle;margin-left:7px}
 .bar i{display:block;height:100%;background:var(--brand)}
-.scr-stat{display:flex;gap:22px;align-items:center;color:var(--muted);font-size:11.5px}.scr-stat b{color:var(--text)}
+.scr-stat{display:flex;gap:22px;align-items:center;color:var(--muted);font-size:11.5px}
+
+/* ===== screener v2 (scr2) — grouped filters, dual column sets, honest states ===== */
+.scr2-bar{display:flex;flex-direction:column;gap:var(--sp-2);padding:10px 16px;border-bottom:1px solid var(--line);flex:none}
+.scr2-row{display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap;min-width:0}
+/* mirrors .alert-form select (globals.css:810-811); .scr-search had NO rule anywhere, so
+   this is also what finally replaces a UA-default input on a dark page */
+.scr2-select{height:30px;max-width:190px;padding:0 26px 0 10px;border-radius:var(--r-md);background:var(--inset);border:1px solid var(--line);color:var(--text);font:600 12px/1 var(--font-ui);appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23717a8e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;cursor:pointer;text-overflow:ellipsis}
+.scr2-select:hover{border-color:var(--line-3)}
+.scr2-select:focus{border-color:var(--brand);outline:none}
+.scr2-search{flex:1;min-width:140px;max-width:260px;height:30px;padding:0 11px;border-radius:var(--r-md);background:var(--inset);border:1px solid var(--line);color:var(--text);font:500 12px/1 var(--font-ui);outline:none}
+.scr2-search:focus{border-color:var(--brand)}
+.scr2-search::placeholder{color:var(--text-dim)}
+/* presetbar = one shrinkable flex item holding the scroller + the never-scrolling Save tail */
+.scr2-presetbar{display:flex;align-items:center;gap:4px;margin-left:auto;min-width:0;max-width:100%}
+.scr2-presets{display:flex;align-items:center;gap:4px;min-width:0;overflow-x:auto;scrollbar-width:none}
+.scr2-presets::-webkit-scrollbar{display:none}
+.scr2-presets .fin-tab{flex:none;font-size:11.5px;padding:6px 11px}
+.scr2-presets-tail{display:flex;align-items:center;flex:none}
+.scr2-presets-tail .fin-tab{font-size:11.5px;padding:6px 11px}
+.scr2-preset-wrap{display:inline-flex;align-items:center;flex:none}
+.scr2-preset-wrap .fin-tab{padding-right:5px}
+.scr2-preset-x{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:2px;border:none;background:none;color:var(--muted);font:600 14px/1 var(--font-ui);cursor:pointer;border-radius:var(--r-pill)}
+.scr2-preset-x:hover{color:var(--text);background:var(--panel-2)}
+@media (pointer:coarse){.scr2-preset-x{min-width:40px;min-height:40px}}
+.scr2-preset-name{flex:none;height:26px;width:120px;padding:0 9px;border-radius:var(--r-pill);background:var(--inset);border:1px solid var(--brand-2);color:var(--text);font:600 11.5px/1 var(--font-ui);outline:none}
+.scr2-status{display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid var(--line);font:500 11.5px/1.4 var(--font-ui);color:var(--muted);flex:none}
+.scr2-status b{color:var(--text);font-family:var(--font-num);font-variant-numeric:tabular-nums}
+/* the filtered buy/sell counts keep their direction colour — .scr2-status b would eat it */
+.scr2-status b.up{color:var(--up)}
+.scr2-status b.down{color:var(--down)}
+.scr2-status-tail{display:inline-flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap;margin-left:auto}
+.scr2-ftag{cursor:pointer;border:none}
+.scr2-ftag:hover{filter:brightness(1.2)}
+.scr2-clear{background:none;border:none;padding:0;color:var(--brand-2);font:600 11.5px/1.4 var(--font-ui);cursor:pointer}
+.scr2-clear:hover{text-decoration:underline}
+.scr2-hidden{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}
+.scr2-table{flex:1;overflow:auto;min-height:0}
+table.scr2{width:100%;border-collapse:collapse;font-size:13px}
+table.scr2 thead th{position:sticky;top:0;background:var(--bg);text-align:right;padding:11px 16px;font:600 10px/1 var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);cursor:pointer;white-space:nowrap;z-index:2}
+table.scr2 thead th:first-child{text-align:left}
+table.scr2 thead th.sorted{color:var(--text)}
+/* ROW PITCH IS PINNED, NOT INFERRED. `height` + zero vertical padding + the fixed .tk/.nm
+   line-heights below make a row EXACTLY 44px (36px compact), matching ROW_H_COMFORT /
+   ROW_H_COMPACT in ScreenerView.tsx. The old padding-derived guess was wrong: with
+   padding:11px the two-line symbol cell measured 57.8px and the virtual spacers
+   under-reported the list by ~24%. Numerals law: --font-num + tabular re-declared here. */
+table.scr2 tbody td{height:44px;padding:0 16px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line-2);font-family:var(--font-num);font-variant-numeric:tabular-nums;color:var(--text)}
+table.scr2 tbody td:first-child{text-align:left;font-family:var(--font-ui)}
+table.scr2 tbody td.scr2-sec{font-family:var(--font-ui);color:var(--text-2)}
+.scr2 table.scr2 .sym-cell .tk{line-height:16px}
+.scr2 table.scr2 .sym-cell .nm{line-height:14px}
+table.scr2 tbody tr{cursor:pointer;transition:background var(--t)}
+table.scr2 tbody tr:hover{background:var(--panel-2)}
+table.scr2 tbody tr.empty-row,table.scr2 tbody tr.scr2-skel-row,table.scr2 tbody tr.scr2-spacer{cursor:default}
+table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,table.scr2 tbody tr.scr2-spacer:hover{background:transparent}
+/* .scr2-prefixed so these out-specify the .scr2.den-k height rule below */
+.scr2 table.scr2 tbody tr.empty-row td{height:auto;padding:var(--sp-5) var(--sp-4);text-align:center;border-bottom:none;font-family:var(--font-ui)}
+.scr2 table.scr2 tbody tr.scr2-spacer td{height:auto;padding:0;border-bottom:none}
+/* compact density — pairs with ROW_H_COMPACT = 36 */
+.scr2.den-k table.scr2 tbody td{height:36px}
+.scr2.den-k table.scr2 .sym-cell .ic{width:20px;height:20px}
+.scr2.den-k table.scr2 .sym-cell .tk{line-height:14px}
+.scr2.den-k table.scr2 .sym-cell .nm{line-height:12px}
+/* descendant selector required: fin.css loads AFTER globals.css, so a bare .scr2-asof
+   would lose the margin-top battle to .fin-asof at equal specificity */
+.scr2 .scr2-asof{flex:none;margin-top:0;padding:8px 16px;border-top:1px solid var(--line)}
+.scr-stat b{color:var(--text)}
 
 /* ===== pine editor ===== */
 .pine-main{grid-column:2;grid-row:2;display:flex;min-width:0;min-height:0;overflow:hidden}
@@ -1741,7 +1819,7 @@ table.scr tbody tr{cursor:pointer} table.scr tbody tr:hover{background:var(--pan
   /* ── Fix 5: font floors (prevent sub-11px text at ≤860px) ── */
   .flow-flag-chip,.flow-dte-chip,.flow-mny-chip{font-size:11px}
   .pill{font-size:11px}
-  table.scr thead th,.ptable th{font-size:11px}
+  table.scr thead th,table.scr2 thead th,.ptable th{font-size:11px}
   .sa-stat .k{font-size:11px}
   .sa-kstat .k{font-size:11px}
   .sym-cell .ic,.wl-row .ic,.m-sym .ic,.sres .r .ic{font-size:10px}
@@ -2065,13 +2143,20 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
   .flow-heat-strip{padding:7px 10px;gap:4px}
   /* portfolio table: reduced padding at narrow widths */
   .ptable th,.ptable td{padding:8px 10px}
-  /* screener standalone route: hide LAST(2), CHG(3), REGIME(5), WIN-RATE(6), PF(7), CAGR(8) — SYMBOL + SIGNAL + VOL visible */
-  .screener-main table.scr td:nth-child(2),.screener-main table.scr th:nth-child(2){display:none}
-  .screener-main table.scr td:nth-child(3),.screener-main table.scr th:nth-child(3){display:none}
-  .screener-main table.scr td:nth-child(5),.screener-main table.scr th:nth-child(5){display:none}
-  .screener-main table.scr td:nth-child(6),.screener-main table.scr th:nth-child(6){display:none}
-  .screener-main table.scr td:nth-child(7),.screener-main table.scr th:nth-child(7),
-  .screener-main table.scr td:nth-child(8),.screener-main table.scr th:nth-child(8){display:none}
+
+  /* screener v2 — universe view: keep Symbol(1) Last(2) Chg(3) $Vol(4) */
+  .scr2.u-view table.scr2 td:nth-child(n+5),.scr2.u-view table.scr2 th:nth-child(n+5){display:none}
+  /* screener v2 — signal view: keep Symbol(1) Last(2) Signal(4) */
+  .scr2.s-view table.scr2 td:nth-child(3),.scr2.s-view table.scr2 th:nth-child(3),
+  .scr2.s-view table.scr2 td:nth-child(n+5),.scr2.s-view table.scr2 th:nth-child(n+5){display:none}
+  .scr2-select,.scr2-search{min-height:36px}
+  .scr2-presetbar{max-width:100%;flex-basis:100%;margin-left:0}
+  .scr2-bar{padding:8px 10px}
+  .scr2-status{gap:6px 12px;padding:8px 10px}
+  .scr2-status-tail{margin-left:0;flex-basis:100%}
+  .scr2 .scr2-asof{padding:8px 10px}
+  table.scr2 thead th{padding:11px 10px}
+  table.scr2 tbody td{padding:0 10px}
   /* portfolio: hide DAY%(3), REGIME(5), WIN-RATE(6), PF(7), CAGR(8), TILT(9) — SYMBOL + LAST + SIGNAL visible */
   .tbl-scroll td:nth-child(3),.tbl-scroll th:nth-child(3){display:none}
   .tbl-scroll td:nth-child(5),.tbl-scroll th:nth-child(5){display:none}
@@ -2088,8 +2173,7 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
   .scr-table table.scr td:nth-child(8),.scr-table table.scr th:nth-child(8){display:none}
   .scr-table table.scr td:nth-child(9),.scr-table table.scr th:nth-child(9){display:none}
   .hub-tab{padding:0 10px;font-size:12px}
-  /* scr-stat in topbar: wrap counts to a second line and reduce gap */
-  .topbar .scr-stat{flex-wrap:wrap;gap:8px 14px;font-size:11px;max-width:240px;justify-content:flex-end}
+  /* (.topbar .scr-stat retired — scr-stat is dead app-wide) */
   /* chip filter tap-target enlargement */
   .chip{min-height:36px;padding:0 11px}
   /* flow chip tap height */

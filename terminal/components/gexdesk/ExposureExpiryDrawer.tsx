@@ -57,9 +57,14 @@ export function ExposureExpiryDrawer({ byExpiry, greek, asOf, lang }: Props) {
   const count = ts.nodes.length;
 
   return (
-    <div className="obs-xdrawer">
+    /* --inline: the drawer now sits inside the desk's LEFT column (see GexDeskView
+       XDRAWER_SLOT) instead of spanning the desk below both panes, so it must be able to
+       shrink to the slot it is given and let its own body scroll. The modifier is
+       namespaced — a bare `.inline` would collide across the obs family. */
+    <div className="obs-xdrawer obs-xdrawer--inline" style={XDRAWER_ROOT}>
       <button
         className="obs-xdrawer-hd"
+        style={{ flexShrink: 0 }}
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls="obs-xdrawer-body"
@@ -75,7 +80,7 @@ export function ExposureExpiryDrawer({ byExpiry, greek, asOf, lang }: Props) {
       </button>
 
       {open && (
-        <div className="obs-xdrawer-body" id="obs-xdrawer-body">
+        <div className="obs-xdrawer-body" id="obs-xdrawer-body" style={XDRAWER_BODY}>
           {/* Toolbar: Bubbles | Bars + Net-only badge */}
           <div className="obs-xdrawer-toolbar">
             <div style={{ display: "flex", gap: 3 }} role="group" aria-label={t("xdrawerViewAria")}>
@@ -153,15 +158,19 @@ function BubbleField({ ts }: { ts: ReturnType<typeof byExpiryToTermStructure> })
 
   return (
     <div className="obs-xdrawer-plot obs-scroll">
-      <svg viewBox={`0 0 ${W} ${H}`} width={W} height="100%" preserveAspectRatio="none" role="img"
+      {/* R1/R2 (components/charts/svgChart.ts): the viewBox is 1:1 with CSS px and
+          preserveAspectRatio="none" is gone. It used to stretch a 190-unit box into the
+          container's 204px, so every bubble rendered as a 7%-tall ellipse and the value
+          labels were sheared. The field still scrolls horizontally at its natural width. */}
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} style={{ display: "block" }} role="img"
         aria-label="Exposure by expiry term structure">
         {/* Quiet horizontal guides keep positive/negative distance legible. */}
         {[0.25, 0.75].map((p) => (
           <line key={p} x1={padL} y1={padT + plotH * p} x2={W - padR} y2={padT + plotH * p}
-            stroke="rgba(214,218,227,.07)" strokeWidth={1} />
+            stroke="var(--line-2)" strokeWidth={1} />
         ))}
         {/* Zero line */}
-        <line x1={padL} y1={midY} x2={W - padR} y2={midY} stroke="rgba(214,218,227,.18)" strokeWidth={1} strokeDasharray="3 3" />
+        <line x1={padL} y1={midY} x2={W - padR} y2={midY} stroke="var(--line-3)" strokeWidth={1} strokeDasharray="3 3" />
         {ts.nodes.map((node, i) => {
           const cx = xFor(i);
           const cy = yFor(node.net);
@@ -199,6 +208,29 @@ function BubbleField({ ts }: { ts: ReturnType<typeof byExpiryToTermStructure> })
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
+
+/**
+ * Column-scoped flex mechanics. `.obs-xdrawer` is flex-shrink:0 in observatory.css, which is
+ * right for a full-width desk footer but wrong now that the drawer lives inside the left
+ * column's height budget (GexDeskView XDRAWER_SLOT caps it): unshrinkable, it would overflow
+ * the slot and get clipped by the column. Shrinkable root + `0 1 auto` body means the body's
+ * own overflow-y:auto absorbs whatever the slot cannot give it — expand and collapse are pure
+ * re-flows of this column and never touch the Market State card next door.
+ *
+ * These are inline so the containment is self-contained; the equivalent
+ * `.obs-xdrawer--inline` rules are offered as a CSS patch if the stylesheet is preferred.
+ */
+const XDRAWER_ROOT: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  flexShrink: 1,
+};
+
+const XDRAWER_BODY: React.CSSProperties = {
+  flex: "0 1 auto",
+  minHeight: 0,
+};
 
 const TOGGLE_CHIP: React.CSSProperties = { height: 22, minWidth: 46, fontSize: 10.5, fontWeight: 600, padding: "0 8px" };
 

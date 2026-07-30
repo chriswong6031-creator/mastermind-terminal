@@ -22,12 +22,20 @@
  *
  * Controls: metric tabs (Net Prem active; Gamma/Vanna/Charm disabled-with-tooltip),
  * agg 1m/5m/15m, opacity slider, strike-range slider (filters price_levels to spot±q),
- * crosshair readout pill top-left (Strike · metric · value), as-of + cadence stamp
- * bottom-right. Empty state: honest "No surface data yet — accruing."
+ * Fit price / Fit strikes, crosshair readout pill top-left (Strike · metric · value),
+ * as-of + cadence stamp bottom-right. Empty state: honest "No surface data yet — accruing."
+ *
+ * Y axis: the field spans every strike in range (hundreds of points) while price spans a
+ * few dollars of it, and both share ONE price scale — so the default window is anchored to
+ * the CANDLE extent (priceWindow) and the field is allowed to overflow past the pane.
+ * Anchoring on the strikes, which is what this pane used to do, left price as a ~12px
+ * hairline. "Fit strikes" restores the whole field; shift+wheel (or wheel over the price
+ * gutter) zooms continuously between them.
  */
 
 import React, {
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -131,6 +139,75 @@ function fmtAsofLabel(asof: string | undefined): string {
   } catch { return asof.slice(11, 16); }
 }
 
+// ─── Y-axis framing ──────────────────────────────────────────────────────────
+// The heat field and the candles share ONE price scale, and the field is two orders of
+// magnitude taller than a session's price range (SPY: strikes 663-823 under a $743 spot
+// that moves ~$5). Framing the axis on the strike extent — the only behaviour this pane
+// had — left price as a ~12px hairline. The default window is therefore anchored to
+// PRICE; strike rows outside it are simply clipped by the pane, which is the honest
+// trade (the field is context, price is the subject). "Fit strikes" restores the whole
+// field on demand, and the wheel/drag zoom moves between them continuously.
+
+/** Zoom-out factor applied per wheel notch (its reciprocal zooms in). */
+const Y_WHEEL_STEP = 1.12;
+/** Narrowest / widest y window a wheel zoom may produce — stops a runaway scroll. */
+const Y_SPAN_MIN = 0.05;
+const Y_SPAN_MAX = 100_000;
+/** Minimum hit width of the right price gutter, for the wheel-over-axis gesture. */
+const Y_AXIS_HIT_MIN = 44;
+
+/**
+ * The PRICE-anchored window: the extent of the candles that will actually be drawn,
+ * padded so price occupies ~31% of the pane and the field overflows around it.
+ *
+ * `dateFilter` (archived replay only) drops the bars `/api/intraday` answered about TODAY
+ * — they are not drawn under a past session's field (see the candles effect) and must not
+ * scale it either. Returns null when there is nothing to anchor to (illiquid root, or a
+ * fixture with no candles), which is the caller's cue to fall back to the field window.
+ */
+function priceWindow(bars: Bar6[], dateFilter?: string | null): [number, number] | null {
+  let dayLo = -Infinity;
+  let dayHi = Infinity;
+  if (dateFilter) {
+    const a = sessionEpoch(dateFilter, "00:00");
+    const b = sessionEpoch(dateFilter, "23:59");
+    if (Number.isFinite(a) && Number.isFinite(b)) { dayLo = a; dayHi = b; }
+  }
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const bar of bars) {
+    if (bar[0] < dayLo || bar[0] > dayHi) continue;
+    if (Number.isFinite(bar[3]) && bar[3] < lo) lo = bar[3];
+    if (Number.isFinite(bar[2]) && bar[2] > hi) hi = bar[2];
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return null;
+  const center = (lo + hi) / 2;
+  // 1.2% floor: a dead-flat session must still get a readable band rather than a
+  // magnified tick, and it keeps the field visible either side of price.
+  const focus = Math.max(hi - lo, Math.abs(center) * 0.012);
+  if (!(focus > 0)) return null;
+  return [center - focus * 1.6, center + focus * 1.6];
+}
+
+/**
+ * The FIELD window: every painted strike row plus a 5.5% margin. This was the only
+ * framing before; it is now the no-candles fallback and the explicit "Fit strikes" chip.
+ */
+function strikeWindow(levels: number[], spot?: number | null): [number, number] | null {
+  if (!levels.length) return null;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of levels) {
+    if (!Number.isFinite(v)) continue;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  const span = Math.max(max - min, Math.max(2, Math.abs(spot ?? max) * 0.01));
+  const padding = span * 0.055;
+  return [min - padding, max + padding];
+}
+
 interface Readout { strike: number; value: number }
 
 /** A hovered strike row: the level, its index, the active-metric value, all-greek values
@@ -229,6 +306,12 @@ export function SurfacePane({
   // strike range. Replay frames and metric switches must not re-enable autoscale and crush
   // the useful strikes back into a thin line.
   const priceRangeKeyRef = useRef<string | null>(null);
+  // The y window we last committed, mirrored here so the wheel zoom always has a base to
+  // scale from. IPriceScaleApi.getVisibleRange is preferred when it answers (it also picks
+  // up an axis DRAG), but it is not relied on — this ref is the fallback.
+  const yDomainRef = useRef<[number, number]>([0, 0]);
+  // The strike levels actually painted (post range-filter) — what "Fit strikes" fits to.
+  const levelsRef = useRef<number[]>([]);
   // The session's full stamp list, so the axis can be pinned to the WHOLE day.
   const stampsRef = useRef<string[]>([]);
   // Live price lines for pinned strikes, by pin id (send-to-chart).
@@ -256,6 +339,36 @@ export function SurfacePane({
       cellShader: (amount: number) => heatShade(amount, maxAbs, pos, neg, W),
       opacity: W,
     } as Partial<HeatSeriesOptions>);
+  });
+
+  // Commit a y window. THE single writer of the price scale's visible range: every path
+  // (first framing, the fit chips, the wheel zoom) goes through here so yDomainRef can
+  // never drift from what is drawn. Returns false when the chart has not finished its
+  // first layout — the caller then declines to commit its key and a later frame retries.
+  const applyYRef = useRef((from: number, to: number): boolean => {
+    const scale = chartRef.current?.priceScale("right");
+    if (!scale || !Number.isFinite(from) || !Number.isFinite(to) || to <= from) return false;
+    try {
+      scale.setVisibleRange({ from, to });
+      scale.setAutoScale(false);
+      yDomainRef.current = [from, to];
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  // The window a wheel zoom scales from. The live range when the API answers (so an axis
+  // drag is respected), otherwise the last window we wrote.
+  const readYRef = useRef((): [number, number] | null => {
+    try {
+      const r = chartRef.current?.priceScale("right").getVisibleRange();
+      if (r && Number.isFinite(r.from) && Number.isFinite(r.to) && r.to > r.from) return [r.from, r.to];
+    } catch {
+      /* not available on this build — the mirror below is the contract */
+    }
+    const [lo, hi] = yDomainRef.current;
+    return hi > lo ? [lo, hi] : null;
   });
 
   // ── Seed the replay stamps from the index (once per root/session) ────────────
@@ -395,6 +508,17 @@ export function SurfacePane({
         borderColor: css("--line") || "#242832", timeVisible: true, secondsVisible: false,
         rightOffset: 3, fixLeftEdge: true,
       },
+      // axisDoubleClickReset.price OFF: the default "reset" re-enables autoscale, which
+      // autoscales to the UNION of the candles and the heat field — i.e. it restores the
+      // full strike extent and squeezes price back into a hairline. There is nothing for
+      // a price reset to restore here that "Fit price" / "Fit strikes" don't do honestly.
+      // The time axis keeps its reset; the price axis keeps its press-drag scale.
+      handleScale: {
+        axisDoubleClickReset: { price: false, time: true },
+        axisPressedMouseMove: { price: true, time: true },
+        mouseWheel: true,
+        pinch: true,
+      },
     });
     chartRef.current = chart;
 
@@ -497,6 +621,44 @@ export function SurfacePane({
     });
     ro.observe(el);
 
+    // Y zoom. Lightweight-Charts spends the wheel on the TIME axis and leaves the price
+    // axis with nothing but an undiscoverable gutter drag — on a field this tall that is
+    // the difference between reading price and guessing at it. Wheel over the price
+    // gutter, or shift+wheel anywhere, scales the price window around the pointer.
+    //
+    // CAPTURE phase + stopPropagation: the library's own wheel handler lives on the chart
+    // widget element INSIDE this container and ignores modifiers, so a bubble-phase
+    // listener would arrive after the time axis had already zoomed. Claiming the event on
+    // the way down is what keeps the two gestures separate.
+    const onWheel = (e: WheelEvent) => {
+      const rect = el.getBoundingClientRect();
+      let gutter = Y_AXIS_HIT_MIN;
+      try { gutter = Math.max(Y_AXIS_HIT_MIN, chartRef.current?.priceScale("right").width() ?? 0); } catch {}
+      const overAxis = e.clientX > rect.right - gutter;
+      if (!overAxis && !e.shiftKey) return; // plain wheel over the field keeps time zoom
+      // macOS reports a shift-held wheel on the X axis, so read whichever one moved —
+      // otherwise shift+wheel would fall through and SCROLL the chart sideways.
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (delta === 0) return;
+      const domain = readYRef.current();
+      if (!domain) return;
+      const [lo, hi] = domain;
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+      const y = e.clientY - rect.top;
+      const anchor =
+        candleSeriesRef.current?.coordinateToPrice(y) ??
+        heatSeriesRef.current?.coordinateToPrice(y) ??
+        (lo + hi) / 2;
+      const k = delta > 0 ? Y_WHEEL_STEP : 1 / Y_WHEEL_STEP;
+      const from = anchor - (anchor - lo) * k;
+      const to = anchor + (hi - anchor) * k;
+      const span = to - from;
+      if (span < Y_SPAN_MIN || span > Y_SPAN_MAX) return;
+      applyYRef.current(from, to);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+
     // Re-resolve shader colors on theme / data-updown flips. Resolve against the pane
     // element so the .obs-scoped greek pair vars (vanna/charm) are seen — not just :root.
     const mo = new MutationObserver(() => {
@@ -508,6 +670,7 @@ export function SurfacePane({
     return () => {
       ro.disconnect();
       mo.disconnect();
+      el.removeEventListener("wheel", onWheel, { capture: true });
       try { chart.remove(); } catch {}
       chartRef.current = null;
       heatSeriesRef.current = null;
@@ -538,21 +701,21 @@ export function SurfacePane({
     heat.setData(bars);
     applyShaderRef.current();
     const levelValues = shown.price_levels.filter((v) => Number.isFinite(v));
-    const rangeKey = `${root}:${frame.session_date ?? ""}:${rangeQ}`;
+    levelsRef.current = levelValues;
+    // `candles.length` is in the key so the window is (re)computed once the bars actually
+    // arrive — the first pass runs with an empty array and would otherwise lock in the
+    // candle-less fallback for the session. Nothing else in the key moves on a replay
+    // scrub or a metric switch, so a scrub still cannot yank the user's zoom.
+    const rangeKey = `${root}:${frame.session_date ?? ""}:${rangeQ}:${candles.length}`;
     if (levelValues.length > 0 && priceRangeKeyRef.current !== rangeKey) {
-      const min = Math.min(...levelValues);
-      const max = Math.max(...levelValues);
-      const span = Math.max(max - min, Math.max(2, Math.abs(frame.spot ?? max) * 0.01));
-      const padding = span * 0.055;
-      const scale = chartRef.current?.priceScale("right");
-      try {
-        scale?.setVisibleRange({ from: min - padding, to: max + padding });
-        scale?.setAutoScale(false);
-        priceRangeKeyRef.current = rangeKey;
-      } catch {
-        // The chart may still be completing its first layout. A later frame retries because
-        // the key is intentionally not committed on failure.
-      }
+      // Price first, field second. On an archived session the candle fetch answered about
+      // TODAY, so those bars are excluded here exactly as they are from the chart.
+      const win =
+        priceWindow(candles, archived ? frame.session_date : null) ??
+        strikeWindow(levelValues, frame.spot);
+      // A failed apply leaves the key uncommitted on purpose: the chart may still be
+      // completing its first layout, and a later frame retries.
+      if (win && applyYRef.current(win[0], win[1])) priceRangeKeyRef.current = rangeKey;
     }
     // B9: fit ONCE per root. Re-fitting on every [frame, metric, rangeQ] change threw away
     // any zoom or pan on the very next replay step. Safe to do once now that the whitespace
@@ -562,7 +725,7 @@ export function SurfacePane({
       fittedForRootRef.current = root;
       chartRef.current?.timeScale().fitContent();
     }
-  }, [frame, metric, rangeQ, root]);
+  }, [frame, metric, rangeQ, root, candles, archived]);
 
   // Re-apply the shader when opacity changes (data unchanged).
   useEffect(() => { applyShaderRef.current(); }, [opacity]);
@@ -683,6 +846,23 @@ export function SurfacePane({
   const cellAccruing = isCell && !!fixedMetric && fixedMetric !== "netprem" && !metricEnabled(frame, fixedMetric);
   const pinnedHere = hover ? (pins ?? []).some((p) => p.strike === hover.strike) : false;
 
+  // ── Y framing (explicit) ─────────────────────────────────────────────────────
+  // Both chips write through applyYRef — the same single writer the automatic framing and
+  // the wheel zoom use — so the mirrored domain can never drift from what is drawn.
+  // "Fit price" is null (and the chip inert) when no candle will be drawn for this
+  // session, which the aria-label says rather than leaving a dead control.
+  // Memoized deliberately (B9 spirit): the crosshair re-renders this component on every
+  // mousemove and this walks the whole session's bars — it must not ride along.
+  const priceFit = useMemo(
+    () => priceWindow(candles, archived ? frame?.session_date : null),
+    [candles, archived, frame?.session_date],
+  );
+  const fitPrice = () => { if (priceFit) applyYRef.current(priceFit[0], priceFit[1]); };
+  const fitStrikes = () => {
+    const win = strikeWindow(levelsRef.current, frame?.spot);
+    if (win) applyYRef.current(win[0], win[1]);
+  };
+
   return (
     <div style={PANE}>
       {/* Controls row — the quad's shared toolbar owns these in cell mode. */}
@@ -739,6 +919,30 @@ export function SurfacePane({
             onChange={(e) => setRangeQ(RANGE_STOPS[Number(e.target.value)])} />
           <span style={SLIDER_VAL} className="num">{rangeQ === 0 ? t("rangeAll") : `±${rangeQ}`}</span>
         </label>
+
+        {/* Price-axis framing. The y window is anchored to PRICE by default — these are the
+            explicit way back to the whole strike field and back to price again. Momentary
+            actions, not a mode: no aria-pressed, no `.on` state. */}
+        <div style={GROUP} role="group" aria-label={t("yFitAria")}>
+          <button
+            className="obs-chip"
+            style={{ ...CHIP, ...(priceFit ? {} : DISABLED_CHIP) }}
+            aria-disabled={!priceFit}
+            aria-label={priceFit ? undefined : `${t("yFitPrice")} — ${t("yFitPriceNone")}`}
+            onClick={fitPrice}
+          >
+            {t("yFitPrice")}
+          </button>
+          <button
+            className="obs-chip"
+            style={{ ...CHIP, ...(hasData ? {} : DISABLED_CHIP) }}
+            aria-disabled={!hasData}
+            aria-label={hasData ? undefined : `${t("yFitStrikes")} — ${t("yFitStrikesNone")}`}
+            onClick={fitStrikes}
+          >
+            {t("yFitStrikes")}
+          </button>
+        </div>
 
         {/* Legend — reads the ACTIVE metric's theme pair, so it keeps telling the truth
             after a preset switch (and still flips with --up/--down on the default). */}
@@ -884,8 +1088,14 @@ export function SurfacePane({
         />
       )}
 
-      {/* Honesty note */}
-      {!isCell && <div className="obs-note" style={NOTE}>{t("surfaceNote")}</div>}
+      {/* Honesty note + the y-axis gesture. The price zoom has no visible affordance of its
+          own, so the one line every user already reads carries it. */}
+      {!isCell && (
+        <div className="obs-note" style={NOTE}>
+          {t("surfaceNote")}
+          <span style={NOTE_HINT}>· {t("yZoomHint")}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -969,6 +1179,12 @@ const EMPTY_WHY: React.CSSProperties = {
 };
 
 const NOTE: React.CSSProperties = { margin: "var(--sp-2) var(--sp-4)", flexShrink: 0 };
+
+/** The gesture hint on the honesty line. Kept inside .obs-note's own amber family
+ *  (opacity, not a second hue) so the panel still carries one accent, and INLINE rather
+ *  than a block: the note is the last child of an overflow:hidden pane, so an extra line
+ *  is an extra chance for the hint to fall below the fold on a short viewport. */
+const NOTE_HINT: React.CSSProperties = { marginLeft: "var(--sp-1)", opacity: 0.78 };
 
 /** .obs-lbl supplies the micro-label type; only the pill chrome and the brighter
  *  on-canvas colour are set here (muted would sink into the heat field). */

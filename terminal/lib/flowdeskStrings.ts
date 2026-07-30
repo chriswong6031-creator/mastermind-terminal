@@ -122,6 +122,12 @@ const FLOW_LEX = {
   inspectorLean:       ["Lean (~soft)", "倾向（~软性）"],
   inspectorLeanNote:   ["Tick-rule derived — magnitude is the reliable read", "基于tick规则推算 — 权利金规模是可靠的读数"],
   inspectorClose:      ["Close", "关闭"],
+  inspectorSessionCtx: ["Session context", "当日概况"],
+
+  // ── Card expand affordance (v7b — chevron button with its own hit slot) ───
+  cardExpand:   ["Show score breakdown", "展开评分拆解"],
+  cardCollapse: ["Hide score breakdown", "收起评分拆解"],
+  cardPenalty:  ["penalty", "扣分"],
 
   // ── Chain Heat rail ────────────────────────────────────────────────────────
   chainHeatTitle:     ["Chain Heat", "链式热度"],
@@ -327,3 +333,36 @@ export const strings = {
   get: getFlowStr,
   make: makeFlowT,
 } as const;
+
+// ─── Score-component labels (v7b) ─────────────────────────────────────────────
+/**
+ * The flow-score components arrive from the server (lib/flowScore.ts) carrying an
+ * ENGLISH `label` only — there is no `label_zh` on the wire. Rendering that label
+ * directly leaked English into the 中文 view on both the card detail panel and the
+ * inspector. This table re-localises by the component's stable `key`; the server
+ * label stays the fallback for any key added upstream before this table catches up.
+ *
+ * Keys mirror lib/flowScore.ts `components[].key` exactly.
+ */
+const FLOW_SCORE_LABELS: Record<string, readonly [string, string]> = {
+  premiumMagnitude:     ["Premium magnitude",            "权利金规模"],
+  unusualness:          ["Activity vs one-year norm",    "相对一年常态的活跃度"],
+  dteRelevance:         ["DTE relevance",                "到期天数相关性"],
+  freshPositioning:     ["Fresh positioning (vol>OI)",   "新建头寸（量>持仓）"],
+  moneynessProximity:   ["Moneyness proximity",          "价值状态接近度"],
+  repeatCluster:        ["Repeat / cluster",             "重复／集群"],
+  directionReliability: ["Direction-reliability penalty", "方向可靠性扣分"],
+};
+
+/**
+ * Localised label for one flow-score component.
+ *
+ * @param lang     - "en" | "zh"
+ * @param key      - component key from the server payload
+ * @param fallback - the server-supplied EN label (used when the key is unknown)
+ */
+export function scoreComponentLabel(lang: Lang, key: string, fallback?: string): string {
+  const entry = FLOW_SCORE_LABELS[key];
+  if (entry) return lang === "zh" ? entry[1] : entry[0];
+  return fallback || key;
+}

@@ -459,7 +459,8 @@
 .fin-fc-chg .fin-tag{font-family:var(--font-num);font-size:12.5px;padding:5px 10px;font-variant-numeric:tabular-nums}
 .fin-fc-sec-head.fin-rule{padding-bottom:9px;border-bottom:1px solid var(--hairline);margin-bottom:12px}
 .fin-fc-sec-head .fin-sec-h{margin-bottom:0}
-.fin-fc-summary{margin-top:12px;font:500 12px/1.5 var(--font-ui);color:var(--text-2);max-width:420px}
+.fin-fc-summary{margin-top:12px;font:500 12px/1.5 var(--font-ui);color:var(--text-2);max-width:min(420px,100%);overflow-wrap:break-word;word-break:normal;hyphens:none}
+.fin-fc-top>.fin-card{min-width:0}
 .fin-fc-fanwrap{display:flex;gap:12px;align-items:stretch;margin-top:14px}
 .fin-fc-fanwrap .fin-chart{flex:1;min-width:0}
 .fin-fc-brackets{display:flex;flex-direction:column;justify-content:center;gap:6px;flex:none;width:132px}
@@ -502,13 +503,16 @@
 .fin-fc-growth .fin-tag .k{font:500 10.5px/1 var(--font-ui);opacity:.78}
 
 /* ── Forecast: analyst target-range band (low—mean—high + current marker) ── */
-.fin-fc-band{margin:14px 0 6px}
+.fin-fc-band{margin:32px 0 8px}
 .fin-fc-band-track{position:relative;height:8px;border-radius:var(--r-pill);
   background:linear-gradient(90deg,color-mix(in srgb,var(--brand) 16%,transparent),color-mix(in srgb,var(--brand) 34%,transparent))}
 .fin-fc-band-mean{position:absolute;top:-2px;width:2px;height:12px;background:var(--text-2);border-radius:1px;transform:translateX(-1px)}
 .fin-fc-band-cur{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center}
 .fin-fc-band-cur .dot{width:11px;height:11px;border-radius:50%;background:var(--brand);border:2px solid var(--panel);box-shadow:0 0 0 1px var(--brand)}
-.fin-fc-band-cur .tag{position:absolute;top:-19px;font:600 10px/1 var(--font-num);color:var(--brand);white-space:nowrap;font-feature-settings:"tnum"}
+.fin-fc-band-cur .tag{position:absolute;top:auto;bottom:calc(100% + 7px);left:50%;transform:translateX(-50%);display:inline-flex;align-items:baseline;gap:5px;white-space:nowrap;padding:2px 7px;border-radius:var(--r-pill);font:600 11px/1.3 var(--font-num);font-variant-numeric:tabular-nums;color:var(--brand-2);background:color-mix(in srgb,var(--brand) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brand) 32%,transparent)}
+.fin-fc-band-cur .tag .k{font:600 var(--fs-micro)/1.3 var(--font-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.fin-fc-band-cur.at-lo .tag{left:0;right:auto;transform:none}
+.fin-fc-band-cur.at-hi .tag{left:auto;right:0;transform:none}
 .fin-fc-band-ends{display:flex;justify-content:space-between;margin-top:9px;font:500 11px/1 var(--font-num);color:var(--text);font-feature-settings:"tnum"}
 .fin-fc-band-ends .mid{color:var(--text-2)}
 .fin-fc-band-ends .k{color:var(--muted);font-family:var(--font-ui);font-weight:500;margin-right:3px}
@@ -689,6 +693,9 @@
 /* legend chips */
 .fin-seas-legend{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .fin-seas-legend-years{display:flex;align-items:center;gap:6px;flex-wrap:wrap;max-height:84px;overflow-y:auto;scrollbar-width:thin}
+/* collapsed legend = one row; drop the scroll cap so the year-picker popover can escape
+   (an abspos child can never escape an ancestor overflow clip, whatever its z-index) */
+.fin-seas-legend-years.collapsed{max-height:none;overflow-y:visible}
 .fin-seas-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--panel-2);border-radius:var(--r-pill);padding:3px 9px 3px 7px;font:600 10.5px/1 var(--font-num);color:var(--text);cursor:pointer;transition:opacity var(--t) var(--ease),border-color var(--t) var(--ease);font-variant-numeric:tabular-nums}
 .fin-seas-chip:hover{border-color:var(--brand-2)}
 .fin-seas-chip.off{color:var(--muted);opacity:.5;text-decoration:line-through;text-decoration-thickness:1px}
@@ -751,7 +758,8 @@
 .fin-adv-panel-s{font:500 10px/1.3 var(--font-ui);color:var(--muted)}
 .fin-adv-panel-n{margin-left:auto;font:600 9.5px/1 var(--font-num);color:var(--muted);font-variant-numeric:tabular-nums}
 .fin-adv-row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.fin-adv-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+/* row 3 holds TWO panels now: quarter contribution (compact) + year-agreement (receipts, wants width) */
+.fin-adv-row3{display:grid;grid-template-columns:1fr 2fr;gap:14px}
 .fin-adv-chartbox{position:relative;width:100%;overflow:hidden;touch-action:none}
 
 /* fan-cone */
@@ -831,15 +839,7 @@
 .fin-adv-qval.down{color:var(--down)}
 .fin-adv-qwr{font:600 10px/1 var(--font-num);color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
 
-/* share-of-return donut */
-.fin-adv-donutwrap{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-.fin-adv-donutleg{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
-.fin-adv-donutleg-row{display:grid;grid-template-columns:8px 30px 34px 1fr;align-items:center;gap:7px}
-.fin-adv-donutleg-m{font:600 10.5px/1 var(--font-num);color:var(--text-2);font-variant-numeric:tabular-nums}
-.fin-adv-donutleg-p{font:700 10.5px/1 var(--font-num);color:var(--text);text-align:right;font-variant-numeric:tabular-nums}
-.fin-adv-donutleg-n{font:600 10px/1 var(--font-num);text-align:right;font-variant-numeric:tabular-nums}
-.fin-adv-donutleg-n.up{color:var(--up)}
-.fin-adv-donutleg-n.down{color:var(--down)}
+/* (share-of-return donut retired — statistically misleading pseudo-insight; B6) */
 
 /* year-agreement matrix */
 .fin-adv-yamx{display:flex;flex-direction:column;gap:2px;overflow:auto;scrollbar-width:thin;max-height:360px}
@@ -1002,6 +1002,7 @@
  * leave the screen) + selected-column band. */
 .fin-hoverband.on{fill:rgba(255,255,255,.055)}
 .fin-dumbtip{position:absolute;z-index:6;top:6px;background:var(--panel-3);border:1px solid var(--line-3);border-radius:var(--r-md);padding:9px 12px;box-shadow:var(--shadow-2,0 8px 24px rgba(0,0,0,.45));pointer-events:none;animation:fin-tip-in .1s ease}
+.fin-dumbtip{max-width:calc(100% - 16px)}
 .fin-dumbtip .r{display:flex;align-items:baseline;gap:14px;font:500 11.5px/1.7 var(--font-ui)}
 .fin-dumbtip .r .k{color:var(--text-2);flex:1;white-space:nowrap}
 .fin-dumbtip .r .v{color:var(--text);font-family:var(--font-num);font-weight:650;white-space:nowrap;font-feature-settings:"tnum"}

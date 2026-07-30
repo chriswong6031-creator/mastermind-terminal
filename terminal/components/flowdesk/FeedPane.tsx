@@ -340,6 +340,47 @@ export function FeedPane({
   // FiltersPanel open/close
   const [filtersOpen, setFiltersOpen] = useState(false);
 
+  // ── Card expansion (v7b) ───────────────────────────────────────────────────
+  // Expansion lives HERE, not inside FlowCard.
+  //
+  // Root cause of the old "sticky / unclosable" panel: each card kept its own
+  // `expanded` useState while `.obs-fc-expand-btn` was `position:absolute;
+  // bottom:8px`. Opening a card grew it in-flow (the feed is a CSS grid, so the
+  // whole row stretched and neighbours gaped) and the ONE toggle drifted with the
+  // card's new bottom edge — down onto the honesty note ~200px below the click, at
+  // an ~11×12px hit size. Every miss bubbled to the card's onClick, which only
+  // toggled SELECTION, so the panel stayed open and the desk felt frozen. The
+  // per-card state also meant nothing could ever close a panel from the outside.
+  //
+  // One id here ⇒ one card open at a time, and Esc / outside-click / the card
+  // itself can all close it.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const handleToggleExpand = useCallback((id: string) => {
+    setExpandedId((prev) => (prev === id ? null : id));
+  }, []);
+
+  // Esc + outside-click close. Bound only while a panel is open; the listeners are
+  // attached in an effect (post-commit), so the very click that opened the panel is
+  // already finished dispatching and cannot immediately close it again.
+  useEffect(() => {
+    if (expandedId === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpandedId(null);
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      const el = e.target as Element | null;
+      if (el?.closest?.('[data-fc-open="1"]')) return; // inside the open card/panel
+      setExpandedId(null);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [expandedId]);
+
   // ── Feed virtualization — cap initial render; auto-load via IntersectionObserver ──
   const PAGE_SIZE = 200;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -347,8 +388,11 @@ export function FeedPane({
 
   // Reset visible count when filters/sort change so users always see newest/top results.
   // We compare a serialized key of the effective filter state.
+  // Any re-slice can drop the open card out of the rendered set, which would strand
+  // the expansion state on an event nobody can see — so collapse alongside it.
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
+    setExpandedId(null);
   }, [search, preset, sort, filters]);
 
   // Merge preset overrides into the base filter set
@@ -628,6 +672,8 @@ export function FeedPane({
             lang={lang}
             selected={ev.id === selectedId}
             onSelect={onSelect}
+            expanded={ev.id === expandedId}
+            onToggleExpand={handleToggleExpand}
           />
         ))}
 

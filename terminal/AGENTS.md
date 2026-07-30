@@ -15,6 +15,16 @@ Opus builds and reviews code. Design choices are judgment work — made in the s
 - Reference images must be actual files (committed under `design_refs/` or given as absolute paths). If a brief describes a look only in words, STOP and ask for the files before designing.
 - Pin the design (exact markup/CSS) before fanning out any builder agents.
 
+## Chart law (hand-rolled SVG)
+Every inline SVG data chart MUST build on `components/charts/svgChart.ts` (useChartWidth,
+niceTicks, padDomain, thinByPixelGap). Concretely: 1:1 pixel-space viewBox from a measured
+container — never `preserveAspectRatio="none"` on a data chart (it distorts strokes) and never
+a fixed-unit viewBox that caps the plot; domains take finite/positive-filtered values with
+padding, zero unioned only when the series straddles it; axis labels thin by PIXEL GAP at
+their mapped positions (never `i % n` on a value-mapped axis); tick formatting derives
+precision from the step so two ticks can't render identically. The v7b wave fixed five charts
+that each violated several of these — do not hand-roll a sixth way.
+
 ## Verification law (what "done" means)
 - A user-facing flow is NOT done until a fresh incognito end-to-end pass succeeds with zero manual workarounds — no reload-to-recover. If you hit a race and work around it, the bug is yours to fix, not to route around.
 - Every UI PR carries its verification artifact in the body: screenshots/crops of each step and state (light + dark + zh via the LEX i18n tuples — zh strings must never leak into the EN view, and vice versa).

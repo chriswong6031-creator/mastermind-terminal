@@ -36,16 +36,21 @@ import { fmtNum, fmtPct, fmtDate, pick } from "../../lib/finFormat";
 function useBoxW(fallback: number) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [w, setW] = useState(fallback);
+  // `measured` gates anchored overlays (the dumbbell tooltip): before the first
+  // real measurement — or on a mount inside a hidden tab, where clientWidth reads
+  // 0 — `w` is the fallback while the SVG stretches to the real box, so anything
+  // positioned in viewBox units lands in the wrong place.
+  const [measured, setMeasured] = useState(false);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const measure = () => { const cw = Math.round(el.clientWidth); if (cw > 0) setW(cw); };
+    const measure = () => { const cw = Math.round(el.clientWidth); if (cw > 0) { setW(cw); setMeasured(true); } };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  return { ref, w };
+  return { ref, w, measured };
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -708,11 +713,16 @@ export function Dumbbell({ points, fmtY = fmtNum, vw = 320, vh = 180, forecastFr
           );
         })}
       </svg>
-      {active != null && win[active] != null && (() => {
+      {active != null && win[active] != null && box.measured && (() => {
         const p = win[active];
         const cx = PAD.l + slot * active + slot / 2;
-        const TIPW = Math.min(180, Math.max(120, vw - 12));
-        const left = Math.min(Math.max(6, cx - TIPW / 2), Math.max(6, vw - TIPW - 6));
+        // Clamp in MEASURED px space only (box.measured gate above): before the first
+        // real measurement vw is the 320 fallback while the SVG stretches to the full
+        // module width, so cx lands in 320-unit space and the old clamp pinned the tip
+        // into the leftmost ~134px — the reported "bleeding off the container".
+        const INSET = 8;
+        const TIPW = Math.min(180, Math.max(96, vw - INSET * 2));
+        const left = Math.min(Math.max(INSET, cx - TIPW / 2), Math.max(INSET, vw - TIPW - INSET));
         const diff = num(p.actual) && num(p.estimate) ? (p.actual as number) - (p.estimate as number) : null;
         const sp = num(p.surp_pct)
           ? (p.surp_pct as number)

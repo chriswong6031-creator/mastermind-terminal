@@ -1,19 +1,23 @@
 "use client";
 /**
- * ConfidencePanel — management-confidence arc + 5-component bars.
+ * ConfidencePanel — the conviction column's verdict block.
+ *
+ * Fused verdict row (score · recommended verb) → stacked component mix → per-component
+ * rows → change reason. The old 84px ring is gone: it spent the column's best real estate
+ * repeating a number the verdict row already states at 34px.
  *
  * HONESTY DOCTRINE (non-negotiable):
  *   - Header VERBATIM: "Management confidence — trade state, not a pick rank"
- *   - Ceiling 92 is VISIBLE — the arc stops visually at 92, and the cap label is shown.
+ *   - Ceiling 92 is VISIBLE — the score is always shown against its cap.
  *   - No predictive language; no "validated".
  *   - Component bar tooltips are factual descriptions of what each measures.
+ *   - Components absent from the payload say so — they never render as zeroes.
  *   - change_reason rendered verbatim (engine text).
  *   - recommended_action rendered verbatim with a translated label.
  */
 
 import { useState } from "react";
 import { makeProphetT } from "./prophetStrings";
-import { RingGauge } from "@/components/ui/RingGauge";
 import type { Lang } from "@/lib/i18n";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -39,31 +43,18 @@ interface ConfidencePanelProps {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const CEILING = 92;
-const ARC_SIZE = 120;    // px, outer diameter
-const STROKE   = 9;
-const RADIUS   = (ARC_SIZE - STROKE) / 2;
-const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+/**
+ * Stepped brand tints — one per component, in declaration order. The stack is a MIX, not
+ * a sum: segment width is each component's share of the five scores, so the steps read as
+ * "different component", never as "different quality".
+ */
+const SEGMENT_MIX = [92, 76, 60, 46, 34];
 
-/** Convert score 0–92 to arc dash offset (arc spans 270° — left cap to right cap) */
-function scoreToOffset(score: number): number {
-  const clampedFraction = Math.min(score, CEILING) / CEILING;
-  // 270° arc = 0.75 of circumference used
-  const filled = clampedFraction * CIRCUMFERENCE * 0.75;
-  return CIRCUMFERENCE - filled;
-}
-
-function scoreToColor(score: number): string {
-  if (score >= 75) return "var(--up)";   // strong — rides the direction token (east-flip aware)
-  if (score >= 55) return "var(--warn)"; // moderate
-  return "var(--down)";                  // weak
-}
-
-function barColor(val: number): string {
-  if (val >= 70) return "var(--up)";
-  if (val >= 40) return "var(--warn)";
-  return "var(--down)";
+function segmentColor(i: number, negative: boolean): string {
+  if (negative) return "color-mix(in srgb, var(--down) 62%, transparent)";
+  const mix = SEGMENT_MIX[i] ?? 34;
+  return `color-mix(in srgb, var(--brand-2) ${mix}%, transparent)`;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -77,13 +68,12 @@ export function ConfidencePanel({
   lang,
 }: ConfidencePanelProps) {
   const t = makeProphetT(lang);
-  const zh = lang === "zh";
 
-  const score = confidence ?? 0;
-  const arcColor = scoreToColor(score);
-  const offset   = scoreToOffset(score);
-
-  const componentDefs: { key: keyof ConfidenceComponents; labelKey: Parameters<typeof t>[0]; tipKey: Parameters<typeof t>[0] }[] = [
+  const componentDefs: {
+    key: keyof ConfidenceComponents;
+    labelKey: Parameters<typeof t>[0];
+    tipKey: Parameters<typeof t>[0];
+  }[] = [
     { key: "validity",  labelKey: "componentValidity",  tipKey: "componentTooltipValidity"  },
     { key: "progress",  labelKey: "componentProgress",  tipKey: "componentTooltipProgress"  },
     { key: "pace",      labelKey: "componentPace",      tipKey: "componentTooltipPace"      },
@@ -113,77 +103,96 @@ export function ConfidencePanel({
     exit:        t("actionExit"),
     invalidated: t("actionInvalidated"),
   };
-  const actionDisplay = recommended_action
-    ? (actionMap[recommended_action.toLowerCase()] ?? recommended_action)
-    : null;
+  const actionKey = recommended_action ? recommended_action.toLowerCase() : null;
+  const actionDisplay = actionKey ? (actionMap[actionKey] ?? recommended_action) : null;
 
-  const actionColor = recommended_action === "exit" || recommended_action === "invalidated"
+  const actionColor = actionKey === "exit" || actionKey === "invalidated"
     ? "var(--down)"
-    : recommended_action === "enter" || recommended_action === "hold" || recommended_action === "trail"
+    : actionKey === "enter" || actionKey === "hold" || actionKey === "trail"
     ? "var(--up)"
     : "var(--text-2)";
 
+  // Stacked mix — only the components the payload actually published.
+  const present = components
+    ? componentDefs
+        .map((d, i) => ({ ...d, i, value: components[d.key] }))
+        .filter((d): d is typeof d & { value: number } => typeof d.value === "number" && Number.isFinite(d.value))
+    : [];
+  const mixTotal = present.reduce((s, d) => s + Math.abs(d.value), 0);
+
   return (
-    <div className="obs-card obs-prophet-confidence" style={PANEL_STYLE}>
-      {/* Header — VERBATIM label required by spec */}
-      <div style={HEADER}>
-        <span style={HEADER_LABEL}>{t("confidenceHeader")}</span>
-        {phaseDisplay && (
-          <span style={PHASE_CHIP}>{phaseDisplay}</span>
+    <div className="obs-prophet-verdictbox">
+      {/* Fused verdict: score, ceiling and the verb it implies, on one baseline. */}
+      <div className="obs-prophet-verdict">
+        {confidence != null ? (
+          <>
+            <span className="obs-prophet-verdict-score num">{confidence.toFixed(0)}</span>
+            <span className="obs-prophet-verdict-max num">/ {CEILING}</span>
+          </>
+        ) : (
+          <span className="obs-prophet-verdict-none">{t("verdictNoScore")}</span>
         )}
-      </div>
-
-      {/* Ring gauge (lg) replaces SVG arc — cap-92 note preserved */}
-      <div style={ARC_WRAPPER}>
-        <RingGauge
-          value={confidence != null ? score : 0}
-          max={CEILING}
-          size="lg"
-          tone="auto"
-        />
-        {/* Ceiling note below ring */}
-        <div style={CEIL_NOTE}>
-          <span style={{ color: "var(--muted)", fontSize: 9 }}>{t("confidenceCeil")}</span>
-          <span style={{ color: "var(--muted)", fontSize: 9, marginLeft: 4 }}>{t("confidenceCeilNote")}</span>
-        </div>
-        {/* Show raw score alongside scaled ring value */}
-        {confidence != null && (
-          <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 4 }}>
-            <span className="num">{score.toFixed(0)}</span>
-            <span style={{ color: "var(--muted)", fontSize: 9, marginLeft: 2 }}>/ {CEILING}</span>
-          </div>
-        )}
-      </div>
-
-      {/* Action chip */}
-      {actionDisplay && (
-        <div style={{ textAlign: "center", marginBottom: 10 }}>
-          <span style={{ ...ACTION_CHIP, color: actionColor, borderColor: actionColor }}>
-            {t("actionLabel")}: {actionDisplay}
+        {actionDisplay && (
+          <span
+            className="obs-prophet-verdict-verb"
+            style={{ "--c": actionColor } as React.CSSProperties}
+          >
+            · {actionDisplay}
           </span>
-        </div>
-      )}
+        )}
+        {phaseDisplay && (
+          <span className="obs-tag obs-prophet-verdict-phase">{phaseDisplay}</span>
+        )}
+      </div>
 
-      {/* Component bars */}
-      {components && (
-        <div style={BARS_WRAPPER}>
-          {componentDefs.map(({ key, labelKey, tipKey }) => (
-            <ComponentBar
-              key={key}
-              label={t(labelKey)}
-              tooltip={t(tipKey)}
-              value={components[key]}
-              lang={lang}
-            />
-          ))}
+      <div className="fin-asof obs-prophet-ceil">
+        <span>{t("confidenceCeil")}</span>
+        <span aria-hidden>·</span>
+        <span>{t("confidenceCeilNote")}</span>
+      </div>
+
+      {/* The doctrine sentence, kept verbatim where the score is read. */}
+      <div className="obs-note obs-prophet-conv-note">{t("confidenceHeader")}</div>
+
+      {/* Component mix — stacked bar + the rows that name every segment. */}
+      {present.length > 0 && mixTotal > 0 ? (
+        <div className="obs-prophet-mix">
+          <div className="obs-prophet-mix-hd">
+            <span className="fin-eyebrow">{t("componentMixLabel")}</span>
+          </div>
+          <div className="obs-prophet-mix-bar" aria-hidden>
+            {present.map((d) => (
+              <span
+                key={d.key}
+                style={{
+                  width: `${(Math.abs(d.value) / mixTotal) * 100}%`,
+                  background: segmentColor(d.i, d.value < 0),
+                }}
+              />
+            ))}
+          </div>
+          <div className="obs-prophet-mix-cap">{t("componentMixCaption")}</div>
+          <div className="obs-prophet-mix-rows">
+            {present.map((d) => (
+              <ComponentBar
+                key={d.key}
+                label={t(d.labelKey)}
+                tooltip={t(d.tipKey)}
+                value={d.value}
+                color={segmentColor(d.i, d.value < 0)}
+              />
+            ))}
+          </div>
         </div>
+      ) : (
+        <div className="obs-prophet-mix-absent">{t("componentsAbsent")}</div>
       )}
 
       {/* Change reason */}
       {change_reason && (
-        <div style={REASON_BOX}>
-          <span style={REASON_LABEL}>{t("changeReasonLabel")}: </span>
-          <span style={REASON_TEXT}>{change_reason}</span>
+        <div className="obs-prophet-reason">
+          <span className="k">{t("changeReasonLabel")}</span>
+          <span>{change_reason}</span>
         </div>
       )}
     </div>
@@ -196,158 +205,36 @@ function ComponentBar({
   label,
   tooltip,
   value,
-  lang: _lang,
+  color,
 }: {
   label: string;
   tooltip: string;
   value: number | null;
-  lang: Lang;
+  color: string;
 }) {
   const [tipVisible, setTipVisible] = useState(false);
   const pct = value != null ? Math.max(0, Math.min(100, value)) : null;
 
   return (
-    <div style={{ marginBottom: 7 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-        <span
-          style={{ ...BAR_LABEL, position: "relative", cursor: "help" }}
-          onMouseEnter={() => setTipVisible(true)}
-          onMouseLeave={() => setTipVisible(false)}
-          aria-label={tooltip}
-        >
-          {label}
-          {tipVisible && (
-            <span style={BAR_TIP_STYLE}>{tooltip}</span>
-          )}
-        </span>
-        <span style={BAR_VAL}>
-          {pct != null ? `${pct.toFixed(0)}` : "—"}
-        </span>
-      </div>
-      <div style={BAR_TRACK}>
+    <div className="obs-prophet-comp">
+      <span
+        className="obs-prophet-comp-k"
+        onMouseEnter={() => setTipVisible(true)}
+        onMouseLeave={() => setTipVisible(false)}
+        onFocus={() => setTipVisible(true)}
+        onBlur={() => setTipVisible(false)}
+        tabIndex={0}
+        aria-label={tooltip}
+      >
+        {label}
+        {tipVisible && <span className="obs-prophet-comp-tip">{tooltip}</span>}
+      </span>
+      <span className="obs-prophet-comp-track">
         {pct != null && (
-          <div
-            style={{
-              height: "100%",
-              width: `${pct}%`,
-              background: barColor(pct),
-              borderRadius: "var(--r-pill)",
-              transition: "width .35s ease",
-            }}
-          />
+          <span className="obs-prophet-comp-fill" style={{ width: `${pct}%`, background: color }} />
         )}
-      </div>
+      </span>
+      <span className="obs-prophet-comp-v num">{value != null ? value.toFixed(0) : "—"}</span>
     </div>
   );
 }
-
-// ── Style constants ───────────────────────────────────────────────────────────
-
-// obs-card class provides glass background/border/radius
-const PANEL_STYLE: React.CSSProperties = {
-  padding: "12px 14px",
-};
-
-const HEADER: React.CSSProperties = {
-  display: "flex",
-  alignItems: "flex-start",
-  justifyContent: "space-between",
-  gap: 8,
-  marginBottom: 10,
-};
-
-const HEADER_LABEL: React.CSSProperties = {
-  font: "600 10px/1.3 var(--font-ui)",
-  color: "var(--text-2)",
-  maxWidth: 170,
-};
-
-const PHASE_CHIP: React.CSSProperties = {
-  flexShrink: 0,
-  font: "600 9.5px/1 var(--font-ui)",
-  color: "var(--text-2)",
-  border: "1px solid var(--line-2)",
-  borderRadius: "var(--r-pill)",
-  padding: "2px 7px",
-  whiteSpace: "nowrap",
-};
-
-const ARC_WRAPPER: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  marginBottom: 8,
-};
-
-const CEIL_NOTE: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  marginTop: 4,
-};
-
-const ACTION_CHIP: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  font: "600 10px/1 var(--font-ui)",
-  border: "1px solid",
-  borderRadius: "var(--r-pill)",
-  padding: "3px 9px",
-};
-
-const BARS_WRAPPER: React.CSSProperties = {
-  marginTop: 8,
-  paddingTop: 8,
-  borderTop: "1px solid rgba(255,255,255,0.08)",
-};
-
-const BAR_LABEL: React.CSSProperties = {
-  font: "500 10px/1 var(--font-ui)",
-  color: "var(--text-2)",
-};
-
-const BAR_VAL: React.CSSProperties = {
-  font: "600 10px/1 var(--font-num)",
-  fontVariantNumeric: "tabular-nums",
-  color: "var(--text)",
-};
-
-const BAR_TRACK: React.CSSProperties = {
-  height: 4,
-  background: "var(--line-2)",
-  borderRadius: "var(--r-pill)",
-  overflow: "hidden",
-};
-
-const BAR_TIP_STYLE: React.CSSProperties = {
-  position: "absolute",
-  top: "calc(100% + 5px)",
-  left: 0,
-  whiteSpace: "normal",
-  maxWidth: 220,
-  background: "var(--panel-3)",
-  border: "1px solid var(--line-3)",
-  borderRadius: "var(--r-md)",
-  padding: "6px 9px",
-  font: "500 10px/1.4 var(--font-ui)",
-  color: "var(--text-2)",
-  zIndex: 50,
-  pointerEvents: "none",
-  boxShadow: "var(--shadow-1)",
-};
-
-const REASON_BOX: React.CSSProperties = {
-  marginTop: 10,
-  paddingTop: 8,
-  borderTop: "1px solid rgba(255,255,255,0.08)",
-  font: "500 10px/1.45 var(--font-ui)",
-  color: "var(--text-2)",
-};
-
-const REASON_LABEL: React.CSSProperties = {
-  fontWeight: 600,
-  color: "var(--muted)",
-};
-
-const REASON_TEXT: React.CSSProperties = {
-  color: "var(--text-2)",
-};

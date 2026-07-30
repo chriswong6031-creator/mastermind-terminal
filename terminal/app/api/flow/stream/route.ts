@@ -115,7 +115,27 @@ export async function GET(req: Request): Promise<Response> {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-store, no-transform",
+      // `no-store` alone — deliberately NOT `no-transform`.
+      //
+      // The scored feed frame measures 2,002,874 B raw / 100,435 B gzipped: a 20×
+      // ratio, and the single largest thing on the tape's critical path. Next's
+      // production server runs the `compression` middleware (verified:
+      // next/dist/server/lib/router-server.js:115-116, enabled unless
+      // `compress:false`), and its content-type filter accepts text/event-stream
+      // via the `^text\/` fallback — but its `shouldTransform()` bails out on a
+      // `no-transform` Cache-Control, so this header was silently switching gzip
+      // OFF for the biggest response we serve. `no-transform` bought us nothing:
+      // `no-store` already forbids storing, and nothing else in the path rewrites
+      // an SSE body.
+      //
+      // The usual reason to fear SSE + gzip — the encoder buffering whole events
+      // and destroying push latency — does not apply here: Next flushes the
+      // compressor after EVERY chunk it writes
+      // (next/dist/server/pipe-readable.js:75-80 calls `res.flush()` when the
+      // response has one, which is exactly what `compression` installs). Each
+      // `send()` below therefore still reaches the client as its own frame, and
+      // Caddy auto-flushes text/event-stream upstream responses.
+      "Cache-Control": "no-store",
       "Connection": "keep-alive",
       // Disable response buffering at nginx/edge so events flush immediately.
       "X-Accel-Buffering": "no",

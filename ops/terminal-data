@@ -121,6 +121,23 @@ run "$PY" -m ingest.artifact_conformance
 run "$PY" ingest/pull_macro_intel.py
 # refresh non-US OHLC (HK/CN/intl) to latest close via yfinance bulk
 run "$PY" ingest/refresh_ohlc_intl.py --days 10 --write
+# regime-aware seasonal outlooks -> terminal/public/data/<SYM>.seasonal.json (display-only).
+# WHY THIS EXISTS: the generator previously ran ONLY from ingest/refresh.sh (a manual Mac
+# lane), so production artifacts drifted for weeks — the Seasonals tab drew a three-week-old
+# as_of as "now". The panel now carries a stale badge past 14 days, so this step is what
+# keeps that badge dark. Weekly (Mondays) to cap the marathon's runtime; the badge threshold
+# is 14d, i.e. two missed runs of headroom.
+# Must run AFTER the OHLC passes above: on the VPS yfinance is usually absent/blocked and
+# build_one falls back to close_from_disk(), which reads this same data dir. ROOT resolves to
+# /opt/terminal (parents[1] of ingest/), and terminal-build.sh step 7 already syncs BOTH
+# ingest/ and signal_layer/ into /opt/terminal, so the deployed tree carries the engine.
+# ⚠️ TWO-COPIES LAW (see the block above): the same step must exist in the macro
+#    app/deploy/terminal-refresh.sh copy, or it vanishes the next time that installer runs.
+if [ "$(date -u +%u)" = "1" ]; then
+  run "$PY" ingest/gen_seasonal_outlook.py
+else
+  echo "[$(ts)] -> skip ingest/gen_seasonal_outlook.py (weekly step: Mondays only)"
+fi
 # Final hydrate: pick up any OHLC written during Phase 2
 run "$PY" ingest/hydrate_prices.py --write
 
