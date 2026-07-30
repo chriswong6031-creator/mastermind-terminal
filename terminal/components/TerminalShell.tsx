@@ -79,6 +79,7 @@ import { type OTEntry } from "@/components/ChartObjectTree";
 import { listTemplates, saveTemplate } from "@/lib/chartTemplates";
 import { FLAG_DEFAULT, FLAG_COLORS } from "@/lib/flagPalette";
 import { TERMINAL_VISUAL_READY_EVENT } from "@/lib/terminalBoot";
+import AssetLogo from "@/components/AssetLogo";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -2440,7 +2441,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                         <SortableWlRow key={sym} sym={sym} className={`wl-row${sym === active ? " on" : ""}${set.tableView ? " tv" : ""}`} style={{ gridTemplateColumns: wlGrid, minWidth: wlMinW, height: set.tableView ? 32 : 46 }} onClick={() => pick(sym)} onMouseEnter={() => { if (!isCompSym) { prefetch(`/data/${sym}.json`); prefetch(`/data/${sym}.slice.json`); prefetch(`/data/${sym}.intel.json`); } }}>
                           {/* F1 flag slot — click to apply lastFlagColor; hover when already set shows palette */}
                           <WlFlagSlot sym={sym} color={flagColor} onSet={(c) => setFlag(sym, c)} onRemove={() => removeFlag(sym)} lastColor={lastFlagColor} />
-                          <div className="s">{set.logo && !isCompSym && <span className="ic" style={{ background: r?.col || "#888", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24 }}>{sym[0]}</span>}
+                          <div className="s">{set.logo && !isCompSym && <AssetLogo className="ic" symbol={sym} name={nm} market={r?.mkt || r?.sec} color={r?.col} size={set.tableView ? 18 : 24} />}
                             {set.logo && isCompSym && <span className="ic" style={{ background: "#2962ff", width: set.tableView ? 18 : 24, height: set.tableView ? 18 : 24, fontSize: 7, fontWeight: 700, color: "#fff" }}>M</span>}
                             <span className="nm"><span className="tk">{isCompSym ? sym.split("+").slice(0, 2).join("+") + (sym.split("+").length > 2 ? "+…" : "") : primary}</span>{secondary && !isCompSym && <span className={set.tableView ? "tk-sub" : "sub"}>{secondary}</span>}</span></div>
                           {dataCols.map(([k]) => {
@@ -2467,7 +2468,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           <div className="board detail-board">
             {/* detail-hd: flex-wrap 2-row — top: icon+name, bottom: big price + status chip */}
             <div className="detail-hd">
-              <span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span>
+              <AssetLogo className="ic" symbol={active} name={nameOf(m)} market={m?.mkt || m?.sec} color={m?.col || "#76b900"} size={26} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="nm">{nameOf(m) || active}</div>
                 <div className="ex">{active}{(m?.mkt || m?.sec) ? ` · ${m?.mkt || m?.sec}` : ""}</div>
@@ -2552,6 +2553,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
             </div>
           </div>
         </div>
+        <a className="logo-attribution" href="https://logo.dev" target="_blank" rel="noopener">Logos provided by Logo.dev</a>
       </aside>
 
       <div className="ticker">

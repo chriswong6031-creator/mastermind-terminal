@@ -54,6 +54,7 @@ import DayStatsStrip from "@/components/DayStatsStrip";
 import { tPlain } from "@/lib/i18n";
 import { listTemplates } from "@/lib/chartTemplates";
 import { announceTerminalVisualReady } from "@/lib/terminalBoot";
+import { assetInitial, assetLogoPath } from "@/lib/assetLogos";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
@@ -259,7 +260,7 @@ const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
 export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
-  onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "", userTier = "free" }:
+  instrumentName, instrumentMarket, instrumentColor, onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "", userTier = "free" }:
   { symbol: string; companyName?: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
     tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
@@ -267,6 +268,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       gridHVisible?: boolean; gridVVisible?: boolean;
       candleUpColor?: string; candleDownColor?: string; candleUpBorder?: string; candleDownBorder?: string; candleUpWick?: string; candleDownWick?: string;
       showWatermark?: boolean; showOHLC?: boolean; showBarChange?: boolean; showSymbolName?: boolean; };
+    instrumentName?: string;
+    instrumentMarket?: string;
+    instrumentColor?: string;
     onChartApi?: (api: IChartApi | null) => void; extHours?: boolean;
     onAddAlert?: (price: number) => void;
     onTableView?: () => void;
@@ -499,6 +503,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const showOHLCRef = useRef<boolean>(true);
   const showBarChangeRef = useRef<boolean>(true);
   const showSymbolNameRef = useRef<boolean>(true);
+  const instrumentNameRef = useRef<string>(instrumentName || symbol);
+  const instrumentMarketRef = useRef<string>(instrumentMarket || "");
+  const instrumentColorRef = useRef<string>(instrumentColor || "#64748b");
   // intraday dead-end empty-state overlay ("Back to Daily") — built in Effect 1, toggled from Effect 2
   const emptyRef = useRef<HTMLDivElement | null>(null);
   const showEmptyRef = useRef<(msg: string) => void>(() => {});
@@ -555,6 +562,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   showOHLCRef.current = chartSettings?.showOHLC !== false;
   showBarChangeRef.current = chartSettings?.showBarChange !== false;
   showSymbolNameRef.current = chartSettings?.showSymbolName !== false;
+  instrumentNameRef.current = instrumentName || symbol;
+  instrumentMarketRef.current = instrumentMarket || "";
+  instrumentColorRef.current = instrumentColor || "#64748b";
 
   // ────────────────────────────────────────────────────────────────────────────
   // Shared helpers (module-level within the component, referenced from every effect).
@@ -1858,9 +1868,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const showBarChange = showBarChangeRef.current;
       const ch = last.c - prev.c, cp = (ch / prev.c) * 100, u = ch >= 0, f = (x: number) => x.toFixed(prec);
       let html = "";
-      if (showOHLC) html += `<span class="mut">O</span><b>${f(last.o)}</b> <span class="mut">H</span><b>${f(last.h)}</b> <span class="mut">L</span><b>${f(last.l)}</b> <span class="mut">C</span><b>${f(last.c)}</b>`;
-      if (showBarChange) { if (html) html += " "; html += `<b class="${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`; }
+      const currentSymbol = symbolRef.current;
+      const fallbackColor = /^#[0-9a-f]{3,8}$/i.test(instrumentColorRef.current) ? instrumentColorRef.current : "#64748b";
+      const logoSrc = assetLogoPath(currentSymbol, instrumentMarketRef.current);
+      let identityHtml = `<span class="status-symbol-logo" style="--status-logo-fallback:${fallbackColor}"><span>${escH(assetInitial(currentSymbol))}</span><img src="${escH(logoSrc)}" alt="" referrerpolicy="origin"></span>`;
+      if (showSymbolNameRef.current) {
+        const identity = [instrumentNameRef.current || currentSymbol, timeframeRef.current, instrumentMarketRef.current].filter(Boolean).map(escH).join(" · ");
+        const basis = liveQuoteRef.current?.basis;
+        identityHtml += `<b class="status-symbol-name">${identity}</b><i class="status-market-dot ${basis === "LIVE" ? "is-live" : basis === "DELAYED_15M" ? "is-delayed" : ""}"></i>`;
+      }
+      html += `<span class="status-identity">${identityHtml}</span>`;
+      let valuesHtml = "";
+      if (showOHLC) valuesHtml += `<span class="mut">O</span><b>${f(last.o)}</b><span class="mut">H</span><b>${f(last.h)}</b><span class="mut">L</span><b>${f(last.l)}</b><span class="mut">C</span><b>${f(last.c)}</b>`;
+      if (showBarChange) valuesHtml += `<b class="status-change ${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`;
+      if (valuesHtml) html += `<span class="status-values">${valuesHtml}</span>`;
       statusRef.current.innerHTML = html;
+      const logoImage = statusRef.current.querySelector<HTMLImageElement>(".status-symbol-logo img");
+      logoImage?.addEventListener("error", () => { logoImage.hidden = true; }, { once: true });
     }
     // Gate oracle verdict text on whether the _oracle indicator is active. The chip's display:none
     // is controlled by oracleVisible in JSX; this guard prevents stale text from painting in the
@@ -4392,6 +4416,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     } catch {}
     // eslint-disable-next-line
   }, [JSON.stringify(chartSettings)]);
+
+  // Descriptive manifest data can land after OHLC. Refresh just the identity line
+  // when it arrives instead of waiting for a quote or rebuilding the chart.
+  useEffect(() => {
+    if (barsRef.current.length) paintStatus(barsRef.current, sliceRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instrumentName, instrumentMarket, instrumentColor, timeframe]);
 
   // ── EFFECT 8 ─ expose the chart API to the parent (for range navigation from the frame bar).
   const onChartApiRef = useRef(onChartApi); onChartApiRef.current = onChartApi;
