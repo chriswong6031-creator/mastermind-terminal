@@ -146,10 +146,13 @@ workspace minus global chrome:
 
 ### 4.2 Bridge v1 (deliberately tiny)
 
-Web → native (`postMessage`): `ready`, `symbolChanged {sym}`, `stateChanged {tf, chartType}` (for restore),
-`openExternal {url}`.
-Native → web (`evaluateJavaScript` on a stable `window.__mmShell` API): `setSymbol(sym)`, `setLang(lang)`,
-`restoreState({sym, tf})`, `setSession({access_token, refresh_token})` (auth handoff, §4.4).
+Web → native (`postMessage`): `ready {availableTimeframes}`, `symbolChanged {sym}`, `stateChanged {tf,
+chartType}` (for restore), `openExternal {url}`.
+Native → web (`evaluateJavaScript` on a stable `window.__mmShell` API): `setSymbol(sym)`, `setTimeframe(tf)`,
+`setLang(lang)`, `restoreState({sym, tf})`, `setSession({access_token, refresh_token})` (auth handoff, §4.4).
+
+`setSymbol`/`setTimeframe` must swap the live chart in place (no reload, no flash) — they power the roller
+strip below, so their latency budget is "feels instant" (<300 ms to first updated paint on Wi-Fi).
 
 No filesystem, no exec, no arbitrary URL loading, no generic eval surface. Contract typed in
 `terminal/lib/platform/contract.ts` + JSON schema in `contracts/native-shell.v1.schema.json`. The browser gets
@@ -240,13 +243,20 @@ brand color conventions (incl. the zh red/green flip law via the web embeds).
    - Primary button: **Open full chart** → Chart tab with that symbol.
 
 3. **Chart (WKWebView, the product's chart)**
-   - Loads the Terminal chart route in `?shell=app` mode; the web chart's own toolbars provide timeframes,
-     chart types, indicators (add/edit/settings incl. Inputs/Style/Visibility — parity already exists on the
-     web), drawings, compare, snapshot export.
-   - Native thin header: symbol pill (tap → native Search sheet) + add-to-watchlist star. Rotation to
-     landscape hides the native header (full-bleed chart, TV behavior).
-   - Bridge keeps native header ↔ web chart in sync both directions; state (symbol/TF) is restored on
-     relaunch via `restoreState`.
+   - Loads the Terminal chart route in `?shell=app` mode; the web chart's own toolbars provide chart types,
+     indicators (add/edit/settings incl. Inputs/Style/Visibility — parity already exists on the web),
+     drawings, compare, snapshot export.
+   - **Native bottom control strip with roller wheels — the TV signature interaction (operator-flagged).**
+     Two side-by-side wheel slots above the tab bar: the **symbol wheel** (chambers = the active watchlist,
+     in list order, prev/next rows ghosted above/below) and the **timeframe wheel** (chambers = available
+     TFs from the bridge `ready` payload). Verified mechanics on the real TV app: **vertical drag rolls**
+     the wheel with detents (haptic tick per chamber in ours) and the chart hot-swaps instantly on each
+     detent via `setSymbol`/`setTimeframe`; **tap** is a different verb — tap on the symbol slot opens the
+     Search sheet (confirmed live), tap on the TF slot opens a TF picker sheet. Add-to-watchlist star sits
+     at the strip's right edge.
+   - Rotation to landscape hides native chrome (full-bleed chart, TV behavior).
+   - Bridge keeps native strip ↔ web chart in sync both directions (chart-side symbol changes roll the
+     wheel to match); state (symbol/TF) is restored on relaunch via `restoreState`.
    - Webview stays mounted across tab switches (no reload cost); page-crash / load-failure → native retry
      surface.
 
@@ -322,7 +332,7 @@ contract, and the Electron main process each have exactly one owner at a time).
 | S0 | docs/governance | This plan merged; `AGENTS.md` boundary amendment; `design_refs/tv-ios/` gitignored | PR merged |
 | S1 | web (`terminal/`) | `?shell=app` mode; bridge v1 + contract types/schema; `setSession` auth handoff; excluded-route nav policy; feature manifest; responsive spec covers shell mode | `npm run test:e2e:responsive` green at 1440×900 / 820×1180 / 390×844; deployed + live-verified with `?shell=app` |
 | S2 | iOS scaffold | Xcode project (SwiftUI, universal, min iOS 17), 4-tab shell, Terminal-v5-derived theme tokens, Chart tab webview loads prod in shell mode (guest) | Simulator: iPhone 17 + iPad Pro 11″ boot to interactive chart |
-| S3 | iOS search + watchlist | Native search sheet (categories, recents, language law), watchlist lists + quotes, bridge symbol sync | Search→chart ≤1 s in sim; watchlist survives relaunch |
+| S3 | iOS search + watchlist | Native search sheet (categories, recents, language law), watchlist lists + quotes, bridge symbol sync, **roller strip** (symbol + TF wheels, haptic detents) | Search→chart ≤1 s in sim; roll-detent→updated chart feels instant; watchlist survives relaunch |
 | S4 | iOS preview + markets | Symbol preview sheet (embed-widget mini-chart, key stats, desk read), Markets tab (index cards + Discover/Analysis embeds) | All data from existing endpoints; no new backend |
 | S5 | iOS auth + menu | Native Supabase login, Keychain session, webview session injection, Menu tab, language toggle | Guest→login→pro badge→embedded chart authed, verified in sim |
 | S6 | iOS lifecycle + iPad + tests | Offline/retry, resume/rotation state restore, webview crash recovery, iPad split view, XCUITest smoke (launch→search→chart→watchlist), physical-device pass | Gates in §9; XCUITest green locally |
