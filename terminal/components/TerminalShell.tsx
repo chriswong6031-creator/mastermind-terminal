@@ -85,6 +85,13 @@ import { listTemplates, saveTemplate } from "@/lib/chartTemplates";
 import { FLAG_DEFAULT, FLAG_COLORS } from "@/lib/flagPalette";
 import { TERMINAL_VISUAL_READY_EVENT } from "@/lib/terminalBoot";
 import AssetLogo from "@/components/AssetLogo";
+import {
+  DEFAULT_WATCHLIST_SETTINGS,
+  WATCHLIST_SETTINGS_KEY,
+  WATCHLIST_SETTINGS_VERSION_KEY,
+  resolveWatchlistSettings,
+  type WatchlistSettings,
+} from "@/lib/watchlistSettings";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -268,11 +275,6 @@ const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "a
 // magnitude as Last rather than a two-digit percentage, so the narrower default clipped it.
 // A user who has already dragged the column keeps their own width (set.colW wins).
 const DEFAULT_COLW: Record<string, number> = { sym: 132, last: 82, change: 84, changePct: 76, volume: 80, ext: 82 };
-// item-26: ext = the extended/overnight PRICE, tinted by the ext move, session + % in the
-// tooltip; dash when no ext print.
-type WLSet = { tableView: boolean; cols: { last: boolean; changePct: boolean; change: boolean; volume: boolean; ext: boolean }; disp: string; logo: boolean; colW: Record<string, number> };
-const DEFAULT_SET: WLSet = { tableView: true, cols: { last: true, changePct: true, change: false, volume: false, ext: true }, disp: "symbol", logo: true, colW: {} };
-
 // ── Boot-trace helper (?boottrace=1) ────────────────────────────────────────
 // Wraps performance.mark so profiling is zero-cost unless the flag is set.
 // Each mark is also console.log'd with a wall-clock delta from the first mark
@@ -417,7 +419,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // id → script, in a ref so the legend callbacks (declared above the derivations) can look it up
   const scriptByIdRef = useRef<Record<string, UserScript>>({});
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
-  const [set, setSet] = useState<WLSet>(DEFAULT_SET);
+  const [set, setSet] = useState<WatchlistSettings>(DEFAULT_WATCHLIST_SETTINGS);
   // ── F1 flags: symbol → color; persisted inside mm.wls additively (read below) ──
   const [flags, setFlags] = useState<Record<string, string>>({});
   const [lastFlagColor, setLastFlagColor] = useState<string>(FLAG_DEFAULT);
@@ -606,7 +608,16 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     // symbol's functional set, since the workspace restore below can land on a symbol other than seed0.
     const savedStartTf = readStartTf();
     const startTf = resolveStartTf(savedStartTf, functionalSet(seed0));
-    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); for (const k of Object.keys(savedP)) if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...savedP[k] }; setIndParams(base); } setPaneTfs([startTf]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); { const sv = load("mm.set", {}); setSet({ ...DEFAULT_SET, ...sv, cols: { ...DEFAULT_SET.cols, ...(sv.cols || {}) }, colW: { ...(sv.colW || {}) } }); } setCompareCfg(load("mm.cmpCfg", {}));
+    { const si = load("mm.inds", ["ema", "vol", "macd", "stochrsi"]) as string[]; setInds(new Set(si)); } setChartType(load("mm.ct", "candles")); setHidden(new Set(load("mm.indHidden", []))); { const savedP = load("mm.indParams", {}); const base = allDefaults(); for (const k of IND_ORDER) base[k] = withDefaults(k, savedP[k]); for (const k of Object.keys(savedP)) if (isSuiteKey(k)) base[k] = { ...suiteDefaults(k), ...savedP[k] }; setIndParams(base); } setPaneTfs([startTf]); setFavTF(load("mm.favtf", ["D", "3D", "W", "1M"])); {
+      const savedSet = load(WATCHLIST_SETTINGS_KEY, {});
+      const savedVersion = Number(localStorage.getItem(WATCHLIST_SETTINGS_VERSION_KEY) || 0);
+      const resolvedSet = resolveWatchlistSettings(savedSet, savedVersion);
+      if (resolvedSet.migrated) {
+        localStorage.setItem(WATCHLIST_SETTINGS_KEY, JSON.stringify(resolvedSet.settings));
+        localStorage.setItem(WATCHLIST_SETTINGS_VERSION_KEY, String(resolvedSet.version));
+      }
+      setSet(resolvedSet.settings);
+    } setCompareCfg(load("mm.cmpCfg", {}));
     { const savedW = Number(localStorage.getItem("mm.railW")); if (Number.isFinite(savedW) && savedW) setRailW(Math.min(520, Math.max(300, savedW))); }
     // restore the saved multi-pane workspace — but a deep-link (?sym=) always wins
     if (!initialSymbol) {
@@ -675,7 +686,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // useEffect at line ~213 runs setFavTF(load(...)). Without the guard, the first render fires
   // this effect with the default and clobbers the saved value before the load effect runs.
   useEffect(() => { if (!favTFMounted.current) { favTFMounted.current = true; return; } localStorage.setItem("mm.favtf", JSON.stringify(favTF)); }, [favTF]);
-  useEffect(() => { if (!setMounted.current) { setMounted.current = true; return; } localStorage.setItem("mm.set", JSON.stringify(set)); }, [set]);
+  useEffect(() => { if (!setMounted.current) { setMounted.current = true; return; } localStorage.setItem(WATCHLIST_SETTINGS_KEY, JSON.stringify(set)); }, [set]);
   useEffect(() => { if (!dtmMounted.current) { dtmMounted.current = true; return; } localStorage.setItem("mm.dtm", JSON.stringify(dtm)); }, [dtm]);
   // restore saved named watchlists (falls back to the server-seeded Default list)
   useEffect(() => {

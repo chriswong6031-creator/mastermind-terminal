@@ -19,6 +19,16 @@ async function waitForTerminalVisualReady(page: Page) {
 }
 
 test("the canonical Terminal shell works at its supported responsive widths", async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("mm.set", JSON.stringify({
+      tableView: true,
+      cols: { last: true, changePct: true, change: false, volume: false, ext: true },
+      disp: "symbol",
+      logo: false,
+      colW: {},
+    }));
+    localStorage.removeItem("mm.setVersion");
+  });
   await armTerminalVisualReady(page);
   await page.goto("/terminal?symbol=NVDA");
 
@@ -29,6 +39,17 @@ test("the canonical Terminal shell works at its supported responsive widths", as
   await waitForTerminalVisualReady(page);
 
   const desktop = testInfo.project.name === "desktop";
+  const logos = page.locator(".wl-row .asset-logo");
+  await expect.poll(() => logos.count()).toBeGreaterThan(0);
+  if (desktop) await expect(logos.first()).toBeVisible();
+  await expect.poll(() => page.evaluate(() =>
+    localStorage.getItem("mm.setVersion"))).toBe("1");
+  const migrated = await page.evaluate(() => ({
+    version: localStorage.getItem("mm.setVersion"),
+    settings: JSON.parse(localStorage.getItem("mm.set") || "{}"),
+  }));
+  expect(migrated.version).toBe("1");
+  expect(migrated.settings.logo).toBe(true);
   if (desktop) {
     await expect(page.locator(".topbar")).toBeVisible();
     await expect(page.locator(".mobilebar")).toBeHidden();
