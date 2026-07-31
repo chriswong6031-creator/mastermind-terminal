@@ -72,12 +72,15 @@ test("the canonical Terminal shell works at its supported responsive widths", as
       path: testInfo.outputPath(`${testInfo.project.name}-search-watchlist.png`),
     });
 
-    // The explicit action can show Recents without summoning the keyboard, and the inverse action
-    // restores the active watchlist. Focusing the field remains the keyboard-driven Recent path.
+    // The explicit action can show Recent without summoning the keyboard. NVDA arrived through the
+    // route (the same path Macro Dashboard uses), so it must be recorded as viewed without a search.
+    // The inverse action restores the active watchlist; focusing the field is the keyboard path.
     await viewToggle.click();
     await expect(searchHub.locator(".s-home")).toHaveCount(0);
     await expect(searchInput).not.toBeFocused();
     await expect(viewToggle).toHaveText("Watchlist");
+    await expect(searchHub.locator(".sres-section-hd")).toHaveText("Recently viewed");
+    await expect(searchHub.locator(".sres .r").first().locator(".tk")).toHaveText("NVDA");
     await searchHub.screenshot({
       path: testInfo.outputPath(`${testInfo.project.name}-search-recent.png`),
     });
@@ -87,6 +90,14 @@ test("the canonical Terminal shell works at its supported responsive widths", as
     await expect(searchInput).toBeFocused();
     await expect(searchHub.locator(".s-home")).toHaveCount(0);
     await expect(viewToggle).toHaveText("Watchlist");
+    // Typing a symbol is not a view. Leaving without opening AAPL must not add it to Recent.
+    await searchInput.fill("AAPL");
+    await expect(searchHub.locator(".sres .r").first().locator(".tk")).toHaveText("AAPL");
+    await searchHub.locator(".smodal-title-bar .esc").click();
+    await expect(searchHub).toBeHidden();
+    await page.locator(".m-symbar").click();
+    await searchHub.locator(".sh-view-toggle").click();
+    await expect(searchHub.locator(".sres .tk")).toHaveText(["NVDA"]);
     await searchHub.locator(".smodal-title-bar .esc").click();
     await expect(searchHub).toBeHidden();
   }

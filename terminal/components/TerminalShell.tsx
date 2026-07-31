@@ -71,7 +71,7 @@ import { useFromMacro, backToMacro } from "@/lib/originNav";
 import { getJSON, prefetch, loadCoverage } from "@/lib/dataCache";
 import { type CmpCfg, type CmpMode, defaultCmpCfg, cmpKey, isCmpKey, cmpSymOf } from "@/lib/compare";
 import { isComposite, parseComposite, compositeQuote as calcCompositeQuote } from "@/lib/composite";
-import { pushHistory } from "@/lib/searchHistory";
+import { pushRecentlyViewed } from "@/lib/recentlyViewed";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
 import { type PineScript } from "@/components/ChartPanel";
 import ChartTableView from "@/components/ChartTableView";
@@ -360,6 +360,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [sync, setSync] = useState(true);
   const [split, setSplit] = useState(1);   // the split the user requested (panes.length may be smaller after dedup)
   const active = panes[activePane] ?? panes[0] ?? seed0;
+  // A deep link already identifies the real landing symbol. A normal launch may restore a saved
+  // workspace later in the mount pass, so wait for that restore before counting the chart view;
+  // otherwise the brief fallback seed would pollute Recent ahead of the actual restored ticker.
+  const [workspaceRestored, setWorkspaceRestored] = useState(!!initialSymbol);
+  // The active chart is the source of truth for Recently viewed. Recording here (instead of only
+  // inside the search picker) includes direct Macro Dashboard links, the warm iframe bridge,
+  // watchlists, movers, and search results. Composite expressions are not standalone ticker rows.
+  useEffect(() => {
+    if (!active || !workspaceRestored) return;
+    if (!isComposite(active)) pushRecentlyViewed(active);
+  }, [active, workspaceRestored]);
   // Analytics: emit a ticker_view whenever the active chart symbol changes. The symbol is client
   // state (not a route), so the route tracker never sees it — fire a decoupled window event that
   // components/Tracker.tsx picks up. Fire-and-forget; never blocks the UI.
@@ -619,6 +630,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       if (initialSymbol) setTimeout(() => setTf("5m"), 0);
       setTimeout(() => setDtm(true), 0);
     }
+    setWorkspaceRestored(true);
   }, []);
   // Legacy workspaces stored one hidden bit per suite. Expand that bit to the suite's currently
   // enabled qualified module ids so new module-level eyes preserve the old all-hidden appearance.
@@ -1851,9 +1863,6 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     if (existing >= 0 && existing !== activePane) setActivePane(existing);          // shown in a different pane → focus it (don't duplicate)
     else if (panes[activePane] !== sym) setPanes((p) => p.map((s, i) => (i === activePane ? sym : s)));
     setReplayOn(false); setReplayIdx(null); setPlaying(false); setCompare([]);
-    // F3: record navigation in history ring buffer (skip composites — SearchModal filters
-    // history via manifest keys, so composite exprs would silently vanish from the Recent list).
-    if (!isComposite(sym)) pushHistory(sym);
   }, [activePane, panes]);
   const onSearchPick = (sym: string) => { if (searchMode === "compare") { toggleCompare(sym); } else pick(sym); };
 

@@ -3,7 +3,7 @@ import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, us
 import { useLang, useT } from "@/lib/i18n";
 import { CMP_PALETTE, CmpMode, CmpCfg } from "@/lib/compare";
 import { parseComposite, compositeExpr, validateLegs } from "@/lib/composite";
-import { getHistory } from "@/lib/searchHistory";
+import { getRecentlyViewed, RECENTLY_VIEWED_LIMIT } from "@/lib/recentlyViewed";
 import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
@@ -32,7 +32,7 @@ const CATS: { id: string; key: string }[] = [
 // "go"      = Symbol search / watchlist home. Two macro-states: HOME (empty + unfocused) shows the
 //             active watchlist; SEARCH (focused or typing) shows category-filtered results. The chip
 //             row morphs in place between the two vocabularies (watchlist chips ⇄ category tabs) —
-//             its geometry never moves. Supports composites + history.
+//             its geometry never moves. Supports composites + recently viewed symbols.
 // "compare" = Compare overlay picker.
 // "add"     = Add Symbol dialog (per S5): has remove-from-watchlist + go-to-symbol instead of +.
 export default function SearchModal({
@@ -69,7 +69,7 @@ export default function SearchModal({
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const [choosing, setChoosing] = useState<string | null>(null);
-  const [history, setHistory] = useState<string[]>([]);
+  const [recentlyViewed, setRecentlyViewed] = useState<string[]>([]);
   const [cat, setCat] = useState("All");   // selected asset-class tab
   const [view, setView] = useState<"home" | "search">("home");
   const [railCreating, setRailCreating] = useState(false);   // inline "+ New list" input open
@@ -90,7 +90,7 @@ export default function SearchModal({
       setSel(0);
       setChoosing(null);
       setCat("All");
-      setHistory(getHistory());
+      setRecentlyViewed(getRecentlyViewed());
       setView(seed ? "search" : "home");
       setRailCreating(false); setRailName("");
       setPicker(null); setPickerUp(false); setPickerNew(false); setPickerNewName("");
@@ -146,7 +146,7 @@ export default function SearchModal({
   }, [deferredQ, manifest]);
 
   // Markets the user has switched off are not in the universe as far as search is concerned —
-  // a disabled market's symbols are unreachable by ticker, by name, and out of history. `ready`
+  // a disabled market's symbols are unreachable by ticker, by name, and out of Recent. `ready`
   // gates the filter so the very first paint (before the account answers) never hides a symbol
   // that is in fact enabled.
   const marketVisible = useCallback(
@@ -180,27 +180,27 @@ export default function SearchModal({
     return scored.slice(0, 30).map(([s, r]) => [s, r] as [string, Row]);
   }, [deferredQ, manifest, cmp, active, cat, marketVisible, boostedMarkets]);
 
-  // History rows when no query (most recent first, filtered against manifest).
-  const historyResults = useMemo((): [string, Row][] => {
+  // Recently viewed rows when no query (most recent first, filtered against manifest).
+  const recentResults = useMemo((): [string, Row][] => {
     if (deferredQ.trim()) return [];
-    return history
+    return recentlyViewed
       .filter((s) => manifest[s] && (cat === "All" || tabOf(s, manifest[s].sec) === cat) && marketVisible(s, manifest[s]))
       .map((s) => [s, manifest[s]] as [string, Row])
-      .slice(0, 30);
-  }, [deferredQ, history, manifest, cat, marketVisible]);
+      .slice(0, RECENTLY_VIEWED_LIMIT);
+  }, [deferredQ, recentlyViewed, manifest, cat, marketVisible]);
 
   // Category BROWSE rows: what a selected category tab lists when the query is still empty.
-  // Without this an empty query rendered history and nothing else, so tapping "Crypto" on a
+  // Without this an empty query rendered Recent and nothing else, so tapping "Crypto" on a
   // fresh session showed only whichever coins were in RECENT — which is exactly how 24 crypto
   // rows in the manifest read to a user as "only BTC and ETH are in Crypto" (2026-07-27).
   // Ordering + capping live in lib/searchCategory.ts, where they are testable.
   const browseResults = useMemo((): [string, Row][] => {
     if (deferredQ.trim() || cat === "All") return [];
     return categoryBrowse(manifest, cat, {
-      exclude: [...historyResults.map(([s]) => s), ...(cmp && active ? [active] : [])],
+      exclude: [...recentResults.map(([s]) => s), ...(cmp && active ? [active] : [])],
       marketPrefs, prefsReady,
     }).map((s) => [s, manifest[s]] as [string, Row]);
-  }, [deferredQ, cat, manifest, historyResults, cmp, active, marketPrefs, prefsReady]);
+  }, [deferredQ, cat, manifest, recentResults, cmp, active, marketPrefs, prefsReady]);
 
   // How many matches the market filter is holding back, and from where. Shown as a one-line
   // footer so a hidden market reads as a setting the user owns, not as missing data — the
@@ -221,10 +221,10 @@ export default function SearchModal({
   // Which asset-class tabs actually have symbols in the universe (others render disabled).
   const availCats = useMemo(() => { const s = new Set<string>(); for (const [sym, r] of Object.entries(manifest)) s.add(tabOf(sym, r.sec)); return s; }, [manifest]);
 
-  const showHistory = !deferredQ.trim();
+  const showRecentRows = !deferredQ.trim();
   // RECENT first, then the rest of the category — one flat list so arrow-key nav and the `sel`
   // index stay a single sequence across the section header that separates them.
-  const displayRows: [string, Row][] = showHistory ? [...historyResults, ...browseResults] : results;
+  const displayRows: [string, Row][] = showRecentRows ? [...recentResults, ...browseResults] : results;
   const catLabelKey = CATS.find((c) => c.id === cat)?.key;
 
   // Active list's symbols joined against the manifest (HOME body). Symbols missing from the
@@ -233,16 +233,16 @@ export default function SearchModal({
 
   // Default highlight: if active symbol not in watchlist → pre-select it; else 0.
   const defaultSel = useMemo(() => {
-    if (showHistory && !inWatchlist.has(active)) {
-      const idx = historyResults.findIndex(([s]) => s === active);
+    if (showRecentRows && !inWatchlist.has(active)) {
+      const idx = recentResults.findIndex(([s]) => s === active);
       return idx >= 0 ? idx : 0;
     }
     return 0;
-  }, [showHistory, active, inWatchlist, historyResults]);
+  }, [showRecentRows, active, inWatchlist, recentResults]);
 
   useEffect(() => {
     if (open) setSel(defaultSel);
-  }, [open, defaultSel, showHistory]);
+  }, [open, defaultSel, showRecentRows]);
 
   if (!open) return null;
 
@@ -344,7 +344,7 @@ export default function SearchModal({
   const titleKey = isAdd ? "addSymbolTitle" : "searchTitle";
   const placeholderKey = "searchInputPlaceholder";
 
-  // Render one symbol row with the shared `.r` anatomy (used by SEARCH results, history, and the
+  // Render one symbol row with the shared `.r` anatomy (used by SEARCH results, Recent, and the
   // HOME active-list body). `withAdd` shows the + / confirm button (SEARCH only).
   function symRow(s: string, r: Row | undefined, rowSel: number, withAdd: boolean) {
     const buy = r ? isBuy(r.verdict) : false;
@@ -615,19 +615,19 @@ export default function SearchModal({
               </div>
             )}
 
-            {/* History header */}
-            {showHistory && historyResults.length > 0 && (
+            {/* Recently viewed header */}
+            {showRecentRows && recentResults.length > 0 && (
               <div className="sres-section-hd">{t("searchRecentHeader")}</div>
             )}
 
-            {/* Type-to-search hint (F): only when there is nothing at all to show and no query
-                yet — a category browse listing is content, so it replaces the hint. */}
-            {!cmp && !isAdd && showHistory && displayRows.length === 0 && (
-              <div className="s-type-hint">{t("typeToSearch")}</div>
+            {/* Recent is navigation history, so an empty list says that plainly. Category browse
+                content replaces this state whenever a category tab has rows. */}
+            {!cmp && !isAdd && showRecentRows && displayRows.length === 0 && (
+              <div className="s-type-hint">{t("searchRecentEmpty")}</div>
             )}
 
             {/* Empty state */}
-            {!showCompositeRow && displayRows.length === 0 && !showHistory && (
+            {!showCompositeRow && displayRows.length === 0 && !showRecentRows && (
               <div className="empty">{t("noSymbolMatch")} "{q}".</div>
             )}
 
@@ -645,16 +645,16 @@ export default function SearchModal({
                 )}
               </div>
             )}
-            {(cmp || isAdd) && showHistory && displayRows.length === 0 && (
-              <div className="empty">{t("searchHistoryEmpty")}</div>
+            {(cmp || isAdd) && showRecentRows && displayRows.length === 0 && (
+              <div className="empty">{t("searchRecentEmpty")}</div>
             )}
 
             {displayRows.map(([s, r], i) => {
               const rowSel = showCompositeRow ? i + 1 : i;
               // The category-browse block gets its own header, at the seam after the RECENT rows
-              // (index 0 when there is no history). Rendered inside the map so one flat row list
+              // (index 0 when there are no recent views). Rendered inside the map so one flat row list
               // keeps driving `sel`/arrow-key nav across the seam.
-              const seamHd = showHistory && browseResults.length > 0 && i === historyResults.length && catLabelKey
+              const seamHd = showRecentRows && browseResults.length > 0 && i === recentResults.length && catLabelKey
                 ? <div className="sres-section-hd">{t(catLabelKey)}</div>
                 : null;
               // compare/add modes keep their bespoke row actions; go mode uses the shared symRow w/ add.
