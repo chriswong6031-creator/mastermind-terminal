@@ -718,9 +718,11 @@ html.acs-lock, html.acs-lock body { overflow: hidden; }
   .acs-x-m { order: 2; }
   .acs-nav {
     order: 3;
-    flex-direction: row; width: 100%;
-    overflow-x: auto; scrollbar-width: none;
-    gap: 4px; padding: 8px 0 2px;
+    flex-direction: row; width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+    overscroll-behavior-x: contain; touch-action: pan-x; -webkit-overflow-scrolling: touch;
+    scroll-padding-inline: 12px;
+    gap: 4px; padding: 8px 12px 2px 0;
   }
   .acs-nav::-webkit-scrollbar { display: none; }
   .acs-nav-b { width: auto; flex: none; padding: 6px 12px; border-radius: 999px; }

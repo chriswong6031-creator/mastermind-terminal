@@ -71,7 +71,7 @@ export default function SearchModal({
   const [choosing, setChoosing] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [cat, setCat] = useState("All");   // selected asset-class tab
-  const [focused, setFocused] = useState(false);       // input focus drives HOME ⇄ SEARCH
+  const [view, setView] = useState<"home" | "search">("home");
   const [railCreating, setRailCreating] = useState(false);   // inline "+ New list" input open
   const [railName, setRailName] = useState("");
   const [picker, setPicker] = useState<string | null>(null);  // symbol whose add-to-list picker is open
@@ -91,13 +91,22 @@ export default function SearchModal({
       setChoosing(null);
       setCat("All");
       setHistory(getHistory());
-      setFocused(false);
+      setView(seed ? "search" : "home");
       setRailCreating(false); setRailName("");
       setPicker(null); setPickerUp(false); setPickerNew(false); setPickerNewName("");
       setJustAdded(null);
-      setTimeout(() => inputRef.current?.focus(), 10);
+      // Opening the mobile ticker picker is a navigation action, so it must land on the active
+      // watchlist without also summoning the keyboard. Desktop symbol search, seeded type-ahead,
+      // Compare, and Add Symbol retain their established autofocus behavior.
+      const mobileWatchlistEntry = mode === "go"
+        && !seed
+        && window.matchMedia("(max-width: 860px)").matches;
+      const focusTimer = mobileWatchlistEntry
+        ? null
+        : setTimeout(() => inputRef.current?.focus(), 10);
+      return () => { if (focusTimer) clearTimeout(focusTimer); };
     }
-  }, [open, seed]);
+  }, [open, seed, mode]);
 
   useEffect(() => { if (railCreating) setTimeout(() => railInputRef.current?.focus(), 10); }, [railCreating]);
   useEffect(() => { if (pickerNew) setTimeout(() => pickerNewRef.current?.focus(), 10); }, [pickerNew]);
@@ -108,10 +117,25 @@ export default function SearchModal({
   const isAdd = mode === "add";
   const signedIn = !!email;
 
-  // "go" mode home vs search: SEARCH when the input has focus OR the query is non-empty; HOME otherwise.
-  // Only "go" mode has a home — compare/add are always in their search body.
-  const searchState = mode !== "go" || focused || q.trim() !== "" ? "search" : "home";
+  // Only "go" mode has a watchlist home. Focusing the field or using the mobile Recent action
+  // moves to search explicitly; it stays there until navigation completes or Watchlist is chosen.
+  const searchState = mode !== "go" || view === "search" || q.trim() !== "" ? "search" : "home";
   const isHome = searchState === "home";
+
+  const showRecent = () => {
+    setQ("");
+    setCat("All");
+    setSel(0);
+    setView("search");
+  };
+
+  const showWatchlist = () => {
+    setQ("");
+    setCat("All");
+    setSel(0);
+    setView("home");
+    inputRef.current?.blur();
+  };
 
   // Parse query as composite expression.
   const compositeLegs = useMemo(() => {
@@ -438,17 +462,27 @@ export default function SearchModal({
             value={q}
             placeholder={cmp ? t("comparePlaceholder") : t(placeholderKey)}
             onChange={(e) => { setQ(e.target.value); setSel(0); }}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
+            onFocus={() => setView("search")}
             onKeyDown={key}
           />
-          {/* keyboard icon (decorative, per S4) */}
+          {/* Desktop keyboard hint. The mobile hub replaces it with the explicit view switch. */}
           <span className="sh-kbd" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <rect x="2" y="6" width="20" height="13" rx="2" />
               <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M9 14h6M18 14h.01" />
             </svg>
           </span>
+          {mode === "go" && (
+            <button
+              type="button"
+              className="sh-view-toggle"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={isHome ? showRecent : showWatchlist}
+              aria-label={isHome ? t("searchShowRecent") : t("searchShowWatchlist")}
+            >
+              {isHome ? t("searchShowRecent") : t("searchShowWatchlist")}
+            </button>
+          )}
         </div>
 
         {/* Compare mode chips */}

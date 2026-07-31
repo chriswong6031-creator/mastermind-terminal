@@ -35,12 +35,61 @@ test("the canonical Terminal shell works at its supported responsive widths", as
   const settingsDialog = page.getByRole("dialog", { name: "Terminal" });
   await expect(settingsDialog).toBeVisible();
   await expect(settingsDialog.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
+  if (testInfo.project.name === "mobile") {
+    const settingsTabs = settingsDialog.locator(".acs-nav");
+    const tabStrip = await settingsTabs.evaluate((el) => {
+      const css = getComputedStyle(el);
+      return {
+        clientWidth: el.clientWidth,
+        scrollWidth: el.scrollWidth,
+        overflowX: css.overflowX,
+        touchAction: css.touchAction,
+      };
+    });
+    expect(tabStrip.scrollWidth).toBeGreaterThan(tabStrip.clientWidth);
+    expect(tabStrip.overflowX).toBe("auto");
+    expect(tabStrip.touchAction).toBe("pan-x");
+    await settingsTabs.evaluate((el) => el.scrollTo({ left: el.scrollWidth }));
+    await expect.poll(() => settingsTabs.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+  }
   await page.screenshot({
     path: testInfo.outputPath(`${testInfo.project.name}-terminal-settings.png`),
     fullPage: false,
   });
   await page.keyboard.press("Escape");
   await expect(settingsDialog).toBeHidden();
+
+  if (!desktop) {
+    // Tapping the mobile ticker is navigation into the watchlist hub, not an implicit search.
+    await page.locator(".m-symbar").click();
+    const searchHub = page.locator(".smodal-hub");
+    const searchInput = searchHub.getByPlaceholder("Symbol, ISIN, or CUSIP");
+    const viewToggle = searchHub.locator(".sh-view-toggle");
+    await expect(searchHub.locator(".s-home")).toBeVisible();
+    await expect(searchInput).not.toBeFocused();
+    await expect(viewToggle).toHaveText("Recent");
+    await searchHub.screenshot({
+      path: testInfo.outputPath(`${testInfo.project.name}-search-watchlist.png`),
+    });
+
+    // The explicit action can show Recents without summoning the keyboard, and the inverse action
+    // restores the active watchlist. Focusing the field remains the keyboard-driven Recent path.
+    await viewToggle.click();
+    await expect(searchHub.locator(".s-home")).toHaveCount(0);
+    await expect(searchInput).not.toBeFocused();
+    await expect(viewToggle).toHaveText("Watchlist");
+    await searchHub.screenshot({
+      path: testInfo.outputPath(`${testInfo.project.name}-search-recent.png`),
+    });
+    await viewToggle.click();
+    await expect(searchHub.locator(".s-home")).toBeVisible();
+    await searchInput.click();
+    await expect(searchInput).toBeFocused();
+    await expect(searchHub.locator(".s-home")).toHaveCount(0);
+    await expect(viewToggle).toHaveText("Watchlist");
+    await searchHub.locator(".smodal-title-bar .esc").click();
+    await expect(searchHub).toBeHidden();
+  }
 
   const overflow = await page.evaluate(() => ({
     viewport: window.innerWidth,
@@ -196,6 +245,10 @@ test("Seasonal read stays useful in chart and table views at every supported wid
       window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "seasonals" }));
     });
     return seasonal.count();
+  }, {
+    // All three viewport projects run alongside the heavier chart suites. Give the dynamically
+    // imported finance pane time to hydrate under that deliberate parallel load.
+    timeout: 15_000,
   }).toBe(1);
   await expect(seasonal).toBeVisible();
   await expect(seasonal.locator(".fin-seas-chart svg")).toBeVisible();
