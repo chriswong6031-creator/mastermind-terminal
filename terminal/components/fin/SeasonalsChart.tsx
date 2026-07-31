@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from "react";
 import { fmtNum, fmtPct, pick } from "../../lib/finFormat";
 import { FinTip, useFinTip } from "./FinCharts";
+import { fmtTick, niceTicks, padDomain, useChartWidth } from "../charts/svgChart";
 import {
   HORIZON,
   MONTHS_EN,
@@ -38,62 +39,10 @@ interface SeasonalsChartProps {
   height?: number;
 }
 
-const PAD = { t: 12, r: 50, b: 30, l: 8 };
+const PAD = { t: 12, r: 68, b: 30, l: 8 };
 const MIN_DRAG_IDX = 3; // below this a press is treated as a click (clears selection)
 
 const num = (v: number | null | undefined): v is number => v != null && isFinite(v);
-
-/** local box-width measure (viewBox = real px → 1:1, crisp text). */
-function useBoxW(fallback: number) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [w, setW] = useState(fallback);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => {
-      const cw = Math.round(el.clientWidth);
-      if (cw > 0) setW(cw);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return { ref, w };
-}
-
-function calcDomain(flat: number[], includeZero: boolean): [number, number] {
-  let lo = Infinity;
-  let hi = -Infinity;
-  for (const v of flat) {
-    if (v < lo) lo = v;
-    if (v > hi) hi = v;
-  }
-  if (!isFinite(lo) || !isFinite(hi)) return [0, 1];
-  if (includeZero) {
-    lo = Math.min(lo, 0);
-    hi = Math.max(hi, 0);
-  }
-  if (lo === hi) {
-    const pad = Math.abs(lo) || 1;
-    return [lo - pad, hi + pad];
-  }
-  const pad = (hi - lo) * 0.08;
-  return [lo - pad, hi + pad];
-}
-
-function niceTicks([lo, hi]: [number, number], count = 4): number[] {
-  if (lo === hi) return [lo];
-  const span = hi - lo;
-  const raw = span / count;
-  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-  const n = raw / mag;
-  const step = (n >= 5 ? 5 : n >= 2 ? 2 : 1) * mag;
-  const start = Math.ceil(lo / step) * step;
-  const out: number[] = [];
-  for (let v = start; v <= hi + step * 0.001; v += step) out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
-  return out;
-}
 
 export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = false, height = 420 }: SeasonalsChartProps) {
   const { tip, show, hide } = useFinTip();
@@ -108,17 +57,9 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
   const [sel, setSel] = useState<{ a: number; b: number } | null>(null);
   const dragStart = useRef<number | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const box = useBoxW(840);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const vw = useChartWidth(boxRef, 840);
 
-  // clear any selection when the underlying data (symbol) changes
-  const dataKey = years.map((y) => y.year).join(",");
-  useEffect(() => {
-    setSel(null);
-    setDrag(null);
-    dragStart.current = null;
-  }, [dataKey]);
-
-  const vw = box.w;
   const vh = height;
   const iw = vw - PAD.l - PAD.r;
   const ih = vh - PAD.t - PAD.b;
@@ -156,12 +97,14 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
     const flat: number[] = [];
     for (const p of normed) for (const v of p.values) if (num(v)) flat.push(v);
     for (const v of avg) if (num(v)) flat.push(v);
-    return calcDomain(flat, pct);
-  }, [normed, avg, pct]);
-  const tk = niceTicks(dom, 4);
+    if (flat.length === 0) return [0, 1] as [number, number];
+    return padDomain(Math.min(...flat), Math.max(...flat), { includeZero: true, padFrac: 0.08 });
+  }, [normed, avg]);
+  const tk = niceTicks(dom[0], dom[1], 5);
   const y = (v: number) => PAD.t + ih - ((v - dom[0]) / (dom[1] - dom[0])) * ih;
 
-  const fmtY = (v: number) => (pct ? fmtPct(v, { decimals: 1, alreadyPct: true, sign: true }) : fmtNum(v));
+  const fmtY = (v: number) =>
+    pct ? `${v > 0 ? "+" : ""}${fmtTick(v, tk.step)}%` : fmtNum(v);
   const fmtG = (v: number) => fmtPct(v, { decimals: 1, alreadyPct: true, sign: true });
 
   const line = (vals: (number | null)[]) => {
@@ -196,7 +139,6 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
   const YEAR_BASE_OP = 0.22;
   const manyYears = normed.length;
   const yearLineOp = manyYears <= 12 ? YEAR_BASE_OP : Math.max(0.1, (YEAR_BASE_OP * 12) / manyYears);
-  const showEndLabels = manyYears <= 12;
   const collapseLegend = years.length > 12; // "N years" chip + popover past 12
 
   /* ── pointer → grid index ─────────────────────────────────────────────── */
@@ -282,8 +224,8 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
       </div>
 
       {/* chart */}
-      <div className="fin-seas-chartbox" ref={box.ref} style={{ height: vh }}>
-        <svg ref={svgRef} viewBox={`0 0 ${vw} ${vh}`} preserveAspectRatio="none" className="fin-svg">
+      <div className="fin-seas-chartbox" ref={boxRef} style={{ height: vh }}>
+        <svg ref={svgRef} viewBox={`0 0 ${vw} ${vh}`} width={vw} height={vh} className="fin-svg">
           {/* month background bands + separators */}
           {bounds.map((bi, m) => {
             const x0 = x(bi);
@@ -297,7 +239,7 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
           })}
 
           {/* y grid + ticks */}
-          {tk.map((t) => (
+          {tk.values.map((t) => (
             <g key={t}>
               <line className={t === 0 ? "fin-grid fin-grid-0" : "fin-grid"} x1={PAD.l} x2={vw - PAD.r} y1={y(t)} y2={y(t)} />
               <text className="fin-axis-y" x={vw - PAD.r + 4} y={y(t) + 3}>{fmtY(t)}</text>
@@ -345,16 +287,18 @@ export function SeasonalsChart({ years, active, onToggleYear, onSetActive, zh = 
               <g key={p.year}>
                 <polyline className="fin-seas-curline" points={line(p.values)} fill="none" />
                 {end && <circle className="fin-seas-curnode" cx={x(end[0])} cy={y(end[1])} r={3.2} />}
-                {end && <text className="fin-seas-curlbl" x={vw - PAD.r + 3} y={y(end[1]) - 3}>{p.year}</text>}
+                {end && (
+                  <text
+                    className="fin-seas-curlbl"
+                    x={end[0] > HORIZON - 20 ? x(end[0]) - 6 : x(end[0]) + 6}
+                    y={y(end[1]) - 6}
+                    textAnchor={end[0] > HORIZON - 20 ? "end" : "start"}
+                  >
+                    {p.year}
+                  </text>
+                )}
               </g>
             );
-          })}
-
-          {/* prior-year end labels (only when few enough to read) */}
-          {showEndLabels && normed.filter((p) => !p.isCurrent).map((p) => {
-            const end = lastFinite(p.values);
-            if (!end) return null;
-            return <text key={p.year} className="fin-yo-endlbl" x={vw - PAD.r + 3} y={y(end[1]) - 3} fill={p.color} opacity={hiYear === p.year ? 1 : 0.5}>{p.year}</text>;
           })}
 
           {/* month labels (calendar-centered) */}
