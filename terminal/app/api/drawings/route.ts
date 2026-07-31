@@ -5,7 +5,7 @@ import {
   MAX_DRAWINGS_PER_SYMBOL,
   normalizeDrawings,
 } from "@/lib/drawings";
-import { getDrawingTool } from "@/lib/drawingTools";
+import { drawingToolAcceptsPersistedPointCount } from "@/lib/drawingTools";
 
 type StoredDrawingRow = { id: string; kind: string; data?: Record<string, unknown> | null };
 type StoredIdRow = { id: string };
@@ -82,8 +82,7 @@ export async function PUT(req: Request) {
   }
   const ids = new Set<string>();
   for (const drawing of normalized) {
-    const tool = getDrawingTool(drawing.kind);
-    if (!tool || drawing.points.length < tool.creation.minPoints || drawing.points.length > tool.creation.maxPoints || ids.has(drawing.id)) {
+    if (!drawingToolAcceptsPersistedPointCount(drawing.kind, drawing.points.length) || ids.has(drawing.id)) {
       return NextResponse.json({ ok: false, error: "One or more drawings have invalid geometry or duplicate IDs" }, { status: 422 });
     }
     ids.add(drawing.id);

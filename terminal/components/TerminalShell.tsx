@@ -66,6 +66,7 @@ import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
 import {
   MAX_DRAWINGS_PER_SYMBOL,
+  type Dash,
   type Drawing,
   type DrawKind,
   normalizeDrawingUpdate,
@@ -73,7 +74,7 @@ import {
   uid,
 } from "@/lib/drawings";
 import { readDrawingOutbox, writeDrawingOutbox, type DrawingOutbox } from "@/lib/drawingOutbox";
-import { isDrawingToolId } from "@/lib/drawingTools";
+import { getDrawingTool, isDrawingToolId } from "@/lib/drawingTools";
 import SettingsButton from "@/components/settings/SettingsButton";
 import { SettingsProvider } from "@/components/settings/SettingsProvider";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
@@ -88,6 +89,8 @@ import { isComposite, parseComposite, compositeQuote as calcCompositeQuote } fro
 import { pushRecentlyViewed } from "@/lib/recentlyViewed";
 import { listScripts, deleteScript as delScript, renameScript as renScript, enabledScriptIds, setEnabledScriptIds, pineParamStore, setPineParamStore, mergedParams, type UserScript } from "@/lib/userScripts";
 import { type PineScript } from "@/components/ChartPanel";
+
+type ShellDrawingStyle = { color: string; width: number; dash: Dash };
 import ChartTableView from "@/components/ChartTableView";
 import { type OTEntry } from "@/components/ChartObjectTree";
 import { listTemplates, saveTemplate } from "@/lib/chartTemplates";
@@ -527,8 +530,34 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (loggedIn || inds.size <= MAX_ANON_IND) return;
     setInds((s) => new Set([...s].slice(0, MAX_ANON_IND)));
   }, [inds, loggedIn]);
-  // pre-draw style chosen BEFORE drawing (color/width/dash) — applied to each new line/arrow/box/HV drawing
-  const [drawStyle, setDrawStyle] = useState<{ color: string; width: number; dash: "solid" | "dashed" | "dotted" }>({ color: "#4d82ff", width: 1.5, dash: "solid" });
+  // Preserve OpenMarket-style defaults per tool. A global blue/1.5/solid state
+  // flattened meaningful defaults (for example Highlighter 8px and dashed Fib)
+  // as soon as a tool was selected. Overrides now belong to the tool that the
+  // user customized and are merged over its registry defaults.
+  const [drawStyleOverrides, setDrawStyleOverrides] = useState<
+    Partial<Record<DrawKind, Partial<ShellDrawingStyle>>>
+  >({});
+  const drawStyle = useMemo<ShellDrawingStyle>(() => {
+    const defaults = tool ? getDrawingTool(tool)?.defaults : undefined;
+    const override = tool ? drawStyleOverrides[tool] : undefined;
+    return {
+      color: override?.color ?? defaults?.color ?? "#4d82ff",
+      width: override?.width ?? defaults?.width ?? 1.5,
+      dash: override?.dash ?? defaults?.dash ?? "solid",
+    };
+  }, [drawStyleOverrides, tool]);
+  const patchDrawStyle = useCallback((patch: Partial<ShellDrawingStyle>) => {
+    if (!tool) return;
+    const safePatch: Partial<ShellDrawingStyle> = {
+      ...(typeof patch.color === "string" ? { color: patch.color } : {}),
+      ...(typeof patch.width === "number" && Number.isFinite(patch.width) ? { width: patch.width } : {}),
+      ...(patch.dash === "solid" || patch.dash === "dashed" || patch.dash === "dotted" ? { dash: patch.dash } : {}),
+    };
+    setDrawStyleOverrides((current) => ({
+      ...current,
+      [tool]: { ...current[tool], ...safePatch },
+    }));
+  }, [tool]);
   const [compare, setCompare] = useState<string[]>([]);
   const [compareCfg, setCompareCfg] = useState<Record<string, CmpCfg>>({});
   const [searchMode, setSearchMode] = useState<"go" | "compare">("go");
@@ -920,6 +949,20 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         if (value.magnet === "off" || value.magnet === "weak" || value.magnet === "strong") setMagnet(value.magnet);
         if (typeof value.sticky === "boolean") setDrawingSticky(value.sticky);
         if (typeof value.visible === "boolean") setDrawingsVisible(value.visible);
+        if (value.styles && typeof value.styles === "object" && !Array.isArray(value.styles)) {
+          const styles: Partial<Record<DrawKind, Partial<ShellDrawingStyle>>> = {};
+          for (const [id, candidate] of Object.entries(value.styles as Record<string, unknown>)) {
+            if (!isDrawingToolId(id) || !candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+            const raw = candidate as Record<string, unknown>;
+            const style: Partial<ShellDrawingStyle> = {
+              ...(typeof raw.color === "string" ? { color: raw.color } : {}),
+              ...(typeof raw.width === "number" && Number.isFinite(raw.width) ? { width: raw.width } : {}),
+              ...(raw.dash === "solid" || raw.dash === "dashed" || raw.dash === "dotted" ? { dash: raw.dash } : {}),
+            };
+            styles[id] = style;
+          }
+          setDrawStyleOverrides(styles);
+        }
       } catch {}
       setDrawingPrefsHydrated(true);
     });
@@ -927,8 +970,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   }, []);
   useEffect(() => {
     if (!drawingPrefsHydrated) return;
-    try { localStorage.setItem("mm.drawing.preferences", JSON.stringify({ magnet, sticky: drawingSticky, visible: drawingsVisible })); } catch {}
-  }, [drawingPrefsHydrated, drawingSticky, drawingsVisible, magnet]);
+    try { localStorage.setItem("mm.drawing.preferences", JSON.stringify({ magnet, sticky: drawingSticky, visible: drawingsVisible, styles: drawStyleOverrides })); } catch {}
+  }, [drawStyleOverrides, drawingPrefsHydrated, drawingSticky, drawingsVisible, magnet]);
   // Drawing ownership is a hard cache boundary. Guest drawings remain in the
   // guest collection; an account always reloads its authoritative server copy.
   // This also handles sign-out and direct account-to-account session changes.
@@ -1263,6 +1306,18 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     window.addEventListener("mm:set-tool", h);
     return () => window.removeEventListener("mm:set-tool", h);
   }, []);
+  // The chart-local creation palette uses the same controlled style state as
+  // the rail palette, so wheel/swatches stay synchronized and persist for the
+  // next drawing instead of becoming an isolated canvas-only preference.
+  useEffect(() => {
+    const h = (event: Event) => {
+      const patch = (event as CustomEvent).detail as Partial<ShellDrawingStyle> | null;
+      if (!patch || typeof patch !== "object") return;
+      patchDrawStyle(patch);
+    };
+    window.addEventListener("mm:drawing-style", h);
+    return () => window.removeEventListener("mm:drawing-style", h);
+  }, [patchDrawStyle]);
   useEffect(() => {
     const committed = () => { if (!drawingStickyRef.current) setTool(null); };
     const history = (event: Event) => {
@@ -2622,11 +2677,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                   chartBus.legend.clear();
                 }
               }}
-              onDrawStyle={(patch) => setDrawStyle((s) => ({ ...s, ...patch }))}
+              onDrawStyle={patchDrawStyle}
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} drawingOwnerKey={currentDrawingOwnerKey} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={drawingsReadyFor(sym) ? tool : null} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawingOwnerMatches ? (drawStore[sym] ?? []) : []), ...chartBus.aiDrawingsFor(sym)]} drawingsVisible={drawingsVisible} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
+                <ChartPane key={i} idx={i} symbol={sym} drawingOwnerKey={currentDrawingOwnerKey} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={drawingsReadyFor(sym) ? tool : null} drawingSticky={drawingSticky} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawingOwnerMatches ? (drawStore[sym] ?? []) : []), ...chartBus.aiDrawingsFor(sym)]} drawingsVisible={drawingsVisible} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}

@@ -8,6 +8,7 @@ const DRAWING_CHROME_KEYS = [
   "drawingGroupTools",
   "drawingDoubleClickKeepActive",
   "drawingStyleForTool",
+  "drawingOpenStyle",
   "drawingColorValue",
   "drawingUseColor",
   "drawingUseWidth",
@@ -50,6 +51,7 @@ const DRAWING_CHROME_KEYS = [
   "drawingMoreProperties",
   "drawingOpacity",
   "drawingFill",
+  "drawingTextSizeOption",
 ] as const;
 
 const globalRecord = globalThis as unknown as Record<string, unknown>;
@@ -72,6 +74,7 @@ describe("drawing registry i18n", () => {
   const registryKeys = [
     ...DRAWING_TOOL_GROUPS.map((group) => group.labelKey),
     ...DRAWING_TOOL_GROUPS.flatMap((group) => group.tools.map((tool) => tool.labelKey)),
+    ...new Set(DRAWING_TOOL_GROUPS.flatMap((group) => group.tools.map((tool) => tool.sectionKey))),
   ];
 
   it("resolves every registry group and tool label in English", () => {
