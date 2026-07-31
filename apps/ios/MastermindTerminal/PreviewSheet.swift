@@ -63,6 +63,7 @@ struct PreviewSheet: View {
             URLQueryItem(name: "theme", value: "dark"),
             URLQueryItem(name: "lang", value: model.lang),
             URLQueryItem(name: "transparent", value: "1"),
+            URLQueryItem(name: "hdr", value: "0"),
         ]
         return components.url!
     }
