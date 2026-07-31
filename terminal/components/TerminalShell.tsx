@@ -64,7 +64,16 @@ import { oracleVerdict, deskVerdict } from "@/lib/signalVerdict";
 import { computeTrendState } from "@/lib/trend";
 import { useLive } from "@/lib/live";
 import { setPaneSync } from "@/lib/paneSync";
-import { type Drawing, uid } from "@/lib/drawings";
+import {
+  MAX_DRAWINGS_PER_SYMBOL,
+  type Drawing,
+  type DrawKind,
+  normalizeDrawingUpdate,
+  normalizeDrawings,
+  uid,
+} from "@/lib/drawings";
+import { readDrawingOutbox, writeDrawingOutbox, type DrawingOutbox } from "@/lib/drawingOutbox";
+import { isDrawingToolId } from "@/lib/drawingTools";
 import SettingsButton from "@/components/settings/SettingsButton";
 import { SettingsProvider } from "@/components/settings/SettingsProvider";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
@@ -232,7 +241,23 @@ function SortableWlRow({ sym, className, style, onClick, onMouseEnter, children 
     </div>
   );
 }
-const CHART_TYPES = [["candles", "Candles"], ["heikin", "Heikin Ashi"], ["bars", "Bars"], ["line", "Line"], ["area", "Area"]];
+const CHART_TYPE_GROUPS: [string, string[]][] = [
+  ["ctGroupCandles", ["candles", "hollow", "heikin"]],
+  ["ctGroupBars", ["bars"]],
+  ["ctGroupLines", ["line", "line-markers", "step"]],
+  ["ctGroupAreas", ["area", "baseline"]],
+];
+function ChartTypeIcon({ kind }: { kind: string }) {
+  if (kind === "candles" || kind === "hollow" || kind === "heikin") return (
+    <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true">
+      <path d="M5 2v12M3 5h4v5H3zM14 1v14M12 3h4v7h-4zM23 3v11M21 7h4v4h-4z" fill={kind === "hollow" ? "none" : "currentColor"} />
+    </svg>
+  );
+  if (kind === "bars") return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M5 2v12M2 5h3M5 11h3M14 1v14M11 4h3M14 10h3M23 3v11M20 6h3M23 12h3" /></svg>;
+  if (kind === "step") return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 12h7V8h8V4h9" /></svg>;
+  if (kind === "area" || kind === "baseline") return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 12l6-5 5 3 6-7 7 3v8H2z" className="ct-fill" /><path d="M2 12l6-5 5 3 6-7 7 3" />{kind === "baseline" && <path d="M2 9h24" className="ct-base" />}</svg>;
+  return <svg className="ct-kind-icon" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 12l6-5 5 3 6-7 7 3" />{kind === "line-markers" && <><circle cx="8" cy="7" r="1.4" /><circle cx="19" cy="3" r="1.4" /><circle cx="26" cy="6" r="1.4" /></>}</svg>;
+}
 const TF_GROUPS: [string, string[]][] = [["Minutes", ["1m", "5m", "15m", "30m"]], ["Hours", ["1h", "2h", "4h"]], ["Days", ["D", "2D", "3D"]], ["Weeks", ["W", "2W"]], ["Months", ["1M", "3M"]]];
 // Daily-derived TFs are always functional. Intraday TFs (R12) go live for intraday-capable markets
 // (us/crypto/cn/hk); .TO (ca) stays daily-only — its picker entries render disabled.
@@ -256,8 +281,10 @@ const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); r
 // everyone and chart drawings were destroyed on symbol switch / reload. Persist them
 // per-symbol in localStorage for guests instead.
 const GUEST_DRAW_KEY = "mm.draw";
-const readGuestDraw = (sym: string): Drawing[] => { try { const m = JSON.parse(localStorage.getItem(GUEST_DRAW_KEY) || "{}"); return Array.isArray(m[sym]) ? m[sym] : []; } catch { return []; } };
+const readGuestDraw = (sym: string): Drawing[] => { try { const m = JSON.parse(localStorage.getItem(GUEST_DRAW_KEY) || "{}"); return normalizeDrawings(m[sym]); } catch { return []; } };
 const writeGuestDraw = (sym: string, d: Drawing[]) => { try { const m = JSON.parse(localStorage.getItem(GUEST_DRAW_KEY) || "{}"); if (d && d.length) m[sym] = d; else delete m[sym]; localStorage.setItem(GUEST_DRAW_KEY, JSON.stringify(m)); } catch {} };
+const drawingCollectionsEqual = (a: Drawing[], b: Drawing[]) =>
+  a.length === b.length && a.every((drawing, index) => drawing === b[index]);
 
 // drawing tools that accept a pre-draw color/width/dash style — still referenced by ChartPane/ChartPanel
 // for the styleable-tool check; DrawingSidebar owns its own definition of this set now.
@@ -266,7 +293,7 @@ const DETECTORS: [string, string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
 ];
 // translation key maps for the (otherwise hard-coded) toolbar/tool labels
-const CT_TKEY: Record<string, string> = { candles: "ctCandles", heikin: "ctHeikin", bars: "ctBars", line: "ctLine", area: "ctArea" };
+const CT_TKEY: Record<string, string> = { candles: "ctCandles", hollow: "ctHollow", heikin: "ctHeikin", bars: "ctBars", line: "ctLine", "line-markers": "ctLineMarkers", step: "ctStepLine", area: "ctArea", baseline: "ctBaseline" };
 const TFG_TKEY: Record<string, string> = { Minutes: "tfMinutes", Hours: "tfHours", Days: "tfDays", Weeks: "tfWeeks", Months: "tfMonths" };
 const DET_TKEY: Record<string, string> = { trendlines: "autoTrendlines", fib: "autoFib", sr: "srHeatmap", mtfa: "mtfSR", clear: "clearDetected" };
 
@@ -431,7 +458,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const [replayOn, setReplayOn] = useState(false); const [replayIdx, setReplayIdx] = useState<number | null>(null); const [total, setTotal] = useState(0); const [playing, setPlaying] = useState(false); const [speed, setSpeed] = useState(1);
   const playRef = useRef<any>(null);
   // §7 state
-  const [tool, setTool] = useState<string | null>(null);
+  const [tool, setTool] = useState<DrawKind | null>(null);
   const [detectCmd, setDetectCmd] = useState<DetectCmd>(null);
   const [detectOpen, setDetectOpen] = useState(false);
   const [intel, setIntel] = useState<any>(null);
@@ -453,7 +480,13 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // MegaPane (in-shell fundamentals overlay) + OracleDash (Golden Oracle history) overlays
   const [paneOpen, setPaneOpen] = useState<FinPage | null>(null);
   const [signalsOpen, setSignalsOpen] = useState(false);
-  const [magnet, setMagnet] = useState(false);
+  const [magnet, setMagnet] = useState<"off" | "weak" | "strong">("off");
+  const [drawingSticky, setDrawingSticky] = useState(false);
+  const drawingStickyRef = useRef(false);
+  drawingStickyRef.current = drawingSticky;
+  const [drawingsVisible, setDrawingsVisible] = useState(true);
+  const [drawingHistoryVersion, setDrawingHistoryVersion] = useState(0);
+  const [drawingPrefsHydrated, setDrawingPrefsHydrated] = useState(false);
   // ── D1-D4: context-menu feature state ──────────────────────────────────────
   // D3: table view mode (replaces chart body)
   const [tableViewOpen, setTableViewOpen] = useState(false);
@@ -554,12 +587,133 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // shared per-symbol drawing store (lifted out of ChartPane so multiple panes on the same
   // symbol share one set instead of clobbering each other through the replace-all PUT)
   const [drawStore, setDrawStore] = useState<Record<string, Drawing[]>>({});
+  const drawStoreRef = useRef<Record<string, Drawing[]>>({});
+  drawStoreRef.current = drawStore;
   const drawLoaded = useRef<Set<string>>(new Set());
   const drawPending = useRef<Record<string, Drawing[]>>({});
   const drawTimers = useRef<Record<string, any>>({});
+  const drawSaving = useRef<Partial<Record<string, Promise<void>>>>({});
+  const flushDrawingsRef = useRef<(sym: string) => void>(() => {});
+  const drawLoadRetryTimers = useRef<Record<string, any>>({});
+  const drawLoadRetryAttempts = useRef<Record<string, number>>({});
+  // Invalidates every async load/save callback when drawing ownership changes
+  // (guest -> account, sign-out, or account swap). A stale request must never
+  // populate or enqueue work into the next owner's cache.
+  const drawOwnerEpoch = useRef(0);
+  const drawOwner = useRef(email ? `account:${email}` : "guest");
+  const [drawingOwnerKey, setDrawingOwnerKey] = useState(email ? `account:${email}` : "guest");
+  const drawHistory = useRef<Record<string, { undo: Drawing[][]; redo: Drawing[][] }>>({});
   const prevPaneSyms = useRef<Set<string>>(new Set());
-  const flushDrawings = useCallback((sym: string) => { clearTimeout(drawTimers.current[sym]); const d = drawPending.current[sym]; if (d) { delete drawPending.current[sym]; if (loggedIn) { fetch("/api/drawings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym, drawings: d }) }).catch(() => {}); } else { writeGuestDraw(sym, d); } } }, [loggedIn]);
-  const setSymbolDrawings = useCallback((sym: string, d: Drawing[]) => { setDrawStore((s) => ({ ...s, [sym]: d })); drawPending.current[sym] = d; clearTimeout(drawTimers.current[sym]); drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 600); }, [flushDrawings]);
+  const [drawingLoadRetryVersion, setDrawingLoadRetryVersion] = useState(0);
+  const [drawingLoadFailures, setDrawingLoadFailures] = useState<Set<string>>(new Set());
+  const drawRecovery = useRef<Record<string, DrawingOutbox>>({});
+  const [drawingLimitWarning, setDrawingLimitWarning] = useState(false);
+  const drawingLimitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDrawingLimitWarning = useCallback(() => {
+    setDrawingLimitWarning(true);
+    if (drawingLimitTimer.current !== null) clearTimeout(drawingLimitTimer.current);
+    drawingLimitTimer.current = setTimeout(() => setDrawingLimitWarning(false), 5_000);
+  }, []);
+  const flushDrawings = useCallback((sym: string) => {
+    clearTimeout(drawTimers.current[sym]);
+    if (drawSaving.current[sym]) return;
+    const drawings = drawPending.current[sym];
+    if (!drawings) return;
+    delete drawPending.current[sym];
+    if (!loggedIn) { writeGuestDraw(sym, drawings); return; }
+    const ownerEpoch = drawOwnerEpoch.current;
+    const ownerKey = drawOwner.current;
+    let failed = false;
+    const save = fetch("/api/drawings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: sym, drawings }),
+      })
+      .then((response) => {
+        if (!response.ok) throw new Error(`drawing save failed (${response.status})`);
+        if (drawOwnerEpoch.current !== ownerEpoch) return;
+        const recovery = drawRecovery.current[ownerKey];
+        if (recovery?.[sym] === drawings) {
+          delete recovery[sym];
+          writeDrawingOutbox(localStorage, ownerKey, recovery);
+        }
+      })
+      .catch(() => {
+        if (drawOwnerEpoch.current !== ownerEpoch) return;
+        failed = true;
+        // Preserve a failed snapshot, but never replace a newer edit queued
+        // while this request was in flight.
+        if (drawPending.current[sym] === undefined) drawPending.current[sym] = drawings;
+      })
+      .finally(() => {
+        if (drawOwnerEpoch.current !== ownerEpoch) return;
+        delete drawSaving.current[sym];
+        const pending = drawPending.current[sym];
+        // Coalesce to the newest snapshot and serialize PUTs per symbol. Do not
+        // spin forever on a lone failed request; a future edit/navigation flush
+        // retries the retained snapshot.
+        if (pending && (!failed || pending !== drawings)) {
+          drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 0);
+        } else if (!pending && !prevPaneSyms.current.has(sym)) {
+          // A symbol that left the workspace stays cached while its serialized
+          // save is in flight. Evict only after the final snapshot is durable;
+          // revisiting before then keeps the authoritative in-memory version.
+          drawLoaded.current.delete(sym);
+          delete drawHistory.current[sym];
+          setDrawStore((store) => {
+            if (store[sym] === undefined) return store;
+            const next = { ...store }; delete next[sym]; return next;
+          });
+        }
+      });
+    drawSaving.current[sym] = save;
+  }, [loggedIn]);
+  useEffect(() => { flushDrawingsRef.current = flushDrawings; }, [flushDrawings]);
+  const setSymbolDrawings = useCallback((sym: string, d: Drawing[], recordHistory = true) => {
+    if (drawOwner.current !== (email ? `account:${email}` : "guest")) return;
+    // `undefined` is deliberate: signed-in symbols remain fail-closed until an
+    // authoritative GET succeeds (a valid empty collection is stored as `[]`).
+    // This prevents a transient load failure plus one new mark from replacing
+    // an unseen server collection.
+    if (loggedIn && drawStoreRef.current[sym] === undefined) return;
+    if (d.length > MAX_DRAWINGS_PER_SYMBOL) {
+      showDrawingLimitWarning();
+      return;
+    }
+    const previous = drawPending.current[sym] ?? drawStoreRef.current[sym] ?? [];
+    const normalized = normalizeDrawingUpdate(d, previous, MAX_DRAWINGS_PER_SYMBOL);
+    if (recordHistory && !drawingCollectionsEqual(previous, normalized)) {
+      const history = drawHistory.current[sym] ?? (drawHistory.current[sym] = { undo: [], redo: [] });
+      history.undo.push(previous);
+      if (history.undo.length > 100) history.undo.shift();
+      history.redo = [];
+    }
+    setDrawStore((s) => ({ ...s, [sym]: normalized }));
+    drawPending.current[sym] = normalized;
+    if (loggedIn) {
+      const ownerKey = drawOwner.current;
+      const recovery = drawRecovery.current[ownerKey] ?? (drawRecovery.current[ownerKey] = {});
+      recovery[sym] = normalized;
+    }
+    clearTimeout(drawTimers.current[sym]);
+    drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 600);
+    setDrawingHistoryVersion((v) => v + 1);
+  }, [email, flushDrawings, loggedIn, showDrawingLimitWarning]);
+  const travelDrawingHistory = useCallback((sym: string, dir: "undo" | "redo") => {
+    const history = drawHistory.current[sym]; if (!history) return;
+    const from = dir === "undo" ? history.undo : history.redo, to = dir === "undo" ? history.redo : history.undo;
+    const target = from.pop(); if (!target) return;
+    const current = drawPending.current[sym] ?? drawStoreRef.current[sym] ?? [];
+    to.push(current);
+    setSymbolDrawings(sym, target, false);
+  }, [setSymbolDrawings]);
+  const drawingHistoryState = useMemo(() => {
+    // drawingHistoryVersion deliberately makes ref-backed stacks reactive without
+    // copying up to 100 drawing snapshots into React state on every pointer move.
+    void drawingHistoryVersion;
+    const history = drawHistory.current[active];
+    return { canUndo: !!history?.undo.length, canRedo: !!history?.redo.length };
+  }, [active, drawingHistoryVersion]);
   // copilot → chart: convert AI-suggested price levels into drawings appended to the symbol's store
   const annotateChart = useCallback((sym: string, anns: any[]) => {
     if (!Array.isArray(anns) || !anns.length) return;
@@ -774,16 +928,112 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // paneSync mirrors same-timeframe peers only — disable it entirely when the panes carry mixed timeframes
   // (the Sync button is rendered disabled in that case), so a stale sync=true can't silently half-work.
   useEffect(() => { setPaneSync(sync && panes.length > 1 && new Set(paneTfs.slice(0, panes.length)).size <= 1); }, [sync, panes.length, paneTfs]);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        const value = JSON.parse(localStorage.getItem("mm.drawing.preferences") || "{}");
+        if (value.magnet === "off" || value.magnet === "weak" || value.magnet === "strong") setMagnet(value.magnet);
+        if (typeof value.sticky === "boolean") setDrawingSticky(value.sticky);
+        if (typeof value.visible === "boolean") setDrawingsVisible(value.visible);
+      } catch {}
+      setDrawingPrefsHydrated(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  useEffect(() => {
+    if (!drawingPrefsHydrated) return;
+    try { localStorage.setItem("mm.drawing.preferences", JSON.stringify({ magnet, sticky: drawingSticky, visible: drawingsVisible })); } catch {}
+  }, [drawingPrefsHydrated, drawingSticky, drawingsVisible, magnet]);
+  // Drawing ownership is a hard cache boundary. Guest drawings remain in the
+  // guest collection; an account always reloads its authoritative server copy.
+  // This also handles sign-out and direct account-to-account session changes.
+  useEffect(() => {
+    const nextOwner = email ? `account:${email}` : "guest";
+    const previousOwner = drawOwner.current;
+    if (previousOwner === nextOwner) return;
+
+    const pending = { ...drawPending.current };
+    for (const timer of Object.values(drawTimers.current)) clearTimeout(timer);
+    for (const timer of Object.values(drawLoadRetryTimers.current)) clearTimeout(timer);
+
+    if (previousOwner === "guest") {
+      // Guest persistence is synchronous, so finish every pending snapshot
+      // before clearing its cache.
+      for (const [sym, drawings] of Object.entries(pending)) writeGuestDraw(sym, drawings);
+    } else {
+      // Authentication has already changed by the time this effect runs, so an
+      // unsent old-account fetch would carry the wrong cookie. Preserve the
+      // captured full snapshots under the previous owner and replay only when
+      // that exact identity is active again.
+      const recovery = drawRecovery.current[previousOwner] ?? (drawRecovery.current[previousOwner] = {});
+      Object.assign(recovery, pending);
+      writeDrawingOutbox(localStorage, previousOwner, recovery);
+    }
+
+    // From here onward, callbacks carrying the previous epoch are inert.
+    drawOwnerEpoch.current += 1;
+    drawOwner.current = nextOwner;
+    setDrawingOwnerKey(nextOwner);
+    const recovered = nextOwner === "guest"
+      ? {}
+      : {
+          ...readDrawingOutbox(localStorage, nextOwner),
+          ...(drawRecovery.current[nextOwner] ?? {}),
+        };
+    if (nextOwner !== "guest") drawRecovery.current[nextOwner] = recovered;
+    drawPending.current = recovered;
+    drawSaving.current = {};
+    drawTimers.current = {};
+    drawLoadRetryTimers.current = {};
+    drawLoadRetryAttempts.current = {};
+    drawLoaded.current.clear();
+    drawHistory.current = {};
+    prevPaneSyms.current.clear();
+    setDrawStore(recovered);
+    setDrawingLoadFailures(new Set());
+    setDrawingHistoryVersion((version) => version + 1);
+    for (const sym of Object.keys(recovered)) {
+      drawTimers.current[sym] = setTimeout(() => flushDrawings(sym), 0);
+    }
+  }, [email, flushDrawings]);
   // load drawings once per symbol that appears in a pane; don't clobber an in-flight local edit
   useEffect(() => {
     const now = new Set(panes);
     for (const sym of now) {
+      // A revisited symbol with an in-flight save keeps its authoritative local
+      // cache. Waiting avoids loading the older server snapshot underneath it.
+      if (drawSaving.current[sym]) continue;
       if (drawLoaded.current.has(sym)) continue;
       drawLoaded.current.add(sym);
       if (loggedIn) {
-        fetch(`/api/drawings?symbol=${sym}`).then((r) => r.json()).then((d) => {
-          if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: d.drawings || [] }));
-        }).catch(() => { drawLoaded.current.delete(sym); });
+        const ownerEpoch = drawOwnerEpoch.current;
+        fetch(`/api/drawings?symbol=${encodeURIComponent(sym)}`).then((r) => {
+          if (!r.ok) throw new Error(`drawing load failed (${r.status})`);
+          return r.json();
+        }).then((d) => {
+          if (drawOwnerEpoch.current !== ownerEpoch) return;
+          if (!prevPaneSyms.current.has(sym)) return;
+          if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: normalizeDrawings(d.drawings) }));
+          clearTimeout(drawLoadRetryTimers.current[sym]);
+          delete drawLoadRetryTimers.current[sym];
+          delete drawLoadRetryAttempts.current[sym];
+          setDrawingLoadFailures((failed) => {
+            if (!failed.has(sym)) return failed;
+            const next = new Set(failed); next.delete(sym); return next;
+          });
+        }).catch(() => {
+          if (drawOwnerEpoch.current !== ownerEpoch || !prevPaneSyms.current.has(sym)) return;
+          drawLoaded.current.delete(sym);
+          setDrawingLoadFailures((failed) => failed.has(sym) ? failed : new Set(failed).add(sym));
+          const attempt = (drawLoadRetryAttempts.current[sym] ?? 0) + 1;
+          drawLoadRetryAttempts.current[sym] = attempt;
+          clearTimeout(drawLoadRetryTimers.current[sym]);
+          drawLoadRetryTimers.current[sym] = setTimeout(() => {
+            if (drawOwnerEpoch.current !== ownerEpoch || !prevPaneSyms.current.has(sym)) return;
+            delete drawLoadRetryTimers.current[sym];
+            setDrawingLoadRetryVersion((version) => version + 1);
+          }, Math.min(30_000, 1_000 * (2 ** Math.min(attempt - 1, 5))));
+        });
       } else {
         const gd = readGuestDraw(sym);
         if (drawPending.current[sym] === undefined) setDrawStore((s) => (s[sym] !== undefined ? s : { ...s, [sym]: gd }));
@@ -794,12 +1044,25 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     for (const sym of prevPaneSyms.current) {
       if (now.has(sym)) continue;
       flushDrawings(sym);
+      clearTimeout(drawLoadRetryTimers.current[sym]);
+      delete drawLoadRetryTimers.current[sym];
+      if (drawSaving.current[sym] || drawPending.current[sym] !== undefined) continue;
       drawLoaded.current.delete(sym);
+      delete drawLoadRetryAttempts.current[sym];
+      delete drawHistory.current[sym];
+      setDrawingLoadFailures((failed) => {
+        if (!failed.has(sym)) return failed;
+        const next = new Set(failed); next.delete(sym); return next;
+      });
       setDrawStore((s) => { if (s[sym] === undefined) return s; const n = { ...s }; delete n[sym]; return n; });
     }
     prevPaneSyms.current = now;
-  }, [panes, flushDrawings, loggedIn]);
-  useEffect(() => () => { for (const sym of Object.keys(drawPending.current)) flushDrawings(sym); }, [flushDrawings]);
+  }, [panes, flushDrawings, loggedIn, drawingLoadRetryVersion, email]);
+  useEffect(() => () => {
+    for (const timer of Object.values(drawLoadRetryTimers.current)) clearTimeout(timer);
+    for (const sym of Object.keys(drawPending.current)) flushDrawingsRef.current(sym);
+    if (drawingLimitTimer.current !== null) clearTimeout(drawingLimitTimer.current);
+  }, []);
 
   // per-symbol data for the rail.  Priority split:
   //   IMMEDIATE  — ohlc + slice share the chart's inflight fetch (dataCache dedup); getBars re-uses
@@ -1005,11 +1268,29 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // ChartPanel's keyboard layer owns Alt+T/H/V/R/X/M + double-Esc but cannot set the shell-owned
   // tool state directly — it dispatches mm:set-tool {detail: toolId|null}; ids match DrawingSidebar.
   useEffect(() => {
-    const TOOL_IDS = new Set(["trendline", "hline", "vline", "rect", "text", "measure", "arrow", "ray", "fib"]);
-    const h = (e: Event) => { const id = (e as CustomEvent).detail as string | null; if (id === null || TOOL_IDS.has(id)) setTool(id); };
+    const h = (e: Event) => {
+      const id = (e as CustomEvent).detail as unknown;
+      if (id === null || isDrawingToolId(id)) {
+        setTool(id);
+        if (id !== null) setDrawingsVisible(true);
+      }
+    };
     window.addEventListener("mm:set-tool", h);
     return () => window.removeEventListener("mm:set-tool", h);
   }, []);
+  useEffect(() => {
+    const committed = () => { if (!drawingStickyRef.current) setTool(null); };
+    const history = (event: Event) => {
+      const direction = (event as CustomEvent).detail as "undo" | "redo" | undefined;
+      if (direction === "undo" || direction === "redo") travelDrawingHistory(active, direction);
+    };
+    window.addEventListener("mm:drawing-committed", committed);
+    window.addEventListener("mm:drawing-history", history);
+    return () => {
+      window.removeEventListener("mm:drawing-committed", committed);
+      window.removeEventListener("mm:drawing-history", history);
+    };
+  }, [active, travelDrawingHistory]);
   // Broadcast the overlay's open/close so AppNav's left-rail "Analyst" highlight tracks the REAL pane
   // state (page name on open, null on close). The URL ?pane= is stripped via replaceState on close and
   // is invisible to Next's useSearchParams, so a URL-derived highlight would stay lit after closing.
@@ -2054,6 +2335,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     window.addEventListener("mouseup", up);
     document.body.classList.add("rail-resizing");
   };
+  const currentDrawingOwnerKey = email ? `account:${email}` : "guest";
+  const drawingOwnerMatches = drawingOwnerKey === currentDrawingOwnerKey;
+  const drawingsReadyFor = (sym: string) => drawingOwnerMatches && (!loggedIn || drawStore[sym] !== undefined);
 
   return (
     <OnboardingProvider email={email}>
@@ -2170,20 +2454,20 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
               )}
             </div>
             <div className="pophost">
-              <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !ctOpen; closeAll(); setCtOpen(willOpen); }}><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h3M14 4v16M14 9h3" /></svg>{t(CT_TKEY[chartType])}<span style={{ color: "var(--muted)" }}>▾</span></button>
+              <button className="tbtn" onClick={(e) => { e.stopPropagation(); const willOpen = !ctOpen; closeAll(); setCtOpen(willOpen); }}><ChartTypeIcon kind={chartType} />{t(CT_TKEY[chartType])}<span style={{ color: "var(--muted)" }}>▾</span></button>
               {/* desktop popover (hidden on mobile via CSS) */}
-              <div className={`pop${ctOpen ? " show" : ""}`} style={{ top: 32, left: 0 }} onClick={(e) => e.stopPropagation()}>
-                {CHART_TYPES.map(([k]) => <div key={k} className="set-row" style={chartType === k ? { color: "var(--brand-2)" } : {}} onClick={() => { setChartType(k); setCtOpen(false); }}>{t(CT_TKEY[k])}</div>)}
+              <div className={`pop chart-type-pop${ctOpen ? " show" : ""}`} style={{ top: 32, left: 0 }} onClick={(e) => e.stopPropagation()}>
+                {CHART_TYPE_GROUPS.map(([groupKey, types]) => <div key={groupKey} className="chart-type-group"><div className="set-grp">{t(groupKey)}</div>{types.map((kind) => <button type="button" key={kind} className={`set-row chart-type-row${chartType === kind ? " on" : ""}`} onClick={() => { setChartType(kind); setCtOpen(false); }}><ChartTypeIcon kind={kind} /><span>{t(CT_TKEY[kind])}</span>{chartType === kind && <span className="ct-check">✓</span>}</button>)}</div>)}
               </div>
               {/* mobile bottom sheet */}
               {isMobile && (
                 <MobileSheet open={ctOpen} onClose={() => setCtOpen(false)} title={t("ctSheetTitle")}>
-                  {CHART_TYPES.map(([k]) => (
-                    <div key={k} className={`msheet-row${chartType === k ? " on" : ""}`} onClick={() => { setChartType(k); setCtOpen(false); }}>
-                      {t(CT_TKEY[k])}
-                      {chartType === k && <span style={{ marginLeft: "auto" }}>✓</span>}
-                    </div>
-                  ))}
+                  {CHART_TYPE_GROUPS.map(([groupKey, types]) => <div key={groupKey}><div className="msheet-ghd">{t(groupKey)}</div>{types.map((kind) => (
+                    <button type="button" key={kind} className={`msheet-row chart-type-row${chartType === kind ? " on" : ""}`} onClick={() => { setChartType(kind); setCtOpen(false); }}>
+                      <ChartTypeIcon kind={kind} /><span>{t(CT_TKEY[kind])}</span>
+                      {chartType === kind && <span className="ct-check">✓</span>}
+                    </button>
+                  ))}</div>)}
                 </MobileSheet>
               )}
             </div>
@@ -2304,17 +2588,37 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         ) : (
           <div className="chart-body" style={{ "--subpanes": subPanes } as React.CSSProperties}>
             <DrawingSidebar
-              tool={tool}
+              tool={drawingsReadyFor(active) ? tool : null}
               magnet={magnet}
+              sticky={drawingSticky}
+              drawingsVisible={drawingsVisible}
+              drawingCount={(drawingOwnerMatches ? (drawStore[active]?.length ?? 0) : 0) + chartBus.legend.count}
+              canUndo={drawingHistoryState.canUndo}
+              canRedo={drawingHistoryState.canRedo}
               drawStyle={drawStyle}
-              onTool={(id) => setTool(id)}
-              onMagnet={() => setMagnet((mg) => !mg)}
-              onClear={() => detect("clearAll")}
+              onTool={(id) => {
+                if (!drawingsReadyFor(active)) return;
+                setTool(id); if (id) setDrawingsVisible(true);
+              }}
+              onMagnet={setMagnet}
+              onSticky={setDrawingSticky}
+              onToggleVisibility={() => setDrawingsVisible((visible) => !visible)}
+              onUndo={() => travelDrawingHistory(active, "undo")}
+              onRedo={() => travelDrawingHistory(active, "redo")}
+              onClear={(scope) => {
+                if (scope === "user") setSymbolDrawings(active, []);
+                else if (scope === "detected") detect("clear");
+                else {
+                  setSymbolDrawings(active, []);
+                  detect("clearAll");
+                  chartBus.legend.clear();
+                }
+              }}
               onDrawStyle={(patch) => setDrawStyle((s) => ({ ...s, ...patch }))}
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={tool} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawStore[sym] ?? []), ...chartBus.aiDrawingsFor(sym)]} onDrawingsChange={(d) => setSymbolDrawings(sym, d.filter((x) => !x.id.startsWith("ai_")))} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
+                <ChartPane key={i} idx={i} symbol={sym} drawingOwnerKey={currentDrawingOwnerKey} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={drawingsReadyFor(sym) ? tool : null} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawingOwnerMatches ? (drawStore[sym] ?? []) : []), ...chartBus.aiDrawingsFor(sym)]} drawingsVisible={drawingsVisible} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}
@@ -2785,6 +3089,18 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         <div className="undo-toast" role="status" style={{ position: "fixed", bottom: 96, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 51, display: "flex", alignItems: "center", gap: 12 }}>
           <span>{gateNudge}</span>
           <a href="/login" style={{ color: "#4d82ff", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>{t("gateSignupCta")}</a>
+        </div>
+      )}
+
+      {drawingOwnerMatches && drawingLoadFailures.has(active) && (
+        <div className="undo-toast" role="alert" style={{ position: "fixed", bottom: 136, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--danger)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 52, display: "flex", alignItems: "center", gap: 10, maxWidth: "min(92vw, 560px)" }}>
+          {t("drawingLoadFailed")}
+        </div>
+      )}
+
+      {drawingLimitWarning && (
+        <div className="undo-toast" role="alert" style={{ position: "fixed", bottom: 176, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--warn)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 52, display: "flex", alignItems: "center", gap: 10, maxWidth: "min(92vw, 560px)" }}>
+          {t("drawingLimitReached")}
         </div>
       )}
 

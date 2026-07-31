@@ -1,6 +1,9 @@
 import { defineConfig } from "@playwright/test";
 
-const port = 3108;
+// Shared worktrees frequently run responsive suites in parallel. Allow each
+// checkout to reserve its own port instead of silently reusing another tree's
+// dev server (3108 remains the local/CI default).
+const port = Number(process.env.TERMINAL_E2E_PORT || 3108);
 const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({

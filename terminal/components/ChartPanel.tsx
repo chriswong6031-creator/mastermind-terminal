@@ -15,7 +15,7 @@ import {
   CandlestickSeries, BarSeries, LineSeries, AreaSeries, HistogramSeries, BaselineSeries,
   createSeriesMarkers, type ISeriesMarkersPluginApi,
   createTextWatermark,
-  CrosshairMode, ColorType, LineStyle, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
+  CrosshairMode, ColorType, LineStyle, LineType, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
 } from "lightweight-charts";
 import { createEngine, type ChartEngine } from "@/lib/chart-engine";
 import { clampAxisZoom, axisZoomMargins, wheelDeltaToZoomStep, type AxisMargins } from "@/lib/chart-engine/axisZoom";
@@ -23,7 +23,8 @@ import { keepIndicatorPaneAxisLabelsOnly } from "@/lib/indicatorPaneSeries";
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engine/host";
 import { ORACLE_V1_PINE } from "@/lib/pine";
-import { type Drawing, type Bar as DBar, FIB, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
+import { DRAWING_SCHEMA_VERSION, type Drawing, type DrawKind, type Bar as DBar, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
+import { drawingToolFromShortcut, getDrawingTool, SINGLE_POINT_DRAWING_KINDS, TWO_POINT_DRAWING_KINDS, type DrawingToolCapability } from "@/lib/drawingTools";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { setActivePaneCoords, getActivePaneCoords } from "@/lib/paneCoords";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
@@ -63,6 +64,14 @@ import { chartTimeAxisOptions, chartTimeSpanDays } from "@/lib/chartTimeAxis";
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
 export type DetectCmd = { kind: "trendlines" | "fib" | "sr" | "mtfa" | "clear" | "clearAll"; nonce: number } | null;
+const VALUE_CHART_TYPES = new Set(["line", "line-markers", "step", "area", "baseline"]);
+const isValueChartType = (chartType: string) => VALUE_CHART_TYPES.has(chartType);
+const priceSeriesFamily = (chartType: string) => {
+  if (chartType === "bars") return "bars";
+  if (chartType === "hollow") return "hollow";
+  if (isValueChartType(chartType)) return chartType;
+  return "candle"; // candles + Heikin Ashi share the same LWC series family
+};
 
 // Optional live/delayed snapshot threaded ChartPane → ChartPanel for the R11 live-bar splice.
 // `ts` is a unix epoch in SECONDS (from the quote hub); `basis` gates whether we splice at all.
@@ -282,11 +291,11 @@ const SUBPANE_ORDER = ["rsi", "stochrsi", "macd", "rsistack", "accum", "rvol", "
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = false, compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = "off", compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
   instrumentName, instrumentMarket, instrumentColor, onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "", userTier = "free" }:
   { symbol: string; companyName?: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: string | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
+    tool?: DrawKind | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: "off" | "weak" | "strong" | boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
     chartSettings?: Partial<ChartSettings>;
     instrumentName?: string;
@@ -420,6 +429,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const replayIdxRef = useRef<number | null>(replayIdx);   // live replayIdx so Effect 2 doesn't build against a stale closure if replay starts mid-fetch
   const liveQuoteRef = useRef<LiveQuote>(liveQuote);       // latest live quote, so Effect 2's tail can re-apply the splice after setData
   const renderRef = useRef<() => void>(() => {});
+  const cancelPendingDrawingRef = useRef<() => void>(() => {});
   const renderTagRef = useRef<(() => void) | null>(null);   // updates the last-price + bar-close-countdown axis tag
   const symbolRef = useRef(symbol);                          // current symbol (Effect 1 mounts once; symbol changes in Effect 2)
   const companyNameRef = useRef(companyName);                 // proper name for the snapshot header (zh preferred over English)
@@ -511,7 +521,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // ── existing DOM / interaction refs (unchanged) ──
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drawRef = useRef<Drawing[]>(drawings);
-  const toolRef = useRef<string | null>(tool);
+  const drawingTransactionRef = useRef(false);
+  const toolRef = useRef<DrawKind | null>(tool);
   const styleRef = useRef(drawStyle);
   const onChangeRef = useRef(onDrawingsChange);
   const magnetRef = useRef(magnet);
@@ -625,7 +636,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (getActivePaneCoords() === cmxCoordResolverRef.current) setActivePaneCoords(null);
     };
   }, [isActive]);
-  drawRef.current = drawings; toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
+  // Live quote/language updates can rerender React in the middle of a pointer
+  // drag or native color/range transaction. Do not replace that in-flight
+  // draft with the last committed prop snapshot.
+  if (!drawingTransactionRef.current) drawRef.current = drawings;
+  toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
   chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol; companyNameRef.current = companyName;
   lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
@@ -656,8 +671,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Build price-series data for the current chartType from a bar set.
   const priceData = (rows: Bar[]) => {
     const display = chartTypeRef.current === "heikin" ? heikin(rows) : rows;
-    if (chartTypeRef.current === "line" || chartTypeRef.current === "area") return display.map((r) => ({ time: r.time, value: r.c }));
-    const byPreviousClose = chartSettingsRef.current.colorBarsPrevClose && chartTypeRef.current !== "bars";
+    if (isValueChartType(chartTypeRef.current)) return display.map((r) => ({ time: r.time, value: r.c }));
+    const byPreviousClose = chartSettingsRef.current.colorBarsPrevClose && chartTypeRef.current !== "bars" && chartTypeRef.current !== "hollow";
     return display.map((r, index) => {
       const point: Record<string, any> = { time: r.time, open: r.o, high: r.h, low: r.l, close: r.c };
       if (byPreviousClose) {
@@ -681,11 +696,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const settings = chartSettingsRef.current;
     const common = { priceFormat: pf, lastValueVisible: false, priceLineVisible: settings.priceLineVisible !== false };
     if (chartTypeRef.current === "line") return chart.addSeries(LineSeries, { ...common, color: t.brand2, lineWidth: 2 }, 0);
+    if (chartTypeRef.current === "line-markers") return chart.addSeries(LineSeries, { ...common, color: t.brand2, lineWidth: 2, pointMarkersVisible: true, pointMarkersRadius: 2.5 }, 0);
+    if (chartTypeRef.current === "step") return chart.addSeries(LineSeries, { ...common, color: t.brand2, lineWidth: 2, lineType: LineType.WithSteps }, 0);
     if (chartTypeRef.current === "area") return chart.addSeries(AreaSeries, { ...common, lineColor: t.brand2, topColor: "rgba(41,98,255,.30)", bottomColor: "rgba(41,98,255,.02)", lineWidth: 2 }, 0);
+    if (chartTypeRef.current === "baseline") return chart.addSeries(BaselineSeries, {
+      ...common,
+      baseValue: { type: "price", price: 0 }, relativeGradient: true, lineWidth: 2,
+      topLineColor: t.up, topFillColor1: "rgba(38,194,129,.28)", topFillColor2: "rgba(38,194,129,.03)",
+      bottomLineColor: t.down, bottomFillColor1: "rgba(240,86,107,.03)", bottomFillColor2: "rgba(240,86,107,.28)",
+    }, 0);
     if (chartTypeRef.current === "bars") return chart.addSeries(BarSeries, { ...common, upColor: settings.candleUpColor || t.up, downColor: settings.candleDownColor || t.down }, 0);
     return chart.addSeries(CandlestickSeries, {
       ...common,
-      upColor: settings.candleBodyVisible === false ? "rgba(0,0,0,0)" : settings.candleUpColor || t.up,
+      upColor: settings.candleBodyVisible === false || chartTypeRef.current === "hollow" ? "rgba(0,0,0,0)" : settings.candleUpColor || t.up,
       downColor: settings.candleBodyVisible === false ? "rgba(0,0,0,0)" : settings.candleDownColor || t.down,
       wickUpColor: settings.candleUpWick || settings.candleUpColor || t.up,
       wickDownColor: settings.candleDownWick || settings.candleDownColor || t.down,
@@ -990,7 +1013,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const applyRibbonCandleColors = (rows: Bar[], rb: ReturnType<typeof trendRibbon>, p: Record<string, any>) => {
     const priceS = priceSeriesRef.current; if (!priceS) return;
     const chartTyp = chartTypeRef.current;
-    if (chartTyp === "line" || chartTyp === "area") return;
+    if (isValueChartType(chartTyp)) return;
     const colored = rows.map((r, i) => {
       const st = rb.state[i], su = rb.shortUp[i];
       let col: string;
@@ -1008,7 +1031,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const restoreNormalCandleColors = (rows: Bar[]) => {
     const priceS = priceSeriesRef.current; if (!priceS) return;
     const chartTyp = chartTypeRef.current;
-    if (chartTyp === "line" || chartTyp === "area") return;
+    if (isValueChartType(chartTyp)) return;
     try { priceS.setData(priceData(rows) as any); } catch {}
   };
 
@@ -1019,7 +1042,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const priceS = priceSeriesRef.current; if (!priceS) return;
     const rows = barsRef.current; if (!rows.length) return;
     const chartTyp = chartTypeRef.current;
-    if (chartTyp === "line" || chartTyp === "area" || chartTyp === "heikin") { suitePaintKeyRef.current = ""; return; }
+    if (isValueChartType(chartTyp) || chartTyp === "heikin") { suitePaintKeyRef.current = ""; return; }
     const active = Object.keys(SUITE_DEFS).filter((k) => indicatorsRef.current.has(k));
     let paint: { i: number; color?: string; borderColor?: string; wickColor?: string }[] = [];
     if (active.length) {
@@ -2078,7 +2101,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // heikin falls through to the OHLC mapping (raw candle acceptable per spec caveat) — passing the
     // raw {o,h,l,c,v} bucket to a candlestick series is read as a whitespace point (no `open` key)
     // and BLANKS the live candle. Map to {open,high,low,close} like the candle/bars family.
-    try { priceS.update((chartTypeRef.current === "line" || chartTypeRef.current === "area" ? { time: bucket.time, value: bucket.c } : { time: bucket.time, open: bucket.o, high: bucket.h, low: bucket.l, close: bucket.c }) as any); } catch { return; }
+    try { priceS.update(isValueChartType(chartTypeRef.current) ? { time: bucket.time, value: bucket.c } : { time: bucket.time, open: bucket.o, high: bucket.h, low: bucket.l, close: bucket.c }); } catch { return; }
     // keep the in-memory bar sets in step with what's on the chart (last bucket only)
     const fb = fullBarsRef.current;
     const bs = barsRef.current;
@@ -2467,7 +2490,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // signal-marker layer (below the user-drawing layer); custom TradingView-style badges
     const sigSvg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(sigSvg); sigRef.current = sigSvg;
-    const svg = mk("svg", { style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
+    const svg = mk("svg", { class: "drawing-layer", "data-drawing-layer": "1", style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(svg); svgRef.current = svg;
     ensureTooltipHost(wrap);   // shared hover tooltip for premium-suite prims (ic-tip)
 
@@ -2782,20 +2805,71 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     renderSignalsRef.current = renderSignals;
 
+    let snapTarget: { x: number; y: number } | null = null;
     const snap = (px: number, py: number) => {
-      const prec = precRef.current; const bars = barsRef.current; let bt = bars[bars.length - 1]?.time, bd = 1e18;
-      for (const b of bars) { const xc = xOf(b.time); if (xc == null) continue; const dd = Math.abs(xc - px); if (dd < bd) { bd = dd; bt = b.time; } }
-      const ps = priceSeriesRef.current; let p = ps ? (ps.coordinateToPrice(py) as number | null) : null; if (p == null) p = bars[bars.length - 1]?.c ?? 0;
-      if (magnetRef.current) { const bar = bars[barIndex(bt!)]; if (bar) { const cand = [bar.o, bar.h, bar.l, bar.c]; p = cand.reduce((a, v) => Math.abs(v - (p as number)) < Math.abs(a - (p as number)) ? v : a, cand[0]); } }
-      return { t: bt, p: +(p as number).toFixed(prec) } as { t: string; p: number };
+      const prec = precRef.current;
+      const bars = barsRef.current;
+      // LWC logical coordinates map directly to the loaded bar array. This replaces the
+      // former O(bars) scan on every pointer event with one projection + clamp.
+      const logical = chart.timeScale().coordinateToLogical(px);
+      const bi = Math.max(0, Math.min(bars.length - 1, Math.round(logical == null ? bars.length - 1 : logical)));
+      const bar = bars[bi];
+      const bt = bar?.time ?? bars[bars.length - 1]?.time;
+      const ps = priceSeriesRef.current;
+      let p = ps ? (ps.coordinateToPrice(py) as number | null) : null;
+      if (p == null) p = bars[bars.length - 1]?.c ?? 0;
+      const mode = magnetRef.current === true ? "strong" : magnetRef.current === false ? "off" : magnetRef.current;
+      snapTarget = null;
+      if (bar && mode !== "off") {
+        const candidates = [bar.o, bar.h, bar.l, bar.c];
+        const best = candidates.reduce((a, v) => Math.abs(v - (p as number)) < Math.abs(a - (p as number)) ? v : a, candidates[0]);
+        const bestY = yOf(best);
+        // Weak magnet is intentionally forgiving but never \"teleports\" an anchor: it only
+        // engages inside an 8px desktop / 14px coarse-pointer halo. Strong always snaps.
+        const weakRadius = matchMedia("(pointer:coarse)").matches ? 14 : 8;
+        if (mode === "strong" || (bestY != null && Math.abs(bestY - py) <= weakRadius)) {
+          p = best;
+          const sx = xOf(String(bt));
+          if (sx != null && bestY != null) snapTarget = { x: sx, y: bestY };
+        }
+      }
+      return { t: String(bt), p: +(p as number).toFixed(prec) };
     };
-    let pending: { kind: string; a: { t: string; p: number } } | null = null;
+    type PendingDrawing = {
+      kind: Drawing["kind"];
+      points: Drawing["points"];
+      mode: "point" | "text" | "drag" | "multi" | "path";
+      pointerId?: number;
+      candidate?: Drawing["points"][number];
+    };
+    let pending: PendingDrawing | null = null;
+    cancelPendingDrawingRef.current = () => {
+      const current = pending;
+      pending = null;
+      if (current?.pointerId != null) {
+        try { if (svg.hasPointerCapture(current.pointerId)) svg.releasePointerCapture(current.pointerId); } catch {}
+      }
+      renderDraw();
+    };
     let sel: string | null = null;
 
-    function shape(d: Drawing, preview = false) {
+    function shape(
+      d: Drawing,
+      preview = false,
+      projectX: (time: string) => number | null = xOf,
+      projectY: (price: number) => number | null = yOf,
+    ) {
       const prec = precRef.current;
-      const col = dcol(d); const W = el!.clientWidth, H = el!.clientHeight, op = preview ? 0.7 : 1; const on = d.id === sel && !preview;
-      const g = mk("g", { "data-id": d.id, opacity: op, "pointer-events": preview ? "none" : "all", style: "cursor:pointer" });
+      const col = dcol(d); const W = el!.clientWidth, H = el!.clientHeight, op = preview ? 0.7 : (d.opacity ?? 1); const on = d.id === sel && !preview;
+      const g = mk("g", {
+        "data-id": d.id,
+        "data-drawing-id": d.id,
+        "data-drawing-kind": d.kind,
+        "data-locked": d.locked ? "true" : "false",
+        opacity: op,
+        "pointer-events": preview || d.hidden ? "none" : "all",
+        style: d.hidden ? "display:none" : (d.locked ? "cursor:default" : "cursor:pointer"),
+      });
       // CMX W3: stroke-and-draw entrance for AI-session objects. Fires ONCE per object (played-set),
       // only while a paced session is animating (<html data-cmx-anim="on">, set by ChartConductor —
       // absent under reduced-motion / pace 0 so objects just appear). The class self-removes on
@@ -2811,12 +2885,26 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         cmxPlayedRef.current.add(d.id);
         g.addEventListener("animationend", () => { try { g.classList.remove(cls); } catch { /* noop */ } }, { once: true });
       }
-      const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 12 }));
-      const grip = (pts: { x: number; y: number }[]) => { if (on) pts.forEach((p) => g.appendChild(mk("circle", { cx: p.x, cy: p.y, r: 4.5, fill: "var(--bg)", stroke: col, "stroke-width": 2 }))); };
+      const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 14, "data-segment": "1" }));
+      const grip = (pts: { x: number; y: number }[]) => {
+        if (!on || d.locked) return;
+        pts.forEach((p, i) => g.appendChild(mk("circle", {
+          cx: p.x, cy: p.y, r: 5, fill: "var(--panel)", stroke: col, "stroke-width": 2,
+          "data-handle": i, "data-drawing-handle": i, style: "cursor:grab",
+        })));
+      };
+      const pill = (x: number, y: number, label: string, fg = "#11151d", bg = "#f7f9fc") => {
+        const w = Math.max(54, label.length * 6.15 + 16), h = 22;
+        const px = Math.max(4, Math.min(W - w - 4, x - w / 2));
+        const py = Math.max(4, Math.min(H - h - 4, y - h / 2));
+        g.appendChild(mk("rect", { x: px, y: py, width: w, height: h, rx: 11, fill: bg, stroke: "rgba(0,0,0,.18)", "stroke-width": 1 }));
+        const tx = mk("text", { x: px + w / 2, y: py + 14.5, fill: fg, "font-size": 10.5, "font-weight": 700, "text-anchor": "middle", "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums" });
+        tx.textContent = label; g.appendChild(tx);
+      };
       const A = d.points[0], B = d.points[1];
       const dash = d.dash === "dashed" ? "7 5" : d.dash === "dotted" ? "2 4" : d.dash === "solid" ? "" : (d.auto ? "5 4" : "");
       const lw = (base: number, boost: number) => (d.width ?? base) + (on ? boost : 0);
-      const ax = A ? xOf(A.t) : null, ay = A ? yOf(A.p) : null;
+      const ax = A ? projectX(A.t) : null, ay = A ? projectY(A.p) : null;
       if (d.kind === "hline") {
         if (ay == null) return g;
         const sw = (d.width ?? (d.meta && (d.meta as any).strength ? 0.4 + 1.0 * (d.meta as any).strength : 1.3)) + (on ? 1 : 0);
@@ -2831,62 +2919,277 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         g.appendChild(mk("line", { x1: ax, y1: 0, x2: ax, y2: H, stroke: col, "stroke-width": lw(1.3, 1), "stroke-dasharray": dash }));
         fat(ax, 0, ax, H); grip([{ x: ax, y: H / 2 }]); return g;
       }
-      const bx = B ? xOf(B.t) : null, by = B ? yOf(B.p) : null;
-      if (d.kind === "text") { if (ax == null || ay == null) return g; const fs = d.fontSize ?? 13; g.appendChild(mk("rect", { x: ax - 3, y: ay - fs - 1, width: Math.max(40, (d.text || "").length * fs * 0.6), height: fs + 6, fill: "transparent" })); const tx = mk("text", { x: ax, y: ay, fill: col, "font-size": fs, "font-family": "var(--font-ui)" }); tx.textContent = d.text || "text"; g.appendChild(tx); grip([{ x: ax, y: ay - fs / 2 }]); return g; }
+      if (d.kind === "horizontalray") {
+        if (ax == null || ay == null) return g;
+        g.appendChild(mk("line", { x1: ax, y1: ay, x2: W, y2: ay, stroke: col, "stroke-width": lw(1.5, .8), "stroke-dasharray": dash }));
+        fat(ax, ay, W, ay); grip([{ x: ax, y: ay }]); return g;
+      }
+      if (d.kind === "crossline") {
+        if (ax == null || ay == null) return g;
+        g.appendChild(mk("line", { x1: 0, y1: ay, x2: W, y2: ay, stroke: col, "stroke-width": lw(1.2, .7), "stroke-dasharray": dash }));
+        g.appendChild(mk("line", { x1: ax, y1: 0, x2: ax, y2: H, stroke: col, "stroke-width": lw(1.2, .7), "stroke-dasharray": dash }));
+        fat(0, ay, W, ay); fat(ax, 0, ax, H); grip([{ x: ax, y: ay }]); return g;
+      }
+      const bx = B ? projectX(B.t) : null, by = B ? projectY(B.p) : null;
+      if (d.kind === "text") { if (ax == null || ay == null) return g; const fallback = tPlain("drawingTextFallback"); const fs = d.fontSize ?? 13; g.appendChild(mk("rect", { x: ax - 3, y: ay - fs - 1, width: Math.max(40, (d.text || fallback).length * fs * 0.6), height: fs + 6, fill: "transparent" })); const tx = mk("text", { x: ax, y: ay, fill: col, "font-size": fs, "font-family": "var(--font-ui)" }); tx.textContent = d.text || fallback; g.appendChild(tx); grip([{ x: ax, y: ay - fs / 2 }]); return g; }
       if (ax == null || ay == null || bx == null || by == null) return g;
-      if (d.kind === "trendline" || d.kind === "ray" || d.kind === "measure" || d.kind === "arrow") {
+      if (d.kind === "trendline" || d.kind === "ray" || d.kind === "extendedline" || d.kind === "measure" || d.kind === "arrow") {
         let ex = bx, ey = by;
-        if (d.kind === "ray" && bx !== ax) { const m = (by - ay) / (bx - ax); ex = W; ey = ay + m * (W - ax); }
-        g.appendChild(mk("line", { x1: ax, y1: ay, x2: ex, y2: ey, stroke: col, "stroke-width": lw(1.6, 0.8), "stroke-dasharray": dash }));
-        fat(ax, ay, ex, ey);
+        let sx = ax, sy = ay;
+        if (d.kind === "ray" || d.kind === "extendedline") {
+          if (bx === ax) {
+            // Vertical rays are a first-class geometry, not a zero-slope edge
+            // case: project in the anchor direction, or to both pane bounds.
+            ex = ax; ey = by >= ay ? H : 0;
+            if (d.kind === "extendedline") { sx = ax; sy = 0; ex = ax; ey = H; }
+          } else {
+            const m = (by - ay) / (bx - ax);
+            ex = bx >= ax ? W : 0; ey = ay + m * (ex - ax);
+            if (d.kind === "extendedline") { sx = bx >= ax ? 0 : W; sy = ay + m * (sx - ax); }
+          }
+        }
+        g.appendChild(mk("line", { x1: sx, y1: sy, x2: ex, y2: ey, stroke: col, "stroke-width": lw(1.6, 0.8), "stroke-dasharray": dash }));
+        fat(sx, sy, ex, ey);
+        if (d.kind === "measure") {
+          const pc = ((B.p - A.p) / A.p) * 100, dp = B.p - A.p, di = Math.abs(barIndex(B.t) - barIndex(A.t));
+          const priceDelta = (dp >= 0 ? "+" : "") + dp.toFixed(prec);
+          pill((ax + bx) / 2, Math.min(ay, by) - 15, di + " " + tPlain("drawingBars") + " × " + priceDelta + " (" + (pc >= 0 ? "+" : "") + pc.toFixed(2) + "%)");
+          grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+        }
         if (d.kind === "arrow") { const an = Math.atan2(by - ay, bx - ax), h = 9; g.appendChild(mk("path", { d: `M${bx} ${by} L${bx + h * Math.cos(an + Math.PI - 0.45)} ${by + h * Math.sin(an + Math.PI - 0.45)} M${bx} ${by} L${bx + h * Math.cos(an + Math.PI + 0.45)} ${by + h * Math.sin(an + Math.PI + 0.45)}`, stroke: col, "stroke-width": lw(1.6, 0.8), fill: "none" })); }
-        if (d.kind === "measure") { const pc = ((B.p - A.p) / A.p) * 100; const di = Math.abs(barIndex(B.t) - barIndex(A.t)); const lab = mk("text", { x: (ax + bx) / 2, y: Math.min(ay, by) - 8, fill: col, "font-size": 11, "text-anchor": "middle", "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums" }); lab.textContent = `${pc >= 0 ? "+" : ""}${pc.toFixed(2)}% · ${di} bars`; g.appendChild(lab); }
         grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
       }
-      if (d.kind === "rect") { g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay), fill: col, "fill-opacity": 0.08, stroke: col, "stroke-width": lw(1, 1), "stroke-dasharray": dash })); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g; }
+      if (d.kind === "channel") {
+        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
+        if (cx == null || cy == null) return g;
+        const dx = bx - ax, dy = by - ay, dx2 = cx + dx, dy2 = cy + dy;
+        g.appendChild(mk("polygon", { points: ax + "," + ay + " " + bx + "," + by + " " + dx2 + "," + dy2 + " " + cx + "," + cy, fill: d.fillColor || col, "fill-opacity": d.fillOpacity ?? .09, stroke: "none" }));
+        g.appendChild(mk("line", { x1: ax, y1: ay, x2: bx, y2: by, stroke: col, "stroke-width": lw(1.5, .8), "stroke-dasharray": dash }));
+        g.appendChild(mk("line", { x1: cx, y1: cy, x2: dx2, y2: dy2, stroke: col, "stroke-width": lw(1.5, .8), "stroke-dasharray": dash }));
+        g.appendChild(mk("line", { x1: ax, y1: ay, x2: cx, y2: cy, stroke: col, "stroke-width": 1, "stroke-dasharray": "4 4", opacity: .55 }));
+        fat(ax, ay, bx, by); fat(cx, cy, dx2, dy2); grip([{ x: ax, y: ay }, { x: bx, y: by }, { x: cx, y: cy }]); return g;
+      }
+      if (d.kind === "ellipse") {
+        const rx = Math.abs(bx - ax) / 2, ry = Math.abs(by - ay) / 2;
+        g.appendChild(mk("ellipse", { cx: (ax + bx) / 2, cy: (ay + by) / 2, rx, ry, fill: d.fillColor || col, "fill-opacity": d.fillOpacity ?? .08, stroke: col, "stroke-width": lw(1.4, .8), "stroke-dasharray": dash }));
+        grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+      }
+      if (d.kind === "triangle") {
+        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
+        const pts = cx != null && cy != null
+          ? ax + "," + ay + " " + bx + "," + by + " " + cx + "," + cy
+          : (ax + bx) / 2 + "," + Math.min(ay, by) + " " + Math.max(ax, bx) + "," + Math.max(ay, by) + " " + Math.min(ax, bx) + "," + Math.max(ay, by);
+        g.appendChild(mk("polygon", { points: pts, fill: d.fillColor || col, "fill-opacity": d.fillOpacity ?? .08, stroke: col, "stroke-width": lw(1.4, .8), "stroke-dasharray": dash }));
+        grip(cx != null && cy != null ? [{ x: ax, y: ay }, { x: bx, y: by }, { x: cx, y: cy }] : [{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+      }
+      if (d.kind === "path") {
+        const pp = d.points.map((pt) => ({ x: projectX(pt.t), y: projectY(pt.p) })).filter((pt): pt is { x: number; y: number } => pt.x != null && pt.y != null);
+        if (pp.length < 2) return g;
+        const pathPoints = pp.map((pt) => pt.x + "," + pt.y).join(" ");
+        g.appendChild(mk("polyline", { points: pathPoints, fill: "none", stroke: col, "stroke-width": lw(2, .7), "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": dash }));
+        // One joined hit path replaces a transparent SVG line per sampled
+        // segment. At the supported 500-object/64-point ceiling this removes
+        // more than 31k DOM nodes from every pan/crosshair rebuild.
+        g.appendChild(mk("polyline", { points: pathPoints, fill: "none", stroke: "transparent", "stroke-width": 14, "stroke-linecap": "round", "stroke-linejoin": "round", "data-segment": "1" }));
+        grip(pp.map((pt) => ({ x: pt.x, y: pt.y }))); return g;
+      }
+      if (d.kind === "xabcd") {
+        const labels = ["X", "A", "B", "C", "D"];
+        const pp = d.points.slice(0, 5).map((pt) => ({ x: projectX(pt.t), y: projectY(pt.p), p: pt.p })).filter((pt): pt is { x: number; y: number; p: number } => pt.x != null && pt.y != null);
+        if (pp.length < 2) return g;
+        g.appendChild(mk("polyline", { points: pp.map((pt) => pt.x + "," + pt.y).join(" "), fill: pp.length >= 4 ? (d.fillColor || col) : "none", "fill-opacity": d.fillOpacity ?? .1, stroke: col, "stroke-width": lw(1.8, .8), "stroke-linejoin": "round", "stroke-dasharray": dash }));
+        pp.forEach((pt, i) => {
+          const badge = mk("text", { x: pt.x, y: pt.y + (i % 2 ? 18 : -10), fill: "#fff", "font-size": 10, "font-weight": 800, "text-anchor": "middle", "font-family": "var(--font-ui)" });
+          badge.textContent = labels[i]; g.appendChild(badge);
+          if (i >= 2) {
+            const den = Math.abs(pp[i - 1].p - pp[i - 2].p);
+            const ratio = den ? Math.abs(pt.p - pp[i - 1].p) / den : 0;
+            pill((pt.x + pp[i - 1].x) / 2, (pt.y + pp[i - 1].y) / 2, ratio.toFixed(3), "#f7f9fc", col);
+          }
+        });
+        grip(pp.map((pt) => ({ x: pt.x, y: pt.y }))); return g;
+      }
+      if (d.kind === "longposition" || d.kind === "shortposition") {
+        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
+        if (cx == null || cy == null) return g;
+        const x1 = Math.min(ax, bx, cx), x2 = Math.max(ax, bx, cx, x1 + 80), entryY = ay;
+        const targetY = by, stopY = cy, targetCol = tokensRef.current.up, stopCol = tokensRef.current.down;
+        const zoneOpacity = d.fillOpacity ?? .2;
+        g.appendChild(mk("rect", { x: x1, y: Math.min(entryY, targetY), width: x2 - x1, height: Math.abs(targetY - entryY), fill: targetCol, "fill-opacity": zoneOpacity, stroke: targetCol, "stroke-opacity": .55 }));
+        g.appendChild(mk("rect", { x: x1, y: Math.min(entryY, stopY), width: x2 - x1, height: Math.abs(stopY - entryY), fill: stopCol, "fill-opacity": zoneOpacity, stroke: stopCol, "stroke-opacity": .55 }));
+        g.appendChild(mk("line", { x1, y1: entryY, x2, y2: entryY, stroke: col, "stroke-width": 1.5 }));
+        const reward = Math.abs(B.p - A.p), risk = Math.abs(C.p - A.p), rr = risk ? reward / risk : 0;
+        pill((x1 + x2) / 2, targetY - 15, tPlain("drawingTarget") + ": " + B.p.toFixed(prec) + " (" + ((B.p - A.p) / A.p * 100).toFixed(2) + "%)");
+        pill((x1 + x2) / 2, stopY + 15, tPlain("drawingStop") + ": " + C.p.toFixed(prec) + " (" + ((C.p - A.p) / A.p * 100).toFixed(2) + "%)");
+        pill((x1 + x2) / 2, entryY, tPlain("drawingRiskReward") + " " + rr.toFixed(2));
+        grip([{ x: ax, y: ay }, { x: bx, y: by }, { x: cx, y: cy }]); return g;
+      }
+      if (d.kind === "pricerange" || d.kind === "daterange") {
+        const di = Math.abs(barIndex(B.t) - barIndex(A.t)), dp = B.p - A.p, pc = A.p ? dp / A.p * 100 : 0;
+        if (d.kind === "daterange") {
+          g.appendChild(mk("rect", { x: Math.min(ax, bx), y: 0, width: Math.max(1, Math.abs(bx - ax)), height: H, fill: col, "fill-opacity": d.fillOpacity ?? .07, stroke: col, "stroke-opacity": .4, "stroke-dasharray": dash }));
+          pill((ax + bx) / 2, H - 34, di + " " + tPlain("drawingBars"));
+        } else {
+          g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.max(1, Math.abs(bx - ax)), height: Math.max(1, Math.abs(by - ay)), fill: col, "fill-opacity": d.fillOpacity ?? .08, stroke: col, "stroke-opacity": .55, "stroke-dasharray": dash }));
+          pill((ax + bx) / 2, Math.min(ay, by) - 14, (dp >= 0 ? "+" : "") + dp.toFixed(prec) + " (" + (pc >= 0 ? "+" : "") + pc.toFixed(2) + "%)");
+        }
+        grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+      }
+      if (d.kind === "rect") { g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay), fill: d.fillColor || col, "fill-opacity": d.fillOpacity ?? 0.08, stroke: col, "stroke-width": lw(1, 1), "stroke-dasharray": dash })); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g; }
       if (d.kind === "fib") {
-        const hi = Math.max(A.p, B.p), lo = Math.min(A.p, B.p), x1 = Math.min(ax, bx);
-        FIB.forEach((f) => { const price = hi - (hi - lo) * f; const y = yOf(price); if (y == null) return; g.appendChild(mk("line", { x1, y1: y, x2: W, y2: y, stroke: col, "stroke-width": 1, "stroke-dasharray": "4 4", opacity: 0.6 })); const tx = mk("text", { x: x1 + 4, y: y - 3, fill: col, "font-size": 9.5, "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums", opacity: 0.85 }); tx.textContent = `${(f * 100).toFixed(1)}%  ${price.toFixed(prec)}`; g.appendChild(tx); });
-        fat(x1, yOf(hi) ?? 0, x1, yOf(lo) ?? 0); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+        const ratios = [0, .236, .382, .5, .618, .786, 1, 1.618];
+        const colors = ["#7c879a", "#f03e5f", "#f59f00", "#2fb344", "#12b886", "#15aabf", "#8490a3", "#3b5bdb"];
+        const x1 = Math.min(ax, bx), x2 = Math.max(ax, bx), spanW = Math.max(48, x2 - x1);
+        const levels = ratios.map((ratio, i) => ({ ratio, color: colors[i], price: A.p + (B.p - A.p) * ratio }));
+        const fibFillOpacity = d.fillOpacity ?? .075;
+        for (let i = 0; i < levels.length - 1; i++) {
+          const y1 = projectY(levels[i].price), y2 = projectY(levels[i + 1].price);
+          if (y1 == null || y2 == null) continue;
+          g.appendChild(mk("rect", { x: x1, y: Math.min(y1, y2), width: spanW, height: Math.abs(y2 - y1), fill: levels[i + 1].color, "fill-opacity": fibFillOpacity }));
+        }
+        levels.forEach((level) => {
+          const y = projectY(level.price); if (y == null) return;
+          g.appendChild(mk("line", { x1, y1: y, x2: x1 + spanW, y2: y, stroke: level.color, "stroke-width": lw(level.ratio === 0 || level.ratio === 1 ? 1.5 : 1.2, .35), "stroke-dasharray": dash }));
+          const tx = mk("text", { x: x1 - 5, y: y + 3, fill: level.color, "font-size": 9.5, "font-weight": 700, "text-anchor": "end", "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums" });
+          tx.textContent = (level.ratio === 0 || level.ratio === 1 ? String(level.ratio) : level.ratio.toFixed(3)) + " (" + level.price.toFixed(prec) + ")"; g.appendChild(tx);
+        });
+        const spineDash = d.dash === "solid" || d.dash == null ? "7 5" : dash;
+        g.appendChild(mk("line", { x1: ax, y1: ay, x2: bx, y2: by, stroke: col, "stroke-width": lw(1.4, .35), "stroke-dasharray": spineDash, opacity: .85 }));
+        fat(ax, ay, bx, by); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
       }
       return g;
     }
 
     // floating style/delete toolbar over the selected drawing
-    const bar = document.createElement("div"); bar.className = "draw-bar"; bar.style.display = "none"; wrap.appendChild(bar); barRef.current = bar;
+    const bar = document.createElement("div");
+    bar.className = "draw-bar"; bar.style.display = "none"; bar.setAttribute("role", "toolbar");
+    bar.setAttribute("aria-label", tPlain("drawingSelectionToolbar")); wrap.appendChild(bar); barRef.current = bar;
     const COLORS = ["#4d82ff", "#26c281", "#f0566b", "#e8b339", "#d6dae3"];
-    const styled = new Set(["trendline", "ray", "vline", "hline", "arrow", "rect"]);
     const DASHES: [string, string][] = [["solid", "M2 6h16"], ["dashed", "M2 6h4M8 6h4M14 6h4"], ["dotted", "M2 6h.5M6 6h.5M10 6h.5M14 6h.5M18 6h.5"]];
     const buildBar = (d: Drawing) => {
+      bar.dataset.drawingId = d.id;
       const sw = (a: boolean) => (a ? " on" : "");
       let h = COLORS.map((cc) => `<button data-c="${cc}" class="dsw${sw((d.color || "#4d82ff") === cc)}" style="background:${cc}" title="${cc}"></button>`).join("");
       if (d.kind === "text") {
         h += `<span class="bar-sep"></span>` + [["12", "S"], ["16", "M"], ["22", "L"]].map(([fs, l]) => `<button data-fs="${fs}" class="dfi${sw((d.fontSize ?? 13) === +fs)}">${l}</button>`).join("");
-      } else if (styled.has(d.kind)) {
+      } else if (getDrawingTool(d.kind)?.capabilities.some((cap) => cap === "width" || cap === "dash")) {
         h += `<span class="bar-sep"></span>` + [1.5, 2.5, 4].map((w) => `<button data-w="${w}" class="dwi${sw((d.width ?? 1.6) === w)}" title="${w}px"><i style="height:${Math.max(1, Math.round(w - 0.5))}px"></i></button>`).join("");
         h += `<span class="bar-sep"></span>` + DASHES.map(([k, p]) => `<button data-dash="${k}" class="ddi${sw((d.dash || "solid") === k)}" title="${k}"><svg viewBox="0 0 20 12"><path d="${p}"/></svg></button>`).join("");
       }
-      h += `<span class="bar-sep"></span><button class="bar-del" data-del="1" title="Delete"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg></button>`;
+      h += `<span class="bar-sep"></span><button class="bar-del" data-del="1" title="${tPlain("drawingDelete")}" aria-label="${tPlain("drawingDelete")}"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg></button>`;
       bar.innerHTML = h;
+      const gripEl = document.createElement("button");
+      gripEl.className = "bar-grip"; gripEl.type = "button"; gripEl.title = tPlain("drawingDragProperties"); gripEl.setAttribute("aria-label", tPlain("drawingDragProperties")); gripEl.setAttribute("data-bar-grip", "1");
+      gripEl.textContent = "⠿"; bar.prepend(gripEl);
+      const custom = document.createElement("input");
+      custom.className = "bar-custom-color"; custom.type = "color"; custom.value = /^#[0-9a-f]{6}$/i.test(d.color || "") ? d.color! : "#4d82ff";
+      custom.title = tPlain("drawingCustomColor"); custom.setAttribute("aria-label", tPlain("drawingCustomColorAria")); custom.setAttribute("data-custom-color", "1");
+      bar.appendChild(custom);
+      const lock = document.createElement("button");
+      lock.className = "bar-act" + (d.locked ? " on" : ""); lock.type = "button"; lock.title = d.locked ? tPlain("drawingUnlock") : tPlain("drawingLock");
+      lock.setAttribute("aria-label", lock.title); lock.setAttribute("data-lock", "1"); lock.textContent = d.locked ? "●" : "○"; bar.appendChild(lock);
+      const duplicate = document.createElement("button");
+      duplicate.className = "bar-act"; duplicate.type = "button"; duplicate.title = tPlain("drawingDuplicate"); duplicate.setAttribute("aria-label", duplicate.title);
+      duplicate.setAttribute("data-duplicate", "1"); duplicate.textContent = "⧉"; bar.appendChild(duplicate);
+      const settings = document.createElement("button");
+      settings.className = "bar-act"; settings.type = "button"; settings.title = tPlain("drawingMoreProperties"); settings.setAttribute("aria-label", settings.title);
+      settings.setAttribute("data-settings", "1"); settings.textContent = "⚙"; bar.appendChild(settings);
+      const panel = document.createElement("div");
+      panel.className = "draw-settings";
+      const opacityLabel = document.createElement("label"); opacityLabel.textContent = tPlain("drawingOpacity");
+      const opacity = document.createElement("input"); opacity.type = "range"; opacity.min = "15"; opacity.max = "100"; opacity.step = "5"; opacity.value = String(Math.round((d.opacity ?? 1) * 100)); opacity.setAttribute("data-opacity", "1");
+      opacityLabel.appendChild(opacity); panel.appendChild(opacityLabel);
+      if (["rect", "ellipse", "triangle", "channel", "fib", "xabcd", "longposition", "shortposition"].includes(d.kind)) {
+        const fillLabel = document.createElement("label"); fillLabel.textContent = tPlain("drawingFill");
+        const fill = document.createElement("input"); fill.type = "range"; fill.min = "0"; fill.max = "45"; fill.step = "1"; fill.value = String(Math.round((d.fillOpacity ?? .08) * 100)); fill.setAttribute("data-fill-opacity", "1");
+        fillLabel.appendChild(fill); panel.appendChild(fillLabel);
+      }
+      bar.appendChild(panel);
     };
+    let barManual: { x: number; y: number } | null = null, barManualFor: string | null = null;
     bar.addEventListener("pointerdown", (e) => {
-      e.stopPropagation(); const tg = (e.target as HTMLElement)?.closest("button") as HTMLElement | null; if (!tg || !sel) return;
+      e.stopPropagation();
+      const target = e.target as HTMLElement;
+      if (target.closest("[data-bar-grip]") && sel) {
+        e.preventDefault();
+        const r = bar.getBoundingClientRect(), host = wrap.getBoundingClientRect();
+        const startX = e.clientX, startY = e.clientY, baseX = r.left - host.left, baseY = r.top - host.top;
+        const move = (ev: PointerEvent) => {
+          barManual = {
+            x: Math.max(4, Math.min(el!.clientWidth - bar.offsetWidth - 4, baseX + ev.clientX - startX)),
+            y: Math.max(4, Math.min(el!.clientHeight - bar.offsetHeight - 4, baseY + ev.clientY - startY)),
+          };
+          barManualFor = sel;
+          bar.style.left = barManual.x + "px"; bar.style.top = barManual.y + "px";
+        };
+        const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
+        window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up); return;
+      }
+      const tg = target.closest("button") as HTMLElement | null; if (!tg || !sel) return;
+      if (tg.getAttribute("data-settings")) { bar.classList.toggle("settings-open"); return; }
       if (tg.getAttribute("data-del")) { const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); return; }
+      if (tg.getAttribute("data-lock")) {
+        drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, locked: !d.locked } : d);
+        barSig = ""; onChangeRef.current?.([...drawRef.current]); return;
+      }
+      if (tg.getAttribute("data-duplicate")) {
+        const src = drawRef.current.find((d) => d.id === sel); if (!src) return;
+        const bars = barsRef.current;
+        const points = src.points.map((pt) => {
+          const i = Math.max(0, barIndex(pt.t)), ni = Math.min(bars.length - 1, i + 2);
+          return { t: String(bars[ni]?.time ?? pt.t), p: +(pt.p * 1.002).toFixed(precRef.current) };
+        });
+        const copy = { ...src, id: uid(), locked: false, points, z: (src.z ?? drawRef.current.length) + 1 };
+        sel = copy.id; drawRef.current = [...drawRef.current, copy]; onChangeRef.current?.([...drawRef.current]); return;
+      }
       const cc = tg.getAttribute("data-c"), w = tg.getAttribute("data-w"), dd = tg.getAttribute("data-dash"), fs = tg.getAttribute("data-fs");
       const patch = cc ? { color: cc } : w ? { width: +w } : dd ? { dash: dd as any } : fs ? { fontSize: +fs } : null;
       if (patch) { drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, ...patch } : d); onChangeRef.current?.([...drawRef.current]); }
     });
+    const inspectorPatch = (input: HTMLInputElement): Partial<Drawing> | null =>
+      input.hasAttribute("data-custom-color") ? { color: input.value }
+        : input.hasAttribute("data-opacity") ? { opacity: +input.value / 100 }
+        : input.hasAttribute("data-fill-opacity") ? { fillOpacity: +input.value / 100 }
+        : null;
+    const barSignature = (d: Drawing) => `${d.id}|${d.kind}|${d.color}|${d.width}|${d.dash}|${d.fontSize}`;
     let barSig = "";
+    bar.addEventListener("input", (e) => {
+      e.stopPropagation(); if (!sel) return;
+      const input = e.target as HTMLInputElement;
+      const patch = inspectorPatch(input);
+      if (patch) {
+        drawingTransactionRef.current = true;
+        drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, ...patch } : d);
+        // Color is part of the inspector signature. Keep the live input mounted
+        // through its later `change` event instead of rebuilding it mid-gesture.
+        const selected = drawRef.current.find((d) => d.id === sel);
+        if (selected && input.hasAttribute("data-custom-color")) barSig = barSignature(selected);
+        scheduleDraw();
+      }
+    });
+    bar.addEventListener("change", (e) => {
+      e.stopPropagation(); if (!sel) return;
+      const patch = inspectorPatch(e.target as HTMLInputElement);
+      if (patch) {
+        drawingTransactionRef.current = false;
+        onChangeRef.current?.([...drawRef.current]);
+      }
+    });
+    bar.addEventListener("pointercancel", () => { drawingTransactionRef.current = false; });
     const positionBar = () => {
       const d = drawRef.current.find((x) => x.id === sel);
       if (sel && d && d.points[0]) {
         const ax = xOf(d.points[0].t), ay = yOf(d.points[0].p);
         if (ax != null && ay != null) {
-          const sig = `${d.id}|${d.kind}|${d.color}|${d.width}|${d.dash}|${d.fontSize}`;
+          const sig = barSignature(d);
           if (sig !== barSig) { buildBar(d); barSig = sig; }
           bar.style.display = "flex";
-          bar.style.left = Math.max(4, Math.min(el!.clientWidth - bar.offsetWidth - 4, ax - 8)) + "px";
-          bar.style.top = Math.max(4, ay - 46) + "px";
+          if (barManualFor !== sel) { barManual = null; barManualFor = sel; }
+          bar.style.left = (barManual?.x ?? Math.max(4, Math.min(el!.clientWidth - bar.offsetWidth - 4, ax - 8))) + "px";
+          const naturalTop = d.kind === "text"
+            ? ay + (d.fontSize ?? 13) + 8
+            : ay - 50;
+          bar.style.top = (barManual?.y ?? Math.max(4, Math.min(el!.clientHeight - bar.offsetHeight - 4, naturalTop))) + "px";
           return;
         }
       }
@@ -2899,7 +3202,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const ax = xOf(at.t), ay = yOf(at.p); if (ax == null || ay == null) return;
       const fs = existing?.fontSize ?? 13;
       const inp = document.createElement("input");
-      inp.className = "text-edit"; inp.value = existing?.text || ""; inp.placeholder = "Add text";
+      inp.className = "text-edit"; inp.value = existing?.text || ""; inp.placeholder = tPlain("drawingAddText");
       inp.style.left = ax + "px"; inp.style.top = (ay - fs - 4) + "px"; inp.style.fontSize = fs + "px";
       inp.style.color = existing ? dcol(existing) : css("--text");
       wrap.appendChild(inp); textEditEl = inp; textEditRef.current = inp;
@@ -2910,7 +3213,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         try { inp.remove(); } catch {} textEditEl = null; if (textEditRef.current === inp) textEditRef.current = null;
         if (!save) return;
         if (existing) onChangeRef.current?.(val ? drawRef.current.map((d) => d.id === existing.id ? { ...d, text: val } : d) : drawRef.current.filter((d) => d.id !== existing.id));
-        else if (val) onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "text", points: [at], text: val, fontSize: fs }]);
+        else if (val) {
+          const next: Drawing = { id: uid(), kind: "text", points: [at], text: val, fontSize: fs, ...applyStyle("text") };
+          sel = next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit();
+        }
       };
       inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); commit(true); } else if (e.key === "Escape") { e.preventDefault(); commit(false); } });
       inp.addEventListener("blur", () => commit(true));
@@ -3478,10 +3784,39 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
     const renderDraw = () => {
       const svgEl = svgRef.current; if (!svgEl) return;
-      renderIndOverlays();
       while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
       if (priceProjHidden()) { positionBar(); renderPriceTag(); return; }   // drawings stay cleared while a sub-pane is maximized
-      for (const d of drawRef.current) svgEl.appendChild(shape(d));
+      // Build one projection context per document render. Logical-index X is
+      // equivalent to snapped timeToCoordinate but materially cheaper for long
+      // paths; the normal price scale is affine, so two chart-API samples give
+      // a safe fast Y mapper. Log/custom modes retain the authoritative API.
+      const xCache = new Map<string, number | null>();
+      const yCache = new Map<number, number | null>();
+      const timeScale = chart.timeScale();
+      const projectX = (time: string) => {
+        const key = String(time); if (xCache.has(key)) return xCache.get(key)!;
+        const index = barIndex(time);
+        const coordinate = index < 0 ? null : timeScale.logicalToCoordinate(index as any) as number | null;
+        xCache.set(key, coordinate); return coordinate;
+      };
+      let affineY: ((price: number) => number) | null = null;
+      try {
+        const series = priceSeriesRef.current;
+        const mode = series?.priceScale().options().mode;
+        const base = barsRef.current[barsRef.current.length - 1]?.c ?? 1;
+        const step = Math.max(Math.abs(base) * .001, .01);
+        const y0 = series?.priceToCoordinate(base), y1 = series?.priceToCoordinate(base + step);
+        if (mode === 0 && y0 != null && y1 != null && Number.isFinite(y0) && Number.isFinite(y1)) {
+          const slope = (y1 - y0) / step;
+          affineY = (price) => y0 + (price - base) * slope;
+        }
+      } catch { /* use authoritative per-price projection below */ }
+      const projectY = (price: number) => {
+        if (affineY) return affineY(price);
+        if (yCache.has(price)) return yCache.get(price)!;
+        const coordinate = yOf(price); yCache.set(price, coordinate); return coordinate;
+      };
+      for (const d of [...drawRef.current].sort((a, b) => (a.z ?? 0) - (b.z ?? 0))) svgEl.appendChild(shape(d, false, projectX, projectY));
       // ── D2 locked vertical line overlay ──
       const lvt = lockedVLineRef.current;
       if (lvt) {
@@ -3519,7 +3854,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     if (activeRef.current) setActivePaneCoords(cmxCoordResolverRef.current);
     // coalesce the overlay rebuild to one paint per frame on the hot pan/zoom path
-    const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderDraw(); } }); };
+    const scheduleRender = () => { if (rafId != null) return; rafId = requestAnimationFrame(() => { rafId = null; if (!dead) { renderSignals(); renderIndOverlays(); renderDraw(); } }); };
     // Draw-only rAF coalescer for the drawing drag / shape-creation pointermove paths: those fire on
     // every raw pointer event and previously called renderDraw() (→ full SVG clear + renderIndOverlays
     // re-projecting every ichimoku/ribbon/vwap point) synchronously per event. Batching to one rebuild
@@ -3532,10 +3867,26 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       drawRaf = requestAnimationFrame(() => { drawRaf = null; if (dead) { drawTrailer = null; return; } renderDraw(); const t = drawTrailer; drawTrailer = null; if (t) t(); });
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
-    // Re-project SVG overlays on vertical price-scale drags (LWC repaints candles but not SVG;
-    // crosshairMove fires on any mouse interaction including Y-axis drag — chart.remove() cleans up).
-    chart.subscribeCrosshairMove(scheduleRender);
-    renderSignals(); renderDraw();
+    // Static drawing geometry must not rebuild on ordinary crosshair hover: a
+    // path-heavy document can contain thousands of data-space anchors. LWC does
+    // emit crosshairMove during canvas drags, so only use it while an actual
+    // chart-canvas pointer gesture is active (vertical price panning included).
+    let projectionPointerId: number | null = null;
+    const onProjectionPointerDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (toolRef.current || target?.tagName.toLowerCase() !== "canvas") return;
+      projectionPointerId = event.pointerId;
+    };
+    const onProjectionPointerEnd = (event: PointerEvent) => {
+      if (projectionPointerId !== event.pointerId) return;
+      projectionPointerId = null; scheduleRender();
+    };
+    const onCrosshairProjection = () => { if (projectionPointerId != null) scheduleRender(); };
+    wrap.addEventListener("pointerdown", onProjectionPointerDown, true);
+    window.addEventListener("pointerup", onProjectionPointerEnd);
+    window.addEventListener("pointercancel", onProjectionPointerEnd);
+    chart.subscribeCrosshairMove(onCrosshairProjection);
+    renderSignals(); renderIndOverlays(); renderDraw();
 
     // ── pane geometry measurement → drives the legend/pane-menu overlay layer (ChartOverlays) ──
     const measureImpl = () => {
@@ -3634,6 +3985,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       st.zoom = clampAxisZoom(st.base, st.zoom + wheelDeltaToZoomStep(e.deltaY, e.deltaMode));
       scale.applyOptions({ scaleMargins: axisZoomMargins(st.base, st.zoom) });
+      scheduleRender();
     };
     const onAxisDbl = (e: MouseEvent) => {
       const w = wrapElRef.current; if (!w) return; const wr = w.getBoundingClientRect();
@@ -3643,6 +3995,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const st = axisZoomState.get(pane.key); if (!st) return;  // never wheel-scaled → nothing to reset
       st.zoom = 0;
       try { paneScale(pane.key, pane.paneIndex)?.applyOptions({ scaleMargins: { ...st.base } }); } catch {}
+      scheduleRender();
     };
     // B1: touch double-tap handler — two qualifying taps (down→up <300ms, <12px displacement) within
     // 350ms and <40px of each other → trigger the same pane maximize-toggle as dblclick.
@@ -3707,39 +4060,162 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
     const rectXY = (ev: PointerEvent) => { const r = svg.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
     const idAt = (ev: Event) => (ev.target as Element)?.closest?.("g[data-id]")?.getAttribute("data-id") || null;
-    const TWO = new Set(["trendline", "ray", "rect", "fib", "measure", "arrow"]);
-    // pre-draw style (color/width/dash) applied to each new styleable drawing; arrow keeps solid
-    const STYLE_KINDS = new Set(["trendline", "ray", "arrow", "rect", "hline", "vline"]);
-    const applyStyle = (kind: string): Partial<Drawing> => {
-      const s = styleRef.current; if (!s || !STYLE_KINDS.has(kind)) return {};
-      return { color: s.color, width: s.width, dash: kind === "arrow" ? "solid" : s.dash };
+    // Registry-backed defaults and capabilities are the sole pre-draw style contract.
+    const applyStyle = (kind: Drawing["kind"]): Partial<Drawing> => {
+      const spec = getDrawingTool(kind), defaults = spec?.defaults;
+      const s = styleRef.current;
+      const can = (cap: DrawingToolCapability) => spec?.capabilities.includes(cap) ?? false;
+      return {
+        schemaVersion: DRAWING_SCHEMA_VERSION,
+        source: "user",
+        locked: false,
+        hidden: false,
+        z: drawRef.current.length,
+        color: s && can("stroke") ? s.color : defaults?.color,
+        width: s && can("width") ? s.width : defaults?.width,
+        dash: s && can("dash") ? s.dash : defaults?.dash,
+        opacity: defaults?.opacity ?? 1,
+        extend: defaults?.extend ?? "none",
+        fillColor: defaults?.fillColor,
+        fillOpacity: defaults?.fillOpacity,
+        fontSize: defaults?.fontSize,
+      };
     };
+    const announceCommit = () => {
+      try { window.dispatchEvent(new CustomEvent("mm:drawing-committed")); } catch {}
+    };
+    const commitDrawing = (kind: Drawing["kind"], points: Drawing["points"]) => {
+      const next: Drawing = { id: uid(), kind, points, ...applyStyle(kind) };
+      sel = next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit();
+    };
+
+    // PointerEvent.detail is always 0 in Chromium. Track presses by stable drawing id so
+    // a real double-click still edits text after the first press rebuilds the SVG node.
+    let lastTextPress: { id: string; at: number; x: number; y: number } | null = null;
 
     // select + drag existing drawings in cursor mode (capture phase; runs before creation)
     svg.addEventListener("pointerdown", (ev) => {
-      if (toolRef.current || !activeRef.current) return; const id = idAt(ev); if (!id) { if (sel) { sel = null; renderDraw(); } return; }
-      ev.stopPropagation(); sel = id; renderDraw();
+      if (toolRef.current || !activeRef.current || !ev.isPrimary || ev.button !== 0) return; const id = idAt(ev); if (!id) { if (sel) { sel = null; renderDraw(); } return; }
       const d0 = drawRef.current.find((x) => x.id === id); if (!d0) return;
+      const pointerId = ev.pointerId;
+      ev.stopPropagation();
+      if (d0.kind === "text" && !d0.locked) {
+        const now = performance.now();
+        const isDoublePress = lastTextPress?.id === id
+          && now - lastTextPress.at <= 500
+          && Math.hypot(ev.clientX - lastTextPress.x, ev.clientY - lastTextPress.y) <= 12;
+        if (isDoublePress) {
+          lastTextPress = null;
+          ev.preventDefault(); sel = id; renderDraw(); openTextEditor(d0.points[0], d0); return;
+        }
+        lastTextPress = { id, at: now, x: ev.clientX, y: ev.clientY };
+      } else {
+        lastTextPress = null;
+      }
+      sel = id; renderDraw();
+      if (d0.locked) return;
       const prec = precRef.current;
+      const handleAttr = (ev.target as Element)?.closest?.("[data-handle]")?.getAttribute("data-handle");
+      if (handleAttr != null) {
+        const handleIndex = Number(handleAttr);
+        if (Number.isInteger(handleIndex) && d0.points[handleIndex]) {
+          drawingTransactionRef.current = true;
+          const moveHandle = (e: PointerEvent) => {
+            if (e.pointerId !== pointerId) return;
+            const m0 = rectXY(e), pt = snap(m0.x, m0.y);
+            drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: x.points.map((p, i) => i === handleIndex ? pt : p) });
+            scheduleDraw();
+          };
+          const cleanupHandle = () => {
+            window.removeEventListener("pointermove", moveHandle); window.removeEventListener("pointerup", endHandle); window.removeEventListener("pointercancel", cancelHandle);
+          };
+          const endHandle = (e: PointerEvent) => {
+            if (e.pointerId !== pointerId) return;
+            cleanupHandle();
+            dragCleanup = null; drawingTransactionRef.current = false; onChangeRef.current?.([...drawRef.current]);
+          };
+          const cancelHandle = (e: PointerEvent) => {
+            if (e.pointerId !== pointerId) return;
+            cleanupHandle(); dragCleanup = null; drawingTransactionRef.current = false;
+            drawRef.current = drawRef.current.map((x) => x.id === id ? d0 : x);
+            renderDraw();
+          };
+          dragCleanup = cleanupHandle;
+          window.addEventListener("pointermove", moveHandle); window.addEventListener("pointerup", endHandle); window.addEventListener("pointercancel", cancelHandle); return;
+        }
+      }
       const s0 = rectXY(ev); const start = snap(s0.x, s0.y); const orig = d0.points.map((p) => ({ ...p }));
+      drawingTransactionRef.current = true;
+      const origIndices = orig.map((point) => barIndex(point.t));
+      const minOrigIndex = Math.min(...origIndices), maxOrigIndex = Math.max(...origIndices);
       const move = (e: PointerEvent) => {
-        const m0 = rectXY(e); const cur = snap(m0.x, m0.y); const dp = cur.p - start.p, di = barIndex(cur.t!) - barIndex(start.t!), bars = barsRef.current;
-        drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: orig.map((pt) => { const ni = Math.max(0, Math.min(bars.length - 1, barIndex(pt.t) + di)); return { t: bars[ni]?.time || pt.t, p: +(pt.p + dp).toFixed(prec) }; }) });
+        if (e.pointerId !== pointerId) return;
+        const m0 = rectXY(e), cur = snap(m0.x, m0.y), bars = barsRef.current;
+        const dp = cur.p - start.p;
+        const requestedDi = barIndex(cur.t!) - barIndex(start.t!);
+        // Clamp one shared translation delta so every anchor moves rigidly at
+        // the data boundary instead of independently collapsing the geometry.
+        const di = Math.max(-minOrigIndex, Math.min(bars.length - 1 - maxOrigIndex, requestedDi));
+        drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: orig.map((pt, index) => { const ni = origIndices[index] + di; return { t: bars[ni]?.time || pt.t, p: +(pt.p + dp).toFixed(prec) }; }) });
         scheduleDraw();   // rAF-coalesced: one renderDraw() per frame instead of per raw pointermove
       };
-      const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); dragCleanup = null; onChangeRef.current?.([...drawRef.current]); };
-      dragCleanup = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-      window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+      const cleanupMove = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", cancelMove); };
+      const up = (e: PointerEvent) => { if (e.pointerId !== pointerId) return; cleanupMove(); dragCleanup = null; drawingTransactionRef.current = false; onChangeRef.current?.([...drawRef.current]); };
+      const cancelMove = (e: PointerEvent) => {
+        if (e.pointerId !== pointerId) return;
+        cleanupMove(); dragCleanup = null; drawingTransactionRef.current = false;
+        drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: orig });
+        renderDraw();
+      };
+      dragCleanup = cleanupMove;
+      window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", cancelMove);
     }, true);
+
+    // Hover a drawing and scroll to rotate through the quick palette—the same
+    // precision shortcut surfaced by OpenMarket's endpoint palette. Only a
+    // drawing hit consumes the wheel; normal chart zoom remains untouched.
+    let lastPaletteWheel = 0;
+    svg.addEventListener("wheel", (event) => {
+      if (toolRef.current || !activeRef.current) return;
+      const id = idAt(event); if (!id) return;
+      const now = performance.now(); if (now - lastPaletteWheel < 90) return;
+      lastPaletteWheel = now; event.preventDefault(); event.stopPropagation();
+      const drawing = drawRef.current.find((candidate) => candidate.id === id); if (!drawing) return;
+      const current = COLORS.findIndex((color) => color === drawing.color);
+      const direction = event.deltaY >= 0 ? 1 : -1;
+      const next = COLORS[(current < 0 ? 0 : current + direction + COLORS.length) % COLORS.length];
+      sel = id;
+      drawRef.current = drawRef.current.map((candidate) => candidate.id === id ? { ...candidate, color: next } : candidate);
+      onChangeRef.current?.([...drawRef.current]);
+    }, { passive: false });
 
     // creation / erase (bubble; svg is pointer-events:auto only when a tool is active)
     svg.addEventListener("pointerdown", (ev) => {
-      const tl = toolRef.current; if (!tl) return; const { x, y } = rectXY(ev); const a = snap(x, y);
-      if (tl === "erase") { const id = idAt(ev); if (id) onChangeRef.current?.(drawRef.current.filter((d) => d.id !== id)); return; }
-      if (tl === "hline") { onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "hline", points: [a], ...applyStyle("hline") }]); return; }
-      if (tl === "vline") { onChangeRef.current?.([...drawRef.current, { id: uid(), kind: "vline", points: [a], ...applyStyle("vline") }]); return; }
-      if (tl === "text") { openTextEditor(a); return; }
-      if (TWO.has(tl)) { pending = { kind: tl, a }; try { svg.setPointerCapture(ev.pointerId); } catch {} }
+      const tl = toolRef.current; if (!tl || !ev.isPrimary || ev.button !== 0) return;
+      const { x, y } = rectXY(ev); const a = snap(x, y);
+      const spec = getDrawingTool(tl); if (!spec) return;
+      if (spec.id === "text" || SINGLE_POINT_DRAWING_KINDS.has(spec.id)) {
+        pending = { kind: spec.id, points: [], mode: spec.id === "text" ? "text" : "point", pointerId: ev.pointerId, candidate: a };
+        try { svg.setPointerCapture(ev.pointerId); } catch {}
+        renderDraw(); return;
+      }
+      if (TWO_POINT_DRAWING_KINDS.has(spec.id)) {
+        pending = { kind: spec.id, points: [a], mode: "drag", pointerId: ev.pointerId };
+        try { svg.setPointerCapture(ev.pointerId); } catch {}
+        return;
+      }
+      if (spec.id === "path") {
+        pending = { kind: spec.id, points: [a], mode: "path", pointerId: ev.pointerId };
+        try { svg.setPointerCapture(ev.pointerId); } catch {}
+        return;
+      }
+      // Three/five-anchor tools commit click-by-click. A live provisional anchor follows
+      // the pointer between clicks; the final click creates one undoable compound object.
+      if (!pending || pending.kind !== spec.id || pending.mode !== "multi") pending = { kind: spec.id, points: [], mode: "multi" };
+      if (pending.pointerId != null) return;
+      pending.pointerId = ev.pointerId; pending.candidate = a;
+      try { svg.setPointerCapture(ev.pointerId); } catch {}
+      renderDraw();
     });
     // double-click a text drawing to edit it in place
     svg.addEventListener("dblclick", (ev) => {
@@ -3747,16 +4223,97 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (d && d.kind === "text") { ev.stopPropagation(); ev.preventDefault(); openTextEditor(d.points[0], d); }
     });
     svg.addEventListener("pointermove", (ev) => {
-      if (!pending) return; const { x, y } = rectXY(ev); const p0 = pending; const b = snap(x, y);
-      // rAF-coalesced: rebuild the base draw layer once per frame, then (trailer) append the live preview
-      // shape ON TOP after the rebuild so it isn't wiped by renderDraw's clear.
-      scheduleDraw(() => { const svgEl = svgRef.current; if (svgEl && pending === p0) svgEl.appendChild(shape({ id: "_p", kind: p0.kind as any, points: [p0.a, b] }, true)); });
+      if (!pending) return;
+      if (pending.pointerId != null && pending.pointerId !== ev.pointerId) return;
+      const { x, y } = rectXY(ev); const p0 = pending; const b = snap(x, y);
+      if (pending.mode === "multi" || pending.mode === "point" || pending.mode === "text") pending.candidate = b;
+      if (pending.mode === "path") {
+        const last = pending.points[pending.points.length - 1], lx = xOf(last.t), ly = yOf(last.p);
+        if (lx == null || ly == null || Math.hypot(x - lx, y - ly) >= 3.5) pending.points.push(b);
+        if (pending.points.length > 64) pending.points.splice(1, 1);
+      }
+      const previewPoints = pending.mode === "path" ? [...pending.points]
+        : pending.mode === "multi" ? [...pending.points, pending.candidate ?? b]
+        : pending.mode === "point" || pending.mode === "text" ? [pending.candidate ?? b]
+        : [pending.points[0], b];
+      // One retained preview per animation frame, plus OpenMarket-style placement guides
+      // and an explicit halo whenever Weak/Strong magnet acquires an OHLC target.
+      scheduleDraw(() => {
+        const svgEl = svgRef.current; if (!svgEl || pending !== p0) return;
+        const guides = mk("g", { "pointer-events": "none", opacity: .72 });
+        guides.appendChild(mk("line", { x1: 0, y1: y, x2: el!.clientWidth, y2: y, stroke: "var(--muted)", "stroke-width": 1, "stroke-dasharray": "4 5", opacity: .48 }));
+        guides.appendChild(mk("line", { x1: x, y1: 0, x2: x, y2: el!.clientHeight, stroke: "var(--muted)", "stroke-width": 1, "stroke-dasharray": "4 5", opacity: .48 }));
+        if (snapTarget) {
+          guides.appendChild(mk("circle", { cx: snapTarget.x, cy: snapTarget.y, r: 8, fill: "none", stroke: "var(--brand-2)", "stroke-width": 1.5, opacity: .9 }));
+          guides.appendChild(mk("circle", { cx: snapTarget.x, cy: snapTarget.y, r: 2.5, fill: "var(--brand-2)" }));
+        }
+        svgEl.appendChild(guides);
+        svgEl.appendChild(shape({ id: "_p", kind: p0.kind, points: previewPoints, ...applyStyle(p0.kind) }, true));
+      });
     });
     svg.addEventListener("pointerup", (ev) => {
-      if (!pending) return; const { x, y } = rectXY(ev); const b = snap(x, y); const a = pending.a; const kind = pending.kind; pending = null;
-      if (Math.abs((xOf(a.t) ?? 0) - (xOf(b.t!) ?? 0)) < 3 && Math.abs((yOf(a.p) ?? 0) - (yOf(b.p) ?? 0)) < 3) { renderDraw(); return; }
-      onChangeRef.current?.([...drawRef.current, { id: uid(), kind: kind as any, points: [a, b], ...applyStyle(kind) }]);
+      if (!pending) return;
+      if (pending.pointerId != null && pending.pointerId !== ev.pointerId) return;
+      const { x, y } = rectXY(ev), b = snap(x, y), current = pending;
+      try { if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId); } catch {}
+      if (current.mode === "multi") {
+        current.points.push(b); current.pointerId = undefined; current.candidate = undefined;
+        const spec = getDrawingTool(current.kind);
+        const required = spec && typeof spec.creation.pointCount === "number" ? spec.creation.pointCount : spec?.creation.minPoints ?? Infinity;
+        if (current.points.length >= required) {
+          const points = [...current.points]; pending = null; commitDrawing(current.kind, points);
+        } else renderDraw();
+        return;
+      }
+      pending = null;
+      if (current.mode === "text") { openTextEditor(b); renderDraw(); return; }
+      if (current.mode === "point") { commitDrawing(current.kind, [b]); renderDraw(); return; }
+      const maxPoints = getDrawingTool(current.kind)?.creation.maxPoints ?? 64;
+      const points = current.mode === "path" ? [...current.points, b].slice(0, maxPoints) : [current.points[0], b];
+      const a = points[0], last = points[points.length - 1];
+      if (!a || !last || (Math.abs((xOf(a.t) ?? 0) - (xOf(last.t) ?? 0)) < 3 && Math.abs((yOf(a.p) ?? 0) - (yOf(last.p) ?? 0)) < 3)) { renderDraw(); return; }
+      commitDrawing(current.kind, points); renderDraw();
     });
+    svg.addEventListener("pointercancel", (ev) => {
+      if (!pending || (pending.pointerId != null && pending.pointerId !== ev.pointerId)) return;
+      try { if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId); } catch {}
+      if (pending.mode === "multi" && pending.points.length) {
+        pending.pointerId = undefined; pending.candidate = undefined;
+      } else pending = null;
+      renderDraw();
+    });
+
+    // Precision shortcut: Shift+drag measures directly from the chart without first
+    // opening the drawing rail. Capture on the chart wrapper because the drawing SVG
+    // intentionally has pointer-events:none while no tool is armed.
+    const onShiftMeasure = (ev: PointerEvent) => {
+      if (!ev.shiftKey || toolRef.current || !activeRef.current || ev.button !== 0) return;
+      const startXY = rectXY(ev), a = snap(startXY.x, startXY.y);
+      ev.preventDefault(); ev.stopPropagation();
+      const move = (e: PointerEvent) => {
+        const xy = rectXY(e), b = snap(xy.x, xy.y);
+        scheduleDraw(() => {
+          const svgEl = svgRef.current; if (!svgEl) return;
+          svgEl.appendChild(shape({ id: "_measure", kind: "measure", points: [a, b], ...applyStyle("measure") }, true));
+        });
+      };
+      const cleanupMeasure = () => {
+        window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", cancel);
+        if (dragCleanup === cleanupMeasure) dragCleanup = null;
+        drawingTransactionRef.current = false;
+      };
+      const end = (e: PointerEvent) => {
+        cleanupMeasure();
+        const xy = rectXY(e), b = snap(xy.x, xy.y);
+        if (Math.hypot((xOf(a.t) ?? 0) - (xOf(b.t) ?? 0), (yOf(a.p) ?? 0) - (yOf(b.p) ?? 0)) >= 3) commitDrawing("measure", [a, b]);
+        else renderDraw();
+      };
+      const cancel = () => { cleanupMeasure(); renderDraw(); };
+      drawingTransactionRef.current = true;
+      dragCleanup = cleanupMeasure;
+      window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", cancel);
+    };
+    wrap.addEventListener("pointerdown", onShiftMeasure, true);
 
     // Alt+<key> → drawing-tool code. Mirrors DrawingSidebar's advertised kbd chips (do NOT edit that
     // file — this is the receiving half). Alt+R was RESET-view but the sidebar advertises it as
@@ -3765,12 +4322,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // ChartPanel can't set it directly — it dispatches the established `mm:set-tool` window event
     // (same idiom as mm:set-tf / mm:open-pane). NOTE: this requires a matching listener in TerminalShell
     // (`mm:set-tool` → setTool) to take effect — see the lane summary.
-    const ALT_TOOL: Record<string, string> = { KeyT: "trendline", KeyH: "hline", KeyV: "vline", KeyR: "rect", KeyX: "text", KeyM: "measure" };
     let lastEscTs = 0;
     onKey = (e: KeyboardEvent) => {
       if (!activeRef.current) return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase(); if (tag === "input" || tag === "textarea") return;
       if (e.key === "Escape") {
+        if (pending) { pending = null; renderDraw(); return; }
         // Esc deselects; double-Esc (within 500ms) resets the chart view (the gesture that replaces the
         // former ⌥R — Alt+R is now the Rectangle tool as the sidebar advertises).
         const now = Date.now();
@@ -3778,12 +4335,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         else { lastEscTs = now; if (sel) { sel = null; renderDraw(); } }
       }
       else if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
+      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyZ") {
+        e.preventDefault();
+        try { window.dispatchEvent(new CustomEvent("mm:drawing-history", { detail: e.shiftKey ? "redo" : "undo" })); } catch {}
+      }
+      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyY") {
+        e.preventDefault();
+        try { window.dispatchEvent(new CustomEvent("mm:drawing-history", { detail: "redo" })); } catch {}
+      }
       // ⌥A = add alert at last bar close
       else if (e.altKey && e.code === "KeyA") { e.preventDefault(); const b = barsRef.current; if (b.length) onAddAlertRef.current?.(b[b.length - 1].c); }
       // ⌥T/H/V/R/X/M = select the advertised drawing tool (via mm:set-tool → TerminalShell.setTool)
-      else if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && ALT_TOOL[e.code]) {
+      else {
+        const shortcut = drawingToolFromShortcut(e);
+        if (!shortcut) return;
         e.preventDefault();
-        try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: ALT_TOOL[e.code] })); } catch {}
+        try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: shortcut })); } catch {}
       }
     };
     window.addEventListener("keydown", onKey);
@@ -3818,12 +4385,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (pineHostRef.current) { try { pineHostRef.current.dispose(); } catch {} pineHostRef.current = null; }
       if (syncCleanupRef.current) { try { syncCleanupRef.current(); } catch {} syncCleanupRef.current = null; }
       if (dragCleanup) dragCleanup();
+      drawingTransactionRef.current = false;
       window.removeEventListener("mm:snapshot", snapshot);
       if (onKey) window.removeEventListener("keydown", onKey);
       if (winDown) window.removeEventListener("pointerdown", winDown);
+      window.removeEventListener("pointerup", onProjectionPointerEnd);
+      window.removeEventListener("pointercancel", onProjectionPointerEnd);
       const wEl = wrapElRef.current;
       if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx);
-      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); }
+      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onProjectionPointerDown, true); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("pointerdown", onShiftMeasure, true); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); }
       mqlMobile?.removeEventListener("change", onMqlChange);
       paneRO?.disconnect(); paneRORef.current = null; wrapElRef.current = null;
       ro?.disconnect();
@@ -3835,6 +4405,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       suiteTablesRef.current = [];
       if (sigRef.current) { try { sigRef.current.remove(); } catch {} sigRef.current = null; }
       if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; }
+      cancelPendingDrawingRef.current = () => {};
       if (tagTimerRef.current != null) { clearInterval(tagTimerRef.current); tagTimerRef.current = null; }
       if (priceTagRef.current) { try { priceTagRef.current.remove(); } catch {} priceTagRef.current = null; }
       renderTagRef.current = null;
@@ -3935,8 +4506,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             }
           }).catch(() => { /* silent — slevels/pivots will render with empty history */ });
         }
-        const familyOf = (ct: string) => (ct === "line" ? "line" : ct === "area" ? "area" : ct === "bars" ? "bars" : "candle");
-        const wantFamily = familyOf(chartType);
+        const wantFamily = priceSeriesFamily(chartType);
         let priceS = priceSeriesRef.current;
         if (!priceS || priceFamilyRef.current !== wantFamily) {
           if (priceS) { clearExtendedPriceLine(); try { chart.removeSeries(priceS); } catch {} }
@@ -3944,6 +4514,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           priceFamilyRef.current = wantFamily;
           priceSeriesRef.current = priceS;
         } else { priceS.applyOptions({ priceFormat: priceFmt() }); }
+        if (chartType === "baseline" && onChart.length) priceS!.applyOptions({ baseValue: { type: "price", price: onChart[0].c } });
         priceS!.setData(priceData(onChart) as any);
         cpMark(`chart-painted[${symbol}]`);
         announceTerminalVisualReady(symbol);
@@ -4054,8 +4625,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
 
       // ── price series: incremental setData if the type matches, else remove + re-add ──
-      const familyOf = (ct: string) => (ct === "line" ? "line" : ct === "area" ? "area" : ct === "bars" ? "bars" : "candle"); // heikin uses candle series
-      const wantFamily = familyOf(chartType);
+      const wantFamily = priceSeriesFamily(chartType);
       let priceS = priceSeriesRef.current;
       if (!priceS || priceFamilyRef.current !== wantFamily) {
         if (priceS) { clearExtendedPriceLine(); try { chart.removeSeries(priceS); } catch {} }
@@ -4065,6 +4635,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       } else {
         priceS.applyOptions({ priceFormat: priceFmt() });
       }
+      if (chartType === "baseline" && onChart.length) priceS!.applyOptions({ baseValue: { type: "price", price: onChart[0].c } });
       priceS!.setData(priceData(onChart) as any);
       cpMark(`chart-painted[${symbol}]`);   // first candle on canvas
       announceTerminalVisualReady(symbol);
@@ -4511,9 +5082,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (priceS) {
       try {
         if (chartType === "bars") priceS.applyOptions({ upColor: settings.candleUpColor || t.up, downColor: settings.candleDownColor || t.down });
-        else if (chartType === "line" || chartType === "area") priceS.applyOptions(chartType === "area" ? { lineColor: t.brand2 } : { color: t.brand2 });
+        else if (isValueChartType(chartType)) {
+          if (chartType === "area") priceS.applyOptions({ lineColor: t.brand2 });
+          else if (chartType === "baseline") priceS.applyOptions({ topLineColor: t.up, bottomLineColor: t.down });
+          else priceS.applyOptions({ color: t.brand2 });
+        }
         else priceS.applyOptions({
-          upColor: settings.candleBodyVisible === false ? "rgba(0,0,0,0)" : settings.candleUpColor || t.up,
+          upColor: settings.candleBodyVisible === false || chartType === "hollow" ? "rgba(0,0,0,0)" : settings.candleUpColor || t.up,
           downColor: settings.candleBodyVisible === false ? "rgba(0,0,0,0)" : settings.candleDownColor || t.down,
           wickUpColor: settings.candleUpWick || settings.candleUpColor || t.up,
           wickDownColor: settings.candleDownWick || settings.candleDownColor || t.down,
@@ -4628,10 +5203,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (chartTypeRef.current === "bars") {
           sOpts.upColor = candleUpColor || tokens.up;
           sOpts.downColor = candleDownColor || tokens.down;
-        } else if (chartTypeRef.current !== "line" && chartTypeRef.current !== "area") {
+        } else if (!isValueChartType(chartTypeRef.current)) {
           sOpts.borderVisible = chartSettings.candleBordersVisible !== false;
           sOpts.wickVisible = chartSettings.candleWicksVisible !== false;
-          sOpts.upColor = chartSettings.candleBodyVisible === false ? "rgba(0,0,0,0)" : candleUpColor || tokens.up;
+          sOpts.upColor = chartSettings.candleBodyVisible === false || chartTypeRef.current === "hollow" ? "rgba(0,0,0,0)" : candleUpColor || tokens.up;
           sOpts.downColor = chartSettings.candleBodyVisible === false ? "rgba(0,0,0,0)" : candleDownColor || tokens.down;
           sOpts.borderUpColor = candleUpBorder || candleUpColor || tokens.up;
           sOpts.borderDownColor = candleDownBorder || candleDownColor || tokens.down;
@@ -4723,7 +5298,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   useEffect(() => { renderRef.current?.(); }, [lockedVLine]);
 
   // ── unchanged: re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild) ──
-  useEffect(() => { renderRef.current?.(); const svg = svgRef.current; if (svg) { svg.style.pointerEvents = tool ? "auto" : "none"; svg.style.cursor = tool === "erase" ? "pointer" : tool ? "crosshair" : "default"; } }, [tool, drawings]);
+  useEffect(() => {
+    cancelPendingDrawingRef.current();
+    const svg = svgRef.current;
+    if (svg) { svg.style.pointerEvents = tool ? "auto" : "none"; svg.style.cursor = tool ? "crosshair" : "default"; }
+  }, [tool]);
+  useEffect(() => { renderRef.current?.(); }, [drawings]);
 
   // ── unchanged: detection commands → append auto-drawings (or clear) ──
   useEffect(() => {

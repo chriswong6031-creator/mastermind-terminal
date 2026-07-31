@@ -3089,3 +3089,157 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 /* The native roller strip owns interval switching in the apps — the toolbar's
    favorited-TF quick tray (and its edit pencil) would be a second TF control. */
 .shell-app .chart-tabs .tftray{display:none}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Drawing Studio — precision chart markup with one glass interaction language.
+   This late layer intentionally upgrades the legacy drawing rail/inspector
+   without changing the rest of the Terminal's locked shell geometry.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.chart-body{isolation:isolate}
+.ct-kind-icon{width:28px!important;height:16px!important;flex:none;fill:none;stroke:currentColor!important;stroke-width:1.35!important;stroke-linecap:round;stroke-linejoin:round}
+.ct-kind-icon .ct-fill{fill:color-mix(in srgb,currentColor 14%,transparent);stroke:none}.ct-kind-icon .ct-base{opacity:.5;stroke-dasharray:2 2}
+.chart-type-pop{width:244px;max-height:min(70vh,540px);padding:5px!important;overflow-y:auto}
+.chart-type-group+.chart-type-group{border-top:1px solid var(--hairline)}
+.chart-type-pop .set-grp{border:0;padding:10px 10px 6px}
+.chart-type-row{width:100%;min-height:38px;border:1px solid transparent;border-radius:7px;text-align:left;transition:color var(--t-fast),background var(--t-fast),border-color var(--t-fast)}
+.chart-type-row:hover{border-color:rgba(255,255,255,.045);background:var(--pop-hover)}
+.chart-type-row.on{color:var(--brand-2);border-color:color-mix(in srgb,var(--brand-2) 20%,transparent);background:color-mix(in srgb,var(--brand) 10%,transparent)}
+.chart-type-row .ct-check{margin-left:auto;color:var(--brand-2);font-weight:750}
+.msheet-row.chart-type-row{display:flex;width:100%;min-height:48px}
+.ds-dock{
+  width:52px;padding:7px 4px;gap:2px;border-right-color:var(--hairline);
+  background:linear-gradient(180deg,color-mix(in srgb,var(--panel) 94%,transparent),color-mix(in srgb,var(--bg) 97%,transparent));
+  box-shadow:inset -1px 0 0 rgba(255,255,255,.018);-webkit-user-select:none;user-select:none
+}
+.ds-btn{
+  width:40px;height:38px;min-width:40px;border:1px solid transparent;border-radius:9px;color:var(--muted);
+  transition:color var(--t-fast) var(--ease-out),background var(--t-fast) var(--ease-out),border-color var(--t-fast) var(--ease-out),transform var(--t-fast) var(--ease-out),box-shadow var(--t-fast) var(--ease-out)
+}
+.ds-btn svg{width:18px;height:18px;stroke-width:1.55;stroke-linecap:round;stroke-linejoin:round}
+.ds-btn:hover{color:var(--text);border-color:var(--hairline);background:rgba(255,255,255,.045);transform:translateY(-1px)}
+.ds-btn:active{transform:scale(.94)}
+.ds-btn.on{color:var(--brand-2);border-color:color-mix(in srgb,var(--brand-2) 28%,var(--hairline));background:color-mix(in srgb,var(--brand) 13%,var(--panel-2));box-shadow:inset 0 1px rgba(255,255,255,.06),0 5px 14px -10px rgba(41,98,255,.75)}
+.ds-btn:disabled{opacity:.28;cursor:not-allowed;transform:none}
+.ds-sep{width:28px;margin:4px 0;background:var(--hairline)}
+.ds-group-host{position:relative;display:grid;grid-template-columns:34px 8px;align-items:center;width:42px}
+.ds-group-main{width:34px;min-width:34px;border-radius:9px 5px 5px 9px}
+.ds-group-chevron{display:grid;place-items:center;width:8px;height:38px;padding:0;border-radius:0 7px 7px 0;color:var(--text-dim);transition:color var(--t-fast),background var(--t-fast)}
+.ds-group-chevron:hover,.ds-group-chevron[aria-expanded="true"]{color:var(--text);background:rgba(255,255,255,.05)}
+.ds-group-chevron svg{width:6px;height:10px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.ds-utility-host{display:block;width:40px}
+.ds-utility-host>.ds-btn{width:40px}
+.ds-history{display:flex;flex-direction:column;gap:2px}
+.ds-menu-heading{padding:9px 11px 7px;color:var(--text-dim);font:720 var(--fs-micro)/1 var(--font-ui);letter-spacing:.09em;text-transform:uppercase}
+.ds-flyout{
+  left:calc(100% + 10px);top:-7px;min-width:236px;max-height:min(68vh,560px);padding:6px;gap:1px;overflow-y:auto;
+  border-color:var(--pop-edge);border-radius:var(--pop-r);background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);
+  box-shadow:var(--pop-shadow),var(--pop-sheen);transform-origin:left top;animation:dsMenuIn 170ms var(--ease-out) both
+}
+.ds-fly-item{min-height:38px;padding:0 10px;border:1px solid transparent;border-radius:var(--pop-item-r);font:540 12.5px/1.15 var(--font-ui);transition:color var(--t-fast),background var(--t-fast),border-color var(--t-fast),transform var(--t-fast)}
+.ds-fly-item:hover{border-color:rgba(255,255,255,.045);background:var(--pop-hover);transform:translateX(1px)}
+.ds-fly-item.on{color:var(--brand-2);border-color:color-mix(in srgb,var(--brand-2) 22%,transparent);background:color-mix(in srgb,var(--brand) 11%,transparent)}
+.ds-fly-item svg{width:17px;height:17px;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.ds-kbd{padding:3px 5px;border-color:var(--hairline);border-radius:5px;background:rgba(255,255,255,.035);font-size:9px}
+.ds-danger{color:var(--text-2)}
+.ds-danger:hover{color:var(--sell);background:color-mix(in srgb,var(--sell) 9%,transparent)}
+.ds-count{position:absolute;right:-3px;top:-3px;display:grid;place-items:center;min-width:15px;height:15px;padding:0 3px;border:2px solid var(--bg);border-radius:99px;background:var(--brand);color:#fff;font:750 8px/1 var(--font-num);font-variant-numeric:tabular-nums}
+.ds-menu-count{margin-left:auto;padding:2px 6px;border-radius:99px;background:rgba(255,255,255,.055);color:var(--muted);font:700 9px/1 var(--font-num);font-variant-numeric:tabular-nums}
+.ds-magnet-mark{width:17px;height:17px;flex:none;border:1.5px solid currentColor;border-top:0;border-radius:0 0 6px 6px;opacity:.62}
+.ds-magnet-mark-off{opacity:.25}.ds-magnet-mark-weak{box-shadow:inset 0 -3px color-mix(in srgb,var(--brand-2) 36%,transparent)}.ds-magnet-mark-strong{color:var(--brand-2);box-shadow:inset 0 -6px color-mix(in srgb,var(--brand-2) 58%,transparent)}
+.ds-style{
+  position:absolute;left:calc(100% + 10px);top:10px;z-index:8;width:max-content;max-width:min(560px,calc(100vw - 86px));
+  flex-direction:row;gap:5px;margin:0;padding:7px 9px;border:1px solid var(--pop-edge);border-radius:var(--pop-r);
+  background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);box-shadow:var(--pop-shadow),var(--pop-sheen);animation:dsMenuIn 170ms var(--ease-out) both
+}
+.ds-sw{width:19px;height:19px;min-width:19px;border:2px solid color-mix(in srgb,var(--panel) 82%,transparent);box-shadow:0 0 0 1px rgba(255,255,255,.08);transition:transform var(--t-fast),box-shadow var(--t-fast)}
+.ds-sw:hover{transform:scale(1.14)}.ds-sw.on{outline:2px solid var(--text);outline-offset:2px;box-shadow:0 0 14px -5px currentColor}
+.ds-sty-sep{width:1px;height:22px;margin:0 2px;background:var(--hairline)}
+.ds-w,.ds-d{width:30px;height:28px;border:1px solid transparent;border-radius:7px}
+.ds-w:hover,.ds-d:hover{border-color:var(--hairline);background:rgba(255,255,255,.045)}
+.ds-w.on,.ds-d.on{border-color:color-mix(in srgb,var(--brand-2) 24%,transparent);background:color-mix(in srgb,var(--brand) 12%,transparent)}
+.ds-dock:has(.ds-flyout)>.ds-style{opacity:.22;pointer-events:none}
+
+.drawing-layer [data-drawing-id]{transition:opacity var(--t-fast) var(--ease-out);vector-effect:non-scaling-stroke}
+.drawing-layer [data-drawing-id]:hover{filter:drop-shadow(0 0 4px color-mix(in srgb,var(--brand-2) 38%,transparent))}
+.drawing-layer [data-drawing-handle]{paint-order:stroke;filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))}
+
+.draw-bar{
+  z-index:14;min-height:44px;gap:5px;padding:6px 7px;border-color:var(--pop-edge);border-radius:13px;
+  background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);box-shadow:var(--pop-shadow),var(--pop-sheen);
+  animation:drawInspectorIn 170ms var(--ease-out) both;isolation:isolate
+}
+.draw-bar button{transition:color var(--t-fast),background var(--t-fast),border-color var(--t-fast),transform var(--t-fast)}
+.draw-bar button:active{transform:scale(.92)}
+.draw-bar button[data-c]{width:19px;height:19px;border:2px solid color-mix(in srgb,var(--panel) 82%,transparent);box-shadow:0 0 0 1px rgba(255,255,255,.08)}
+.draw-bar .dsw.on{outline:2px solid var(--text);outline-offset:2px}
+.draw-bar .bar-sep{height:22px;background:var(--hairline)}
+.draw-bar .dwi,.draw-bar .ddi,.draw-bar .dfi,.draw-bar .bar-act,.draw-bar .bar-grip,.draw-bar .bar-del{height:30px;min-width:30px;border:1px solid transparent;border-radius:7px;display:grid;place-items:center;color:var(--muted);padding:0 5px}
+.draw-bar .dwi:hover,.draw-bar .ddi:hover,.draw-bar .dfi:hover,.draw-bar .bar-act:hover,.draw-bar .bar-grip:hover{color:var(--text);border-color:var(--hairline);background:var(--pop-hover)}
+.draw-bar .bar-act.on{color:var(--brand-2);background:color-mix(in srgb,var(--brand) 12%,transparent)}
+.draw-bar .bar-grip{cursor:grab;color:var(--text-dim);font-size:17px;touch-action:none}.draw-bar .bar-grip:active{cursor:grabbing}
+.draw-bar .bar-del:hover{color:var(--sell);border-color:color-mix(in srgb,var(--sell) 22%,transparent);background:color-mix(in srgb,var(--sell) 9%,transparent)}
+.draw-bar .bar-custom-color{width:26px;height:26px;padding:0;border:1px solid var(--hairline);border-radius:7px;background:transparent;overflow:hidden;cursor:pointer}
+.draw-bar .bar-custom-color::-webkit-color-swatch-wrapper{padding:3px}.draw-bar .bar-custom-color::-webkit-color-swatch{border:0;border-radius:4px}
+.draw-settings{position:absolute;right:0;top:calc(100% + 8px);display:none;min-width:210px;padding:11px;border:1px solid var(--pop-edge);border-radius:11px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);box-shadow:var(--pop-shadow),var(--pop-sheen)}
+.draw-bar.settings-open .draw-settings{display:flex;flex-direction:column;gap:10px;animation:dsMenuIn 150ms var(--ease-out) both}
+.draw-settings label{display:grid;grid-template-columns:58px 1fr;align-items:center;gap:9px;color:var(--text-2);font:600 10.5px/1 var(--font-ui)}
+.draw-settings input[type="range"]{width:100%;accent-color:var(--brand-2)}
+.text-edit{min-height:34px;padding:6px 9px;border-color:var(--brand-2);border-radius:8px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand-2) 15%,transparent),var(--shadow-2)}
+
+@keyframes dsMenuIn{from{opacity:0;transform:translateX(-5px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes drawInspectorIn{from{opacity:0;transform:translateY(5px) scale(.985)}to{opacity:1;transform:none}}
+
+@media (max-width:860px){
+  .chart-body>.ds-dock{
+    display:flex;position:absolute;left:max(8px,env(safe-area-inset-left));right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));z-index:22;
+    width:auto;height:54px;min-height:54px;padding:5px 6px;gap:3px;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:visible;
+    border:1px solid var(--pop-edge);border-radius:15px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);
+    box-shadow:var(--pop-shadow),var(--pop-sheen);scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x
+  }
+  .chart-body>.ds-dock::-webkit-scrollbar{display:none}
+  .ds-dock .ds-btn{width:44px;height:44px;min-width:44px}
+  .ds-dock .ds-group-host{display:grid;grid-template-columns:36px 8px;width:44px;min-width:44px}
+  .ds-dock .ds-group-main{width:36px;min-width:36px}
+  .ds-dock .ds-group-chevron{height:44px}
+  .ds-dock .ds-utility-host{display:block;width:44px;min-width:44px}
+  .ds-dock .ds-utility-host>.ds-btn{width:44px}
+  .ds-dock .ds-history{flex-direction:row;gap:3px}
+  .ds-dock .ds-sep{width:1px;height:28px;margin:0 3px;min-width:1px}
+  .ds-dock .ds-spacer{display:none}
+  .ds-dock .ds-style{
+    position:fixed;left:12px;right:12px;top:auto;bottom:calc(70px + env(safe-area-inset-bottom));z-index:80;width:auto;max-width:none;
+    min-height:48px;justify-content:flex-start;overflow-x:auto;overscroll-behavior-x:contain;touch-action:pan-x
+  }
+  .ds-dock .ds-flyout{
+    position:fixed;left:12px;right:12px;top:auto;bottom:calc(70px + env(safe-area-inset-bottom));z-index:81;min-width:0;max-height:min(58dvh,480px);
+    transform-origin:center bottom;animation:dsMobileMenuIn 190ms var(--ease-out) both
+  }
+  /* Mobile menus are portalled to the chart-body host so the dock can stay horizontally
+     scrollable without clipping its glass popovers. */
+  .ds-mobile-popover{
+    position:absolute;left:max(12px,env(safe-area-inset-left));right:max(12px,env(safe-area-inset-right));top:auto;bottom:calc(70px + env(safe-area-inset-bottom));z-index:81;min-width:0;max-height:min(58dvh,480px);
+    transform-origin:center bottom;animation:dsMobileMenuIn 190ms var(--ease-out) both
+  }
+  .ds-mobile-style{
+    position:absolute;left:max(12px,env(safe-area-inset-left));right:max(12px,env(safe-area-inset-right));top:auto;bottom:calc(70px + env(safe-area-inset-bottom));z-index:80;width:auto;max-width:none;
+    min-height:48px;justify-content:flex-start;overflow-x:auto;overscroll-behavior-x:contain;touch-action:pan-x
+  }
+  .chart-body:has(>.ds-mobile-popover)>.ds-mobile-style{opacity:.22;pointer-events:none}
+  .ds-mobile-style .ds-sw,.ds-mobile-style .ds-w,.ds-mobile-style .ds-d{width:44px;height:44px;min-width:44px}
+  .ds-fly-item{min-height:44px;font-size:13px}
+  .draw-bar{left:8px!important;right:8px;top:auto!important;bottom:70px;max-width:calc(100% - 16px);min-height:60px;overflow-x:auto;overflow-y:visible;padding:8px;scrollbar-width:none}
+  .draw-bar::-webkit-scrollbar{display:none}
+  .draw-bar .dwi,.draw-bar .ddi,.draw-bar .dfi,.draw-bar .bar-act,.draw-bar .bar-grip,.draw-bar .bar-del{min-width:44px;height:44px}
+  .draw-bar button[data-c],.draw-bar .bar-custom-color{min-width:44px;width:44px;height:44px}
+  .draw-settings{position:fixed;left:12px;right:12px;top:auto;bottom:128px;min-width:0}
+  .ai-chip{left:10px;bottom:72px}
+}
+@keyframes dsMobileMenuIn{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+
+@media (hover:none),(pointer:coarse){
+  .ds-btn:hover,.ds-fly-item:hover{transform:none}
+  .drawing-layer [data-drawing-handle]{stroke-width:3px}
+}
+@media (prefers-reduced-motion:reduce){
+  .ds-dock *,.ds-mobile-popover,.ds-mobile-popover *,.ds-mobile-style,.ds-mobile-style *,.draw-bar,.draw-bar *,.drawing-layer [data-drawing-id],.text-edit{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
