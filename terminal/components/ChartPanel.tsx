@@ -36,6 +36,7 @@ import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
 import { computeSuite, resolveSuiteColors } from "@/lib/indicator-canvas/host";
 import { renderPrims, ensureTooltipHost } from "@/lib/indicator-canvas/render";
 import { paintCandleData } from "@/lib/indicator-canvas/candlePaint";
+import { paintSnapshotTables } from "@/lib/chartSnapshotTables";
 import { SUITE_DEFS, getSuiteDef, isSuiteKey as isSuiteKeyReg, paneSuiteKeys } from "@/lib/suites/registry";
 import {
   enabledModulesForSuite,
@@ -412,7 +413,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const suiteColorsRef = useRef<SuiteColors | null>(null);          // resolved once per mount + on updown flip
   const suitePaintKeyRef = useRef<string>("");                      // last applied suite candle-paint signature
   const suiteTablesSigRef = useRef<string>("");                     // dashboard tables change-signature
+  const suiteTablesRef = useRef<TableSpec[]>([]);                   // synchronous snapshot source
   const [suiteTables, setSuiteTables] = useState<TableSpec[]>([]);  // rendered by <ChartTables> (DOM, not SVG)
+  suiteTablesRef.current = suiteTables;
   const wrapElRef = useRef<HTMLElement | null>(null);
   const paneLayoutRef = useRef<PaneInfo[]>([]);
   const hoveredKeyRef = useRef<string | null>(null);   // pane under cursor, tracked by stable key
@@ -2018,15 +2021,33 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Reads live refs so labels match the on-screen state.
     // Scale: takeScreenshot() returns a canvas at lightweight-charts' own pixel ratio (may be 1:1).
     // We derive realScale from src.width / wrap.clientWidth and upscale the output to TARGET_SCALE (2x)
-    // for crispness. Drawing overlays (sigSvg z-index:3, drawSvg z-index:4) are composited separately.
+    // for crispness. Custom indicators (z-index:2), signals (z-index:3), and user drawings
+    // (z-index:4) are composited separately in the same order as the live chart.
     const TARGET_SCALE = 2;
+    const SNAPSHOT_SVG_VARS = [
+      "--bg", "--panel", "--panel-2", "--panel-3", "--line", "--line-3",
+      "--text", "--text-2", "--text-dim", "--muted", "--brand", "--brand-2",
+      "--up", "--down", "--buy", "--sell", "--signal", "--warn",
+      "--font-inter", "--font-ui", "--font-num", "--font-code",
+    ] as const;
     // Serialize an SVG element to a bitmap at the given CSS dimensions scaled to TARGET_SCALE.
     const svgToImage = (svgEl: SVGSVGElement, cssW: number, cssH: number): Promise<HTMLImageElement | null> => {
       return new Promise((resolve) => {
         try {
           const clone = svgEl.cloneNode(true) as SVGSVGElement;
+          // The live overlays inherit theme variables and use CSS-pixel coordinates. A blob-loaded
+          // SVG has neither the page cascade nor a useful viewport unless we make both explicit.
+          clone.style.cssText = "background:transparent;overflow:visible";
+          const rootStyle = getComputedStyle(document.documentElement);
+          for (const name of SNAPSHOT_SVG_VARS) {
+            const value = rootStyle.getPropertyValue(name).trim();
+            if (value) clone.style.setProperty(name, value);
+          }
+          clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+          clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
           clone.setAttribute("width", String(cssW * TARGET_SCALE));
           clone.setAttribute("height", String(cssH * TARGET_SCALE));
+          clone.setAttribute("viewBox", `0 0 ${cssW} ${cssH}`);
           const xml = new XMLSerializer().serializeToString(clone);
           const blob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
           const url = URL.createObjectURL(blob);
@@ -2042,6 +2063,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const action: string = (ev as CustomEvent)?.detail?.action || "download";
       (async () => {
         try {
+          // Repaint the DOM overlay layer immediately before capture so a just-added indicator,
+          // live-bar update, or settings change cannot export the previous render.
+          renderSignalsRef.current?.();
+          renderRef.current?.();
           const src = chartRef.current!.takeScreenshot();   // HTMLCanvasElement — all panes (lightweight-charts' own px ratio)
           const wrap = wrapElRef.current;
           const cssW = wrap ? wrap.clientWidth : src.width;
@@ -2062,6 +2087,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           const mut = tokensRef.current.mut || css("--muted") || "#5a616f";
           const brand2 = tokensRef.current.brand2 || css("--brand-2") || "#4d82ff";
           const fam = css("--font-ui") || "system-ui, sans-serif";
+          const numFam = css("--font-num") || fam;
           // ── background ──
           g.fillStyle = bg;
           g.fillRect(0, 0, out.width, out.height);
@@ -2095,18 +2121,39 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             } catch {}
           }
           if (!srcDrawn) g.drawImage(src, 0, HDR, chartW, chartH);
-          // ── composite drawing overlays (signal markers z:3, user drawings z:4) ──
+          // ── composite SVG overlays in their live stacking order ──
           // Each SVG occupies the full wrap (inset:0 100% 100%), so we draw them at (0, HDR).
           if (wrap) {
+            const indicatorSvgEl = indSvgRef.current;
             const sigSvgEl = sigRef.current;
             const drawSvgEl = svgRef.current;
-            const [sigImg, drawImg] = await Promise.all([
+            const [indicatorImg, sigImg, drawImg] = await Promise.all([
+              indicatorSvgEl ? svgToImage(indicatorSvgEl, cssW, cssH) : Promise.resolve(null),
               sigSvgEl ? svgToImage(sigSvgEl, cssW, cssH) : Promise.resolve(null),
               drawSvgEl ? svgToImage(drawSvgEl, cssW, cssH) : Promise.resolve(null),
             ]);
+            if (indicatorImg) g.drawImage(indicatorImg, 0, HDR, chartW, chartH);
             if (sigImg) g.drawImage(sigImg, 0, HDR, chartW, chartH);
             if (drawImg) g.drawImage(drawImg, 0, HDR, chartW, chartH);
           }
+          // Premium Market/MTF dashboards are live DOM tables rather than chart/SVG primitives.
+          // Repaint their current TableSpec data directly so every first-class indicator surface
+          // participates in the export without depending on a lagging React commit or DOM rasterizer.
+          paintSnapshotTables(g, suiteTablesRef.current, {
+            outputWidth: out.width,
+            outputHeight: out.height,
+            scale: dpr,
+            chartBodyTop: HDR,
+            palette: {
+              panel: css("--panel") || "#101217",
+              line: css("--line-3") || "#30343d",
+              text,
+              text2: css("--text-2") || "#b8beca",
+              textDim: css("--text-dim") || "#747b89",
+              muted: mut,
+            },
+            fonts: { ui: fam, numeric: numFam },
+          });
           // ── header band ──
           const tf = timeframeRef.current;
           const pad = Math.round(14 * dpr);
@@ -2935,10 +2982,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // dashboards collected from every suite bundle this frame; flushed to React only on change
       const collectedTables: TableSpec[] = [];
       const flushTables = () => {
+        const nextTables = collectedTables.slice();
+        suiteTablesRef.current = nextTables;
         const sig = collectedTables.length ? JSON.stringify(collectedTables) : "";
         if (sig === suiteTablesSigRef.current) return;
         suiteTablesSigRef.current = sig;
-        setSuiteTables(collectedTables.slice());
+        setSuiteTables(nextTables);
       };
       // ── premium PANE suites — pane-local coordinate space, clipped per pane; must run even while a
       //    sub-pane is maximized (that is exactly when the user is looking at the suite pane) ──
@@ -3658,6 +3707,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; }
       if (emptyRef.current) { try { emptyRef.current.remove(); } catch {} emptyRef.current = null; }
       if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; }
+      if (indSvgRef.current) { try { indSvgRef.current.remove(); } catch {} indSvgRef.current = null; }
+      suiteTablesRef.current = [];
       if (sigRef.current) { try { sigRef.current.remove(); } catch {} sigRef.current = null; }
       if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; }
       if (tagTimerRef.current != null) { clearInterval(tagTimerRef.current); tagTimerRef.current = null; }

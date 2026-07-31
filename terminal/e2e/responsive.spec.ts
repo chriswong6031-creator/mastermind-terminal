@@ -1,10 +1,32 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function armTerminalVisualReady(page: Page) {
+  await page.addInitScript(() => {
+    const readyWindow = window as Window & { __mmResponsiveVisualReady?: boolean };
+    readyWindow.__mmResponsiveVisualReady = false;
+    window.addEventListener("mm:terminal-visual-ready", () => {
+      readyWindow.__mmResponsiveVisualReady = true;
+    }, { once: true });
+  });
+}
+
+async function waitForTerminalVisualReady(page: Page) {
+  await expect.poll(
+    () => page.evaluate(() =>
+      Boolean((window as Window & { __mmResponsiveVisualReady?: boolean }).__mmResponsiveVisualReady)),
+    { message: "the interactive Terminal should finish hydrating", timeout: 15_000 },
+  ).toBe(true);
+}
 
 test("the canonical Terminal shell works at its supported responsive widths", async ({ page }, testInfo) => {
+  await armTerminalVisualReady(page);
   await page.goto("/terminal?symbol=NVDA");
 
   await expect(page.locator(".workspace")).toBeVisible();
   await expect(page.locator(".chart-body")).toBeVisible();
+  // The shell is server-rendered before React attaches toolbar/settings handlers.
+  await expect(page.locator(".chart-wrap canvas").first()).toBeVisible();
+  await waitForTerminalVisualReady(page);
 
   const desktop = testInfo.project.name === "desktop";
   if (desktop) {
@@ -32,8 +54,10 @@ test("the canonical Terminal shell works at its supported responsive widths", as
     ? page.locator(".topbar button.avatar")
     : page.locator(".mobilebar button.avatar");
   await settingsButton.click();
-  const settingsDialog = page.getByRole("dialog", { name: "Terminal" });
-  await expect(settingsDialog).toBeVisible();
+  const settingsDialog = page.locator(".acs-card");
+  await expect(settingsDialog).toBeVisible({ timeout: 10_000 });
+  await expect(settingsDialog).toHaveAttribute("role", "dialog");
+  await expect(settingsDialog).toHaveAttribute("aria-label", "Terminal");
   await expect(settingsDialog.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
   if (testInfo.project.name === "mobile") {
     const settingsTabs = settingsDialog.locator(".acs-nav");
@@ -117,11 +141,16 @@ test("the canonical Terminal shell works at its supported responsive widths", as
 test("a Pro-equivalent entitlement can discover all premium modules and add a suite preset", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "One viewport is sufficient for the shared entitlement contract.");
 
+  await armTerminalVisualReady(page);
   await page.goto("/terminal?symbol=NVDA");
+  // The toolbar is present in the server-rendered shell before React attaches its handlers.
+  // Waiting for the imperative chart canvas prevents a fast/parallel run from clicking pre-hydration.
+  await expect(page.locator(".chart-wrap canvas").first()).toBeVisible();
+  await waitForTerminalVisualReady(page);
   await page.getByRole("button", { name: "Indicators", exact: true }).click();
 
   const modal = page.locator(".imodal");
-  await expect(modal).toBeVisible();
+  await expect(modal).toBeVisible({ timeout: 10_000 });
   await expect(modal.locator(".imod-row")).toHaveCount(31);
   await expect(modal.locator(".imod-row.locked")).toHaveCount(0);
 
@@ -332,8 +361,10 @@ test("Golden Oracle shows the session a 3D signal became knowable", async ({ pag
   await page.route(/\/data\/COST\.slice\.json(?:\?.*)?$/, async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(costSlice) });
   });
+  await armTerminalVisualReady(page);
   await page.goto("/terminal?symbol=COST");
   await expect(page.locator(".workspace")).toBeVisible();
+  await waitForTerminalVisualReady(page);
 
   const signalButton = page.locator(".sig-btn");
   await signalButton.scrollIntoViewIfNeeded();
@@ -356,10 +387,13 @@ test("Golden Oracle shows the session a 3D signal became knowable", async ({ pag
   await expect(signalButton.locator(".sig-btn-go .sig-btn-sub")).toHaveText(expectedDate);
   await signalButton.click();
 
-  const dialog = page.getByRole("dialog", {
-    name: zh ? "研究台与黄金神谕" : "Research Desk and Golden Oracle",
-  });
+  const dialog = page.locator(".sd-scrim");
   await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute("role", "dialog");
+  await expect(dialog).toHaveAttribute(
+    "aria-label",
+    zh ? "研究台与黄金神谕" : "Research Desk and Golden Oracle",
+  );
   await expect(dialog.locator(".sd-go .od-vsub")).toHaveText(expectedDate);
 
   const latest = dialog.locator(".sd-go .sd-sigrow").first();
