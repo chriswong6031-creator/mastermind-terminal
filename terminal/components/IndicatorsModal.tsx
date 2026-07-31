@@ -1,8 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import Link from "next/link";
 import { useLang, useT } from "@/lib/i18n";
+import {
+  normalizeIndicatorSearch,
+  rankIndicatorSearch,
+  type IndicatorSearchDocument,
+} from "@/lib/indicatorSearch";
 import { type UserScript } from "@/lib/userScripts";
 import { MODULE_CATALOG, MODULE_CATEGORIES, type SuiteModuleCatalogEntry } from "@/lib/suites/catalog";
 import { SUITE_DEFS, SUITE_ORDER } from "@/lib/suites/registry";
@@ -54,6 +66,11 @@ const CAT_TKEY: Record<string, string> = {
 const ALL_INDICATORS = "__all__";
 const MY_SCRIPTS = "__scripts__";
 const SYSTEM_PRESETS = "__presets__";
+
+type IndicatorSearchValue =
+  | { kind: "module"; entry: SuiteModuleCatalogEntry }
+  | { kind: "classic"; item: ClassicIndicator; category: string }
+  | { kind: "script"; script: UserScript };
 
 type Tier = "free" | "insider" | "pro";
 const TIER_RANK: Record<Tier, number> = { free: 0, insider: 1, pro: 2 };
@@ -177,26 +194,125 @@ export default function IndicatorsModal({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const restoreFocusRef = useRef(true);
   const copy = (en: string, zh: string) => (lang === "zh" ? zh : en);
 
   useEffect(() => {
-    if (open) searchRef.current?.focus();
+    if (!open) return;
+
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement && !dialogRef.current?.contains(activeElement)) {
+      returnFocusRef.current = activeElement;
+    }
+    restoreFocusRef.current = true;
+
+    // Touch-first devices should open on the browse surface without immediately covering half of
+    // it with a soft keyboard. Fine-pointer devices retain command-palette autofocus.
+    const touchFirst = window.matchMedia("(pointer: coarse)").matches;
+    const frame = window.requestAnimationFrame(() => {
+      if (touchFirst) dialogRef.current?.focus({ preventScroll: true });
+      else searchRef.current?.focus({ preventScroll: true });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (!restoreFocusRef.current) return;
+      const target = returnFocusRef.current;
+      window.requestAnimationFrame(() => {
+        if (target?.isConnected) target.focus({ preventScroll: true });
+      });
+    };
   }, [open]);
+
+  const deferredQuery = useDeferredValue(query);
+  const normalizedQuery = normalizeIndicatorSearch(query);
+  const normalizedDeferredQuery = normalizeIndicatorSearch(deferredQuery);
+  const searching = normalizedQuery.length > 0;
+  const searchUpdating = searching && normalizedQuery !== normalizedDeferredQuery;
+
+  const searchDocuments = useMemo<IndicatorSearchDocument<IndicatorSearchValue>[]>(() => {
+    let order = 0;
+    const documents: IndicatorSearchDocument<IndicatorSearchValue>[] = [];
+
+    for (const entry of MODULE_CATALOG) {
+      const category = MODULE_CATEGORIES.find((candidate) => candidate.id === entry.category);
+      documents.push({
+        id: entry.id,
+        primary: entry.label,
+        aliases: [
+          entry.tag,
+          entry.moduleKey,
+          ...entry.aliases,
+          ...entry.aliasesZh,
+        ],
+        metadata: [
+          entry.suiteLabel,
+          entry.suiteTkey ? t(entry.suiteTkey, entry.suiteLabel) : entry.suiteLabel,
+          category?.label ?? "",
+          category?.description ?? "",
+          category?.descriptionZh ?? "",
+          entry.description,
+          entry.descriptionZh,
+          entry.surface,
+          entry.tier,
+          entry.searchText,
+          entry.searchTextZh,
+        ],
+        order: order++,
+        value: { kind: "module", entry },
+      });
+    }
+
+    for (const { item, category } of classicEntries) {
+      const label = item.tkey ? t(item.tkey, item.label) : item.label;
+      documents.push({
+        id: `classic:${item.key}`,
+        primary: label,
+        aliases: [item.label, item.key, item.tkey ?? ""],
+        metadata: [
+          category,
+          t(CAT_TKEY[category] || category, category),
+          lang === "zh" ? "内置图表指标" : "Built-in chart indicator",
+        ],
+        order: order++,
+        value: { kind: "classic", item, category },
+      });
+    }
+
+    for (const script of scripts) {
+      documents.push({
+        id: `script:${script.id}`,
+        primary: script.name,
+        aliases: [script.id],
+        metadata: [t("myScripts"), lang === "zh" ? "Pine 脚本" : "Pine script"],
+        order: order++,
+        value: { kind: "script", script },
+      });
+    }
+
+    return documents;
+  }, [lang, scripts, t]);
+
+  const rankedSearchResults = useMemo(
+    () => rankIndicatorSearch(searchDocuments, normalizedDeferredQuery),
+    [normalizedDeferredQuery, searchDocuments],
+  );
+  const resultCount = rankedSearchResults.length;
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setQuery("");
-      onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+    // A new query/category always starts at the top. Smooth scrolling here would queue motion for
+    // every keystroke and make a fast typist feel the list fighting them.
+    listRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [cat, normalizedDeferredQuery, open]);
 
   if (!open) return null;
 
-  const closeModal = () => {
+  const closeModal = (restoreFocus = true) => {
+    restoreFocusRef.current = restoreFocus;
     setQuery("");
     setRenaming(null);
     onClose();
@@ -205,7 +321,6 @@ export default function IndicatorsModal({
   const pickCategory = (next: string) => {
     setCat(next);
     setQuery("");
-    searchRef.current?.focus();
   };
 
   const commitRename = (id: string) => {
@@ -214,24 +329,110 @@ export default function IndicatorsModal({
     setRenaming(null);
   };
 
-  const normalizedQuery = query.trim().toLocaleLowerCase(lang);
-  const searching = normalizedQuery.length > 0;
-  const searchModules = searching
-    ? MODULE_CATALOG.filter((entry) =>
-        `${entry.searchText} ${entry.searchTextZh}`.includes(normalizedQuery),
+  const searchResultButtons = () =>
+    Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>("[data-im-search-result]:not(:disabled)") ?? [],
+    );
+
+  const focusSearchResult = (edge: "first" | "last") => {
+    const results = searchResultButtons();
+    const target = edge === "first" ? results[0] : results.at(-1);
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({ block: "nearest" });
+  };
+
+  const handleDialogKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.nativeEvent.isComposing) return;
+
+    const target = event.target as HTMLElement;
+    const editable = target.matches("input, textarea, select, [contenteditable='true']");
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (query.length > 0) {
+        setQuery("");
+        searchRef.current?.focus({ preventScroll: true });
+      } else {
+        closeModal();
+      }
+      return;
+    }
+
+    if (((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") || (event.key === "/" && !editable)) {
+      event.preventDefault();
+      searchRef.current?.focus({ preventScroll: true });
+      searchRef.current?.select();
+      return;
+    }
+
+    if (target === searchRef.current) {
+      if (event.key === "ArrowDown" && searching && !searchUpdating) {
+        event.preventDefault();
+        focusSearchResult("first");
+      } else if (event.key === "ArrowUp" && searching && !searchUpdating) {
+        event.preventDefault();
+        focusSearchResult("last");
+      } else if (event.key === "Enter" && searching && !searchUpdating) {
+        const first = searchResultButtons()[0];
+        if (first) {
+          event.preventDefault();
+          first.click();
+        }
+      }
+      return;
+    }
+
+    const resultTarget = target.closest<HTMLElement>("[data-im-search-result]");
+    if (resultTarget && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      const results = searchResultButtons();
+      const current = results.indexOf(resultTarget);
+      if (current < 0 || results.length === 0) return;
+      event.preventDefault();
+      const nextIndex = event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? results.length - 1
+          : (current + (event.key === "ArrowDown" ? 1 : -1) + results.length) % results.length;
+      const next = results[nextIndex];
+      next.focus({ preventScroll: true });
+      next.scrollIntoView({ block: "nearest" });
+      return;
+    }
+
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+      ) ?? [],
+    ).filter((element) => element.getClientRects().length > 0);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (target === dialogRef.current) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && target === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && target === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const queryLabel = query.trim();
+  const searchStatus = !searching
+    ? copy(
+        `Search ${searchDocuments.length} indicators, modules, and scripts`,
+        `搜索 ${searchDocuments.length} 个指标、模块与脚本`,
       )
-    : [];
-  const searchClassics = searching
-    ? classicEntries.filter(({ item, category }) =>
-        `${item.label} ${item.key} ${category} ${item.tkey ? t(item.tkey, item.label) : ""} ${t(CAT_TKEY[category] || category, category)}`
-          .toLocaleLowerCase(lang)
-          .includes(normalizedQuery),
-      )
-    : [];
-  const searchScripts = searching
-    ? scripts.filter((script) => script.name.toLocaleLowerCase(lang).includes(normalizedQuery))
-    : [];
-  const resultCount = searchModules.length + searchClassics.length + searchScripts.length;
+    : searchUpdating
+      ? copy(`Searching for “${queryLabel}”…`, `正在搜索“${queryLabel}”…`)
+      : copy(
+          `${resultCount} ${resultCount === 1 ? "result" : "results"} for “${queryLabel}”`,
+          `“${queryLabel}”找到 ${resultCount} 个结果`,
+        );
 
   const renderClassic = (item: ClassicIndicator, category: string) => {
     const on = active.has(item.key);
@@ -239,11 +440,12 @@ export default function IndicatorsModal({
     return (
       <button
         type="button"
-        key={item.key}
+        key={`classic:${item.key}`}
         className={`li li-classic${on ? " on" : ""}`}
         role="checkbox"
         aria-checked={on}
         aria-label={`${on ? copy("Remove", "移除") : copy("Add", "添加")} ${label}`}
+        data-im-search-result={searching ? "" : undefined}
         onClick={() => onToggle(item.key)}
       >
         <span className={`im-classic-mark${item.mm ? " mastermind" : ""}`} aria-hidden="true">
@@ -281,6 +483,7 @@ export default function IndicatorsModal({
           aria-checked={on}
           aria-describedby={`imod-desc-${entry.suiteKey}-${entry.moduleKey}`}
           aria-label={locked ? `${entry.label} — ${copy("upgrade required", "需要升级")}` : addLabel}
+          data-im-search-result={searching ? "" : undefined}
           disabled={disabled}
           onClick={() => onToggleModule?.(entry.id)}
         >
@@ -320,7 +523,7 @@ export default function IndicatorsModal({
               title={`${t("settings", "Settings")}: ${entry.label}`}
               aria-label={`${t("settings", "Settings")}: ${entry.label}`}
               onClick={() => {
-                closeModal();
+                closeModal(false);
                 onOpenModuleSettings(entry.id);
               }}
             >
@@ -356,7 +559,7 @@ export default function IndicatorsModal({
       return (
         <div className="li-empty">
           {t("noScriptsYet")}{" "}
-          <Link href="/scripts" className="li-link" onClick={closeModal}>{t("openPineEditor")}</Link>
+          <Link href="/scripts" className="li-link" onClick={() => closeModal(false)}>{t("openPineEditor")}</Link>
         </div>
       );
     }
@@ -385,6 +588,7 @@ export default function IndicatorsModal({
               type="button"
               className="li-script-main"
               aria-pressed={on}
+              data-im-search-result={searching ? "" : undefined}
               onClick={() => onToggleScript?.(script.id)}
             >
               <span className="im-classic-mark script" aria-hidden="true">ƒ</span>
@@ -418,7 +622,7 @@ export default function IndicatorsModal({
               href={`/scripts?id=${encodeURIComponent(script.id)}`}
               title={t("editScript")}
               aria-label={`${t("editScript")}: ${script.name}`}
-              onClick={closeModal}
+              onClick={() => closeModal(false)}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M8 6l-5 6 5 6M16 6l5 6-5 6" />
@@ -468,53 +672,40 @@ export default function IndicatorsModal({
   );
 
   const renderSearchResults = () => (
-    <>
+    <div className="im-search-results">
       <div className="im-list-title">
         <span>
           <strong>{copy("Search results", "搜索结果")}</strong>
-          <small>{copy("Across built-ins, Pro modules, and your scripts", "搜索内置指标、专业模块与个人脚本")}</small>
+          <small>{copy("Ranked across built-ins, Pro modules, and your scripts", "按相关度搜索内置指标、专业模块与个人脚本")}</small>
         </span>
-        <span className="im-result-count" aria-live="polite">{resultCount}</span>
+        <span className="im-result-count" aria-hidden="true">{resultCount}</span>
       </div>
-      {resultCount === 0 ? (
+      {searchUpdating && normalizedDeferredQuery.length === 0 ? (
+        <div className="im-search-pending" aria-hidden="true">
+          <span /><span /><span />
+        </div>
+      ) : resultCount === 0 ? (
         <div className="im-empty">
           <strong>{copy("No indicators found", "未找到指标")}</strong>
           <span>{copy("Try a module name, abbreviation, or purpose such as FVG, divergence, or TP.", "请尝试模块名称、缩写或用途，例如 FVG、背离或止盈。")}</span>
         </div>
       ) : (
-        <>
-          {searchModules.length > 0 && (
-            <section className="im-section">
-              <div className="im-search-group">
-                <strong>{copy("Pro modules", "专业模块")}</strong>
-                <span>{searchModules.length}</span>
-              </div>
-              <div className="im-row-stack">{searchModules.map(renderModule)}</div>
-            </section>
-          )}
-          {searchClassics.length > 0 && (
-            <section className="im-section">
-              <div className="im-search-group">
-                <strong>{copy("Built-in indicators", "内置指标")}</strong>
-                <span>{searchClassics.length}</span>
-              </div>
-              <div className="im-row-stack">
-                {searchClassics.map(({ item, category }) => renderClassic(item, category))}
-              </div>
-            </section>
-          )}
-          {searchScripts.length > 0 && (
-            <section className="im-section">
-              <div className="im-search-group">
-                <strong>{t("myScripts")}</strong>
-                <span>{searchScripts.length}</span>
-              </div>
-              <div className="im-row-stack">{renderScripts(searchScripts)}</div>
-            </section>
-          )}
-        </>
+        <section className="im-section">
+          <div className="im-search-group">
+            <strong>{copy("Best matches", "最佳匹配")}</strong>
+            <span>{copy("Relevance ranked", "按相关度排序")}</span>
+          </div>
+          <div className="im-row-stack">
+            {rankedSearchResults.map(({ document }) => {
+              const value = document.value;
+              if (value.kind === "module") return renderModule(value.entry);
+              if (value.kind === "classic") return renderClassic(value.item, value.category);
+              return renderScripts([value.script]);
+            })}
+          </div>
+        </section>
       )}
-    </>
+    </div>
   );
 
   const renderPresets = () => (
@@ -643,48 +834,81 @@ export default function IndicatorsModal({
       }}
     >
       <div
-        className="imodal imodal-library"
+        ref={dialogRef}
+        id="indicator-library-dialog"
+        className={`imodal imodal-library${searching ? " is-searching" : ""}${searchUpdating ? " is-updating" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="indicators-modal-title"
+        aria-describedby="indicator-search-status"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={handleDialogKeyDown}
       >
         <div className="im-head">
           <div>
             <b id="indicators-modal-title">{t("indicatorsTitle")}</b>
             <span>{copy("Find, add, and configure chart tools", "查找、添加并配置图表工具")}</span>
           </div>
-          <button type="button" className="im-close" aria-label={t("guideClose", "Close")} onClick={closeModal}>
+          <button type="button" className="im-close" aria-label={t("guideClose", "Close")} onClick={() => closeModal()}>
             <CloseMark />
           </button>
         </div>
-        <label className="im-search">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="11" cy="11" r="6.5" />
-            <path d="m16 16 4 4" />
-          </svg>
-          <span className="sr-only">{copy("Search indicators", "搜索指标")}</span>
-          <input
-            ref={searchRef}
-            type="search"
-            value={query}
-            placeholder={copy("Search indicators, modules, or aliases…", "搜索指标、模块或别名…")}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          {query && (
-            <button
-              type="button"
-              className="im-search-clear"
-              aria-label={copy("Clear search", "清除搜索")}
-              onClick={() => {
-                setQuery("");
-                searchRef.current?.focus();
-              }}
-            >
-              <CloseMark />
-            </button>
-          )}
-        </label>
+        <div className="im-search-shell" role="search">
+          <div className="im-search">
+            <span className="im-search-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <circle cx="11" cy="11" r="6.5" />
+                <path d="m16 16 4 4" />
+              </svg>
+            </span>
+            <label className="sr-only" htmlFor="indicator-library-search">
+              {copy("Search indicators", "搜索指标")}
+            </label>
+            <input
+              id="indicator-library-search"
+              className="im-search-input"
+              ref={searchRef}
+              type="search"
+              value={query}
+              placeholder={copy("Search indicators, modules, or aliases…", "搜索指标、模块或别名…")}
+              autoComplete="off"
+              spellCheck={false}
+              enterKeyHint="search"
+              aria-controls="indicator-library-results"
+              aria-describedby="indicator-search-status indicator-search-help"
+              aria-keyshortcuts="/ Meta+K Control+K"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <span className="im-search-tail">
+              <kbd className={`im-search-key${query.length > 0 ? " is-hidden" : ""}`} aria-hidden="true">/</kbd>
+              <button
+                type="button"
+                className={`im-search-clear${query.length > 0 ? " is-visible" : ""}`}
+                aria-label={copy("Clear search", "清除搜索")}
+                aria-hidden={query.length === 0}
+                disabled={query.length === 0}
+                onClick={() => {
+                  setQuery("");
+                  searchRef.current?.focus({ preventScroll: true });
+                }}
+              >
+                <CloseMark />
+              </button>
+            </span>
+            <span className="im-search-progress" aria-hidden="true" />
+          </div>
+          <div className="im-search-meta">
+            <span id="indicator-search-status" role="status" aria-live="polite" aria-atomic="true">
+              {searchStatus}
+            </span>
+            <span id="indicator-search-help" className="im-search-help">
+              {searching
+                ? copy("↑↓ navigate · Enter toggle · Esc clear", "↑↓ 导航 · Enter 切换 · Esc 清除")
+                : copy("Names, aliases, and descriptions supported", "支持名称、别名与功能描述")}
+            </span>
+          </div>
+        </div>
         <div className="ib">
           <nav className="inav" aria-label={t("library")}>
             <div className="im-nav-group">
@@ -715,7 +939,12 @@ export default function IndicatorsModal({
               {navButton(MY_SCRIPTS, t("myScripts"), scripts.length)}
             </div>
           </nav>
-          <main className="ilist" aria-live={searching ? "polite" : undefined}>
+          <main
+            ref={listRef}
+            id="indicator-library-results"
+            className="ilist"
+            aria-busy={searchUpdating}
+          >
             {renderCategory()}
           </main>
         </div>

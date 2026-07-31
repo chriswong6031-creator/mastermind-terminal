@@ -2134,7 +2134,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 </MobileSheet>
               )}
             </div>
-            <button className="tbtn" onClick={() => setIndOpen(true)}><svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>{t("indicators")}</button>
+            <button
+              className="tbtn indicator-library-trigger"
+              aria-haspopup="dialog"
+              aria-expanded={indOpen}
+              aria-controls={indOpen ? "indicator-library-dialog" : undefined}
+              onClick={() => setIndOpen(true)}
+            >
+              <svg viewBox="0 0 24 24" style={{ strokeWidth: 2 }}><path d="M5 12h14M12 5v14" /></svg>
+              {t("indicators")}
+            </button>
             <div className="seg tool-adv" title={t("splitLayout")}>{[1, 2, 4].map((n) => <button key={n} className={split === n ? "on" : ""} onClick={() => setGrid(n)}>{n}</button>)}</div>
             <button className={`tbtn tool-adv${isMtf ? " on" : ""}`} title={t("mtfTip")} onClick={mtfLayout}><svg viewBox="0 0 24 24"><path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z" /></svg>{t("mtf")}</button>
             <button className={`tbtn dtm${dtm ? " on" : ""}`} title={t("dtmTip")} onClick={toggleDtm}><svg viewBox="0 0 24 24" style={{ width: 13, height: 13 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>{t("dtmBtn")}</button>
