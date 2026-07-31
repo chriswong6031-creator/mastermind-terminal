@@ -138,6 +138,73 @@ test("the canonical Terminal shell works at its supported responsive widths", as
   });
 });
 
+test("Prophet fills its Options workspace at every supported width", async ({ page }, testInfo) => {
+  const zh = testInfo.project.name === "tablet";
+  if (zh) {
+    await page.addInitScript(() => {
+      localStorage.setItem("mm.lang", "zh");
+      document.documentElement.setAttribute("data-lang", "zh");
+      document.documentElement.setAttribute("lang", "zh-CN");
+    });
+  }
+  await page.goto("/options?tab=prophet");
+
+  const prophet = page.locator(".obs-prophet");
+  await expect(prophet).toBeVisible({ timeout: 15_000 });
+  await expect(prophet.locator(".obs-prophet-title-row h2")).toHaveText(zh ? "预言台" : "Prophet");
+
+  const readLayout = () => prophet.evaluate((root) => {
+    const host = root.parentElement;
+    const grid = root.querySelector<HTMLElement>(".obs-prophet-grid");
+    if (!host || !grid) throw new Error("Prophet layout host is unavailable");
+    const rootRect = root.getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    return {
+      rootWidth: rootRect.width,
+      hostWidth: hostRect.width,
+      unusedRight: hostRect.right - rootRect.right,
+      gridDisplay: getComputedStyle(grid).display,
+      gridColumns: getComputedStyle(grid).gridTemplateColumns.split(" ").length,
+    };
+  });
+
+  const layout = await readLayout();
+  expect(layout.rootWidth).toBeGreaterThanOrEqual(layout.hostWidth - 1);
+  expect(layout.unusedRight).toBeLessThanOrEqual(1);
+  if (testInfo.project.name === "mobile") {
+    expect(layout.gridDisplay).toBe("flex");
+  } else {
+    expect(layout.gridDisplay).toBe("grid");
+    expect(layout.gridColumns).toBe(testInfo.project.name === "desktop" ? 3 : 2);
+  }
+
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-prophet.png`),
+    fullPage: false,
+  });
+
+  if (testInfo.project.name === "desktop") {
+    // The July 28 restyle dropped the old grid root's full-width sizing. At widths above
+    // the dossier's max-content size, Prophet then stopped around 1520px and left a large
+    // dead strip on the right. Exercise the width from the operator's report explicitly.
+    await page.setViewportSize({ width: 1904, height: 1198 });
+    const wideLayout = await readLayout();
+    expect(wideLayout.rootWidth).toBeGreaterThanOrEqual(wideLayout.hostWidth - 1);
+    expect(wideLayout.unusedRight).toBeLessThanOrEqual(1);
+    expect(wideLayout.gridColumns).toBe(3);
+    await page.screenshot({
+      path: testInfo.outputPath("wide-desktop-prophet.png"),
+      fullPage: false,
+    });
+  }
+
+  const overflow = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+  }));
+  expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
+});
+
 test("a Pro-equivalent entitlement can discover all premium modules and add a suite preset", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "One viewport is sufficient for the shared entitlement contract.");
 
