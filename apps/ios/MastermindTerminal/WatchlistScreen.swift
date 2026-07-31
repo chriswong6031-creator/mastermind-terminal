@@ -11,6 +11,7 @@ struct WatchlistScreen: View {
     @State private var newListPrompt = false
     @State private var newListName = ""
     @State private var confirmDeleteList = false
+    @State private var preview: PreviewItem?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +30,21 @@ struct WatchlistScreen: View {
         .onDisappear { ticker.stop() }
         .onChange(of: watchlists.activeIndex) { _, _ in ticker.start(symbols: watchlists.active.symbols) }
         .onChange(of: watchlists.active.symbols) { _, syms in ticker.start(symbols: syms) }
+        .sheet(item: $preview) { item in
+            PreviewSheet(symbol: item.symbol) {
+                preview = nil
+                model.openChart(symbol: item.symbol)
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.hidden)
+        }
+        .onAppear {
+            // Headless screenshot hook: -mmPreview SYM opens the preview directly.
+            let args = ProcessInfo.processInfo.arguments
+            if let idx = args.firstIndex(of: "-mmPreview"), idx + 1 < args.count {
+                preview = PreviewItem(symbol: args[idx + 1])
+            }
+        }
         .alert("New watchlist", isPresented: $newListPrompt) {
             TextField("List name", text: $newListName)
             Button("Create") {
@@ -81,7 +97,7 @@ struct WatchlistScreen: View {
                     let row = manifest.rows[sym]
                     let quote = ticker.quotes[sym]
                     Button {
-                        model.openChart(symbol: sym)
+                        preview = PreviewItem(symbol: sym)
                     } label: {
                         let name = manifest.displayName(sym, lang: model.lang)
                         HStack(spacing: 12) {

@@ -12,8 +12,20 @@ final class ManifestStore: ObservableObject {
         let col: String?
         let last: Double?
         let chg: Double?
+        let open: Double?
+        let high: Double?
+        let low: Double?
+        let vol: Double?
+        let hi52: Double?
+        let lo52: Double?
 
-        private enum CodingKeys: String, CodingKey { case name, zh, sec, col, last, chg }
+        private enum CodingKeys: String, CodingKey { case name, zh, sec, col, last, chg, open, high, low, vol, hi52, lo52 }
+
+        /// Key-path bundle for the preview stats grid.
+        struct Extra {
+            let open: Double?, high: Double?, low: Double?, vol: Double?, hi52: Double?, lo52: Double?
+        }
+        var extra: Extra { Extra(open: open, high: high, low: low, vol: vol, hi52: hi52, lo52: lo52) }
     }
 
     private struct Manifest: Codable {
