@@ -99,21 +99,25 @@ function SeasonalsPage({ sym, bars = [], zh = false }: SeasonalsPageProps) {
         <WindowSeg win={win} onSet={setWindow} zh={zh} />
       </div>
 
-      {view === "chart" ? (
-        years.length === 0 ? (
-          <div className="fin-empty">{pick(zh, "No daily price history loaded for this symbol yet.", "该标的尚未加载日线历史数据。")}</div>
-        ) : (
-          <>
-            <div className="fin-sec">
-              <SeasonalsChart years={years} active={active} onToggleYear={toggleYear} onSetActive={setActive} zh={zh} />
-            </div>
-            <AdvancedSeasonality years={years} active={active} win={win} zh={zh} />
-            <RegimeOutlook sym={sym} zh={zh} />
-          </>
-        )
+      {years.length === 0 ? (
+        <div className="fin-empty">{pick(zh, "No daily price history loaded for this symbol yet.", "该标的尚未加载日线历史数据。")}</div>
+      ) : view === "chart" ? (
+        <div className="fin-sec">
+          <SeasonalsChart key={sym} years={years} active={active} onToggleYear={toggleYear} onSetActive={setActive} zh={zh} />
+        </div>
       ) : (
         // key on the window so the 'show all' expander resets when it changes
         <MonthlyGrid key={win} years={years} active={active} win={win} zh={zh} />
+      )}
+
+      {/* The read explains the selected sample, not the rendering mode. Keeping it
+          outside the Chart/Table branch makes the same evidence available beneath
+          either primary view. */}
+      {years.length > 0 && (
+        <>
+          <AdvancedSeasonality years={years} active={active} win={win} zh={zh} />
+          <RegimeOutlook sym={sym} zh={zh} />
+        </>
       )}
 
       <Disclaimer zh={zh} />

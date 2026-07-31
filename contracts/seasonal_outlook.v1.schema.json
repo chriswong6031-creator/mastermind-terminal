@@ -53,6 +53,12 @@
         "regime_hit": { "type": ["number", "null"] },
         "baseline_hit": { "type": ["number", "null"] },
         "skill": { "type": ["number", "null"] },
+        "skill_ci_lo": { "type": ["number", "null"] },
+        "skill_ci_hi": { "type": ["number", "null"] },
+        "n_blocks": { "type": "integer", "minimum": 0 },
+        "regime_better_years": { "type": "integer", "minimum": 0 },
+        "baseline_better_years": { "type": "integer", "minimum": 0 },
+        "tied_years": { "type": "integer", "minimum": 0 },
         "verdict": { "enum": ["edge", "no_edge", "anti", "untested"] }
       }
     },
@@ -113,8 +119,15 @@
         "start": { "type": "string" },
         "end": { "type": "string" },
         "expected_move": { "type": "number" },
+        "typical_move": { "type": ["number", "null"] },
         "win_rate": { "type": ["number", "null"] },
         "n": { "type": "integer" },
+        "n_eff": { "type": "number", "minimum": 0 },
+        "lo": { "type": ["number", "null"] },
+        "hi": { "type": ["number", "null"] },
+        "stability": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "evidence_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "confidence": { "enum": ["low", "medium", "high"] },
         "buckets": { "type": "array", "items": { "type": "string" } }
       }
     }

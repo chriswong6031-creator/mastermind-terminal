@@ -14,12 +14,12 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type MouseEvent as RMouseEvent,
   type PointerEvent as RPointerEvent,
 } from "react";
 import { fmtPct, pick } from "../../lib/finFormat";
 import { FinTip, useFinTip } from "./FinCharts";
 import { getJSON } from "../../lib/dataCache";
+import { thinLabels, useChartWidth } from "../charts/svgChart";
 
 /* ── types matching the JSON schema ─────────────────────────────────────── */
 interface BucketView {
@@ -44,8 +44,15 @@ interface Interval {
   start: string;
   end: string;
   expected_move: number;
+  typical_move?: number | null;
   win_rate: number | null;
   n: number;
+  n_eff?: number;
+  lo?: number | null;
+  hi?: number | null;
+  stability?: number | null;
+  evidence_score?: number;
+  confidence?: "low" | "medium" | "high";
   buckets: string[];
 }
 interface Analog {
@@ -74,6 +81,12 @@ interface Validation {
   regime_hit: number | null;
   baseline_hit: number | null;
   skill: number | null;
+  skill_ci_lo?: number | null;
+  skill_ci_hi?: number | null;
+  n_blocks?: number;
+  regime_better_years?: number;
+  baseline_better_years?: number;
+  tied_years?: number;
   verdict: "edge" | "no_edge" | "anti" | "untested";
 }
 interface History {
@@ -108,6 +121,8 @@ interface SeasonalOutlook {
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 const P = (v: number | null | undefined) =>
   fmtPct(v, { alreadyPct: true, sign: true, decimals: 1 });
+const HIT_DELTA = (v: number | null | undefined) =>
+  fmtPct(v, { sign: true, decimals: 1 });
 const WRp = (v: number | null | undefined) =>
   v == null ? "—" : `${Math.round(v * 100)}%`;
 
@@ -161,39 +176,29 @@ function tickLabel(d: Date, zh: boolean): string {
   return `${m} '${yy}`;
 }
 
-/** ResizeObserver hook (same pattern as AdvancedSeasonality) */
-function useBoxW(fallback: number) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [w, setW] = useState(fallback);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => {
-      const cw = Math.round(el.clientWidth);
-      if (cw > 0) setW(cw);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return { ref, w };
+function shortDate(s: string, zh: boolean): string {
+  const d = parseDate(s);
+  if (zh) return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日`;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 /* ── main export ─────────────────────────────────────────────────────────── */
 export function RegimeOutlook({ sym, zh = false }: { sym: string; zh?: boolean }) {
-  const [data, setData] = useState<SeasonalOutlook | null | "loading">("loading");
+  const [load, setLoad] = useState<{
+    sym: string;
+    data: SeasonalOutlook | null | "loading";
+  }>({ sym, data: "loading" });
 
   useEffect(() => {
-    setData("loading");
     let cancelled = false;
     getJSON(`/data/${sym}.seasonal.json`).then((d: SeasonalOutlook | null) => {
-      if (!cancelled) setData(d ?? null);
+      if (!cancelled) setLoad({ sym, data: d ?? null });
     });
     return () => {
       cancelled = true;
     };
   }, [sym]);
+  const data = load.sym === sym ? load.data : "loading";
 
   // Loading gets a skeleton of the panel's own height — the old combined null
   // popped the whole panel in after the fetch and shoved the page down.
@@ -213,11 +218,18 @@ export function RegimeOutlook({ sym, zh = false }: { sym: string; zh?: boolean }
     return (
       <div className="fin-ro-panel">
         <div className="fin-ro-head">
-          <span className="fin-ro-title">{pick(zh, "Forward outlook", "前瞻展望")}</span>
-          <span className="fin-ro-pill">{pick(zh, "experimental", "实验性")}</span>
+          <span className="fin-ro-title">{pick(zh, "Forward seasonal map", "前瞻季节图")}</span>
+          <span className="fin-ro-pill">{pick(zh, "research", "研究")}</span>
         </div>
-        <div className="fin-ro-honest">{d.honest_read}</div>
-        <div className="fin-ro-disclaimer">{d.disclaimer}</div>
+        <div className="fin-ro-emptyread">
+          <strong>{pick(zh, "No reliable map yet", "暂无可靠季节图")}</strong>
+          <span>
+            {d.mode === "insufficient"
+              ? pick(zh, "This symbol needs at least three complete calendar years.", "该标的至少需要三个完整日历年。")
+              : pick(zh, "The price-history quality check failed, so the model suppressed the read.", "价格历史质量检查未通过，因此模型已隐藏读数。")}
+          </span>
+        </div>
+        <div className="fin-ro-disclaimer">{pick(zh, "Historical research only · not a forecast or investment advice.", "仅供历史研究 · 不构成预测或投资建议。")}</div>
       </div>
     );
   }
@@ -232,14 +244,47 @@ function RegimeOutlookInner({ data: d, zh }: { data: SeasonalOutlook; zh: boolea
   const intervals = view === "baseline" ? d.intervals_baseline : d.intervals_regime;
   const val = d.validation;
   const isStale = dateMs(todayIso()) - dateMs(d.as_of) > STALE_MS;
+  const liveIntervals = intervals.filter((iv) => dateMs(iv.end) > dateMs(todayIso()));
+  const bestSupport = liveIntervals.reduce(
+    (best, iv) => Math.max(best, iv.evidence_score ?? 0),
+    0,
+  );
+  const status =
+    val.verdict === "edge"
+      ? {
+          tone: "up",
+          label: pick(zh, "Regime lift validated", "制度加权已验证"),
+          sentence: pick(
+            zh,
+            `The regime lens improved year-level tests and maps ${liveIntervals.length} upcoming seasonal window${liveIntervals.length === 1 ? "" : "s"}.`,
+            `制度加权通过年度层级检验，并标出 ${liveIntervals.length} 个未来季节窗口。`,
+          ),
+        }
+      : val.verdict === "anti"
+        ? {
+            tone: "down",
+            label: pick(zh, "Regime lens rejected", "制度加权未通过"),
+            sentence: pick(
+              zh,
+              `Regime matching weakened out-of-sample results, so the map defaults to the all-years seasonal baseline.`,
+              "制度匹配削弱了样本外结果，因此地图默认采用所有年份的季节基准。",
+            ),
+          }
+        : {
+            tone: "neu",
+            label: pick(zh, "Baseline only", "仅采用基准"),
+            sentence: pick(
+              zh,
+              `Historical seasonality maps ${liveIntervals.length} upcoming window${liveIntervals.length === 1 ? "" : "s"}; regime matching did not add reliable out-of-sample lift.`,
+              `历史季节性标出 ${liveIntervals.length} 个未来窗口；制度匹配未带来可靠的样本外提升。`,
+            ),
+          };
 
   return (
     <div className="fin-ro-panel fin-adv-panel">
-      {/* header row */}
       <div className="fin-ro-head">
-        <span className="fin-ro-title">{pick(zh, "Forward outlook", "前瞻展望")}</span>
-        <span className="fin-ro-pill">{pick(zh, "experimental", "实验性")}</span>
-        {/* the artifact is regenerated by a batch job; when it drifts, say so out loud */}
+        <span className="fin-ro-title">{pick(zh, "Forward seasonal map", "前瞻季节图")}</span>
+        <span className="fin-ro-pill">{pick(zh, "research", "研究")}</span>
         {isStale && (
           <span className="fin-tag" style={{ "--c": "var(--warn)" } as CSSProperties}>
             {pick(zh, `stale · as-of ${d.as_of}`, `过期 · 截至 ${d.as_of}`)}
@@ -247,52 +292,54 @@ function RegimeOutlookInner({ data: d, zh }: { data: SeasonalOutlook; zh: boolea
         )}
       </div>
 
-      {/* regime badge row */}
-      <div className="fin-ro-badge-row">
-        <span className="fin-ro-regime-badge">
-          {d.current_year.year}
-          <span className="fin-ro-sep">·</span>
-          {cyclePosLabel(d.current_year.cycle_pos, zh)}
-          <span className="fin-ro-sep">·</span>
-          {rateDirLabel(d.current_year.rate_dir, zh)}
-          {d.current_year.is_recession && (
-            <span className="fin-tag fin-ro-flag-rec" style={{ "--c": "var(--down)" } as CSSProperties}>
-              {pick(zh, "Recession", "衰退")}
-            </span>
-          )}
-          {d.current_year.provisional && (
-            <span
-              className="fin-tag fin-ro-provisional"
-              style={{ "--c": "var(--warn)" } as CSSProperties}
-              title={pick(
-                zh,
-                "Current-year regime is an as-of estimate while analog years carry full-year hindsight.",
-                "当前年度制度为截止估算，历史类比年具有全年后见之明。"
-              )}
-            >
-              {pick(zh, "provisional", "暂定")}
-            </span>
-          )}
-        </span>
+      <div className="fin-ro-summary">
+        <div className="fin-ro-summary-copy">
+          <span className={`fin-ro-state ${status.tone}`}>{status.label}</span>
+          <p>{status.sentence}</p>
+        </div>
+        <div className="fin-ro-kpis">
+          <div className="fin-ro-kpi">
+            <span>{pick(zh, "Model read", "模型结论")}</span>
+            <strong>{view === "baseline" ? pick(zh, "All years", "所有年份") : pick(zh, "Regime lens", "制度视角")}</strong>
+          </div>
+          <div className="fin-ro-kpi">
+            <span>{pick(zh, "History", "历史样本")}</span>
+            <strong className="num">{d.history.complete_years}y</strong>
+          </div>
+          <div className="fin-ro-kpi">
+            <span>{pick(zh, "Best support", "最高支持度")}</span>
+            <strong className="num">{bestSupport > 0 ? `${bestSupport}/100` : "—"}</strong>
+          </div>
+        </div>
+      </div>
 
-        {/* view toggle */}
+      <div className="fin-ro-controls">
         <div className="fin-toggle fin-ro-toggle">
           <button
             className={view === "baseline" ? "on" : ""}
             onClick={() => setView("baseline")}
           >
-            {pick(zh, "All-years", "所有年份")}
+            {pick(zh, "Baseline", "基准")}
           </button>
           <button
             className={view === "regime" ? "on" : ""}
             onClick={() => setView("regime")}
+            title={
+              val.verdict === "edge"
+                ? pick(zh, "Validated regime-weighted view", "已验证的制度加权视图")
+                : pick(zh, "Research view; it did not beat the baseline", "研究视图；未优于基准")
+            }
           >
-            {pick(zh, "Regime analogs", "制度类比")}
+            {pick(zh, "Regime lens", "制度视角")}
           </button>
         </div>
+        <span>
+          {view === "baseline"
+            ? pick(zh, "Uses every complete year equally.", "对每个完整年份等权处理。")
+            : pick(zh, "Weights years with similar cycle and rate conditions.", "加权处理周期与利率环境相似的年份。")}
+        </span>
       </div>
 
-      {/* timeline */}
       <TimelinePanel
         intervals={intervals}
         asOf={d.as_of}
@@ -301,25 +348,105 @@ function RegimeOutlookInner({ data: d, zh }: { data: SeasonalOutlook; zh: boolea
         zh={zh}
       />
 
-      {/* validation strip */}
-      <ValidationStrip val={val} zh={zh} />
+      <WindowCards intervals={liveIntervals} zh={zh} />
 
-      {/* analog chips */}
-      <AnalogChips analogs={d.analogs} relaxedFilters={d.relaxed_filters} nEff={d.n_eff} zh={zh} />
+      <details className="fin-ro-details">
+        <summary>{pick(zh, "Evidence & analog years", "证据与类比年份")}</summary>
+        <div className="fin-ro-details-body">
+          <div className="fin-ro-regime-badge">
+            {d.current_year.year}
+            <span className="fin-ro-sep">·</span>
+            {cyclePosLabel(d.current_year.cycle_pos, zh)}
+            <span className="fin-ro-sep">·</span>
+            {rateDirLabel(d.current_year.rate_dir, zh)}
+            {d.current_year.is_recession && (
+              <span className="fin-tag fin-ro-flag-rec" style={{ "--c": "var(--down)" } as CSSProperties}>
+                {pick(zh, "Recession", "衰退")}
+              </span>
+            )}
+            {d.current_year.provisional && (
+              <span
+                className="fin-tag fin-ro-provisional"
+                style={{ "--c": "var(--warn)" } as CSSProperties}
+                title={pick(
+                  zh,
+                  "Current-year regime is an as-of estimate while analog years carry full-year hindsight.",
+                  "当前年度制度为截止估算，历史类比年具有全年后见之明。",
+                )}
+              >
+                {pick(zh, "provisional", "暂定")}
+              </span>
+            )}
+          </div>
+          <ValidationStrip val={val} zh={zh} />
+          <AnalogChips analogs={d.analogs} relaxedFilters={d.relaxed_filters} nEff={d.n_eff} zh={zh} />
+          <div className="fin-asof">
+            <span className="num">
+              {pick(
+                zh,
+                `engine ${d.engine_version} · as-of ${d.as_of} · ${d.history.complete_years}y history · ${d.validation.loyo_years} year-level tests`,
+                `引擎 ${d.engine_version} · 截至 ${d.as_of} · ${d.history.complete_years} 年历史 · ${d.validation.loyo_years} 次年度检验`,
+              )}
+            </span>
+          </div>
+        </div>
+      </details>
 
-      {/* honest read + disclaimer */}
-      <div className="fin-ro-honest">{d.honest_read}</div>
-      <div className="fin-ro-disclaimer">{d.disclaimer}</div>
+      <div className="fin-ro-disclaimer">
+        {pick(zh, "Historical pattern research only · not a forecast or investment advice.", "仅供历史规律研究 · 不构成预测或投资建议。")}
+      </div>
+    </div>
+  );
+}
 
-      {/* provenance: which engine, which vintage, how much history it actually saw */}
-      <div className="fin-asof">
-        <span className="num">
-          {pick(
-            zh,
-            `seasonal_outlook ${d.engine_version} · as-of ${d.as_of} · ${d.history.complete_years}y history · LOYO ${d.validation.loyo_years}y`,
-            `seasonal_outlook ${d.engine_version} · 截至 ${d.as_of} · ${d.history.complete_years} 年历史 · 留一年验证 ${d.validation.loyo_years} 年`,
-          )}
-        </span>
+function WindowCards({ intervals, zh }: { intervals: Interval[]; zh: boolean }) {
+  if (intervals.length === 0) return null;
+  const shown = intervals.slice(0, 4);
+  return (
+    <div className="fin-ro-windows">
+      <div className="fin-ro-section-label">{pick(zh, "Window detail", "窗口详情")}</div>
+      <div className="fin-ro-window-grid">
+        {shown.map((iv) => {
+          const score = iv.evidence_score;
+          const move = iv.typical_move ?? iv.expected_move;
+          const confidence = iv.confidence ?? "low";
+          return (
+            <article className={`fin-ro-window ${iv.dir}`} key={`${iv.start}-${iv.end}`}>
+              <div className="fin-ro-window-head">
+                <span>{shortDate(iv.start, zh)} → {shortDate(iv.end, zh)}</span>
+                <span className={`fin-ro-confidence ${confidence}`}>
+                  {confidence === "high"
+                    ? pick(zh, "high support", "高支持")
+                    : confidence === "medium"
+                      ? pick(zh, "medium support", "中等支持")
+                      : pick(zh, "low support", "低支持")}
+                </span>
+              </div>
+              <div className="fin-ro-window-move">
+                <strong>{P(move)}</strong>
+                <span>{pick(zh, "typical move", "典型涨跌")}</span>
+              </div>
+              <div className="fin-ro-window-stats">
+                <span><b>{WRp(iv.win_rate)}</b>{pick(zh, " positive", " 上涨")}</span>
+                <span><b>{iv.n_eff != null ? iv.n_eff.toFixed(1) : iv.n}</b>{pick(zh, " effective years", " 有效年份")}</span>
+                <span>
+                  <b>{iv.lo != null && iv.hi != null ? `${P(iv.lo)} … ${P(iv.hi)}` : "—"}</b>
+                  {pick(zh, " middle range", " 中间区间")}
+                </span>
+              </div>
+              <div className="fin-ro-score">
+                <span style={{ width: `${Math.max(0, Math.min(100, score ?? 0))}%` }} />
+              </div>
+              <div className="fin-ro-score-label">
+                <span>{pick(zh, "Evidence", "证据")}</span>
+                <b>{score != null ? `${score}/100` : "—"}</b>
+                {iv.stability != null && (
+                  <em>{pick(zh, `${Math.round(iv.stability * 100)}% sign-stable`, `${Math.round(iv.stability * 100)}% 方向稳定`)}</em>
+                )}
+              </div>
+            </article>
+          );
+        })}
       </div>
     </div>
   );
@@ -336,14 +463,14 @@ interface TimelinePanelProps {
 
 function TimelinePanel({ intervals, asOf, forwardBuckets, view, zh }: TimelinePanelProps) {
   const { tip, show, hide } = useFinTip();
-  const box = useBoxW(680);
-  const vw = box.w;
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const vw = useChartWidth(boxRef, 680);
   const SVG_H = 88; // total SVG height
   const BAND_Y = 22; // top of the band area
   const BAND_H = 40; // height of each interval band
   const TICK_Y = BAND_Y + BAND_H + 10; // y for month labels
-  const PAD_L = 0;
-  const PAD_R = 0;
+  const PAD_L = 18;
+  const PAD_R = 8;
   const IW = vw - PAD_L - PAD_R;
 
   // Anchor on TODAY, not on the artifact's as_of. The artifact is regenerated by a
@@ -364,8 +491,10 @@ function TimelinePanel({ intervals, asOf, forwardBuckets, view, zh }: TimelinePa
     );
   }
 
-  // time domain: from as_of to end of last interval still ahead of us
-  const t0 = dateMs(asOf);
+  // Old artifacts may include weeks of already elapsed horizon. Start the plot
+  // at the later of the artifact vintage and today so the useful future fills it.
+  const domainStart = dateMs(asOf) > tToday ? asOf : today;
+  const t0 = dateMs(domainStart);
   const lastEnd = live.reduce(
     (mx, iv) => Math.max(mx, dateMs(iv.end)),
     0
@@ -380,7 +509,7 @@ function TimelinePanel({ intervals, asOf, forwardBuckets, view, zh }: TimelinePa
   // Build month tick positions
   const tickDates: Date[] = [];
   {
-    const start = parseDate(asOf);
+    const start = parseDate(domainStart);
     // step to the first of the next month
     let cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
     const endDate = new Date(lastEnd);
@@ -396,16 +525,23 @@ function TimelinePanel({ intervals, asOf, forwardBuckets, view, zh }: TimelinePa
     const bv = view === "baseline" ? fb.baseline : fb.regime;
     bucketByLabel[fb.label] = bv;
   }
+  const tickPoints = tickDates
+    .map((d) => ({ d, x: tx(d.toISOString().slice(0, 10)) }))
+    .filter((t) => t.x >= PAD_L && t.x <= vw - PAD_R);
+  const labelledTicks = new Set(
+    thinLabels(tickPoints, (t) => t.x, 74).map((t) => t.d.getTime()),
+  );
 
   return (
-    <div className="fin-ro-timeline-wrap" ref={box.ref}>
+    <div className="fin-ro-timeline-wrap" ref={boxRef}>
       <div className="fin-ro-timeline-label">
-        {pick(zh, "Key seasonal intervals (historical bias)", "关键季节性区间（历史偏向）")}
+        {pick(zh, "Upcoming windows", "未来窗口")}
       </div>
       <div className="fin-ro-svg-box" style={{ height: SVG_H }}>
         <svg
           viewBox={`0 0 ${vw} ${SVG_H}`}
-          preserveAspectRatio="none"
+          width={vw}
+          height={SVG_H}
           className="fin-svg fin-ro-svg"
           style={{ display: "block", width: "100%", height: SVG_H }}
         >
@@ -433,10 +569,12 @@ function TimelinePanel({ intervals, asOf, forwardBuckets, view, zh }: TimelinePa
               if (!bv) return 0;
               return bv.confidence === "high" ? 3 : bv.confidence === "medium" ? 2 : 1;
             });
-            const minConf = confScores.length ? Math.min(...confScores) : 1;
+            const intervalConf =
+              iv.confidence === "high" ? 3 : iv.confidence === "medium" ? 2 : iv.confidence === "low" ? 1 : null;
+            const minConf = intervalConf ?? (confScores.length ? Math.min(...confScores) : 1);
             const opacity = minConf === 3 ? 0.75 : minConf === 2 ? 0.55 : 0.38;
 
-            const pctTxt = P(iv.expected_move);
+            const pctTxt = P(iv.typical_move ?? iv.expected_move);
             const wrTxt = iv.win_rate != null ? `${Math.round(iv.win_rate * 100)}%` : "";
 
             return (
@@ -451,7 +589,25 @@ function TimelinePanel({ intervals, asOf, forwardBuckets, view, zh }: TimelinePa
                   rx={3}
                   className="fin-ro-band"
                   onPointerMove={(e: RPointerEvent<SVGRectElement>) => {
-                    const rows: { label: string; value: string; color?: string }[] = [];
+                    const rows: { label: string; value: string; color?: string }[] = [
+                      {
+                        label: pick(zh, "Typical move", "典型涨跌"),
+                        value: pctTxt,
+                        color: isBull ? "var(--up)" : "var(--down)",
+                      },
+                      {
+                        label: pick(zh, "Years up", "上涨年份"),
+                        value: wrTxt || "—",
+                        color: "var(--text-2)",
+                      },
+                    ];
+                    if (iv.lo != null && iv.hi != null) {
+                      rows.push({
+                        label: pick(zh, "Middle range", "中间区间"),
+                        value: `${P(iv.lo)} … ${P(iv.hi)}`,
+                        color: "var(--muted)",
+                      });
+                    }
                     for (const bl of iv.buckets) {
                       const bv = bucketByLabel[bl];
                       if (bv) {
@@ -477,20 +633,7 @@ function TimelinePanel({ intervals, asOf, forwardBuckets, view, zh }: TimelinePa
                     show(
                       e,
                       `${iv.start} → ${iv.end}`,
-                      rows.length > 0
-                        ? rows
-                        : [
-                            {
-                              label: pick(zh, "Expected move", "预期涨跌"),
-                              value: pctTxt,
-                              color: isBull ? "var(--up)" : "var(--down)",
-                            },
-                            {
-                              label: pick(zh, "Win rate", "胜率"),
-                              value: wrTxt || "—",
-                              color: "var(--text-2)",
-                            },
-                          ]
+                      rows,
                     );
                   }}
                   onPointerLeave={hide}
@@ -525,8 +668,7 @@ function TimelinePanel({ intervals, asOf, forwardBuckets, view, zh }: TimelinePa
           {tickDates.map((d, i) => {
             const xp = tx(d.toISOString().slice(0, 10));
             const isYear = d.getUTCMonth() === 0;
-            // Only show label for Jan (year boundary) and every 2nd month otherwise
-            const showLabel = isYear || i % 2 === 0;
+            const showLabel = labelledTicks.has(d.getTime());
             return (
               <g key={i}>
                 <line
@@ -611,24 +753,35 @@ function ValidationStrip({ val, zh }: { val: Validation; zh: boolean }) {
           "Regime-weighting matched but did not beat the plain all-years seasonal out-of-sample.",
           "制度加权与全年平均季节性持平，但未超越。"
         );
+  const better = val.regime_better_years;
+  const worse = val.baseline_better_years;
+  const ci =
+    val.skill_ci_lo != null && val.skill_ci_hi != null
+      ? `${HIT_DELTA(val.skill_ci_lo)} … ${HIT_DELTA(val.skill_ci_hi)}`
+      : "—";
 
   return (
     <div className="fin-ro-val">
-      <span className="fin-ro-val-label">
-        {pick(zh, `Leave-one-year-out (N=${val.loyo_years}): `, `留一年交叉验证 (N=${val.loyo_years}): `)}
-        {val.regime_hit != null && (
-          <span>
-            {pick(zh, "regime ", "制度 ")}
-            <strong>{Math.round(val.regime_hit * 100)}%</strong>
-            {pick(zh, " vs baseline ", " 对比基准 ")}
-            <strong>{val.baseline_hit != null ? `${Math.round(val.baseline_hit * 100)}%` : "—"}</strong>
-            {pick(zh, " hit-rate →", " 命中率 →")}
-          </span>
-        )}
-      </span>
-      <span className="fin-ro-verdict-chip" style={{ color: verdictColor, borderColor: verdictColor }}>
-        {verdictTxt}
-      </span>
+      <div className="fin-ro-val-head">
+        <strong>{pick(zh, "Year-level validation", "年度层级验证")}</strong>
+        <span className="fin-ro-verdict-chip" style={{ color: verdictColor, borderColor: verdictColor }}>
+          {verdictTxt}
+        </span>
+      </div>
+      <div className="fin-ro-val-grid">
+        <span>
+          <b>{better != null && worse != null ? `${better}–${worse}` : `${val.loyo_years}y`}</b>
+          {pick(zh, " better–worse years", " 优于–劣于年份")}
+        </span>
+        <span>
+          <b>{HIT_DELTA(val.skill)}</b>
+          {pick(zh, " average lift", " 平均提升")}
+        </span>
+        <span>
+          <b>{ci}</b>
+          {pick(zh, " 90% range", " 90% 区间")}
+        </span>
+      </div>
       <span className="fin-ro-val-gloss">{skillGloss}</span>
     </div>
   );
@@ -648,7 +801,7 @@ function AnalogChips({
 }) {
   if (analogs.length === 0) return null;
 
-  const topAnalogs = analogs.slice().sort((a, b) => b.weight - a.weight).slice(0, 15);
+  const topAnalogs = analogs.slice().sort((a, b) => b.weight - a.weight).slice(0, 10);
   const maxW = topAnalogs[0]?.weight ?? 1;
 
   return (

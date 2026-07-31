@@ -83,6 +83,158 @@ test("a Pro-equivalent entitlement can discover all premium modules and add a su
   await expect(trendPreset.getByRole("button", { name: /Reapply recommended/ })).toBeEnabled();
 });
 
+test("Seasonal read stays useful in chart and table views at every supported width", async ({ page }, testInfo) => {
+  const now = new Date();
+  const iso = (days: number) => {
+    const d = new Date(now);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  };
+  const interval = (
+    start: number,
+    end: number,
+    dir: "bull" | "bear",
+    move: number,
+    winRate: number,
+    score: number,
+  ) => ({
+    dir,
+    start: iso(start),
+    end: iso(end),
+    expected_move: move,
+    typical_move: move * 0.82,
+    win_rate: winRate,
+    n: 27,
+    n_eff: 27,
+    lo: dir === "bull" ? -2.8 : -5.6,
+    hi: dir === "bull" ? 8.9 : 3.1,
+    stability: 0.85,
+    evidence_score: score,
+    confidence: score >= 70 ? "high" : score >= 48 ? "medium" : "low",
+    buckets: [],
+  });
+  const baseline = [
+    interval(3, 25, "bull", 6.4, 0.74, 78),
+    interval(34, 51, "bear", -2.1, 0.37, 55),
+    interval(67, 104, "bull", 9.2, 0.78, 83),
+    interval(126, 148, "bull", 3.0, 0.67, 52),
+  ];
+  const artifact = {
+    schema: "mastermind.seasonal_outlook/v1",
+    symbol: "NVDA",
+    as_of: iso(0),
+    is_display_only: true,
+    engine_version: "0.2.0",
+    regime_table_version: "2026.1",
+    disclaimer: "Historical research only.",
+    mode: "baseline_fallback",
+    default_view: "baseline",
+    n_eff: 10.7,
+    n_eff_note: "Effective analog count.",
+    relaxed_filters: [],
+    current_year: {
+      year: now.getUTCFullYear(),
+      cycle_pos: "midterm",
+      rate_dir: "holding",
+      is_recession: false,
+      whipsaw: false,
+      flags: [],
+      anomaly_flags: [],
+      provisional: true,
+    },
+    history: {
+      first_year: 1999,
+      last_date: iso(0),
+      complete_years: 27,
+      coverage: "deep",
+    },
+    validation: {
+      loyo_years: 27,
+      n_predictions: 612,
+      regime_hit: 0.56,
+      baseline_hit: 0.56,
+      skill: -0.003,
+      skill_ci_lo: -0.028,
+      skill_ci_hi: 0.021,
+      n_blocks: 7,
+      regime_better_years: 8,
+      baseline_better_years: 9,
+      tied_years: 10,
+      verdict: "no_edge",
+    },
+    analogs: [2010, 2014, 2002, 2006, 2018, 2011, 2012, 2013, 2015, 2019].map((year, i) => ({
+      year,
+      weight: 1 - i * 0.07,
+      cycle_pos: "midterm",
+      rate_dir: "holding",
+      is_recession: false,
+      whipsaw: false,
+      flags: [],
+      provisional: false,
+    })),
+    forward_buckets: [],
+    intervals_baseline: baseline,
+    intervals_regime: baseline.map((item) => ({
+      ...item,
+      expected_move: item.expected_move * 0.9,
+      typical_move: item.typical_move * 0.9,
+      evidence_score: Math.max(25, item.evidence_score - 18),
+      confidence: "low",
+      n_eff: 10.7,
+    })),
+    honest_read: "Baseline shown because the regime lens has no measurable edge.",
+  };
+  await page.route(/\/data\/NVDA\.seasonal\.json(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(artifact) });
+  });
+
+  await page.goto("/terminal?symbol=NVDA");
+  await expect(page.locator(".workspace")).toBeVisible();
+  const seasonal = page.locator(".fin-seas");
+  await expect.poll(async () => {
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: "seasonals" }));
+    });
+    return seasonal.count();
+  }).toBe(1);
+  await expect(seasonal).toBeVisible();
+  await expect(seasonal.locator(".fin-seas-chart svg")).toBeVisible();
+  await expect(seasonal.locator(".fin-seas-chart svg")).not.toHaveAttribute("preserveAspectRatio", "none");
+  await expect(seasonal.locator(".fin-yo-endlbl")).toHaveCount(0);
+  await expect(seasonal.locator(".fin-adv-title")).toContainText("Seasonal read");
+  await seasonal.locator(".fin-seas-chart").screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-seasonal-overlay.png`),
+  });
+
+  const typical = seasonal.locator(".fin-adv-typical-chart");
+  const typicalPanel = typical.locator("xpath=..");
+  await typical.scrollIntoViewIfNeeded();
+  await expect(typical).toBeVisible();
+  await expect(typicalPanel.locator(".fin-adv-monthpulse-cell")).toHaveCount(12);
+  await typicalPanel.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-seasonal-typical-path.png`),
+  });
+
+  const outlook = seasonal.locator(".fin-ro-panel");
+  await outlook.scrollIntoViewIfNeeded();
+  await expect(outlook.getByText("Baseline only", { exact: true })).toBeVisible();
+  await expect(outlook.locator(".fin-ro-window")).toHaveCount(4);
+  await outlook.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-seasonal-forward-map.png`),
+  });
+
+  await seasonal.getByRole("button", { name: "Table", exact: true }).click();
+  await expect(seasonal.locator(".fin-seas-grid")).toBeVisible();
+  await expect(seasonal.locator(".fin-adv-title")).toContainText("Seasonal read");
+  await expect(seasonal.locator(".fin-ro-panel")).toBeVisible();
+
+  const overflow = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+  }));
+  expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
+});
+
 test("Golden Oracle shows the session a 3D signal became knowable", async ({ page }, testInfo) => {
   // Exercise the bilingual branch at one supported width; the Terminal itself is dark-only.
   const zh = testInfo.project.name === "tablet";
