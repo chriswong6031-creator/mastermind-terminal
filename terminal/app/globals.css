@@ -3086,4 +3086,8 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
    rails/ticker in JSX; here the grid collapses to a single chart cell. Kept at
    the very end of the cascade so it wins over every viewport-specific .app rule. */
 .app.shell-app{grid-template-columns:minmax(0,1fr);grid-template-rows:1fr;overscroll-behavior:none}
-.shell-app .workspace{grid-column:1;grid-row:1;border-right:none}
+/* The mobile page flows .workspace (flex:none, auto height) and caps .chart-body at
+   46–80svh because content scrolls below the chart; a shell WebView has nothing below
+   it, so the workspace pins to the frame and the chart flexes to fill at every width. */
+.shell-app .workspace{grid-column:1;grid-row:1;border-right:none;height:100svh;min-height:0;flex:none}
+.shell-app .chart-body{height:auto;flex:1 1 0;min-height:0}

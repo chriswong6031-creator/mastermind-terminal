@@ -26,6 +26,14 @@ test.describe("native shell mode", () => {
     // The chart itself still mounts and renders.
     await expect(page.locator(".workspace canvas").first()).toBeVisible({ timeout: 45_000 });
 
+    // The chart fills the frame — the mobile 46–80svh cap must not apply in shell mode
+    // (a shell WebView has no scrolling page below the chart).
+    const chartFill = await page.evaluate(() => {
+      const body = document.querySelector(".chart-body");
+      return body ? body.getBoundingClientRect().height / window.innerHeight : 0;
+    });
+    expect(chartFill).toBeGreaterThan(0.8);
+
     // No horizontal document overflow at any project viewport.
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
