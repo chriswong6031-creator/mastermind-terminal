@@ -16,6 +16,7 @@ import {
   createSeriesMarkers, type ISeriesMarkersPluginApi,
   createTextWatermark,
   CrosshairMode, ColorType, LineStyle, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
+  type TickMarkType, type Time,
 } from "lightweight-charts";
 import { createEngine, type ChartEngine } from "@/lib/chart-engine";
 import { clampAxisZoom, axisZoomMargins, wheelDeltaToZoomStep, type AxisMargins } from "@/lib/chart-engine/axisZoom";
@@ -58,43 +59,11 @@ import { announceTerminalVisualReady } from "@/lib/terminalBoot";
 import { assetInitial, assetLogoPath } from "@/lib/assetLogos";
 import type { ChartSettings } from "@/components/ChartFrameBar";
 import { buildEventMarkers, parseChartEvents, type ChartEvent } from "@/lib/chartEvents";
+import { formatChartTimeTick } from "@/lib/chartTimeAxis";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
 export type DetectCmd = { kind: "trendlines" | "fib" | "sr" | "mtfa" | "clear" | "clearAll"; nonce: number } | null;
-
-function formatTick(time: any, settings: Partial<ChartSettings>): string {
-  const numeric = typeof time === "number" || (typeof time === "string" && /^\d+$/.test(time));
-  const date = numeric
-    ? new Date(Number(time) * 1000)
-    : typeof time === "string"
-      ? new Date(`${time.slice(0, 10)}T00:00:00Z`)
-      : new Date(Date.UTC(time?.year ?? 1970, (time?.month ?? 1) - 1, time?.day ?? 1));
-  if (!Number.isFinite(date.getTime())) return String(time ?? "");
-
-  const get = (part: "Hours" | "Minutes" | "Date" | "Month" | "FullYear" | "Day") =>
-    (date as any)[`getUTC${part}`]() as number;
-  if (numeric) {
-    let hour = get("Hours");
-    const minute = String(get("Minutes")).padStart(2, "0");
-    if (settings.hourFormat === "12") {
-      const suffix = hour >= 12 ? "PM" : "AM";
-      hour = hour % 12 || 12;
-      return `${hour}:${minute} ${suffix}`;
-    }
-    return `${String(hour).padStart(2, "0")}:${minute}`;
-  }
-  const year = get("FullYear");
-  const month = String(get("Month") + 1).padStart(2, "0");
-  const day = String(get("Date")).padStart(2, "0");
-  const formatted = settings.dateFormat === "dd-mm-yyyy" ? `${day}-${month}-${year}`
-    : settings.dateFormat === "mm-dd-yyyy" ? `${month}-${day}-${year}`
-      : settings.dateFormat === "yyyy-mm-dd" ? `${year}-${month}-${day}`
-        : `${month}/${day}/${String(year).slice(-2)}`;
-  if (settings.dayOfWeekLabels === false) return formatted;
-  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  return `${weekdays[get("Day")]} ${formatted}`;
-}
 
 function EventPopover({ popup, symbol, onClose }: {
   popup: { event: ChartEvent; x: number; y: number };
@@ -4722,7 +4691,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         timeScale: {
           borderColor: chartSettings.scaleLineColor || tokens.line,
           rightOffset: chartSettings.rightOffsetBars ?? 10,
-          tickMarkFormatter: (time: any) => formatTick(time, chartSettings),
+          tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) =>
+            formatChartTimeTick(time, tickMarkType, chartSettings.hourFormat ?? "24"),
         } as any,
       });
       // Watermark visibility — v5 uses the createTextWatermark plugin (chart-level watermark removed in v5).
