@@ -13,9 +13,15 @@
 // Pure helpers (Bar6, tfMinutes, classify, resample, isIntradayTf) live in intradayShared so they
 // can be imported by both this module (client-shared) and intradayStore (server-only, node:fs).
 export type { Bar6, Market } from "./intradayShared";
-export { INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
+export {
+  INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample,
+  filterUsEquitySession, resampleUsEquitySession,
+} from "./intradayShared";
 import type { Bar6, Market } from "./intradayShared";
-import { isIntradayTf, tfMinutes, classify, resample } from "./intradayShared";
+import {
+  isIntradayTf, tfMinutes, classify, resample,
+  filterUsEquitySession, resampleUsEquitySession,
+} from "./intradayShared";
 import { isMacroSymbol, isDailyOnlySymbol, fetchMacroQuotes, macroDisplayTz } from "./macroSymbols";
 
 // ── US / crypto → Polygon ──
@@ -68,19 +74,37 @@ export function polygonLookbackDays(minutes: number, market: Market): number {
   return market === "crypto" ? 30 : 60;
 }
 
+// Choose the largest Polygon minute aggregate that divides the requested
+// interval and still lands exactly on the 09:30 ET regular-session boundary.
+// This keeps long lookbacks well below Polygon's 50,000 base-aggregate cap
+// without accepting provider-built hourly candles that begin at 09:00.
+export function polygonUsSessionBaseMinutes(minutes: number): number {
+  for (const candidate of [30, 15, 5]) {
+    if (minutes >= candidate && minutes % candidate === 0) return candidate;
+  }
+  return 1;
+}
+
 async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolean): Promise<Bar6[]> {
   const key = process.env.POLYGON_API_KEY || process.env.MASSIVE_API_KEY;
   if (!key) throw new Error("POLYGON_API_KEY not set");
-  const m = /^(\d+)(m|h)$/.exec(tf)!;
-  const mult = parseInt(m[1], 10) || 1;
-  const unit = m[2] === "h" ? "hour" : "minute";
   const minutes = tfMinutes(tf);
   const days = polygonLookbackDays(minutes, market);
   const iso = (d: Date) => d.toISOString().slice(0, 10);
   const to = new Date();
   const from = new Date(to.getTime() - days * 86400000);
   const ticker = market === "crypto" ? "X:" + sym.replace(/-/g, "").toUpperCase() : sym.toUpperCase();
-  const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(ticker)}/range/${mult}/${unit}/${iso(from)}/${iso(to)}?adjusted=true&sort=asc&limit=50000&apiKey=${key}`;
+  const parsed = /^(\d+)(m|h)$/.exec(tf)!;
+  const requestedMult = parseInt(parsed[1], 10) || 1;
+  const requestedUnit = parsed[2] === "h" ? "hour" : "minute";
+  const sourceMinutes = market === "us" ? polygonUsSessionBaseMinutes(minutes) : minutes;
+  // US session-safe source bars always align to 09:30. Provider-built hourly
+  // bars can straddle that boundary and irreversibly mix premarket prints into
+  // the first regular candle. Crypto has no session boundary, so keep its
+  // native requested aggregate.
+  const rangeMult = market === "us" ? sourceMinutes : requestedMult;
+  const rangeUnit = market === "us" ? "minute" : requestedUnit;
+  const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(ticker)}/range/${rangeMult}/${rangeUnit}/${iso(from)}/${iso(to)}?adjusted=true&sort=asc&limit=50000&apiKey=${key}`;
   const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) {
     if (r.status === 429) throw new Error("polygon rate-limited");
@@ -91,9 +115,15 @@ async function fetchPolygon(sym: string, market: Market, tf: string, ext: boolea
   const out: Bar6[] = [];
   for (const b of res) {
     if (market === "crypto") { out.push([Math.floor(b.t / 1000), b.o, b.h, b.l, b.c, b.v]); continue; }
-    const { epoch, minOfDay } = etDisplay(b.t);
-    if (!ext && unit === "minute" && (minOfDay < 570 || minOfDay >= 960)) continue; // RTH = 09:30–16:00 ET
+    const { epoch } = etDisplay(b.t);
     out.push([epoch, b.o, b.h, b.l, b.c, b.v]);
+  }
+  if (market === "us") {
+    const session = ext ? "extended" : "regular";
+    const selected = filterUsEquitySession(out, session);
+    return minutes === sourceMinutes
+      ? selected
+      : resampleUsEquitySession(selected, minutes, session);
   }
   return out;
 }
@@ -312,6 +342,14 @@ export type Quote = {
   // extPrice: the most recent ext print; extChg: % vs close; extTs: epoch-sec of that print.
   // Absent (undefined) when no ext data is available (keyless or no print).
   extPrice?: number | null; extChg?: number | null; extTs?: number | null;
+  extSession?: "pre" | "post" | "overnight";
+  extSource?: string;
+  extBasis?: "LIVE" | "DELAYED_15M" | "UNOFFICIAL";
+  marketSession?: "pre" | "rth" | "post" | "overnight";
+  regularSessionDate?: string;
+  regularSession?: "rth" | "closed";
+  close?: number | null;
+  prevSessionChg?: number | null;
 };
 
 function _n(s: string | undefined): number | null {

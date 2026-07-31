@@ -43,7 +43,8 @@
 //       Clearly labelled extSource="yahoo_unofficial". Grey endpoint — ToS-grey risk noted.
 //       429s on DigitalOcean VPS IPs; r2file mode exists to bypass this.
 //
-//   Serve priority in getExt(): Alpaca (authed & healthy) → Webull → Yahoo / R2 relay.
+//   Serve priority in getExt(): licensed stream (Alpaca/Polygon) → Webull →
+//   Yahoo / R2 relay. An Alpaca entry is ignored when authentication failed.
 //
 // KILL-SWITCHES
 //   EXT_FEED_DISABLE=1 → disables entirely (extPrice fields never emitted).
@@ -63,33 +64,9 @@
 const https = require("https");
 const WebSocket = require("ws");
 const log = require("./log");
+const { classifySession } = require("./usSession");
 
 // ── Session window classification ──────────────────────────────────────────────
-
-const ET_FMT = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  hour: "numeric",
-  minute: "numeric",
-  hour12: false,
-});
-
-/**
- * Classify the current ET time into a trading session.
- * @param {number} nowMs
- * @returns {'pre'|'rth'|'post'|'overnight'}
- */
-function classifySession(nowMs) {
-  const parts = {};
-  for (const p of ET_FMT.formatToParts(new Date(nowMs))) parts[p.type] = Number(p.value);
-  // formatToParts hour12:false: midnight = 0 or 24 depending on engine; normalise.
-  const h = parts.hour === 24 ? 0 : parts.hour;
-  const mins = h * 60 + parts.minute;
-
-  if (mins >= 4 * 60 && mins < 9 * 60 + 30) return "pre";
-  if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "rth";
-  if (mins >= 16 * 60 && mins < 20 * 60) return "post";
-  return "overnight"; // 20:00–04:00 ET
-}
 
 // ── LRU map (insertion-ordered, Map iteration order is stable in V8) ──────────
 
@@ -795,7 +772,13 @@ class ExtFeed {
     if (alpacaKey && alpacaSecret) {
       this.mode = "alpaca";
       this.alpaca = new AlpacaFeed(alpacaKey, alpacaSecret, (sym, { price, ts, session }) => {
-        this._extMap.set(sym, { price, ts, session, source: "alpaca_overnight" });
+        this.ingest(sym, {
+          price,
+          ts,
+          session,
+          source: "alpaca_overnight",
+          basis: "DELAYED_15M",
+        });
         log.every(`ext-${sym}`, "DEBUG", "ext trade", sym, price, session);
       });
       // Yahoo fallback structures are initialised unconditionally so that if Alpaca
@@ -868,6 +851,21 @@ class ExtFeed {
   }
 
   /**
+   * Ingest an extended-session print from any hub feed. Newer timestamps win,
+   * which lets Alpaca and Polygon coexist without racing the displayed price.
+   *
+   * @param {string} sym
+   * @param {{price:number,ts:number,session:string,source:string,basis?:string}} entry
+   */
+  ingest(sym, entry) {
+    if (this.disabled || !this._extMap || !entry) return;
+    if (!Number.isFinite(entry.price) || !Number.isFinite(entry.ts)) return;
+    if (entry.session === "rth") return;
+    const previous = this._extMap.get(sym);
+    if (!previous || entry.ts >= previous.ts) this._extMap.set(sym, entry);
+  }
+
+  /**
    * Return ext fields to merge into a quote at serve-time.
    * Returns null when: feed disabled, current window is RTH, no ext print available.
    *
@@ -881,40 +879,43 @@ class ExtFeed {
     const session = classifySession(nowMs);
     if (session === "rth") return null;
 
-    // ── Serve priority: Alpaca (authed & healthy) → Webull → Yahoo / R2 relay ──
-    const alpacaAuthFailed = !!(this.alpaca && this.alpaca.authFailed);
-
-    // (1) Alpaca websocket — the only leg with a contractual overnight entitlement.
-    let entry = null;
-    if (this.alpaca && !alpacaAuthFailed && this._extMap) {
-      entry = validExtEntry(this._extMap.get(sym));
-    }
-
-    // (2) Webull — keyless; pre/post confirmed, overnight verified absent
-    //     (2026-07-27). Its own session gate already rejected any print that does
-    //     not belong to the session we are serving into.
-    if (!entry && this.webull) {
-      entry = validExtEntry(this.webull.get(sym));
-      if (entry) log.every("webull-serve", "INFO", "serving ext data from webull leg", sym);
-    }
-
-    // (3) Yahoo direct / R2 relay — pre and post only, never overnight.
-    if (!entry && this._yahooCache) {
-      const y = validExtEntry(this._yahooCache.get(sym));
-      if (y && y.session !== "overnight") {
-        entry = y;
-        if (alpacaAuthFailed) {
-          log.every("alpaca-yahoo-fallback", "WARN",
-            "alpaca authFailed — serving ext data from Yahoo fallback");
-        }
-      }
-    }
+    // Preserve the documented provider priority. The shared map contains both
+    // Polygon and Alpaca prints, so an Alpaca entry is only eligible when the
+    // configured Alpaca leg has not failed authentication. A post-market print
+    // must not leak into the overnight lane merely because it is still young.
+    const streamEntry = this._extMap
+      ? validExtEntry(this._extMap.get(sym))
+      : null;
+    const streamSource = String(streamEntry?.source || "");
+    const streamEligible =
+      streamEntry &&
+      streamEntry.session === session &&
+      (
+        !streamSource.startsWith("alpaca") ||
+        (this.alpaca && !this.alpaca.authFailed)
+      );
+    const webullEntry = this.webull
+      ? validExtEntry(this.webull.get(sym))
+      : null;
+    const yahooEntry = this._yahooCache
+      ? validExtEntry(this._yahooCache.get(sym))
+      : null;
+    const entry =
+      (streamEligible ? streamEntry : null) ||
+      (webullEntry?.session === session ? webullEntry : null) ||
+      (
+        yahooEntry?.session === session &&
+        !(session === "overnight" && String(yahooEntry.source || "").startsWith("yahoo"))
+          ? yahooEntry
+          : null
+      );
 
     if (!entry) return null;
 
     // Stale guard: reject ext prints older than 90 minutes.
     const ageMs = nowMs - entry.ts * 1000;
     if (ageMs > 90 * 60 * 1000) return null;
+    if (ageMs < -60 * 1000) return null;
 
     const extPrice = entry.price;
     // chg vs the best available close reference:
@@ -933,6 +934,13 @@ class ExtFeed {
       extTs: entry.ts,
       extSession: entry.session,
       extSource: entry.source,
+      extBasis: entry.basis || (
+        entry.source === "webull" || String(entry.source || "").startsWith("yahoo")
+          ? "UNOFFICIAL"
+          : String(entry.source || "").includes("live")
+            ? "LIVE"
+            : "DELAYED_15M"
+      ),
     };
   }
 

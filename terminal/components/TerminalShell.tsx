@@ -1222,15 +1222,13 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     };
   }, [intel, m?.verdict]);
   // live quote (China/HK) wins over the WS tick and the manifest EOD row for both price and % change
-  // AH semantics: when the hub emits `close` (official EOD) use it as the primary display price.
-  // The `last` field may be a delayed AH print; expose it as a secondary line when it differs.
+  // Regular and extended prices are independent lanes. `last`/`close` stay
+  // regular-session values; the hub's ext* namespace drives the secondary line.
   const officialClose = liveQuote?.close as number | undefined;
-  const ahPrint = liveQuote?.afterHours as number | undefined;
-  // AH % change vs the official close (shown alongside ahPrint in the secondary line).
-  const ahChg: number | null =
-    ahPrint != null && officialClose != null && officialClose !== 0
-      ? ((ahPrint - officialClose) / officialClose) * 100
-      : null;
+  const hubExtPrice = liveQuote?.extPrice as number | undefined;
+  const hubExtChg = liveQuote?.extChg as number | undefined;
+  const hubExtTs = liveQuote?.extTs as number | undefined;
+  const hubExtSession = liveQuote?.extSession as ExtSession | undefined;
   // F2: for composites, use summed composite quote; for singles, use existing logic.
   const lastPx: number | undefined = activeIsComposite
     ? (compositeQ?.last ?? undefined)
@@ -2500,24 +2498,21 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
                 <span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span>
                 {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
               </div>
-              {/* item-25: Overnight / extended-hours secondary price block (TV parity).
+              {/* Overnight / extended-hours secondary price block.
                   Shown ONLY when market is closed and we have an ext print.
                   Sources in priority order:
-                    1. Hub-emitted afterHours field on the live quote (existing leg).
-                    2. ext-quote poll result from /api/ext-quote (Yahoo grey fallback).
-                  Disappears at market open (mktClosed gate) — TV's "Overnight via BOATS" mechanic.
+                    1. Hub-emitted ext* namespace.
+                    2. ext-quote poll result as a compatibility fallback.
+                  Disappears at market open.
                   We label by our actual source, never a borrowed brand.
-                  The label follows the hub's extSession ('pre'/'post'/'overnight') rather than
-                  saying "Overnight" over an 08:15 ET pre-market print; the hub afterHours leg
-                  carries no session, so it keeps the neutral "Overnight" wording. */}
+                  The label follows extSession ('pre'/'post'/'overnight'). */}
               {(() => {
                 if (!mktClosed) return null;
-                // Prefer hub afterHours print; fall back to ext-quote poll
-                const hubExt = ahPrint != null && ahPrint !== officialClose ? {
-                  price: ahPrint,
-                  chg: ahChg,
-                  ts: null as number | null,
-                  session: undefined as ExtSession | undefined,
+                const hubExt = hubExtPrice != null && Number.isFinite(hubExtPrice) ? {
+                  price: hubExtPrice,
+                  chg: hubExtChg ?? null,
+                  ts: hubExtTs ?? null,
+                  session: hubExtSession,
                   source: "hub",
                 } : null;
                 const pollExt = !isComposite(active) && classify(active) === "us"

@@ -26,7 +26,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const sym = (searchParams.get("sym") || "").trim();
   const tf = (searchParams.get("tf") || "").trim();
-  const ext = searchParams.get("ext") !== "0"; // extended hours on by default (US only)
+  const ext = searchParams.get("ext") === "1"; // regular session by default; extended is explicit opt-in
   if (!sym || !isIntradayTf(tf)) return NextResponse.json({ error: "bad params" }, { status: 400 });
 
   // Dev fixture branch (FLOW_FIXTURE=1 only, never production): with no market-data key and an empty

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { polygonLookbackDays } from "../intradaySources";
+import { polygonLookbackDays, polygonUsSessionBaseMinutes } from "../intradaySources";
 
 describe("polygonLookbackDays", () => {
   it("keeps every US hourly timeframe inside Polygon's aggregate limit", () => {
@@ -16,5 +16,18 @@ describe("polygonLookbackDays", () => {
   it("preserves the existing minute windows", () => {
     expect(polygonLookbackDays(5, "us")).toBe(10);
     expect(polygonLookbackDays(30, "us")).toBe(25);
+  });
+});
+
+describe("polygonUsSessionBaseMinutes", () => {
+  it("uses boundary-aligned source aggregates without provider-built hourly bars", () => {
+    expect(polygonUsSessionBaseMinutes(1)).toBe(1);
+    expect(polygonUsSessionBaseMinutes(2)).toBe(1);
+    expect(polygonUsSessionBaseMinutes(3)).toBe(1);
+    expect(polygonUsSessionBaseMinutes(10)).toBe(5);
+    expect(polygonUsSessionBaseMinutes(15)).toBe(15);
+    expect(polygonUsSessionBaseMinutes(45)).toBe(15);
+    expect(polygonUsSessionBaseMinutes(60)).toBe(30);
+    expect(polygonUsSessionBaseMinutes(240)).toBe(30);
   });
 });
