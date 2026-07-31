@@ -2948,3 +2948,11 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
      re-enable motion for the Indicator Library after the user's reduced-motion preference. */
   .imodal-library,.imodal-library *{scroll-behavior:auto!important;transition:none!important;animation:none!important}
 }
+
+/* ── native shell mode (?shell=app) ─────────────────────────────────────────────
+   The installable apps (apps/) host /terminal in a WebView and provide their own
+   chrome — tab bar, symbol/TF rollers, search. TerminalShell skips topbar/nav/
+   rails/ticker in JSX; here the grid collapses to a single chart cell. Kept at
+   the very end of the cascade so it wins over every viewport-specific .app rule. */
+.app.shell-app{grid-template-columns:minmax(0,1fr);grid-template-rows:1fr;overscroll-behavior:none}
+.shell-app .workspace{grid-column:1;grid-row:1;border-right:none}

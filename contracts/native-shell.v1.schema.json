@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "native-shell.v1.schema.json",
+  "title": "Mastermind native shell bridge v1 — web→native messages",
+  "description": "Messages the Terminal posts to the native host (webkit.messageHandlers.mm) when loaded with ?shell=app. Commands flow native→web through the window.__mmShell API typed in terminal/lib/platform/contract.ts. Version bumps are bridge-lane changes per docs/NATIVE_APPS_ALPHA_MASTERPLAN_2026-07-30.md §6.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["type", "bridgeVersion", "availableTimeframes"],
+      "properties": {
+        "type": { "const": "ready" },
+        "bridgeVersion": { "type": "integer", "minimum": 1 },
+        "availableTimeframes": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "sym"],
+      "properties": { "type": { "const": "symbolChanged" }, "sym": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "tf"],
+      "properties": { "type": { "const": "stateChanged" }, "tf": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "url"],
+      "properties": { "type": { "const": "openExternal" }, "url": { "type": "string", "format": "uri" } },
+      "additionalProperties": false
+    }
+  ]
+}
