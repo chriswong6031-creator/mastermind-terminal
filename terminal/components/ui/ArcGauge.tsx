@@ -85,6 +85,26 @@ export function arcInnerPadPct(sublabel?: string): number {
   return wraps ? 0.21 : 0.1;
 }
 
+/**
+ * Optical layout for the numeral + verdict stack.
+ *
+ * The content wrapper is intentionally shorter than the full SVG because the
+ * gauge has an open bottom gap. Centering a two-line verdict in that shorter
+ * wrapper pushes the larger numeral too close to the arc's inner top edge.
+ * Multi-word verdicts therefore use a slightly smaller numeral and move the
+ * complete stack down into the open gap. Single-line gauges retain the original
+ * metrics exactly.
+ */
+export function arcStackMetrics(size: number, sublabel?: string) {
+  const tight = arcInnerPadPct(sublabel) > 0.1;
+  return {
+    tight,
+    valueFontSize: Math.round(size * (tight ? 0.235 : 0.26)),
+    translateY: tight ? Math.max(4, Math.round(size * 0.042)) : 0,
+    gap: tight ? Math.max(3, Math.round(size * 0.025)) : 2,
+  };
+}
+
 export function ArcGauge({
   value,
   state,
@@ -105,9 +125,10 @@ export function ArcGauge({
   const { arcLen, offset } = arcGeometry(radius, v);
 
   // Verdict crowding: a wrapping verdict gets a deeper inner inset plus tighter
-  // tracking/leading so both lines clear the arc stroke. Single-word verdicts
-  // keep the original wide lane and tracking.
-  const subTight = arcInnerPadPct(sublabel) > 0.1;
+  // tracking/leading, a smaller numeral, and a downward optical shift so both
+  // the score and verdict clear the arc. Single-word verdicts keep the original
+  // metrics.
+  const stack = arcStackMetrics(size, sublabel);
   const innerPad = Math.round(size * arcInnerPadPct(sublabel));
 
   // The 240° arc is centered at the bottom gap: start at 150°, sweep to 30°
@@ -168,10 +189,11 @@ export function ArcGauge({
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: subTight ? 3 : 2,
+              gap: stack.gap,
               // inner padding — the lane the centred stack may occupy. Deeper
               // when the verdict wraps, so line 2 never touches the arc.
               padding: `0 ${innerPad}px`,
+              transform: stack.translateY ? `translateY(${stack.translateY}px)` : undefined,
               pointerEvents: "none",
             }}
           >
@@ -180,7 +202,7 @@ export function ArcGauge({
               style={{
                 fontFamily: "var(--font-num)",
                 fontWeight: 650,
-                fontSize: Math.round(size * 0.26),
+                fontSize: stack.valueFontSize,
                 letterSpacing: "-.01em",
                 color: "var(--text)",
                 lineHeight: 1,
@@ -194,8 +216,8 @@ export function ArcGauge({
                   // 10px is the bottom of the v6 ramp AND the house font floor,
                   // so the "one step down" for a wrapping verdict is spent on
                   // tracking + leading rather than on an illegible font size.
-                  font: `600 var(--fs-micro)/${subTight ? 1.15 : 1.2} var(--font-ui)`,
-                  letterSpacing: subTight ? ".02em" : ".06em",
+                  font: `600 var(--fs-micro)/${stack.tight ? 1.15 : 1.2} var(--font-ui)`,
+                  letterSpacing: stack.tight ? ".02em" : ".06em",
                   textTransform: "uppercase",
                   color: "var(--muted)",
                   maxWidth: "100%",
