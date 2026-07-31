@@ -51,6 +51,15 @@ final class ShellBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     func setTimeframe(_ timeframe: String) { call("setTimeframe", args: [timeframe]) }
     func setLang(_ lang: String) { call("setLang", args: [lang]) }
 
+    /// Hands the page a Supabase session. One object argument, matching the web's
+    /// `setSession({access_token, refresh_token})`; the page reloads ITSELF once the
+    /// cookies are written, so native must not reload after calling this.
+    /// Fire-and-forget: the promise it returns is unreadable from here, and token
+    /// values must never reach a log.
+    func setSession(accessToken: String, refreshToken: String) {
+        call("setSession", args: [["access_token": accessToken, "refresh_token": refreshToken]])
+    }
+
     private func call(_ method: String, args: [Any]) {
         // Arguments are JSON-encoded and applied — never string-interpolated into JS.
         guard JSONSerialization.isValidJSONObject(args),

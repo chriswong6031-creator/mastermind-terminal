@@ -4,7 +4,8 @@ import Foundation
 /// translates itself through the bridge's setLang; this table covers native
 /// chrome only. Keys are the English strings, so any label can be wrapped in
 /// `L10n.t("…", model.lang)` without waiting for a table entry — unknown keys
-/// fall back to English.
+/// fall back to English. (The Logo.dev attribution stays English in both
+/// languages on purpose: it is a brand credit, not product copy.)
 enum L10n {
     static func t(_ en: String, _ lang: String) -> String {
         guard lang == "zh" else { return en }
@@ -21,19 +22,29 @@ enum L10n {
         // Watchlist + lists
         "My watchlist": "我的自选",
         "New list": "新建列表",
+        "New watchlist": "新建自选列表",
+        "List name": "列表名称",
+        "Create": "创建",
         "Rename": "重命名",
         "Delete": "删除",
+        "Delete list": "删除列表",
+        "Delete this list": "删除此列表",
         "Remove": "移除",
         "Edit": "编辑",
         "Done": "完成",
         "Add": "添加",
         "Add symbol": "添加代码",
+        "Add symbols": "添加代码",
+        "No symbols yet": "暂无代码",
+        "Open chart": "打开图表",
+        "Move to top": "置顶",
 
         // Search
         "Search": "搜索",
         "Search symbols": "搜索代码",
-        "Recents": "最近",
+        "Recent": "最近",
         "Cancel": "取消",
+        "Close": "关闭",
         "No results": "无结果",
         "All": "全部",
 
@@ -53,6 +64,8 @@ enum L10n {
         // Markets
         "Discover": "发现",
         "Analysis": "分析",
+        "Screeners, heatmap & market movers": "筛选器、热力图与市场异动",
+        "Research desk & deep dives": "研究台与深度分析",
 
         // Menu / account
         "Account": "账户",
@@ -61,11 +74,15 @@ enum L10n {
         "Sign in": "登录",
         "Sign out": "退出登录",
         "Signed in": "已登录",
+        "Sign in to sync your watchlists": "登录以同步自选列表",
         "Create account": "注册账户",
         "Language": "语言",
         "Version": "版本",
+        "Bridge": "桥接",
         "About": "关于",
         "Settings": "设置",
+        "Open the web Terminal": "打开网页版终端",
+        "External pages always open in the system browser.": "外部页面始终在系统浏览器中打开。",
 
         // Sign-in screen
         "Email": "邮箱",
@@ -73,8 +90,9 @@ enum L10n {
         "Signing in…": "正在登录…",
         "Sign-in failed": "登录失败",
         "Check your email or password.": "请检查邮箱或密码。",
+        "Couldn't reach the server. Check your connection.": "无法连接服务器，请检查网络。",
+        "Signing in is optional — the app works as a guest.": "登录为可选 — 应用可以访客身份使用。",
         "Continue as guest": "以访客继续",
-        "Forgot password?": "忘记密码？",
 
         // Cloud sync
         "Synced": "已同步",
@@ -82,10 +100,13 @@ enum L10n {
         "Sync failed — changes are saved on this device.": "同步失败 — 更改已保存在本机。",
 
         // Web covers / errors
-        "Connecting…": "连接中…",
-        "Can't reach the terminal": "无法连接终端",
+        "Loading chart…": "图表加载中…",
+        "The chart is taking too long to load.": "图表加载时间过长。",
+        "Can't reach the Terminal": "无法连接终端",
         "Retry": "重试",
+        "OK": "好",
         "Not in this alpha": "不在此 Alpha 版本",
+        "That area of the Terminal isn't part of the app alpha yet. It remains available on the website.": "该功能尚未包含在 App Alpha 版中，网页版仍可正常使用。",
         "Open in browser": "在浏览器打开",
     ]
 }

@@ -7,6 +7,7 @@ struct WatchlistScreen: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var manifest: ManifestStore
     @EnvironmentObject private var watchlists: WatchlistStore
+    @ObservedObject private var sync = WatchlistSyncService.shared
     @StateObject private var ticker = QuoteTicker()
     @State private var newListPrompt = false
     @State private var newListName = ""
@@ -23,6 +24,7 @@ struct WatchlistScreen: View {
             )
             .padding(.bottom, 8)
             Hairline()
+            if sync.showsFailureHint { syncHint }
             rowsList
         }
         .background(Theme.bg.ignoresSafeArea())
@@ -45,25 +47,44 @@ struct WatchlistScreen: View {
                 preview = PreviewItem(symbol: args[idx + 1])
             }
         }
-        .alert("New watchlist", isPresented: $newListPrompt) {
-            TextField("List name", text: $newListName)
-            Button("Create") {
+        .alert(L10n.t("New watchlist", model.lang), isPresented: $newListPrompt) {
+            TextField(L10n.t("List name", model.lang), text: $newListName)
+            Button(L10n.t("Create", model.lang)) {
                 watchlists.createList(named: newListName)
                 newListName = ""
             }
-            Button("Cancel", role: .cancel) { newListName = "" }
+            Button(L10n.t("Cancel", model.lang), role: .cancel) { newListName = "" }
         }
-        .confirmationDialog("Delete “\(watchlists.active.name)”?", isPresented: $confirmDeleteList, titleVisibility: .visible) {
-            Button("Delete list", role: .destructive) { watchlists.deleteActiveList() }
+        .confirmationDialog("\(L10n.t("Delete", model.lang)) “\(watchlists.active.name)”?",
+                            isPresented: $confirmDeleteList, titleVisibility: .visible) {
+            Button(L10n.t("Delete list", model.lang), role: .destructive) { watchlists.deleteActiveList() }
+        }
+    }
+
+    /// Signed-in-only, silent-failure hint. No retry button: the next foreground, auth
+    /// change, or list edit re-runs the reconcile on its own.
+    private var syncHint: some View {
+        VStack(spacing: 0) {
+            Text(L10n.t("Sync failed — changes are saved on this device.", model.lang))
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+            Hairline()
         }
     }
 
     private var header: some View {
         HStack {
             Menu {
-                Button { newListPrompt = true } label: { Label("New list", systemImage: "plus.rectangle.on.rectangle") }
+                Button { newListPrompt = true } label: {
+                    Label(L10n.t("New list", model.lang), systemImage: "plus.rectangle.on.rectangle")
+                }
                 if watchlists.lists.count > 1 {
-                    Button(role: .destructive) { confirmDeleteList = true } label: { Label("Delete this list", systemImage: "trash") }
+                    Button(role: .destructive) { confirmDeleteList = true } label: {
+                        Label(L10n.t("Delete this list", model.lang), systemImage: "trash")
+                    }
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -116,9 +137,15 @@ struct WatchlistScreen: View {
                         .contentShape(Rectangle())
                     }
                     .contextMenu {
-                        Button { model.openChart(symbol: sym) } label: { Label("Open chart", systemImage: "chart.xyaxis.line") }
-                        Button { watchlists.moveToTop(sym) } label: { Label("Move to top", systemImage: "arrow.up.to.line") }
-                        Button(role: .destructive) { watchlists.remove(sym) } label: { Label("Remove", systemImage: "trash") }
+                        Button { model.openChart(symbol: sym) } label: {
+                            Label(L10n.t("Open chart", model.lang), systemImage: "chart.xyaxis.line")
+                        }
+                        Button { watchlists.moveToTop(sym) } label: {
+                            Label(L10n.t("Move to top", model.lang), systemImage: "arrow.up.to.line")
+                        }
+                        Button(role: .destructive) { watchlists.remove(sym) } label: {
+                            Label(L10n.t("Remove", model.lang), systemImage: "trash")
+                        }
                     }
                     Hairline().padding(.leading, 60)
                 }
@@ -130,10 +157,10 @@ struct WatchlistScreen: View {
                     Image(systemName: "list.bullet.rectangle")
                         .font(.system(size: 30))
                         .foregroundStyle(Theme.muted)
-                    Text("No symbols yet")
+                    Text(L10n.t("No symbols yet", model.lang))
                         .font(.subheadline)
                         .foregroundStyle(Theme.text2)
-                    Button("Add symbols") { model.searchMode = .add }
+                    Button(L10n.t("Add symbols", model.lang)) { model.searchMode = .add }
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.brand2)
                 }

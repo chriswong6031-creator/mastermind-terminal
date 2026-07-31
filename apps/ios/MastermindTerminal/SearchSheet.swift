@@ -34,7 +34,7 @@ struct SearchSheet: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.muted)
-                TextField("Search symbols", text: $query)
+                TextField(L10n.t("Search symbols", model.lang), text: $query)
                     .font(.system(size: 15))
                     .foregroundStyle(Theme.text)
                     .textInputAutocapitalization(.characters)
@@ -44,7 +44,7 @@ struct SearchSheet: View {
             .padding(.horizontal, 12)
             .frame(height: 38)
             .background(Theme.panel2, in: RoundedRectangle(cornerRadius: 10))
-            Button("Close") { onClose() }
+            Button(L10n.t("Close", model.lang)) { onClose() }
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.text)
         }
@@ -56,7 +56,7 @@ struct SearchSheet: View {
     private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                chip(nil, label: "All")
+                chip(nil, label: L10n.t("All", model.lang))
                 ForEach(manifest.categories, id: \.self) { cat in
                     chip(cat, label: cat)
                 }
@@ -95,7 +95,7 @@ struct SearchSheet: View {
             LazyVStack(spacing: 0) {
                 if query.isEmpty && category == nil && !recentsRaw.isEmpty {
                     HStack {
-                        Text("Recent")
+                        Text(L10n.t("Recent", model.lang))
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Theme.muted)
                         Spacer()
@@ -128,6 +128,10 @@ struct SearchSheet: View {
 
     private func addButton(_ sym: String) -> some View {
         Button {
+            // Add-only beacon: a toggle that removes is not a search commit.
+            if !watchlists.contains(sym) {
+                SearchTracker.track(sym, source: "ios-watchlist-add", query: query)
+            }
             watchlists.toggle(sym)
         } label: {
             Image(systemName: watchlists.contains(sym) ? "checkmark" : "plus")
@@ -138,13 +142,19 @@ struct SearchSheet: View {
         .buttonStyle(.plain)
     }
 
+    /// A committed search: the row tap is the signal the web's search log measures, so it
+    /// beacons here exactly as the web modal does (dedupe lives in SearchTracker).
     private func pick(_ sym: String) {
         recordRecent(sym)
         switch mode {
         case .go:
+            SearchTracker.track(sym, source: "ios-search", query: query)
             model.openChart(symbol: sym)
             onClose()
         case .add:
+            if !watchlists.contains(sym) {
+                SearchTracker.track(sym, source: "ios-watchlist-add", query: query)
+            }
             watchlists.toggle(sym)
         }
     }
