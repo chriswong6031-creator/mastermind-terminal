@@ -7,6 +7,9 @@ import SwiftUI
 final class AppModel: ObservableObject {
     enum Tab: Hashable { case watchlist, chart, markets, menu }
 
+    /// Non-nil presents the search sheet INSTANTLY as a root overlay (TV's search does
+    /// not slide up — it appears). Covers the whole screen including the tab bar.
+    @Published var searchMode: SearchSheet.Mode?
     @Published var tab: Tab = {
         // Headless screenshot pipelines pick a start tab via launch args (DEBUG builds).
         let args = ProcessInfo.processInfo.arguments
@@ -57,19 +60,29 @@ struct RootTabsView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        TabView(selection: $model.tab) {
-            WatchlistScreen()
-                .tabItem { Label("Watchlist", systemImage: "list.bullet.rectangle") }
-                .tag(AppModel.Tab.watchlist)
-            ChartScreen()
-                .tabItem { Label("Chart", systemImage: "chart.xyaxis.line") }
-                .tag(AppModel.Tab.chart)
-            MarketsScreen()
-                .tabItem { Label("Markets", systemImage: "globe") }
-                .tag(AppModel.Tab.markets)
-            MenuScreen()
-                .tabItem { Label("Menu", systemImage: "line.3.horizontal") }
-                .tag(AppModel.Tab.menu)
+        ZStack {
+            TabView(selection: $model.tab) {
+                WatchlistScreen()
+                    .tabItem { Label("Watchlist", systemImage: "list.bullet.rectangle") }
+                    .tag(AppModel.Tab.watchlist)
+                ChartScreen()
+                    .tabItem { Label("Chart", systemImage: "chart.xyaxis.line") }
+                    .tag(AppModel.Tab.chart)
+                MarketsScreen()
+                    .tabItem { Label("Markets", systemImage: "globe") }
+                    .tag(AppModel.Tab.markets)
+                MenuScreen()
+                    .tabItem { Label("Menu", systemImage: "line.3.horizontal") }
+                    .tag(AppModel.Tab.menu)
+            }
+            if let mode = model.searchMode {
+                SearchSheet(mode: mode) { model.searchMode = nil }
+                    .zIndex(1)
+                    .transition(.identity)
+            }
+        }
+        .onAppear {
+            if ProcessInfo.processInfo.arguments.contains("-mmOpenSearch") { model.searchMode = .go }
         }
     }
 }
