@@ -927,8 +927,8 @@
 .fin-ro-axis-line{stroke:var(--line-2);stroke-width:1;vector-effect:non-scaling-stroke}
 .fin-ro-band{cursor:crosshair;transition:opacity .1s}
 .fin-ro-band:hover{opacity:.9!important}
-.fin-ro-band-pct{font:700 10px/1 var(--font-num);font-feature-settings:"tnum"}
-.fin-ro-band-wr{fill:var(--text-2);font:500 9px/1 var(--font-num);font-variant-numeric:tabular-nums}
+.fin-ro-band-pct{font:700 10px/1 var(--font-num);font-feature-settings:"tnum";pointer-events:none}
+.fin-ro-band-wr{fill:var(--text-2);font:500 9px/1 var(--font-num);font-variant-numeric:tabular-nums;pointer-events:none}
 .fin-ro-tick{stroke:var(--line-2);stroke-width:1;vector-effect:non-scaling-stroke}
 .fin-ro-tick-year{stroke:var(--line-3);stroke-width:1.4;vector-effect:non-scaling-stroke}
 .fin-ro-tick-lbl{fill:var(--muted);font:500 8px/1 var(--font-num);font-variant-numeric:tabular-nums}
