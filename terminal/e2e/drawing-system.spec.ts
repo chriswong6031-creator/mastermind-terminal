@@ -525,11 +525,14 @@ test("flagship geometry, editing, and path limits survive adversarial interactio
     return {
       y1: Number(line.getAttribute("y1")),
       y2: Number(line.getAttribute("y2")),
-      height: line.ownerSVGElement!.getBoundingClientRect().height,
     };
   });
   expect(Math.min(verticalExtent.y1, verticalExtent.y2)).toBeCloseTo(0, 1);
-  expect(Math.max(verticalExtent.y1, verticalExtent.y2)).toBeCloseTo(verticalExtent.height, 1);
+  // Use the already-stabilized drawing-layer box. A quote repaint may replace
+  // the SVG subtree between locator resolution and evaluation on slower CI
+  // runners, making `ownerSVGElement` transiently null even though the line's
+  // geometry is valid.
+  expect(Math.max(verticalExtent.y1, verticalExtent.y2)).toBeCloseTo(layerBox!.height, 1);
 
   const text = layer.locator('g[data-id="text-contract"] text');
   await text.dblclick();
