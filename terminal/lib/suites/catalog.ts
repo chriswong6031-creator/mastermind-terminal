@@ -149,10 +149,10 @@ const META: Record<SuiteModuleId, PickerMetadata> = {
     aliasesZh: ["成交量分布", "资金流分布", "控制点", "价值区"],
   },
   "suite:structure/pat": {
-    description: "Automatic chart-pattern recognition with break confirmation and measured targets.",
-    descriptionZh: "自动识别图表形态，并提供突破确认与测量目标。",
-    aliases: ["patterns", "chart patterns", "measured move", "triangles", "wedges"],
-    aliasesZh: ["自动形态", "图表形态", "测量目标", "三角形", "楔形"],
+    description: "Automatic trendlines and parallel channels with break confirmation and measured targets.",
+    descriptionZh: "自动绘制趋势线与平行通道，并提供突破确认与测量目标。",
+    aliases: ["patterns", "trendlines", "parallel channels", "measured move"],
+    aliasesZh: ["自动形态", "趋势线", "平行通道", "测量目标"],
   },
 
   "suite:trend/te": {
@@ -181,8 +181,8 @@ const META: Record<SuiteModuleId, PickerMetadata> = {
     surface: "candles",
   },
   "suite:trend/dash": {
-    description: "Compact dashboard for volatility, compression, trend, pressure, rating, and MTF state.",
-    descriptionZh: "汇总波动、压缩、趋势、压力、评级与多周期状态的紧凑仪表盘。",
+    description: "Compact dashboard for volatility, compression, trend, pressure, rating, and Chart/2×/4× resampled state.",
+    descriptionZh: "汇总波动、压缩、趋势、压力、评级与图表／2×／4× 重采样状态的紧凑仪表盘。",
     aliases: ["market dashboard", "trend dashboard", "market state", "rating table"],
     aliasesZh: ["市场仪表盘", "趋势仪表盘", "市场状态"],
     surface: "dashboard",
@@ -219,8 +219,8 @@ const META: Record<SuiteModuleId, PickerMetadata> = {
     aliasesZh: ["资金流", "成交量差", "买卖压力"],
   },
   "suite:pulse/mtf": {
-    description: "Confirmed multi-timeframe Pulse state, signals, and divergence dashboard.",
-    descriptionZh: "显示已确认的多周期脉冲状态、信号与背离仪表盘。",
+    description: "Pulse state, signals, and divergences across Chart/2×/4× resampled blocks.",
+    descriptionZh: "比较图表／2×／4× 重采样区块的脉冲状态、信号与背离。",
     aliases: ["pulse MTF", "multi timeframe", "timeframe dashboard", "MTF table"],
     aliasesZh: ["脉冲多周期", "多时间框架", "多周期仪表盘"],
     surface: "dashboard",
@@ -251,8 +251,8 @@ const META: Record<SuiteModuleId, PickerMetadata> = {
     aliasesZh: ["RSI 通道", "布林通道", "肯特纳通道", "唐奇安通道"],
   },
   "suite:rsix/mtf": {
-    description: "Confirmed multi-timeframe RSI values, signals, and divergence dashboard.",
-    descriptionZh: "显示已确认的多周期 RSI 数值、信号与背离仪表盘。",
+    description: "RSI values, signals, and divergences across Chart/2×/4× resampled blocks.",
+    descriptionZh: "比较图表／2×／4× 重采样区块的 RSI 数值、信号与背离。",
     aliases: ["RSI MTF", "multi timeframe RSI", "timeframe dashboard", "MTF table"],
     aliasesZh: ["RSI 多周期", "多时间框架 RSI", "多周期仪表盘"],
     surface: "dashboard",
@@ -289,8 +289,8 @@ const META: Record<SuiteModuleId, PickerMetadata> = {
     aliasesZh: ["MACD 趋势", "阶段趋势", "吸筹", "派发"],
   },
   "suite:macdx/mtf": {
-    description: "Confirmed multi-timeframe MACD values, signals, and phase dashboard.",
-    descriptionZh: "显示已确认的多周期 MACD 数值、信号与阶段仪表盘。",
+    description: "MACD values, signals, and phases across Chart/2×/4× resampled blocks.",
+    descriptionZh: "比较图表／2×／4× 重采样区块的 MACD 数值、信号与阶段。",
     aliases: ["MACD MTF", "multi timeframe MACD", "timeframe dashboard", "MTF table"],
     aliasesZh: ["MACD 多周期", "多时间框架 MACD", "多周期仪表盘"],
     surface: "dashboard",

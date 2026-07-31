@@ -106,20 +106,30 @@ const moduleCountByCategory = MODULE_CATALOG.reduce<Record<string, number>>((cou
   return counts;
 }, {});
 
-function CheckMark() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 12l5 5L20 6" />
-    </svg>
-  );
-}
-
 function LockMark() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <rect x="5" y="11" width="14" height="9" rx="2" />
       <path d="M8 11V8a4 4 0 0 1 8 0v3" />
     </svg>
+  );
+}
+
+function StateSwitch({ on, locked = false }: { on: boolean; locked?: boolean }) {
+  if (locked) {
+    return (
+      <span className="im-state-lock" aria-hidden="true">
+        <LockMark />
+      </span>
+    );
+  }
+  return (
+    <span className={`im-state-switch${on ? " on" : ""}`} aria-hidden="true">
+      <span className="im-state-switch-glow" />
+      <span className="im-state-switch-knob">
+        <span />
+      </span>
+    </span>
   );
 }
 
@@ -151,6 +161,8 @@ function CloseMark() {
 
 export interface IndicatorsModalProps {
   open: boolean;
+  /** Keeps the Library mounted for return navigation while a child Guide Center owns interaction. */
+  suspended?: boolean;
   active: Set<string>;
   activeModules?: ReadonlySet<string>;
   onClose: () => void;
@@ -172,6 +184,7 @@ export interface IndicatorsModalProps {
 
 export default function IndicatorsModal({
   open,
+  suspended = false,
   active,
   activeModules,
   onClose,
@@ -331,7 +344,9 @@ export default function IndicatorsModal({
 
   const searchResultButtons = () =>
     Array.from(
-      dialogRef.current?.querySelectorAll<HTMLElement>("[data-im-search-result]:not(:disabled)") ?? [],
+      dialogRef.current?.querySelectorAll<HTMLElement>(
+        "[data-im-search-focus]:not(:disabled), [data-im-search-result]:not(:disabled)",
+      ) ?? [],
     );
 
   const focusSearchResult = (edge: "first" | "last") => {
@@ -383,7 +398,7 @@ export default function IndicatorsModal({
       return;
     }
 
-    const resultTarget = target.closest<HTMLElement>("[data-im-search-result]");
+    const resultTarget = target.closest<HTMLElement>("[data-im-search-focus], [data-im-search-result]");
     if (resultTarget && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
       const results = searchResultButtons();
       const current = results.indexOf(resultTarget);
@@ -442,9 +457,9 @@ export default function IndicatorsModal({
         type="button"
         key={`classic:${item.key}`}
         className={`li li-classic${on ? " on" : ""}`}
-        role="checkbox"
+        role="switch"
         aria-checked={on}
-        aria-label={`${on ? copy("Remove", "移除") : copy("Add", "添加")} ${label}`}
+        aria-label={label}
         data-im-search-result={searching ? "" : undefined}
         onClick={() => onToggle(item.key)}
       >
@@ -455,7 +470,7 @@ export default function IndicatorsModal({
           <span className="li-nm">{label}</span>
           <span className="li-sub">{t(CAT_TKEY[category] || category, category)}</span>
         </span>
-        <span className="chk" aria-hidden="true"><CheckMark /></span>
+        <StateSwitch on={on} />
       </button>
     );
   };
@@ -471,7 +486,6 @@ export default function IndicatorsModal({
       candles: copy("Candles", "蜡烛图"),
     }[entry.surface];
     const suiteLabel = entry.suiteTkey ? t(entry.suiteTkey, entry.suiteLabel) : entry.suiteLabel;
-    const addLabel = `${on ? copy("Remove", "移除") : copy("Add", "添加")} ${entry.label}`;
     const disabled = locked || !onToggleModule;
 
     return (
@@ -479,10 +493,10 @@ export default function IndicatorsModal({
         <button
           type="button"
           className="imod-main"
-          role="checkbox"
+          role="switch"
           aria-checked={on}
           aria-describedby={`imod-desc-${entry.suiteKey}-${entry.moduleKey}`}
-          aria-label={locked ? `${entry.label} — ${copy("upgrade required", "需要升级")}` : addLabel}
+          aria-label={locked ? `${entry.label} — ${copy("upgrade required", "需要升级")}` : entry.label}
           data-im-search-result={searching ? "" : undefined}
           disabled={disabled}
           onClick={() => onToggleModule?.(entry.id)}
@@ -500,9 +514,7 @@ export default function IndicatorsModal({
               {description}
             </span>
           </span>
-          <span className={`imod-check${locked ? " locked" : ""}`} aria-hidden="true">
-            {locked ? <LockMark /> : <CheckMark />}
-          </span>
+          <StateSwitch on={on} locked={locked} />
         </button>
         <span className="imod-actions">
           {onOpenGuide && (
@@ -511,6 +523,8 @@ export default function IndicatorsModal({
               className="imod-action"
               title={`${t("guideOpen", "Guide")}: ${entry.label}`}
               aria-label={`${t("guideOpen", "Guide")}: ${entry.label}`}
+              data-guide-module={entry.id}
+              data-im-search-focus={searching && disabled ? "" : undefined}
               onClick={() => onOpenGuide(entry.id)}
             >
               <GuideMark /><span>{t("guideOpen", "Guide")}</span>
@@ -587,7 +601,9 @@ export default function IndicatorsModal({
             <button
               type="button"
               className="li-script-main"
-              aria-pressed={on}
+              role="switch"
+              aria-checked={on}
+              aria-label={script.name}
               data-im-search-result={searching ? "" : undefined}
               onClick={() => onToggleScript?.(script.id)}
             >
@@ -598,6 +614,7 @@ export default function IndicatorsModal({
                   {t("myScripts")}{script.locked ? ` · ${t("readOnly")}` : ""}
                 </span>
               </span>
+              <StateSwitch on={on} />
             </button>
           )}
           <span className="li-acts">
@@ -643,15 +660,6 @@ export default function IndicatorsModal({
                 </svg>
               </button>
             )}
-            <button
-              type="button"
-              className="chk"
-              aria-pressed={on}
-              aria-label={`${on ? copy("Remove", "移除") : copy("Add", "添加")} ${script.name}`}
-              onClick={() => onToggleScript?.(script.id)}
-            >
-              <CheckMark />
-            </button>
           </span>
         </div>
       );
@@ -828,7 +836,9 @@ export default function IndicatorsModal({
 
   return (
     <div
-      className="scrim"
+      className={`scrim${suspended ? " is-suspended" : ""}`}
+      aria-hidden={suspended || undefined}
+      inert={suspended || undefined}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) closeModal();
       }}
