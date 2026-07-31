@@ -14,7 +14,7 @@ struct MarketsScreen: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Markets")
+                    Text(L10n.t("Markets", model.lang))
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(Theme.text)
                         .padding(.horizontal, 16)
@@ -28,11 +28,11 @@ struct MarketsScreen: View {
                     .padding(.horizontal, 16)
 
                     VStack(spacing: 0) {
-                        exploreRow(icon: "square.grid.2x2", title: "Discover",
-                                   detail: "Screeners, heatmap & market movers", path: "discover")
+                        exploreRow(icon: "square.grid.2x2", title: L10n.t("Discover", model.lang),
+                                   detail: L10n.t("Screeners, heatmap & market movers", model.lang), path: "discover")
                         Hairline().padding(.leading, 56)
-                        exploreRow(icon: "brain.head.profile", title: "Analysis",
-                                   detail: "Research desk & deep dives", path: "analysis")
+                        exploreRow(icon: "brain.head.profile", title: L10n.t("Analysis", model.lang),
+                                   detail: L10n.t("Research desk & deep dives", model.lang), path: "analysis")
                     }
                     .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
                     .padding(.horizontal, 16)

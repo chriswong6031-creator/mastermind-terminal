@@ -35,7 +35,7 @@ struct PreviewSheet: View {
                     statsGrid
                     if let intel { deskRead(intel) }
                     Button(action: onOpenChart) {
-                        Text("Open full chart")
+                        Text(L10n.t("Open full chart", model.lang))
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
@@ -106,10 +106,11 @@ struct PreviewSheet: View {
             ("52W High", PriceStack.price(rowValue(\.hi52))),
             ("52W Low", PriceStack.price(rowValue(\.lo52))),
         ]
+        // Keys stay English so the ForEach id is stable across the language toggle.
         return LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
             ForEach(stats, id: \.0) { label, value in
                 HStack {
-                    Text(label).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Text(L10n.t(label, model.lang)).font(.system(size: 12)).foregroundStyle(Theme.muted)
                     Spacer()
                     Text(value).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(Theme.text)
                 }
@@ -134,7 +135,7 @@ struct PreviewSheet: View {
 
     private func deskRead(_ intel: Intel) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("RESEARCH DESK READ — NOT A TRADE SIGNAL")
+            Text(L10n.t("RESEARCH DESK READ — NOT A TRADE SIGNAL", model.lang))
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(Theme.muted)
             if let verdict = intel.cards?.ai_judgment?.verdict {
@@ -150,7 +151,7 @@ struct PreviewSheet: View {
             if let conviction = intel.cards?.conviction {
                 HStack(spacing: 8) {
                     if let score = conviction.score {
-                        Text("Conviction \(Int(score))")
+                        Text("\(L10n.t("Conviction", model.lang)) \(Int(score))")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(Theme.signal)
                     }
@@ -158,8 +159,8 @@ struct PreviewSheet: View {
                         Text(band).font(.system(size: 11)).foregroundStyle(Theme.muted)
                     }
                 }
-                chipsRow(conviction.drivers ?? [], color: Theme.up, label: "Drivers")
-                chipsRow(conviction.cautions ?? [], color: Theme.down, label: "Cautions")
+                chipsRow(conviction.drivers ?? [], color: Theme.up, label: L10n.t("Drivers", model.lang))
+                chipsRow(conviction.cautions ?? [], color: Theme.down, label: L10n.t("Cautions", model.lang))
             }
         }
         .padding(14)

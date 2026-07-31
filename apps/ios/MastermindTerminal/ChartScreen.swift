@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 
 /// Chart tab: the live web chart under a native loading/error surface, with the
 /// TV-style roller strip (symbol + timeframe wheels) docked above the tab bar in
@@ -8,12 +9,17 @@ struct ChartScreen: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var manifest: ManifestStore
     @EnvironmentObject private var watchlists: WatchlistStore
+    @EnvironmentObject private var auth: AuthService
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @StateObject private var bridge = ShellBridge()
     @State private var loadError: String?
     @State private var blockedRoute: String?
     @State private var symbolIndex = 0
     @State private var timeframeIndex = 0
+    /// Loop guard for the cookie-absent handoff: setSession makes the page reload itself,
+    /// so `ready` fires again — without this the second pass would push once more.
+    /// Reset only when WE load the page (retry, sign-out), never on the page's own reload.
+    @State private var didPushWebSession = false
 
     /// The symbol wheel's chambers: the active watchlist, with the current symbol
     /// appended when it isn't on the list (so the wheel always shows reality).
@@ -41,20 +47,21 @@ struct ChartScreen: View {
                 )
 
                 if !bridge.isReady && loadError == nil {
-                    LoadingCover()
+                    LoadingCover(lang: model.lang)
                         .task {
                             // The page normally reports ready in a few seconds; a silent
                             // hang (captive portal, stalled TLS) must not strand a blank cover.
                             try? await Task.sleep(for: .seconds(25))
                             if !bridge.isReady && loadError == nil {
-                                loadError = "The chart is taking too long to load."
+                                loadError = L10n.t("The chart is taking too long to load.", model.lang)
                             }
                         }
                 }
 
                 if let message = loadError {
-                    ErrorCover(message: message) {
+                    ErrorCover(message: message, lang: model.lang) {
                         loadError = nil
+                        didPushWebSession = false
                         bridge.reset()
                         bridge.webView?.load(URLRequest(url: AppConfig.chartURL(symbol: model.symbol)))
                     }
@@ -93,8 +100,22 @@ struct ChartScreen: View {
                 bridge.setSymbol(pending)
                 model.requestedSymbol = nil
             }
+            // The page bootstraps its language from its own storage; this covers the first
+            // load after a native toggle, when that storage is still empty or stale.
+            bridge.setLang(model.lang)
+            Task { await flushWebSession() }
             syncWheels()
             DemoDriver.runIfRequested(bridge: bridge, watchlists: watchlists)
+        }
+        .onChange(of: model.lang) { _, lang in bridge.setLang(lang) }
+        .onReceive(NotificationCenter.default.publisher(for: .mmAuthChanged)) { _ in
+            // Signing in from any tab must reach a web view that is already loaded and
+            // ready, where no isReady transition is coming.
+            if auth.user == nil {
+                Task { await resetWebToGuest() }
+            } else {
+                Task { await flushWebSession() }
+            }
         }
         .onChange(of: bridge.symbol) { _, sym in
             model.symbol = sym
@@ -102,11 +123,59 @@ struct ChartScreen: View {
         }
         .onChange(of: bridge.timeframe) { _, _ in syncWheels() }
         .onAppear { syncWheels() }
-        .alert("Not in this alpha", isPresented: Binding(get: { blockedRoute != nil }, set: { if !$0 { blockedRoute = nil } })) {
-            Button("OK", role: .cancel) { blockedRoute = nil }
+        .alert(
+            Text(L10n.t("Not in this alpha", model.lang)),
+            isPresented: Binding(get: { blockedRoute != nil }, set: { if !$0 { blockedRoute = nil } })
+        ) {
+            Button(L10n.t("OK", model.lang), role: .cancel) { blockedRoute = nil }
         } message: {
-            Text("That area of the Terminal isn't part of the app alpha yet. It remains available on the website.")
+            Text(L10n.t("That area of the Terminal isn't part of the app alpha yet. It remains available on the website.", model.lang))
         }
+    }
+
+    /// Gives the page a session at most once per native page load.
+    ///
+    /// A fresh sign-in always hands over the second token family minted for the web. With
+    /// nothing pending we only intervene when the page has no auth cookie of its own —
+    /// cookies persist in the default data store, so the ordinary cold launch of a
+    /// signed-in user pushes nothing and the page comes up authenticated on its own.
+    private func flushWebSession() async {
+        guard bridge.isReady else { return }
+        if let handoff = auth.consumePendingWebSession() {
+            didPushWebSession = true
+            bridge.setSession(accessToken: handoff.accessToken, refreshToken: handoff.refreshToken)
+            return
+        }
+        guard auth.user != nil, !didPushWebSession else { return }
+        if await hasWebAuthCookie() { return }
+        guard let handoff = await auth.fallbackWebSession() else { return }
+        didPushWebSession = true
+        bridge.setSession(accessToken: handoff.accessToken, refreshToken: handoff.refreshToken)
+    }
+
+    /// Supabase's cookie is chunked (`…auth-token.0`/`.1`) once it exceeds the size limit,
+    /// so match on the prefix rather than an exact name.
+    private func hasWebAuthCookie() async -> Bool {
+        let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
+        return cookies.contains {
+            $0.domain.contains("mastermind-x.com") && $0.name.hasPrefix("sb-") && $0.name.contains("auth-token")
+        }
+    }
+
+    /// Signing out natively must not leave a signed-in page behind: the web's session lives
+    /// in cookies and storage that outlive our Keychain entry. Everything for the origin
+    /// goes, including the page's own language key — the reload's setLang restores it.
+    private func resetWebToGuest() async {
+        let store = WKWebsiteDataStore.default()
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        let records = await store.dataRecords(ofTypes: types)
+        await store.removeData(
+            ofTypes: types,
+            for: records.filter { $0.displayName.contains("mastermind-x.com") }
+        )
+        didPushWebSession = false
+        bridge.reset()
+        bridge.webView?.load(URLRequest(url: AppConfig.chartURL(symbol: model.symbol)))
     }
 
     /// Programmatic wheel moves (bridge → UI). User drags flow the other way through
@@ -142,6 +211,8 @@ enum DemoDriver {
 }
 
 struct LoadingCover: View {
+    var lang = "en"
+
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
@@ -149,7 +220,7 @@ struct LoadingCover: View {
                 ProgressView()
                     .controlSize(.large)
                     .tint(Theme.brand2)
-                Text("Loading chart…")
+                Text(L10n.t("Loading chart…", lang))
                     .font(.subheadline)
                     .foregroundStyle(Theme.text2)
             }
@@ -159,6 +230,7 @@ struct LoadingCover: View {
 
 struct ErrorCover: View {
     let message: String
+    var lang = "en"
     let retry: () -> Void
 
     var body: some View {
@@ -168,7 +240,7 @@ struct ErrorCover: View {
                 Image(systemName: "wifi.exclamationmark")
                     .font(.system(size: 34))
                     .foregroundStyle(Theme.muted)
-                Text("Can't reach the Terminal")
+                Text(L10n.t("Can't reach the Terminal", lang))
                     .font(.headline)
                     .foregroundStyle(Theme.text)
                 Text(message)
@@ -177,7 +249,7 @@ struct ErrorCover: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
                 Button(action: retry) {
-                    Text("Retry")
+                    Text(L10n.t("Retry", lang))
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 28)
                         .padding(.vertical, 10)
