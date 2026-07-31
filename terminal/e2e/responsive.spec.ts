@@ -205,6 +205,76 @@ test("Prophet fills its Options workspace at every supported width", async ({ pa
   expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
 });
 
+test("Flow Surface opens on a readable selected-session viewport at every supported width", async ({ page }, testInfo) => {
+  const candleResponsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === "/api/intraday" &&
+      url.searchParams.get("sym") === "SPY" &&
+      url.searchParams.has("date");
+  });
+  await page.goto("/options?tab=surface");
+
+  await expect(page.getByText("Flow Surface", { exact: true })).toBeVisible({ timeout: 15_000 });
+  const candleInterval = page.getByRole("group", { name: "Candle interval" });
+  await expect(candleInterval).toBeVisible();
+  await expect(candleInterval).toContainText("Candles");
+
+  const candleResponse = await candleResponsePromise;
+  expect(candleResponse.ok()).toBe(true);
+  const requestedDate = new URL(candleResponse.url()).searchParams.get("date");
+  expect(requestedDate).toBe("2026-07-06");
+  const candlePayload = await candleResponse.json() as {
+    session_date?: string;
+    bars?: [number, number, number, number, number, number][];
+  };
+  expect(candlePayload.session_date).toBe(requestedDate);
+  expect(candlePayload.bars?.length).toBeGreaterThan(0);
+  const dayStart = Date.UTC(2026, 6, 6) / 1000;
+  expect(candlePayload.bars?.every((bar) => bar[0] >= dayStart && bar[0] < dayStart + 86_400)).toBe(true);
+
+  const provenance = page.locator(".obs-asof").filter({ hasText: "snapshots" });
+  await expect(provenance).toContainText("78 snapshots");
+  await expect(provenance).toContainText("~5m observed");
+  await expect(page.locator(".obs-note")).toContainText("One selected-session OPRA per-strike field");
+  await expect(page.locator(".obs-note")).toContainText("Candle intervals change price bars only");
+  await expect(page.locator(".obs-note")).toContainText("past fields appear in the session picker when retained");
+
+  const overflow = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+  }));
+  expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-flow-surface.png`),
+    fullPage: false,
+  });
+});
+
+test("PRISM defaults to the full strike window at every supported width", async ({ page }, testInfo) => {
+  await page.goto("/options?tab=prism");
+
+  const range40 = page.getByRole("button", { name: "±40", exact: true });
+  await expect(range40).toBeVisible({ timeout: 15_000 });
+  await expect(range40).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "±10", exact: true })).toHaveAttribute("aria-pressed", "false");
+
+  const matrix = page.locator("table").filter({
+    has: page.getByRole("columnheader", { name: "Strike", exact: true }),
+  });
+  await expect(matrix).toBeVisible();
+  await expect.poll(() => matrix.locator("tbody > tr").count()).toBeGreaterThanOrEqual(40);
+
+  const overflow = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+  }));
+  expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-prism-full-strikes.png`),
+    fullPage: false,
+  });
+});
+
 test("a Pro-equivalent entitlement can discover all premium modules and add a suite preset", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "One viewport is sufficient for the shared entitlement contract.");
 

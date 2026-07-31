@@ -8,8 +8,9 @@
  *   surface:{ROOT}:{HHMM}→ SurfaceFrame  { spot, price_levels[], time_steps[],
  *                                          grids:{ netprem:[[…]] }, asof, cadence }
  *
- * The UI must never pretend a cadence it doesn't have: `cadenceSec`/`cadence` are carried
- * verbatim from the materializer and shown honestly (see SurfacePane cadence stamp).
+ * The UI must never pretend a cadence it doesn't have: producer cadence metadata is a
+ * target, while SurfacePane measures the plotted `time_steps` and labels that observed
+ * spacing (see `observedSurfaceCadenceSec`).
  */
 
 import type { HeatData, HeatCell } from "@/lib/heatSeries";
@@ -159,6 +160,36 @@ export function gridMaxAbs(grid: number[][]): number {
     }
   }
   return m;
+}
+
+/**
+ * Median observed interval between surface columns, in seconds.
+ *
+ * The snapshot producer carries a configured target cadence, but a full poll cycle can
+ * take much longer. The plotted columns are the authority for what the user actually
+ * received. Returning null for fewer than two valid points avoids inventing precision
+ * before a cadence can be observed.
+ */
+export function observedSurfaceCadenceSec(timeSteps: string[]): number | null {
+  const minutes: number[] = [];
+  for (const step of timeSteps) {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(step);
+    if (!match) continue;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) continue;
+    minutes.push(hour * 60 + minute);
+  }
+  if (minutes.length < 2) return null;
+  const gaps: number[] = [];
+  for (let i = 1; i < minutes.length; i++) {
+    const gap = minutes[i] - minutes[i - 1];
+    if (gap > 0) gaps.push(gap * 60);
+  }
+  if (!gaps.length) return null;
+  gaps.sort((a, b) => a - b);
+  const mid = Math.floor(gaps.length / 2);
+  return gaps.length % 2 === 1 ? gaps[mid] : Math.round((gaps[mid - 1] + gaps[mid]) / 2);
 }
 
 /**

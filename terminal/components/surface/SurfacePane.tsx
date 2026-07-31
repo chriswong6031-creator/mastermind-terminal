@@ -6,15 +6,13 @@
  * Data:
  *   - surface_idx:{ROOT}  → seeds the replay stamps (once per root)
  *   - surface:{ROOT}:{STAMP} → the realized-so-far field for the scrubbed time
- *   - /api/intraday?sym={ROOT}&tf={agg}m → price candles (Bar6 tuples)
+ *   - /api/intraday?sym={ROOT}&tf={agg}m&date={session} → selected-session candles
  *
  * When the replay is on an ARCHIVED session the first two swap to their date-keyed twins
- * (surface_idx_at / surface_at). Candles do not: /api/intraday defaults to the current regular
- * session when no explicit extended-session parameter is supplied and
- * always answers about now, so on an archived session they are filtered to that date's window
- * — which yields whatever the deep bar store actually holds for the day, and nothing at all
- * when it holds none. Drawing today's price under a past day's field is the loudest possible
- * point-in-time lie, so it is not an option.
+ * (surface_idx_at / surface_at). Candles request that same date from the deep intraday
+ * store; the client filters defensively too. Drawing a year of price history under one
+ * session's field flattened the candles and reduced the field to a sliver, while drawing
+ * today's price under a past field would be a point-in-time lie.
  *
  * Rendering: HeatSeries custom-series (lib/heatSeries) paints the field; a candlestick
  * series draws price on top. The shader's pos/neg RGB are resolved from --up/--down at
@@ -22,7 +20,7 @@
  * hardcoded direction hex.
  *
  * Controls: metric tabs (Net Prem active; Gamma/Vanna/Charm disabled-with-tooltip),
- * agg 1m/5m/15m, opacity slider, strike-range slider (filters price_levels to spot±q),
+ * candle interval 1m/5m/15m, opacity slider, strike-range slider (filters price_levels to spot±q),
  * Fit price / Fit strikes, crosshair readout pill top-left (Strike · metric · value),
  * as-of + cadence stamp bottom-right. Empty state: honest "No surface data yet — accruing."
  *
@@ -65,10 +63,11 @@ import {
   isSurfaceFrame,
   isSurfaceIndex,
   metricEnabled,
+  observedSurfaceCadenceSec,
   type SurfaceFrame,
   type MatrixCell,
 } from "@/lib/surfaceContract";
-import { sessionEpoch } from "@/lib/intradayShared";
+import { filterBarsToSessionDate, sessionEpoch, type Bar6 } from "@/lib/intradayShared";
 import { useReplay } from "./replayContext";
 import { StrikeEvolutionModal } from "./StrikeEvolutionModal";
 import { makeSurfaceT } from "./surfaceStrings";
@@ -114,8 +113,6 @@ const METRIC_CSS: Record<Metric, { pos: string; neg: string }> = {
   charm: { pos: "--metric-charm-pos", neg: "--metric-charm-neg" },
 };
 
-type Bar6 = [number, number, number, number, number, number];
-
 function css(n: string): string {
   if (typeof document === "undefined") return "";
   return getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -140,6 +137,15 @@ function fmtAsofLabel(asof: string | undefined): string {
   } catch { return asof.slice(11, 16); }
 }
 
+/** Human-sized observed gap, without implying more precision than the snapshots carry. */
+function fmtObservedCadence(seconds: number): string {
+  if (seconds >= 60) {
+    const minutes = seconds / 60;
+    return `${Number.isInteger(minutes) ? minutes.toFixed(0) : minutes.toFixed(1)}m`;
+  }
+  return `${Math.round(seconds)}s`;
+}
+
 // ─── Y-axis framing ──────────────────────────────────────────────────────────
 // The heat field and the candles share ONE price scale, and the field is two orders of
 // magnitude taller than a session's price range (SPY: strikes 663-823 under a $743 spot
@@ -159,35 +165,25 @@ const Y_AXIS_HIT_MIN = 44;
 
 /**
  * The PRICE-anchored window: the extent of the candles that will actually be drawn,
- * padded so price occupies ~31% of the pane and the field overflows around it.
- *
- * `dateFilter` (archived replay only) drops the bars `/api/intraday` answered about TODAY
- * — they are not drawn under a past session's field (see the candles effect) and must not
- * scale it either. Returns null when there is nothing to anchor to (illiquid root, or a
- * fixture with no candles), which is the caller's cue to fall back to the field window.
+ * padded so price occupies ~37% of the pane and the field overflows around it. The caller
+ * supplies bars already filtered to the selected session. Returns null when there is
+ * nothing to anchor to (illiquid root or missing archive), which is the caller's cue to
+ * fall back to the field window.
  */
-function priceWindow(bars: Bar6[], dateFilter?: string | null): [number, number] | null {
-  let dayLo = -Infinity;
-  let dayHi = Infinity;
-  if (dateFilter) {
-    const a = sessionEpoch(dateFilter, "00:00");
-    const b = sessionEpoch(dateFilter, "23:59");
-    if (Number.isFinite(a) && Number.isFinite(b)) { dayLo = a; dayHi = b; }
-  }
+function priceWindow(bars: Bar6[]): [number, number] | null {
   let lo = Infinity;
   let hi = -Infinity;
   for (const bar of bars) {
-    if (bar[0] < dayLo || bar[0] > dayHi) continue;
     if (Number.isFinite(bar[3]) && bar[3] < lo) lo = bar[3];
     if (Number.isFinite(bar[2]) && bar[2] > hi) hi = bar[2];
   }
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return null;
   const center = (lo + hi) / 2;
-  // 1.2% floor: a dead-flat session must still get a readable band rather than a
+  // 0.8% floor: a dead-flat session must still get a readable band rather than a
   // magnified tick, and it keeps the field visible either side of price.
-  const focus = Math.max(hi - lo, Math.abs(center) * 0.012);
+  const focus = Math.max(hi - lo, Math.abs(center) * 0.008);
   if (!(focus > 0)) return null;
-  return [center - focus * 1.6, center + focus * 1.6];
+  return [center - focus * 1.35, center + focus * 1.35];
 }
 
 /**
@@ -278,6 +274,8 @@ export function SurfacePane({
   const [rangeQ, setRangeQ] = useState<number>(80);
   const [frame, setFrame] = useState<SurfaceFrame | null>(null);
   const [candles, setCandles] = useState<Bar6[]>([]);
+  /** Session whose candle request has completed (including an honest empty response). */
+  const [candleSession, setCandleSession] = useState<string | null>(null);
   const [readout, setReadout] = useState<Readout | null>(null);
   const [loading, setLoading] = useState(true);
   // Strike hover popover (RECON §4.2): the row under the crosshair + its screen anchor.
@@ -300,7 +298,7 @@ export function SurfacePane({
   // handler used to construct one Date per session column on every mousemove (~390 for a
   // full 1-min day); it now binary-free scans this prebuilt array instead.
   const timeEpochsRef = useRef<number[]>([]);
-  // B9: the viewport is set ONCE per root and never again — never on a replay scrub or a
+  // B9: the viewport is set ONCE per session/basis and never on a replay scrub or a
   // metric/range toggle, which used to yank the user's zoom back on every step.
   const fittedForRootRef = useRef<string | null>(null);
   // The vertical viewport is set on first paint and when the user explicitly changes the
@@ -325,6 +323,14 @@ export function SurfacePane({
   useEffect(() => { opacityRef.current = opacity; }, [opacity]);
   useEffect(() => { hoverIdxRef.current = hover?.strikeIdx ?? null; }, [hover]);
   const effAggMin = aggMinOverride ?? aggMin;
+  // The route slices server-side so a single-session pane does not receive 20,000 deep
+  // history bars. Keep the same filter client-side as a contract boundary: a stale CDN,
+  // fixture, or older server must never be able to flatten this chart again.
+  const candleSessionDate = frame?.session_date ?? null;
+  const sessionCandles = useMemo(
+    () => candleSessionDate ? filterBarsToSessionDate(candles, candleSessionDate) : [],
+    [candles, candleSessionDate],
+  );
 
   // Apply the shader to the heat series from the CURRENT frame/metric/opacity/colors.
   // Ref-backed (reads *Ref values) so the chart-mount effect and the MutationObserver
@@ -469,17 +475,31 @@ export function SurfacePane({
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const date = frame?.session_date;
+      if (!date) {
+        if (!cancelled) { setCandles([]); setCandleSession(null); }
+        return;
+      }
       try {
-        const r = await fetch(`/api/intraday?sym=${encodeURIComponent(root)}&tf=${effAggMin}m`, { cache: "no-store" });
-        if (!r.ok) { if (!cancelled) setCandles([]); return; }
+        const r = await fetch(
+          `/api/intraday?sym=${encodeURIComponent(root)}&tf=${effAggMin}m&date=${encodeURIComponent(date)}`,
+          { cache: "no-store" },
+        );
+        if (!r.ok) {
+          if (!cancelled) { setCandles([]); setCandleSession(date); }
+          return;
+        }
         const j = await r.json();
-        if (!cancelled) setCandles(Array.isArray(j?.bars) ? (j.bars as Bar6[]) : []);
+        if (!cancelled) {
+          setCandles(Array.isArray(j?.bars) ? (j.bars as Bar6[]) : []);
+          setCandleSession(date);
+        }
       } catch {
-        if (!cancelled) setCandles([]);
+        if (!cancelled) { setCandles([]); setCandleSession(date); }
       }
     })();
     return () => { cancelled = true; };
-  }, [root, effAggMin]);
+  }, [root, effAggMin, frame?.session_date]);
 
   // ── Chart lifecycle: create once, tear down on unmount ───────────────────────
   useEffect(() => {
@@ -703,30 +723,34 @@ export function SurfacePane({
     applyShaderRef.current();
     const levelValues = shown.price_levels.filter((v) => Number.isFinite(v));
     levelsRef.current = levelValues;
-    // `candles.length` is in the key so the window is (re)computed once the bars actually
+    // `sessionCandles.length` is in the key so the window is (re)computed once the bars actually
     // arrive — the first pass runs with an empty array and would otherwise lock in the
     // candle-less fallback for the session. Nothing else in the key moves on a replay
     // scrub or a metric switch, so a scrub still cannot yank the user's zoom.
-    const rangeKey = `${root}:${frame.session_date ?? ""}:${rangeQ}:${candles.length}`;
+    const rangeKey = `${root}:${frame.session_date ?? ""}:${rangeQ}:${sessionCandles.length}`;
     if (levelValues.length > 0 && priceRangeKeyRef.current !== rangeKey) {
-      // Price first, field second. On an archived session the candle fetch answered about
-      // TODAY, so those bars are excluded here exactly as they are from the chart.
-      const win =
-        priceWindow(candles, archived ? frame.session_date : null) ??
-        strikeWindow(levelValues, frame.spot);
+      // Price first, field second. The bars are already pinned to this frame's session.
+      const win = priceWindow(sessionCandles) ?? strikeWindow(levelValues, frame.spot);
       // A failed apply leaves the key uncommitted on purpose: the chart may still be
       // completing its first layout, and a later frame retries.
       if (win && applyYRef.current(win[0], win[1])) priceRangeKeyRef.current = rangeKey;
     }
-    // B9: fit ONCE per root. Re-fitting on every [frame, metric, rangeQ] change threw away
-    // any zoom or pan on the very next replay step. Safe to do once now that the whitespace
-    // padding above keeps the bar count constant across scrubs — there is nothing left for a
-    // later fit to correct.
-    if (fittedForRootRef.current !== root) {
-      fittedForRootRef.current = root;
+    // Fit once only AFTER the selected-session candle request resolves. Fitting as soon as
+    // the field arrived used the sparse field's first/last timestamps (10:06–16:14 on the
+    // reported feed) and never expanded when the 09:30 candles arrived. An honestly empty
+    // candle response falls back to fitting the field. Replay/metric/range updates retain
+    // the user's time zoom because the basis key stays unchanged.
+    const timeFitBasis = sessionCandles.length > 0
+      ? "candles"
+      : candleSession === frame.session_date
+        ? "field"
+        : null;
+    const timeFitKey = timeFitBasis ? `${root}:${frame.session_date ?? ""}:${timeFitBasis}` : null;
+    if (timeFitKey && fittedForRootRef.current !== timeFitKey) {
+      fittedForRootRef.current = timeFitKey;
       chartRef.current?.timeScale().fitContent();
     }
-  }, [frame, metric, rangeQ, root, candles, archived]);
+  }, [frame, metric, rangeQ, root, sessionCandles, candleSession]);
 
   // Re-apply the shader when opacity changes (data unchanged).
   useEffect(() => { applyShaderRef.current(); }, [opacity]);
@@ -800,27 +824,14 @@ export function SurfacePane({
   useEffect(() => {
     const candle = candleSeriesRef.current;
     if (!candle) return;
-    if (!candles.length) { candle.setData([]); return; }
+    if (!sessionCandles.length) { candle.setData([]); return; }
     const date = frame?.session_date;
     let cutoff = Infinity;
     if (!live && asOfStamp && date && asOfStamp.length >= 4) {
       const e = sessionEpoch(date, `${asOfStamp.slice(0, 2)}:${asOfStamp.slice(2, 4)}`);
       if (Number.isFinite(e)) cutoff = e;
     }
-    // Archived session: /api/intraday answered about TODAY, so keep only bars that fall on
-    // the replayed date. The deep bar store may hold them (then they line up with the field,
-    // which anchors on the same session date) or may not (then the field replays alone) —
-    // either is honest; splicing in today's price would not be.
-    let lo = -Infinity;
-    let hi = Infinity;
-    if (archived && date) {
-      const dayLo = sessionEpoch(date, "00:00");
-      const dayHi = sessionEpoch(date, "23:59");
-      if (Number.isFinite(dayLo) && Number.isFinite(dayHi)) { lo = dayLo; hi = dayHi; }
-    }
-    const kept = candles
-      .filter((b, i, arr) => i === 0 || b[0] !== arr[i - 1][0])
-      .filter((b) => b[0] >= lo && b[0] <= hi);
+    const kept = sessionCandles.filter((b, i, arr) => i === 0 || b[0] !== arr[i - 1][0]);
     const data = kept
       .filter((b) => b[0] <= cutoff)
       .map((b) => ({ time: b[0] as unknown as Time, open: b[1], high: b[2], low: b[3], close: b[4] }));
@@ -834,12 +845,14 @@ export function SurfacePane({
     // candlestick series does, so the whitespace lives here.)
     const tail = kept.filter((b) => b[0] > cutoff).map((b) => ({ time: b[0] as unknown as Time }));
     candle.setData([...data, ...tail] as Parameters<typeof candle.setData>[0]);
-  }, [candles, live, archived, asOfStamp, frame?.session_date]);
+  }, [sessionCandles, live, asOfStamp, frame?.session_date]);
 
   // ── Stamps / labels ──────────────────────────────────────────────────────────
   // Plain computations — the React Compiler auto-memoizes; a manual useMemo here trips
   // preserve-manual-memoization (its inferred deps differ from the hand-written ones).
   const asofLabel = fmtAsofLabel(frame?.asof);
+  const snapshotCount = frame?.time_steps.length ?? 0;
+  const observedCadenceSec = frame ? observedSurfaceCadenceSec(frame.time_steps) : null;
   const metricLabel = t(METRICS.find((m) => m.key === metric)?.labelKey ?? "metricNetPrem");
   const hasData = !!frame && !!frame.grids[metric] && frame.time_steps.length > 0;
   // A quad cell whose greek the snapshot doesn't carry: say "accruing" over the empty
@@ -855,8 +868,8 @@ export function SurfacePane({
   // Memoized deliberately (B9 spirit): the crosshair re-renders this component on every
   // mousemove and this walks the whole session's bars — it must not ride along.
   const priceFit = useMemo(
-    () => priceWindow(candles, archived ? frame?.session_date : null),
-    [candles, archived, frame?.session_date],
+    () => priceWindow(sessionCandles),
+    [sessionCandles],
   );
   const fitPrice = () => { if (priceFit) applyYRef.current(priceFit[0], priceFit[1]); };
   const fitStrikes = () => {
@@ -892,8 +905,9 @@ export function SurfacePane({
           })}
         </div>
 
-        {/* Aggregation */}
+        {/* Candle interval. These controls never change or resample the field snapshots. */}
         <div style={GROUP} role="group" aria-label={t("aggAria")}>
+          <span className="obs-lbl">{t("candleInterval")}</span>
           {AGGS.map((a) => (
             <button key={a.min} className={`obs-chip${effAggMin === a.min ? " on" : ""}`} style={CHIP}
               aria-pressed={effAggMin === a.min} onClick={() => setAggMin(a.min)}>
@@ -979,16 +993,21 @@ export function SurfacePane({
           </div>
         )}
 
-        {/* Provenance row (bottom-right) — source · as-of · cadence · session date, from
-            the frame's own fields. Full pane only; in a quad the shared replay bar carries
-            one stamp for all four cells. The dot is the standard live marker and appears
-            only at the live head, never on a scrubbed or archived read. */}
+        {/* Provenance row (bottom-right) — source · as-of · ACTUAL observed spacing ·
+            session date. The producer's configured target cadence is not authoritative:
+            sparse poll cycles can take far longer, so the plotted time_steps are measured.
+            Full pane only; in a quad the shared replay bar carries one stamp for all cells. */}
         {hasData && !isCell && (
           <div className="obs-asof" style={STAMP_PILL}>
             {live && !archived && <span className="dot" aria-hidden />}
             <span>{t("sourceOpra")}</span>
             {asofLabel && <span style={{ color: "var(--text-2)" }}>· {t("asOf")} {asofLabel}</span>}
-            {frame?.cadence && <span>· {frame.cadence} {t("cadenceLabel")}</span>}
+            <span>· {snapshotCount} {t("snapshots")}</span>
+            <span>
+              · {observedCadenceSec != null
+                ? `~${fmtObservedCadence(observedCadenceSec)} ${t("observedCadence")}`
+                : t("cadencePending")}
+            </span>
             {frame?.session_date && <span>· {frame.session_date}</span>}
           </div>
         )}

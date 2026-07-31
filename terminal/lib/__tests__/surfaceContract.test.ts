@@ -5,6 +5,7 @@ import {
   checkIndexFilesContract,
   levelStep,
   gridMaxAbs,
+  observedSurfaceCadenceSec,
   buildHeatBars,
   filterFrameToRange,
   toPerMinute,
@@ -106,6 +107,18 @@ describe("levelStep / gridMaxAbs", () => {
   });
   it("gridMaxAbs ignores non-finite", () => {
     expect(gridMaxAbs([[Infinity, 3], [NaN, -4]])).toBe(4);
+  });
+});
+
+describe("observedSurfaceCadenceSec", () => {
+  it("reports the median interval actually present in the field", () => {
+    expect(observedSurfaceCadenceSec(["10:06", "10:33", "11:01", "11:32", "12:05"]))
+      .toBe(29.5 * 60);
+  });
+
+  it("does not substitute a configured cadence when observation is impossible", () => {
+    expect(observedSurfaceCadenceSec(["10:06"])).toBeNull();
+    expect(observedSurfaceCadenceSec(["bad", "11:00"])).toBeNull();
   });
 });
 

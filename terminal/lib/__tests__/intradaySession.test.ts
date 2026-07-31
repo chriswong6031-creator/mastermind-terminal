@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { filterUsEquitySession, resampleUsEquitySession, type Bar6 } from "../intradayShared";
+import {
+  filterBarsToSessionDate,
+  filterUsEquitySession,
+  resampleUsEquitySession,
+  type Bar6,
+} from "../intradayShared";
 
 const day = Date.UTC(2026, 6, 30) / 1000;
 const at = (hour: number, minute: number, value = hour * 100 + minute): Bar6 =>
@@ -25,5 +30,24 @@ describe("US equity session routing", () => {
     expect(bars[0][0]).toBe(at(9, 30)[0]);
     expect(bars[1][0]).toBe(at(10, 30)[0]);
     expect(bars[0][1]).toBe(at(9, 30)[1]);
+  });
+});
+
+describe("single-session chart routing", () => {
+  it("keeps the requested display-epoch date and excludes deep history", () => {
+    const prior = Date.UTC(2026, 6, 29) / 1000;
+    const next = Date.UTC(2026, 6, 31) / 1000;
+    const bars: Bar6[] = [
+      [prior + 15 * 3600, 1, 2, 0, 1, 10],
+      at(9, 30),
+      at(15, 59),
+      [next + 9 * 3600 + 30 * 60, 1, 2, 0, 1, 10],
+    ];
+    expect(filterBarsToSessionDate(bars, "2026-07-30").map((bar) => bar[0]))
+      .toEqual([at(9, 30)[0], at(15, 59)[0]]);
+  });
+
+  it("fails closed for a malformed date", () => {
+    expect(filterBarsToSessionDate([at(9, 30)], "not-a-date")).toEqual([]);
   });
 });

@@ -7,8 +7,8 @@
  *     No two-line fat cells.
  *   - DTE-count toggle: 4 expiries (default, spacious) | 8 expiries (tighter).
  *     Rendered as chip buttons in the toolbar row.
- *   - Strike-range toggle: ±10 (default) | ±20 | ±40 strikes centered on spot.
- *     Default 10-strike view fits viewport with no vertical scroll.
+ *   - Strike-range toggle: ±10 | ±20 | ±40 (default) strikes centered on spot.
+ *     The broad default fills a full-height workspace; narrower views remain one click away.
  *   - Σ All column pinned at the right: sum/net across all visible expiries per strike.
  *   - Spot row: highlighted with var(--brand-2) teal chip showing spot price.
  *
@@ -34,7 +34,7 @@
  *   activeLens     — which lens to color
  *   norm           — "column" | "global"
  *   dteColCount    — 4 | 8 — how many expiry columns to show (default 4)
- *   strikeRange    — 10 | 20 | 40 — strikes each side of spot (default 10)
+ *   strikeRange    — 10 | 20 | 40 — strikes each side of spot (default 40)
  *   lang           — "en" | "zh"
  */
 
@@ -83,7 +83,7 @@ interface MatrixGridProps {
   norm?: "column" | "global";
   /** Number of expiry columns to show (4 = spacious, 8 = tighter). Default 4. */
   dteColCount?: 4 | 8;
-  /** Strikes each side of spot (±10, ±20, ±40). Default 10. */
+  /** Strikes each side of spot (±10, ±20, ±40). Default 40. */
   strikeRange?: 10 | 20 | 40;
   lang: Lang;
 }
@@ -280,7 +280,7 @@ export function MatrixGrid({
   activeLens,
   norm = "column",
   dteColCount = 4,
-  strikeRange = 10,
+  strikeRange = 40,
   lang,
 }: MatrixGridProps) {
   const t = makePrismT(lang);
@@ -419,7 +419,8 @@ export function MatrixGrid({
   const handleMouseLeave = useCallback(() => setTooltip(null), []);
 
   // Auto-scroll spot row to the center of the matrix pane when strike range changes.
-  // Only fires when the content overflows (40-depth); at 10/20 it's a no-op because
+  // Only fires when the content overflows (normally the 40-depth default); at 10/20
+  // it is a no-op because
   // scrollTop clamped to 0 equals the already-visible position.
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -762,8 +763,9 @@ const TABLE: React.CSSProperties = {
 /** Type/colour come from `.obs-lbl` — only geometry stays inline. */
 const TH_STRIKE: React.CSSProperties = {
   position: "sticky",
+  top: 0,
   left: 0,
-  zIndex: 3,
+  zIndex: 4,
   background: "var(--panel)",
   padding: "4px 8px",
   borderBottom: "1px solid var(--line)",
@@ -773,8 +775,9 @@ const TH_STRIKE: React.CSSProperties = {
 
 const TH_BADGE: React.CSSProperties = {
   position: "sticky",
+  top: 0,
   left: 62,
-  zIndex: 3,
+  zIndex: 4,
   background: "var(--panel)",
   padding: "4px 4px",
   borderBottom: "1px solid var(--line)",
@@ -782,6 +785,9 @@ const TH_BADGE: React.CSSProperties = {
 };
 
 const TH_EXP: React.CSSProperties = {
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
   padding: "3px 6px",
   borderBottom: "1px solid var(--line)",
   borderLeft: "1px solid var(--line-2)",
@@ -802,8 +808,9 @@ const TH_SIGMA: React.CSSProperties = {
   fontWeight: 800,
   letterSpacing: "0.04em",
   position: "sticky",
+  top: 0,
   right: 0,
-  zIndex: 3,
+  zIndex: 4,
 };
 
 const EXP_HEADER_WRAP: React.CSSProperties = {
