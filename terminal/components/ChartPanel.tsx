@@ -16,7 +16,6 @@ import {
   createSeriesMarkers, type ISeriesMarkersPluginApi,
   createTextWatermark,
   CrosshairMode, ColorType, LineStyle, type IChartApi, type ISeriesApi, type IPaneApi, type IPriceLine,
-  type TickMarkType, type Time,
 } from "lightweight-charts";
 import { createEngine, type ChartEngine } from "@/lib/chart-engine";
 import { clampAxisZoom, axisZoomMargins, wheelDeltaToZoomStep, type AxisMargins } from "@/lib/chart-engine/axisZoom";
@@ -59,7 +58,7 @@ import { announceTerminalVisualReady } from "@/lib/terminalBoot";
 import { assetInitial, assetLogoPath } from "@/lib/assetLogos";
 import type { ChartSettings } from "@/components/ChartFrameBar";
 import { buildEventMarkers, parseChartEvents, type ChartEvent } from "@/lib/chartEvents";
-import { formatChartTimeTick } from "@/lib/chartTimeAxis";
+import { chartTimeAxisOptions, chartTimeSpanDays } from "@/lib/chartTimeAxis";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
@@ -360,6 +359,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // bridge handle the not-yet-migrated call sites still speak (P2 drives it out).
   const engineRef = useRef<ChartEngine | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const visibleCalendarSpanDays = () => {
+    try {
+      const range = chartRef.current?.timeScale().getVisibleRange();
+      return range ? chartTimeSpanDays(range.from, range.to) : null;
+    } catch {
+      return null;
+    }
+  };
   const priceSeriesRef = useRef<ISeriesApi<any> | null>(null);
   const priceFamilyRef = useRef<string | null>(null);   // which series family is on the chart now
   const indSeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());   // indKey → its series
@@ -2504,7 +2511,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
       crosshair: { mode: CrosshairMode.Normal, vertLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: t.p3 }, horzLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: t.p3 } },
       rightPriceScale: { borderColor: t.line, scaleMargins: { top: 0.1, bottom: 0.08 } },
-      timeScale: { borderColor: t.line, rightOffset: 6, barSpacing: 8 },
+      timeScale: {
+        borderColor: t.line,
+        rightOffset: 6,
+        barSpacing: 8,
+        ...chartTimeAxisOptions(chartSettingsRef.current.hourFormat ?? "24", visibleCalendarSpanDays),
+      },
       // momentum glide on pan release (LWC ships mouse:false — that reads as a hard stop)
       kineticScroll: { mouse: true, touch: true },
     });
@@ -4691,8 +4703,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         timeScale: {
           borderColor: chartSettings.scaleLineColor || tokens.line,
           rightOffset: chartSettings.rightOffsetBars ?? 10,
-          tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) =>
-            formatChartTimeTick(time, tickMarkType, chartSettings.hourFormat ?? "24"),
+          ...chartTimeAxisOptions(chartSettings.hourFormat ?? "24", visibleCalendarSpanDays),
         } as any,
       });
       // Watermark visibility — v5 uses the createTextWatermark plugin (chart-level watermark removed in v5).
