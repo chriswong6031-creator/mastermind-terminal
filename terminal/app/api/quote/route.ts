@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { fetchQuotes } from "@/lib/intradaySources";
 import { rateLimit, tooMany } from "@/lib/rateLimit";
+import {
+  withRegularSessionDisplay,
+  type QuoteDisplayInput,
+  type RegularSessionDisplay,
+} from "@/lib/quoteDisplay";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +25,20 @@ const CACHE = new Map<string, Entry>(); // per-symbol, shared by the single + ba
 const TTL = 5_000; // real-time snapshot cadence; also bounds upstream call volume per symbol
 const KEEP_GOOD_MS = 30_000; // ride out a transient upstream miss on a recently-good symbol
 const MAX_BATCH = 200; // a watchlist is normally < 50; cap to bound one poll's upstream fan-out
+
+// Every client receives an explicit regular-session display lane. This keeps native/mobile
+// consumers from interpreting the feed's raw last/chg as an overnight percentage, while the
+// existing ext* namespace remains the sole source for pre/post/overnight presentation.
+type PublicQuote = QuoteDisplayInput & Record<string, unknown>;
+
+function expose(quote: unknown): (PublicQuote & RegularSessionDisplay) | null {
+  if (!quote || typeof quote !== "object") return null;
+  return withRegularSessionDisplay(quote as PublicQuote);
+}
+
+function exposeMap(quotes: Record<string, unknown>): Record<string, (PublicQuote & RegularSessionDisplay) | null> {
+  return Object.fromEntries(Object.entries(quotes).map(([sym, quote]) => [sym, expose(quote)]));
+}
 
 // Split requested symbols into fresh cache hits vs misses (the misses are fetched in one batch).
 function readCache(syms: string[]): { hits: Record<string, any>; miss: string[] } {
@@ -90,20 +109,20 @@ export async function GET(req: Request) {
     if (miss.length) { const denied = await gate(); if (denied) return denied; }
     try {
       const filled = await fillMisses(miss);
-      return NextResponse.json({ quotes: { ...hits, ...filled } }, { headers: { "Cache-Control": "no-store" } });
+      return NextResponse.json({ quotes: exposeMap({ ...hits, ...filled }) }, { headers: { "Cache-Control": "no-store" } });
     } catch {
-      return NextResponse.json({ quotes: hits }, { headers: { "Cache-Control": "no-store" } }); // serve what we have
+      return NextResponse.json({ quotes: exposeMap(hits) }, { headers: { "Cache-Control": "no-store" } }); // serve what we have
     }
   }
 
   // ── single: the detail/header pane (unchanged {sym, quote} contract) ──
   if (!sym) return NextResponse.json({ error: "bad params" }, { status: 400 });
   const { hits, miss } = readCache([sym]);
-  if (!miss.length) return NextResponse.json({ sym, quote: hits[sym] ?? null });
+  if (!miss.length) return NextResponse.json({ sym, quote: expose(hits[sym] ?? null) });
   const denied = await gate(); if (denied) return denied;
   try {
     const filled = await fillMisses([sym]);
-    return NextResponse.json({ sym, quote: filled[sym] ?? null }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({ sym, quote: expose(filled[sym] ?? null) }, { headers: { "Cache-Control": "no-store" } });
   } catch (e: any) {
     return NextResponse.json({ sym, quote: null, error: e?.message || "fetch failed" });
   }

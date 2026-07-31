@@ -350,6 +350,10 @@ export type Quote = {
   regularSession?: "rth" | "closed";
   close?: number | null;
   prevSessionChg?: number | null;
+  // Canonical public display lane added by /api/quote. Native/mobile clients use these
+  // instead of interpreting the feed's raw last/chg during pre/post/overnight windows.
+  regularPrice?: number | null;
+  regularChg?: number | null;
 };
 
 function _n(s: string | undefined): number | null {

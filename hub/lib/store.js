@@ -218,13 +218,21 @@ class Store {
         const q = out[sym];
         if (!q || q.market !== "us") continue;
         const officialClose = typeof q.close === "number" ? q.close : null;
-        // Pre-market / overnight: today's official close does not exist yet (daily file
-        // has not rolled). Fall back to prevClose (prior session's close) so extChg can
-        // be computed as (extPrice − prevClose) / prevClose × 100.  This is the correct
-        // reference — the same anchor used to compute the primary chg field.
+        // After the bell, the delayed aggregate's current-session last is already the
+        // regular close even when the daily file has not rolled yet. Use it so AH % is
+        // measured FROM today's close, not from yesterday's close. Pre-market/overnight
+        // still reference prevClose, which is the last completed regular session.
+        const currentSessionLast =
+          q.marketSession === "post" &&
+          q.regularSessionDate != null && q.regularSessionDate === etDate(now) &&
+          typeof q.last === "number" && Number.isFinite(q.last)
+            ? q.last
+            : null;
         const closeRef = officialClose != null
           ? officialClose
-          : (typeof q.prevClose === "number" ? q.prevClose : null);
+          : currentSessionLast != null
+            ? currentSessionLast
+            : (typeof q.prevClose === "number" ? q.prevClose : null);
         const ext = extFeed.getExt(sym, now, closeRef);
         if (ext) {
           // Shallow-copy so we don't mutate the persisted quote object.

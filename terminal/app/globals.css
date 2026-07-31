@@ -1902,12 +1902,16 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 .m-brand b{font:800 13px/1 var(--font-ui);letter-spacing:.1em;color:var(--text)}
 .m-right{margin-left:auto;display:flex;align-items:center;gap:2px}
 .m-symbar{display:none;align-items:center;gap:10px;height:46px;padding:0 13px;border-bottom:1px solid var(--line);background:var(--bg);flex:none}
+.m-symbar.has-ext{height:60px}
 .m-sym{display:flex;align-items:center;gap:8px;min-width:0}
 .m-sym .ic{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font:800 10px/1 var(--font-ui);color:#04130a;flex:none}
 .m-sym b{font:700 17px/1 var(--font-ui)}
 .m-sym .car{width:12px;height:12px;stroke:var(--muted);fill:none;stroke-width:2.4}
-.m-px{margin-left:auto;text-align:right;display:flex;align-items:baseline;gap:9px}
+.m-quote-stack{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:0}
+.m-px{text-align:right;display:flex;align-items:baseline;gap:9px}
 .m-px b{font:700 17px/1 var(--font-num);font-variant-numeric:tabular-nums}.m-px .cg{font:600 12.5px/1 var(--font-num);font-variant-numeric:tabular-nums}
+.m-ext{display:flex;align-items:center;justify-content:flex-end;gap:5px;color:var(--text-2);font:600 10.5px/1 var(--font-num);font-variant-numeric:tabular-nums;white-space:nowrap}
+.m-ext-label{padding:2px 5px;border-radius:4px;background:rgba(255,152,0,.14);color:var(--warn);font:700 9px/1 var(--font-ui);letter-spacing:.04em;text-transform:uppercase}
 .m-drawer-scrim{position:fixed;inset:0;background:var(--pop-scrim);backdrop-filter:blur(6px) saturate(1.1);-webkit-backdrop-filter:blur(6px) saturate(1.1);z-index:70;opacity:0;pointer-events:none;transition:opacity .2s var(--ease)}
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.m-drawer-scrim{background:rgba(5,7,11,.8)}}
 .m-drawer-scrim.open{opacity:1;pointer-events:auto}

@@ -48,7 +48,7 @@ struct MarketsScreen: View {
     private func tile(_ sym: String) -> some View {
         let row = manifest.rows[sym]
         let quote = ticker.quotes[sym]
-        let chg = quote?.chg ?? row?.chg
+        let chg = quote?.primaryChange ?? row?.chg
         return Button {
             model.openChart(symbol: sym)
         } label: {
@@ -60,12 +60,14 @@ struct MarketsScreen: View {
                         .foregroundStyle(Theme.text)
                     Spacer()
                 }
-                Text(PriceStack.price(quote?.last ?? row?.last))
-                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Theme.text)
-                Text(PriceStack.change(chg))
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle((chg ?? 0) >= 0 ? Theme.up : Theme.down)
+                PriceStack(
+                    last: quote?.primaryPrice ?? row?.last,
+                    chgPct: chg,
+                    extPrice: quote?.extPrice,
+                    extChgPct: quote?.extChg,
+                    extSession: quote?.extSession,
+                    alignment: .leading
+                )
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)

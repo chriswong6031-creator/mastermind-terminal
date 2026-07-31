@@ -17,6 +17,7 @@ struct PreviewSheet: View {
 
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var manifest: ManifestStore
+    @StateObject private var ticker = QuoteTicker()
     @State private var intel: Intel?
 
     private var row: ManifestStore.Row? { manifest.rows[symbol] }
@@ -47,6 +48,8 @@ struct PreviewSheet: View {
             }
         }
         .background(Theme.bg.ignoresSafeArea())
+        .onAppear { ticker.start(symbols: [symbol]) }
+        .onDisappear { ticker.stop() }
         .task {
             let url = AppConfig.origin.appendingPathComponent("data/\(symbol).intel.json")
             guard let (data, response) = try? await URLSession.shared.data(from: url),
@@ -69,7 +72,8 @@ struct PreviewSheet: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
+        let quote = ticker.quotes[symbol]
+        return HStack(alignment: .center, spacing: 12) {
             LogoCircle(symbol: symbol, colorHex: row?.col, size: 40,
                        nameForInitial: manifest.displayName(symbol, lang: model.lang), market: row?.sec)
             VStack(alignment: .leading, spacing: 2) {
@@ -82,14 +86,14 @@ struct PreviewSheet: View {
                     .foregroundStyle(Theme.muted)
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(PriceStack.price(row?.last))
-                    .font(.system(size: 22, weight: .bold).monospacedDigit())
-                    .foregroundStyle(Theme.text)
-                Text(PriceStack.change(row?.chg))
-                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                    .foregroundStyle((row?.chg ?? 0) >= 0 ? Theme.up : Theme.down)
-            }
+            PriceStack(
+                last: quote?.primaryPrice ?? row?.last,
+                chgPct: quote?.primaryChange ?? row?.chg,
+                extPrice: quote?.extPrice,
+                extChgPct: quote?.extChg,
+                extSession: quote?.extSession,
+                prominent: true
+            )
         }
     }
 
