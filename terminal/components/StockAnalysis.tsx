@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useLang } from "@/lib/i18n";
-import { pick as pickI18n, fmtPct } from "@/lib/finFormat";
+import { daysUntil, pick as pickI18n, fmtPct } from "@/lib/finFormat";
 import type { Fund, Opts, Bar } from "@/lib/fund";
+import { buildKeyStatRows, formatCompactStat } from "@/lib/keyStats";
 import { computeRatings } from "@/lib/techRating";
 import { realizedVolCone } from "@/lib/realizedVol";
 import { Dumbbell, ComboChart, LineSeries, type Series } from "@/components/fin/FinCharts";
@@ -98,44 +99,21 @@ function Stat({ k, v, tone }: { k: string; v: React.ReactNode; tone?: "up" | "do
    call onOpenPane(page) → MegaPane. */
 
 type Pick = (en?: string | null, cn?: string | null) => string;
+const MB = formatCompactStat;
 
-const MB = (n: number | null | undefined) => {
-  if (n == null || !isFinite(n)) return "—";
-  const a = Math.abs(n);
-  if (a >= 1e12) return (n / 1e12).toFixed(2) + " T";
-  if (a >= 1e9) return (n / 1e9).toFixed(2) + " B";
-  if (a >= 1e6) return (n / 1e6).toFixed(2) + " M";
-  if (a >= 1e3) return (n / 1e3).toFixed(2) + " K";
-  return fnum(n, 0);
-};
-const daysUntilLocal = (iso?: string | null): number | null => {
-  if (!iso) return null;
-  const d = new Date(iso.length <= 10 ? iso + "T00:00:00Z" : iso);
-  if (isNaN(d.getTime())) return null;
-  const now = new Date();
-  const a = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const b = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-  return Math.round((b - a) / 86400000);
-};
-
-/** Key stats: volume / avg vol 30D / mktcap / next-earnings-in-N-days. */
+/** Cross-market fundamentals plus trading activity; all rows remain null-honest. */
 function KeyStats({ fund, bars, pick }: { fund: Fund | null; bars: Bar[]; pick: Pick }) {
-  const mktcap = fund?.stats?.mktcap ?? null;
-  const lastVol = bars.length ? bars[bars.length - 1].v : null;
-  const avgVol30 = bars.length >= 2
-    ? bars.slice(-30).reduce((s, b) => s + (isFinite(b.v) ? b.v : 0), 0) / Math.min(30, bars.length)
-    : null;
-  const nDays = daysUntilLocal(fund?.earnings?.next_date);
-  const rows: [string, string][] = [];
-  if (nDays != null) rows.push([pick("Next earnings report", "下次财报"), nDays >= 0 ? pick(`In ${nDays} days`, `${nDays} 天后`) : pick(`${-nDays} days ago`, `${-nDays} 天前`)]);
-  if (lastVol != null) rows.push([pick("Volume", "成交量"), MB(lastVol)]);
-  if (avgVol30 != null) rows.push([pick("Avg volume (30D)", "平均成交量(30日)"), MB(avgVol30)]);
-  if (mktcap != null) rows.push([pick("Market capitalization", "总市值"), MB(mktcap)]);
+  const rows = buildKeyStatRows(fund, bars, pick);
   if (!rows.length) return null;
   return (
     <Section title={pick("Key stats", "关键数据")}>
       <div className="sa-kstats">
-        {rows.map(([k, v]) => <div key={k} className="sa-kstat"><span className="k">{k}</span><span className="v num">{v}</span></div>)}
+        {rows.map((row) => (
+          <div key={row.id} className="sa-kstat">
+            <span className="k">{row.label}</span>
+            <span className="v num">{row.value}</span>
+          </div>
+        ))}
       </div>
     </Section>
   );
@@ -151,7 +129,7 @@ function EarningsMini({ fund, pick, onOpen }: { fund: Fund | null; pick: Pick; o
   if (fund?.earnings?.next_eps_est != null)
     points.push({ label: periodShort(fund.earnings.next_period), actual: null, estimate: fund.earnings.next_eps_est });
   if (points.every((p) => p.actual == null && p.estimate == null)) return null;
-  const nDays = daysUntilLocal(fund?.earnings?.next_date);
+  const nDays = daysUntil(fund?.earnings?.next_date);
   return (
     <Section title={pick("Earnings", "盈利")} sub={nDays != null && nDays >= 0 ? `${nDays}${pick("d", "天")}` : undefined}>
       <Dumbbell points={points} vw={300} vh={150} zh={undefined} noWindow />
