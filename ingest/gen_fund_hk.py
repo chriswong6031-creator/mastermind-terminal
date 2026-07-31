@@ -35,8 +35,10 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import math
 import os
 import sys
+from numbers import Integral, Real
 from pathlib import Path
 
 CA_ROOT = Path(__file__).resolve().parents[1]
@@ -66,9 +68,36 @@ def _f(v):
         return None
     try:
         x = float(v)
-        return None if x != x else x
+        return x if math.isfinite(x) else None
     except (TypeError, ValueError):
         return None
+
+
+def _json_safe(value):
+    """Recursively normalize numpy/Python numerics and replace non-finite values with null."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def strict_json_dumps(value) -> str:
+    """Emit browser-valid JSON and fail closed if a non-finite value escapes normalization."""
+    return json.dumps(
+        _json_safe(value),
+        separators=(",", ":"),
+        ensure_ascii=False,
+        sort_keys=False,
+        allow_nan=False,
+    )
 
 
 def _pick(items: dict, codes) -> float | None:
@@ -266,7 +295,7 @@ def build_estimates(yf: dict, fin: dict | None = None) -> dict | None:
             avg.append(_f(d.get("avg")))
             high.append(_f(d.get("high")))
             low.append(_f(d.get("low")))
-            n.append(d.get("numberOfAnalysts"))
+            n.append(_f(d.get("numberOfAnalysts")))
         return {"avg": avg, "high": high, "low": low, "n": n}
     eps_fy = row(ee, ["0y", "+1y"])
     rev_fy = row(re_, ["0y", "+1y"])
@@ -279,7 +308,7 @@ def build_estimates(yf: dict, fin: dict | None = None) -> dict | None:
         "eps_fy": {"periods": list(fy_periods), **eps_fy},
         "rev_fy": {"periods": list(fy_periods), **rev_fy},
         "eps_q": {"periods": list(q_periods), **eps_q},
-        "growth": {"rev_yoy": yf.get("rev_growth"), "eps_yoy": yf.get("eps_growth")},
+        "growth": {"rev_yoy": _f(yf.get("rev_growth")), "eps_yoy": _f(yf.get("eps_growth"))},
     }
 
 
@@ -497,6 +526,23 @@ def atomic_write(dest: Path, text: str) -> None:
     os.replace(tmp, dest)
 
 
+def normalize_existing_artifacts(out_dir: Path, skip: set[Path] | None = None) -> tuple[int, int]:
+    """Repair strict JSON in output-only HK artifacts without discarding their production data."""
+    normalized = errors = 0
+    skipped = skip or set()
+    for dest in sorted(out_dir.glob("*.HK.fund.json")):
+        if dest in skipped:
+            continue
+        try:
+            atomic_write(dest, strict_json_dumps(json.loads(dest.read_text())))
+            normalized += 1
+        except Exception as exc:  # noqa: BLE001
+            errors += 1
+            if errors <= 20:
+                print(f"  ERR normalize {dest.name}: {exc}", flush=True)
+    return normalized, errors
+
+
 def main(argv: list[str]) -> None:
     only = _arg(argv, "--only")
     limit = int(_arg(argv, "--limit", 0) or 0)
@@ -510,6 +556,7 @@ def main(argv: list[str]) -> None:
         syms = syms[:limit]
 
     ok = err = miss = merged_n = 0
+    written: set[Path] = set()
     for sym in syms:
         cache = HK_FUND / f"{sym}.json"
         if not cache.exists():
@@ -525,14 +572,17 @@ def main(argv: list[str]) -> None:
                     merged_n += 1
                 except Exception:
                     pass   # unreadable existing → plain fresh write
-            atomic_write(dest,
-                         json.dumps(fund, separators=(",", ":"), ensure_ascii=False, sort_keys=False))
+            atomic_write(dest, strict_json_dumps(fund))
+            written.add(dest)
             ok += 1
         except Exception as exc:   # noqa: BLE001
             err += 1
             if err <= 20:
                 print(f"  ERR {sym}: {exc}", flush=True)
-    print(f"gen_fund_hk: {ok} written ({merged_n} merge-mode), {err} errors, {miss} missing cache → {out_dir}",
+    normalized_n, normalize_errors = normalize_existing_artifacts(out_dir, written)
+    err += normalize_errors
+    print(f"gen_fund_hk: {ok} written ({merged_n} merge-mode), "
+          f"{normalized_n} output-only normalized, {err} errors, {miss} missing cache → {out_dir}",
           flush=True)
 
 
