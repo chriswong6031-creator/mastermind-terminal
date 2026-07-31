@@ -1,62 +1,130 @@
 import SwiftUI
 
-/// Watchlist tab, S2 scope: the guest seed rendered natively with tap→chart.
-/// S3 replaces the static seed with real lists + quotes (Supabase when signed in,
-/// local lists for guests) and adds search / add / remove.
+/// Watchlist tab, TV anatomy: header (⋯ · list name · +), named-list chips, then
+/// flat full-bleed quote rows — logo, symbol + one-language name, price over signed
+/// change%. Tap opens the chart; long-press gets the row context menu.
 struct WatchlistScreen: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var manifest: ManifestStore
+    @EnvironmentObject private var watchlists: WatchlistStore
+    @StateObject private var ticker = QuoteTicker()
+    @State private var searchOpen = false
+    @State private var newListPrompt = false
+    @State private var newListName = ""
+    @State private var confirmDeleteList = false
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    ForEach(AppConfig.guestWatchlist, id: \.symbol) { item in
-                        Button {
-                            model.openChart(symbol: item.symbol)
-                        } label: {
-                            HStack(spacing: 12) {
-                                SymbolBadge(symbol: item.symbol)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.symbol)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(Theme.text)
-                                    Text(item.name)
-                                        .font(.caption)
-                                        .foregroundStyle(Theme.muted)
-                                }
-                                Spacer()
-                                if model.symbol == item.symbol {
-                                    Image(systemName: "chart.xyaxis.line")
-                                        .font(.footnote)
-                                        .foregroundStyle(Theme.brand2)
-                                }
-                            }
-                            .padding(.vertical, 2)
-                        }
-                        .listRowBackground(Theme.panel)
-                    }
-                } header: {
-                    Text("Default")
-                        .foregroundStyle(Theme.muted)
-                }
+        VStack(spacing: 0) {
+            header
+            ListChipsRow(
+                names: watchlists.lists.map(\.name),
+                activeIndex: watchlists.activeIndex,
+                onPick: { watchlists.activeIndex = $0 }
+            )
+            .padding(.bottom, 8)
+            Hairline()
+            rowsList
+        }
+        .background(Theme.bg.ignoresSafeArea())
+        .onAppear { ticker.start(symbols: watchlists.active.symbols) }
+        .onDisappear { ticker.stop() }
+        .onChange(of: watchlists.activeIndex) { _, _ in ticker.start(symbols: watchlists.active.symbols) }
+        .onChange(of: watchlists.active.symbols) { _, syms in ticker.start(symbols: syms) }
+        .fullScreenCover(isPresented: $searchOpen) {
+            SearchSheet(mode: .add)
+        }
+        .alert("New watchlist", isPresented: $newListPrompt) {
+            TextField("List name", text: $newListName)
+            Button("Create") {
+                watchlists.createList(named: newListName)
+                newListName = ""
             }
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(Theme.bg)
-            .navigationTitle("Watchlist")
+            Button("Cancel", role: .cancel) { newListName = "" }
+        }
+        .confirmationDialog("Delete “\(watchlists.active.name)”?", isPresented: $confirmDeleteList, titleVisibility: .visible) {
+            Button("Delete list", role: .destructive) { watchlists.deleteActiveList() }
         }
     }
-}
 
-struct SymbolBadge: View {
-    let symbol: String
+    private var header: some View {
+        HStack {
+            Menu {
+                Button { newListPrompt = true } label: { Label("New list", systemImage: "plus.rectangle.on.rectangle") }
+                if watchlists.lists.count > 1 {
+                    Button(role: .destructive) { confirmDeleteList = true } label: { Label("Delete this list", systemImage: "trash") }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.text2)
+                    .frame(width: 40, height: 36)
+            }
+            Spacer()
+            Text(watchlists.active.name.uppercased())
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Theme.text)
+            Spacer()
+            Button {
+                searchOpen = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                    .frame(width: 40, height: 36)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 4)
+        .padding(.bottom, 2)
+    }
 
-    var body: some View {
-        Text(String(symbol.prefix(1)))
-            .font(.subheadline.weight(.bold))
-            .foregroundStyle(.white)
-            .frame(width: 32, height: 32)
-            .background(Theme.panel3, in: Circle())
-            .overlay(Circle().strokeBorder(Theme.line, lineWidth: 1))
+    private var rowsList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(watchlists.active.symbols, id: \.self) { sym in
+                    let row = manifest.rows[sym]
+                    let quote = ticker.quotes[sym]
+                    Button {
+                        model.openChart(symbol: sym)
+                    } label: {
+                        HStack(spacing: 12) {
+                            LogoCircle(symbol: sym, colorHex: row?.col)
+                            SymbolTitle(symbol: sym, name: manifest.displayName(sym, lang: model.lang))
+                            Spacer(minLength: 8)
+                            if model.symbol == sym {
+                                Image(systemName: "chart.xyaxis.line")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Theme.brand2)
+                            }
+                            PriceStack(last: quote?.last ?? row?.last, chgPct: quote?.chg ?? row?.chg)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(height: 62)
+                        .contentShape(Rectangle())
+                    }
+                    .contextMenu {
+                        Button { model.openChart(symbol: sym) } label: { Label("Open chart", systemImage: "chart.xyaxis.line") }
+                        Button { watchlists.moveToTop(sym) } label: { Label("Move to top", systemImage: "arrow.up.to.line") }
+                        Button(role: .destructive) { watchlists.remove(sym) } label: { Label("Remove", systemImage: "trash") }
+                    }
+                    Hairline().padding(.leading, 60)
+                }
+            }
+        }
+        .overlay {
+            if watchlists.active.symbols.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.system(size: 30))
+                        .foregroundStyle(Theme.muted)
+                    Text("No symbols yet")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.text2)
+                    Button("Add symbols") { searchOpen = true }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.brand2)
+                }
+            }
+        }
     }
 }
