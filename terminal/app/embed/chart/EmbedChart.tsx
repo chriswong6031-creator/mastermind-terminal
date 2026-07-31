@@ -51,6 +51,9 @@ export interface EmbedChartProps {
   lang: Lang;
   transparent: boolean;
   initialRange: RangeKey;
+  /** hdr=0 — hide the symbol/price quote line (native hosts render their own header);
+   *  the range tabs and SMA legend stay. */
+  hideQuote?: boolean;
 }
 
 type LoadState =
@@ -83,7 +86,7 @@ function useTransparentRoot(transparent: boolean): void {
   }, [transparent]);
 }
 
-export default function EmbedChart({ symbol, theme, lang, transparent, initialRange }: EmbedChartProps) {
+export default function EmbedChart({ symbol, theme, lang, transparent, initialRange, hideQuote }: EmbedChartProps) {
   const pal = useMemo<EmbedPalette>(() => palette(theme, transparent), [theme, transparent]);
   const t = useMemo(() => makeT(lang), [lang]);
 
@@ -271,7 +274,7 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
   const terminalHref = `${TERMINAL_BASE}?sym=${encodeURIComponent(symbol)}&from=embed`;
 
   return (
-    <div className="embed-root" data-theme={theme} data-transparent={transparent ? "1" : "0"}>
+    <div className="embed-root" data-theme={theme} data-transparent={transparent ? "1" : "0"} data-hdr={hideQuote ? "0" : undefined}>
       <Header
         symbol={symbol}
         state={state}
@@ -571,6 +574,7 @@ function StyleTag({ pal }: { pal: EmbedPalette }) {
   .embed-header{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
     padding:8px 12px 7px;min-height:38px;}
   .embed-head-quote{display:flex;align-items:baseline;gap:10px;min-width:0;flex:1 1 auto;}
+  .embed-root[data-hdr="0"] .embed-head-quote{display:none;}
   .embed-ticker{font-weight:700;font-size:15px;letter-spacing:.02em;color:var(--e-text);flex:none;}
   .embed-day{display:inline-flex;align-items:baseline;gap:8px;min-width:0;}
   .embed-last{font-weight:600;font-size:15px;color:var(--e-text);}
