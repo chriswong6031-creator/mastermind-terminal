@@ -1,20 +1,15 @@
 "use client";
 /**
- * GeometryRail — the dossier's centerpiece: a vertical price LADDER.
+ * GeometryRail — positional price rail showing STOP / ENTRY / LAST / T1 / T2.
  *
- * One price axis, levels docked as tinted cards on alternating sides, a gradient spine
- * running stop→target, and R-distance chips between consecutive levels.
+ * Bull layout (bottom→top):  STOP < ENTRY < LAST < T1 < T2
+ * Bear layout (top→bottom):  STOP > ENTRY > LAST > T1 (inverted for BEAR)
  *
- * Ladder order is always stop-at-the-bottom, targets-at-the-top — for BEAR plans the
- * price axis is inverted so "up the ladder" always means "toward the target".
+ * Distances are expressed in R-units (multiples of ENTRY→STOP distance).
+ * When geometry.dist_to_stop_r and dist_to_t1_r are present they are used;
+ * otherwise raw price levels are compared.
  *
- * HONESTY (D3 fix_spec 1):
- *   - Purely positional display — no forecast copy.
- *   - WIDE GEOMETRY guard: when R is a large fraction of entry, or T2 is a long stretch
- *     from it, the target cards de-emphasise (never hide) and a caption says the targets
- *     are projected from a structural base-low stop.
- *   - When the payload carries no last_price, the ladder says so instead of letting plan
- *     levels read as current prices.
+ * HONESTY: purely positional display — no forecast copy.
  */
 
 import { makeProphetT } from "./prophetStrings";
@@ -40,27 +35,20 @@ interface GeometryRailProps {
   lang: Lang;
 }
 
-// ── Wide-geometry guard ───────────────────────────────────────────────────────
-//
-// Thresholds are the D3 audit's: R wider than 12% of entry, or T2 stretched more than
-// 35% from it, means the targets are 1.5R/3R projections off a structural base-low stop
-// rather than anything the horizon can carry. Display-only — no payload change.
-
 export const WIDE_R_PCT = 0.12;
 export const WIDE_T2_STRETCH = 0.35;
 
 export interface GeometryStretch {
-  /** |entry − stop| in price terms */
   rAbs: number | null;
-  /** R as a fraction of entry */
   rPct: number | null;
-  /** |T2 − entry| as a fraction of entry */
   t2Stretch: number | null;
-  /** true when either threshold trips */
   wide: boolean;
 }
 
-/** Shared by the ladder and the profit-taking table so one plan gets one verdict. */
+/**
+ * Large structural stops can make mechanically projected targets look like
+ * forecasts. Keep the audit guard independent of the visual layout.
+ */
 export function geometryStretch(
   entry: number | null | undefined,
   stop: number | null | undefined,
@@ -71,57 +59,9 @@ export function geometryStretch(
   const rPct = e != null && rAbs != null ? rAbs / e : null;
   const t2Stretch = e != null && t2 != null ? Math.abs(t2 - e) / e : null;
   const wide =
-    (rPct != null && rPct > WIDE_R_PCT) || (t2Stretch != null && t2Stretch > WIDE_T2_STRETCH);
+    (rPct != null && rPct > WIDE_R_PCT) ||
+    (t2Stretch != null && t2Stretch > WIDE_T2_STRETCH);
   return { rAbs, rPct, t2Stretch, wide };
-}
-
-// ── Ladder geometry ───────────────────────────────────────────────────────────
-
-type Side = "l" | "r";
-
-interface LadderRow {
-  key: string;
-  label: string;
-  price: number;
-  color: string;
-  side: Side;
-  /** true position on the axis, 0 = bottom */
-  truePct: number;
-  /** display position after de-cluttering */
-  pct: number;
-  /** target rows dim under the wide-geometry guard */
-  dim: boolean;
-}
-
-/**
- * Minimum vertical separation between two cards docked on the SAME side, in axis %.
- * A level card measures 38px and the track is 280px, so 16% (44.8px) is the first value
- * that cannot overlap. Keep these two constants in step with the ladder height in CSS.
- */
-const MIN_GAP_PCT = 16;
-/** A distance chip (14px) needs clear spine between two cards: 21% of 280px = 58.8px. */
-const MIN_CHIP_GAP_PCT = 21;
-
-/**
- * Push same-side cards apart so their labels never overlap. The dot on the spine keeps
- * the true position, so nudging a card never misstates where the level is.
- */
-function declutter(rows: LadderRow[]): void {
-  for (const side of ["l", "r"] as Side[]) {
-    const lane = rows.filter((r) => r.side === side).sort((a, b) => a.pct - b.pct);
-    for (let i = 1; i < lane.length; i++) {
-      const prev = lane[i - 1];
-      if (lane[i].pct - prev.pct < MIN_GAP_PCT) lane[i].pct = prev.pct + MIN_GAP_PCT;
-    }
-    const overflow = lane.length > 0 ? lane[lane.length - 1].pct - 100 : 0;
-    if (overflow > 0) {
-      for (const r of lane) r.pct = Math.max(0, r.pct - overflow);
-      for (let i = 1; i < lane.length; i++) {
-        const prev = lane[i - 1];
-        if (lane[i].pct - prev.pct < MIN_GAP_PCT) lane[i].pct = prev.pct + MIN_GAP_PCT;
-      }
-    }
-  }
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -140,137 +80,260 @@ export function GeometryRail({
   const isBear = direction === "BEAR";
   const stretch = geometryStretch(entry, stop, t2 ?? t1);
 
-  // Sides are fixed by level so the eye learns one layout: risk on the left, the trade
-  // and its targets on the right, targets stepping away from ENTRY.
-  const raw: { key: string; label: string; price: number; color: string; side: Side; dim: boolean }[] = [];
-  if (stop != null)  raw.push({ key: "stop",  label: t("stop"),  price: stop,  color: "var(--down)",   side: "l", dim: false });
-  if (entry != null) raw.push({ key: "entry", label: t("entry"), price: entry, color: "var(--text-2)", side: "r", dim: false });
-  if (last != null)  raw.push({ key: "last",  label: t("last"),  price: last,  color: "var(--obs-prophet-cyan)", side: "r", dim: false });
-  if (t1 != null)    raw.push({ key: "t1",    label: t("t1"),    price: t1,    color: "var(--up)",     side: "l", dim: stretch.wide });
-  if (t2 != null)    raw.push({ key: "t2",    label: t("t2"),    price: t2,    color: "color-mix(in srgb, var(--up) 70%, transparent)", side: "r", dim: stretch.wide });
+  // Collect all defined price levels for rail scaling
+  const levels: {
+    label: string;
+    price: number;
+    color: string;
+    isLast?: boolean;
+    isTarget?: boolean;
+  }[] = [];
 
-  if (raw.length < 2) {
+  if (stop != null)  levels.push({ label: t("stop"),  price: stop,  color: "var(--down)" });
+  if (entry != null) levels.push({ label: t("entry"), price: entry, color: "var(--text-2)" });
+  if (last != null)  levels.push({ label: t("last"),  price: last,  color: "var(--obs-prophet-cyan)", isLast: true });
+  if (t1 != null)    levels.push({ label: t("t1"),    price: t1,    color: "var(--up)", isTarget: true });
+  if (t2 != null)    levels.push({ label: t("t2"),    price: t2,    color: "color-mix(in srgb,var(--up) 60%,transparent)", isTarget: true });
+
+  if (levels.length < 2) {
     return (
-      <div className="obs-prophet-ladder-empty">
-        <div className="obs-prophet-ladder-empty-t">{t("geometryEmpty")}</div>
-        <div className="obs-prophet-ladder-empty-w">{t("geometryEmptyWhy")}</div>
+      <div style={EMPTY_STYLE}>
+        {t("geometryEmpty")}
       </div>
     );
   }
 
-  const prices = raw.map((l) => l.price);
+  const prices = levels.map((l) => l.price);
   const minP = Math.min(...prices);
   const maxP = Math.max(...prices);
   const range = maxP - minP || 1;
 
-  // Stop always sits at the bottom of the ladder: for BEAR the price axis inverts, so
-  // "further up" reads as "further along the trade" in both directions.
+  // For BEAR, top of rail = highest price (STOP), bottom = T1
+  // For BULL, bottom of rail = STOP, top = T1/T2
   const positionPct = (price: number): number => {
-    const rawPct = ((price - minP) / range) * 100;
-    return isBear ? 100 - rawPct : rawPct;
+    const raw = (price - minP) / range; // 0=bottom, 1=top
+    return isBear ? 1 - raw : raw;      // invert for bear
   };
 
-  const rows: LadderRow[] = raw.map((l) => {
-    const p = positionPct(l.price);
-    return { ...l, truePct: p, pct: p };
-  });
-  declutter(rows);
+  // Sort levels by vertical position (lowest pct = bottom)
+  const sorted = [...levels].sort((a, b) => positionPct(a.price) - positionPct(b.price));
 
-  const byPos = [...rows].sort((a, b) => a.pct - b.pct);
-
-  // Distance chips: the gap between two neighbouring levels, in R units.
-  const chips =
-    stretch.rAbs != null && stretch.rAbs > 0
-      ? byPos.slice(0, -1).flatMap((lo, i) => {
-          const hi = byPos[i + 1];
-          if (hi.pct - lo.pct < MIN_CHIP_GAP_PCT) return [];
-          const r = Math.abs(hi.price - lo.price) / stretch.rAbs!;
-          if (!Number.isFinite(r) || r < 0.05) return [];
-          return [{ key: `${lo.key}-${hi.key}`, pct: (lo.pct + hi.pct) / 2, r }];
-        })
-      : [];
-
-  const distStop = geometry?.dist_to_stop_r ?? null;
-  const distT1 = geometry?.dist_to_t1_r ?? null;
-
+  const hasGeom = geometry != null;
+  const distStop = hasGeom ? geometry!.dist_to_stop_r : null;
+  const distT1   = hasGeom ? geometry!.dist_to_t1_r   : null;
+  const horizPct = hasGeom ? geometry!.horizon_pct_used : null;
   const wideBody = t("wideGeomBody")
     .replace("{r}", stretch.rAbs != null ? `$${stretch.rAbs.toFixed(2)}` : "—")
     .replace("{pct}", stretch.rPct != null ? (stretch.rPct * 100).toFixed(0) : "—");
 
   return (
-    <div className="obs-prophet-ladder-wrap">
-      <div className="obs-prophet-ladder" role="img" aria-label={ladderAria(byPos, t("geometryTitle"))}>
-        <div className="obs-prophet-ladder-track">
-          <div className="obs-prophet-ladder-spine" aria-hidden />
+    <div className="obs-card obs-prophet-geometry" style={WRAPPER}>
+      <div style={TITLE_ROW}>
+        <span style={SECTION_LABEL}>{t("geometryTitle")}</span>
+        {/* R/R summary */}
+        {distStop != null && distT1 != null && distStop > 0 && (
+          <span style={RR_CHIP}>
+            R/R {(distT1 / distStop).toFixed(2)}
+          </span>
+        )}
+      </div>
 
-          {chips.map((c) => (
-            <span key={c.key} className="obs-prophet-ladder-gap num" style={{ bottom: `${c.pct}%` }}>
-              +{c.r.toFixed(2)}{t("rUnit")}
-            </span>
-          ))}
+      {/* ── Rail ── */}
+      <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
+        {/* Vertical bar */}
+        <div style={RAIL_BAR}>
+          {sorted.map((lv) => {
+            const pct = positionPct(lv.price) * 100;
+            return (
+              <div
+                key={lv.label}
+                style={{
+                  position: "absolute",
+                  bottom: `${pct}%`,
+                  left: 0,
+                  right: 0,
+                  height: lv.isLast ? 3 : 2,
+                  background: lv.color,
+                  borderRadius: 2,
+                  transform: "translateY(50%)",
+                  opacity: stretch.wide && lv.isTarget ? 0.55 : 1,
+                }}
+                aria-label={`${lv.label} ${lv.price.toFixed(2)}`}
+              />
+            );
+          })}
+          {/* Filled progress toward T1 */}
+          {entry != null && last != null && t1 != null && (() => {
+            const entryPct = positionPct(entry) * 100;
+            const lastPct  = positionPct(last)  * 100;
+            const filled   = Math.max(0, Math.min(100, lastPct - entryPct));
+            const start    = Math.min(entryPct, lastPct);
+            return (
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: `${start}%`,
+                  left: "30%",
+                  width: "40%",
+                  height: `${filled}%`,
+                  background: isBear
+                    ? "color-mix(in srgb, var(--down) 18%, transparent)"
+                    : "color-mix(in srgb, var(--up) 18%, transparent)",
+                  borderRadius: 2,
+                  transition: "height .3s",
+                }}
+              />
+            );
+          })()}
+        </div>
 
-          {rows.map((r) => (
-            <span
-              key={`dot-${r.key}`}
-              className="obs-prophet-ladder-dot"
-              style={{ bottom: `${r.truePct}%`, "--c": r.color } as React.CSSProperties}
-              aria-hidden
-            />
-          ))}
-
-          {rows.map((r) => (
-            <div
-              key={r.key}
-              className={`obs-prophet-lvl ${r.side === "l" ? "on-l" : "on-r"}${r.dim ? " dim" : ""}`}
-              style={{ bottom: `${r.pct}%`, "--c": r.color } as React.CSSProperties}
-            >
-              <span className="obs-prophet-lvl-k">{r.label}</span>
-              <span className="obs-prophet-lvl-v num">${r.price.toFixed(2)}</span>
-            </div>
-          ))}
+        {/* Labels column */}
+        <div style={{ flex: 1, position: "relative", minHeight: RAIL_HEIGHT }}>
+          {sorted.map((lv) => {
+            const pct = positionPct(lv.price) * 100;
+            return (
+              <div
+                key={lv.label}
+                style={{
+                  position: "absolute",
+                  bottom: `${pct}%`,
+                  left: 0,
+                  transform: "translateY(50%)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  opacity: stretch.wide && lv.isTarget ? 0.55 : 1,
+                }}
+              >
+                <span style={{ font: "600 9.5px/1 var(--font-ui)", color: lv.color, minWidth: 38 }}>
+                  {lv.label}
+                </span>
+                <span style={{ font: "600 11px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
+                  ${lv.price.toFixed(2)}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* Live R-distances — nested-shape payloads only; silent when absent. */}
-      {(distStop != null || distT1 != null) && (
-        <div className="obs-prophet-ladder-live">
-          {distStop != null && (
-            <span>
-              <i>{t("stop")}</i>
-              <b className="num">{distStop.toFixed(2)}{t("rUnit")}</b>
-              <i>{t("distAway")}</i>
-            </span>
-          )}
-          {distT1 != null && (
-            <span>
-              <i>{t("t1")}</i>
-              <b className="num">{distT1.toFixed(2)}{t("rUnit")}</b>
-              <i>{t("distAway")}</i>
-            </span>
-          )}
-        </div>
-      )}
-
       {stretch.wide && (
-        <div className="obs-prophet-guard">
-          <span className="fin-tag" style={{ "--c": "var(--warn)" } as React.CSSProperties}>
+        <div className="obs-note" style={WIDE_NOTE}>
+          <span className="obs-tag" style={{ "--c": "var(--warn)" } as React.CSSProperties}>
             {t("wideGeomTag")}
           </span>
-          <p>{wideBody}</p>
+          <span>{wideBody}</span>
         </div>
       )}
 
-      <div className="fin-asof obs-prophet-ladder-asof">
+      {/* ── Stat rows below rail ── */}
+      <div style={STAT_ROWS}>
+        {distStop != null && (
+          <StatRow
+            label={t("stop") + " " + t("distAway")}
+            value={`${distStop.toFixed(2)}${t("rUnit")}`}
+            valueColor="var(--down)"
+          />
+        )}
+        {distT1 != null && (
+          <StatRow
+            label={t("t1") + " " + t("distAway")}
+            value={`${distT1.toFixed(2)}${t("rUnit")}`}
+            valueColor="var(--up)"
+          />
+        )}
+        {horizPct != null && (
+          <StatRow
+            label={t("horizonPct")}
+            value={`${horizPct.toFixed(0)}%`}
+            valueColor="var(--text-2)"
+          />
+        )}
+      </div>
+
+      <div style={ASOF_NOTE}>
         {last == null ? t("noLastNote") : t("ladderCaption")}
       </div>
     </div>
   );
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
-/** One spoken line for the whole ladder — screen readers get the levels, not the pixels. */
-function ladderAria(rows: LadderRow[], title: string): string {
-  const parts = rows.map((r) => `${r.label} ${r.price.toFixed(2)}`);
-  return `${title}: ${parts.join(", ")}`;
+function StatRow({ label, value, valueColor }: { label: string; value: string; valueColor: string }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
+      <span style={{ font: "500 10px/1 var(--font-ui)", color: "var(--muted)" }}>{label}</span>
+      <span style={{ font: "600 10.5px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: valueColor }}>{value}</span>
+    </div>
+  );
 }
+
+// ── Style constants ───────────────────────────────────────────────────────────
+
+const RAIL_HEIGHT = 140;
+
+// obs-card provides glass background/border/radius
+const WRAPPER: React.CSSProperties = {
+  padding: "10px 12px",
+};
+
+const TITLE_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  marginBottom: 10,
+};
+
+const SECTION_LABEL: React.CSSProperties = {
+  font: "600 10px/1 var(--font-ui)",
+  color: "var(--text-2)",
+  textTransform: "uppercase",
+  letterSpacing: ".06em",
+};
+
+const RR_CHIP: React.CSSProperties = {
+  font: "600 9.5px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
+  color: "var(--text-2)",
+  border: "1px solid var(--line-2)",
+  borderRadius: "var(--r-pill)",
+  padding: "2px 7px",
+};
+
+const RAIL_BAR: React.CSSProperties = {
+  position: "relative",
+  width: 8,
+  minHeight: RAIL_HEIGHT,
+  background: "var(--line-2)",
+  borderRadius: 4,
+  flexShrink: 0,
+};
+
+const STAT_ROWS: React.CSSProperties = {
+  marginTop: 10,
+  paddingTop: 10,
+  borderTop: "1px solid rgba(255,255,255,0.08)",
+};
+
+const WIDE_NOTE: React.CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 8,
+  marginTop: 10,
+  padding: "8px 10px",
+  font: "500 10px/1.45 var(--font-ui)",
+};
+
+const ASOF_NOTE: React.CSSProperties = {
+  marginTop: 8,
+  font: "500 9.5px/1.4 var(--font-ui)",
+  color: "var(--muted)",
+};
+
+const EMPTY_STYLE: React.CSSProperties = {
+  padding: "12px 0",
+  font: "500 11px/1.4 var(--font-ui)",
+  color: "var(--muted)",
+  textAlign: "center",
+};

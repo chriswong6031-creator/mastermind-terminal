@@ -2,23 +2,23 @@
 /**
  * ProphetView — managed-pick desk for the Prophet tab.
  *
- * Layout (desktop) — THREE columns:
- *   LEFT   — the LEDGER: one slim row per plan, lifecycle rail, sort chips, SIGNALS/PERF
- *   CENTER — the DOSSIER: focus masthead → geometry ladder → thesis → stepper → profit plan
- *   RIGHT  — CONVICTION: fused verdict, component mix, R/R tiles, option overlay
+ * Layout (desktop) — THREE columns, matching competitor reference quality:
+ *   LEFT   — Alert stream (signal cards, sort controls, SIGNALS/PERF sub-tabs)
+ *   CENTER — Analysis: ticker header + phase + geometry rail + WHAT TO DO NOW
+ *             + PROFIT TAKING PLAN + SIGNAL THESIS
+ *   RIGHT  — Confidence Index: arc gauge + component bars + R/R + option card
  *
  * Narrow-width: CENTER and RIGHT stack vertically below LEFT.
  *
  * HONESTY DOCTRINE:
- *   - Masthead states the SOURCE, not just the cadence: these are factor-engine standouts,
- *     and options are context overlays that never generated the signal (D3 fix_spec 1).
+ *   - Masthead names the factor engine so the Options hub does not imply options origination.
  *   - Cadence chip: "nightly EOD — updates after close"
- *   - Authority: "display-only — forward ledger accruing"
+ *   - Authority chip: "display-only — forward ledger accruing"
  *   - Thesis rendered with "machine-generated from engine fields" caption
  *   - what_to_do_now rendered with "phase-keyed action guide — display only"
- *   - profit_plan rendered with "exit levels from engine geometry — display only", and
- *     de-emphasised when the wide-geometry guard trips
- *   - GAINERS sort is HIDDEN when no plan carries last_price (it would sort nothing)
+ *   - profit_plan rendered with "exit levels from engine geometry — display only";
+ *     wide projected geometry keeps its warning and target de-emphasis.
+ *   - GAINERS is hidden until the producer publishes last_price.
  *   - No "validated", no predictive copy
  *   - Empty state: "No active prophecies — ledger accruing."
  *   - PERF sub-tab: placeholder only ("outcome ledger accruing")
@@ -33,7 +33,7 @@ import { SignalCard, phaseTone, planAsof, planConfidence, planPhase, planRecomme
 import type { PlanSummary } from "./SignalCard";
 import { ConfidencePanel } from "./ConfidencePanel";
 import type { ConfidenceComponents } from "./ConfidencePanel";
-import { GeometryRail, geometryStretch } from "./GeometryRail";
+import { GeometryRail } from "./GeometryRail";
 import { OptionCard } from "./OptionCard";
 import type { LiveMark } from "./OptionCard";
 
@@ -93,27 +93,41 @@ function resolveliveMark(
   return { mark: m, forced };
 }
 
-/**
- * Masthead live dot gate: at least one mark in the feed is inside the RTH freshness
- * window. Outside that window the dot is absent rather than dimmed — a "live" light that
- * is on when nothing is live is the exact lie this desk is not allowed to tell.
- */
 function marksAreFresh(marks: ProphetMarksPayload | null): boolean {
   const table = marks?.marks;
-  if (!table) return false;
-  const keys = Object.keys(table);
-  if (keys.length === 0) return false;
+  if (!table || Object.keys(table).length === 0) return false;
   if (marks?._fixture === true) return true;
   const now = Date.now();
-  for (const k of keys) {
-    const ts = new Date(table[k].ts_utc).getTime();
-    if (Number.isFinite(ts) && now - ts >= 0 && now - ts <= LIVE_MARK_WINDOW_MS) return true;
-  }
-  return false;
+  return Object.values(table).some((mark) => {
+    const ts = new Date(mark.ts_utc).getTime();
+    return Number.isFinite(ts) && now - ts >= 0 && now - ts <= LIVE_MARK_WINDOW_MS;
+  });
 }
 
 type SortMode = "new" | "best" | "gainers";
 type SubTab   = "signals" | "perf";
+
+function SortButton({
+  mode,
+  label,
+  active,
+  onSelect,
+}: {
+  mode: SortMode;
+  label: string;
+  active: boolean;
+  onSelect: (mode: SortMode) => void;
+}) {
+  return (
+    <button
+      className={`obs-chip${active ? " on" : ""}`}
+      style={SORT_CHIP_STYLE}
+      onClick={() => onSelect(mode)}
+    >
+      {label}
+    </button>
+  );
+}
 
 // ── Sort helpers ──────────────────────────────────────────────────────────────
 
@@ -146,14 +160,12 @@ function sortPlans(plans: PlanSummary[], mode: SortMode): PlanSummary[] {
   }
 }
 
-// ── Date formatting ───────────────────────────────────────────────────────────
-
 function fmtDate(iso: string | null | undefined, lang: "en" | "zh"): string | null {
   if (!iso) return null;
   try {
-    const d = new Date(iso);
-    if (!Number.isFinite(d.getTime())) return iso.slice(0, 10) || null;
-    return d.toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US", {
+    const date = new Date(iso);
+    if (!Number.isFinite(date.getTime())) return iso.slice(0, 10) || null;
+    return date.toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US", {
       month: "short",
       day: "numeric",
       timeZone: "America/New_York",
@@ -212,6 +224,8 @@ export function ProphetView() {
   }, []);
 
   useEffect(() => {
+    // Initializing the external feed subscription is the purpose of this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
     fetchMarks();
     const poll = setInterval(fetchMarks, 30_000);
@@ -221,28 +235,15 @@ export function ProphetView() {
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const plans = payload?.plans ?? [];
-  // The producer publishes no last_price today, so a GAINERS sort would compare -Infinity
-  // to -Infinity for every plan — a control that visibly does nothing. Gate it on data.
-  const hasLastPrice = plans.some((p) => p.last_price != null);
-  const effectiveSort: SortMode = sortMode === "gainers" && !hasLastPrice ? "new" : sortMode;
+  // The producer currently omits last_price, so a GAINERS sort would compare an
+  // identical empty value for every plan. Keep the control hidden until it can work.
+  const hasLastPrice = plans.some((plan) => plan.last_price != null);
+  const effectiveSort = sortMode === "gainers" && !hasLastPrice ? "new" : sortMode;
   const sortedPlans = sortPlans(plans, effectiveSort);
   const selected    = sortedPlans.find((p) => p.id === selectedId) ?? sortedPlans[0] ?? null;
   const activePlans = sortedPlans.filter((p) => planPhase(p) !== "invalidated").length;
   const marksFresh  = marksAreFresh(marks);
   const asofLabel   = fmtDate(payload?.asof, lang) ?? (lang === "zh" ? "等待更新" : "Awaiting close");
-
-  // ── Render helpers ─────────────────────────────────────────────────────────
-
-  function SortButton({ mode, label }: { mode: SortMode; label: string }) {
-    return (
-      <button
-        className={`obs-chip obs-prophet-sort${sortMode === mode ? " on" : ""}`}
-        onClick={() => setSortMode(mode)}
-      >
-        {label}
-      </button>
-    );
-  }
 
   // ── Full-pane states ───────────────────────────────────────────────────────
 
@@ -271,29 +272,26 @@ export function ProphetView() {
           <span className="obs-prophet-eyebrow">{t("mastheadEyebrow")}</span>
           <div className="obs-prophet-title-row">
             <h2>{t("tabProphet")}</h2>
-            <span>{t("tabSubtitle")}</span>
+            <span>{t("provSource")}</span>
           </div>
-          {/* Provenance: the one line that stops an options-hub tab from implying its
-              signals come from options flow. */}
-          <p className="obs-prophet-source">{t("provenanceLine")}</p>
         </div>
         <div className="obs-prophet-status">
-          <div className="obs-prophet-kpi">
-            <span className="k">{t("mastheadActive")}</span>
-            <b className="v num">{activePlans}</b>
+          <div className="obs-prophet-stat">
+            <span>{t("mastheadActive")}</span>
+            <b>{activePlans}</b>
           </div>
-          <div className="obs-prophet-kpi">
-            <span className="k">{t("mastheadFocus")}</span>
-            <b className="v">{selected?.asset ?? "—"}</b>
+          <div className="obs-prophet-stat">
+            <span>{t("mastheadFocus")}</span>
+            <b>{selected?.asset ?? "—"}</b>
           </div>
-          <div className="obs-prophet-kpi">
-            <span className="k">{t("mastheadUpdated")}</span>
-            <b className="v num">{asofLabel}</b>
+          <div className="obs-prophet-stat">
+            <span>{t("mastheadUpdated")}</span>
+            <b>{asofLabel}</b>
           </div>
           {marksFresh && (
-            <div className="obs-prophet-kpi">
-              <span className="k">{t("mastheadMarks")}</span>
-              <b className="v">
+            <div className="obs-prophet-stat">
+              <span>{t("mastheadMarks")}</span>
+              <b style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <span className="obs-live-dot" aria-hidden />
                 {t("mastheadMarksLive")}
               </b>
@@ -303,7 +301,7 @@ export function ProphetView() {
       </header>
 
       <div className="obs-prophet-grid">
-      {/* ── LEFT — the ledger ── */}
+      {/* ── LEFT — alert stream ── */}
       <div className="obs-card obs-prophet-pane obs-prophet-left" style={LEFT_PANE}>
         {/* Sub-tabs */}
         <div style={SUBTAB_ROW}>
@@ -320,17 +318,39 @@ export function ProphetView() {
             >{t("tabPerf")}</button>
           </nav>
           <div style={{ flex: 1 }} />
-          <span className="obs-prophet-cadence">{t("cadenceLabel")}</span>
+          <span style={INFO_CHIP}>{t("cadenceLabel")}</span>
         </div>
 
         {subTab === "signals" && (
           <>
-            <div className="obs-prophet-sortrow">
-              <SortButton mode="new"     label={t("sortNew")} />
-              <SortButton mode="best"    label={t("sortBest")} />
-              {hasLastPrice && <SortButton mode="gainers" label={t("sortGainers")} />}
+            <div style={SORT_ROW}>
+              <SortButton
+                mode="new"
+                label={t("sortNew")}
+                active={sortMode === "new"}
+                onSelect={setSortMode}
+              />
+              <SortButton
+                mode="best"
+                label={t("sortBest")}
+                active={sortMode === "best"}
+                onSelect={setSortMode}
+              />
+              {hasLastPrice && (
+                <SortButton
+                  mode="gainers"
+                  label={t("sortGainers")}
+                  active={sortMode === "gainers"}
+                  onSelect={setSortMode}
+                />
+              )}
             </div>
-            <div style={CARD_LIST} className="obs-scroll" role="listbox" aria-label={t("signalStreamTitle")}>
+            <div
+              style={CARD_LIST}
+              className="obs-scroll"
+              role="listbox"
+              aria-label={t("signalStreamTitle")}
+            >
               {sortedPlans.length === 0 ? (
                 <EmptyColumn t={t} />
               ) : (
@@ -356,7 +376,7 @@ export function ProphetView() {
         )}
       </div>
 
-      {/* ── CENTER — the dossier ── */}
+      {/* ── CENTER — analysis ── */}
       <div className="obs-card obs-prophet-pane obs-prophet-center" style={CENTER_PANE}>
         {!selected ? (
           <EmptyColumn t={t} center />
@@ -365,7 +385,7 @@ export function ProphetView() {
         )}
       </div>
 
-      {/* ── RIGHT — conviction ── */}
+      {/* ── RIGHT — confidence index ── */}
       <div className="obs-card obs-prophet-pane obs-prophet-right" style={RIGHT_PANE}>
         {!selected ? (
           <EmptyColumn t={t} center />
@@ -399,41 +419,11 @@ function EmptyColumn({
   );
 }
 
-// ── Band header ───────────────────────────────────────────────────────────────
-
-function BandHead({
-  label,
-  caption,
-  tag,
-}: {
-  label: string;
-  caption?: string;
-  tag?: React.ReactNode;
-}) {
-  return (
-    <div className="obs-prophet-band-hd">
-      <span className="obs-prophet-band-lbl">{label}</span>
-      {tag}
-      {caption && <span className="obs-prophet-band-cap">{caption}</span>}
-    </div>
-  );
-}
-
-// ── Thesis sentence split ─────────────────────────────────────────────────────
-//
-// The engine appends a dealer-positioning sentence to the thesis. It is options CONTEXT,
-// not a driver of the pick, so it is lifted out of the prose into its own note instead of
-// sitting mid-paragraph where it reads like a reason the signal fired.
-
 const POSITIONING_HINTS = [
   "dealer", "open interest", "call wall", "put wall", "gamma", "positioning",
   "做市商", "未平仓", "持仓", "伽马", "看涨墙", "看跌墙",
 ];
 
-/**
- * Sentence scanner that does not break on decimals: an ASCII terminator only ends a
- * sentence when whitespace follows it ("$290.00," never does; "…the level. Dealers…" does).
- */
 function splitSentences(text: string): string[] {
   const out: string[] = [];
   let start = 0;
@@ -446,30 +436,29 @@ function splitSentences(text: string): string[] {
       const next = text[i + 1];
       if (next !== undefined && !/\s/.test(next)) continue;
     }
-    let j = i + 1;
-    while (j < text.length && /\s/.test(text[j])) j++;
-    out.push(text.slice(start, j));
-    start = j;
+    let end = i + 1;
+    while (end < text.length && /\s/.test(text[end])) end++;
+    out.push(text.slice(start, end));
+    start = end;
   }
   if (start < text.length) out.push(text.slice(start));
-  return out.filter((s) => s.trim().length > 0);
+  return out.filter((sentence) => sentence.trim().length > 0);
 }
 
 function splitPositioning(text: string): { body: string; note: string | null } {
   const parts = splitSentences(text);
   if (parts.length < 2) return { body: text, note: null };
-  const idx = parts.findIndex((s) => {
-    const low = s.toLowerCase();
-    return POSITIONING_HINTS.some((h) => low.includes(h));
+  const index = parts.findIndex((sentence) => {
+    const lower = sentence.toLowerCase();
+    return POSITIONING_HINTS.some((hint) => lower.includes(hint));
   });
-  if (idx < 0) return { body: text, note: null };
-  const note = parts[idx].trim();
-  const body = parts.filter((_, i) => i !== idx).join("").trim();
-  if (!body || !note) return { body: text, note: null };
-  return { body, note };
+  if (index < 0) return { body: text, note: null };
+  const note = parts[index].trim();
+  const body = parts.filter((_, partIndex) => partIndex !== index).join("").trim();
+  return body && note ? { body, note } : { body: text, note: null };
 }
 
-// ── AnalysisPanel (CENTER column — the dossier) ───────────────────────────────
+// ── AnalysisPanel (CENTER column) ─────────────────────────────────────────────
 
 function AnalysisPanel({
   plan,
@@ -489,6 +478,7 @@ function AnalysisPanel({
   const t1 = plan.targets?.[0] ?? null;
   const t2 = plan.targets?.[1] ?? null;
 
+  // Phase chip colors
   const phaseMap: Record<string, string> = {
     pre_trigger:       t("phasePretrigger"),
     triggered_pre_t1:  t("phaseTriggered"),
@@ -511,54 +501,36 @@ function AnalysisPanel({
     ? plan.profit_plan_zh
     : plan.profit_plan;
   // Thesis from payload — prefer ZH variant when lang is zh.
-  const thesisRaw = (lang === "zh" && plan.thesis_zh) ? plan.thesis_zh : plan.thesis;
-  const thesis = thesisRaw ? splitPositioning(thesisRaw) : null;
-
-  const signalOn   = fmtDate(planAsof(plan), lang);
-  const conviction = plan._conviction_score ?? null;
-  // One verdict per plan, shared by the ladder and the profit table.
-  const stretch = geometryStretch(plan.entry, plan.invalidation, t2 ?? t1);
+  const _planAny = plan as unknown as { thesis?: string | null; thesis_zh?: string | null };
+  const thesis = (lang === "zh" && _planAny.thesis_zh) ? _planAny.thesis_zh : _planAny.thesis;
+  const thesisParts = thesis ? splitPositioning(thesis) : null;
 
   return (
-    <div className="obs-scroll obs-prophet-analysis obs-prophet-stage">
-      {/* ── Band 1 — focus masthead ── */}
-      <div className="obs-prophet-focus">
-        <div className="obs-prophet-focus-id">
-          <span className="obs-prophet-focus-tkr">{plan.asset}</span>
-          <span className="obs-tag" style={{ "--c": dirColor } as React.CSSProperties}>
+    <div style={ANALYSIS_SCROLL} className="obs-scroll obs-prophet-analysis">
+      {/* ── Ticker header ── */}
+      <div style={ANALYSIS_HEADER}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={ANALYSIS_TICKER}>{plan.asset}</span>
+          <span
+            className="obs-tag"
+            style={{ ...DIR_BADGE, "--c": dirColor } as React.CSSProperties}
+          >
             {isBear ? `▼ ${t("bear")}` : `▲ ${t("bull")}`}
           </span>
           {phaseLabel && (
-            <span className="obs-tag" style={{ "--c": phaseColor } as React.CSSProperties}>
+            <span
+              className="obs-tag"
+              style={{ ...PHASE_BADGE, "--c": phaseColor } as React.CSSProperties}
+            >
               {phaseLabel}
             </span>
           )}
         </div>
-        {(signalOn || conviction != null) && (
-          <div className="obs-prophet-focus-meta">
-            {signalOn && (
-              <span>{t("dossierSignalOn")} <b className="num">{signalOn}</b></span>
-            )}
-            {conviction != null && (
-              <span>{t("dossierConviction")} <b className="num">{conviction.toFixed(0)}</b></span>
-            )}
-          </div>
-        )}
-        {/* Per-plan provenance — where this row came from, how often it moves, what it is. */}
-        <div className="fin-asof obs-prophet-prov">
-          <span>{t("provSource")}</span>
-          <span aria-hidden>·</span>
-          <span>{t("provCadence")}</span>
-          <span aria-hidden>·</span>
-          <span>{t("provAuthority")}</span>
-        </div>
+        <span style={AUTH_CHIP}>{t("authorityLabel")}</span>
       </div>
 
-      <div className="obs-card-hr" />
-
-      {/* ── Band 2 — geometry ladder ── */}
-      <section className="obs-prophet-band">
-        <BandHead label={t("geometryTitle")} />
+      {/* ── Trade geometry price rail ── */}
+      <div style={{ marginBottom: 14 }}>
         <GeometryRail
           direction={plan.direction}
           entry={plan.entry}
@@ -569,84 +541,58 @@ function AnalysisPanel({
           geometry={geometry}
           lang={lang}
         />
-      </section>
+      </div>
 
-      {/* ── Band 3 — thesis ── */}
-      {thesis && (
-        <>
-          <div className="obs-card-hr" />
-          <section className="obs-prophet-band">
-            <BandHead label={t("thesisLabel")} caption={t("thesisCaption")} />
-            <p className="obs-prophet-thesis">{thesis.body}</p>
-            {thesis.note && (
-              <div className="obs-note obs-prophet-positioning">
-                <span className="obs-prophet-positioning-k">{t("positioningLabel")}</span>
-                {thesis.note}
-              </div>
-            )}
-          </section>
-        </>
-      )}
-
-      {/* ── Band 4 — what to do now ── */}
+      {/* ── WHAT TO DO NOW ── */}
       {whatToDo && whatToDo.length > 0 && (
-        <>
-          <div className="obs-card-hr" />
-          <section className="obs-prophet-band">
-            <BandHead
-              label={t("briefLabel")}
-              caption={t("briefCaption")}
-              tag={
-                <span className="fin-tag" style={{ "--c": "var(--muted)" } as React.CSSProperties}>
-                  {t("tagDisplayOnly")}
-                </span>
-              }
-            />
-            <ol className="obs-prophet-steps">
-              {whatToDo.map((line, i) => (
-                <li key={i} className={`obs-prophet-step${i === 0 ? " is-now" : ""}`}>
-                  <span className="obs-prophet-step-n num" aria-hidden>{i + 1}</span>
-                  <span className="obs-prophet-step-t">{line}</span>
-                </li>
-              ))}
-            </ol>
-          </section>
-        </>
+        <div style={SECTION_BOX} className="obs-card obs-prophet-section obs-prophet-section-primary">
+          <div style={SECTION_HDR_ROW}>
+            <span className="obs-lbl" style={SECTION_LABEL}>{t("briefLabel")}</span>
+            <span style={SECTION_CAPTION}>{t("briefCaption")}</span>
+          </div>
+          <ol style={BULLET_LIST}>
+            {whatToDo.map((line, i) => (
+              <li key={i} style={BULLET_ITEM}>
+                <span style={BULLET_NUMBER}>{i + 1}</span>
+                <span style={BULLET_TEXT}>{line}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
       )}
 
-      {/* ── Band 5 — profit-taking plan ── */}
+      {/* ── PROFIT TAKING PLAN ── */}
       {profitPlan && profitPlan.length > 0 && (
-        <>
-          <div className="obs-card-hr" />
-          <section className="obs-prophet-band">
-            <BandHead
-              label={t("profitPlanLabel")}
-              caption={t("profitPlanCaption")}
-              tag={stretch.wide ? (
-                <span className="fin-tag" style={{ "--c": "var(--warn)" } as React.CSSProperties}>
-                  {t("wideGeomTag")}
-                </span>
-              ) : undefined}
-            />
-            <div className="obs-prophet-ptable" role="table">
-              <div className="obs-prophet-ptr obs-prophet-ptr-hd" role="row">
-                <span role="columnheader">{t("profitColLevel")}</span>
-                <span role="columnheader">{t("profitColAction")}</span>
-                <span role="columnheader">{t("profitColStatus")}</span>
-              </div>
-              {profitPlan.map((row, i) => (
-                <ProfitRow
-                  key={i}
-                  row={row}
-                  t={t}
-                  entry={plan.entry}
-                  isBear={isBear}
-                  wide={stretch.wide}
-                />
-              ))}
-            </div>
-          </section>
-        </>
+        <div style={SECTION_BOX} className="obs-card obs-prophet-section">
+          <div style={SECTION_HDR_ROW}>
+            <span className="obs-lbl" style={SECTION_LABEL}>{t("profitPlanLabel")}</span>
+            <span style={SECTION_CAPTION}>{t("profitPlanCaption")}</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {profitPlan.map((row, i) => (
+              <ProfitRow key={i} row={row} t={t} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── SIGNAL THESIS ── */}
+      {thesisParts && (
+        <div style={SECTION_BOX} className="obs-card obs-prophet-section">
+          <div style={SECTION_HDR_ROW}>
+            <span className="obs-lbl" style={SECTION_LABEL}>{t("thesisLabel")}</span>
+            <span style={SECTION_CAPTION}>{t("thesisCaption")}</span>
+          </div>
+          <p style={THESIS_TEXT}>{thesisParts.body}</p>
+          {thesisParts.note && (
+            <p style={POSITIONING_NOTE}>
+              <span style={{ color: "var(--warn)", fontWeight: 700 }}>
+                {t("positioningLabel")}:{" "}
+              </span>
+              {thesisParts.note}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );
@@ -657,15 +603,9 @@ function AnalysisPanel({
 function ProfitRow({
   row,
   t,
-  entry,
-  isBear,
-  wide,
 }: {
   row: NonNullable<PlanSummary["profit_plan"]>[number];
   t: ReturnType<typeof makeProphetT>;
-  entry: number | null;
-  isBear: boolean;
-  wide: boolean;
 }) {
   const statusColor =
     row.status === "DONE"    ? "var(--muted)" :
@@ -676,44 +616,29 @@ function ProfitRow({
     row.status === "ACTIVE"  ? t("profitStatusActive") :
     t("profitStatusPending");
 
-  // A row tints by which side of entry its level sits on — the target side rides --up,
-  // the risk side --down, so a stop row can never wear the colour of a win.
-  const onTargetSide =
-    row.level != null && entry != null
-      ? (isBear ? row.level < entry : row.level > entry)
-      : null;
-  const levelColor =
-    onTargetSide == null ? "var(--muted)" : onTargetSide ? "var(--up)" : "var(--down)";
-  // Wide geometry de-emphasises the projected targets — visible, never hidden.
-  const dim = row.status === "DONE" || (wide && onTargetSide === true);
-
   return (
-    <div
-      className={`obs-prophet-ptr${dim ? " dim" : ""}`}
-      role="row"
-      style={{ "--c": levelColor } as React.CSSProperties}
-    >
-      <span className="obs-prophet-ptr-lvl" role="cell">
-        <b className="num">{row.level != null ? `$${row.level.toFixed(2)}` : "—"}</b>
-        <i>{row.label}</i>
-      </span>
-      <span
-        className="obs-prophet-ptr-act"
-        role="cell"
-        style={{ textDecoration: row.status === "DONE" ? "line-through" : "none" }}
-      >
-        {row.action}
-      </span>
-      <span className="obs-prophet-ptr-st" role="cell">
-        <span className="fin-tag" style={{ "--c": statusColor } as React.CSSProperties}>
-          {statusLabel}
+    <div style={PROFIT_ROW}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+        {/* Level chip */}
+        <span style={{ ...PROFIT_LEVEL, opacity: row.status === "DONE" ? 0.5 : 1 }}>
+          {row.level != null ? `$${row.level.toFixed(2)}` : "—"}
         </span>
+        {/* Label badge */}
+        <span style={PROFIT_LABEL_BADGE}>{row.label}</span>
+        {/* Action text */}
+        <span style={{ ...PROFIT_ACTION, textDecoration: row.status === "DONE" ? "line-through" : "none", opacity: row.status === "DONE" ? 0.45 : 1 }}>
+          {row.action}
+        </span>
+      </div>
+      {/* Status chip */}
+      <span style={{ ...STATUS_CHIP, color: statusColor, borderColor: `${statusColor}55` }}>
+        {statusLabel}
       </span>
     </div>
   );
 }
 
-// ── ConfidenceColumn (RIGHT column — conviction) ─────────────────────────────
+// ── ConfidenceColumn (RIGHT column) ──────────────────────────────────────────
 
 function ConfidenceColumn({
   plan,
@@ -729,89 +654,72 @@ function ConfidenceColumn({
   const state      = plan.state;
   const confidence = planConfidence(plan);
   const components = (state as { components?: ConfidenceComponents } | null | undefined)?.components ?? null;
-  const geometry   = state?.geometry ?? null;
-
   const t1 = plan.targets?.[0] ?? null;
 
-  const riskAbs =
-    plan.entry != null && plan.invalidation != null ? Math.abs(plan.entry - plan.invalidation) : null;
-  const rewardAbs = plan.entry != null && t1 != null ? Math.abs(t1 - plan.entry) : null;
   const rrRatio: number | null =
-    riskAbs != null && riskAbs > 0 && rewardAbs != null ? rewardAbs / riskAbs : null;
-  const horizonPct = geometry?.horizon_pct_used ?? null;
+    plan.entry != null && plan.invalidation != null && t1 != null
+      ? Math.abs(t1 - plan.entry) / Math.abs(plan.entry - plan.invalidation)
+      : null;
 
   return (
-    <div className="obs-scroll obs-prophet-confidence-column obs-prophet-conviction">
-      <div className="fin-eyebrow obs-prophet-conv-eyebrow">{t("confidenceEyebrow")}</div>
+    <div style={CONFIDENCE_SCROLL} className="obs-scroll obs-prophet-confidence-column">
+      {/* Section label */}
+      <div style={CONF_HDR}>
+        <span className="obs-lbl" style={CONF_HDR_LABEL}>{t("confidenceTitle")}</span>
+      </div>
 
-      <ConfidencePanel
-        confidence={confidence}
-        components={components}
-        phase={planPhase(plan)}
-        change_reason={(state as { change_reason?: string | null } | null | undefined)?.change_reason ?? null}
-        recommended_action={planRecommendedAction(plan)}
-        lang={lang}
-      />
+      {/* Confidence panel (arc + bars) */}
+      <div style={{ marginBottom: 10 }}>
+        <ConfidencePanel
+          confidence={confidence}
+          components={components}
+          phase={planPhase(plan)}
+          change_reason={(state as { change_reason?: string | null } | null | undefined)?.change_reason ?? null}
+          recommended_action={planRecommendedAction(plan)}
+          lang={lang}
+        />
+      </div>
 
-      {/* R/R — two tiles, so risk and reward are read as two facts, not one ratio. */}
-      {(riskAbs != null || rewardAbs != null) && (
-        <div className="obs-prophet-rr">
-          <div className="obs-prophet-rr-hd">
-            <span className="fin-eyebrow">{t("rrLabel")}</span>
-            {rrRatio != null && (
-              <span className="fin-tag num" style={{ "--c": "var(--text-2)" } as React.CSSProperties}>
-                {rrRatio.toFixed(2)}
+      {/* R/R at entry */}
+      {rrRatio != null && (
+        <div style={RR_ROW}>
+          <span style={RR_LABEL}>{t("rrLabel")}</span>
+          <span style={RR_VAL}>{rrRatio.toFixed(2)}</span>
+          {plan.entry != null && plan.invalidation != null && (
+            <>
+              <span style={RR_SUB}>
+                {t("rrRisk")}: ${Math.abs(plan.entry - plan.invalidation).toFixed(2)}
               </span>
-            )}
-          </div>
-          <div className="obs-prophet-rr-tiles">
-            {riskAbs != null && (
-              <div className="obs-prophet-tile" style={{ "--c": "var(--down)" } as React.CSSProperties}>
-                <span className="k">{t("rrRiskTile")}</span>
-                <b className="v num">${riskAbs.toFixed(2)}</b>
-              </div>
-            )}
-            {rewardAbs != null && (
-              <div className="obs-prophet-tile" style={{ "--c": "var(--up)" } as React.CSSProperties}>
-                <span className="k">{t("rrRewardTile")}</span>
-                <b className="v num">${rewardAbs.toFixed(2)}</b>
-              </div>
-            )}
-          </div>
-          {/* Horizon meter renders ONLY when the payload carries the number. */}
-          {horizonPct != null && (
-            <div className="obs-prophet-horizon">
-              <div className="obs-prophet-horizon-hd">
-                <span>{t("horizonMeter")}</span>
-                <b className="num">{horizonPct.toFixed(0)}%</b>
-              </div>
-              <div className="obs-prophet-meter">
-                <div
-                  className="obs-prophet-meter-fill"
-                  style={{ width: `${Math.max(0, Math.min(100, horizonPct))}%` }}
-                />
-              </div>
-            </div>
+              {t1 != null && (
+                <span style={RR_SUB}>
+                  {t("rrReward")}: ${Math.abs(t1 - plan.entry).toFixed(2)}
+                </span>
+              )}
+            </>
           )}
         </div>
       )}
 
       {/* Option card — with live-mark overlay if fresh */}
-      {plan.option_contract && (() => {
-        const oc = plan.option_contract;
-        const right = oc.right ?? (oc.type?.toUpperCase() === "PUT" ? "P" : "C");
-        const { mark, forced } = resolveliveMark(
-          marks, plan.asset, right, oc.expiry, oc.strike
-        );
-        return (
-          <OptionCard
-            contract={oc}
-            lang={lang}
-            liveMark={mark}
-            liveMarkForced={forced}
-          />
-        );
-      })()}
+      {plan.option_contract && (
+        <div style={{ marginBottom: 10 }}>
+          {(() => {
+            const oc = plan.option_contract;
+            const right = oc.right ?? (oc.type?.toUpperCase() === "PUT" ? "P" : "C");
+            const { mark, forced } = resolveliveMark(
+              marks, plan.asset, right, oc.expiry, oc.strike
+            );
+            return (
+              <OptionCard
+                contract={oc}
+                lang={lang}
+                liveMark={mark}
+                liveMarkForced={forced}
+              />
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 }
@@ -842,19 +750,39 @@ const RIGHT_PANE: React.CSSProperties = {
 const SUBTAB_ROW: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  // Wrap rather than squeeze: the cadence chip is a doctrine string that must not be
-  // truncated, and at a 270px ledger it would otherwise crush the PERF tab.
-  flexWrap: "wrap",
-  borderBottom: "1px solid var(--hairline)",
+  borderBottom: "1px solid rgba(255,255,255,0.07)",
   padding: "7px 10px",
   flexShrink: 0,
   gap: 6,
+};
+
+const SORT_ROW: React.CSSProperties = {
+  display: "flex",
+  gap: 4,
+  padding: "8px 10px",
+  flexShrink: 0,
+  borderBottom: "1px solid rgba(255,255,255,0.07)",
+};
+
+const SORT_CHIP_STYLE: React.CSSProperties = {
+  padding: "4px 10px",
+  fontSize: 10,
+  borderRadius: 8,
 };
 
 const CARD_LIST: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",
   padding: "6px 8px",
+};
+
+const INFO_CHIP: React.CSSProperties = {
+  font: "500 9px/1 var(--font-ui)",
+  color: "var(--muted)",
+  border: "1px solid rgba(255,255,255,0.09)",
+  borderRadius: "var(--r-pill)",
+  padding: "2px 6px",
+  whiteSpace: "nowrap",
 };
 
 const EMPTY_STATE: React.CSSProperties = {
@@ -908,6 +836,228 @@ const PERF_BODY: React.CSSProperties = {
   font: "500 11px/1.6 var(--font-ui)",
   color: "var(--muted)",
   maxWidth: 260,
+};
+
+// ── Analysis panel styles ─────────────────────────────────────────────────────
+
+const ANALYSIS_SCROLL: React.CSSProperties = {
+  flex: 1,
+  overflowY: "auto",
+  padding: "12px 14px",
+};
+
+const ANALYSIS_HEADER: React.CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 8,
+  marginBottom: 14,
+  flexWrap: "wrap",
+};
+
+const ANALYSIS_TICKER: React.CSSProperties = {
+  font: "750 28px/1 var(--font-ui)",
+  color: "var(--text)",
+  letterSpacing: ".01em",
+};
+
+const DIR_BADGE: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  font: "700 11px/1 var(--font-ui)",
+  borderRadius: "var(--r-pill)",
+  padding: "4px 9px",
+};
+
+const PHASE_BADGE: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  font: "600 10px/1 var(--font-ui)",
+  border: "1px solid",
+  borderRadius: "var(--r-pill)",
+  padding: "3px 8px",
+  whiteSpace: "nowrap",
+};
+
+const AUTH_CHIP: React.CSSProperties = {
+  flexShrink: 0,
+  font: "500 9px/1 var(--font-ui)",
+  color: "var(--muted)",
+  border: "1px solid rgba(255,255,255,0.09)",
+  borderRadius: "var(--r-pill)",
+  padding: "3px 7px",
+  whiteSpace: "nowrap",
+  marginLeft: "auto",
+};
+
+const SECTION_BOX: React.CSSProperties = {
+  background: "linear-gradient(145deg, rgba(255,255,255,.045), rgba(255,255,255,.018))",
+  border: "1px solid rgba(255,255,255,0.095)",
+  borderRadius: 14,
+  padding: "14px 15px",
+  marginBottom: 12,
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,.035)",
+};
+
+const SECTION_HDR_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  marginBottom: 9,
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+const SECTION_LABEL: React.CSSProperties = {
+  font: "600 10.5px/1 var(--font-ui)",
+  color: "var(--text-2)",
+  textTransform: "uppercase",
+  letterSpacing: ".10em",
+};
+
+const SECTION_CAPTION: React.CSSProperties = {
+  font: "500 9px/1 var(--font-ui)",
+  color: "var(--muted)",
+  fontStyle: "italic",
+};
+
+const BULLET_LIST: React.CSSProperties = {
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
+const BULLET_ITEM: React.CSSProperties = {
+  display: "flex",
+  gap: 10,
+  alignItems: "flex-start",
+};
+
+const BULLET_NUMBER: React.CSSProperties = {
+  flexShrink: 0,
+  width: 20,
+  height: 20,
+  borderRadius: "50%",
+  background: "rgba(var(--brand-rgb, 100 160 255) / 0.18)",
+  border: "1px solid rgba(var(--brand-rgb, 100 160 255) / 0.30)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  font: "700 10px/1 var(--font-ui)",
+  color: "var(--brand)",
+};
+
+const BULLET_TEXT: React.CSSProperties = {
+  font: "500 12px/1.55 var(--font-ui)",
+  color: "var(--text-2)",
+};
+
+const PROFIT_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "9px 10px",
+  background: "rgba(255,255,255,0.035)",
+  border: "1px solid rgba(255,255,255,0.07)",
+  borderRadius: "var(--r-md)",
+};
+
+const PROFIT_LEVEL: React.CSSProperties = {
+  font: "700 13px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
+  color: "var(--text)",
+  minWidth: 72,
+};
+
+const PROFIT_LABEL_BADGE: React.CSSProperties = {
+  font: "600 9.5px/1 var(--font-ui)",
+  color: "var(--brand)",
+  background: "rgba(var(--brand-rgb, 100 160 255) / 0.12)",
+  borderRadius: "var(--r-sm)",
+  padding: "2px 6px",
+  whiteSpace: "nowrap",
+};
+
+const PROFIT_ACTION: React.CSSProperties = {
+  font: "500 11px/1.4 var(--font-ui)",
+  color: "var(--text-2)",
+  flex: 1,
+};
+
+const STATUS_CHIP: React.CSSProperties = {
+  flexShrink: 0,
+  font: "600 9.5px/1 var(--font-ui)",
+  border: "1px solid",
+  borderRadius: "var(--r-pill)",
+  padding: "3px 8px",
+  whiteSpace: "nowrap",
+};
+
+const THESIS_TEXT: React.CSSProperties = {
+  font: "500 11.5px/1.65 var(--font-ui)",
+  color: "var(--text-2)",
+  margin: 0,
+  whiteSpace: "pre-wrap",
+};
+
+const POSITIONING_NOTE: React.CSSProperties = {
+  margin: "9px 0 0",
+  paddingTop: 8,
+  borderTop: "1px solid var(--hairline)",
+  font: "500 10.5px/1.5 var(--font-ui)",
+  color: "var(--text-2)",
+};
+
+// ── Confidence column styles ──────────────────────────────────────────────────
+
+const CONFIDENCE_SCROLL: React.CSSProperties = {
+  flex: 1,
+  overflowY: "auto",
+  padding: "12px 12px",
+};
+
+const CONF_HDR: React.CSSProperties = {
+  marginBottom: 10,
+  paddingBottom: 8,
+  borderBottom: "1px solid rgba(255,255,255,0.08)",
+};
+
+const CONF_HDR_LABEL: React.CSSProperties = {
+  font: "600 10.5px/1 var(--font-ui)",
+  color: "var(--text-2)",
+  textTransform: "uppercase",
+  letterSpacing: ".10em",
+};
+
+const RR_ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+  padding: "8px 10px",
+  background: "rgba(255,255,255,0.033)",
+  border: "1px solid rgba(255,255,255,0.09)",
+  borderRadius: "var(--r-md)",
+  marginBottom: 10,
+};
+
+const RR_LABEL: React.CSSProperties = {
+  font: "600 10px/1 var(--font-ui)",
+  color: "var(--text-2)",
+};
+
+const RR_VAL: React.CSSProperties = {
+  font: "700 14px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
+  color: "var(--text)",
+};
+
+const RR_SUB: React.CSSProperties = {
+  font: "500 10px/1 var(--font-ui)",
+  color: "var(--muted)",
 };
 
 const FULL_CENTER: React.CSSProperties = {
