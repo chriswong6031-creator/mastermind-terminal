@@ -30,6 +30,8 @@ export interface ArcGaugeProps {
   sublabel?: string;
   /** Show the center numeral (default true). */
   showValue?: boolean;
+  /** Textual state shown in the center when a numeric score is intentionally hidden. */
+  centerLabel?: string;
 }
 
 /** The visible arc spans 240° (a 120° gap at the bottom, symmetric). */
@@ -50,6 +52,19 @@ export function arcStateColor(state: ArcState): string {
 export function clampArcValue(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(100, value));
+}
+
+/** Keep the accessible name honest when the visual deliberately withholds a score. */
+export function arcAccessibleLabel(
+  label: string | undefined,
+  value: number,
+  showValue = true,
+  centerLabel?: string,
+): string {
+  const prefix = label ? `${label}: ` : "";
+  return showValue
+    ? `${prefix}${Math.round(clampArcValue(value))} of 100`
+    : `${prefix}${centerLabel || "No numeric score"}`;
 }
 
 /**
@@ -112,6 +127,7 @@ export function ArcGauge({
   label,
   sublabel,
   showValue = true,
+  centerLabel,
 }: ArcGaugeProps) {
   const v = clampArcValue(value);
   const color = arcStateColor(state);
@@ -142,7 +158,7 @@ export function ArcGauge({
       className="arcg"
       style={{ width: size, display: "inline-flex", flexDirection: "column", alignItems: "center", gap: label ? 6 : 0 }}
       role="img"
-      aria-label={`${label ? label + ": " : ""}${Math.round(v)} of 100`}
+      aria-label={arcAccessibleLabel(label, v, showValue, centerLabel)}
     >
       <span style={{ position: "relative", width: size, height: size * 0.82, display: "block" }}>
         <svg
@@ -228,6 +244,27 @@ export function ArcGauge({
                 {sublabel}
               </span>
             )}
+          </span>
+        )}
+        {!showValue && centerLabel && (
+          <span
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: `0 ${Math.round(size * 0.19)}px`,
+              color: "var(--text-2)",
+              font: "650 var(--fs-micro)/1.25 var(--font-ui)",
+              letterSpacing: ".04em",
+              textTransform: "uppercase",
+              textAlign: "center",
+              overflowWrap: "break-word",
+              pointerEvents: "none",
+            }}
+          >
+            {centerLabel}
           </span>
         )}
       </span>

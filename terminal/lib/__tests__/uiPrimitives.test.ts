@@ -3,6 +3,7 @@ import {
   arcStateColor,
   clampArcValue,
   arcGeometry,
+  arcAccessibleLabel,
   arcStackMetrics,
   ARC_SWEEP_DEG,
 } from "@/components/ui/ArcGauge";
@@ -57,6 +58,13 @@ describe("ArcGauge logic", () => {
       translateY: 5,
       gap: 3,
     });
+  });
+
+  it("announces a textual state instead of a fake score when the numeral is withheld", () => {
+    expect(arcAccessibleLabel("Insider Power", 50, false, "No material signal"))
+      .toBe("Insider Power: No material signal");
+    expect(arcAccessibleLabel("Insider Power", 72))
+      .toBe("Insider Power: 72 of 100");
   });
 });
 

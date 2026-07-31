@@ -329,6 +329,11 @@ function InsiderPage({ sym, bars = [], zh = false }: InsiderPageProps) {
               state={verdict.gauge}
               size={148}
               showValue={!verdict.staleScore}
+              centerLabel={
+                verdict.staleScore
+                  ? pick(zh, "No material signal", "无实质信号")
+                  : undefined
+              }
               label={pick(zh, "Insider Power", "操作力度")}
               sublabel={pick(zh, "50 = neutral", "50 = 中性")}
             />
