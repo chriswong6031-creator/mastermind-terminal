@@ -12,7 +12,6 @@ struct ChartScreen: View {
     @StateObject private var bridge = ShellBridge()
     @State private var loadError: String?
     @State private var blockedRoute: String?
-    @State private var searchOpen = false
     @State private var symbolIndex = 0
     @State private var timeframeIndex = 0
 
@@ -76,7 +75,7 @@ struct ChartScreen: View {
                         guard tf != bridge.timeframe else { return }
                         bridge.setTimeframe(tf)
                     },
-                    onSearch: { searchOpen = true }
+                    onTapSymbol: { model.searchMode = .go }
                 )
             }
         }
@@ -102,13 +101,7 @@ struct ChartScreen: View {
             syncWheels()
         }
         .onChange(of: bridge.timeframe) { _, _ in syncWheels() }
-        .onAppear {
-            syncWheels()
-            if ProcessInfo.processInfo.arguments.contains("-mmOpenSearch") { searchOpen = true }
-        }
-        .fullScreenCover(isPresented: $searchOpen) {
-            SearchSheet(mode: .go)
-        }
+        .onAppear { syncWheels() }
         .alert("Not in this alpha", isPresented: Binding(get: { blockedRoute != nil }, set: { if !$0 { blockedRoute = nil } })) {
             Button("OK", role: .cancel) { blockedRoute = nil }
         } message: {

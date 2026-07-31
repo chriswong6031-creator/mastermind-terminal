@@ -62,6 +62,15 @@ struct MenuScreen: View {
                             .foregroundStyle(Theme.muted)
                     }
                     .listRowBackground(Theme.panel)
+                    // Required attribution for the logo image CDN (same as the web terminal).
+                    Button {
+                        openURL(URL(string: "https://logo.dev")!)
+                    } label: {
+                        Text("Logos provided by Logo.dev")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.muted)
+                    }
+                    .listRowBackground(Theme.panel)
                 } header: {
                     Text("About")
                         .foregroundStyle(Theme.muted)

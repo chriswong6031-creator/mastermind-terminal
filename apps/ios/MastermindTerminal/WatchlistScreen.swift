@@ -8,7 +8,6 @@ struct WatchlistScreen: View {
     @EnvironmentObject private var manifest: ManifestStore
     @EnvironmentObject private var watchlists: WatchlistStore
     @StateObject private var ticker = QuoteTicker()
-    @State private var searchOpen = false
     @State private var newListPrompt = false
     @State private var newListName = ""
     @State private var confirmDeleteList = false
@@ -30,9 +29,6 @@ struct WatchlistScreen: View {
         .onDisappear { ticker.stop() }
         .onChange(of: watchlists.activeIndex) { _, _ in ticker.start(symbols: watchlists.active.symbols) }
         .onChange(of: watchlists.active.symbols) { _, syms in ticker.start(symbols: syms) }
-        .fullScreenCover(isPresented: $searchOpen) {
-            SearchSheet(mode: .add)
-        }
         .alert("New watchlist", isPresented: $newListPrompt) {
             TextField("List name", text: $newListName)
             Button("Create") {
@@ -65,7 +61,7 @@ struct WatchlistScreen: View {
                 .foregroundStyle(Theme.text)
             Spacer()
             Button {
-                searchOpen = true
+                model.searchMode = .add
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 17, weight: .semibold))
@@ -87,9 +83,10 @@ struct WatchlistScreen: View {
                     Button {
                         model.openChart(symbol: sym)
                     } label: {
+                        let name = manifest.displayName(sym, lang: model.lang)
                         HStack(spacing: 12) {
-                            LogoCircle(symbol: sym, colorHex: row?.col)
-                            SymbolTitle(symbol: sym, name: manifest.displayName(sym, lang: model.lang))
+                            LogoCircle(symbol: sym, colorHex: row?.col, nameForInitial: name, market: row?.sec)
+                            SymbolTitle(symbol: sym, name: name)
                             Spacer(minLength: 8)
                             if model.symbol == sym {
                                 Image(systemName: "chart.xyaxis.line")
@@ -120,7 +117,7 @@ struct WatchlistScreen: View {
                     Text("No symbols yet")
                         .font(.subheadline)
                         .foregroundStyle(Theme.text2)
-                    Button("Add symbols") { searchOpen = true }
+                    Button("Add symbols") { model.searchMode = .add }
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.brand2)
                 }

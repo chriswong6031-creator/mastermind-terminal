@@ -7,11 +7,11 @@ import SwiftUI
 struct SearchSheet: View {
     enum Mode { case go, add }
     let mode: Mode
+    let onClose: () -> Void
 
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var manifest: ManifestStore
     @EnvironmentObject private var watchlists: WatchlistStore
-    @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var category: String?
     @FocusState private var fieldFocused: Bool
@@ -44,7 +44,7 @@ struct SearchSheet: View {
             .padding(.horizontal, 12)
             .frame(height: 38)
             .background(Theme.panel2, in: RoundedRectangle(cornerRadius: 10))
-            Button("Close") { dismiss() }
+            Button("Close") { onClose() }
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.text)
         }
@@ -107,7 +107,7 @@ struct SearchSheet: View {
                     let row = manifest.rows[sym]
                     let name = manifest.displayName(sym, lang: model.lang)
                     HStack(spacing: 12) {
-                        LogoCircle(symbol: sym, colorHex: row?.col, size: 32, nameForInitial: name)
+                        LogoCircle(symbol: sym, colorHex: row?.col, size: 32, nameForInitial: name, market: row?.sec)
                         SymbolTitle(symbol: sym, name: name)
                         Spacer(minLength: 8)
                         Text(row?.sec ?? "")
@@ -143,7 +143,7 @@ struct SearchSheet: View {
         switch mode {
         case .go:
             model.openChart(symbol: sym)
-            dismiss()
+            onClose()
         case .add:
             watchlists.toggle(sym)
         }

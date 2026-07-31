@@ -10,6 +10,8 @@ struct LogoCircle: View {
     var size: CGFloat = 34
     /// Numeric tickers (CN/HK) get the company name's initial — a "0" badge says nothing.
     var nameForInitial: String = ""
+    /// Manifest `sec` (used for the crypto logo family, mirroring lib/assetLogos.ts).
+    var market: String? = nil
 
     private var initial: String {
         if let first = symbol.first, first.isLetter { return String(first) }
@@ -17,12 +19,38 @@ struct LogoCircle: View {
         return String(symbol.prefix(1))
     }
 
+    /// Same contract as the web's assetLogoPath(): logo.dev image CDN, publishable token,
+    /// crypto family for -USD pairs, 404 fallback → the initial circle below.
+    private var logoURL: URL? {
+        let isCrypto = (market?.localizedCaseInsensitiveContains("crypto") ?? false)
+            || symbol.uppercased().hasSuffix("-USD")
+        let lookup = isCrypto && symbol.uppercased().hasSuffix("-USD") ? String(symbol.dropLast(4)) : symbol
+        let family = isCrypto ? "crypto" : "ticker"
+        var components = URLComponents(string: "https://img.logo.dev/\(family)/\(lookup)")
+        components?.queryItems = [
+            URLQueryItem(name: "token", value: "pk_c5LwRfhZRCWZUm6KzpmDRQ"),
+            URLQueryItem(name: "size", value: "64"),
+            URLQueryItem(name: "format", value: "webp"),
+            URLQueryItem(name: "retina", value: "true"),
+            URLQueryItem(name: "fallback", value: "404"),
+        ]
+        return components?.url
+    }
+
     var body: some View {
-        Text(initial)
-            .font(.system(size: size * 0.44, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(Color(hexString: colorHex) ?? Theme.panel3, in: Circle())
+        AsyncImage(url: logoURL) { phase in
+            if case .success(let image) = phase {
+                image.resizable().scaledToFill()
+            } else {
+                Text(initial)
+                    .font(.system(size: size * 0.44, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: size, height: size)
+                    .background(Color(hexString: colorHex) ?? Theme.panel3)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
     }
 }
 
