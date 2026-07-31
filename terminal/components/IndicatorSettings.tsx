@@ -236,6 +236,7 @@ export default function IndicatorSettings({ indKey, moduleTarget, params, onChan
   const [defOpen, setDefOpen] = useState(false);
   // explicit user collapse/expand overrides per suite module; absent = default (expanded iff enabled + unlocked)
   const [modOpen, setModOpen] = useState<Record<string, boolean>>({});
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   // snapshot the params at open so Cancel can revert this editing session (changes otherwise auto-save live)
   const snap = useRef(params);
   const pineSnap = useRef(pine?.params);
@@ -248,6 +249,10 @@ export default function IndicatorSettings({ indKey, moduleTarget, params, onChan
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => dialogRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
   useEffect(() => { if (!defOpen) return; const close = () => setDefOpen(false); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [defOpen]);
 
   const isPine = indKey === "pine";
@@ -288,9 +293,17 @@ export default function IndicatorSettings({ indKey, moduleTarget, params, onChan
 
   return (
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="ind-set" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className="ind-set"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="indicator-settings-title"
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="is-head">
-          <b>{title}</b>
+          <b id="indicator-settings-title">{title}</b>
           <span className="x" onClick={onClose} aria-label="Close">✕</span>
         </div>
         <div className="is-tabs">

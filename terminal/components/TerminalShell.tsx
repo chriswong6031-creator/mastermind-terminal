@@ -2607,7 +2607,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           onToggleCompare={(s: string, mode?: CmpMode) => toggleCompare(s, mode)} />
       )}
       {indOpen && (
-        <IndicatorsModal open active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
+        <IndicatorsModal open suspended={!!guide} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
           onApplyPreset={applySuitePreset} userTier={userTier}
           activeModules={activeSuiteModuleIds} onToggleModule={toggleSuiteModule} onOpenModuleSettings={openSettings}
           onOpenGuide={(id) => {
@@ -2623,9 +2623,27 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               pine={{ name: scriptById[settingsKey].name, params: mergedParams(scriptById[settingsKey], pineParams) }}
               onPineChange={(patch) => setPineParam(settingsKey, patch)}
               onClose={() => setSettingsKey(null)} />
-          : <IndicatorSettings indKey={settingsKey} params={indParams[parseSuiteModuleId(settingsKey)?.suiteKey ?? settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} onOpenGuide={(sk, mk, ml) => setGuide({ suite: sk, mod: mk, label: ml })} />)}
+          : <IndicatorSettings key={settingsKey} indKey={settingsKey} params={indParams[parseSuiteModuleId(settingsKey)?.suiteKey ?? settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} onOpenGuide={(sk, mk, ml) => {
+              setSettingsKey(null);
+              setGuide({ suite: sk, mod: mk, label: ml });
+            }} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
-      {guide && <GuidePanel suiteKey={guide.suite} moduleKey={guide.mod} moduleLabel={guide.label} onClose={() => setGuide(null)} />}
+      {guide && (
+        <GuidePanel
+          suiteKey={guide.suite}
+          moduleKey={guide.mod}
+          moduleLabel={guide.label}
+          activeModules={activeSuiteModuleIds}
+          userTier={userTier}
+          onToggleModule={toggleSuiteModule}
+          onConfigureModule={(id) => {
+            setGuide(null);
+            setIndOpen(false);
+            openSettings(id);
+          }}
+          onClose={() => setGuide(null)}
+        />
+      )}
       <BrainWidget
         active={active}
         onCommand={handleBrainCommand}
