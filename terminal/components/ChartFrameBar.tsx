@@ -63,10 +63,6 @@ export type ChartSettings = {
   preMarketColor: string;
   postMarketColor: string;
   overnightColor: string;
-  // Corporate events
-  showDividends: boolean;
-  showSplits: boolean;
-  showEarnings: boolean;
 };
 export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   mode: PriceScaleMode.Normal,
@@ -124,9 +120,6 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   preMarketColor: "#ff9800",
   postMarketColor: "#2962ff",
   overnightColor: "#9c27b0",
-  showDividends: true,
-  showSplits: true,
-  showEarnings: true,
 };
 
 // Range presets — the button click scrolls the chart time axis to show this window.

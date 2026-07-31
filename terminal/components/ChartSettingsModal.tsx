@@ -5,7 +5,7 @@ import { PriceScaleMode, type IChartApi } from "lightweight-charts";
 import { DEFAULT_CHART_SETTINGS, type ChartSettings } from "@/components/ChartFrameBar";
 import { useT } from "@/lib/i18n";
 
-export type ChartSettingsTab = "symbol" | "status" | "scales" | "canvas" | "events";
+export type ChartSettingsTab = "symbol" | "status" | "scales" | "canvas";
 type Patch = (patch: Partial<ChartSettings>) => void;
 
 const TEMPLATE_KEY = "mm.chartSettingTemplates";
@@ -21,7 +21,6 @@ function tabIcon(tab: ChartSettingsTab) {
     status: <><path d="M3 4h14M3 7h10M3 10h12M3 13h7" /></>,
     scales: <><path d="M4 3v12h12M2 5l2-2 2 2M14 13l2 2 2-2" /></>,
     canvas: <><path d="M4 13l8-8 3 3-8 8H4zM11 6l3 3" /></>,
-    events: <><rect x="3" y="4" width="14" height="13" rx="1.5" /><path d="M3 8h14M7 2v4M13 2v4" /></>,
   };
   return <svg className="sm-tab-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.35">{paths[tab]}</svg>;
 }
@@ -77,7 +76,6 @@ export default function ChartSettingsModal({
     { key: "status", label: t("smTabStatus") },
     { key: "scales", label: t("smTabScales") },
     { key: "canvas", label: t("smTabCanvas") },
-    { key: "events", label: "Events" },
   ];
 
   const templates = readTemplates();
@@ -103,7 +101,6 @@ export default function ChartSettingsModal({
       status: ["showLogo", "showSymbolName", "titleMode", "showOHLC", "showBarChange", "showVolume", "showLastDayChange", "showIndicatorTitles", "indicatorBackgroundOpacity"],
       scales: ["mode", "invertScale", "scaleLeft", "autoScale", "lastValueVisible", "priceLineVisible", "countdownVisible", "extendedLineVisible", "preMarketColor", "postMarketColor", "overnightColor", "hourFormat"],
       canvas: ["showWatermark", "backgroundType", "backgroundTop", "backgroundBottom", "gridHVisible", "gridVVisible", "gridHColor", "gridVColor", "paneSeparatorColor", "crosshairColor", "watermarkColor", "scaleTextColor", "scaleFontSize", "scaleLineColor", "paneButtons", "scaleMarginsTop", "scaleMarginsBottom", "rightOffsetBars"],
-      events: ["showDividends", "showSplits", "showEarnings"],
     };
     onSettings(Object.fromEntries(keys[tab].map((key) => [key, defaults[key]])) as Partial<ChartSettings>);
   }
@@ -136,7 +133,6 @@ export default function ChartSettingsModal({
             {tab === "status" && <StatusTab settings={settings} onSettings={onSettings} />}
             {tab === "scales" && <ScalesTab settings={settings} onSettings={onSettings} chartApi={chartApi} />}
             {tab === "canvas" && <CanvasTab settings={settings} onSettings={onSettings} />}
-            {tab === "events" && <EventsTab settings={settings} onSettings={onSettings} />}
           </main>
         </div>
 
@@ -385,14 +381,3 @@ const visibilityOptions = [
   { value: "hover", label: "Visible on mouse over" },
   { value: "never", label: "Hidden" },
 ];
-
-function EventsTab({ settings: s, onSettings }: { settings: ChartSettings; onSettings: Patch }) {
-  return <div className="sm-section-list">
-    <Section title="Events">
-      <CheckRow label="Dividends" value={s.showDividends} onChange={(value) => onSettings({ showDividends: value })} />
-      <CheckRow label="Splits" value={s.showSplits} onChange={(value) => onSettings({ showSplits: value })} />
-      <CheckRow label="Earnings" value={s.showEarnings} onChange={(value) => onSettings({ showEarnings: value })} />
-      <p className="sm-help">Earnings, dividends, and splits use the symbol’s fundamentals feed and render on real trading bars.</p>
-    </Section>
-  </div>;
-}

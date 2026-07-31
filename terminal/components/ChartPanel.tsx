@@ -58,55 +58,11 @@ import { listTemplates } from "@/lib/chartTemplates";
 import { announceTerminalVisualReady } from "@/lib/terminalBoot";
 import { assetInitial, assetLogoPath } from "@/lib/assetLogos";
 import type { ChartSettings } from "@/components/ChartFrameBar";
-import { buildEventMarkers, parseChartEvents, type ChartEvent } from "@/lib/chartEvents";
 import { chartTimeAxisOptions, chartTimeSpanDays } from "@/lib/chartTimeAxis";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
 export type DetectCmd = { kind: "trendlines" | "fib" | "sr" | "mtfa" | "clear" | "clearAll"; nonce: number } | null;
-
-function EventPopover({ popup, symbol, onClose }: {
-  popup: { event: ChartEvent; x: number; y: number };
-  symbol: string;
-  onClose: () => void;
-}) {
-  const event = popup.event;
-  const accent = event.kind === "earnings"
-    ? event.surprisePct != null && event.surprisePct < 0 ? "#f23645" : "#00a98f"
-    : event.kind === "dividend" ? "#2962ff" : "#ff9800";
-  const number = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 3 });
-  const money = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 3 });
-  const compact = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 2 });
-  const openPane = () => {
-    window.dispatchEvent(new CustomEvent("mm:open-pane", { detail: event.kind === "earnings" ? "earnings" : event.kind === "dividend" ? "dividends" : "statistics" }));
-    onClose();
-  };
-  return <div className="chart-event-pop" style={{ left: popup.x, top: popup.y, borderLeftColor: accent }} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
-    <button className="chart-event-close" onClick={onClose} aria-label="Close event details">×</button>
-    <div className="chart-event-title"><span style={{ color: accent }}>{event.kind === "earnings" ? "E" : event.kind === "dividend" ? "D" : "S"}</span>{event.title}</div>
-    <dl>
-      <dt>Date</dt><dd>{event.date}</dd>
-      {event.period && <><dt>Period ending</dt><dd>{event.period}</dd></>}
-      {event.kind === "earnings" && <>
-        <dt className="chart-event-group">Earnings</dt><dd />
-        <dt>Reported</dt><dd>{number(event.epsActual)}</dd>
-        <dt>Estimate</dt><dd>{number(event.epsEstimate)}</dd>
-        <dt>Surprise</dt><dd style={{ color: accent }}>{event.surprisePct == null ? "—" : `${event.surprisePct > 0 ? "+" : ""}${event.surprisePct.toFixed(2)}%`}</dd>
-        {(event.revenueActual != null || event.revenueEstimate != null) && <>
-          <dt className="chart-event-group">Revenue</dt><dd />
-          <dt>Reported</dt><dd>{compact(event.revenueActual)}</dd>
-          <dt>Estimate</dt><dd>{compact(event.revenueEstimate)}</dd>
-        </>}
-      </>}
-      {event.kind === "dividend" && <>
-        <dt>Amount</dt><dd>{money(event.amount)}</dd>
-        <dt>Payment date</dt><dd>{event.paymentDate || "—"}</dd>
-      </>}
-      {event.kind === "split" && <><dt>Ratio</dt><dd>{event.ratio || "—"}</dd></>}
-    </dl>
-    <button className="chart-event-more" onClick={openPane}>More {symbol} {event.kind === "split" ? "financials" : event.kind === "dividend" ? "dividends" : "earnings"}</button>
-  </div>;
-}
 
 // Optional live/delayed snapshot threaded ChartPane → ChartPanel for the R11 live-bar splice.
 // `ts` is a unix epoch in SECONDS (from the quote hub); `basis` gates whether we splice at all.
@@ -378,9 +334,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const pineMarkersRef = useRef<Map<string, ISeriesMarkersPluginApi<any>>>(new Map()); // scriptId → its markers plugin
   const ttmsqMarkersRef = useRef<ISeriesMarkersPluginApi<any> | null>(null); // ttmsq squeeze-tier dots plugin
   const macdMarkersRef = useRef<ISeriesMarkersPluginApi<any> | null>(null);  // TH_RSIMACD+ crossover dots plugin (on the MACD-RSI line series)
-  const eventMarkersRef = useRef<ISeriesMarkersPluginApi<any> | null>(null);
-  const eventByIdRef = useRef<Map<string, ChartEvent>>(new Map());
-  const fundRef = useRef<any>(null);
   const pinePaneMapRef = useRef<Map<string, number>>(new Map());             // sub-pane scriptId → pane index (overlay scripts absent)
   const pineErrRef = useRef<Map<string, string>>(new Map());                 // scriptId → error text (surfaced in the legend)
   const pineCacheRef = useRef<Map<string, { key: string; result: RunResult | null; error: string | null }>>(new Map()); // memo: scriptId → last run
@@ -503,7 +456,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     typeof window === "undefined" ? true : !window.matchMedia("(max-width:860px)").matches
   );
   const [showDetail, setShowDetail] = useState(true);   // GC v2: early-dots + warnings overlay toggle
-  const [eventPopup, setEventPopup] = useState<{ event: ChartEvent; x: number; y: number } | null>(null);
   // DayStatsStrip: snapshot of bars + dailyBars for the strip (updated when intraday data loads)
   // Using state so React re-renders the strip when data changes; refs are not enough.
   const [stripBars, setStripBars] = useState<Bar[]>([]);
@@ -650,40 +602,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         title,
       });
     } catch {}
-  };
-  const clearEventMarkers = () => {
-    try { (eventMarkersRef.current as any)?.detach?.(); } catch {}
-    eventMarkersRef.current = null;
-    eventByIdRef.current = new Map();
-  };
-  const applyEventMarkers = (rows: Bar[]) => {
-    clearEventMarkers();
-    const priceSeries = priceSeriesRef.current;
-    const fund = fundRef.current;
-    if (!priceSeries || !fund || !rows.length) return;
-    const settings = chartSettingsRef.current;
-    const events = parseChartEvents(fund, {
-      showEarnings: settings.showEarnings !== false,
-      showDividends: settings.showDividends !== false,
-      showSplits: settings.showSplits !== false,
-    });
-    const built = buildEventMarkers(events, rows);
-    eventByIdRef.current = built.byId;
-    if (!built.markers.length) return;
-    try { eventMarkersRef.current = createSeriesMarkers(priceSeries, built.markers as any); } catch {}
-  };
-  const loadEventMarkers = async (eventSymbol: string, rows: Bar[], epoch: number) => {
-    try {
-      const fund = await getJSON(`/data/${encodeURIComponent(eventSymbol)}.fund.json`);
-      if (epochRef.current !== epoch || symbolRef.current !== eventSymbol) return;
-      fundRef.current = fund;
-      applyEventMarkers(rows);
-    } catch {
-      if (epochRef.current === epoch) {
-        fundRef.current = null;
-        clearEventMarkers();
-      }
-    }
   };
   // Session shading primitive attached to the candle series (intraday + market has sessions + dayMode).
   const shadingPrimRef = useRef<SessionShadingPrimitive | null>(null);
@@ -2217,7 +2135,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let onCtx: ((e: MouseEvent) => void) | null = null, winDown: ((e: PointerEvent) => void) | null = null, dragCleanup: (() => void) | null = null;
     let rafId: number | null = null, measRaf: number | null = null;
     let onPaneMove: ((e: MouseEvent) => void) | null = null, onPaneLeave: (() => void) | null = null, onPaneDbl: ((e: MouseEvent) => void) | null = null;
-    let onChartClick: ((param: any) => void) | null = null;
     // ── snapshot: composite the chart with per-pane labels + brand logo + timestamp ──
     // action = "download" | "copy" | "share" | "tab" (from event detail; default = "download")
     // Reads live refs so labels match the on-screen state.
@@ -2527,21 +2444,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // migrates behind the contract in P2, and this unwrap dies with the last one.
     const chart = engine.unwrap<IChartApi>();
     chartRef.current = chart;
-    onChartClick = (param: any) => {
-      const id = String(param?.hoveredObjectId ?? param?.hoveredInfo?.objectId ?? "");
-      const event = eventByIdRef.current.get(id);
-      if (!event || !param?.point) { setEventPopup(null); return; }
-      const host = el.parentElement;
-      const maxX = Math.max(16, (host?.clientWidth ?? 360) - 340);
-      const maxY = Math.max(16, (host?.clientHeight ?? 300) - 260);
-      setEventPopup({
-        event,
-        x: Math.max(12, Math.min(maxX, Number(param.point.x) - 20)),
-        y: Math.max(46, Math.min(maxY, Number(param.point.y) - 165)),
-      });
-    };
-    chart.subscribeClick(onChartClick);
-
     // ── v5 text watermark (createTextWatermark plugin — chart.applyOptions({ watermark }) removed in v5) ──
     // Created once on mount; Effect 7 toggles visibility via applyOptions on the plugin instance.
     try {
@@ -3918,7 +3820,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (dragCleanup) dragCleanup();
       window.removeEventListener("mm:snapshot", snapshot);
       if (onKey) window.removeEventListener("keydown", onKey);
-      if (onChartClick) { try { chart.unsubscribeClick(onChartClick); } catch {} }
       if (winDown) window.removeEventListener("pointerdown", winDown);
       const wEl = wrapElRef.current;
       if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx);
@@ -3942,7 +3843,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (countdownChipRef.current) { try { countdownChipRef.current.remove(); } catch {} countdownChipRef.current = null; }
       if (shadingPrimRef.current && priceSeriesRef.current) { try { detachSessionShading(priceSeriesRef.current, shadingPrimRef.current); } catch {} shadingPrimRef.current = null; }
       clearExtendedPriceLine();
-      clearEventMarkers();
       indPriceLinesRef.current = new Map();
       indSeriesRef.current.clear(); cmpSeriesRef.current.clear(); paneMapRef.current.clear();
       pineSeriesRef.current.clear(); pineMarkersRef.current.clear(); pinePaneMapRef.current.clear(); pineErrRef.current.clear(); pineCacheRef.current.clear(); pineAstRef.current.clear();
@@ -3962,9 +3862,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const chart = chartRef.current; if (!chart) return;
     cpMark(`chart-effect2-start[${symbol}]`);
     const epoch = ++epochRef.current;
-    clearEventMarkers();
-    fundRef.current = null;
-    setEventPopup(null);
     let cancelled = false;
     const intraday = isIntradayTf(timeframe);
     // crossing the intraday↔daily boundary changes the TIME TYPE of every series (numeric epoch vs
@@ -4048,7 +3945,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           priceSeriesRef.current = priceS;
         } else { priceS.applyOptions({ priceFormat: priceFmt() }); }
         priceS!.setData(priceData(onChart) as any);
-        void loadEventMarkers(symbol, onChart, epoch);
         cpMark(`chart-painted[${symbol}]`);
         announceTerminalVisualReady(symbol);
         clearAllIndicators();
@@ -4170,7 +4066,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         priceS.applyOptions({ priceFormat: priceFmt() });
       }
       priceS!.setData(priceData(onChart) as any);
-      void loadEventMarkers(symbol, onChart, epoch);
       cpMark(`chart-painted[${symbol}]`);   // first candle on canvas
       announceTerminalVisualReady(symbol);
 
@@ -4544,7 +4439,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // exiting replay returns to the live series → re-apply the splice (self-guards under replay/EOD/intraday)
     applyLiveSplice();
     applyExtendedPriceLine();
-    if (fundRef.current) applyEventMarkers(barsRef.current);
     // eslint-disable-next-line
   }, [replayIdx]);
 
@@ -4759,7 +4653,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       renderTagRef.current?.();
       if (barsRef.current.length) paintStatus(barsRef.current, sliceRef.current);
       applyExtendedPriceLine();
-      if (fundRef.current && barsRef.current.length) applyEventMarkers(barsRef.current);
     } catch {}
     // eslint-disable-next-line
   }, [JSON.stringify(chartSettings)]);
@@ -4887,7 +4780,6 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         </span>}
       </div>
       <div ref={ref} style={{ position: "absolute", inset: 0 }} />
-      {eventPopup && <EventPopover popup={eventPopup} symbol={symbol} onClose={() => setEventPopup(null)} />}
       <ChartTables tables={suiteTables} />
       <ChartOverlays
         panes={paneLayout} hoveredKey={hoveredKey} legendOpen={legendOpen} onToggleLegend={() => setLegendOpen((o) => !o)}
