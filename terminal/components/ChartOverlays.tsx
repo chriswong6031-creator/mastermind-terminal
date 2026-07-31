@@ -78,7 +78,16 @@ const ICONS = {
 
 type MoreState = { key: string; label: string; paneIndex: number; isPane: boolean; hidden: boolean; isCompare: boolean; noParams: boolean; noSource: boolean; x: number; y: number; rowTop: number };
 
-export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: string | null; legendOpen: boolean; onToggleLegend: () => void; coarse?: boolean } & OverlayActions) {
+export default function ChartOverlays(props: {
+  panes: PaneInfo[];
+  hoveredKey: string | null;
+  legendOpen: boolean;
+  onToggleLegend: () => void;
+  coarse?: boolean;
+  showTitles?: boolean;
+  backgroundOpacity?: number;
+  paneButtons?: "always" | "hover" | "never";
+} & OverlayActions) {
   const coarse = !!props.coarse;
   const [more, setMore] = useState<MoreState | null>(null);
   const [flip, setFlip] = useState<{ key: string; n: number } | null>(null);
@@ -154,11 +163,17 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
         // a maximized PRICE pane renders a restore-only ops strip (it is reachable via double-click/tap,
         // and without this there is no visible way back — the flattened sub-panes show no ops of their own)
         const priceRestoreOnly = p.isPrice && p.maximized;
-        const showPaneOps = priceRestoreOnly || (showOps && (coarse ? (p.collapsed || p.maximized) : (props.hoveredKey === p.key || p.collapsed || p.maximized)));
+        const paneButtons = props.paneButtons ?? "hover";
+        const showPaneOps = priceRestoreOnly || (showOps && (
+          p.collapsed ||
+          p.maximized ||
+          paneButtons === "always" ||
+          (paneButtons === "hover" && !coarse && props.hoveredKey === p.key)
+        ));
         // B5: entry row visibility — price pane gated by legendOpen; sub-pane gated by legendOpen on coarse only
         const entriesVisible = p.isPrice ? props.legendOpen : (coarse ? props.legendOpen : true);
         // B5: render the price-pane lg-block even on coarse when it has no entries (so the count chip always shows)
-        const showBlock = p.entries.length > 0 || (p.isPrice && coarse);
+        const showBlock = props.showTitles !== false && (p.entries.length > 0 || (p.isPrice && coarse));
         return (
           <div key={p.key}>
             {showBlock && (
@@ -171,7 +186,9 @@ export default function ChartOverlays(props: { panes: PaneInfo[]; hoveredKey: st
                       key={e.key}
                       ref={isArmed ? armedRowRef : undefined}
                       className={`lg-row${e.hidden ? " is-hidden" : ""}${e.isCompare ? " is-cmp" : ""}${isArmed ? " is-armed" : ""}`}
-                      style={visible ? undefined : { display: "none" }}
+                      style={visible
+                        ? { background: `rgba(6,9,14,${Math.max(0, Math.min(100, props.backgroundOpacity ?? 70)) * 0.0054})` }
+                        : { display: "none" }}
                     >
                       {e.isCompare && <span className="lg-dot" style={{ background: e.color || "currentColor" }} />}
                       {/* Static Legend: tapping the name area on touch ARMS the row (fires no action) */}

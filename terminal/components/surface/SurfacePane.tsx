@@ -9,7 +9,8 @@
  *   - /api/intraday?sym={ROOT}&tf={agg}m → price candles (Bar6 tuples)
  *
  * When the replay is on an ARCHIVED session the first two swap to their date-keyed twins
- * (surface_idx_at / surface_at). Candles do not: /api/intraday has no session parameter and
+ * (surface_idx_at / surface_at). Candles do not: /api/intraday defaults to the current regular
+ * session when no explicit extended-session parameter is supplied and
  * always answers about now, so on an archived session they are filtered to that date's window
  * — which yields whatever the deep bar store actually holds for the day, and nothing at all
  * when it holds none. Drawing today's price under a past day's field is the loudest possible

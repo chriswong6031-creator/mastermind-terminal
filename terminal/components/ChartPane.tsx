@@ -2,13 +2,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChartPanel, { type DetectCmd, type LiveQuote, type PineScript } from "@/components/ChartPanel";
 import ChartFrameBar, { DEFAULT_CHART_SETTINGS, type ChartSettings } from "@/components/ChartFrameBar";
-import ChartSettingsModal from "@/components/ChartSettingsModal";
+import ChartSettingsModal, { type ChartSettingsTab } from "@/components/ChartSettingsModal";
 import { type Drawing } from "@/lib/drawings";
 import { type CmpCfg } from "@/lib/compare";
 import { type IChartApi } from "lightweight-charts";
 import { useLang } from "@/lib/i18n";
 import { displayName } from "@/lib/markets";
 import AssetLogo from "@/components/AssetLogo";
+import { classify, isIntradayTf } from "@/lib/intradaySources";
+import { isMacroSymbol } from "@/lib/macroSymbols";
 
 const f = (n: number | null | undefined, d = 2) => (n == null || !isFinite(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 
@@ -38,7 +40,7 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
   const [chartSettings, setChartSettings] = useState<ChartSettings>(DEFAULT_CHART_SETTINGS);
   const [chartApi, setChartApi] = useState<IChartApi | null>(null);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [settingsModalTab, setSettingsModalTab] = useState<"symbol" | "status" | "scales" | "canvas" | "trading">("scales");
+  const [settingsModalTab, setSettingsModalTab] = useState<ChartSettingsTab>("scales");
 
   // Load persisted chart settings on mount
   useEffect(() => { setChartSettings(load(DEFAULT_CHART_SETTINGS)); }, []);
@@ -46,8 +48,8 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
   useEffect(() => {
     const h = (e: Event) => {
       const tab = (e as CustomEvent).detail as string;
-      if (["symbol", "status", "scales", "canvas", "trading"].includes(tab)) {
-        setSettingsModalTab(tab as any);
+      if (["symbol", "status", "scales", "canvas", "events"].includes(tab)) {
+        setSettingsModalTab(tab as ChartSettingsTab);
       }
     };
     window.addEventListener("mm:settings-tab", h);
@@ -87,30 +89,19 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
   const up = (row?.chg ?? 0) >= 0;
   const marketLabel = row?.mkt || row?.sec || "";
 
-  // Derive the settings object for ChartPanel (omit extHours — threaded separately)
-  const panelSettings = useMemo(() => ({
-    mode: chartSettings.mode,
-    invertScale: chartSettings.invertScale,
-    scaleLeft: chartSettings.scaleLeft,
-    autoScale: chartSettings.autoScale,
-    priceLineVisible: chartSettings.priceLineVisible,
-    lastValueVisible: chartSettings.lastValueVisible,
-    gridHVisible: chartSettings.gridHVisible,
-    gridVVisible: chartSettings.gridVVisible,
-    candleUpColor: chartSettings.candleUpColor,
-    candleDownColor: chartSettings.candleDownColor,
-    candleUpBorder: chartSettings.candleUpBorder,
-    candleDownBorder: chartSettings.candleDownBorder,
-    candleUpWick: chartSettings.candleUpWick,
-    candleDownWick: chartSettings.candleDownWick,
-    showWatermark: chartSettings.showWatermark,
-  }), [chartSettings]);
+  const extendedEligible = classify(symbol) === "us" && !isMacroSymbol(symbol);
+  const panelSettings = useMemo(() => ({ ...chartSettings }), [chartSettings]);
+  const title = chartSettings.titleMode === "ticker"
+    ? symbol
+    : chartSettings.titleMode === "both"
+      ? `${row?.zh || row?.name || symbol} · ${symbol}`
+      : row?.zh || row?.name || symbol;
 
   return (
     <div className={`pane${isActive ? " on" : ""}`} onPointerDownCapture={() => { if (!isActive) onActivate(idx); }}>
       <div className="pane-hd">
-        <AssetLogo className="pic" symbol={symbol} name={row?.zh || row?.name} market={marketLabel} color={row?.col} size={18} />
-        <b>{row?.zh || row?.name || symbol}</b>
+        {chartSettings.showLogo && <AssetLogo className="pic" symbol={symbol} name={row?.zh || row?.name} market={marketLabel} color={row?.col} size={18} />}
+        {chartSettings.showSymbolName && <b>{title}</b>}
         <span className="pane-tf">{tf}</span>
         <span className="px num">{f(row?.last, (row?.last ?? 99) < 10 ? 4 : 2)}</span>
         <span className={`cg num ${up ? "up" : "down"}`}>{up ? "+" : ""}{f(row?.chg)}%</span>
@@ -131,7 +122,7 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         pineScripts={pineScripts} userTier={userTier}
         chartSettings={panelSettings}
         onChartApi={setChartApi}
-        extHours={chartSettings.extHours}
+        extHours={extendedEligible && chartSettings.extHours}
         key={symbol}
         onAddAlert={isActive ? onAddAlert : undefined}
         onTableView={isActive ? onTableView : undefined}
@@ -149,9 +140,10 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         settings={chartSettings}
         onSettings={patchSettings}
         onOpenSettingsModal={(tab) => {
-          if (tab) setSettingsModalTab(tab as any);
+          if (tab) setSettingsModalTab(tab as ChartSettingsTab);
           setSettingsModalOpen(true);
         }}
+        extendedEligible={extendedEligible}
       />
       <ChartSettingsModal
         open={settingsModalOpen}
@@ -160,6 +152,8 @@ export default function ChartPane({ idx, symbol, isActive, onActivate, row, tf, 
         onSettings={patchSettings}
         onClose={() => setSettingsModalOpen(false)}
         chartApi={chartApi}
+        extendedEligible={extendedEligible}
+        intraday={isIntradayTf(tf)}
       />
     </div>
   );

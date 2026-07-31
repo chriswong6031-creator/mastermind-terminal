@@ -234,7 +234,7 @@ function boot() {
 
   if (!DISABLE_US) {
     const apiKey = process.env.POLYGON_API_KEY || process.env.MASSIVE_API_KEY || "";
-    polygon = new Polygon(store, apiKey);
+    polygon = new Polygon(store, apiKey, extFeed);
     polygon.start(); // authenticates; no subs until first /quotes request
   } else {
     log.warn("HUB_DISABLE_US=1 — US feed off");
