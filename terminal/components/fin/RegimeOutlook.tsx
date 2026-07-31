@@ -19,6 +19,7 @@ import {
 import { fmtPct, pick } from "../../lib/finFormat";
 import { FinTip, useFinTip } from "./FinCharts";
 import { getJSON } from "../../lib/dataCache";
+import { forwardSeasonalTooltipRows } from "../../lib/forwardSeasonalTooltip";
 import { thinLabels, useChartWidth } from "../charts/svgChart";
 
 /* ── types matching the JSON schema ─────────────────────────────────────── */
@@ -588,52 +589,12 @@ function TimelinePanel({ intervals, asOf, forwardBuckets, view, zh }: TimelinePa
                   fillOpacity={opacity}
                   rx={3}
                   className="fin-ro-band"
+                  data-bucket-count={iv.buckets.length}
                   onPointerMove={(e: RPointerEvent<SVGRectElement>) => {
-                    const rows: { label: string; value: string; color?: string }[] = [
-                      {
-                        label: pick(zh, "Typical move", "典型涨跌"),
-                        value: pctTxt,
-                        color: isBull ? "var(--up)" : "var(--down)",
-                      },
-                      {
-                        label: pick(zh, "Years up", "上涨年份"),
-                        value: wrTxt || "—",
-                        color: "var(--text-2)",
-                      },
-                    ];
-                    if (iv.lo != null && iv.hi != null) {
-                      rows.push({
-                        label: pick(zh, "Middle range", "中间区间"),
-                        value: `${P(iv.lo)} … ${P(iv.hi)}`,
-                        color: "var(--muted)",
-                      });
-                    }
-                    for (const bl of iv.buckets) {
-                      const bv = bucketByLabel[bl];
-                      if (bv) {
-                        rows.push({
-                          label: bl,
-                          value: `${P(bv.mean)} · ${WRp(bv.win_rate)} WR · n=${bv.n}`,
-                          color:
-                            bv.dir === "bull"
-                              ? "var(--up)"
-                              : bv.dir === "bear"
-                              ? "var(--down)"
-                              : "var(--muted)",
-                        });
-                        if (bv.lo != null && bv.hi != null) {
-                          rows.push({
-                            label: pick(zh, "Range (p20–p80)", "区间 (p20–p80)"),
-                            value: `${P(bv.lo)} … ${P(bv.hi)}`,
-                            color: "var(--muted)",
-                          });
-                        }
-                      }
-                    }
                     show(
                       e,
                       `${iv.start} → ${iv.end}`,
-                      rows,
+                      forwardSeasonalTooltipRows(iv, zh),
                     );
                   }}
                   onPointerLeave={hide}

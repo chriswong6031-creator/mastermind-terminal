@@ -174,6 +174,7 @@ test("a Pro-equivalent entitlement can discover all premium modules and add a su
 
 test("Seasonal read stays useful in chart and table views at every supported width", async ({ page }, testInfo) => {
   const now = new Date();
+  const crowdedBucketLabels = ["Oct H2", "Nov H1", "Nov H2", "Dec H1", "Dec H2"];
   const iso = (days: number) => {
     const d = new Date(now);
     d.setUTCDate(d.getUTCDate() + days);
@@ -186,6 +187,7 @@ test("Seasonal read stays useful in chart and table views at every supported wid
     move: number,
     winRate: number,
     score: number,
+    buckets: string[] = [],
   ) => ({
     dir,
     start: iso(start),
@@ -200,12 +202,12 @@ test("Seasonal read stays useful in chart and table views at every supported wid
     stability: 0.85,
     evidence_score: score,
     confidence: score >= 70 ? "high" : score >= 48 ? "medium" : "low",
-    buckets: [],
+    buckets,
   });
   const baseline = [
     interval(3, 25, "bull", 6.4, 0.74, 78),
     interval(34, 51, "bear", -2.1, 0.37, 55),
-    interval(67, 104, "bull", 9.2, 0.78, 83),
+    interval(67, 104, "bull", 9.2, 0.78, 83, crowdedBucketLabels),
     interval(126, 148, "bull", 3.0, 0.67, 52),
   ];
   const artifact = {
@@ -261,7 +263,31 @@ test("Seasonal read stays useful in chart and table views at every supported wid
       flags: [],
       provisional: false,
     })),
-    forward_buckets: [],
+    forward_buckets: crowdedBucketLabels.map((label, index) => ({
+      start: iso(67 + index * 7),
+      end: iso(73 + index * 7),
+      label,
+      baseline: {
+        dir: "bull",
+        mean: 2.4 + index,
+        median: 2.1 + index,
+        win_rate: 0.67,
+        n: 27,
+        lo: -4.2,
+        hi: 9.8,
+        confidence: "high",
+      },
+      regime: {
+        dir: "bull",
+        mean: 2.1 + index,
+        median: 1.8 + index,
+        win_rate: 0.64,
+        n: 12,
+        lo: -4.8,
+        hi: 9.1,
+        confidence: "medium",
+      },
+    })),
     intervals_baseline: baseline,
     intervals_regime: baseline.map((item) => ({
       ...item,
@@ -315,6 +341,20 @@ test("Seasonal read stays useful in chart and table views at every supported wid
   await outlook.screenshot({
     path: testInfo.outputPath(`${testInfo.project.name}-seasonal-forward-map.png`),
   });
+  const crowdedBand = outlook.locator('.fin-ro-band[data-bucket-count="5"]');
+  await expect(crowdedBand).toHaveCount(1);
+  await crowdedBand.hover();
+  const windowTip = page.getByRole("tooltip");
+  await expect(windowTip).toBeVisible();
+  await expect(windowTip.locator(".fin-tip-row")).toHaveCount(5);
+  await expect(windowTip).toContainText("Support");
+  await expect(windowTip).toContainText("Effective years");
+  await expect(windowTip).not.toContainText("Oct H2");
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-seasonal-forward-tooltip.png`),
+  });
+  await outlook.locator(".fin-ro-timeline-label").hover();
+  await expect(windowTip).toHaveCount(0);
 
   await seasonal.getByRole("button", { name: "Table", exact: true }).click();
   await expect(seasonal.locator(".fin-seas-grid")).toBeVisible();
