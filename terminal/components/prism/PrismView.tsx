@@ -11,7 +11,7 @@
  *   - SINGLE | CONFLUENCE mode toggle
  *   - DTE column count: 4 | 8 (default 4 = spacious; 8 = tighter)
  *   - Expiry scope: DEFAULT | 0DTE | ALL
- *   - Strike range: ±10 | ±20 | ±40 (default ±10, centered on spot, no scroll)
+ *   - Strike range: ±10 | ±20 | ±40 (default ±40, centered on spot)
  *   - Normalization: PER-COL | GLOBAL
  *   - LensBar (GEX | OI | VOL | ΔOI; VEX + UNUSUAL disabled)
  *
@@ -119,7 +119,7 @@ export function PrismView() {
   const [activeLens, setLens]           = useState<ActiveLens>("GEX");
   const [scope, setScope]               = useState<ScopeMode>("default");
   const [dteColCount, setDteColCount]   = useState<DteColCount>(4);
-  const [strikeRange, setStrikeRange]   = useState<StrikeRange>(10);
+  const [strikeRange, setStrikeRange]   = useState<StrikeRange>(40);
   const [norm, setNorm]                 = useState<NormMode>("column");
 
   const [matrix, setMatrix]             = useState<MatrixPayload | null>(null);

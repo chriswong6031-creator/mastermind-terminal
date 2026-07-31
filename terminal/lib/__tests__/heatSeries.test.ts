@@ -5,6 +5,7 @@ import {
   cssColorToRgb,
   cellRowSpan,
   resolveMetricColors,
+  timeInterpolation,
   type Rgb,
 } from "@/lib/heatSeries";
 import { buildHeatBars, type SurfaceFrame } from "@/lib/surfaceContract";
@@ -14,55 +15,55 @@ import type { Time } from "lightweight-charts";
 const POS: Rgb = [38, 194, 129];
 const NEG: Rgb = [240, 86, 107];
 
-describe("heatShade — exact two-band curve (RECON §3 verbatim)", () => {
+describe("heatShade — two-band hue with transparent neutral cells", () => {
   // With maxAbs = 1 and W = 1, amount === o, so these pin the exact band math.
-  it("o = 0 → faint neutral panel wash", () => {
-    expect(heatShade(0, 1, POS, NEG, 1)).toBe("rgba(30,30,35,0.200)");
+  it("o = 0 → transparent (no muddy session block)", () => {
+    expect(heatShade(0, 1, POS, NEG, 1)).toBe("rgba(30,30,35,0.000)");
   });
 
   it("o = 0.3 (low band, sqrt ramp) — positive", () => {
-    expect(heatShade(0.3, 1, POS, NEG, 1)).toBe("rgba(36,146,101,0.530)");
+    expect(heatShade(0.3, 1, POS, NEG, 1)).toBe("rgba(36,146,101,0.353)");
   });
 
   it("o = 0.6 (band boundary) reaches full hue exactly", () => {
-    expect(heatShade(0.6, 1, POS, NEG, 1)).toBe("rgba(38,194,129,0.700)");
+    expect(heatShade(0.6, 1, POS, NEG, 1)).toBe("rgba(38,194,129,0.581)");
   });
 
   it("o = 0.8 (hot band) over-exposes toward white", () => {
-    expect(heatShade(0.8, 1, POS, NEG, 1)).toBe("rgba(76,205,151,0.795)");
+    expect(heatShade(0.8, 1, POS, NEG, 1)).toBe("rgba(76,205,151,0.715)");
   });
 
   it("o = 1.0 (max) — brightest core", () => {
-    expect(heatShade(1.0, 1, POS, NEG, 1)).toBe("rgba(114,215,173,0.880)");
+    expect(heatShade(1.0, 1, POS, NEG, 1)).toBe("rgba(114,215,173,0.840)");
   });
 
   it("negative amounts use the neg triplet (o = 0.3 and 0.8)", () => {
-    expect(heatShade(-0.3, 1, POS, NEG, 1)).toBe("rgba(178,70,86,0.530)");
-    expect(heatShade(-0.8, 1, POS, NEG, 1)).toBe("rgba(243,116,133,0.795)");
+    expect(heatShade(-0.3, 1, POS, NEG, 1)).toBe("rgba(178,70,86,0.353)");
+    expect(heatShade(-0.8, 1, POS, NEG, 1)).toBe("rgba(243,116,133,0.715)");
   });
 
-  it("maxAbs = 0 → neutral wash scaled only by opacity W", () => {
-    expect(heatShade(5, 0, POS, NEG, 1)).toBe("rgba(30,30,35,0.200)");
-    expect(heatShade(5, 0, POS, NEG, 0.5)).toBe("rgba(30,30,35,0.100)");
+  it("maxAbs = 0 → transparent regardless of opacity", () => {
+    expect(heatShade(5, 0, POS, NEG, 1)).toBe("rgba(30,30,35,0.000)");
+    expect(heatShade(5, 0, POS, NEG, 0.5)).toBe("rgba(30,30,35,0.000)");
   });
 
   it("opacity W scales alpha but not the RGB", () => {
-    expect(heatShade(1, 1, POS, NEG, 0.5)).toBe("rgba(114,215,173,0.440)");
+    expect(heatShade(1, 1, POS, NEG, 0.5)).toBe("rgba(114,215,173,0.420)");
   });
 
   it("|amount| > maxAbs clamps to o = 1 (no overflow past white core)", () => {
-    expect(heatShade(2, 1, POS, NEG, 1)).toBe("rgba(114,215,173,0.880)");
+    expect(heatShade(2, 1, POS, NEG, 1)).toBe("rgba(114,215,173,0.840)");
   });
 
-  it("sign boundary: amount 0 is treated as positive (>= 0)", () => {
-    // exactly 0 with maxAbs>0 → o=0 → panel base regardless of pos/neg (they blend to 0)
-    expect(heatShade(0, 10, POS, NEG, 1)).toBe("rgba(30,30,35,0.200)");
+  it("non-finite input fails transparent", () => {
+    expect(heatShade(Number.NaN, 10, POS, NEG, 1)).toBe("rgba(30,30,35,0.000)");
+    expect(heatShade(1, Number.POSITIVE_INFINITY, POS, NEG, 1)).toBe("rgba(30,30,35,0.000)");
   });
 });
 
 describe("parseRgba", () => {
   it("parses rgba with alpha to [r,g,b,a255]", () => {
-    expect(parseRgba("rgba(114,215,173,0.880)")).toEqual([114, 215, 173, 224]);
+    expect(parseRgba("rgba(114,215,173,0.840)")).toEqual([114, 215, 173, 214]);
   });
   it("parses rgb (no alpha) as opaque", () => {
     expect(parseRgba("rgb(38,194,129)")).toEqual([38, 194, 129, 255]);
@@ -73,7 +74,26 @@ describe("parseRgba", () => {
   it("round-trips a shader output", () => {
     const [r, g, b, a] = parseRgba(heatShade(1, 1, POS, NEG, 1));
     expect([r, g, b]).toEqual([114, 215, 173]);
-    expect(a).toBe(Math.round(0.88 * 255));
+    expect(a).toBe(Math.round(0.84 * 255));
+  });
+});
+
+describe("timeInterpolation — observed x spacing is authoritative", () => {
+  const samples = [10, 20, 80, 100];
+
+  it("clamps outside the observed range", () => {
+    expect(timeInterpolation(samples, 0)).toEqual({ left: 0, right: 0, mix: 0 });
+    expect(timeInterpolation(samples, 120)).toEqual({ left: 3, right: 3, mix: 0 });
+  });
+
+  it("interpolates within the actual irregular gap", () => {
+    expect(timeInterpolation(samples, 50)).toEqual({ left: 1, right: 2, mix: 0.5 });
+    expect(timeInterpolation(samples, 15)).toEqual({ left: 0, right: 1, mix: 0.5 });
+  });
+
+  it("returns null when no observation can be located", () => {
+    expect(timeInterpolation([], 10)).toBeNull();
+    expect(timeInterpolation(samples, Number.NaN)).toBeNull();
   });
 });
 

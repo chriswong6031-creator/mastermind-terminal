@@ -124,3 +124,19 @@ export function sessionEpoch(sessionDate: string, hhmm: string): number {
   if (!d || !t) return NaN;
   return Date.UTC(+d[1], +d[2] - 1, +d[3], +t[1], +t[2]) / 1000;
 }
+
+/**
+ * Keep only bars belonging to one market session date.
+ *
+ * Intraday bars use the app's display-epoch convention, so a session is the simple
+ * half-open UTC-shaped day [00:00, next 00:00). Keeping this helper beside
+ * `sessionEpoch` prevents clients from accidentally mixing a deep history response into
+ * a single-session study (the Flow Surface regression that flattened price and reduced
+ * today's field to a sliver).
+ */
+export function filterBarsToSessionDate(bars: Bar6[], sessionDate: string): Bar6[] {
+  const start = sessionEpoch(sessionDate, "00:00");
+  if (!Number.isFinite(start)) return [];
+  const end = start + 86_400;
+  return bars.filter((bar) => Number.isFinite(bar[0]) && bar[0] >= start && bar[0] < end);
+}

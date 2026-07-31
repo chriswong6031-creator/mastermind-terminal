@@ -4,7 +4,8 @@
  *
  * HONESTY DOCTRINE (display-tier wording only):
  *   - The surface is a PREMIUM-FLOW field materialized from OPRA per-strike flow.
- *     Cadence is shown verbatim from the snapshot store — never claim 1-min if it's 10-min.
+ *     Cadence is measured from the plotted timestamps — a configured producer target is
+ *     not presented as achieved when the actual snapshots are sparse.
  *   - Greek surfaces (gamma/vanna/charm) are NOT built yet → shown disabled-with-tooltip
  *     ("accruing — ships with the greeks snapshotter"), never faked.
  *   - No "validated" / "predictive" / directional-signal language.
@@ -31,8 +32,9 @@ const SURFACE_LEX = {
   ],
   metricLensAria: ["Surface metric", "曲面指标"],
 
-  // ── Aggregation ─────────────────────────────────────────────────────────────
-  aggAria: ["Aggregation", "聚合"],
+  // ── Candle interval (does not resample the surface field) ───────────────────
+  aggAria: ["Candle interval", "K线周期"],
+  candleInterval: ["Candles", "K线"],
   agg1m: ["1m", "1分"],
   agg5m: ["5m", "5分"],
   agg15m: ["15m", "15分"],
@@ -67,6 +69,9 @@ const SURFACE_LEX = {
   legendNeg: ["outflow", "流出"],
   asOf: ["as of", "更新于"],
   cadenceLabel: ["cadence", "频率"],
+  snapshots: ["snapshots", "个快照"],
+  observedCadence: ["observed", "实测间隔"],
+  cadencePending: ["cadence pending", "频率待测"],
   sessionLabel: ["session", "交易日"],
 
   // ── Empty / loading ─────────────────────────────────────────────────────────
@@ -111,8 +116,8 @@ const SURFACE_LEX = {
 
   // ── Data honesty note ───────────────────────────────────────────────────────
   surfaceNote: [
-    "Premium-flow field from OPRA per-strike flow. Display-only; cadence is the store's true cadence — the field is not resampled finer than the data.",
-    "基于 OPRA 逐行权价资金流的权利金场。仅供展示；显示频率为存储的真实频率——不会对数据进行更细粒度的重采样。",
+    "One selected-session OPRA per-strike field at its observed snapshot cadence. Candle intervals change price bars only; past fields appear in the session picker when retained.",
+    "按所选交易日显示 OPRA 逐行权价资金流，并采用实测快照频率。K线周期仅改变价格K线；已保留的历史场会显示在交易日选择器中。",
   ],
 
   // ── Session Flow pane ───────────────────────────────────────────────────────

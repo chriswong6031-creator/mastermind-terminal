@@ -248,9 +248,10 @@ export function SurfaceView() {
             </button>
           </div>
 
-          {/* Quad's shared aggregation (the single view keeps its own in-pane control). */}
+          {/* Quad's shared CANDLE interval (the field snapshots are never resampled). */}
           {view === "quad" && (
             <div style={GROUP} role="group" aria-label={t("aggAria")}>
+              <span className="obs-lbl">{t("candleInterval")}</span>
               {[1, 5, 15, 30].map((m) => (
                 <button key={m} className={`obs-chip${aggMin === m ? " on" : ""}`} style={CHIP}
                   aria-pressed={aggMin === m} onClick={() => setAggMin(m)}>

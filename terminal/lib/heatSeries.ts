@@ -3,19 +3,17 @@
  *
  * This is the "paint surface" renderer: an intraday exposure/premium field painted
  * BEHIND the price candles. Each bar carries a vertical stack of `cells` ({low, high,
- * amount}); the renderer paints the whole grid onto a tiny offscreen canvas at native
- * grid resolution (1 cell = 1 px), then blits it to the plot rect with high-quality
- * image smoothing. The browser's smooth upscale of the tiny grid IS the watercolor look
- * — there is deliberately NO blur filter (see RECON §3 / MASTERPLAN §3 Lane T).
+ * amount}); the renderer builds the native time×strike grid, interpolates ONLY across
+ * the observed time coordinates into a screen-width raster, then scales strike rows with
+ * nearest-neighbour sampling. That preserves real irregular snapshot spacing and crisp
+ * strike bands instead of bilinear-blurring a tiny source image in both directions.
  *
  * Algorithm mirrors quanted's decoded renderer (research/quanted_options/js_extracts):
  *   1. Over the visible range, collect the union of unique cell boundaries → sorted
  *      levels `p`; grid height g = p.length - 1, width h = #visible bars.
- *   2. createImageData(h, g); per pixel write cellShader(amount) parsed to RGBA bytes,
- *      y-flipped so the highest price sits at the top row.
- *   3. putImageData → the offscreen canvas; then in MEDIA (CSS-pixel) coordinate space,
- *      compute the plot rect from priceConverter(maxHigh..minLow) and the first/last bar
- *      x ± barSpacing/2, set imageSmoothingEnabled + quality='high', drawImage upscale.
+ *   2. Build native amount/RGBA arrays, y-flipped so the highest price is the top row.
+ *   3. Interpolate source columns at their ACTUAL chart x coordinates into a
+ *      screen-width raster. Blit with smoothing disabled so price rows stay legible.
  *
  * The shader (`heatShade`) is a PURE function exported for unit testing — its exact
  * two-band curve (sqrt ramp to hue, then over-expose toward white above 60% of day-max)
@@ -56,7 +54,8 @@ export type Rgb = readonly [number, number, number];
  *
  * Band 1 (o ≤ 0.6): sqrt-eased blend from the panel base to the full hue.
  * Band 2 (o > 0.6): over-expose toward white by up to 35% — the "hot core".
- * Alpha: 0.2 + 0.68·o^0.6, scaled by W. Empty field (maxAbs 0) → faint neutral wash.
+ * Alpha: 0.84·o^0.72, scaled by W. Zero/missing values are transparent, so empty cells
+ * do not turn the selected session into a muddy rectangular block.
  */
 export function heatShade(
   amount: number,
@@ -65,7 +64,10 @@ export function heatShade(
   neg: Rgb,
   W: number,
 ): string {
-  if (!maxAbs) return `rgba(30,30,35,${(0.2 * W).toFixed(3)})`;
+  const weight = Number.isFinite(W) ? Math.min(1, Math.max(0, W)) : 0;
+  if (!(maxAbs > 0) || !Number.isFinite(maxAbs) || !Number.isFinite(amount)) {
+    return "rgba(30,30,35,0.000)";
+  }
   const o = Math.min(1, Math.abs(amount) / maxAbs);
   const c = amount >= 0 ? pos : neg;
   let r: number, g: number, b: number;
@@ -80,8 +82,41 @@ export function heatShade(
     g = c[1] + (255 - c[1]) * e;
     b = c[2] + (255 - c[2]) * e;
   }
-  const a = (0.2 + 0.68 * Math.pow(o, 0.6)) * W;
+  const a = 0.84 * Math.pow(o, 0.72) * weight;
   return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${a.toFixed(3)})`;
+}
+
+export interface TimeInterpolation {
+  left: number;
+  right: number;
+  mix: number;
+}
+
+/**
+ * Locate the two observed time columns surrounding a chart x coordinate.
+ *
+ * Unlike stretching an h-pixel bitmap uniformly, this preserves long gaps between sparse
+ * snapshots. Coordinates outside the observations clamp to the nearest edge column.
+ */
+export function timeInterpolation(
+  sampleX: readonly number[],
+  x: number,
+): TimeInterpolation | null {
+  if (!sampleX.length || !Number.isFinite(x)) return null;
+  const last = sampleX.length - 1;
+  if (x <= sampleX[0]) return { left: 0, right: 0, mix: 0 };
+  if (x >= sampleX[last]) return { left: last, right: last, mix: 0 };
+
+  let lo = 0;
+  let hi = last;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (sampleX[mid] <= x) lo = mid;
+    else hi = mid;
+  }
+  const span = sampleX[hi] - sampleX[lo];
+  if (!(span > 0)) return { left: lo, right: lo, mix: 0 };
+  return { left: lo, right: hi, mix: Math.min(1, Math.max(0, (x - sampleX[lo]) / span)) };
 }
 
 /**
@@ -214,7 +249,8 @@ function isHeat(d: HeatData | WhitespaceData<Time>): d is HeatData {
 class HeatRenderer implements ICustomSeriesPaneRenderer {
   private _data: PaneRendererCustomData<Time, HeatData> | null = null;
   private _options: HeatSeriesOptions | null = null;
-  private _offscreen: HTMLCanvasElement | OffscreenCanvas | null = null;
+  private _timeRaster: HTMLCanvasElement | OffscreenCanvas | null = null;
+  private _rasterKey = "";
 
   update(
     data: PaneRendererCustomData<Time, HeatData>,
@@ -225,11 +261,12 @@ class HeatRenderer implements ICustomSeriesPaneRenderer {
   }
 
   destroy(): void {
-    if (this._offscreen) {
-      this._offscreen.width = 0;
-      this._offscreen.height = 0;
-      this._offscreen = null;
+    if (this._timeRaster) {
+      this._timeRaster.width = 0;
+      this._timeRaster.height = 0;
+      this._timeRaster = null;
     }
+    this._rasterKey = "";
     this._data = null;
     this._options = null;
   }
@@ -275,27 +312,9 @@ class HeatRenderer implements ICustomSeriesPaneRenderer {
       const rowOf = new Map<number, number>();
       for (let i = 0; i < boundaries.length; i++) rowOf.set(boundaries[i], i);
 
-      // 2. Native-resolution offscreen canvas (reused across frames when the size holds).
-      if (!this._offscreen || this._offscreen.width !== h || this._offscreen.height !== g) {
-        try {
-          this._offscreen =
-            typeof OffscreenCanvas !== "undefined"
-              ? new OffscreenCanvas(h, g)
-              : document.createElement("canvas");
-        } catch {
-          this._offscreen = document.createElement("canvas");
-        }
-        this._offscreen.width = h;
-        this._offscreen.height = g;
-      }
-      const octx = this._offscreen.getContext("2d", { willReadFrequently: true }) as
-        | CanvasRenderingContext2D
-        | OffscreenCanvasRenderingContext2D
-        | null;
-      if (!octx) return;
-
-      const img = octx.createImageData(h, g);
-      const buf = img.data;
+      // 2. Native-resolution source arrays (one entry per observed time×strike cell).
+      const buf = new Uint8ClampedArray(h * g * 4);
+      const amounts = new Float64Array(h * g);
       for (let i = from; i < to; i++) {
         const bar = bars[i];
         const cells = bar?.originalData?.cells;
@@ -313,18 +332,20 @@ class HeatRenderer implements ICustomSeriesPaneRenderer {
             buf[px + 1] = gg;
             buf[px + 2] = b;
             buf[px + 3] = a;
+            amounts[yFlipped * h + col] = cell.amount;
           }
         }
       }
-      octx.putImageData(img, 0, 0);
-
-      // 3. Blit the tiny grid to the plot rect with high-quality upscale.
+      // 3. Build a screen-width time raster using the ACTUAL chart x positions. The old
+      // path stretched every source column uniformly, which lied about sparse/irregular
+      // snapshots and made an 11-column feed visibly blocky.
       const first = bars[from];
       const last = bars[to - 1];
       if (!first || !last) return;
-      const halfBar = barSpacing / 2;
-      const xLeft = first.x - halfBar;
-      const xRight = last.x + halfBar;
+      const firstGap = h > 1 ? Math.max(1, bars[from + 1].x - first.x) : barSpacing;
+      const lastGap = h > 1 ? Math.max(1, last.x - bars[to - 2].x) : barSpacing;
+      const xLeft = first.x - firstGap / 2;
+      const xRight = last.x + lastGap / 2;
       const yHigh = priceConverter(maxHigh);
       const yLow = priceConverter(minLow);
       if (yHigh === null || yLow === null) return;
@@ -332,23 +353,88 @@ class HeatRenderer implements ICustomSeriesPaneRenderer {
       const height = Math.abs(yLow - yHigh);
       if (height <= 0 || xRight <= xLeft) return;
 
+      // One raster pixel per CSS pixel (capped for pathological zoom), then a final
+      // nearest-neighbour vertical scale. Interpolation is horizontal only.
+      const plotWidth = xRight - xLeft;
+      const rasterWidth = Math.max(1, Math.min(4096, Math.ceil(plotWidth)));
+      const sampleX = new Array<number>(h);
+      for (let col = 0; col < h; col++) sampleX[col] = bars[from + col].x;
+      // Crosshair motion redraws the pane without changing the field. Hash the compact
+      // native source and geometry so that expensive screen-width interpolation is reused
+      // during those redraws while still invalidating on data, palette, zoom, or pan.
+      let sourceHash = 2166136261;
+      for (let i = 0; i < buf.length; i++) {
+        sourceHash ^= buf[i];
+        sourceHash = Math.imul(sourceHash, 16777619);
+      }
+      const rasterKey = [
+        sourceHash >>> 0,
+        g,
+        rasterWidth,
+        xLeft.toFixed(3),
+        xRight.toFixed(3),
+        sampleX.map((x) => x.toFixed(3)).join(","),
+      ].join(":");
+      if (!this._timeRaster || this._timeRaster.width !== rasterWidth || this._timeRaster.height !== g) {
+        try {
+          this._timeRaster =
+            typeof OffscreenCanvas !== "undefined"
+              ? new OffscreenCanvas(rasterWidth, g)
+              : document.createElement("canvas");
+        } catch {
+          this._timeRaster = document.createElement("canvas");
+        }
+        this._timeRaster.width = rasterWidth;
+        this._timeRaster.height = g;
+        this._rasterKey = "";
+      }
+      const tctx = this._timeRaster.getContext("2d", { willReadFrequently: true }) as
+        | CanvasRenderingContext2D
+        | OffscreenCanvasRenderingContext2D
+        | null;
+      if (!tctx) return;
+
+      if (this._rasterKey !== rasterKey) {
+        const timeImg = tctx.createImageData(rasterWidth, g);
+        const timeBuf = timeImg.data;
+        const mixes = new Array<TimeInterpolation>(rasterWidth);
+        for (let outCol = 0; outCol < rasterWidth; outCol++) {
+          const chartX = xLeft + ((outCol + 0.5) / rasterWidth) * plotWidth;
+          mixes[outCol] = timeInterpolation(sampleX, chartX) ?? { left: 0, right: 0, mix: 0 };
+        }
+        for (let row = 0; row < g; row++) {
+          for (let outCol = 0; outCol < rasterWidth; outCol++) {
+            const { left, right, mix } = mixes[outCol];
+            const amountL = amounts[row * h + left];
+            const amountR = amounts[row * h + right];
+            const [r, gg, b, a] = parseRgba(
+              options.cellShader(amountL + (amountR - amountL) * mix),
+            );
+            const dst = (row * rasterWidth + outCol) * 4;
+            timeBuf[dst] = r;
+            timeBuf[dst + 1] = gg;
+            timeBuf[dst + 2] = b;
+            timeBuf[dst + 3] = a;
+          }
+        }
+        tctx.putImageData(timeImg, 0, 0);
+        this._rasterKey = rasterKey;
+      }
+
       const prevSmoothing = ctx.imageSmoothingEnabled;
-      const prevQuality = ctx.imageSmoothingQuality;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(
-        this._offscreen as CanvasImageSource,
+        this._timeRaster as CanvasImageSource,
         0,
         0,
-        h,
+        rasterWidth,
         g,
         xLeft,
         yTop,
-        xRight - xLeft,
+        plotWidth,
         height,
       );
       ctx.imageSmoothingEnabled = prevSmoothing;
-      ctx.imageSmoothingQuality = prevQuality;
     });
   }
 }
