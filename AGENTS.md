@@ -37,6 +37,20 @@ promises or “memory” recorded only inside one chat do not carry to another s
   390×844 mobile. Run `npm run test:e2e:responsive` from `terminal/`; update the shared responsive
   shell and test together when behavior intentionally changes.
 
+## Native app shells (`apps/`)
+
+- The installable iPhone/iPad/macOS apps (later Windows/Android) are thin native hosts around the
+  Terminal, governed by `docs/NATIVE_APPS_ALPHA_MASTERPLAN_2026-07-30.md`.
+- Native code under `apps/` may implement presentation and OS integration only: navigation chrome,
+  lists/sheets rendering data fetched from published Terminal HTTP APIs (`/api/*`, `/data/*`),
+  OS features (share, keychain, haptics), and WebView hosting of Terminal routes in shell mode.
+- Native code must never re-implement chart rendering, indicator/signal math, entitlement logic,
+  or any analysis; those live only in `terminal/` and its backends. If a native screen needs data
+  that no published API provides, add the API to `terminal/` first.
+- The Options suite is excluded from every installable alpha surface (feature manifest + webview
+  route policy) while remaining untouched on the web.
+- Native binaries are build artifacts, never VPS deploys; the web delivery chain is unchanged.
+
 ## Definition of done
 
 For every substantive, verified change, complete the full delivery chain without
