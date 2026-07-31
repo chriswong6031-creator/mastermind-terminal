@@ -11,6 +11,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
 import { AppNav } from "@/components/AppNav";
+import { initShellBridge, postToShell } from "@/lib/platform/shellBridge";
 import MobileNav from "@/components/MobileNav";
 import { type DetectCmd } from "@/components/ChartPanel";
 import ChartPane from "@/components/ChartPane";
@@ -287,7 +288,7 @@ function btMark(name: string) {
   console.log(`[boottrace] ${name} +${(now - _btStart).toFixed(1)}ms`);
 }
 
-export default function TerminalShell({ symbols, email, initialSymbol }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string }) {
+export default function TerminalShell({ symbols, email, initialSymbol, shellMode = false }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string; shellMode?: boolean }) {
   const [man, setMan] = useState<Manifest | null>(null);
   // named watchlists — client-side + localStorage-backed so switching / creating lists works for guests
   // (no auth needed). The server-provided `symbols` seed becomes the "Default" list.
@@ -1901,6 +1902,18 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     return () => window.removeEventListener("mm:embedded-symbol", onEmbeddedSymbol);
   }, [pick]);
 
+  // Native shell bridge (?shell=app): the installable apps drive this page through
+  // window.__mmShell; commands reuse the mm:embedded-symbol / mm:set-tf seams above,
+  // so the bridge adds no second symbol/TF pathway (lib/platform/shellBridge.ts).
+  const shellStateRef = useRef({ sym: "", tf: "" });
+  shellStateRef.current = { sym: active, tf };
+  useEffect(() => {
+    if (!shellMode) return;
+    return initShellBridge({ getState: () => shellStateRef.current });
+  }, [shellMode]);
+  useEffect(() => { if (shellMode) postToShell({ type: "symbolChanged", sym: active }); }, [shellMode, active]);
+  useEffect(() => { if (shellMode) postToShell({ type: "stateChanged", tf }); }, [shellMode, tf]);
+
   // ── Chart Bus v2 (CMX W1) ──────────────────────────────────────────────────────────────────
   // The v2 typed drawing/command vocabulary. v1 envelopes stay on handleBrainCommand below; a v:2
   // envelope routes here. The bus owns the in-memory per-symbol AI drawing layer, acks, and the
@@ -2038,7 +2051,8 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         TerminalShell, so useSettings() *here* would be the no-op — the buttons
         below are children of it, which is what matters. */}
     <SettingsProvider email={email} defaultSection="terminal">
-    <div className={`app${fullChart ? " fs" : ""}`} style={{ ["--rail-w" as any]: `${railW}px` }}>
+    <div className={`app${fullChart ? " fs" : ""}${shellMode ? " shell-app" : ""}`} data-shell={shellMode ? "app" : undefined} style={{ ["--rail-w" as any]: `${railW}px` }}>
+      {!shellMode && (
       <header className="topbar">
         {fromMacro
           ? <button className="brand-back" onClick={onBack} title={t("backToDashboard")} aria-label={t("backToDashboard")}>
@@ -2071,8 +2085,10 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         <button className="ai" onClick={() => (window as any).MMBrain?.toggle()}><svg viewBox="0 0 24 24"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z" /></svg>Mastermind AI</button>
         <SettingsButton email={email} />
       </header>
+      )}
 
       {/* ── mobile top bar + drawer (shared component) ── */}
+      {!shellMode && (<>
       <MobileNav
         email={email}
         fromMacro={fromMacro}
@@ -2091,13 +2107,16 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       </div>
 
       <AppNav />
+      </>)}
 
       <section className="workspace">
+        {!shellMode && (
         <button className={`chart-fs-float${fullChart ? " on" : ""}`} title={fullChart ? t("exitFullscreen") : t("fullscreenChart")} onClick={() => setFullChart((f) => !f)}>
           {fullChart
             ? <svg viewBox="0 0 24 24"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" /></svg>
             : <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M15 20h5v-5M9 20H4v-5" /></svg>}
         </button>
+        )}
         <div className="chart-tabs">
           <div className="ct on">{t("priceChart")}</div>
           <div className="tools">
@@ -2360,6 +2379,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         )}
       </section>
 
+      {!shellMode && (<>
       <div className="rail-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" onMouseDown={startRailResize}><span /></div>
       <aside className="rail">
         <div className="rail-body">
@@ -2593,7 +2613,9 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
         </div>
         <a className="logo-attribution" href="https://logo.dev" target="_blank" rel="noopener">Logos provided by Logo.dev</a>
       </aside>
+      </>)}
 
+      {!shellMode && (
       <div className="ticker">
         <span className="lbl">{t("movers")}</span>
         <div className="tk-marquee">
@@ -2609,6 +2631,7 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
           </div>
         </div>
       </div>
+      )}
 
       {searchOpen && (
         <SearchModal open seed={seed} manifest={(man?.symbols as any) || {}} inWatchlist={inWl} mode={searchMode} compare={compare} compareCfg={compareCfg} active={active}
