@@ -22,7 +22,7 @@ import { useMarketPrefs } from "@/lib/useMarketPrefs";
 import { type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
-import { isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
+import { SUITE_DEFS, isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
 import {
   enabledModulesForSuite,
   enabledSuiteModules,
@@ -31,8 +31,12 @@ import {
   setSuiteModuleEnabledParams,
   setSuiteSurfaceEnabledParams,
   suiteModuleCatalogFor,
-  suitePresetParams,
 } from "@/lib/suites/catalog";
+import {
+  applySuitePresetParams,
+  resolveSuitePreset,
+  type SuitePresetId,
+} from "@/lib/suites/presets";
 import { useEntitlement } from "@/lib/useEntitlement";
 import { useChartBus } from "@/lib/useChartBus";
 import { isV2Envelope, type IndicatorSpec } from "@/lib/chartBus";
@@ -394,7 +398,11 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
   const [hidden, setHidden] = useState<Set<string>>(new Set());                       // indicators the eye has hidden
   const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());      // per-indicator params (Settings dialog)
   const [settingsKey, setSettingsKey] = useState<string | null>(null);
-  const [guide, setGuide] = useState<{ suite: string; mod: string; label: string } | null>(null);                 // indicator whose Settings dialog is open
+  const [guide, setGuide] = useState<
+    | { kind: "module"; suite: string; mod: string; label: string }
+    | { kind: "system"; suite: string; label: string }
+    | null
+  >(null);
   const [sourceKey, setSourceKey] = useState<string | null>(null);                     // indicator whose Source view is open
   const activeSuiteModuleIds = useMemo(
     () => new Set(enabledSuiteModules(inds, indParams).map((entry) => entry.id)),
@@ -1490,22 +1498,33 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
     // Checked OUTSIDE the setInds updater (no setState side-effect in a reducer).
     if (!loggedIn && !inds.has(k) && inds.size >= MAX_ANON_IND) { showGateNudge(t("gateIndCap")); return; }
     setInds((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
-    // Suite rows are optional one-click presets. Re-adding one restores the recommended module
-    // selection while preserving every customized field value.
+    // A newly added suite starts with its quiet Focus profile. Saved workspaces are never migrated
+    // implicitly; this runs only after an explicit add/toggle action.
     if (isSuiteKey(k) && !inds.has(k)) {
-      setIndParams((p) => ({ ...p, [k]: suitePresetParams(k, p[k]) }));
+      const preset = resolveSuitePreset(k);
+      setIndParams((p) => ({
+        ...p,
+        [k]: applySuitePresetParams(k, preset?.id, p[k]),
+      }));
       setHidden((h) => {
         const next = new Set(h);
         next.delete(k);
-        for (const entry of suiteModuleCatalogFor(k)) next.delete(entry.id);
+        const selected = new Set(preset?.modules ?? []);
+        for (const entry of suiteModuleCatalogFor(k)) {
+          if (selected.has(entry.moduleKey)) next.delete(entry.id);
+        }
         return next;
       });
     }
   };
-  const applySuitePreset = (k: string) => {
+  const applySuitePreset = (k: string, presetId: SuitePresetId) => {
     if (!isSuiteKey(k)) return;
+    const profile = resolveSuitePreset(k, presetId);
+    if (!profile) return;
+    const tierRank = (tier: "free" | "insider" | "pro") => tier === "pro" ? 2 : tier === "insider" ? 1 : 0;
+    if (tierRank(profile.minTier) > tierRank(userTier)) return;
     const parentActive = inds.has(k);
-    const preset = suitePresetParams(k, indParams[k]);
+    const preset = applySuitePresetParams(k, profile.id, indParams[k]);
     const nextModuleCount = suiteModuleCatalogFor(k).filter(
       (entry) => preset[`${entry.moduleKey}.on`] ?? entry.defaultOn,
     ).length;
@@ -1517,11 +1536,17 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       return;
     }
     setInds((current) => new Set(current).add(k));
-    setIndParams((current) => ({ ...current, [k]: suitePresetParams(k, current[k]) }));
+    setIndParams((current) => ({
+      ...current,
+      [k]: applySuitePresetParams(k, profile.id, current[k]),
+    }));
     setHidden((current) => {
       const next = new Set(current);
       next.delete(k);
-      for (const entry of suiteModuleCatalogFor(k)) next.delete(entry.id);
+      const selected = new Set(profile.modules);
+      for (const entry of suiteModuleCatalogFor(k)) {
+        if (selected.has(entry.moduleKey)) next.delete(entry.id);
+      }
       return next;
     });
   };
@@ -2608,11 +2633,15 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
       )}
       {indOpen && (
         <IndicatorsModal open suspended={!!guide} active={inds} onClose={() => setIndOpen(false)} onToggle={toggleInd}
-          onApplyPreset={applySuitePreset} userTier={userTier}
+          onApplyPreset={applySuitePreset} suiteParams={indParams} userTier={userTier}
           activeModules={activeSuiteModuleIds} onToggleModule={toggleSuiteModule} onOpenModuleSettings={openSettings}
           onOpenGuide={(id) => {
             const entry = getSuiteModuleCatalogEntry(id);
-            if (entry) setGuide({ suite: entry.suiteKey, mod: entry.moduleKey, label: entry.label });
+            if (entry) setGuide({ kind: "module", suite: entry.suiteKey, mod: entry.moduleKey, label: entry.label });
+          }}
+          onOpenSystemGuide={(suite) => {
+            const def = SUITE_DEFS[suite];
+            if (def) setGuide({ kind: "system", suite, label: def.label });
           }}
           scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
       )}
@@ -2625,17 +2654,21 @@ export default function TerminalShell({ symbols, email, initialSymbol }: { symbo
               onClose={() => setSettingsKey(null)} />
           : <IndicatorSettings key={settingsKey} indKey={settingsKey} params={indParams[parseSuiteModuleId(settingsKey)?.suiteKey ?? settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} onOpenGuide={(sk, mk, ml) => {
               setSettingsKey(null);
-              setGuide({ suite: sk, mod: mk, label: ml });
+              setGuide({ kind: "module", suite: sk, mod: mk, label: ml });
             }} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
       {guide && (
         <GuidePanel
           suiteKey={guide.suite}
-          moduleKey={guide.mod}
+          moduleKey={guide.kind === "module" ? guide.mod : undefined}
+          systemKey={guide.kind === "system" ? guide.suite : undefined}
           moduleLabel={guide.label}
           activeModules={activeSuiteModuleIds}
+          activeSuites={inds}
+          suiteParams={indParams}
           userTier={userTier}
           onToggleModule={toggleSuiteModule}
+          onApplyPreset={applySuitePreset}
           onConfigureModule={(id) => {
             setGuide(null);
             setIndOpen(false);

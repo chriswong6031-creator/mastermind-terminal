@@ -10,8 +10,20 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import GuideVisual from "@/components/guides/GuideVisual";
+import GuideSystemVisual from "@/components/guides/GuideSystemVisual";
+import GuideWorkflow, {
+  moduleGuideWorkflow,
+  type GuideWorkflowItem,
+} from "@/components/guides/GuideWorkflow";
 import { parseGuideDocument, type GuideSectionKind, type ParsedGuideDocument } from "@/lib/guides/document";
 import { loadGuide } from "@/lib/guides/registry";
+import {
+  SYSTEM_GUIDE_LIST,
+  getSystemGuide,
+  loadSystemGuide,
+  localizeSystemGuide,
+  type SystemGuideDescriptor,
+} from "@/lib/guides/systems/registry";
 import { useLang, useT } from "@/lib/i18n";
 import { SUITE_ALERT_EVENTS } from "@/lib/suiteAlerts";
 import { ACS_UPGRADE_URL } from "@/components/settings/types";
@@ -22,16 +34,25 @@ import {
   suiteModuleId,
   type SuiteModuleCatalogEntry,
 } from "@/lib/suites/catalog";
+import {
+  matchSuitePreset,
+  suitePresetsFor,
+  type SuitePresetId,
+} from "@/lib/suites/presets";
 import type { SuiteField, SuiteTier } from "@/lib/indicator-canvas/types";
 
 export interface GuidePanelProps {
   suiteKey: string;
-  moduleKey: string;
+  moduleKey?: string;
+  systemKey?: string;
   moduleLabel: string;
   activeModules?: ReadonlySet<string>;
+  activeSuites?: ReadonlySet<string>;
+  suiteParams?: Readonly<Record<string, Readonly<Record<string, unknown>> | undefined>>;
   userTier?: SuiteTier;
   onToggleModule?: (id: string) => void;
   onConfigureModule?: (id: string) => void;
+  onApplyPreset?: (suiteKey: string, presetId: SuitePresetId) => void;
   onClose: () => void;
 }
 
@@ -190,20 +211,124 @@ function moduleMatches(entry: SuiteModuleCatalogEntry, query: string): boolean {
     .includes(normalized);
 }
 
+function systemMatches(descriptor: SystemGuideDescriptor, query: string): boolean {
+  const normalized = query.trim().toLocaleLowerCase();
+  if (!normalized) return true;
+  const category = MODULE_CATEGORIES.find((candidate) => candidate.suiteKey === descriptor.suiteKey);
+  return [
+    descriptor.title.en,
+    descriptor.title.zh,
+    descriptor.summary.en,
+    descriptor.summary.zh,
+    category?.label,
+    category?.description,
+    category?.descriptionZh,
+  ].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalized);
+}
+
+function SystemProfiles({
+  descriptor,
+  lang,
+  params,
+  active,
+  userTier,
+  onApplyPreset,
+}: {
+  descriptor: SystemGuideDescriptor;
+  lang: "en" | "zh";
+  params: Readonly<Record<string, unknown>> | undefined;
+  active: boolean;
+  userTier: SuiteTier;
+  onApplyPreset?: (suiteKey: string, presetId: SuitePresetId) => void;
+}) {
+  const zh = lang === "zh";
+  const current = active ? matchSuitePreset(descriptor.suiteKey, params) : null;
+  return (
+    <section className="gp-profile-lab" aria-label={zh ? "渐进式系统预设" : "Progressive system presets"}>
+      <div className="gp-profile-head">
+        <span>
+          <small>{zh ? "控制图表复杂度" : "Control chart complexity"}</small>
+          <strong>{zh ? "从聚焦开始，只在需要时增加证据" : "Start focused. Add evidence only when it earns its place."}</strong>
+        </span>
+        <span className="gp-profile-current">
+          {active
+            ? current
+              ? (zh ? current.name.zh : current.name.en)
+              : (zh ? "自定义组合" : "Custom mix")
+            : (zh ? "尚未添加" : "Not on chart")}
+        </span>
+      </div>
+      <div className="gp-profile-grid">
+        {suitePresetsFor(descriptor.suiteKey).map((preset, index) => {
+          const locked = TIER_RANK[userTier] < TIER_RANK[preset.minTier];
+          const selected = active && current?.id === preset.id;
+          const dense = preset.id === "research";
+          return (
+            <article className={`${selected ? "selected " : ""}${dense ? "dense" : ""}`} key={preset.id}>
+              <div className="gp-profile-card-head">
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <small>{preset.minTier}</small>
+              </div>
+              <strong>{zh ? preset.name.zh : preset.name.en}</strong>
+              <p>{zh ? preset.description.zh : preset.description.en}</p>
+              <div className="gp-profile-modules">
+                {preset.modules.map((moduleKey) => {
+                  const moduleEntry = getSuiteModuleCatalogEntry(suiteModuleId(descriptor.suiteKey, moduleKey));
+                  return <span key={moduleKey}>{moduleEntry?.tag ?? moduleKey}</span>;
+                })}
+              </div>
+              {onApplyPreset && (
+                locked ? (
+                  <a href={ACS_UPGRADE_URL} target="_blank" rel="noopener">
+                    <Icon name="lock" />{zh ? "升级解锁" : "Upgrade"}
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={selected}
+                    onClick={() => onApplyPreset(descriptor.suiteKey, preset.id)}
+                  >
+                    {selected
+                      ? (zh ? "当前组合" : "Current")
+                      : active
+                        ? (zh ? "应用组合" : "Apply profile")
+                        : (zh ? "添加到图表" : "Add to chart")}
+                  </button>
+                )
+              )}
+            </article>
+          );
+        })}
+      </div>
+      <p className="gp-profile-disclaimer">
+        {zh
+          ? "预设只改变模块开关；你调整过的参数、颜色与未来字段都会保留。完整研究组合故意较密集，适合探索，不建议作为默认执行视图。"
+          : "Profiles change module switches only. Your tuned inputs, colors, and future fields stay intact. Complete Research is intentionally dense for investigation—not the default execution view."}
+      </p>
+    </section>
+  );
+}
+
 export default function GuidePanel({
   suiteKey,
   moduleKey,
+  systemKey,
   moduleLabel,
   activeModules,
+  activeSuites,
+  suiteParams,
   userTier = "free",
   onToggleModule,
   onConfigureModule,
+  onApplyPreset,
   onClose,
 }: GuidePanelProps) {
   const { lang } = useLang();
   const t = useT();
   const zh = lang === "zh";
-  const initialId = suiteModuleId(suiteKey, moduleKey);
+  const initialId = systemKey
+    ? `system:${systemKey}`
+    : suiteModuleId(suiteKey, moduleKey ?? "");
   const [currentId, setCurrentId] = useState(initialId);
   const [expandedSuite, setExpandedSuite] = useState(suiteKey);
   const [query, setQuery] = useState("");
@@ -216,16 +341,31 @@ export default function GuidePanel({
   const guideSearchRef = useRef<HTMLInputElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  const entry = getSuiteModuleCatalogEntry(currentId)
-    ?? getSuiteModuleCatalogEntry(initialId);
-  const title = document?.title || entry?.label || moduleLabel;
-  const currentSuite = entry?.suiteKey ?? suiteKey;
-  const currentModule = entry?.moduleKey ?? moduleKey;
-  const currentModuleId = entry?.id ?? initialId;
+  const system = getSystemGuide(currentId)
+    ?? (currentId === initialId && systemKey ? getSystemGuide(`system:${systemKey}`) : null);
+  const entry = system
+    ? null
+    : getSuiteModuleCatalogEntry(currentId)
+      ?? getSuiteModuleCatalogEntry(initialId);
+  const title = document?.title
+    || (system ? localizeSystemGuide(system.title, lang) : entry?.label)
+    || moduleLabel;
+  const currentSuite = system?.suiteKey ?? entry?.suiteKey ?? suiteKey;
+  const currentModule = entry?.moduleKey ?? moduleKey ?? "";
+  const currentModuleId = entry?.id ?? "";
   const suiteCategory = MODULE_CATEGORIES.find((category) => category.suiteKey === currentSuite);
   const localizedSuite = suiteCategory?.tkey ? t(suiteCategory.tkey, suiteCategory.label) : suiteCategory?.label;
   const onChart = !!activeModules?.has(currentModuleId);
   const locked = entry ? TIER_RANK[userTier] < TIER_RANK[entry.tier] : false;
+  const systemOnChart = !!system && !!activeSuites?.has(system.suiteKey);
+  const systemWorkflow: readonly GuideWorkflowItem[] = system?.workflow.map((stage) => ({
+      id: stage.id,
+      title: localizeSystemGuide(stage.title, lang),
+      summary: localizeSystemGuide(stage.summary, lang),
+      modules: stage.moduleKeys.map((moduleKey) => (
+        getSuiteModuleCatalogEntry(suiteModuleId(system.suiteKey, moduleKey))?.tag ?? moduleKey
+      )),
+    })) ?? [];
 
   useEffect(() => {
     let alive = true;
@@ -239,7 +379,9 @@ export default function GuidePanel({
       setEnFallback(false);
       setActiveSection("anatomy");
       scrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
-      const guide = await loadGuide(currentSuite, currentModule, lang);
+      const guide = system
+        ? await loadSystemGuide(system.id, lang)
+        : await loadGuide(currentSuite, currentModule, lang);
       if (!alive) return;
       if (!guide) {
         setStatus("missing");
@@ -252,7 +394,7 @@ export default function GuidePanel({
     return () => {
       alive = false;
     };
-  }, [currentModule, currentSuite, lang]);
+  }, [currentModule, currentSuite, lang, system]);
 
   useEffect(() => {
     returnFocusRef.current = documentActiveElement();
@@ -264,16 +406,20 @@ export default function GuidePanel({
       globalThis.document.body.style.overflow = previousBodyOverflow;
       const target = returnFocusRef.current;
       window.requestAnimationFrame(() => {
-        const libraryGuide = Array.from(
-          globalThis.document.querySelectorAll<HTMLElement>("[data-guide-module]"),
-        ).find((candidate) => candidate.dataset.guideModule === initialId);
+        const libraryGuide = systemKey
+          ? Array.from(
+              globalThis.document.querySelectorAll<HTMLElement>("[data-guide-system]"),
+            ).find((candidate) => candidate.dataset.guideSystem === systemKey)
+          : Array.from(
+              globalThis.document.querySelectorAll<HTMLElement>("[data-guide-module]"),
+            ).find((candidate) => candidate.dataset.guideModule === initialId);
         const returnTarget = target?.isConnected && target !== globalThis.document.body
           ? target
           : libraryGuide;
         returnTarget?.focus({ preventScroll: true });
       });
     };
-  }, [initialId]);
+  }, [initialId, systemKey]);
 
   useEffect(() => {
     const root = scrollRef.current;
@@ -358,6 +504,15 @@ export default function GuidePanel({
     setExpandedSuite(next.suiteKey);
   };
 
+  const selectSystem = (next: SystemGuideDescriptor, preserveFocus = false) => {
+    if (!preserveFocus) dialogRef.current?.focus({ preventScroll: true });
+    setStatus("loading");
+    setDocument(null);
+    setActiveSection("anatomy");
+    setCurrentId(next.id);
+    setExpandedSuite(next.suiteKey);
+  };
+
   const jumpTo = (sectionId: string) => {
     const node = scrollRef.current?.querySelector<HTMLElement>(`#gp-section-${sectionId}`);
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -372,11 +527,16 @@ export default function GuidePanel({
     () => MODULE_CATALOG.filter((candidate) => moduleMatches(candidate, query)),
     [query],
   );
+  const filteredSystems = useMemo(
+    () => SYSTEM_GUIDE_LIST.filter((candidate) => systemMatches(candidate, query)),
+    [query],
+  );
 
   const currentIndex = MODULE_CATALOG.findIndex((candidate) => candidate.id === currentModuleId);
   const previous = currentIndex > 0 ? MODULE_CATALOG[currentIndex - 1] : null;
   const next = currentIndex >= 0 && currentIndex < MODULE_CATALOG.length - 1 ? MODULE_CATALOG[currentIndex + 1] : null;
   const source = entry?.source ? getSuiteModuleCatalogEntry(entry.source) : null;
+  const firstPlaybookIndex = document?.sections.findIndex((section) => section.kind === "playbook") ?? -1;
 
   return (
     <div className="gp-scrim" onMouseDown={onScrim}>
@@ -442,7 +602,7 @@ export default function GuidePanel({
           <aside className="gp-library" aria-label={zh ? "指标指南" : "Indicator guides"}>
             <div className="gp-library-head">
               <span>{zh ? "指南库" : "Guide library"}</span>
-              <small>{MODULE_CATALOG.length} {zh ? "个模块" : "modules"}</small>
+              <small>{MODULE_CATALOG.length + SYSTEM_GUIDE_LIST.length} {zh ? "节课程" : "lessons"}</small>
             </div>
             <div className="gp-guide-search" role="search">
               <Icon name="search" />
@@ -452,7 +612,7 @@ export default function GuidePanel({
                 id="guide-center-search"
                 type="search"
                 value={query}
-                placeholder={zh ? "搜索模块…" : "Search modules…"}
+                placeholder={zh ? "搜索系统或模块…" : "Search systems or modules…"}
                 onChange={(event) => setQuery(event.target.value)}
               />
               {query && (
@@ -470,6 +630,27 @@ export default function GuidePanel({
               )}
             </div>
             <div className="gp-library-scroll">
+              {filteredSystems.length > 0 && (
+                <div className="gp-library-systems">
+                  <span>{zh ? "系统作战手册" : "System playbooks"}</span>
+                  {filteredSystems.map((candidate) => {
+                    const category = MODULE_CATEGORIES.find((item) => item.suiteKey === candidate.suiteKey);
+                    return (
+                      <button
+                        type="button"
+                        className={system?.id === candidate.id ? "on" : ""}
+                        aria-current={system?.id === candidate.id ? "page" : undefined}
+                        key={candidate.id}
+                        onClick={() => selectSystem(candidate, true)}
+                      >
+                        <span aria-hidden="true">{category?.tag ?? "M"}</span>
+                        <span>{localizeSystemGuide(candidate.title, lang)}</span>
+                        <small>{zh ? "系统" : "system"}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {MODULE_CATEGORIES.map((category) => {
                 const modules = filteredCatalog.filter((candidate) => candidate.suiteKey === category.suiteKey);
                 if (query && modules.length === 0) return null;
@@ -508,7 +689,7 @@ export default function GuidePanel({
                   </div>
                 );
               })}
-              {filteredCatalog.length === 0 && (
+              {filteredCatalog.length === 0 && filteredSystems.length === 0 && (
                 <p className="gp-library-empty">{zh ? "没有匹配的指南。" : "No matching guides."}</p>
               )}
             </div>
@@ -527,35 +708,67 @@ export default function GuidePanel({
                   <strong>{t("guideMissing", "Guide not written yet.")}</strong>
                 </div>
               )}
-              {status === "ready" && document && entry && (
+              {status === "ready" && document && (entry || system) && (
                 <article className="gp-article">
-                  <section className="gp-hero">
+                  <section className={`gp-hero${system ? " gp-hero-system" : ""}`}>
                     <div className="gp-hero-copy">
                       <div className="gp-breadcrumb">
                         <span>{localizedSuite}</span>
-                        <span>{surfaceLabel(entry.surface, zh)}</span>
-                        <span className={`gp-tier gp-tier-${entry.tier}`}>{entry.tier}</span>
+                        <span>{system ? (zh ? "系统作战手册" : "System playbook") : surfaceLabel(entry!.surface, zh)}</span>
+                        {entry && <span className={`gp-tier gp-tier-${entry.tier}`}>{entry.tier}</span>}
                       </div>
                       <h1 id="guide-center-title">{title}</h1>
                       <div className="gp-lede" dangerouslySetInnerHTML={{ __html: document.introHtml }} />
                     </div>
-                    <GuideVisual suiteKey={entry.suiteKey} moduleKey={entry.moduleKey} lang={lang} />
+                    {system
+                      ? <GuideSystemVisual descriptor={system} key={system.id} lang={lang} />
+                      : <GuideVisual suiteKey={entry!.suiteKey} moduleKey={entry!.moduleKey} lang={lang} />}
                   </section>
 
                   <section className="gp-glance" aria-label={zh ? "快速了解" : "At a glance"}>
-                    <div>
-                      <span>{zh ? "显示什么" : "What it shows"}</span>
-                      <p>{zh ? entry.descriptionZh : entry.description}</p>
-                    </div>
-                    <div>
-                      <span>{zh ? "最佳用途" : "Best used for"}</span>
-                      <p>{bestUse(entry, zh)}</p>
-                    </div>
-                    <div>
-                      <span>{zh ? "使用边界" : "Guardrail"}</span>
-                      <p>{guardrail(entry, zh)}</p>
-                    </div>
+                    {system ? (
+                      <>
+                        <div>
+                          <span>{zh ? "解决什么" : "What it solves"}</span>
+                          <p>{localizeSystemGuide(system.summary, lang)}</p>
+                        </div>
+                        <div>
+                          <span>{zh ? "正确顺序" : "Reading order"}</span>
+                          <p>{system.workflow.map((stage) => localizeSystemGuide(stage.title, lang)).join(" → ")}</p>
+                        </div>
+                        <div>
+                          <span>{zh ? "视觉预算" : "Visual budget"}</span>
+                          <p>{zh ? "先用聚焦组合；每一层都必须回答一个不同问题。" : "Begin with the Focus profile. Every extra layer must answer a different question."}</p>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          <span>{zh ? "显示什么" : "What it shows"}</span>
+                          <p>{zh ? entry!.descriptionZh : entry!.description}</p>
+                        </div>
+                        <div>
+                          <span>{zh ? "最佳用途" : "Best used for"}</span>
+                          <p>{bestUse(entry!, zh)}</p>
+                        </div>
+                        <div>
+                          <span>{zh ? "使用边界" : "Guardrail"}</span>
+                          <p>{guardrail(entry!, zh)}</p>
+                        </div>
+                      </>
+                    )}
                   </section>
+
+                  {system && (
+                    <SystemProfiles
+                      active={systemOnChart}
+                      descriptor={system}
+                      lang={lang}
+                      onApplyPreset={onApplyPreset}
+                      params={suiteParams?.[system.suiteKey]}
+                      userTier={userTier}
+                    />
+                  )}
 
                   <nav className="gp-mobile-toc" aria-label={zh ? "本页内容" : "On this guide"}>
                     {document.sections.map((section, index) => (
@@ -582,16 +795,23 @@ export default function GuidePanel({
                         <span className="gp-section-icon"><Icon name={SECTION_ICON[section.kind]} /></span>
                         <h2>{section.title}</h2>
                       </div>
-                      {section.kind === "settings" && <GuideSettings entry={entry} zh={zh} />}
-                      {section.kind === "alerts" && <GuideAlerts entry={entry} zh={zh} />}
+                      {index === firstPlaybookIndex && (
+                        <GuideWorkflow
+                          eyebrow={zh ? "决策工作流" : "Decision workflow"}
+                          items={system ? systemWorkflow : moduleGuideWorkflow(entry!, zh)}
+                          label={zh ? "从环境到退出的决策工作流" : "Decision workflow from context to exit"}
+                        />
+                      )}
+                      {entry && section.kind === "settings" && <GuideSettings entry={entry} zh={zh} />}
+                      {entry && section.kind === "alerts" && <GuideAlerts entry={entry} zh={zh} />}
                       <div
-                        className={`gp-prose${section.kind === "settings" || section.kind === "alerts" ? " gp-prose-notes" : ""}`}
+                        className={`gp-prose${entry && (section.kind === "settings" || section.kind === "alerts") ? " gp-prose-notes" : ""}`}
                         dangerouslySetInnerHTML={{ __html: section.html }}
                       />
                     </section>
                   ))}
 
-                  {(source || previous || next) && (
+                  {entry && (source || previous || next) && (
                     <footer className="gp-related">
                       <div>
                         <span>{zh ? "继续探索" : "Continue learning"}</span>
@@ -622,6 +842,27 @@ export default function GuidePanel({
                       </div>
                     </footer>
                   )}
+                  {system && (
+                    <footer className="gp-related">
+                      <div>
+                        <span>{zh ? "深入学习" : "Go deeper"}</span>
+                        <strong>{zh ? "打开系统中的单模块图解课程" : "Open an animated lesson for each module"}</strong>
+                      </div>
+                      <div className="gp-related-grid gp-related-system">
+                        {system.moduleKeys.map((moduleKey) => {
+                          const moduleEntry = getSuiteModuleCatalogEntry(suiteModuleId(system.suiteKey, moduleKey));
+                          if (!moduleEntry) return null;
+                          return (
+                            <button type="button" key={moduleEntry.id} onClick={() => selectModule(moduleEntry)}>
+                              <span>{moduleEntry.tag} · {moduleEntry.tier}</span>
+                              <strong>{moduleEntry.label}</strong>
+                              <Icon name="arrow" />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </footer>
+                  )}
                 </article>
               )}
             </div>
@@ -643,7 +884,11 @@ export default function GuidePanel({
             ))}
             <div className="gp-toc-note">
               <span aria-hidden="true">M</span>
-              <p>{zh ? "指南描述的是 Mastermind 当前实际实现与默认值。" : "Guides describe the current Mastermind implementation and live defaults."}</p>
+              <p>
+                {system
+                  ? (zh ? "作战手册解释模块如何协同；它不是经过验证的自动交易策略。" : "Playbooks explain how modules work together; they are not validated automated strategies.")
+                  : (zh ? "指南描述的是 Mastermind 当前实际实现与默认值。" : "Guides describe the current Mastermind implementation and live defaults.")}
+              </p>
             </div>
           </aside>
         </div>

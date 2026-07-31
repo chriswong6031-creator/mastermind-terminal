@@ -21,8 +21,8 @@ const SECTION_KINDS: GuideSectionKind[] = ["anatomy", "playbook", "settings", "a
 
 function sectionKind(heading: string, index: number): GuideSectionKind {
   const normalized = heading.toLocaleLowerCase().replace(/[&/]/g, " ");
-  if (/(what you see|what it shows|图上|图中)/.test(normalized)) return "anatomy";
-  if (/(how to trade|how to use|怎么用|如何交易|交易方法)/.test(normalized)) return "playbook";
+  if (/(what you see|what it shows|system map|图上|图中|系统地图)/.test(normalized)) return "anatomy";
+  if (/(how to trade|how to use|reading order|clean-first|setup .* trigger|怎么用|如何交易|交易方法|阅读顺序|清爽起步|准备 .* 触发)/.test(normalized)) return "playbook";
   if (/(settings|inputs|设置|参数)/.test(normalized)) return "settings";
   if (/(signals|alerts|events|信号|提醒|事件)/.test(normalized)) return "alerts";
   return SECTION_KINDS[index] ?? "detail";

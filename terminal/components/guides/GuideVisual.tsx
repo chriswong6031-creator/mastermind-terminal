@@ -1,10 +1,13 @@
-import type { CSSProperties, ReactNode } from "react";
+"use client";
+
+import { useId, type CSSProperties, type ReactNode } from "react";
 import {
   getGuideVisualMetadata,
   localizeGuideText,
   type GuideLanguage,
   type GuideVisualId,
 } from "@/lib/guides/experience";
+import { useGuidePlayback } from "./useGuidePlayback";
 
 export interface GuideVisualProps {
   suiteKey: string;
@@ -839,6 +842,63 @@ function VisualScene({ id, lang }: { id: GuideVisualId; lang: GuideLanguage }) {
   }
 }
 
+const STAGE_SLICES = [
+  { x: 0, width: 252 },
+  { x: 244, width: 252 },
+  { x: 488, width: 232 },
+] as const;
+
+function StagedVisualScene({
+  id,
+  lang,
+  activeStage,
+  prefersReducedMotion,
+  instanceId,
+}: {
+  id: GuideVisualId;
+  lang: GuideLanguage;
+  activeStage: number;
+  prefersReducedMotion: boolean;
+  instanceId: string;
+}) {
+  const clipPrefix = `gp-stage-${id.replace("/", "-")}-${instanceId}`;
+
+  return (
+    <>
+      <defs aria-hidden="true">
+        {STAGE_SLICES.map((slice, index) => (
+          <clipPath id={`${clipPrefix}-${index}`} key={`${clipPrefix}-${index}`}>
+            <rect x={slice.x} y="0" width={slice.width} height="360" />
+          </clipPath>
+        ))}
+      </defs>
+      {STAGE_SLICES.map((_, index) => {
+        const revealed = activeStage >= index;
+        return (
+          <g
+            aria-hidden="true"
+            className={`gp-visual-scene-stage gp-visual-scene-stage-${index + 1}`}
+            clipPath={`url(#${clipPrefix}-${index})`}
+            data-revealed={revealed ? "true" : "false"}
+            key={`${id}-stage-${index}`}
+            style={{
+              opacity: revealed ? 1 : 0,
+              transform: revealed ? "translateY(0)" : "translateY(8px)",
+              transformBox: "fill-box",
+              transformOrigin: "center",
+              transition: prefersReducedMotion
+                ? "none"
+                : "opacity 480ms cubic-bezier(0.22, 1, 0.36, 1), transform 480ms cubic-bezier(0.22, 1, 0.36, 1)",
+            }}
+          >
+            <VisualScene id={id} lang={lang} />
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
 const SUITE_ACCENTS: Record<string, string> = {
   structure: "#70a5ff",
   trend: "#3ee2b8",
@@ -855,7 +915,17 @@ const SUITE_ACCENTS: Record<string, string> = {
  * legacy GuidePanel styles.
  */
 export default function GuideVisual({ suiteKey, moduleKey, lang }: GuideVisualProps) {
+  const instanceId = useId().replaceAll(":", "");
   const metadata = getGuideVisualMetadata(suiteKey, moduleKey);
+  const {
+    activeStage,
+    isPlaying,
+    pause,
+    prefersReducedMotion,
+    replay,
+    rootRef,
+    selectStage,
+  } = useGuidePlayback(`${suiteKey}/${moduleKey}`);
   if (!metadata) return null;
 
   const title = localizeGuideText(metadata.title, lang);
@@ -867,13 +937,40 @@ export default function GuideVisual({ suiteKey, moduleKey, lang }: GuideVisualPr
   const style = {
     "--gp-visual-accent": SUITE_ACCENTS[suiteKey] ?? SUITE_ACCENTS.structure,
   } as CSSProperties;
+  const currentStage = metadata.stages[activeStage];
+  const pauseLabel = lang === "zh" ? "暂停讲解" : "Pause walkthrough";
+  const replayLabel = prefersReducedMotion
+    ? lang === "zh" ? "从第一步开始" : "Start from step one"
+    : lang === "zh" ? "重播讲解" : "Replay walkthrough";
 
   return (
-    <figure className={`gp-visual gp-visual-${suiteKey}`} style={style}>
+    <figure
+      className={`gp-visual gp-visual-${suiteKey}`}
+      data-active-stage={currentStage.id}
+      ref={rootRef}
+      style={style}
+    >
       <div className="gp-visual-frame">
-        <div className="gp-visual-topline" aria-hidden="true">
+        <div className="gp-visual-topline">
           <span className="gp-visual-kicker">{kicker}</span>
-          <span className="gp-visual-live"><i className="gp-visual-live-dot" />MASTERCLASS</span>
+          <div className="gp-visual-player-status">
+            <span className="gp-visual-live" aria-hidden="true">
+              <i className="gp-visual-live-dot" />MASTERCLASS
+            </span>
+            <button
+              aria-label={isPlaying ? pauseLabel : replayLabel}
+              className="gp-visual-playback-button"
+              onClick={isPlaying ? pause : replay}
+              type="button"
+            >
+              <span aria-hidden="true">{isPlaying ? "Ⅱ" : "↻"}</span>
+              <span className="gp-visual-playback-label">
+                {isPlaying
+                  ? lang === "zh" ? "暂停" : "Pause"
+                  : lang === "zh" ? "重播" : "Replay"}
+              </span>
+            </button>
+          </div>
         </div>
         <svg
           className="gp-visual-svg"
@@ -885,7 +982,13 @@ export default function GuideVisual({ suiteKey, moduleKey, lang }: GuideVisualPr
           <title id={titleId}>{title}</title>
           <desc id={descriptionId}>{caption}</desc>
           <rect className="gp-visual-canvas" x="1" y="1" width="718" height="358" rx="18" />
-          <VisualScene id={metadata.id} lang={lang} />
+          <StagedVisualScene
+            activeStage={activeStage}
+            id={metadata.id}
+            instanceId={instanceId}
+            lang={lang}
+            prefersReducedMotion={prefersReducedMotion}
+          />
         </svg>
       </div>
       <figcaption className="gp-visual-caption">
@@ -905,6 +1008,49 @@ export default function GuideVisual({ suiteKey, moduleKey, lang }: GuideVisualPr
           ))}
         </ul>
       </figcaption>
+      <div
+        aria-atomic="true"
+        aria-live="polite"
+        className="gp-visual-stage-announcement"
+        role="status"
+      >
+        {localizeGuideText(currentStage.eyebrow, lang)}:{" "}
+        {localizeGuideText(currentStage.title, lang)}
+      </div>
+      <ol
+        aria-label={lang === "zh" ? "互动图解步骤" : "Interactive diagram steps"}
+        className="gp-visual-stage-list"
+      >
+        {metadata.stages.map((stage, index) => {
+          const selected = index === activeStage;
+          const revealed = index <= activeStage;
+          return (
+            <li
+              className={`gp-visual-stage-item gp-visual-stage-item-${stage.tone}`}
+              data-revealed={revealed ? "true" : "false"}
+              data-selected={selected ? "true" : "false"}
+              key={stage.id}
+            >
+              <button
+                aria-current={selected ? "step" : undefined}
+                className="gp-visual-stage-button"
+                onClick={() => selectStage(index)}
+                type="button"
+              >
+                <span className="gp-visual-stage-eyebrow">
+                  {localizeGuideText(stage.eyebrow, lang)}
+                </span>
+                <span className="gp-visual-stage-title">
+                  {localizeGuideText(stage.title, lang)}
+                </span>
+                <span className="gp-visual-stage-description">
+                  {localizeGuideText(stage.description, lang)}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
     </figure>
   );
 }
