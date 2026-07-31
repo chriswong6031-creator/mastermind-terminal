@@ -254,6 +254,11 @@ brand color conventions (incl. the zh red/green flip law via the web embeds).
      detent via `setSymbol`/`setTimeframe`; **tap** is a different verb — tap on the symbol slot opens the
      Search sheet (confirmed live), tap on the TF slot opens a TF picker sheet. Add-to-watchlist star sits
      at the strip's right edge.
+     *Implementation (operator insight): this is the OS wheel-picker mechanic (the date-picker wheel), so we
+     build it as a restyled native wheel picker — compact slot height, transparent chrome, ghosted prev/next
+     chambers — inheriting Apple's drag physics/detents/snap rather than writing a custom gesture engine.
+     (Side effect: the gesture can't be driven through iPhone Mirroring — real touch flicks only — which is
+     a mirror limitation to remember during reference sessions, not a defect in either app.)*
    - Rotation to landscape hides native chrome (full-bleed chart, TV behavior).
    - Bridge keeps native strip ↔ web chart in sync both directions (chart-side symbol changes roll the
      wheel to match); state (symbol/TF) is restored on relaunch via `restoreState`.
