@@ -26,7 +26,12 @@ enum KeychainStore {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
-        return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
+        let status = SecItemAdd(attributes as CFDictionary, nil)
+        #if DEBUG
+        // Status code only — the payload is a credential and must never be logged.
+        if status != errSecSuccess { print("[mm] keychain save failed: \(status)") }
+        #endif
+        return status == errSecSuccess
     }
 
     static func load(account: String) -> Data? {
@@ -38,7 +43,13 @@ enum KeychainStore {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        #if DEBUG
+        if status != errSecSuccess && status != errSecItemNotFound {
+            print("[mm] keychain load failed: \(status)")
+        }
+        #endif
+        guard status == errSecSuccess else { return nil }
         return item as? Data
     }
 

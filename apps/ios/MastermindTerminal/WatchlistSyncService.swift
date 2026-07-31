@@ -131,7 +131,19 @@ final class WatchlistSyncService: ObservableObject {
             // Subtract, never clear: a removal can land while the deletes are in flight.
             pendingRemovals.subtract(removals)
 
-            let cloud = try await fetchCloudSymbols(listID: id, token: token)
+            var cloud = try await fetchCloudSymbols(listID: id, token: token)
+            // Self-heal duplicate rows. The table has no (watchlist_id, symbol) unique
+            // constraint, and two clients CAN race their first heal-up — this app's
+            // reconcile and the freshly signed-in web page seed the same guest list in
+            // parallel after the session handoff. putSymbol's delete-then-insert
+            // collapses every row for the symbol back to one.
+            var seen = Set<String>()
+            var dupes = Set<String>()
+            for symbol in cloud where !seen.insert(symbol).inserted { dupes.insert(symbol) }
+            for symbol in dupes {
+                try await putSymbol(symbol, listID: id, token: token, position: cloud.count)
+            }
+            if !dupes.isEmpty { cloud = cloud.filter { seen.remove($0) != nil } }
             // Read the device list only now: it is the merge's local side, and the user may
             // have edited it while the fetch was in flight.
             let local = store.cloudListSymbols ?? []
