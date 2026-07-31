@@ -1,7 +1,7 @@
 import Foundation
 
 /// Live-ish quotes for native lists via the web's own batch endpoint
-/// (/api/quote?syms=A,B,C → { quotes: { SYM: {last, chg, basis} | null } }).
+/// (/api/quote?syms=A,B,C → explicit regular-session + extended-session lanes).
 /// Server caches per symbol (5s TTL) so the 6s poll matches the web's cadence
 /// without adding upstream load. null → caller falls back to manifest EOD.
 @MainActor
@@ -10,6 +10,40 @@ final class QuoteTicker: ObservableObject {
         let last: Double?
         let chg: Double?
         let basis: String?
+        let close: Double?
+        let prevClose: Double?
+        let prevSessionChg: Double?
+        let regularPrice: Double?
+        let regularChg: Double?
+        let extPrice: Double?
+        let extChg: Double?
+        let extTs: Double?
+        let extSession: String?
+
+        /// The primary lane is always the regular session. The explicit API fields win;
+        /// older servers still degrade safely through close/prevSessionChg before raw last/chg.
+        var primaryPrice: Double? {
+            if let regularPrice, regularPrice.isFinite, regularPrice > 0 { return regularPrice }
+            if let close, close.isFinite, close > 0 { return close }
+            if let last, last.isFinite, last > 0 { return last }
+            return nil
+        }
+
+        var primaryChange: Double? {
+            if let regularChg, regularChg.isFinite { return regularChg }
+            if let close, close.isFinite,
+               let prevClose, prevClose.isFinite, prevClose != 0 {
+                return ((close - prevClose) / prevClose) * 100
+            }
+            if let prevSessionChg, prevSessionChg.isFinite { return prevSessionChg }
+            if let chg, chg.isFinite { return chg }
+            return nil
+        }
+
+        var hasExtended: Bool {
+            guard let extPrice else { return false }
+            return extPrice.isFinite && extPrice > 0
+        }
     }
 
     private struct Batch: Codable {
@@ -49,6 +83,7 @@ final class QuoteTicker: ObservableObject {
               let batch = try? JSONDecoder().decode(Batch.self, from: data) else { return }
         for (sym, quote) in batch.quotes {
             if let quote { quotes[sym] = quote }
+            else { quotes.removeValue(forKey: sym) }
         }
     }
 }

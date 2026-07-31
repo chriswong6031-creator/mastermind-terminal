@@ -57,15 +57,26 @@ struct LogoCircle: View {
 struct PriceStack: View {
     let last: Double?
     let chgPct: Double?
+    var extPrice: Double? = nil
+    var extChgPct: Double? = nil
+    var extSession: String? = nil
+    var alignment: HorizontalAlignment = .trailing
+    var prominent = false
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 2) {
+        VStack(alignment: alignment, spacing: 2) {
             Text(Self.price(last))
-                .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                .font(.system(size: prominent ? 22 : 15, weight: prominent ? .bold : .semibold).monospacedDigit())
                 .foregroundStyle(Theme.text)
+                .accessibilityIdentifier("regular-price")
             Text(Self.change(chgPct))
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .font(.system(size: prominent ? 13 : 12, weight: prominent ? .semibold : .medium).monospacedDigit())
                 .foregroundStyle((chgPct ?? 0) >= 0 ? Theme.up : Theme.down)
+                .accessibilityIdentifier("regular-change")
+            if let extPrice, extPrice.isFinite, extPrice > 0 {
+                ExtendedQuoteLine(price: extPrice, change: extChgPct, session: extSession)
+                    .padding(.top, 2)
+            }
         }
     }
 
@@ -77,6 +88,52 @@ struct PriceStack: View {
     static func change(_ pct: Double?) -> String {
         guard let pct, pct.isFinite else { return "—" }
         return String(format: "%@%.2f%%", pct >= 0 ? "+" : "", pct)
+    }
+}
+
+/// Compact third line for a pre/post/overnight print. It is intentionally a separate
+/// labeled capsule so an extended-hours percentage can never be mistaken for the EOD move.
+struct ExtendedQuoteLine: View {
+    let price: Double
+    let change: Double?
+    let session: String?
+
+    private var shortLabel: String {
+        switch session {
+        case "pre": return "PRE"
+        case "post": return "AH"
+        default: return "OVN"
+        }
+    }
+
+    private var fullLabel: String {
+        switch session {
+        case "pre": return "Pre-market"
+        case "post": return "After hours"
+        default: return "Overnight"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(shortLabel)
+                .font(.system(size: 8, weight: .bold))
+                .tracking(0.3)
+                .foregroundStyle(Theme.signal)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(Theme.signal.opacity(0.13), in: RoundedRectangle(cornerRadius: 3))
+            Text(PriceStack.price(price))
+                .foregroundStyle(Theme.text2)
+            if let change, change.isFinite {
+                Text(PriceStack.change(change))
+                    .foregroundStyle(change >= 0 ? Theme.up : Theme.down)
+            }
+        }
+        .font(.system(size: 9, weight: .semibold).monospacedDigit())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(fullLabel), \(PriceStack.price(price)), \(PriceStack.change(change))")
+        .accessibilityIdentifier("extended-quote")
     }
 }
 

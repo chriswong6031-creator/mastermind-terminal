@@ -109,10 +109,16 @@ struct WatchlistScreen: View {
                                     .font(.system(size: 11))
                                     .foregroundStyle(Theme.brand2)
                             }
-                            PriceStack(last: quote?.last ?? row?.last, chgPct: quote?.chg ?? row?.chg)
+                            PriceStack(
+                                last: quote?.primaryPrice ?? row?.last,
+                                chgPct: quote?.primaryChange ?? row?.chg,
+                                extPrice: quote?.extPrice,
+                                extChgPct: quote?.extChg,
+                                extSession: quote?.extSession
+                            )
                         }
                         .padding(.horizontal, 14)
-                        .frame(height: 62)
+                        .frame(height: quote?.hasExtended == true ? 76 : 62)
                         .contentShape(Rectangle())
                     }
                     .contextMenu {

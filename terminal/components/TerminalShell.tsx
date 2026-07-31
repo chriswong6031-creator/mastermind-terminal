@@ -101,6 +101,7 @@ import {
   resolveWatchlistSettings,
   type WatchlistSettings,
 } from "@/lib/watchlistSettings";
+import { resolveRegularSessionDisplay } from "@/lib/quoteDisplay";
 
 type Row ={ name: string; sec: string; col: string; mkt?: string; zh?: string; last: number; chg: number; open: number; high: number; low: number; vol: number; hi52: number; lo52: number; verdict: string | null; wr: number | null; pf: number | null; cagr: number | null; regimeBull: boolean | null };
 type Manifest = { as_of: string | null; symbols: Record<string, Row> };
@@ -135,25 +136,9 @@ function mergeLive(r: Row | undefined, q: any): Row | undefined {
     const v = q[k];
     if (v != null && isFinite(v)) base[k] = v;
   }
-  // After-hours: when the hub emits an official EOD `close`, the row's LAST/CHG%
-  // should reflect the completed session (the after-hours delta belongs in the
-  // EXT column), NOT the raw AH-influenced `last`/`chg`. Mirrors the detail-pane
-  // rule (officialClose ?? last; chg = (close - prevClose)/prevClose) so the
-  // sidebar, header, and detail pane all agree.
-  const officialClose = q.close;
-  if (officialClose != null && isFinite(officialClose)) {
-    base.last = officialClose;
-    const prevClose = q.prevClose;
-    if (prevClose != null && isFinite(prevClose) && prevClose !== 0) {
-      base.chg = ((officialClose - prevClose) / prevClose) * 100;
-    }
-  }
-  // Overnight (post-midnight-ET, pre-open): no new session prints exist, so chg
-  // computes to a misleading 0.00%. The hub emits prevSessionChg ONLY in that
-  // window — show the last completed session's move instead (TV semantics).
-  if (q.prevSessionChg != null && isFinite(q.prevSessionChg)) {
-    base.chg = q.prevSessionChg;
-  }
+  const regular = resolveRegularSessionDisplay(q);
+  if (regular.regularPrice != null) base.last = regular.regularPrice;
+  if (regular.regularChg != null) base.chg = regular.regularChg;
   return base;
 }
 
@@ -1525,7 +1510,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // live quote (China/HK) wins over the WS tick and the manifest EOD row for both price and % change
   // Regular and extended prices are independent lanes. `last`/`close` stay
   // regular-session values; the hub's ext* namespace drives the secondary line.
-  const officialClose = liveQuote?.close as number | undefined;
+  const regularQuote = resolveRegularSessionDisplay(liveQuote);
   const hubExtPrice = liveQuote?.extPrice as number | undefined;
   const hubExtChg = liveQuote?.extChg as number | undefined;
   const hubExtTs = liveQuote?.extTs as number | undefined;
@@ -1533,15 +1518,10 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // F2: for composites, use summed composite quote; for singles, use existing logic.
   const lastPx: number | undefined = activeIsComposite
     ? (compositeQ?.last ?? undefined)
-    : (officialClose ?? liveQuote?.last ?? livePx ?? m?.last);
-  const prevCloseForChg = liveQuote?.prevClose as number | undefined;
+    : (regularQuote.regularPrice ?? livePx ?? m?.last);
   const chgNow: number | null | undefined = activeIsComposite
     ? (compositeQ?.chg ?? null)
-    : officialClose != null && prevCloseForChg != null && prevCloseForChg !== 0
-      ? ((officialClose - prevCloseForChg) / prevCloseForChg) * 100
-      : // Overnight: hub emits prevSessionChg only when no new session prints
-        // exist — prefer it over the misleading 0.00% (TV semantics).
-        ((liveQuote?.prevSessionChg as number | undefined) ?? liveQuote?.chg ?? m?.chg);
+    : (regularQuote.regularChg ?? m?.chg);
 
   // ── market-closed chip ──────────────────────────────────────────────────────
   // Recomputes every minute via setInterval (no holiday calendar — see risks).
@@ -2272,6 +2252,25 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // is both the third value and the honest fallback when the hub does not say which window.
   const extSessionLabel = (s?: ExtSession) =>
     s === "pre" ? t("extSessionPre") : s === "post" ? t("extSessionPost") : t("overnight");
+  // One extended-hours display object feeds both the responsive mobile symbol bar and the
+  // desktop/detail card. The hub namespace wins; the dedicated poll is a compatibility fallback.
+  const activeExtData = (() => {
+    const hubExt = hubExtPrice != null && Number.isFinite(hubExtPrice) ? {
+      price: hubExtPrice,
+      chg: hubExtChg ?? null,
+      ts: hubExtTs ?? null,
+      session: hubExtSession,
+    } : null;
+    const pollExt = !isComposite(active) && classify(active) === "us"
+      ? extQuotes[active]
+      : null;
+    return hubExt ?? (pollExt ? {
+      price: pollExt.extPrice,
+      chg: pollExt.extChg,
+      ts: pollExt.extTs,
+      session: pollExt.extSession,
+    } : null);
+  })();
   // Ext column tooltip: which session, and the move — the % the cell no longer prints itself.
   const extTitle = (sym: string): string | undefined => {
     const eq = extQuotes[sym];
@@ -2396,9 +2395,18 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         })()}
       />
       {/* ── mobile symbol bar (tap → search) ── */}
-      <div className="m-symbar" onClick={() => { setSeed(""); setSearchOpen(true); }}>
+      <div className={`m-symbar${activeExtData ? " has-ext" : ""}`} onClick={() => { setSeed(""); setSearchOpen(true); }}>
         <span className="m-sym"><span className="ic" style={{ background: m?.col || "#76b900" }}>{active[0]}</span><b>{active}</b><svg className="car" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></span>
-        <span className="m-px"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></span>
+        <span className="m-quote-stack">
+          <span className="m-px" data-quote-lane="regular"><b className="num">{fmt(lastPx, m && lastPx != null && lastPx < 10 ? 4 : 2)}</b><span className={`cg num ${(chgNow ?? 0) >= 0 ? "up" : "down"}`}>{chgStr(chgNow)}</span></span>
+          {activeExtData && (
+            <span className="m-ext" data-quote-lane="extended">
+              <span className="m-ext-label">{extSessionLabel(activeExtData.session)}</span>
+              <span className="num">{fmt(activeExtData.price, activeExtData.price < 10 ? 4 : 2)}</span>
+              {activeExtData.chg != null && <span className={`num ${activeExtData.chg >= 0 ? "up" : "down"}`}>{chgStr(activeExtData.chg)}</span>}
+            </span>
+          )}
+        </span>
       </div>
 
       <AppNav />
@@ -2859,7 +2867,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                 {mktClosed && <span className="mkt-closed">{t("marketClosed")}</span>}
               </div>
               {/* Overnight / extended-hours secondary price block.
-                  Shown ONLY when market is closed and we have an ext print.
+                  Shown only while the backend exposes an out-of-session ext print.
                   Sources in priority order:
                     1. Hub-emitted ext* namespace.
                     2. ext-quote poll result as a compatibility fallback.
@@ -2867,26 +2875,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
                   We label by our actual source, never a borrowed brand.
                   The label follows extSession ('pre'/'post'/'overnight'). */}
               {(() => {
-                if (!mktClosed) return null;
-                const hubExt = hubExtPrice != null && Number.isFinite(hubExtPrice) ? {
-                  price: hubExtPrice,
-                  chg: hubExtChg ?? null,
-                  ts: hubExtTs ?? null,
-                  session: hubExtSession,
-                  source: "hub",
-                } : null;
-                const pollExt = !isComposite(active) && classify(active) === "us"
-                  ? extQuotes[active]
-                  : null;
-                const extData = hubExt ?? (pollExt ? {
-                  price: pollExt.extPrice,
-                  chg: pollExt.extChg,
-                  ts: pollExt.extTs,
-                  session: pollExt.extSession,
-                  source: "ext-quote",
-                } : null);
-                if (!extData) return null;
-                const { price, chg, ts, session } = extData;
+                if (!activeExtData) return null;
+                const { price, chg, ts, session } = activeExtData;
                 const eu = (chg ?? 0) >= 0;
                 const tsStr = ts
                   ? new Date(ts * 1000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })

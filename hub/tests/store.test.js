@@ -170,6 +170,36 @@ describe("close-leak regression — two-session boundary", () => {
     assert.equal(result.NVDA.extPrice, 205.50, "extended price is carried under extPrice");
     assert.equal(result.NVDA.extSession, "post");
   });
+
+  it("getQuotes: post-market ext change references today's RTH close before the daily file rolls", () => {
+    const regularClose = 200.81;
+    const storeAH = makeStore(new Map([
+      ["NVDA", { prevClose: 195.04, anchor_source: "daily_file" }],
+    ]));
+    storeAH.quotes.set("NVDA", {
+      sym: "NVDA", last: regularClose, market: "us",
+      regularSession: "rth", regularSessionDate: "2026-07-09",
+      prevClose: 195.04, chg: 2.95, ts: Math.floor(NOW_DAY_N_AH / 1000) - 10,
+      anchor_source: "daily_file",
+    });
+    let reference = null;
+    const extFeed = {
+      getExt(_sym, _now, closeRef) {
+        reference = closeRef;
+        return {
+          extPrice: 199.79,
+          extChg: ((199.79 - closeRef) / closeRef) * 100,
+          extTs: Math.floor(NOW_DAY_N_AH / 1000) - 5,
+          extSession: "post",
+        };
+      },
+    };
+
+    const result = storeAH.getQuotes(["NVDA"], NOW_DAY_N_AH, extFeed);
+    assert.equal(reference, regularClose,
+      "AH reference must be today's RTH close even before the daily anchor rolls");
+    assert.ok(Math.abs(result.NVDA.extChg - ((199.79 - regularClose) / regularClose) * 100) < 1e-9);
+  });
 });
 
 // ── setQuote: basic merge semantics ──

@@ -159,6 +159,57 @@ test("the canonical Terminal shell works at its supported responsive widths", as
   });
 });
 
+test("regular-session performance stays primary while extended pricing is separate", async ({ page }, testInfo) => {
+  const regularClose = 390.54;
+  const previousClose = 393.33;
+  const regularChange = ((regularClose - previousClose) / previousClose) * 100;
+
+  await page.route("**/api/quote?**", async (route) => {
+    const url = new URL(route.request().url());
+    const syms = (url.searchParams.get("syms") || "NVDA").split(",");
+    const quotes = Object.fromEntries(syms.map((sym) => [sym, sym === "NVDA" ? {
+      sym,
+      last: 421.14,           // deliberately contaminated raw feed value
+      chg: 7.84,
+      close: regularClose,
+      prevClose: previousClose,
+      regularPrice: regularClose,
+      regularChg: regularChange,
+      basis: "DELAYED_15M",
+      marketSession: "post",
+      extPrice: 421.14,
+      extChg: 7.84,
+      extTs: 1_785_533_400,
+      extSession: "post",
+    } : null]));
+    await route.fulfill({ json: { quotes } });
+  });
+  await page.route("**/api/ext-quote?**", async (route) => {
+    await route.fulfill({ json: { quotes: {
+      NVDA: { extPrice: 421.14, extChg: 7.84, extTs: 1_785_533_400, extSession: "post" },
+    } } });
+  });
+
+  await armTerminalVisualReady(page);
+  await page.goto("/terminal?symbol=NVDA");
+  await waitForTerminalVisualReady(page);
+
+  if (testInfo.project.name === "desktop") {
+    await expect(page.locator(".detail-hd .px")).toContainText("390.54");
+    await expect(page.locator(".detail-hd .px")).toContainText("-0.71%");
+    await expect(page.locator(".detail-hd .ah-block")).toContainText("421.14");
+    await expect(page.locator(".detail-hd .ah-block")).toContainText("+7.84%");
+  } else {
+    const regular = page.locator('[data-quote-lane="regular"]');
+    const extended = page.locator('[data-quote-lane="extended"]');
+    await expect(regular).toContainText("390.54");
+    await expect(regular).toContainText("-0.71%");
+    await expect(extended).toContainText("After hours");
+    await expect(extended).toContainText("421.14");
+    await expect(extended).toContainText("+7.84%");
+  }
+});
+
 test("Prophet fills its Options workspace at every supported width", async ({ page }, testInfo) => {
   const zh = testInfo.project.name === "tablet";
   if (zh) {
