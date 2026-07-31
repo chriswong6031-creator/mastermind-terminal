@@ -91,13 +91,6 @@ export interface PlanSummary {
     action: string;
     status: "ACTIVE" | "PENDING" | "DONE";
   }> | null;
-  /** Machine-generated thesis prose (+ zh variant when the engine emits one). */
-  thesis?: string | null;
-  thesis_zh?: string | null;
-  /** Flat-shape origination fields the payload already carries (display only). */
-  _conviction_score?: number | null;
-  _r_unit?: number | null;
-  trigger?: number | null;
 }
 
 /** Return ISO date string from either flat (_signal_date) or nested (asof) shape. */
@@ -230,80 +223,111 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
 
   return (
     <div
-      className={`obs-card obs-prophet-signal${selected ? " sel" : ""}${isInvalidated ? " dead" : ""}`}
-      style={{ "--c": phaseColor } as React.CSSProperties}
+      className={`obs-card obs-prophet-signal${selected ? " sel" : ""}`}
+      style={{
+        ...CARD_STYLE,
+        opacity: isInvalidated ? 0.6 : 1,
+      }}
       onClick={() => onSelect(plan)}
       role="option"
       aria-selected={selected}
     >
-      {/* Line 1: ticker + direction … age */}
-      <div className="obs-prophet-sig-hd">
-        <span className="obs-prophet-sig-tkr">{plan.asset}</span>
+      {/* Row 1: ticker + direction + archetype + phase */}
+      <div style={ROW}>
+        <span style={TICKER_STYLE}>{plan.asset}</span>
+
+        {/* Direction badge */}
         <span
-          className="obs-tag obs-prophet-sig-dir"
-          style={{ "--c": dirColor } as React.CSSProperties}
+          className="obs-tag"
+          style={{ ...CHIP_BASE, "--c": dirColor, fontWeight: 700 } as React.CSSProperties}
         >
           {isBear ? `▼ ${t("bear")}` : `▲ ${t("bull")}`}
         </span>
-        <span className="obs-prophet-sig-age num">{days}{t("daysActive")}</span>
-      </div>
 
-      {/* Line 2: entry level + archetype … lifecycle phase */}
-      <div className="obs-prophet-sig-sub">
-        <span className="obs-prophet-sig-entry">
-          <i>{t("entryLabel")}</i>
-          <b className="num">{plan.entry != null ? `$${plan.entry.toFixed(2)}` : "—"}</b>
-        </span>
+        {/* Archetype tag */}
         {plan.archetype && (
           <span
-            className="obs-tag obs-prophet-sig-arch"
-            style={{ "--c": archetypeColor(plan.archetype) } as React.CSSProperties}
+            className="obs-tag"
+            style={{ ...CHIP_BASE, "--c": archetypeColor(plan.archetype) } as React.CSSProperties}
           >
             {plan.archetype}
           </span>
         )}
-        {pnlPct != null && (
-          <span
-            className="obs-prophet-sig-pnl num"
-            style={{ "--c": pnlPct >= 0 ? "var(--up)" : "var(--down)" } as React.CSSProperties}
-          >
-            {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%
-            <i>{lang === "zh" ? "对比计划" : "vs plan"}</i>
-          </span>
-        )}
+
+        {/* Spacer */}
+        <div style={{ flex: 1 }} />
+
+        {/* Phase chip — lifecycle state, tinted by phaseTone() */}
         {phaseDisplay && (
           <span
-            className="obs-tag obs-prophet-sig-phase"
-            style={{ "--c": phaseColor } as React.CSSProperties}
+            className="obs-tag"
+            style={{ ...CHIP_BASE, "--c": phaseColor, fontSize: 9 } as React.CSSProperties}
           >
             {phaseDisplay}
           </span>
         )}
       </div>
 
-      {/* T1 progress — only exists when the payload carries a last price */}
+      {/* Row 2: entry / days / P&L */}
+      <div style={{ ...ROW, marginTop: 6, gap: 12, fontSize: 10.5 }}>
+        <span style={FACT}>
+          <span className="obs-lbl" style={FACT_LABEL}>{t("entryLabel")}</span>
+          <span className="num" style={FACT_VAL}>{plan.entry != null ? `$${plan.entry.toFixed(2)}` : "—"}</span>
+        </span>
+        <span style={FACT}>
+          <span style={FACT_LABEL}></span>
+          <span className="num" style={{ ...FACT_VAL, color: "var(--muted)" }}>{days}{t("daysActive")}</span>
+        </span>
+        {pnlPct != null && (
+          <span className="num" style={{ marginLeft: "auto", font: "600 11px/1 var(--font-num)", fontVariantNumeric: "tabular-nums", color: pnlPct >= 0 ? "var(--up)" : "var(--down)" }}>
+            {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%
+            <span style={{ font: "500 9px/1 var(--font-ui)", color: "var(--muted)", marginLeft: 3 }}>
+              vs plan
+            </span>
+          </span>
+        )}
+      </div>
+
+      {/* T1 progress bar */}
       {t1pct != null && (
-        <div className="obs-prophet-sig-bar">
-          <div className="obs-prophet-sig-bar-hd">
-            <span className="num">{t1pct.toFixed(0)}% {t("t1Progress")}</span>
+        <div style={{ marginTop: 7 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+            <span className="num" style={{ font: "500 9.5px/1 var(--font-ui)", fontVariantNumeric: "tabular-nums", color: "var(--muted)" }}>{t1pct.toFixed(0)}% {t("t1Progress")}</span>
           </div>
-          <div className="obs-prophet-meter">
-            <div className="obs-prophet-meter-fill up" style={{ width: `${t1pct}%` }} />
+          <div style={PROGRESS_TRACK}>
+            <div
+              style={{
+                height: "100%",
+                width: `${t1pct}%`,
+                background: "var(--up)",
+                borderRadius: "var(--r-pill)",
+                transition: "width .3s",
+              }}
+            />
           </div>
         </div>
       )}
 
       {/* Min-hold bar */}
       {minPct != null && (
-        <div className="obs-prophet-sig-bar">
-          <div className="obs-prophet-sig-bar-hd">
-            <span className="num">{days}d / {minHold}d {t("minHold")}</span>
-            <span style={{ color: holdColor }}>{isLocked ? "🔒 " : ""}{holdLabel}</span>
+        <div style={{ marginTop: 5 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3, alignItems: "center" }}>
+            <span className="num" style={{ font: "500 9.5px/1 var(--font-ui)", fontVariantNumeric: "tabular-nums", color: "var(--muted)" }}>
+              {days}d / {minHold}d {t("minHold")}
+            </span>
+            <span style={{ font: "600 9px/1 var(--font-ui)", color: holdColor }}>
+              {isLocked ? "🔒 " : ""}{holdLabel}
+            </span>
           </div>
-          <div className="obs-prophet-meter">
+          <div style={PROGRESS_TRACK}>
             <div
-              className={`obs-prophet-meter-fill${isLocked ? "" : " up"}`}
-              style={{ width: `${minPct}%` }}
+              style={{
+                height: "100%",
+                width: `${minPct}%`,
+                background: isLocked ? "var(--line-3)" : "var(--up)",
+                borderRadius: "var(--r-pill)",
+                transition: "width .3s",
+              }}
             />
           </div>
         </div>
@@ -312,7 +336,7 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
       {/* Expand toggle for OptionCard */}
       {plan.option_contract && (
         <button
-          className="obs-prophet-sig-exp"
+          style={EXPAND_BTN}
           onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
           aria-expanded={expanded}
           aria-label={expanded ? t("optionCollapse") : t("optionExpand")}
@@ -328,3 +352,69 @@ export function SignalCard({ plan, lang, selected, onSelect }: SignalCardProps) 
     </div>
   );
 }
+
+// ── Style constants ───────────────────────────────────────────────────────────
+
+const CARD_STYLE: React.CSSProperties = {
+  position: "relative",
+  padding: "12px 13px",
+  cursor: "pointer",
+  marginBottom: 8,
+};
+
+const ROW: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 5,
+};
+
+const TICKER_STYLE: React.CSSProperties = {
+  font: "750 15px/1 var(--font-ui)",
+  color: "var(--text)",
+  letterSpacing: ".01em",
+};
+
+/** Dense overrides for `.obs-tag` in the card's chip row; the tint rides `--c`. */
+const CHIP_BASE: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 600,
+  padding: "3px 8px",
+  gap: 3,
+};
+
+const FACT: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+};
+
+const FACT_LABEL: React.CSSProperties = {
+  font: "500 9px/1 var(--font-ui)",
+  color: "var(--muted)",
+};
+
+const FACT_VAL: React.CSSProperties = {
+  font: "600 11px/1 var(--font-num)",
+  fontVariantNumeric: "tabular-nums",
+  color: "var(--text)",
+};
+
+const PROGRESS_TRACK: React.CSSProperties = {
+  height: 4,
+  background: "var(--line-2)",
+  borderRadius: "var(--r-pill)",
+  overflow: "hidden",
+};
+
+const EXPAND_BTN: React.CSSProperties = {
+  position: "absolute",
+  bottom: 6,
+  right: 8,
+  font: "600 8px/1 var(--font-ui)",
+  color: "var(--muted)",
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  padding: "2px 4px",
+};

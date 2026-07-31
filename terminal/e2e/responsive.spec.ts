@@ -152,6 +152,13 @@ test("Prophet fills its Options workspace at every supported width", async ({ pa
   const prophet = page.locator(".obs-prophet");
   await expect(prophet).toBeVisible({ timeout: 15_000 });
   await expect(prophet.locator(".obs-prophet-title-row h2")).toHaveText(zh ? "预言台" : "Prophet");
+  await expect(prophet.locator(".obs-prophet-title-row")).toContainText(
+    zh ? "Mastermind 因子引擎" : "Mastermind factor engine",
+  );
+  await expect(prophet.locator(".obs-prophet-signal").first()).toBeVisible();
+  await expect(prophet.locator(".obs-prophet-geometry")).toBeVisible();
+  await expect(prophet.locator(".obs-prophet-confidence .obs-ring")).toBeVisible();
+  await expect(prophet.locator(".obs-prophet-stage")).toHaveCount(0);
 
   const readLayout = () => prophet.evaluate((root) => {
     const host = root.parentElement;
@@ -178,6 +185,37 @@ test("Prophet fills its Options workspace at every supported width", async ({ pa
     expect(layout.gridColumns).toBe(testInfo.project.name === "desktop" ? 3 : 2);
   }
 
+  const composition = await prophet.evaluate((root) => {
+    const rect = (selector: string) => {
+      const el = root.querySelector<HTMLElement>(selector);
+      if (!el) throw new Error(`Missing Prophet pane: ${selector}`);
+      const box = el.getBoundingClientRect();
+      return { left: box.left, top: box.top, width: box.width, height: box.height };
+    };
+    return {
+      left: rect(".obs-prophet-left"),
+      center: rect(".obs-prophet-center"),
+      right: rect(".obs-prophet-right"),
+      signal: rect(".obs-prophet-signal"),
+      geometry: rect(".obs-prophet-geometry"),
+    };
+  });
+  // Regression receipt for the pre-v2 composition: readable ledger rows, a compact
+  // horizontal geometry card, and the confidence ring all survive the responsive shell.
+  expect(composition.signal.height).toBeGreaterThanOrEqual(58);
+  expect(composition.geometry.height).toBeLessThan(280);
+  if (testInfo.project.name === "desktop") {
+    expect(Math.abs(composition.left.top - composition.center.top)).toBeLessThanOrEqual(1);
+    expect(Math.abs(composition.center.top - composition.right.top)).toBeLessThanOrEqual(1);
+    expect(composition.center.width).toBeGreaterThan(composition.left.width);
+  } else if (testInfo.project.name === "tablet") {
+    expect(Math.abs(composition.left.top - composition.center.top)).toBeLessThanOrEqual(1);
+    expect(composition.right.top).toBeGreaterThan(composition.center.top);
+  } else {
+    expect(composition.center.top).toBeGreaterThan(composition.left.top);
+    expect(composition.right.top).toBeGreaterThan(composition.center.top);
+  }
+
   await page.screenshot({
     path: testInfo.outputPath(`${testInfo.project.name}-prophet.png`),
     fullPage: false,
@@ -194,6 +232,20 @@ test("Prophet fills its Options workspace at every supported width", async ({ pa
     expect(wideLayout.gridColumns).toBe(3);
     await page.screenshot({
       path: testInfo.outputPath("wide-desktop-prophet.png"),
+      fullPage: false,
+    });
+  }
+
+  // The compact rail still carries the v2 honesty guard. LRN's structural stop
+  // exceeds both audit thresholds, so its projected targets must be de-emphasized
+  // and explicitly labeled as geometry rather than forecasts.
+  await prophet.locator(".obs-prophet-signal").filter({ hasText: "LRN" }).click();
+  await expect(prophet.locator(".obs-prophet-geometry .obs-note")).toContainText(
+    zh ? "结构过宽" : "Wide geometry",
+  );
+  if (testInfo.project.name === "desktop") {
+    await page.screenshot({
+      path: testInfo.outputPath("desktop-prophet-wide-geometry.png"),
       fullPage: false,
     });
   }
