@@ -23,8 +23,6 @@ export type ChartSettings = {
   scaleFontSize: number;
   scaleLineColor: string;
   countdownVisible: boolean;
-  dayOfWeekLabels: boolean;
-  dateFormat: "locale" | "yyyy-mm-dd" | "dd-mm-yyyy" | "mm-dd-yyyy";
   hourFormat: "12" | "24";
   // Symbol (candle body/wick/border colors)
   candleBodyVisible: boolean;
@@ -87,8 +85,6 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   scaleFontSize: 12,
   scaleLineColor: "",
   countdownVisible: true,
-  dayOfWeekLabels: true,
-  dateFormat: "locale",
   hourFormat: "24",
   // Empty strings = "use CSS theme tokens (--up/--down)". Non-empty = user-overridden hex.
   // Effect 7 only applies candle colors when truthy, so the up/down flip in Effect 5 is never

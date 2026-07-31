@@ -101,7 +101,7 @@ export default function ChartSettingsModal({
     const keys: Record<ChartSettingsTab, (keyof ChartSettings)[]> = {
       symbol: ["colorBarsPrevClose", "candleBodyVisible", "candleBordersVisible", "candleWicksVisible", "candleUpColor", "candleDownColor", "candleUpBorder", "candleDownBorder", "candleUpWick", "candleDownWick", "extHours", "precision"],
       status: ["showLogo", "showSymbolName", "titleMode", "showOHLC", "showBarChange", "showVolume", "showLastDayChange", "showIndicatorTitles", "indicatorBackgroundOpacity"],
-      scales: ["mode", "invertScale", "scaleLeft", "autoScale", "lastValueVisible", "priceLineVisible", "countdownVisible", "extendedLineVisible", "preMarketColor", "postMarketColor", "overnightColor", "dayOfWeekLabels", "dateFormat", "hourFormat"],
+      scales: ["mode", "invertScale", "scaleLeft", "autoScale", "lastValueVisible", "priceLineVisible", "countdownVisible", "extendedLineVisible", "preMarketColor", "postMarketColor", "overnightColor", "hourFormat"],
       canvas: ["showWatermark", "backgroundType", "backgroundTop", "backgroundBottom", "gridHVisible", "gridVVisible", "gridHColor", "gridVColor", "paneSeparatorColor", "crosshairColor", "watermarkColor", "scaleTextColor", "scaleFontSize", "scaleLineColor", "paneButtons", "scaleMarginsTop", "scaleMarginsBottom", "rightOffsetBars"],
       events: ["showDividends", "showSplits", "showEarnings"],
     };
@@ -333,9 +333,6 @@ function ScalesTab({ settings: s, onSettings, chartApi }: { settings: ChartSetti
       </CheckRow>
     </Section>
     <Section title="Time scale">
-      <CheckRow label="Day of week on labels" value={s.dayOfWeekLabels} onChange={(value) => onSettings({ dayOfWeekLabels: value })} />
-      <SelectRow label="Date format" value={s.dateFormat} onChange={(value) => onSettings({ dateFormat: value as ChartSettings["dateFormat"] })}
-        options={[{ value: "locale", label: "System locale" }, { value: "yyyy-mm-dd", label: "2026-07-30" }, { value: "dd-mm-yyyy", label: "30-07-2026" }, { value: "mm-dd-yyyy", label: "07-30-2026" }]} />
       <SelectRow label="Time hours format" value={s.hourFormat} onChange={(value) => onSettings({ hourFormat: value as "12" | "24" })}
         options={[{ value: "24", label: "24-hours" }, { value: "12", label: "12-hours" }]} />
     </Section>
