@@ -31,5 +31,8 @@ web/ohlc/*.json
 
 .DS_Store
 
+# third-party design reference captures (TradingView etc.) — local only, never commit
+design_refs/
+
 # suite-alerts sidecar bundle — built on the box by terminal-build.sh step 9
 ingest/dist/
