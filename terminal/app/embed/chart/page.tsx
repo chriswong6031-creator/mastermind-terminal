@@ -31,6 +31,6 @@ export default async function EmbedChartPage({
   }
 
   return (
-    <EmbedChart symbol={symbol} theme={theme} lang={lang} transparent={transparent} initialRange={range} />
+    <EmbedChart symbol={symbol} theme={theme} lang={lang} transparent={transparent} initialRange={range} hideQuote={first(sp.hdr) === "0"} />
   );
 }

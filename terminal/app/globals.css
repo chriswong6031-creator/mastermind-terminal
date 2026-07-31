@@ -3086,3 +3086,6 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
    it, so the workspace pins to the frame and the chart flexes to fill at every width. */
 .shell-app .workspace{grid-column:1;grid-row:1;border-right:none;height:100svh;min-height:0;flex:none}
 .shell-app .chart-body{height:auto;flex:1 1 0;min-height:0}
+/* The native roller strip owns interval switching in the apps — the toolbar's
+   favorited-TF quick tray (and its edit pencil) would be a second TF control. */
+.shell-app .chart-tabs .tftray{display:none}

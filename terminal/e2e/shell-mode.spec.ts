@@ -26,6 +26,9 @@ test.describe("native shell mode", () => {
     // The chart itself still mounts and renders.
     await expect(page.locator(".workspace canvas").first()).toBeVisible({ timeout: 45_000 });
 
+    // The native roller strip owns interval switching — the toolbar TF quick tray is hidden.
+    await expect(page.locator(".chart-tabs .tftray")).toBeHidden();
+
     // The chart fills the frame — the mobile 46–80svh cap must not apply in shell mode
     // (a shell WebView has no scrolling page below the chart).
     const chartFill = await page.evaluate(() => {
@@ -55,6 +58,15 @@ test.describe("native shell mode", () => {
     await page.waitForFunction(() => (window as any).__mmShell.getState().sym === "AAPL");
     await page.evaluate(() => (window as any).__mmShell.setTimeframe("D"));
     await page.waitForFunction(() => (window as any).__mmShell.getState().tf === "D");
+  });
+
+  test("embed widget hdr=0 hides the quote line, keeps range tabs", async ({ page }) => {
+    await page.goto("/embed/chart?symbol=NVDA&hdr=0");
+    await expect(page.locator(".embed-ranges")).toBeVisible();
+    await expect(page.locator(".embed-head-quote")).toBeHidden();
+    // Without the param the quote line stays (dossier iframes unchanged).
+    await page.goto("/embed/chart?symbol=NVDA");
+    await expect(page.locator(".embed-head-quote")).toBeVisible();
   });
 
   test("normal mode is untouched", async ({ page }) => {
