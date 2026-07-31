@@ -19,6 +19,7 @@ import {
 } from "lightweight-charts";
 import { createEngine, type ChartEngine } from "@/lib/chart-engine";
 import { clampAxisZoom, axisZoomMargins, wheelDeltaToZoomStep, type AxisMargins } from "@/lib/chart-engine/axisZoom";
+import { keepIndicatorPaneAxisLabelsOnly } from "@/lib/indicatorPaneSeries";
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engine/host";
 import { ORACLE_V1_PINE } from "@/lib/pine";
@@ -1819,6 +1820,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (key === "adx") series = buildAdx(chart, rows, pane);
       else if (key === "cvd") series = buildCvd(chart, rows, pane);
       else if (isSuiteKeyReg(key)) series = buildSuitePane(chart, rows, key, pane);
+      series = keepIndicatorPaneAxisLabelsOnly(series);
       indSeriesRef.current.set(key, series);
       // Claim the pane index (and advance the counter) ONLY when the builder actually rendered ≥1 series.
       // rvol/cvd return [] on daily (intraday-only). Setting paneMapRef + incrementing `pane` for an empty
@@ -4329,6 +4331,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         else if (a === "adx") series = buildAdx(chart, rows, pane);
         else if (a === "cvd") series = buildCvd(chart, rows, pane);
         else if (isSuiteKeyReg(a)) series = buildSuitePane(chart, rows, a, pane);
+        series = keepIndicatorPaneAxisLabelsOnly(series);
         indSeriesRef.current.set(a, series);
         // Claim the pane ONLY when the builder rendered ≥1 series: rvol/cvd return [] on daily, and a phantom
         // paneMapRef entry would both desync the next add's nextFreePane() index (splitting a later builder,
