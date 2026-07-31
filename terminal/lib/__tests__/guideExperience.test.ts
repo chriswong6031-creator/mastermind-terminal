@@ -31,7 +31,21 @@ describe("indicator guide experience", () => {
       expect(metadata?.title.zh.trim().length, id).toBeGreaterThan(0);
       expect(metadata?.caption.en.trim().length, id).toBeGreaterThan(20);
       expect(metadata?.caption.zh.trim().length, id).toBeGreaterThan(8);
-      expect(metadata?.legend.length, id).toBeGreaterThanOrEqual(2);
+      expect(metadata?.legend.length, id).toBe(3);
+      expect(metadata?.stages.map((stage) => stage.id), id).toEqual([
+        "context",
+        "confirmation",
+        "decision",
+      ]);
+
+      for (const stage of metadata?.stages ?? []) {
+        expect(stage.eyebrow.en.trim().length, `${id}/${stage.id} English eyebrow`).toBeGreaterThan(0);
+        expect(stage.eyebrow.zh.trim().length, `${id}/${stage.id} Chinese eyebrow`).toBeGreaterThan(0);
+        expect(stage.title.en.trim().length, `${id}/${stage.id} English title`).toBeGreaterThan(0);
+        expect(stage.title.zh.trim().length, `${id}/${stage.id} Chinese title`).toBeGreaterThan(0);
+        expect(stage.description.en.trim().length, `${id}/${stage.id} English description`).toBeGreaterThan(30);
+        expect(stage.description.zh.trim().length, `${id}/${stage.id} Chinese description`).toBeGreaterThan(12);
+      }
     }
 
     expect(hasGuide("trend", "missing")).toBe(false);

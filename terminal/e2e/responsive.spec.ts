@@ -227,16 +227,25 @@ test("a Pro-equivalent entitlement can discover all premium modules and add a su
 
   await modal.getByRole("button", { name: "Systems & Presets" }).click();
   const structurePreset = modal.locator(".ipreset-row").filter({ hasText: "Structure Core" });
-  const reapplyStructure = structurePreset.getByRole("button", { name: /Reapply recommended/ });
-  await expect(reapplyStructure).toBeEnabled();
-  await reapplyStructure.click();
+  await expect(structurePreset.getByRole("button", { name: "Current: Structure Focus" })).toBeDisabled();
+  await structurePreset.getByRole("button", { name: "Apply: Structure Workflow" }).click();
   await modal.locator(".im-nav-item").filter({ hasText: "Structure Core" }).click();
   await expect(modal.locator(".imod-row.on")).toHaveCount(3);
 
   await modal.getByRole("button", { name: "Systems & Presets" }).click();
+  await structurePreset.getByRole("button", { name: "Apply: Complete Structure Research" }).click();
+  await modal.locator(".im-nav-item").filter({ hasText: "Structure Core" }).click();
+  await expect(modal.locator(".imod-row.on")).toHaveCount(9);
+
+  await modal.getByRole("button", { name: "Systems & Presets" }).click();
+  await structurePreset.getByRole("button", { name: "Apply: Structure Focus" }).click();
+  await modal.locator(".im-nav-item").filter({ hasText: "Structure Core" }).click();
+  await expect(modal.locator(".imod-row.on")).toHaveCount(1);
+
+  await modal.getByRole("button", { name: "Systems & Presets" }).click();
   const trendPreset = modal.locator(".ipreset-row").filter({ hasText: "Trend Waves" });
-  await trendPreset.getByRole("button", { name: /Add recommended/ }).click();
-  await expect(trendPreset.getByRole("button", { name: /Reapply recommended/ })).toBeEnabled();
+  await trendPreset.getByRole("button", { name: "Add: Candle State" }).click();
+  await expect(trendPreset.getByRole("button", { name: "Current: Candle State" })).toBeDisabled();
 });
 
 test("Seasonal read stays useful in chart and table views at every supported width", async ({ page }, testInfo) => {

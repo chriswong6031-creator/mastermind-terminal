@@ -38,7 +38,7 @@ async function openIndicatorLibrary(page: Page) {
 test("module switches and the 31-module Guide Center are accessible and responsive", async ({ page }, testInfo) => {
   const { library } = await openIndicatorLibrary(page);
 
-  await library.getByRole("button", { name: /Trend Waves/ }).click();
+  await library.locator(".im-nav-item").filter({ hasText: "Trend Waves" }).click();
 
   // Candle Painter is the suite's free module, so this contract remains testable for guests too.
   const moduleSwitch = library.getByRole("switch", { name: "Candle Painter", exact: true });
@@ -74,6 +74,13 @@ test("module switches and the 31-module Guide Center are accessible and responsi
   await expect(guide.getByRole("heading", { level: 1, name: "Trend Engine" })).toBeVisible();
   await expect(guide.getByRole("img", { name: /Manage the full trade path/ })).toBeVisible();
   await expect(guide.getByRole("list", { name: "Legend" })).toBeVisible();
+  const diagramSteps = guide.getByRole("list", { name: "Interactive diagram steps" });
+  await expect(diagramSteps).toBeVisible();
+  await expect(diagramSteps.getByRole("button")).toHaveCount(3);
+  await diagramSteps.getByRole("button").filter({ hasText: "Trend rail" }).click();
+  await expect(diagramSteps.getByRole("button").filter({ hasText: "Trend rail" })).toHaveAttribute("aria-current", "step");
+  await guide.getByRole("button", { name: /Replay walkthrough/ }).click();
+  await expect(guide.getByRole("button", { name: "Pause walkthrough" })).toBeVisible();
   await expect(guide.getByLabel("At a glance")).toBeVisible();
   await expect(guide.getByLabel("Current settings schema")).toBeVisible();
   await expect(guide.locator(".gp-event-list code")).toHaveText([
@@ -137,6 +144,12 @@ test("module switches and the 31-module Guide Center are accessible and responsi
   expect(viewportFit.top).toBeGreaterThanOrEqual(-1);
   expect(viewportFit.bottom).toBeLessThanOrEqual(viewportFit.viewportHeight + 1);
   expect(viewportFit.documentWidth).toBeLessThanOrEqual(viewportFit.viewportWidth + 1);
+  if (testInfo.project.name === "desktop") {
+    const academyBox = await guide.boundingBox();
+    const visualBox = await guide.locator(".gp-visual-frame").boundingBox();
+    expect(academyBox?.width ?? 0).toBeGreaterThan(1300);
+    expect(visualBox?.width ?? 0).toBeGreaterThan(760);
+  }
 
   await guide.screenshot({
     path: testInfo.outputPath(`${testInfo.project.name}-indicator-guide-center.png`),
@@ -153,7 +166,49 @@ test("module switches and the 31-module Guide Center are accessible and responsi
   await expect(guideTrigger).toBeFocused();
   await expect(library).toBeVisible();
 
-  await guideTrigger.click();
+  await library.getByRole("button", { name: "Systems & Presets" }).click();
+  const systemGuideTrigger = library.getByRole("button", { name: "Guide: Structure Core system" });
+  await systemGuideTrigger.click();
+  await expect(guide.getByRole("heading", { level: 1, name: "Structure Core Playbook" })).toBeVisible();
+  await expect(guide.locator(".gp-system-visual")).toBeVisible();
+  const profileLab = guide.getByLabel("Progressive system presets");
+  await expect(profileLab.locator("article")).toHaveCount(3);
+  const focusProfile = profileLab.locator("article").filter({ hasText: "Structure Focus" });
+  await focusProfile.getByRole("button", { name: "Add to chart" }).click();
+  await expect(focusProfile.getByRole("button", { name: "Current" })).toBeDisabled();
+  const workflowProfile = profileLab.locator("article").filter({ hasText: "Structure Workflow" });
+  await workflowProfile.getByRole("button", { name: "Apply profile" }).click();
+  await expect(workflowProfile.getByRole("button", { name: "Current" })).toBeDisabled();
+  await expect(guide.getByText(/Every extra layer must answer a different question/)).toBeVisible();
+  const systemSteps = guide.getByRole("group", { name: "System learning steps" });
+  const decisionAreaStep = systemSteps.getByRole("button", { name: /Locate the decision area/ });
+  await decisionAreaStep.click();
+  await expect(decisionAreaStep).toHaveAttribute("aria-current", "step");
+  await expect(guide.getByRole("heading", { level: 2, name: "Clean-first recipe" })).toBeVisible();
+  const systemViewportFit = await guide.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      documentWidth: document.documentElement.scrollWidth,
+    };
+  });
+  expect(systemViewportFit.left).toBeGreaterThanOrEqual(-1);
+  expect(systemViewportFit.right).toBeLessThanOrEqual(systemViewportFit.viewportWidth + 1);
+  expect(systemViewportFit.top).toBeGreaterThanOrEqual(-1);
+  expect(systemViewportFit.bottom).toBeLessThanOrEqual(systemViewportFit.viewportHeight + 1);
+  expect(systemViewportFit.documentWidth).toBeLessThanOrEqual(systemViewportFit.viewportWidth + 1);
+  await page.keyboard.press("Escape");
+  await expect(guide).toBeHidden();
+  await expect(systemGuideTrigger).toBeFocused();
+
+  await library.locator(".im-nav-item").filter({ hasText: "Trend Waves" }).click();
+  const guideTriggerAgain = library.getByRole("button", { name: "Guide: Trend Engine" });
+  await guideTriggerAgain.click();
   await guide.getByRole("button", { name: "Configure" }).click();
   const settings = page.locator(".ind-set");
   await expect(settings).toBeVisible();
@@ -188,6 +243,51 @@ test("a locked search result remains keyboard reachable through its guide action
   await expect(guide.getByRole("heading", { level: 1, name: "Trend Engine" })).toBeVisible();
 });
 
+test("Structure profiles expose the exact Free, Insider, and Pro access matrix", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "The entitlement gate is shared by every viewport.");
+
+  const profiles = [
+    "Structure Focus",
+    "Structure Workflow",
+    "Complete Structure Research",
+  ] as const;
+  const matrix = [
+    { tier: "free", available: [] },
+    { tier: "insider", available: ["Structure Focus", "Structure Workflow"] },
+    { tier: "pro", available: [...profiles] },
+  ] as const;
+  let currentTier: "free" | "insider" | "pro" = "free";
+
+  // /api/me is the production client boundary for entitlement display. Varying only this
+  // response exercises the real tier normalization and avoids test-only auth/session mutation.
+  await page.route("**/api/me", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ tier: currentTier, features: [], status: "active" }),
+    });
+  });
+
+  for (const row of matrix) {
+    currentTier = row.tier;
+    const { library } = await openIndicatorLibrary(page);
+    await library.getByRole("button", { name: "Systems & Presets" }).click();
+
+    const structure = library.locator(".ipreset-row").filter({ hasText: "Structure Core" });
+    const available = new Set<string>(row.available);
+    for (const profileName of profiles) {
+      const profile = structure.locator("article").filter({ hasText: profileName });
+      if (available.has(profileName)) {
+        await expect(profile.getByRole("button", { name: `Add: ${profileName}` })).toBeVisible();
+        await expect(profile.getByRole("link", { name: `${profileName} — upgrade required` })).toHaveCount(0);
+      } else {
+        await expect(profile.getByRole("link", { name: `${profileName} — upgrade required` })).toBeVisible();
+        await expect(profile.getByRole("button", { name: `Add: ${profileName}` })).toHaveCount(0);
+      }
+    }
+  }
+});
+
 test("indicator controls and guides honor reduced motion", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The reduced-motion CSS contract is shared by every viewport.");
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -201,7 +301,7 @@ test("indicator controls and guides honor reduced motion", async ({ page }, test
     ),
   ).toBe("0s");
 
-  await library.getByRole("button", { name: /Trend Waves/ }).click();
+  await library.locator(".im-nav-item").filter({ hasText: "Trend Waves" }).click();
   await library.getByRole("button", { name: "Guide: Trend Engine" }).click();
   const guide = page.locator(".gp-center");
   await expect(guide).toBeVisible({ timeout: 10_000 });
@@ -211,4 +311,29 @@ test("indicator controls and guides honor reduced motion", async ({ page }, test
   await expect.poll(() =>
     guide.locator(".gp-scroll").evaluate((element) => getComputedStyle(element).scrollBehavior),
   ).toBe("auto");
+  const reducedSteps = guide.getByRole("list", { name: "Interactive diagram steps" }).getByRole("button");
+  await expect(reducedSteps.nth(2)).toHaveAttribute("aria-current", "step");
+  await page.waitForTimeout(2_300);
+  await expect(reducedSteps.nth(2)).toHaveAttribute("aria-current", "step");
+  await reducedSteps.first().click();
+  await expect(reducedSteps.first()).toHaveAttribute("aria-current", "step");
+
+  await page.keyboard.press("Escape");
+  await expect(guide).toBeHidden();
+  await library.getByRole("button", { name: "Systems & Presets" }).click();
+  await library.getByRole("button", { name: "Guide: Structure Core system" }).click();
+  await expect(guide.getByRole("heading", { level: 1, name: "Structure Core Playbook" })).toBeVisible();
+
+  const systemVisual = guide.locator(".gp-system-visual");
+  const systemSteps = guide.getByRole("group", { name: "System learning steps" });
+  const systemStepButtons = systemSteps.getByRole("button");
+  await expect(systemStepButtons).toHaveCount(4);
+  await expect(systemVisual).toHaveAttribute("data-stage", "4");
+  await expect(systemStepButtons.last()).toHaveAttribute("aria-current", "step");
+  await page.waitForTimeout(2_300);
+  await expect(systemVisual).toHaveAttribute("data-stage", "4");
+  await expect(systemStepButtons.last()).toHaveAttribute("aria-current", "step");
+  await systemStepButtons.first().click();
+  await expect(systemVisual).toHaveAttribute("data-stage", "1");
+  await expect(systemStepButtons.first()).toHaveAttribute("aria-current", "step");
 });

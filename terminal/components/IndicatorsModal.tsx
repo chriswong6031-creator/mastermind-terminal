@@ -9,6 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import Link from "next/link";
+import { ACS_UPGRADE_URL } from "@/components/settings/types";
 import { useLang, useT } from "@/lib/i18n";
 import {
   normalizeIndicatorSearch,
@@ -16,7 +17,18 @@ import {
   type IndicatorSearchDocument,
 } from "@/lib/indicatorSearch";
 import { type UserScript } from "@/lib/userScripts";
-import { MODULE_CATALOG, MODULE_CATEGORIES, type SuiteModuleCatalogEntry } from "@/lib/suites/catalog";
+import {
+  MODULE_CATALOG,
+  MODULE_CATEGORIES,
+  getSuiteModuleCatalogEntry,
+  suiteModuleId,
+  type SuiteModuleCatalogEntry,
+} from "@/lib/suites/catalog";
+import {
+  matchSuitePreset,
+  suitePresetsFor,
+  type SuitePresetId,
+} from "@/lib/suites/presets";
 import { SUITE_DEFS, SUITE_ORDER } from "@/lib/suites/registry";
 
 type ClassicIndicator = { key: string; label: string; mm?: boolean; tkey?: string };
@@ -74,17 +86,6 @@ type IndicatorSearchValue =
 
 type Tier = "free" | "insider" | "pro";
 const TIER_RANK: Record<Tier, number> = { free: 0, insider: 1, pro: 2 };
-
-/** A preset is addable at the lowest tier that unlocks any of its recommended modules. */
-const suiteMinTier = (key: string): Tier => {
-  const def = SUITE_DEFS[key];
-  if (!def) return "pro";
-  let min: Tier = "pro";
-  for (const suiteModule of def.modules) {
-    if (TIER_RANK[suiteModule.tier] < TIER_RANK[min]) min = suiteModule.tier;
-  }
-  return min;
-};
 
 /** Highest module tier — shown on the preset row so its full reach is explicit. */
 const suiteTopTier = (key: string): Tier => {
@@ -168,12 +169,14 @@ export interface IndicatorsModalProps {
   onClose: () => void;
   /** Classic indicators and the five optional recommended suite presets. */
   onToggle: (key: string) => void;
-  /** Applies or reapplies a suite's recommended module mix without removing the suite. */
-  onApplyPreset?: (key: string) => void;
+  /** Applies one progressive suite profile without replacing customized field values. */
+  onApplyPreset?: (key: string, presetId: SuitePresetId) => void;
+  suiteParams?: Readonly<Record<string, Readonly<Record<string, unknown>> | undefined>>;
   /** Qualified module ids (`suite:<suite>/<module>`) — never short module keys. */
   onToggleModule?: (id: string) => void;
   onOpenModuleSettings?: (id: string) => void;
   onOpenGuide?: (id: string) => void;
+  onOpenSystemGuide?: (suiteKey: string) => void;
   scripts?: UserScript[];
   enabled?: Set<string>;
   onToggleScript?: (id: string) => void;
@@ -190,9 +193,11 @@ export default function IndicatorsModal({
   onClose,
   onToggle,
   onApplyPreset,
+  suiteParams,
   onToggleModule,
   onOpenModuleSettings,
   onOpenGuide,
+  onOpenSystemGuide,
   scripts = [],
   enabled,
   onToggleScript,
@@ -721,47 +726,115 @@ export default function IndicatorsModal({
       <div className="im-list-title">
         <span>
           <strong>{copy("Systems & Presets", "系统与预设")}</strong>
-          <small>{copy("Optional recommended setups — modules remain individually controllable.", "可选推荐组合——每个模块仍可独立控制。")}</small>
+          <small>{copy("Guided workflows that scale from a clean chart to a complete research desk.", "从清爽图表逐步扩展到完整研究工作台的引导式工作流。")}</small>
         </span>
       </div>
       <div className="ipreset-note">
-        <strong>{copy("Start quickly, then customize", "快速开始，再按需定制")}</strong>
-        <span>{copy("Adding a preset enables its recommended module mix. It does not hide the modules inside Settings.", "添加预设会启用推荐模块组合，模块仍会在指标库中单独显示。")}</span>
+        <strong>{copy("Start focused. Add evidence deliberately.", "从聚焦开始，有目的地增加证据")}</strong>
+        <span>{copy("Profiles only change module switches. Your tuned inputs, colors, and saved work stay intact.", "预设只改变模块开关；已调整的参数、颜色与保存内容都会保留。")}</span>
       </div>
       <div className="ipreset-stack">
         {SUITE_ORDER.map((key) => {
           const def = SUITE_DEFS[key];
           if (!def) return null;
           const added = active.has(key);
-          const locked = TIER_RANK[userTier] < TIER_RANK[suiteMinTier(key)];
           const top = suiteTopTier(key);
           const label = def.tkey ? t(def.tkey, def.label) : def.label;
           const category = MODULE_CATEGORIES.find((candidate) => candidate.suiteKey === key);
-          const action = added
-            ? copy("Reapply recommended", "重新应用推荐组合")
-            : copy("Add recommended", "添加推荐组合");
+          const current = added ? matchSuitePreset(key, suiteParams?.[key]) : null;
           return (
-            <div key={key} className={`ipreset-row${added ? " on" : ""}${locked ? " locked" : ""}`}>
-              <span className="ipreset-mark" aria-hidden="true">{def.tag}</span>
-              <span className="ipreset-copy">
-                <span className="ipreset-title">
-                  <strong>{label}</strong>
-                  <span className={`im-tier im-tier-${top}`}>{top}</span>
+            <section key={key} className={`ipreset-row${added ? " on" : ""}`}>
+              <div className="ipreset-system-head">
+                <span className="ipreset-mark" aria-hidden="true">{def.tag}</span>
+                <span className="ipreset-copy">
+                  <span className="ipreset-title">
+                    <strong>{label}</strong>
+                    <span className={`im-tier im-tier-${top}`}>{top}</span>
+                    {added && (
+                      <small className={`ipreset-status${current ? "" : " custom"}`}>
+                        {current
+                          ? (lang === "zh" ? current.name.zh : current.name.en)
+                          : copy("Custom", "自定义")}
+                      </small>
+                    )}
+                  </span>
+                  <span>{lang === "zh" ? category?.descriptionZh : category?.description}</span>
                 </span>
-                <span>{lang === "zh" ? category?.descriptionZh : category?.description}</span>
-                <small>{def.modules.length} {t("suiteModulesWord", "modules")}</small>
-              </span>
-              <button
-                type="button"
-                className="ipreset-add"
-                disabled={locked}
-                aria-label={locked ? `${label} — ${copy("upgrade required", "需要升级")}` : `${action}: ${label}`}
-                onClick={() => (onApplyPreset ?? onToggle)(key)}
-              >
-                {locked && <LockMark />}
-                {locked ? copy("Upgrade required", "需要升级") : action}
-              </button>
-            </div>
+                {onOpenSystemGuide && (
+                  <button
+                    type="button"
+                    className="ipreset-guide"
+                    data-guide-system={key}
+                    aria-label={`${copy("Guide", "指南")}: ${label} ${copy("system", "系统")}`}
+                    onClick={() => onOpenSystemGuide(key)}
+                  >
+                    <GuideMark />
+                    <span>{copy("Playbook", "作战手册")}</span>
+                  </button>
+                )}
+              </div>
+              <div className="ipreset-profiles">
+                {suitePresetsFor(key).map((preset, index) => {
+                  const locked = TIER_RANK[userTier] < TIER_RANK[preset.minTier];
+                  const selected = added && current?.id === preset.id;
+                  const dense = preset.id === "research";
+                  return (
+                    <article
+                      className={`${selected ? "selected " : ""}${dense ? "dense" : ""}${locked ? " locked" : ""}`}
+                      key={preset.id}
+                    >
+                      <div className="ipreset-profile-top">
+                        <span>{String(index + 1).padStart(2, "0")}</span>
+                        <small className={`im-tier im-tier-${preset.minTier}`}>{preset.minTier}</small>
+                      </div>
+                      <strong>{lang === "zh" ? preset.name.zh : preset.name.en}</strong>
+                      <p>{lang === "zh" ? preset.description.zh : preset.description.en}</p>
+                      <div className="ipreset-module-tags" aria-label={`${preset.modules.length} ${copy("modules", "个模块")}`}>
+                        {preset.modules.map((moduleKey) => {
+                          const moduleEntry = getSuiteModuleCatalogEntry(suiteModuleId(key, moduleKey));
+                          return <span key={moduleKey}>{moduleEntry?.tag ?? moduleKey}</span>;
+                        })}
+                      </div>
+                      {locked ? (
+                        <a
+                          className="ipreset-add"
+                          href={ACS_UPGRADE_URL}
+                          target="_blank"
+                          rel="noopener"
+                          aria-label={`${lang === "zh" ? preset.name.zh : preset.name.en} — ${copy("upgrade required", "需要升级")}`}
+                        >
+                          <LockMark />
+                          {copy("Upgrade", "升级")}
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          className="ipreset-add"
+                          disabled={selected}
+                          aria-label={`${selected ? copy("Current", "当前") : added ? copy("Apply", "应用") : copy("Add", "添加")}: ${lang === "zh" ? preset.name.zh : preset.name.en}`}
+                          onClick={() => {
+                            if (onApplyPreset) onApplyPreset(key, preset.id);
+                            else onToggle(key);
+                          }}
+                        >
+                          {selected
+                            ? copy("Current", "当前")
+                            : added
+                              ? copy("Apply", "应用")
+                              : copy("Add", "添加")}
+                        </button>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+              <p className="ipreset-footnote">
+                {copy(
+                  "Complete Research is intentionally dense. Use it to investigate, then return to a focused execution view.",
+                  "完整研究组合故意保持高密度。用于探索后，请回到聚焦的执行视图。",
+                )}
+              </p>
+            </section>
           );
         })}
       </div>

@@ -19,6 +19,16 @@ export interface GuideVisualLegendItem {
   tone: GuideVisualTone;
 }
 
+export type GuideVisualStageId = "context" | "confirmation" | "decision";
+
+export interface GuideVisualStage {
+  id: GuideVisualStageId;
+  eyebrow: LocalizedGuideText;
+  title: LocalizedGuideText;
+  description: LocalizedGuideText;
+  tone: GuideVisualTone;
+}
+
 export interface GuideVisualMetadata {
   id: GuideVisualId;
   suiteKey: string;
@@ -27,6 +37,7 @@ export interface GuideVisualMetadata {
   kicker: LocalizedGuideText;
   caption: LocalizedGuideText;
   legend: readonly GuideVisualLegendItem[];
+  stages: readonly GuideVisualStage[];
 }
 
 export const GUIDE_VISUAL_IDS = [
@@ -72,6 +83,54 @@ const legend = (
   tone: GuideVisualTone,
 ): GuideVisualLegendItem => ({ label: text(en, zh), tone });
 
+const STAGE_BLUEPRINTS: readonly {
+  id: GuideVisualStageId;
+  eyebrow: LocalizedGuideText;
+  describe: (item: GuideVisualLegendItem) => LocalizedGuideText;
+}[] = [
+  {
+    id: "context",
+    eyebrow: text("01 · Map the context", "01 · 定位环境"),
+    describe: (item) => text(
+      `First, locate ${item.label.en}. It establishes the context for everything that follows.`,
+      `先定位${item.label.zh}。这是理解后续变化的基础环境。`,
+    ),
+  },
+  {
+    id: "confirmation",
+    eyebrow: text("02 · Confirm the change", "02 · 确认变化"),
+    describe: (item) => text(
+      `Then, wait for ${item.label.en}. It connects the setup to a measurable change instead of an assumption.`,
+      `然后等待${item.label.zh}。它把前提连接到可衡量的变化，而不是主观猜测。`,
+    ),
+  },
+  {
+    id: "decision",
+    eyebrow: text("03 · Resolve the decision", "03 · 完成决策"),
+    describe: (item) => text(
+      `Finally, read ${item.label.en}. Use it to confirm, invalidate, or manage the outcome.`,
+      `最后读取${item.label.zh}，用它确认、否定或管理最终结果。`,
+    ),
+  },
+] as const;
+
+function visualStages(items: readonly GuideVisualLegendItem[]): readonly GuideVisualStage[] {
+  if (items.length !== STAGE_BLUEPRINTS.length) {
+    throw new Error(`Guide visuals require exactly ${STAGE_BLUEPRINTS.length} semantic stages.`);
+  }
+
+  return STAGE_BLUEPRINTS.map((blueprint, index) => {
+    const item = items[index];
+    return {
+      id: blueprint.id,
+      eyebrow: blueprint.eyebrow,
+      title: item.label,
+      description: blueprint.describe(item),
+      tone: item.tone,
+    };
+  });
+}
+
 function visual(
   id: GuideVisualId,
   title: LocalizedGuideText,
@@ -80,7 +139,16 @@ function visual(
   items: readonly GuideVisualLegendItem[],
 ): GuideVisualMetadata {
   const [suiteKey, moduleKey] = id.split("/");
-  return { id, suiteKey, moduleKey, title, kicker, caption, legend: items };
+  return {
+    id,
+    suiteKey,
+    moduleKey,
+    title,
+    kicker,
+    caption,
+    legend: items,
+    stages: visualStages(items),
+  };
 }
 
 export const GUIDE_VISUALS: Readonly<Record<GuideVisualId, GuideVisualMetadata>> = {
