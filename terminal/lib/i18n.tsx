@@ -916,6 +916,8 @@ const LEX: Record<string, [string, string]> = {
   searchInputPlaceholder: ["Symbol, ISIN, or CUSIP", "代码、ISIN或CUSIP"],
   searchHistoryEmpty: ["No recent searches", "暂无最近搜索"],
   searchRecentHeader: ["Recent", "最近"],
+  searchShowRecent: ["Recent", "最近"],
+  searchShowWatchlist: ["Watchlist", "自选"],
   removeFromWatchlist: ["Remove from Watchlist", "从自选移除"],
   goToSymbol: ["Go to Symbol", "跳转到标的"],
   shiftClickHint: ["⇧ + Click  or  ⇧ + Enter  to add symbol and close dialog", "⇧ + 点击  或  ⇧ + Enter  添加标的并关闭对话框"],

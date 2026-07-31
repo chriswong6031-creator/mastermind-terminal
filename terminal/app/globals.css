@@ -883,6 +883,7 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 /* Keyboard icon in the search input slot */
 .smodal .sh .sh-kbd{display:grid;place-items:center;flex:none;color:var(--text-dim);width:20px;height:20px}
 .smodal .sh .sh-kbd svg{width:17px;height:17px;stroke:currentColor;stroke-width:1.5;fill:none}
+.smodal .sh .sh-view-toggle{display:none}
 /* Filter chips row */
 .s-chips{display:flex;gap:5px;padding:8px 12px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--line)}
 .s-chips::-webkit-scrollbar{display:none}
@@ -1987,6 +1988,12 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
   .smodal-hub .sres{flex:1;max-height:none;min-height:0}
   /* keep the chip row + input from shrinking as the body grows */
   .smodal-hub .sh,.smodal-hub .s-chips,.smodal-hub .smodal-title-bar{flex:none}
+  /* The desktop keyboard glyph is decorative and ambiguous on touch. Its slot becomes the
+     explicit Watchlist / Recent view action requested for the mobile ticker picker. */
+  .smodal-hub .sh .sh-kbd{display:none}
+  .smodal-hub .sh .sh-view-toggle{display:inline-flex;align-items:center;justify-content:center;flex:none;min-height:34px;padding:0 11px;border:1px solid var(--line-3);border-radius:var(--r-pill);background:var(--panel-2);color:var(--brand-2);font:650 11px/1 var(--font-ui);white-space:nowrap;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .smodal-hub .sh .sh-view-toggle:active{background:var(--panel-3)}
+  .smodal-hub .sh .sh-view-toggle:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
 }
 /* NOTE: legend/pane-ops mobile overrides live in the ≤860px block AFTER the legend base styles
    (further down this file) — equal-specificity rules here would lose to the later base rules. */

@@ -98,6 +98,7 @@ export default function SettingsPanel(props: SettingsPanelProps) {
 
   // ── focus the active rail tab on open (keyboard entry point) ──────────────
   const cardRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!visible) return;
     const id = setTimeout(() => {
@@ -107,6 +108,20 @@ export default function SettingsPanel(props: SettingsPanelProps) {
     }, 90);
     return () => clearTimeout(id);
   }, [visible]);
+
+  // The mobile rail collapses into a horizontally scrollable tab strip. Keep the selected tab
+  // fully in view on open and after a section switch without moving the vertical settings pane.
+  useEffect(() => {
+    if (!visible || !window.matchMedia("(max-width: 640px)").matches) return;
+    const id = requestAnimationFrame(() => {
+      const nav = navRef.current;
+      const activeTab = nav?.querySelector<HTMLElement>(".acs-nav-b.active");
+      if (!nav || !activeTab) return;
+      const left = activeTab.offsetLeft - (nav.clientWidth - activeTab.offsetWidth) / 2;
+      nav.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [visible, section]);
 
   // ── focus trap (Tab cycle within the card) ────────────────────────────────
   const onCardKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -203,7 +218,7 @@ export default function SettingsPanel(props: SettingsPanelProps) {
             </span>
           </div>
 
-          <nav className="acs-nav" role="tablist" aria-label={t("acsSections")}>
+          <nav className="acs-nav" role="tablist" aria-label={t("acsSections")} ref={navRef}>
             {NAV.map((n) => (
               <button
                 key={n.id}
