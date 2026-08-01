@@ -42,6 +42,11 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+try:  # direct execution: python ingest/collect_transcripts.py
+    from build_transcript_index import _read_body
+except ImportError:  # module execution: python -m ingest.collect_transcripts
+    from ingest.build_transcript_index import _read_body
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -555,6 +560,15 @@ def _infer_transcript_roles(segments: list[dict[str, str]]) -> list[str]:
 # ---------------------------------------------------------------------------
 # Main processing
 # ---------------------------------------------------------------------------
+def _canonical_body_bytes(payload: object) -> bytes:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def process_symbol(sym: str, parquet: str, quarters: int, duckdb_mod) -> tuple[int, list[str]]:
     """Fetch rows for sym from local parquet, write .json.gz files.
 
@@ -587,8 +601,6 @@ def process_symbol(sym: str, parquet: str, quarters: int, duckdb_mod) -> tuple[i
         ids_out.append(tx_id)
 
         gz_path = out_dir / f"{tx_id}.json.gz"
-        if gz_path.exists():
-            continue  # incremental skip
 
         # Build segments list
         segs = []
@@ -630,13 +642,25 @@ def process_symbol(sym: str, parquet: str, quarters: int, duckdb_mod) -> tuple[i
             "segments": segs,
         }
 
-        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-        # atomic: a kill mid-write must never leave an existing-but-truncated gz (the exists() check
-        # above would then skip it forever and the client DecompressionStream would fail silently).
+        raw = _canonical_body_bytes(payload)
+        if gz_path.exists():
+            try:
+                existing = _read_body(gz_path, sym, tx_id)
+            except ValueError as exc:
+                print(f"[warn] repairing invalid transcript body {gz_path}: {exc}", flush=True)
+            else:
+                if _canonical_body_bytes(existing) == raw:
+                    continue
+
+        # Atomic replacement prevents a kill mid-write from leaving a truncated
+        # body, whether this is a new call, an upstream correction, or a repair.
         tmp_path = gz_path.with_name(gz_path.name + ".tmp")
-        with gzip.open(tmp_path, "wb", compresslevel=6) as f:
-            f.write(raw)
-        os.replace(tmp_path, gz_path)
+        try:
+            with gzip.open(tmp_path, "wb", compresslevel=6) as f:
+                f.write(raw)
+            os.replace(tmp_path, gz_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
         written += 1
 
     return written, ids_out

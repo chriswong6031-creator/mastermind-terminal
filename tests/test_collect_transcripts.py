@@ -5,7 +5,40 @@ import time
 import pytest
 
 import ingest.collect_transcripts as collect
+from ingest.build_transcript_index import body_sha256
 from ingest.collect_transcripts import _infer_role, _infer_transcript_roles
+
+
+class _FakeTranscriptConnection:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def execute(self, _query):
+        return self
+
+    def fetchall(self):
+        return self.rows
+
+    def close(self):
+        return None
+
+
+class _FakeTranscriptDuckDB:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def connect(self, _database):
+        return _FakeTranscriptConnection(self.rows)
+
+
+def _transcript_row(text: str):
+    return (
+        "AAPL",
+        2026,
+        3,
+        "2026-07-31",
+        [{"paragraph_number": 1, "speaker": "Jane Doe", "content": text}],
+    )
 
 
 def test_unchanged_upstream_revision_skips_download_even_when_cache_is_old(
@@ -125,6 +158,75 @@ def test_revision_candidate_is_written_only_after_successful_processing(
         collect.main()
     assert not candidate.exists()
     assert collect._read_revision_marker(applied_marker) == "etag:upstream-old"
+
+
+def test_existing_unchanged_body_is_not_rewritten(tmp_path, monkeypatch) -> None:
+    tx_root = tmp_path / "tx"
+    monkeypatch.setattr(collect, "TX_OUT", tx_root)
+    source = _FakeTranscriptDuckDB([_transcript_row("Prepared remarks.")])
+
+    first_written, first_ids = collect.process_symbol("AAPL", "fixture.parquet", 1, source)
+    path = tx_root / "AAPL" / "2026Q3.json.gz"
+    stable_mtime = 1_700_000_000_123_456_789
+    os.utime(path, ns=(stable_mtime, stable_mtime))
+    compressed = path.read_bytes()
+
+    second_written, second_ids = collect.process_symbol("AAPL", "fixture.parquet", 1, source)
+
+    assert first_written == 1
+    assert second_written == 0
+    assert first_ids == second_ids == ["2026Q3"]
+    assert path.stat().st_mtime_ns == stable_mtime
+    assert path.read_bytes() == compressed
+
+
+def test_corrected_same_id_body_is_atomically_rewritten_once(tmp_path, monkeypatch) -> None:
+    tx_root = tmp_path / "tx"
+    monkeypatch.setattr(collect, "TX_OUT", tx_root)
+    original = _FakeTranscriptDuckDB([_transcript_row("Original prepared remarks.")])
+    corrected = _FakeTranscriptDuckDB([_transcript_row("Corrected prepared remarks.")])
+
+    first_written, first_ids = collect.process_symbol("AAPL", "fixture.parquet", 1, original)
+    path = tx_root / "AAPL" / "2026Q3.json.gz"
+    before = collect._read_body(path, "AAPL", "2026Q3")
+    before_hash = body_sha256(before)
+    replacements = []
+    real_replace = os.replace
+
+    def recorded_replace(source, destination):
+        replacements.append((source, destination))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(collect.os, "replace", recorded_replace)
+    second_written, second_ids = collect.process_symbol("AAPL", "fixture.parquet", 1, corrected)
+    after = collect._read_body(path, "AAPL", "2026Q3")
+
+    assert first_written == second_written == 1
+    assert first_ids == second_ids == ["2026Q3"]
+    assert len(replacements) == 1
+    assert replacements[0][0] == path.with_name(path.name + ".tmp")
+    assert replacements[0][1] == path
+    assert not path.with_name(path.name + ".tmp").exists()
+    assert body_sha256(after) != before_hash
+    assert after["segments"][0]["text"] == "Corrected prepared remarks."
+
+
+def test_corrupt_existing_body_is_repaired_without_changing_id(tmp_path, monkeypatch) -> None:
+    tx_root = tmp_path / "tx"
+    path = tx_root / "AAPL" / "2026Q3.json.gz"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"not a gzip body")
+    monkeypatch.setattr(collect, "TX_OUT", tx_root)
+    source = _FakeTranscriptDuckDB([_transcript_row("Prepared remarks.")])
+
+    written, ids = collect.process_symbol("AAPL", "fixture.parquet", 1, source)
+    repaired = collect._read_body(path, "AAPL", "2026Q3")
+
+    assert written == 1
+    assert ids == ["2026Q3"]
+    assert repaired["id"] == "2026Q3"
+    assert repaired["segments"][0]["text"] == "Prepared remarks."
+    assert not path.with_name(path.name + ".tmp").exists()
 
 
 def test_operator_label_wins_over_people_named_in_intro() -> None:
