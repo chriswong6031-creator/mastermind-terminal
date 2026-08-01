@@ -1,195 +1,324 @@
-# OpenMarket Drawing System Review and Delivery Reconciliation
+# OpenMarket Drawing System — Current Implementation Reconciliation
 
-**Status:** Reconciled against the implementation in the shared delivery tree
+**Status:** Current reconciliation; merged baseline plus an explicitly marked
+unmerged follow-up overlay
+
+**Mastermind baseline:** merged `origin/master` at `10d920de4ece75e861e1ebafae9678498cc3c4cf`
+
+**Current follow-up tree:** `claude/openmarket-parity-reconciliation-20260731`
+(working-tree implementation; not yet merged or production-verified)
 
 **Audit date:** 2026-07-31
 
 **Reference product:** [OpenMarket Chart](https://openmarket.xyz/chart/)
 
-**Production status:** This memo records implementation parity. Merge,
-deployment, and live verification are recorded in the delivery PR and operator
-handoff so this artifact does not become a stale environment-status page.
+## Source boundary
 
-## Scope and status language
+This memo reconciles three different kinds of evidence:
 
-This memo compares the supplied OpenMarket captures with the code currently
-implemented in Mastermind Terminal. It is an implementation inventory, not a
-claim that Terminal now contains OpenMarket's complete catalog or interaction
-model.
+1. OpenMarket's first-party
+   [Drawing Tools guide](https://openmarket.xyz/learn/charting/drawing-tools),
+   including its catalog, toolbar, favorites, Stay, magnet, lock, visibility,
+   removal, keyboard, Replay, and multi-chart behavior;
+2. the supplied OpenMarket captures and the live first-party chart menu/runtime;
+3. the implementation and automated contracts in Mastermind Terminal.
 
-Status terms are deliberately strict:
+The Drawing Tools guide is the primary specification for this comparison. Its
+nine groups and 99 named tools define the catalog, while its interaction
+sections define behaviors such as hover/touch flyouts, double-click pinning,
+Brush/Highlighter auto-repeat, draggable favorites, Off/Weak/Strong magnet,
+global lock/visibility/removal, keyboard dismissal, and creation restrictions
+during Replay or multi-chart layouts. Live observation and supplied captures
+fill visual details that the guide does not quantify.
 
-- **Delivered** — the capability exists end to end in the shared tree.
-- **Partial** — a useful implementation exists, but one or more material
-  OpenMarket behaviors are absent.
-- **Deferred** — the capability is not implemented in this delivery.
+OpenMarket's separate [Data API documentation](https://openmarket.xyz/docs/index.md)
+is authoritative only where this memo discusses data products such as
+[Volume Profile](https://openmarket.xyz/docs/rest/volume-profile.md) and
+[TPO / Market Profile](https://openmarket.xyz/docs/rest/tpo.md); it is not the
+source for the drawing catalog or toolbar behavior.
 
-“Delivered” here means delivered in the implementation being reviewed. It does
-not mean production-verified until the final deployment checks are complete.
+This file records code capability. Deployment and live-production evidence
+belong in the delivery pull request and operator handoff; this memo does not
+infer either from a merged commit.
+
+## Status language
+
+- **Registered** — present in the canonical registry and durable `DrawKind`
+  union.
+- **Renderer-covered** — assigned to an explicit renderer family and accepted
+  by the creation/persistence contracts.
+- **Interaction-verified** — exercised directly by a focused unit or browser
+  test, not merely reachable through a menu.
+- **Delivered** — an end-to-end baseline exists for the stated scope.
+- **Delivered in branch** — implemented and interaction-verified in the current
+  follow-up tree, but not yet merged, deployed, or live-verified.
+- **Partial** — useful behavior exists, but material reference behavior,
+  settings, fidelity, or verification is absent.
+- **Not implemented** — no current product workflow exists.
+
+Registered and renderer-covered do **not** mean semantically identical to
+OpenMarket. A generalized renderer can draw a credible Gann, Elliott, harmonic,
+or forecasting object without reproducing every reference formula, constraint,
+label, setting, and editing rule.
 
 ## Executive verdict
 
-This delivery is a substantial drawing-system upgrade, not full OpenMarket
-parity.
+Mastermind now exposes the exact 99-tool comparison catalog across nine
+registry-driven groups. All 99 tools have durable identities, creation metadata,
+localized labels, defaults, capability declarations, persistence validation,
+and an explicit renderer-family assignment. The same registry drives the
+desktop rail and responsive dock.
 
-The shipped core is credible:
+That is **catalog coverage**, not complete OpenMarket parity. The implementation
+has strong shared creation, selection, styling, history, persistence, and
+responsive foundations, plus direct interaction proofs for flagship geometry,
+freehand input, pane-anchored notes, and media placement. It does not yet have
+reference-grade semantic and settings depth for every advanced tool, a spatial
+hit-test engine, drawing views/object management, or every OpenMarket chart
+presentation.
 
-- one canonical 21-tool registry across seven families;
-- registry-driven point, drag, multi-anchor, and path acquisition;
-- one-shot versus pinned-repeat drawing;
-- selectable drawings with visible and draggable anchors;
-- whole-object movement, locking, duplication, styling, and deletion;
-- per-symbol undo/redo history;
-- Off, Weak, and Strong magnet controls;
-- versioned drawing normalization and persistence-boundary validation;
-- a glass desktop rail that becomes a horizontal responsive dock; and
-- four additional chart presentations.
+The honest current claim is:
 
-The remaining gap is equally important. Terminal does not ship OpenMarket's
-full Gann, Elliott, advanced Fibonacci, pattern, curve, emoji, image, volume
-profile, footprint, TPO, forecasting, or drawing-view systems. Several delivered
-tools—especially Fibonacci, XABCD, long/short position, snapping, the property
-inspector, and mobile editing—are strong first versions rather than feature
-parity.
+> Mastermind has a 99-tool, nine-group OpenMarket-aligned drawing catalog with
+> complete registry and renderer-family coverage, plus verified flagship
+> workflows. Full per-tool semantic and interaction parity is still partial.
 
-## Delivered 21-tool registry
+## Historical 21-tool checkpoint
 
-`terminal/lib/drawingTools.ts` is now the canonical catalog for labels, icons,
-creation cardinality, capabilities, defaults, and shortcuts. The sidebar and
-creation controller consume this registry rather than carrying separate lists.
+Commit `8f5b583c` represented the earlier 21-tool, seven-group foundation. Its
+inventory is superseded by the 99-tool expansion completed in `f90ded24` and
+merged in `10d920de`. The number 21 is historical and must not be used to
+describe the current product.
 
-| Family | Count | Delivered tools |
+## Current follow-up wave — validated branch, release pending
+
+The current reconciliation branch adds a second fidelity wave on top of the
+merged `10d920de` baseline. These changes were inspected in source and exercised
+by focused unit and browser contracts in this working tree. Until the branch
+merges, deploys, and passes live verification, they must be described as
+**delivered in branch**, not as merged, shipped, or OpenMarket-parity complete.
+
+### Tool-specific analytics
+
+- **Regression Trend:** least-squares close-price regression, residual standard
+  deviation bands, Pearson correlation, and an on-chart `R` / sigma readout.
+- **Anchored VWAP:** cumulative typical-price VWAP using actual positive volume,
+  online volume-weighted variance, and visible plus/minus one, two, and three
+  standard-deviation bands.
+- **Fixed Range Volume Profile:** candle-range-overlap volume allocation across
+  24 price bins, point of control, and an outward-growing 70% value area.
+- **Ghost Feed:** deterministic scenario candles that follow the user's control
+  path while inheriting noise and wick scale from recent realized volatility.
+
+These are materially stronger semantics than the merged generalized renderers.
+They still do not prove identical exchange aggregation, formulas, defaults,
+settings, or output to OpenMarket.
+
+### Professional creation and editing interactions
+
+- two-anchor tools support drag placement and stationary click-then-click
+  placement;
+- holding Shift constrains applicable endpoints to the nearest 45-degree screen
+  angle before magnet snapping;
+- whole-object movement applies one boundary-clamped bar delta to every anchor;
+- Command/Ctrl-drag clones an unlocked drawing, while Command/Ctrl+C and
+  Command/Ctrl+V provide a chart-local drawing clipboard;
+- right-click cancels an armed or pending tool, and Escape gives an open
+  portalled drawing menu first refusal before retiring the tool or selection.
+
+The pure regression/AVWAP/profile/Ghost Feed and interaction helpers have
+focused unit coverage in the branch. Their professional creation/editing paths
+also have focused desktop browser coverage and pass within the exact shared
+desktop/tablet/mobile responsive suite.
+
+### Settings and workspace controls
+
+The branch contains settings helpers and inspector UI for all 24 Fibonacci
+slots: every ratio value, visibility state, and color is editable, with reverse
+and ratio/price/both label preferences consumed by the renderer. Position tools
+accept account value and risk as either a percentage or a fixed money amount,
+then render the resulting risk budget and quantity. The selected-object quick
+bar shows the current color, two persisted recent colors, and a full color
+picker. The branch also contains a persisted, draggable favorites strip,
+separate desktop/compact positions, per-family
+last-used faces, global drawing lock/unlock, clearer Stay-versus-per-tool-pin
+behavior, freehand keep-active behavior, and drawing/indicator cleanup scopes.
+
+The workspace controls are now shell-wired and localized in this branch.
+Favorites can be starred from every family menu, appear in a draggable,
+horizontally scrollable glass strip, retain separate desktop and compact
+positions, and can be hidden from the rail, close button, or context menu.
+Normal tools remain one-shot, double-click pins one tool until Escape,
+right-click, or another tool; Brush and Highlighter remain armed after every
+stroke without turning on the global Stay preference. The magnet face toggles
+Off and Weak while its split arrow opens all three modes. Command/Ctrl+Alt+H
+hides drawings, global lock/unlock is history-aware, and cleanup exposes user,
+detected, all-drawing, indicator, and whole-workspace scopes with counts where
+the shell owns an exact count.
+
+Replay now retires creation, blocks the Shift-measure shortcut, and makes
+existing drawings read-only while it is active. Multi-chart layouts retire and
+disable creation but preserve editing of existing marks, matching the narrower
+documented restriction. The active pane now reports its transient detector count
+to the shell, so the cleanup menu's detected count and disable state follow the
+pane-local detector lifecycle. Detect and clear commands carry their dispatch
+pane identity, so activating another pane cannot replay a stale command there.
+Playwright coverage passed for the registry/precision controls, favorites,
+lifecycle/safety, freehand persistence, and mobile collision surface
+at 1440×900, 820×1180, and 390×844. The exact responsive suite, full unit suite,
+TypeScript check, and production build all pass locally. CI, merge, deployment,
+and live production verification are still pending, so these remain branch
+capability, not a production claim. Broader per-family settings and
+reference-level semantic fidelity remain separate open work.
+
+## Canonical 99-tool catalog
+
+`terminal/lib/drawingTools.ts` is the catalog authority. It contains exactly
+the same 99 durable identities declared by `terminal/lib/drawings.ts`.
+
+| Group | Count | Registered tools |
 |---|---:|---|
-| Lines | 9 | Trend Line, Ray, Extended Line, Horizontal Line, Horizontal Ray, Vertical Line, Cross Line, Arrow, Parallel Channel |
-| Fibonacci | 1 | Fibonacci Retracement |
-| Shapes | 4 | Rectangle, Ellipse, Triangle, Path |
-| Patterns | 1 | XABCD Pattern |
-| Text & Notes | 1 | Text |
-| Measure & Ranges | 3 | Measure, Price Range, Date Range |
-| Forecasting | 2 | Long Position, Short Position |
-| **Total** | **21** | Every durable `DrawKind` appears exactly once |
+| Lines, Channels & Pitchforks | 17 | Trend Line, Ray, Info Line, Extended Line, Trend Angle, Horizontal Line, Horizontal Ray, Vertical Line, Cross Line, Parallel Line, Regression Trend, Flat Top/Bottom, Disjoint Channel, Pitchfork, Schiff Pitchfork, Modified Schiff Pitchfork, Inside Pitchfork |
+| Fibonacci & Gann | 15 | Fibonacci Retracement, Fibonacci Trend, Fib Channel, Fib Time Zone, Fib Speed Resistance Fan, Trend-Based Fib Time, Fib Circles, Fib Spiral, Fib Speed Resistance Arcs, Fib Wedge, Pitchfan, Gann Box, Gann Square Fixed, Gann Square, Gann Fan |
+| Patterns, Elliott Waves & Cycles | 14 | XABCD Pattern, Cypher Pattern, Head and Shoulders, ABCD Pattern, Triangle Pattern, Three Drives Pattern, Elliott Impulse Wave, Elliott Correction Wave, Elliott Triangle Wave, Elliott Double Combo, Elliott Triple Combo, Cyclic Lines, Time Cycles, Sine Line |
+| Forecasting, Volume & Ranges | 12 | Long Position, Short Position, Forecast, Ghost Feed, Bar Pattern, Sector, Anchored VWAP, Fixed Range Volume Profile, Price Range, Date Range, Date and Price Range, Measure |
+| Freehand | 3 | Brush, Highlighter, Path |
+| Shapes & Curves | 9 | Rectangle, Rotated Rectangle, Ellipse, Circle, Triangle, Polyline, Arc, Curve, Double Curve |
+| Arrows & Stylized Paths | 17 | Arrow Marker, Arrow, Arrow Mark Left, Arrow Mark Right, Arrow Mark Top, Arrow Mark Bottom, Flag Mark, Momentum, Flow, Emphasis, Whisper, Subtle, Divergence, Journey, Fork, 3 Paths, Burj |
+| Text, Notes, Labels & Content | 10 | Text, Anchored Text, Note, Anchored Note, Callout, Price Label, Price Note, Signpost, Comment, Image |
+| Emoji & Icons | 2 | Emoji, Icon |
+| **Total** | **99** | Every durable `DrawKind` appears exactly once |
 
-### Creation gestures
+### Creation contracts
 
-The controller derives acquisition behavior from the registry:
+The registry declares five acquisition modes:
 
-- **Single point:** Horizontal Line, Horizontal Ray, Vertical Line, Cross Line,
-  and Text. Text opens an in-chart editor.
-- **Two-point drag:** Trend Line, Ray, Extended Line, Arrow, Rectangle, Ellipse,
-  Fibonacci Retracement, Measure, Price Range, and Date Range.
-- **Multi-anchor:** Parallel Channel and Triangle use three anchors, XABCD uses
-  five, and Long/Short Position use three.
-- **Path:** samples a pointer path, caps it at 64 points, previews it while
-  moving, and rejects sub-three-pixel accidental creation.
-- **Precision measure:** `Shift + drag` creates Measure without first arming the
-  tool.
+- **One point:** axis lines, marks, anchored VWAP, text/notes/labels, emoji, and
+  icons place from one chart or pane anchor.
+- **Two-point drag:** ordinary lines, ranges, circles, many advanced studies,
+  and image placement commit on pointer-up.
+- **Fixed multi-anchor:** channels, pitchforks, patterns, waves, triangles, and
+  other geometry require three to seven anchors.
+- **Variable multi-anchor:** Path, Polyline, and Ghost Feed accumulate segments
+  and finish by double-click; coarse pointers can finish by repeating the last
+  endpoint within a larger tolerance.
+- **Freehand:** Brush and Highlighter sample a pointer stroke, bounded to 64
+  durable points.
 
-Each committed drawing returns to the cursor by default. The sticky control or
-double-clicking a family face keeps the tool armed for repeat creation.
-`Escape` cancels pending geometry before deselecting, and the advertised
-`Alt+T/H/V/R/X/M` shortcuts route through the same registry.
+Some economical two-point gestures materialize additional editable semantic
+handles after capture. Current examples are Long/Short Position, Curve, Double
+Curve, Divergence, Journey, Fork, 3 Paths, and Burj. Anchored Text and Anchored
+Note persist normalized pane coordinates so they remain fixed during chart
+pan/zoom.
 
-## Delivery status
+One-shot creation returns ordinary tools to the cursor. Double-click pins one
+ordinary tool for repeat creation until Escape, right-click, or another tool;
+Brush and Highlighter always stay armed after a stroke, matching the documented
+exception without mutating the persisted global Stay preference. Tool commits
+carry an activation identity so a stale pointer-up from an older activation
+cannot disarm or mutate a newly selected tool. Replay retires creation and makes
+existing drawings read-only; multi-chart layouts retire creation while
+preserving existing-object editing.
 
-| Capability | Status | What exists now | Honest boundary |
+## Delivery matrix
+
+| Capability | Status | Current implementation | Honest boundary |
 |---|---|---|---|
-| Canonical 21-tool registry | **Delivered** | Seven registry-driven groups, complete `DrawKind` coverage, defaults, capabilities, icons, labels, and shortcuts | The OpenMarket long tail is intentionally not registered |
-| Drawing controller and gestures | **Delivered** | Point, two-point drag, multi-anchor, path, preview, cancel, accidental-drag rejection, one-shot, and pinned repeat | It is still an inline controller inside `ChartPanel`, not a standalone state-machine module |
-| Expanded line family | **Delivered** | Trend, Ray, Extended, Horizontal, Horizontal Ray, Vertical, Cross, Arrow, and Parallel Channel | No separate OpenMarket “Parallel Line” primitive beyond the three-anchor channel |
-| Selection, hit testing, and anchors | **Partial** | Selected-object grips, per-anchor dragging, whole-object dragging, broad transparent line hit areas, locked-object protection | No spatial index, label/fill-region hit taxonomy, geometry-specific secondary handles, grouping, or long-press selection |
-| Undo/redo history | **Delivered** | Per-symbol 100-snapshot undo/redo stacks, structural sharing for unchanged objects/anchors, rail buttons, `Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z`, and `Cmd/Ctrl+Y` | History is in memory and is not restored after reload |
-| Contextual property inspector | **Partial** | Movable glass toolbar, quick and custom color, width, dash, text size, opacity, fill opacity, lock, duplicate, settings, and delete | Not fully schema-generated; no per-Fibonacci-level editor or independent position-zone editor |
-| Off/Weak/Strong magnet | **Partial** | Off preserves continuous price; Weak uses an 8px desktop or 14px coarse-pointer radius; Strong always snaps to nearest active-bar OHLC; acquired targets show a halo | No hysteresis and no drawing-anchor, indicator, or named-structure candidates |
-| Placement feedback | **Partial** | Live geometry preview, dashed cross-guides, anchor grips, snap halo, measurement pills, ratio labels, viewport-clamped pills, and wheel quick-color rotation while hovering a drawing | No visible endpoint-anchored palette |
-| `Shift + drag` measure | **Delivered** | Direct chart gesture with bars, price delta, and percentage output | Does not yet expose every OpenMarket tick/value formatting option |
-| Fibonacci Retracement | **Partial** | Direction-aware anchors, `0/.236/.382/.5/.618/.786/1/1.618`, ratio and price labels, colored bands, dashed spine, and draggable endpoints | Levels, colors, visibility, and fills are hard-coded rather than individually editable |
-| Long/Short Position | **Partial** | Three draggable anchors, target/stop regions, target and stop labels, percentages, and risk/reward | No account size, quantity, amount/P&L model, directional validation, or independent zone styles |
-| Price and Date ranges | **Partial** | Price Range and Date Range render with relevant deltas | Combined Date and Price Range is deferred |
-| XABCD | **Partial** | Five-anchor acquisition, X/A/B/C/D labels, live leg ratios, fill, selection, and anchor editing | No named harmonic validation, projected construction legs, or Cypher/ABCD/Three Drives variants |
-| Shapes, paths, and text | **Partial** | Rectangle, Ellipse, Triangle, pointer-sampled Path, and editable Text | No rotated rectangle, separate circle, brush, highlighter, arc, curve, double curve, anchored notes, or callouts |
-| Versioned drawing validation | **Delivered** | Schema version 1, legacy normalization, bounded numeric styles, source migration, duplicate-ID and geometry validation, shared 500-object/2MB UTF-8 limits, non-destructive cap rejection, and fail-safe API replacement | This is schema and boundary validation, not proof of every persistence transport in production |
-| Persistence lifecycle | **Partial** | Per-symbol guest local storage, signed-in API load/save, serialized 600ms debouncing, owner-scoped transition recovery outbox, leave/unmount flush, retry retention, normalized reload, fail-closed load tests, and a browser proof above Chromium's 64KB keepalive quota | No named drawing views, general offline queue, or completed authenticated production round trip |
-| Visibility and scoped removal | **Delivered** | Global drawing visibility plus user, detected, and all-object removal scopes with an aggregate count badge | The badge is not split by scope and does not surface the pane-local detector count; there is no searchable drawing object tree or per-object hide control in the rail |
-| Responsive dock | **Delivered** | Vertical glass desktop rail; horizontal, safe-area-aware dock below 860px; portalled mobile flyouts, pre-style palette, bottom inspector treatment, and 44px mobile controls | Full touch-workflow parity remains partial |
-| Full mobile/tablet drawing workflow | **Partial** | Shared responsive markup, coarse-pointer snapping radius, scrollable dock, touch-sized menu rows, keyboard/focus containment, pointer-cancel rollback, and a passing three-viewport interaction suite | No long-press selection or physical-device virtual-keyboard geometry validation |
-| Chart presentation additions | **Partial** | Hollow Candle, Line with Markers, Step Line, and Baseline join Candles, Heikin Ashi, Bars, Line, and Area | Volume Bars, Columns, High-Low, HLC Area, Volume Footprint, and TPO are deferred |
-| Advanced OpenMarket catalog | **Deferred** | None claimed | Full inventory is listed explicitly below |
+| Exact catalog and durable schema | **Delivered** | 99 tools in nine groups; registry IDs and durable kinds match exactly | Catalog equality alone says nothing about per-tool mathematical fidelity |
+| Responsive catalog reachability | **Delivered** | Registry order and all 99 menu entries are asserted at 1440×900, 820×1180, and 390×844 | Physical-device and landscape-notch validation remain separate work |
+| Renderer coverage | **Delivered** | Every `DrawKind` has an exhaustive renderer-family assignment | Several advanced tools share generalized family primitives; direct golden visual/formula proofs do not exist for all 99 |
+| Creation state machine | **Delivered** | One-point, drag, fixed multi-point, variable multi-point, and freehand flows; preview, cancel, pointer-cancel rollback, one-shot, and pinned repeat | The controller remains concentrated in `ChartPanel`, not a standalone plugin/state-machine package |
+| Selection and editing | **Partial** | Merged anchor grips, semantic handles, movement, lock, duplicate, style, and delete; current branch adds rigid boundary-clamped drag, click-then-click placement, Shift-angle constraint, command-drag clone, and copy/paste | SVG-tree hit testing remains; no spatial index, grouping, long-press selection, or complete fill/label/body hit taxonomy |
+| Contextual inspector | **Partial** | The quick bar exposes current plus two recent colors, a full picker, width, dash, font size, opacity, fill opacity, lock, duplicate, settings, and delete; the branch adds a user-facing 24-slot Fibonacci level editor and percent-or-money account/risk position controls | No complete schema-generated editor, independent position-zone styles, or advanced settings surface for every family |
+| History | **Delivered** | Per-symbol bounded undo/redo, keyboard shortcuts, structural sharing, and persistence after history changes | History is collection-snapshot based and is not restored after reload |
+| Placement feedback | **Delivered** | Live previews, cross-guides, grips, snap halo, measurement/ratio pills, and a visible pointer-following quick-color palette | Palette behavior is directly covered for representative tools, not every geometry family |
+| Off/Weak/Strong magnet | **Partial** | Weak radius and Strong nearest-OHLC snapping with visible acquisition feedback; the face toggles Off/Weak and its split arrow exposes all modes | No hysteresis or drawing-anchor, indicator-value, or named-structure candidates |
+| Fibonacci and Gann family | **Partial** | All 15 catalog tools render through fib, grid, time, fan, radial, or Gann families; Fibonacci Retracement consumes all 24 editable ratio values, visibility/color states, reverse, and ratio/price/both label preferences | Complete reference-formula and per-family settings verification remain open; most advanced family members still use shared rules |
+| Patterns, waves, and cycles | **Partial** | All 14 identities have fixed-anchor contracts, labels, editing, persistence, and pattern/cycle rendering | No harmonic-name validation, ratio enforcement, wave-rule validation, or per-tool visual goldens |
+| Forecasting and position tools | **Partial** | Merged Long/Short regions, Forecast, Ghost Feed, Bar Pattern, and Sector geometry; the branch adds deterministic volatility-scaled Ghost Feed candles and account/quantity calculations from percentage or fixed-money risk | No brokerage/account integration, live amount/P&L workflow, directional validation, or evidence that scenario generation matches OpenMarket |
+| Anchored VWAP, Regression Trend, and Fixed Range Volume Profile | **Partial** | The branch adds volume-weighted AVWAP with deviation bands, least-squares regression with `R`/sigma, and overlap-allocated profile bins with POC/value area | Local chart bars and local formulas do not establish parity with OpenMarket's aggregation, settings, or documented Data API products |
+| Range and Measure tools | **Delivered** | Price, Date, combined Date and Price, and Shift+drag Measure display relevant deltas | Formatting and settings do not expose every reference option |
+| Freehand, shapes, curves, arrows | **Delivered** | All catalog identities are creatable, editable, styleable where applicable, and durable; Brush/Highlighter and segmented Path have direct browser proofs | Advanced curve/stylized-path semantics use shared construction rules rather than per-tool reference specifications |
+| Text, notes, labels, emoji, icon, image | **Delivered** | Editable text-bearing tools, pane anchors, choice pickers, bounded image upload, rendering, and persistence | Image is embedded in the drawing payload; there is no external media library or drawing-template system |
+| Persistence safety | **Partial** | Guest storage, authenticated API load/save, serialized debounce, fail-closed loading, same-owner recovery outbox, empty-state tombstones, 500-object/2MB limits, and non-destructive object-501 rejection | No general offline queue, named drawing views, or authenticated production round-trip evidence in this memo |
+| Drawing visibility and removal | **Partial** | Merged global visibility and user/detected/all removal; the branch adds history-aware global lock/unlock, Command/Ctrl+Alt+H visibility, active-pane detector counts, and drawing/indicator/everything cleanup scopes | Separate ChartBus AI objects remain outside the pane-local detector count; no searchable drawing object tree, per-object rail visibility, rename, reorder, or grouping workflow |
+| Replay and multi-chart safety | **Delivered in branch** | Replay retires creation, selection, handles, inspectors, keyboard edits, and Shift-measure; grids with more than one chart disable creation while preserving existing-object editing | Focused browser coverage exists, but this is not a merged or production-verified claim yet |
+| Mobile/tablet workflow | **Partial** | One responsive product, portalled compact menus, touch-sized rows, coarse-pointer completion, collision control, pointer-cancel rollback, and a safe-area-clamped favorites strip | Long-press selection and physical-device virtual-keyboard geometry remain unverified; landscape-notch and real-device testing remain open |
+| Chart presentations | **Partial** | Candles, Hollow Candle, Heikin Ashi, Bars, Line, Line with Markers, Step Line, Area, and Baseline | Volume Bars, Columns, High-Low, HLC Area, Volume Footprint, and TPO presentation modes are not implemented |
+| Drawing workspace management | **Partial** | The branch adds star affordances across all family menus, persisted favorites, a draggable/scrollable responsive strip, show/hide/context-close controls, and separate desktop/compact placement, verified at all three responsive widths | No named drawing views, save-as-view, drawing templates, searchable object tree, rename, reorder, grouping, or combined manager |
 
-## Current editing and persistence behavior
+## What the 99-tool renderer does and does not prove
 
-### Selection and anchor editing
+The exhaustive renderer map in
+`terminal/lib/drawing-engine/geometry.ts` is an important engineering contract:
+adding a durable kind without a renderer family becomes a type/test failure.
+Families share bounded SVG primitives for lines, channels, pitchforks,
+Fibonacci grids/time/radial studies, fans, Gann studies, patterns, cycles,
+positions, forecasts, ranges, freehand paths, shapes, curves, marks,
+annotations, and media.
 
-Every rendered drawing carries stable drawing and kind attributes. Selecting an
-unlocked object exposes its data-space anchors as grips. Dragging a grip changes
-only that anchor; dragging the object translates all anchors together across
-bar indices and price. Pointer movement is animation-frame coalesced, while the
-history and persistence callbacks occur at the end of an edit.
+This is deliberately different from claiming 99 independent, reference-perfect
+engines. For example:
 
-This is a meaningful improvement over the prior visual-only grips. It is not a
-complete hit-test engine: hit regions still come from the SVG object tree, and
-there is no spatial index or semantic distinction among labels, fills, bodies,
-and derived geometry.
+- harmonic and Elliott objects render their construction and labels but do not
+  validate market-theory rules;
+- several Fibonacci/Gann tools derive from shared ratios and geometry without a
+  complete per-tool settings surface;
+- forecasting drawings remain user-authored constructions; the branch's Ghost
+  Feed adds deterministic scenario candles, not a predictive model;
+- the branch's Anchored VWAP, Regression Trend, and Fixed Range Volume Profile
+  use local chart bars and documented local formulas rather than proving
+  equivalent exchange aggregation or reference settings;
+- stylized paths have distinct identities and editable semantic handles, but
+  not a published OpenMarket geometry specification to verify against.
 
-### History
+The correct next fidelity test is a per-tool fixture matrix containing reference
+anchors, expected derived geometry, labels, settings mutations, hit regions,
+and screenshots at multiple price/time scales. Registry count and menu
+screenshots cannot substitute for that test.
 
-The shell owns a bounded undo and redo stack per symbol. Create, handle move,
-whole-object move, style, opacity/fill commit, lock, duplicate, delete, and clear
-flow through the same collection update boundary. Undo and redo create a new
-debounced persistence snapshot without recursively recording history.
+## Persistence and ownership reality
 
-The stack stores whole drawing collection arrays rather than typed commands,
-but interactive normalization structurally shares every untouched object and
-style-only anchor array. In the 500-by-64-anchor/100-edit forced-GC audit this
-removed the prior 115.7 MB retained growth; the post-fix heap moved from
-32.1 MB to 31.0 MB. This is adequate for the current cap, though a command
-history would still be preferable for history inspection.
+All incoming local and remote collections pass through normalization. The
+current schema preserves time/price anchors and bounded styles while accepting
+all 99 durable kinds. Persisted drawing collections preserve source tags so
+user-authored and detector-generated marks can be filtered without conflating
+them; ChartBus AI objects remain outside that durable collection.
 
-### Persistence validation
+The signed-in path is fail-closed: a failed load does not convert an unknown
+remote state into a destructive empty save. Saves are serialized and coalesced.
+Unsaved account snapshots are captured before logout/account transition in an
+identity-scoped outbox, including an explicit empty collection used as a
+clear-all tombstone; only the same account can replay and clear that snapshot.
+Changing drawing owner also remounts the imperative chart renderer so native
+pointer listeners and in-flight drafts cannot cross the account/guest boundary.
 
-Every incoming local or remote collection passes through `normalizeDrawings`.
-The schema preserves data-space points and now normalizes:
-
-```text
-schemaVersion, source, locked, hidden, z, opacity, extend,
-color, fillColor, fillOpacity, width, dash, fontSize, text, metadata
-```
-
-The signed-in PUT boundary rejects malformed JSON, oversized UTF-8 payloads,
-unsupported geometry, duplicate IDs, and partial-normalization saves. It stages
-new rows before deleting the prior valid collection and removes the staged rows
-if replacement fails. Only user-source drawings persist; detector and AI
-objects remain separate.
-
-Normalization and migration have automated tests. Browser-level tests prove
-fail-closed load/retry behavior and a dense 32-by-64-point collection whose
-request exceeds Chromium's keepalive quota; normal saves deliberately use an
-ordinary serialized fetch rather than `keepalive`. A real authenticated
-production save/reload cycle does not yet have completed evidence. Unsaved
-account snapshots are mirrored in memory before debounce and written to an
-identity-scoped local recovery outbox on logout/account change; only the same
-account can replay and clear them after a successful PUT. Overall persistence
-parity therefore remains partial rather than complete.
+The hard limits remain 500 objects per symbol and 2,000,000 UTF-8 bytes. Images
+are restricted to PNG/JPEG/WebP, 700 KB, 4096×4096, and 12 megapixels before
+their data URL is accepted. Capacity overflow rejects the new object rather
+than evicting an existing drawing.
 
 ## Responsive implementation
 
-The same drawing markup serves all supported viewports:
+Desktop, tablet, and mobile use the same `terminal/` implementation:
 
-- **Desktop:** 52px vertical rail, registry flyouts, floating pre-style palette,
-  and movable selected-object inspector.
-- **Tablet and mobile below 860px:** horizontally scrollable bottom dock,
-  safe-area offsets, bottom-anchored flyouts and style palette, horizontal
-  history controls, and a bottom-positioned selected-object inspector.
-- **Coarse pointers:** larger Weak-magnet acquisition radius and hover transforms
-  disabled.
+- desktop presents a vertical glass rail, hover labels, clamped flyouts, a
+  pointer-following quick palette, a movable selected-object inspector, and a
+  draggable favorites strip;
+- tablet/mobile below 860px use a horizontal safe-area-aware dock, portalled
+  menus, a compact style surface, touch-sized controls, a bottom inspector, and
+  separately persisted/clamped compact favorites placement;
+- coarse pointers receive larger finishing/snap tolerances and avoid
+  hover-dependent behavior.
 
-This is a delivered responsive dock, not a claim of complete touch parity. The
-mobile controls meet the 44px contract and the 1440×900, 820×1180, and 390×844
-interaction matrix passes. Long-press selection and physical-device
-virtual-keyboard geometry remain open.
+Automated responsive contracts cover registry reachability and representative
+editing workflows at 1440×900, 820×1180, and 390×844. They do not replace a
+physical-device pass for landscape notches, long-press behavior, or virtual
+keyboard resizing.
 
-## Chart presentation update
+## Chart presentation boundary
 
-Terminal now exposes nine chart presentations:
+Terminal currently exposes nine chart presentations:
 
 | Family | Implemented |
 |---|---|
@@ -198,137 +327,88 @@ Terminal now exposes nine chart presentations:
 | Lines | Line, Line with Markers, Step Line |
 | Areas | Area, Baseline |
 
-The four additions in this delivery are Hollow Candle, Line with Markers, Step
-Line, and Baseline. They use native Lightweight Charts series/options rather
-than drawing-layer approximations.
+OpenMarket's public API docs confirm that Volume Profile and TPO data products
+exist, but API availability is not a Terminal chart presentation. Volume Bars,
+Columns, High-Low, HLC Area, Volume Footprint, and TPO remain absent from the
+chart-type menu. Fixed Range Volume Profile is a delivered drawing tool and
+must not be confused with those missing presentation modes.
 
-This remains partial relative to the supplied OpenMarket menu. Volume Bars,
-Columns, High-Low, HLC Area, Volume Footprint, and Time Price Opportunity are
-not implemented.
+## Remaining work before a full-parity claim
 
-## Explicitly not shipped
-
-The following OpenMarket capabilities must not be described as delivered or
-implied by the 21-tool count.
-
-### Advanced Fibonacci and Gann
-
-- Fibonacci Trend, Fib Channel, Fib Time Zone, Fib Speed Resistance Fan,
-  Trend-Based Fib Time, Fib Circles, Fib Spiral, Fib Speed Resistance Arcs,
-  Fib Wedge, and Pitchfan
-- Gann Box, Gann Square Fixed, Gann Square, and Gann Fan
-- user-defined Fibonacci level sets and independent per-level styles
-
-### Patterns, Elliott waves, and cycles
-
-- Cypher, Head and Shoulders, ABCD, Triangle Pattern, and Three Drives
-- Elliott Impulse, Correction, Triangle, Double Combo, and Triple Combo
-- Cyclic Lines, Time Cycles, and Sine Line
-
-XABCD is implemented, but it does not make the broader pattern or wave family
-shipped.
-
-### Forecasting, volume, and profile tools
-
-- Forecast, Ghost Feed, Bar Pattern, and Sector
-- Anchored VWAP
-- Fixed Range Volume Profile
-- Volume Footprint
-- Time Price Opportunity
-- combined Date and Price Range
-
-### Freehand, geometry, arrows, and content
-
-- Brush and Highlighter
-- Rotated Rectangle and a distinct Circle tool
-- Polyline, Arc, Curve, and Double Curve
-- directional arrow marks, flag marks, and the stylized marker library
-- anchored text, notes, anchored notes, callouts, price labels, price notes,
-  signposts, and comments
-- emoji and icon browsers
-- image placement
-
-Path, Arrow, Ellipse, Triangle, and Text are delivered slices; they are not the
-full OpenMarket annotation catalog.
-
-### Object and workspace management
-
-- searchable drawing object tree
-- per-object rename, hide, reorder, group, and duplicate-from-tree workflows
-- persisted favorites
-- persisted last-used family faces
-- named drawing views
-- save-current-drawings-as-view workflow
-- combined indicator/drawing object manager with OpenMarket's category counts
-
-The current rail provides global visibility and scoped clearing only.
-
-### Remaining interaction depth
-
-- snap hysteresis and candidates beyond active-bar OHLC
-- geometry-specific secondary handles
-- position amount, quantity, P&L, and account-risk calculations
-- per-zone position styling
-- per-level Fibonacci settings
-- visible endpoint-anchored palette (wheel quick-color routing is delivered)
-- full touch selection and virtual-keyboard-safe text editing
+1. Build per-tool semantic fixtures and visual/formula goldens for every
+   advanced Fibonacci, Gann, harmonic, Elliott, cycle, curve, and stylized tool.
+2. Extend schema-driven settings beyond the delivered 24-slot Fibonacci
+   Retracement and percent-or-money account/risk controls: add independent
+   position-zone styling plus complete family-specific inputs for advanced tools.
+3. Replace SVG-tree-only hit testing with indexed, geometry-aware regions and
+   add grouping plus drawing-object management.
+4. Add drawing views, templates, searchable object management, rename/reorder,
+   grouping, and save/restore workflows beyond the verified favorites strip.
+5. Expand snapping with hysteresis, drawing anchors, indicator values, and named
+   structures.
+6. Complete physical-device validation for touch selection, virtual keyboards,
+   landscape safe areas, focus transitions, and reduced motion.
+7. Add the missing chart presentations separately from the drawing registry.
+8. Complete and record an authenticated production save/reload/delete cycle.
 
 ## Architecture reality
 
-The delivery establishes the correct first boundary: one registry owns tool
-identity, acquisition metadata, capabilities, defaults, icons, labels, and
-shortcuts. Durable records remain in time/price data space and no screen-pixel
-geometry is persisted.
+The catalog, durable schema, and renderer-family map are now explicit shared
+boundaries. Geometry is stored in data space, except for intentionally
+pane-anchored annotations whose normalized pane coordinates are stored in
+metadata.
 
-The renderer and interaction controller are still concentrated in
-`ChartPanel.shape()` and adjacent pointer handlers. There is no independent
-tool-plugin interface, spatial hit-test index, or command-object history layer
-yet. Future catalog growth should extract those layers before adding the
-deferred Gann/Elliott/curve families; simply extending the renderer branch
-indefinitely would recreate the scaling problem the registry solved for menus.
+The interaction and SVG renderer remain concentrated in `ChartPanel.tsx`.
+There is no independent tool-plugin interface, spatial hit-test index, or
+command-object history layer. Future semantic depth should extract those
+boundaries instead of adding more per-tool conditionals to the chart monolith.
 
-## Verification checklist
+## Evidence
 
-Completed against the shared tree:
+### Merged baseline at `10d920de`
 
-- [x] TypeScript: `tsc --noEmit`
-- [x] Registry, shortcut, normalization, and migration tests:
-  `drawingTools.test.ts` — 12 passed
-- [x] English/Chinese registry and drawing-control coverage:
-  `drawingI18n.test.ts` — 4 passed
-- [x] ESLint for the new registry, schema/API boundary, and sidebar files
-- [x] Registry contains all 21 durable kinds exactly once
-- [x] Code-path inspection confirms creation and rendering paths for all 21
-- [x] Code-path inspection confirms anchor editing, history wiring, persistence
-  normalization, responsive dock rules, and all four chart-type additions
-- [x] Full Vitest corpus: 81 files, 1,625 passed, 4 todo
-- [x] Responsive Playwright corpus: 56 passed, 22 intentional skips across
-  1440×900, 820×1180, and 390×844
-- [x] Adversarial drawing suite: real text double-click, vertical extended
-  lines, styled Fibonacci, rigid edge drag, 64-point path cap, pointer-cancel
-  rollback, live-rerender draft retention, non-destructive object-cap handling,
-  fail-closed loading, and >64KB persistence transport
-- [x] Production build: `next build`
-- [x] Visual proof pack: `docs/verification/openmarket-drawing-studio/`
-- [x] Extreme ceiling benchmark: 500 drawings × 64 anchors × 100 color edits,
-  no retained heap growth after forced GC
+| Evidence | What it establishes |
+|---|---|
+| `terminal/lib/__tests__/drawingTools.test.ts` | Exact 99 tools/nine groups, durable coverage, creation contracts, semantic-handle counts, capabilities, shortcuts, and legacy normalization |
+| `terminal/lib/__tests__/drawingGeometry.test.ts` | Exhaustive renderer-family map, Fibonacci slots/defaults, and semantic-point materialization |
+| `terminal/lib/__tests__/drawingI18n.test.ts` | English and Chinese labels for every group/tool and the new interaction copy |
+| `terminal/lib/__tests__/drawingOutbox.test.ts` | Account isolation, corrupt-state fail-closed behavior, and empty-collection tombstones |
+| `terminal/lib/__tests__/drawingOwnerLifecycle.test.ts` | Account-to-guest renderer boundary and same-owner stability |
+| `terminal/e2e/drawing-system.spec.ts` | Responsive 99-tool menu, interaction chrome, lifecycle/history, adversarial editing, freehand/segmented input, pane annotations, media persistence, payload limits, object-501 rejection, and fail-closed loads |
+| `terminal/lib/drawing-engine/geometry.ts` | Exhaustive family mapping for every durable kind; this is coverage, not a per-tool fidelity proof |
 
-Still required before claiming production completion or broad parity:
+Baseline-focused reconciliation rerun: five Vitest files, 28 tests passed.
 
-- [ ] Complete an authenticated production save/reload/delete round trip
-- [ ] Verify virtual-keyboard geometry on a physical mobile device
+### Current follow-up branch validation
+
+| Gate | Result |
+|---|---|
+| Exact registry-to-memo parser | 99 registry tools, 99 documented tools, no missing, extra, or duplicate names |
+| Full unit suite | 87 files; 1,673 tests passed; four explicit todos |
+| Exact responsive browser suite | 123 cases across desktop, tablet, and mobile; 79 passed and 44 viewport-inapplicable cases intentionally skipped |
+| Professional drawing browser contract | Six desktop passes, including analytical settings, Replay hard lock, responsive focus continuity, source-scoped cleanup, and pane-targeted detector commands |
+| TypeScript | Full no-emit check passed |
+| Production build | Passed |
+| Patch hygiene | `git diff --check` passed |
+
+CI, authenticated production round trip, physical-device validation, merge,
+deployment, and live verification remain delivery gates. The older 21-tool
+visual proof pack remains historical evidence and must not be presented as proof
+of the 99-tool system.
 
 ## Final parity boundary
 
-The correct claim for this delivery is:
+Correct:
 
-> Mastermind now has a robust registry-driven 21-tool drawing foundation with
-> editable anchors, history, validated persistence, responsive controls, and
-> several OpenMarket-inspired flagship tools.
+> Mastermind has the full 99-tool comparison catalog and renderer-family
+> coverage, with robust shared editing, persistence, and responsive foundations.
 
-The incorrect claim is:
+Incorrect:
 
-> Mastermind has complete OpenMarket drawing parity.
+> Mastermind reproduces every OpenMarket drawing's formulas, settings,
+> interactions, object-management workflow, and chart presentation.
 
-That second statement remains false until the explicitly deferred catalog and
-the remaining partial interaction lanes are implemented and verified.
+The first statement is supported by the merged registry and automated
+contracts. The second remains false until the remaining semantic, settings,
+workspace, responsive-device, and presentation lanes are implemented and
+verified.

@@ -105,6 +105,7 @@ type DrawingSavePayload = {
     width?: number;
     dash?: string;
     opacity?: number;
+    locked?: boolean;
     text?: string;
     meta?: Record<string, unknown>;
     points?: unknown[];
@@ -153,7 +154,7 @@ async function openTerminal(
 
 async function selectMagnet(page: Page, mode: "off" | "weak" | "strong") {
   const trigger = page.getByTestId("drawing-magnet-trigger");
-  await trigger.click();
+  await page.getByTestId("drawing-magnet-menu-trigger").click();
   const menu = page.getByTestId("drawing-magnet-menu");
   await expect(menu).toBeVisible();
   await menu.getByTestId(`drawing-magnet-${mode}`).click();
@@ -293,14 +294,17 @@ test("drawing registry and precision controls stay complete at every responsive 
     await expect(trigger).toBeFocused();
   }
 
-  for (const utility of ["magnet", "clear"] as const) {
-    const trigger = page.getByTestId(`drawing-${utility}-trigger`);
-    const menu = page.getByTestId(`drawing-${utility}-menu`);
+  for (const utility of [
+    { id: "magnet", triggerId: "drawing-magnet-menu-trigger" },
+    { id: "clear", triggerId: "drawing-clear-trigger" },
+  ] as const) {
+    const trigger = page.getByTestId(utility.triggerId);
+    const menu = page.getByTestId(`drawing-${utility.id}-menu`);
     await trigger.click();
     await expect(menu).toBeVisible();
     await expectChartLocal(page, menu, { directChild: true, clearOfDetails });
-    if (utility === "clear") {
-      await expect(menu.getByRole("menuitem")).toHaveCount(3);
+    if (utility.id === "clear") {
+      await expect(menu.getByRole("menuitem")).toHaveCount(5);
     }
     await page.keyboard.press("Escape");
     await expect(menu).toBeHidden();
@@ -325,6 +329,10 @@ test("drawing registry and precision controls stay complete at every responsive 
   await expect(lineTool).toBeFocused();
 
   const magnetTrigger = page.getByTestId("drawing-magnet-trigger");
+  await expect(magnetTrigger).toHaveAttribute("data-magnet-mode", "off");
+  await magnetTrigger.click();
+  await expect(magnetTrigger).toHaveAttribute("data-magnet-mode", "weak");
+  await magnetTrigger.click();
   await expect(magnetTrigger).toHaveAttribute("data-magnet-mode", "off");
   await selectMagnet(page, "weak");
   await selectMagnet(page, "strong");
@@ -464,6 +472,88 @@ test("desktop drawing labels and hover flyouts match the OpenMarket interaction 
   expect(leaveTiming!.closingAfter!).toBeGreaterThanOrEqual(120);
   expect(leaveTiming!.hiddenAfter!).toBeGreaterThanOrEqual(260);
   expect(leaveTiming!.hiddenAfter! - leaveTiming!.closingAfter!).toBeGreaterThanOrEqual(120);
+});
+
+test("favorite drawing tools are keyboard-reachable, draggable, responsive, and persistent", async ({ page }) => {
+  await openTerminal(page);
+
+  const compact = (page.viewportSize()?.width ?? 1440) <= 860;
+  const clearOfDetails = page.viewportSize()?.width === 390;
+  const trigger = page.getByTestId("drawing-group-lines-menu-trigger");
+  await trigger.click();
+  await expect(page.getByTestId("drawing-tool-trendline")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  const star = page.getByTestId("drawing-favorite-trendline");
+  await expect(star).toBeFocused();
+  await expect(star).toHaveAttribute("role", "menuitemcheckbox");
+  await page.keyboard.press("Enter");
+  await expect(star).toHaveAttribute("aria-checked", "true");
+
+  const strip = page.getByTestId("drawing-favorites-strip");
+  await expect(strip).toBeVisible();
+  await expect(strip).toHaveAttribute("data-favorite-count", "1");
+  await expectChartLocal(page, strip, { directChild: true, clearOfDetails });
+  await expectNoDocumentOverflow(page);
+
+  await page.keyboard.press("Escape");
+  const favoriteTool = page.getByTestId("drawing-favorite-tool-trendline");
+  await favoriteTool.click();
+  await expect(page.getByTestId("drawing-group-lines-main")).toHaveAttribute("aria-pressed", "true");
+
+  const grip = page.getByTestId("drawing-favorites-grip");
+  const gripBox = await grip.boundingBox();
+  expect(gripBox).not.toBeNull();
+  const leftBefore = await strip.evaluate((element) => Number.parseFloat((element as HTMLElement).style.left));
+  await page.mouse.move(gripBox!.x + gripBox!.width / 2, gripBox!.y + gripBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    gripBox!.x + gripBox!.width / 2 + (compact ? 42 : 118),
+    gripBox!.y + gripBox!.height / 2 + 18,
+    { steps: 6 },
+  );
+  await page.mouse.up();
+  const leftAfter = await strip.evaluate((element) => Number.parseFloat((element as HTMLElement).style.left));
+  expect(leftAfter).toBeGreaterThan(leftBefore + 20);
+
+  const favoriteMode = compact ? "compact" : "desktop";
+  await expect.poll(() => page.evaluate((mode) => {
+    const value = JSON.parse(localStorage.getItem("mm.drawing.favorites.v1") || "{}");
+    return value.positions?.[mode]?.x;
+  }, favoriteMode)).toBe(leftAfter);
+  const storedPosition = await page.evaluate((mode) => {
+    const value = JSON.parse(localStorage.getItem("mm.drawing.favorites.v1") || "{}");
+    return value.positions?.[mode] as { x: number; y: number } | undefined;
+  }, favoriteMode);
+  expect(storedPosition).toBeDefined();
+
+  // The rail star is the explicit show/hide control, and right-clicking the
+  // floating strip provides the documented fast hide action.
+  const stripToggle = page.getByTestId("drawing-favorites-toggle");
+  await stripToggle.click();
+  await expect(strip).toBeHidden();
+  await expect(stripToggle).toHaveAttribute("data-favorites-visible", "false");
+  await stripToggle.click();
+  await expect(strip).toBeVisible();
+  await strip.click({ button: "right" });
+  await expect(strip).toBeHidden();
+  await stripToggle.click();
+  await expect(strip).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator(".chart-wrap canvas").first()).toBeVisible();
+  const restored = page.getByTestId("drawing-favorites-strip");
+  await expect(restored).toBeVisible();
+  await expect(page.getByTestId("drawing-favorites-toggle")).toHaveAttribute("data-favorite-count", "1");
+  await expect.poll(() => restored.evaluate((element) => Number.parseFloat((element as HTMLElement).style.left))).toBe(storedPosition!.x);
+  await expectChartLocal(page, restored, { directChild: true, clearOfDetails });
+  await expectNoDocumentOverflow(page);
+
+  await page.getByTestId("drawing-group-lines-menu-trigger").click();
+  const restoredStar = page.getByTestId("drawing-favorite-trendline");
+  await restoredStar.click();
+  await expect(restoredStar).toHaveAttribute("aria-checked", "false");
+  await expect(restored).toBeHidden();
+  await expect(page.getByTestId("drawing-favorites-toggle")).toHaveAttribute("data-favorite-count", "0");
 });
 
 test("portalled drawing surfaces honor reduced motion and keep focus across the mobile breakpoint", async ({ page }) => {
@@ -653,6 +743,11 @@ test("chart-type catalog exposes and applies the new line and area families", as
 });
 
 test("drawing lifecycle supports one-shot, sticky, history, visibility, and scoped clear", async ({ page }) => {
+  // This deliberately dense contract exercises the complete lifecycle in one
+  // browser session. GitHub's two-worker runner can exceed Playwright's 30s
+  // default even when the final clear assertion succeeds, so budget the test
+  // independently without weakening any action or assertion timeout.
+  test.setTimeout(60_000);
   test.skip(
     (page.viewportSize()?.width ?? 1440) <= 860,
     "Pointer lifecycle is covered once on the stable desktop canvas.",
@@ -665,28 +760,20 @@ test("drawing lifecycle supports one-shot, sticky, history, visibility, and scop
   const cursor = page.getByTestId("drawing-tool-cursor");
   const sticky = page.getByTestId("drawing-sticky-toggle");
 
-  // Secondary mouse input must never create or consume a one-shot tool.
+  // Secondary mouse input exits an armed tool without creating a drawing.
   await page.getByTestId("drawing-group-lines-menu-trigger").click();
   await page.getByTestId("drawing-tool-hline").click();
   await expect(lineTool).toHaveAttribute("data-tool-id", "hline");
   await expect(lineTool).toHaveAttribute("aria-pressed", "true");
   const rightClickBox = await layer.boundingBox();
   expect(rightClickBox).not.toBeNull();
-  await layer.dispatchEvent("pointerdown", {
-    bubbles: true,
-    cancelable: true,
-    composed: true,
-    pointerId: 73,
-    pointerType: "mouse",
-    isPrimary: true,
-    button: 2,
-    buttons: 2,
-    clientX: rightClickBox!.x + rightClickBox!.width * 0.5,
-    clientY: rightClickBox!.y + rightClickBox!.height * 0.5,
-  });
+  await page.mouse.click(
+    rightClickBox!.x + rightClickBox!.width * 0.5,
+    rightClickBox!.y + rightClickBox!.height * 0.5,
+    { button: "right" },
+  );
   await expect(layer.locator('g[data-drawing-kind="hline"]')).toHaveCount(0);
-  await expect(lineTool).toHaveAttribute("aria-pressed", "true");
-  await cursor.click();
+  await expect(cursor).toHaveAttribute("aria-pressed", "true");
   await page.getByTestId("drawing-group-lines-menu-trigger").click();
   await page.getByTestId("drawing-tool-trendline").press("Enter");
   await expect(lineTool).toHaveAttribute("data-tool-id", "trendline");
@@ -797,6 +884,20 @@ test("drawing lifecycle supports one-shot, sticky, history, visibility, and scop
   await redo.click();
   await expect(trendlines).toHaveCount(1);
 
+  const lockAll = page.getByTestId("drawing-lock-all");
+  await expect(lockAll).toBeEnabled();
+  await expect(lockAll).toHaveAttribute("data-user-drawing-count", "1");
+  await lockAll.click();
+  await expect(trendlines.first()).toHaveAttribute("data-locked", "true");
+  await expect(lockAll).toHaveAttribute("data-drawings-locked", "true");
+  // Global lock is a normal drawing transaction, so history can undo it.
+  await undo.click();
+  await expect(trendlines.first()).toHaveAttribute("data-locked", "false");
+  await redo.click();
+  await expect(trendlines.first()).toHaveAttribute("data-locked", "true");
+  await lockAll.click();
+  await expect(trendlines.first()).toHaveAttribute("data-locked", "false");
+
   const visibility = page.getByTestId("drawing-visibility-toggle");
   await visibility.click();
   await expect(visibility).toHaveAttribute("data-drawings-visible", "false");
@@ -804,14 +905,50 @@ test("drawing lifecycle supports one-shot, sticky, history, visibility, and scop
   await visibility.click();
   await expect(visibility).toHaveAttribute("data-drawings-visible", "true");
   await expect(trendlines).toHaveCount(1);
+  await page.keyboard.press("Control+Alt+H");
+  await expect(visibility).toHaveAttribute("data-drawings-visible", "false");
+  await expect(trendlines).toHaveCount(0);
+  await visibility.click();
+  await expect(visibility).toHaveAttribute("data-drawings-visible", "true");
+  await expect(trendlines).toHaveCount(1);
+
+  // Replay and multi-chart grids preserve existing objects but retire creation
+  // until the single live chart context is restored.
+  const drawingToolbar = page.getByTestId("drawing-toolbar");
+  const replay = page.getByRole("button", { name: "Replay", exact: true });
+  await lineTool.click();
+  await replay.click();
+  await expect(drawingToolbar).toHaveAttribute("data-creation-disabled", "replay");
+  await expect(lineTool).toBeDisabled();
+  await expect(cursor).toHaveAttribute("aria-pressed", "true");
+  await expect(trendlines).toHaveCount(1);
+  await replay.click();
+  await expect(drawingToolbar).toHaveAttribute("data-creation-disabled", "false");
+  await expect(lineTool).toBeEnabled();
+
+  await lineTool.click();
+  const splitLayout = page.locator('.seg.tool-adv[title="Split layout"]');
+  await splitLayout.getByRole("button", { name: "2", exact: true }).click();
+  await expect(page.locator('.pane-grid[data-n="2"]')).toBeVisible();
+  await expect(drawingToolbar).toHaveAttribute("data-creation-disabled", "multi-chart");
+  await expect(lineTool).toBeDisabled();
+  await expect(cursor).toHaveAttribute("aria-pressed", "true");
+  await splitLayout.getByRole("button", { name: "1", exact: true }).click();
+  await expect(drawingToolbar).toHaveAttribute("data-creation-disabled", "false");
+  await expect(lineTool).toBeEnabled();
 
   await lineTool.dblclick();
   await expect(sticky).toHaveAttribute("data-sticky", "true");
+  await expect(sticky).toHaveAttribute("data-stay-active", "false");
   await expect(lineTool).toHaveAttribute("aria-pressed", "true");
   await dragDrawing(page, layer, { x: 0.32, y: 0.62 }, { x: 0.69, y: 0.40 });
   await expect(trendlines).toHaveCount(2);
   await expect(lineTool).toHaveAttribute("aria-pressed", "true");
-  await cursor.click();
+  // Escape exits the per-tool pin without turning on the persisted global Stay mode.
+  await page.keyboard.press("Escape");
+  await expect(cursor).toHaveAttribute("aria-pressed", "true");
+  await expect(sticky).toHaveAttribute("data-sticky", "false");
+  await expect(sticky).toHaveAttribute("data-stay-active", "false");
 
   const shapesTrigger = page.getByTestId("drawing-group-shapes-menu-trigger");
   await shapesTrigger.click();
@@ -1067,6 +1204,9 @@ test("each drawing tool keeps its own defaults and fill color contract", async (
     const drawing = saves.flatMap((payload) => payload.drawings ?? []).find((item) => item.kind === "highlighter");
     return drawing ? { color: drawing.color, width: drawing.width, opacity: drawing.opacity } : null;
   }, { timeout: 5_000 }).toEqual({ color: "#4d82ff", width: 8, opacity: .28 });
+  await expect(page.getByTestId("drawing-group-freehand-main")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("drawing-sticky-toggle")).toHaveAttribute("data-sticky", "true");
+  await expect(page.getByTestId("drawing-sticky-toggle")).toHaveAttribute("data-stay-active", "false");
 
   await page.getByTestId("drawing-group-fibonacci-menu-trigger").click();
   await page.getByTestId("drawing-tool-fib").press("Enter");
