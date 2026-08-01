@@ -7,8 +7,6 @@ import {
   topology,
   expiryConcentration,
   buildMarketStructure,
-  guardedFlip,
-  isPlausibleFlip,
   hedgeProfile,
   termStructure,
   tenorBand,
@@ -336,41 +334,21 @@ describe("expiryConcentration", () => {
   });
 });
 
-describe("guardedFlip / isPlausibleFlip", () => {
-  it("keeps a flip that sits near spot", () => {
-    expect(isPlausibleFlip(752.2, 750.72)).toBe(true);
-    expect(guardedFlip(752.2, 750.72)).toBe(752.2);
-  });
-
-  it("drops the measured live SPY and QQQ defects", () => {
-    // Published 2026-08-01: SPY 275.0 against spot 741.69, QQQ 249.8 against 683.55.
-    expect(isPlausibleFlip(275.0, 741.69)).toBe(false);
-    expect(guardedFlip(275.0, 741.69)).toBeNull();
-    expect(guardedFlip(249.8, 683.55)).toBeNull();
-  });
-
-  it("documents the guard's known blind spot: SPX and NVDA survive it", () => {
-    // These are ALSO wrong upstream but sit inside ±20%, so the guard cannot catch them.
-    // The real repair is MSC R1.1 — this test exists so the limitation stays visible.
-    expect(isPlausibleFlip(8676.93, 7437.63)).toBe(true);
-    expect(isPlausibleFlip(219.55, 195.04)).toBe(true);
-  });
-
-  it("is symmetric about spot and inclusive at the boundary", () => {
-    expect(isPlausibleFlip(120, 100)).toBe(true);
-    expect(isPlausibleFlip(80, 100)).toBe(true);
-    expect(isPlausibleFlip(120.01, 100)).toBe(false);
-    expect(isPlausibleFlip(79.99, 100)).toBe(false);
-  });
-
-  it("treats missing or nonsensical inputs as not drawable", () => {
-    expect(guardedFlip(null, 100)).toBeNull();
-    expect(guardedFlip(100, null)).toBeNull();
-    expect(guardedFlip(100, 0)).toBeNull();
-    expect(guardedFlip(NaN, 100)).toBeNull();
-    expect(guardedFlip(100, -5)).toBeNull();
-  });
-});
+// The ±20% flip plausibility guard was REMOVED once the upstream estimator was repaired
+// (macro #4189). Keeping it would have suppressed legitimate far flips: on the corrected
+// data AAPL sits 21.4% from spot, which the guard would have hidden as implausible.
+//
+// The repaired estimator re-prices the book on a ±25% spot grid, so it is structurally
+// incapable of returning a level outside that band — the guard's job is now done by the
+// estimator's own domain, and a second clip in the client would only ever remove real
+// readings. The measured before/after, for the record:
+//
+//   SPY  275.00 -> 747.95   (62.9% from spot -> 0.84%)
+//   QQQ  249.80 -> 691.45   (63.5% -> 1.16%)
+//   SPX 8676.93 -> 7481.82  (above both walls -> 0.59%)
+//   IWM     null -> 298.45  (-> 2.00%)
+//
+// History: docs/audits/2026-08-01-market-structure-core/gamma-flip-defect-rca.md
 
 describe("buildMarketStructure", () => {
   it("assembles every block from one pass over the payload", () => {

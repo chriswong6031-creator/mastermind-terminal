@@ -52,7 +52,6 @@ import type { GexStatePayload } from "./MarketStateCard";
 import { GexGuide } from "./GexGuide";
 import { EodContextBelt } from "@/components/eodcontext/EodContextBelt";
 import { isGexDates, gexSessionOf } from "@/lib/gexSessions";
-import { guardedFlip } from "@/lib/marketStructure";
 import {
   LENS_ALL,
   matrixExpiryCoverage,
@@ -353,7 +352,7 @@ export function GexDeskView() {
   // which flips are drawable, and so the whole workaround is deleted in one place when
   // MSC R1.1 repairs the builder. Root cause + measurements:
   // docs/audits/2026-08-01-market-structure-core/gamma-flip-defect-rca.md
-  const gammaFlip = guardedFlip(activePayload?.gamma_flip ?? null, spot);
+  const gammaFlip = activePayload?.gamma_flip ?? null;
   const levels = {
     callWall: activePayload?.call_wall ?? null,
     putWall: activePayload?.put_wall ?? null,
