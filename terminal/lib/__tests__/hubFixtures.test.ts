@@ -90,7 +90,11 @@ describe("fixtureFor vol:/tctx:/matrix: — root keying", () => {
   });
 
   it("every root-keyed feed refuses an unknown root with {} — the whole family, one convention", async () => {
-    for (const f of ["ticker:ZZZT", "vol:ZZZT", "gex:ZZZT", "moves:ZZZT", "tctx:ZZZT", "gexstate:ZZZT", "matrix:ZZZT"]) {
+    for (const f of [
+      "ticker:ZZZT", "vol:ZZZT", "gex:ZZZT", "moves:ZZZT", "tctx:ZZZT", "gexstate:ZZZT", "matrix:ZZZT",
+      // R3 OI suite joins the same convention.
+      "oi_time:ZZZT", "max_pain:ZZZT", "oi_change:ZZZT",
+    ]) {
       expect(await fixtureFor(f), f).toEqual({});
     }
   });

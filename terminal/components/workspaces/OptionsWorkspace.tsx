@@ -16,10 +16,12 @@ import { useLang } from "@/lib/i18n";
  *
  * Tab registry order per spec:
  *   tape · desk · tide · tickers · vol (Options Screener) · gex · surface · prism ·
- *   volatility · prophet.
+ *   structure · volatility · prophet.
  * NOTE the two distinct keys: `vol` is a load-bearing legacy alias for the Options
  * SCREENER (do not touch); `volatility` is the R3 Volatility tab (IV rank / term /
- * skew, per-root options_hub.vol payloads).
+ * skew, per-root options_hub.vol payloads); `structure` is the R3 OI suite
+ * (options_hub.oi_time/max_pain/oi_change payloads), ordered before Volatility
+ * per the masterplan §5 category order.
  * (Fundamentals was here as a cross-jump chip; it graduated to the standalone
  * /analysis page. A stray ?tab=fundamentals now redirects there — see below.)
  *
@@ -43,12 +45,13 @@ const HUB_KEY: Record<string, TabKey> = {
   gex: "gex",
   surface: "surface",
   prism: "prism",
+  structure: "structure",
   volatility: "volatility",
   prophet: "prophet",
 };
 
 // The tabs the hub is allowed to render under Research (canonical hub keys).
-const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "surface", "prism", "volatility", "prophet"];
+const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "surface", "prism", "structure", "volatility", "prophet"];
 
 const DEFAULT_TAB: TabKey = "tape";
 
@@ -63,6 +66,7 @@ const TABS: WorkspaceTab[] = [
   { key: "gex", labelKey: "wtGex" },
   { key: "surface", labelKey: "tabSurface" },
   { key: "prism", labelKey: "wtPrism" },
+  { key: "structure", labelKey: "wtStructure" },
   { key: "volatility", labelKey: "wtVolatility" },
   { key: "prophet", labelKey: "wtProphet" },
 ];
@@ -77,7 +81,7 @@ const FUNDAMENTALS_HREF = "/analysis";
 const PAGE_KEY: Record<TabKey, string> = {
   tape: "tape", desk: "desk", tide: "tide", tickers: "tickers",
   screener: "vol", gex: "gex", surface: "surface", prism: "prism",
-  volatility: "volatility", prophet: "prophet",
+  structure: "structure", volatility: "volatility", prophet: "prophet",
   leaders: "tape", radar: "tape", // never shown here (redirected to Discover)
 };
 
