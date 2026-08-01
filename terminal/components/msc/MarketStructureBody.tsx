@@ -41,6 +41,7 @@ import { fmtMn, fmtMnMag } from "@/lib/gexLadder";
 import { buildMarketStructure, guardedFlip, type MscMoves } from "@/lib/marketStructure";
 import type { MarketStructure } from "@/lib/marketStructure";
 import { makeMscT, type MscKey } from "./mscStrings";
+import { HedgingByStrikeCard, TermStructureCard, DailyHedgingCard } from "./HedgingCards";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload } from "@/components/gexdesk/GexDeskView";
 
@@ -130,6 +131,11 @@ export function MarketStructureBody({ gex, moves, archived = false, lang }: Prop
       )}
 
       <div style={GRID}>
+        {/* Volland-parity W1: the hedging-requirement reframing leads, because it is the
+            question every other card is a refinement of — "what must dealers trade?" */}
+        <HedgingByStrikeCard byStrike={gex?.by_strike ?? null} spot={gex?.spot_ref ?? null} lang={lang} />
+        <DailyHedgingCard agg={ms.agg} emPct1sig={ms.em.emPct1sig} lang={lang} />
+        <TermStructureCard byExpiry={gex?.by_expiry ?? null} asof={gex?.asof ?? null} lang={lang} />
         <SignCard ms={ms} t={t} convention={gex?.convention ?? null} />
         <TopologyCard ms={ms} t={t} />
         <ScenarioCard ms={ms} t={t} />
