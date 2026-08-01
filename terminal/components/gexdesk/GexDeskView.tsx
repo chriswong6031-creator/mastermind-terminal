@@ -38,6 +38,7 @@ import React, {
 import { flowGet } from "@/lib/flowClientCache";
 import { useFlowStream } from "@/lib/flowStream";
 import { useLang } from "@/lib/i18n";
+import { GEX_QUICK_ROOTS, GEX_AUTOCOMPLETE_ROOTS } from "@/lib/optionsRoots";
 import { trackSearch } from "@/lib/searchTrack";
 import { makeGexT } from "./gexStrings";
 import type { GexDeskKey } from "./gexStrings";
@@ -131,16 +132,8 @@ function isIndexProduct(root: string): boolean {
   return INDEX_ETFS.has(root.toUpperCase());
 }
 
-// One-click quick picks next to the ticker box (indices first, then the most
-// liquid single names). The full autocomplete list backs the native <datalist>
-// dropdown — a zero-dependency "instant search" without loading the 1.9MB manifest.
-const GEX_QUICK_ROOTS = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "META", "AAPL"];
-const GEX_AUTOCOMPLETE_ROOTS = [
-  "SPY", "QQQ", "IWM", "DIA", "SPX", "NDX", "RUT",
-  "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "GOOG", "AMD", "NFLX",
-  "AVGO", "MU", "PLTR", "COIN", "SMCI", "MSTR", "BABA", "INTC", "CRM", "ORCL",
-  "QCOM", "ARM", "MARA", "SOFI", "UBER", "DIS", "BA", "JPM", "XLF", "XLE", "GLD",
-];
+// Quick picks + datalist universe now live in lib/optionsRoots.ts (shared with
+// the Volatility tab's root picker) so the per-root surfaces can't drift apart.
 
 // ─── Polling ──────────────────────────────────────────────────────────────────
 
