@@ -18,6 +18,8 @@ export interface MmShellApi {
   setSymbol(sym: string): void;
   setTimeframe(tf: string): void;
   setLang(lang: "en" | "zh"): void;
+  /** Show/hide the drawing toolbar in shell mode (hidden by default; the native pencil toggles it). */
+  setDrawTools(visible: boolean): boolean;
   restoreState(state: { sym?: string; tf?: string }): void;
   /** Adopt a session obtained by native auth; resolves false on rejection. Never log tokens. */
   setSession(tokens: { access_token: string; refresh_token: string }): Promise<boolean>;

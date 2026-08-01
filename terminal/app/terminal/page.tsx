@@ -5,11 +5,14 @@ import { preload } from "react-dom";
 
 // dynamic='auto': supabase reads cookies → Next auto-detects dynamic; no need to force it.
 
-export default async function Terminal({ searchParams }: { searchParams: Promise<{ sym?: string; symbol?: string; shell?: string }> }) {
+export default async function Terminal({ searchParams }: { searchParams: Promise<{ sym?: string; symbol?: string; shell?: string; tray?: string }> }) {
   const sp = await searchParams;
   const initialSymbol = sp?.symbol ?? sp?.sym;
   // ?shell=app — the installable apps' WebView mode: chart-only chrome + window.__mmShell bridge.
   const shellMode = sp?.shell === "app";
+  // ?tray=1 (shell mode only) — keeps the TF quick tray visible; the symbol-preview sheet
+  // embeds the full chart and has no native roller to own the interval.
+  const shellTray = shellMode && sp?.tray === "1";
   // Start the two chart-blocking JSON requests while the browser is still
   // downloading/hydrating the Terminal JavaScript. getSliceAndOhlc() reuses
   // these same-origin preloads when ChartPanel mounts.
@@ -25,7 +28,7 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
   const e2eFixture = process.env.TERMINAL_E2E_FIXTURE === "1";
   const guestSymbols: [string, string][] = [["Crypto", "BTC-USD"], ["Crypto", "ETH-USD"], ["Equities", "NVDA"], ["Equities", "AAPL"], ["Equities", "MSFT"], ["Equities", "QQQ"]];
   if (e2eFixture) {
-    return <TerminalShell symbols={guestSymbols.map(([section, symbol]) => ({ symbol, section }))} email={process.env.TERMINAL_E2E_EMAIL || ""} initialSymbol={initialSymbol} shellMode={shellMode} />;
+    return <TerminalShell symbols={guestSymbols.map(([section, symbol]) => ({ symbol, section }))} email={process.env.TERMINAL_E2E_EMAIL || ""} initialSymbol={initialSymbol} shellMode={shellMode} shellTray={shellTray} />;
   }
 
   const supabase = await createClient();
@@ -33,7 +36,7 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
 
   // login disabled for now — render an open guest workspace (no server-side persistence)
   if (!user) {
-    return <TerminalShell symbols={guestSymbols.map(([section, symbol]) => ({ symbol, section }))} email="" initialSymbol={initialSymbol} shellMode={shellMode} />;
+    return <TerminalShell symbols={guestSymbols.map(([section, symbol]) => ({ symbol, section }))} email="" initialSymbol={initialSymbol} shellMode={shellMode} shellTray={shellTray} />;
   }
 
   // load or seed the user's first watchlist (idempotent via unique (user_id,name)).
@@ -73,5 +76,5 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
   const { data: syms } = await supabase
     .from("watchlist_symbols").select("symbol,section").eq("watchlist_id", active.id).order("position");
 
-  return <TerminalShell symbols={(syms as any) || []} email={user?.email || ""} initialSymbol={initialSymbol} shellMode={shellMode} />;
+  return <TerminalShell symbols={(syms as any) || []} email={user?.email || ""} initialSymbol={initialSymbol} shellMode={shellMode} shellTray={shellTray} />;
 }

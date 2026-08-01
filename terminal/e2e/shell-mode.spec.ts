@@ -29,6 +29,16 @@ test.describe("native shell mode", () => {
     // The native roller strip owns interval switching — the toolbar TF quick tray is hidden.
     await expect(page.locator(".chart-tabs .tftray")).toBeHidden();
 
+    // Drawing tools cede chart real estate in shell mode; the native pencil re-enables
+    // them via setDrawTools → the .shell-draw class.
+    await expect(page.locator(".ds-dock")).toBeHidden();
+    await expect(page.locator(".ds-favorites")).toBeHidden();
+    await page.waitForFunction(() => (window as any).__mmShell?.version === 1);
+    await page.evaluate(() => (window as any).__mmShell.setDrawTools(true));
+    await expect(page.locator(".app.shell-draw")).toHaveCount(1);
+    await page.evaluate(() => (window as any).__mmShell.setDrawTools(false));
+    await expect(page.locator(".app.shell-draw")).toHaveCount(0);
+
     // The chart fills the frame — the mobile 46–80svh cap must not apply in shell mode
     // (a shell WebView has no scrolling page below the chart).
     const chartFill = await page.evaluate(() => {
@@ -58,6 +68,14 @@ test.describe("native shell mode", () => {
     await page.waitForFunction(() => (window as any).__mmShell.getState().sym === "AAPL");
     await page.evaluate(() => (window as any).__mmShell.setTimeframe("D"));
     await page.waitForFunction(() => (window as any).__mmShell.getState().tf === "D");
+  });
+
+  test("shell tray=1 keeps the TF tray for the embedded preview chart", async ({ page }) => {
+    await page.goto("/terminal?symbol=NVDA&shell=app&tray=1");
+    await expect(page.locator('[data-tray="1"]')).toHaveCount(1);
+    await expect(page.locator(".chart-tabs .tftray")).toBeVisible();
+    // Drawing tools stay hidden even with the tray enabled.
+    await expect(page.locator(".ds-favorites")).toBeHidden();
   });
 
   test("embed widget hdr=0 hides the quote line, keeps range tabs", async ({ page }) => {

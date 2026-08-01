@@ -29,6 +29,12 @@ export function initShellBridge(hooks: { getState: () => { sym: string; tf: stri
       if (t) window.dispatchEvent(new CustomEvent("mm:set-tf", { detail: { tf: t } }));
     },
     setLang: (lang) => applyLang(lang === "zh" ? "zh" : "en"),
+    setDrawTools: (visible) => {
+      // Shell mode hides the drawing toolbar by default (chart real estate); the native
+      // pencil toggles it back in — pure CSS class flip, no drawing state touched.
+      document.querySelector(".app")?.classList.toggle("shell-draw", !!visible);
+      return true;
+    },
     restoreState: ({ sym, tf } = {}) => {
       if (sym) api.setSymbol(sym);
       if (tf) api.setTimeframe(tf);

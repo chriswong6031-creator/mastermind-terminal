@@ -287,20 +287,22 @@ struct PreviewSheet: View {
     // MARK: - Chart (§3.4.4 — the widget owns its own range tabs)
 
     private var chartWidget: some View {
-        InlineWebView(url: widgetURL)
+        InlineWebView(url: chartEngineURL)
             .frame(height: 430)
             .accessibilityHidden(true)
     }
 
-    private var widgetURL: URL {
-        var components = URLComponents(url: AppConfig.origin.appendingPathComponent("embed/chart"), resolvingAgainstBaseURL: false)!
+    /// The REAL chart engine — the same MastermindChart the Chart tab and the web
+    /// terminal run — in shell mode, not the lightweight `/embed/chart` dossier widget
+    /// it replaced (operator: same engine, same fluidity, everywhere a chart appears).
+    /// `tray=1` keeps the web TF quick tray visible as this sheet's interval control,
+    /// since there is no native roller here; language follows the shared web storage.
+    private var chartEngineURL: URL {
+        var components = URLComponents(url: AppConfig.origin.appendingPathComponent("terminal"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
+            URLQueryItem(name: "shell", value: "app"),
             URLQueryItem(name: "symbol", value: symbol),
-            URLQueryItem(name: "range", value: "1Y"),
-            URLQueryItem(name: "theme", value: "dark"),
-            URLQueryItem(name: "lang", value: model.lang),
-            URLQueryItem(name: "transparent", value: "1"),
-            URLQueryItem(name: "hdr", value: "0"),
+            URLQueryItem(name: "tray", value: "1"),
         ]
         return components.url!
     }

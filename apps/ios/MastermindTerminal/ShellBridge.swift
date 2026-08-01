@@ -60,6 +60,12 @@ final class ShellBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         call("setSession", args: [["access_token": accessToken, "refresh_token": refreshToken]])
     }
 
+    /// Shows/hides the web chart's own drawing toolbar (hidden by default in shell mode
+    /// to give the chart its real estate back; the toolbar pencil toggles it).
+    func setDrawTools(_ visible: Bool) {
+        call("setDrawTools", args: [visible])
+    }
+
     private func call(_ method: String, args: [Any]) {
         // Arguments are JSON-encoded and applied — never string-interpolated into JS.
         guard JSONSerialization.isValidJSONObject(args),
