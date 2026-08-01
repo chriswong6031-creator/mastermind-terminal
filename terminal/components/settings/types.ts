@@ -61,10 +61,28 @@ export function acsDate(iso: string | null | undefined, lang: "en" | "zh"): stri
   }
 }
 
+/**
+ * Settings keys off the RAW /api/me tier (the panel pipes the gateway payload
+ * through verbatim and narrows nothing), so the raw→effective aliasing that
+ * lib/subscriptionTier.ts does for the chart has to happen here too.
+ *
+ * `essential` is the billing authority's new name for the SAME entitlement as
+ * `insider`; the macro-side rename lands after this tolerance ships. Without the
+ * alias an Essential subscriber's Billing tab reads "Free" — wrong label, wrong
+ * feature list, no price line, wrong upgrade CTA — while still being charged.
+ *
+ * `unlimited` is deliberately NOT folded into `pro` here: the label/feature/CTA
+ * helpers each treat it distinctly (a lifetime grant has nothing left to buy).
+ */
+export function acsNormalizeTier(tier: string | undefined): string {
+  return tier === "essential" ? "insider" : tier || "free";
+}
+
 /** Tier → display label key. Unlimited reads as Pro (it is an uncapped Pro). */
 export function acsTierLabelKey(tier: string | undefined): string {
-  if (tier === "pro" || tier === "unlimited") return "acsTierPro";
-  if (tier === "insider") return "acsTierInsider";
+  const tr = acsNormalizeTier(tier);
+  if (tr === "pro" || tr === "unlimited") return "acsTierPro";
+  if (tr === "insider") return "acsTierInsider";
   return "acsTierFree";
 }
 
@@ -110,7 +128,7 @@ export const ACS_PLAN_FEATURES: Record<string, string[]> = {
 export const ACS_UPGRADE_URL = "https://www.mastermind-x.com/index.html?upgrade=1";
 
 export function acsUpgradeIsInApp(tier: string | undefined): boolean {
-  return (tier || "free") === "free";
+  return acsNormalizeTier(tier) === "free";
 }
 
 /** The CTA label for a tier+interval, or null when nothing is left to buy. */
@@ -118,7 +136,7 @@ export function acsUpgradeLabelKey(
   tier: string | undefined,
   interval: string | null | undefined,
 ): string | null {
-  const tr = tier || "free";
+  const tr = acsNormalizeTier(tier);
   if (tr === "unlimited") return null;
   if (tr === "pro" && interval === "annual") return null;
   if (tr === "free") return "acsChoosePlan";

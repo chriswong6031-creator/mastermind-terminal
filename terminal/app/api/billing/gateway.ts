@@ -22,7 +22,12 @@ export const BILLING_BASE =
 
 // Tiers the terminal is allowed to forward. The gateway re-validates, but bounding
 // here keeps garbage off the wire and returns a crisp 400 to the UI.
-export const VALID_TIERS = ["insider", "pro"] as const;
+//
+// `essential` is the billing authority's new name for the `insider` entitlement.
+// It is accepted (not translated) because the gateway will take BOTH names across
+// the rename — bouncing it here would 400 an Essential checkout the moment the
+// macro side starts emitting the new name.
+export const VALID_TIERS = ["insider", "essential", "pro"] as const;
 export const VALID_INTERVALS = ["monthly", "annual"] as const;
 export type ValidTier = (typeof VALID_TIERS)[number];
 export type ValidInterval = (typeof VALID_INTERVALS)[number];
