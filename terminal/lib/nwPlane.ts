@@ -25,6 +25,24 @@ export type MarketPlane = {
     rrp_buffer_state?: string;
     tga_bn?: number;
   };
+  // Dealer positioning (Market Structure Core §6). A CONDITIONING variable for the rest
+  // of this plane, not another signal beside it: "risk-on with dealers long gamma" and
+  // "risk-on with dealers short gamma below the flip" are different states with
+  // different realized-vol distributions. Display-only, like everything here.
+  options_structure?: {
+    root?: string | null;
+    index_regime?: "long_gamma" | "short_gamma" | "near_flip" | null;
+    regime_trend?: "strengthening" | "stable" | "weakening" | "unknown";
+    regime_velocity_1d?: number | null;
+    net_gex_bn?: number | null;
+    dist_to_flip_pct?: number | null;
+    /** 0..1 — how far the book's call and put gamma are from cancelling. */
+    sign_confidence?: number | null;
+    expiring_gamma_share_pct?: number | null;
+    opex_window?: boolean | null;
+    roots?: string[];
+    asof?: string | null;
+  };
   contradiction_count?: number;
   cortex?: { status?: string; degradation_reason?: string | null };
   stale?: boolean;
@@ -122,3 +140,19 @@ export function liqLabel(token: string | undefined, lang: "en" | "zh"): string {
   const hit = lang === "zh" ? LIQ_ZH[k] : LIQ_EN[k];
   return hit ?? prettyToken(token);
 }
+
+// ─── Dealer gamma regime (Market Structure Core §6) ─────────────────────────────────
+//
+// The TYPE above is the whole Terminal-side surface of this integration, and that is
+// deliberate. §6 of the masterplan specified "add one chip to NeuralWebStrip" — but the
+// operator ordered that strip unmounted on 2026-07-12 ("internal-jargon at the glance
+// tier — get rid of it", commit 12d8c395), and it has been dead code since. Adding a
+// chip there would either render nothing or re-introduce a surface that was rejected.
+//
+// The substance of §6 lives on the producer side: engine/neuralweb/options_plane.py puts
+// the gamma regime into market_plane so the Neural Web's OWN reasoning can condition on
+// it — which is the integration that was asked for. The type is kept because /api/nw
+// still proxies this payload and a consumer should not have to guess its shape.
+//
+// If a glance-tier surface for this is ever wanted, it needs an operator decision about
+// WHERE, not a re-mount of the strip they deleted.
