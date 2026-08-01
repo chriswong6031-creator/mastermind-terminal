@@ -377,6 +377,29 @@ const GEX_LEX = {
     "The history strip needs at least two archived sessions to draw a trend.",
     "历史条形图需要至少两个已归档交易日才能绘制趋势。",
   ],
+
+  // ── Dated session replay (R0.10) — full-ladder date picker on the scrubber ──
+  // The scalar scrubber above gains a load path into options_hub/gex_history/{ROOT}/{DATE}:
+  // the FULL by-strike ladder exactly as the desk published it that session. Honesty: the
+  // history plane has accrual holes (sessions that were never published) — a missing date
+  // gets its own named state, never today's ladder wearing an archived label.
+  sessionPickerAria:  ["Archived session", "已归档交易日"],
+  sessionLive:        ["Latest (live)", "最新（当前）"],
+  archivedChip:       ["archived session · {date}", "已归档交易日 · {date}"],
+  backToLive:         ["Back to latest", "返回最新"],
+  loadFullLadder:     ["Load full ladder", "加载完整梯图"],
+  viewingSession:     ["viewing", "正在查看"],
+  archivedLoading:    ["Loading archived session…", "加载已归档交易日中…"],
+  archivedMissingTitle: ["No archived snapshot for {date}", "{date} 无已归档快照"],
+  archivedMissingWhy: [
+    "This session was never published to the ladder history plane — an archive gap, not a data error. Pick another date or return to the latest session.",
+    "该交易日的完整梯图未发布到历史层——属于归档缺口，并非数据错误。请选择其他日期或返回最新交易日。",
+  ],
+  archivedPaneTitle:  ["Archived session", "已归档交易日"],
+  archivedPaneNote:   [
+    "Market state and the EOD context belt describe the current session only — hidden while replaying an archived ladder.",
+    "市场状态与收盘背景条仅描述当前交易日——回放已归档梯图时予以隐藏。",
+  ],
 } as const;
 
 type GexDeskKey = keyof typeof GEX_LEX;

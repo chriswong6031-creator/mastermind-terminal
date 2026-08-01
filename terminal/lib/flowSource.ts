@@ -39,6 +39,7 @@ const FLOW_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_i
 const SURFACE_IDX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_idx_fixture.json");
 const SURFACE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_fixture.json");
 const SURFACE_DATES_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "surface_dates_fixture.json");
+const GEX_DATES_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gex_dates_fixture.json");
 // EOD context belt (OEU T-E) — settled-close artifacts mirrored from the macro estate.
 const DARKPOOL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "darkpool_fixture.json");
 const VOLREGIME_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "volregime_fixture.json");
@@ -56,6 +57,12 @@ export function isValidF(f: string): boolean {
   if (f.startsWith("ticker:") && f.length > 7) return true;
   if (f.startsWith("vol:") && f.length > 4) return true;
   if (f.startsWith("gex:") && f.length > 4) return true;
+  // Dated GEX-ladder history (R0.10): the sessions index + the per-date full ladder
+  // (options_hub/gex_history — WP-GEX-SNAPSHOTS, accruing since 2026-07-16). Distinct
+  // prefixes from `gex:` — the 4th char is `_`, not `:` — so neither form can be eaten
+  // by the live read (the surface_idx/surface_idx_at rule, one plane over).
+  if (f.startsWith("gex_dates:") && f.length > 10) return true;
+  if (f.startsWith("gex_at:") && f.split(":").length === 3 && f.length > 9) return true;
   if (f.startsWith("tctx:") && f.length > 5) return true;
   if (f.startsWith("gexstate:") && f.length > 9) return true;
   if (f.startsWith("matrix:") && f.length > 7) return true;
@@ -91,6 +98,13 @@ export function backendPath(f: string): string {
   if (f === "dte") return "/api/flow/dte";
   if (f.startsWith("ticker:")) return `/api/flow/ticker/${f.slice(7)}`;
   if (f.startsWith("vol:")) return `/api/hub/vol/${f.slice(4)}`;
+  // Dated GEX history first (surface convention): the prefixes are disjoint from `gex:`,
+  // but matching them ahead keeps that independent of prefix arithmetic.
+  if (f.startsWith("gex_dates:")) return `/api/hub/gex_history/${f.slice(10)}/dates`;
+  if (f.startsWith("gex_at:")) {
+    const [, root, date] = f.split(":");
+    return `/api/hub/gex_history/${root}/${date}`;
+  }
   if (f.startsWith("gex:")) return `/api/hub/gex/${f.slice(4)}`;
   if (f === "oi") return "/api/hub/oi";
   if (f === "hot") return "/api/hub/hot";
@@ -138,6 +152,14 @@ export function r2Key(f: string): string {
   if (f === "dte") return "live_flow/dte_tide_current.json";
   if (f.startsWith("ticker:")) return `live_flow/tickers/${f.slice(7)}.json`;
   if (f.startsWith("vol:")) return `options_hub/vol/${f.slice(4)}.json`;
+  // Dated GEX-ladder history on R2: options_hub/gex_history/{ROOT}/{DATE}.json (the full
+  // options_hub.gex/v1 payload, keyed by the payload's own asof) + the dates.json index
+  // the macro hub maintains beside it. Matched ahead of `gex:` per the surface convention.
+  if (f.startsWith("gex_dates:")) return `options_hub/gex_history/${f.slice(10)}/dates.json`;
+  if (f.startsWith("gex_at:")) {
+    const [, root, date] = f.split(":");
+    return `options_hub/gex_history/${root}/${date}.json`;
+  }
   if (f.startsWith("gex:")) return `options_hub/gex/${f.slice(4)}.json`;
   if (f === "oi") return "options_hub/oi_movers.json";
   if (f === "hot") return "options_hub/hot_contracts.json";
@@ -267,6 +289,32 @@ async function fixtureHasSession(root: string, date: string): Promise<boolean> {
   }
 }
 
+// ── Dated GEX-ladder fixture helpers (R0.10) ─────────────────────────────────
+//
+// Same doctrine as the surface family above: ONE canonical gex payload per root stands in
+// for every archived session, re-dated so the payload describes the requested date; a date
+// the gex sessions fixture does not list is refused with the honest empty {} — which is
+// exactly what a prod accrual hole (07-18/07-20 style 404) resolves to, so dev exercises
+// the missing-session state the UI must carry.
+
+const emptyGexDates = (root: string): Record<string, unknown> => ({
+  schema: "options_hub.gex_dates/v1",
+  root, dates: [], latest: null, count: 0, asof: "", source: "fixture-empty",
+});
+
+/** True when the GEX sessions fixture lists `date` for `root` (missing fixture → false). */
+async function gexFixtureHasSession(root: string, date: string): Promise<boolean> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  try {
+    const raw = await fs.readFile(GEX_DATES_FIXTURE_FILE, "utf8");
+    const all = JSON.parse(raw) as Record<string, { dates?: unknown }>;
+    const dates = all[root]?.dates;
+    return Array.isArray(dates) && dates.includes(date);
+  } catch {
+    return false;
+  }
+}
+
 export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
   if (f === "tide") {
     const raw = await fs.readFile(TIDE_FIXTURE_FILE, "utf8");
@@ -304,6 +352,43 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     const raw = await fs.readFile(GEX_FIXTURE_FILE, "utf8");
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     return all[root] ?? {};
+  }
+  // GEX sessions index (dated ladder replay) — keyed by ROOT. Unknown roots return an
+  // honest empty list; the desk then hides the session dropdown and keeps only the
+  // scrubber's explicit per-date probe.
+  if (f.startsWith("gex_dates:")) {
+    const root = f.slice(10).toUpperCase();
+    try {
+      const raw = await fs.readFile(GEX_DATES_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? emptyGexDates(root);
+    } catch {
+      return emptyGexDates(root);
+    }
+  }
+  // Archived full ladder for one session. The canonical gex payload stands in for every
+  // listed date, RE-DATED so asof describes the requested session, with history[] cut to
+  // the sessions that had settled by then (an archived snapshot cannot know its future).
+  // A date the sessions fixture doesn't list — including the deliberate accrual hole —
+  // returns {} : the same honest missing-session state a prod 404 produces.
+  if (f.startsWith("gex_at:")) {
+    const [, rootRaw, date] = f.split(":");
+    const root = (rootRaw ?? "").toUpperCase();
+    if (!(await gexFixtureHasSession(root, date ?? ""))) return {};
+    try {
+      const raw = await fs.readFile(GEX_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      const full = all[root];
+      if (!full) return {};
+      const history = Array.isArray(full.history)
+        ? (full.history as { date?: string }[]).filter(
+            (h) => typeof h?.date === "string" && h.date <= date,
+          )
+        : full.history;
+      return { ...full, asof: redate(full.asof, date), history };
+    } catch {
+      return {};
+    }
   }
   if (f === "oi" || f === "hot") {
     const raw = await fs.readFile(SCREENER_FIXTURE_FILE, "utf8");

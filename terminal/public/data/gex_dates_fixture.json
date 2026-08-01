@@ -1,0 +1,13 @@
+{
+  "_fixture": true,
+  "_note": "DEV FIXTURE for f=gex_dates:{ROOT} (dated GEX-ladder replay, R0.10). Shape pinned by the macro hub's dates-index writer beside options_hub/gex_history/{ROOT}/{DATE}.json: dates are YYYY-MM-DD sorted NEWEST FIRST, latest === dates[0], no retention fields (the EOD plane keeps every session). Vintage matches gex_fixture.json's SPY world: latest 2026-07-10 is that payload's own asof session, and the archived dates mirror its history[] rows EXCEPT 2026-07-07 — omitted on purpose as the accrual hole (prod holes: 2026-07-18 / 07-20), so dev can exercise the honest missing-session state via the scrubber's explicit probe of a session the index does not list.",
+  "SPY": {
+    "schema": "options_hub.gex_dates/v1",
+    "root": "SPY",
+    "dates": ["2026-07-10", "2026-07-09", "2026-07-08", "2026-07-06", "2026-07-02"],
+    "latest": "2026-07-10",
+    "count": 5,
+    "asof": "2026-07-10T20:15:00Z",
+    "source": "fixture"
+  }
+}

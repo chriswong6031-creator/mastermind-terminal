@@ -734,3 +734,53 @@ test("Golden Oracle shows the session a 3D signal became knowable", async ({ pag
     () => page.evaluate(() => (window as Window & { __oracleJumpTs?: string }).__oracleJumpTs),
   ).toBe("2026-07-24");
 });
+
+test("Exposure desk replays an archived session's full ladder at every supported width", async ({ page }, testInfo) => {
+  await page.goto("/options?tab=gex");
+
+  // Live desk up first: the ladder and the session dropdown (driven by the
+  // gex_history dates.json index — R0.10) are both on screen, no archived chip yet.
+  const picker = page.getByRole("combobox", { name: "Archived session" });
+  await expect(picker).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("group", { name: "Strike range" })).toBeVisible();
+  await expect(page.getByTestId("gex-archived-chip")).toHaveCount(0);
+
+  // Pick an archived session → that session's FULL ladder, labelled as archived.
+  await picker.selectOption("2026-07-02");
+  const chip = page.getByTestId("gex-archived-chip");
+  await expect(chip).toBeVisible();
+  await expect(chip).toContainText("archived session · 2026-07-02");
+  await expect(page.getByRole("group", { name: "Strike range" })).toBeVisible();
+  // The replay withdraws the current-session rail and says so, instead of leaving
+  // an empty column that reads as breakage.
+  await expect(page.getByText("Archived session", { exact: true })).toBeVisible();
+
+  // The scrubber probes a session the index does NOT list (2026-07-07 — the fixture's
+  // deliberate accrual hole, the prod 07-18/07-20 class): honest missing-session state,
+  // never a fabricated ladder.
+  const scrubber = page.locator('svg[role="slider"]');
+  await scrubber.focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await page.getByRole("button", { name: "Load full ladder" }).click();
+  await expect(chip).toContainText("archived session · 2026-07-07");
+  const missing = page.getByTestId("gex-archived-missing");
+  await expect(missing).toBeVisible();
+  await expect(missing).toContainText("No archived snapshot for 2026-07-07");
+
+  // Back to the live session: chip gone, live ladder back.
+  await page.getByRole("button", { name: "Back to latest" }).first().click();
+  await expect(page.getByTestId("gex-archived-chip")).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Strike range" })).toBeVisible();
+
+  const overflow = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+  }));
+  expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-gex-archived-session.png`),
+    fullPage: false,
+  });
+});

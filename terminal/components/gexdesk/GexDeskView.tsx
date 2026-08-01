@@ -50,6 +50,7 @@ import { MarketStateCard } from "./MarketStateCard";
 import type { GexStatePayload } from "./MarketStateCard";
 import { GexGuide } from "./GexGuide";
 import { EodContextBelt } from "@/components/eodcontext/EodContextBelt";
+import { isGexDates, gexSessionOf } from "@/lib/gexSessions";
 import {
   LENS_ALL,
   matrixExpiryCoverage,
@@ -175,6 +176,20 @@ export function GexDeskView() {
   // what makes the lens real. Best-effort: it exists only for some roots (and can run a
   // different session than the gex payload) — absent → the lens reports itself unavailable.
   const [matrix, setMatrix] = useState<GexMatrix | null>(null);
+  // ── Dated session replay (R0.10) ──────────────────────────────────────────
+  // sessionDates = the gex_history dates.json index (null = absent/invalid → no dropdown;
+  // the scrubber's explicit per-date probe still works — the index is an enumeration aid,
+  // not a gate). sessionDate = the archived session being replayed (null = live).
+  const [sessionDates, setSessionDates] = useState<string[] | null>(null);
+  const [sessionDate, setSessionDate] = useState<string | null>(null);
+  const [archivedPayload, setArchivedPayload] = useState<GexPayload | null>(null);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  // True when the picked session has no published snapshot (accrual hole / pre-plane
+  // date): its own named empty state, never today's ladder wearing an archived label.
+  const [archivedMissing, setArchivedMissing] = useState(false);
+  const sessionReqRef = useRef(0);
+  // One retry of the dates-index fetch per ticker (see the payload-arrival effect below).
+  const datesRetryRef = useRef(false);
 
   // GEX payload now arrives over the SSE live spine (push) instead of a 60s poll;
   // the hook falls back to flowGet polling if SSE is unavailable, so this is never
@@ -215,12 +230,57 @@ export function GexDeskView() {
     setMatrix(Array.isArray(data?.cells) ? data : null);
   }, []);
 
+  // Sessions index for the dated-ladder plane. Validated (isGexDates) before it drives
+  // the dropdown: a malformed index degrades to no-dropdown, never a coerced list.
+  const fetchSessionDates = useCallback(async (root: string) => {
+    const data = await safeFetch<Record<string, unknown>>(`/api/flow?f=gex_dates:${root}`);
+    setSessionDates(data && isGexDates(data) && data.dates.length > 0 ? data.dates : null);
+  }, []);
+
+  // Load one archived session's FULL ladder — or return to live (date = null). The
+  // request counter drops stale responses: a slow probe must not clobber a newer pick
+  // (or a return-to-live) that resolved first.
+  const loadSession = useCallback(
+    (date: string | null) => {
+      const req = ++sessionReqRef.current;
+      if (!date) {
+        setSessionDate(null);
+        setArchivedPayload(null);
+        setArchivedMissing(false);
+        setArchivedLoading(false);
+        return;
+      }
+      setSessionDate(date);
+      setArchivedLoading(true);
+      setArchivedMissing(false);
+      setArchivedPayload(null);
+      void (async () => {
+        const data = await safeFetch<GexPayload>(`/api/flow?f=gex_at:${ticker}:${date}`);
+        if (sessionReqRef.current !== req) return;
+        const ok = !!data && Array.isArray(data.by_strike) && data.by_strike.length > 0;
+        setArchivedPayload(ok ? data : null);
+        setArchivedMissing(!ok);
+        setArchivedLoading(false);
+      })();
+    },
+    [ticker]
+  );
+
   useEffect(() => {
     setStatePayload(null);
     setLens(LENS_ALL);
     setMatrix(null);
+    // Ticker change always lands on the LIVE session; invalidate in-flight probes.
+    sessionReqRef.current++;
+    datesRetryRef.current = false;
+    setSessionDates(null);
+    setSessionDate(null);
+    setArchivedPayload(null);
+    setArchivedMissing(false);
+    setArchivedLoading(false);
     void fetchGexState(ticker);
     void fetchMatrix(ticker);
+    void fetchSessionDates(ticker);
 
     pollRef.current = setInterval(() => void fetchGexState(ticker), GEX_POLL_MS);
 
@@ -236,6 +296,18 @@ export function GexDeskView() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticker]);
+
+  // The dates-index fetch is one-shot on mount and a cold server can lose that race
+  // (mount-fetch race — the same class the manifest/intel fetch documents). Once the
+  // live payload proves the desk's data path is up, give the index exactly one more
+  // chance per ticker; a root with no index still resolves to null and stays quiet.
+  useEffect(() => {
+    if (gexPayload && sessionDates === null && !datesRetryRef.current) {
+      datesRetryRef.current = true;
+      void fetchSessionDates(ticker);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gexPayload, sessionDates]);
 
   // ── Input handlers ────────────────────────────────────────────────────────────
 
@@ -256,23 +328,30 @@ export function GexDeskView() {
 
   // ── Derived values ────────────────────────────────────────────────────────────
 
-  const spot = gexPayload?.spot_ref ?? null;
-  const asof = gexPayload?.asof ?? null;
+  // The payload every exposure surface below reads: the archived session's full ladder
+  // while replaying, the live spine otherwise. The scrubber strip alone stays pinned to
+  // the LIVE payload (it is the navigation, and an archived payload's history is cut to
+  // that session's past by construction).
+  const isArchived = sessionDate != null;
+  const activePayload = isArchived ? archivedPayload : gexPayload;
+
+  const spot = activePayload?.spot_ref ?? null;
+  const asof = activePayload?.asof ?? null;
 
   const isIndex = isIndexProduct(ticker);
 
   // Guard a nonsense gamma_flip: the builder's zero-crossing detection sometimes
   // returns a strike far from spot (e.g. 285 vs spot 748). If the flip is outside
   // ±20% of spot it isn't a real dealer flip — drop it rather than draw a bogus line.
-  const rawFlip = gexPayload?.gamma_flip ?? null;
+  const rawFlip = activePayload?.gamma_flip ?? null;
   const gammaFlip = rawFlip != null && spot != null && spot > 0 && Math.abs(rawFlip - spot) / spot <= 0.20
     ? rawFlip
     : null;
   const levels = {
-    callWall: gexPayload?.call_wall ?? null,
-    putWall: gexPayload?.put_wall ?? null,
+    callWall: activePayload?.call_wall ?? null,
+    putWall: activePayload?.put_wall ?? null,
     gammaFlip,
-    hvl: gexPayload?.hvl ?? null,
+    hvl: activePayload?.hvl ?? null,
   };
 
   // ── Expiry lens plumbing ─────────────────────────────────────────────────────
@@ -291,8 +370,8 @@ export function GexDeskView() {
   );
 
   const ladderStrikes = useMemo(
-    () => (gexPayload?.by_strike ?? []).map((s) => s.strike),
-    [gexPayload?.by_strike]
+    () => (activePayload?.by_strike ?? []).map((s) => s.strike),
+    [activePayload?.by_strike]
   );
 
   // Honesty gate: the matrix and the gex payload disagree on which session they describe
@@ -437,6 +516,16 @@ export function GexDeskView() {
           {greek !== "gamma" && (
             <span style={LENS_NOTE}>{t("greekLensNote")}</span>
           )}
+          {/* Archived-session chip (R0.10): the one label that says the whole desk below
+              is replaying a settled session, with the way back beside it. */}
+          {isArchived && (
+            <span style={ARCHIVED_CHIP} data-testid="gex-archived-chip">
+              {t("archivedChip").replace("{date}", sessionDate ?? "")}
+              <button style={ARCHIVED_BACK} onClick={() => loadSession(null)}>
+                {t("backToLive")}
+              </button>
+            </span>
+          )}
           {asofStr && (
             <span style={asofStale ? { ...ASOF_BADGE, color: "var(--warn)" } : ASOF_BADGE}>
               {t("asOf")} {asofStr}
@@ -455,20 +544,33 @@ export function GexDeskView() {
       </div>
 
       {/* ── Summary bar ──────────────────────────────────────────────────── */}
+      {/* Withdrawn in the missing-session state: the bar's only null-payload render is a
+          "Loading…" skeleton, and nothing is loading — the ladder region names the gap. */}
+      {!(isArchived && archivedMissing) && (
       <GexSummaryBar
-        payload={gexPayload}
-        callOI={(statePayload as unknown as Record<string, number | null | undefined>)?.call_oi ?? null}
-        putOI={(statePayload as unknown as Record<string, number | null | undefined>)?.put_oi ?? null}
+        payload={activePayload}
+        /* gexstate OI describes the CURRENT session — never dress an archived bar in it. */
+        callOI={isArchived ? null : (statePayload as unknown as Record<string, number | null | undefined>)?.call_oi ?? null}
+        putOI={isArchived ? null : (statePayload as unknown as Record<string, number | null | undefined>)?.put_oi ?? null}
         lens={lens}
         lensNetMn={lensValues.cellCount > 0 ? lensValues.totalMn : null}
         lensCoveredStrikes={lensCoveredStrikeCount}
         lensTotalStrikes={ladderStrikes.length}
         lang={lang}
       />
+      )}
 
-      {/* ── GEX history strip — net-GEX trend over recent sessions, from the EOD
-             surface we already own (first slice of historical playback) ────── */}
-      <GexHistory history={gexPayload?.history} lang={lang} />
+      {/* ── GEX history strip — the session scrubber, now also the date picker for the
+             dated-ladder plane (R0.10). Deliberately reads the LIVE payload's history in
+             both modes: it is the navigation surface, not part of the replay. ────── */}
+      <GexHistory
+        history={gexPayload?.history}
+        lang={lang}
+        sessionDates={sessionDates}
+        activeSession={sessionDate}
+        liveDate={gexSessionOf(gexPayload?.asof)}
+        onLoadSession={loadSession}
+      />
 
       {/* ── EOD context belt (OEU T-E) ───────────────────────────────────────
           Settled-close structure + off-exchange positioning for the SAME root, sitting
@@ -476,12 +578,17 @@ export function GexDeskView() {
           than the bar above it (gex_state, options_hub/moves, options_hub/vol) and stamps
           every value with that store's own session, so the cadence boundary between the
           desk's live spine and macro's nightly close is visible rather than assumed. */}
-      <EodContextBelt
-        root={ticker}
-        gexState={statePayload}
-        gex={gexPayload}
-        lang={lang}
-      />
+      {/* Hidden during replay: every belt store (gex_state, moves, vol) is a CURRENT-
+          session read with no dated twin — an archived ladder wearing today's context
+          would be the exact cross-session adjacency the belt exists to prevent. */}
+      {!isArchived && (
+        <EodContextBelt
+          root={ticker}
+          gexState={statePayload}
+          gex={gexPayload}
+          lang={lang}
+        />
+      )}
 
       {/* ── Body (two-pane) ──────────────────────────────────────────────── */}
       <div style={BODY_ROW}>
@@ -513,9 +620,21 @@ export function GexDeskView() {
               overflow, so the drawer below can expand without pushing anything out of the
               desk (and, crucially, without changing the RIGHT column's height at all). */}
           <div style={LADDER_REGION}>
-            {loading && !gexPayload ? (
+            {isArchived && archivedLoading ? (
+              <div style={LADDER_LOADING}>{t("archivedLoading")}</div>
+            ) : isArchived && archivedMissing ? (
+              /* Honest missing-session state: the picked date has no published snapshot
+                 (accrual hole / pre-plane session). Named as an archive gap — never the
+                 live ladder wearing an archived label, never a fabricated one. */
+              <div style={LADDER_EMPTY} data-testid="gex-archived-missing">
+                <div style={LADDER_EMPTY_TITLE}>
+                  {t("archivedMissingTitle").replace("{date}", sessionDate ?? "")}
+                </div>
+                <div style={LADDER_EMPTY_WHY}>{t("archivedMissingWhy")}</div>
+              </div>
+            ) : loading && !activePayload && !isArchived ? (
               <div style={LADDER_LOADING}>{t("loadingGex")}</div>
-            ) : error && !gexPayload ? (
+            ) : error && !gexPayload && !isArchived ? (
               /* Honest empty: the nightly options build re-pulls index anchors first, so a
                  missing single name is a COVERAGE gap, not a broken desk. Name which one it
                  is instead of leaving a bare "could not load". */
@@ -527,11 +646,11 @@ export function GexDeskView() {
               </div>
             ) : view === "strike" ? (
               <StrikeLadder
-                strikes={gexPayload?.by_strike ?? []}
+                strikes={activePayload?.by_strike ?? []}
                 spot={spot}
                 levels={ladderLevels}
                 greek={greek}
-                byExpiry={gexPayload?.by_expiry ?? null}
+                byExpiry={activePayload?.by_expiry ?? null}
                 lens={lens}
                 onLens={setLens}
                 lensValues={lensValues}
@@ -539,12 +658,12 @@ export function GexDeskView() {
                 asOf={asof}
                 matrixAsOf={matrix?.asof ?? null}
                 lang={lang}
-                netGexBn={gexPayload?.net_gex_bn ?? null}
+                netGexBn={activePayload?.net_gex_bn ?? null}
                 matrixCells={matrixCells}
               />
             ) : (
               <ExpiryBars
-                byExpiry={gexPayload?.by_expiry ?? null}
+                byExpiry={activePayload?.by_expiry ?? null}
                 greek={greek}
                 asOf={asof}
                 lang={lang}
@@ -564,9 +683,9 @@ export function GexDeskView() {
               column's height never changes. */}
           <div style={XDRAWER_SLOT}>
             <ExposureExpiryDrawer
-              byExpiry={gexPayload?.by_expiry ?? null}
+              byExpiry={activePayload?.by_expiry ?? null}
               greek={greek}
-              asOf={gexPayload?.asof ?? null}
+              asOf={activePayload?.asof ?? null}
               lang={lang}
             />
           </div>
@@ -575,13 +694,33 @@ export function GexDeskView() {
         {/* ── Right pane: Market state ──────────────────────────────────────
             An independent min-height:0 / overflow-y:auto region (see CARD_OUTER in
             MarketStateCard) — it derives its scroll geometry from BODY_ROW's height alone,
-            never from what the left column is doing. */}
-        <MarketStateCard
-          statePayload={statePayload}
-          gexPayload={gexPayload}
-          isIndexProduct={isIndex}
-          lang={lang}
-        />
+            never from what the left column is doing. During replay the state card (a
+            current-session read, like the belt) is withdrawn and REPLACED by a card that
+            says so — an empty rail would read as breakage, not honesty. */}
+        {isArchived ? (
+          <div className="obs-card" style={ARCHIVED_PANE}>
+            <div className="obs-card-hd" style={{ padding: "10px 14px 0" }}>
+              <span className="obs-lbl">{t("archivedPaneTitle")}</span>
+            </div>
+            <div style={ARCHIVED_PANE_BODY}>
+              <span style={ARCHIVED_PANE_DATE}>{sessionDate}</span>
+              <span style={ARCHIVED_PANE_NOTE}>{t("archivedPaneNote")}</span>
+              <button
+                style={{ ...ARCHIVED_BACK, alignSelf: "flex-start", marginLeft: 0 }}
+                onClick={() => loadSession(null)}
+              >
+                {t("backToLive")}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <MarketStateCard
+            statePayload={statePayload}
+            gexPayload={gexPayload}
+            isIndexProduct={isIndex}
+            lang={lang}
+          />
+        )}
       </div>
     </div>
   );
@@ -694,6 +833,74 @@ const ASOF_BADGE: React.CSSProperties = {
   fontSize: 10,
   color: "var(--muted)",
   fontVariantNumeric: "tabular-nums",
+};
+
+/* ── Dated session replay (R0.10) ─────────────────────────────────────────────
+   The chip is warn-toned: replay is a mode the user must not forget they are in — the
+   same register as the asof staleness chip, because it states the same fact (this desk
+   describes a settled past session, not now). */
+const ARCHIVED_CHIP: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 7,
+  height: 24,
+  padding: "0 4px 0 9px",
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  color: "var(--warn)",
+  border: "1px solid var(--warn)",
+  borderRadius: "var(--r-md)",
+  fontVariantNumeric: "tabular-nums",
+  whiteSpace: "nowrap",
+};
+
+const ARCHIVED_BACK: React.CSSProperties = {
+  height: 18,
+  padding: "0 7px",
+  fontSize: 9.5,
+  fontWeight: 700,
+  letterSpacing: "0.03em",
+  background: "var(--inset)",
+  color: "var(--text-2)",
+  border: "1px solid var(--line)",
+  borderRadius: 5,
+  cursor: "pointer",
+};
+
+/* Mirrors MarketStateCard's CARD_OUTER geometry so swapping the rail's content during
+   replay never re-flows the two-pane row. */
+const ARCHIVED_PANE: React.CSSProperties = {
+  borderLeft: "1px solid var(--hairline)",
+  borderRadius: 0,
+  display: "flex",
+  flexDirection: "column",
+  minWidth: 0,
+  width: 360,
+  maxWidth: "100%",
+  flexShrink: 0,
+  minHeight: 0,
+  overflowY: "auto",
+};
+
+const ARCHIVED_PANE_BODY: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  padding: "12px 14px",
+};
+
+const ARCHIVED_PANE_DATE: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 700,
+  color: "var(--warn)",
+  fontVariantNumeric: "tabular-nums",
+};
+
+const ARCHIVED_PANE_NOTE: React.CSSProperties = {
+  fontSize: 11,
+  color: "var(--muted)",
+  lineHeight: 1.55,
 };
 
 const LOADING_BADGE: React.CSSProperties = {
