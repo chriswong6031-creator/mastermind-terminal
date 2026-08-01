@@ -4844,13 +4844,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // web terminal shows at rest. Writes into the existing .status-ohlc <b> nodes via textContent —
     // a paintStatus() re-render would rebuild the identity <img> and flicker the logo on every
     // crosshair frame. Shell-only: `.is-scrub` never appears on web.
+    // Crosshair events also fire from programmatic sources (pane sync, setCrosshairPosition),
+    // which carry a valid time with no pointer anywhere near the chart — in headless CI that
+    // latched `.is-scrub` at rest on every viewport. Scrub is a POINTER verb: gate it on a
+    // real pointer being over the chart, tracked on the wrap itself.
+    let scrubPointerLive = false;
+    const onScrubEnter = () => { scrubPointerLive = true; };
+    const onScrubLeave = () => {
+      scrubPointerLive = false;
+      statusRef.current?.closest(".statusline")?.classList.remove("is-scrub");
+    };
     const scrubStatus = (p: any) => {
       const st = statusRef.current; if (!st) return;
       // statusRef is the Row-A/Row-B <span> INSIDE .statusline; the D-block rules key off
       // .statusline, so the flag belongs on the wrapper.
       const line = st.closest(".statusline"); if (!line) return;
       const tm = p?.time ?? null;
-      const on = tm != null;
+      const on = tm != null && scrubPointerLive;
       if (on) {
         const idx = barIdxMap().get(tm as any) ?? barIdxMap().get(String(tm));
         const bar = idx != null ? barsRef.current[idx] : undefined;
@@ -4866,7 +4876,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     window.addEventListener("pointerup", onProjectionPointerEnd);
     window.addEventListener("pointercancel", onProjectionPointerEnd);
     chart.subscribeCrosshairMove(onCrosshairProjection);
-    if (shellAxis()) chart.subscribeCrosshairMove(scrubStatus);
+    if (shellAxis()) {
+      wrap.addEventListener("pointerenter", onScrubEnter);
+      wrap.addEventListener("pointerleave", onScrubLeave);
+      wrap.addEventListener("pointercancel", onScrubLeave);
+      chart.subscribeCrosshairMove(scrubStatus);
+    }
     renderSignals(); renderIndOverlays(); renderDraw();
 
     // ── pane geometry measurement → drives the legend/pane-menu overlay layer (ChartOverlays) ──
@@ -5850,7 +5865,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       window.removeEventListener("pointercancel", onProjectionPointerEnd);
       const wEl = wrapElRef.current;
       if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx);
-      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onProjectionPointerDown, true); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("pointerdown", onShiftMeasure, true); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); }
+      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onProjectionPointerDown, true); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("pointerdown", onShiftMeasure, true); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); wEl.removeEventListener("pointerenter", onScrubEnter); wEl.removeEventListener("pointerleave", onScrubLeave); wEl.removeEventListener("pointercancel", onScrubLeave); }
       mqlMobile?.removeEventListener("change", onMqlChange);
       paneRO?.disconnect(); paneRORef.current = null; wrapElRef.current = null;
       ro?.disconnect();
