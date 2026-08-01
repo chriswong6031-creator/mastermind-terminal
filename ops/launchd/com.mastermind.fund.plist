@@ -23,9 +23,12 @@
   stockdata build. NOTE: launchd uses local wall-clock — in winter (PST) 16:30 local is
   00:30 UTC; adjust to 15:30 if you want to hold 23:30 UTC year-round.
 
-  INSTALL (as the mac user — not root):
-    cp /Users/chriswong/fund-ops-wt/ops/launchd/com.mastermind.fund.plist ~/Library/LaunchAgents/
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mastermind.fund.plist
+  INSTALL OR REFRESH (as the mac user — not root):
+    /bin/bash /Users/chriswong/fund-ops-wt/ops/bootstrap_nightly_fund.sh --check
+    /bin/bash /Users/chriswong/fund-ops-wt/ops/bootstrap_nightly_fund.sh
+
+  INSTALL AND RUN ONCE NOW:
+    /bin/bash /Users/chriswong/fund-ops-wt/ops/bootstrap_nightly_fund.sh --run-now
 
   UNINSTALL:
     launchctl bootout gui/$(id -u)/com.mastermind.fund

@@ -1,4 +1,4 @@
-"""Collect earnings-call transcripts for US/ADR symbols via defeatbeta-api.
+"""Collect earnings-call transcripts for Terminal equity symbols via defeatbeta-api.
 
 MANDATORY pattern (BUILD-SPEC §2 D5):
   Download defeatbeta's full stock_earning_call_transcripts.parquet ONCE per run to a
@@ -7,7 +7,8 @@ MANDATORY pattern (BUILD-SPEC §2 D5):
 
 Output per symbol × fiscal quarter:
   terminal/public/data/tx/<SYM>/<YYYYQn>.json.gz  — gzipped JSON per §1.3 schema
-  Macro Dashboard/data/us_fund/_tx_index.json      — SYM → sorted [ids] for D-US emitter join
+  terminal/public/data/tx/<SYM>/index.json         — browser-facing ticker discovery
+  Macro Dashboard/data/us_fund/_tx_index.json      — legacy emitter join during migration
 
 ID format: defeatbeta's fiscal year + quarter labels, e.g. "2026Q3"
 Incremental: existing .gz files are skipped.
@@ -24,6 +25,7 @@ Flags:
   --only SYM[,SYM,...]  comma-separated symbols to process (overrides full universe)
   --quarters N          number of most-recent quarters per symbol (default 8)
   --limit N             cap the symbol universe (for testing)
+  --defer-index-publish write bodies only; the nightly lane validates/publishes later
 """
 from __future__ import annotations
 
@@ -44,7 +46,10 @@ from typing import Optional
 # Paths
 # ---------------------------------------------------------------------------
 CA_ROOT   = Path(__file__).resolve().parents[1]
-MACRO_DIR = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard")
+MACRO_DIR = Path(os.environ.get(
+    "MACRO_ROOT",
+    "/Users/chriswong/Documents/Cluade/Macro Dashboard",
+))
 DATA_DIR  = MACRO_DIR / "data"
 TX_CACHE  = DATA_DIR / "transcripts"
 US_FUND   = DATA_DIR / "us_fund"
@@ -114,13 +119,11 @@ def _need_download(refresh: bool = False) -> bool:
         return True
     if LOCAL_PARQUET.stat().st_size < MIN_PARQUET_BYTES:
         print(f"[warn] parquet too small ({LOCAL_PARQUET.stat().st_size} B) — re-downloading", flush=True)
-        LOCAL_PARQUET.unlink()
         return True
     age_days = (time.time() - LOCAL_PARQUET.stat().st_mtime) / 86400
     if refresh or age_days >= PARQUET_STALE_DAYS:
         why = "forced (--refresh-parquet)" if refresh else f"{age_days:.0f}d old ≥ {PARQUET_STALE_DAYS}d"
         print(f"[info] parquet stale ({why}) — re-downloading for new quarters", flush=True)
-        LOCAL_PARQUET.unlink()
         return True
     return False
 
@@ -128,6 +131,7 @@ def _need_download(refresh: bool = False) -> bool:
 def _download_parquet():
     TX_CACHE.mkdir(parents=True, exist_ok=True)
     tmp = LOCAL_PARQUET.with_suffix(".parquet.tmp")
+    tmp.unlink(missing_ok=True)
     print(f"[download] {PARQUET_URL}", flush=True)
     print(f"  → {LOCAL_PARQUET} (~2.1 GB, may take 3–5 min)", flush=True)
 
@@ -159,31 +163,81 @@ def _download_parquet():
             tmp.unlink()
         raise RuntimeError(f"download failed: {exc}") from exc
 
-    tmp.rename(LOCAL_PARQUET)
+    downloaded = tmp.stat().st_size
+    if downloaded < MIN_PARQUET_BYTES:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"download incomplete: {downloaded} bytes is below the "
+            f"{MIN_PARQUET_BYTES}-byte safety floor"
+        )
+    os.replace(tmp, LOCAL_PARQUET)
     print(f"[download] done: {LOCAL_PARQUET.stat().st_size // 1_000_000} MB", flush=True)
 
 
 # ---------------------------------------------------------------------------
 # Universe
 # ---------------------------------------------------------------------------
+_SAFE_CORPUS_SYMBOL_RE = re.compile(r"^[A-Z0-9.^-]+$")
+_EXCLUDED_MARKET_SUFFIXES = (".SS", ".SZ", ".HK", ".TO")
+
+
+def _eligible_corpus_symbol(raw: object) -> str | None:
+    """Normalize a path/query-safe corpus symbol outside separately owned lanes."""
+    if not isinstance(raw, str):
+        return None
+    sym = raw.strip().upper()
+    if (
+        not sym
+        or not _SAFE_CORPUS_SYMBOL_RE.fullmatch(sym)
+        or sym.endswith(_EXCLUDED_MARKET_SUFFIXES)
+        or "-USD" in sym
+    ):
+        return None
+    return sym
+
+
 def _load_universe() -> list[str]:
-    """All 'us' equity symbols from manifest, excluding .TO."""
-    if not MANIFEST.exists():
-        return []
-    with open(MANIFEST) as f:
-        mf = json.load(f)
-    syms: list[str] = []
-    rows = mf if isinstance(mf, list) else mf.get("symbols", {})
-    # manifest.symbols is a dict keyed by symbol; mkt carries exchange labels
-    # (NYSE/NASDAQ/SSE/…) or None — filter US/ADR by suffix, not by mkt.
-    items = rows.items() if isinstance(rows, dict) else ((r.get("sym", ""), r) for r in rows)
-    for sym, _row in items:
-        if not sym:
-            continue
-        if sym.endswith((".SS", ".SZ", ".HK", ".TO")) or "-USD" in sym:
-            continue
-        syms.append(sym)
-    return sorted(set(syms))
+    """Return the durable transcript corpus universe across all local sources.
+
+    The Terminal watchlist manifest is intentionally small (roughly 30 names in
+    the ops clone), so it cannot own corpus coverage.  Union it with the legacy
+    ``us_fund`` cache (which may also hold other supported global exchanges) and
+    the last-good transcript index: cache-only issuers need new calls, and
+    index-only issuers must remain eligible even before fundamentals heal.
+    """
+    candidates: set[object] = set()
+
+    if MANIFEST.exists():
+        try:
+            with open(MANIFEST) as handle:
+                manifest = json.load(handle)
+            rows = manifest if isinstance(manifest, list) else manifest.get("symbols", {})
+            items = (
+                rows.items()
+                if isinstance(rows, dict)
+                else ((row.get("sym", ""), row) for row in rows if isinstance(row, dict))
+            )
+            candidates.update(sym for sym, _row in items)
+        except Exception as exc:
+            print(f"[warn] could not read manifest universe: {exc}", flush=True)
+
+    if US_FUND.is_dir():
+        candidates.update(
+            path.stem
+            for path in US_FUND.glob("*.json")
+            if not path.name.startswith("_")
+        )
+
+    if TX_INDEX.exists():
+        try:
+            index = json.loads(TX_INDEX.read_text())
+            if not isinstance(index, dict):
+                raise ValueError("index must be an object")
+            candidates.update(index)
+        except Exception as exc:
+            print(f"[warn] could not read transcript-index universe: {exc}", flush=True)
+
+    return sorted({sym for raw in candidates if (sym := _eligible_corpus_symbol(raw))})
 
 
 # ---------------------------------------------------------------------------
@@ -305,27 +359,10 @@ def process_symbol(sym: str, parquet: str, quarters: int, duckdb_mod) -> tuple[i
     return written, ids_out
 
 
-def _update_tx_index(sym: str, ids: list[str]):
-    """Merge ids into _tx_index.json for sym (additive, sorted)."""
-    US_FUND.mkdir(parents=True, exist_ok=True)
-    idx: dict = {}
-    if TX_INDEX.exists():
-        try:
-            idx = json.loads(TX_INDEX.read_text())
-        except Exception:
-            idx = {}
-
-    existing = set(idx.get(sym, []))
-    existing.update(ids)
-    idx[sym] = sorted(existing)
-
-    TX_INDEX.write_text(json.dumps(idx, indent=2, sort_keys=True))
-
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(description="Collect earnings-call transcripts (defeatbeta-api)")
     ap.add_argument("--only",     default="",  help="comma-separated symbols (ZS,AAPL,…)")
     ap.add_argument("--quarters", type=int, default=8, help="most-recent quarters per symbol (default 8)")
@@ -333,6 +370,11 @@ def main():
     ap.add_argument("--refresh-parquet", action="store_true",
                     help="force re-download of the transcripts parquet (else re-downloads when "
                          f"absent, undersized, or ≥{PARQUET_STALE_DAYS} days old)")
+    ap.add_argument(
+        "--defer-index-publish",
+        action="store_true",
+        help="write transcript bodies only; validate and publish indexes in a later step",
+    )
     args = ap.parse_args()
 
     # Re-exec in the defeatbeta venv if not already there
@@ -348,12 +390,17 @@ def main():
 
     # Build universe
     if args.only:
-        universe = [s.strip().upper() for s in args.only.split(",") if s.strip()]
+        requested = [value for value in args.only.split(",") if value.strip()]
+        invalid = [value for value in requested if _eligible_corpus_symbol(value) is None]
+        if invalid:
+            print(f"[error] unsafe or unsupported --only symbol(s): {invalid}", flush=True)
+            return 2
+        universe = sorted({_eligible_corpus_symbol(value) for value in requested})
     else:
         universe = _load_universe()
         if not universe:
-            print("[warn] empty universe from manifest; use --only SYM,…", flush=True)
-            sys.exit(1)
+            print("[warn] empty universe from local sources; use --only SYM,…", flush=True)
+            return 1
 
     if args.limit and args.limit < len(universe):
         universe = universe[:args.limit]
@@ -384,11 +431,8 @@ def main():
             missing_syms.append(sym)
         else:
             if n_written > 0:
-                _update_tx_index(sym, ids)
                 total_written += n_written
             else:
-                # All already existed — still update index
-                _update_tx_index(sym, ids)
                 total_skipped += len(ids)
 
         if i % 50 == 0 or i == len(universe):
@@ -400,6 +444,34 @@ def main():
     if missing_syms and len(missing_syms) <= 20:
         print(f"  missing syms: {missing_syms}", flush=True)
 
+    if _stop:
+        print("[interrupt] indexes were not changed; retry the collection run", flush=True)
+        return 130
+
+    if args.defer_index_publish:
+        print("[index] deferred; bodies await validated publication", flush=True)
+        return 0
+
+    # Rebuild from the bodies that actually exist.  One atomic final write is
+    # faster and safer than rewriting a growing JSON map once per symbol, and a
+    # killed run leaves the prior last-good indexes intact.
+    try:
+        from build_transcript_index import write_transcript_indexes
+    except ImportError:  # module execution: python -m ingest.collect_transcripts
+        from ingest.build_transcript_index import write_transcript_indexes
+    US_FUND.mkdir(parents=True, exist_ok=True)
+    global_index, _legacy = write_transcript_indexes(
+        TX_OUT,
+        write_public=True,
+        legacy_out=TX_INDEX,
+    )
+    print(
+        f"[index] {global_index['body_count']} bodies across "
+        f"{global_index['symbol_count']} symbols",
+        flush=True,
+    )
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

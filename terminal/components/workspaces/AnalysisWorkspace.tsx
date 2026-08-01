@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import MegaPane, { type FinPage } from "@/components/fin/MegaPane";
+import MegaPane, { FIN_PAGES as FIN_PAGE_LIST, type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getBars, type Fund, type Bar } from "@/lib/fund";
 import { getJSON } from "@/lib/dataCache";
 import { useLang } from "@/lib/i18n";
@@ -35,14 +35,7 @@ import { useLang } from "@/lib/i18n";
  *    (`opts` is not fetched: MegaPane never reads it.)
  */
 
-// MegaPane's FIN_TABS list is module-private (not exported), so the valid-page
-// set is mirrored here — the same local-key-set idiom the sibling composers use
-// (DiscoverWorkspace `KEYS`, ResearchWorkspace `HUB_KEY`). Keep in sync with
-// MegaPane's FinPage union / FIN_TABS if a page is added.
-const FIN_PAGES = new Set<FinPage>([
-  "overview", "statements", "statistics", "dividends", "earnings",
-  "revenue", "seasonals", "forecast", "technicals", "insider", "lab",
-]);
+const FIN_PAGES = new Set<FinPage>(FIN_PAGE_LIST);
 const DEFAULT_SYMBOL = "NVDA";
 const DEFAULT_PAGE: FinPage = "overview";
 // Light live-quote refresh; matches the /api/quote snapshot cadence (TTL 5s). We

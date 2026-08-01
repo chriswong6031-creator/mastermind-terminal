@@ -21,7 +21,7 @@ import { intradayCapable } from "@/components/ChartPanel";
 import { classify } from "@/lib/intradaySources";
 import { DEFAULT_START_TF, TF_CANONICAL_ORDER, readStartTf, resolveStartTf } from "@/lib/startTf";
 import { useMarketPrefs } from "@/lib/useMarketPrefs";
-import { type FinPage } from "@/components/fin/MegaPane";
+import { FIN_PAGES, type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
 import { isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
@@ -262,7 +262,7 @@ function functionalSet(sym: string): Set<string> {
 }
 // valid ?pane= deep-link targets (the MegaPane pages; "analyst" is an alias for forecast).
 // "mastermind" was retired — its research read now lives in the OracleDash Research-Desk surface.
-const VALID_PANES = new Set(["overview", "statements", "statistics", "dividends", "earnings", "revenue", "forecast", "analyst", "technicals", "seasonals", "insider", "lab"]);
+const VALID_PANES = new Set<string>([...FIN_PAGES, "analyst"]);
 const normalizePane = (pane: string): FinPage => (pane === "analyst" ? "forecast" : pane) as FinPage;
 const load = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 
