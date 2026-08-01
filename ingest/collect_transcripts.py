@@ -77,8 +77,6 @@ def _handle_sigint(sig, frame):
     print("\n[interrupt] finishing current symbol then exiting …", flush=True)
     _stop = True
 
-signal.signal(signal.SIGINT, _handle_sigint)
-
 # ---------------------------------------------------------------------------
 # Venv bootstrap
 # ---------------------------------------------------------------------------
@@ -250,9 +248,13 @@ _ROLE_PATTERNS = [
     (r"(?i)\bchief financial\b",            "CFO"),
     (r"(?i)\bcfo\b",                        "CFO"),
     (r"(?i)\bchief operating\b",            "COO"),
+    (r"(?i)\bcoo\b",                        "COO"),
     (r"(?i)\bchief revenue\b",              "CRO"),
+    (r"(?i)\bcro\b",                        "CRO"),
     (r"(?i)\bchief technology\b",           "CTO"),
+    (r"(?i)\bcto\b",                        "CTO"),
     (r"(?i)\bchief product\b",              "CPO"),
+    (r"(?i)\bcpo\b",                        "CPO"),
     (r"(?i)\binvestor relations\b",         "IR"),
     (r"(?i)\bvice president.*investor\b",   "IR"),
     (r"(?i)\banalyst\b",                    "Analyst"),
@@ -260,16 +262,182 @@ _ROLE_PATTERNS = [
     (r"(?i)\bmanaging director\b",          "Managing Director"),
 ]
 
-def _infer_role(speaker: str, text: str) -> str:
-    """Best-effort role from speaker name + first ~300 chars of paragraph."""
-    # Speaker name takes precedence (most reliable)
-    if re.search(r"(?i)^operator$", speaker.strip()):
-        return "Operator"
-    snippet = speaker + " " + text[:250]
+_SELF_ROLE_CONTEXT_PATTERN = re.compile(
+    r"""(?ix)
+    (?:
+        \b(?:i\s+am|i'm)\s+(?:the\s+|an?\s+)?(?:acting\s+|interim\s+)?
+            (?:chief|ceo|cfo|coo|cro|cto|cpo|investor\s+relations|analyst|managing\s+director)\b
+      | \bi\s+(?:serve|served|have\s+served|will\s+serve|joined|am\s+joining)\s+as\b
+      | \bi\s+(?:will\s+be|am)\s+stepping\s+down\s+as\b
+      | \bi(?:'ll|\s+will)\s+be\s+(?:your|the)\b
+      | \bas\s+i\s+(?:take\s+on|step\s+into|transition\s+into)\b
+      | \bmy\s+(?:new\s+)?role\s+as\b
+      | ^\s*(?:serving|stepping|taking)\b(?=[^.!?]*\b(?:i|i'm|i've|me|my)\b)
+    )
+    """
+)
+
+
+def _matched_role(value: str) -> str:
     for pattern, role in _ROLE_PATTERNS:
-        if re.search(pattern, snippet):
+        if re.search(pattern, value):
             return role
     return ""
+
+
+def _role_occurrences(value: str) -> list[tuple[int, int, str]]:
+    matches: set[tuple[int, int, str]] = set()
+    for pattern, role in _ROLE_PATTERNS:
+        for match in re.finditer(pattern, value):
+            matches.add((match.start(), match.end(), role))
+    return sorted(matches)
+
+
+def _role_near_exact_name(speaker: str, sentence: str) -> str:
+    """Return only a title locally bound to the speaker's full label.
+
+    Introductory rosters frequently contain several executives.  The closest
+    role wins, but an intervening person/joining clause rejects the match.
+    """
+    normalized = " ".join(speaker.split())
+    if not normalized:
+        return ""
+    folded = sentence.casefold()
+    name_matches = list(re.finditer(
+        rf"(?<!\w){re.escape(normalized.casefold())}(?!\w)",
+        folded,
+    ))
+    if not name_matches:
+        return ""
+
+    candidates: list[tuple[int, int, str]] = []
+    for name_match in name_matches:
+        for role_start, role_end, role in _role_occurrences(sentence):
+            if role_end <= name_match.start():
+                gap = name_match.start() - role_end
+                between = sentence[role_end:name_match.start()]
+            elif role_start >= name_match.end():
+                gap = role_start - name_match.end()
+                between = sentence[name_match.end():role_start]
+            else:
+                gap = 0
+                between = ""
+            if gap > 64:
+                continue
+            if re.search(r"(?i)\b(?:joined|joining|with\s+me|followed|hand(?:ing)?\s+(?:it\s+)?to)\b", between):
+                continue
+            if ";" in between:
+                continue
+            proper_names = re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", between)
+            title_or_company_words = {
+                "chief", "executive", "financial", "officer", "senior", "vice",
+                "president", "director", "investor", "relations", "managing",
+                "interim", "company", "corporation", "corp", "inc", "limited", "group",
+            }
+            if any(
+                not ({token.casefold() for token in phrase.split()} & title_or_company_words)
+                for phrase in proper_names
+            ):
+                continue
+            candidates.append((gap, role_start, role))
+    return min(candidates)[2] if candidates else ""
+
+
+def _self_declared_role(sentence: str) -> str:
+    """Return a role captured by a direct first-person title statement."""
+    occurrences = _role_occurrences(sentence)
+    for anchor in _SELF_ROLE_CONTEXT_PATTERN.finditer(sentence):
+        candidates = [
+            (max(0, start - anchor.end()), start, role)
+            for start, end, role in occurrences
+            if end >= anchor.start() and start - anchor.end() <= 72
+        ]
+        if candidates:
+            return min(candidates)[2]
+    return ""
+
+def _infer_role(speaker: str, text: str) -> str:
+    """Conservative role inference from speaker-local evidence only.
+
+    Earnings-call introductions often name several other executives.  Searching
+    the whole paragraph therefore assigns those executives' titles to the person
+    currently speaking.  Accept a title only when it is embedded in the speaker
+    label or appears in a sentence that identifies the current speaker.
+    """
+    if re.search(r"(?i)^operator$", speaker.strip()):
+        return "Operator"
+
+    role = _matched_role(speaker)
+    if role:
+        return role
+
+    # Cap work without cutting the usual introductory sentence.  A role found
+    # later in a long paragraph is much more likely to describe someone else.
+    for sentence in re.split(r"(?<=[.!?])\s+|[\r\n]+", text[:1000]):
+        candidate = sentence.strip()
+        if not candidate:
+            continue
+        role = _role_near_exact_name(speaker, candidate)
+        if not role:
+            role = _self_declared_role(candidate)
+        if role:
+            return role
+    return ""
+
+
+def _infer_transcript_roles(segments: list[dict[str, str]]) -> list[str]:
+    """Infer one stable role per speaker from transcript-wide evidence.
+
+    A roster may name the CEO before that person speaks.  Resolve that adjacent
+    evidence once, then propagate it across the participant's turns so the UI
+    never oscillates between CEO, Operator, and blank for the same speaker.
+    """
+    roles_by_speaker: dict[str, str] = {}
+    speakers: dict[str, str] = {}
+    for segment in segments:
+        speaker = " ".join(segment.get("speaker", "").split())
+        if speaker:
+            speakers.setdefault(speaker.casefold(), speaker)
+
+    # Highest-confidence evidence: the label itself.
+    for key, speaker in speakers.items():
+        label_role = "Operator" if re.search(r"(?i)^operator$", speaker) else _matched_role(speaker)
+        if label_role:
+            roles_by_speaker[key] = label_role
+
+    # A participant almost always identifies a title on their first turn.  A
+    # single pass avoids repeatedly walking the transcript for every speaker.
+    first_turn_seen: set[str] = set()
+    for segment in segments:
+        key = " ".join(segment.get("speaker", "").split()).casefold()
+        if not key or key in roles_by_speaker or key in first_turn_seen:
+            continue
+        first_turn_seen.add(key)
+        role = _infer_role(speakers[key], segment.get("text", ""))
+        if role:
+            roles_by_speaker[key] = role
+
+    # Introductory rosters and handoffs: exact full name plus adjacent title.
+    # Search by sentence first so title regexes run only for participant names
+    # actually present, rather than for every speaker × sentence combination.
+    unresolved = set(speakers) - set(roles_by_speaker)
+    for segment in segments[:5]:
+        if not unresolved:
+            break
+        for sentence in re.split(r"(?<=[.!?])\s+|[\r\n]+", segment.get("text", "")[:2000]):
+            folded = sentence.casefold()
+            for key in tuple(unresolved):
+                if key not in folded:
+                    continue
+                role = _role_near_exact_name(speakers[key], sentence)
+                if role:
+                    roles_by_speaker[key] = role
+                    unresolved.remove(key)
+
+    return [
+        roles_by_speaker.get(" ".join(segment.get("speaker", "").split()).casefold(), "")
+        for segment in segments
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -333,9 +501,12 @@ def process_symbol(sym: str, parquet: str, quarters: int, duckdb_mod) -> tuple[i
 
                 segs.append({
                     "speaker": speaker,
-                    "role":    _infer_role(speaker, text) if speaker else "",
+                    "role":    "",
                     "text":    text,
                 })
+
+        for segment, role in zip(segs, _infer_transcript_roles(segs)):
+            segment["role"] = role
 
         payload = {
             "schema":   "mastermind.tx/v1",
@@ -363,6 +534,7 @@ def process_symbol(sym: str, parquet: str, quarters: int, duckdb_mod) -> tuple[i
 # Entry point
 # ---------------------------------------------------------------------------
 def main() -> int:
+    signal.signal(signal.SIGINT, _handle_sigint)
     ap = argparse.ArgumentParser(description="Collect earnings-call transcripts (defeatbeta-api)")
     ap.add_argument("--only",     default="",  help="comma-separated symbols (ZS,AAPL,…)")
     ap.add_argument("--quarters", type=int, default=8, help="most-recent quarters per symbol (default 8)")

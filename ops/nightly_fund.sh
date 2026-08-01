@@ -59,6 +59,7 @@ LOG="/tmp/mm_fund_refresh.log"
 DATA="$DEPLOY/terminal/public/data"
 TX_INDEX="$FUNDSRC/data/us_fund/_tx_index.json"
 TX_REFRESH_STAMP="$FUNDSRC/data/transcripts/.nightly_refresh_ok"
+TX_ROLE_REPAIR_STAMP="$FUNDSRC/data/transcripts/.role_inference_v2_ok"
 LOCK_DIR="/tmp/mm_fund_refresh.lock"
 ts(){ date "+%Y-%m-%dT%H:%M:%S%z"; }
 
@@ -125,22 +126,38 @@ if [ $? -ne 0 ]; then echo "[$(ts)] ABORT: panels/EV step failed — no deploy" 
 # parquet at most every 14 days and writes only missing bodies.  Indexes remain
 # untouched until the remote no-write scan and exact append-only gate below.
 export MACRO_ROOT="$FUNDSRC"
+TX_COLLECTED=0
+TX_REPAIR_NEEDED=0
 if [ ! -f "$TX_REFRESH_STAMP" ] || find "$TX_REFRESH_STAMP" -mtime +6 -print -quit | grep -q .; then
   if "$PY" "$DEPLOY/ingest/collect_transcripts.py" --quarters 8 --defer-index-publish >> "$LOG" 2>&1; then
-    # Bodies only: never let locally generated index files bypass the remote
-    # validation gate.  Stamp only after transfer succeeds so failure retries
-    # on the next nightly run instead of being suppressed for seven days.
-    if rsync -az --size-only \
+    TX_COLLECTED=1
+    TX_REPAIR_NEEDED=1
+  else
+    echo "[$(ts)] WARN: transcript refresh failed — stamp not advanced; scanning remote last-good" >> "$LOG"
+  fi
+fi
+if [ ! -f "$TX_ROLE_REPAIR_STAMP" ]; then TX_REPAIR_NEEDED=1; fi
+
+# Re-run the current conservative speaker-role classifier after new bodies or
+# whenever its versioned migration stamp is absent.  A source-download failure
+# must not block repair of the already-valid local archive.
+if [ "$TX_REPAIR_NEEDED" -eq 1 ]; then
+  if "$PY" "$DEPLOY/ingest/repair_transcript_roles.py" \
+    --tx-root "$DATA/tx" --write >> "$LOG" 2>&1; then
+    # Bodies only: never let locally generated indexes bypass the remote gate.
+    # Checksums are intentional: a CEO→CFO repair can retain the same gzip size.
+    if rsync -az --checksum \
       --include='*/' --include='*.json.gz' --exclude='*' \
       -e "ssh -i $KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=25" \
       "$DATA/tx/" "$VPS:$VPS_DATA/tx/" >> "$LOG" 2>&1; then
       mkdir -p "$(dirname "$TX_REFRESH_STAMP")"
-      touch "$TX_REFRESH_STAMP"
+      touch "$TX_ROLE_REPAIR_STAMP"
+      if [ "$TX_COLLECTED" -eq 1 ]; then touch "$TX_REFRESH_STAMP"; fi
     else
-      echo "[$(ts)] WARN: transcript body rsync failed — stamp not advanced; retry next run" >> "$LOG"
+      echo "[$(ts)] WARN: transcript body rsync failed — stamps not advanced; retry next run" >> "$LOG"
     fi
   else
-    echo "[$(ts)] WARN: transcript refresh failed — stamp not advanced; scanning remote last-good" >> "$LOG"
+    echo "[$(ts)] WARN: transcript role repair failed — no body rsync; retry next run" >> "$LOG"
   fi
 fi
 
