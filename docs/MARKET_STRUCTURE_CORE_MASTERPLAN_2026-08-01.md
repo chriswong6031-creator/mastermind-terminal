@@ -616,8 +616,22 @@ flip" are different states with different realized-vol distributions, and the Ne
 cannot tell them apart. Per the regime-dynamics law, the label never ships bare — level, trend and
 velocity ride together.
 
-Terminal side: extend `lib/nwPlane.ts` types and add one chip to `NeuralWebStrip`. A heavier feed
-gets its own entry in `/api/nw`'s `FEEDS` map rather than bloating `market_plane`.
+**Producer side — SHIPPED 2026-08-01** (macro #4199, `engine/neuralweb/options_plane.py`).
+278 bytes against the plane's ~2KB budget, fail-open, verified on real payloads.
+
+**Terminal side — CORRECTED. Do not add a chip to `NeuralWebStrip`.** This plan assumed
+that strip was live. It is not: the operator ordered it unmounted on 2026-07-12
+("internal-jargon at the glance tier — get rid of it", commit `12d8c395`) and it has been
+dead code since. A chip there would render nothing, or re-introduce a rejected surface.
+
+`lib/nwPlane.ts` carries the `options_structure` type — `/api/nw` still proxies the
+payload and a consumer should not have to guess its shape — and nothing more. **If a
+glance-tier surface for the gamma regime is wanted, it needs an operator decision about
+WHERE, not a re-mount of the strip they deleted.** The Positioning tab is the surface that
+exists today and it renders this material in full.
+
+A heavier feed still gets its own entry in `/api/nw`'s `FEEDS` map rather than bloating
+`market_plane`.
 
 ## 7. Prophet integration
 

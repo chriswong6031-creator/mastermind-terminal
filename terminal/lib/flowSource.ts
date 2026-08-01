@@ -23,6 +23,7 @@ const DTE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "dte_fixture
 const VOL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "vol_fixture.json");
 const GEX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gex_fixture.json");
 const AGG_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "agg_fixture.json");
+const QUAD_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "quad_fixture.json");
 const SCREENER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "screener_fixture.json");
 const CTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ctx_fixture.json");
 const LEADERS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_leaders_fixture.json");
@@ -72,6 +73,9 @@ export function isValidF(f: string): boolean {
   // Aggregate greek trend (Volland parity W2) — options_hub.aggtrend/v1, one row per
   // session back to 2017. Prefix is disjoint from every `gex*` form above.
   if (f.startsWith("agg:") && f.length > 4) return true;
+  // Cross-root positioning board (W3). A whole-file artifact, deliberately NOT under
+  // the `agg:` prefix — `agg:quad` would be a legal-looking read for a root named quad.
+  if (f === "quad") return true;
   // Dated GEX-ladder history (R0.10): the sessions index + the per-date full ladder
   // (options_hub/gex_history — WP-GEX-SNAPSHOTS, accruing since 2026-07-16). Distinct
   // prefixes from `gex:` — the 4th char is `_`, not `:` — so neither form can be eaten
@@ -122,6 +126,7 @@ export function backendPath(f: string): string {
   }
   if (f.startsWith("gex:")) return `/api/hub/gex/${f.slice(4)}`;
   if (f.startsWith("agg:")) return `/api/hub/aggtrend/${f.slice(4)}`;
+  if (f === "quad") return "/api/hub/quad";
   if (f === "oi") return "/api/hub/oi";
   if (f === "hot") return "/api/hub/hot";
   if (f === "meta") return "/api/flow/meta";
@@ -183,6 +188,7 @@ export function r2Key(f: string): string {
   }
   if (f.startsWith("gex:")) return `options_hub/gex/${f.slice(4)}.json`;
   if (f.startsWith("agg:")) return `options_hub/aggtrend/${f.slice(4)}.json`;
+  if (f === "quad") return "options_hub/quad.json";
   if (f === "oi") return "options_hub/oi_movers.json";
   if (f === "hot") return "options_hub/hot_contracts.json";
   if (f === "ctx") return "options_hub/context.json";
@@ -381,6 +387,14 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     const raw = await fs.readFile(GEX_FIXTURE_FILE, "utf8");
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     return all[root] ?? {};
+  }
+  if (f === "quad") {
+    try {
+      const raw = await fs.readFile(QUAD_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
   }
   // Aggregate greek trend, keyed by root. Same wrong-root refusal as gex:/vol: —
   // a nine-year positioning history under the wrong ticker's header would be read

@@ -43,7 +43,9 @@ import type { MarketStructure } from "@/lib/marketStructure";
 import { makeMscT, type MscKey } from "./mscStrings";
 import { HedgingByStrikeCard, TermStructureCard, DailyHedgingCard } from "./HedgingCards";
 import { AggTrendCard, SpotVolCard, ExtremesCard } from "./TrendCards";
+import { FloatingStrikeCard, QuadScreenerCard } from "./QuadCards";
 import type { AggTrendPayload } from "@/lib/aggTrend";
+import type { QuadPayload } from "@/lib/quadBoard";
 import type { GexMatrix } from "@/lib/gexLadder";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload } from "@/components/gexdesk/GexDeskView";
@@ -64,6 +66,14 @@ interface Props {
    * card reports itself unavailable rather than showing blanks when it is missing.
    */
   matrix?: GexMatrix | null;
+  /**
+   * `quad` — the cross-root positioning board (options_hub.quad/v1). One whole-file
+   * artifact shared by every root, so it is fetched once and the committed root is
+   * merely highlighted within it.
+   */
+  quad?: QuadPayload | null;
+  /** The committed root, so the screener can mark where the reader already is. */
+  root?: string;
   /**
    * Set once this surface gains dated replay (masterplan R2). The expected-move band is a
    * CURRENT-session read, so a caller replaying an archived ladder must pass `moves: null`
@@ -89,6 +99,8 @@ export function MarketStructureBody({
   moves,
   agg = null,
   matrix = null,
+  quad = null,
+  root = "",
   archived = false,
   lang,
 }: Props) {
@@ -176,6 +188,11 @@ export function MarketStructureBody({
           asof={gex?.asof ?? null}
           lang={lang}
         />
+        {/* Volland-parity W3. Floating strike is per-root and rides the gex payload;
+            the screener is one cross-root board and closes the tab by answering "and
+            where does this ticker sit among everything else". */}
+        <FloatingStrikeCard byDelta={gex?.by_delta ?? null} lang={lang} />
+        {quad?.rows?.length ? <QuadScreenerCard quad={quad} root={root} lang={lang} /> : null}
       </div>
     </div>
   );

@@ -88,6 +88,20 @@ export interface GexPayload {
     gamma_net: number;
     delta_net?: number;
   }[];
+  /**
+   * The same book indexed by CALL-EQUIVALENT delta rather than by strike (Volland
+   * parity W3). Bounds are 0..1; puts are folded onto the call axis upstream, so a
+   * −0.30 put appears in the 0.70 bucket. Optional: older payloads predate it.
+   */
+  by_delta?: {
+    lo: number;
+    hi: number;
+    gamma_net?: number | null;
+    delta_net?: number | null;
+    vanna_net?: number | null;
+    charm_net?: number | null;
+    n?: number | null;
+  }[];
   // Optional extended fields (may come from richer server payload)
   hvl?: number | null;
   magnet?: number | null;
