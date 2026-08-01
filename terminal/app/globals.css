@@ -5,6 +5,11 @@
   --bg:#0a0b0e; --panel:#0d0f13; --panel-2:#15171d; --panel-3:#1f222b; --inset:#08090c;
   --chart-bg:#131722;
   --line:#23262f; --line-2:#1a1d24; --line-3:#33373f; --grid:rgba(255,255,255,.04);
+  /* Chart-surface indirection (TV parity wave, D6). Defaults reproduce today EXACTLY —
+     --chart-axis-text == --muted and --chart-grid == --grid — so the web app is unchanged;
+     the native shell overrides them on <html> where ChartPanel.readTokens() can see them. */
+  --chart-axis-text:#717a8e;
+  --chart-grid:rgba(255,255,255,.04);
   --pane-sep:#39404d; --pane-sep-h:#626b80;   /* indicator sub-pane divider — visible enough to find the resize handle */
   --text:#d6dae3; --text-2:#9ba3b4; --muted:#717a8e; --text-dim:#4a5468;
   --up:#26c281; --down:#f0566b;
@@ -3383,3 +3388,197 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 @media (prefers-reduced-motion:reduce){
   .ds-dock *,.ds-flyout,.ds-flyout *,.ds-style,.ds-style *,.ds-favorites,.ds-favorites *,.draw-settings,.draw-settings *,.draw-bar,.draw-bar *,.drawing-media-picker,.drawing-media-picker *,.drawing-layer [data-drawing-id],.text-edit{animation:none!important;transition:none!important;scroll-behavior:auto!important}
 }
+
+/* ═══ TV chart-surface parity — native shell only (D1–D12) ═══════════════════
+   Every rule here is scoped to html[data-shell="app"] (set pre-paint by LOCALE_INIT
+   in app/layout.tsx when ?shell=app is present). The browser web app renders
+   byte-identically to before this block existed. Kept at the very END of the file so
+   source order backs up specificity against the ≤860px phone rules above.
+   Reference: docs/tv-parity — measured against TradingView iOS at 402pt / DPR 3.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── D6a — TV-measured up/down + axis/grid tokens. Sits AFTER html[data-updown="east"]
+   (globals.css:111) and carries the flipped variant, or CN/HK users lose red-up. ── */
+html[data-shell="app"]{
+  --up:#089981; --down:#f23645;
+  --buy:#089981; --sell:#f23645;
+  --up-rgb:8,153,129; --down-rgb:242,54,69;
+  --chart-axis-text:#b1b5be;
+  --chart-grid:rgba(255,255,255,.055);
+}
+html[data-shell="app"][data-updown="east"],
+html[data-shell="app"][data-red-up="true"]{
+  --up:#f23645; --down:#089981;
+  --buy:#f23645; --sell:#089981;
+  --up-rgb:242,54,69; --down-rgb:8,153,129;
+}
+/* canvas gradient — LWC's layout.background is transparent, so the CSS surface shows through */
+html[data-shell="app"] .pane{background:linear-gradient(180deg,#131722 0%,#181b26 100%)}
+
+/* ── D1 — no toolbar row: the surviving controls float on Row C of the canvas.
+   .workspace is position:relative (globals.css:1880), so the absolute box lands on the chart. ── */
+html[data-shell="app"]:not([data-tray]) .chart-tabs{
+  position:absolute; top:56px; right:0; left:auto; z-index:8;
+  height:28px; padding:0 10px 0 0; gap:6px;
+  background:transparent; border-bottom:0;
+  overflow:visible; pointer-events:none;
+}
+html[data-shell="app"]:not([data-tray]) .chart-tabs .ct{display:none}
+html[data-shell="app"]:not([data-tray]) .chart-tabs .tools{
+  margin-left:0; gap:6px; pointer-events:auto;
+}
+/* control pills: TV's translucent-over-canvas idiom, not a filled toolbar button */
+html[data-shell="app"] .chart-tabs .tbtn{
+  height:28px; min-height:28px; padding:0 9px; gap:5px;
+  border-radius:7px;
+  background:rgba(6,9,14,.5);
+  border:1px solid #3d3d3d;
+  color:#dbdbdb;
+  font:600 11.5px/1 var(--font-ui);
+  text-shadow:0 1px 3px rgba(0,0,0,.7);
+}
+html[data-shell="app"] .chart-tabs .tbtn svg{width:14px;height:14px;stroke-width:1.9}
+html[data-shell="app"] .chart-tabs .tbtn:hover,
+html[data-shell="app"] .chart-tabs .tbtn:active{background:rgba(6,9,14,.82);color:#fff}
+/* "Day" active state: keep the amber semantic, drop the extra border box */
+html[data-shell="app"] .chart-tabs .tbtn.dtm.on{
+  background:rgba(232,179,57,.20); border-color:rgba(232,179,57,.55); color:var(--signal);
+}
+/* the ▾ affordance on the chart-type button is noise at this size */
+html[data-shell="app"] .chart-tabs .tbtn>span{display:none}
+
+/* ── D2a — web-neutral default for the new status element (zero pixel change on web) ── */
+.status-last{display:none}
+
+/* ── D2b — shell: stack Row A over Row B; .mm chips ride to the right of Row B,
+   bottom-aligned, so the Row-C band below never moves when the oracle chip mounts. ── */
+html[data-shell="app"] .statusline{
+  align-items:flex-end; gap:8px; padding:8px 12px 0;
+  font-size:17px; max-width:100%;
+}
+html[data-shell="app"] .statusline>span:first-child{
+  flex:0 1 auto; min-width:0;
+  flex-direction:column; align-items:flex-start; gap:2px;
+}
+html[data-shell="app"] .status-identity{gap:8px; max-width:calc(100vw - 24px)}
+html[data-shell="app"] .status-symbol-logo{width:17px;height:17px;font-size:8px}
+html[data-shell="app"] .status-symbol-name{
+  font:500 17px/1.25 var(--font-ui); color:#b1b5be; letter-spacing:-.01em;
+}
+html[data-shell="app"] .status-market-dot{width:6px;height:6px}
+html[data-shell="app"] .status-values{gap:6px; font:700 17px/1.25 var(--font-num); font-variant-numeric:tabular-nums}
+/* Row B: OHLC / Vol / Day are scrub-only data on TV — suppressed at rest */
+html[data-shell="app"] .status-ohlc,
+html[data-shell="app"] .status-vol,
+html[data-shell="app"] .status-day{display:none}
+html[data-shell="app"] .status-last{display:inline; font:700 17px/1.25 var(--font-num); font-variant-numeric:tabular-nums}
+/* TV chart-tab exception (master spec §6 C1): price AND change use the up/down FILL hex here,
+   not the softer text token used on symbol-detail. */
+html[data-shell="app"] .statusline .status-last,
+html[data-shell="app"] .statusline .status-change.up{color:var(--up)}
+html[data-shell="app"] .statusline .status-change.down{color:var(--down)}
+html[data-shell="app"] .statusline .status-last{color:inherit}
+html[data-shell="app"] .status-values:has(.status-change.up) .status-last{color:var(--up)}
+html[data-shell="app"] .status-values:has(.status-change.down) .status-last{color:var(--down)}
+html[data-shell="app"] .statusline .status-change{margin-left:0; font-weight:700}
+/* oracle / replay / detail chips: quieter, aligned to Row B's baseline */
+html[data-shell="app"] .statusline .mm{font:600 9.5px/1 var(--font-ui); padding:3px 7px; flex:none}
+
+/* ── D3 — legend-count chip → TV's outlined ghost pill ── */
+html[data-shell="app"] .lg-collapse{
+  height:26px; min-width:42px; padding:0 10px; gap:6px;
+  border-radius:7px;
+  background:transparent; border:1px solid #3d3d3d;
+  color:#dbdbdb;
+}
+html[data-shell="app"] .lg-collapse:hover,
+html[data-shell="app"] .lg-collapse:active{background:rgba(6,9,14,.55); color:#fff}
+html[data-shell="app"] .lg-collapse svg{width:15px;height:15px;stroke-width:2.2}
+html[data-shell="app"] .lg-cnt{font:700 13px/1 var(--font-num); color:#dbdbdb; padding:0; font-variant-numeric:tabular-nums}
+/* Row C alignment: price-pane legend block drops below the new two-row header.
+   `.lg-block:first-child` matches EVERY pane's block (each is the first child of its own
+   wrapper div, ChartOverlays.tsx:177) — so target the price pane's wrapper explicitly.
+   ChartPanel pushes `__price__` first, so `>div:first-child` is the price pane. */
+html[data-shell="app"]:not([data-tray]) .chart-overlays>div:first-child .lg-block{padding-top:18px}
+html[data-shell="app"][data-tray="1"] .chart-overlays>div:first-child .lg-block{padding-top:0}
+
+/* ── D4 — legend rows → plateless TV overlay text.
+   the inline style attribute on .lg-row means !important is REQUIRED to kill the plate ── */
+html[data-shell="app"] .lg-row{
+  height:26px; padding:0; gap:8px;
+  background:transparent!important; border-color:transparent; border-radius:0;
+  max-width:calc(100vw - 96px);
+}
+html[data-shell="app"] .lg-name{
+  font:600 15px/1 var(--font-ui); color:#b1b5be; max-width:190px;
+  text-shadow:0 1px 3px rgba(0,0,0,.8);
+}
+html[data-shell="app"] .lg-row.is-hidden{opacity:1}
+html[data-shell="app"] .lg-row.is-hidden .lg-name{color:#575757; font-weight:600}
+html[data-shell="app"] .lg-row.is-hidden .lg-ic.eye{color:#dbdbdb}
+html[data-shell="app"] .lg-block{gap:0}
+/* armed (= TV "selected indicator") — the ONE state that keeps a surface */
+html[data-shell="app"] .lg-row.is-armed{
+  background:#0f0f0f!important; border:1px solid #1748cc; border-radius:8px;
+  padding:0 4px 0 9px; height:30px;
+}
+html[data-shell="app"] .lg-row.is-armed .lg-name{color:#dbdbdb; text-shadow:none}
+html[data-shell="app"] .lg-ic{width:26px;height:26px;color:#dbdbdb}
+html[data-shell="app"] .lg-ic svg,html[data-shell="app"] .lg-ic .lgsvg{width:18px;height:18px}
+
+/* ── D8 — bottom range row: hidden; the chart-settings gear (+ ETH chip) become a
+   floating bottom-right cluster over the right end of the time axis, TV's hexagon slot.
+   .chart-frame-bar lives inside .pane (position:relative; overflow:hidden). ── */
+html[data-shell="app"] .chart-frame-bar{
+  position:absolute; right:0; bottom:0; left:auto; z-index:7;
+  height:26px; padding:0 4px 0 8px; gap:6px;
+  background:transparent; border-top:0; pointer-events:none;
+}
+html[data-shell="app"] .cfb-left,
+html[data-shell="app"] .cfb-clock,
+html[data-shell="app"] .cfb-tz,
+html[data-shell="app"] .cfb-chip-adj{display:none}
+html[data-shell="app"] .cfb-right{gap:7px; pointer-events:auto}
+html[data-shell="app"] .cfb-chip{height:20px; padding:0 7px; font:700 10px/1 var(--font-num)}
+html[data-shell="app"] .cfb-gear{width:26px; height:26px; color:#b1b5be}
+html[data-shell="app"] .cfb-gear svg{width:15px; height:15px}
+
+/* ── D9 — last-price axis badge: single line.
+   `tagCd.style.display` is set inline by renderPriceTag → !important is required ── */
+html[data-shell="app"] .mm-ptag-cd{display:none!important}
+/* the `font:` shorthand is also set inline on these two (createElement + cssText), so — by the
+   same rule the spec states for .lg-row — !important is required for the size bump to land. */
+html[data-shell="app"] .mm-ptag-px{font:700 12px/1.25 var(--font-num)!important;font-variant-numeric:tabular-nums!important}
+html[data-shell="app"] .mm-ptag-sym{font:700 11px/1 var(--font-num)!important;font-variant-numeric:tabular-nums!important}
+
+/* ── D11 — tray mode (?tray=1, the embedded symbol-preview sheet).
+   One time control, zero duplicated identity, all controls reachable without scrolling. ── */
+html[data-shell="app"][data-tray="1"] .chart-tabs{
+  height:36px; padding:0 8px; gap:4px;
+  border-bottom:0; background:transparent; overflow-x:auto;
+}
+html[data-shell="app"][data-tray="1"] .chart-tabs .ct{display:none}
+html[data-shell="app"][data-tray="1"] .chart-tabs .tools{margin-left:auto; gap:4px}
+html[data-shell="app"][data-tray="1"] .tfbtn{
+  height:32px; min-height:32px; min-width:32px; padding:0 8px;
+  font:700 12.5px/1 var(--font-num); color:#8b90a0; font-variant-numeric:tabular-nums;
+}
+html[data-shell="app"][data-tray="1"] .tfbtn.on{color:#2962ff}
+html[data-shell="app"][data-tray="1"] .tfbtn-edit{min-width:30px; padding:0 6px}
+/* icon-only controls (font-size:0 collapses the text node; svg is sized by attribute) */
+html[data-shell="app"][data-tray="1"] .chart-tabs .tbtn{
+  width:32px; height:32px; min-height:32px; padding:0; gap:0;
+  font-size:0; justify-content:center;
+}
+html[data-shell="app"][data-tray="1"] .chart-tabs .tbtn svg{width:16px;height:16px}
+/* identity is the sheet header's job in tray mode */
+html[data-shell="app"][data-tray="1"] .statusline>span:first-child{display:none}
+html[data-shell="app"][data-tray="1"] .statusline{padding:6px 10px 0; gap:6px}
+
+/* ── D12 — housekeeping ── */
+/* one chart per shell surface — the split header can never be meaningful here */
+html[data-shell="app"] .pane-hd{display:none}
+/* the pane separator is a desktop drag affordance; at 402pt it reads as a stray divider */
+html[data-shell="app"]{--pane-sep:#232732; --pane-sep-h:#3d4250}
+/* no page bounce behind the canvas */
+html[data-shell="app"]{overscroll-behavior:none; background:#131722}

@@ -37,6 +37,11 @@ const LOCALE_INIT = `(function(){try{
   document.documentElement.setAttribute('data-updown',ud);
   var lg=localStorage.getItem('mm.lang'); if(lg!=='zh'&&lg!=='en') lg=/^zh/.test(L)?'zh':'en';
   document.documentElement.setAttribute('data-lang',lg);
+  var sp=new URLSearchParams(location.search);
+  if(sp.get('shell')==='app'){
+    document.documentElement.setAttribute('data-shell','app');
+    if(sp.get('tray')==='1') document.documentElement.setAttribute('data-tray','1');
+  }
 }catch(e){}})();`;
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
