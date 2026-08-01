@@ -11,15 +11,22 @@ import UIKit
 /// hairline above *and* below, both labels **17 pt Bold pure white** at rest (t-045 ink
 /// band 12.0 pt → 17 pt; the spec's original 26 pt was a misread of the enlarged mid-drag
 /// wheel centre, §2.19) with the previous/next wheel values ghosted above and below at
-/// ~40 % opacity and reduced scale — the "keep scrolling" affordance. Right cluster,
-/// left → right: pencil · magnet · `•••` (+ red dot) · vertical divider · undo ·
-/// fullscreen, all white stroke on a 28 pt target (§1.8).
+/// ~40 % opacity and reduced scale — the "keep scrolling" affordance.
 ///
-/// Magnet / undo are placeholder affordances: correctly-styled controls that acknowledge
-/// the touch and do nothing (snap and undo live in the chart renderer, which per
-/// `AGENTS.md` stays in `terminal/`). The pencil toggles the renderer's own drawing
-/// toolbar over the bridge (`setDrawTools`) — TV's verb, our engine's tools.
-/// `•••` presents the Analysis hub.
+/// **C25 structure** — the strip is now two blocks, not one row:
+/// `[ FIXED: symbol wheel · interval wheel ] [ fade ] [ SCROLLABLE icon cluster ]`.
+/// The wheels are anchored: they never move when the cluster is scrolled, and the cluster's
+/// leading edge dissolves under a 16 pt gradient so an icon scrolling out never crowds the
+/// interval label. Cluster order, left → right (TV): pencil · magnet · `•••` (+ red dot) ·
+/// 1 pt divider · undo · minimize · redo · share, on 28 pt targets at a 14 pt pitch.
+/// The cluster is wider than any phone on purpose — TV clips its own trailing icons the
+/// same way (§2.18 "fullscreen … clipped at right edge") — so it scrolls.
+///
+/// Magnet / undo / redo are placeholder affordances: correctly-styled controls that
+/// acknowledge the touch and do nothing (snap and drawing-undo live in the chart renderer,
+/// which per `AGENTS.md` stays in `terminal/`). The pencil toggles the renderer's own
+/// drawing toolbar over the bridge (`setDrawTools`); `•••` presents the Analysis hub;
+/// minimize collapses the app's bottom menu into the chart; share is real OS share.
 struct RollerStrip: View {
     /// §2.18: measured 739.3 → 791.0 pt.
     static let height: CGFloat = 51.7
@@ -27,6 +34,11 @@ struct RollerStrip: View {
     static let symbolLeading: CGFloat = 13.3
     static let symbolWidth: CGFloat = 83.4
     static let intervalWidth: CGFloat = 54
+    /// C25: the "faded cut off" between the fixed wheels and the scrolling cluster.
+    static let clusterFade: CGFloat = 16
+    /// §1.8 touch target, and the C25 pitch between them (the old 5 pt read as cramped).
+    static let iconTarget: CGFloat = 28
+    static let iconGap: CGFloat = 14
 
     let symbols: [String]
     let timeframes: [String]
@@ -42,12 +54,19 @@ struct RollerStrip: View {
     /// Pencil state + toggle: mirrors whether the web chart's drawing toolbar is shown.
     var drawActive: Bool = false
     var onDraw: () -> Void = {}
-    var onFullscreen: () -> Void = {}
+    /// The chart's live symbol — what the share sheet links to (the wheel index can lag a
+    /// programmatic symbol change by a frame; the bridge's value is the truth).
+    var shareSymbol: String = AppConfig.defaultSymbol
+    /// C25 minimize-rect: chrome-minimize state and its toggle. Replaces the old
+    /// full-screen button, whose only action was a "rotate the device" hint.
+    var chromeMinimized: Bool = false
+    var onToggleChrome: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 0) {
             // Symbol first, interval second — TV's order and their measured x-bands. The
-            // labels are the leading edge of the bar: nothing sits to their left.
+            // labels are the leading edge of the bar: nothing sits to their left, and
+            // nothing the cluster does can move them.
             WheelColumn(
                 items: symbols,
                 selection: $symbolIndex,
@@ -67,9 +86,7 @@ struct RollerStrip: View {
                 onCenterTap: nil
             )
 
-            Spacer(minLength: 0)
-
-            iconCluster
+            scrollingCluster
         }
         .frame(height: Self.height)
         .background(Theme.bg)
@@ -79,14 +96,42 @@ struct RollerStrip: View {
         .overlay(alignment: .bottom) { TVHairline.hair() }
     }
 
-    /// Sized so the whole strip still fits a 375 pt device without the trailing icon
-    /// clipping: 5 × 28 pt targets + 5 gaps + the divider = 180 pt against a 151 pt
-    /// left block.
+    /// The scrolling half of the bar. `GeometryReader` only supplies the viewport width, so
+    /// the cluster can be pushed to the trailing edge when it *does* fit (iPad, landscape)
+    /// while still overflowing — and scrolling — on every phone.
+    ///
+    /// The mask lives on the scroll container, never on the wheels: both are pure SwiftUI
+    /// now, but the wheels are the one thing that must not be composited into a fading
+    /// layer (that is what killed the `UIPickerView` build — see `WheelColumn`).
+    private var scrollingCluster: some View {
+        GeometryReader { geo in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    iconCluster
+                }
+                .frame(minWidth: geo.size.width, minHeight: Self.height)
+            }
+            .frame(width: geo.size.width, height: Self.height)
+            .mask(fadeMask)
+        }
+    }
+
+    /// ~16 pt of dissolve at the leading edge, hard-opaque everywhere after it.
+    private var fadeMask: some View {
+        HStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                .frame(width: Self.clusterFade)
+            Color.black
+        }
+    }
+
     private var iconCluster: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: Self.iconGap) {
             ToolbarIcon(
-                glyph: .symbol(drawActive ? "pencil.circle.fill" : "pencil"),
+                glyph: .symbol("pencil", size: 22, weight: .medium),
                 label: L10n.t("Draw", lang),
+                isActive: drawActive,
                 lang: lang,
                 action: onDraw
             )
@@ -99,7 +144,7 @@ struct RollerStrip: View {
                 lang: lang
             )
             ToolbarIcon(
-                glyph: .symbol("ellipsis"),
+                glyph: .symbol("ellipsis", size: 22, weight: .medium),
                 label: L10n.t("More", lang),
                 showsBadge: showsMoreBadge,
                 lang: lang,
@@ -109,42 +154,113 @@ struct RollerStrip: View {
             Rectangle()
                 .fill(Theme.line)
                 .frame(width: 1, height: 24)
-                .padding(.horizontal, 3)
                 .accessibilityHidden(true)
 
             ToolbarIcon(
-                glyph: .symbol("arrow.uturn.backward"),
+                glyph: .symbol("arrow.uturn.backward", size: 20, weight: .medium),
                 label: L10n.t("Undo", lang),
                 isPlaceholder: true,
                 lang: lang
             )
             ToolbarIcon(
-                glyph: .symbol("arrow.up.left.and.arrow.down.right"),
-                label: L10n.t("Full screen", lang),
+                glyph: .minimizeRect,
+                label: chromeMinimized
+                    ? L10n.t("Show menu bar", lang)
+                    : L10n.t("Hide menu bar", lang),
+                isActive: chromeMinimized,
                 lang: lang,
-                action: onFullscreen
+                action: onToggleChrome
             )
+            ToolbarIcon(
+                glyph: .symbol("arrow.uturn.forward", size: 20, weight: .medium),
+                label: L10n.t("Redo", lang),
+                isPlaceholder: true,
+                lang: lang
+            )
+
+            // Real OS share of the public chart link — no `shell=app`, so the recipient
+            // lands on the web terminal rather than a shell-mode page.
+            ShareLink(item: shareURL, subject: Text(shareSymbol)) {
+                ToolbarGlyphInk(glyph: .symbol("square.and.arrow.up", size: 20, weight: .medium))
+            }
+            .buttonStyle(ToolbarIconStyle())
+            .accessibilityLabel(L10n.t("Share", lang))
         }
-        .padding(.trailing, 8)
+        // Clears the fade zone, so the pencil reads at full ink at rest and only dissolves
+        // once the user actually scrolls the cluster under the wheels.
+        .padding(.leading, Self.clusterFade - 2)
+        .padding(.trailing, 12)
+    }
+
+    private var shareURL: URL {
+        var components = URLComponents(url: AppConfig.origin, resolvingAgainstBaseURL: false)!
+        components.path = "/terminal"
+        components.queryItems = [URLQueryItem(name: "symbol", value: shareSymbol)]
+        return components.url ?? AppConfig.origin
     }
 }
 
 // MARK: - toolbar icons
 
-/// §1.8: 28 pt target, white stroke, no fill, never tinted. Placeholders answer the touch
-/// with a soft impact and a press state, then do nothing — TV's structure without a lie
-/// about what the alpha ships.
-private struct ToolbarIcon: View {
-    enum Glyph {
-        case symbol(String)
-        /// §2.18 magnet/snap — no SF equivalent, so it ships as a vector (§1.8's rule for
-        /// TV marks that SF does not carry).
-        case magnet
+/// §1.8 + C25: white stroke, no fill, never tinted, on a 28 pt target. Ink weights are
+/// deliberately heavier than the pass-1 `.light` 20 pt: TV's marks are solid and confident,
+/// and at `.light` the pencil and the u-turn arrows read as sketches next to them.
+private enum ToolbarGlyph {
+    case symbol(String, size: CGFloat, weight: Font.Weight)
+    /// §2.18 magnet/snap — no SF equivalent, so it ships as a vector (§1.8's rule for TV
+    /// marks that SF does not carry).
+    case magnet
+    /// C25 minimize/expand — TV's rounded-rect outline that collapses the bottom menu.
+    case minimizeRect
+}
+
+/// The ink alone, with no gesture attached, so a `Button` and a `ShareLink` can both wear it.
+private struct ToolbarGlyphInk: View {
+    let glyph: ToolbarGlyph
+    var isActive = false
+    var showsBadge = false
+
+    var body: some View {
+        ink
+            .foregroundStyle(.white)
+            .frame(width: RollerStrip.iconTarget, height: RollerStrip.iconTarget)
+            // C21 one-notch rule: a raised plate on pure black is `pill`, and the glyph
+            // itself stays a bare white stroke in both states.
+            .background {
+                if isActive {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Theme.pill)
+                }
+            }
+            .tvBadgeDot(showsBadge)
+            .contentShape(Rectangle())
     }
 
-    let glyph: Glyph
+    @ViewBuilder
+    private var ink: some View {
+        switch glyph {
+        case let .symbol(name, size, weight):
+            Image(systemName: name)
+                .font(.system(size: size, weight: weight))
+        case .magnet:
+            MagnetSnapGlyph()
+                .stroke(style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+                .frame(width: 20, height: 13)
+        case .minimizeRect:
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.8, lineJoin: .round))
+                .frame(width: 20, height: 15)
+        }
+    }
+}
+
+/// Placeholders answer the touch with a soft impact and a press state, then do nothing —
+/// TV's structure without a lie about what the alpha ships.
+private struct ToolbarIcon: View {
+    let glyph: ToolbarGlyph
     let label: String
     var isPlaceholder = false
+    var isActive = false
     var showsBadge = false
     var lang = "en"
     var action: () -> Void = {}
@@ -156,39 +272,31 @@ private struct ToolbarIcon: View {
             }
             action()
         } label: {
-            ink
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .tvBadgeDot(showsBadge)
-                .contentShape(Rectangle())
+            ToolbarGlyphInk(glyph: glyph, isActive: isActive, showsBadge: showsBadge)
         }
         .buttonStyle(ToolbarIconStyle())
         .accessibilityLabel(label)
+        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityHint(isPlaceholder ? L10n.t("Not in this alpha", lang) : "")
-    }
-
-    @ViewBuilder
-    private var ink: some View {
-        switch glyph {
-        case .symbol(let name):
-            Image(systemName: name)
-                .font(.system(size: 20, weight: .light))
-        case .magnet:
-            // Matched to the neighbouring 20 pt `.light` SF glyphs: same ink height, same
-            // 1.6 pt stroke, round caps and joins.
-            MagnetSnapGlyph()
-                .stroke(style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
-                .frame(width: 19, height: 11)
-        }
     }
 }
 
-/// Two congruent chevrons offset on the diagonal: one pointing up in the lower-left
-/// overlapping one pointing down in the upper-right (§2.18, matched to the TV reference).
+/// Two congruent chevrons offset on the diagonal — the same shape twice, the second shifted
+/// right and up, drawn at 1.8 pt with round caps so it reads as solid as TV's mark (§2.18,
+/// C25: the pass-1 pair was thin, and its two halves were mirrored rather than congruent).
 private struct MagnetSnapGlyph: Shape {
+    /// Normalised half-extent of one chevron; the pair spans the full box.
+    private static let span: CGFloat = 0.72
+    private static let rise: CGFloat = 0.62
+
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        func chevron(_ points: [(CGFloat, CGFloat)]) {
+        func chevron(originX: CGFloat, originY: CGFloat) {
+            let points: [(CGFloat, CGFloat)] = [
+                (originX, originY + Self.rise),
+                (originX + Self.span / 2, originY),
+                (originX + Self.span, originY + Self.rise),
+            ]
             let mapped = points.map {
                 CGPoint(x: rect.minX + $0.0 * rect.width, y: rect.minY + $0.1 * rect.height)
             }
@@ -196,8 +304,8 @@ private struct MagnetSnapGlyph: Shape {
             path.addLine(to: mapped[1])
             path.addLine(to: mapped[2])
         }
-        chevron([(0.00, 0.98), (0.32, 0.32), (0.64, 0.98)])
-        chevron([(0.36, 0.02), (0.68, 0.68), (1.00, 0.02)])
+        chevron(originX: 0, originY: 1 - Self.rise)
+        chevron(originX: 1 - Self.span, originY: 0)
         return path
     }
 }

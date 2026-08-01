@@ -46,6 +46,11 @@ final class AppModel: ObservableObject {
     @Published var requestedSymbol: String?
     /// Presents the sign-in sheet from the root, so any tab can ask for it.
     @Published var showSignIn = false
+    /// C25 chrome-minimize (the chart toolbar's minimize-rect): the bottom tab bar slides
+    /// away and its band of the screen becomes chart. Only the Chart tab can enter it, and
+    /// leaving that tab always restores the chrome — `RootTabsView` owns both rules, so no
+    /// screen can strand the app without a tab bar.
+    @Published var chromeMinimized = false
     /// "en" | "zh" — drives native strings' displayName side and the webview via setLang (S5 adds the toggle UI).
     @Published var lang: String = UserDefaults.standard.string(forKey: "mm.lang") ?? "en" {
         didSet { UserDefaults.standard.set(lang, forKey: "mm.lang") }
@@ -103,6 +108,11 @@ struct RootTabsView: View {
                 ChartScreen()
                     .tabItem { tabItem(L10n.t("Chart", model.lang), .chart) }
                     .tag(AppModel.Tab.chart)
+                    // C25: this — not hiding our overlay — is what actually gives the
+                    // chart the tab bar's band. The overlay is drawn *over* the system
+                    // bar's rect, but the bottom safe-area inset that reserves that rect
+                    // is `TabView`'s, and only hiding the system bar returns it.
+                    .modifier(TVSystemTabBarHidden(hidden: model.chromeMinimized))
                 ExploreScreen()
                     .tabItem { tabItem(L10n.t("Explore", model.lang), .explore) }
                     .tag(AppModel.Tab.explore)
@@ -122,6 +132,11 @@ struct RootTabsView: View {
             // system bar's rect, below the search overlay (which still covers everything).
             TVRootTabBar(selection: $model.tab, lang: model.lang)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                // C25: minimised chrome slides the bar off the bottom edge (and stops
+                // taking touches there) while the system bar it covers is hidden underneath.
+                .offset(y: model.chromeMinimized ? TVTabBarMetrics.totalHeight : 0)
+                .allowsHitTesting(!model.chromeMinimized)
+                .animation(.easeOut(duration: 0.22), value: model.chromeMinimized)
                 .zIndex(0.5)
 
             if let mode = model.searchMode {
@@ -133,6 +148,13 @@ struct RootTabsView: View {
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("-mmOpenSearch") { model.searchMode = .go }
             AuthTestDriver.runIfRequested()
+        }
+        // Chrome-minimize belongs to the chart and nothing else: any move off that tab
+        // (including the sign-out hop to Menu) brings the bar back, so a minimised state
+        // can never follow the user to a screen with no way to undo it.
+        .onChange(of: model.tab) { _, tab in
+            guard tab != .chart, model.chromeMinimized else { return }
+            withAnimation(.easeOut(duration: 0.22)) { model.chromeMinimized = false }
         }
         // Presented from the root so any tab can request it and it survives a tab switch.
         .sheet(isPresented: $model.showSignIn) { SignInScreen() }
@@ -246,6 +268,28 @@ struct TVRootTabBar: View {
         .buttonStyle(.plain)
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// C25 chrome-minimize: hides the **system** tab bar for the tab this is applied to, which
+/// is the only thing that gives the tab's content the bottom inset back. `TVRootTabBar` is
+/// an overlay in the root `ZStack`, so hiding *it* changes no layout at all — the 83 pt
+/// band it sits in is `TabView`'s safe-area inset, and `TabView` only returns that inset
+/// when its own bar is hidden. Applied per-tab (never to the `TabView`), so a tab switch
+/// restores the bar even before `AppModel.chromeMinimized` is reset.
+///
+/// `toolbarVisibility(_:for:)` is iOS 18's spelling of the iOS 16 `toolbar(_:for:)`; both
+/// are shipped so the iOS 17 deployment target keeps building without a deprecation.
+private struct TVSystemTabBarHidden: ViewModifier {
+    let hidden: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.toolbarVisibility(hidden ? .hidden : .visible, for: .tabBar)
+        } else {
+            content.toolbar(hidden ? .hidden : .visible, for: .tabBar)
+        }
     }
 }
 

@@ -736,7 +736,18 @@ function StyleTag({ pal }: { pal: EmbedPalette }) {
 
   /* ── clean=1 — TV symbol-sheet mini chart (docs/tv-parity/spec-symbol-detail.md §2B) ──
      Everything below is scoped to [data-clean="1"]; the default widget is untouched. */
-  .embed-root[data-clean="1"] .embed-header{padding:6px 12px 8px;min-height:0;}
+  /* TV parks the range row at the BOTTOM of the symbol-sheet chart so a thumb never has to
+     travel to the top of the widget. .embed-root is already flex-direction:column, so the row
+     moves by flipping flex ORDER — the DOM stays put (header still owns the quote line, and
+     the tab/reading order is unchanged for assistive tech, which reads it as the widget's
+     footer controls). .embed-body keeps flex:1 1 auto, so the absolute-inset chart host still
+     sizes to whatever height is left over. Full-bleed row: the chips' own 12px padding is the
+     only inset, and the ⤢ square keeps its margin-left:auto right-end anchor. */
+  .embed-root[data-clean="1"] .embed-body{order:1;}
+  .embed-root[data-clean="1"] .embed-header{order:2;padding:2px 0 8px;min-height:0;}
+  /* clean+hdr=1: the header is now the widget's FOOTER, so the quote line needs the inset back
+     (the chips carry their own capsule padding; the quote text has none). */
+  .embed-root[data-clean="1"] .embed-head-quote{padding:0 12px;}
   /* TV's mini chart carries no brand accent and no attribution (the app IS the brand,
      and the attribution collides with the time-axis labels at 300pt heights). */
   .embed-root[data-clean="1"] .embed-ribbon,
