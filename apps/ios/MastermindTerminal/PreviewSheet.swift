@@ -47,10 +47,12 @@ struct PreviewSheet: View {
     /// the row: the structure mirrors the reference even where our backend is thinner.
     private static let contentTabs = ["Overview", "News", "Minds", "Ideas"]
 
-    /// §2B: the chart plot area measures ~430 pt on the reference device *including* the
-    /// x-axis, range-pill row and the chart screen's own chrome. The embed widget carries
-    /// only the plot + pills + ⤢, so it gets the 300 pt module height the shell spec pins.
-    private static let chartHeight: CGFloat = 300
+    /// §2B: the chart plot area measures **430 pt** on the reference device, including the
+    /// x-axis and the range-pill row — and that is what this module gets. The earlier
+    /// 300 pt reading deducted chrome the embed does not draw, which left our chart module
+    /// visibly shorter than the reference's: TV's chart container reaches higher up the
+    /// sheet and pushes the tabs/dossier below the fold. 430 restores that proportion.
+    private static let chartHeight: CGFloat = 430
     private static let dossierDefaultHeight: CGFloat = 900
     /// Clamp for anything the page reports — a zero/absurd measurement must never collapse
     /// or explode the scroll content.
@@ -296,8 +298,8 @@ struct PreviewSheet: View {
     /// The `/embed/chart` widget in its shell dress: no header quote (`hdr=0`), no page
     /// chrome (`clean=1`), transparent so the sheet's pure black shows through, and the
     /// fullscreen rect enabled (`fs=1`). Inner scrolling is off — this module is a fixed
-    /// 300 pt block inside the sheet's single ScrollView, and a live inner scroller would
-    /// fight the sheet's own drag.
+    /// `chartHeight` block inside the sheet's single ScrollView, and a live inner scroller
+    /// would fight the sheet's own drag.
     private var chartModule: some View {
         InlineWebView(url: chartEmbedURL,
                       scrollEnabled: false,

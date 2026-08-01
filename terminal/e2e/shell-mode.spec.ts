@@ -115,6 +115,34 @@ test.describe("native shell mode", () => {
     await fs.click(); // must not throw / navigate without a native host
     await expect(page.locator('.embed-root[data-clean="1"]')).toHaveCount(1);
 
+    // ── C24: TV parks the range row UNDER the chart so thumbs stay low ────────────
+    // The header keeps its DOM position; clean mode flips flex order on the column root.
+    const bodyBox = (await page.locator(".embed-body").boundingBox())!;
+    const rangeBox = (await page.locator(".embed-ranges").boundingBox())!;
+    expect(rangeBox.y).toBeGreaterThanOrEqual(bodyBox.y + bodyBox.height - 1);
+    // …the ⤢ rides with it and stays at the right end of that same row, still clickable.
+    const fsBox2 = (await fs.boundingBox())!;
+    expect(fsBox2.y).toBeGreaterThanOrEqual(bodyBox.y + bodyBox.height - 1);
+    expect(fsBox2.x + fsBox2.width).toBeGreaterThan(rangeBox.x + rangeBox.width / 2);
+    await expect(fs).toBeVisible();
+    await fs.click();
+    // …the pills sit ~8px above the widget's bottom edge (.embed-root is position:fixed;inset:0).
+    const bottomGap = await page.evaluate(
+      () => window.innerHeight - document.querySelector(".embed-ranges")!.getBoundingClientRect().bottom,
+    );
+    expect(bottomGap).toBeGreaterThanOrEqual(6);
+    expect(bottomGap).toBeLessThanOrEqual(12);
+    // …and the chart body still fills everything above it — the absolute-inset host keeps sizing
+    // after the order flip (the regression this guards is a 0-height chart host).
+    const hostBox = (await page.locator(".embed-chart-host").boundingBox())!;
+    expect(hostBox.height).toBeGreaterThan(0);
+    expect(hostBox.height).toBeCloseTo(bodyBox.height, 0);
+    const vh = await page.evaluate(() => window.innerHeight);
+    expect(bodyBox.height / vh).toBeGreaterThan(0.7);
+    expect(await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    )).toBeLessThanOrEqual(0);
+
     // Chips wear the measured TV capsule treatment (selected #2E2E2E on #DBDBDB).
     const active = page.locator(".embed-chip.is-active").first();
     const chip = await active.evaluate((el) => {
@@ -145,6 +173,10 @@ test.describe("native shell mode", () => {
     });
     expect(webChip.size).toBeCloseTo(11, 0);
     expect(webChip.color).not.toBe("rgb(219, 219, 219)");
+    // …and the order flip is inert too: the browser widget keeps its ranges ABOVE the chart.
+    const webBody = (await page.locator(".embed-body").boundingBox())!;
+    const webRanges = (await page.locator(".embed-ranges").boundingBox())!;
+    expect(webRanges.y + webRanges.height).toBeLessThanOrEqual(webBody.y + 1);
   });
 
   // ── dossier mode: the detail rail is the whole page, no chart workspace ────────────
@@ -265,20 +297,30 @@ test.describe("TV chart-surface parity (shell)", () => {
     expect(webGrid.a).toBeCloseTo(0.04, 2);
   });
 
-  // B. Toolbar row is gone from the flow, controls survive (D1).
-  test("B · the web toolbar row leaves the flow, its controls float on the canvas", async ({ page }) => {
+  // B. Toolbar row is gone entirely in plain shell mode (C24 revision of D1).
+  // TV's chart tab carries no top controls at all, so the floating pill row that D1 shipped is
+  // deleted rather than restyled; indicator / chart-type management returns via the native hub.
+  // tray=1 — the embedded preview-engine sheet — keeps its icon-only tray (see H).
+  test("B · plain shell hides the toolbar row; tray=1 still shows the tray", async ({ page }) => {
     await page.goto(SHELL_URL);
     await chartReady(page);
     const tabs = page.locator(".chart-tabs");
-    expect(await tabs.evaluate((el) => getComputedStyle(el).position)).toBe("absolute");
-    await expect(page.locator(".chart-tabs .ct")).toBeHidden();
-    await expect(page.locator(".chart-tabs .indicator-library-trigger")).toBeVisible();
+    await expect(tabs).toBeHidden();
+    expect(await tabs.evaluate((el) => getComputedStyle(el).display)).toBe("none");
+    // nothing the row contained is reachable — the whole subtree goes with it
+    await expect(page.locator(".chart-tabs .indicator-library-trigger")).toBeHidden();
+    await expect(page.locator(".chart-tabs .tftray")).toBeHidden();
+    await expect(page.locator(".chart-tabs .tbtn.dtm")).toBeHidden();
     // no chart height is consumed above the canvas
     const wrapTop = await page.locator(".chart-wrap").first().evaluate((el) => el.getBoundingClientRect().top);
     expect(wrapTop).toBeLessThanOrEqual(2);
-    // + Indicators is the app's ONLY indicator-management entry — it must still open the library.
-    await page.locator(".chart-tabs .indicator-library-trigger").click();
-    await expect(page.locator("#indicator-library-dialog")).toBeVisible();
+
+    // tray=1 keeps the row and its controls.
+    await page.goto(TRAY_URL);
+    await chartReady(page);
+    await expect(page.locator(".chart-tabs")).toBeVisible();
+    await expect(page.locator(".chart-tabs .tftray")).toBeVisible();
+    await expect(page.locator(".chart-tabs .indicator-library-trigger")).toBeVisible();
   });
 
   // C. Chart reclaims both bands (D1 + D8).

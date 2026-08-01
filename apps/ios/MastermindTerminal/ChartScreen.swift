@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 
 /// Chart tab: the live web chart under a native loading/error surface, with the
@@ -23,7 +24,6 @@ struct ChartScreen: View {
     @State private var drawToolsOn = false
     /// §2.18 ships a red dot on `•••` for unseen hub items; it clears once the hub is seen.
     @State private var hubUnseen = true
-    @State private var toast: TVToastContent?
     /// Loop guard for the cookie-absent handoff: setSession makes the page reload itself,
     /// so `ready` fires again — without this the second pass would push once more.
     /// Reset only when WE load the page (retry, sign-out), never on the page's own reload.
@@ -109,20 +109,22 @@ struct ChartScreen: View {
                         drawToolsOn.toggle()
                         bridge.setDrawTools(drawToolsOn)
                     },
-                    onFullscreen: {
-                        // Landscape already drops every piece of native chrome for the
-                        // full-bleed chart, so the honest affordance is a hint, not a
-                        // second full-screen mode.
-                        toast = TVToastContent(
-                            icon: "rotate.right",
-                            title: L10n.t("Rotate to full screen", model.lang),
-                            subtitle: L10n.t("Landscape hides the app chrome.", model.lang)
-                        )
+                    shareSymbol: model.symbol,
+                    chromeMinimized: model.chromeMinimized,
+                    onToggleChrome: {
+                        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+                        // Animated at the mutation site so the tab bar's slide-out and the
+                        // chart's reclaimed safe-area inset move on the same curve.
+                        withAnimation(.easeOut(duration: 0.22)) {
+                            model.chromeMinimized.toggle()
+                        }
                     }
                 )
+                // With the tab bar minimised away, the strip becomes the bottom-most piece
+                // of chrome — the home-indicator inset under it stays pure black (§1.10).
+                .background(Theme.bg.ignoresSafeArea(edges: .bottom))
             }
         }
-        .tvToast($toast)
         .sheet(isPresented: $showAnalysisHub) {
             AnalysisHubSheet(lang: model.lang) { showAnalysisHub = false }
         }

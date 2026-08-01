@@ -68,12 +68,14 @@ struct WatchlistScreen: View {
                 preview = nil
                 model.openChart(symbol: item.symbol)
             }
-            // spec-symbol-detail.md §2B: the sheet's top radius begins at ~y108 of the
-            // 874 pt reference device, so the host screen's toolbar stays visible (dimmed)
-            // above it rather than being covered by a full-height card. 0.88 is that
-            // measurement, not a taste choice. The system drag indicator stays hidden —
+            // spec-symbol-detail.md §2B: the sheet's top edge begins at ~y83 of the 874 pt
+            // reference device, so the host screen's status bar / toolbar band stays
+            // visible (dimmed) above it rather than being covered by a full-height card.
+            // 0.91 is that measurement (83/874 ≈ 0.095 of the screen left above), not a
+            // taste choice — the earlier 0.88 sat the card ~26 pt too low and cost the
+            // chart module the height TV gives it. The system drag indicator stays hidden —
             // `TVGrabber` draws the reference's own 36.7 × 5.3 pt handle (§2.2).
-            .presentationDetents([.fraction(0.88)])
+            .presentationDetents([.fraction(0.91)])
             .presentationDragIndicator(.hidden)
         }
         .onAppear {

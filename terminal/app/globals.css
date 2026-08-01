@@ -3449,19 +3449,14 @@ html[data-shell="app"][data-red-up="true"]{
 /* canvas gradient — LWC's layout.background is transparent, so the CSS surface shows through */
 html[data-shell="app"] .pane{background:linear-gradient(180deg,#131722 0%,#181b26 100%)}
 
-/* ── D1 — no toolbar row: the surviving controls float on Row C of the canvas.
-   .workspace is position:relative (globals.css:1880), so the absolute box lands on the chart. ── */
-html[data-shell="app"]:not([data-tray]) .chart-tabs{
-  position:absolute; top:56px; right:0; left:auto; z-index:8;
-  height:28px; padding:0 10px 0 0; gap:6px;
-  background:transparent; border-bottom:0;
-  overflow:visible; pointer-events:none;
-}
-html[data-shell="app"]:not([data-tray]) .chart-tabs .ct{display:none}
-html[data-shell="app"]:not([data-tray]) .chart-tabs .tools{
-  margin-left:0; gap:6px; pointer-events:auto;
-}
-/* control pills: TV's translucent-over-canvas idiom, not a filled toolbar button */
+/* ── D1 (C24 revision) — NO toolbar row at all.
+   D1 originally floated the surviving toolbar controls as pills on Row C of the canvas.
+   TV's chart tab has no top controls whatsoever, so plain shell mode now drops the whole
+   row: chart-type / +Indicators / DTM / replay management returns through the native hub,
+   not a web pill stack. Scoped to the .app marker so the browser web app is untouched;
+   tray=1 (the embedded preview-engine sheet) keeps its icon-only tray — see D11 below. */
+.shell-app:not([data-tray="1"]) .chart-tabs{display:none}
+/* control pills (tray=1 only now): TV's translucent-over-canvas idiom, not a filled button */
 html[data-shell="app"] .chart-tabs .tbtn{
   height:28px; min-height:28px; padding:0 9px; gap:5px;
   border-radius:7px;
