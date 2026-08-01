@@ -227,6 +227,24 @@
         "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
       }
+    },
+    {
+      "name": "r3-structure",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3246"
+      ],
+      "cwd": "terminal",
+      "port": 3246,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
     }
   ]
 }

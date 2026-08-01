@@ -56,6 +56,10 @@ const VolView = dynamic(
   () => import("@/components/vol/VolView").then((m) => ({ default: m.VolView })),
   { ssr: false, loading: () => <TabSkeleton /> },
 );
+const StructureView = dynamic(
+  () => import("@/components/structure/StructureView").then((m) => ({ default: m.StructureView })),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
 const ProphetView = dynamic(
   () => import("@/components/prophet/ProphetView").then((m) => ({ default: m.ProphetView })),
   { ssr: false, loading: () => <TabSkeleton /> },
@@ -82,7 +86,7 @@ const TideChart = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "gex" | "surface" | "prism" | "volatility" | "leaders" | "radar";
+export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "gex" | "surface" | "prism" | "structure" | "volatility" | "leaders" | "radar";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
@@ -95,6 +99,9 @@ const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "gex",      enKey: "tabGex",      zhKey: "tabGex" },
   { key: "surface",  enKey: "tabSurface",  zhKey: "tabSurface" },
   { key: "prism",    enKey: "tabPrism",    zhKey: "tabPrism" },
+  // R3 Structure tab (OI suite: ladder / OI-time / max pain / OI change) —
+  // ordered before Volatility per the masterplan §5 category order.
+  { key: "structure", enKey: "tabStructure", zhKey: "tabStructure" },
   // R3 Volatility tab (IV rank / term / skew). Distinct from the retired standalone
   // "vol" surface (folded into Tickers) and from the `vol → screener` URL alias.
   { key: "volatility", enKey: "tabVolatility", zhKey: "tabVolatility" },
@@ -3794,6 +3801,13 @@ export default function OptionsHubView({
           {(activeTab === "prism" || visitedTabs.has("prism")) && (
             <div style={{ flex: 1, overflow: "hidden", display: activeTab === "prism" ? "flex" : "none", minHeight: 0 }}>
               <PrismView />
+            </div>
+          )}
+
+          {/* ═══ STRUCTURE TAB (R3 — OI ladder / OI-time / max pain / OI change) ═ */}
+          {(activeTab === "structure" || visitedTabs.has("structure")) && (
+            <div style={{ flex: 1, overflow: "hidden", display: activeTab === "structure" ? "flex" : "none", minHeight: 0 }}>
+              <StructureView />
             </div>
           )}
 

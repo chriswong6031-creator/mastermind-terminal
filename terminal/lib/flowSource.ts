@@ -44,6 +44,10 @@ const GEX_DATES_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gex_d
 const DARKPOOL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "darkpool_fixture.json");
 const VOLREGIME_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "volregime_fixture.json");
 const MOVES_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "moves_fixture.json");
+// R3 OI suite (Structure tab) — nightly options_hub oi_time/max_pain/oi_change payloads.
+const OI_TIME_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oi_time_fixture.json");
+const MAX_PAIN_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "max_pain_fixture.json");
+const OI_CHANGE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oi_change_fixture.json");
 
 // Valid f-param values: existing feed|heat|meta, plus hub params.
 // Parameterized sub-types: tide, dte, ticker:{ROOT}, vol:{ROOT}, gex:{ROOT}, oi, hot
@@ -54,6 +58,13 @@ export function isValidF(f: string): boolean {
   // per-root expected-move band, already published beside gex/vol in the options_hub plane.
   if (f === "darkpool" || f === "volregime") return true;
   if (f.startsWith("moves:") && f.length > 6) return true;
+  // R3 OI suite (Structure tab). `oi_change` bare = the cross-root board; the
+  // root-keyed forms are per-root payloads. All prefixes are disjoint from the
+  // exact-match `oi` (oi_movers) above — no overload, no prefix arithmetic.
+  if (f === "oi_change") return true;
+  if (f.startsWith("oi_time:") && f.length > 8) return true;
+  if (f.startsWith("max_pain:") && f.length > 9) return true;
+  if (f.startsWith("oi_change:") && f.length > 10) return true;
   if (f.startsWith("ticker:") && f.length > 7) return true;
   if (f.startsWith("vol:") && f.length > 4) return true;
   if (f.startsWith("gex:") && f.length > 4) return true;
@@ -114,6 +125,11 @@ export function backendPath(f: string): string {
   if (f === "darkpool") return "/api/hub/darkpool";
   if (f === "volregime") return "/api/hub/volregime";
   if (f.startsWith("moves:")) return `/api/hub/moves/${f.slice(6)}`;
+  // R3 OI suite
+  if (f.startsWith("oi_time:")) return `/api/hub/oi_time/${f.slice(8)}`;
+  if (f.startsWith("max_pain:")) return `/api/hub/max_pain/${f.slice(9)}`;
+  if (f === "oi_change") return "/api/hub/oi_change";
+  if (f.startsWith("oi_change:")) return `/api/hub/oi_change/${f.slice(10)}`;
   if (f.startsWith("tctx:")) return `/api/hub/tctx/${f.slice(5)}`;
   if (f === "chainheat") return "/api/flow/chainheat";
   if (f.startsWith("gexstate:")) return `/api/hub/gexstate/${f.slice(9)}`;
@@ -170,6 +186,13 @@ export function r2Key(f: string): string {
   if (f === "darkpool") return "darkpool/eod.json";
   if (f === "volregime") return "vol/regime.json";
   if (f.startsWith("moves:")) return `options_hub/moves/${f.slice(6)}.json`;
+  // R3 OI suite: per-root payloads beside vol/gex/moves in the options_hub
+  // plane; the bare oi_change is the cross-root board (also the options_hub_oi
+  // dead-man beacon on the macro side).
+  if (f.startsWith("oi_time:")) return `options_hub/oi_time/${f.slice(8)}.json`;
+  if (f.startsWith("max_pain:")) return `options_hub/max_pain/${f.slice(9)}.json`;
+  if (f === "oi_change") return "options_hub/oi_change.json";
+  if (f.startsWith("oi_change:")) return `options_hub/oi_change/${f.slice(10)}.json`;
   if (f.startsWith("tctx:")) return `options_hub/tickers_ctx/${f.slice(5)}.json`;
   if (f === "chainheat") return "live_flow/chain_heat_current.json";
   if (f.startsWith("gexstate:")) return `options_structure/gex_state/${f.slice(9)}.json`;
@@ -438,6 +461,34 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       const raw = await fs.readFile(MOVES_FIXTURE_FILE, "utf8");
       const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
       return all[root] ?? {};
+    } catch { return {}; }
+  }
+  // R3 OI suite. Per-root feeds keyed by root, honest {} for an unknown root
+  // (whole-family convention — locked by hubFixtures.test.ts). The bare
+  // `oi_change` serves the cross-root board from the same file's lowercase
+  // "cross" key (real roots are uppercase, so the key can never collide).
+  if (f.startsWith("oi_time:")) {
+    const root = f.slice(8).toUpperCase();
+    try {
+      const raw = await fs.readFile(OI_TIME_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? {};
+    } catch { return {}; }
+  }
+  if (f.startsWith("max_pain:")) {
+    const root = f.slice(9).toUpperCase();
+    try {
+      const raw = await fs.readFile(MAX_PAIN_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? {};
+    } catch { return {}; }
+  }
+  if (f === "oi_change" || f.startsWith("oi_change:")) {
+    const key = f === "oi_change" ? "cross" : f.slice(10).toUpperCase();
+    try {
+      const raw = await fs.readFile(OI_CHANGE_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[key] ?? {};
     } catch { return {}; }
   }
   // Ticker z-context, keyed by root. Unknown roots return {} — the drill's z-chips then
