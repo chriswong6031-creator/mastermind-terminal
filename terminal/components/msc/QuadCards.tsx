@@ -175,6 +175,7 @@ export function FloatingStrikeCard({
           </div>
 
           <p style={FOOT}>{t("fsLegend")}</p>
+          <p style={FOOT}>{t("fsCoverage")}</p>
           <p style={FOOT}>{t("fsScale").replace("{v}", fmtMnMag(f.maxAbsMn))}</p>
         </>
       )}
