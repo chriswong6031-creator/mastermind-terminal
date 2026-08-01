@@ -8,11 +8,14 @@ the commit marker by writing it last.
 The legacy ``{SYM: [ids]}`` map remains available while fund payloads migrate
 to the canonical per-symbol indexes.  Existing discovery pairs are append-only:
 an index rebuild may add calls, but may never silently remove or remap one.
+The global commit marker keeps that ``symbols`` contract intact and adds compact
+``revisions`` and ``dates`` maps keyed by ``SYM/ID`` for downstream delta scans.
 """
 from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -120,6 +123,17 @@ def _read_body(path: Path, expected_sym: str, expected_id: str) -> dict[str, Any
     return raw
 
 
+def body_sha256(payload: object) -> str:
+    """Hash a transcript's canonical decompressed JSON representation."""
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _qa_start(segments: list[dict[str, str]]) -> int | None:
     for i, segment in enumerate(segments):
         role = segment["role"].strip().lower()
@@ -141,6 +155,8 @@ def build_transcript_indexes(tx_root: Path) -> tuple[dict, dict, dict[str, dict]
     generated_at = datetime.now(timezone.utc).isoformat()
     legacy: dict[str, list[str]] = {}
     per_symbol: dict[str, dict] = {}
+    revisions: dict[str, str] = {}
+    dates: dict[str, str | None] = {}
     latest_mtime: float | None = None
     body_count = 0
 
@@ -157,6 +173,10 @@ def build_transcript_indexes(tx_root: Path) -> tuple[dict, dict, dict[str, dict]
                 stat = body.stat()
                 tx_id = match.group(0)
                 payload = _read_body(body, sym, tx_id)
+                revision_key = f"{sym}/{tx_id}"
+                revision = body_sha256(payload)
+                revisions[revision_key] = revision
+                dates[revision_key] = payload.get("date")
                 segments = payload["segments"]
                 speakers = sorted({
                     segment["speaker"].strip()
@@ -166,6 +186,7 @@ def build_transcript_indexes(tx_root: Path) -> tuple[dict, dict, dict[str, dict]
                 qa_start = _qa_start(segments)
                 calls.append({
                     "id": tx_id,
+                    "body_sha256": revision,
                     "period": payload["period"].strip(),
                     "date": payload.get("date"),
                     "title": payload["title"].strip(),
@@ -206,6 +227,8 @@ def build_transcript_indexes(tx_root: Path) -> tuple[dict, dict, dict[str, dict]
             else None
         ),
         "symbols": legacy,
+        "revisions": revisions,
+        "dates": dates,
     }
     return global_index, legacy, per_symbol
 
