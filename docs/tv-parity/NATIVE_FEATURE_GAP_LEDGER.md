@@ -249,3 +249,33 @@ New TradingView affordances observed in the original 43-shot corpus, bucketed:
 | News / Calendar action buttons | Explore | no market-news or econ/earnings-calendar API | **B** — terminal/ APIs first; ship placeholder buttons now |
 | Top Stories feed | Explore | no news API | **B** — placeholder/empty state now |
 | Brokers button | Explore | — | **D** — excluded |
+
+---
+
+## POLISH-ROUND ADDENDUM (2026-08-01 — `POLISH_ROUND_SPEC_2026-08-01.md`)
+
+### E. Evidence acquisition (blocks build, not itself a build item)
+
+These are not features. They are the reference imagery and live checks that must exist before the
+regular-width decisions this round shipped can stop being extrapolations. All of them are registered
+in master-spec **§4-A20**.
+
+| # | Evidence needed | Blocks | Why it cannot be derived |
+|---|---|---|---|
+| E1 | **TradingView-for-iPad captures**, both orientations, all five tabs, plus one sheet and one pushed screen | every §4-A20 number (A20.1–A20.9) | All 47 `IMG_*.PNG` in both corpora are iPhone; the master spec's pre-A20 text contains zero iPad/orientation/size-class content. Column width, grid counts, sheet presentation and rotation policy are currently conservative extrapolations from the 402 pt phone measure |
+| E2 | The **unselected** Chart-tab shield glyph | §4-A20.16 / SCREEN-04 | `IMG_2298.PNG` measures the *selected* white shield with knocked-out candles (shipped as a bundled vector). Its outline variant appears in no frame, so the app keeps the outline bar chart rather than inventing an outline shield |
+| E3 | A live session with a **real-time and a delayed instrument on one watchlist** | §4-A15 (SCREEN-07) | The orange `D` appears on exactly one row in one frame. That establishes neither the trigger rule nor the per-row frequency. Our always-on-for-delayed-equities behaviour runs ahead of the evidence and stays flagged |
+| E4 | A 60 fps capture of the **`•••` popover on iPad** | §4-A20.7 | We substitute a `.popover` for the phone's anchored overlay because TV's own popover (`t-096`/`t-097`) sits over an undimmed page — but the iPad anchor, arrow edge and sizing are unmeasured |
+| E5 | A capture of TradingView's **symbol sheet and Analysis hub on iOS 26** | §4-A20.18 / §4-A20.21 | Our corpus predates the OS transform: `IMG_2325.PNG` shows a full-bleed card with its top edge at y 83, which iOS 26 no longer produces for any sub-maximum detent. Whether TV now ships the inset+scaled look, moved to the maximum detent, or restyled the surface entirely decides whether A20.21's `.large` is parity or a stopgap |
+
+### F. Deliberate deviations — do not re-file as defects
+
+| Deviation | Finding | Why it stands |
+|---|---|---|
+| **One merged search surface** (`SearchSheet` serves both Add-Symbol and go-to-symbol) | SCREEN-05 | TV keeps Add-Symbol (§3.2.6) and Compare (§3.2.9-11) visually distinct. Ours is one surface with a `Mode`. This is a product decision, not an oversight; the finding that raised it declined to answer it ("confirm with product") |
+| **Crypto-forward category chip order** | SCREEN-06 | §3.2.4 orders All/Stocks/Funds/Futures/Forex. Ours leads with the categories this product's universe actually leads with. The finding concedes "if deliberate, no action needed beyond a spec-doc note" — this is that note |
+| **No chart-tab watchlist rail on iPad** | IPAD-18 / §4-A20.15 | Rejected, not deferred by accident. "TV keeps a left rail on iPad" is an assumption with no capture behind it; a 320 pt trailing rail would be a component invented for a device we have never photographed |
+| **Explore action row is capsules, not the A20.2 tile grid** | SCREEN-02 × IPAD-08 | SCREEN-02 replaced the 117.7 pt icon-over-label tile with §3.8.2's measured capsule, so the adaptive grid whose `minimum` was derived from that tile no longer applies. Regular width gets a non-scrolling capsule row inside the readable column instead |
+| **Referral card ships as an alpha placeholder** | SCREEN-03 | §3.7.3 measures two promo cards; no referral flow exists. The card is present with the screen's own "Not in this alpha" notice rather than absent — an absent card was the only alpha gap on that screen with no marker |
+| **Sheet content renders ~4 % small and 8 pt inset on iPhone** | §4-A20.18 | Not our layout. iOS 26 applies an inset + ≈0.963 scale to any sheet below its maximum detent, measured on one build as `TVGrabber` 35.3 pt at a partial detent vs 36.7 pt at `.large` while non-sheet surfaces measure exact. Compensating would mean inflating measured tokens against an undocumented system transform that disappears at full height — an L1 violation in the other direction. The symbol sheet avoids it by having one maximum detent (§4-A20.21); the hub keeps its measured 60 %-then-full anatomy and wears it |
+| **iPad's first content ink is 14 pt below the safe area, not at the phone's y 67** | §6 rule 6 | iPadOS 26 reports a 32 pt top inset against the phone's 62 pt, so the same safe-area-relative padding lands at a different absolute y. Both idioms are already identical in code and in measurement (76 − 62 = 46 − 32 = 14). Acceptance is stated as an offset from the safe area; an absolute phone y-band applied to iPad measures the inset, not the layout |

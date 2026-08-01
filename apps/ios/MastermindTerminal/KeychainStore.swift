@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import Security
 
 /// The only place a Supabase token is allowed to rest. Never UserDefaults, never a
@@ -14,6 +15,11 @@ enum KeychainStore {
     static let service = "com.mastermindx.terminal"
     static let sessionAccount = "supabase.session"
 
+    /// `OSLog` at debug level rather than `print`: it is stripped from release logging by
+    /// the system, carries the subsystem, and never reaches the shipped device console.
+    /// The payload is a credential and is never an argument — status codes only.
+    private static let log = Logger(subsystem: service, category: "keychain")
+
     /// Delete-then-add rather than add-or-update: one code path, and a corrupt or
     /// duplicated item can never survive a save.
     @discardableResult
@@ -27,10 +33,7 @@ enum KeychainStore {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
         let status = SecItemAdd(attributes as CFDictionary, nil)
-        #if DEBUG
-        // Status code only — the payload is a credential and must never be logged.
-        if status != errSecSuccess { print("[mm] keychain save failed: \(status)") }
-        #endif
+        if status != errSecSuccess { log.debug("save failed: \(status, privacy: .public)") }
         return status == errSecSuccess
     }
 
@@ -44,11 +47,9 @@ enum KeychainStore {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        #if DEBUG
         if status != errSecSuccess && status != errSecItemNotFound {
-            print("[mm] keychain load failed: \(status)")
+            log.debug("load failed: \(status, privacy: .public)")
         }
-        #endif
         guard status == errSecSuccess else { return nil }
         return item as? Data
     }

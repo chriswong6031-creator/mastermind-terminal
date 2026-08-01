@@ -26,15 +26,60 @@ struct PreviewItem: Identifiable {
     var id: String { symbol }
 }
 
+/// The symbol sheet's one detent (`spec-symbol-detail.md` §2B), shared by both call sites.
+///
+/// **The reference:** the card's top edge begins at ~y 83 of the 874 pt device, full-bleed,
+/// with the host's status band visible above it — the platform's own maximum sheet on the
+/// OS the corpus was captured on (`IMG_2325.PNG`: card ink reaches x 0 and x 401 at every
+/// row, so no inset).
+///
+/// **What we shipped:** `.fraction(0.91)`, which resolves against `maxDetentValue` (the
+/// screen *less* the top safe area, 812 here), landing the top edge at 153 pt.
+///
+/// **What iOS 26 does, measured on this simulator** — a sheet below its maximum detent is
+/// rendered inset 8 pt per side **and scaled to ≈0.963**, and the scale hits every token
+/// inside it: `TVGrabber` measures 35.3 pt at a partial detent and its true 36.7 pt at
+/// `.large`, on the same build, in the same sheet. Three detents, one capture each:
+///
+/// | detent | card height | rendered top edge | grabber |
+/// |---|---|---|---|
+/// | `.fraction(0.91)` | 739 | 153 pt | 35.3 |
+/// | `.custom(max − 24)` | 788 | 109 pt | 35.3 |
+/// | `.large` | 812 | **62 pt** | **36.7** |
+///
+/// The reference's 83 pt is therefore **unreachable on this OS**: the scaled regime cannot
+/// go above ~90 pt before the platform switches to the edge-attached look. `.large` is both
+/// the closest reachable top edge (−21 pt vs +26 pt) and the only one that renders the
+/// sheet's measured anatomy at measured size — a 4 % shrink of every inset, row height and
+/// type size inside the card is a far larger parity loss than 21 pt of host chrome, and
+/// L1 makes the measured tokens the thing we protect. Registered as §4-A20.21.
+///
+/// Compact width only — in regular width SwiftUI discards detents entirely and the host
+/// presents a `.fullScreenCover` instead (§4-A20.5).
+enum PreviewSheetPresentation {
+    static let detent: PresentationDetent = .large
+}
+
 struct PreviewSheet: View {
     let symbol: String
+    /// IPAD-10 / §4-A20.5. In regular width the host presents this as a `.fullScreenCover`
+    /// (SwiftUI discards `presentationDetents` there), so the surface is not
+    /// drag-dismissable: `TVGrabber` — which advertises exactly that — is suppressed and an
+    /// explicit close takes its place. Default `false` keeps every compact call site
+    /// byte-identical.
+    var isFullScreen = false
     let onOpenChart: () -> Void
 
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var manifest: ManifestStore
     @StateObject private var ticker = QuoteTicker()
     @State private var contentTab = 0
     @State private var showsAlphaNotice = false
+    /// ANIM-18 — the two embeds each hold a skeleton until their page reports `didFinish`,
+    /// instead of showing a hole where a module will be.
+    @State private var chartLoaded = false
+    @State private var dossierLoaded = false
     /// Driven by the dossier slice's own `contentHeight` posts (see `InlineWebView`'s
     /// height bridge). The default is the measured first-paint height of the rail, so the
     /// sheet never opens on a collapsed web view while the page is laying out.
@@ -47,12 +92,19 @@ struct PreviewSheet: View {
     /// the row: the structure mirrors the reference even where our backend is thinner.
     private static let contentTabs = ["Overview", "News", "Minds", "Ideas"]
 
-    /// §2B: the chart plot area measures **430 pt** on the reference device, including the
-    /// x-axis and the range-pill row — and that is what this module gets. The earlier
-    /// 300 pt reading deducted chrome the embed does not draw, which left our chart module
-    /// visibly shorter than the reference's: TV's chart container reaches higher up the
-    /// sheet and pushes the tabs/dossier below the fold. 430 restores that proportion.
-    private static let chartHeight: CGFloat = 430
+    /// §2B: the chart plot area measures **430 pt** including the x-axis and the range-pill
+    /// row. It is the *proportion* that is measured, not the absolute — §4-A20.5 re-derives
+    /// the module from the presented container's own height so a 1210 pt iPad cover does
+    /// not ship a phone-sized chart with 700 pt of dossier under it.
+    ///
+    /// The denominator is the **card**, not the device: 430 pt of a 791 pt sheet (874 − the
+    /// 83 pt top edge), not of the 874 pt screen the sheet never fills. Dividing by 874 was
+    /// the arithmetic that made the module ~19 % short even before the detent was wrong.
+    private static let referenceSheetHeight: CGFloat = 874 - 83
+    private static let chartHeightRatio: CGFloat = 430.0 / referenceSheetHeight
+    /// Floor/ceiling so a mid-presentation measurement can neither collapse the module nor
+    /// push the tabs off the bottom of a short window.
+    private static let chartHeightRange: ClosedRange<CGFloat> = 300...620
     private static let dossierDefaultHeight: CGFloat = 900
     /// Clamp for anything the page reports — a zero/absurd measurement must never collapse
     /// or explode the scroll content.
@@ -65,15 +117,26 @@ struct PreviewSheet: View {
     private var change: Double? { quote?.primaryChange ?? row?.chg }
 
     var body: some View {
-        VStack(spacing: 0) {
-            TVGrabber()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    header.padding(.top, 14)
-                    priceBlock.padding(.top, TVSpace.s3)
-                    chartModule.padding(.top, TVSpace.block)
-                    tabRow.padding(.top, TVSpace.block)
-                    content
+        GeometryReader { geo in
+            // The ratio's denominator is the whole card, so the measurement must be too:
+            // a GeometryReader inside a sheet reports the *safe* height, and subtracting
+            // the home-indicator inset from the container while the reference includes it
+            // is how a proportion silently loses 34 pt.
+            let containerHeight = geo.size.height + geo.safeAreaInsets.top + geo.safeAreaInsets.bottom
+            VStack(spacing: 0) {
+                // §4-A20.5 — the grabber only ships where the surface can actually be
+                // dragged; on a full-screen cover it would advertise a gesture that is not
+                // there, so the close control takes its place.
+                if isFullScreen { closeRow } else { TVGrabber() }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        header.padding(.top, 14)
+                        priceBlock.padding(.top, TVSpace.s3)
+                        chartModule(containerHeight: containerHeight)
+                            .padding(.top, TVSpace.block)
+                        tabRow.padding(.top, TVSpace.block)
+                        content
+                    }
                 }
             }
         }
@@ -92,6 +155,19 @@ struct PreviewSheet: View {
 
     // MARK: - Header block (§3.4.2)
 
+    /// The regular-width dismissal. Same ⌀30 circular close the tool sheets use (§2.2),
+    /// on the sheet's own 16 pt inset.
+    private var closeRow: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            TVCloseButton(style: .circle, accessibilityLabel: L10n.t("Close", model.lang)) {
+                dismiss()
+            }
+        }
+        .padding(.horizontal, TVSpace.s4)
+        .padding(.top, TVSpace.s3)
+    }
+
     private var header: some View {
         HStack(alignment: .top, spacing: 13) {
             LogoCircle(symbol: symbol, colorHex: row?.col, size: 36,
@@ -109,7 +185,7 @@ struct PreviewSheet: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(Theme.text2)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TVPressStyle(.glyph))
                     .accessibilityLabel(L10n.t("Switch symbol", model.lang))
                 }
                 HStack(spacing: TVSpace.s2) {
@@ -300,11 +376,23 @@ struct PreviewSheet: View {
     /// fullscreen rect enabled (`fs=1`). Inner scrolling is off — this module is a fixed
     /// `chartHeight` block inside the sheet's single ScrollView, and a live inner scroller
     /// would fight the sheet's own drag.
-    private var chartModule: some View {
-        InlineWebView(url: chartEmbedURL,
-                      scrollEnabled: false,
-                      onShellMessage: handleChartMessage)
-            .frame(height: Self.chartHeight)
+    private func chartModule(containerHeight: CGFloat) -> some View {
+        let height = min(max(containerHeight * Self.chartHeightRatio,
+                             Self.chartHeightRange.lowerBound),
+                         Self.chartHeightRange.upperBound)
+        return InlineWebView(url: chartEmbedURL,
+                             scrollEnabled: false,
+                             onShellMessage: handleChartMessage,
+                             onLoaded: { chartLoaded = true })
+            .frame(height: height)
+            .overlay {
+                if !chartLoaded {
+                    TVSkeletonBlock(lines: 1, lineHeight: height - TVSpace.s4 * 2)
+                        .padding(.horizontal, TVSpace.s4)
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.18), value: chartLoaded)
     }
 
     private var chartEmbedURL: URL {
@@ -357,8 +445,18 @@ struct PreviewSheet: View {
     private var dossier: some View {
         InlineWebView(url: dossierURL,
                       scrollEnabled: false,
-                      onShellMessage: handleDossierMessage)
+                      onShellMessage: handleDossierMessage,
+                      onLoaded: { dossierLoaded = true })
             .frame(height: dossierHeight)
+            .overlay(alignment: .top) {
+                if !dossierLoaded {
+                    TVSkeletonBlock(lines: 6, thumb: true)
+                        .padding(.horizontal, TVSpace.s4)
+                        .padding(.top, TVSpace.s4)
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.18), value: dossierLoaded)
     }
 
     private var dossierURL: URL {
@@ -423,10 +521,13 @@ struct PreviewSheet: View {
 /// * `onShellMessage` — installs the `mm` script-message handler plus a documentEnd
 ///   height bridge, so a hosted page can post `{type:"openFullChart"}` (the chart
 ///   widget's ⤢) or `{type:"contentHeight", h}` (the ResizeObserver) back to SwiftUI.
+/// * `onLoaded` — fired once, on the first main-frame `didFinish`, so a host can hold a
+///   skeleton over the module until the page is actually there (ANIM-18).
 struct InlineWebView: UIViewRepresentable {
     let url: URL
     var scrollEnabled: Bool = true
     var onShellMessage: (([String: Any]) -> Void)? = nil
+    var onLoaded: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -435,6 +536,7 @@ struct InlineWebView: UIViewRepresentable {
         configuration.allowsInlineMediaPlayback = true
 
         context.coordinator.onShellMessage = onShellMessage
+        context.coordinator.onLoaded = onLoaded
         if onShellMessage != nil {
             // A duplicate handler name on one content controller raises an ObjC exception.
             // This configuration is freshly built, but the remove-then-add keeps that
@@ -464,6 +566,7 @@ struct InlineWebView: UIViewRepresentable {
         // The coordinator is made once; refresh the closure so a re-rendered SwiftUI view
         // never delivers messages into a stale capture.
         context.coordinator.onShellMessage = onShellMessage
+        context.coordinator.onLoaded = onLoaded
         if webView.scrollView.isScrollEnabled != scrollEnabled {
             webView.scrollView.isScrollEnabled = scrollEnabled
             webView.scrollView.bounces = scrollEnabled
@@ -476,6 +579,7 @@ struct InlineWebView: UIViewRepresentable {
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         coordinator.onShellMessage = nil
+        coordinator.onLoaded = nil
         guard coordinator.installedMessageHandler else { return }
         coordinator.installedMessageHandler = false
         webView.configuration.userContentController.removeScriptMessageHandler(forName: ShellBridge.messageName)
@@ -523,6 +627,7 @@ struct InlineWebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var lastRequested: URL?
         var onShellMessage: (([String: Any]) -> Void)?
+        var onLoaded: (() -> Void)?
         var installedMessageHandler = false
 
         func userContentController(_ userContentController: WKUserContentController,
@@ -530,6 +635,10 @@ struct InlineWebView: UIViewRepresentable {
             guard message.name == ShellBridge.messageName,
                   let body = message.body as? [String: Any] else { return }
             onShellMessage?(body)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            onLoaded?()
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,

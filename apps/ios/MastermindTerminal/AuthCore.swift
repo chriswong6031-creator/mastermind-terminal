@@ -170,6 +170,11 @@ final class AuthService: ObservableObject {
 
     // MARK: - Supabase REST
 
+    /// Both unwraps below are invariants, not optimism: the base is the static, compile-time
+    /// `AppConfig.supabaseURL`, `path` is a literal at every call site, and `query` is
+    /// percent-encoded by `URLComponents` on the way out — so neither the components nor the
+    /// recomposed URL can be nil. Returning an optional here would push a `guard` into every
+    /// caller to handle a case that cannot occur (SWEEP-FORCE-UNWRAP-002, P2 hygiene).
     private func authRequest(path: String, query: [URLQueryItem]) -> URLRequest {
         var components = URLComponents(
             url: AppConfig.supabaseURL.appendingPathComponent("auth/v1/\(path)"),

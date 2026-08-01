@@ -395,6 +395,31 @@ variant, doubles its stroke weight instead (1.33–1.67 → 3.0–3.33 pt). Meas
 selected/unselected pairs exist for 4 of 5 tabs; Community's active state is the
 residual check (§4-A1r).
 
+**Chart is the one documented exception to that law (SCREEN-04).** Verified on
+`IMG_2298.PNG`: TV's *selected* Chart tab is a white filled shield/badge with a
+small black two-candle glyph knocked out of it, and the red dot **nested into**
+it — not a solid variant of an outline bar chart. This also resolves the second
+half of §4-A1r: **the red dot does survive selection.** The *unselected* shield is
+not in the corpus, so the outline bar chart stays until it is — §4-A20.16.
+
+Measured badge geometry (`IMG_2298.PNG`, 3× pixels: ink x 325–395, y 2398–2463),
+shipped as `TVChartTabShield`'s path — a bundled imageset could not hold it,
+because `scaledToFit` inside the 22 pt icon box resolved to 18 × 18.7 pt and an
+image cannot express the knockout notch at all:
+
+| Part | Measurement |
+|---|---|
+| Badge box | **23.7 × 22.0 pt**, centred on the column's icon centre (x 120.0) |
+| Silhouette | flat-top pentagon: top edge 16 pt wide (15.5 %→84.5 % of the width), straight bevelled shoulders reaching full width at **39.4 %** of the height, then straight edges to a **sharp bottom vertex** at mid-width |
+| Bottom edge | level with the neighbouring glyphs' ink; TV's vertex extends 3–4 device px below theirs |
+| Candles (knocked out) | left: hollow body 0.268–0.479 × 0.273–0.545 with a 0.338–0.408 wick above and below; right: filled body 0.577–0.761 × 0.288–0.409 with a wick below to 0.500 — all as fractions of the badge box |
+| Red dot | **⌀5.67 pt**, centre (0.831, 0.083) of the badge box — i.e. on the top-right corner, riding 1 pt proud of the top edge |
+| Nest | the badge is cut away in a **⌀10.67 pt** circle on the dot's centre, leaving a ~2.5 pt ring of bar background between red and white |
+
+The dot is therefore **part of the badge**, not the generic `tvBadgeDot` corner
+mark: that dot is suppressed for this one glyph state, or two dots' worth of ink
+land in the same corner.
+
 ---
 
 ## 2. COMPONENT KIT — `TVKit.swift`
@@ -813,9 +838,10 @@ points at the source doc for content/interaction detail this document omits.
 Ordered by build risk. Each names the exact check to run.
 
 **A1r — Tab-bar active state (RESOLVED for 4/5 tabs, C18).** Selected = glyph
-solid variant, label unchanged. Residual: Community's active state was never
-captured, and whether Chart's red dot survives selection. *Check: tap Community,
-screenshot.*
+solid variant, label unchanged. Chart is the measured exception (§1.10,
+SCREEN-04): a filled shield with knocked-out candles, **and its red dot does
+survive selection** — that half of A1r is closed. Residual: Community's active
+state was never captured. *Check: tap Community, screenshot.*
 
 **A2 — Quick-Info (A) vs Symbol Detail (B).** Are these two reachable surfaces or
 one surface across two app versions? They never appear back-to-back in any
@@ -870,8 +896,12 @@ toggle it and re-run the census.* Until then, ship dark-only.
 ratio but 24–30 pt across plausible ratios. *Check: Accessibility Inspector on a
 live device rather than trusting pixel conversion.*
 
-**A15 — "D" delayed badge.** Colour, shape and trigger rule for the orange `D`
-(appears once). The MNQ2! trailing dash is RESOLVED by pass 2 (D1): it appears
+**A15 — "D" delayed badge (STILL OPEN, SCREEN-07).** Colour, shape and trigger
+rule for the orange `D` (appears once). Our behaviour — always on for a quote the
+lane labels delayed — **runs ahead of the evidence**: the reference shows the
+badge on one row in one frame, which establishes neither the trigger nor the
+per-row frequency. No iPad or mixed-feed capture exists to settle it. *Check:
+mirror a live session with both a real-time and a delayed instrument on one list.* The MNQ2! trailing dash is RESOLVED by pass 2 (D1): it appears
 on 100 % of watchlist rows — a universal glyph, most plausibly a drag handle
 (see A19).
 
@@ -888,6 +918,44 @@ subscription pages unphotographed (`spec2-menu-settings.md` §1 table).
 
 **A19 — Watchlist reorder gesture.** "Customized order" + the universal drag
 glyph imply long-press drag reorder (D10). Confirm the gesture and haptics live.
+
+
+**A20 — iPad / regular-width anatomy.** There is **no TradingView-for-iPad
+imagery in either corpus**: all 47 `IMG_*.PNG` are iPhone, and this document's
+912 pre-A20 lines contain zero iPad, landscape, orientation or size-class text.
+§1.10 measures the tab bar on one 402 × 874 device. Every regular-width number
+the app ships is therefore a **conservative extrapolation, not a measurement**,
+and must be re-derived once iPad captures exist. *Check: mirror a live
+TradingView-for-iPad session in both orientations and re-run the census.*
+
+The full inventory of extrapolations, with the item that introduced each, is
+`docs/tv-parity/POLISH_ROUND_SPEC_2026-08-01.md` §4 (A20.1–A20.16). The
+load-bearing ones:
+
+| # | Extrapolation | Value |
+|---|---|---|
+| A20.1 | Readable content column | `TVMetrics.readableWidth = 704` pt |
+| A20.2 | Explore action row | non-scrolling capsule row in regular width; SCREEN-02 replaced the 117.7 pt tile with `TVNavPill`'s measured 31.3 pt capsule, so the cell-derived adaptive grid no longer applies |
+| A20.3 | Explore card grid | `LazyVGrid .adaptive(minimum: 149.7)`, non-scrolling; card metrics unchanged |
+| A20.4 | Tab-bar content width | bar content bounded to `5 × 80.4 = 402` pt and centred; fill `#040404` and the `#4A4A4A` rule stay full-bleed. Holding the measured pitch is the conservative reading — widening it would be pure invention |
+| A20.5 | Regular-width sheets | `.fullScreenCover` substituted for `.presentationDetents` (which SwiftUI discards in regular width); `TVGrabber` suppressed when the surface is not drag-dismissable; symbol-detail chart height re-derived from the container on the measured **430 / 791** ratio — 430 pt of the *card*, not of the 874 pt device the card never fills |
+| A20.6 | iPad rotation policy — **two verbs, never one** | iPad does **not** auto-hide chrome on rotation. C25 minimize hides **the tab bar only**, on every idiom, and its state is persisted per orientation; the RollerStrip stays mounted, because the minimize rect that undoes it is drawn *on the strip*. Dropping the strip as well is a separate verb (`ChartScreen.hidesRollerStrip`) that fires **only on a landscape phone**, where there is no room for it. Binding the strip to `chromeMinimized` left an iPad chart with zero chrome and no way back — see §6's verification row |
+| A20.7 | `•••` dropdown, regular width | `.popover` anchored on the button, no scrim |
+| A20.8 | Compact scrim reduction | watchlist dropdown scrim 0.55 → 0.22 |
+| A20.9 | Multitasking posture | `UIRequiresFullScreen = YES` for the alpha — one window, one size class per orientation |
+| A20.15 | **REJECTED** | the chart-tab watchlist rail (IPAD-18). "TV keeps a left rail" is an assumption with no capture behind it; building it would violate §1.10's own law. Held until iPad captures exist |
+| A20.16 | **OPEN** | the **unselected** Chart-tab shield. The selected shield is measured (`IMG_2298.PNG`); its outline variant is uncaptured, so the outline bar-chart glyph stays until it is |
+| A20.17 | Analysis-hub grids in regular width | hub content (header, ghost rows, CTA, all three tile grids) bounded to `readableWidth` and centred; **the §3.5.3 divider stays outside the column** and runs edge-to-edge, because a rule that stops at the column edge is a different component from the one measured. Cell metrics, gutters and row gaps unchanged |
+| A20.18 | **iOS 26 partial-detent sheet transform — measured, not ours** | Below its maximum detent, iOS 26 renders a sheet **inset 8 pt per side and scaled to ≈0.963**, and the scale reaches every token inside the card. Measured on one build: `TVGrabber` = 35.3 pt at `.fraction(0.6)`/`.fraction(0.91)` vs its true **36.7 pt at `.large`**; the hub's 16 pt content inset reads 23.3 pt from the screen edge and its 180.7 pt cell reads 172.6. Non-sheet surfaces are exact in the same captures (watchlist row pitch 60.3 pt, tab-bar rule at y 790.7). **Policy: do not compensate.** Inflating measured tokens by 1/0.963 would be an invention that breaks the moment the sheet is dragged to full height, where the transform is absent. The hub keeps §3.5's measured 60 %-then-full anatomy and accepts the transform; the symbol sheet, which has only one detent, takes A20.21 instead |
+| A20.19 | Menu promo pair in regular width | the two 181 pt `TVPromoCard`s are **centred within the readable column**; compact keeps its leading alignment byte-for-byte. Left-aligned on iPad the 370 pt block sat against the column's leading edge with 318 pt of dead space beside it, while every other block on the page fills the column. No measured number moves and nothing is invented to fill the gap |
+| A20.20 | Pushed About page | rows in the readable column, hairlines full-bleed on their measured 16 pt inset — the same law the tab roots follow (§6 rule 2) |
+| A20.21 | Symbol-sheet detent | `.large`, not a fraction and not `maxDetentValue − 24`. `spec-symbol-detail.md` §2B measures a **full-bleed** card whose top edge is at y 83 (`IMG_2325.PNG` reaches x 0 and x 401 at every row) — the platform's own maximum sheet on the corpus's OS. Under A20.18's transform the reachable top edges are 153 pt (0.91), 109 pt (max − 24) and **62 pt (`.large`)**, and only `.large` renders the card full-bleed and unscaled. 21 pt of host chrome is a smaller parity loss than a 4 % shrink of every inset, row height and type size inside the card, which is what L1 protects. Re-derive if a future OS restores the full-bleed partial sheet |
+| A20.22 | Wheel ghost ink — **two surfaces, two measurements** | resting toolbar wheel `WheelMetrics.restingGhostOpacity = 0.34` (`IMG_2296.PNG` ghost `#4A4A4A` 74/255 vs centre `#DBDBDB` 219/255 = 0.338); the ~15 % figure (`TVWheelPicker.dragGhostOpacity = 0.146`) belongs ONLY to the §2.19 mid-drag panel's outermost row, whose ramp is 1 → 0.65 (±1) → 0.146 (±3). Never collapse the two back into one constant |
+| A20.23 | C26 seam ownership | `TVRootTabBar` owns the RollerStrip/tab-bar hairline; the strip draws a bottom rule only when `chromeMinimized` removes the bar. Band measures 51.7 pt (155 px @3x) top-rule → seam — a double rule at the seam reads as 0.67 pt and is wrong |
+| A20.24 | `EllipsisRingsGlyph` | the toolbar `•••` is three **stroked rings**: ring ⌀5.3 pt, pitch 8.2 pt, wall 1.33 pt, span 21.7 pt (`IMG_2296.PNG` x861–924 / y2287–2302 — 3 × 16 px rings on a 24 px pitch, 4 px wall). Not SF `ellipsis` (filled, 24.3 pt) |
+| A20.25 | `RollerStrip.uturnInk = 12.7 × 9.7` pt | undo/redo ink box (`IMG_2296.PNG` x1042–1079 / y2279–2308). SF `arrow.uturn.*` is square where TV's is 1.3:1, so the box is the bound and height is the match; rendered ink lands 10.0 × 9.67, ~2.7 pt narrower than TV — closing that needs a hand-drawn vector, held until it matters |
+| A20.26 | `TVPromoCard` geometry | fixed `width = 181` (never `maxWidth`), `pageMargin = 16`, `gutter = 8` charged **once** (host stacks must use spacing 0 + one explicit 8 pt spacer — an implicit stack gutter charges alignment Spacers too), title top-aligned over a fixed 2-line subtitle slot (35.8 pt) so titles share a baseline regardless of wrap |
+| A20.27 | `LogoCircle.markInset = 0.70` | dark marks are aspect-fit to 0.70 of the contrast plate (1/√2 inscribed-square rule); above ≈0.707 the AAPL silhouette clips the plate again. Known cost: logo.dev assets shipping an opaque square canvas (ETH-USD, QQQ, MSFT) show the plate as a ring — per-asset alpha analysis is the future fix, not a bigger ratio |
 
 ---
 
@@ -910,3 +978,52 @@ glyph imply long-press drag reorder (D10). Confirm the gesture and haptics live.
 integration only. No chart rendering, no indicator math, no entitlement logic in
 `apps/ios`. Any screen here that needs data no published Terminal API exposes
 gets its API added to `terminal/` first.
+
+---
+
+## 6. REGULAR WIDTH (iPad, Split View, Stage Manager)
+
+This chapter exists because §1–§3 are measured entirely on a 402 × 874 iPhone and
+§4-A20 records that no iPad reference imagery exists. It is the **law that bounds
+extrapolation**, not a second design.
+
+1. **Measured tokens never change with width.** Row heights, insets, type sizes
+   and weights, corner radii, hairline weights, gutters, the tab-bar's 80.4 pt
+   column pitch and 49 pt content height — all of them are the same number on a
+   402 pt phone and a 1210 pt iPad. A token that varies by width is a defect.
+2. **Only two things may adapt:** the width of the content **column**, and the
+   **count** of columns in a grid. `TVReadableWidth` (§A20.1) bounds the first;
+   `TVGrid.adaptiveColumns` derives the second from a measured cell.
+3. **No new component, column or affordance may be introduced for iPad without a
+   captured reference.** A wide window is not a licence to add a sidebar, a
+   master-detail split, a second results column, or a sparkline that the phone
+   layout does not have. If the extra space has nothing measured to put in it,
+   the correct answer is whitespace.
+4. **Where the platform silently changes behaviour, substitute rather than
+   improvise.** `presentationDetents` is discarded in regular width, so the
+   affected sheets become full-screen covers carrying the *same internal layout*
+   (§A20.5) — and any affordance that advertised the lost behaviour (the grabber)
+   is suppressed rather than left lying.
+5. **Every substitution is registered in §4-A20** before it ships.
+
+6. **Acceptance on iPad is stated relative to the safe area, never in the phone's
+   absolute y.** §1–§3's y-bands are absolute pixels on a 402 × 874 device whose
+   top inset is 62 pt; iPadOS 26 reports **32 pt** on the 834 × 1210 device, so
+   the same code lands the same content at a different absolute y by definition.
+   A judge measuring "first content ink at y 46" against the phone's "y 67–96"
+   band is measuring the inset, not a defect. **Restate the check as an offset:**
+   the watchlist toolbar's ink begins **14 pt below the safe-area top on both
+   idioms** (row top = safe-area top + 8 pt, ink 6 pt into the 29 pt row).
+   Verified: iPhone first ink 76 pt − 62 pt inset = 14; iPad 46 pt − 32 pt inset
+   = 14. Both insets are readable from the same captures — the search field's
+   measured 31.7 pt top padding puts its edge at 93.7 pt on iPhone and 63.5 pt on
+   iPad, i.e. 62 and 32.
+
+**Verification (both idioms, portrait and landscape):** no floating capsule
+anywhere; the RollerStrip's bottom hairline sits at or above the tab bar's top
+hairline; **minimize on iPad hides the tab bar and keeps the strip** (the restore
+control lives on it — §4-A20.6); pushed screens (`explore-discover`, `menu-about`)
+show exactly three chrome bands — status bar, inline nav bar, our bottom bar; row
+content sits in the readable column while every hairline still reaches the page
+edge on its measured leading inset (16 pt search / 16 pt watchlist + About /
+54 pt menu list).

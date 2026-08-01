@@ -44,6 +44,12 @@ struct AnalysisHubSheet: View {
     /// * non-`nil`: the hub closes itself and hands the symbol to the host, which owns the
     ///   presentation. One-line wiring for a host that would rather own the sheet.
     var onSymbolDetails: ((String) -> Void)? = nil
+    /// IPAD-10 / §4-A20.5. In regular width the host presents this as a `.fullScreenCover`,
+    /// because `presentationDetents` are silently discarded there. The surface then has no
+    /// drag-to-resize behind it, so the grabber — which advertises exactly that — is
+    /// suppressed and the circular close is the only dismissal. Default `false` keeps every
+    /// compact call site byte-identical.
+    var isFullScreen = false
     let onClose: () -> Void
 
     @EnvironmentObject private var model: AppModel
@@ -53,6 +59,9 @@ struct AnalysisHubSheet: View {
     /// Non-nil while the stacked symbol-detail sheet is up (the `onSymbolDetails == nil`
     /// path). `PreviewItem` is the same identity token the watchlist uses.
     @State private var detail: PreviewItem?
+    /// ANIM-23: set alongside `detail = nil` and consumed in `onDismiss`, so the hub's own
+    /// close never races the detail sheet's dismissal animation.
+    @State private var closesAfterDetail = false
 
     var body: some View {
         ZStack {
@@ -63,31 +72,39 @@ struct AnalysisHubSheet: View {
             // A10 recommends always opening at the top regardless of entry point — a plain
             // ScrollView does exactly that.
             ScrollView {
+                // §6 rule 2 + §4-A20.17: on a regular-width cover the grids are the same
+                // measured cells in a bounded, centred column — never 834 pt of stretched
+                // 2-up tiles. The §3.5.3 divider is deliberately left OUTSIDE the wrapper:
+                // it is the sheet's one edge-to-edge line, and a rule that stops at the
+                // column edge is a different component from the one measured.
                 VStack(spacing: 0) {
                     TVSheetHeader(
                         title: L10n.t("Analysis hub", lang),
                         closeStyle: .circle,
+                        showsGrabber: !isFullScreen,
                         inset: TVSpace.s4,
                         closeAccessibilityLabel: L10n.t("Close", lang),
                         onClose: onClose
                     )
+                    .tvReadableWidth()
 
-                    layoutRow
-                    fileRow
+                    layoutRow.tvReadableWidth()
+                    fileRow.tvReadableWidth()
                     // §3.5.3 — the only full-bleed line in the sheet.
                     TVHairline.sheet()
                         .padding(.top, TVSpace.s5)
 
-                    brokerCTA
-                    toolsSection
-                    infoSection
-                    moreSection
+                    brokerCTA.tvReadableWidth()
+                    toolsSection.tvReadableWidth()
+                    infoSection.tvReadableWidth()
+                    moreSection.tvReadableWidth()
                 }
                 .padding(.bottom, TVSpace.s7)
             }
         }
-        // §3.5 / `spec-chart.md` §2.4: opens partial (~60 %), swipes up to full.
-        .presentationDetents([.fraction(0.6), .large])
+        // §3.5 / `spec-chart.md` §2.4: opens partial (~60 %), swipes up to full. Applied
+        // only where the system honours it — see `isFullScreen`.
+        .presentationDetents(isFullScreen ? [.large] : [.fraction(0.6), .large])
         // With two detents, a drag that starts on the grid must scroll the grid, not resize
         // the sheet; the header/grabber band above the scroll view still drags it to .large.
         .presentationContentInteraction(.scrolls)
@@ -95,18 +112,10 @@ struct AnalysisHubSheet: View {
         // indicator would double it.
         .presentationDragIndicator(.hidden)
         .presentationBackground(Theme.panel2)
-        .sheet(item: $detail) { item in
-            PreviewSheet(symbol: item.symbol) {
-                // The widget's ⤢: drop the detail AND the hub — the chart underneath is
-                // already this symbol, so there is nothing further to route.
-                detail = nil
-                onClose()
-            }
-            // Same measurement the watchlist's detail sheet uses (spec-symbol-detail.md
-            // §2B): the card's top edge lands at ~y83 of the 874 pt reference device.
-            .presentationDetents([.fraction(0.91)])
-            .presentationDragIndicator(.hidden)
-        }
+        // The stacked detail follows the hub's own presentation class: a sheet over a sheet
+        // in compact, a cover over a cover in regular (where detents are discarded anyway).
+        .sheet(item: detailBinding(fullScreen: false), onDismiss: dismissDetail, content: detailCard)
+        .fullScreenCover(item: detailBinding(fullScreen: true), onDismiss: dismissDetail, content: detailCard)
         .alert(
             Text(L10n.t("Not in this alpha", lang)),
             isPresented: $showsPlaceholderNotice
@@ -115,6 +124,35 @@ struct AnalysisHubSheet: View {
         } message: {
             Text(L10n.t("That area of the Terminal isn't part of the app alpha yet. It remains available on the website.", lang))
         }
+    }
+
+    // MARK: - Stacked symbol detail (§3.5.8)
+
+    private func detailBinding(fullScreen: Bool) -> Binding<PreviewItem?> {
+        Binding(
+            get: { fullScreen == isFullScreen ? detail : nil },
+            set: { detail = $0 }
+        )
+    }
+
+    private func detailCard(_ item: PreviewItem) -> some View {
+        PreviewSheet(symbol: item.symbol, isFullScreen: isFullScreen) {
+            // The widget's ⤢: drop the detail AND the hub — the chart underneath is
+            // already this symbol, so there is nothing further to route.
+            closesAfterDetail = true
+            detail = nil
+        }
+        // Same presentation the watchlist's detail sheet uses (spec-symbol-detail.md §2B),
+        // for the same measured reason — see `PreviewSheetPresentation`.
+        .presentationDetents([PreviewSheetPresentation.detent])
+        .presentationDragIndicator(.hidden)
+    }
+
+    /// ANIM-23: the hub closes only once the detail card is off screen.
+    private func dismissDetail() {
+        guard closesAfterDetail else { return }
+        closesAfterDetail = false
+        onClose()
     }
 
     // MARK: - §3.5.2 ghost rows

@@ -9,6 +9,16 @@ import SwiftUI
 // `TVSymbolRow` / `TVChipRow` / `TVHairline` directly; the types below stay so existing
 // call sites keep working, and now render at the spec's sizes.
 
+/// ANIM-16 — `AsyncImage` uses `URLCache.shared`, whose default 512 KB memory / 10 MB disk
+/// budget evicts a scrolled list's logos almost immediately, so every tab return re-fetched
+/// them and the fade played again. Sized here, as a one-shot, rather than in the app's
+/// `init()`: the cache exists for this view and nothing else reads it.
+private enum LogoCache {
+    static let install: Void = {
+        URLCache.shared = URLCache(memoryCapacity: 8 << 20, diskCapacity: 64 << 20)
+    }()
+}
+
 struct LogoCircle: View {
     let symbol: String
     let colorHex: String?
@@ -28,6 +38,7 @@ struct LogoCircle: View {
     /// Same contract as the web's assetLogoPath(): logo.dev image CDN, publishable token,
     /// crypto family for -USD pairs, 404 fallback → the initial circle below.
     private var logoURL: URL? {
+        _ = LogoCache.install
         let isCrypto = (market?.localizedCaseInsensitiveContains("crypto") ?? false)
             || symbol.uppercased().hasSuffix("-USD")
         let lookup = isCrypto && symbol.uppercased().hasSuffix("-USD") ? String(symbol.dropLast(4)) : symbol
@@ -43,20 +54,59 @@ struct LogoCircle: View {
         return components?.url
     }
 
+    /// C26 — the fetched mark is drawn inside the **inscribed square** of the plate, not
+    /// across the plate's full box. logo.dev ships a square canvas whose artwork runs
+    /// edge to edge; clipping that square to a circle cuts every mark whose silhouette
+    /// reaches the corners — AAPL's apple was sliced flat on its left, right and bottom
+    /// by the plate it is supposed to sit on. A square of side `d / √2 ≈ 0.707 d` is the
+    /// largest that fits inside a circle of diameter `d`, so at this ratio no mark can
+    /// escape the plate whatever its shape. Full-bleed brand artwork (BTC, TSLA, NVDA)
+    /// simply shows a ring of the manifest's own brand colour around it, which is the
+    /// same colour the artwork's own disc carries.
+    static let markInset: CGFloat = 0.70
+
     var body: some View {
-        AsyncImage(url: logoURL) { phase in
-            if case .success(let image) = phase {
-                image.resizable().scaledToFill()
-            } else {
-                Text(initial)
-                    .font(.system(size: size * 0.44, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: size, height: size)
-                    .background(Color(hexString: colorHex) ?? Theme.panel3)
+        ZStack {
+            // The contrast plate. It is the tile's floor and is never removed — the mark
+            // sits *on* it, and for a dark mark on a black page it is the only thing that
+            // keeps the logo legible at all.
+            plate
+            AsyncImage(
+                url: logoURL,
+                transaction: Transaction(animation: .easeOut(duration: 0.18))
+            ) { phase in
+                ZStack {
+                    // The monogram is the floor, not an alternative branch: it stays
+                    // mounted for the whole load so nothing swaps mid-scroll (ANIM-16 —
+                    // the hard swap is what made a list of rows flicker in sequence). It
+                    // *fades* rather than unmounts once the mark lands, because a mark
+                    // inset to 0.70 no longer covers the plate edge to edge and a letter
+                    // left underneath it could show through the mark's own transparency.
+                    monogram
+                        .opacity(phase.image == nil ? 1 : 0)
+                    if let image = phase.image {
+                        // Aspect-**fit**, never fill: `scaledToFill` also let a non-square
+                        // asset overflow on its long axis before the circle clipped it.
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: size * Self.markInset, height: size * Self.markInset)
+                    }
+                }
             }
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+    }
+
+    private var plate: some View {
+        Color(hexString: colorHex) ?? Theme.panel3
+    }
+
+    private var monogram: some View {
+        Text(initial)
+            .font(.system(size: size * 0.44, weight: .bold))
+            .foregroundStyle(.white)
     }
 }
 
@@ -69,21 +119,51 @@ struct PriceStack: View {
     var alignment: HorizontalAlignment = .trailing
     var prominent = false
 
+    /// ANIM-08 — `+1` up-tick, `-1` down-tick, `nil` at rest. The direction, not the size:
+    /// the flash says a print landed and which way it went, and the number says how much.
+    @State private var flash: Double?
+
     var body: some View {
         VStack(alignment: alignment, spacing: 2) {
             // §2.6 row line 1 = 17 pt Semibold; §3.4.3 hero price = 28 pt Bold.
             Text(Self.price(last))
                 .font(.system(size: prominent ? 28 : 17, weight: prominent ? .bold : .semibold).monospacedDigit())
                 .foregroundStyle(Theme.text)
+                // The quote poller replaces values wholesale every 6 s; without a content
+                // transition the list reads as a page that reloads, not a live surface.
+                .contentTransition(.numericText())
+                .animation(.easeOut(duration: 0.25), value: last)
+                .background {
+                    if let flash {
+                        // Negative padding so the plate bleeds past the glyphs without
+                        // moving them — the row's 17.3 pt trailing inset is measured.
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(flash > 0 ? Theme.upFill : Theme.downFill)
+                            .opacity(0.18)
+                            .padding(.horizontal, -4)
+                            .padding(.vertical, -1)
+                    }
+                }
                 .accessibilityIdentifier("regular-price")
             // §2.6 row line 2 = 15 pt Medium. Exactly 0.00 renders `Theme.text`, not green.
             Text(Self.change(chgPct))
                 .font(.system(size: prominent ? 17 : 15, weight: prominent ? .semibold : .medium).monospacedDigit())
                 .foregroundStyle(TVFormat.changeColor(chgPct))
+                .contentTransition(.numericText())
+                .animation(.easeOut(duration: 0.25), value: chgPct)
                 .accessibilityIdentifier("regular-change")
             if let extPrice, extPrice.isFinite, extPrice > 0 {
                 ExtendedQuoteLine(price: extPrice, change: extChgPct, session: extSession)
                     .padding(.top, 2)
+            }
+        }
+        .onChange(of: last) { old, new in
+            guard let old, let new, old.isFinite, new.isFinite, new != old else { return }
+            flash = new > old ? 1 : -1
+            Task { @MainActor in
+                // One runloop hop before the fade: set-and-clear inside a single
+                // transaction coalesces to "nil" and the lit frame never paints.
+                withAnimation(.easeOut(duration: 0.32)) { flash = nil }
             }
         }
     }

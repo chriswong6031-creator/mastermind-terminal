@@ -34,8 +34,14 @@ struct WatchlistScreen: View {
     @EnvironmentObject private var watchlists: WatchlistStore
     @ObservedObject private var sync = WatchlistSyncService.shared
     @StateObject private var ticker = QuoteTicker()
+    @Environment(\.tvWidthClass) private var publishedWidthClass
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var preview: PreviewItem?
+    /// ANIM-23: held across the sheet's dismissal rather than racing it — writing
+    /// `preview = nil` and `openChart` in the same frame made the tab switch fight the
+    /// dismiss transition.
+    @State private var pendingChartSymbol: String?
     @State private var newListPrompt = false
     @State private var newListName = ""
     @State private var confirmDeleteList = false
@@ -48,6 +54,8 @@ struct WatchlistScreen: View {
     /// a stacked sheet (spec2 §4).
     private enum MenuBranch { case root, edit, sort, allLists }
 
+    private var widthClass: TVWidthClass { publishedWidthClass ?? TVWidthClass(horizontalSizeClass) }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             Theme.bg.ignoresSafeArea()
@@ -57,27 +65,31 @@ struct WatchlistScreen: View {
                 if sync.showsFailureHint { syncHint }
                 rowsList
             }
-            if menuOpen { dropdownOverlay }
+            // IPAD-15: only compact width gets the overlay. Regular width presents the
+            // identical card as a `.popover` anchored on the `•••` button (§4-A20.7), so a
+            // 250 pt menu never dims an 834 × 1210 pt window.
+            if menuOpen && !widthClass.isRegular { dropdownOverlay }
         }
-        .onAppear { ticker.start(symbols: watchlists.active.symbols) }
-        .onDisappear { ticker.stop() }
-        .onChange(of: watchlists.activeIndex) { _, _ in ticker.start(symbols: watchlists.active.symbols) }
-        .onChange(of: watchlists.active.symbols) { _, syms in ticker.start(symbols: syms) }
-        .sheet(item: $preview) { item in
-            PreviewSheet(symbol: item.symbol) {
-                preview = nil
-                model.openChart(symbol: item.symbol)
+        // A1.7 — every screen now stays mounted, so `onAppear`/`onDisappear` no longer
+        // bound a tab's lifetime. The ticker follows the selected tab instead, or every
+        // poller in the app runs forever.
+        .onChange(of: model.tab, initial: true) { _, tab in
+            if tab == .watchlist {
+                ticker.start(symbols: watchlists.active.symbols)
+            } else {
+                ticker.stop()
             }
-            // spec-symbol-detail.md §2B: the sheet's top edge begins at ~y83 of the 874 pt
-            // reference device, so the host screen's status bar / toolbar band stays
-            // visible (dimmed) above it rather than being covered by a full-height card.
-            // 0.91 is that measurement (83/874 ≈ 0.095 of the screen left above), not a
-            // taste choice — the earlier 0.88 sat the card ~26 pt too low and cost the
-            // chart module the height TV gives it. The system drag indicator stays hidden —
-            // `TVGrabber` draws the reference's own 36.7 × 5.3 pt handle (§2.2).
-            .presentationDetents([.fraction(0.91)])
-            .presentationDragIndicator(.hidden)
         }
+        .onChange(of: watchlists.activeIndex) { _, _ in
+            guard model.tab == .watchlist else { return }
+            ticker.start(symbols: watchlists.active.symbols)
+        }
+        .onChange(of: watchlists.active.symbols) { _, syms in
+            guard model.tab == .watchlist else { return }
+            ticker.start(symbols: syms)
+        }
+        .sheet(item: previewBinding(fullScreen: false), onDismiss: openPendingChart, content: previewCard)
+        .fullScreenCover(item: previewBinding(fullScreen: true), onDismiss: openPendingChart, content: previewCard)
         .onAppear {
             // Headless screenshot hook: -mmPreview SYM opens the preview directly.
             let args = ProcessInfo.processInfo.arguments
@@ -105,11 +117,51 @@ struct WatchlistScreen: View {
         }
     }
 
+    // MARK: - Symbol-detail presentation (§3.4 / IPAD-10)
+
+    /// IPAD-10 — `presentationDetents` are honoured only when the presented sheet's own
+    /// horizontal size class is compact; in iPad regular width SwiftUI falls back to a
+    /// centred `.formSheet`, so spec-symbol-detail §2B's `.fraction(0.91)` collapsed to a
+    /// generic card while `TVGrabber` still painted a handle with no drag behind it.
+    private func previewBinding(fullScreen: Bool) -> Binding<PreviewItem?> {
+        Binding(
+            get: { fullScreen == widthClass.isRegular ? preview : nil },
+            set: { preview = $0 }
+        )
+    }
+
+    private func previewCard(_ item: PreviewItem) -> some View {
+        PreviewSheet(symbol: item.symbol, isFullScreen: widthClass.isRegular) {
+            pendingChartSymbol = item.symbol
+            preview = nil
+        }
+        // spec-symbol-detail.md §2B: the sheet is the platform's maximum, with the host's
+        // status band visible above it — `.fraction(0.91)` put its top edge 70 pt low and,
+        // being below the maximum, had iOS 26 render the whole card inset and scaled to
+        // 0.963. The evidence table lives on `PreviewSheetPresentation`.
+        // The system drag indicator stays hidden — `TVGrabber` draws the reference's own
+        // 36.7 × 5.3 pt handle (§2.2).
+        .presentationDetents([PreviewSheetPresentation.detent])
+        .presentationDragIndicator(.hidden)
+    }
+
+    private func openPendingChart() {
+        guard let symbol = pendingChartSymbol else { return }
+        pendingChartSymbol = nil
+        model.openChart(symbol: symbol)
+    }
+
     // MARK: - Toolbar (§3.1.2)
 
-    /// y 67–96 pt on the reference device: 8 pt below the safe-area top, 29 pt tall.
+    /// y 67–96 pt on the reference device: **8 pt below the safe-area top**, 29 pt tall.
     /// The centred mark is absolutely centred (ZStack), so an odd-width `•••`/`+` pair
     /// can never nudge it off-centre.
+    ///
+    /// The 8 pt is safe-area-relative and identical on both idioms — which is why the
+    /// absolute y differs and must not be read as a defect (§6 rule 6): iPhone's top inset
+    /// is 62 pt and iPadOS 26's is 32 pt, so the same code puts the first ink at 76 pt and
+    /// 46 pt respectively — 14 pt below the safe area on both. Verify the offset, never the
+    /// phone's absolute band.
     private var toolbar: some View {
         ZStack {
             WLBrandMark()
@@ -124,12 +176,27 @@ struct WatchlistScreen: View {
                         .frame(width: 44, height: 29, alignment: .leading)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TVPressStyle(.glyph))
                 .padding(.leading, 32)
                 .accessibilityLabel(L10n.t("More", model.lang))
+                // §4-A20.7 — regular width anchors the real popover on the real button,
+                // which also retires the hard-coded leading 11.7 / top 44.3 anchor.
+                .popover(
+                    isPresented: Binding(get: { menuOpen && widthClass.isRegular },
+                                         set: { if !$0 { closeMenu() } }),
+                    attachmentAnchor: .rect(.bounds),
+                    arrowEdge: .top
+                ) {
+                    dropdownCard
+                        .frame(width: WLPopup.width)
+                        // The card owns its own `Theme.panel2` fill; the popover chrome
+                        // behind it must match rather than showing a system material.
+                        .presentationBackground(Theme.panel2)
+                        .presentationCompactAdaptation(.popover)
+                }
                 Spacer(minLength: TVSpace.s2)
                 Button {
-                    model.searchMode = .add
+                    model.openSearch(.add)
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 21, weight: .regular))
@@ -137,13 +204,16 @@ struct WatchlistScreen: View {
                         .frame(width: 44, height: 29, alignment: .trailing)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TVPressStyle(.glyph))
                 .padding(.trailing, 19.3)
                 .accessibilityLabel(L10n.t("Add symbol", model.lang))
             }
         }
         .frame(height: 29)
         .padding(.top, 8)
+        // IPAD-06 — the absolute-centre ZStack is correct; it only needed a bounded
+        // container, or the `•••`/`+` pair sat 700 pt apart around a centred mark.
+        .tvReadableWidth()
     }
 
     // MARK: - List chips (§3.1.3)
@@ -155,10 +225,15 @@ struct WatchlistScreen: View {
             TVChipRow(
                 titles: watchlists.lists.map(\.name),
                 selectedIndex: watchlists.activeIndex,
-                onSelect: { watchlists.activeIndex = $0 }
+                onSelect: { index in
+                    withAnimation(TVList.reorder) { watchlists.activeIndex = index }
+                }
             )
             .padding(.top, 14)
             .padding(.bottom, TVSpace.s2)
+            // Same bounded column as the toolbar above and the rows below; the under-tab
+            // rule stays full-bleed like every other structural line (§2.1).
+            .tvReadableWidth()
             TVHairline(weight: .hair, tone: .structural)
         }
     }
@@ -197,16 +272,34 @@ struct WatchlistScreen: View {
                         size: .watchlist,
                         inset: TVSymbolRowMetrics.leftInset
                     )
+                    .tvReadableWidth()
                 }
+                // ANIM-09 — row and its divider are one identified subview, so an insert
+                // or a sort re-order moves them as a unit instead of tearing.
                 ForEach(displayedSymbols, id: \.self) { sym in
-                    symbolRow(sym)
-                    TVHairline(weight: .hair, tone: .list, leadingInset: TVSymbolRowMetrics.leftInset)
+                    rowWithDivider(sym)
                 }
                 if watchlists.active.symbols.isEmpty { emptyState }
                 addSymbolFooter
             }
             .padding(.bottom, TVSpace.s6)
         }
+        .sensoryFeedback(.impact(weight: .light), trigger: watchlists.active.symbols.count)
+    }
+
+    /// IPAD-07 — the row content is bounded to the readable column (a 'BTC-USD' whose ink
+    /// ended at x 135 while its price started at x 735 is not a row, it is two columns with
+    /// 620 pt of nothing between them). The divider stays **full-bleed**: TV keeps rules
+    /// edge-to-edge while content is inset. No column is invented to fill the gap.
+    private func rowWithDivider(_ sym: String) -> some View {
+        VStack(spacing: 0) {
+            symbolRow(sym).tvReadableWidth()
+            TVHairline(weight: .hair, tone: .list, leadingInset: TVSymbolRowMetrics.leftInset)
+        }
+        .transition(.asymmetric(
+            insertion: .opacity,
+            removal: .opacity.combined(with: .move(edge: .leading))
+        ))
     }
 
     private func symbolRow(_ sym: String) -> some View {
@@ -236,7 +329,7 @@ struct WatchlistScreen: View {
             // quote lane carries an extended print (§3.6 D2).
             TVSymbolRow(data, variant: .watchlist3)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.row))
         .contextMenu { rowMenu(sym) }
     }
 
@@ -274,14 +367,14 @@ struct WatchlistScreen: View {
             // `WatchlistStore` does not expose yet (it has `moveToTop` and nothing else),
             // so long-press → Move to top is the reorder we can actually persist today.
             Button {
-                watchlists.moveToTop(sym)
+                withAnimation(TVList.reorder) { watchlists.moveToTop(sym) }
             } label: {
                 Label(L10n.t("Move to top", model.lang), systemImage: "arrow.up.to.line")
             }
         }
         Section {
             Button(role: .destructive) {
-                watchlists.remove(sym)
+                withAnimation(TVList.reorder) { watchlists.remove(sym) }
             } label: {
                 Label(L10n.t("Remove", model.lang), systemImage: "trash")
             }
@@ -291,7 +384,7 @@ struct WatchlistScreen: View {
     /// §3.1.10 / spec-watchlist §3.7 — the only centred row in the list.
     private var addSymbolFooter: some View {
         Button {
-            model.searchMode = .add
+            model.openSearch(.add)
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: "plus")
@@ -304,7 +397,8 @@ struct WatchlistScreen: View {
             .frame(height: TVSymbolRowMetrics.symbolHeight)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.row))
+        .tvReadableWidth()
     }
 
     private var emptyState: some View {
@@ -325,19 +419,22 @@ struct WatchlistScreen: View {
 
     private func openMenu() {
         expanded = .root
-        withAnimation(.easeOut(duration: 0.12)) { menuOpen = true }
+        withAnimation(WLPopup.motion) { menuOpen = true }
     }
 
     private func closeMenu() {
-        withAnimation(.easeOut(duration: 0.12)) { menuOpen = false }
+        withAnimation(WLPopup.motion) { menuOpen = false }
         expanded = .root
     }
 
-    /// Compact popup anchored top-left over the dimmed list — card x 11.7, top y 103.3,
-    /// width 250 (spec2 §2.2/§3.2).
+    /// Compact popup anchored top-left over the list — card x 11.7, top y 103.3, width 250
+    /// (spec2 §2.2/§3.2). ANIM-15: the scrim is the tap-out target, not a modal blackout —
+    /// TV's own `•••` popover (t-096/t-097) sits over an **undimmed** page, so 0.55 is cut
+    /// to 0.22 (§4-A20.8) and the card scales out of the button's corner instead of fading
+    /// in over 0.12 s, which is too fast to read as motion at all.
     private var dropdownOverlay: some View {
         ZStack(alignment: .topLeading) {
-            Color.black.opacity(0.55)
+            Color.black.opacity(0.22)
                 .ignoresSafeArea()
                 .onTapGesture { closeMenu() }
             dropdownCard
@@ -345,7 +442,7 @@ struct WatchlistScreen: View {
                 .padding(.leading, 11.7)
                 .padding(.top, 44.3)
         }
-        .transition(.opacity)
+        .transition(.scale(scale: 0.92, anchor: .topLeading).combined(with: .opacity))
     }
 
     @ViewBuilder
@@ -360,6 +457,8 @@ struct WatchlistScreen: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.panel2, in: RoundedRectangle(cornerRadius: TVRadius.tile, style: .continuous))
+        // The accordion swaps the card's whole body; without this the card's height steps.
+        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: expanded)
     }
 
     @ViewBuilder
@@ -368,11 +467,11 @@ struct WatchlistScreen: View {
         WLPopupGroupLabel(text: watchlists.active.name, height: 30)
         WLPopupDivider()
         WLPopupRow(title: L10n.t("Edit", model.lang), chevron: "chevron.right", icon: "pencil") {
-            withAnimation(.easeOut(duration: 0.12)) { expanded = .edit }
+            withAnimation(WLPopup.motion) { expanded = .edit }
         }
         WLPopupDivider()
         WLPopupRow(title: L10n.t("Sort by", model.lang), chevron: "chevron.right", icon: "arrow.down.arrow.up") {
-            withAnimation(.easeOut(duration: 0.12)) { expanded = .sort }
+            withAnimation(WLPopup.motion) { expanded = .sort }
         }
         WLPopupDivider()
         // Placeholder affordance: the news plane has no published per-watchlist API yet.
@@ -384,7 +483,7 @@ struct WatchlistScreen: View {
         WLPopupGroupLabel(text: L10n.t("Watchlists", model.lang), height: 37)
         WLPopupDivider()
         WLPopupRow(title: L10n.t("All watchlists", model.lang), chevron: "chevron.right", icon: "bookmark") {
-            withAnimation(.easeOut(duration: 0.12)) { expanded = .allLists }
+            withAnimation(WLPopup.motion) { expanded = .allLists }
         }
         WLPopupDivider()
         WLPopupRow(title: L10n.t("Create new list", model.lang), icon: "plus") {
@@ -403,7 +502,7 @@ struct WatchlistScreen: View {
             chevron: "chevron.down",
             icon: "arrow.down.arrow.up"
         ) {
-            withAnimation(.easeOut(duration: 0.12)) { expanded = .root }
+            withAnimation(WLPopup.motion) { expanded = .root }
         }
         WLPopupDivider()
         ForEach(Array(WLSortField.allCases.enumerated()), id: \.element) { index, field in
@@ -413,7 +512,7 @@ struct WatchlistScreen: View {
                 isActive: field == sortField
             ) {
                 guard field.isSupported else { return }
-                sortField = field
+                withAnimation(TVList.reorder) { sortField = field }
                 closeMenu()
             }
             if index < WLSortField.allCases.count - 1 { WLPopupDivider() }
@@ -430,7 +529,7 @@ struct WatchlistScreen: View {
             chevron: "chevron.down",
             icon: "pencil"
         ) {
-            withAnimation(.easeOut(duration: 0.12)) { expanded = .root }
+            withAnimation(WLPopup.motion) { expanded = .root }
         }
         WLPopupDivider()
         WLPopupRow(
@@ -452,7 +551,7 @@ struct WatchlistScreen: View {
             chevron: "chevron.down",
             icon: "bookmark"
         ) {
-            withAnimation(.easeOut(duration: 0.12)) { expanded = .root }
+            withAnimation(WLPopup.motion) { expanded = .root }
         }
         WLPopupDivider()
         ForEach(Array(watchlists.lists.enumerated()), id: \.offset) { index, list in
@@ -460,7 +559,7 @@ struct WatchlistScreen: View {
                 title: list.name,
                 icon: index == watchlists.activeIndex ? "checkmark" : nil
             ) {
-                watchlists.activeIndex = index
+                withAnimation(TVList.reorder) { watchlists.activeIndex = index }
                 closeMenu()
             }
             if index < watchlists.lists.count - 1 { WLPopupDivider() }
@@ -495,6 +594,12 @@ struct WatchlistScreen: View {
         default: return nil
         }
     }
+}
+
+/// ANIM-09 — list mutations (reorder, remove, sort, list switch) share one curve so a row
+/// leaving and the rows closing the gap read as a single movement.
+private enum TVList {
+    static let reorder: Animation = .spring(response: 0.34, dampingFraction: 0.86)
 }
 
 // MARK: - Sort fields (spec2 §2.3 — TV's nine rows, in TV's order)
@@ -542,11 +647,19 @@ enum WLSortField: CaseIterable, Hashable {
 
 // MARK: - Popup chrome (spec2 §3.2 — a 44 pt row token distinct from TVMenuRow's 60 pt)
 
+/// SWEEP-COLOR-POPUP-ROWS — `rowLabel` / `groupLabel` / `baselineLabel` below are
+/// **spec-locked measured values** (spec2-watchlist D7/D8) that intentionally differ from
+/// the sheet and page tokens. They stay local: a semantic name in `Theme` invites a future
+/// session to "adjust" a measurement.
+///
 /// Context-specific values the shared kit deliberately does not carry: spec2 D7/D8 record
 /// that compact dropdown rows are *brighter* than sheet rows (`#F6F6F6` vs `Theme.text`)
 /// and that their group labels are a plain mixed-case one-off, not `TVSectionCaption`.
 /// Scoped to this file so nothing leaks into `Theme`/`TVKit`.
 private enum WLPopup {
+    /// ANIM-15 — one curve for open/close and every accordion branch, replacing six
+    /// separate `.easeOut(0.12)` calls.
+    static let motion: Animation = .spring(response: 0.30, dampingFraction: 0.82)
     /// Card width, left-anchored under the `•••` button.
     static let width: CGFloat = 250
     /// Standard action/option row.
@@ -626,7 +739,7 @@ private struct WLPopupRow: View {
             .frame(height: height)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.row))
         .disabled(!isEnabled)
     }
 }
@@ -669,7 +782,7 @@ private struct WLSortRow: View {
             .frame(height: isBaseline ? WLPopup.baselineHeight : WLPopup.rowHeight)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.row))
         .disabled(!field.isSupported)
         .accessibilityAddTraits(isActive ? [.isSelected] : [])
     }

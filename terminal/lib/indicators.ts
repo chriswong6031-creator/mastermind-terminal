@@ -53,8 +53,10 @@ export const IND_ORDER: IndKey[] = [
 // Module scope is safe: the pre-paint LOCALE_INIT script (app/layout.tsx) stamps data-shell on
 // <html> before any bundle executes, and these values never reach SSR'd HTML (no hydration risk).
 // Three deliberate deviations from the raw measurement — do NOT "fix" them:
-//  1. volume/hist alpha stays ~0.45/0.55 (not TV's full saturation): our volume sliver is ~3× TV's
-//     share of the price pane, so full saturation reads LOUDER. Hue matched, alpha compensates.
+//  1. C4/CHART-04 RESOLVED the old geometry-vs-alpha trade: the band itself shrank 22% → 12%
+//     (ChartPanel's "volume" scaleMargins), so upFill/downFill no longer have to compensate and
+//     carry 0.70. upHist/downHist stay at 0.55 — the histograms live in their own sub-panes and
+//     were never oversized. Alpha and band size must move TOGETHER; changing one alone re-breaks it.
 //  2. COL.faint (MA-200) darkens — in the shell it was the brightest line on the chart.
 //  3. MACD-RSI cyan/yellow are untouched; TV's own oscillator pills measure the same family.
 const _SHELL = typeof document !== "undefined"
@@ -66,8 +68,8 @@ const COL = {
   up: _SHELL ? "#089981" : "#26c281",
   down: _SHELL ? "#f23645" : "#f0566b",
   gold: "#e8b339", yellow: "#f5c518",
-  upFill: _SHELL ? "rgba(8,153,129,0.45)" : "rgba(38,194,129,0.4)",
-  downFill: _SHELL ? "rgba(242,54,69,0.45)" : "rgba(240,86,107,0.4)",
+  upFill: _SHELL ? "rgba(8,153,129,0.70)" : "rgba(38,194,129,0.4)",
+  downFill: _SHELL ? "rgba(242,54,69,0.70)" : "rgba(240,86,107,0.4)",
   upHist: _SHELL ? "rgba(8,153,129,0.55)" : "rgba(38,194,129,0.5)",
   downHist: _SHELL ? "rgba(242,54,69,0.55)" : "rgba(240,86,107,0.5)",
   bbBand: "rgba(77,130,255,0.55)", bbBasis: "rgba(214,218,227,0.45)",

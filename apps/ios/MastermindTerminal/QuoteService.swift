@@ -6,7 +6,10 @@ import Foundation
 /// without adding upstream load. null → caller falls back to manifest EOD.
 @MainActor
 final class QuoteTicker: ObservableObject {
-    struct Quote: Codable {
+    /// `Equatable` so a poll that returns the same print does not republish (ANIM-08):
+    /// `PriceStack`'s tick flash keys off a real change, and a wholesale rewrite of the
+    /// dictionary every 6 s would otherwise re-render every row with nothing to say.
+    struct Quote: Codable, Equatable {
         let last: Double?
         let chg: Double?
         let basis: String?
@@ -82,8 +85,12 @@ final class QuoteTicker: ObservableObject {
               (response as? HTTPURLResponse)?.statusCode == 200,
               let batch = try? JSONDecoder().decode(Batch.self, from: data) else { return }
         for (sym, quote) in batch.quotes {
-            if let quote { quotes[sym] = quote }
-            else { quotes.removeValue(forKey: sym) }
+            if let quote {
+                guard quotes[sym] != quote else { continue }
+                quotes[sym] = quote
+            } else if quotes[sym] != nil {
+                quotes.removeValue(forKey: sym)
+            }
         }
     }
 }

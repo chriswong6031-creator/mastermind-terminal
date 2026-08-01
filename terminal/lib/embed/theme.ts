@@ -99,13 +99,20 @@ const LIGHT: EmbedPalette = {
  * CLEAN — the TV symbol-sheet mini-chart palette, measured off the reference stills in
  * docs/tv-parity/spec-symbol-detail.md (§0 global palette + §2B chart plot area).
  *
- * Deliberately DIFFERENT from the house v5 candles above: TV's sheet chart runs a brighter
- * teal/red pair (#22AB94 / #F7525F) on a quiet canvas — no vertical gridlines, ~5% white
- * horizontals, #B1B5BE axis text, no scale borders. Only reachable via ?clean=1; the default
- * widget (and every existing embed) keeps the house palette byte-for-byte.
+ * Deliberately DIFFERENT from the house v5 candles above: TV's sheet chart runs the measured
+ * fill pair (#089981 / #F23645) on a quiet canvas — NO gridlines at all (C11), #B1B5BE axis text,
+ * no scale borders, no last-value badge. Only reachable via ?clean=1; the default widget (and
+ * every existing embed) keeps the house palette byte-for-byte.
  */
 export interface CleanOverlay {
-  /** Measured TV bull/bear (spec §0). */
+  /**
+   * TV's bull/bear **fill** pair — the tokens TV paints CANDLES in (master spec §47-48, token
+   * table §132-135: `tvUpFill` = up candles, `tvUpText` = positive change text).
+   * C11/CHART-10: this was `#22AB94` / `#F7525F`, which are the TEXT tokens — so the sheet chart
+   * and the Chart tab rendered the same instrument in two visibly different greens. A colour
+   * census of IMG_2325.PNG's plot (y900–1750) returns `#089981` at 34,392 px and `#F23645` at
+   * 25,040 px, with the text pair absent from the candles entirely.
+   */
   up: string;
   down: string;
   /** Axis tick text (spec §2B right price axis + time ticks). */
@@ -117,8 +124,8 @@ export interface CleanOverlay {
 }
 
 export const CLEAN: CleanOverlay = {
-  up: "#22AB94",
-  down: "#F7525F",
+  up: "#089981",
+  down: "#F23645",
   axisText: "#B1B5BE",
   grid: "rgba(255,255,255,.05)",
   priorClose: "rgba(180,185,195,.5)",

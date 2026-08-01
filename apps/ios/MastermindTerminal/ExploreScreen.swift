@@ -5,8 +5,9 @@ import SwiftUI
 //
 // Surface law (§1.2 rule 1): a full-screen tab root that keeps the 5-tab bar visible is
 // pure `Theme.bg`. Every raised child on it therefore fills `Theme.pill` `#2E2E2E`, not
-// the sheet-tier `#2C2C2E` (the one-notch rule, C21) — which is why this screen builds
-// its own action tile instead of reusing `TVTile`, whose fill is keyed to a sheet host.
+// the sheet-tier `#2C2C2E` (the one-notch rule, C21) — which is why the index cards and
+// both pill rows fill `Theme.pill` and `TVTile` (whose fill is keyed to a sheet host) is
+// never used on this screen.
 //
 // Margin correction (spec2-explore §2.2a): the Explore root uses the **16 pt** margin,
 // not the 20 pt margin §1.4 assigns to black full-screen pages. Both hard geometric
@@ -24,13 +25,9 @@ private enum ExploreMetrics {
     static let searchToTitleGap: CGFloat = 15.5
     /// §3.1 — title cap bottom → action-row top is 24.3 pt, less SF Pro's 34 pt descent.
     static let titleToActionGap: CGFloat = 17
-    /// §3.1 — 117.7 × 63.7 pt action button, 8.3 pt gutter.
-    static let actionWidth: CGFloat = 117.7
-    static let actionHeight: CGFloat = 63.7
-    static let actionGutter: CGFloat = 8.3
-    static let actionIconInk: CGFloat = 19.3
-    static let actionIconTopInset: CGFloat = 12
-    static let actionIconToLabelGap: CGFloat = 12
+    // SCREEN-02: the 117.7 × 63.7 pt tile metrics that used to live here described the
+    // wrong primitive. §3.8.2 measures this row as capsules, so it is built from
+    // `TVNavPill`'s own measured 31.3 pt height and 11 pt gutter instead.
     /// §3.2 — action-row bottom → pill-row top.
     static let actionToPillsGap: CGFloat = 16.7
     /// §3.3 — pill-row bottom → first card row top.
@@ -58,12 +55,18 @@ struct ExploreScreen: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var manifest: ManifestStore
     @StateObject private var ticker = QuoteTicker()
+    @Environment(\.tvWidthClass) private var publishedWidthClass
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// Drives the app's existing "Not in this alpha" notice for the placeholder entries.
     @State private var showsNotInAlpha = false
+    /// Headless §6.2 capture state (`-mmDiscover`): the pushed Discover frame is tap-only.
+    @State private var debugDiscover = false
 
     /// The majors rail. Real data throughout: manifest EOD renders instantly, `QuoteTicker`
     /// overlays the live/delayed print from `/api/quote` on the existing 6 s cadence.
     private let indices = ["SPY", "QQQ", "DIA", "IWM", "BTC-USD", "ETH-USD"]
+
+    private var widthClass: TVWidthClass { publishedWidthClass ?? TVWidthClass(horizontalSizeClass) }
 
     var body: some View {
         NavigationStack {
@@ -83,6 +86,14 @@ struct ExploreScreen: View {
             }
             .background(Theme.bg.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: $debugDiscover) {
+                ShellWebScreen(title: L10n.t("Discover", model.lang), path: "discover")
+            }
+            .onAppear {
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-mmDiscover") { debugDiscover = true }
+                #endif
+            }
             .alert(
                 Text(L10n.t("Not in this alpha", model.lang)),
                 isPresented: $showsNotInAlpha
@@ -92,8 +103,15 @@ struct ExploreScreen: View {
                 Text(L10n.t("This part of Explore arrives in a later alpha.", model.lang))
             }
         }
-        .onAppear { ticker.start(symbols: indices) }
-        .onDisappear { ticker.stop() }
+        // A1.7 — the screen is mounted for the app's whole lifetime now, so the ticker
+        // follows the selected tab instead of view appearance.
+        .onChange(of: model.tab, initial: true) { _, tab in
+            if tab == .explore {
+                ticker.start(symbols: indices)
+            } else {
+                ticker.stop()
+            }
+        }
     }
 
     // MARK: - §2.1/§2.2 header
@@ -110,7 +128,7 @@ struct ExploreScreen: View {
                         .foregroundStyle(Theme.text)
                         .frame(width: ExploreMetrics.searchGlyph, height: ExploreMetrics.searchGlyph)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TVPressStyle(.glyph))
                 .accessibilityLabel(L10n.t("Search", model.lang))
             }
             .padding(.trailing, ExploreMetrics.searchGlyphTrailingInset)
@@ -125,70 +143,72 @@ struct ExploreScreen: View {
                 .padding(.top, ExploreMetrics.searchToTitleGap)
                 .accessibilityAddTraits(.isHeader)
         }
+        // IPAD-09 — the search glyph sat ~660 pt from the title it belongs to.
+        .tvReadableWidth()
     }
 
-    // MARK: - §3.1 action row
+    // MARK: - §3.8.2 action row
 
-    /// TV ships exactly three buttons here (News / Calendar / Brokers) and they tile the
-    /// full 402 pt width, which is why the reference frame shows no scrolling. Brokers is
-    /// excluded from the alpha (§3.8.6, ledger bucket D) and our two working web
-    /// workspaces take its place, so the row carries four. The measured 117.7 pt cell is
-    /// the token that survives (it is also the §2.10 3-column tile width); the row scrolls
-    /// and the fourth peeks, matching the page's own peek convention (§3.3).
+    /// SCREEN-02 — §3.8.2 measures this row as "filled `#2E2E2E` capsule buttons, 13–14 pt
+    /// labels". It shipped as ~112 × 64 pt icon-over-label tiles, i.e. `TVTile` geometry
+    /// (§3.5.6's Analysis-hub tool cell), with the correctly-built `TVNavPill` category row
+    /// directly beneath it on the same screen. The **inventory** (News / Calendar /
+    /// Discover / Analysis in place of TV's News / Calendar / Brokers) is spec-sanctioned by
+    /// §3.8.6 — only the shape was wrong.
+    ///
+    /// IPAD-08: on the phone the row scrolls because 402 pt clips it. In regular width the
+    /// reason to scroll has evaporated, so the same capsules tile a bounded column.
+    @ViewBuilder
     private var actionRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: ExploreMetrics.actionGutter) {
-                actionTile(icon: "newspaper", title: L10n.t("News", model.lang)) {
-                    showsNotInAlpha = true
-                }
-                actionTile(icon: "calendar", title: L10n.t("Calendar", model.lang)) {
-                    showsNotInAlpha = true
-                }
-                webActionTile(icon: "square.grid.2x2", title: L10n.t("Discover", model.lang), path: "discover")
-                webActionTile(icon: "brain.head.profile", title: L10n.t("Analysis", model.lang), path: "analysis")
+        if widthClass.isRegular {
+            HStack(spacing: TVNavPill.gutter) {
+                actionPills
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, TVSpace.s4)
+            .tvReadableWidth()
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: TVNavPill.gutter) {
+                    actionPills
+                }
+                .padding(.horizontal, TVSpace.s4)
+            }
+            .frame(height: TVNavPill.height)
         }
-        .frame(height: ExploreMetrics.actionHeight)
     }
 
-    /// The placeholder variant: a fully-styled control that surfaces the app's existing
-    /// "Not in this alpha" notice rather than pretending the feature is missing.
-    private func actionTile(icon: String, title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { actionTileLabel(icon: icon, title: title) }
-            .buttonStyle(.plain)
+    @ViewBuilder
+    private var actionPills: some View {
+        // The placeholder variants surface the app's existing "Not in this alpha" notice
+        // rather than pretending the feature is missing.
+        TVNavPill(title: L10n.t("News", model.lang), icon: "newspaper") { showsNotInAlpha = true }
+        TVNavPill(title: L10n.t("Calendar", model.lang), icon: "calendar") { showsNotInAlpha = true }
+        // The working variants: shell-mode web workspaces pushed with native chrome.
+        webActionPill(icon: "square.grid.2x2", title: L10n.t("Discover", model.lang), path: "discover")
+        webActionPill(icon: "brain.head.profile", title: L10n.t("Analysis", model.lang), path: "analysis")
     }
 
-    /// The working variant: a shell-mode web workspace pushed with native chrome.
-    private func webActionTile(icon: String, title: String, path: String) -> some View {
+    /// `TVNavPill`'s anatomy behind a `NavigationLink`, which cannot take the primitive's
+    /// action closure.
+    private func webActionPill(icon: String, title: String, path: String) -> some View {
         NavigationLink {
             ShellWebScreen(title: title, path: path)
         } label: {
-            actionTileLabel(icon: icon, title: title)
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                Text(title)
+                    .font(TVType.pillLabel)
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: TVNavPill.height)
+            .background(Theme.pill, in: Capsule())
         }
-        .buttonStyle(.plain)
-    }
-
-    /// 117.7 × 63.7 pt, `Theme.pill` on black (C21), r 12 `.continuous` (§1.9; the raster
-    /// corner only bounds it to 10–12 pt, B10, and 12 is the app-wide card radius).
-    /// Vertical rhythm: 12 top / 19.3 icon / 12 gap / ~9.3 label ink / 11 bottom = 63.7.
-    private func actionTileLabel(icon: String, title: String) -> some View {
-        VStack(spacing: ExploreMetrics.actionIconToLabelGap) {
-            Image(systemName: icon)
-                .font(.system(size: ExploreMetrics.actionIconInk, weight: .regular))
-                .foregroundStyle(Theme.text)
-                .frame(height: ExploreMetrics.actionIconInk)
-            // §1.3 "Pill label (navigation)": 13–14 pt Semibold, `Theme.text` always.
-            Text(title)
-                .font(TVType.pillLabel)
-                .foregroundStyle(Theme.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-        }
-        .padding(.top, ExploreMetrics.actionIconTopInset)
-        .frame(width: ExploreMetrics.actionWidth, height: ExploreMetrics.actionHeight, alignment: .top)
-        .background(Theme.pill, in: RoundedRectangle(cornerRadius: TVRadius.tile, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: TVRadius.tile, style: .continuous))
+        .buttonStyle(TVPressStyle(.tile))
     }
 
     // MARK: - §3.2 category pills
@@ -202,26 +222,48 @@ struct ExploreScreen: View {
             guard categories.indices.contains(index) else { return }
             model.openSearch(.go, category: categories[index])
         }
+        // Same bounded column as the action row above and the cards below.
+        .tvReadableWidth()
     }
 
     // MARK: - §3.3 index-card carousel
 
     /// A 2-row × N-column grid that pans as one unit — not two independent single-row
     /// carousels, and not a static 2-column grid.
+    ///
+    /// IPAD-08 / §4-A20.3: in regular width the grid ended ~485 pt into an 834 pt page and
+    /// had nothing left to scroll to, so the same measured cell tiles a bounded column
+    /// instead. Every card metric (`cardWidth`, `cardHeight`, `cardGutter`,
+    /// `cardRowGutter`, `ExploreColumnRule`) is unchanged — only the column **count**
+    /// adapts, which is the whole of §6's extrapolation law.
+    @ViewBuilder
     private var carousel: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            LazyHGrid(
-                rows: [
-                    GridItem(.fixed(ExploreMetrics.cardHeight), spacing: ExploreMetrics.cardRowGutter),
-                    GridItem(.fixed(ExploreMetrics.cardHeight), spacing: 0),
-                ],
-                spacing: ExploreMetrics.cardGutter
+        if widthClass.isRegular {
+            LazyVGrid(
+                columns: TVGrid.adaptiveColumns(minimum: ExploreMetrics.cardWidth,
+                                                gutter: ExploreMetrics.cardGutter),
+                alignment: .leading,
+                spacing: ExploreMetrics.cardRowGutter
             ) {
                 ForEach(indices, id: \.self) { indexCard($0) }
             }
             .padding(.horizontal, TVSpace.s4)
+            .tvReadableWidth()
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHGrid(
+                    rows: [
+                        GridItem(.fixed(ExploreMetrics.cardHeight), spacing: ExploreMetrics.cardRowGutter),
+                        GridItem(.fixed(ExploreMetrics.cardHeight), spacing: 0),
+                    ],
+                    spacing: ExploreMetrics.cardGutter
+                ) {
+                    ForEach(indices, id: \.self) { indexCard($0) }
+                }
+                .padding(.horizontal, TVSpace.s4)
+            }
+            .frame(height: ExploreMetrics.cardHeight * 2 + ExploreMetrics.cardRowGutter)
         }
-        .frame(height: ExploreMetrics.cardHeight * 2 + ExploreMetrics.cardRowGutter)
     }
 
     /// Borderless: no enclosing rounded rect, no fill panel, no drawn top or bottom edge.
@@ -299,7 +341,7 @@ struct ExploreScreen: View {
             .contentShape(Rectangle())
             .overlay(alignment: .trailing) { ExploreColumnRule() }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.tile))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(name), \(TVFormat.price(last)), \(TVFormat.change(change))")
     }
@@ -325,7 +367,7 @@ struct ExploreScreen: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TVPressStyle(.glyph))
             .accessibilityAddTraits(.isHeader)
 
             Text(L10n.t("Top stories arrive in a later alpha.", model.lang))
@@ -334,6 +376,7 @@ struct ExploreScreen: View {
                 .padding(.top, TVSpace.s3)
         }
         .padding(.horizontal, TVSpace.s4)
+        .tvReadableWidth()
     }
 }
 

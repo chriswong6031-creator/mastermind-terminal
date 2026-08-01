@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // =====================================================================================
 // TVKit — the shared TV-parity component kit.
@@ -90,6 +91,198 @@ enum TVRadius {
     static let toast: CGFloat = 24
     /// News-row thumbnail.
     static let thumb: CGFloat = 8
+}
+
+// MARK: - Adaptivity seam (IPAD-03)
+
+/// Layout-affecting metrics that are **not** measured from the phone corpus.
+enum TVMetrics {
+    /// The regular-width content column. **INVENTION — §4-A20.1**: there is no
+    /// TradingView-for-iPad reference in either corpus, so this is a conservative
+    /// extrapolation of the 402 pt phone content measure onto a 4:3 reading width, not a
+    /// measurement. Re-derive it the moment iPad captures exist.
+    static let readableWidth: CGFloat = 704
+}
+
+/// The app's single width seam. Screens branch on this, never on
+/// `horizontalSizeClass` directly, so the extrapolation law in §6 has one place to live.
+enum TVWidthClass {
+    case compact
+    case regular
+
+    init(_ sizeClass: UserInterfaceSizeClass?) {
+        self = sizeClass == .regular ? .regular : .compact
+    }
+
+    var isRegular: Bool { self == .regular }
+}
+
+private struct TVWidthClassKey: EnvironmentKey {
+    static let defaultValue: TVWidthClass? = nil
+}
+
+extension EnvironmentValues {
+    /// Published by the root container. `nil` means "nobody published one", and every
+    /// consumer falls back to `horizontalSizeClass` — so a screen resolves correctly even
+    /// when it is hosted outside the root (previews, sheets presented on their own).
+    var tvWidthClass: TVWidthClass? {
+        get { self[TVWidthClassKey.self] }
+        set { self[TVWidthClassKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Publishes the width class into the environment. Call once, at the root container.
+    func tvWidthClass(_ value: TVWidthClass) -> some View {
+        environment(\.tvWidthClass, value)
+    }
+}
+
+/// Resolves the seam for a subtree: the root's published value wins, otherwise the
+/// ambient size class.
+struct TVWidthClassReader<Content: View>: View {
+    @Environment(\.tvWidthClass) private var published
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    private let content: (TVWidthClass) -> Content
+
+    init(@ViewBuilder content: @escaping (TVWidthClass) -> Content) {
+        self.content = content
+    }
+
+    var body: some View {
+        content(published ?? TVWidthClass(sizeClass))
+    }
+}
+
+/// Bounds a stacked column to `TVMetrics.readableWidth` and centres it, leaving the host
+/// full-bleed. This is the whole fix for the dead-middle class of iPad defect: measured
+/// tokens (row heights, insets, type, radii, hairlines) are untouched — only the column
+/// narrows. Dividers that must stay edge-to-edge belong *outside* this wrapper.
+struct TVReadableWidth<Content: View>: View {
+    var maxWidth: CGFloat = TVMetrics.readableWidth
+    private let content: Content
+
+    init(maxWidth: CGFloat = TVMetrics.readableWidth, @ViewBuilder content: () -> Content) {
+        self.maxWidth = maxWidth
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .frame(maxWidth: maxWidth)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+extension View {
+    /// Modifier spelling of `TVReadableWidth`, for wrapping a single existing subview.
+    func tvReadableWidth(_ maxWidth: CGFloat = TVMetrics.readableWidth) -> some View {
+        frame(maxWidth: maxWidth).frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - ANIM-07 TVPressStyle
+
+/// `.buttonStyle(.plain)` suppresses every default highlight, which left no tappable
+/// surface in the app with a pressed state. TV fills the pressed row lighter for the whole
+/// touch (t-073, t-074, t-078, t-079, t-080, t-097) — a state, not a flash.
+///
+/// Three kinds because one acknowledgement does not fit three anatomies: a full-bleed row
+/// cannot scale without tearing its dividers, and a bare glyph has no fill to lighten.
+struct TVPressStyle: ButtonStyle {
+    enum Kind {
+        /// Full-bleed list rows — lighten the whole row for the duration of the touch.
+        case row
+        /// Tiles, cards, capsules — a 3 % press-in.
+        case tile
+        /// Bare icon / text buttons with no plate of their own.
+        case glyph
+    }
+
+    var kind: Kind = .row
+
+    init(_ kind: Kind = .row) {
+        self.kind = kind
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed
+        return configuration.label
+            .background(kind == .row ? Color.white.opacity(pressed ? 0.07 : 0) : Color.clear)
+            .scaleEffect(kind == .tile && pressed ? 0.97 : 1)
+            .opacity(kind == .glyph && pressed ? 0.45 : 1)
+            .animation(.easeOut(duration: 0.12), value: pressed)
+    }
+}
+
+// MARK: - ANIM-18 shimmer / skeleton
+
+/// The one shimmer in the app: a `LinearGradient` mask swept left → right over 1.2 s,
+/// linear, repeating. Phase 0 is the instant reset, so the sweep never bounces back.
+struct TVShimmer: ViewModifier {
+    func body(content: Content) -> some View {
+        content.phaseAnimator([0.0, 1.0]) { view, phase in
+            view.mask {
+                GeometryReader { geo in
+                    // Opaque floor + travelling highlight: the floor keeps every pixel
+                    // visible (dimmed) while the band sweeps — a bare band mask leaves
+                    // content OUTSIDE it fully invisible for most of each cycle.
+                    ZStack(alignment: .leading) {
+                        Color.black.opacity(0.55)
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black, location: 0.5),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                        .frame(width: geo.size.width * 0.6)
+                        .offset(x: (phase * 1.6 - 0.6) * geo.size.width)
+                    }
+                }
+            }
+        } animation: { phase in
+            phase == 1 ? .linear(duration: 1.2) : .linear(duration: 0)
+        }
+    }
+}
+
+extension View {
+    func tvShimmer() -> some View { modifier(TVShimmer()) }
+}
+
+/// Placeholder block for a surface that is still loading — TV fills exactly this slot
+/// (t-088 → t-089) rather than leaving a hole or dropping a spinner on the page.
+/// Rounded rects at 5 % white, r 8, under the shared 1.2 s shimmer.
+struct TVSkeletonBlock: View {
+    var lines: Int = 3
+    var thumb: Bool = false
+    var lineHeight: CGFloat = 12
+    var spacing: CGFloat = TVSpace.s2
+    var thumbSize: CGFloat = 56
+
+    var body: some View {
+        HStack(alignment: .top, spacing: TVSpace.s3) {
+            if thumb {
+                RoundedRectangle(cornerRadius: TVRadius.thumb, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+                    .frame(width: thumbSize, height: thumbSize)
+            }
+            VStack(alignment: .leading, spacing: spacing) {
+                ForEach(0..<max(lines, 1), id: \.self) { index in
+                    RoundedRectangle(cornerRadius: TVRadius.thumb, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                        .frame(height: lineHeight)
+                        // Last line short, as a real paragraph ragged edge would be.
+                        .frame(maxWidth: index == max(lines, 1) - 1 && lines > 1 ? 180 : .infinity, alignment: .leading)
+                }
+            }
+        }
+        .tvShimmer()
+        .accessibilityHidden(true)
+    }
 }
 
 // MARK: - Number formatting (§2.6 colour rule)
@@ -248,7 +441,7 @@ struct TVCloseButton: View {
                     .frame(width: 30, height: 30)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.glyph))
         .accessibilityLabel(accessibilityLabel)
     }
 }
@@ -351,7 +544,7 @@ struct TVSearchField: View {
                             .font(.system(size: 15))
                             .foregroundStyle(Theme.text2)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TVPressStyle(.glyph))
                     .accessibilityLabel("Clear")
                 }
             }
@@ -370,7 +563,7 @@ struct TVSearchField: View {
                 Button(title) { onTrailing?() }
                     .font(.system(size: 17))
                     .foregroundStyle(.white)
-                    .buttonStyle(.plain)
+                    .buttonStyle(TVPressStyle(.glyph))
             case .glyph:
                 TVCloseButton(style: .circle) { onTrailing?() }
             }
@@ -424,6 +617,10 @@ struct TVTextField: View {
 struct TVChip: View {
     let title: String
     var isSelected = false
+    /// ANIM-14: inside a `TVChipRow` the selection capsule is hoisted into one
+    /// `matchedGeometryEffect` so it slides between chips instead of teleporting. A chip
+    /// used on its own still draws its own fill.
+    var drawsFill = true
     let action: () -> Void
 
     static let height: CGFloat = 33.7
@@ -436,16 +633,23 @@ struct TVChip: View {
                 .foregroundStyle(isSelected ? Theme.text : Theme.text2)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                // ANIM-20: the label is language-bearing, so an EN⇄中文 switch cross-fades
+                // instead of hard-cutting under the capsule.
+                .contentTransition(.opacity)
                 .padding(.horizontal, Self.horizontalPadding)
                 .frame(height: Self.height)
-                .background(isSelected ? Theme.pill : Color.clear, in: Capsule())
+                .background(isSelected && drawsFill ? Theme.pill : Color.clear, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.tile))
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 }
 
 /// Horizontally-scrollable `TVChip` row — leading inset 16 pt, no divider, no fade edge (§2.4).
+///
+/// The row owns the selection capsule (ANIM-14) and the scroll position: a selection that
+/// lands off-screen — which is every selection past the third chip on a phone — was
+/// previously invisible with no indication that anything had happened.
 struct TVChipRow: View {
     let titles: [String]
     let selectedIndex: Int
@@ -453,17 +657,37 @@ struct TVChipRow: View {
     var spacing: CGFloat = TVSpace.s2
     let onSelect: (Int) -> Void
 
+    @Namespace private var chipNS
+
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: spacing) {
-                ForEach(Array(titles.enumerated()), id: \.offset) { index, title in
-                    TVChip(title: title, isSelected: index == selectedIndex) { onSelect(index) }
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: spacing) {
+                    ForEach(Array(titles.enumerated()), id: \.offset) { index, title in
+                        TVChip(
+                            title: title,
+                            isSelected: index == selectedIndex,
+                            drawsFill: false
+                        ) { onSelect(index) }
+                            .background {
+                                if index == selectedIndex {
+                                    Capsule()
+                                        .fill(Theme.pill)
+                                        .matchedGeometryEffect(id: "tvchip", in: chipNS)
+                                }
+                            }
+                            .id(index)
+                    }
                 }
+                .padding(.leading, leadingInset)
+                .padding(.trailing, leadingInset)
+                .animation(.spring(response: 0.30, dampingFraction: 0.85), value: selectedIndex)
             }
-            .padding(.leading, leadingInset)
-            .padding(.trailing, leadingInset)
+            .frame(height: TVChip.height)
+            .onChange(of: selectedIndex) { _, index in
+                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(index, anchor: .center) }
+            }
         }
-        .frame(height: TVChip.height)
     }
 }
 
@@ -496,7 +720,7 @@ struct TVNavPill: View {
             .frame(height: Self.height)
             .background(Theme.pill, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.tile))
     }
 }
 
@@ -542,7 +766,7 @@ struct TVSegmentedPill: View {
                 .frame(height: Self.height)
                 .background(isSelected ? Theme.inverseRow : Theme.pill, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.tile))
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 }
@@ -801,16 +1025,11 @@ struct TVSymbolRow<Accessory: View>: View {
 
     @ViewBuilder private var trailingStack: some View {
         if variant == .watchlist3 || (data.trailingTop == nil && data.trailingBottom == nil) {
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(TVFormat.price(data.price))
-                    .font(TVType.rowPrimary.monospacedDigit())
-                    .foregroundStyle(Theme.text)
-                    .accessibilityIdentifier("regular-price")
-                Text(TVFormat.change(data.changePct))
-                    .font(TVType.rowChange.monospacedDigit())
-                    .foregroundStyle(TVFormat.changeColor(data.changePct))
-                    .accessibilityIdentifier("regular-change")
-            }
+            // ANIM-08: one price stack, so the rolling digits and the tick flash reach the
+            // list rows too — this branch used to be a second, static copy of `PriceStack`
+            // at identical type (17 Semibold over 15 Medium), which is why lists read as a
+            // page that reloads every 6 s rather than a live surface.
+            PriceStack(last: data.price, chgPct: data.changePct)
         } else {
             // §2.6: "its two lines match the leading stack's baselines exactly" — so the
             // `.symbol2`/`.compact` trailing text uses the SAME type as the leading stack
@@ -893,7 +1112,7 @@ struct TVAddGlyph: View {
                 .frame(width: 30, height: 30)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.glyph))
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(isAdded ? [.isSelected] : [])
     }
@@ -901,6 +1120,11 @@ struct TVAddGlyph: View {
 
 /// 18 pt verification/venue badge circle carried by search-result rows (§3.2.6):
 /// navy + white ✓ for a retail broker feed, deep blue + cyan globe for an exchange.
+///
+/// The three hexes below are **spec-locked measurements** from §3.2.6 (independently
+/// re-confirmed by pixel sampling during the SCREEN-05 review) and deliberately stay
+/// local: they belong to this one badge, and a semantic name in `Theme` would invite a
+/// future session to "adjust" a measured value to taste.
 struct TVExchangeBadge: View {
     enum Kind { case broker, exchange }
     var kind: Kind = .exchange
@@ -947,6 +1171,8 @@ struct TVMenuRow: View {
                         .font(TVType.rowPrimaryMenu)
                         .foregroundStyle(tint)
                         .lineLimit(1)
+                        // ANIM-20 — language-bearing label; cross-fade on an EN⇄中文 switch.
+                        .contentTransition(.opacity)
                     if let subtitle {
                         Text(subtitle)
                             .font(TVType.rowTertiary)
@@ -966,7 +1192,7 @@ struct TVMenuRow: View {
             .frame(height: Self.height)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.row))
     }
 }
 
@@ -981,6 +1207,10 @@ struct TVAccountRow: View {
     var trailingText: String? = nil
     var showsChevron = false
     var isDestructive = false
+    /// ANIM-19 — an in-flight row action (Sign out) reports in the chevron slot rather
+    /// than dropping a spinner somewhere else on the page. Takes the slot over the chevron:
+    /// a row that is working is not a row you can push into.
+    var trailingProgress = false
     let action: () -> Void
 
     static let height: CGFloat = 44
@@ -1001,6 +1231,8 @@ struct TVAccountRow: View {
                     .font(TVType.rowPrimaryMenu)
                     .foregroundStyle(tint)
                     .lineLimit(1)
+                    // ANIM-20 — language-bearing label; cross-fade on an EN⇄中文 switch.
+                    .contentTransition(.opacity)
                     .padding(.leading, 15.3)
                 Spacer(minLength: TVSpace.s2)
                 if let trailingText {
@@ -1008,9 +1240,14 @@ struct TVAccountRow: View {
                         .font(TVType.rowSecondary)
                         .foregroundStyle(Theme.text2)
                         .lineLimit(1)
-                        .padding(.trailing, showsChevron ? TVSpace.s2 : 25.7)
+                        .padding(.trailing, showsChevron || trailingProgress ? TVSpace.s2 : 25.7)
                 }
-                if showsChevron {
+                if trailingProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(Theme.text2)
+                        .padding(.trailing, 25.7)
+                } else if showsChevron {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.muted)
@@ -1020,7 +1257,7 @@ struct TVAccountRow: View {
             .frame(height: Self.height)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.row))
     }
 }
 
@@ -1119,6 +1356,20 @@ enum TVGrid {
         let gutter = count >= 3 ? threeColumnGutter : twoColumnGutter
         return Array(repeating: GridItem(.flexible(), spacing: gutter), count: count)
     }
+
+    /// The width seam applied to a grid: the **count** is the only thing that may change
+    /// with width (§6 extrapolation law) — cell metrics and gutters stay measured.
+    static func columns(for widthClass: TVWidthClass, compact: Int = 1, regular: Int = 2) -> [GridItem] {
+        columns(widthClass.isRegular ? regular : compact)
+    }
+
+    /// Adaptive variant for the rows that TV lays out as a horizontal scroller on the
+    /// phone: in regular width the reason to scroll is gone, so the same measured cell
+    /// tiles the column instead. Cell minimum/maximum are measured; the resulting column
+    /// count is derived — **§4-A20.2 / A20.3**.
+    static func adaptiveColumns(minimum: CGFloat, maximum: CGFloat = .infinity, gutter: CGFloat) -> [GridItem] {
+        [GridItem(.adaptive(minimum: minimum, maximum: maximum), spacing: gutter)]
+    }
 }
 
 /// Icon-over-label card: 72 pt tall, r 12 `.continuous`, fill `Theme.panel3`, icon ~15 pt
@@ -1154,7 +1405,7 @@ struct TVTile: View {
             )
             .opacity(isEnabled ? 1 : 0.45)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.tile))
         .disabled(!isEnabled)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
@@ -1193,7 +1444,7 @@ struct TVGhostButton: View {
                     .strokeBorder(Theme.line, lineWidth: 1)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.tile))
     }
 }
 
@@ -1219,7 +1470,7 @@ struct TVPrimaryCTA: View {
                 .frame(height: height)
                 .background(isEnabled ? Color.white : Theme.ctaDisabled, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.tile))
         .disabled(!isEnabled)
         .padding(.horizontal, horizontalMargin)
     }
@@ -1269,7 +1520,7 @@ struct TVGradientCTA: View {
                     )
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.tile))
         .padding(.horizontal, horizontalMargin)
     }
 }
@@ -1311,7 +1562,7 @@ struct TVCapsuleButton: View {
             .frame(height: height)
             .background(Theme.pill, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.tile))
     }
 }
 
@@ -1403,13 +1654,19 @@ struct TVBadgeDot: View {
 
 extension View {
     /// Anchors a `TVBadgeDot` to this view's top-right corner per C24.
+    ///
+    /// ANIM-13: the dot pops in and shrinks away rather than blinking — a 6 pt mark
+    /// appearing or vanishing in one frame is below the threshold at which a user
+    /// registers that anything changed, which is the whole point of a notification dot.
     func tvBadgeDot(_ isVisible: Bool = true, diameter: CGFloat = TVBadgeDot.size) -> some View {
         overlay(alignment: .topTrailing) {
             if isVisible {
                 TVBadgeDot(diameter: diameter)
                     .offset(x: diameter / 2, y: -diameter / 2 - 1)
+                    .transition(.scale(scale: 0.1).combined(with: .opacity))
             }
         }
+        .animation(.spring(response: 0.28, dampingFraction: 0.7), value: isVisible)
     }
 }
 
@@ -1431,8 +1688,13 @@ struct TVToastContent: Equatable {
 }
 
 /// Centred card ≈85 % width, fill `Theme.toast`, r 24, big centred glyph (~28 pt) over a
-/// 20 pt Bold title over a 15 pt `Theme.text2` subtitle. It **dims the layer behind it** —
-/// a blocking confirmation, not an inline snackbar (§2.17).
+/// 20 pt Bold title over a 15 pt `Theme.text2` subtitle.
+///
+/// **ANIM-06 correction to §2.17**: TV does *not* dim the layer behind this card. Measured
+/// on the same list band, `t-006` (card present) vs `t-004` (absent) read p99 = 254 /
+/// mean ≈ 50.4 in both, and 254 / 81.9 vs 81.8 in the keyboard band — zero attenuation.
+/// The card floats over a live, fully-lit, still-interactive surface; it is not a blocking
+/// confirmation. §2.17's "dims the layer behind it" is the reading this supersedes.
 struct TVToast: View {
     let content: TVToastContent
 
@@ -1467,18 +1729,19 @@ private struct TVToastModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.overlay {
             if let value = toast {
-                ZStack {
-                    Color.black.opacity(0.45)
-                        .ignoresSafeArea()
-                        .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { toast = nil } }
-                    TVToast(content: value)
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, 30) // ≈85 % width on a 402 pt screen
-                }
-                .transition(.opacity)
+                // No scrim (ANIM-06) and no full-bleed hit-testing layer: the card is the
+                // only drawn content in this overlay, so every touch outside it reaches the
+                // list underneath. `.allowsHitTesting(false)` on the container would be the
+                // literal spelling of "touches pass through", but it also disables the
+                // card's own tap-to-dismiss — the frame carries no ink, so it needs neither.
+                TVToast(content: value)
+                    .padding(.horizontal, 30) // ≈85 % width on a 402 pt screen
+                    .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { toast = nil } }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
             }
         }
-        .animation(.easeOut(duration: 0.18), value: toast)
+        .animation(.spring(response: 0.30, dampingFraction: 0.80), value: toast)
         .task(id: toast?.identity) {
             guard toast != nil else { return }
             try? await Task.sleep(for: .seconds(duration))
@@ -1489,10 +1752,132 @@ private struct TVToastModifier: ViewModifier {
 }
 
 extension View {
-    /// Presents a blocking `TVToast` while `toast` is non-nil, auto-dismissing after
-    /// `duration` (§4-A6: TV's exact timing was never captured — 1.8 s is our default).
+    /// Presents a `TVToast` while `toast` is non-nil, auto-dismissing after `duration`
+    /// (§4-A6: TV's exact timing was never captured — 1.8 s is our default). Non-blocking:
+    /// the host stays lit and interactive for the whole 1.8 s (ANIM-06).
     func tvToast(_ toast: Binding<TVToastContent?>, duration: Double = 1.8) -> some View {
         modifier(TVToastModifier(toast: toast, duration: duration))
+    }
+}
+
+// MARK: - §2.19 TVWheelPicker
+
+/// The floating magnified wheel that rides above the chart toolbar while a value wheel is
+/// being dragged (§2.19). Until now it was **not implemented at all**, so the app's single
+/// most-used gesture had no visible affordance: the 51.7 pt toolbar chamber is `.clipped()`
+/// and a roll read as a twitching label.
+///
+/// Measured (§2.19): container ≈ 183 × 133 pt, r 20, dark translucent ≈ 55 % black, no
+/// sheet and no scrim in the drag variant. Row emphasis is by distance from centre —
+/// 34 pt Bold at the centre stepping down and fading to the container edge. The symbol
+/// variant prefixes each row with a 16.7 pt avatar at the row's own opacity.
+///
+/// Presentation only: it renders whatever strings it is handed, so the caller owns copy
+/// (and its localisation) — including the long-form interval spelling of `t-012`/`t-014`.
+struct TVWheelPicker: View {
+    enum Kind {
+        /// Rows carry a leading logo.
+        case symbol
+        /// Bare text rows.
+        case interval
+    }
+
+    let items: [String]
+    /// The wheel's continuous, un-snapped centre — the same value the toolbar wheel drags,
+    /// so the panel tracks the finger rather than stepping per detent.
+    let centre: CGFloat
+    var kind: Kind = .symbol
+
+    static let width: CGFloat = 183
+    static let height: CGFloat = 133
+    static let corner: CGFloat = 20
+    /// 133 / 5 — the centre row plus two rows each side inside the container; ±3 rides the
+    /// edge fade (§2.19 "fading to the container edge"). Derived from the measured
+    /// container height, not measured directly.
+    static let rowPitch: CGFloat = TVWheelPicker.height / 5
+    /// Rows rendered each side of the centre; the container crops before this.
+    static let window = 3
+    static let avatar: CGFloat = 16.7
+    static let inset: CGFloat = TVSpace.s4
+    /// C26 — the ink of the **outermost** row of the mid-drag panel, ~15 % of the centre
+    /// row. This is the *only* surface that keeps the 14.6 % figure: it was measured on a
+    /// panel row three detents from centre and riding the container's edge fade, not on the
+    /// toolbar chamber. The toolbar's resting ghost is three times brighter —
+    /// `WheelMetrics.restingGhostOpacity` (0.34) in `RollerStrip.swift`.
+    ///
+    /// **Two surfaces, two measurements — do not collapse them into one constant again.**
+    static let dragGhostOpacity: CGFloat = 0.146
+
+    private var visibleRows: [Int] {
+        guard !items.isEmpty else { return [] }
+        let anchor = Int(centre.rounded())
+        let lower = max(0, anchor - Self.window)
+        let upper = min(items.count - 1, anchor + Self.window)
+        guard lower <= upper else { return [] }
+        return Array(lower...upper)
+    }
+
+    var body: some View {
+        ZStack {
+            ForEach(visibleRows, id: \.self) { index in
+                let distance = CGFloat(index) - centre
+                let magnitude = abs(distance)
+                // §2.19 emphasis ramp: one step to ±1, a shallower one out to ±3, landing
+                // the outermost row exactly on the measured `dragGhostOpacity`.
+                let near = min(magnitude, 1)
+                let far = max(0, min(magnitude - 1, 2))
+                let farStep = (0.65 - Self.dragGhostOpacity) / 2
+                row(items[index], size: 34 - 5 * near - 4 * far)
+                    .opacity(1 - 0.35 * near - farStep * far)
+                    .offset(y: distance * Self.rowPitch)
+            }
+        }
+        .frame(width: Self.width, height: Self.height)
+        // The rows fade at the container edge; the container itself must not, so the mask
+        // sits under the background rather than over the whole panel.
+        .mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 0.14),
+                    .init(color: .black, location: 0.86),
+                    .init(color: .clear, location: 1),
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+        }
+        .background {
+            RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+                        .fill(Color.black.opacity(0.55))
+                }
+        }
+        // Decorative: the wheel it mirrors is the accessible control, and VoiceOver drives
+        // that one with an adjustable action rather than a drag.
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func row(_ title: String, size: CGFloat) -> some View {
+        HStack(spacing: TVSpace.s2) {
+            if kind == .symbol {
+                LogoCircle(symbol: title, colorHex: nil, size: Self.avatar)
+            }
+            Text(title)
+                .font(.system(size: size, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Self.inset)
+        // Width only. `rowPitch` is the *offset* unit, not a box: at 34 pt the line box
+        // exceeds the pitch even though the cap-height ink does not, and constraining the
+        // height here would let `minimumScaleFactor` shrink the centre row off its measure.
+        .frame(width: Self.width)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -1507,7 +1892,54 @@ struct TVPromoCard: View {
     let title: String
     let subtitle: String
     var height: CGFloat = 97.7
+    /// SCREEN-03 — the 2-column cell this card's own contract specifies: `(370 − 8) / 2`.
+    /// Without it a single card stretched to a 369.7 pt full-width block, which is a
+    /// different component from the one measured in spec2-menu-settings §3.3.
+    ///
+    /// C26 — this is now a **fixed** width, not a `maxWidth` cap. A cap is only an upper
+    /// bound, and the cap never bound: in the menu's
+    /// `HStack { promo; referral; Spacer(minLength: 0) }` the trailing spacer is a third
+    /// child, so the stack charges the 8 pt gutter **twice** (370 − 16 = 354) and then
+    /// splits what is left equally — both cards came out 177 pt inside a 24.3 pt trailing
+    /// margin. Claiming the measured cell outright restores `181 + 8 + 181 = 370`.
+    ///
+    /// The phantom gutter still exists in the host: with fixed cells that `HStack` reports
+    /// 378 pt into a 370 pt slot, and the page centres the 8 pt of overflow, so the menu
+    /// column sits 4 pt left of its 16 pt margin. The remaining fix is one line **in the
+    /// host**, not here — drop the trailing `Spacer(minLength: 0)` and let the `HStack`
+    /// carry `.frame(maxWidth: .infinity, alignment: .leading)` instead. Then the row is
+    /// exactly `16 + 181 + 8 + 181 + 16 = 402` with nothing over-committed.
+    var width: CGFloat = TVPromoCard.cellWidth
     let action: () -> Void
+
+    static let cellWidth: CGFloat = 181
+    /// Two lines of `TVType.rowSecondary` (15 pt Regular), taken from the font's own line
+    /// height rather than guessed, so the reserved slot tracks the type scale if it moves.
+    static let subtitleSlot: CGFloat = 2 * UIFont.systemFont(ofSize: 15).lineHeight
+    /// The page margin and gutter the 181 pt cell was measured inside
+    /// (spec2-menu-settings §3.3): `16 + 181 + 8 + 181 + 16 = 402`, the reference device's
+    /// width exactly. Kept here because the cell only means anything alongside them.
+    static let pageMargin: CGFloat = TVSpace.s4
+    static let gutter: CGFloat = TVSpace.s2
+
+    /// A fixed width cannot shrink, so it is clamped to half of the page's own content
+    /// column on any device narrower than the 402 pt reference (an iPhone SE would
+    /// otherwise push the second card past the trailing edge). On the reference phone and
+    /// on every regular-width column this resolves to the measured 181 pt.
+    private var resolvedWidth: CGFloat {
+        let column = TVPromoCard.hostWidth - 2 * TVPromoCard.pageMargin - TVPromoCard.gutter
+        return min(width, max(column / 2, 0))
+    }
+
+    /// Window width, read once per layout. `UIRequiresFullScreen = YES` for the alpha
+    /// (§4-A20.9), so there is exactly one window and this is the page width.
+    private static var hostWidth: CGFloat {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        return scene?.screen.bounds.width ?? 402
+    }
 
     var body: some View {
         Button(action: action) {
@@ -1533,16 +1965,25 @@ struct TVPromoCard: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
                     .fixedSize(horizontal: false, vertical: true)
+                    // C26 — the subtitle slot is **always** exactly two lines tall. The
+                    // card is a fixed 97.7 pt with a `Spacer` above the title, so a card
+                    // whose subtitle wraps to one line let the spacer grow and pushed its
+                    // title a full line below its neighbour's: two cards side by side, two
+                    // different title baselines. A hard slot (rather than
+                    // `reservesSpace:`) also absorbs the ~1 pt that `minimumScaleFactor`
+                    // shaves off a wrapped subtitle's own line box, so the baseline is a
+                    // property of the card and never of its copy.
+                    .frame(height: Self.subtitleSlot, alignment: .topLeading)
             }
             .padding(.leading, TVSpace.s5)
             .padding(.trailing, TVSpace.s3)
             .padding(.top, 14)
             .padding(.bottom, 13.7)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: resolvedWidth, alignment: .leading)
             .frame(height: height)
             .background(Theme.pill, in: RoundedRectangle(cornerRadius: TVRadius.tile, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.tile))
     }
 }
 
