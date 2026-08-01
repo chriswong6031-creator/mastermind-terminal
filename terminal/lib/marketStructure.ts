@@ -599,3 +599,279 @@ export function buildMarketStructure(input: BuildInput): MarketStructure {
     em: emFrame(input.spot, input.levels, input.moves),
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// Volland-parity wave 1 — hedging-requirement framing (docs/VOLLAND_PARITY_PLAN_2026-08-01.md)
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * THE REFRAMING. Volland renders every greek on one axis: the dollar amount of underlying a
+ * continuously-hedged dealer must TRANSACT. Gamma, vanna, charm and delta all collapse to
+ * "$ to buy or sell". We already publish the inputs — we were showing the greek and asking
+ * the reader to translate.
+ *
+ * Sign convention, stated once and used everywhere below:
+ *   our `*_net` columns are the change in DEALER position delta for a +1 unit move.
+ *   A hedged dealer must trade the NEGATIVE of that to stay flat.
+ *   ⇒ hedging requirement = −(position-delta change).  POSITIVE = dealers BUY.
+ *
+ * This deliberately inverts the sign of the familiar GEX ladder, which plots dealer
+ * position rather than dealer action. Both are correct; they answer different questions.
+ * Anything rendering these values must say "dealers buy / dealers sell" rather than
+ * relying on a colour the reader has to decode.
+ */
+
+/** Which greek lens a hedging series was built from. */
+export type HedgeGreek = "gamma" | "delta" | "vanna" | "charm";
+
+/**
+ * Second-order greeks measure a RATE (how the hedge changes as something moves), so their
+ * cumulative curve is anchored at spot and accumulates outward — "what must dealers trade
+ * to get from here to there". First-order greeks are a LEVEL (the position itself), so
+ * their cumulative curve is a plain running total across the ladder.
+ *
+ * Volland's user guide documents exactly this split, and getting it wrong (cumsumming
+ * everything identically from the low strike) produces a curve that looks plausible and
+ * means nothing.
+ */
+export const SECOND_ORDER: ReadonlySet<HedgeGreek> = new Set<HedgeGreek>(["gamma", "vanna", "charm"]);
+
+export interface HedgeRow {
+  strike: number;
+  /** $mn of underlying to transact per unit move. Positive = dealers buy. */
+  hedgeMn: number;
+}
+
+export interface HedgeProfile {
+  greek: HedgeGreek;
+  /** Per-strike requirement — the histogram. */
+  rows: HedgeRow[];
+  /**
+   * Cumulative requirement — the profile line. Anchored at spot for second-order greeks
+   * (spot reads 0 and the curve accumulates away from it in both directions); a plain
+   * running total for first-order greeks.
+   */
+  cumulative: { strike: number; cumMn: number }[];
+  anchored: boolean;
+  /** Largest |value| in each series, for scale captions. */
+  maxAbsMn: number;
+  maxAbsCumMn: number;
+  /** The unit the per-unit move refers to, for the axis caption. */
+  perUnit: "1% spot" | "1 vol point" | "1 day" | "position";
+}
+
+const PER_UNIT: Record<HedgeGreek, HedgeProfile["perUnit"]> = {
+  gamma: "1% spot",
+  vanna: "1 vol point",
+  charm: "1 day",
+  delta: "position",
+};
+
+function greekField(greek: HedgeGreek): keyof MscStrikeRow {
+  return greek === "gamma" ? "gamma_net"
+    : greek === "delta" ? "delta_net"
+    : greek === "vanna" ? "vanna_net"
+    : "charm_net";
+}
+
+/**
+ * Build the hedging-requirement histogram + cumulative profile for one greek lens.
+ *
+ * The anchored branch is the interesting one. Rows are split at spot; going up, the running
+ * total accumulates from spot outward; going down, likewise. Spot therefore sits at zero and
+ * each point answers "if price travelled from here to this strike, how much would dealers
+ * have had to transact along the way" — the one-dimensional form of the same question the
+ * (ΔS, Δσ, Δt) scenario grid answers in three.
+ */
+export function hedgeProfile(
+  rows: readonly MscStrikeRow[] | null | undefined,
+  greek: HedgeGreek,
+  spot: number | null | undefined,
+): HedgeProfile {
+  const field = greekField(greek);
+  const out: HedgeRow[] = [];
+  for (const r of rows ?? []) {
+    if (!r || !isNum(r.strike)) continue;
+    const v = r[field];
+    if (!isNum(v)) continue;
+    // negate: dealer ACTION is the mirror of the dealer POSITION change
+    out.push({ strike: r.strike, hedgeMn: v === 0 ? 0 : -v });
+  }
+  out.sort((a, b) => a.strike - b.strike);
+
+  const anchored = SECOND_ORDER.has(greek) && isNum(spot) && spot > 0;
+  const cumulative: { strike: number; cumMn: number }[] = [];
+
+  if (!anchored) {
+    let acc = 0;
+    for (const r of out) {
+      acc += r.hedgeMn;
+      cumulative.push({ strike: r.strike, cumMn: acc });
+    }
+  } else {
+    const s = spot as number;
+    const below = out.filter((r) => r.strike < s).sort((a, b) => b.strike - a.strike);
+    const above = out.filter((r) => r.strike >= s);
+    let accDown = 0;
+    const down: { strike: number; cumMn: number }[] = [];
+    for (const r of below) {
+      accDown += r.hedgeMn;
+      down.push({ strike: r.strike, cumMn: accDown });
+    }
+    down.reverse();
+    let accUp = 0;
+    const up: { strike: number; cumMn: number }[] = [];
+    for (const r of above) {
+      accUp += r.hedgeMn;
+      up.push({ strike: r.strike, cumMn: accUp });
+    }
+    cumulative.push(...down, ...up);
+  }
+
+  let maxAbsMn = 0;
+  for (const r of out) maxAbsMn = Math.max(maxAbsMn, Math.abs(r.hedgeMn));
+  let maxAbsCumMn = 0;
+  for (const c of cumulative) maxAbsCumMn = Math.max(maxAbsCumMn, Math.abs(c.cumMn));
+
+  return { greek, rows: out, cumulative, anchored, maxAbsMn, maxAbsCumMn, perUnit: PER_UNIT[greek] };
+}
+
+// ─── Term structure with tenor banding ───────────────────────────────────────────────
+
+export type TenorBand = "daily" | "weekly" | "monthly" | "quarterly" | "annual";
+
+/**
+ * Volland bands their term-structure charts by the GAP between consecutive expirations —
+ * not by absolute DTE. That is the better choice: it shows how finely the term structure is
+ * sampled at each point, so a dense 0DTE cluster and a lone LEAPS read differently at a
+ * glance. Thresholds are theirs (documented in their user guide); the colours are ours.
+ */
+export function tenorBand(gapDays: number): TenorBand {
+  if (gapDays <= 5) return "daily";
+  if (gapDays <= 10) return "weekly";
+  if (gapDays <= 35) return "monthly";
+  if (gapDays <= 360) return "quarterly";
+  return "annual";
+}
+
+export interface TermNode {
+  exp: string;
+  dte: number | null;
+  /** $mn to transact at this expiration. Positive = dealers buy. */
+  hedgeMn: number;
+  /** Running total accumulating from the NEAREST expiration outward. */
+  cumMn: number;
+  /** Gap in days to the next expiration (null for the last). */
+  gapDays: number | null;
+  band: TenorBand | null;
+}
+
+export interface TermStructure {
+  nodes: TermNode[];
+  maxAbsMn: number;
+  maxAbsCumMn: number;
+  /** True when the payload only carries gamma+delta per expiration (our current contract). */
+  limitedGreeks: boolean;
+}
+
+/**
+ * Term structure of the hedging requirement — where in TIME the dealer risk sits.
+ *
+ * `asof` anchors DTE deterministically (never the wall clock, so an archived session reads
+ * its own DTEs rather than today's).
+ */
+export function termStructure(
+  rows: readonly MscExpiryRow[] | null | undefined,
+  greek: "gamma" | "delta",
+  asof: string | null | undefined,
+): TermStructure {
+  const list = (rows ?? []).filter((r) => r && typeof r.exp === "string");
+  const sorted = [...list].sort((a, b) => (a.exp < b.exp ? -1 : a.exp > b.exp ? 1 : 0));
+  const base = asof ? Date.parse(`${asof.slice(0, 10)}T00:00:00Z`) : NaN;
+
+  const nodes: TermNode[] = [];
+  let acc = 0;
+  let maxAbsMn = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const r = sorted[i];
+    const raw = greek === "gamma" ? r.gamma_net : r.delta_net;
+    if (!isNum(raw)) continue;
+    const hedgeMn = raw === 0 ? 0 : -raw;
+    acc += hedgeMn;
+    const t = Date.parse(`${r.exp}T00:00:00Z`);
+    const dte = Number.isFinite(base) && Number.isFinite(t)
+      ? Math.round((t - base) / 86_400_000)
+      : null;
+    let gapDays: number | null = null;
+    const next = sorted[i + 1];
+    if (next) {
+      const tn = Date.parse(`${next.exp}T00:00:00Z`);
+      if (Number.isFinite(t) && Number.isFinite(tn)) gapDays = Math.round((tn - t) / 86_400_000);
+    }
+    maxAbsMn = Math.max(maxAbsMn, Math.abs(hedgeMn));
+    nodes.push({
+      exp: r.exp,
+      dte,
+      hedgeMn,
+      cumMn: acc,
+      gapDays,
+      band: gapDays == null ? null : tenorBand(gapDays),
+    });
+  }
+  let maxAbsCumMn = 0;
+  for (const n of nodes) maxAbsCumMn = Math.max(maxAbsCumMn, Math.abs(n.cumMn));
+
+  return {
+    nodes,
+    maxAbsMn,
+    maxAbsCumMn,
+    // by_expiry publishes gamma+delta only — vanna/charm are not available per expiration.
+    limitedGreeks: true,
+  };
+}
+
+// ─── Daily hedging summary ───────────────────────────────────────────────────────────
+
+export interface DailyHedging {
+  /** From charm: delta drift over one calendar day, spot and IV unchanged. */
+  fromTimeMn: number | null;
+  /** From gamma, scaled by a one-sigma expected move rather than an arbitrary 1%. */
+  fromSpotMn: number | null;
+  /** From vanna, scaled by the typical daily IV change when supplied. */
+  fromVolMn: number | null;
+  /** Sum of the components that exist. */
+  totalMn: number | null;
+  /** The move the spot component was scaled by, in percent. */
+  emPct: number | null;
+  /** The IV shock the vol component was scaled by, in vol points. */
+  volPts: number | null;
+}
+
+/**
+ * "How much must dealers transact today?" — the Greek Hedging card.
+ *
+ * Volland ships this as three scalars (delta / vega / theta hedging) plus a total, without a
+ * published methodology. Rather than guess at theirs, this composes OUR published inputs at
+ * a stated, honest scale: the gamma leg is scaled by the ticker's own one-sigma expected move
+ * (not a nominal 1%), so the number answers "on a typical day" instead of "per arbitrary
+ * unit". Every component states the shock it assumed, and any missing lens is null, never 0.
+ */
+export function dailyHedging(
+  agg: AggregateResult,
+  emPct1sig: number | null | undefined,
+  volPts = 1,
+): DailyHedging {
+  const em = isNum(emPct1sig) && emPct1sig > 0 ? emPct1sig : null;
+  const fromTimeMn = agg.charmMn == null ? null : (agg.charmMn === 0 ? 0 : -agg.charmMn);
+  const fromSpotMn = em == null ? null : (agg.gammaMn === 0 ? 0 : -agg.gammaMn * em);
+  const fromVolMn = agg.vannaMn == null ? null : (agg.vannaMn === 0 ? 0 : -agg.vannaMn * volPts);
+  const parts = [fromTimeMn, fromSpotMn, fromVolMn].filter((v): v is number => v != null);
+  return {
+    fromTimeMn,
+    fromSpotMn,
+    fromVolMn,
+    totalMn: parts.length ? parts.reduce((a, b) => a + b, 0) : null,
+    emPct: em,
+    volPts: agg.vannaMn == null ? null : volPts,
+  };
+}
