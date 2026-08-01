@@ -8,6 +8,7 @@ import { test, expect } from "@playwright/test";
 
 const SHELL_URL = "/terminal?symbol=NVDA&shell=app";
 const TRAY_URL = "/terminal?symbol=NVDA&shell=app&tray=1";
+const DOSSIER_URL = "/terminal?symbol=NVDA&shell=app&dossier=1";
 const WEB_URL = "/terminal?symbol=NVDA";
 
 test.describe("native shell mode", () => {
@@ -94,6 +95,117 @@ test.describe("native shell mode", () => {
     // Without the param the quote line stays (dossier iframes unchanged).
     await page.goto("/embed/chart?symbol=NVDA");
     await expect(page.locator(".embed-head-quote")).toBeVisible();
+  });
+
+  // ── TV symbol-sheet mini chart (docs/tv-parity/spec-symbol-detail.md §2B) ──────────
+  test("embed clean=1 is candles-only with TV chips; fs=1 adds the fullscreen affordance", async ({ page }) => {
+    await page.goto("/embed/chart?symbol=NVDA&clean=1&fs=1&hdr=0");
+
+    // Root marker — every clean-mode CSS rule hangs off it.
+    await expect(page.locator('.embed-root[data-clean="1"]')).toHaveCount(1);
+    // Candles only: no SMA series ⇒ no SMA legend to drive them.
+    await expect(page.locator(".embed-legend")).toHaveCount(0);
+    // The range row survives and gains the ⤢ square (a browser tap is a silent no-op).
+    await expect(page.locator(".embed-ranges")).toBeVisible();
+    const fs = page.locator(".embed-fs");
+    await expect(fs).toBeVisible();
+    const fsBox = await fs.boundingBox();
+    expect(fsBox!.width).toBeGreaterThanOrEqual(30);
+    expect(fsBox!.height).toBeGreaterThanOrEqual(30);
+    await fs.click(); // must not throw / navigate without a native host
+    await expect(page.locator('.embed-root[data-clean="1"]')).toHaveCount(1);
+
+    // Chips wear the measured TV capsule treatment (selected #2E2E2E on #DBDBDB).
+    const active = page.locator(".embed-chip.is-active").first();
+    const chip = await active.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { bg: s.backgroundColor, color: s.color, weight: s.fontWeight, size: parseFloat(s.fontSize) };
+    });
+    expect(chip.bg).toBe("rgb(46, 46, 46)");
+    expect(chip.color).toBe("rgb(219, 219, 219)");
+    expect(Number(chip.weight)).toBeGreaterThanOrEqual(600);
+    expect(chip.size).toBeGreaterThanOrEqual(13);
+    expect(chip.size).toBeLessThanOrEqual(14);
+    const idle = await page.locator(".embed-chip:not(.is-active)").first().evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { bg: s.backgroundColor, color: s.color };
+    });
+    expect(idle.bg).toBe("rgba(0, 0, 0, 0)");
+    expect(idle.color).toBe("rgb(140, 140, 140)");
+
+    // Web parity: without ?clean the widget is untouched — SMA legend back, no fs button,
+    // no marker, and the chips keep their house styling.
+    await page.goto("/embed/chart?symbol=NVDA");
+    await expect(page.locator("[data-clean]")).toHaveCount(0);
+    await expect(page.locator(".embed-fs")).toHaveCount(0);
+    await expect(page.locator(".embed-legend")).toBeVisible({ timeout: 30_000 });
+    const webChip = await page.locator(".embed-chip.is-active").first().evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { color: s.color, size: parseFloat(s.fontSize) };
+    });
+    expect(webChip.size).toBeCloseTo(11, 0);
+    expect(webChip.color).not.toBe("rgb(219, 219, 219)");
+  });
+
+  // ── dossier mode: the detail rail is the whole page, no chart workspace ────────────
+  test("shell dossier=1 renders the detail rail as the only content", async ({ page }) => {
+    await page.goto(DOSSIER_URL);
+
+    await expect(page.locator('[data-dossier="1"]')).toHaveCount(1);
+    // The chart workspace is absent from the DOM entirely — the native sheet owns the chart.
+    await expect(page.locator(".workspace")).toHaveCount(0);
+    // …and the rail, which plain shell mode drops, is here and visible.
+    const rail = page.locator("aside.rail");
+    await expect(rail).toBeVisible();
+    await expect(page.locator(".detail-board")).toBeVisible();
+    // Watchlist board + resizer stay out at every viewport (the native list owns them).
+    await expect(page.locator(".rail .wl-board")).toBeHidden();
+    await expect(page.locator(".rail-resizer")).toHaveCount(0);
+    // Still no global web chrome.
+    await expect(page.locator("header.topbar")).toHaveCount(0);
+    await expect(page.locator(".mobilebar")).toHaveCount(0);
+    await expect(page.locator(".ticker")).toHaveCount(0);
+
+    // The rail is ordinary full-width block flow, not a fixed-width grid column.
+    const geom = await page.evaluate(() => {
+      const r = document.querySelector("aside.rail") as HTMLElement;
+      const s = getComputedStyle(r);
+      return { display: s.display, w: r.getBoundingClientRect().width, vw: window.innerWidth };
+    });
+    expect(geom.display).toBe("block");
+    expect(geom.w).toBeCloseTo(geom.vw, 0);
+
+    // The page scrolls naturally: nothing traps the dossier in an inner scroller, and the
+    // document is at least a full viewport tall (min-height:100svh, no 100svh LOCK).
+    const scroll = await page.evaluate(() => ({
+      rail: getComputedStyle(document.querySelector("aside.rail")!).overflow,
+      inner: getComputedStyle(document.querySelector(".detail-scroll")!).overflow,
+      docH: document.documentElement.scrollHeight,
+      vh: window.innerHeight,
+    }));
+    expect(scroll.rail).toBe("visible");
+    expect(scroll.inner).toBe("visible");
+    expect(scroll.docH).toBeGreaterThanOrEqual(scroll.vh);
+    // …with no horizontal document overflow at any project viewport.
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+
+    // The bridge still installs and answers without a chart on the page.
+    await page.waitForFunction(() => (window as any).__mmShell?.version === 1);
+    expect(await page.evaluate(() => (window as any).__mmShell.getState().sym)).toBe("NVDA");
+
+    // Scope law: dossier is inert without the param — plain shell keeps chart-only chrome.
+    await page.goto(SHELL_URL);
+    await expect(page.locator("[data-dossier]")).toHaveCount(0);
+    await expect(page.locator("aside.rail")).toHaveCount(0);
+    await expect(page.locator(".workspace")).toHaveCount(1);
+    // …and the browser web app never sees it either.
+    await page.goto(WEB_URL);
+    await expect(page.locator("[data-dossier]")).toHaveCount(0);
+    await expect(page.locator(".workspace")).toHaveCount(1);
+    await expect(page.locator("aside.rail")).toHaveCount(1);
   });
 
   test("normal mode is untouched", async ({ page }) => {

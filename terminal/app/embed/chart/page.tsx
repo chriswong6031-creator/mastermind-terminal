@@ -30,7 +30,22 @@ export default async function EmbedChartPage({
     return <EmbedError theme={theme} lang={lang} transparent={transparent} />;
   }
 
+  // ?clean=1 — the TV symbol-sheet mini chart (candles only, quiet canvas, TV palette).
+  // ?fs=1    — append the native "open full chart" affordance to the range row.
+  // Both default OFF; without them the widget renders exactly as it always has.
+  const clean = first(sp.clean) === "1";
+  const fullscreenBtn = first(sp.fs) === "1";
+
   return (
-    <EmbedChart symbol={symbol} theme={theme} lang={lang} transparent={transparent} initialRange={range} hideQuote={first(sp.hdr) === "0"} />
+    <EmbedChart
+      symbol={symbol}
+      theme={theme}
+      lang={lang}
+      transparent={transparent}
+      initialRange={range}
+      hideQuote={first(sp.hdr) === "0"}
+      clean={clean}
+      fullscreenBtn={fullscreenBtn}
+    />
   );
 }

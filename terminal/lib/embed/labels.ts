@@ -30,6 +30,8 @@ const LABELS = {
   toggleSma50: ["Toggle the 50-day moving average", "切换50日移动平均线"],
   toggleSma200: ["Toggle the 200-day moving average", "切换200日移动平均线"],
   rangePrefix: ["Show range", "显示区间"],
+  // ?fs=1 — the native host's "open the full chart" affordance at the end of the range row.
+  fullscreen: ["Open full chart", "打开完整图表"],
 } satisfies Record<string, Pair>;
 
 export type LabelKey = keyof typeof LABELS;

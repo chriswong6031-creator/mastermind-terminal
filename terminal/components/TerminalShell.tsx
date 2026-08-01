@@ -309,7 +309,7 @@ function btMark(name: string) {
   console.log(`[boottrace] ${name} +${(now - _btStart).toFixed(1)}ms`);
 }
 
-export default function TerminalShell({ symbols, email, initialSymbol, shellMode = false, shellTray = false }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string; shellMode?: boolean; shellTray?: boolean }) {
+export default function TerminalShell({ symbols, email, initialSymbol, shellMode = false, shellTray = false, shellDossier = false }: { symbols: { symbol: string; section: string }[]; email: string; initialSymbol?: string; shellMode?: boolean; shellTray?: boolean; shellDossier?: boolean }) {
   const [man, setMan] = useState<Manifest | null>(null);
   // named watchlists — client-side + localStorage-backed so switching / creating lists works for guests
   // (no auth needed). The server-provided `symbols` seed becomes the "Default" list.
@@ -2502,6 +2502,11 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     });
   };
 
+  // ?shell=app&dossier=1 — the native symbol sheet stacks THIS page under its own chart, so the
+  // detail rail is the whole surface: no chart workspace, no watchlist board, natural page scroll.
+  // Only meaningful inside shell mode (the page prop already ANDs the two; belt-and-braces here).
+  const dossierMode = shellMode && shellDossier;
+
   return (
     <OnboardingProvider email={email}>
     {/* Inside OnboardingProvider so the settings panel (and the avatar button)
@@ -2509,7 +2514,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         TerminalShell, so useSettings() *here* would be the no-op — the buttons
         below are children of it, which is what matters. */}
     <SettingsProvider email={email} defaultSection="terminal">
-    <div className={`app${fullChart ? " fs" : ""}${shellMode ? " shell-app" : ""}`} data-shell={shellMode ? "app" : undefined} data-tray={shellMode && shellTray ? "1" : undefined} style={{ ["--rail-w" as any]: `${railW}px` }}>
+    <div className={`app${fullChart ? " fs" : ""}${shellMode ? " shell-app" : ""}`} data-shell={shellMode ? "app" : undefined} data-tray={shellMode && shellTray ? "1" : undefined} data-dossier={dossierMode ? "1" : undefined} style={{ ["--rail-w" as any]: `${railW}px` }}>
       {!shellMode && (
       <header className="topbar">
         {fromMacro
@@ -2576,6 +2581,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       <AppNav />
       </>)}
 
+      {/* Dossier mode renders NO chart workspace — the native sheet owns the chart above us. */}
+      {!dossierMode && (
       <section className="workspace">
         {!shellMode && (
         <button className={`chart-fs-float${fullChart ? " on" : ""}`} title={fullChart ? t("exitFullscreen") : t("fullscreenChart")} onClick={() => setFullChart((f) => !f)}>
@@ -2887,9 +2894,15 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           </div>
         )}
       </section>
+      )}
 
-      {!shellMode && (<>
+      {/* The rail and the chart workspace are INDEPENDENT surfaces (the rail's intel/fund/opts
+          fetches never touch ChartPanel), so shell mode drops the rail while dossier mode keeps
+          it and drops the chart. The resizer is desktop-only chrome — never in a native shell. */}
+      {!shellMode && (
       <div className="rail-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" onMouseDown={startRailResize}><span /></div>
+      )}
+      {(!shellMode || dossierMode) && (<>
       <aside className="rail">
         <div className="rail-body">
           <div className="board wl-board">
@@ -3105,6 +3118,25 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         <a className="logo-attribution" href="https://logo.dev" target="_blank" rel="noopener">Logos provided by Logo.dev</a>
       </aside>
       </>)}
+
+      {/* The rail's "Open full analysis" / seasonality drill-ins call setPaneOpen, and the ONLY
+          MegaPane mount lives inside the chart workspace — which dossier mode does not render.
+          Mount the same pane here in overlay mode so those buttons are not dead in the sheet. */}
+      {dossierMode && paneOpen && (
+        <MegaPane
+          sym={active}
+          fund={fund}
+          fundLoading={fundLoading}
+          quote={liveQuote ? { last: lastPx ?? null } : null}
+          bars={bars}
+          page={paneOpen}
+          onPage={(p) => setPaneOpen(p)}
+          onClose={() => setPaneOpen(null)}
+          name={nameOf(m) || active}
+          mode="overlay"
+          intel={intel}
+        />
+      )}
 
       {!shellMode && (
       <div className="ticker">

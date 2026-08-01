@@ -95,9 +95,45 @@ const LIGHT: EmbedPalette = {
   skelHi: "rgba(15,23,42,.08)",
 };
 
-/** palette — resolve the effective palette for a theme + transparent flag. */
-export function palette(theme: ThemeName, transparent: boolean): EmbedPalette {
-  const base = theme === "light" ? LIGHT : DARK;
+/**
+ * CLEAN — the TV symbol-sheet mini-chart palette, measured off the reference stills in
+ * docs/tv-parity/spec-symbol-detail.md (§0 global palette + §2B chart plot area).
+ *
+ * Deliberately DIFFERENT from the house v5 candles above: TV's sheet chart runs a brighter
+ * teal/red pair (#22AB94 / #F7525F) on a quiet canvas — no vertical gridlines, ~5% white
+ * horizontals, #B1B5BE axis text, no scale borders. Only reachable via ?clean=1; the default
+ * widget (and every existing embed) keeps the house palette byte-for-byte.
+ */
+export interface CleanOverlay {
+  /** Measured TV bull/bear (spec §0). */
+  up: string;
+  down: string;
+  /** Axis tick text (spec §2B right price axis + time ticks). */
+  axisText: string;
+  /** Horizontal gridline wash — verticals are switched off entirely. */
+  grid: string;
+  /** The dashed prior-session-close rule TV draws across the plot. */
+  priorClose: string;
+}
+
+export const CLEAN: CleanOverlay = {
+  up: "#22AB94",
+  down: "#F7525F",
+  axisText: "#B1B5BE",
+  grid: "rgba(255,255,255,.05)",
+  priorClose: "rgba(180,185,195,.5)",
+};
+
+/**
+ * palette — resolve the effective palette for a theme + transparent flag.
+ * `clean` (opt-in, ?clean=1) swaps the candle/axis/grid neutrals for the measured TV
+ * mini-chart values; every other consumer is untouched because it never passes the flag.
+ */
+export function palette(theme: ThemeName, transparent: boolean, clean = false): EmbedPalette {
+  const base0 = theme === "light" ? LIGHT : DARK;
+  const base = clean
+    ? { ...base0, up: CLEAN.up, down: CLEAN.down, muted: CLEAN.axisText, grid: CLEAN.grid }
+    : base0;
   if (!transparent) return base;
   // Transparent mode: the parent's glass card is the background. Zero both page + chart bg.
   return { ...base, pageBg: "transparent", chartBg: "transparent" };
