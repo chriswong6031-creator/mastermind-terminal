@@ -226,7 +226,7 @@ the nearest shipping size. `ink` = the measured glyph band, for re-verification.
 | **Sheet / tool-page title** | **20 pt Bold** | `tvText` | 14.0–14.7 cap | Analysis hub, Indicators picker, Compare symbols, Layouts, Chart type. Never 28 |
 | **Compact nav title** `[P2]` | **18 pt Bold** | `tvText` | 12.67 cap | Collapsed watchlist name ("CHRIS"), pushed-page title ("News by watchlist"), compact-modal title ("Create section"), profile display name. **Four independent measurements land on exactly 18.0** — this is a real tier, not noise |
 | **Section header (in-content)** | 20 pt Bold | `tvText` | 14.33 cap | "Key stats", "Earnings", "Statistics", "Top Stories" |
-| **Toolbar symbol / interval** | 26 pt Bold | `#FFFFFF` | — | Chart bottom toolbar — the only pure-white text in the app |
+| **Toolbar symbol / interval** | **17 pt Bold** (C24) | `#FFFFFF` | 12.0 | Chart bottom toolbar — the only pure-white text in the app. C24 correction: the original 26 pt reading was the enlarged mid-drag wheel centre (§2.19), not the at-rest label — t-045's at-rest ink band measures 36 px = 12.0 pt → 17 pt |
 | **Row primary** | 17 pt Semibold | `tvText` | 11.3–12.7 | Ticker, price, list-row label, template title |
 | **Row primary (menu rows)** | 18 pt Semibold | `tvText` | 12.67 | Indicators-picker rows; use 17 pt if Dynamic Type matters more than exactness |
 | **Row secondary** | 15 pt Regular | `tvTextSecondary` | 9.7–11.0 | Company name, category, subtitle, change value |
@@ -559,8 +559,9 @@ Copy pattern: `MNQ2!` / `Added to "CHRIS"`.
 
 ### 2.18 `TVChartToolbar` (chart tab only)
 **51.7 pt** tall (measured 739.3 → 791.0), fill `#000000`, 1 pt `#4A4A4A`
-hairline above **and** below. Contents left → right: symbol label 26 pt Bold
-`#FFFFFF` · interval label 26 pt Bold `#FFFFFF` · pencil · magnet · `•••`
+hairline above **and** below. Contents left → right: symbol label **17 pt Bold**
+`#FFFFFF` · interval label **17 pt Bold** `#FFFFFF` (C24 — at rest; the wheel
+centre enlarges only mid-drag, §2.19) · pencil · magnet · `•••`
 (+ red dot) · 1 pt vertical divider · undo · fullscreen. Icons 28 pt white
 stroke, no fill.
 Both text labels show the **previous/next wheel values ghosted above and below at
@@ -658,7 +659,7 @@ points at the source doc for content/interaction detail this document omits.
 7. Sub-panes (volume + 0–3 studies), each with its own right axis and one badge
    per plot.
 8. **`TVChartToolbar`** at 51.7 pt with hairlines above and below; symbol and
-   interval at 26 pt Bold pure white with ghosted neighbour values.
+   interval at 17 pt Bold pure white (C24) with ghosted neighbour values.
 9. `TVWheelPicker` on drag of either label; commits **live per drag-frame**, not
    on release.
 10. On-chart legend (top-left per pane): 19 pt Semibold names, hidden studies

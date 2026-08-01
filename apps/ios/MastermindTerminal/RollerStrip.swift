@@ -7,16 +7,19 @@ import UIKit
 /// release"). Tapping the SELECTED symbol chamber opens search — TV's verb; there is
 /// deliberately no separate search button.
 ///
-/// Measured chrome (§2.18): **51.7 pt** tall, fill pure `#000000`, a hairline above *and*
-/// below, both labels **26 pt Bold pure white** (the only pure-white text in the app,
-/// §1.3) with the previous/next wheel values ghosted above and below at ~40 % opacity and
-/// reduced scale at rest — the "keep scrolling" affordance. Right cluster, left → right:
-/// pencil · magnet · `•••` (+ red dot) · vertical divider · undo · fullscreen, all white
-/// stroke on a 28 pt target (§1.8).
+/// Measured chrome (§2.18, corrected by C24): **51.7 pt** tall, fill pure `#000000`, a
+/// hairline above *and* below, both labels **17 pt Bold pure white** at rest (t-045 ink
+/// band 12.0 pt → 17 pt; the spec's original 26 pt was a misread of the enlarged mid-drag
+/// wheel centre, §2.19) with the previous/next wheel values ghosted above and below at
+/// ~40 % opacity and reduced scale — the "keep scrolling" affordance. Right cluster,
+/// left → right: pencil · magnet · `•••` (+ red dot) · vertical divider · undo ·
+/// fullscreen, all white stroke on a 28 pt target (§1.8).
 ///
-/// Pencil / magnet / undo are placeholder affordances: correctly-styled controls that
-/// acknowledge the touch and do nothing (drawing, snap and undo all live in the chart
-/// renderer, which per `AGENTS.md` stays in `terminal/`). `•••` presents the Analysis hub.
+/// Magnet / undo are placeholder affordances: correctly-styled controls that acknowledge
+/// the touch and do nothing (snap and undo live in the chart renderer, which per
+/// `AGENTS.md` stays in `terminal/`). The pencil toggles the renderer's own drawing
+/// toolbar over the bridge (`setDrawTools`) — TV's verb, our engine's tools.
+/// `•••` presents the Analysis hub.
 struct RollerStrip: View {
     /// §2.18: measured 739.3 → 791.0 pt.
     static let height: CGFloat = 51.7
@@ -36,6 +39,9 @@ struct RollerStrip: View {
     /// §2.18 — the `•••` icon carries the universal red dot while the hub holds unseen items.
     var showsMoreBadge: Bool = true
     var onMore: () -> Void = {}
+    /// Pencil state + toggle: mirrors whether the web chart's drawing toolbar is shown.
+    var drawActive: Bool = false
+    var onDraw: () -> Void = {}
     var onFullscreen: () -> Void = {}
 
     var body: some View {
@@ -79,10 +85,10 @@ struct RollerStrip: View {
     private var iconCluster: some View {
         HStack(spacing: 5) {
             ToolbarIcon(
-                glyph: .symbol("pencil"),
+                glyph: .symbol(drawActive ? "pencil.circle.fill" : "pencil"),
                 label: L10n.t("Draw", lang),
-                isPlaceholder: true,
-                lang: lang
+                lang: lang,
+                action: onDraw
             )
             // §2.18's "magnet": TV's snap mark is two congruent chevrons offset on the
             // diagonal, not SF's symmetric `chevron.up.chevron.down` sort control.
@@ -205,14 +211,15 @@ private struct ToolbarIconStyle: ButtonStyle {
 // MARK: - the value wheels
 
 private enum WheelMetrics {
-    /// §1.3 toolbar symbol / interval.
-    static let fontSize: CGFloat = 26
-    /// Pitch that puts the ghost ink inside the 51.7 pt strip while leaving the 26 pt
-    /// centre row uncrowded (ghost ink lands 18.3–29.7 pt from centre, cropped at 25.85).
-    static let rowHeight: CGFloat = 24
+    /// §1.3 toolbar symbol / interval — C24 correction: TV's at-rest label ink measures
+    /// 12.0 pt in t-045 → **17 pt Bold** (the spec's 26 pt was the mid-drag wheel centre).
+    static let fontSize: CGFloat = 17
+    /// Pitch that puts the ghost ink inside the 51.7 pt strip while leaving the 17 pt
+    /// centre row uncrowded (ghost ink lands ~13–21 pt from centre, cropped at 25.85).
+    static let rowHeight: CGFloat = 19
     /// §2.18 — neighbours at rest.
     static let ghostOpacity: CGFloat = 0.4
-    static let ghostScale: CGFloat = 0.62
+    static let ghostScale: CGFloat = 0.72
     /// Rows rendered on each side of the centre; the strip crops well before this.
     static let window = 3
 }

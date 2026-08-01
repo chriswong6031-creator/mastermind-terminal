@@ -3093,6 +3093,12 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 /* The native roller strip owns interval switching in the apps — the toolbar's
    favorited-TF quick tray (and its edit pencil) would be a second TF control. */
 .shell-app .chart-tabs .tftray{display:none}
+/* the embedded symbol-preview chart re-enables the tray as its TF control (?tray=1) */
+.shell-app[data-tray="1"] .chart-tabs .tftray{display:inline-flex}
+/* drawing tools cede chart real estate to the shell by default; the native pencil
+   toggles .shell-draw over the bridge (setDrawTools) to bring them back */
+.shell-app .ds-dock,.shell-app .ds-favorites{display:none}
+.shell-app.shell-draw .ds-favorites{display:flex}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Drawing Studio — precision chart markup with one glass interaction language.

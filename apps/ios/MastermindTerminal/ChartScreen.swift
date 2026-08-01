@@ -18,6 +18,9 @@ struct ChartScreen: View {
     @State private var timeframeIndex = 0
     /// §2.18 `•••` → §3.5 Analysis hub.
     @State private var showAnalysisHub = false
+    /// Whether the web chart's drawing toolbar is shown (hidden by default in shell mode);
+    /// re-applied on every page ready since a reload resets the page to hidden.
+    @State private var drawToolsOn = false
     /// §2.18 ships a red dot on `•••` for unseen hub items; it clears once the hub is seen.
     @State private var hubUnseen = true
     @State private var toast: TVToastContent?
@@ -101,6 +104,11 @@ struct ChartScreen: View {
                         hubUnseen = false
                         showAnalysisHub = true
                     },
+                    drawActive: drawToolsOn,
+                    onDraw: {
+                        drawToolsOn.toggle()
+                        bridge.setDrawTools(drawToolsOn)
+                    },
                     onFullscreen: {
                         // Landscape already drops every piece of native chrome for the
                         // full-bleed chart, so the honest affordance is a hint, not a
@@ -135,6 +143,8 @@ struct ChartScreen: View {
             // The page bootstraps its language from its own storage; this covers the first
             // load after a native toggle, when that storage is still empty or stale.
             bridge.setLang(model.lang)
+            // A (re)loaded page defaults its drawing toolbar hidden — restore the toggle.
+            if drawToolsOn { bridge.setDrawTools(true) }
             Task { await flushWebSession() }
             syncWheels()
             DemoDriver.runIfRequested(bridge: bridge, watchlists: watchlists)
