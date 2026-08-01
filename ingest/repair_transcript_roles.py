@@ -1,9 +1,10 @@
 """Recompute transcript speaker roles with the current conservative classifier.
 
-The collector is incremental, so improving role inference does not change bodies
-that already exist.  This migration scans and validates the complete archive
-before it writes anything, then atomically replaces only bodies whose inferred
-roles changed.  Dry-run is the default; ``--write`` is required to mutate data.
+The collector reconciles the recent quarters it visits, but improving role
+inference still needs a complete-corpus pass.  This migration scans and validates
+the complete archive before it writes anything, then atomically replaces only
+bodies whose inferred roles changed.  Dry-run is the default; ``--write`` is
+required to mutate data.
 """
 from __future__ import annotations
 

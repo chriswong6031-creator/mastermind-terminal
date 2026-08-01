@@ -60,6 +60,8 @@ DATA="$DEPLOY/terminal/public/data"
 TX_INDEX="$FUNDSRC/data/us_fund/_tx_index.json"
 TX_REFRESH_STAMP="$FUNDSRC/data/transcripts/.nightly_refresh_ok"
 TX_ROLE_REPAIR_STAMP="$FUNDSRC/data/transcripts/.role_inference_v2_ok"
+TX_REVISION_MARKER="$FUNDSRC/data/transcripts/.stock_earning_call_transcripts.applied_revision"
+TX_REVISION_CANDIDATE="$FUNDSRC/data/transcripts/.stock_earning_call_transcripts.revision_candidate"
 LOCK_DIR="/tmp/mm_fund_refresh.lock"
 ts(){ date "+%Y-%m-%dT%H:%M:%S%z"; }
 
@@ -122,17 +124,46 @@ assert ev > 500, f"EV coverage too low ({ev}) — aborting before deploy"
 PYEOF
 if [ $? -ne 0 ]; then echo "[$(ts)] ABORT: panels/EV step failed — no deploy" >> "$LOG"; exit 1; fi
 
-# 2. Refresh the raw corpus weekly.  The collector downloads the DefeatBeta
-# parquet at most every 14 days and writes only missing bodies.  Indexes remain
-# untouched until the remote no-write scan and exact append-only gate below.
+# 2. HEAD-probe the upstream parquet every night.  A changed file triggers an
+# immediate collection; an unchanged file still gets the existing weekly full
+# repair pass without a 2.2 GB redownload.  If the cheap probe is unavailable,
+# fail open: keep the weekly age-based fallback and continue on non-weekly days.
+# Indexes remain untouched until the remote no-write scan and append-only gate.
 export MACRO_ROOT="$FUNDSRC"
 TX_COLLECTED=0
 TX_REPAIR_NEEDED=0
+TX_BODY_SYNCED=0
+TX_WEEKLY_DUE=0
+TX_PROBE_RC=0
+TX_UPSTREAM_REVISION=""
+rm -f "$TX_REVISION_CANDIDATE"
 if [ ! -f "$TX_REFRESH_STAMP" ] || find "$TX_REFRESH_STAMP" -mtime +6 -print -quit | grep -q .; then
-  if "$PY" "$DEPLOY/ingest/collect_transcripts.py" --quarters 8 --defer-index-publish >> "$LOG" 2>&1; then
+  TX_WEEKLY_DUE=1
+fi
+TX_UPSTREAM_REVISION=$("$PY" "$DEPLOY/ingest/collect_transcripts.py" \
+  --probe-parquet-revision 2>> "$LOG") || TX_PROBE_RC=$?
+if { [ "$TX_PROBE_RC" -eq 0 ] || [ "$TX_PROBE_RC" -eq 10 ]; } && [ -z "$TX_UPSTREAM_REVISION" ]; then
+  TX_PROBE_RC=11
+  echo "[$(ts)] WARN: transcript parquet probe returned an empty revision" >> "$LOG"
+elif [ "$TX_PROBE_RC" -eq 10 ]; then
+  echo "[$(ts)] transcript parquet changed: $TX_UPSTREAM_REVISION" >> "$LOG"
+elif [ "$TX_PROBE_RC" -eq 0 ]; then
+  echo "[$(ts)] transcript parquet unchanged: $TX_UPSTREAM_REVISION" >> "$LOG"
+else
+  echo "[$(ts)] WARN: transcript parquet probe failed (rc=$TX_PROBE_RC) — weekly fallback retained" >> "$LOG"
+fi
+
+if [ "$TX_WEEKLY_DUE" -eq 1 ] || [ "$TX_PROBE_RC" -eq 10 ]; then
+  TX_COLLECT_ARGS=(--quarters 8 --defer-index-publish \
+    --revision-candidate-out "$TX_REVISION_CANDIDATE")
+  if [ "$TX_PROBE_RC" -eq 0 ] || [ "$TX_PROBE_RC" -eq 10 ]; then
+    TX_COLLECT_ARGS+=(--upstream-revision "$TX_UPSTREAM_REVISION")
+  fi
+  if "$PY" "$DEPLOY/ingest/collect_transcripts.py" "${TX_COLLECT_ARGS[@]}" >> "$LOG" 2>&1; then
     TX_COLLECTED=1
     TX_REPAIR_NEEDED=1
   else
+    rm -f "$TX_REVISION_CANDIDATE"
     echo "[$(ts)] WARN: transcript refresh failed — stamp not advanced; scanning remote last-good" >> "$LOG"
   fi
 fi
@@ -152,11 +183,13 @@ if [ "$TX_REPAIR_NEEDED" -eq 1 ]; then
       "$DATA/tx/" "$VPS:$VPS_DATA/tx/" >> "$LOG" 2>&1; then
       mkdir -p "$(dirname "$TX_REFRESH_STAMP")"
       touch "$TX_ROLE_REPAIR_STAMP"
-      if [ "$TX_COLLECTED" -eq 1 ]; then touch "$TX_REFRESH_STAMP"; fi
+      if [ "$TX_COLLECTED" -eq 1 ]; then TX_BODY_SYNCED=1; fi
     else
+      rm -f "$TX_REVISION_CANDIDATE"
       echo "[$(ts)] WARN: transcript body rsync failed — stamps not advanced; retry next run" >> "$LOG"
     fi
   else
+    rm -f "$TX_REVISION_CANDIDATE"
     echo "[$(ts)] WARN: transcript role repair failed — no body rsync; retry next run" >> "$LOG"
   fi
 fi
@@ -205,18 +238,34 @@ PYEOF
         "python3 /opt/terminal/ingest/build_transcript_index.py --tx-root '$VPS_DATA/tx' --require-superset-of '$REMOTE_TX_BASELINE' --write-public --stdout summary; rc=\$?; rm -f '$REMOTE_TX_BASELINE'; exit \$rc" \
         >> "$LOG" 2>&1; then
       mv "$TX_TMP" "$TX_INDEX"
+      if [ "$TX_BODY_SYNCED" -eq 1 ]; then
+        if [ -f "$TX_REVISION_CANDIDATE" ]; then
+          if mv "$TX_REVISION_CANDIDATE" "$TX_REVISION_MARKER"; then
+            touch "$TX_REFRESH_STAMP"
+          else
+            echo "[$(ts)] WARN: transcript revision promotion failed — refresh stamp not advanced" >> "$LOG"
+          fi
+        else
+          # Probe failure preserves the old weekly path, which may not have a
+          # stable upstream revision to promote.
+          touch "$TX_REFRESH_STAMP"
+        fi
+      fi
     else
       rm -f "$TX_TMP"
+      rm -f "$TX_REVISION_CANDIDATE"
       echo "[$(ts)] ABORT: transcript index publication failed — local and remote last-good retained" >> "$LOG"
       exit 1
     fi
   else
     rm -f "$TX_TMP"
+    rm -f "$TX_REVISION_CANDIDATE"
     echo "[$(ts)] ABORT: transcript index validation failed — no fund overwrite" >> "$LOG"
     exit 1
   fi
 else
   rm -f "$TX_TMP"
+  rm -f "$TX_REVISION_CANDIDATE"
   echo "[$(ts)] ABORT: remote transcript no-write scan failed — no fund overwrite" >> "$LOG"
   exit 1
 fi

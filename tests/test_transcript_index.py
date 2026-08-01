@@ -61,11 +61,21 @@ def test_builds_enriched_indexes_and_publishes_global_last(tmp_path: Path, monke
     assert global_index["schema"] == "mastermind.tx-index/v1"
     assert global_index["body_count"] == 3
     assert global_index["symbol_count"] == 2
+    assert global_index["symbols"] == legacy
+    assert set(global_index["revisions"]) == {
+        "AAPL/2026Q2", "AAPL/2026Q3", "NVDA/2027Q1",
+    }
+    assert global_index["dates"] == {
+        "AAPL/2026Q2": "2026-07-31",
+        "AAPL/2026Q3": "2026-07-31",
+        "NVDA/2027Q1": "2026-07-31",
+    }
     assert legacy == {"AAPL": ["2026Q2", "2026Q3"], "NVDA": ["2027Q1"]}
     ticker = json.loads((tx_root / "AAPL" / "index.json").read_text())
     assert [call["id"] for call in ticker["calls"]] == ["2026Q3", "2026Q2"]
     newest = ticker["calls"][0]
     assert newest["url"] == "/data/tx/AAPL/2026Q3.json.gz"
+    assert newest["body_sha256"] == global_index["revisions"]["AAPL/2026Q3"]
     assert newest["segment_count"] == 3
     assert newest["speaker_count"] == 3
     assert newest["qa_start"] == 1
@@ -73,6 +83,74 @@ def test_builds_enriched_indexes_and_publishes_global_last(tmp_path: Path, monke
     assert newest["source"] == "DefeatBeta"
     assert writes[-1] == tx_root / "index.json"
     assert json.loads(legacy_out.read_text()) == legacy
+
+
+def test_body_sha256_is_stable_canonical_utf8_json():
+    mod = _load("build_tx_hash", ROOT / "ingest" / "build_transcript_index.py")
+    first = {"z": "é", "a": [{"y": 2, "x": 1}]}
+    reordered = {"a": [{"x": 1, "y": 2}], "z": "é"}
+
+    expected = "47a31e59e6e3f7cec9238462fd4c6166ef60d01052ba6705c35d7519dd3e1540"
+    assert mod.body_sha256(first) == expected
+    assert mod.body_sha256(reordered) == expected
+
+
+def test_revision_hash_detects_a_corrected_body_without_remapping_the_call(tmp_path: Path):
+    mod = _load("build_tx_correction", ROOT / "ingest" / "build_transcript_index.py")
+    tx_root = tmp_path / "tx"
+    path = _body(tx_root, "AAPL", "2026Q3")
+    first, first_legacy, _ = mod.build_transcript_indexes(tx_root)
+
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        corrected = json.load(handle)
+    corrected["segments"][0]["text"] = "Corrected prepared remarks."
+    _body(tx_root, "AAPL", "2026Q3", payload=corrected)
+    second, second_legacy, per_symbol = mod.build_transcript_indexes(tx_root)
+
+    assert first_legacy == second_legacy == {"AAPL": ["2026Q3"]}
+    assert first["symbols"] == second["symbols"]
+    assert first["dates"] == second["dates"]
+    assert first["revisions"]["AAPL/2026Q3"] != second["revisions"]["AAPL/2026Q3"]
+    assert (
+        per_symbol["AAPL"]["calls"][0]["body_sha256"]
+        == second["revisions"]["AAPL/2026Q3"]
+    )
+
+
+def test_unchanged_body_revision_survives_different_gzip_and_json_encoding(tmp_path: Path):
+    mod = _load("build_tx_unchanged", ROOT / "ingest" / "build_transcript_index.py")
+    tx_root = tmp_path / "tx"
+    path = _body(tx_root, "AAPL", "2026Q3")
+    compressed_before = path.read_bytes()
+    first, _, _ = mod.build_transcript_indexes(tx_root)
+
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+    compressed_after = path.read_bytes()
+    second, _, _ = mod.build_transcript_indexes(tx_root)
+
+    assert compressed_before != compressed_after
+    assert first["revisions"] == second["revisions"]
+
+
+def test_revision_metadata_is_additive_to_the_legacy_index_contract(tmp_path: Path):
+    mod = _load("build_tx_compat", ROOT / "ingest" / "build_transcript_index.py")
+    tx_root = tmp_path / "tx"
+    path = _body(tx_root, "AAPL", "2026Q3")
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    payload["date"] = None
+    _body(tx_root, "AAPL", "2026Q3", payload=payload)
+
+    global_index, legacy, _ = mod.build_transcript_indexes(tx_root)
+
+    assert global_index["schema"] == "mastermind.tx-index/v1"
+    assert global_index["symbols"] == legacy == {"AAPL": ["2026Q3"]}
+    assert mod.normalize_legacy_map(global_index["symbols"]) == legacy
+    assert global_index["dates"] == {"AAPL/2026Q3": None}
+    mod.assert_append_only(global_index["symbols"], legacy)
 
 
 def test_no_write_scan_does_not_create_indexes(tmp_path: Path):
