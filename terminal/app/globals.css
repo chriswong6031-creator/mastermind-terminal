@@ -3107,6 +3107,37 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .shell-app .ds-dock,.shell-app .chart-body>.ds-dock,.shell-app .ds-favorites{display:none}
 .shell-app.shell-draw .ds-dock,.shell-app.shell-draw .chart-body>.ds-dock,.shell-app.shell-draw .ds-favorites{display:flex}
 
+/* ── dossier mode (?shell=app&dossier=1) ───────────────────────────────────────
+   The native symbol sheet draws its OWN chart and stacks this page underneath it, so
+   TerminalShell renders the detail rail and nothing else — no .workspace at all. The
+   rail therefore stops being a fixed-width grid column and becomes ordinary full-width
+   block flow that the sheet scrolls. Every selector is gated on [data-dossier="1"];
+   plain shell mode and the browser web app never see any of it.
+   Specificity note: (0,3,0) here beats both the desktop .app/.rail rules and the
+   ≤860px phone block, which is what lets one set of rules serve all three viewports. */
+.app.shell-app[data-dossier="1"]{
+  display:block;grid-template-columns:none;grid-template-rows:none;
+  height:auto;min-height:100svh;overflow:visible;background:var(--bg)
+}
+/* No chart → nothing may lock the page to one viewport height (the .shell-app .workspace
+   100svh rule above only ever matched the element dossier mode does not render, but the
+   resizer/board heights below would still have pinned the rail). */
+.shell-app[data-dossier="1"] .rail-resizer{display:none}
+.shell-app[data-dossier="1"] .rail{
+  grid-column:auto;grid-row:auto;display:block;
+  width:auto;max-width:none;min-width:0;min-height:0;
+  overflow:visible;border:0;background:var(--bg)
+}
+.shell-app[data-dossier="1"] .rail-body{display:block;flex:none;padding:0;gap:0;overflow:visible;min-height:0}
+/* The watchlist board is the sheet's one irrelevant surface — the native list owns it. */
+.shell-app[data-dossier="1"] .rail .wl-board{display:none}
+.shell-app[data-dossier="1"] .detail-board{
+  display:block;flex:none;height:auto;min-height:0;overflow:visible;
+  border:0;border-radius:0;background:transparent
+}
+.shell-app[data-dossier="1"] .detail-hd{position:static;background:var(--bg);z-index:auto}
+.shell-app[data-dossier="1"] .detail-scroll{flex:none;overflow:visible;min-height:0}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Drawing Studio — precision chart markup with one glass interaction language.
    This late layer intentionally upgrades the legacy drawing rail/inspector

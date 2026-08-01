@@ -5,20 +5,22 @@ import WebKit
 /// TV-parity **symbol-detail sheet** — `TV_PARITY_MASTER_SPEC.md` §3.4 plus
 /// `spec-symbol-detail.md` §2B (surface B, the chart-anchored detail sheet).
 ///
-/// Structure, top → bottom: 36 pt logo · company name 20 pt Bold + `⌄` ticker-switcher ·
-/// `•••` · `TICKER · EXCHANGE` 15 pt gray with a session badge → hero price 28 pt Bold
-/// with its 13 pt currency caption, over a 17 pt cash-then-percent change with a gray
-/// context suffix and the extended-hours pill → the
-/// existing `/embed/chart` widget (it ships its own range tabs, so §3.4.4's native range
-/// row is deliberately NOT duplicated) → `TVChip` content tabs → Overview content
-/// (Key stats · Day's/52-week `TVRangeSlider` · the Mastermind desk read) → the white
-/// `TVPrimaryCTA`.
+/// Structure, top → bottom: grabber → 36 pt logo · company name 20 pt Bold + `⌄`
+/// ticker-switcher · `•••` · `TICKER · EXCHANGE` 15 pt gray with a session badge →
+/// hero price 28 pt Bold with its 13 pt currency caption, over a 17 pt cash-then-percent
+/// change with a gray context suffix and the extended-hours pill → the **chart module**
+/// (`/embed/chart`, which ships its own TV-style range pills and the ⤢ fullscreen rect,
+/// so §3.4.4's native range row is deliberately NOT duplicated) → `TVChip` content tabs →
+/// the **dossier web slice** (`/terminal?dossier=1`) as the Overview body. Nothing follows
+/// it: the slice ends with its own Open-full-analysis / Ask-AI actions, so the native
+/// stats grid, the two range sliders, the desk-read module and the white "Open full chart"
+/// CTA that used to live here are gone — one implementation of that content, on the web
+/// side, exactly as root `AGENTS.md` requires (native never re-implements analysis).
 ///
 /// Surface law (§1.2 tier 2): a sheet whose content is a symbol is **pure `#000000`**,
 /// and raised children on it step one notch to `Theme.pill` — never `panel2`.
 ///
 /// Presentation only (root AGENTS.md): every number here is fetched, never derived.
-/// The desk read stays labelled research, never a trade signal.
 struct PreviewItem: Identifiable {
     let symbol: String
     var id: String { symbol }
@@ -31,9 +33,12 @@ struct PreviewSheet: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var manifest: ManifestStore
     @StateObject private var ticker = QuoteTicker()
-    @State private var intel: Intel?
     @State private var contentTab = 0
     @State private var showsAlphaNotice = false
+    /// Driven by the dossier slice's own `contentHeight` posts (see `InlineWebView`'s
+    /// height bridge). The default is the measured first-paint height of the rail, so the
+    /// sheet never opens on a collapsed web view while the page is laying out.
+    @State private var dossierHeight: CGFloat = Self.dossierDefaultHeight
 
     /// §3.4.6 content tabs — the reference's full four-chip row. Keys stay English so the
     /// selected index survives a language flip and the `ForEach` identity never churns.
@@ -41,6 +46,15 @@ struct PreviewSheet: View {
     /// affordances on the existing "Not in this alpha" pattern rather than being cut from
     /// the row: the structure mirrors the reference even where our backend is thinner.
     private static let contentTabs = ["Overview", "News", "Minds", "Ideas"]
+
+    /// §2B: the chart plot area measures ~430 pt on the reference device *including* the
+    /// x-axis, range-pill row and the chart screen's own chrome. The embed widget carries
+    /// only the plot + pills + ⤢, so it gets the 300 pt module height the shell spec pins.
+    private static let chartHeight: CGFloat = 300
+    private static let dossierDefaultHeight: CGFloat = 900
+    /// Clamp for anything the page reports — a zero/absurd measurement must never collapse
+    /// or explode the scroll content.
+    private static let dossierHeightRange: ClosedRange<CGFloat> = 240...20000
 
     private var row: ManifestStore.Row? { manifest.rows[symbol] }
     private var quote: QuoteTicker.Quote? { ticker.quotes[symbol] }
@@ -55,22 +69,15 @@ struct PreviewSheet: View {
                 VStack(alignment: .leading, spacing: 0) {
                     header.padding(.top, 14)
                     priceBlock.padding(.top, TVSpace.s3)
-                    chartWidget.padding(.top, TVSpace.block)
+                    chartModule.padding(.top, TVSpace.block)
                     tabRow.padding(.top, TVSpace.block)
                     content
-                    footer
                 }
             }
         }
         .background(Theme.bg.ignoresSafeArea())
         .onAppear { ticker.start(symbols: [symbol]) }
         .onDisappear { ticker.stop() }
-        .task {
-            let url = AppConfig.origin.appendingPathComponent("data/\(symbol).intel.json")
-            guard let (data, response) = try? await URLSession.shared.data(from: url),
-                  (response as? HTTPURLResponse)?.statusCode == 200 else { return }
-            intel = try? JSONDecoder().decode(Intel.self, from: data)
-        }
         .alert(
             Text(L10n.t("Not in this alpha", model.lang)),
             isPresented: $showsAlphaNotice
@@ -284,27 +291,41 @@ struct PreviewSheet: View {
         return quote.hasExtended ? L10n.t("at close", model.lang) : nil
     }
 
-    // MARK: - Chart (§3.4.4 — the widget owns its own range tabs)
+    // MARK: - Chart module (§3.4.4 — the widget owns its range pills AND its ⤢)
 
-    private var chartWidget: some View {
-        InlineWebView(url: chartEngineURL)
-            .frame(height: 430)
-            .accessibilityHidden(true)
+    /// The `/embed/chart` widget in its shell dress: no header quote (`hdr=0`), no page
+    /// chrome (`clean=1`), transparent so the sheet's pure black shows through, and the
+    /// fullscreen rect enabled (`fs=1`). Inner scrolling is off — this module is a fixed
+    /// 300 pt block inside the sheet's single ScrollView, and a live inner scroller would
+    /// fight the sheet's own drag.
+    private var chartModule: some View {
+        InlineWebView(url: chartEmbedURL,
+                      scrollEnabled: false,
+                      onShellMessage: handleChartMessage)
+            .frame(height: Self.chartHeight)
     }
 
-    /// The REAL chart engine — the same MastermindChart the Chart tab and the web
-    /// terminal run — in shell mode, not the lightweight `/embed/chart` dossier widget
-    /// it replaced (operator: same engine, same fluidity, everywhere a chart appears).
-    /// `tray=1` keeps the web TF quick tray visible as this sheet's interval control,
-    /// since there is no native roller here; language follows the shared web storage.
-    private var chartEngineURL: URL {
-        var components = URLComponents(url: AppConfig.origin.appendingPathComponent("terminal"), resolvingAgainstBaseURL: false)!
+    private var chartEmbedURL: URL {
+        var components = URLComponents(url: AppConfig.origin.appendingPathComponent("embed/chart"),
+                                       resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            URLQueryItem(name: "shell", value: "app"),
             URLQueryItem(name: "symbol", value: symbol),
-            URLQueryItem(name: "tray", value: "1"),
+            URLQueryItem(name: "range", value: "3M"),
+            URLQueryItem(name: "theme", value: "dark"),
+            URLQueryItem(name: "lang", value: model.lang),
+            URLQueryItem(name: "transparent", value: "1"),
+            URLQueryItem(name: "hdr", value: "0"),
+            URLQueryItem(name: "clean", value: "1"),
+            URLQueryItem(name: "fs", value: "1"),
         ]
         return components.url!
+    }
+
+    /// The widget's ⤢ posts `{type:"openFullChart"}`; the native answer is the sheet's
+    /// existing exit closure, which dismisses and opens the Chart tab on this symbol.
+    private func handleChartMessage(_ body: [String: Any]) {
+        guard body["type"] as? String == "openFullChart" else { return }
+        onOpenChart()
     }
 
     // MARK: - Content tabs (§3.4.5/§3.4.6)
@@ -321,151 +342,58 @@ struct PreviewSheet: View {
 
     @ViewBuilder
     private var content: some View {
-        if contentTab == 0 { overview } else { placeholderTab }
+        if contentTab == 0 { dossier } else { placeholderTab }
     }
 
-    // MARK: - Overview (§3.4.7 order, at the depth our published APIs support)
+    // MARK: - Overview = the dossier web slice (§3.4.7 content, one implementation)
 
-    private var overview: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sectionHeader(L10n.t("Key stats", model.lang))
-            ForEach(keyStats) { stat in
-                TVStatRow(label: L10n.t(stat.label, model.lang), value: stat.value, unit: stat.unit)
-            }
-            rangeSliders
-            if let intel { deskRead(intel) }
-        }
+    /// `/terminal?shell=app&symbol=…&dossier=1` renders the detail-board rail with no
+    /// chart of its own — key stats, ranges, the desk read, financial modules and its own
+    /// trailing Open-full-analysis / Ask-AI actions. It lives *inside* this sheet's
+    /// ScrollView, so its own scroller is disabled and its height is driven by the page's
+    /// `contentHeight` posts rather than a guess.
+    private var dossier: some View {
+        InlineWebView(url: dossierURL,
+                      scrollEnabled: false,
+                      onShellMessage: handleDossierMessage)
+            .frame(height: dossierHeight)
     }
 
-    /// §3.4.8 stat rows. Labels stay English keys so the `ForEach` identity is stable
-    /// across the language toggle; the magnitude suffix rides as the 13 pt gray unit.
-    private struct Stat: Identifiable {
-        let label: String
-        let value: String
-        var unit: String? = nil
-        var id: String { label }
-    }
-
-    private var keyStats: [Stat] {
-        let volume = Self.volumeParts(rowValue(\.vol))
-        return [
-            Stat(label: "Open", value: PriceStack.price(rowValue(\.open))),
-            Stat(label: "High", value: PriceStack.price(rowValue(\.high))),
-            Stat(label: "Low", value: PriceStack.price(rowValue(\.low))),
-            Stat(label: "Volume", value: volume.0, unit: volume.1),
-            Stat(label: "52W High", value: PriceStack.price(rowValue(\.hi52))),
-            Stat(label: "52W Low", value: PriceStack.price(rowValue(\.lo52))),
+    private var dossierURL: URL {
+        var components = URLComponents(url: AppConfig.origin.appendingPathComponent("terminal"),
+                                       resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "shell", value: "app"),
+            URLQueryItem(name: "symbol", value: symbol),
+            URLQueryItem(name: "dossier", value: "1"),
         ]
+        return components.url!
     }
 
-    /// §3.4.9 — two sliders, day's range then 52-week range, each with the last print
-    /// under the track. Rendered only when the manifest actually carries both endpoints.
-    @ViewBuilder
-    private var rangeSliders: some View {
-        if let low = rowValue(\.low), let high = rowValue(\.high), high > low {
-            TVRangeSlider(caption: L10n.t("Day's range", model.lang), low: low, high: high, current: last)
-                .padding(.top, TVSpace.block)
-        }
-        if let lo52 = rowValue(\.lo52), let hi52 = rowValue(\.hi52), hi52 > lo52 {
-            TVRangeSlider(caption: L10n.t("52-week range", model.lang), low: lo52, high: hi52, current: last)
-                .padding(.top, TVSpace.block)
-        }
-    }
-
-    private func rowValue(_ key: KeyPath<ManifestStore.Row.Extra, Double?>) -> Double? {
-        row?.extra[keyPath: key]
-    }
-
-    /// Kept for callers that want one string (unchanged formatting contract).
-    static func volume(_ value: Double?) -> String {
-        guard let value, value.isFinite, value > 0 else { return "—" }
-        if value >= 1e9 { return String(format: "%.2fB", value / 1e9) }
-        if value >= 1e6 { return String(format: "%.1fM", value / 1e6) }
-        if value >= 1e3 { return String(format: "%.1fK", value / 1e3) }
-        return String(format: "%.0f", value)
-    }
-
-    /// Same thresholds and precision as `volume(_:)`, split so `TVStatRow` can render the
-    /// magnitude letter as the 13 pt gray unit suffix TV puts on stat values (§2.8).
-    static func volumeParts(_ value: Double?) -> (String, String?) {
-        guard let value, value.isFinite, value > 0 else { return ("—", nil) }
-        if value >= 1e9 { return (String(format: "%.2f", value / 1e9), "B") }
-        if value >= 1e6 { return (String(format: "%.1f", value / 1e6), "M") }
-        if value >= 1e3 { return (String(format: "%.1f", value / 1e3), "K") }
-        return (String(format: "%.0f", value), nil)
-    }
-
-    /// In-content section header — 20 pt Bold, 16 pt inset, 24 pt above (§1.3/§1.4).
-    private func sectionHeader(_ text: String) -> some View {
-        Text(text)
-            .font(TVType.sheetTitle)
-            .foregroundStyle(Theme.text)
-            .padding(.horizontal, TVSpace.s4)
-            .padding(.top, TVSpace.s6)
-            .padding(.bottom, TVSpace.s2)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityAddTraits(.isHeader)
-    }
-
-    // MARK: - Research desk read (Mastermind content module, TV section anatomy)
-
-    private func deskRead(_ intel: Intel) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sectionHeader(L10n.t("Research desk read", model.lang))
-            VStack(alignment: .leading, spacing: TVSpace.s2) {
-                TVSectionCaption(text: L10n.t("RESEARCH DESK READ — NOT A TRADE SIGNAL", model.lang),
-                                 inset: 0, topPadding: 0, bottomPadding: TVSpace.s1)
-                if let verdict = intel.cards?.ai_judgment?.verdict {
-                    Text(verdict)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Theme.text)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let gloss = intel.cards?.ai_judgment?.gloss {
-                    Text(gloss)
-                        .font(TVType.rowSecondary)
-                        .foregroundStyle(Theme.text2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let conviction = intel.cards?.conviction {
-                    if let score = conviction.score {
-                        TVStatRow(label: L10n.t("Conviction", model.lang),
-                                  value: String(Int(score)),
-                                  unit: conviction.band,
-                                  valueWeight: .semibold,
-                                  inset: 0)
-                    }
-                    bulletBlock(conviction.drivers ?? [], color: Theme.upText, label: L10n.t("Drivers", model.lang))
-                    bulletBlock(conviction.cautions ?? [], color: Theme.downText, label: L10n.t("Cautions", model.lang))
-                }
+    private func handleDossierMessage(_ body: [String: Any]) {
+        switch body["type"] as? String {
+        case "contentHeight":
+            guard let reported = body["h"] as? NSNumber else { return }
+            let value = CGFloat(reported.doubleValue)
+            guard value.isFinite else { return }
+            let clamped = min(max(value, Self.dossierHeightRange.lowerBound),
+                              Self.dossierHeightRange.upperBound)
+            // Sub-point churn from the page's own layout must not animate the scroll view.
+            guard abs(clamped - dossierHeight) >= 1 else { return }
+            withAnimation(.easeOut(duration: 0.18)) { dossierHeight = clamped }
+        case "openExternal":
+            // Shell-mode pages route outbound links through the bridge rather than a
+            // navigation; honour it the same way `ShellBridge` does.
+            if let raw = body["url"] as? String, let url = URL(string: raw),
+               url.scheme == "https" || url.scheme == "http" {
+                UIApplication.shared.open(url)
             }
-            .padding(.horizontal, TVSpace.s4)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder
-    private func bulletBlock(_ items: [String], color: Color, label: String) -> some View {
-        if !items.isEmpty {
-            VStack(alignment: .leading, spacing: TVSpace.s1) {
-                TVSectionCaption(text: label, inset: 0, topPadding: TVSpace.s2, bottomPadding: TVSpace.s1)
-                ForEach(items.prefix(3), id: \.self) { item in
-                    HStack(alignment: .top, spacing: TVSpace.s2) {
-                        Circle()
-                            .fill(color)
-                            .frame(width: 5, height: 5)
-                            .padding(.top, 6)
-                        Text(item)
-                            .font(TVType.rowSecondary)
-                            .foregroundStyle(Theme.text2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
+        default:
+            break
         }
     }
 
-    // MARK: - News / Ideas placeholders (§3.4.6 structure, honest empty state)
+    // MARK: - News / Minds / Ideas placeholders (§3.4.6 structure, honest empty state)
 
     private var placeholderTab: some View {
         VStack(alignment: .leading, spacing: TVSpace.s2) {
@@ -481,69 +409,126 @@ struct PreviewSheet: View {
         .padding(.vertical, TVSpace.s7)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-
-    // MARK: - CTA (§2.12 — 40 pt in the symbol-detail sheet)
-
-    private var footer: some View {
-        VStack(spacing: 0) {
-            TVHairline().padding(.top, TVSpace.block)
-            TVPrimaryCTA(title: L10n.t("Open full chart", model.lang), height: 40, action: onOpenChart)
-                .padding(.top, TVSpace.block)
-                .padding(.bottom, TVSpace.s6)
-        }
-    }
 }
 
-struct Intel: Codable {
-    let sector: String?
-    let cards: Cards?
-
-    struct Cards: Codable {
-        let ai_judgment: AIJudgment?
-        let conviction: Conviction?
-    }
-
-    struct AIJudgment: Codable {
-        let verdict: String?
-        let gloss: String?
-    }
-
-    struct Conviction: Codable {
-        let score: Double?
-        let band: String?
-        let drivers: [String]?
-        let cautions: [String]?
-    }
-}
-
-/// Minimal web container for owned-origin embeds (the /embed/chart widget and the
-/// shell-mode workspace screens). Main-frame navigation is pinned to the origin;
-/// anything else opens in the system browser.
+/// Minimal web container for owned-origin embeds (the `/embed/chart` widget, the dossier
+/// slice, and the shell-mode workspace screens). Main-frame navigation is pinned to the
+/// origin; anything else opens in the system browser.
+///
+/// Two opt-in capabilities, both defaulted off so existing call sites are unchanged:
+/// * `scrollEnabled: false` — for an embed hosted inside a native ScrollView, where an
+///   inner scroller would fight the host's drag. The caller then owns the frame height.
+/// * `onShellMessage` — installs the `mm` script-message handler plus a documentEnd
+///   height bridge, so a hosted page can post `{type:"openFullChart"}` (the chart
+///   widget's ⤢) or `{type:"contentHeight", h}` (the ResizeObserver) back to SwiftUI.
 struct InlineWebView: UIViewRepresentable {
     let url: URL
+    var scrollEnabled: Bool = true
+    var onShellMessage: (([String: Any]) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> WKWebView {
-        let webView = WKWebView()
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+
+        context.coordinator.onShellMessage = onShellMessage
+        if onShellMessage != nil {
+            // A duplicate handler name on one content controller raises an ObjC exception.
+            // This configuration is freshly built, but the remove-then-add keeps that
+            // guarantee local instead of resting on the allocation above.
+            configuration.userContentController.removeScriptMessageHandler(forName: ShellBridge.messageName)
+            configuration.userContentController.add(context.coordinator, name: ShellBridge.messageName)
+            configuration.userContentController.addUserScript(Self.heightBridgeScript)
+            context.coordinator.installedMessageHandler = true
+        }
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.isScrollEnabled = scrollEnabled
+        webView.scrollView.bounces = scrollEnabled
+        #if DEBUG
+        webView.isInspectable = true
+        #endif
         webView.load(URLRequest(url: url))
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        // The coordinator is made once; refresh the closure so a re-rendered SwiftUI view
+        // never delivers messages into a stale capture.
+        context.coordinator.onShellMessage = onShellMessage
+        if webView.scrollView.isScrollEnabled != scrollEnabled {
+            webView.scrollView.isScrollEnabled = scrollEnabled
+            webView.scrollView.bounces = scrollEnabled
+        }
         if webView.url != url && context.coordinator.lastRequested != url {
             context.coordinator.lastRequested = url
             webView.load(URLRequest(url: url))
         }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        coordinator.onShellMessage = nil
+        guard coordinator.installedMessageHandler else { return }
+        coordinator.installedMessageHandler = false
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: ShellBridge.messageName)
+        webView.configuration.userContentController.removeAllUserScripts()
+    }
+
+    /// Height bridge: report the document's laid-out height to native, throttled to ~200 ms
+    /// so a page that reflows continuously cannot storm the main thread. Installed only
+    /// when a caller asked for shell messages; a page that ignores it is unaffected.
+    private static let heightBridgeScript = WKUserScript(
+        source: """
+        (function () {
+          if (window.__mmHeightBridge) { return; }
+          window.__mmHeightBridge = true;
+          var last = -1;
+          var timer = null;
+          function post() {
+            timer = null;
+            var body = document.body;
+            var root = document.documentElement;
+            var h = Math.max(
+              body ? body.scrollHeight : 0,
+              body ? body.offsetHeight : 0,
+              root ? root.scrollHeight : 0
+            );
+            if (!h || Math.abs(h - last) < 1) { return; }
+            last = h;
+            try {
+              window.webkit.messageHandlers.mm.postMessage({ type: 'contentHeight', h: h });
+            } catch (e) {}
+          }
+          function schedule() { if (timer === null) { timer = setTimeout(post, 200); } }
+          if (window.ResizeObserver && document.body) {
+            try { new ResizeObserver(schedule).observe(document.body); } catch (e) {}
+          }
+          window.addEventListener('load', schedule);
+          window.addEventListener('resize', schedule);
+          schedule();
+        })();
+        """,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true
+    )
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var lastRequested: URL?
+        var onShellMessage: (([String: Any]) -> Void)?
+        var installedMessageHandler = false
+
+        func userContentController(_ userContentController: WKUserContentController,
+                                   didReceive message: WKScriptMessage) {
+            guard message.name == ShellBridge.messageName,
+                  let body = message.body as? [String: Any] else { return }
+            onShellMessage?(body)
+        }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
