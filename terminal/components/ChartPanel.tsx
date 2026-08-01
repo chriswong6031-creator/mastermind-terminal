@@ -339,9 +339,18 @@ function heikin(rows: Bar[]): Bar[] { const out: Bar[] = []; let po = 0, pc = 0;
 const NS = "http://www.w3.org/2000/svg";
 const mk = (tag: string, attrs: Record<string, any>) => { const e = document.createElementNS(NS, tag); for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, String(attrs[k])); return e; };
 
+/** Native shell renders TV-parity axis chips: the VALUE pill only. LWC draws a second filled
+ *  label for a series `title`, which duplicates the DOM legend and triples the axis ink.
+ *  Web is unchanged. (D5) */
+const shellAxis = () =>
+  typeof document !== "undefined" && document.documentElement.getAttribute("data-shell") === "app";
+const axTitle = (s: string) => (shellAxis() ? "" : s);
+
 // ── color-token snapshot (re-read on mount and on the up/down color flip, Effect 5) ──
-type Tokens = { up: string; down: string; grid: string; line: string; p3: string; link: string; warn: string; buy: string; sell: string; mut: string; brand2: string };
-const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: css("--grid"), line: css("--line"), p3: css("--panel-3"), link: css("--link"), warn: css("--warn"), buy: css("--buy"), sell: css("--sell"), mut: css("--muted"), brand2: css("--brand-2") });
+// `axis`/`grid` resolve through the --chart-axis-text / --chart-grid indirection whose :root
+// defaults reproduce --muted / --grid exactly; only the native shell retunes them (D6).
+type Tokens = { up: string; down: string; grid: string; axis: string; line: string; p3: string; link: string; warn: string; buy: string; sell: string; mut: string; brand2: string };
+const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: css("--chart-grid") || css("--grid"), axis: css("--chart-axis-text") || css("--muted"), line: css("--line"), p3: css("--panel-3"), link: css("--link"), warn: css("--warn"), buy: css("--buy"), sell: css("--sell"), mut: css("--muted"), brand2: css("--brand-2") });
 
 // ── the canonical sub-pane order (parity with the base's sequential pane assignment) ──
 // overlays (ema/bb/vwap/vol + new DT overlays) always live in pane 0.
@@ -479,7 +488,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const viewSavedRef = useRef<{ from: number; to: number } | null>(null);
   // SSR-safe: seed with empty tokens (this client component still renders on the server for initial
   // HTML, where getComputedStyle/document are unavailable). Effect 1 populates real tokens on mount.
-  const tokensRef = useRef<Tokens>({ up: "", down: "", grid: "", line: "", p3: "", link: "", warn: "", buy: "", sell: "", mut: "", brand2: "" });
+  const tokensRef = useRef<Tokens>({ up: "", down: "", grid: "", axis: "", line: "", p3: "", link: "", warn: "", buy: "", sell: "", mut: "", brand2: "" });
   const chartTypeRef = useRef<string>(chartType);
   const timeframeRef = useRef<string>(timeframe);
   const compareRef = useRef<string[]>(compare || []);
@@ -840,7 +849,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   };
   // rsi and stochrsi each get their own pane (formerly combined into one shared "osc" pane)
   const buildRsiPane = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
-    const p = P("rsi"); const rS = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lastValueVisible: true, title: "RSI" }, pane);
+    const p = P("rsi"); const rS = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lastValueVisible: true, title: axTitle("RSI") }, pane);
     rS.setData(toLine(rows, rsi(closes, p.length)));
     if (p.showLevels) { try { rS.createPriceLine({ price: p.obLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); rS.createPriceLine({ price: p.osLevel, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {} }
     return [rS];
@@ -859,8 +868,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const hlS = chart.addSeries(HistogramSeries, { priceScaleId: "stochsig", base: 0, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 1 } }) }, pane);
     try { chart.priceScale("stochsig").applyOptions({ scaleMargins: { top: 0, bottom: 0 } }); } catch {}   // full-pane-height bars (default overlay margins are 0.2/0.1)
     hlS.setData(stochHiData(rows, sr.k, sr.d, p.upLine, p.lowLine) as any);
-    const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: "%K" }, pane);
-    const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: "%D" }, pane);
+    const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: axTitle("%K") }, pane);
+    const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: axTitle("%D") }, pane);
     kS.setData(toLine(rows, sr.k)); dS.setData(toLine(rows, sr.d));
     // CM_Stochastic_MTF upper/lower/mid guide lines (80 / 20 / 50 by default)
     try { kS.createPriceLine({ price: p.upLine, color: "rgba(240,86,107,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: p.lowLine, color: "rgba(38,194,129,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: 50, color: "rgba(214,218,227,.15)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
@@ -883,7 +892,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const buildMacd = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
     const p = P("macd"); const m = rsiMacd(closes, p.rsiLen, p.fastLen, p.baseLen, p.signalLen);
     const hs = chart.addSeries(HistogramSeries, {}, pane); hs.setData(rows.map((r, i) => (m.hist[i] != null ? { time: r.time, value: m.hist[i]!, color: m.hist[i]! >= 0 ? p.upHist : p.downHist } : null)).filter(Boolean) as any);
-    const lS = chart.addSeries(LineSeries, { color: p.macdCol, lineWidth: p.width as any, title: "MACD-RSI" }, pane); const sS = chart.addSeries(LineSeries, { color: p.signalCol, lineWidth: 1, title: "signal" }, pane);
+    const lS = chart.addSeries(LineSeries, { color: p.macdCol, lineWidth: p.width as any, title: axTitle("MACD-RSI") }, pane); const sS = chart.addSeries(LineSeries, { color: p.signalCol, lineWidth: 1, title: axTitle("signal") }, pane);
     lS.setData(toLine(rows, m.line)); sS.setData(toLine(rows, m.sig));
     try { lS.createPriceLine({ price: 0, color: "rgba(214,218,227,.2)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
     applyMacdMarkers(lS, rows, m.line, m.sig);
@@ -1173,7 +1182,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const anchorKey = anchors[Math.min(3, Math.max(0, Math.round(p.anchor)))] ?? "swing_low";
     const vals = computeAvwap(rows, anchorKey, p.lookback);
     const title = anchorKey === "vol_spike" ? "AVWAP (vol-spike, earnings proxy)" : "AVWAP";
-    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lineStyle: 1 /* dashed */, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title }, 0);
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, lineStyle: 1 /* dashed */, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: axTitle(title) }, 0);
     ln.setData(toLine(rows, vals));
     return [ln];
   };
@@ -1182,7 +1191,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const buildRvwap = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
     const p = P("rvwap");
     const vals = rollingVwap(rows, p.length);
-    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: `RVWAP ${p.length}` }, 0);
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: axTitle(`RVWAP ${p.length}`) }, 0);
     ln.setData(toLine(rows, vals));
     return [ln];
   };
@@ -1191,7 +1200,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const buildWvwap = (chart: IChartApi, rows: Bar[]): ISeriesApi<any>[] => {
     const p = P("wvwap");
     const vals = weekAnchoredVwap(rows);
-    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: "WVWAP" }, 0);
+    const ln = chart.addSeries(LineSeries, { color: p.col, lineWidth: p.width as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: axTitle("WVWAP") }, 0);
     ln.setData(toLine(rows, vals));
     return [ln];
   };
@@ -1216,9 +1225,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const buildRsiStack = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
     const p = P("rsistack");
     const rs = rsiStack(rows, p.len1, p.len2, p.len3);
-    const s1 = chart.addSeries(LineSeries, { color: p.col1, lineWidth: p.width as any, lastValueVisible: true, title: `RSI${p.len1}` }, pane);
-    const s2 = chart.addSeries(LineSeries, { color: p.col2, lineWidth: p.width as any, lastValueVisible: true, title: `RSI${p.len2}` }, pane);
-    const s3 = chart.addSeries(LineSeries, { color: p.col3, lineWidth: p.width as any, lastValueVisible: true, title: `RSI${p.len3}` }, pane);
+    const s1 = chart.addSeries(LineSeries, { color: p.col1, lineWidth: p.width as any, lastValueVisible: true, title: axTitle(`RSI${p.len1}`) }, pane);
+    const s2 = chart.addSeries(LineSeries, { color: p.col2, lineWidth: p.width as any, lastValueVisible: true, title: axTitle(`RSI${p.len2}`) }, pane);
+    const s3 = chart.addSeries(LineSeries, { color: p.col3, lineWidth: p.width as any, lastValueVisible: true, title: axTitle(`RSI${p.len3}`) }, pane);
     s1.setData(toLine(rows, rs.r1)); s2.setData(toLine(rows, rs.r2)); s3.setData(toLine(rows, rs.r3));
     if (p.showLevels) {
       try { s2.createPriceLine({ price: p.ob, color: "rgba(214,218,227,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
@@ -1231,7 +1240,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const buildAccum = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
     const p = P("accum");
     const vals = accumPct(rows, p.win);
-    const ln = chart.addSeries(LineSeries, { color: "#4d82ff", lineWidth: 1.4 as any, lastValueVisible: true, title: "Accum%" }, pane);
+    const ln = chart.addSeries(LineSeries, { color: "#4d82ff", lineWidth: 1.4 as any, lastValueVisible: true, title: axTitle("Accum%") }, pane);
     ln.setData(toLine(rows, vals));
     if (p.showBands) {
       for (const band of [75, 50, 35]) {
@@ -1396,7 +1405,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const out: ISeriesApi<any>[] = [];
     if (rv.sessionsUsed < 3) {
       // Insufficient history — return a dummy LineSeries with empty data so the pane renders
-      const dummy = chart.addSeries(LineSeries, { lastValueVisible: true, title: "RVOL" }, pane);
+      const dummy = chart.addSeries(LineSeries, { lastValueVisible: true, title: axTitle("RVOL") }, pane);
       dummy.setData([]);
       out.push(dummy);
       indOverlayRef.current["rvol_nobase"] = true;
@@ -1411,7 +1420,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     out.push(histS);
     const lineS = chart.addSeries(LineSeries, {
       color: p.lineCol as string, lineWidth: p.width as any,
-      lastValueVisible: true, title: "RVOL",
+      lastValueVisible: true, title: axTitle("RVOL"),
     }, pane);
     lineS.setData(toLine(rows, rv.cum));
     out.push(lineS);
@@ -1471,7 +1480,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const out: ISeriesApi<any>[] = [];
     const adxS = chart.addSeries(LineSeries, {
       color: p.col as string, lineWidth: p.width as any,
-      lastValueVisible: true, title: "ADX",
+      lastValueVisible: true, title: axTitle("ADX"),
     }, pane);
     adxS.setData(toLine(rows, res.adx));
     // 20 / 25 hlines
@@ -1481,9 +1490,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (p.showDi as boolean) {
       const upC = getComputedStyle(document.documentElement).getPropertyValue("--up").trim() || "#26c281";
       const dnC = getComputedStyle(document.documentElement).getPropertyValue("--down").trim() || "#f0566b";
-      const diPlusS = chart.addSeries(LineSeries, { color: upC, lineWidth: 1 as any, lastValueVisible: true, title: "+DI" }, pane);
+      const diPlusS = chart.addSeries(LineSeries, { color: upC, lineWidth: 1 as any, lastValueVisible: true, title: axTitle("+DI") }, pane);
       diPlusS.setData(toLine(rows, res.diPlus));
-      const diMinusS = chart.addSeries(LineSeries, { color: dnC, lineWidth: 1 as any, lastValueVisible: true, title: "-DI" }, pane);
+      const diMinusS = chart.addSeries(LineSeries, { color: dnC, lineWidth: 1 as any, lastValueVisible: true, title: axTitle("-DI") }, pane);
       diMinusS.setData(toLine(rows, res.diMinus));
       out.push(diPlusS, diMinusS);
     }
@@ -1501,7 +1510,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       baseValue: { type: "price", price: 0 },
       topLineColor: upC, topFillColor1: upC + "33", topFillColor2: upC + "11",
       bottomLineColor: dnC, bottomFillColor1: dnC + "11", bottomFillColor2: dnC + "33",
-      lastValueVisible: true, title: "Est. CVD",
+      lastValueVisible: true, title: axTitle("Est. CVD"),
     } as any, pane);
     cvdS.setData(toLine(rows, vals));
     return [cvdS];
@@ -2093,13 +2102,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       if (identityHtml) html += `<span class="status-identity">${identityHtml}</span>`;
       let valuesHtml = "";
-      if (showOHLC) valuesHtml += `<span class="mut">O</span><b>${f(last.o)}</b><span class="mut">H</span><b>${f(last.h)}</b><span class="mut">L</span><b>${f(last.l)}</b><span class="mut">C</span><b>${f(last.c)}</b>`;
+      // D2 — the OHLC / Vol / Day runs are wrapped so the native shell can suppress them as a
+      // unit (TV shows them only on crosshair scrub). The wrappers are inert on web.
+      if (showOHLC) valuesHtml += `<span class="status-ohlc"><span class="mut">O</span><b>${f(last.o)}</b><span class="mut">H</span><b>${f(last.h)}</b><span class="mut">L</span><b>${f(last.l)}</b><span class="mut">C</span><b>${f(last.c)}</b></span>`;
+      // shell-only last price — display:none on web via the base .status-last rule.
+      valuesHtml += `<b class="status-last">${f(last.c)}</b>`;
       if (showBarChange) valuesHtml += `<b class="status-change ${u ? "up" : "down"}">${u ? "+" : ""}${f(ch)} (${u ? "+" : ""}${cp.toFixed(2)}%)</b>`;
-      if (showVolumeRef.current) valuesHtml += `<span class="mut">Vol</span><b>${last.v.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 2 })}</b>`;
+      if (showVolumeRef.current) valuesHtml += `<span class="status-vol"><span class="mut">Vol</span><b>${last.v.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 2 })}</b></span>`;
       if (showLastDayChangeRef.current) {
         const dayChange = liveQuoteRef.current?.prevSessionChg ?? liveQuoteRef.current?.chg;
         if (dayChange != null && Number.isFinite(dayChange)) {
-          valuesHtml += `<span class="mut">Day</span><b class="${dayChange >= 0 ? "up" : "down"}">${dayChange >= 0 ? "+" : ""}${dayChange.toFixed(2)}%</b>`;
+          valuesHtml += `<span class="status-day"><span class="mut">Day</span><b class="${dayChange >= 0 ? "up" : "down"}">${dayChange >= 0 ? "+" : ""}${dayChange.toFixed(2)}%</b></span>`;
         }
       }
       if (valuesHtml) html += `<span class="status-values">${valuesHtml}</span>`;
@@ -2129,7 +2142,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       verdictRef.current.textContent = `GOLDEN ORACLE · ${v === "RECLAIM" ? "RE-ENTRY" : v}`;
       verdictRef.current.style.color = buy ? t.buy : t.sell;
       const w = verdictRef.current.parentElement as HTMLElement;
-      if (w) { w.style.background = buy ? "rgba(38,194,129,.12)" : "rgba(240,86,107,.12)"; w.style.borderColor = buy ? "rgba(38,194,129,.3)" : "rgba(240,86,107,.3)"; }
+      // Token-derived so the chip tracks the shell palette (byte-identical output on web, where
+      // --buy/--sell still resolve to the locked v5 hexes).
+      if (w) {
+        w.style.background = `color-mix(in srgb, ${buy ? t.buy : t.sell} 12%, transparent)`;
+        w.style.borderColor = `color-mix(in srgb, ${buy ? t.buy : t.sell} 30%, transparent)`;
+      }
     }
   };
 
@@ -2521,6 +2539,24 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     window.addEventListener("mm:snapshot", snapshot);
 
+    // ── D5 test hook (dev/e2e only) ────────────────────────────────────────────
+    // lightweight-charts renders axis labels on canvas, so the "no series-name pill" contract
+    // has no DOM to assert against. Expose every axis-labelled series' `title` option instead.
+    if (process.env.NODE_ENV !== "production") {
+      (window as any).__mmChartSeriesTitles = () => {
+        const out: string[] = [];
+        for (const list of indSeriesRef.current.values()) {
+          for (const s of list) {
+            try {
+              const o = s.options() as any;
+              if (o?.lastValueVisible) out.push(String(o.title ?? ""));
+            } catch {}
+          }
+        }
+        return out;
+      };
+    }
+
     // ── create the ONE chart (the hard invariant — exactly one renderer instance — now
     // lives behind createEngine; docs/CHART_ENGINE_MASTERPLAN.md P1) ──
     cpMark(`chart-create[${symbol}]`);
@@ -2528,7 +2564,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const t = tokensRef.current;
     const engine = createEngine(el, {
       width: el.clientWidth || 900, height: el.clientHeight || 600,
-      layout: { background: { color: "transparent" }, textColor: t.mut, fontSize: 11, attributionLogo: false, panes: { separatorColor: css("--pane-sep"), separatorHoverColor: css("--pane-sep-h") } },
+      // fontSize 12 matches the settings effect (6482) so the axis does not reflow one frame after mount.
+      layout: { background: { color: "transparent" }, textColor: t.axis, fontSize: 12, attributionLogo: false, panes: { separatorColor: css("--pane-sep"), separatorHoverColor: css("--pane-sep-h") } },
       grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
       crosshair: { mode: CrosshairMode.Normal, vertLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: t.p3 }, horzLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: t.p3 } },
       rightPriceScale: { borderColor: t.line, scaleMargins: { top: 0.1, bottom: 0.08 } },
@@ -2551,11 +2588,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     try {
       const pane = chart.panes()[0];
       if (pane) {
+        // D10 — the shell wears a small bottom-left brand bug (TV's idiom); web keeps the
+        // centered ghost wordmark.
+        const wmShell = shellAxis();
         const wm = createTextWatermark(pane, {
           visible: true,
-          horzAlign: "center",
-          vertAlign: "center",
-          lines: [{ text: "Mastermind Terminal", color: "rgba(214,218,227,0.04)", fontSize: 48, fontStyle: "bold", fontFamily: "var(--font-ui, system-ui, sans-serif)" }],
+          horzAlign: wmShell ? "left" : "center",
+          vertAlign: wmShell ? "bottom" : "center",
+          lines: [{
+            text: wmShell ? "MASTERMIND" : "Mastermind Terminal",
+            color: chartSettingsRef.current?.watermarkColor || (wmShell ? "rgba(214,218,227,0.13)" : "rgba(214,218,227,0.04)"),
+            fontSize: wmShell ? 20 : 48,
+            fontStyle: "bold",
+            fontFamily: "var(--font-ui, system-ui, sans-serif)",
+          }],
         });
         watermarkPluginRef.current = wm;
       }
@@ -2576,15 +2622,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // ── last-price tag (symbol · price · bar-close countdown) on the right axis ──
     // Replaces lightweight-charts' built-in last-value label (disabled on the price series). The
     // countdown differs per timeframe: exact for intraday, calendar-boundary for daily+ (see periodCloseTs).
+    // D9: classNames only — every cssText string is unchanged, so web renders identically; the
+    // shell block in globals.css uses these hooks to collapse the badge to TV's single line.
     const priceTag = document.createElement("div");
+    priceTag.className = "mm-ptag";
     priceTag.style.cssText = "position:absolute;z-index:5;right:1px;display:none;flex-direction:row;align-items:center;gap:2px;pointer-events:none;transform:translateY(-50%);white-space:nowrap";
     const tagSym = document.createElement("div");
+    tagSym.className = "mm-ptag-sym";
     tagSym.style.cssText = "padding:2px 5px;border-radius:3px;color:#fff;font:700 10px/1 var(--font-num);letter-spacing:.02em;font-variant-numeric:tabular-nums";
     const tagVal = document.createElement("div");
+    tagVal.className = "mm-ptag-val";
     tagVal.style.cssText = "display:flex;flex-direction:column;align-items:flex-end;padding:2px 6px;border-radius:3px;color:#fff;text-align:right";
     const tagPrice = document.createElement("div");
+    tagPrice.className = "mm-ptag-px";
     tagPrice.style.cssText = "font:700 11px/1.15 var(--font-num);font-variant-numeric:tabular-nums";
     const tagCd = document.createElement("div");
+    tagCd.className = "mm-ptag-cd";
     tagCd.style.cssText = "font:600 9px/1.15 var(--font-num);opacity:.85;font-variant-numeric:tabular-nums";
     tagVal.appendChild(tagPrice); tagVal.appendChild(tagCd);
     priceTag.appendChild(tagSym); priceTag.appendChild(tagVal);
@@ -5703,6 +5756,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (dragCleanup) dragCleanup();
       drawingTransactionRef.current = false;
       window.removeEventListener("mm:snapshot", snapshot);
+      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; } catch {} }
       if (onKey) window.removeEventListener("keydown", onKey);
       if (winDown) window.removeEventListener("pointerdown", winDown);
       window.removeEventListener("pointerup", onProjectionPointerEnd);
@@ -6396,7 +6450,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const settings = chartSettingsRef.current;
     try {
       chart.applyOptions({
-        layout: { textColor: settings.scaleTextColor || t.mut, panes: { separatorColor: settings.paneSeparatorColor || css("--pane-sep"), separatorHoverColor: settings.paneSeparatorColor || css("--pane-sep-h") } },
+        layout: { textColor: settings.scaleTextColor || t.axis, panes: { separatorColor: settings.paneSeparatorColor || css("--pane-sep"), separatorHoverColor: settings.paneSeparatorColor || css("--pane-sep-h") } },
         grid: { vertLines: { color: settings.gridVColor || t.grid }, horzLines: { color: settings.gridHColor || t.grid } },
         crosshair: { vertLine: { labelBackgroundColor: t.p3 }, horzLine: { labelBackgroundColor: t.p3 } },
         rightPriceScale: { borderColor: settings.scaleLineColor || t.line },
@@ -6478,7 +6532,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       chart.applyOptions({
         layout: {
           background: background as any,
-          textColor: chartSettings.scaleTextColor || tokens.mut,
+          textColor: chartSettings.scaleTextColor || tokens.axis,
           fontSize: chartSettings.scaleFontSize || 12,
           panes: {
             separatorColor: chartSettings.paneSeparatorColor || css("--pane-sep"),
@@ -6505,12 +6559,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // Watermark visibility — v5 uses the createTextWatermark plugin (chart-level watermark removed in v5).
       if (showWatermark != null) {
         try {
+          const wmShell = shellAxis();   // D10 — brand bug in the shell, ghost wordmark on web
           watermarkPluginRef.current?.applyOptions({
             visible: showWatermark,
+            horzAlign: wmShell ? "left" : "center",
+            vertAlign: wmShell ? "bottom" : "center",
             lines: [{
-              text: "Mastermind Terminal",
-              color: chartSettings.watermarkColor || "rgba(214,218,227,0.04)",
-              fontSize: 48,
+              text: wmShell ? "MASTERMIND" : "Mastermind Terminal",
+              color: chartSettings.watermarkColor || (wmShell ? "rgba(214,218,227,0.13)" : "rgba(214,218,227,0.04)"),
+              fontSize: wmShell ? 20 : 48,
               fontStyle: "bold",
               fontFamily: "var(--font-ui, system-ui, sans-serif)",
             }],
