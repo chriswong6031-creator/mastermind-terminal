@@ -2,6 +2,10 @@
 
 **Date:** 2026-08-01 · Annex to `docs/MARKET_STRUCTURE_CORE_MASTERPLAN_2026-08-01.md`.
 
+> **Status 2026-08-01 — W1, W2 and W3 shipped.** See §7 for what landed, the two live
+> defects the work surfaced, and what W4 still owes. Read §7 before re-planning anything
+> here: three §3 rows moved, and one methodological assumption in §5 was measured wrong.
+
 **Evidence:** operator-supplied screenshots of the live product (retail dashboard, institutional
 widgets, single-name exposure), plus `docs/audits/2026-08-01-market-structure-core/`
 (`volland-feature-census.md`, `volland-methodology.md`, `volland-build-specs.md`). The census agent
@@ -181,3 +185,69 @@ segment actually asks for oil or metals gamma.
 
 *Do not reproduce Volland's copy, marketing, or visual design. Parity here means capability parity,
 rendered in the v5/v7 Terminal idiom, under our honesty tiering.*
+
+---
+
+## 7. What shipped, 2026-08-01 — and what the build taught us
+
+### 7.1 Delivered
+
+| Wave | Cards | PRs |
+|---|---|---|
+| **W1** | Hedging requirement by strike · Today's hedging · Term structure | terminal #302 |
+| **W2** | Positioning vs its own history · Spot–vol relationship · Where gamma sits by horizon | macro #4194 · terminal #304 |
+| **W3** | The book in delta space · Which names sit at a positioning extreme | macro #4199 · terminal #305 |
+
+The Positioning tab now carries **13 cards**. New published artifacts:
+`options_hub.aggtrend/v1` (`agg:{ROOT}`), `options_hub.quad/v1` (`quad`), and a `by_delta`
+block on `options_hub.gex/v1`.
+
+### 7.2 Two live defects the work surfaced
+
+Both were found by *building on top of the data*, not by auditing it — which is the
+argument for building history and cross-sectional views early rather than late.
+
+1. **The gamma flip was the wrong estimator** (macro #4189). Three sites returned the
+   zero-crossing of a running sum across the strike ladder rather than the zero-gamma
+   *spot*. SPY published 275.00 against a spot of 741.69. Full RCA in
+   `docs/audits/2026-08-01-market-structure-core/gamma-flip-defect-rca.md`.
+
+2. **A degenerate quote could dominate a headline** (macro #4194). On 2026-06-26 the
+   published SPY net gamma was **−$1,129bn**, all of it one 0DTE at-the-money put quoted
+   at `iv = 0.0001`, where Black-Scholes gamma diverges. 21 of 2,407 SPY sessions were
+   contaminated; **two had the sign inverted**. Fixed by gating on `MIN_QUOTED_IV`; the
+   filter changes nothing on ordinary sessions.
+
+The pattern is identical in both: a number that is arithmetically faithful line by line
+and wrong as an answer to the question asked. Neither would have been caught by a test
+of the code as written — only by checking the output against reality.
+
+### 7.3 The §5 assumption that was measured wrong
+
+§5 W2 said our depth (2017→, 2012→ for QQQ) was "a real advantage, not parity". That is
+true for the *chart* and false for the *percentile*, and the difference matters.
+
+Dealer exposure scales with the underlying — gamma with S², vanna and charm with S. SPY's
+yearly **median** vanna climbed 3.54bn (2017) → 5.07bn (2026) while spot went 225 → 741.
+So a rank against nine years partly measures how much the market **grew**: the first quad
+board put 20 of 23 roots above the 85th vanna percentile and left two of the four corners
+empty. Not a finding — a trend.
+
+**Ruling:** ranks are computed over a trailing year; the long series stays for the *chart*,
+where the drift is visible and the reader can judge it. Any future percentile over these
+series inherits this constraint. Detrending (exposure per unit of notional) is the more
+principled fix and is open for a later wave; it changes the published unit, so it is not
+a drive-by.
+
+### 7.4 What W4 still owes
+
+- **The trade-side classifier** (§5 W4) — untouched. Still the only work here that
+  reaches their actual moat, and still a program rather than a wave.
+- **Theo Curves / positioning-implied skew** — deliberately not built. `VolSkewPanel`
+  already ships the *market* smile; the missing half is a positioning-implied reference
+  curve, which is a model we cannot yet grade. Same ruling as Paradigm and Catalyst
+  Impact in §3.2: build a graded equivalent or nothing.
+- **Greek Volatility 3-D surface, Liquidity** — buildable, not yet built. The matrix
+  store already carries strike × expiry, so the surface is presentation work; Liquidity
+  needs a per-root spread series the EOD store can support.
+- **Detrended exposure** — see §7.3.
