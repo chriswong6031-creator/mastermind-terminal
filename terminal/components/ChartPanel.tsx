@@ -4877,7 +4877,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     window.addEventListener("pointercancel", onProjectionPointerEnd);
     chart.subscribeCrosshairMove(onCrosshairProjection);
     if (shellAxis()) {
+      // pointermove/pointerdown are the presence signals, not just pointerenter: headless
+      // Chromium (CI) synthesizes moves without reliable boundary events, and a real
+      // crosshair drag always bubbles move events through the wrap. Programmatic
+      // crosshair sources fire no DOM pointer events at all, so the guard stays sound.
       wrap.addEventListener("pointerenter", onScrubEnter);
+      wrap.addEventListener("pointermove", onScrubEnter);
+      wrap.addEventListener("pointerdown", onScrubEnter);
       wrap.addEventListener("pointerleave", onScrubLeave);
       wrap.addEventListener("pointercancel", onScrubLeave);
       chart.subscribeCrosshairMove(scrubStatus);
@@ -5865,7 +5871,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       window.removeEventListener("pointercancel", onProjectionPointerEnd);
       const wEl = wrapElRef.current;
       if (onCtx && ref.current?.parentElement) ref.current.parentElement.removeEventListener("contextmenu", onCtx);
-      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onProjectionPointerDown, true); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("pointerdown", onShiftMeasure, true); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); wEl.removeEventListener("pointerenter", onScrubEnter); wEl.removeEventListener("pointerleave", onScrubLeave); wEl.removeEventListener("pointercancel", onScrubLeave); }
+      if (wEl) { if (onPaneMove) wEl.removeEventListener("mousemove", onPaneMove); if (onPaneLeave) wEl.removeEventListener("mouseleave", onPaneLeave); if (onPaneDbl) wEl.removeEventListener("dblclick", onPaneDbl); wEl.removeEventListener("pointerdown", onProjectionPointerDown, true); wEl.removeEventListener("pointerdown", onTouchDown); wEl.removeEventListener("pointerdown", onShiftMeasure, true); wEl.removeEventListener("wheel", onAxisWheel, true); wEl.removeEventListener("dblclick", onAxisDbl); wEl.removeEventListener("pointerenter", onScrubEnter); wEl.removeEventListener("pointermove", onScrubEnter); wEl.removeEventListener("pointerdown", onScrubEnter); wEl.removeEventListener("pointerleave", onScrubLeave); wEl.removeEventListener("pointercancel", onScrubLeave); }
       mqlMobile?.removeEventListener("change", onMqlChange);
       paneRO?.disconnect(); paneRORef.current = null; wrapElRef.current = null;
       ro?.disconnect();
