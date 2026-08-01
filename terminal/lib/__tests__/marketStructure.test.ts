@@ -7,6 +7,8 @@ import {
   topology,
   expiryConcentration,
   buildMarketStructure,
+  guardedFlip,
+  isPlausibleFlip,
   TILT_FRAGILE_ABS,
   REACHABLE_EM,
   type MscStrikeRow,
@@ -327,6 +329,42 @@ describe("expiryConcentration", () => {
   it("reports a delta share only when the lens is present", () => {
     expect(expiryConcentration([{ exp: "2026-08-07", gamma_net: 5 }]).deltaSharePct).toBeNull();
     expect(expiryConcentration(EXPS).deltaSharePct).not.toBeNull();
+  });
+});
+
+describe("guardedFlip / isPlausibleFlip", () => {
+  it("keeps a flip that sits near spot", () => {
+    expect(isPlausibleFlip(752.2, 750.72)).toBe(true);
+    expect(guardedFlip(752.2, 750.72)).toBe(752.2);
+  });
+
+  it("drops the measured live SPY and QQQ defects", () => {
+    // Published 2026-08-01: SPY 275.0 against spot 741.69, QQQ 249.8 against 683.55.
+    expect(isPlausibleFlip(275.0, 741.69)).toBe(false);
+    expect(guardedFlip(275.0, 741.69)).toBeNull();
+    expect(guardedFlip(249.8, 683.55)).toBeNull();
+  });
+
+  it("documents the guard's known blind spot: SPX and NVDA survive it", () => {
+    // These are ALSO wrong upstream but sit inside ±20%, so the guard cannot catch them.
+    // The real repair is MSC R1.1 — this test exists so the limitation stays visible.
+    expect(isPlausibleFlip(8676.93, 7437.63)).toBe(true);
+    expect(isPlausibleFlip(219.55, 195.04)).toBe(true);
+  });
+
+  it("is symmetric about spot and inclusive at the boundary", () => {
+    expect(isPlausibleFlip(120, 100)).toBe(true);
+    expect(isPlausibleFlip(80, 100)).toBe(true);
+    expect(isPlausibleFlip(120.01, 100)).toBe(false);
+    expect(isPlausibleFlip(79.99, 100)).toBe(false);
+  });
+
+  it("treats missing or nonsensical inputs as not drawable", () => {
+    expect(guardedFlip(null, 100)).toBeNull();
+    expect(guardedFlip(100, null)).toBeNull();
+    expect(guardedFlip(100, 0)).toBeNull();
+    expect(guardedFlip(NaN, 100)).toBeNull();
+    expect(guardedFlip(100, -5)).toBeNull();
   });
 });
 

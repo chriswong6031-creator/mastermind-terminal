@@ -286,6 +286,39 @@ strike*, which on a put-heavy book walks the cumulative sum far down the ladder;
 not use that method. **The fixture hides it** — `gex_fixture.json` carries a sane SPY flip of 748.3,
 which is why every local verification pass has looked correct.
 
+**Root cause CONFIRMED** — full analysis, numeric reproduction and fix spec in
+`docs/audits/2026-08-01-market-structure-core/gamma-flip-defect-rca.md`. The short version:
+`_find_gamma_flip` computes the zero-crossing of the **running partial sum of dealer gamma across
+the strike ladder**, gammas frozen at today's spot, unwindowed. The real flip is the hypothetical
+spot `S*` at which the whole book **re-priced at `S*`** has zero net gamma — which is exactly what
+`gex_engine._gamma_flip` does on a 101-point ±25% grid, and what reaches `gex_state` through
+`gex_model.build_model`. Two different mathematical objects; agreement would be coincidence. The
+docstring claiming it "mirrors gex_engine._gamma_flip" is false, and is what let this survive.
+
+Five extra findings from that analysis, each of which changes the work:
+
+1. **All five symptoms are one bug in three regimes.** Reproduced on the real
+   `polygon_gex/chains/2026-07-09.parquet`: with negative net GEX the cumulative series never
+   recrosses zero on a shallow ladder ⇒ `null` (IWM); deepen SPY's ladder and the *same book*
+   returns 379.96 with eight crossings in the deep tail ⇒ the gross failures. Positive net GEX
+   yields a single crossing where the integral turns positive ⇒ SPX/NVDA. **The last case is the
+   dangerous one** — 12–16% off survives every guard and reads as credible.
+2. **The same JSON is self-contradictory.** `history[]` is sourced from `summary_{ROOT}.parquet`,
+   which *is* grid-method and *is* sane (SPY 747.83 against spot 745.40). The desk renders the
+   broken scalar and the sane history side by side.
+3. **A frontend workaround already existed** (`GexDeskView.tsx`, citing "285 vs spot 748"): a ±20%
+   plausibility band. So SPY/QQQ render **no** flip while SPX/NVDA render the **wrong one as real**.
+   That guard is now centralised in `lib/marketStructure.ts` (`guardedFlip`) so this desk and the
+   Positioning tab cannot disagree, and so the whole workaround is deleted in one place at R1.1.
+   Its blind spot is pinned by a test that names SPX and NVDA.
+4. **Sibling defects, same shape:** `vex_engine._find_vex_flip` is broken identically (so `vex_flip`
+   is live-wrong too), and `levels_engine._flip_from_rows` replicates it with `min(crossings)` —
+   worse. R1.1 must fix all three, not just the one we happened to measure.
+5. **A backfill is required, and ordering matters.** `gex_history/{ROOT}/{DATE}.json` is a verbatim
+   payload copy, and `_heal_gex_history` re-runs the same `compute_gex` — so after the fix, healing
+   a past date would still mint a *new* bad snapshot unless the repair ships with it. Sequence:
+   fix → verify one nightly → then backfill (only `gamma_flip` needs rewriting).
+
 Consequences for sequencing:
 - **R1.1 is promoted to the critical path** and is no longer a refinement — it is a live-data repair.
   Route the hub payload's flip through `engine/gex_engine.py`'s existing ±25% spot-grid
