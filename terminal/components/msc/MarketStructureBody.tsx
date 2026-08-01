@@ -505,7 +505,7 @@ function EmCard({
 }) {
   const em = ms.em;
   return (
-    <Card title={t("emTitle")} tier={t("tierA")} tierWhy={t("tierAWhy")} lead={t("emLead")}>
+    <Card title={t("emTitle")} tier={t("tierB")} tierWhy={t("emTierWhy")} lead={t("emLead")}>
       {!levels.length ? (
         <p style={FOOT}>{t("emNone")}</p>
       ) : (
@@ -588,13 +588,13 @@ function ExpiryCard({ ms, t }: { ms: MarketStructure; t: T }) {
   const e = ms.expiry;
   if (!e.nExp) {
     return (
-      <Card title={t("expTitle")} tier={t("tierA")} tierWhy={t("tierAWhy")}>
+      <Card title={t("expTitle")} tier={t("tierB")} tierWhy={t("tierBWhy")}>
         <p style={FOOT}>{t("expNone")}</p>
       </Card>
     );
   }
   return (
-    <Card title={t("expTitle")} tier={t("tierA")} tierWhy={t("tierAWhy")} lead={t("expLead")}>
+    <Card title={t("expTitle")} tier={t("tierB")} tierWhy={t("tierBWhy")} lead={t("expLead")}>
       <div style={ROW}>
         <Stat label={t("expNext")} value={e.nextExp ?? "—"} />
         <div style={STAT}>

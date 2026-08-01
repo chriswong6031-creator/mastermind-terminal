@@ -51,6 +51,32 @@ const OI_TIME_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oi_time
 const MAX_PAIN_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "max_pain_fixture.json");
 const OI_CHANGE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oi_change_fixture.json");
 
+
+/**
+ * A syntactically valid option root, for f-params whose tail is interpolated into a
+ * backend path or an R2 object key.
+ *
+ * ⚠️ SECURITY, not tidiness. Before this existed, `isValidF` accepted ANY non-empty
+ * string after `gex:` / `vol:` / `matrix:` / `agg:` / … and `backendPath` / `r2Key`
+ * interpolated it raw. `gex:../../admin/secrets` normalises away the `..` segments at
+ * fetch time and reads an arbitrary backend endpoint or R2 object — and because the
+ * route caches by the f-param string, the result is then served from the shared
+ * server-side CACHE under the attacker's key. Path traversal plus cache poisoning from
+ * one query parameter.
+ *
+ * Roots are uppercase alphanumerics with an optional dot or hyphen inside (BRK.B,
+ * RDS-A) — never a slash, a dot-dot, a space or a percent escape. 12 chars matches the
+ * ticker input's own maxLength.
+ */
+const ROOT_RE = /^[A-Z0-9]{1,10}(?:[.-][A-Z0-9]{1,4})?$/;
+
+export function isValidRoot(root: string): boolean {
+  return root.length > 0 && root.length <= 12 && ROOT_RE.test(root);
+}
+
+/** A date segment in a dated f-param. Same reasoning as isValidRoot. */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 // Valid f-param values: existing feed|heat|meta, plus hub params.
 // Parameterized sub-types: tide, dte, ticker:{ROOT}, vol:{ROOT}, gex:{ROOT}, oi, hot
 export function isValidF(f: string): boolean {
@@ -59,20 +85,20 @@ export function isValidF(f: string): boolean {
   // macro nightly mirrors (scripts/mirror_terminal_context_r2.py); `moves:{ROOT}` is the
   // per-root expected-move band, already published beside gex/vol in the options_hub plane.
   if (f === "darkpool" || f === "volregime") return true;
-  if (f.startsWith("moves:") && f.length > 6) return true;
+  if (f.startsWith("moves:")) return isValidRoot(f.slice(6));
   // R3 OI suite (Structure tab). `oi_change` bare = the cross-root board; the
   // root-keyed forms are per-root payloads. All prefixes are disjoint from the
   // exact-match `oi` (oi_movers) above — no overload, no prefix arithmetic.
   if (f === "oi_change") return true;
-  if (f.startsWith("oi_time:") && f.length > 8) return true;
-  if (f.startsWith("max_pain:") && f.length > 9) return true;
-  if (f.startsWith("oi_change:") && f.length > 10) return true;
-  if (f.startsWith("ticker:") && f.length > 7) return true;
-  if (f.startsWith("vol:") && f.length > 4) return true;
-  if (f.startsWith("gex:") && f.length > 4) return true;
+  if (f.startsWith("oi_time:")) return isValidRoot(f.slice(8));
+  if (f.startsWith("max_pain:")) return isValidRoot(f.slice(9));
+  if (f.startsWith("oi_change:")) return isValidRoot(f.slice(10));
+  if (f.startsWith("ticker:")) return isValidRoot(f.slice(7));
+  if (f.startsWith("vol:")) return isValidRoot(f.slice(4));
+  if (f.startsWith("gex:")) return isValidRoot(f.slice(4));
   // Aggregate greek trend (Volland parity W2) — options_hub.aggtrend/v1, one row per
   // session back to 2017. Prefix is disjoint from every `gex*` form above.
-  if (f.startsWith("agg:") && f.length > 4) return true;
+  if (f.startsWith("agg:")) return isValidRoot(f.slice(4));
   // Cross-root positioning board (W3). A whole-file artifact, deliberately NOT under
   // the `agg:` prefix — `agg:quad` would be a legal-looking read for a root named quad.
   if (f === "quad") return true;
@@ -80,22 +106,35 @@ export function isValidF(f: string): boolean {
   // (options_hub/gex_history — WP-GEX-SNAPSHOTS, accruing since 2026-07-16). Distinct
   // prefixes from `gex:` — the 4th char is `_`, not `:` — so neither form can be eaten
   // by the live read (the surface_idx/surface_idx_at rule, one plane over).
-  if (f.startsWith("gex_dates:") && f.length > 10) return true;
-  if (f.startsWith("gex_at:") && f.split(":").length === 3 && f.length > 9) return true;
-  if (f.startsWith("tctx:") && f.length > 5) return true;
-  if (f.startsWith("gexstate:") && f.length > 9) return true;
-  if (f.startsWith("matrix:") && f.length > 7) return true;
+  if (f.startsWith("gex_dates:")) return isValidRoot(f.slice(10));
+  if (f.startsWith("gex_at:")) {
+    const [, root, date] = f.split(":");
+    return f.split(":").length === 3 && isValidRoot(root ?? "") && DATE_RE.test(date ?? "");
+  }
+  if (f.startsWith("tctx:")) return isValidRoot(f.slice(5));
+  if (f.startsWith("gexstate:")) return isValidRoot(f.slice(9));
+  if (f.startsWith("matrix:")) return isValidRoot(f.slice(7));
   // Surface replay store: surface_idx:{ROOT} (frame index) + surface:{ROOT}:{STAMP} (one frame).
-  if (f.startsWith("surface_idx:") && f.length > 12) return true;
-  if (f.startsWith("surface:") && f.split(":").length === 3 && f.length > 10) return true;
+  if (f.startsWith("surface_idx:")) return isValidRoot(f.slice(12));
+  if (f.startsWith("surface:")) {
+    const [, root, stamp] = f.split(":");
+    return f.split(":").length === 3 && isValidRoot(root ?? "") && /^[A-Za-z0-9_-]{1,32}$/.test(stamp ?? "");
+  }
   // Multi-day replay (macro #3499): the sessions index + the date-keyed copies of the two
   // keys above. `surface_dates:` is one prefix; the dated reads carry an extra DATE segment,
   // so they are distinct prefixes rather than an overload — `surface_idx_at:` cannot be
   // mistaken for `surface_idx:` (12th char `_` vs `:`) and `surface_at:` never matches
   // `surface:`. Legacy today-paths above are untouched and remain the LIVE read.
-  if (f.startsWith("surface_dates:") && f.length > 14) return true;
-  if (f.startsWith("surface_idx_at:") && f.split(":").length === 3 && f.length > 15) return true;
-  if (f.startsWith("surface_at:") && f.split(":").length === 4 && f.length > 13) return true;
+  if (f.startsWith("surface_dates:")) return isValidRoot(f.slice(14));
+  if (f.startsWith("surface_idx_at:")) {
+    const [, root, date] = f.split(":");
+    return f.split(":").length === 3 && isValidRoot(root ?? "") && DATE_RE.test(date ?? "");
+  }
+  if (f.startsWith("surface_at:")) {
+    const [, root, date, stamp] = f.split(":");
+    return f.split(":").length === 4 && isValidRoot(root ?? "") && DATE_RE.test(date ?? "")
+      && /^[A-Za-z0-9_-]{1,32}$/.test(stamp ?? "");
+  }
   if (f === "manifest") return true;
   if (f === "flow_idx") return true;
   if (f === "prophet_idx") return true;
