@@ -46,14 +46,15 @@ import type { GexPayload } from "@/components/gexdesk/GexDeskView";
 
 interface Props {
   gex: GexPayload | null;
-  /**
-   * `moves:{ROOT}` — the expected-move band + its containment calibration. The band is a
-   * CURRENT-session read, so the desk passes null while an archived ladder is being
-   * replayed; the expected-move card then says why rather than pairing yesterday's
-   * structure with today's band.
-   */
+  /** `moves:{ROOT}` — the expected-move band + its containment calibration. Optional: */
   moves: MscMoves | null;
-  /** True while an archived session is on screen (changes the expected-move copy only). */
+  /**
+   * Set once this surface gains dated replay (masterplan R2). The expected-move band is a
+   * CURRENT-session read, so a caller replaying an archived ladder must pass `moves: null`
+   * AND `archived: true` — the expected-move card then explains that the band did not
+   * travel with the ladder, instead of silently pairing yesterday's structure with today's
+   * band. Today's only caller (PositioningView) is live-only, so this stays false.
+   */
   archived?: boolean;
   lang: Lang;
 }
