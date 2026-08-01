@@ -3099,7 +3099,12 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
    This late layer intentionally upgrades the legacy drawing rail/inspector
    without changing the rest of the Terminal's locked shell geometry.
    ═══════════════════════════════════════════════════════════════════════════ */
-.chart-body{isolation:isolate}
+.chart-body{
+  isolation:isolate;
+  --drawing-safe-left:env(safe-area-inset-left,0px);
+  --drawing-safe-right:env(safe-area-inset-right,0px);
+  --drawing-safe-bottom:env(safe-area-inset-bottom,0px)
+}
 .ct-kind-icon{width:28px!important;height:16px!important;flex:none;fill:none;stroke:currentColor!important;stroke-width:1.35!important;stroke-linecap:round;stroke-linejoin:round}
 .ct-kind-icon .ct-fill{fill:color-mix(in srgb,currentColor 14%,transparent);stroke:none}.ct-kind-icon .ct-base{opacity:.5;stroke-dasharray:2 2}
 .chart-type-pop{width:244px;max-height:min(70vh,540px);padding:5px!important;overflow-y:auto}
@@ -3122,22 +3127,34 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .ds-btn svg{width:18px;height:18px;stroke-width:1.55;stroke-linecap:round;stroke-linejoin:round}
 .ds-btn:hover{color:var(--text);border-color:var(--hairline);background:rgba(255,255,255,.045);transform:translateY(-1px)}
 .ds-btn:active{transform:scale(.94)}
+.ds-btn:focus-visible,.ds-fly-item:focus-visible,.ds-style button:focus-visible{outline:2px solid color-mix(in srgb,var(--brand-2) 72%,white);outline-offset:2px}
 .ds-btn.on{color:var(--brand-2);border-color:color-mix(in srgb,var(--brand-2) 28%,var(--hairline));background:color-mix(in srgb,var(--brand) 13%,var(--panel-2));box-shadow:inset 0 1px rgba(255,255,255,.06),0 5px 14px -10px rgba(41,98,255,.75)}
 .ds-btn:disabled{opacity:.28;cursor:not-allowed;transform:none}
 .ds-sep{width:28px;margin:4px 0;background:var(--hairline)}
 .ds-group-host{position:relative;display:grid;grid-template-columns:34px 8px;align-items:center;width:42px}
 .ds-group-main{width:34px;min-width:34px;border-radius:9px 5px 5px 9px}
+.ds-group-main[data-sticky="true"]::after{content:"";position:absolute;right:4px;bottom:4px;width:4px;height:4px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor}
 .ds-group-chevron{display:grid;place-items:center;width:8px;height:38px;padding:0;border-radius:0 7px 7px 0;color:var(--text-dim);transition:color var(--t-fast),background var(--t-fast)}
 .ds-group-chevron:hover,.ds-group-chevron[aria-expanded="true"]{color:var(--text);background:rgba(255,255,255,.05)}
 .ds-group-chevron svg{width:6px;height:10px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .ds-utility-host{display:block;width:40px}
 .ds-utility-host>.ds-btn{width:40px}
+.ds-style-host{display:block;width:40px}
+.ds-style-host>.ds-btn{width:40px}
 .ds-history{display:flex;flex-direction:column;gap:2px}
-.ds-menu-heading{padding:9px 11px 7px;color:var(--text-dim);font:720 var(--fs-micro)/1 var(--font-ui);letter-spacing:.09em;text-transform:uppercase}
+.ds-menu-heading{position:sticky;top:-6px;z-index:2;padding:9px 11px 7px;color:var(--text-dim);background:linear-gradient(180deg,color-mix(in srgb,var(--panel-3) 96%,transparent) 72%,transparent);font:720 var(--fs-micro)/1 var(--font-ui);letter-spacing:.09em;text-transform:uppercase;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.ds-menu-heading:not(:first-child){margin-top:5px;border-top:1px solid var(--hairline)}
 .ds-flyout{
   left:calc(100% + 10px);top:-7px;min-width:236px;max-height:min(68vh,560px);padding:6px;gap:1px;overflow-y:auto;
   border-color:var(--pop-edge);border-radius:var(--pop-r);background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);
-  box-shadow:var(--pop-shadow),var(--pop-sheen);transform-origin:left top;animation:dsMenuIn 170ms var(--ease-out) both
+  box-shadow:var(--pop-shadow),var(--pop-sheen);transform-origin:left top;animation:dsMenuIn 150ms var(--ease-out) both;scrollbar-width:thin;scrollbar-color:var(--hairline) transparent
+}
+.ds-flyout::-webkit-scrollbar{width:6px}.ds-flyout::-webkit-scrollbar-thumb{border-radius:99px;background:var(--hairline)}
+.ds-utility-host>.ds-flyout{top:auto;bottom:-7px;transform-origin:left bottom}
+.ds-flyout.ds-floating-popover{position:absolute;right:auto;bottom:auto;box-sizing:border-box;max-height:calc(100% - 16px);transform-origin:left top}
+.ds-flyout[data-state="closing"],.ds-mobile-style[data-state="closing"]{
+  animation:none;opacity:0;transform:translateX(-4px) scale(.985);pointer-events:none;
+  transition:opacity 150ms var(--ease-out),transform 150ms var(--ease-out)
 }
 .ds-fly-item{min-height:38px;padding:0 10px;border:1px solid transparent;border-radius:var(--pop-item-r);font:540 12.5px/1.15 var(--font-ui);transition:color var(--t-fast),background var(--t-fast),border-color var(--t-fast),transform var(--t-fast)}
 .ds-fly-item:hover{border-color:rgba(255,255,255,.045);background:var(--pop-hover);transform:translateX(1px)}
@@ -3162,6 +3179,11 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .ds-w:hover,.ds-d:hover{border-color:var(--hairline);background:rgba(255,255,255,.045)}
 .ds-w.on,.ds-d.on{border-color:color-mix(in srgb,var(--brand-2) 24%,transparent);background:color-mix(in srgb,var(--brand) 12%,transparent)}
 .ds-dock:has(.ds-flyout)>.ds-style{opacity:.22;pointer-events:none}
+.chart-body:has(>.ds-floating-popover)>.ds-dock>.ds-style{opacity:.22;pointer-events:none}
+.ds-tip-copy{display:flex;min-width:154px;flex-direction:column;gap:5px}
+.ds-tip-title{display:flex;align-items:center;gap:9px;color:var(--text);font:650 12px/1.2 var(--font-ui)}
+.ds-tip-title .ds-kbd{margin-left:auto}
+.ds-tip-hint{color:var(--muted);font:500 10.5px/1.25 var(--font-ui)}
 
 .drawing-layer [data-drawing-id]{transition:opacity var(--t-fast) var(--ease-out);vector-effect:non-scaling-stroke}
 .drawing-layer [data-drawing-id]:hover{filter:drop-shadow(0 0 4px color-mix(in srgb,var(--brand-2) 38%,transparent))}
@@ -3189,61 +3211,103 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .draw-settings label{display:grid;grid-template-columns:58px 1fr;align-items:center;gap:9px;color:var(--text-2);font:600 10.5px/1 var(--font-ui)}
 .draw-settings input[type="range"]{width:100%;accent-color:var(--brand-2)}
 .text-edit{min-height:34px;padding:6px 9px;border-color:var(--brand-2);border-radius:8px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand-2) 15%,transparent),var(--shadow-2)}
+.drawing-media-picker{
+  position:absolute;z-index:90;pointer-events:auto;box-sizing:border-box;width:min(324px,calc(100% - 16px));max-height:min(420px,calc(100% - 16px));overflow:auto;overscroll-behavior:contain;
+  padding:10px;border:1px solid var(--pop-edge);border-radius:14px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);
+  box-shadow:var(--pop-shadow),var(--pop-sheen);animation:drawInspectorIn 170ms var(--ease-out) both
+}
+.drawing-media-picker-head{display:flex;min-height:32px;align-items:center;justify-content:space-between;gap:10px;padding:0 1px 8px}
+.drawing-media-picker-title{color:var(--text);font:700 12px/1.2 var(--font-ui);letter-spacing:.01em}
+.drawing-media-picker-close{display:grid;width:30px;height:30px;flex:none;place-items:center;border:1px solid transparent;border-radius:8px;color:var(--muted);font:400 20px/1 var(--font-ui);cursor:pointer}
+.drawing-media-picker-close:hover{border-color:var(--hairline);background:var(--pop-hover);color:var(--text)}
+.drawing-media-picker-body{min-width:0}
+.drawing-media-choice-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.drawing-media-choice{display:flex;min-width:0;min-height:62px;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:6px 4px;border:1px solid var(--hairline);border-radius:10px;background:rgba(255,255,255,.025);color:var(--text-2);cursor:pointer;transition:transform var(--t-fast),border-color var(--t-fast),background var(--t-fast),color var(--t-fast)}
+.drawing-media-choice:hover{transform:translateY(-1px);border-color:color-mix(in srgb,var(--brand-2) 35%,var(--hairline));background:var(--pop-hover);color:var(--text)}
+.drawing-media-choice-glyph{font-size:25px;line-height:1}.drawing-media-choice-icon{width:24px;height:24px;overflow:visible}
+.drawing-media-choice-label{max-width:100%;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font:600 8.5px/1 var(--font-ui);white-space:nowrap}
+.drawing-media-picker button:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
+.drawing-media-picker-help{margin:1px 0 11px;color:var(--muted);font:500 11px/1.4 var(--font-ui)}
+.drawing-media-picker-actions{display:flex;gap:7px}.drawing-media-picker-actions button{min-height:38px;padding:0 13px;border:1px solid var(--hairline);border-radius:9px;font:650 11px/1 var(--font-ui);cursor:pointer}
+.drawing-media-picker-primary{background:color-mix(in srgb,var(--brand) 22%,var(--panel));border-color:color-mix(in srgb,var(--brand-2) 34%,var(--hairline))!important;color:#fff}
+.drawing-media-picker-primary:hover{background:color-mix(in srgb,var(--brand) 30%,var(--panel))}.drawing-media-picker-secondary{background:rgba(255,255,255,.025);color:var(--text-2)}
+.drawing-media-picker-actions button:disabled{cursor:wait;opacity:.48}
+.drawing-media-picker-status{min-height:15px;margin-top:8px;color:var(--muted);font:550 10px/1.35 var(--font-ui)}
+.drawing-media-picker-status:empty{display:none}.drawing-media-picker-status[data-state="loading"]{color:var(--brand-2)}.drawing-media-picker-status[data-state="error"]{color:var(--sell)}
+.drawing-media-file-input{position:absolute!important;width:1px!important;height:1px!important;margin:-1px!important;padding:0!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;clip-path:inset(50%)!important;border:0!important;white-space:nowrap!important}
 
-@keyframes dsMenuIn{from{opacity:0;transform:translateX(-5px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes dsMenuIn{from{opacity:0;transform:translateX(-4px) scale(.96)}to{opacity:1;transform:none}}
 @keyframes drawInspectorIn{from{opacity:0;transform:translateY(5px) scale(.985)}to{opacity:1;transform:none}}
 
 @media (max-width:860px){
   .chart-body>.ds-dock{
-    display:flex;position:absolute;left:max(8px,env(safe-area-inset-left));right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));z-index:22;
+    display:flex;position:absolute;left:max(8px,var(--drawing-safe-left));right:max(8px,var(--drawing-safe-right));bottom:max(8px,var(--drawing-safe-bottom));z-index:22;
     width:auto;height:54px;min-height:54px;padding:5px 6px;gap:3px;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:visible;
     border:1px solid var(--pop-edge);border-radius:15px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);
     box-shadow:var(--pop-shadow),var(--pop-sheen);scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x
   }
   .chart-body>.ds-dock::-webkit-scrollbar{display:none}
   .ds-dock .ds-btn{width:44px;height:44px;min-width:44px}
-  .ds-dock .ds-group-host{display:grid;grid-template-columns:36px 8px;width:44px;min-width:44px}
-  .ds-dock .ds-group-main{width:36px;min-width:36px}
-  .ds-dock .ds-group-chevron{height:44px}
+  .ds-dock .ds-group-host{display:grid;grid-template-columns:44px 44px;width:88px;min-width:88px}
+  .ds-dock .ds-group-main{width:44px;min-width:44px}
+  .ds-dock .ds-group-chevron{width:44px;height:44px}
   .ds-dock .ds-utility-host{display:block;width:44px;min-width:44px}
   .ds-dock .ds-utility-host>.ds-btn{width:44px}
+  .ds-dock .ds-style-host{display:block;width:44px;min-width:44px}
+  .ds-dock .ds-style-host>.ds-btn{width:44px}
   .ds-dock .ds-history{flex-direction:row;gap:3px}
   .ds-dock .ds-sep{width:1px;height:28px;margin:0 3px;min-width:1px}
   .ds-dock .ds-spacer{display:none}
   .ds-dock .ds-style{
-    position:fixed;left:12px;right:12px;top:auto;bottom:calc(70px + env(safe-area-inset-bottom));z-index:80;width:auto;max-width:none;
+    position:fixed;left:max(12px,var(--drawing-safe-left));right:max(12px,var(--drawing-safe-right));top:auto;bottom:calc(70px + var(--drawing-safe-bottom));z-index:80;width:auto;max-width:none;
     min-height:48px;justify-content:flex-start;overflow-x:auto;overscroll-behavior-x:contain;touch-action:pan-x
   }
   .ds-dock .ds-flyout{
-    position:fixed;left:12px;right:12px;top:auto;bottom:calc(70px + env(safe-area-inset-bottom));z-index:81;min-width:0;max-height:min(58dvh,480px);
-    transform-origin:center bottom;animation:dsMobileMenuIn 190ms var(--ease-out) both
+    position:fixed;left:max(12px,var(--drawing-safe-left));right:max(12px,var(--drawing-safe-right));top:auto;bottom:calc(70px + var(--drawing-safe-bottom));z-index:81;min-width:0;max-height:min(58dvh,480px);
+    transform-origin:center bottom;animation:dsMobileMenuIn 150ms var(--ease-out) both
   }
   /* Mobile menus are portalled to the chart-body host so the dock can stay horizontally
      scrollable without clipping its glass popovers. */
   .ds-mobile-popover{
-    position:absolute;left:max(12px,env(safe-area-inset-left));right:max(12px,env(safe-area-inset-right));top:auto;bottom:calc(70px + env(safe-area-inset-bottom));z-index:81;min-width:0;max-height:min(58dvh,480px);
+    position:absolute;left:max(12px,var(--drawing-safe-left));right:max(12px,var(--drawing-safe-right));top:auto;bottom:calc(70px + var(--drawing-safe-bottom));z-index:81;min-width:0;max-height:min(58dvh,calc(100% - 86px - var(--drawing-safe-bottom)),480px);
     transform-origin:center bottom;animation:dsMobileMenuIn 190ms var(--ease-out) both
   }
   .ds-mobile-style{
-    position:absolute;left:max(12px,env(safe-area-inset-left));right:max(12px,env(safe-area-inset-right));top:auto;bottom:calc(70px + env(safe-area-inset-bottom));z-index:80;width:auto;max-width:none;
+    position:absolute;left:max(12px,var(--drawing-safe-left));right:max(12px,var(--drawing-safe-right));top:auto;bottom:calc(70px + var(--drawing-safe-bottom));z-index:80;width:auto;max-width:none;
     min-height:48px;justify-content:flex-start;overflow-x:auto;overscroll-behavior-x:contain;touch-action:pan-x
   }
+  .ds-mobile-popover[data-state="closing"],.ds-mobile-style[data-state="closing"]{transform:translateY(8px) scale(.985)}
   .chart-body:has(>.ds-mobile-popover)>.ds-mobile-style{opacity:.22;pointer-events:none}
   .ds-mobile-style .ds-sw,.ds-mobile-style .ds-w,.ds-mobile-style .ds-d{width:44px;height:44px;min-width:44px}
   .ds-fly-item{min-height:44px;font-size:13px}
-  .draw-bar{left:8px!important;right:8px;top:auto!important;bottom:70px;max-width:calc(100% - 16px);min-height:60px;overflow-x:auto;overflow-y:visible;padding:8px;scrollbar-width:none}
+  /* Keep the compact inspector from becoming the containing block for its fixed
+     settings child. The desktop entrance uses transform + backdrop-filter; either
+     would make the settings panel scroll with the inspector's horizontal strip. */
+  .draw-bar{left:max(8px,var(--drawing-safe-left))!important;right:max(8px,var(--drawing-safe-right));top:auto!important;bottom:calc(70px + var(--drawing-safe-bottom));max-width:calc(100% - 16px);min-height:60px;overflow-x:auto;overflow-y:visible;padding:8px;scrollbar-width:none;-webkit-backdrop-filter:none;backdrop-filter:none;animation:drawInspectorMobileIn 170ms var(--ease-out) both}
   .draw-bar::-webkit-scrollbar{display:none}
   .draw-bar .dwi,.draw-bar .ddi,.draw-bar .dfi,.draw-bar .bar-act,.draw-bar .bar-grip,.draw-bar .bar-del{min-width:44px;height:44px}
+  .draw-bar .bar-grip{display:none}
   .draw-bar button[data-c],.draw-bar .bar-custom-color{min-width:44px;width:44px;height:44px}
-  .draw-settings{position:fixed;left:12px;right:12px;top:auto;bottom:128px;min-width:0}
-  .ai-chip{left:10px;bottom:72px}
+  .draw-settings{
+    position:fixed;box-sizing:border-box;
+    left:calc(var(--drawing-host-left-gap,0px) + max(12px,var(--drawing-safe-left)));
+    right:calc(var(--drawing-host-right-gap,0px) + max(12px,var(--drawing-safe-right)));
+    top:auto;bottom:calc(var(--drawing-host-bottom-gap,0px) + 138px + var(--drawing-safe-bottom));
+    min-width:0;max-height:clamp(72px,calc(var(--drawing-host-height,100dvh) - 150px - var(--drawing-safe-bottom)),240px);
+    overflow-y:auto;overscroll-behavior:contain
+  }
+  .drawing-media-picker{left:max(12px,var(--drawing-safe-left))!important;right:max(12px,var(--drawing-safe-right));top:auto!important;bottom:calc(70px + var(--drawing-safe-bottom));width:auto;max-height:min(58dvh,calc(100% - 86px - var(--drawing-safe-bottom)),480px)}
+  .drawing-media-choice{min-height:68px}
+  .ai-chip{left:max(10px,var(--drawing-safe-left));bottom:calc(72px + var(--drawing-safe-bottom))}
 }
-@keyframes dsMobileMenuIn{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@media (max-width:420px){.drawing-media-choice-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.drawing-media-picker{max-height:min(52dvh,calc(100% - 86px - var(--drawing-safe-bottom)),420px)}}
+@keyframes dsMobileMenuIn{from{opacity:0;transform:translateY(8px) scale(.96)}to{opacity:1;transform:none}}
+@keyframes drawInspectorMobileIn{from{opacity:0}to{opacity:1}}
 
 @media (hover:none),(pointer:coarse){
   .ds-btn:hover,.ds-fly-item:hover{transform:none}
   .drawing-layer [data-drawing-handle]{stroke-width:3px}
 }
 @media (prefers-reduced-motion:reduce){
-  .ds-dock *,.ds-mobile-popover,.ds-mobile-popover *,.ds-mobile-style,.ds-mobile-style *,.draw-bar,.draw-bar *,.drawing-layer [data-drawing-id],.text-edit{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+  .ds-dock *,.ds-flyout,.ds-flyout *,.ds-style,.ds-style *,.draw-settings,.draw-settings *,.draw-bar,.draw-bar *,.drawing-media-picker,.drawing-media-picker *,.drawing-layer [data-drawing-id],.text-edit{animation:none!important;transition:none!important;scroll-behavior:auto!important}
 }

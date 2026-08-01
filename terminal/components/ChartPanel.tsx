@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 // ── Boot-trace helper — mirrors the one in TerminalShell (?boottrace=1) ──────
 const _cpStart = typeof performance !== "undefined" ? performance.now() : 0;
@@ -23,8 +23,9 @@ import { keepIndicatorPaneAxisLabelsOnly } from "@/lib/indicatorPaneSeries";
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engine/host";
 import { ORACLE_V1_PINE } from "@/lib/pine";
-import { DRAWING_SCHEMA_VERSION, type Drawing, type DrawKind, type Bar as DBar, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
-import { drawingToolFromShortcut, getDrawingTool, SINGLE_POINT_DRAWING_KINDS, TWO_POINT_DRAWING_KINDS, type DrawingToolCapability } from "@/lib/drawingTools";
+import { DRAWING_SCHEMA_VERSION, MAX_DRAWING_PAYLOAD_BYTES, type Drawing, type DrawKind, type Bar as DBar, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
+import { drawingToolFromShortcut, getDrawingTool, type DrawingToolCapability } from "@/lib/drawingTools";
+import { DEFAULT_FIBONACCI_LEVELS, DRAWING_RENDERER_FAMILY, materializeSemanticPoints } from "@/lib/drawing-engine/geometry";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { setActivePaneCoords, getActivePaneCoords } from "@/lib/paneCoords";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
@@ -63,6 +64,57 @@ import { chartTimeAxisOptions, chartTimeSpanDays } from "@/lib/chartTimeAxis";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 type Bar = { time: string; o: number; h: number; l: number; c: number; v: number };
+
+const DRAWING_IMAGE_MAX_FILE_BYTES = 700 * 1024;
+const DRAWING_IMAGE_MAX_EDGE = 4096;
+const DRAWING_IMAGE_MAX_PIXELS = 12_000_000;
+const DRAWING_IMAGE_PAYLOAD_BUDGET = Math.floor(MAX_DRAWING_PAYLOAD_BYTES * .9);
+const DRAWING_IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/webp"]);
+const DRAWING_IMAGE_DATA_RE = /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/]+={0,2}$/i;
+
+type DrawingMediaIcon = {
+  id: string;
+  label: string;
+  path: string;
+  filled?: boolean;
+};
+
+const DRAWING_MEDIA_EMOJIS = [
+  { glyph: "😀", label: "Smile" },
+  { glyph: "👍", label: "Thumbs up" },
+  { glyph: "🔥", label: "Fire" },
+  { glyph: "🚀", label: "Rocket" },
+  { glyph: "💡", label: "Idea" },
+  { glyph: "⚡", label: "Lightning" },
+  { glyph: "🎯", label: "Target" },
+  { glyph: "👀", label: "Watching" },
+  { glyph: "💰", label: "Money" },
+  { glyph: "📈", label: "Chart up" },
+  { glyph: "📉", label: "Chart down" },
+  { glyph: "⚠️", label: "Warning" },
+] as const;
+
+const DRAWING_MEDIA_ICONS: readonly DrawingMediaIcon[] = [
+  { id: "star", label: "Star", filled: true, path: "M12 2.4l2.92 5.92 6.53.95-4.72 4.6 1.12 6.5L12 17.3l-5.85 3.07 1.12-6.5-4.72-4.6 6.53-.95z" },
+  { id: "heart", label: "Heart", filled: true, path: "M12 20.5S3.5 15.6 3.5 9.2A4.7 4.7 0 0 1 12 6.4a4.7 4.7 0 0 1 8.5 2.8c0 6.4-8.5 11.3-8.5 11.3z" },
+  { id: "bolt", label: "Bolt", filled: true, path: "M13.4 2.5L5.8 13h5.1l-.4 8.5L18.2 11h-5.1z" },
+  { id: "flag", label: "Flag", path: "M6 21V4m0 1h10l-1.8 3L16 11H6" },
+  { id: "check", label: "Check", path: "M4.5 12.5l4.2 4.2L19.5 6" },
+  { id: "warning", label: "Warning", path: "M12 3l9 17H3L12 3zm0 5v5m0 3.5v.1" },
+  { id: "pin", label: "Pin", filled: true, path: "M12 21s6-6.2 6-11a6 6 0 1 0-12 0c0 4.8 6 11 6 11zm0-8.4a2.6 2.6 0 1 1 0-5.2 2.6 2.6 0 0 1 0 5.2z" },
+  { id: "target", label: "Target", path: "M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5m-5 0 8-8m0 0v5m0-5h-5" },
+] as const;
+
+function isSafeDrawingImageDataUrl(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length <= Math.ceil(DRAWING_IMAGE_MAX_FILE_BYTES * 4 / 3) + 128
+    && DRAWING_IMAGE_DATA_RE.test(value);
+}
+
+function drawingMediaIcon(value: unknown): DrawingMediaIcon {
+  const id = typeof value === "string" ? value : "";
+  return DRAWING_MEDIA_ICONS.find((icon) => icon.id === id) ?? DRAWING_MEDIA_ICONS[0];
+}
 export type DetectCmd = { kind: "trendlines" | "fib" | "sr" | "mtfa" | "clear" | "clearAll"; nonce: number } | null;
 const VALUE_CHART_TYPES = new Set(["line", "line-markers", "step", "area", "baseline"]);
 const isValueChartType = (chartType: string) => VALUE_CHART_TYPES.has(chartType);
@@ -291,11 +343,11 @@ const SUBPANE_ORDER = ["rsi", "stochrsi", "macd", "rsistack", "accum", "rvol", "
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = "off", compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, toolActivation = 0, drawingSticky = false, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = "off", compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
   instrumentName, instrumentMarket, instrumentColor, onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "", userTier = "free" }:
   { symbol: string; companyName?: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: DrawKind | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: "off" | "weak" | "strong" | boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
+    tool?: DrawKind | null; toolActivation?: number; drawingSticky?: boolean; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: "off" | "weak" | "strong" | boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
     chartSettings?: Partial<ChartSettings>;
     instrumentName?: string;
@@ -430,6 +482,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const liveQuoteRef = useRef<LiveQuote>(liveQuote);       // latest live quote, so Effect 2's tail can re-apply the splice after setData
   const renderRef = useRef<() => void>(() => {});
   const cancelPendingDrawingRef = useRef<() => void>(() => {});
+  const cancelMediaToolRef = useRef<(activeTool?: DrawKind | null) => void>(() => {});
   const renderTagRef = useRef<(() => void) | null>(null);   // updates the last-price + bar-close-countdown axis tag
   const symbolRef = useRef(symbol);                          // current symbol (Effect 1 mounts once; symbol changes in Effect 2)
   const companyNameRef = useRef(companyName);                 // proper name for the snapshot header (zh preferred over English)
@@ -523,6 +576,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const drawRef = useRef<Drawing[]>(drawings);
   const drawingTransactionRef = useRef(false);
   const toolRef = useRef<DrawKind | null>(tool);
+  const toolActivationRef = useRef(toolActivation);
+  const drawingStickyRef = useRef(drawingSticky);
+  const clearDrawingSelectionRef = useRef<() => void>(() => {});
   const styleRef = useRef(drawStyle);
   const onChangeRef = useRef(onDrawingsChange);
   const magnetRef = useRef(magnet);
@@ -534,6 +590,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // CMX W3: this pane's live coordinate resolver (set inside the chart effect once xOf/yOf exist).
   const cmxCoordResolverRef = useRef<import("@/lib/paneCoords").PaneCoordResolver | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
+  const creationPaletteRef = useRef<HTMLDivElement | null>(null);
+  const mediaPickerRef = useRef<HTMLDivElement | null>(null);
+  const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const ctxRef = useRef<HTMLDivElement | null>(null);
   const textEditRef = useRef<HTMLInputElement | null>(null);
   const sigRef = useRef<SVGSVGElement | null>(null);
@@ -640,7 +699,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // drag or native color/range transaction. Do not replace that in-flight
   // draft with the last committed prop snapshot.
   if (!drawingTransactionRef.current) drawRef.current = drawings;
-  toolRef.current = tool; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
+  toolRef.current = tool; toolActivationRef.current = toolActivation; drawingStickyRef.current = drawingSticky; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
   chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol; companyNameRef.current = companyName;
   lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
@@ -656,6 +715,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   instrumentNameRef.current = instrumentName || symbol;
   instrumentMarketRef.current = instrumentMarket || "";
   instrumentColorRef.current = instrumentColor || "#64748b";
+
+  // Creating a new drawing and inspecting an existing object are mutually
+  // exclusive. On narrow charts those controls intentionally share one lane.
+  useEffect(() => {
+    if (tool) clearDrawingSelectionRef.current();
+  }, [tool]);
+  useEffect(() => {
+    const dismiss = () => clearDrawingSelectionRef.current();
+    window.addEventListener("mm:drawing-dismiss-selection", dismiss);
+    return () => window.removeEventListener("mm:drawing-dismiss-selection", dismiss);
+  }, []);
 
   // ────────────────────────────────────────────────────────────────────────────
   // Shared helpers (module-level within the component, referenced from every effect).
@@ -2806,7 +2876,24 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     renderSignalsRef.current = renderSignals;
 
     let snapTarget: { x: number; y: number } | null = null;
-    const snap = (px: number, py: number) => {
+    type PaneAnchor = { x: number; y: number };
+    const clampUnit = (value: number) => Math.max(0, Math.min(1, value));
+    const paneAnchorOf = (meta: Drawing["meta"]): PaneAnchor | null => {
+      const anchor = meta?.paneAnchor;
+      if (!anchor || typeof anchor !== "object" || Array.isArray(anchor)) return null;
+      const x = (anchor as Record<string, unknown>).x;
+      const y = (anchor as Record<string, unknown>).y;
+      if (typeof x !== "number" || !Number.isFinite(x) || typeof y !== "number" || !Number.isFinite(y)) return null;
+      return { x: clampUnit(x), y: clampUnit(y) };
+    };
+    const paneMetaAt = (x: number, y: number, meta?: Drawing["meta"]): Drawing["meta"] => ({
+      ...(meta ?? {}),
+      paneAnchor: {
+        x: clampUnit(x / Math.max(1, el!.clientWidth)),
+        y: clampUnit(y / Math.max(1, el!.clientHeight)),
+      },
+    });
+    const snap = (px: number, py: number, modifier?: { ctrlKey?: boolean; metaKey?: boolean }) => {
       const prec = precRef.current;
       const bars = barsRef.current;
       // LWC logical coordinates map directly to the loaded bar array. This replaces the
@@ -2818,7 +2905,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const ps = priceSeriesRef.current;
       let p = ps ? (ps.coordinateToPrice(py) as number | null) : null;
       if (p == null) p = bars[bars.length - 1]?.c ?? 0;
-      const mode = magnetRef.current === true ? "strong" : magnetRef.current === false ? "off" : magnetRef.current;
+      const configuredMode = magnetRef.current === true ? "strong" : magnetRef.current === false ? "off" : magnetRef.current;
+      // OpenMarket's precision modifier is deliberately reversible: Ctrl/Cmd
+      // supplies Strong magnet while Off is configured, but temporarily frees
+      // the cursor when Weak/Strong is already active.
+      const modifierDown = Boolean(modifier?.ctrlKey || modifier?.metaKey);
+      const mode = modifierDown ? (configuredMode === "off" ? "strong" : "off") : configuredMode;
       snapTarget = null;
       if (bar && mode !== "off") {
         const candidates = [bar.o, bar.h, bar.l, bar.c];
@@ -2837,15 +2929,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     type PendingDrawing = {
       kind: Drawing["kind"];
+      // Bind the gesture to the exact toolbar activation that began it. The
+      // same tool can be re-armed before a native pointerup/text/media callback
+      // runs, so sampling the mutable ref at commit time could retire the newer
+      // selection instead of the transaction that actually produced the object.
+      activation: number;
       points: Drawing["points"];
-      mode: "point" | "text" | "drag" | "multi" | "path";
+      mode: "point" | "text" | "drag" | "multi" | "freehand";
       pointerId?: number;
       candidate?: Drawing["points"][number];
+      meta?: Drawing["meta"];
     };
     let pending: PendingDrawing | null = null;
     cancelPendingDrawingRef.current = () => {
       const current = pending;
       pending = null;
+      if (creationPaletteRef.current) creationPaletteRef.current.style.pointerEvents = "auto";
       if (current?.pointerId != null) {
         try { if (svg.hasPointerCapture(current.pointerId)) svg.releasePointerCapture(current.pointerId); } catch {}
       }
@@ -2859,37 +2958,55 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       projectX: (time: string) => number | null = xOf,
       projectY: (price: number) => number | null = yOf,
     ) {
+      type XY = { x: number; y: number; p?: number };
       const prec = precRef.current;
       const col = dcol(d); const W = el!.clientWidth, H = el!.clientHeight, op = preview ? 0.7 : (d.opacity ?? 1); const on = d.id === sel && !preview;
+      const family = DRAWING_RENDERER_FAMILY[d.kind];
       const g = mk("g", {
         "data-id": d.id,
         "data-drawing-id": d.id,
         "data-drawing-kind": d.kind,
+        "data-renderer-family": family,
         "data-locked": d.locked ? "true" : "false",
         opacity: op,
         "pointer-events": preview || d.hidden ? "none" : "all",
         style: d.hidden ? "display:none" : (d.locked ? "cursor:default" : "cursor:pointer"),
       });
-      // CMX W3: stroke-and-draw entrance for AI-session objects. Fires ONCE per object (played-set),
-      // only while a paced session is animating (<html data-cmx-anim="on">, set by ChartConductor —
-      // absent under reduced-motion / pace 0 so objects just appear). The class self-removes on
-      // animationend so pan/zoom re-renders (which rebuild this <g>) never re-trigger it.
       if (!preview && (d.meta as any)?.by === "ai" &&
           typeof document !== "undefined" && document.documentElement.getAttribute("data-cmx-anim") === "on" &&
           !cmxPlayedRef.current.has(d.id)) {
         const cls = d.kind === "rect" ? "cmx-enter-zone"
           : d.kind === "fib" ? "cmx-enter-fib"
-          : (d.kind === "text") ? "cmx-enter-pop"
-          : "cmx-enter-line"; // trendline / ray / hline
-        g.classList.add(cls);
-        cmxPlayedRef.current.add(d.id);
+          : family === "annotation" || family === "media" ? "cmx-enter-pop"
+          : "cmx-enter-line";
+        g.classList.add(cls); cmxPlayedRef.current.add(d.id);
         g.addEventListener("animationend", () => { try { g.classList.remove(cls); } catch { /* noop */ } }, { once: true });
       }
-      const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 14, "data-segment": "1" }));
-      const grip = (pts: { x: number; y: number }[]) => {
+      let geometryCount = 0;
+      const add = (tag: string, attrs: Record<string, any>) => {
+        geometryCount += 1;
+        const node = mk(tag, { ...attrs, "data-geometry": "1" }); g.appendChild(node); return node;
+      };
+      const fat = (x1: number, y1: number, x2: number, y2: number) => g.appendChild(mk("line", { x1, y1, x2, y2, stroke: "transparent", "stroke-width": 14, "stroke-linecap": "round", "data-segment": "1" }));
+      const line = (x1: number, y1: number, x2: number, y2: number, attrs: Record<string, any> = {}) => {
+        const { hit = true, ...svgAttrs } = attrs;
+        add("line", { x1, y1, x2, y2, stroke: col, "stroke-width": lw(1.5, .75), "stroke-dasharray": dash, ...svgAttrs });
+        if (hit) fat(x1, y1, x2, y2);
+      };
+      const polyline = (points: XY[], attrs: Record<string, any> = {}) => {
+        if (points.length < 2) return;
+        const value = points.map((point) => `${point.x},${point.y}`).join(" ");
+        add("polyline", { points: value, fill: "none", stroke: col, "stroke-width": lw(1.8, .7), "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": dash, ...attrs });
+        g.appendChild(mk("polyline", { points: value, fill: "none", stroke: "transparent", "stroke-width": 14, "stroke-linecap": "round", "stroke-linejoin": "round", "data-segment": "1" }));
+      };
+      const path = (value: string, attrs: Record<string, any> = {}) => {
+        add("path", { d: value, fill: "none", stroke: col, "stroke-width": lw(1.7, .7), "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": dash, ...attrs });
+        g.appendChild(mk("path", { d: value, fill: "none", stroke: "transparent", "stroke-width": 14, "stroke-linecap": "round", "stroke-linejoin": "round", "data-segment": "1" }));
+      };
+      const grip = (pts: XY[]) => {
         if (!on || d.locked) return;
-        pts.forEach((p, i) => g.appendChild(mk("circle", {
-          cx: p.x, cy: p.y, r: 5, fill: "var(--panel)", stroke: col, "stroke-width": 2,
+        pts.forEach((point, i) => g.appendChild(mk("circle", {
+          cx: point.x, cy: point.y, r: 5, fill: "var(--panel)", stroke: col, "stroke-width": 2,
           "data-handle": i, "data-drawing-handle": i, style: "cursor:grab",
         })));
       };
@@ -2897,209 +3014,553 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const w = Math.max(54, label.length * 6.15 + 16), h = 22;
         const px = Math.max(4, Math.min(W - w - 4, x - w / 2));
         const py = Math.max(4, Math.min(H - h - 4, y - h / 2));
-        g.appendChild(mk("rect", { x: px, y: py, width: w, height: h, rx: 11, fill: bg, stroke: "rgba(0,0,0,.18)", "stroke-width": 1 }));
+        add("rect", { x: px, y: py, width: w, height: h, rx: 11, fill: bg, stroke: "rgba(0,0,0,.18)", "stroke-width": 1, "data-semantic-pill": "1" });
         const tx = mk("text", { x: px + w / 2, y: py + 14.5, fill: fg, "font-size": 10.5, "font-weight": 700, "text-anchor": "middle", "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums" });
         tx.textContent = label; g.appendChild(tx);
       };
+      const text = (x: number, y: number, value: string, attrs: Record<string, any> = {}) => {
+        const node = mk("text", { x, y, fill: col, "font-size": 10, "font-family": "var(--font-ui)", ...attrs }); node.textContent = value; g.appendChild(node); return node;
+      };
+      const projected = (points = d.points): XY[] => points.flatMap((point) => {
+        const x = projectX(point.t), y = projectY(point.p);
+        return x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y) ? [] : [{ x, y, p: point.p }];
+      });
       const A = d.points[0], B = d.points[1];
       const dash = d.dash === "dashed" ? "7 5" : d.dash === "dotted" ? "2 4" : d.dash === "solid" ? "" : (d.auto ? "5 4" : "");
       const lw = (base: number, boost: number) => (d.width ?? base) + (on ? boost : 0);
-      const ax = A ? projectX(A.t) : null, ay = A ? projectY(A.p) : null;
-      if (d.kind === "hline") {
-        if (ay == null) return g;
-        const sw = (d.width ?? (d.meta && (d.meta as any).strength ? 0.4 + 1.0 * (d.meta as any).strength : 1.3)) + (on ? 1 : 0);
-        g.appendChild(mk("line", { x1: 0, y1: ay, x2: W, y2: ay, stroke: col, "stroke-width": sw, "stroke-dasharray": dash }));
-        fat(0, ay, W, ay);
-        const label = (d.meta as any)?.label || A.p.toFixed(prec);
-        const tx = mk("text", { x: W - 6, y: ay - 4, fill: col, "font-size": 10, "text-anchor": "end", "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums" }); tx.textContent = String(label);
-        g.appendChild(tx); grip([{ x: W / 2, y: ay }]); return g;
-      }
-      if (d.kind === "vline") {
-        if (ax == null) return g;
-        g.appendChild(mk("line", { x1: ax, y1: 0, x2: ax, y2: H, stroke: col, "stroke-width": lw(1.3, 1), "stroke-dasharray": dash }));
-        fat(ax, 0, ax, H); grip([{ x: ax, y: H / 2 }]); return g;
-      }
-      if (d.kind === "horizontalray") {
-        if (ax == null || ay == null) return g;
-        g.appendChild(mk("line", { x1: ax, y1: ay, x2: W, y2: ay, stroke: col, "stroke-width": lw(1.5, .8), "stroke-dasharray": dash }));
-        fat(ax, ay, W, ay); grip([{ x: ax, y: ay }]); return g;
-      }
-      if (d.kind === "crossline") {
-        if (ax == null || ay == null) return g;
-        g.appendChild(mk("line", { x1: 0, y1: ay, x2: W, y2: ay, stroke: col, "stroke-width": lw(1.2, .7), "stroke-dasharray": dash }));
-        g.appendChild(mk("line", { x1: ax, y1: 0, x2: ax, y2: H, stroke: col, "stroke-width": lw(1.2, .7), "stroke-dasharray": dash }));
-        fat(0, ay, W, ay); fat(ax, 0, ax, H); grip([{ x: ax, y: ay }]); return g;
-      }
+      const paneAnchor = getDrawingTool(d.kind)?.creation.anchorSpace === "pane" ? paneAnchorOf(d.meta) : null;
+      const ax = paneAnchor ? paneAnchor.x * W : A ? projectX(A.t) : null;
+      const ay = paneAnchor ? paneAnchor.y * H : A ? projectY(A.p) : null;
       const bx = B ? projectX(B.t) : null, by = B ? projectY(B.p) : null;
-      if (d.kind === "text") { if (ax == null || ay == null) return g; const fallback = tPlain("drawingTextFallback"); const fs = d.fontSize ?? 13; g.appendChild(mk("rect", { x: ax - 3, y: ay - fs - 1, width: Math.max(40, (d.text || fallback).length * fs * 0.6), height: fs + 6, fill: "transparent" })); const tx = mk("text", { x: ax, y: ay, fill: col, "font-size": fs, "font-family": "var(--font-ui)" }); tx.textContent = d.text || fallback; g.appendChild(tx); grip([{ x: ax, y: ay - fs / 2 }]); return g; }
-      if (ax == null || ay == null || bx == null || by == null) return g;
-      if (d.kind === "trendline" || d.kind === "ray" || d.kind === "extendedline" || d.kind === "measure" || d.kind === "arrow") {
-        let ex = bx, ey = by;
-        let sx = ax, sy = ay;
-        if (d.kind === "ray" || d.kind === "extendedline") {
-          if (bx === ax) {
-            // Vertical rays are a first-class geometry, not a zero-slope edge
-            // case: project in the anchor direction, or to both pane bounds.
-            ex = ax; ey = by >= ay ? H : 0;
-            if (d.kind === "extendedline") { sx = ax; sy = 0; ex = ax; ey = H; }
-          } else {
-            const m = (by - ay) / (bx - ax);
-            ex = bx >= ax ? W : 0; ey = ay + m * (ex - ax);
-            if (d.kind === "extendedline") { sx = bx >= ax ? 0 : W; sy = ay + m * (sx - ax); }
-          }
+      const projectedAnchors = projected();
+      const anchorXY = paneAnchor && ax != null && ay != null
+        ? [{ x: ax, y: ay, p: A?.p }, ...projectedAnchors.slice(1)]
+        : projectedAnchors;
+      const measurementLabel = () => {
+        if (!A || !B) return "";
+        const bars = Math.abs(barIndex(B.t) - barIndex(A.t)), delta = B.p - A.p, pct = A.p ? delta / A.p * 100 : 0;
+        return `${bars} ${tPlain("drawingBars")} × ${delta >= 0 ? "+" : ""}${delta.toFixed(prec)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
+      };
+      const done = (handles: XY[] = anchorXY, semanticPill = false) => {
+        if (geometryCount === 0 && ax != null && ay != null) {
+          g.setAttribute("data-renderer-fallback", "true");
+          add("circle", { cx: ax, cy: ay, r: 7, fill: d.fillColor || col, "fill-opacity": .24, stroke: col, "stroke-width": lw(1.4, .5) });
+          if (bx != null && by != null) line(ax, ay, bx, by);
         }
-        g.appendChild(mk("line", { x1: sx, y1: sy, x2: ex, y2: ey, stroke: col, "stroke-width": lw(1.6, 0.8), "stroke-dasharray": dash }));
-        fat(sx, sy, ex, ey);
-        if (d.kind === "measure") {
-          const pc = ((B.p - A.p) / A.p) * 100, dp = B.p - A.p, di = Math.abs(barIndex(B.t) - barIndex(A.t));
-          const priceDelta = (dp >= 0 ? "+" : "") + dp.toFixed(prec);
-          pill((ax + bx) / 2, Math.min(ay, by) - 15, di + " " + tPlain("drawingBars") + " × " + priceDelta + " (" + (pc >= 0 ? "+" : "") + pc.toFixed(2) + "%)");
-          grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+        if (geometryCount === 0) g.setAttribute("data-renderer-state", "unprojected");
+        if (on && !semanticPill && ax != null && ay != null && bx != null && by != null) pill((ax + bx) / 2, Math.min(ay, by) - 18, measurementLabel());
+        grip(handles); return g;
+      };
+      const fill = d.fillColor || col, fillOpacity = d.fillOpacity ?? .09;
+
+      // One-anchor axis tools remain pane-spanning and retain generous transparent hit regions.
+      if (family === "axis") {
+        if (d.kind === "hline" && ay != null) {
+          const sw = (d.width ?? ((d.meta as any)?.strength ? .4 + Number((d.meta as any).strength) : 1.3)) + (on ? 1 : 0);
+          line(0, ay, W, ay, { "stroke-width": sw }); text(W - 6, ay - 4, String((d.meta as any)?.label || A.p.toFixed(prec)), { "text-anchor": "end", "font-family": "var(--font-num)" });
+          return done([{ x: W / 2, y: ay }]);
         }
-        if (d.kind === "arrow") { const an = Math.atan2(by - ay, bx - ax), h = 9; g.appendChild(mk("path", { d: `M${bx} ${by} L${bx + h * Math.cos(an + Math.PI - 0.45)} ${by + h * Math.sin(an + Math.PI - 0.45)} M${bx} ${by} L${bx + h * Math.cos(an + Math.PI + 0.45)} ${by + h * Math.sin(an + Math.PI + 0.45)}`, stroke: col, "stroke-width": lw(1.6, 0.8), fill: "none" })); }
-        grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+        if (d.kind === "vline" && ax != null) { line(ax, 0, ax, H); return done([{ x: ax, y: H / 2 }]); }
+        if (d.kind === "horizontalray" && ax != null && ay != null) { line(ax, ay, W, ay); return done([{ x: ax, y: ay }]); }
+        if (d.kind === "crossline" && ax != null && ay != null) { line(0, ay, W, ay); line(ax, 0, ax, H); return done([{ x: ax, y: ay }]); }
+        return done();
       }
-      if (d.kind === "channel") {
-        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
-        if (cx == null || cy == null) return g;
-        const dx = bx - ax, dy = by - ay, dx2 = cx + dx, dy2 = cy + dy;
-        g.appendChild(mk("polygon", { points: ax + "," + ay + " " + bx + "," + by + " " + dx2 + "," + dy2 + " " + cx + "," + cy, fill: d.fillColor || col, "fill-opacity": d.fillOpacity ?? .09, stroke: "none" }));
-        g.appendChild(mk("line", { x1: ax, y1: ay, x2: bx, y2: by, stroke: col, "stroke-width": lw(1.5, .8), "stroke-dasharray": dash }));
-        g.appendChild(mk("line", { x1: cx, y1: cy, x2: dx2, y2: dy2, stroke: col, "stroke-width": lw(1.5, .8), "stroke-dasharray": dash }));
-        g.appendChild(mk("line", { x1: ax, y1: ay, x2: cx, y2: cy, stroke: col, "stroke-width": 1, "stroke-dasharray": "4 4", opacity: .55 }));
-        fat(ax, ay, bx, by); fat(cx, cy, dx2, dy2); grip([{ x: ax, y: ay }, { x: bx, y: by }, { x: cx, y: cy }]); return g;
-      }
-      if (d.kind === "ellipse") {
-        const rx = Math.abs(bx - ax) / 2, ry = Math.abs(by - ay) / 2;
-        g.appendChild(mk("ellipse", { cx: (ax + bx) / 2, cy: (ay + by) / 2, rx, ry, fill: d.fillColor || col, "fill-opacity": d.fillOpacity ?? .08, stroke: col, "stroke-width": lw(1.4, .8), "stroke-dasharray": dash }));
-        grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
-      }
-      if (d.kind === "triangle") {
-        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
-        const pts = cx != null && cy != null
-          ? ax + "," + ay + " " + bx + "," + by + " " + cx + "," + cy
-          : (ax + bx) / 2 + "," + Math.min(ay, by) + " " + Math.max(ax, bx) + "," + Math.max(ay, by) + " " + Math.min(ax, bx) + "," + Math.max(ay, by);
-        g.appendChild(mk("polygon", { points: pts, fill: d.fillColor || col, "fill-opacity": d.fillOpacity ?? .08, stroke: col, "stroke-width": lw(1.4, .8), "stroke-dasharray": dash }));
-        grip(cx != null && cy != null ? [{ x: ax, y: ay }, { x: bx, y: by }, { x: cx, y: cy }] : [{ x: ax, y: ay }, { x: bx, y: by }]); return g;
-      }
-      if (d.kind === "path") {
-        const pp = d.points.map((pt) => ({ x: projectX(pt.t), y: projectY(pt.p) })).filter((pt): pt is { x: number; y: number } => pt.x != null && pt.y != null);
-        if (pp.length < 2) return g;
-        const pathPoints = pp.map((pt) => pt.x + "," + pt.y).join(" ");
-        g.appendChild(mk("polyline", { points: pathPoints, fill: "none", stroke: col, "stroke-width": lw(2, .7), "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": dash }));
-        // One joined hit path replaces a transparent SVG line per sampled
-        // segment. At the supported 500-object/64-point ceiling this removes
-        // more than 31k DOM nodes from every pan/crosshair rebuild.
-        g.appendChild(mk("polyline", { points: pathPoints, fill: "none", stroke: "transparent", "stroke-width": 14, "stroke-linecap": "round", "stroke-linejoin": "round", "data-segment": "1" }));
-        grip(pp.map((pt) => ({ x: pt.x, y: pt.y }))); return g;
-      }
-      if (d.kind === "xabcd") {
-        const labels = ["X", "A", "B", "C", "D"];
-        const pp = d.points.slice(0, 5).map((pt) => ({ x: projectX(pt.t), y: projectY(pt.p), p: pt.p })).filter((pt): pt is { x: number; y: number; p: number } => pt.x != null && pt.y != null);
-        if (pp.length < 2) return g;
-        g.appendChild(mk("polyline", { points: pp.map((pt) => pt.x + "," + pt.y).join(" "), fill: pp.length >= 4 ? (d.fillColor || col) : "none", "fill-opacity": d.fillOpacity ?? .1, stroke: col, "stroke-width": lw(1.8, .8), "stroke-linejoin": "round", "stroke-dasharray": dash }));
-        pp.forEach((pt, i) => {
-          const badge = mk("text", { x: pt.x, y: pt.y + (i % 2 ? 18 : -10), fill: "#fff", "font-size": 10, "font-weight": 800, "text-anchor": "middle", "font-family": "var(--font-ui)" });
-          badge.textContent = labels[i]; g.appendChild(badge);
-          if (i >= 2) {
-            const den = Math.abs(pp[i - 1].p - pp[i - 2].p);
-            const ratio = den ? Math.abs(pt.p - pp[i - 1].p) / den : 0;
-            pill((pt.x + pp[i - 1].x) / 2, (pt.y + pp[i - 1].y) / 2, ratio.toFixed(3), "#f7f9fc", col);
-          }
-        });
-        grip(pp.map((pt) => ({ x: pt.x, y: pt.y }))); return g;
-      }
-      if (d.kind === "longposition" || d.kind === "shortposition") {
-        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
-        if (cx == null || cy == null) return g;
-        const x1 = Math.min(ax, bx, cx), x2 = Math.max(ax, bx, cx, x1 + 80), entryY = ay;
-        const targetY = by, stopY = cy, targetCol = tokensRef.current.up, stopCol = tokensRef.current.down;
-        const zoneOpacity = d.fillOpacity ?? .2;
-        g.appendChild(mk("rect", { x: x1, y: Math.min(entryY, targetY), width: x2 - x1, height: Math.abs(targetY - entryY), fill: targetCol, "fill-opacity": zoneOpacity, stroke: targetCol, "stroke-opacity": .55 }));
-        g.appendChild(mk("rect", { x: x1, y: Math.min(entryY, stopY), width: x2 - x1, height: Math.abs(stopY - entryY), fill: stopCol, "fill-opacity": zoneOpacity, stroke: stopCol, "stroke-opacity": .55 }));
-        g.appendChild(mk("line", { x1, y1: entryY, x2, y2: entryY, stroke: col, "stroke-width": 1.5 }));
-        const reward = Math.abs(B.p - A.p), risk = Math.abs(C.p - A.p), rr = risk ? reward / risk : 0;
-        pill((x1 + x2) / 2, targetY - 15, tPlain("drawingTarget") + ": " + B.p.toFixed(prec) + " (" + ((B.p - A.p) / A.p * 100).toFixed(2) + "%)");
-        pill((x1 + x2) / 2, stopY + 15, tPlain("drawingStop") + ": " + C.p.toFixed(prec) + " (" + ((C.p - A.p) / A.p * 100).toFixed(2) + "%)");
-        pill((x1 + x2) / 2, entryY, tPlain("drawingRiskReward") + " " + rr.toFixed(2));
-        grip([{ x: ax, y: ay }, { x: bx, y: by }, { x: cx, y: cy }]); return g;
-      }
-      if (d.kind === "pricerange" || d.kind === "daterange") {
-        const di = Math.abs(barIndex(B.t) - barIndex(A.t)), dp = B.p - A.p, pc = A.p ? dp / A.p * 100 : 0;
-        if (d.kind === "daterange") {
-          g.appendChild(mk("rect", { x: Math.min(ax, bx), y: 0, width: Math.max(1, Math.abs(bx - ax)), height: H, fill: col, "fill-opacity": d.fillOpacity ?? .07, stroke: col, "stroke-opacity": .4, "stroke-dasharray": dash }));
-          pill((ax + bx) / 2, H - 34, di + " " + tPlain("drawingBars"));
+
+      // Text, notes and price labels render before the two-anchor guard.
+      if (family === "annotation" && ax != null && ay != null) {
+        const label = d.text || (d.kind === "text" || d.kind === "anchoredtext" ? tPlain("drawingTextFallback") : getDrawingTool(d.kind)?.label || "Note");
+        const fs = d.fontSize ?? 13;
+        if (d.kind === "text" || d.kind === "anchoredtext") {
+          add("rect", { x: ax - 4, y: ay - fs - 3, width: Math.max(42, label.length * fs * .6 + 8), height: fs + 8, rx: 3, fill: "transparent", stroke: d.kind === "anchoredtext" ? col : "transparent", "stroke-dasharray": d.kind === "anchoredtext" ? "3 3" : "" });
+          text(ax, ay, label, { "font-size": fs }); return done([{ x: ax, y: ay - fs / 2 }]);
+        }
+        if (d.kind === "callout" && bx != null && by != null) {
+          const w = Math.max(82, label.length * 7 + 22), h = 34, left = bx >= ax ? bx : bx - w, top = by - h / 2;
+          add("path", { d: `M${left} ${top}h${w}v${h}h-${Math.max(18, w * .66)}L${ax} ${ay}l${Math.max(6, w * .08)}-${h / 2}H${left}z`, fill, "fill-opacity": Math.max(.12, fillOpacity), stroke: col, "stroke-width": lw(1.2, .5) });
+          text(left + 10, top + 21, label, { "font-size": fs }); return done(anchorXY);
+        }
+        const w = Math.max(72, label.length * 6.4 + 18), h = 30;
+        if (d.kind === "pricelabel" || d.kind === "pricenote") {
+          add("path", { d: `M${ax} ${ay}l9-10h${w}v20H${ax + 9}z`, fill, "fill-opacity": Math.max(.15, fillOpacity), stroke: col, "stroke-width": 1.2 });
+          text(ax + 17, ay + 4, d.kind === "pricelabel" ? A.p.toFixed(prec) : label, { "font-size": fs });
+        } else if (d.kind === "signpost") {
+          line(ax, ay - 18, ax, ay + 24); add("path", { d: `M${ax} ${ay - 16}h${w}l8 11-8 11h-${w}z`, fill, "fill-opacity": Math.max(.15, fillOpacity), stroke: col }); text(ax + 9, ay - 1, label, { "font-size": fs });
         } else {
-          g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.max(1, Math.abs(bx - ax)), height: Math.max(1, Math.abs(by - ay)), fill: col, "fill-opacity": d.fillOpacity ?? .08, stroke: col, "stroke-opacity": .55, "stroke-dasharray": dash }));
-          pill((ax + bx) / 2, Math.min(ay, by) - 14, (dp >= 0 ? "+" : "") + dp.toFixed(prec) + " (" + (pc >= 0 ? "+" : "") + pc.toFixed(2) + "%)");
+          add("rect", { x: ax, y: ay - h, width: w, height: h, rx: 6, fill, "fill-opacity": Math.max(.12, fillOpacity), stroke: col, "stroke-width": 1.2, "stroke-dasharray": d.kind === "anchorednote" ? "3 3" : "" });
+          if (d.kind === "comment") add("path", { d: `M${ax + 14} ${ay}l-8 9 2-9z`, fill, stroke: col });
+          text(ax + 9, ay - 10, label, { "font-size": fs });
         }
-        grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+        return done([{ x: ax, y: ay }]);
       }
-      if (d.kind === "rect") { g.appendChild(mk("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay), fill: d.fillColor || col, "fill-opacity": d.fillOpacity ?? 0.08, stroke: col, "stroke-width": lw(1, 1), "stroke-dasharray": dash })); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g; }
-      if (d.kind === "fib") {
-        const ratios = [0, .236, .382, .5, .618, .786, 1, 1.618];
-        const colors = ["#7c879a", "#f03e5f", "#f59f00", "#2fb344", "#12b886", "#15aabf", "#8490a3", "#3b5bdb"];
-        const x1 = Math.min(ax, bx), x2 = Math.max(ax, bx), spanW = Math.max(48, x2 - x1);
-        const levels = ratios.map((ratio, i) => ({ ratio, color: colors[i], price: A.p + (B.p - A.p) * ratio }));
-        const fibFillOpacity = d.fillOpacity ?? .075;
-        for (let i = 0; i < levels.length - 1; i++) {
-          const y1 = projectY(levels[i].price), y2 = projectY(levels[i + 1].price);
-          if (y1 == null || y2 == null) continue;
-          g.appendChild(mk("rect", { x: x1, y: Math.min(y1, y2), width: spanW, height: Math.abs(y2 - y1), fill: levels[i + 1].color, "fill-opacity": fibFillOpacity }));
+
+      if (family === "media" && ax != null && ay != null) {
+        if (d.kind === "emoji") {
+          const glyph = d.text || "🙂";
+          text(ax, ay + 10, glyph, { "font-size": d.fontSize ?? 30, "text-anchor": "middle", "data-media-choice": glyph });
+          add("circle", { cx: ax, cy: ay, r: 20, fill: "transparent", "data-media-hit": "1" });
+          return done([{ x: ax, y: ay }]);
         }
-        levels.forEach((level) => {
-          const y = projectY(level.price); if (y == null) return;
-          g.appendChild(mk("line", { x1, y1: y, x2: x1 + spanW, y2: y, stroke: level.color, "stroke-width": lw(level.ratio === 0 || level.ratio === 1 ? 1.5 : 1.2, .35), "stroke-dasharray": dash }));
-          const tx = mk("text", { x: x1 - 5, y: y + 3, fill: level.color, "font-size": 9.5, "font-weight": 700, "text-anchor": "end", "font-family": "var(--font-num)", style: "font-variant-numeric:tabular-nums" });
-          tx.textContent = (level.ratio === 0 || level.ratio === 1 ? String(level.ratio) : level.ratio.toFixed(3)) + " (" + level.price.toFixed(prec) + ")"; g.appendChild(tx);
-        });
-        const spineDash = d.dash === "solid" || d.dash == null ? "7 5" : dash;
-        g.appendChild(mk("line", { x1: ax, y1: ay, x2: bx, y2: by, stroke: col, "stroke-width": lw(1.4, .35), "stroke-dasharray": spineDash, opacity: .85 }));
-        fat(ax, ay, bx, by); grip([{ x: ax, y: ay }, { x: bx, y: by }]); return g;
+        if (d.kind === "icon") {
+          const icon = drawingMediaIcon((d.meta as Record<string, unknown> | undefined)?.iconId ?? d.text);
+          add("path", {
+            d: icon.path,
+            transform: `translate(${ax - 15} ${ay - 15}) scale(1.25)`,
+            fill: icon.filled ? fill : "none",
+            "fill-opacity": icon.filled ? Math.max(.5, fillOpacity) : 0,
+            "fill-rule": "evenodd",
+            stroke: col,
+            "stroke-width": icon.filled ? 1.1 : 1.8,
+            "stroke-linecap": "round",
+            "stroke-linejoin": "round",
+            "vector-effect": "non-scaling-stroke",
+            "data-media-choice": icon.id,
+          });
+          add("circle", { cx: ax, cy: ay, r: 20, fill: "transparent", "data-media-hit": "1" });
+          return done([{ x: ax, y: ay }]);
+        }
+        if (bx != null && by != null) {
+          const x = Math.min(ax, bx), y = Math.min(ay, by), w = Math.max(20, Math.abs(bx - ax)), h = Math.max(20, Math.abs(by - ay));
+          const meta = d.meta as Record<string, unknown> | undefined;
+          const imageSrc = isSafeDrawingImageDataUrl(meta?.imageSrc) ? meta.imageSrc : null;
+          const fallback: SVGElement[] = [];
+          fallback.push(add("rect", { x, y, width: w, height: h, rx: 5, fill, "fill-opacity": Math.max(.08, fillOpacity), "data-media-fallback": "1" }));
+          fallback.push(add("circle", { cx: x + w * .72, cy: y + h * .28, r: Math.max(2, Math.min(7, w * .06)), fill: col, opacity: .82, "data-media-fallback": "1" }));
+          fallback.push(add("path", {
+            d: `M${x + 4} ${y + h - 5}L${x + w * .34} ${y + h * .52}L${x + w * .53} ${y + h * .7}L${x + w * .73} ${y + h * .44}L${x + w - 4} ${y + h - 5}`,
+            fill: "none", stroke: col, "stroke-width": lw(1.7, .7), "stroke-linecap": "round", "stroke-linejoin": "round", opacity: .82, "data-media-fallback": "1",
+          }));
+          if (imageSrc) {
+            const image = add("image", {
+              x, y, width: w, height: h, href: imageSrc,
+              preserveAspectRatio: "xMidYMid slice",
+              decoding: "async",
+              style: "clip-path:inset(0 round 5px)",
+              "data-media-image": "1",
+              "aria-label": typeof meta?.imageName === "string" ? meta.imageName : "Drawing image",
+            });
+            image.addEventListener("load", () => {
+              fallback.forEach((node) => node.setAttribute("display", "none"));
+              g.setAttribute("data-media-state", "loaded");
+            }, { once: true });
+            image.addEventListener("error", () => {
+              image.setAttribute("display", "none");
+              g.setAttribute("data-media-state", "error");
+            }, { once: true });
+          } else {
+            g.setAttribute("data-media-state", "placeholder");
+          }
+          add("rect", { x, y, width: w, height: h, rx: 5, fill: "transparent", stroke: col, "stroke-width": 1.3, "data-media-border": "1" });
+          add("rect", { x, y, width: w, height: h, rx: 5, fill: "transparent", "data-media-hit": "1" });
+          return done(anchorXY);
+        }
+        return done();
       }
-      return g;
+
+      if (family === "mark" && ax != null && ay != null) {
+        const size = 12;
+        if (d.kind === "flagmark") {
+          line(ax, ay + 18, ax, ay - 20); add("path", { d: `M${ax} ${ay - 18}h25l-7 8 7 8H${ax}z`, fill, "fill-opacity": .28, stroke: col, "stroke-width": 1.4 });
+        } else {
+          const direction = d.kind === "arrowmarkleft" ? Math.PI : d.kind === "arrowmarktop" ? -Math.PI / 2 : d.kind === "arrowmarkbottom" ? Math.PI / 2 : 0;
+          const tipX = ax + Math.cos(direction) * size, tipY = ay + Math.sin(direction) * size;
+          const backX = ax - Math.cos(direction) * size * .75, backY = ay - Math.sin(direction) * size * .75;
+          const nx = -Math.sin(direction) * size * .62, ny = Math.cos(direction) * size * .62;
+          add("polygon", { points: `${tipX},${tipY} ${backX + nx},${backY + ny} ${ax - Math.cos(direction) * 2},${ay - Math.sin(direction) * 2} ${backX - nx},${backY - ny}`, fill, "fill-opacity": d.kind === "arrowmarker" ? .75 : .24, stroke: col, "stroke-width": 1.4 });
+        }
+        return done([{ x: ax, y: ay }]);
+      }
+
+      if (family === "anchored-vwap" && A && ax != null && ay != null) {
+        const start = Math.max(0, barIndex(A.t)), rows = barsRef.current.slice(start, Math.min(barsRef.current.length, start + 160));
+        let cv = 0, cpv = 0;
+        const points = rows.map((row) => { const vol = Math.max(1, row.v || 0), typical = (row.h + row.l + row.c) / 3; cv += vol; cpv += typical * vol; const x = projectX(row.time), y = projectY(cpv / cv); return x == null || y == null ? null : { x, y }; }).filter((point): point is XY => point != null);
+        if (points.length >= 2) polyline(points, { "stroke-width": lw(1.8, .6) });
+        add("circle", { cx: ax, cy: ay, r: 4, fill: col }); text(ax + 8, ay - 8, "VWAP", { "font-size": 9, "font-weight": 700 });
+        return done([{ x: ax, y: ay }]);
+      }
+
+      if (ax == null || ay == null || bx == null || by == null || !A || !B) return done();
+
+      if (family === "line" || family === "arrow") {
+        let sx = ax, sy = ay, ex = bx, ey = by;
+        if (d.kind === "ray" || d.kind === "extendedline" || d.extend === "right" || d.extend === "both") {
+          if (Math.abs(bx - ax) < .01) { ex = ax; ey = by >= ay ? H : 0; if (d.kind === "extendedline" || d.extend === "both") { sy = 0; ey = H; } }
+          else { const slope = (by - ay) / (bx - ax); ex = bx >= ax ? W : 0; ey = ay + slope * (ex - ax); if (d.kind === "extendedline" || d.extend === "both") { sx = bx >= ax ? 0 : W; sy = ay + slope * (sx - ax); } }
+        }
+        line(sx, sy, ex, ey);
+        if (family === "arrow") {
+          const angle = Math.atan2(by - ay, bx - ax), head = 10 + (d.width ?? 1.5);
+          path(`M${bx} ${by}L${bx + head * Math.cos(angle + Math.PI - .5)} ${by + head * Math.sin(angle + Math.PI - .5)}M${bx} ${by}L${bx + head * Math.cos(angle + Math.PI + .5)} ${by + head * Math.sin(angle + Math.PI + .5)}`);
+        }
+        if (d.kind === "trendangle") {
+          line(ax, ay, bx, ay, { opacity: .55, "stroke-dasharray": "3 4" });
+          const angle = Math.atan2(ay - by, bx - ax) * 180 / Math.PI; pill((ax + bx) / 2, ay - 13, `${Math.abs(angle).toFixed(1)}°`);
+        }
+        if (d.kind === "infoline") pill((ax + bx) / 2, Math.min(ay, by) - 15, measurementLabel());
+        return done(anchorXY, d.kind === "infoline" || d.kind === "trendangle");
+      }
+
+      if (family === "channel") {
+        if (d.kind === "regressiontrend") {
+          const offset = Math.max(14, Math.abs(by - ay) * .2), p1 = [{ x: ax, y: ay - offset }, { x: bx, y: by - offset }], p2 = [{ x: ax, y: ay + offset }, { x: bx, y: by + offset }];
+          add("polygon", { points: [...p1, ...p2.slice().reverse()].map((point) => `${point.x},${point.y}`).join(" "), fill, "fill-opacity": fillOpacity, stroke: "none" });
+          line(ax, ay, bx, by); polyline(p1); polyline(p2); return done(anchorXY);
+        }
+        const C = d.points[2], D = d.points[3], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null, dx4 = D ? projectX(D.t) : null, dy4 = D ? projectY(D.p) : null;
+        if (d.kind === "flattopbottom" && cx != null && cy != null) { line(ax, ay, bx, ay); line(bx, by, cx, cy); line(ax, ay, cx, cy, { opacity: .45, "stroke-dasharray": "4 4" }); return done(anchorXY); }
+        if (d.kind === "disjointchannel" && cx != null && cy != null && dx4 != null && dy4 != null) { line(ax, ay, bx, by); line(cx, cy, dx4, dy4); add("polygon", { points: `${ax},${ay} ${bx},${by} ${dx4},${dy4} ${cx},${cy}`, fill, "fill-opacity": fillOpacity, stroke: "none" }); return done(anchorXY); }
+        if (cx != null && cy != null) {
+          const dx = bx - ax, dy = by - ay, endX = cx + dx, endY = cy + dy;
+          add("polygon", { points: `${ax},${ay} ${bx},${by} ${endX},${endY} ${cx},${cy}`, fill, "fill-opacity": fillOpacity, stroke: "none" });
+          line(ax, ay, bx, by); line(cx, cy, endX, endY); line(ax, ay, cx, cy, { opacity: .48, "stroke-dasharray": "4 4" });
+        }
+        return done(anchorXY);
+      }
+
+      if (family === "pitchfork") {
+        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
+        if (cx == null || cy == null) return done();
+        let ox = ax, oy = ay;
+        if (d.kind === "schiffpitchfork") ox = (ax + bx) / 2;
+        if (d.kind === "modifiedschiffpitchfork") { ox = (ax + bx) / 2; oy = (ay + by) / 2; }
+        const mx = (bx + cx) / 2, my = (by + cy) / 2, vx = mx - ox, vy = my - oy;
+        const scale = Math.max(1, Math.abs(vx) < 1 ? H / Math.max(1, Math.abs(vy)) : Math.abs((vx > 0 ? W - ox : -ox) / vx));
+        const ex = ox + vx * scale, ey = oy + vy * scale;
+        line(ox, oy, ex, ey);
+        const forkScale = d.kind === "insidepitchfork" ? .5 : 1;
+        line(bx, by, bx + vx * scale * forkScale, by + vy * scale * forkScale);
+        line(cx, cy, cx + vx * scale * forkScale, cy + vy * scale * forkScale);
+        add("polygon", { points: `${bx},${by} ${bx + vx * scale * forkScale},${by + vy * scale * forkScale} ${cx + vx * scale * forkScale},${cy + vy * scale * forkScale} ${cx},${cy}`, fill, "fill-opacity": fillOpacity * .75, stroke: "none" });
+        return done(anchorXY);
+      }
+
+      if (family === "fib") {
+        const configured = Array.isArray((d.meta as any)?.fibLevels) ? (d.meta as any).fibLevels.filter((value: unknown) => typeof value === "number" && Number.isFinite(value)).slice(0, 24) : null;
+        const ratios: readonly number[] = configured?.length ? configured as number[] : DEFAULT_FIBONACCI_LEVELS;
+        const colors = ["#7c879a", "#f03e5f", "#f59f00", "#2fb344", "#12b886", "#15aabf", "#8490a3", "#748ffc", "#4d82ff", "#845ef7", "#be4bdb"];
+        const x1 = Math.min(ax, bx), spanW = Math.max(48, Math.abs(bx - ax));
+        const levels = ratios.map((ratio: number, i: number) => ({ ratio, color: colors[i % colors.length], price: A.p + (B.p - A.p) * ratio }));
+        for (let i = 0; i < levels.length - 1; i++) { const y1 = projectY(levels[i].price), y2 = projectY(levels[i + 1].price); if (y1 != null && y2 != null) add("rect", { x: x1, y: Math.min(y1, y2), width: spanW, height: Math.abs(y2 - y1), fill: levels[i + 1].color, "fill-opacity": d.fillOpacity ?? .065, "pointer-events": "none" }); }
+        levels.forEach((level) => { const y = projectY(level.price); if (y == null) return; line(x1, y, x1 + spanW, y, { stroke: level.color, "stroke-width": lw(level.ratio === 0 || level.ratio === 1 ? 1.5 : 1.15, .3), "pointer-events": "none", hit: false }); text(x1 - 5, y + 3, `${Number(level.ratio.toFixed(3))} (${level.price.toFixed(prec)})`, { fill: level.color, "font-size": 9.5, "font-weight": 700, "text-anchor": "end", "font-family": "var(--font-num)", "pointer-events": "none" }); });
+        line(ax, ay, bx, by, { "stroke-dasharray": d.dash === "solid" || d.dash == null ? "7 5" : dash, opacity: .85 });
+        return done(anchorXY, true);
+      }
+
+      if (family === "fib-grid") {
+        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
+        if (cx == null || cy == null) return done();
+        const dx = bx - ax, dy = by - ay, offX = cx - ax, offY = cy - ay;
+        const levels = [0, .236, .382, .5, .618, .786, 1];
+        levels.forEach((ratio) => { const sx = ax + offX * ratio, sy = ay + offY * ratio; line(sx, sy, sx + dx, sy + dy, { opacity: ratio === 0 || ratio === 1 ? 1 : .8 }); text(sx - 4, sy - 3, String(ratio), { "font-size": 8.5, "text-anchor": "end" }); });
+        add("polygon", { points: `${ax},${ay} ${bx},${by} ${bx + offX},${by + offY} ${cx},${cy}`, fill, "fill-opacity": fillOpacity, stroke: "none" }); return done(anchorXY);
+      }
+
+      if (family === "fib-time") {
+        const startX = d.kind === "trendbasedfibtime" && d.points[2] ? projectX(d.points[2].t) ?? ax : ax;
+        const unit = Math.max(5, Math.abs(bx - ax)), seq = [0, 1, 2, 3, 5, 8, 13, 21];
+        seq.forEach((factor, i) => { const x = startX + Math.sign(bx - ax || 1) * unit * factor; if (x < -4 || x > W + 4) return; line(x, 0, x, H, { opacity: i < 2 ? .9 : .55, "stroke-dasharray": i ? "4 4" : dash }); text(x + 3, 14, String(factor), { "font-size": 8.5 }); });
+        return done(anchorXY);
+      }
+
+      if (family === "fan") {
+        const C = d.points[2], cx = C ? projectX(C.t) : bx, cy = C ? projectY(C.p) : by;
+        if (d.kind === "pitchfan" && cx != null && cy != null) {
+          const ratios = [0, .236, .382, .5, .618, .786, 1];
+          ratios.forEach((ratio) => line(
+            ax,
+            ay,
+            bx + (cx - bx) * ratio,
+            by + (cy - by) * ratio,
+            { opacity: ratio === 0 || ratio === 1 ? 1 : .66 },
+          ));
+          return done(anchorXY);
+        }
+        const endX = cx ?? bx, endY = cy ?? by, ratios = d.kind === "gannfan" ? [.125, .25, .333, .5, 1, 2, 3, 4, 8] : [.236, .382, .5, .618, .786, 1];
+        ratios.forEach((ratio) => line(ax, ay, endX, ay + (endY - ay) * ratio, { opacity: ratio === 1 ? 1 : .66 })); return done(anchorXY);
+      }
+
+      if (family === "radial") {
+        const C = d.points[2], cx = C ? projectX(C.t) : bx, cy = C ? projectY(C.p) : by;
+        const rx = Math.max(4, Math.abs(bx - ax)), ry = Math.max(4, Math.abs(by - ay)), ratios = [.236, .382, .5, .618, .786, 1];
+        if (d.kind === "fibspiral") {
+          const pts: XY[] = []; const turns = Math.PI * 4.5;
+          for (let i = 0; i <= 56; i++) { const angle = i / 56 * turns, radius = Math.pow(1.618, angle / (Math.PI / 2) - turns / (Math.PI / 2)) * Math.max(rx, ry); pts.push({ x: ax + Math.cos(angle) * radius, y: ay + Math.sin(angle) * radius }); }
+          polyline(pts); line(ax, ay, bx, by, { opacity: .45, "stroke-dasharray": "4 4" });
+        } else if (d.kind === "fibwedge") {
+          line(ax, ay, bx, by); line(ax, ay, cx ?? bx, cy ?? by);
+          ratios.forEach((ratio) => path(`M${ax + (bx - ax) * ratio} ${ay + (by - ay) * ratio}A${rx * ratio} ${ry * ratio} 0 0 1 ${ax + ((cx ?? bx) - ax) * ratio} ${ay + ((cy ?? by) - ay) * ratio}`, { opacity: .7 }));
+        } else {
+          ratios.forEach((ratio) => {
+            if (d.kind === "fibcircles") add("ellipse", { cx: ax, cy: ay, rx: rx * ratio, ry: ry * ratio, fill: ratio === 1 ? fill : "none", "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.1, .25), opacity: .82 });
+            else path(`M${ax - rx * ratio} ${ay}A${rx * ratio} ${ry * ratio} 0 0 1 ${ax + rx * ratio} ${ay}`, { opacity: .82 });
+          });
+        }
+        return done(anchorXY);
+      }
+
+      if (family === "gann") {
+        const x = Math.min(ax, bx), y = Math.min(ay, by), w = Math.max(2, Math.abs(bx - ax)), h = Math.max(2, Math.abs(by - ay));
+        add("rect", { x, y, width: w, height: h, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.3, .5) });
+        for (const ratio of [.25, .5, .75]) { line(x + w * ratio, y, x + w * ratio, y + h, { opacity: .45 }); line(x, y + h * ratio, x + w, y + h * ratio, { opacity: .45 }); }
+        line(x, y, x + w, y + h); line(x + w, y, x, y + h); return done(anchorXY);
+      }
+
+      if (family === "pattern") {
+        const points = anchorXY;
+        const labelsByKind: Partial<Record<DrawKind, string[]>> = {
+          xabcd: ["X", "A", "B", "C", "D"], cypher: ["X", "A", "B", "C", "D"], abcd: ["A", "B", "C", "D"],
+          headandshoulders: ["0", "LS", "N", "H", "N", "RS", "0"], threedrives: ["0", "1", "A", "2", "B", "3", "C"],
+          elliottimpulse: ["0", "1", "2", "3", "4", "5"], elliottcorrection: ["0", "A", "B", "C"], elliotttriangle: ["0", "A", "B", "C", "D", "E"],
+          elliottdoublecombo: ["W", "X", "Y", "Z"], elliotttriplecombo: ["W", "X", "Y", "X", "Z", "0"], trianglepattern: ["A", "B", "C", "D"],
+        };
+        polyline(points, { fill: d.kind === "trianglepattern" && points.length >= 3 ? fill : "none", "fill-opacity": fillOpacity });
+        const labels = labelsByKind[d.kind] ?? points.map((_, i) => String(i + 1));
+        points.forEach((point, i) => { text(point.x, point.y + (i % 2 ? 17 : -9), labels[i] ?? String(i + 1), { fill: "#f7f9fc", "font-size": 9.5, "font-weight": 800, "text-anchor": "middle" }); if (d.kind === "xabcd" && i >= 2) { const p0 = d.points[i - 2], p1 = d.points[i - 1], p2 = d.points[i], den = Math.abs(p1.p - p0.p); pill((point.x + points[i - 1].x) / 2, (point.y + points[i - 1].y) / 2, (den ? Math.abs(p2.p - p1.p) / den : 0).toFixed(3), "#f7f9fc", col); } });
+        return done(points, d.kind === "xabcd");
+      }
+
+      if (family === "cycle") {
+        const x1 = Math.min(ax, bx), x2 = Math.max(ax, bx), width = Math.max(8, x2 - x1);
+        if (d.kind === "cycliclines") { const step = Math.max(8, width); for (let x = x1, i = 0; x <= W + step && i < 40; x += step, i++) line(x, 0, x, H, { opacity: i ? .45 : .9, "stroke-dasharray": i ? "4 4" : dash }); }
+        else if (d.kind === "timecycles") { const count = Math.max(1, Math.min(24, Math.ceil((W - x1) / width))); for (let i = 0; i < count; i++) add("ellipse", { cx: x1 + width * (i + .5), cy: (ay + by) / 2, rx: width / 2, ry: Math.max(12, Math.abs(by - ay) / 2), fill: "none", stroke: col, "stroke-width": lw(1.2, .4), "stroke-dasharray": dash }); }
+        else { const points: XY[] = []; const amplitude = Math.max(8, Math.abs(by - ay) / 2), center = (ay + by) / 2; for (let i = 0; i <= 48; i++) points.push({ x: ax + (bx - ax) * i / 48, y: center + Math.sin(i / 48 * Math.PI * 4) * amplitude }); polyline(points); }
+        return done(anchorXY);
+      }
+
+      if (family === "position") {
+        const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
+        if (!C || cx == null || cy == null) return done();
+        const x1 = Math.min(ax, bx, cx), x2 = Math.max(ax + 80, bx, cx), entryY = ay, targetY = by, stopY = cy, targetCol = tokensRef.current.up, stopCol = tokensRef.current.down;
+        add("rect", { x: x1, y: Math.min(entryY, targetY), width: x2 - x1, height: Math.max(1, Math.abs(targetY - entryY)), fill: targetCol, "fill-opacity": d.fillOpacity ?? .2, stroke: targetCol, "stroke-opacity": .55 });
+        add("rect", { x: x1, y: Math.min(entryY, stopY), width: x2 - x1, height: Math.max(1, Math.abs(stopY - entryY)), fill: stopCol, "fill-opacity": d.fillOpacity ?? .2, stroke: stopCol, "stroke-opacity": .55 });
+        line(x1, entryY, x2, entryY); const reward = Math.abs(B.p - A.p), risk = Math.abs(C.p - A.p), rr = risk ? reward / risk : 0;
+        pill((x1 + x2) / 2, targetY - 15, `${tPlain("drawingTarget")}: ${B.p.toFixed(prec)} (${((B.p - A.p) / A.p * 100).toFixed(2)}%)`);
+        pill((x1 + x2) / 2, stopY + 15, `${tPlain("drawingStop")}: ${C.p.toFixed(prec)} (${((C.p - A.p) / A.p * 100).toFixed(2)}%)`);
+        pill((x1 + x2) / 2, entryY, `${tPlain("drawingRiskReward")} ${rr.toFixed(2)}`); return done(anchorXY, true);
+      }
+
+      if (family === "forecast") {
+        const points = anchorXY;
+        polyline(points, { "stroke-dasharray": d.kind === "ghostfeed" ? "2 4" : dash, opacity: d.kind === "ghostfeed" ? .72 : 1 });
+        if (d.kind === "forecast") { const angle = Math.atan2(by - ay, bx - ax), head = 10; path(`M${bx} ${by}L${bx + head * Math.cos(angle + Math.PI - .5)} ${by + head * Math.sin(angle + Math.PI - .5)}M${bx} ${by}L${bx + head * Math.cos(angle + Math.PI + .5)} ${by + head * Math.sin(angle + Math.PI + .5)}`); pill((ax + bx) / 2, Math.min(ay, by) - 15, measurementLabel()); }
+        return done(points, d.kind === "forecast");
+      }
+
+      if (family === "bar-pattern") {
+        const x1 = Math.min(ax, bx), y1 = Math.min(ay, by), w = Math.max(24, Math.abs(bx - ax)), h = Math.max(24, Math.abs(by - ay));
+        const i1 = Math.max(0, Math.min(barIndex(A.t), barIndex(B.t))), i2 = Math.min(barsRef.current.length - 1, Math.max(barIndex(A.t), barIndex(B.t))), rows = barsRef.current.slice(i1, i2 + 1);
+        const sample = rows.length > 18 ? rows.filter((_, i) => i % Math.ceil(rows.length / 18) === 0) : rows;
+        const lo = Math.min(...sample.map((row) => row.l), A.p, B.p), hi = Math.max(...sample.map((row) => row.h), A.p, B.p), span = Math.max(1e-9, hi - lo);
+        sample.forEach((row, i) => { const x = x1 + (i + .5) / Math.max(1, sample.length) * w, yy = (price: number) => y1 + (hi - price) / span * h; line(x, yy(row.h), x, yy(row.l), { "stroke-width": 1 }); add("rect", { x: x - Math.max(1.5, w / Math.max(8, sample.length) * .25), y: Math.min(yy(row.o), yy(row.c)), width: Math.max(3, w / Math.max(8, sample.length) * .5), height: Math.max(1, Math.abs(yy(row.o) - yy(row.c))), fill: row.c >= row.o ? tokensRef.current.up : tokensRef.current.down, stroke: "none" }); });
+        return done(anchorXY);
+      }
+
+      if (family === "sector") {
+        const C = d.points[2], cx = C ? projectX(C.t) : bx, cy = C ? projectY(C.p) : by, radius = Math.max(6, Math.hypot(bx - ax, by - ay));
+        const a1 = Math.atan2(by - ay, bx - ax), a2 = Math.atan2((cy ?? by) - ay, (cx ?? bx) - ax), ex2 = ax + Math.cos(a2) * radius, ey2 = ay + Math.sin(a2) * radius, large = Math.abs(a2 - a1) > Math.PI ? 1 : 0;
+        add("path", { d: `M${ax} ${ay}L${bx} ${by}A${radius} ${radius} 0 ${large} 1 ${ex2} ${ey2}Z`, fill, "fill-opacity": Math.max(.12, fillOpacity), stroke: col, "stroke-width": lw(1.3, .5) }); return done(anchorXY);
+      }
+
+      if (family === "volume-profile") {
+        const x1 = Math.min(ax, bx), x2 = Math.max(ax, bx), y1 = Math.min(ay, by), y2 = Math.max(ay, by), bins = Array(16).fill(0), low = Math.min(A.p, B.p), high = Math.max(A.p, B.p), span = Math.max(1e-9, high - low);
+        const i1 = Math.max(0, Math.min(barIndex(A.t), barIndex(B.t))), i2 = Math.min(barsRef.current.length - 1, Math.max(barIndex(A.t), barIndex(B.t)));
+        for (const row of barsRef.current.slice(i1, i2 + 1)) { const price = (row.h + row.l + row.c) / 3, bin = Math.max(0, Math.min(bins.length - 1, Math.floor((price - low) / span * bins.length))); bins[bin] += Math.max(1, row.v || 0); }
+        const max = Math.max(1, ...bins); bins.forEach((volume, i) => { const h = Math.max(1, (y2 - y1) / bins.length - 1), width = (x2 - x1) * volume / max; add("rect", { x: x1, y: y2 - (i + 1) / bins.length * (y2 - y1), width, height: h, fill: col, "fill-opacity": .22 + .48 * volume / max, stroke: "none" }); });
+        add("rect", { x: x1, y: y1, width: Math.max(1, x2 - x1), height: Math.max(1, y2 - y1), fill: "none", stroke: col, "stroke-width": 1, "stroke-dasharray": dash }); return done(anchorXY);
+      }
+
+      if (family === "range") {
+        const bars = Math.abs(barIndex(B.t) - barIndex(A.t)), delta = B.p - A.p, pct = A.p ? delta / A.p * 100 : 0, x = Math.min(ax, bx), y = Math.min(ay, by), w = Math.max(1, Math.abs(bx - ax)), h = Math.max(1, Math.abs(by - ay));
+        if (d.kind === "measure") { line(ax, ay, bx, by); pill((ax + bx) / 2, y - 15, measurementLabel()); }
+        else if (d.kind === "daterange") { add("rect", { x, y: 0, width: w, height: H, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-opacity": .5, "stroke-dasharray": dash }); pill((ax + bx) / 2, H - 34, `${bars} ${tPlain("drawingBars")}`); }
+        else { add("rect", { x, y, width: w, height: h, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-opacity": .62, "stroke-dasharray": dash }); const label = d.kind === "dateandpricerange" ? `${bars} ${tPlain("drawingBars")} · ${delta >= 0 ? "+" : ""}${delta.toFixed(prec)} (${pct.toFixed(2)}%)` : `${delta >= 0 ? "+" : ""}${delta.toFixed(prec)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`; pill((ax + bx) / 2, y - 15, label); }
+        return done(anchorXY, true);
+      }
+
+      if (family === "freehand") {
+        // Drawing opacity already lives on the root group. Applying it again to
+        // the Highlighter stroke squared the alpha (.28 -> .078) and made the
+        // mark look broken on dark charts.
+        polyline(anchorXY, { "stroke-width": lw(d.kind === "highlighter" ? 8 : d.kind === "brush" ? 2.6 : 1.8, .7) }); return done(anchorXY);
+      }
+
+      if (family === "shape") {
+        if (d.kind === "rect") add("rect", { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.max(1, Math.abs(bx - ax)), height: Math.max(1, Math.abs(by - ay)), fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.2, .6), "stroke-dasharray": dash });
+        else if (d.kind === "circle") { const radius = Math.max(2, Math.hypot(bx - ax, by - ay)); add("circle", { cx: ax, cy: ay, r: radius, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.3, .6), "stroke-dasharray": dash }); }
+        else if (d.kind === "ellipse") { const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null, centerX = (ax + bx) / 2, centerY = (ay + by) / 2, angle = cx != null && cy != null ? Math.atan2(cy - centerY, cx - centerX) * 180 / Math.PI : 0; add("ellipse", { cx: centerX, cy: centerY, rx: Math.max(2, Math.abs(bx - ax) / 2), ry: Math.max(2, Math.abs(by - ay) / 2), transform: `rotate(${angle} ${centerX} ${centerY})`, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.3, .6), "stroke-dasharray": dash }); }
+        else if (d.kind === "rotatedrect") { const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null; if (cx != null && cy != null) add("polygon", { points: `${ax},${ay} ${bx},${by} ${cx + bx - ax},${cy + by - ay} ${cx},${cy}`, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.3, .6), "stroke-dasharray": dash }); }
+        else { const C = d.points[2], cx = C ? projectX(C.t) : (ax + bx) / 2, cy = C ? projectY(C.p) : Math.min(ay, by); add("polygon", { points: `${ax},${ay} ${bx},${by} ${cx},${cy}`, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.3, .6), "stroke-dasharray": dash }); }
+        return done(anchorXY);
+      }
+
+      if (family === "curve") {
+        const C = d.points[2], D = d.points[3], cx = C ? projectX(C.t) : (ax + bx) / 2, cy = C ? projectY(C.p) : (ay + by) / 2, dx = D ? projectX(D.t) : null, dy = D ? projectY(D.p) : null;
+        if (d.kind === "arc") path(`M${ax} ${ay}Q${cx} ${cy} ${bx} ${by}`);
+        else if (d.kind === "doublecurve" && dx != null && dy != null) { path(`M${ax} ${ay}Q${cx} ${cy} ${bx} ${by}`); path(`M${ax} ${ay}Q${dx} ${dy} ${bx} ${by}`); }
+        else path(`M${ax} ${ay}Q${cx} ${cy} ${bx} ${by}`);
+        return done(anchorXY);
+      }
+
+      if (family === "stylized") {
+        const C = d.points[2], D = d.points[3], E = d.points[4], F = d.points[5];
+        const c = C ? { x: projectX(C.t), y: projectY(C.p) } : null, q = D ? { x: projectX(D.t), y: projectY(D.p) } : null, e = E ? { x: projectX(E.t), y: projectY(E.p) } : null, f = F ? { x: projectX(F.t), y: projectY(F.p) } : null;
+        if (d.kind === "divergence" && c?.x != null && c.y != null && q?.x != null && q.y != null) { line(ax, ay, bx, by); line(c.x, c.y, q.x, q.y); }
+        else if (d.kind === "journey" && c?.x != null && c.y != null && q?.x != null && q.y != null && e?.x != null && e.y != null && f?.x != null && f.y != null) polyline([{ x: ax, y: ay }, c as XY, q as XY, e as XY, f as XY, { x: bx, y: by }]);
+        else if (d.kind === "fork" && c?.x != null && c.y != null && q?.x != null && q.y != null && e?.x != null && e.y != null) { line(ax, ay, c.x, c.y); line(c.x, c.y, bx, by); line(c.x, c.y, q.x, q.y); line(c.x, c.y, e.x, e.y); }
+        else if (d.kind === "threepaths" && c?.x != null && c.y != null && q?.x != null && q.y != null && e?.x != null && e.y != null) { line(ax, ay, bx, by); line(c.x, c.y, q.x, q.y); line(e.x, e.y, bx, by); }
+        else if (d.kind === "burj" && c?.x != null && c.y != null) { add("polygon", { points: `${ax},${ay} ${c.x},${c.y} ${bx},${by}`, fill, "fill-opacity": fillOpacity, stroke: col, "stroke-width": lw(1.5, .6) }); line((ax + bx) / 2, (ay + by) / 2, c.x, c.y); }
+        else if (d.kind === "momentum") polyline([{ x: ax, y: ay }, { x: ax + (bx - ax) * .34, y: ay + (by - ay) * .2 }, { x: ax + (bx - ax) * .48, y: ay + (by - ay) * .76 }, { x: ax + (bx - ax) * .68, y: ay + (by - ay) * .42 }, { x: bx, y: by }]);
+        else if (d.kind === "emphasis") { line(ax, ay, bx, by, { "stroke-width": lw(3.2, .8) }); line(ax + 5, ay + 7, bx + 5, by + 7, { opacity: .42 }); }
+        else { const bend = d.kind === "whisper" || d.kind === "subtle" ? .14 : .32, cx1 = ax + (bx - ax) * .35, cy1 = ay - Math.abs(by - ay || 30) * bend, cx2 = ax + (bx - ax) * .65, cy2 = by + Math.abs(by - ay || 30) * bend; path(`M${ax} ${ay}C${cx1} ${cy1} ${cx2} ${cy2} ${bx} ${by}`, { opacity: d.kind === "whisper" || d.kind === "subtle" ? .58 : 1 }); }
+        return done(anchorXY);
+      }
+
+      // This is deliberately loud and test-addressable. The exhaustive family map
+      // makes this exceptional, but malformed/off-spec data still gets a visible,
+      // editable object instead of a silent empty SVG group.
+      g.setAttribute("data-renderer-fallback", "true");
+      line(ax, ay, bx, by); return done(anchorXY);
     }
 
     // floating style/delete toolbar over the selected drawing
     const bar = document.createElement("div");
     bar.className = "draw-bar"; bar.style.display = "none"; bar.setAttribute("role", "toolbar");
     bar.setAttribute("aria-label", tPlain("drawingSelectionToolbar")); wrap.appendChild(bar); barRef.current = bar;
+    const barTip = document.createElement("div");
+    barTip.className = "tip tip-mini draw-bar-hover-tip";
+    barTip.setAttribute("role", "tooltip");
+    barTip.dataset.open = "0";
+    barTip.style.display = "none";
+    document.body.appendChild(barTip);
+    let barTipTimer: number | null = null;
+    let lastBarTouchAt = -Infinity;
+    const hideBarTip = () => {
+      if (barTipTimer !== null) window.clearTimeout(barTipTimer);
+      barTipTimer = null;
+      barTip.dataset.open = "0";
+      barTip.style.display = "none";
+    };
+    const showBarTip = (target: HTMLElement, immediate = false) => {
+      const label = target.getAttribute("aria-label");
+      if (!label) return;
+      if (barTipTimer !== null) window.clearTimeout(barTipTimer);
+      barTipTimer = window.setTimeout(() => {
+        barTipTimer = null;
+        if (!target.isConnected || bar.style.display === "none") return;
+        barTip.textContent = label;
+        barTip.style.display = "flex";
+        barTip.dataset.open = "0";
+        const anchor = target.getBoundingClientRect();
+        const tipRect = barTip.getBoundingClientRect();
+        const edge = 8, gap = 8;
+        const left = Math.max(edge, Math.min(window.innerWidth - tipRect.width - edge, anchor.left + anchor.width / 2 - tipRect.width / 2));
+        const above = anchor.top - tipRect.height - gap;
+        const top = above >= edge ? above : Math.min(window.innerHeight - tipRect.height - edge, anchor.bottom + gap);
+        barTip.dataset.side = above >= edge ? "top" : "bottom";
+        barTip.style.left = Math.round(left) + "px";
+        barTip.style.top = Math.round(top) + "px";
+        requestAnimationFrame(() => { if (barTip.style.display !== "none") barTip.dataset.open = "1"; });
+      }, immediate ? 0 : 200);
+    };
+    bar.addEventListener("pointerover", (event) => {
+      if (event.pointerType === "touch") return;
+      const target = (event.target as Element).closest<HTMLElement>("[aria-label]");
+      if (target && bar.contains(target)) showBarTip(target);
+    });
+    bar.addEventListener("pointerout", (event) => {
+      const from = (event.target as Element).closest<HTMLElement>("[aria-label]");
+      const to = (event.relatedTarget as Element | null)?.closest?.<HTMLElement>("[aria-label]");
+      if (from !== to) hideBarTip();
+    });
+    bar.addEventListener("focusin", (event) => {
+      if (performance.now() - lastBarTouchAt < 700) return;
+      const target = (event.target as Element).closest<HTMLElement>("[aria-label]");
+      if (target) showBarTip(target, true);
+    });
+    bar.addEventListener("focusout", hideBarTip);
+    window.addEventListener("resize", hideBarTip);
+    document.addEventListener("scroll", hideBarTip, true);
     const COLORS = ["#4d82ff", "#26c281", "#f0566b", "#e8b339", "#d6dae3"];
+    const creationPalette = document.createElement("div");
+    creationPalette.className = "drawing-creation-palette";
+    creationPalette.setAttribute("role", "toolbar");
+    creationPalette.setAttribute("aria-label", "Drawing color");
+    creationPalette.style.cssText = "position:absolute;z-index:9;display:none;align-items:center;gap:5px;padding:6px 7px 5px;border:1px solid rgba(148,163,184,.22);border-radius:10px;background:rgba(14,18,27,.9);box-shadow:0 10px 28px rgba(0,0,0,.32);backdrop-filter:blur(14px);pointer-events:auto;transform:translateZ(0)";
+    const creationSwatches = document.createElement("div"); creationSwatches.style.cssText = "display:flex;align-items:center;gap:4px";
+    for (const color of COLORS) {
+      const swatch = document.createElement("button"); swatch.type = "button"; swatch.dataset.creationColor = color; swatch.setAttribute("aria-label", color);
+      swatch.style.cssText = `width:17px;height:17px;padding:0;border:1px solid rgba(255,255,255,.18);border-radius:4px;background:${color};cursor:pointer;box-sizing:border-box`;
+      creationSwatches.appendChild(swatch);
+    }
+    const creationCaption = document.createElement("span");
+    creationCaption.className = "drawing-creation-palette-caption";
+    creationCaption.textContent = document.documentElement.lang.toLowerCase().startsWith("zh") ? "滚动切换" : "Scroll to Change";
+    creationCaption.style.cssText = "display:block;margin-top:3px;color:rgba(226,232,240,.68);font:600 8px/1.1 var(--font-ui,system-ui);text-align:center;white-space:nowrap";
+    const creationInner = document.createElement("div"); creationInner.append(creationSwatches, creationCaption); creationPalette.appendChild(creationInner); wrap.appendChild(creationPalette); creationPaletteRef.current = creationPalette;
+    const updateCreationPaletteSelection = () => {
+      const selected = styleRef.current?.color || getDrawingTool(toolRef.current)?.defaults.color || COLORS[0];
+      creationSwatches.querySelectorAll<HTMLElement>("[data-creation-color]").forEach((swatch) => {
+        const active = swatch.dataset.creationColor === selected;
+        swatch.setAttribute("aria-pressed", active ? "true" : "false");
+        swatch.style.outline = active ? "2px solid rgba(248,250,252,.96)" : "none";
+        swatch.style.outlineOffset = active ? "2px" : "0";
+      });
+    };
+    const setCreationColor = (color: string) => {
+      const current = styleRef.current ?? { color: COLORS[0], width: 1.5, dash: "solid" as const };
+      styleRef.current = { ...current, color }; updateCreationPaletteSelection();
+      try { window.dispatchEvent(new CustomEvent("mm:drawing-style", { detail: { color } })); } catch {}
+      renderDraw();
+    };
+    creationPalette.addEventListener("pointerdown", (event) => {
+      const swatch = (event.target as Element).closest<HTMLElement>("[data-creation-color]"); if (!swatch?.dataset.creationColor) return;
+      event.preventDefault(); event.stopPropagation(); setCreationColor(swatch.dataset.creationColor);
+    });
+    const positionCreationPalette = (clientX: number, clientY: number) => {
+      if (!toolRef.current || !matchMedia("(pointer:fine)").matches || matchMedia("(max-width:860px)").matches) { creationPalette.style.display = "none"; return; }
+      const rect = wrap.getBoundingClientRect(); creationPalette.style.display = "flex"; updateCreationPaletteSelection();
+      const width = creationPalette.offsetWidth || 132, height = creationPalette.offsetHeight || 43;
+      const left = Math.max(6, Math.min(el!.clientWidth - width - 6, clientX - rect.left + 16));
+      const top = Math.max(6, Math.min(el!.clientHeight - height - 6, clientY - rect.top + 16));
+      creationPalette.style.left = `${left}px`; creationPalette.style.top = `${top}px`;
+    };
+    svg.addEventListener("pointerleave", () => { creationPalette.style.display = "none"; });
     const DASHES: [string, string][] = [["solid", "M2 6h16"], ["dashed", "M2 6h4M8 6h4M14 6h4"], ["dotted", "M2 6h.5M6 6h.5M10 6h.5M14 6h.5M18 6h.5"]];
     const buildBar = (d: Drawing) => {
+      hideBarTip();
       bar.dataset.drawingId = d.id;
       const sw = (a: boolean) => (a ? " on" : "");
-      let h = COLORS.map((cc) => `<button data-c="${cc}" class="dsw${sw((d.color || "#4d82ff") === cc)}" style="background:${cc}" title="${cc}"></button>`).join("");
-      if (d.kind === "text") {
-        h += `<span class="bar-sep"></span>` + [["12", "S"], ["16", "M"], ["22", "L"]].map(([fs, l]) => `<button data-fs="${fs}" class="dfi${sw((d.fontSize ?? 13) === +fs)}">${l}</button>`).join("");
+      let h = COLORS.map((cc) => `<button data-c="${cc}" class="dsw${sw((d.color || "#4d82ff") === cc)}" style="background:${cc}" aria-label="${escH(tPlain("drawingColorValue").replace("{color}", cc))}"></button>`).join("");
+      if (getDrawingTool(d.kind)?.capabilities.includes("fontSize")) {
+        h += `<span class="bar-sep"></span>` + [["12", "S"], ["16", "M"], ["22", "L"]].map(([fs, l]) => `<button data-fs="${fs}" class="dfi${sw((d.fontSize ?? 13) === +fs)}" aria-label="${escH(tPlain("drawingTextSizeOption").replace("{size}", l))}">${l}</button>`).join("");
       } else if (getDrawingTool(d.kind)?.capabilities.some((cap) => cap === "width" || cap === "dash")) {
-        h += `<span class="bar-sep"></span>` + [1.5, 2.5, 4].map((w) => `<button data-w="${w}" class="dwi${sw((d.width ?? 1.6) === w)}" title="${w}px"><i style="height:${Math.max(1, Math.round(w - 0.5))}px"></i></button>`).join("");
-        h += `<span class="bar-sep"></span>` + DASHES.map(([k, p]) => `<button data-dash="${k}" class="ddi${sw((d.dash || "solid") === k)}" title="${k}"><svg viewBox="0 0 20 12"><path d="${p}"/></svg></button>`).join("");
+        h += `<span class="bar-sep"></span>` + [1.5, 2.5, 4].map((w) => `<button data-w="${w}" class="dwi${sw((d.width ?? 1.6) === w)}" aria-label="${escH(tPlain("drawingUseWidth").replace("{width}", String(w)))}"><i style="height:${Math.max(1, Math.round(w - 0.5))}px"></i></button>`).join("");
+        h += `<span class="bar-sep"></span>` + DASHES.map(([k, p]) => `<button data-dash="${k}" class="ddi${sw((d.dash || "solid") === k)}" aria-label="${escH(tPlain(k === "solid" ? "drawingDashSolid" : k === "dashed" ? "drawingDashDashed" : "drawingDashDotted"))}"><svg viewBox="0 0 20 12"><path d="${p}"/></svg></button>`).join("");
       }
-      h += `<span class="bar-sep"></span><button class="bar-del" data-del="1" title="${tPlain("drawingDelete")}" aria-label="${tPlain("drawingDelete")}"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg></button>`;
+      h += `<span class="bar-sep"></span><button class="bar-del" data-del="1" aria-label="${tPlain("drawingDelete")}"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg></button>`;
       bar.innerHTML = h;
       const gripEl = document.createElement("button");
-      gripEl.className = "bar-grip"; gripEl.type = "button"; gripEl.title = tPlain("drawingDragProperties"); gripEl.setAttribute("aria-label", tPlain("drawingDragProperties")); gripEl.setAttribute("data-bar-grip", "1");
+      gripEl.className = "bar-grip"; gripEl.type = "button"; gripEl.setAttribute("aria-label", tPlain("drawingDragProperties")); gripEl.setAttribute("data-bar-grip", "1");
       gripEl.textContent = "⠿"; bar.prepend(gripEl);
       const custom = document.createElement("input");
       custom.className = "bar-custom-color"; custom.type = "color"; custom.value = /^#[0-9a-f]{6}$/i.test(d.color || "") ? d.color! : "#4d82ff";
-      custom.title = tPlain("drawingCustomColor"); custom.setAttribute("aria-label", tPlain("drawingCustomColorAria")); custom.setAttribute("data-custom-color", "1");
+      custom.setAttribute("aria-label", tPlain("drawingCustomColorAria")); custom.setAttribute("data-custom-color", "1");
       bar.appendChild(custom);
       const lock = document.createElement("button");
-      lock.className = "bar-act" + (d.locked ? " on" : ""); lock.type = "button"; lock.title = d.locked ? tPlain("drawingUnlock") : tPlain("drawingLock");
-      lock.setAttribute("aria-label", lock.title); lock.setAttribute("data-lock", "1"); lock.textContent = d.locked ? "●" : "○"; bar.appendChild(lock);
+      lock.className = "bar-act" + (d.locked ? " on" : ""); lock.type = "button";
+      lock.setAttribute("aria-label", d.locked ? tPlain("drawingUnlock") : tPlain("drawingLock")); lock.setAttribute("data-lock", "1"); lock.textContent = d.locked ? "●" : "○"; bar.appendChild(lock);
       const duplicate = document.createElement("button");
-      duplicate.className = "bar-act"; duplicate.type = "button"; duplicate.title = tPlain("drawingDuplicate"); duplicate.setAttribute("aria-label", duplicate.title);
+      duplicate.className = "bar-act"; duplicate.type = "button"; duplicate.setAttribute("aria-label", tPlain("drawingDuplicate"));
       duplicate.setAttribute("data-duplicate", "1"); duplicate.textContent = "⧉"; bar.appendChild(duplicate);
       const settings = document.createElement("button");
-      settings.className = "bar-act"; settings.type = "button"; settings.title = tPlain("drawingMoreProperties"); settings.setAttribute("aria-label", settings.title);
+      settings.className = "bar-act"; settings.type = "button"; settings.setAttribute("aria-label", tPlain("drawingMoreProperties"));
       settings.setAttribute("data-settings", "1"); settings.textContent = "⚙"; bar.appendChild(settings);
       const panel = document.createElement("div");
       panel.className = "draw-settings";
       const opacityLabel = document.createElement("label"); opacityLabel.textContent = tPlain("drawingOpacity");
       const opacity = document.createElement("input"); opacity.type = "range"; opacity.min = "15"; opacity.max = "100"; opacity.step = "5"; opacity.value = String(Math.round((d.opacity ?? 1) * 100)); opacity.setAttribute("data-opacity", "1");
       opacityLabel.appendChild(opacity); panel.appendChild(opacityLabel);
-      if (["rect", "ellipse", "triangle", "channel", "fib", "xabcd", "longposition", "shortposition"].includes(d.kind)) {
+      if (getDrawingTool(d.kind)?.capabilities.includes("fill")) {
         const fillLabel = document.createElement("label"); fillLabel.textContent = tPlain("drawingFill");
         const fill = document.createElement("input"); fill.type = "range"; fill.min = "0"; fill.max = "45"; fill.step = "1"; fill.value = String(Math.round((d.fillOpacity ?? .08) * 100)); fill.setAttribute("data-fill-opacity", "1");
         fillLabel.appendChild(fill); panel.appendChild(fillLabel);
@@ -3109,12 +3570,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     let barManual: { x: number; y: number } | null = null, barManualFor: string | null = null;
     bar.addEventListener("pointerdown", (e) => {
       e.stopPropagation();
+      if (e.pointerType === "touch") lastBarTouchAt = performance.now();
       const target = e.target as HTMLElement;
       if (target.closest("[data-bar-grip]") && sel) {
         e.preventDefault();
         const r = bar.getBoundingClientRect(), host = wrap.getBoundingClientRect();
+        const pointerId = e.pointerId;
         const startX = e.clientX, startY = e.clientY, baseX = r.left - host.left, baseY = r.top - host.top;
         const move = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointerId) return;
           barManual = {
             x: Math.max(4, Math.min(el!.clientWidth - bar.offsetWidth - 4, baseX + ev.clientX - startX)),
             y: Math.max(4, Math.min(el!.clientHeight - bar.offsetHeight - 4, baseY + ev.clientY - startY)),
@@ -3122,9 +3586,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           barManualFor = sel;
           bar.style.left = barManual.x + "px"; bar.style.top = barManual.y + "px";
         };
-        const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
+        const cleanupGrip = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+          if (dragCleanup === cleanupGrip) dragCleanup = null;
+        };
+        const up = (ev: PointerEvent) => { if (ev.pointerId === pointerId) cleanupGrip(); };
+        dragCleanup?.();
+        dragCleanup = cleanupGrip;
         window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up); return;
       }
+    });
+    // Click, rather than pointerdown, keeps every inspector action operable with
+    // Enter/Space while retaining delegated mouse and touch behavior.
+    bar.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const target = e.target as HTMLElement;
       const tg = target.closest("button") as HTMLElement | null; if (!tg || !sel) return;
       if (tg.getAttribute("data-settings")) { bar.classList.toggle("settings-open"); return; }
       if (tg.getAttribute("data-del")) { const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); return; }
@@ -3139,19 +3617,38 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           const i = Math.max(0, barIndex(pt.t)), ni = Math.min(bars.length - 1, i + 2);
           return { t: String(bars[ni]?.time ?? pt.t), p: +(pt.p * 1.002).toFixed(precRef.current) };
         });
-        const copy = { ...src, id: uid(), locked: false, points, z: (src.z ?? drawRef.current.length) + 1 };
+        const paneAnchor = paneAnchorOf(src.meta);
+        const copy = {
+          ...src,
+          id: uid(),
+          locked: false,
+          points,
+          ...(paneAnchor ? { meta: { ...(src.meta ?? {}), paneAnchor: { x: clampUnit(paneAnchor.x + .025), y: clampUnit(paneAnchor.y + .025) } } } : {}),
+          z: (src.z ?? drawRef.current.length) + 1,
+        };
         sel = copy.id; drawRef.current = [...drawRef.current, copy]; onChangeRef.current?.([...drawRef.current]); return;
       }
       const cc = tg.getAttribute("data-c"), w = tg.getAttribute("data-w"), dd = tg.getAttribute("data-dash"), fs = tg.getAttribute("data-fs");
-      const patch = cc ? { color: cc } : w ? { width: +w } : dd ? { dash: dd as any } : fs ? { fontSize: +fs } : null;
+      const selectedDrawing = drawRef.current.find((drawing) => drawing.id === sel);
+      const selectedCanFill = getDrawingTool(selectedDrawing?.kind)?.capabilities.includes("fill") ?? false;
+      const patch = cc ? { color: cc, ...(selectedCanFill ? { fillColor: cc } : {}) }
+        : w ? { width: +w }
+        : dd ? { dash: dd as any }
+        : fs ? { fontSize: +fs }
+        : null;
       if (patch) { drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, ...patch } : d); onChangeRef.current?.([...drawRef.current]); }
     });
-    const inspectorPatch = (input: HTMLInputElement): Partial<Drawing> | null =>
-      input.hasAttribute("data-custom-color") ? { color: input.value }
-        : input.hasAttribute("data-opacity") ? { opacity: +input.value / 100 }
-        : input.hasAttribute("data-fill-opacity") ? { fillOpacity: +input.value / 100 }
-        : null;
-    const barSignature = (d: Drawing) => `${d.id}|${d.kind}|${d.color}|${d.width}|${d.dash}|${d.fontSize}`;
+    const inspectorPatch = (input: HTMLInputElement): Partial<Drawing> | null => {
+      if (input.hasAttribute("data-custom-color")) {
+        const selectedDrawing = drawRef.current.find((drawing) => drawing.id === sel);
+        const canFill = getDrawingTool(selectedDrawing?.kind)?.capabilities.includes("fill") ?? false;
+        return { color: input.value, ...(canFill ? { fillColor: input.value } : {}) };
+      }
+      if (input.hasAttribute("data-opacity")) return { opacity: +input.value / 100 };
+      if (input.hasAttribute("data-fill-opacity")) return { fillOpacity: +input.value / 100 };
+      return null;
+    };
+    const barSignature = (d: Drawing) => `${d.id}|${d.kind}|${d.color}|${d.fillColor}|${d.width}|${d.dash}|${d.fontSize}`;
     let barSig = "";
     bar.addEventListener("input", (e) => {
       e.stopPropagation(); if (!sel) return;
@@ -3179,14 +3676,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const positionBar = () => {
       const d = drawRef.current.find((x) => x.id === sel);
       if (sel && d && d.points[0]) {
-        const ax = xOf(d.points[0].t), ay = yOf(d.points[0].p);
+        const paneAnchor = getDrawingTool(d.kind)?.creation.anchorSpace === "pane" ? paneAnchorOf(d.meta) : null;
+        const ax = paneAnchor ? paneAnchor.x * el!.clientWidth : xOf(d.points[0].t);
+        const ay = paneAnchor ? paneAnchor.y * el!.clientHeight : yOf(d.points[0].p);
         if (ax != null && ay != null) {
           const sig = barSignature(d);
           if (sig !== barSig) { buildBar(d); barSig = sig; }
           bar.style.display = "flex";
           if (barManualFor !== sel) { barManual = null; barManualFor = sel; }
           bar.style.left = (barManual?.x ?? Math.max(4, Math.min(el!.clientWidth - bar.offsetWidth - 4, ax - 8))) + "px";
-          const naturalTop = d.kind === "text"
+          const naturalTop = getDrawingTool(d.kind)?.capabilities.includes("fontSize")
             ? ay + (d.fontSize ?? 13) + 8
             : ay - 50;
           bar.style.top = (barManual?.y ?? Math.max(4, Math.min(el!.clientHeight - bar.offsetHeight - 4, naturalTop))) + "px";
@@ -3197,9 +3696,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     // inline, editable text box — type directly on the chart
     let textEditEl: HTMLInputElement | null = null;
-    const openTextEditor = (at: { t: string; p: number }, existing?: Drawing) => {
+    const openTextEditor = (
+      at: { t: string; p: number },
+      existing?: Drawing,
+      newKind: DrawKind = "text",
+      newPoints: Drawing["points"] = [at],
+      newMeta?: Drawing["meta"],
+      activation = toolActivationRef.current,
+    ) => {
       if (textEditEl) { try { textEditEl.remove(); } catch {} textEditEl = null; } textEditRef.current = null;
-      const ax = xOf(at.t), ay = yOf(at.p); if (ax == null || ay == null) return;
+      const paneAnchor = paneAnchorOf(existing?.meta ?? newMeta);
+      const ax = paneAnchor ? paneAnchor.x * el!.clientWidth : xOf(at.t);
+      const ay = paneAnchor ? paneAnchor.y * el!.clientHeight : yOf(at.p);
+      if (ax == null || ay == null) return;
       const fs = existing?.fontSize ?? 13;
       const inp = document.createElement("input");
       inp.className = "text-edit"; inp.value = existing?.text || ""; inp.placeholder = tPlain("drawingAddText");
@@ -3214,8 +3723,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (!save) return;
         if (existing) onChangeRef.current?.(val ? drawRef.current.map((d) => d.id === existing.id ? { ...d, text: val } : d) : drawRef.current.filter((d) => d.id !== existing.id));
         else if (val) {
-          const next: Drawing = { id: uid(), kind: "text", points: [at], text: val, fontSize: fs, ...applyStyle("text") };
-          sel = next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit();
+          const next: Drawing = { id: uid(), kind: newKind, points: newPoints, text: val, fontSize: fs, ...applyStyle(newKind), ...(newMeta ? { meta: newMeta } : {}) };
+          sel = drawingStickyRef.current ? null : next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit(newKind, activation);
         }
       };
       inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); commit(true); } else if (e.key === "Escape") { e.preventDefault(); commit(false); } });
@@ -3274,7 +3783,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     onCtx = (e: MouseEvent) => {
       e.preventDefault();
       const r = wrap.getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top;
-      ctxPt = snap(x, y);
+      ctxPt = snap(x, y, e);
       buildCtxMenu();
       // measure after building (display:block first so offsetWidth/Height are real)
       ctxm.style.display = "block";
@@ -3841,6 +4350,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       renderPriceTag();   // keep the last-price + countdown tag in step with every data/pan/style render
     };
     renderRef.current = renderDraw;
+    clearDrawingSelectionRef.current = () => {
+      if (!sel) return;
+      sel = null;
+      renderDraw();
+    };
     // CMX W3: when THIS is the active pane, publish a coordinate resolver so ChartConductor's ghost
     // cursor can map an op's first anchor (epoch-seconds + price) into pane pixels via the exact
     // DrawLayer transform (xOf/yOf). Registration is refreshed on the active-pane effect below; here we
@@ -4076,17 +4590,280 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         dash: s && can("dash") ? s.dash : defaults?.dash,
         opacity: defaults?.opacity ?? 1,
         extend: defaults?.extend ?? "none",
-        fillColor: defaults?.fillColor,
+        fillColor: s && can("fill") ? s.color : defaults?.fillColor,
         fillOpacity: defaults?.fillOpacity,
         fontSize: defaults?.fontSize,
       };
     };
-    const announceCommit = () => {
-      try { window.dispatchEvent(new CustomEvent("mm:drawing-committed")); } catch {}
+    const announceCommit = (kind: Drawing["kind"], activation = toolActivationRef.current) => {
+      // Include the committed tool so the controlled shell can retire only the
+      // selection that produced this object. Under a busy concurrent render an
+      // older one-shot update must never clear a newer tool choice.
+      try { window.dispatchEvent(new CustomEvent("mm:drawing-committed", { detail: { kind, activation } })); } catch {}
     };
-    const commitDrawing = (kind: Drawing["kind"], points: Drawing["points"]) => {
-      const next: Drawing = { id: uid(), kind, points, ...applyStyle(kind) };
-      sel = next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit();
+    let semanticTimesCache: { signature: string; times: string[] } = { signature: "", times: [] };
+    const semanticTimes = () => {
+      const rows = barsRef.current, signature = `${rows.length}|${rows[0]?.time ?? ""}|${rows[rows.length - 1]?.time ?? ""}`;
+      if (semanticTimesCache.signature !== signature) semanticTimesCache = { signature, times: rows.map((row) => String(row.time)) };
+      return semanticTimesCache.times;
+    };
+    const materializePoints = (kind: Drawing["kind"], points: Drawing["points"]) =>
+      getDrawingTool(kind)?.creation.semanticPointCount
+        ? materializeSemanticPoints(kind, points, semanticTimes(), precRef.current)
+        : points;
+    const commitDrawing = (kind: Drawing["kind"], points: Drawing["points"], meta: Drawing["meta"] | undefined, activation: number) => {
+      const next: Drawing = { id: uid(), kind, points: materializePoints(kind, points), ...applyStyle(kind), ...(meta ? { meta } : {}) };
+      sel = drawingStickyRef.current ? null : next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit(kind, activation);
+    };
+
+    // Media tools deliberately pause between geometry placement and persistence.
+    // OpenMarket exposes a real choice surface for markers, while Image opens the
+    // native file chooser only after its box exists. Keeping this DOM chart-local
+    // avoids the mobile double-palette collision and makes teardown deterministic.
+    let mediaSurfaceCleanup: (() => void) | null = null;
+    let mediaSurfaceKind: "emoji" | "icon" | "image" | null = null;
+    let mediaFileReader: FileReader | null = null;
+    let mediaFocusReturn: HTMLElement | null = null;
+    const closeMediaSurface = (restoreFocus = false) => {
+      const cleanup = mediaSurfaceCleanup; mediaSurfaceCleanup = null;
+      if (mediaFileReader?.readyState === FileReader.LOADING) {
+        try { mediaFileReader.abort(); } catch {}
+      }
+      mediaFileReader = null;
+      cleanup?.();
+      if (restoreFocus && mediaFocusReturn?.isConnected) window.setTimeout(() => mediaFocusReturn?.focus({ preventScroll: true }), 0);
+      mediaFocusReturn = null;
+      mediaSurfaceKind = null;
+    };
+    cancelMediaToolRef.current = (activeTool) => {
+      // The tool-change effect runs after React commits. A very fast pointer can
+      // already have opened the new tool's picker by then; only dismiss a surface
+      // that belongs to the tool we just left.
+      if (mediaSurfaceKind && mediaSurfaceKind === activeTool) return;
+      closeMediaSurface(false);
+    };
+
+    const mediaCopy = () => document.documentElement.lang.toLowerCase().startsWith("zh") ? {
+      emojiTitle: "选择表情",
+      iconTitle: "选择图标",
+      imageTitle: "添加图片",
+      imageHelp: "PNG、JPG 或 WebP · 最大 700 KB",
+      browse: "选择图片",
+      cancel: "取消",
+      close: "关闭",
+      chooseError: "请选择 PNG、JPG 或 WebP 图片。",
+      sizeError: "图片必须小于 700 KB。",
+      dimensionError: "图片尺寸必须不超过 4096 × 4096 和 1200 万像素。",
+      decodeError: "无法读取这张图片，请选择另一张。",
+      payloadError: "图片会使绘图存储超过安全上限，请选择更小的图片。",
+      loading: "正在处理图片…",
+      cancelled: "未选择图片。你可以重试或取消。",
+    } : {
+      emojiTitle: "Choose an emoji",
+      iconTitle: "Choose an icon",
+      imageTitle: "Add image",
+      imageHelp: "PNG, JPG or WebP · 700 KB maximum",
+      browse: "Choose image",
+      cancel: "Cancel",
+      close: "Close",
+      chooseError: "Choose a PNG, JPG or WebP image.",
+      sizeError: "Image must be smaller than 700 KB.",
+      dimensionError: "Image must be at most 4096 × 4096 and 12 megapixels.",
+      decodeError: "This image could not be read. Choose another one.",
+      payloadError: "This image would exceed the drawing storage limit. Choose a smaller one.",
+      loading: "Processing image…",
+      cancelled: "No image selected. Try again or cancel.",
+    };
+
+    const createMediaSurface = (kind: "emoji" | "icon" | "image", title: string, x: number, y: number) => {
+      closeMediaSurface(false);
+      mediaSurfaceKind = kind;
+      mediaFocusReturn = document.querySelector<HTMLElement>(`[data-tool-id="${kind}"]`) ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      const panel = document.createElement("div");
+      panel.className = "drawing-media-picker";
+      panel.dataset.mediaKind = kind;
+      panel.dataset.testid = "drawing-media-picker";
+      panel.setAttribute("role", "dialog");
+      panel.tabIndex = -1;
+      const titleId = `drawing-media-title-${uid()}`;
+      panel.setAttribute("aria-labelledby", titleId);
+      const head = document.createElement("div"); head.className = "drawing-media-picker-head";
+      const heading = document.createElement("div"); heading.className = "drawing-media-picker-title"; heading.id = titleId; heading.textContent = title;
+      const close = document.createElement("button"); close.type = "button"; close.className = "drawing-media-picker-close"; close.setAttribute("aria-label", mediaCopy().close); close.textContent = "×";
+      const body = document.createElement("div"); body.className = "drawing-media-picker-body";
+      const status = document.createElement("div"); status.className = "drawing-media-picker-status"; status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+      head.append(heading, close); panel.append(head, body, status); wrap.appendChild(panel); mediaPickerRef.current = panel;
+      const stop = (event: Event) => event.stopPropagation();
+      panel.addEventListener("pointerdown", stop);
+      panel.addEventListener("click", stop);
+      const onOutside = (event: PointerEvent) => {
+        if (panel.contains(event.target as Node)) return;
+        // A chart click is dismissal, not the first press of another marker.
+        // Consume it before the still-armed SVG handler can immediately reopen
+        // this surface (or the native file chooser) on pointerup.
+        if ((event.target as Element | null)?.closest?.(".drawing-layer")) {
+          event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
+        }
+        closeMediaSurface(false);
+      };
+      const onEscape = (event: KeyboardEvent) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault(); event.stopPropagation(); closeMediaSurface(true);
+      };
+      window.addEventListener("pointerdown", onOutside, true);
+      window.addEventListener("keydown", onEscape, true);
+      panel.addEventListener("keydown", (event) => {
+        if (event.key !== "Tab") return;
+        const focusable = Array.from(panel.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+        if (!focusable.length) { event.preventDefault(); panel.focus({ preventScroll: true }); return; }
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus({ preventScroll: true }); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus({ preventScroll: true }); }
+      });
+      close.addEventListener("click", () => closeMediaSurface(true));
+      mediaSurfaceCleanup = () => {
+        window.removeEventListener("pointerdown", onOutside, true);
+        window.removeEventListener("keydown", onEscape, true);
+        try { panel.remove(); } catch {}
+        if (mediaPickerRef.current === panel) mediaPickerRef.current = null;
+        const input = mediaInputRef.current;
+        if (input) { try { input.remove(); } catch {} mediaInputRef.current = null; }
+      };
+      panel.style.left = `${Math.max(8, x + 14)}px`;
+      panel.style.top = `${Math.max(8, y + 14)}px`;
+      requestAnimationFrame(() => {
+        if (!panel.isConnected || matchMedia("(max-width:860px)").matches) return;
+        const width = panel.offsetWidth, height = panel.offsetHeight;
+        panel.style.left = `${Math.max(8, Math.min(el!.clientWidth - width - 8, x + 14))}px`;
+        panel.style.top = `${Math.max(8, Math.min(el!.clientHeight - height - 8, y + 14))}px`;
+      });
+      return { panel, body, status, close };
+    };
+
+    const appendMediaDrawing = (next: Drawing, activation: number) => {
+      closeMediaSurface(false);
+      sel = drawingStickyRef.current ? null : next.id;
+      drawRef.current = [...drawRef.current, next];
+      onChangeRef.current?.([...drawRef.current]);
+      announceCommit(next.kind, activation);
+    };
+
+    const openMediaChoicePicker = (kind: "emoji" | "icon", point: Drawing["points"][number], x: number, y: number, activation = toolActivationRef.current) => {
+      const copy = mediaCopy();
+      const { panel, body } = createMediaSurface(kind, kind === "emoji" ? copy.emojiTitle : copy.iconTitle, x, y);
+      body.classList.add("drawing-media-choice-grid");
+      const choices = kind === "emoji" ? DRAWING_MEDIA_EMOJIS : DRAWING_MEDIA_ICONS;
+      const buttons: HTMLButtonElement[] = [];
+      choices.forEach((choice, index) => {
+        const button = document.createElement("button"); button.type = "button"; button.className = "drawing-media-choice";
+        button.dataset.mediaChoice = kind === "emoji" ? String(index) : (choice as DrawingMediaIcon).id;
+        button.dataset.testid = `drawing-media-choice-${kind}-${index}`;
+        const label = choice.label; button.setAttribute("aria-label", label);
+        if (kind === "emoji") {
+          const glyph = document.createElement("span"); glyph.className = "drawing-media-choice-glyph"; glyph.setAttribute("aria-hidden", "true"); glyph.textContent = (choice as typeof DRAWING_MEDIA_EMOJIS[number]).glyph;
+          const caption = document.createElement("span"); caption.className = "drawing-media-choice-label"; caption.textContent = label;
+          button.append(glyph, caption);
+          button.addEventListener("click", () => {
+            const emoji = choice as typeof DRAWING_MEDIA_EMOJIS[number];
+            appendMediaDrawing({
+              id: uid(), kind: "emoji", points: [point], ...applyStyle("emoji"),
+              text: emoji.glyph, fontSize: 30,
+              meta: { mediaType: "emoji", emojiLabel: emoji.label },
+            }, activation);
+          });
+        } else {
+          const icon = choice as DrawingMediaIcon;
+          const glyph = document.createElementNS(NS, "svg"); glyph.setAttribute("viewBox", "0 0 24 24"); glyph.setAttribute("aria-hidden", "true"); glyph.classList.add("drawing-media-choice-icon");
+          glyph.appendChild(mk("path", { d: icon.path, fill: icon.filled ? "currentColor" : "none", stroke: "currentColor", "stroke-width": icon.filled ? 1 : 1.8, "stroke-linecap": "round", "stroke-linejoin": "round", "fill-rule": "evenodd" }));
+          const caption = document.createElement("span"); caption.className = "drawing-media-choice-label"; caption.textContent = icon.label;
+          button.append(glyph, caption);
+          button.addEventListener("click", () => appendMediaDrawing({
+            id: uid(), kind: "icon", points: [point], ...applyStyle("icon"), text: icon.id,
+            meta: { mediaType: "icon", iconId: icon.id, iconLabel: icon.label },
+          }, activation));
+        }
+        buttons.push(button); body.appendChild(button);
+      });
+      panel.addEventListener("keydown", (event) => {
+        const current = document.activeElement instanceof HTMLButtonElement ? buttons.indexOf(document.activeElement) : -1;
+        if (current < 0) return;
+        const columns = matchMedia("(max-width:420px)").matches ? 3 : 4;
+        const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : event.key === "ArrowDown" ? columns : event.key === "ArrowUp" ? -columns : 0;
+        if (!delta && event.key !== "Home" && event.key !== "End") return;
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : Math.max(0, Math.min(buttons.length - 1, current + delta));
+        buttons[next]?.focus({ preventScroll: true });
+      });
+      window.setTimeout(() => {
+        if (!panel.contains(document.activeElement)) buttons[0]?.focus({ preventScroll: true });
+      }, 0);
+    };
+
+    const probeImage = (src: string) => new Promise<{ width: number; height: number }>((resolve, reject) => {
+      const probe = new Image();
+      probe.onload = () => resolve({ width: probe.naturalWidth, height: probe.naturalHeight });
+      probe.onerror = () => reject(new Error("decode"));
+      probe.src = src;
+    });
+
+    const openImageUpload = (points: Drawing["points"], x: number, y: number, activation = toolActivationRef.current) => {
+      const copy = mediaCopy();
+      const { panel, body, status } = createMediaSurface("image", copy.imageTitle, x, y);
+      const help = document.createElement("p"); help.className = "drawing-media-picker-help"; help.textContent = copy.imageHelp;
+      const actions = document.createElement("div"); actions.className = "drawing-media-picker-actions";
+      const browse = document.createElement("button"); browse.type = "button"; browse.className = "drawing-media-picker-primary"; browse.textContent = copy.browse; browse.dataset.testid = "drawing-image-browse";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "drawing-media-picker-secondary"; cancel.textContent = copy.cancel;
+      actions.append(browse, cancel); body.append(help, actions);
+      const input = document.createElement("input"); input.type = "file"; input.accept = "image/png,image/jpeg,image/webp"; input.className = "drawing-media-file-input"; input.dataset.testid = "drawing-image-input"; input.setAttribute("aria-label", copy.browse);
+      wrap.appendChild(input); mediaInputRef.current = input;
+      const setStatus = (message: string, state: "idle" | "loading" | "error" = "idle") => {
+        status.textContent = message; status.dataset.state = state;
+      };
+      const choose = () => { input.value = ""; input.click(); };
+      browse.addEventListener("click", choose);
+      cancel.addEventListener("click", () => closeMediaSurface(true));
+      input.addEventListener("cancel", () => { setStatus(copy.cancelled); browse.focus({ preventScroll: true }); });
+      input.addEventListener("change", () => {
+        const file = input.files?.[0];
+        if (!file) { setStatus(copy.cancelled); browse.focus({ preventScroll: true }); return; }
+        if (!DRAWING_IMAGE_MIME.has(file.type)) { setStatus(copy.chooseError, "error"); browse.focus({ preventScroll: true }); return; }
+        if (file.size <= 0 || file.size > DRAWING_IMAGE_MAX_FILE_BYTES) { setStatus(copy.sizeError, "error"); browse.focus({ preventScroll: true }); return; }
+        setStatus(copy.loading, "loading"); browse.disabled = true; cancel.disabled = true;
+        const reader = new FileReader(); mediaFileReader = reader;
+        reader.onerror = () => { if (!panel.isConnected) return; mediaFileReader = null; browse.disabled = false; cancel.disabled = false; setStatus(copy.decodeError, "error"); browse.focus({ preventScroll: true }); };
+        reader.onabort = () => { mediaFileReader = null; };
+        reader.onload = async () => {
+          mediaFileReader = null;
+          if (!panel.isConnected) return;
+          const src = reader.result;
+          if (!isSafeDrawingImageDataUrl(src)) { browse.disabled = false; cancel.disabled = false; setStatus(copy.decodeError, "error"); browse.focus({ preventScroll: true }); return; }
+          try {
+            const dimensions = await probeImage(src);
+            if (!panel.isConnected) return;
+            if (dimensions.width <= 0 || dimensions.height <= 0 || dimensions.width > DRAWING_IMAGE_MAX_EDGE || dimensions.height > DRAWING_IMAGE_MAX_EDGE || dimensions.width * dimensions.height > DRAWING_IMAGE_MAX_PIXELS) {
+              browse.disabled = false; cancel.disabled = false; setStatus(copy.dimensionError, "error"); browse.focus({ preventScroll: true }); return;
+            }
+            const safeName = file.name.trim().slice(0, 96) || "image";
+            const next: Drawing = {
+              id: uid(), kind: "image", points, ...applyStyle("image"),
+              meta: { mediaType: "image", imageSrc: src, imageName: safeName, imageMime: file.type, imageWidth: dimensions.width, imageHeight: dimensions.height },
+            };
+            const payloadBytes = new TextEncoder().encode(JSON.stringify([...drawRef.current, next])).byteLength;
+            if (payloadBytes > DRAWING_IMAGE_PAYLOAD_BUDGET) {
+              browse.disabled = false; cancel.disabled = false; setStatus(copy.payloadError, "error"); browse.focus({ preventScroll: true }); return;
+            }
+            appendMediaDrawing(next, activation);
+          } catch {
+            if (!panel.isConnected) return;
+            browse.disabled = false; cancel.disabled = false; setStatus(copy.decodeError, "error"); browse.focus({ preventScroll: true });
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+      // Keep this call synchronous with pointerup so Safari/iOS considers it a
+      // trusted user gesture. The visible Browse action remains if it is blocked.
+      choose();
+      requestAnimationFrame(() => { if (panel.isConnected) browse.focus({ preventScroll: true }); });
     };
 
     // PointerEvent.detail is always 0 in Chromium. Track presses by stable drawing id so
@@ -4099,7 +4876,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const d0 = drawRef.current.find((x) => x.id === id); if (!d0) return;
       const pointerId = ev.pointerId;
       ev.stopPropagation();
-      if (d0.kind === "text" && !d0.locked) {
+      if (getDrawingTool(d0.kind)?.capabilities.includes("textInput") && !d0.locked) {
         const now = performance.now();
         const isDoublePress = lastTextPress?.id === id
           && now - lastTextPress.at <= 500
@@ -4122,8 +4899,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           drawingTransactionRef.current = true;
           const moveHandle = (e: PointerEvent) => {
             if (e.pointerId !== pointerId) return;
-            const m0 = rectXY(e), pt = snap(m0.x, m0.y);
-            drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: x.points.map((p, i) => i === handleIndex ? pt : p) });
+            const m0 = rectXY(e), pt = snap(m0.x, m0.y, e);
+            const paneAnchored = getDrawingTool(d0.kind)?.creation.anchorSpace === "pane" && handleIndex === 0;
+            drawRef.current = drawRef.current.map((x) => x.id !== id ? x : {
+              ...x,
+              points: x.points.map((p, i) => i === handleIndex ? pt : p),
+              ...(paneAnchored ? { meta: paneMetaAt(m0.x, m0.y, x.meta) } : {}),
+            });
             scheduleDraw();
           };
           const cleanupHandle = () => {
@@ -4144,13 +4926,28 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           window.addEventListener("pointermove", moveHandle); window.addEventListener("pointerup", endHandle); window.addEventListener("pointercancel", cancelHandle); return;
         }
       }
-      const s0 = rectXY(ev); const start = snap(s0.x, s0.y); const orig = d0.points.map((p) => ({ ...p }));
+      const s0 = rectXY(ev); const start = snap(s0.x, s0.y, ev); const orig = d0.points.map((p) => ({ ...p }));
+      const origPaneAnchor = getDrawingTool(d0.kind)?.creation.anchorSpace === "pane" ? paneAnchorOf(d0.meta) : null;
       drawingTransactionRef.current = true;
       const origIndices = orig.map((point) => barIndex(point.t));
       const minOrigIndex = Math.min(...origIndices), maxOrigIndex = Math.max(...origIndices);
       const move = (e: PointerEvent) => {
         if (e.pointerId !== pointerId) return;
-        const m0 = rectXY(e), cur = snap(m0.x, m0.y), bars = barsRef.current;
+        const m0 = rectXY(e), cur = snap(m0.x, m0.y, e), bars = barsRef.current;
+        if (origPaneAnchor) {
+          const nextAnchor = {
+            x: clampUnit(origPaneAnchor.x + (m0.x - s0.x) / Math.max(1, el!.clientWidth)),
+            y: clampUnit(origPaneAnchor.y + (m0.y - s0.y) / Math.max(1, el!.clientHeight)),
+          };
+          const point = snap(nextAnchor.x * el!.clientWidth, nextAnchor.y * el!.clientHeight, e);
+          drawRef.current = drawRef.current.map((x) => x.id !== id ? x : {
+            ...x,
+            points: x.points.map((existingPoint, index) => index === 0 ? point : existingPoint),
+            meta: { ...(x.meta ?? {}), paneAnchor: nextAnchor },
+          });
+          scheduleDraw();
+          return;
+        }
         const dp = cur.p - start.p;
         const requestedDi = barIndex(cur.t!) - barIndex(start.t!);
         // Clamp one shared translation delta so every anchor moves rigidly at
@@ -4164,7 +4961,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const cancelMove = (e: PointerEvent) => {
         if (e.pointerId !== pointerId) return;
         cleanupMove(); dragCleanup = null; drawingTransactionRef.current = false;
-        drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: orig });
+        drawRef.current = drawRef.current.map((x) => x.id === id ? d0 : x);
         renderDraw();
       };
       dragCleanup = cleanupMove;
@@ -4176,7 +4973,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // drawing hit consumes the wheel; normal chart zoom remains untouched.
     let lastPaletteWheel = 0;
     svg.addEventListener("wheel", (event) => {
-      if (toolRef.current || !activeRef.current) return;
+      if (!activeRef.current) return;
+      if (toolRef.current) {
+        if (!matchMedia("(pointer:fine)").matches) return;
+        const now = performance.now(); if (now - lastPaletteWheel < 90) return;
+        lastPaletteWheel = now; event.preventDefault(); event.stopPropagation();
+        const current = COLORS.findIndex((color) => color === (styleRef.current?.color || getDrawingTool(toolRef.current)?.defaults.color));
+        const direction = event.deltaY >= 0 ? 1 : -1;
+        setCreationColor(COLORS[(current < 0 ? 0 : current + direction + COLORS.length) % COLORS.length]);
+        positionCreationPalette(event.clientX, event.clientY);
+        return;
+      }
       const id = idAt(event); if (!id) return;
       const now = performance.now(); if (now - lastPaletteWheel < 90) return;
       lastPaletteWheel = now; event.preventDefault(); event.stopPropagation();
@@ -4185,57 +4992,99 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const direction = event.deltaY >= 0 ? 1 : -1;
       const next = COLORS[(current < 0 ? 0 : current + direction + COLORS.length) % COLORS.length];
       sel = id;
-      drawRef.current = drawRef.current.map((candidate) => candidate.id === id ? { ...candidate, color: next } : candidate);
+      const canFill = getDrawingTool(drawing.kind)?.capabilities.includes("fill") ?? false;
+      drawRef.current = drawRef.current.map((candidate) => candidate.id === id
+        ? { ...candidate, color: next, ...(canFill ? { fillColor: next } : {}) }
+        : candidate);
       onChangeRef.current?.([...drawRef.current]);
     }, { passive: false });
 
     // creation / erase (bubble; svg is pointer-events:auto only when a tool is active)
     svg.addEventListener("pointerdown", (ev) => {
       const tl = toolRef.current; if (!tl || !ev.isPrimary || ev.button !== 0) return;
-      const { x, y } = rectXY(ev); const a = snap(x, y);
+      const activation = toolActivationRef.current;
+      positionCreationPalette(ev.clientX, ev.clientY);
+      const { x, y } = rectXY(ev); const a = snap(x, y, ev);
       const spec = getDrawingTool(tl); if (!spec) return;
-      if (spec.id === "text" || SINGLE_POINT_DRAWING_KINDS.has(spec.id)) {
-        pending = { kind: spec.id, points: [], mode: spec.id === "text" ? "text" : "point", pointerId: ev.pointerId, candidate: a };
+      // The palette follows the pointer by a small offset. During a paced
+      // diagonal drag its previous frame can otherwise move underneath the
+      // next pointer sample and steal the gesture before pointerup. Keep it
+      // visible, but make it click-through until this creation transaction
+      // ends; swatches become interactive again immediately on release.
+      creationPalette.style.pointerEvents = "none";
+      if (spec.creation.mode === "one-point") {
+        pending = {
+          kind: spec.id,
+          activation,
+          points: [],
+          mode: spec.capabilities.includes("textInput") ? "text" : "point",
+          pointerId: ev.pointerId,
+          candidate: a,
+          ...(spec.creation.anchorSpace === "pane" ? { meta: paneMetaAt(x, y) } : {}),
+        };
         try { svg.setPointerCapture(ev.pointerId); } catch {}
         renderDraw(); return;
       }
-      if (TWO_POINT_DRAWING_KINDS.has(spec.id)) {
-        pending = { kind: spec.id, points: [a], mode: "drag", pointerId: ev.pointerId };
+      if (spec.creation.mode === "two-point") {
+        pending = { kind: spec.id, activation, points: [a], mode: "drag", pointerId: ev.pointerId };
         try { svg.setPointerCapture(ev.pointerId); } catch {}
         return;
       }
-      if (spec.id === "path") {
-        pending = { kind: spec.id, points: [a], mode: "path", pointerId: ev.pointerId };
+      if (spec.creation.mode === "freehand") {
+        pending = { kind: spec.id, activation, points: [a], mode: "freehand", pointerId: ev.pointerId };
         try { svg.setPointerCapture(ev.pointerId); } catch {}
         return;
       }
-      // Three/five-anchor tools commit click-by-click. A live provisional anchor follows
-      // the pointer between clicks; the final click creates one undoable compound object.
-      if (!pending || pending.kind !== spec.id || pending.mode !== "multi") pending = { kind: spec.id, points: [], mode: "multi" };
+      // Fixed and variable tools commit click-by-click. Variable paths finish on
+      // a repeated final anchor / native double-click; fixed tools auto-commit at
+      // their declarative 3–7 point count.
+      if (!pending || pending.kind !== spec.id || pending.mode !== "multi" || pending.activation !== activation) {
+        pending = { kind: spec.id, activation, points: [], mode: "multi" };
+      }
       if (pending.pointerId != null) return;
       pending.pointerId = ev.pointerId; pending.candidate = a;
       try { svg.setPointerCapture(ev.pointerId); } catch {}
       renderDraw();
     });
-    // double-click a text drawing to edit it in place
+    // Double-click finishes variable segmented tools and edits text in cursor mode.
     svg.addEventListener("dblclick", (ev) => {
-      if (!activeRef.current) return; const id = idAt(ev); const d = drawRef.current.find((x) => x.id === id);
-      if (d && d.kind === "text") { ev.stopPropagation(); ev.preventDefault(); openTextEditor(d.points[0], d); }
+      if (!activeRef.current) return;
+      const activeTool = toolRef.current, spec = getDrawingTool(activeTool);
+      if (activeTool && spec?.creation.mode === "variable-multi" && pending?.kind === activeTool && pending.mode === "multi") {
+        ev.stopPropagation(); ev.preventDefault();
+        const points = [...pending.points];
+        const activation = pending.activation;
+        // The second click in a dblclick repeats the endpoint. Persist one clean
+        // control anchor while still honoring the repeated-last finish gesture.
+        while (points.length > 1) {
+          const last = points[points.length - 1], before = points[points.length - 2];
+          const lx = xOf(last.t), ly = yOf(last.p), px = xOf(before.t), py = yOf(before.p);
+          if (lx == null || ly == null || px == null || py == null || Math.hypot(lx - px, ly - py) > 3) break;
+          points.pop();
+        }
+        if (points.length >= spec.creation.minPoints) { pending = null; commitDrawing(activeTool, points.slice(0, spec.creation.maxPoints), undefined, activation); renderDraw(); }
+        return;
+      }
+      const id = idAt(ev); const d = drawRef.current.find((x) => x.id === id);
+      if (d && getDrawingTool(d.kind)?.capabilities.includes("textInput")) { ev.stopPropagation(); ev.preventDefault(); openTextEditor(d.points[0], d); }
     });
     svg.addEventListener("pointermove", (ev) => {
+      positionCreationPalette(ev.clientX, ev.clientY);
       if (!pending) return;
       if (pending.pointerId != null && pending.pointerId !== ev.pointerId) return;
-      const { x, y } = rectXY(ev); const p0 = pending; const b = snap(x, y);
+      const { x, y } = rectXY(ev); const p0 = pending; const b = snap(x, y, ev);
       if (pending.mode === "multi" || pending.mode === "point" || pending.mode === "text") pending.candidate = b;
-      if (pending.mode === "path") {
+      if (getDrawingTool(pending.kind)?.creation.anchorSpace === "pane") pending.meta = paneMetaAt(x, y, pending.meta);
+      if (pending.mode === "freehand") {
         const last = pending.points[pending.points.length - 1], lx = xOf(last.t), ly = yOf(last.p);
         if (lx == null || ly == null || Math.hypot(x - lx, y - ly) >= 3.5) pending.points.push(b);
         if (pending.points.length > 64) pending.points.splice(1, 1);
       }
-      const previewPoints = pending.mode === "path" ? [...pending.points]
+      const rawPreviewPoints = pending.mode === "freehand" ? [...pending.points]
         : pending.mode === "multi" ? [...pending.points, pending.candidate ?? b]
         : pending.mode === "point" || pending.mode === "text" ? [pending.candidate ?? b]
         : [pending.points[0], b];
+      const previewPoints = materializePoints(pending.kind, rawPreviewPoints);
       // One retained preview per animation frame, plus OpenMarket-style placement guides
       // and an explicit halo whenever Weak/Strong magnet acquires an OHLC target.
       scheduleDraw(() => {
@@ -4248,34 +5097,52 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           guides.appendChild(mk("circle", { cx: snapTarget.x, cy: snapTarget.y, r: 2.5, fill: "var(--brand-2)" }));
         }
         svgEl.appendChild(guides);
-        svgEl.appendChild(shape({ id: "_p", kind: p0.kind, points: previewPoints, ...applyStyle(p0.kind) }, true));
+        svgEl.appendChild(shape({ id: "_p", kind: p0.kind, points: previewPoints, ...applyStyle(p0.kind), ...(p0.meta ? { meta: p0.meta } : {}) }, true));
       });
     });
     svg.addEventListener("pointerup", (ev) => {
       if (!pending) return;
       if (pending.pointerId != null && pending.pointerId !== ev.pointerId) return;
-      const { x, y } = rectXY(ev), b = snap(x, y), current = pending;
+      creationPalette.style.pointerEvents = "auto";
+      const { x, y } = rectXY(ev), b = snap(x, y, ev), current = pending;
       try { if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId); } catch {}
       if (current.mode === "multi") {
-        current.points.push(b); current.pointerId = undefined; current.candidate = undefined;
+        const previous = current.points[current.points.length - 1], px = previous ? xOf(previous.t) : null, py = previous ? yOf(previous.p) : null;
+        const repeatRadius = ev.pointerType === "touch" || matchMedia("(pointer:coarse)").matches ? 16 : 3;
+        const repeatedAnchor = Boolean(previous && px != null && py != null && Math.hypot(x - px, y - py) <= repeatRadius);
+        if (!repeatedAnchor) current.points.push(b);
+        current.pointerId = undefined; current.candidate = undefined;
         const spec = getDrawingTool(current.kind);
-        const required = spec && typeof spec.creation.pointCount === "number" ? spec.creation.pointCount : spec?.creation.minPoints ?? Infinity;
-        if (current.points.length >= required) {
-          const points = [...current.points]; pending = null; commitDrawing(current.kind, points);
+        const required = spec?.creation.mode === "fixed-multi" && typeof spec.creation.pointCount === "number" ? spec.creation.pointCount : Infinity;
+        const repeatedFinish = repeatedAnchor && spec?.creation.mode === "variable-multi" && current.points.length >= spec.creation.minPoints;
+        if (current.points.length >= required || repeatedFinish || (spec?.creation.mode === "variable-multi" && current.points.length >= spec.creation.maxPoints)) {
+          const points = [...current.points]; pending = null; commitDrawing(current.kind, points, undefined, current.activation);
         } else renderDraw();
         return;
       }
       pending = null;
-      if (current.mode === "text") { openTextEditor(b); renderDraw(); return; }
-      if (current.mode === "point") { commitDrawing(current.kind, [b]); renderDraw(); return; }
+      const currentMeta = getDrawingTool(current.kind)?.creation.anchorSpace === "pane" ? paneMetaAt(x, y, current.meta) : current.meta;
+      if (current.mode === "text") { openTextEditor(b, undefined, current.kind, [b], currentMeta, current.activation); renderDraw(); return; }
+      if (current.mode === "point") {
+        if (current.kind === "emoji" || current.kind === "icon") openMediaChoicePicker(current.kind, b, x, y, current.activation);
+        else commitDrawing(current.kind, [b], currentMeta, current.activation);
+        renderDraw(); return;
+      }
       const maxPoints = getDrawingTool(current.kind)?.creation.maxPoints ?? 64;
-      const points = current.mode === "path" ? [...current.points, b].slice(0, maxPoints) : [current.points[0], b];
+      const points = current.mode === "freehand" ? [...current.points, b].slice(0, maxPoints) : [current.points[0], b];
       const a = points[0], last = points[points.length - 1];
       if (!a || !last || (Math.abs((xOf(a.t) ?? 0) - (xOf(last.t) ?? 0)) < 3 && Math.abs((yOf(a.p) ?? 0) - (yOf(last.p) ?? 0)) < 3)) { renderDraw(); return; }
-      commitDrawing(current.kind, points); renderDraw();
+      if (current.kind === "image") { openImageUpload(points, x, y, current.activation); renderDraw(); return; }
+      if (getDrawingTool(current.kind)?.capabilities.includes("textInput")) {
+        openTextEditor(last, undefined, current.kind, points, currentMeta, current.activation);
+        renderDraw();
+        return;
+      }
+      commitDrawing(current.kind, points, currentMeta, current.activation); renderDraw();
     });
     svg.addEventListener("pointercancel", (ev) => {
       if (!pending || (pending.pointerId != null && pending.pointerId !== ev.pointerId)) return;
+      creationPalette.style.pointerEvents = "auto";
       try { if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId); } catch {}
       if (pending.mode === "multi" && pending.points.length) {
         pending.pointerId = undefined; pending.candidate = undefined;
@@ -4288,10 +5155,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // intentionally has pointer-events:none while no tool is armed.
     const onShiftMeasure = (ev: PointerEvent) => {
       if (!ev.shiftKey || toolRef.current || !activeRef.current || ev.button !== 0) return;
-      const startXY = rectXY(ev), a = snap(startXY.x, startXY.y);
+      const startXY = rectXY(ev), a = snap(startXY.x, startXY.y, ev);
+      const activation = toolActivationRef.current;
       ev.preventDefault(); ev.stopPropagation();
       const move = (e: PointerEvent) => {
-        const xy = rectXY(e), b = snap(xy.x, xy.y);
+        const xy = rectXY(e), b = snap(xy.x, xy.y, e);
         scheduleDraw(() => {
           const svgEl = svgRef.current; if (!svgEl) return;
           svgEl.appendChild(shape({ id: "_measure", kind: "measure", points: [a, b], ...applyStyle("measure") }, true));
@@ -4304,8 +5172,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       };
       const end = (e: PointerEvent) => {
         cleanupMeasure();
-        const xy = rectXY(e), b = snap(xy.x, xy.y);
-        if (Math.hypot((xOf(a.t) ?? 0) - (xOf(b.t) ?? 0), (yOf(a.p) ?? 0) - (yOf(b.p) ?? 0)) >= 3) commitDrawing("measure", [a, b]);
+        const xy = rectXY(e), b = snap(xy.x, xy.y, e);
+        if (Math.hypot((xOf(a.t) ?? 0) - (xOf(b.t) ?? 0), (yOf(a.p) ?? 0) - (yOf(b.p) ?? 0)) >= 3) commitDrawing("measure", [a, b], undefined, activation);
         else renderDraw();
       };
       const cancel = () => { cleanupMeasure(); renderDraw(); };
@@ -4327,7 +5195,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (!activeRef.current) return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase(); if (tag === "input" || tag === "textarea") return;
       if (e.key === "Escape") {
-        if (pending) { pending = null; renderDraw(); return; }
+        if (pending) { cancelPendingDrawingRef.current(); return; }
         // Esc deselects; double-Esc (within 500ms) resets the chart view (the gesture that replaces the
         // former ⌥R — Alt+R is now the Rectangle tool as the sidebar advertises).
         const now = Date.now();
@@ -4401,11 +5269,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (ctxRef.current) { try { ctxRef.current.remove(); } catch {} ctxRef.current = null; }
       if (emptyRef.current) { try { emptyRef.current.remove(); } catch {} emptyRef.current = null; }
       if (barRef.current) { try { barRef.current.remove(); } catch {} barRef.current = null; }
+      if (creationPaletteRef.current) { try { creationPaletteRef.current.remove(); } catch {} creationPaletteRef.current = null; }
+      hideBarTip();
+      window.removeEventListener("resize", hideBarTip);
+      document.removeEventListener("scroll", hideBarTip, true);
+      try { barTip.remove(); } catch {}
       if (indSvgRef.current) { try { indSvgRef.current.remove(); } catch {} indSvgRef.current = null; }
       suiteTablesRef.current = [];
       if (sigRef.current) { try { sigRef.current.remove(); } catch {} sigRef.current = null; }
       if (svgRef.current) { try { svgRef.current.remove(); } catch {} svgRef.current = null; }
+      closeMediaSurface(false);
       cancelPendingDrawingRef.current = () => {};
+      cancelMediaToolRef.current = () => {};
+      clearDrawingSelectionRef.current = () => {};
       if (tagTimerRef.current != null) { clearInterval(tagTimerRef.current); tagTimerRef.current = null; }
       if (priceTagRef.current) { try { priceTagRef.current.remove(); } catch {} priceTagRef.current = null; }
       renderTagRef.current = null;
@@ -5298,11 +6174,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   useEffect(() => { renderRef.current?.(); }, [lockedVLine]);
 
   // ── unchanged: re-render overlay + toggle interactivity on tool/drawings change (no chart rebuild) ──
-  useEffect(() => {
+  useLayoutEffect(() => {
     cancelPendingDrawingRef.current();
+    cancelMediaToolRef.current(tool);
     const svg = svgRef.current;
-    if (svg) { svg.style.pointerEvents = tool ? "auto" : "none"; svg.style.cursor = tool ? "crosshair" : "default"; }
-  }, [tool]);
+    if (svg) {
+      svg.style.pointerEvents = tool ? "auto" : "none";
+      svg.style.cursor = tool ? "crosshair" : "default";
+      svg.dataset.toolActivation = String(toolActivation);
+    }
+    if (!tool && creationPaletteRef.current) creationPaletteRef.current.style.display = "none";
+  }, [tool, toolActivation]);
   useEffect(() => { renderRef.current?.(); }, [drawings]);
 
   // ── unchanged: detection commands → append auto-drawings (or clear) ──

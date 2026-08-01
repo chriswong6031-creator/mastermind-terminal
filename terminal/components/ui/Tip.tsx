@@ -39,6 +39,8 @@ export interface TipProps {
   label: ReactNode;
   side?: TipSide;
   size?: TipSize;
+  /** Optional first-open delay. Adjacent warm-open behavior still applies. */
+  delay?: number;
   /** Optional keyboard shortcut, rendered as a .ds-kbd chip (mini only). */
   shortcut?: string;
   /** The trigger element. Must accept a ref + mouse/focus handlers. */
@@ -104,7 +106,7 @@ export function placeTip(
   return { left: Math.round(left), top: Math.round(top), side };
 }
 
-export function Tip({ label, side = "top", size = "mini", shortcut, children }: TipProps) {
+export function Tip({ label, side = "top", size = "mini", delay = OPEN_DELAY, shortcut, children }: TipProps) {
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState(false); // drives the [data-open] enter transition
   const [pos, setPos] = useState<TipPosition>({ left: 0, top: 0, side });
@@ -115,14 +117,12 @@ export function Tip({ label, side = "top", size = "mini", shortcut, children }: 
 
   const clearTimer = () => { if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; } };
 
-  const doOpen = useCallback(() => { clearTimer(); setOpen(true); }, []);
-
   const scheduleOpen = useCallback((instant: boolean) => {
     clearTimer();
-    const delay = instant || isWarm(Date.now()) ? 0 : OPEN_DELAY;
-    if (delay === 0) { setOpen(true); return; }
-    openTimer.current = setTimeout(() => setOpen(true), delay);
-  }, []);
+    const wait = instant || isWarm(Date.now()) ? 0 : Math.max(0, delay);
+    if (wait === 0) { setOpen(true); return; }
+    openTimer.current = setTimeout(() => setOpen(true), wait);
+  }, [delay]);
 
   const close = useCallback(() => {
     clearTimer();

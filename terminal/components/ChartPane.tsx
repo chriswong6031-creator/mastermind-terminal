@@ -22,9 +22,9 @@ const load = (d: ChartSettings): ChartSettings => { try { const v = localStorage
 // store) so multiple panes on the same symbol (an MTF layout) share one set. Auto-DETECTED drawings,
 // by contrast, are computed against THIS pane's timeframe and are transient (never persisted), so they
 // stay pane-local and are merged in only for this pane's own render.
-export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onActivate, row, tf, chartType, inds, tool, drawStyle, detectCmd, compare, compareCfg, magnet, replayIdx, onMeta, drawings, drawingsVisible = true, onDrawingsChange, liveQuote, indParams, hidden, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts,
+export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onActivate, row, tf, chartType, inds, tool, toolActivation = 0, drawingSticky = false, drawStyle, detectCmd, compare, compareCfg, magnet, replayIdx, onMeta, drawings, drawingsVisible = true, onDrawingsChange, liveQuote, indParams, hidden, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts,
   onAddAlert, onTableView, onObjectTree, lockedVLine, onSetLockedVLine, onIndRowsAt, dayMode: _dayMode, onPaneCount, userTier }:
-  { idx: number; symbol: string; drawingOwnerKey: string; isActive: boolean; onActivate: (i: number) => void; row?: { name?: string; zh?: string; sec?: string; mkt?: string; col?: string; last?: number; chg?: number } | null; tf: string; chartType: string; inds: Set<string>; tool: DrawKind | null; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; detectCmd: DetectCmd; compare: string[]; compareCfg?: Record<string, CmpCfg>; magnet: "off" | "weak" | "strong"; replayIdx: number | null; onMeta: (m: { total: number }) => void; drawings: Drawing[]; drawingsVisible?: boolean; onDrawingsChange: (d: Drawing[]) => void; liveQuote?: LiveQuote;
+  { idx: number; symbol: string; drawingOwnerKey: string; isActive: boolean; onActivate: (i: number) => void; row?: { name?: string; zh?: string; sec?: string; mkt?: string; col?: string; last?: number; chg?: number } | null; tf: string; chartType: string; inds: Set<string>; tool: DrawKind | null; toolActivation?: number; drawingSticky?: boolean; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; detectCmd: DetectCmd; compare: string[]; compareCfg?: Record<string, CmpCfg>; magnet: "off" | "weak" | "strong"; replayIdx: number | null; onMeta: (m: { total: number }) => void; drawings: Drawing[]; drawingsVisible?: boolean; onDrawingsChange: (d: Drawing[]) => void; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
     onAddAlert?: (price: number) => void; onTableView?: () => void; onObjectTree?: () => void;
     lockedVLine?: string | null; onSetLockedVLine?: (t: string | null) => void;
@@ -121,7 +121,7 @@ export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onAc
       <ChartPanel
         symbol={symbol} companyName={displayName(row, lang)} chartType={chartType} indicators={inds} timeframe={tf}
         replayIdx={isActive ? replayIdx : null} onMeta={isActive ? onMeta : undefined}
-        tool={isActive ? tool : null} drawStyle={drawStyle} drawings={merged}
+        tool={isActive ? tool : null} toolActivation={toolActivation} drawingSticky={isActive && drawingSticky} drawStyle={drawStyle} drawings={merged}
         onDrawingsChange={handleChange} detectCmd={isActive ? detectCmd : null}
         compare={isActive ? compare.filter((c) => c !== symbol) : []} compareCfg={compareCfg}
         magnet={isActive ? magnet : "off"} isActive={isActive} syncId={idx}

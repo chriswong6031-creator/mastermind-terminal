@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { DRAWING_TOOL_REGISTRY } from "../lib/drawingTools";
 
 // Allows this suite to target an already-running same-worktree server when another
 // local Next process owns the shared dev lock. The repository Playwright config
@@ -20,25 +21,68 @@ if (process.env.DRAWING_E2E_BASE_URL || externalViewportMatch) {
   });
 }
 
-const TOOL_GROUPS = {
-  lines: [
-    "trendline",
-    "ray",
-    "extendedline",
-    "hline",
-    "horizontalray",
-    "vline",
-    "crossline",
-    "arrow",
-    "channel",
-  ],
-  fibonacci: ["fib"],
-  shapes: ["rect", "ellipse", "triangle", "path"],
-  patterns: ["xabcd"],
-  annotation: ["text"],
-  measurement: ["measure", "pricerange", "daterange"],
-  forecasting: ["longposition", "shortposition"],
-} as const;
+/** OpenMarket's documented nine families and 99 tools, in product order. */
+const TOOL_GROUPS = [
+  {
+    id: "lines",
+    tools: [
+      "trendline", "ray", "infoline", "extendedline", "trendangle", "hline",
+      "horizontalray", "vline", "crossline", "channel", "regressiontrend",
+      "flattopbottom", "disjointchannel", "pitchfork", "schiffpitchfork",
+      "modifiedschiffpitchfork", "insidepitchfork",
+    ],
+  },
+  {
+    id: "fibonacci",
+    tools: [
+      "fib", "fibtrend", "fibchannel", "fibtimezone", "fibspeedresistancefan",
+      "trendbasedfibtime", "fibcircles", "fibspiral", "fibspeedresistancearcs",
+      "fibwedge", "pitchfan", "gannbox", "gannsquarefixed", "gannsquare", "gannfan",
+    ],
+  },
+  {
+    id: "patterns",
+    tools: [
+      "xabcd", "cypher", "headandshoulders", "abcd", "trianglepattern", "threedrives",
+      "elliottimpulse", "elliottcorrection", "elliotttriangle", "elliottdoublecombo",
+      "elliotttriplecombo", "cycliclines", "timecycles", "sineline",
+    ],
+  },
+  {
+    id: "forecasting",
+    tools: [
+      "longposition", "shortposition", "forecast", "ghostfeed", "barpattern", "sector",
+      "anchoredvwap", "fixedrangevolumeprofile", "pricerange", "daterange",
+      "dateandpricerange", "measure",
+    ],
+  },
+  { id: "freehand", tools: ["brush", "highlighter", "path"] },
+  {
+    id: "shapes",
+    tools: [
+      "rect", "rotatedrect", "ellipse", "circle", "triangle", "polyline", "arc",
+      "curve", "doublecurve",
+    ],
+  },
+  {
+    id: "arrows",
+    tools: [
+      "arrowmarker", "arrow", "arrowmarkleft", "arrowmarkright", "arrowmarktop",
+      "arrowmarkbottom", "flagmark", "momentum", "flow", "emphasis", "whisper",
+      "subtle", "divergence", "journey", "fork", "threepaths", "burj",
+    ],
+  },
+  {
+    id: "annotation",
+    tools: [
+      "text", "anchoredtext", "note", "anchorednote", "callout", "pricelabel",
+      "pricenote", "signpost", "comment", "image",
+    ],
+  },
+  { id: "emoji", tools: ["emoji", "icon"] },
+] as const;
+
+const TOOL_COUNT = 99;
 
 const CHART_TYPES = [
   "Candles",
@@ -53,7 +97,18 @@ const CHART_TYPES = [
 ] as const;
 
 type DrawingSavePayload = {
-  drawings?: Array<{ id?: string; kind?: string; color?: string; points?: unknown[] }>;
+  drawings?: Array<{
+    id?: string;
+    kind?: string;
+    color?: string;
+    fillColor?: string;
+    width?: number;
+    dash?: string;
+    opacity?: number;
+    text?: string;
+    meta?: Record<string, unknown>;
+    points?: unknown[];
+  }>;
 };
 
 async function openTerminal(
@@ -116,17 +171,84 @@ async function dragDrawing(
   layer: Locator,
   start: { x: number; y: number },
   end: { x: number; y: number },
+  stepPauseMs = 0,
 ) {
   const box = await layer.boundingBox();
   expect(box).not.toBeNull();
   await page.mouse.move(box!.x + box!.width * start.x, box!.y + box!.height * start.y);
   await page.mouse.down();
-  await page.mouse.move(
-    box!.x + box!.width * end.x,
-    box!.y + box!.height * end.y,
-    { steps: 8 },
-  );
+  if (stepPauseMs > 0) {
+    for (let step = 1; step <= 8; step += 1) {
+      const progress = step / 8;
+      await page.mouse.move(
+        box!.x + box!.width * (start.x + (end.x - start.x) * progress),
+        box!.y + box!.height * (start.y + (end.y - start.y) * progress),
+      );
+      await page.waitForTimeout(stepPauseMs);
+    }
+  } else {
+    await page.mouse.move(
+      box!.x + box!.width * end.x,
+      box!.y + box!.height * end.y,
+      { steps: 8 },
+    );
+  }
   await page.mouse.up();
+}
+
+async function expectChartLocal(
+  page: Page,
+  surface: Locator,
+  options: { directChild?: boolean; clearOfDetails?: boolean } = {},
+) {
+  await expect(surface).toBeVisible();
+  const metrics = await surface.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const chartBody = element.closest(".chart-body")
+      ?? (element.parentElement?.classList.contains("chart-body") ? element.parentElement : null)
+      ?? document.querySelector(".chart-body");
+    const bodyRect = chartBody?.getBoundingClientRect();
+    const details = document.querySelector(".detail-board");
+    const detailRect = details?.getBoundingClientRect();
+    return {
+      directChartBodyChild: element.parentElement?.classList.contains("chart-body") === true,
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      bodyLeft: bodyRect?.left ?? Number.NaN,
+      bodyTop: bodyRect?.top ?? Number.NaN,
+      bodyRight: bodyRect?.right ?? Number.NaN,
+      bodyBottom: bodyRect?.bottom ?? Number.NaN,
+      detailTop: detailRect && detailRect.height > 0 ? detailRect.top : null,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    };
+  });
+
+  if (options.directChild) expect(metrics.directChartBodyChild).toBe(true);
+  expect(metrics.left).toBeGreaterThanOrEqual(metrics.bodyLeft - 1);
+  expect(metrics.top).toBeGreaterThanOrEqual(metrics.bodyTop - 1);
+  expect(metrics.right).toBeLessThanOrEqual(metrics.bodyRight + 1);
+  expect(metrics.bottom).toBeLessThanOrEqual(metrics.bodyBottom + 1);
+  expect(metrics.left).toBeGreaterThanOrEqual(-1);
+  expect(metrics.top).toBeGreaterThanOrEqual(-1);
+  expect(metrics.right).toBeLessThanOrEqual(metrics.viewportWidth + 1);
+  expect(metrics.bottom).toBeLessThanOrEqual(metrics.viewportHeight + 1);
+  if (options.clearOfDetails && metrics.detailTop !== null) {
+    expect(metrics.bottom).toBeLessThanOrEqual(metrics.detailTop + 1);
+  }
+  return metrics;
+}
+
+async function expectNoDocumentOverflow(page: Page) {
+  await expect.poll(() => page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }))).toEqual({
+    scrollWidth: page.viewportSize()?.width,
+    clientWidth: page.viewportSize()?.width,
+  });
 }
 
 test("drawing registry and precision controls stay complete at every responsive width", async ({ page }) => {
@@ -136,8 +258,23 @@ test("drawing registry and precision controls stay complete at every responsive 
   await expect(toolbar).toBeVisible();
   await expect(toolbar).toHaveAttribute("role", "toolbar");
   await expect(toolbar).toHaveAttribute("aria-label", "Drawing tools");
+  await expect(toolbar.locator("[title]")).toHaveCount(0);
 
-  for (const [group, expectedTools] of Object.entries(TOOL_GROUPS)) {
+  const canonicalRegistry = DRAWING_TOOL_REGISTRY.map((group) => ({
+    id: group.id,
+    tools: group.tools.map((tool) => tool.id),
+  }));
+  expect(canonicalRegistry).toEqual(TOOL_GROUPS.map((group) => ({
+    id: group.id,
+    tools: [...group.tools],
+  })));
+  expect(canonicalRegistry.flatMap((group) => group.tools)).toHaveLength(TOOL_COUNT);
+  await expect.poll(() => toolbar.locator("[data-group-id]").evaluateAll((elements) =>
+    elements.map((element) => element.getAttribute("data-group-id")),
+  )).toEqual(TOOL_GROUPS.map((group) => group.id));
+
+  const clearOfDetails = page.viewportSize()?.width === 390;
+  for (const { id: group, tools: expectedTools } of TOOL_GROUPS) {
     const trigger = page.getByTestId(`drawing-group-${group}-menu-trigger`);
     await trigger.click();
     const menu = page.getByTestId(`drawing-group-${group}-menu`);
@@ -148,30 +285,44 @@ test("drawing registry and precision controls stay complete at every responsive 
         elements.map((element) => element.getAttribute("data-tool-id"))),
       { message: `${group} should expose the canonical drawing registry in order` },
     ).toEqual([...expectedTools]);
-    if (group === "lines" && page.viewportSize()?.width === 390) {
-      const fit = await menu.evaluate((element) => {
-        const rect = element.getBoundingClientRect();
-        return {
-          isDockSibling: element.parentElement?.classList.contains("chart-body") === true
-            && !document.querySelector("[data-testid='drawing-toolbar']")?.contains(element),
-          left: rect.left,
-          top: rect.top,
-          right: rect.right,
-          bottom: rect.bottom,
-          viewportWidth: window.innerWidth,
-          viewportHeight: window.innerHeight,
-        };
-      });
-      expect(fit.isDockSibling).toBe(true);
-      expect(fit.left).toBeGreaterThanOrEqual(0);
-      expect(fit.top).toBeGreaterThanOrEqual(0);
-      expect(fit.right).toBeLessThanOrEqual(fit.viewportWidth);
-      expect(fit.bottom).toBeLessThanOrEqual(fit.viewportHeight);
+    expect(await menu.locator("[data-tool-id]").evaluateAll((elements) =>
+      elements.every((element) => Boolean(element.textContent?.trim())))).toBe(true);
+    await expectChartLocal(page, menu, { directChild: true, clearOfDetails });
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await expect(trigger).toBeFocused();
+  }
+
+  for (const utility of ["magnet", "clear"] as const) {
+    const trigger = page.getByTestId(`drawing-${utility}-trigger`);
+    const menu = page.getByTestId(`drawing-${utility}-menu`);
+    await trigger.click();
+    await expect(menu).toBeVisible();
+    await expectChartLocal(page, menu, { directChild: true, clearOfDetails });
+    if (utility === "clear") {
+      await expect(menu.getByRole("menuitem")).toHaveCount(3);
     }
     await page.keyboard.press("Escape");
     await expect(menu).toBeHidden();
     await expect(trigger).toBeFocused();
   }
+
+  // Menu focus stays within the toolbar's logical order on both rail and dock layouts.
+  const linesTrigger = page.getByTestId("drawing-group-lines-menu-trigger");
+  const linesMenu = page.getByTestId("drawing-group-lines-menu");
+  const lineTool = page.getByTestId("drawing-group-lines-main");
+  const nextLogicalControl = page.getByTestId("drawing-group-fibonacci-main");
+  await linesTrigger.click();
+  await expect(linesMenu).toBeVisible();
+  await expect(page.getByTestId("drawing-tool-trendline")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(linesMenu).toBeHidden();
+  await expect(nextLogicalControl).toBeFocused();
+  await linesTrigger.click();
+  await expect(page.getByTestId("drawing-tool-trendline")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(linesMenu).toBeHidden();
+  await expect(lineTool).toBeFocused();
 
   const magnetTrigger = page.getByTestId("drawing-magnet-trigger");
   await expect(magnetTrigger).toHaveAttribute("data-magnet-mode", "off");
@@ -179,64 +330,23 @@ test("drawing registry and precision controls stay complete at every responsive 
   await selectMagnet(page, "strong");
   await selectMagnet(page, "off");
 
-  const lineTool = page.getByTestId("drawing-group-lines-main");
   await lineTool.click();
   await expect(lineTool).toHaveAttribute("data-tool-id", "trendline");
   await expect(lineTool).toHaveAttribute("aria-pressed", "true");
 
   const palette = page.getByTestId("drawing-style-palette");
-  await expect(palette).toBeVisible();
-  if ((page.viewportSize()?.width ?? 1440) <= 860) {
-    const linesTrigger = page.getByTestId("drawing-group-lines-menu-trigger");
-    const linesMenu = page.getByTestId("drawing-group-lines-menu");
-    const nextLogicalControl = page.getByTestId("drawing-group-fibonacci-main");
-
-    await linesTrigger.click();
-    await expect(linesMenu).toBeVisible();
-    await expect(page.getByTestId("drawing-tool-trendline")).toBeFocused();
-    expect(await linesMenu.evaluate((element) =>
-      !document.querySelector("[data-testid='drawing-toolbar']")?.contains(element))).toBe(true);
-    await expect(palette).toHaveAttribute("inert", "");
-    await expect(palette).toHaveAttribute("aria-hidden", "true");
-
-    await page.keyboard.press("Tab");
-    await expect(linesMenu).toBeHidden();
-    await expect(nextLogicalControl).toBeFocused();
-    await expect(palette).not.toHaveAttribute("inert", "");
-    await expect(palette).not.toHaveAttribute("aria-hidden", "true");
-
-    await linesTrigger.click();
-    await expect(linesMenu).toBeVisible();
-    await expect(page.getByTestId("drawing-tool-trendline")).toBeFocused();
-    await expect(palette).toHaveAttribute("inert", "");
-    await expect(palette).toHaveAttribute("aria-hidden", "true");
-
-    await page.keyboard.press("Shift+Tab");
-    await expect(linesMenu).toBeHidden();
-    await expect(lineTool).toBeFocused();
-    await expect(palette).not.toHaveAttribute("inert", "");
-    await expect(palette).not.toHaveAttribute("aria-hidden", "true");
+  const isCompact = (page.viewportSize()?.width ?? 1440) <= 860;
+  if (isCompact) {
+    const styleTrigger = page.getByTestId("drawing-style-trigger");
+    await expect(styleTrigger).toBeVisible();
+    await expect(palette).toBeHidden();
+    await styleTrigger.click();
+    await expect(palette).toBeVisible();
+    await expectChartLocal(page, palette, { directChild: true, clearOfDetails });
+  } else {
+    await expect(palette).toBeVisible();
   }
-  if (page.viewportSize()?.width === 390) {
-    const fit = await palette.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      return {
-        isDockSibling: element.parentElement?.classList.contains("chart-body") === true
-          && !document.querySelector("[data-testid='drawing-toolbar']")?.contains(element),
-        left: rect.left,
-        top: rect.top,
-        right: rect.right,
-        bottom: rect.bottom,
-        viewportWidth: window.innerWidth,
-        viewportHeight: window.innerHeight,
-      };
-    });
-    expect(fit.isDockSibling).toBe(true);
-    expect(fit.left).toBeGreaterThanOrEqual(0);
-    expect(fit.top).toBeGreaterThanOrEqual(0);
-    expect(fit.right).toBeLessThanOrEqual(fit.viewportWidth);
-    expect(fit.bottom).toBeLessThanOrEqual(fit.viewportHeight);
-  }
+
   const red = page.getByTestId("drawing-style-color-2");
   const wide = page.getByTestId("drawing-style-width-4");
   const dotted = page.getByTestId("drawing-style-dash-dotted");
@@ -247,9 +357,266 @@ test("drawing registry and precision controls stay complete at every responsive 
   await expect(wide).toHaveAttribute("aria-pressed", "true");
   await expect(dotted).toHaveAttribute("aria-pressed", "true");
 
+  if (isCompact) {
+    await page.keyboard.press("Escape");
+    await expect(palette).toBeHidden();
+    await expect(page.getByTestId("drawing-style-trigger")).toBeFocused();
+  }
+
   await page.getByTestId("drawing-tool-cursor").click();
   await expect(page.getByTestId("drawing-tool-cursor")).toHaveAttribute("aria-pressed", "true");
   await expect(palette).toBeHidden();
+  if (page.viewportSize()?.width === 390) {
+    await expectChartLocal(page, toolbar, { directChild: true, clearOfDetails: true });
+    await expectNoDocumentOverflow(page);
+  }
+});
+
+test("desktop drawing labels and hover flyouts match the OpenMarket interaction contract", async ({ page }) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 1440) <= 860,
+    "Hover labels and delayed flyouts are a fine-pointer contract.",
+  );
+  await openTerminal(page);
+
+  const toolbar = page.getByTestId("drawing-toolbar");
+  await expect(toolbar.locator("[title]")).toHaveCount(0);
+
+  const mainTool = page.getByTestId("drawing-group-lines-main");
+  await mainTool.hover();
+  const mainTip = page.getByRole("tooltip").filter({ hasText: "Trend Line" });
+  await expect(mainTip).toBeVisible();
+  await expect(mainTip).toContainText("Alt+T");
+  await expect(mainTip).toContainText("Double-click to keep active");
+
+  const clearTrigger = page.getByTestId("drawing-clear-trigger");
+  await clearTrigger.hover();
+  await expect(page.getByRole("tooltip").filter({ hasText: "Remove drawings" })).toBeVisible();
+  await expect(clearTrigger).not.toHaveAttribute("title", /.+/);
+
+  const chevron = page.getByTestId("drawing-group-lines-menu-trigger");
+  const menu = page.getByTestId("drawing-group-lines-menu");
+  await page.evaluate(() => {
+    const timedWindow = window as Window & {
+      __mmDrawingHoverTiming?: { enteredAt: number | null; openedAfter: number | null };
+    };
+    const timing = { enteredAt: null as number | null, openedAfter: null as number | null };
+    timedWindow.__mmDrawingHoverTiming = timing;
+    const trigger = document.querySelector('[data-testid="drawing-group-lines-menu-trigger"]');
+    trigger?.addEventListener("pointerenter", () => { timing.enteredAt = performance.now(); }, { once: true });
+    const observer = new MutationObserver(() => {
+      if (timing.enteredAt === null) return;
+      if (!document.querySelector('[data-testid="drawing-group-lines-menu"]')) return;
+      timing.openedAfter = performance.now() - timing.enteredAt;
+      observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+  await chevron.hover();
+  await expect(menu).toBeVisible({ timeout: 1_200 });
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __mmDrawingHoverTiming?: { openedAfter: number | null } }
+  ).__mmDrawingHoverTiming?.openedAfter ?? null)).not.toBeNull();
+  const openAfter = await page.evaluate(() => (
+    window as Window & { __mmDrawingHoverTiming?: { openedAfter: number | null } }
+  ).__mmDrawingHoverTiming?.openedAfter ?? 0);
+  expect(openAfter).toBeGreaterThanOrEqual(160);
+  expect(openAfter).toBeLessThan(1_000);
+  await expectChartLocal(page, menu, { directChild: true });
+
+  await page.evaluate(() => {
+    const timedWindow = window as Window & {
+      __mmDrawingLeaveTiming?: {
+        leftAt: number | null;
+        closingAfter: number | null;
+        hiddenAfter: number | null;
+      };
+    };
+    const timing = { leftAt: null as number | null, closingAfter: null as number | null, hiddenAfter: null as number | null };
+    timedWindow.__mmDrawingLeaveTiming = timing;
+    const host = document.querySelector('[data-testid="drawing-group-lines"]');
+    const menuElement = document.querySelector('[data-testid="drawing-group-lines-menu"]');
+    host?.addEventListener("pointerleave", () => { timing.leftAt = performance.now(); }, { once: true });
+    const observer = new MutationObserver(() => {
+      if (timing.leftAt === null || !menuElement) return;
+      if (timing.closingAfter === null && menuElement.getAttribute("data-state") === "closing") {
+        timing.closingAfter = performance.now() - timing.leftAt;
+      }
+      if (!menuElement.isConnected) {
+        timing.hiddenAfter = performance.now() - timing.leftAt;
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.body, { attributes: true, attributeFilter: ["data-state"], childList: true, subtree: true });
+  });
+  const viewport = page.viewportSize()!;
+  await page.mouse.move(viewport.width - 4, 4);
+  await expect(menu).toBeHidden({ timeout: 2_000 });
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __mmDrawingLeaveTiming?: { hiddenAfter: number | null } }
+  ).__mmDrawingLeaveTiming?.hiddenAfter ?? null)).not.toBeNull();
+  const leaveTiming = await page.evaluate(() => (
+    window as Window & {
+      __mmDrawingLeaveTiming?: { closingAfter: number | null; hiddenAfter: number | null };
+    }
+  ).__mmDrawingLeaveTiming);
+  expect(leaveTiming?.closingAfter).not.toBeNull();
+  expect(leaveTiming!.closingAfter!).toBeGreaterThanOrEqual(120);
+  expect(leaveTiming!.hiddenAfter!).toBeGreaterThanOrEqual(260);
+  expect(leaveTiming!.hiddenAfter! - leaveTiming!.closingAfter!).toBeGreaterThanOrEqual(120);
+});
+
+test("portalled drawing surfaces honor reduced motion and keep focus across the mobile breakpoint", async ({ page }) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 1440) <= 860,
+    "The breakpoint transition starts from the desktop drawing rail.",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await openTerminal(page);
+
+  const toolbar = page.getByTestId("drawing-toolbar");
+  const lineTool = page.getByTestId("drawing-group-lines-main");
+  const linesTrigger = page.getByTestId("drawing-group-lines-menu-trigger");
+  const linesMenu = page.getByTestId("drawing-group-lines-menu");
+  await linesTrigger.click();
+  await expect(linesMenu).toBeVisible();
+  await expect(page.getByTestId("drawing-tool-trendline")).toBeFocused();
+  expect(await linesMenu.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { animationName: style.animationName, transitionDuration: style.transitionDuration };
+  })).toEqual({ animationName: "none", transitionDuration: "0s" });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(toolbar).toHaveAttribute("aria-orientation", "horizontal");
+  await expect(linesMenu).toBeHidden();
+  await expect(linesTrigger).toBeFocused();
+
+  await lineTool.click();
+  const styleTrigger = page.getByTestId("drawing-style-trigger");
+  const palette = page.getByTestId("drawing-style-palette");
+  await styleTrigger.click();
+  await expect(palette).toBeVisible();
+  await expect(page.getByTestId("drawing-style-color-0")).toBeFocused();
+  expect(await palette.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { animationName: style.animationName, transitionDuration: style.transitionDuration };
+  })).toEqual({ animationName: "none", transitionDuration: "0s" });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(toolbar).toHaveAttribute("aria-orientation", "vertical");
+  await expect(styleTrigger).toBeHidden();
+  await expect(lineTool).toBeFocused();
+});
+
+test("mobile drawing chrome keeps one collision-free editing surface", async ({ page }) => {
+  test.skip(page.viewportSize()?.width !== 390, "The reported regression is pinned to 390×844.");
+  await openTerminal(page);
+
+  const chartBody = page.locator(".chart-body");
+  const details = page.locator(".detail-board").first();
+  const dock = page.getByTestId("drawing-toolbar");
+  const layer = page.locator(".pane.on .drawing-layer");
+  const lineTool = page.getByTestId("drawing-group-lines-main");
+  const sticky = page.getByTestId("drawing-sticky-toggle");
+  const palette = page.getByTestId("drawing-style-palette");
+  const styleTrigger = page.getByTestId("drawing-style-trigger");
+  const selectionToolbar = page.getByRole("toolbar", { name: "Selected drawing properties" });
+  const lines = layer.locator('g[data-drawing-kind="trendline"]:not([data-id="_p"])');
+
+  // Custom properties mirror iOS landscape safe-area env() values and make the
+  // horizontal inset contract deterministic in desktop Chromium CI.
+  await chartBody.evaluate((element) => {
+    const body = element as HTMLElement;
+    body.style.setProperty("--drawing-safe-left", "31px");
+    body.style.setProperty("--drawing-safe-right", "27px");
+  });
+
+  const safeDock = await expectChartLocal(page, dock, { directChild: true, clearOfDetails: true });
+  expect(safeDock.left - safeDock.bodyLeft).toBeGreaterThanOrEqual(31);
+  expect(safeDock.bodyRight - safeDock.right).toBeGreaterThanOrEqual(27);
+  await expectNoDocumentOverflow(page);
+  const initialLayout = await Promise.all([
+    chartBody.boundingBox(),
+    details.boundingBox(),
+  ]);
+
+  await lineTool.click();
+  await sticky.click();
+  await expect(sticky).toHaveAttribute("data-sticky", "true");
+  await expect(styleTrigger).toBeVisible();
+  await expect(palette).toBeHidden();
+  await dragDrawing(page, layer, { x: 0.25, y: 0.35 }, { x: 0.57, y: 0.52 });
+  await expect(lines).toHaveCount(1);
+  await expect(lineTool).toHaveAttribute("aria-pressed", "true");
+  await expect(selectionToolbar).toBeHidden();
+  await expect(palette).toBeHidden();
+
+  // Turning sticky off leaves the armed tool in place; its next placement is one-shot
+  // and must replace the pre-draw controls with the selected-object inspector.
+  await sticky.click();
+  await expect(sticky).toHaveAttribute("data-sticky", "false");
+  await dragDrawing(page, layer, { x: 0.35, y: 0.62 }, { x: 0.67, y: 0.43 });
+  await expect(lines).toHaveCount(2);
+  await expect(page.getByTestId("drawing-tool-cursor")).toHaveAttribute("aria-pressed", "true");
+  await expect(styleTrigger).toBeHidden();
+  await expect(palette).toBeHidden();
+  await expect(selectionToolbar).toBeVisible();
+  const inspectorMetrics = await expectChartLocal(page, selectionToolbar, { clearOfDetails: true });
+  const dockMetrics = await expectChartLocal(page, dock, { directChild: true, clearOfDetails: true });
+  expect(inspectorMetrics.bottom).toBeLessThanOrEqual(dockMetrics.top + 1);
+  expect(await page.locator("[data-testid='drawing-style-palette'], .draw-bar").evaluateAll((elements) =>
+    elements.filter((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    }).length)).toBe(1);
+
+  // The settings panel remains a renderer-owned descendant, but its fixed box is
+  // clamped to the measured chart host rather than the full viewport.
+  await selectionToolbar.locator("[data-settings]").click();
+  const settings = selectionToolbar.locator(".draw-settings");
+  const settingsMetrics = await expectChartLocal(page, settings, { clearOfDetails: true });
+  expect(settingsMetrics.left - settingsMetrics.bodyLeft).toBeGreaterThanOrEqual(31);
+  expect(settingsMetrics.bodyRight - settingsMetrics.right).toBeGreaterThanOrEqual(27);
+  await selectionToolbar.locator("[data-settings]").click();
+  await expect(settings).toBeHidden();
+
+  // The trash flyout must overlay inside the chart instead of expanding the page or
+  // pushing the company detail card down (the original mobile breakage).
+  const clearTrigger = page.getByTestId("drawing-clear-trigger");
+  await clearTrigger.click();
+  const clearMenu = page.getByTestId("drawing-clear-menu");
+  await expect(selectionToolbar).toBeHidden();
+  const clearMetrics = await expectChartLocal(page, clearMenu, { directChild: true, clearOfDetails: true });
+  expect(clearMetrics.left - clearMetrics.bodyLeft).toBeGreaterThanOrEqual(31);
+  expect(clearMetrics.bodyRight - clearMetrics.right).toBeGreaterThanOrEqual(27);
+  await expectNoDocumentOverflow(page);
+  const openLayout = await Promise.all([
+    chartBody.boundingBox(),
+    details.boundingBox(),
+  ]);
+  expect(openLayout).toEqual(initialLayout);
+  await page.keyboard.press("Escape");
+  await expect(clearMenu).toBeHidden();
+  await expect(clearTrigger).toBeFocused();
+
+  // Re-select a drawing, then arm another tool and open its style palette. The
+  // inspector must be torn down so the exact stacked-palette mobile regression
+  // cannot return.
+  await lines.last().locator('line[stroke="transparent"]').first().click({ force: true });
+  await expect(selectionToolbar).toBeVisible();
+  await lineTool.click();
+  await expect(selectionToolbar).toBeHidden();
+  await expect(styleTrigger).toBeVisible();
+  await styleTrigger.click();
+  await expect(palette).toBeVisible();
+  expect(await page.locator("[data-testid='drawing-style-palette'], .draw-bar").evaluateAll((elements) =>
+    elements.filter((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    }).length)).toBe(1);
+  await page.keyboard.press("Escape");
 });
 
 test("chart-type catalog exposes and applies the new line and area families", async ({ page }) => {
@@ -605,22 +972,67 @@ test("flagship geometry, editing, and path limits survive adversarial interactio
   await expect.poll(span).toBeCloseTo(spanBefore, 0);
   await expect.poll(() => midpoint().then((value) => Math.abs(value - midpointBefore))).toBeGreaterThan(2);
 
-  await page.getByTestId("drawing-group-shapes-menu-trigger").click();
-  await page.getByTestId("drawing-tool-path").press("Enter");
+  await page.getByTestId("drawing-group-freehand-menu-trigger").click();
+  await page.getByTestId("drawing-tool-brush").press("Enter");
   await page.mouse.move(layerBox!.x + layerBox!.width * .15, layerBox!.y + layerBox!.height * .35);
   await page.mouse.down();
   await page.mouse.move(layerBox!.x + layerBox!.width * .82, layerBox!.y + layerBox!.height * .62, { steps: 100 });
   await page.mouse.up();
-  const path = layer.locator('g[data-drawing-kind="path"]').last();
+  const brush = layer.locator('g[data-drawing-kind="brush"]').last();
+  await expect(brush).toBeVisible();
+  await expect(brush.locator("polyline")).toHaveCount(2);
+  await expect(brush.locator('line[data-segment="1"]')).toHaveCount(0);
+  await expect.poll(
+    () => saves.flatMap((payload) => payload.drawings ?? []).find((drawing) => drawing.kind === "brush")?.points?.length ?? 0,
+    { timeout: 5_000, message: "a dense Brush stroke should persist within the registry/API limit" },
+  ).toBeGreaterThan(1);
+  const savedBrush = saves.flatMap((payload) => payload.drawings ?? []).find((drawing) => drawing.kind === "brush");
+  expect(savedBrush?.points?.length).toBeLessThanOrEqual(64);
+
+  // Path is deliberately segmented (click-by-click), unlike Brush/Highlighter.
+  // A final double-click completes one compound object instead of starting a
+  // freehand pointer-drag or emitting an object per segment.
+  await page.getByTestId("drawing-group-freehand-menu-trigger").click();
+  await page.getByTestId("drawing-tool-path").press("Enter");
+  const pathPoint = (x: number, y: number) => ({
+    x: layerBox!.x + layerBox!.width * x,
+    y: layerBox!.y + layerBox!.height * y,
+  });
+  const p1 = pathPoint(.18, .58);
+  const p2 = pathPoint(.36, .43);
+  const p3 = pathPoint(.55, .55);
+  const p4 = pathPoint(.72, .34);
+  await page.mouse.click(p1.x, p1.y);
+  await page.mouse.click(p2.x, p2.y);
+  await page.mouse.click(p3.x, p3.y);
+  await page.mouse.dblclick(p4.x, p4.y, { delay: 60 });
+  const path = layer.locator('g[data-drawing-kind="path"]:not([data-id="_p"])').last();
   await expect(path).toBeVisible();
   await expect(path.locator("polyline")).toHaveCount(2);
-  await expect(path.locator('line[data-segment="1"]')).toHaveCount(0);
   await expect.poll(
-    () => saves.flatMap((payload) => payload.drawings ?? []).find((drawing) => drawing.kind === "path")?.points?.length ?? 0,
-    { timeout: 5_000, message: "a dense path should persist within the registry/API limit" },
-  ).toBeGreaterThan(1);
-  const savedPath = saves.flatMap((payload) => payload.drawings ?? []).find((drawing) => drawing.kind === "path");
-  expect(savedPath?.points?.length).toBeLessThanOrEqual(64);
+    () => saves.flatMap((payload) => payload.drawings ?? []).filter((drawing) => drawing.kind === "path").at(-1)?.points?.length ?? 0,
+    { timeout: 5_000, message: "double-click should persist one segmented Path" },
+  ).toBeGreaterThanOrEqual(4);
+
+  // Coarse pointers finish a segmented tool by tapping its final anchor again.
+  // The second tap is deliberately 10px away—inside the 16px finger tolerance,
+  // but well outside the desktop precision radius.
+  await page.getByTestId("drawing-group-freehand-menu-trigger").click();
+  await page.getByTestId("drawing-tool-path").press("Enter");
+  const touchTap = async (point: { x: number; y: number }, pointerId: number) => {
+    await layer.dispatchEvent("pointerdown", { bubbles: true, pointerId, pointerType: "touch", isPrimary: true, button: 0, buttons: 1, clientX: point.x, clientY: point.y });
+    await layer.dispatchEvent("pointerup", { bubbles: true, pointerId, pointerType: "touch", isPrimary: true, button: 0, buttons: 0, clientX: point.x, clientY: point.y });
+  };
+  const touchStart = pathPoint(.28, .68);
+  const touchEnd = pathPoint(.48, .61);
+  await touchTap(touchStart, 351);
+  await touchTap(touchEnd, 352);
+  await touchTap({ x: touchEnd.x, y: touchEnd.y + 10 }, 353);
+  await expect(layer.locator('g[data-drawing-kind="path"]:not([data-id="_p"])')).toHaveCount(2);
+  await expect.poll(
+    () => saves.flatMap((payload) => payload.drawings ?? []).filter((drawing) => drawing.kind === "path").at(-1)?.points?.length ?? 0,
+    { timeout: 5_000, message: "a repeated coarse-pointer endpoint should finish Path" },
+  ).toBe(2);
 
   await page.getByTestId("drawing-group-shapes-menu-trigger").click();
   await page.getByTestId("drawing-tool-triangle").press("Enter");
@@ -637,6 +1049,190 @@ test("flagship geometry, editing, and path limits survive adversarial interactio
   await layer.dispatchEvent("pointercancel", { bubbles: true, pointerId: 402, pointerType: "touch", isPrimary: true, button: 0, buttons: 0, ...canceledFinal });
   await expect(layer.locator('g[data-drawing-kind="triangle"]:not([data-id="_p"])')).toHaveCount(0);
   await expect(triangleTool).toHaveAttribute("aria-pressed", "true");
+});
+
+test("each drawing tool keeps its own defaults and fill color contract", async ({ page }) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 1440) <= 860,
+    "Per-tool registry defaults only need one stable desktop proof.",
+  );
+  const saves: DrawingSavePayload[] = [];
+  await openTerminal(page, { onPut: (payload) => saves.push(payload) });
+  const layer = page.locator(".pane.on .drawing-layer");
+
+  await page.getByTestId("drawing-group-freehand-menu-trigger").click();
+  await page.getByTestId("drawing-tool-highlighter").press("Enter");
+  await dragDrawing(page, layer, { x: .2, y: .3 }, { x: .58, y: .48 });
+  await expect.poll(() => {
+    const drawing = saves.flatMap((payload) => payload.drawings ?? []).find((item) => item.kind === "highlighter");
+    return drawing ? { color: drawing.color, width: drawing.width, opacity: drawing.opacity } : null;
+  }, { timeout: 5_000 }).toEqual({ color: "#4d82ff", width: 8, opacity: .28 });
+
+  await page.getByTestId("drawing-group-fibonacci-menu-trigger").click();
+  await page.getByTestId("drawing-tool-fib").press("Enter");
+  await dragDrawing(page, layer, { x: .28, y: .28 }, { x: .63, y: .61 });
+  await expect.poll(() => {
+    const drawing = saves.flatMap((payload) => payload.drawings ?? []).find((item) => item.kind === "fib");
+    return drawing ? { color: drawing.color, dash: drawing.dash } : null;
+  }, { timeout: 5_000 }).toEqual({ color: "#4d82ff", dash: "dashed" });
+
+  await page.getByTestId("drawing-group-shapes-menu-trigger").click();
+  await page.getByTestId("drawing-tool-rect").press("Enter");
+  await expect(page.getByTestId("drawing-group-shapes-main")).toHaveAttribute("aria-pressed", "true");
+  const rectangleActivation = Number(await layer.getAttribute("data-tool-activation"));
+  expect(rectangleActivation).toBeGreaterThan(1);
+  // A replayed commit from an older activation of this same tool must not
+  // disarm the newly selected Rectangle transaction.
+  await page.evaluate(({ activation }) => {
+    window.dispatchEvent(new CustomEvent("mm:drawing-committed", {
+      detail: { kind: "rect", activation: activation - 1 },
+    }));
+  }, { activation: rectangleActivation });
+  await expect(page.getByTestId("drawing-group-shapes-main")).toHaveAttribute("aria-pressed", "true");
+  await expect(layer).toHaveAttribute("data-tool-activation", String(rectangleActivation));
+  const red = page.getByTestId("drawing-style-color-2");
+  await red.click();
+  await expect(red).toHaveAttribute("aria-pressed", "true");
+  // Escape must cancel the whole pointer transaction, including capture and
+  // the palette's temporary click-through state, before another drag begins.
+  const layerBox = await layer.boundingBox();
+  expect(layerBox).not.toBeNull();
+  await page.mouse.move(layerBox!.x + layerBox!.width * .72, layerBox!.y + layerBox!.height * .18);
+  await page.mouse.down();
+  const creationPalette = page.locator(".drawing-creation-palette");
+  await expect(creationPalette).toHaveCSS("pointer-events", "none");
+  await page.keyboard.press("Escape");
+  await expect(creationPalette).toHaveCSS("pointer-events", "auto");
+  await page.mouse.up();
+  // Keep this placement clear of the earlier Highlighter/Fib hit regions so
+  // the assertion isolates new-tool creation from existing-drawing selection.
+  // A paced drag gives the endpoint palette time to follow every pointer step;
+  // it must remain click-through until the creation transaction finishes.
+  await dragDrawing(page, layer, { x: .72, y: .18 }, { x: .86, y: .38 }, 24);
+  await expect(layer.locator('g[data-drawing-kind="rect"]:not([data-id="_p"])')).toBeVisible();
+  await expect.poll(() => {
+    const drawing = saves.flatMap((payload) => payload.drawings ?? []).find((item) => item.kind === "rect");
+    return drawing ? { color: drawing.color, fillColor: drawing.fillColor } : null;
+  }, { timeout: 10_000 }).toEqual({ color: "#f0566b", fillColor: "#f0566b" });
+});
+
+test("pane-anchored notes stay fixed while calculated labels never open a text editor", async ({ page }) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 1440) <= 860,
+    "Pane anchoring and precise double-click targeting only need one desktop proof.",
+  );
+  await openTerminal(page, {
+    drawings: [
+      {
+        id: "pane-anchor-contract",
+        kind: "anchoredtext",
+        source: "user",
+        points: [{ t: "2026-06-12", p: 198 }],
+        color: "#4d82ff",
+        text: "FIXED",
+        fontSize: 16,
+        meta: { paneAnchor: { x: .22, y: .27 } },
+      },
+      {
+        id: "price-label-contract",
+        kind: "pricelabel",
+        source: "user",
+        points: [{ t: "2026-06-18", p: 204 }],
+        color: "#26c281",
+      },
+      {
+        id: "vwap-label-contract",
+        kind: "anchoredvwap",
+        source: "user",
+        points: [{ t: "2026-06-20", p: 201 }],
+        color: "#e8b339",
+      },
+    ],
+  });
+  const layer = page.locator(".pane.on .drawing-layer");
+  const fixedText = layer.locator('g[data-id="pane-anchor-contract"] text').first();
+  const position = () => fixedText.evaluate((node) => ({
+    x: Number(node.getAttribute("x")),
+    y: Number(node.getAttribute("y")),
+  }));
+  const before = await position();
+  const box = await layer.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width * .74, box!.y + box!.height * .42);
+  await page.mouse.wheel(0, -720);
+  await page.waitForTimeout(180);
+  await expect.poll(position).toEqual(before);
+
+  await layer.locator('g[data-id="price-label-contract"] [data-geometry="1"]').first().dblclick({ force: true });
+  await expect(page.locator(".text-edit")).toHaveCount(0);
+  await layer.locator('g[data-id="vwap-label-contract"] [data-geometry="1"]').first().dblclick({ force: true });
+  await expect(page.locator(".text-edit")).toHaveCount(0);
+});
+
+test("media tools choose and persist real emoji, icons, and bounded local images", async ({ page }) => {
+  const saves: DrawingSavePayload[] = [];
+  await openTerminal(page, { onPut: (payload) => saves.push(payload) });
+  const layer = page.locator(".pane.on .drawing-layer");
+  const at = async (x: number, y: number) => {
+    // The compact dock may be reached after the document itself scrolls. Bring
+    // the chart back into view before translating semantic chart coordinates so
+    // a placement can never become an off-viewport negative mouse position.
+    await layer.scrollIntoViewIfNeeded();
+    const box = await layer.boundingBox();
+    expect(box).not.toBeNull();
+    return { x: box!.x + box!.width * x, y: box!.y + box!.height * y };
+  };
+
+  await page.getByTestId("drawing-group-emoji-menu-trigger").click();
+  await page.getByTestId("drawing-tool-emoji").press("Enter");
+  const emojiPoint = await at(.36, .34);
+  await page.mouse.click(emojiPoint.x, emojiPoint.y);
+  const emojiPicker = page.getByTestId("drawing-media-picker");
+  await expect(emojiPicker).toBeVisible();
+  await expectChartLocal(page, emojiPicker);
+  const dismissPoint = await at(.94, .06);
+  await page.mouse.click(dismissPoint.x, dismissPoint.y);
+  await expect(emojiPicker).toBeHidden();
+  await page.waitForTimeout(80);
+  await expect(page.getByTestId("drawing-media-picker")).toHaveCount(0);
+  const replacementEmojiPoint = await at(.36, .34);
+  await page.mouse.click(replacementEmojiPoint.x, replacementEmojiPoint.y);
+  await expect(emojiPicker).toBeVisible();
+  await page.getByTestId("drawing-media-choice-emoji-3").click();
+  await expect(layer.locator('g[data-drawing-kind="emoji"] [data-media-choice="🚀"]')).toHaveCount(1);
+  await expect.poll(() => saves.flatMap((payload) => payload.drawings ?? []).find((drawing) => drawing.kind === "emoji")?.text).toBe("🚀");
+  await expect(page.getByTestId("drawing-media-picker")).toHaveCount(0);
+  await expect(page.getByTestId("drawing-tool-cursor")).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByTestId("drawing-group-emoji-menu-trigger").click();
+  await page.getByTestId("drawing-tool-icon").press("Enter");
+  await expect(page.getByTestId("drawing-group-emoji-main")).toHaveAttribute("data-tool-id", "icon");
+  await expect(page.getByTestId("drawing-group-emoji-main")).toHaveAttribute("aria-pressed", "true");
+  const iconPoint = await at(.48, .43);
+  await page.mouse.click(iconPoint.x, iconPoint.y);
+  const iconPicker = page.getByTestId("drawing-media-picker");
+  await expect(iconPicker).toBeVisible();
+  await page.getByTestId("drawing-media-choice-icon-2").focus();
+  await page.keyboard.press("Enter");
+  await expect(layer.locator('g[data-drawing-kind="icon"] [data-media-choice="bolt"]')).toHaveCount(1);
+  await expect.poll(() => saves.flatMap((payload) => payload.drawings ?? []).find((drawing) => drawing.kind === "icon")?.meta?.iconId).toBe("bolt");
+
+  await page.getByTestId("drawing-group-annotation-menu-trigger").click();
+  await page.getByTestId("drawing-tool-image").press("Enter");
+  await layer.scrollIntoViewIfNeeded();
+  const chooserPromise = page.waitForEvent("filechooser");
+  await dragDrawing(page, layer, { x: .24, y: .26 }, { x: .56, y: .54 });
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    name: "chart-note.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z4SIAAAAASUVORK5CYII=", "base64"),
+  });
+  await expect.poll(() => saves.flatMap((payload) => payload.drawings ?? []).find((drawing) => drawing.kind === "image")?.meta?.imageSrc).toMatch(/^data:image\/png;base64,/);
+  const renderedImage = layer.locator('g[data-drawing-kind="image"] image[data-media-image="1"]');
+  await expect(renderedImage).toHaveCount(1);
+  await expect.poll(() => layer.locator('g[data-drawing-kind="image"]').getAttribute("data-media-state")).toBe("loaded");
+  await expectNoDocumentOverflow(page);
 });
 
 test("dense collections save beyond Chromium's keepalive request quota", async ({ page }) => {
