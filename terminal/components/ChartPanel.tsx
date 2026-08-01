@@ -25,7 +25,10 @@ import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engin
 import { ORACLE_V1_PINE } from "@/lib/pine";
 import { DRAWING_SCHEMA_VERSION, MAX_DRAWING_PAYLOAD_BYTES, type Drawing, type DrawKind, type Bar as DBar, uid, autoTrendlines, autoFib, srDrawings, mtfaDrawings } from "@/lib/drawings";
 import { drawingToolFromShortcut, getDrawingTool, type DrawingToolCapability } from "@/lib/drawingTools";
-import { DEFAULT_FIBONACCI_LEVELS, DRAWING_RENDERER_FAMILY, materializeSemanticPoints } from "@/lib/drawing-engine/geometry";
+import { DRAWING_RENDERER_FAMILY, materializeSemanticPoints } from "@/lib/drawing-engine/geometry";
+import { calculateAnchoredVwap, calculateFixedRangeVolumeProfile, calculateRegressionChannel, generateGhostFeed } from "@/lib/drawing-engine/analytics";
+import { cloneDrawing, constrainScreenAngle, translateDrawingAnchors } from "@/lib/drawing-engine/interaction";
+import { calculatePositionMetrics, fibonacciSettings, positionSettings, type FibonacciLabelMode } from "@/lib/drawing-engine/settings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
 import { setActivePaneCoords, getActivePaneCoords } from "@/lib/paneCoords";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
@@ -115,7 +118,12 @@ function drawingMediaIcon(value: unknown): DrawingMediaIcon {
   const id = typeof value === "string" ? value : "";
   return DRAWING_MEDIA_ICONS.find((icon) => icon.id === id) ?? DRAWING_MEDIA_ICONS[0];
 }
-export type DetectCmd = { kind: "trendlines" | "fib" | "sr" | "mtfa" | "clear" | "clearAll"; nonce: number } | null;
+export type DetectCmd = {
+  kind: "trendlines" | "fib" | "sr" | "mtfa" | "clear" | "clearAll";
+  nonce: number;
+  /** Pane that owned the command when it was dispatched; prevents replay after an active-pane switch. */
+  targetPane: number;
+} | null;
 const VALUE_CHART_TYPES = new Set(["line", "line-markers", "step", "area", "baseline"]);
 const isValueChartType = (chartType: string) => VALUE_CHART_TYPES.has(chartType);
 const priceSeriesFamily = (chartType: string) => {
@@ -343,11 +351,11 @@ const SUBPANE_ORDER = ["rsi", "stochrsi", "macd", "rsistack", "accum", "rvol", "
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, toolActivation = 0, drawingSticky = false, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = "off", compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, toolActivation = 0, drawingSticky = false, drawingCreationDisabled = false, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = "off", compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
   instrumentName, instrumentMarket, instrumentColor, onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "", userTier = "free" }:
   { symbol: string; companyName?: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: DrawKind | null; toolActivation?: number; drawingSticky?: boolean; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: "off" | "weak" | "strong" | boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
+    tool?: DrawKind | null; toolActivation?: number; drawingSticky?: boolean; drawingCreationDisabled?: boolean; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: "off" | "weak" | "strong" | boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
     chartSettings?: Partial<ChartSettings>;
     instrumentName?: string;
@@ -578,6 +586,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const toolRef = useRef<DrawKind | null>(tool);
   const toolActivationRef = useRef(toolActivation);
   const drawingStickyRef = useRef(drawingSticky);
+  const drawingCreationDisabledRef = useRef(drawingCreationDisabled);
   const clearDrawingSelectionRef = useRef<() => void>(() => {});
   const styleRef = useRef(drawStyle);
   const onChangeRef = useRef(onDrawingsChange);
@@ -699,7 +708,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // drag or native color/range transaction. Do not replace that in-flight
   // draft with the last committed prop snapshot.
   if (!drawingTransactionRef.current) drawRef.current = drawings;
-  toolRef.current = tool; toolActivationRef.current = toolActivation; drawingStickyRef.current = drawingSticky; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
+  toolRef.current = tool; toolActivationRef.current = toolActivation; drawingStickyRef.current = drawingSticky; drawingCreationDisabledRef.current = drawingCreationDisabled; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
   chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol; companyNameRef.current = companyName;
   lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
@@ -2927,6 +2936,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       return { t: String(bt), p: +(p as number).toFixed(prec) };
     };
+    const constrainedSnap = (
+      origin: Drawing["points"][number] | undefined,
+      px: number,
+      py: number,
+      modifier?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
+    ) => {
+      if (!origin || !modifier?.shiftKey) return snap(px, py, modifier);
+      const ox = xOf(origin.t), oy = yOf(origin.p);
+      if (ox == null || oy == null) return snap(px, py, modifier);
+      const constrained = constrainScreenAngle({ x: ox, y: oy }, { x: px, y: py });
+      return snap(constrained.x, constrained.y, modifier);
+    };
     type PendingDrawing = {
       kind: Drawing["kind"];
       // Bind the gesture to the exact toolbar activation that began it. The
@@ -2938,6 +2959,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       mode: "point" | "text" | "drag" | "multi" | "freehand";
       pointerId?: number;
       candidate?: Drawing["points"][number];
+      awaitingSecond?: boolean;
       meta?: Drawing["meta"];
     };
     let pending: PendingDrawing | null = null;
@@ -2960,7 +2982,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     ) {
       type XY = { x: number; y: number; p?: number };
       const prec = precRef.current;
-      const col = dcol(d); const W = el!.clientWidth, H = el!.clientHeight, op = preview ? 0.7 : (d.opacity ?? 1); const on = d.id === sel && !preview;
+      const col = dcol(d); const W = el!.clientWidth, H = el!.clientHeight, op = preview ? 0.7 : (d.opacity ?? 1);
+      const replayLocked = replayIdxRef.current != null;
+      const on = d.id === sel && !preview && !replayLocked;
       const family = DRAWING_RENDERER_FAMILY[d.kind];
       const g = mk("g", {
         "data-id": d.id,
@@ -2968,9 +2992,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         "data-drawing-kind": d.kind,
         "data-renderer-family": family,
         "data-locked": d.locked ? "true" : "false",
+        "data-replay-locked": replayLocked ? "true" : "false",
         opacity: op,
-        "pointer-events": preview || d.hidden ? "none" : "all",
-        style: d.hidden ? "display:none" : (d.locked ? "cursor:default" : "cursor:pointer"),
+        "pointer-events": preview || d.hidden || replayLocked ? "none" : "all",
+        style: d.hidden ? "display:none" : (d.locked || replayLocked ? "cursor:default" : "cursor:pointer"),
       });
       if (!preview && (d.meta as any)?.by === "ai" &&
           typeof document !== "undefined" && document.documentElement.getAttribute("data-cmx-anim") === "on" &&
@@ -3171,11 +3196,41 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
 
       if (family === "anchored-vwap" && A && ax != null && ay != null) {
-        const start = Math.max(0, barIndex(A.t)), rows = barsRef.current.slice(start, Math.min(barsRef.current.length, start + 160));
-        let cv = 0, cpv = 0;
-        const points = rows.map((row) => { const vol = Math.max(1, row.v || 0), typical = (row.h + row.l + row.c) / 3; cv += vol; cpv += typical * vol; const x = projectX(row.time), y = projectY(cpv / cv); return x == null || y == null ? null : { x, y }; }).filter((point): point is XY => point != null);
-        if (points.length >= 2) polyline(points, { "stroke-width": lw(1.8, .6) });
-        add("circle", { cx: ax, cy: ay, r: 4, fill: col }); text(ax + 8, ay - 8, "VWAP", { "font-size": 9, "font-weight": 700 });
+        const start = Math.max(0, barIndex(A.t));
+        const series = calculateAnchoredVwap(barsRef.current.slice(start));
+        const projectSeries = (priceAt: (row: (typeof series)[number]) => number): XY[] => series.flatMap((row) => {
+          const x = projectX(row.time), y = projectY(priceAt(row));
+          return x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y) ? [] : [{ x, y }];
+        });
+        const center = projectSeries((row) => row.vwap);
+        const upper = [0, 1, 2].map((index) => projectSeries((row) => row.upper[index]));
+        const lower = [0, 1, 2].map((index) => projectSeries((row) => row.lower[index]));
+        for (let index = 2; index >= 0; index -= 1) {
+          if (upper[index].length < 2 || lower[index].length < 2) continue;
+          add("polygon", {
+            points: [...upper[index], ...lower[index].slice().reverse()].map((point) => `${point.x},${point.y}`).join(" "),
+            fill,
+            "fill-opacity": Math.max(.018, fillOpacity * (.22 + (2 - index) * .12)),
+            stroke: "none",
+            "pointer-events": "none",
+          });
+        }
+        for (let index = 2; index >= 0; index -= 1) {
+          const bandDash = index === 0 ? "" : index === 1 ? "6 5" : "2 4";
+          for (const points of [upper[index], lower[index]]) {
+            if (points.length < 2) continue;
+            add("polyline", {
+              points: points.map((point) => `${point.x},${point.y}`).join(" "),
+              fill: "none", stroke: col, "stroke-width": lw(1.05, .25),
+              "stroke-dasharray": bandDash, opacity: index === 0 ? .76 : index === 1 ? .56 : .38,
+              "pointer-events": "none",
+            });
+          }
+        }
+        if (center.length >= 2) polyline(center, { "stroke-width": lw(1.9, .6) });
+        add("circle", { cx: ax, cy: ay, r: 4, fill: col });
+        const labelPoint = center.at(-1) ?? { x: ax, y: ay };
+        text(labelPoint.x + 8, labelPoint.y - 8, "VWAP · ±1/2/3σ", { "font-size": 9, "font-weight": 700 });
         return done([{ x: ax, y: ay }]);
       }
 
@@ -3202,9 +3257,25 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
       if (family === "channel") {
         if (d.kind === "regressiontrend") {
-          const offset = Math.max(14, Math.abs(by - ay) * .2), p1 = [{ x: ax, y: ay - offset }, { x: bx, y: by - offset }], p2 = [{ x: ax, y: ay + offset }, { x: bx, y: by + offset }];
-          add("polygon", { points: [...p1, ...p2.slice().reverse()].map((point) => `${point.x},${point.y}`).join(" "), fill, "fill-opacity": fillOpacity, stroke: "none" });
-          line(ax, ay, bx, by); polyline(p1); polyline(p2); return done(anchorXY);
+          const i1 = Math.max(0, Math.min(barIndex(A.t), barIndex(B.t)));
+          const i2 = Math.min(barsRef.current.length - 1, Math.max(barIndex(A.t), barIndex(B.t)));
+          const regression = calculateRegressionChannel(barsRef.current.slice(i1, i2 + 1), 2);
+          if (!regression) return done(anchorXY);
+          const x1 = projectX(regression.startTime), x2 = projectX(regression.endTime);
+          const meanY1 = projectY(regression.start), meanY2 = projectY(regression.end);
+          const upperY1 = projectY(regression.upperStart), upperY2 = projectY(regression.upperEnd);
+          const lowerY1 = projectY(regression.lowerStart), lowerY2 = projectY(regression.lowerEnd);
+          if ([x1, x2, meanY1, meanY2, upperY1, upperY2, lowerY1, lowerY2].some((value) => value == null || !Number.isFinite(value))) return done(anchorXY);
+          const rx1 = x1 as number, rx2 = x2 as number;
+          const my1 = meanY1 as number, my2 = meanY2 as number;
+          const uy1 = upperY1 as number, uy2 = upperY2 as number;
+          const ly1 = lowerY1 as number, ly2 = lowerY2 as number;
+          add("polygon", { points: `${rx1},${uy1} ${rx2},${uy2} ${rx2},${ly2} ${rx1},${ly1}`, fill, "fill-opacity": Math.max(.06, fillOpacity), stroke: "none" });
+          line(rx1, uy1, rx2, uy2, { hit: false, opacity: .72, "stroke-dasharray": "6 5" });
+          line(rx1, ly1, rx2, ly2, { hit: false, opacity: .72, "stroke-dasharray": "6 5" });
+          line(rx1, my1, rx2, my2);
+          pill((rx1 + rx2) / 2, Math.min(uy1, uy2) - 14, `R ${regression.pearsonR.toFixed(3)} · σ ${regression.standardDeviation.toFixed(prec)}`);
+          return done(anchorXY, true);
         }
         const C = d.points[2], D = d.points[3], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null, dx4 = D ? projectX(D.t) : null, dy4 = D ? projectY(D.p) : null;
         if (d.kind === "flattopbottom" && cx != null && cy != null) { line(ax, ay, bx, ay); line(bx, by, cx, cy); line(ax, ay, cx, cy, { opacity: .45, "stroke-dasharray": "4 4" }); return done(anchorXY); }
@@ -3235,13 +3306,21 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
 
       if (family === "fib") {
-        const configured = Array.isArray((d.meta as any)?.fibLevels) ? (d.meta as any).fibLevels.filter((value: unknown) => typeof value === "number" && Number.isFinite(value)).slice(0, 24) : null;
-        const ratios: readonly number[] = configured?.length ? configured as number[] : DEFAULT_FIBONACCI_LEVELS;
-        const colors = ["#7c879a", "#f03e5f", "#f59f00", "#2fb344", "#12b886", "#15aabf", "#8490a3", "#748ffc", "#4d82ff", "#845ef7", "#be4bdb"];
+        const settings = fibonacciSettings(d.meta);
+        const startPrice = settings.reverse ? B.p : A.p;
+        const endPrice = settings.reverse ? A.p : B.p;
         const x1 = Math.min(ax, bx), spanW = Math.max(48, Math.abs(bx - ax));
-        const levels = ratios.map((ratio: number, i: number) => ({ ratio, color: colors[i % colors.length], price: A.p + (B.p - A.p) * ratio }));
+        const levels = settings.levels
+          .filter((level) => level.visible)
+          .map((level) => ({ ratio: level.value, color: level.color, price: startPrice + (endPrice - startPrice) * level.value }));
         for (let i = 0; i < levels.length - 1; i++) { const y1 = projectY(levels[i].price), y2 = projectY(levels[i + 1].price); if (y1 != null && y2 != null) add("rect", { x: x1, y: Math.min(y1, y2), width: spanW, height: Math.abs(y2 - y1), fill: levels[i + 1].color, "fill-opacity": d.fillOpacity ?? .065, "pointer-events": "none" }); }
-        levels.forEach((level) => { const y = projectY(level.price); if (y == null) return; line(x1, y, x1 + spanW, y, { stroke: level.color, "stroke-width": lw(level.ratio === 0 || level.ratio === 1 ? 1.5 : 1.15, .3), "pointer-events": "none", hit: false }); text(x1 - 5, y + 3, `${Number(level.ratio.toFixed(3))} (${level.price.toFixed(prec)})`, { fill: level.color, "font-size": 9.5, "font-weight": 700, "text-anchor": "end", "font-family": "var(--font-num)", "pointer-events": "none" }); });
+        levels.forEach((level) => {
+          const y = projectY(level.price); if (y == null) return;
+          const ratio = String(Number(level.ratio.toFixed(3))), price = level.price.toFixed(prec);
+          const label = settings.labels === "ratio" ? ratio : settings.labels === "price" ? price : `${ratio} (${price})`;
+          line(x1, y, x1 + spanW, y, { stroke: level.color, "stroke-width": lw(level.ratio === 0 || level.ratio === 1 ? 1.5 : 1.15, .3), "pointer-events": "none", hit: false });
+          text(x1 - 5, y + 3, label, { fill: level.color, "font-size": 9.5, "font-weight": 700, "text-anchor": "end", "font-family": "var(--font-num)", "pointer-events": "none" });
+        });
         line(ax, ay, bx, by, { "stroke-dasharray": d.dash === "solid" || d.dash == null ? "7 5" : dash, opacity: .85 });
         return done(anchorXY, true);
       }
@@ -3330,18 +3409,76 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (family === "position") {
         const C = d.points[2], cx = C ? projectX(C.t) : null, cy = C ? projectY(C.p) : null;
         if (!C || cx == null || cy == null) return done();
+        const metrics = calculatePositionMetrics(d.points, d.meta);
         const x1 = Math.min(ax, bx, cx), x2 = Math.max(ax + 80, bx, cx), entryY = ay, targetY = by, stopY = cy, targetCol = tokensRef.current.up, stopCol = tokensRef.current.down;
         add("rect", { x: x1, y: Math.min(entryY, targetY), width: x2 - x1, height: Math.max(1, Math.abs(targetY - entryY)), fill: targetCol, "fill-opacity": d.fillOpacity ?? .2, stroke: targetCol, "stroke-opacity": .55 });
         add("rect", { x: x1, y: Math.min(entryY, stopY), width: x2 - x1, height: Math.max(1, Math.abs(stopY - entryY)), fill: stopCol, "fill-opacity": d.fillOpacity ?? .2, stroke: stopCol, "stroke-opacity": .55 });
-        line(x1, entryY, x2, entryY); const reward = Math.abs(B.p - A.p), risk = Math.abs(C.p - A.p), rr = risk ? reward / risk : 0;
-        pill((x1 + x2) / 2, targetY - 15, `${tPlain("drawingTarget")}: ${B.p.toFixed(prec)} (${((B.p - A.p) / A.p * 100).toFixed(2)}%)`);
-        pill((x1 + x2) / 2, stopY + 15, `${tPlain("drawingStop")}: ${C.p.toFixed(prec)} (${((C.p - A.p) / A.p * 100).toFixed(2)}%)`);
-        pill((x1 + x2) / 2, entryY, `${tPlain("drawingRiskReward")} ${rr.toFixed(2)}`); return done(anchorXY, true);
+        const compact = (value: number) => new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 2 }).format(value);
+        line(x1, entryY, x2, entryY);
+        const rr = metrics?.rewardRisk ?? 0, targetProfit = metrics?.targetProfit ?? 0, riskBudget = metrics?.riskBudget ?? 0;
+        pill((x1 + x2) / 2, targetY - 15, `${tPlain("drawingTarget")} ${B.p.toFixed(prec)} (${((B.p - A.p) / A.p * 100).toFixed(2)}%) · +${compact(targetProfit)}`);
+        pill((x1 + x2) / 2, stopY + 15, `${tPlain("drawingStop")} ${C.p.toFixed(prec)} (${((C.p - A.p) / A.p * 100).toFixed(2)}%) · -${compact(riskBudget)}`);
+        pill((x1 + x2) / 2, entryY, `${tPlain("drawingRiskReward")} ${rr.toFixed(2)} · ${compact(metrics?.quantity ?? 0)} @ ${compact(metrics?.positionValue ?? 0)}`); return done(anchorXY, true);
       }
 
       if (family === "forecast") {
+        if (d.kind === "ghostfeed") {
+          const controls = d.points.flatMap((point) => {
+            const x = projectX(point.t), y = projectY(point.p);
+            return x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y) ? [] : [{ x, y, p: point.p }];
+          });
+          if (controls.length < 2) return done(anchorXY);
+          const pathLength = controls.slice(1).reduce((sum, point, index) => sum + Math.hypot(point.x - controls[index].x, point.y - controls[index].y), 0);
+          const candleCount = Math.max(8, Math.min(48, Math.round(pathLength / 10)));
+          const sourceEnd = Math.max(0, barIndex(d.points[0].t));
+          const history = barsRef.current.slice(Math.max(0, sourceEnd - 63), sourceEnd + 1);
+          const feed = generateGhostFeed(history, controls.map((point) => point.p), candleCount);
+          if (!feed) return done(controls);
+          const pointAtProgress = (progress: number) => {
+            const scaled = progress * (controls.length - 1);
+            const index = Math.min(controls.length - 2, Math.floor(scaled));
+            const local = scaled - index;
+            return {
+              x: controls[index].x + (controls[index + 1].x - controls[index].x) * local,
+              y: controls[index].y + (controls[index + 1].y - controls[index].y) * local,
+            };
+          };
+          const candleX = feed.candles.map((candle) => pointAtProgress(candle.progress).x);
+          const spacings = candleX.slice(1).map((x, index) => Math.abs(x - candleX[index])).filter((value) => value > .5).sort((a, b) => a - b);
+          const medianSpacing = spacings.length ? spacings[Math.floor(spacings.length / 2)] : 5;
+          const bodyWidth = Math.max(2, Math.min(8, medianSpacing * .62));
+          feed.candles.forEach((candle, index) => {
+            const x = candleX[index];
+            const openY = projectY(candle.o), highY = projectY(candle.h), lowY = projectY(candle.l), closeY = projectY(candle.c);
+            if ([openY, highY, lowY, closeY].some((value) => value == null || !Number.isFinite(value))) return;
+            const candleColor = candle.c >= candle.o ? tokensRef.current.up : tokensRef.current.down;
+            add("line", {
+              x1: x, y1: highY as number, x2: x, y2: lowY as number,
+              stroke: candleColor, "stroke-width": Math.max(1, bodyWidth * .22),
+              "pointer-events": "none", "data-ghost-wick": String(index),
+            });
+            add("rect", {
+              x: x - bodyWidth / 2,
+              y: Math.min(openY as number, closeY as number),
+              width: bodyWidth,
+              height: Math.max(1.2, Math.abs((closeY as number) - (openY as number))),
+              rx: Math.min(1.2, bodyWidth * .18),
+              fill: candleColor,
+              stroke: candleColor,
+              "stroke-width": .65,
+              "pointer-events": "none",
+              "data-ghost-candle": String(index),
+            });
+          });
+          g.appendChild(mk("polyline", {
+            points: controls.map((point) => `${point.x},${point.y}`).join(" "),
+            fill: "none", stroke: "transparent", "stroke-width": 16,
+            "stroke-linecap": "round", "stroke-linejoin": "round", "data-segment": "1",
+          }));
+          return done(controls);
+        }
         const points = anchorXY;
-        polyline(points, { "stroke-dasharray": d.kind === "ghostfeed" ? "2 4" : dash, opacity: d.kind === "ghostfeed" ? .72 : 1 });
+        polyline(points);
         if (d.kind === "forecast") { const angle = Math.atan2(by - ay, bx - ax), head = 10; path(`M${bx} ${by}L${bx + head * Math.cos(angle + Math.PI - .5)} ${by + head * Math.sin(angle + Math.PI - .5)}M${bx} ${by}L${bx + head * Math.cos(angle + Math.PI + .5)} ${by + head * Math.sin(angle + Math.PI + .5)}`); pill((ax + bx) / 2, Math.min(ay, by) - 15, measurementLabel()); }
         return done(points, d.kind === "forecast");
       }
@@ -3362,11 +3499,39 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
 
       if (family === "volume-profile") {
-        const x1 = Math.min(ax, bx), x2 = Math.max(ax, bx), y1 = Math.min(ay, by), y2 = Math.max(ay, by), bins = Array(16).fill(0), low = Math.min(A.p, B.p), high = Math.max(A.p, B.p), span = Math.max(1e-9, high - low);
+        const x1 = Math.min(ax, bx), x2 = Math.max(ax, bx), y1 = Math.min(ay, by), y2 = Math.max(ay, by);
         const i1 = Math.max(0, Math.min(barIndex(A.t), barIndex(B.t))), i2 = Math.min(barsRef.current.length - 1, Math.max(barIndex(A.t), barIndex(B.t)));
-        for (const row of barsRef.current.slice(i1, i2 + 1)) { const price = (row.h + row.l + row.c) / 3, bin = Math.max(0, Math.min(bins.length - 1, Math.floor((price - low) / span * bins.length))); bins[bin] += Math.max(1, row.v || 0); }
-        const max = Math.max(1, ...bins); bins.forEach((volume, i) => { const h = Math.max(1, (y2 - y1) / bins.length - 1), width = (x2 - x1) * volume / max; add("rect", { x: x1, y: y2 - (i + 1) / bins.length * (y2 - y1), width, height: h, fill: col, "fill-opacity": .22 + .48 * volume / max, stroke: "none" }); });
-        add("rect", { x: x1, y: y1, width: Math.max(1, x2 - x1), height: Math.max(1, y2 - y1), fill: "none", stroke: col, "stroke-width": 1, "stroke-dasharray": dash }); return done(anchorXY);
+        const profile = calculateFixedRangeVolumeProfile(barsRef.current.slice(i1, i2 + 1), A.p, B.p, 24, .7);
+        if (!profile) return done(anchorXY);
+        const maxVolume = Math.max(...profile.bins.map((bin) => bin.volume), 1e-9);
+        profile.bins.forEach((bin, index) => {
+          const top = projectY(bin.high), bottom = projectY(bin.low);
+          if (top == null || bottom == null || !Number.isFinite(top) || !Number.isFinite(bottom)) return;
+          const width = Math.max(.5, (x2 - x1) * bin.volume / maxVolume);
+          add("rect", {
+            x: x2 - width,
+            y: Math.min(top, bottom) + .5,
+            width,
+            height: Math.max(1, Math.abs(bottom - top) - 1),
+            fill: col,
+            "fill-opacity": bin.isPoc ? .82 : bin.inValueArea ? .46 : .17,
+            stroke: bin.isPoc ? col : "none",
+            "stroke-width": bin.isPoc ? .8 : 0,
+            "pointer-events": "none",
+            "data-profile-bin": String(index),
+            "data-value-area": bin.inValueArea ? "true" : "false",
+            "data-poc": bin.isPoc ? "true" : "false",
+          });
+        });
+        const pocY = projectY(profile.pocPrice), vahY = projectY(profile.valueAreaHigh), valY = projectY(profile.valueAreaLow);
+        if (vahY != null) line(x1, vahY, x2, vahY, { hit: false, opacity: .46, "stroke-dasharray": "3 4" });
+        if (valY != null) line(x1, valY, x2, valY, { hit: false, opacity: .46, "stroke-dasharray": "3 4" });
+        if (pocY != null) {
+          line(x1, pocY, x2, pocY, { hit: false, "stroke-width": lw(1.8, .45), "stroke-dasharray": "" });
+          pill(x1 + (x2 - x1) * .68, pocY - 14, `POC ${profile.pocPrice.toFixed(prec)}`);
+        }
+        add("rect", { x: x1, y: y1, width: Math.max(1, x2 - x1), height: Math.max(1, y2 - y1), fill: "none", stroke: col, "stroke-width": 1, "stroke-dasharray": dash });
+        return done(anchorXY, true);
       }
 
       if (family === "range") {
@@ -3481,6 +3646,28 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     window.addEventListener("resize", hideBarTip);
     document.addEventListener("scroll", hideBarTip, true);
     const COLORS = ["#4d82ff", "#26c281", "#f0566b", "#e8b339", "#d6dae3"];
+    const RECENT_COLOR_KEY = "mm.drawing.recentColors.v1";
+    const normalizeHexColor = (value: unknown) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
+      ? value.toLowerCase()
+      : null;
+    const readRecentColors = () => {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(RECENT_COLOR_KEY) || "[]");
+        if (!Array.isArray(parsed)) return [] as string[];
+        return parsed.flatMap((value) => normalizeHexColor(value) ?? []).filter((value, index, all) => all.indexOf(value) === index).slice(0, 8);
+      } catch { return [] as string[]; }
+    };
+    let recentColors = readRecentColors();
+    const rememberRecentColor = (color: unknown, previous?: unknown) => {
+      const values = [normalizeHexColor(color), normalizeHexColor(previous), ...recentColors].filter((value): value is string => value !== null);
+      recentColors = values.filter((value, index) => values.indexOf(value) === index).slice(0, 8);
+      try { localStorage.setItem(RECENT_COLOR_KEY, JSON.stringify(recentColors)); } catch {}
+    };
+    const quickBarColors = (value: unknown) => {
+      const current = normalizeHexColor(value) || COLORS[0];
+      const candidates = [current, ...recentColors, ...COLORS.map((color) => color.toLowerCase())];
+      return candidates.filter((color, index) => candidates.indexOf(color) === index).slice(0, 3);
+    };
     const creationPalette = document.createElement("div");
     creationPalette.className = "drawing-creation-palette";
     creationPalette.setAttribute("role", "toolbar");
@@ -3530,7 +3717,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       hideBarTip();
       bar.dataset.drawingId = d.id;
       const sw = (a: boolean) => (a ? " on" : "");
-      let h = COLORS.map((cc) => `<button data-c="${cc}" class="dsw${sw((d.color || "#4d82ff") === cc)}" style="background:${cc}" aria-label="${escH(tPlain("drawingColorValue").replace("{color}", cc))}"></button>`).join("");
+      const currentColor = normalizeHexColor(d.color) || COLORS[0];
+      let h = quickBarColors(currentColor).map((cc, index) => `<button data-c="${cc}" data-color-role="${index === 0 ? "current" : "recent"}" class="dsw${sw(index === 0)}" style="background:${cc}" aria-label="${escH(tPlain("drawingColorValue").replace("{color}", cc))}"></button>`).join("");
       if (getDrawingTool(d.kind)?.capabilities.includes("fontSize")) {
         h += `<span class="bar-sep"></span>` + [["12", "S"], ["16", "M"], ["22", "L"]].map(([fs, l]) => `<button data-fs="${fs}" class="dfi${sw((d.fontSize ?? 13) === +fs)}" aria-label="${escH(tPlain("drawingTextSizeOption").replace("{size}", l))}">${l}</button>`).join("");
       } else if (getDrawingTool(d.kind)?.capabilities.some((cap) => cap === "width" || cap === "dash")) {
@@ -3539,13 +3727,24 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       h += `<span class="bar-sep"></span><button class="bar-del" data-del="1" aria-label="${tPlain("drawingDelete")}"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg></button>`;
       bar.innerHTML = h;
+      const picker = document.createElement("label");
+      picker.className = "bar-color-picker";
+      picker.setAttribute("aria-label", tPlain("drawingCustomColorAria"));
+      picker.setAttribute("data-color-role", "picker");
+      const pickerPreview = document.createElement("span");
+      pickerPreview.className = "bar-color-picker-preview";
+      pickerPreview.style.background = currentColor;
+      const pickerPlus = document.createElement("span");
+      pickerPlus.className = "bar-color-picker-plus";
+      pickerPlus.textContent = "+";
       const gripEl = document.createElement("button");
       gripEl.className = "bar-grip"; gripEl.type = "button"; gripEl.setAttribute("aria-label", tPlain("drawingDragProperties")); gripEl.setAttribute("data-bar-grip", "1");
       gripEl.textContent = "⠿"; bar.prepend(gripEl);
       const custom = document.createElement("input");
-      custom.className = "bar-custom-color"; custom.type = "color"; custom.value = /^#[0-9a-f]{6}$/i.test(d.color || "") ? d.color! : "#4d82ff";
+      custom.className = "bar-custom-color"; custom.type = "color"; custom.value = currentColor; custom.dataset.previousColor = currentColor;
       custom.setAttribute("aria-label", tPlain("drawingCustomColorAria")); custom.setAttribute("data-custom-color", "1");
-      bar.appendChild(custom);
+      picker.append(pickerPreview, pickerPlus, custom);
+      bar.insertBefore(picker, bar.querySelector(".bar-sep"));
       const lock = document.createElement("button");
       lock.className = "bar-act" + (d.locked ? " on" : ""); lock.type = "button";
       lock.setAttribute("aria-label", d.locked ? tPlain("drawingUnlock") : tPlain("drawingLock")); lock.setAttribute("data-lock", "1"); lock.textContent = d.locked ? "●" : "○"; bar.appendChild(lock);
@@ -3557,6 +3756,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       settings.setAttribute("data-settings", "1"); settings.textContent = "⚙"; bar.appendChild(settings);
       const panel = document.createElement("div");
       panel.className = "draw-settings";
+      panel.dataset.settingsKind = d.kind;
       const opacityLabel = document.createElement("label"); opacityLabel.textContent = tPlain("drawingOpacity");
       const opacity = document.createElement("input"); opacity.type = "range"; opacity.min = "15"; opacity.max = "100"; opacity.step = "5"; opacity.value = String(Math.round((d.opacity ?? 1) * 100)); opacity.setAttribute("data-opacity", "1");
       opacityLabel.appendChild(opacity); panel.appendChild(opacityLabel);
@@ -3565,10 +3765,59 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const fill = document.createElement("input"); fill.type = "range"; fill.min = "0"; fill.max = "45"; fill.step = "1"; fill.value = String(Math.round((d.fillOpacity ?? .08) * 100)); fill.setAttribute("data-fill-opacity", "1");
         fillLabel.appendChild(fill); panel.appendChild(fillLabel);
       }
+      if (d.kind === "fib") {
+        const fib = fibonacciSettings(d.meta);
+        const heading = document.createElement("div"); heading.className = "draw-settings-heading"; heading.textContent = tPlain("drawingFibLevels"); panel.appendChild(heading);
+        const controls = document.createElement("div"); controls.className = "draw-settings-grid";
+        const reverseLabel = document.createElement("label"); reverseLabel.textContent = tPlain("drawingFibReverse");
+        const reverse = document.createElement("input"); reverse.type = "checkbox"; reverse.checked = fib.reverse; reverse.setAttribute("data-fib-reverse", "1"); reverseLabel.appendChild(reverse); controls.appendChild(reverseLabel);
+        const labelModeLabel = document.createElement("label"); labelModeLabel.textContent = tPlain("drawingFibLabels");
+        const labelMode = document.createElement("select"); labelMode.setAttribute("data-fib-labels", "1");
+        (["ratio", "price", "both"] as const).forEach((value) => {
+          const option = document.createElement("option"); option.value = value;
+          option.textContent = tPlain(value === "ratio" ? "drawingFibRatio" : value === "price" ? "drawingFibPrice" : "drawingFibBoth");
+          option.selected = fib.labels === value; labelMode.appendChild(option);
+        });
+        labelModeLabel.appendChild(labelMode); controls.appendChild(labelModeLabel); panel.appendChild(controls);
+        const levels = document.createElement("div"); levels.className = "draw-fib-levels"; levels.setAttribute("role", "group"); levels.setAttribute("aria-label", tPlain("drawingFibLevels"));
+        fib.levels.forEach((level, index) => {
+          const row = document.createElement("label"); row.className = "draw-fib-level";
+          const visible = document.createElement("input"); visible.type = "checkbox"; visible.checked = level.visible; visible.setAttribute("data-fib-level", String(index));
+          const value = document.createElement("input"); value.type = "number"; value.min = "-100"; value.max = "100"; value.step = ".001"; value.value = String(level.value); value.setAttribute("data-fib-value", String(index)); value.setAttribute("aria-label", tPlain("drawingFibLevelValue").replace("{value}", String(level.value)));
+          const color = document.createElement("input"); color.type = "color"; color.value = level.color; color.setAttribute("data-fib-color", String(index)); color.setAttribute("aria-label", `${level.value} ${tPlain("drawingCustomColor")}`);
+          row.append(visible, value, color); levels.appendChild(row);
+        });
+        panel.appendChild(levels);
+        const reset = document.createElement("button"); reset.type = "button"; reset.className = "draw-settings-reset"; reset.setAttribute("data-reset-tool-settings", "fib"); reset.textContent = tPlain("drawingResetDefaults"); panel.appendChild(reset);
+      }
+      if (d.kind === "longposition" || d.kind === "shortposition") {
+        const position = positionSettings(d.meta);
+        const metrics = calculatePositionMetrics(d.points, d.meta);
+        const heading = document.createElement("div"); heading.className = "draw-settings-heading"; heading.textContent = getDrawingTool(d.kind)?.label || "Position"; panel.appendChild(heading);
+        const controls = document.createElement("div"); controls.className = "draw-settings-grid";
+        const accountLabel = document.createElement("label"); accountLabel.textContent = tPlain("drawingAccountSize");
+        const account = document.createElement("input"); account.type = "number"; account.min = "1"; account.max = "1000000000000"; account.step = "100"; account.value = String(position.accountSize); account.setAttribute("data-position-account", "1"); accountLabel.appendChild(account); controls.appendChild(accountLabel);
+        const riskModeLabel = document.createElement("label"); riskModeLabel.textContent = tPlain("drawingRiskMode");
+        const riskMode = document.createElement("select"); riskMode.setAttribute("data-position-risk-mode", "1");
+        (["percent", "money"] as const).forEach((mode) => {
+          const option = document.createElement("option"); option.value = mode; option.selected = position.riskMode === mode;
+          option.textContent = tPlain(mode === "percent" ? "drawingRiskModePercent" : "drawingRiskModeMoney"); riskMode.appendChild(option);
+        });
+        riskModeLabel.appendChild(riskMode); controls.appendChild(riskModeLabel);
+        const riskLabel = document.createElement("label"); riskLabel.textContent = tPlain(position.riskMode === "money" ? "drawingRiskAmount" : "drawingRiskPercent");
+        const risk = document.createElement("input"); risk.type = "number"; risk.min = ".01"; risk.max = position.riskMode === "money" ? String(position.accountSize) : "100"; risk.step = position.riskMode === "money" ? "1" : ".1"; risk.value = String(position.riskMode === "money" ? position.riskAmount : position.riskPercent); risk.setAttribute(position.riskMode === "money" ? "data-position-risk-amount" : "data-position-risk", "1"); riskLabel.appendChild(risk); controls.appendChild(riskLabel); panel.appendChild(controls);
+        if (metrics) {
+          const summary = document.createElement("div"); summary.className = "draw-position-summary";
+          summary.innerHTML = `<span>${escH(tPlain("drawingRiskAmount"))}<b>${metrics.riskBudget.toLocaleString(undefined, { maximumFractionDigits: 2 })}</b></span><span>${escH(tPlain("drawingPositionSize"))}<b>${metrics.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}</b></span>`;
+          panel.appendChild(summary);
+        }
+        const reset = document.createElement("button"); reset.type = "button"; reset.className = "draw-settings-reset"; reset.setAttribute("data-reset-tool-settings", "position"); reset.textContent = tPlain("drawingResetDefaults"); panel.appendChild(reset);
+      }
       bar.appendChild(panel);
     };
     let barManual: { x: number; y: number } | null = null, barManualFor: string | null = null;
     bar.addEventListener("pointerdown", (e) => {
+      if (replayIdxRef.current != null) return;
       e.stopPropagation();
       if (e.pointerType === "touch") lastBarTouchAt = performance.now();
       const target = e.target as HTMLElement;
@@ -3601,10 +3850,25 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Click, rather than pointerdown, keeps every inspector action operable with
     // Enter/Space while retaining delegated mouse and touch behavior.
     bar.addEventListener("click", (e) => {
+      if (replayIdxRef.current != null) return;
       e.stopPropagation();
       const target = e.target as HTMLElement;
       const tg = target.closest("button") as HTMLElement | null; if (!tg || !sel) return;
       if (tg.getAttribute("data-settings")) { bar.classList.toggle("settings-open"); return; }
+      const resetSettings = tg.getAttribute("data-reset-tool-settings");
+      if (resetSettings) {
+        drawRef.current = drawRef.current.map((drawing) => {
+          if (drawing.id !== sel) return drawing;
+          const meta = { ...(drawing.meta ?? {}) };
+          if (resetSettings === "fib") {
+            delete meta.fibLevels; delete meta.fibLevelStyles; delete meta.fibReverse; delete meta.fibLabels;
+          } else {
+            delete meta.accountSize; delete meta.riskMode; delete meta.riskPercent; delete meta.riskAmount;
+          }
+          return { ...drawing, ...(Object.keys(meta).length ? { meta } : { meta: undefined }) };
+        });
+        barSig = ""; onChangeRef.current?.([...drawRef.current]); return;
+      }
       if (tg.getAttribute("data-del")) { const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); return; }
       if (tg.getAttribute("data-lock")) {
         drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, locked: !d.locked } : d);
@@ -3630,15 +3894,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       const cc = tg.getAttribute("data-c"), w = tg.getAttribute("data-w"), dd = tg.getAttribute("data-dash"), fs = tg.getAttribute("data-fs");
       const selectedDrawing = drawRef.current.find((drawing) => drawing.id === sel);
+      if (cc && selectedDrawing) rememberRecentColor(cc, selectedDrawing.color);
       const selectedCanFill = getDrawingTool(selectedDrawing?.kind)?.capabilities.includes("fill") ?? false;
       const patch = cc ? { color: cc, ...(selectedCanFill ? { fillColor: cc } : {}) }
         : w ? { width: +w }
         : dd ? { dash: dd as any }
         : fs ? { fontSize: +fs }
         : null;
-      if (patch) { drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, ...patch } : d); onChangeRef.current?.([...drawRef.current]); }
+      if (patch) {
+        drawRef.current = drawRef.current.map((d) => d.id === sel ? { ...d, ...patch } : d);
+        if (selectedDrawing) {
+          try { window.dispatchEvent(new CustomEvent("mm:drawing-style", { detail: { kind: selectedDrawing.kind, ...patch } })); } catch {}
+        }
+        onChangeRef.current?.([...drawRef.current]);
+      }
     });
-    const inspectorPatch = (input: HTMLInputElement): Partial<Drawing> | null => {
+    const inspectorPatch = (input: HTMLInputElement | HTMLSelectElement): Partial<Drawing> | null => {
       if (input.hasAttribute("data-custom-color")) {
         const selectedDrawing = drawRef.current.find((drawing) => drawing.id === sel);
         const canFill = getDrawingTool(selectedDrawing?.kind)?.capabilities.includes("fill") ?? false;
@@ -3646,13 +3917,50 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       if (input.hasAttribute("data-opacity")) return { opacity: +input.value / 100 };
       if (input.hasAttribute("data-fill-opacity")) return { fillOpacity: +input.value / 100 };
+      const selectedDrawing = drawRef.current.find((drawing) => drawing.id === sel);
+      if (!selectedDrawing) return null;
+      if (input.hasAttribute("data-fib-reverse")) return { meta: { ...(selectedDrawing.meta ?? {}), fibReverse: (input as HTMLInputElement).checked } };
+      if (input.hasAttribute("data-fib-labels")) {
+        const labels = input.value as FibonacciLabelMode;
+        if (labels !== "ratio" && labels !== "price" && labels !== "both") return null;
+        return { meta: { ...(selectedDrawing.meta ?? {}), fibLabels: labels } };
+      }
+      const fibLevel = input.getAttribute("data-fib-level"), fibColor = input.getAttribute("data-fib-color"), fibValue = input.getAttribute("data-fib-value");
+      if (fibLevel !== null || fibColor !== null || fibValue !== null) {
+        const index = Number(fibLevel ?? fibColor ?? fibValue);
+        const fib = fibonacciSettings(selectedDrawing.meta);
+        if (!Number.isInteger(index) || !fib.levels[index]) return null;
+        fib.levels[index] = fibLevel !== null
+          ? { ...fib.levels[index], visible: (input as HTMLInputElement).checked }
+          : fibColor !== null
+            ? { ...fib.levels[index], color: input.value }
+            : { ...fib.levels[index], value: Math.max(-100, Math.min(100, Number.isFinite(Number(input.value)) ? +Number(input.value).toFixed(6) : fib.levels[index].value)) };
+        return { meta: {
+          ...(selectedDrawing.meta ?? {}),
+          fibLevels: fib.levels.filter((level) => level.visible).map((level) => level.value),
+          fibLevelStyles: fib.levels,
+        } };
+      }
+      if (input.hasAttribute("data-position-risk-mode")) {
+        const riskMode = input.value === "money" ? "money" : "percent";
+        return { meta: { ...(selectedDrawing.meta ?? {}), riskMode } };
+      }
+      if (input.hasAttribute("data-position-account") || input.hasAttribute("data-position-risk") || input.hasAttribute("data-position-risk-amount")) {
+        const current = positionSettings(selectedDrawing.meta);
+        const raw = Number(input.value);
+        const accountSize = input.hasAttribute("data-position-account") ? Math.max(1, Math.min(1_000_000_000_000, raw || current.accountSize)) : current.accountSize;
+        const riskPercent = input.hasAttribute("data-position-risk") ? Math.max(.01, Math.min(100, raw || current.riskPercent)) : current.riskPercent;
+        const riskAmount = input.hasAttribute("data-position-risk-amount") ? Math.max(.01, Math.min(accountSize, raw || current.riskAmount)) : current.riskAmount;
+        return { meta: { ...(selectedDrawing.meta ?? {}), accountSize, riskPercent, riskAmount } };
+      }
       return null;
     };
-    const barSignature = (d: Drawing) => `${d.id}|${d.kind}|${d.color}|${d.fillColor}|${d.width}|${d.dash}|${d.fontSize}`;
+    const barSignature = (d: Drawing) => `${d.id}|${d.kind}|${d.color}|${d.fillColor}|${d.width}|${d.dash}|${d.fontSize}|${JSON.stringify(d.meta ?? {})}`;
     let barSig = "";
     bar.addEventListener("input", (e) => {
+      if (replayIdxRef.current != null) return;
       e.stopPropagation(); if (!sel) return;
-      const input = e.target as HTMLInputElement;
+      const input = e.target as HTMLInputElement | HTMLSelectElement;
       const patch = inspectorPatch(input);
       if (patch) {
         drawingTransactionRef.current = true;
@@ -3660,20 +3968,32 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // Color is part of the inspector signature. Keep the live input mounted
         // through its later `change` event instead of rebuilding it mid-gesture.
         const selected = drawRef.current.find((d) => d.id === sel);
-        if (selected && input.hasAttribute("data-custom-color")) barSig = barSignature(selected);
+        if (selected) barSig = barSignature(selected);
         scheduleDraw();
       }
     });
     bar.addEventListener("change", (e) => {
+      if (replayIdxRef.current != null) return;
       e.stopPropagation(); if (!sel) return;
-      const patch = inspectorPatch(e.target as HTMLInputElement);
+      const input = e.target as HTMLInputElement | HTMLSelectElement;
+      const patch = inspectorPatch(input);
       if (patch) {
+        if (input.hasAttribute("data-custom-color")) {
+          rememberRecentColor(input.value, (input as HTMLInputElement).dataset.previousColor);
+          (input as HTMLInputElement).dataset.previousColor = input.value;
+        }
         drawingTransactionRef.current = false;
+        barSig = "";
         onChangeRef.current?.([...drawRef.current]);
+        renderDraw();
       }
     });
     bar.addEventListener("pointercancel", () => { drawingTransactionRef.current = false; });
     const positionBar = () => {
+      if (replayIdxRef.current != null) {
+        bar.style.display = "none"; barSig = "";
+        return;
+      }
       const d = drawRef.current.find((x) => x.id === sel);
       if (sel && d && d.points[0]) {
         const paneAnchor = getDrawingTool(d.kind)?.creation.anchorSpace === "pane" ? paneAnchorOf(d.meta) : null;
@@ -3782,6 +4102,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     onCtx = (e: MouseEvent) => {
       e.preventDefault();
+      // Right-click is the fast escape hatch from an armed/stay-active drawing
+      // tool. Do not stack the chart context menu over a half-finished gesture.
+      if (toolRef.current) {
+        cancelPendingDrawingRef.current();
+        try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: null })); } catch {}
+        return;
+      }
       const r = wrap.getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top;
       ctxPt = snap(x, y, e);
       buildCtxMenu();
@@ -4869,11 +5196,24 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // PointerEvent.detail is always 0 in Chromium. Track presses by stable drawing id so
     // a real double-click still edits text after the first press rebuilds the SVG node.
     let lastTextPress: { id: string; at: number; x: number; y: number } | null = null;
+    const setInspectorMoving = (moving: boolean) => bar.classList.toggle("is-drawing-moving", moving);
 
     // select + drag existing drawings in cursor mode (capture phase; runs before creation)
     svg.addEventListener("pointerdown", (ev) => {
-      if (toolRef.current || !activeRef.current || !ev.isPrimary || ev.button !== 0) return; const id = idAt(ev); if (!id) { if (sel) { sel = null; renderDraw(); } return; }
-      const d0 = drawRef.current.find((x) => x.id === id); if (!d0) return;
+      if (replayIdxRef.current != null || toolRef.current || !activeRef.current || !ev.isPrimary || ev.button !== 0) return; const hitId = idAt(ev); if (!hitId) { if (sel) { sel = null; renderDraw(); } return; }
+      const source = drawRef.current.find((x) => x.id === hitId); if (!source) return;
+      const handleAttr = (ev.target as Element)?.closest?.("[data-handle]")?.getAttribute("data-handle");
+      let id = hitId;
+      let d0 = source;
+      // Cmd/Ctrl-drag clones the object before movement. The clone is detached,
+      // unlocked and selected; pointercancel removes it without touching source.
+      const commandClone = Boolean((ev.metaKey || ev.ctrlKey) && handleAttr == null && !source.locked);
+      if (commandClone) {
+        d0 = cloneDrawing(source, uid());
+        d0.z = Math.max(drawRef.current.length, ...drawRef.current.map((drawing) => drawing.z ?? 0)) + 1;
+        id = d0.id;
+        drawRef.current = [...drawRef.current, d0];
+      }
       const pointerId = ev.pointerId;
       ev.stopPropagation();
       if (getDrawingTool(d0.kind)?.capabilities.includes("textInput") && !d0.locked) {
@@ -4892,14 +5232,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       sel = id; renderDraw();
       if (d0.locked) return;
       const prec = precRef.current;
-      const handleAttr = (ev.target as Element)?.closest?.("[data-handle]")?.getAttribute("data-handle");
       if (handleAttr != null) {
         const handleIndex = Number(handleAttr);
         if (Number.isInteger(handleIndex) && d0.points[handleIndex]) {
           drawingTransactionRef.current = true;
+          setInspectorMoving(true);
           const moveHandle = (e: PointerEvent) => {
             if (e.pointerId !== pointerId) return;
-            const m0 = rectXY(e), pt = snap(m0.x, m0.y, e);
+            const m0 = rectXY(e);
+            const angleOrigin = d0.points.length === 2
+              ? d0.points[handleIndex === 0 ? 1 : 0]
+              : handleIndex > 0 ? d0.points[0] : undefined;
+            const pt = constrainedSnap(angleOrigin, m0.x, m0.y, e);
             const paneAnchored = getDrawingTool(d0.kind)?.creation.anchorSpace === "pane" && handleIndex === 0;
             drawRef.current = drawRef.current.map((x) => x.id !== id ? x : {
               ...x,
@@ -4910,6 +5254,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           };
           const cleanupHandle = () => {
             window.removeEventListener("pointermove", moveHandle); window.removeEventListener("pointerup", endHandle); window.removeEventListener("pointercancel", cancelHandle);
+            setInspectorMoving(false);
           };
           const endHandle = (e: PointerEvent) => {
             if (e.pointerId !== pointerId) return;
@@ -4929,6 +5274,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const s0 = rectXY(ev); const start = snap(s0.x, s0.y, ev); const orig = d0.points.map((p) => ({ ...p }));
       const origPaneAnchor = getDrawingTool(d0.kind)?.creation.anchorSpace === "pane" ? paneAnchorOf(d0.meta) : null;
       drawingTransactionRef.current = true;
+      setInspectorMoving(true);
       const origIndices = orig.map((point) => barIndex(point.t));
       const minOrigIndex = Math.min(...origIndices), maxOrigIndex = Math.max(...origIndices);
       const move = (e: PointerEvent) => {
@@ -4956,12 +5302,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         drawRef.current = drawRef.current.map((x) => x.id !== id ? x : { ...x, points: orig.map((pt, index) => { const ni = origIndices[index] + di; return { t: bars[ni]?.time || pt.t, p: +(pt.p + dp).toFixed(prec) }; }) });
         scheduleDraw();   // rAF-coalesced: one renderDraw() per frame instead of per raw pointermove
       };
-      const cleanupMove = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", cancelMove); };
+      const cleanupMove = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", cancelMove); setInspectorMoving(false); };
       const up = (e: PointerEvent) => { if (e.pointerId !== pointerId) return; cleanupMove(); dragCleanup = null; drawingTransactionRef.current = false; onChangeRef.current?.([...drawRef.current]); };
       const cancelMove = (e: PointerEvent) => {
         if (e.pointerId !== pointerId) return;
         cleanupMove(); dragCleanup = null; drawingTransactionRef.current = false;
-        drawRef.current = drawRef.current.map((x) => x.id === id ? d0 : x);
+        drawRef.current = commandClone
+          ? drawRef.current.filter((x) => x.id !== id)
+          : drawRef.current.map((x) => x.id === id ? d0 : x);
+        if (commandClone) sel = hitId;
         renderDraw();
       };
       dragCleanup = cleanupMove;
@@ -4973,7 +5322,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // drawing hit consumes the wheel; normal chart zoom remains untouched.
     let lastPaletteWheel = 0;
     svg.addEventListener("wheel", (event) => {
-      if (!activeRef.current) return;
+      if (!activeRef.current || replayIdxRef.current != null) return;
       if (toolRef.current) {
         if (!matchMedia("(pointer:fine)").matches) return;
         const now = performance.now(); if (now - lastPaletteWheel < 90) return;
@@ -4992,6 +5341,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const direction = event.deltaY >= 0 ? 1 : -1;
       const next = COLORS[(current < 0 ? 0 : current + direction + COLORS.length) % COLORS.length];
       sel = id;
+      rememberRecentColor(next, drawing.color);
       const canFill = getDrawingTool(drawing.kind)?.capabilities.includes("fill") ?? false;
       drawRef.current = drawRef.current.map((candidate) => candidate.id === id
         ? { ...candidate, color: next, ...(canFill ? { fillColor: next } : {}) }
@@ -5001,7 +5351,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
 
     // creation / erase (bubble; svg is pointer-events:auto only when a tool is active)
     svg.addEventListener("pointerdown", (ev) => {
-      const tl = toolRef.current; if (!tl || !ev.isPrimary || ev.button !== 0) return;
+      const tl = toolRef.current; if (drawingCreationDisabledRef.current || replayIdxRef.current != null || !tl || !ev.isPrimary || ev.button !== 0) return;
       const activation = toolActivationRef.current;
       positionCreationPalette(ev.clientX, ev.clientY);
       const { x, y } = rectXY(ev); const a = snap(x, y, ev);
@@ -5026,7 +5376,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         renderDraw(); return;
       }
       if (spec.creation.mode === "two-point") {
-        pending = { kind: spec.id, activation, points: [a], mode: "drag", pointerId: ev.pointerId };
+        if (pending?.kind === spec.id && pending.mode === "drag" && pending.awaitingSecond && pending.activation === activation) {
+          pending.pointerId = ev.pointerId;
+          pending.candidate = constrainedSnap(pending.points[0], x, y, ev);
+        } else {
+          pending = { kind: spec.id, activation, points: [a], mode: "drag", pointerId: ev.pointerId, awaitingSecond: false };
+        }
         try { svg.setPointerCapture(ev.pointerId); } catch {}
         return;
       }
@@ -5066,13 +5421,20 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         return;
       }
       const id = idAt(ev); const d = drawRef.current.find((x) => x.id === id);
-      if (d && getDrawingTool(d.kind)?.capabilities.includes("textInput")) { ev.stopPropagation(); ev.preventDefault(); openTextEditor(d.points[0], d); }
+      if (d && replayIdxRef.current == null && !d.locked && getDrawingTool(d.kind)?.capabilities.includes("textInput")) { ev.stopPropagation(); ev.preventDefault(); openTextEditor(d.points[0], d); }
+      else if (d && replayIdxRef.current == null && !d.locked) {
+        ev.stopPropagation(); ev.preventDefault(); sel = d.id; renderDraw(); bar.classList.add("settings-open");
+      }
     });
     svg.addEventListener("pointermove", (ev) => {
       positionCreationPalette(ev.clientX, ev.clientY);
       if (!pending) return;
       if (pending.pointerId != null && pending.pointerId !== ev.pointerId) return;
-      const { x, y } = rectXY(ev); const p0 = pending; const b = snap(x, y, ev);
+      const { x, y } = rectXY(ev); const p0 = pending;
+      const angleOrigin = pending.mode === "drag"
+        ? pending.points[0]
+        : pending.mode === "multi" ? pending.points[pending.points.length - 1] : undefined;
+      const b = constrainedSnap(angleOrigin, x, y, ev);
       if (pending.mode === "multi" || pending.mode === "point" || pending.mode === "text") pending.candidate = b;
       if (getDrawingTool(pending.kind)?.creation.anchorSpace === "pane") pending.meta = paneMetaAt(x, y, pending.meta);
       if (pending.mode === "freehand") {
@@ -5104,7 +5466,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (!pending) return;
       if (pending.pointerId != null && pending.pointerId !== ev.pointerId) return;
       creationPalette.style.pointerEvents = "auto";
-      const { x, y } = rectXY(ev), b = snap(x, y, ev), current = pending;
+      const { x, y } = rectXY(ev), current = pending;
+      const angleOrigin = current.mode === "drag"
+        ? current.points[0]
+        : current.mode === "multi" ? current.points[current.points.length - 1] : undefined;
+      const b = constrainedSnap(angleOrigin, x, y, ev);
       try { if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId); } catch {}
       if (current.mode === "multi") {
         const previous = current.points[current.points.length - 1], px = previous ? xOf(previous.t) : null, py = previous ? yOf(previous.p) : null;
@@ -5120,10 +5486,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         } else renderDraw();
         return;
       }
-      pending = null;
       const currentMeta = getDrawingTool(current.kind)?.creation.anchorSpace === "pane" ? paneMetaAt(x, y, current.meta) : current.meta;
-      if (current.mode === "text") { openTextEditor(b, undefined, current.kind, [b], currentMeta, current.activation); renderDraw(); return; }
+      if (current.mode === "text") { pending = null; openTextEditor(b, undefined, current.kind, [b], currentMeta, current.activation); renderDraw(); return; }
       if (current.mode === "point") {
+        pending = null;
         if (current.kind === "emoji" || current.kind === "icon") openMediaChoicePicker(current.kind, b, x, y, current.activation);
         else commitDrawing(current.kind, [b], currentMeta, current.activation);
         renderDraw(); return;
@@ -5131,7 +5497,18 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const maxPoints = getDrawingTool(current.kind)?.creation.maxPoints ?? 64;
       const points = current.mode === "freehand" ? [...current.points, b].slice(0, maxPoints) : [current.points[0], b];
       const a = points[0], last = points[points.length - 1];
-      if (!a || !last || (Math.abs((xOf(a.t) ?? 0) - (xOf(last.t) ?? 0)) < 3 && Math.abs((yOf(a.p) ?? 0) - (yOf(last.p) ?? 0)) < 3)) { renderDraw(); return; }
+      const isTiny = !a || !last || (Math.abs((xOf(a.t) ?? 0) - (xOf(last.t) ?? 0)) < 3 && Math.abs((yOf(a.p) ?? 0) - (yOf(last.p) ?? 0)) < 3);
+      // A stationary first click arms the documented click-then-click placement
+      // mode. A normal drag continues to commit on the first pointerup.
+      if (current.mode === "drag" && isTiny && !current.awaitingSecond) {
+        current.pointerId = undefined;
+        current.candidate = b;
+        current.awaitingSecond = true;
+        renderDraw();
+        return;
+      }
+      if (isTiny) { current.pointerId = undefined; current.candidate = b; renderDraw(); return; }
+      pending = null;
       if (current.kind === "image") { openImageUpload(points, x, y, current.activation); renderDraw(); return; }
       if (getDrawingTool(current.kind)?.capabilities.includes("textInput")) {
         openTextEditor(last, undefined, current.kind, points, currentMeta, current.activation);
@@ -5154,7 +5531,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // opening the drawing rail. Capture on the chart wrapper because the drawing SVG
     // intentionally has pointer-events:none while no tool is armed.
     const onShiftMeasure = (ev: PointerEvent) => {
-      if (!ev.shiftKey || toolRef.current || !activeRef.current || ev.button !== 0) return;
+      if (drawingCreationDisabledRef.current || replayIdxRef.current != null || !ev.shiftKey || toolRef.current || !activeRef.current || ev.button !== 0) return;
       const startXY = rectXY(ev), a = snap(startXY.x, startXY.y, ev);
       const activation = toolActivationRef.current;
       ev.preventDefault(); ev.stopPropagation();
@@ -5191,25 +5568,96 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // (same idiom as mm:set-tf / mm:open-pane). NOTE: this requires a matching listener in TerminalShell
     // (`mm:set-tool` → setTool) to take effect — see the lane summary.
     let lastEscTs = 0;
+    let drawingClipboard: Drawing | null = null;
     onKey = (e: KeyboardEvent) => {
       if (!activeRef.current) return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase(); if (tag === "input" || tag === "textarea") return;
+      // Portalled drawing menus own their first Escape. Window listeners share
+      // one event target, so stopPropagation in the sidebar alone cannot keep a
+      // later chart listener from also retiring the armed tool.
+      if (e.key === "Escape" && document.querySelector("[data-menu-id]")) return;
       if (e.key === "Escape") {
         if (pending) { cancelPendingDrawingRef.current(); return; }
+        if (toolRef.current) {
+          lastEscTs = 0;
+          try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: null })); } catch {}
+          return;
+        }
         // Esc deselects; double-Esc (within 500ms) resets the chart view (the gesture that replaces the
         // former ⌥R — Alt+R is now the Rectangle tool as the sidebar advertises).
         const now = Date.now();
         if (now - lastEscTs < 500) { lastEscTs = 0; if (toolRef.current) { try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: null })); } catch {} } try { chart.timeScale().fitContent(); } catch {} }
         else { lastEscTs = now; if (sel) { sel = null; renderDraw(); } }
       }
-      else if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
-      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyZ") {
+      else if ((e.key === "Delete" || e.key === "Backspace") && sel && replayIdxRef.current == null) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
+      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyZ" && replayIdxRef.current == null) {
         e.preventDefault();
         try { window.dispatchEvent(new CustomEvent("mm:drawing-history", { detail: e.shiftKey ? "redo" : "undo" })); } catch {}
       }
-      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyY") {
+      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyY" && replayIdxRef.current == null) {
         e.preventDefault();
         try { window.dispatchEvent(new CustomEvent("mm:drawing-history", { detail: "redo" })); } catch {}
+      }
+      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyC" && sel) {
+        const selected = drawRef.current.find((drawing) => drawing.id === sel);
+        if (!selected) return;
+        e.preventDefault();
+        drawingClipboard = cloneDrawing(selected, "_drawing_clipboard");
+      }
+      else if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyV" && drawingClipboard && replayIdxRef.current == null) {
+        e.preventDefault();
+        const source = drawingClipboard;
+        const times = semanticTimes();
+        const reference = source.points[0];
+        const referenceY = reference ? yOf(reference.p) : null;
+        const offsetPrice = referenceY == null
+          ? 0
+          : ((priceSeriesRef.current?.coordinateToPrice(referenceY + 10) as number | null) ?? reference.p) - reference.p;
+        const points = translateDrawingAnchors(source, times, 2, offsetPrice, precRef.current);
+        const copy = cloneDrawing(source, uid(), points);
+        const paneAnchor = paneAnchorOf(source.meta);
+        if (paneAnchor) {
+          const nextAnchor = { x: clampUnit(paneAnchor.x + .025), y: clampUnit(paneAnchor.y + .025) };
+          copy.meta = { ...(copy.meta ?? {}), paneAnchor: nextAnchor };
+          copy.points[0] = snap(nextAnchor.x * el!.clientWidth, nextAnchor.y * el!.clientHeight);
+        }
+        copy.z = Math.max(drawRef.current.length, ...drawRef.current.map((drawing) => drawing.z ?? 0)) + 1;
+        sel = copy.id;
+        drawRef.current = [...drawRef.current, copy];
+        onChangeRef.current?.([...drawRef.current]);
+      }
+      else if (sel && replayIdxRef.current == null && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        const selected = drawRef.current.find((drawing) => drawing.id === sel);
+        if (!selected || selected.locked) return;
+        e.preventDefault();
+        const amount = e.shiftKey ? 10 : 1;
+        const paneAnchor = paneAnchorOf(selected.meta);
+        if (paneAnchor) {
+          const dx = e.key === "ArrowLeft" ? -amount : e.key === "ArrowRight" ? amount : 0;
+          const dy = e.key === "ArrowUp" ? -amount : e.key === "ArrowDown" ? amount : 0;
+          const nextAnchor = {
+            x: clampUnit(paneAnchor.x + dx / Math.max(1, el!.clientWidth)),
+            y: clampUnit(paneAnchor.y + dy / Math.max(1, el!.clientHeight)),
+          };
+          const point = snap(nextAnchor.x * el!.clientWidth, nextAnchor.y * el!.clientHeight);
+          drawRef.current = drawRef.current.map((drawing) => drawing.id === sel ? {
+            ...drawing,
+            points: drawing.points.map((existing, index) => index === 0 ? point : existing),
+            meta: { ...(drawing.meta ?? {}), paneAnchor: nextAnchor },
+          } : drawing);
+        } else {
+          const requestedBars = e.key === "ArrowLeft" ? -amount : e.key === "ArrowRight" ? amount : 0;
+          const reference = selected.points[0];
+          const referenceY = reference ? yOf(reference.p) : null;
+          const targetY = referenceY == null ? null
+            : referenceY + (e.key === "ArrowUp" ? -amount : e.key === "ArrowDown" ? amount : 0);
+          const targetPrice = targetY == null ? reference?.p
+            : (priceSeriesRef.current?.coordinateToPrice(targetY) as number | null) ?? reference?.p;
+          const deltaPrice = requestedBars || reference == null || targetPrice == null ? 0 : targetPrice - reference.p;
+          const points = translateDrawingAnchors(selected, semanticTimes(), requestedBars, deltaPrice, precRef.current);
+          drawRef.current = drawRef.current.map((drawing) => drawing.id === sel ? { ...drawing, points } : drawing);
+        }
+        onChangeRef.current?.([...drawRef.current]);
       }
       // ⌥A = add alert at last bar close
       else if (e.altKey && e.code === "KeyA") { e.preventDefault(); const b = barsRef.current; if (b.length) onAddAlertRef.current?.(b[b.length - 1].c); }
@@ -6185,6 +6633,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     }
     if (!tool && creationPaletteRef.current) creationPaletteRef.current.style.display = "none";
   }, [tool, toolActivation]);
+  useLayoutEffect(() => {
+    if (!drawingCreationDisabled && replayIdx == null) return;
+    cancelPendingDrawingRef.current();
+    cancelMediaToolRef.current(null);
+    if (creationPaletteRef.current) creationPaletteRef.current.style.display = "none";
+    // Replay is a read-only historical lens: its first committed frame must
+    // retire any live selection so no inspector, handle, keyboard edit, or
+    // direct-dispatched pointer event can mutate the document behind it.
+    if (replayIdx != null) clearDrawingSelectionRef.current();
+  }, [drawingCreationDisabled, replayIdx]);
   useEffect(() => { renderRef.current?.(); }, [drawings]);
 
   // ── unchanged: detection commands → append auto-drawings (or clear) ──

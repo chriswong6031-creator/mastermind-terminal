@@ -75,7 +75,7 @@ import {
   uid,
 } from "@/lib/drawings";
 import { readDrawingOutbox, writeDrawingOutbox, type DrawingOutbox } from "@/lib/drawingOutbox";
-import { getDrawingTool, isDrawingToolId } from "@/lib/drawingTools";
+import { FREEHAND_DRAWING_KINDS, getDrawingTool, isDrawingToolId } from "@/lib/drawingTools";
 import SettingsButton from "@/components/settings/SettingsButton";
 import { SettingsProvider } from "@/components/settings/SettingsProvider";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
@@ -274,11 +274,14 @@ const readGuestDraw = (sym: string): Drawing[] => { try { const m = JSON.parse(l
 const writeGuestDraw = (sym: string, d: Drawing[]) => { try { const m = JSON.parse(localStorage.getItem(GUEST_DRAW_KEY) || "{}"); if (d && d.length) m[sym] = d; else delete m[sym]; localStorage.setItem(GUEST_DRAW_KEY, JSON.stringify(m)); } catch {} };
 const drawingCollectionsEqual = (a: Drawing[], b: Drawing[]) =>
   a.length === b.length && a.every((drawing, index) => drawing === b[index]);
+const isUserDrawing = (drawing: Drawing) => drawing.source
+  ? drawing.source === "user"
+  : drawing.auto !== true;
 
 // drawing tools that accept a pre-draw color/width/dash style — still referenced by ChartPane/ChartPanel
 // for the styleable-tool check; DrawingSidebar owns its own definition of this set now.
 // kept for parity reference; not rendered in this component.
-const DETECTORS: [string, string][] = [
+const DETECTORS: [NonNullable<DetectCmd>["kind"], string][] = [
   ["trendlines", "Auto trendlines"], ["fib", "Auto Fibonacci"], ["sr", "S/R strength heatmap"], ["mtfa", "Multi-timeframe S/R"], ["clear", "Clear detected"],
 ];
 // translation key maps for the (otherwise hard-coded) toolbar/tool labels
@@ -452,7 +455,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // tool under React concurrent rendering.
   const [toolState, setToolState] = useState<{ kind: DrawKind | null; activation: number }>({ kind: null, activation: 0 });
   const tool = toolState.kind;
+  const [drawingPinnedTool, setDrawingPinnedTool] = useState<DrawKind | null>(null);
   const selectDrawingTool = useCallback((kind: DrawKind | null) => {
+    setDrawingPinnedTool((current) => kind !== null && current === kind ? current : null);
     setToolState((current) => kind === null
       ? (current.kind === null ? current : { ...current, kind: null })
       : { kind, activation: current.activation + 1 });
@@ -480,11 +485,26 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const [signalsOpen, setSignalsOpen] = useState(false);
   const [magnet, setMagnet] = useState<"off" | "weak" | "strong">("off");
   const [drawingSticky, setDrawingSticky] = useState(false);
+  const drawingCreationDisabledReason = replayOn
+    ? "replay" as const
+    : panes.length > 1
+      ? "multi-chart" as const
+      : null;
+  const activeDrawingTool = drawingCreationDisabledReason ? null : tool;
+  const drawingKeepsActive = drawingSticky
+    || (activeDrawingTool !== null && drawingPinnedTool === activeDrawingTool)
+    || (activeDrawingTool !== null && FREEHAND_DRAWING_KINDS.has(activeDrawingTool));
   const drawingStickyRef = useRef(false);
-  drawingStickyRef.current = drawingSticky;
+  drawingStickyRef.current = drawingCreationDisabledReason ? false : drawingKeepsActive;
   const [drawingsVisible, setDrawingsVisible] = useState(true);
   const [drawingHistoryVersion, setDrawingHistoryVersion] = useState(0);
+  const [activePaneDetectedDrawingCount, setActivePaneDetectedDrawingCount] = useState(0);
   const [drawingPrefsHydrated, setDrawingPrefsHydrated] = useState(false);
+  useEffect(() => {
+    if (!drawingCreationDisabledReason) return;
+    const frame = window.requestAnimationFrame(() => selectDrawingTool(null));
+    return () => window.cancelAnimationFrame(frame);
+  }, [drawingCreationDisabledReason, selectDrawingTool]);
   // ── D1-D4: context-menu feature state ──────────────────────────────────────
   // D3: table view mode (replaces chart body)
   const [tableViewOpen, setTableViewOpen] = useState(false);
@@ -503,7 +523,12 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // D2: locked vertical line (bar time string | null); persists with the workspace save
   const [lockedVLine, setLockedVLine] = useState<string | null>(null);
   // D1: "remove all indicators" undo toast
-  const [undoInds, setUndoInds] = useState<{ snapshot: Set<string>; timer: any } | null>(null);
+  const [undoInds, setUndoInds] = useState<{
+    snapshot: Set<string>;
+    enabledScripts: string[];
+    hidden: Set<string>;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
   // ── Day Trade Mode (D lane §5) ────────────────────────────────────────────────
   const [dtm, setDtm] = useState(false);
   // Snapshot of pre-mode workspace fields restored on OFF
@@ -556,8 +581,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       dash: override?.dash ?? defaults?.dash ?? "solid",
     };
   }, [drawStyleOverrides, tool]);
-  const patchDrawStyle = useCallback((patch: Partial<ShellDrawingStyle>) => {
-    if (!tool) return;
+  const patchDrawStyle = useCallback((patch: Partial<ShellDrawingStyle>, explicitKind?: DrawKind) => {
+    const targetKind = explicitKind ?? tool;
+    if (!targetKind) return;
     const safePatch: Partial<ShellDrawingStyle> = {
       ...(typeof patch.color === "string" ? { color: patch.color } : {}),
       ...(typeof patch.width === "number" && Number.isFinite(patch.width) ? { width: patch.width } : {}),
@@ -565,7 +591,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     };
     setDrawStyleOverrides((current) => ({
       ...current,
-      [tool]: { ...current[tool], ...safePatch },
+      [targetKind]: { ...current[targetKind], ...safePatch },
     }));
   }, [tool]);
   const [compare, setCompare] = useState<string[]>([]);
@@ -1309,21 +1335,34 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const h = (e: Event) => {
       const id = (e as CustomEvent).detail as unknown;
       if (id === null || isDrawingToolId(id)) {
+        if (id !== null && drawingCreationDisabledReason) return;
         selectDrawingTool(id);
         if (id !== null) setDrawingsVisible(true);
       }
     };
     window.addEventListener("mm:set-tool", h);
     return () => window.removeEventListener("mm:set-tool", h);
-  }, [selectDrawingTool]);
-  // The chart-local creation palette uses the same controlled style state as
-  // the rail palette, so wheel/swatches stay synchronized and persist for the
-  // next drawing instead of becoming an isolated canvas-only preference.
+  }, [drawingCreationDisabledReason, selectDrawingTool]);
+  useEffect(() => {
+    const hideAllDrawings = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable || target?.closest("input,textarea,select,[contenteditable='true']")) return;
+      if (!(event.metaKey || event.ctrlKey) || !event.altKey || event.code !== "KeyH") return;
+      event.preventDefault();
+      setDrawingsVisible(false);
+    };
+    window.addEventListener("keydown", hideAllDrawings);
+    return () => window.removeEventListener("keydown", hideAllDrawings);
+  }, []);
+  // Creation-palette events omit `kind` and therefore target the armed tool.
+  // Existing-object quick bars include an explicit kind so their edits become
+  // that tool family's next-drawing default even while cursor mode is active.
   useEffect(() => {
     const h = (event: Event) => {
-      const patch = (event as CustomEvent).detail as Partial<ShellDrawingStyle> | null;
-      if (!patch || typeof patch !== "object") return;
-      patchDrawStyle(patch);
+      const detail = (event as CustomEvent).detail as (Partial<ShellDrawingStyle> & { kind?: unknown }) | null;
+      if (!detail || typeof detail !== "object") return;
+      if ("kind" in detail && !isDrawingToolId(detail.kind)) return;
+      patchDrawStyle(detail, isDrawingToolId(detail.kind) ? detail.kind : undefined);
     };
     window.addEventListener("mm:drawing-style", h);
     return () => window.removeEventListener("mm:drawing-style", h);
@@ -1367,15 +1406,28 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
 
   // Remove-all-indicators event (from D1 context menu)
   useEffect(() => {
-    const h = (e: Event) => {
-      const cnt = (e as CustomEvent).detail?.count as number;
-      // snapshot current inds for undo
-      setUndoInds((prev) => { if (prev?.timer) clearTimeout(prev.timer); const snap = new Set(inds); const timer = setTimeout(() => setUndoInds(null), 5000); return { snapshot: snap, timer }; });
+    const h = () => {
+      if (!inds.size && !enabledIds.length) return;
+      setUndoInds((previous) => {
+        if (previous?.timer) clearTimeout(previous.timer);
+        const timer = setTimeout(() => setUndoInds(null), 5_000);
+        return { snapshot: new Set(inds), enabledScripts: [...enabledIds], hidden: new Set(hidden), timer };
+      });
       setInds(new Set());
+      setEnabledIds([]);
+      setHidden((current) => {
+        const removed = new Set<string>([...inds, ...enabledIds, ...enabledIds.map((id) => `pine:${id}`)]);
+        for (const key of inds) {
+          if (isSuiteKey(key)) for (const entry of suiteModuleCatalogFor(key)) removed.add(entry.id);
+        }
+        const next = new Set(current);
+        for (const key of removed) next.delete(key);
+        return next;
+      });
     };
     window.addEventListener("mm:remove-all-inds", h);
     return () => window.removeEventListener("mm:remove-all-inds", h);
-  }, [inds]);
+  }, [enabledIds, hidden, inds]);
 
   // Apply template event (from D2 context menu)
   useEffect(() => {
@@ -1400,7 +1452,10 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     return () => window.removeEventListener("mm:save-template", h);
   }, []);
 
-  const detect = (kind: any) => { setDetectCmd({ kind, nonce: ++nonce.current }); setDetectOpen(false); };
+  const detect = (kind: NonNullable<DetectCmd>["kind"]) => {
+    setDetectCmd({ kind, nonce: ++nonce.current, targetPane: activePane });
+    setDetectOpen(false);
+  };
   function setGrid(n: number) {
     setSplit(n);
     let next: string[];
@@ -2280,9 +2335,10 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     capabilities: { tfs: TF_CANONICAL_ORDER, indicators: [...IND_ORDER] },
     sessionIndicators,
     currentTf: tf,
-    // AI objects live in the bus's own store, never in drawStore — so drawStore[active] is purely the
-    // user's own drawings (by:"user"). Enumerable, so we report them.
-    userDrawings: drawStore[active] ?? [],
+    // AI objects live in the bus's own store. Detector drawings do share the
+    // durable drawing collection, so keep them out of the bus's user-authored
+    // context rather than reporting generated levels as operator marks.
+    userDrawings: (drawStore[active] ?? []).filter(isUserDrawing),
     setSymbol: (s) => pick(s),
     setTf: (t2) => setTf(t2),
     setIndicators: (specs) => {
@@ -2417,6 +2473,36 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const currentDrawingOwnerKey = email ? `account:${email}` : "guest";
   const drawingOwnerMatches = drawingOwnerKey === currentDrawingOwnerKey;
   const drawingsReadyFor = (sym: string) => drawingOwnerMatches && (!loggedIn || drawStore[sym] !== undefined);
+  const activeStoredDrawings = drawingOwnerMatches ? (drawStore[active] ?? []) : [];
+  const activeUserDrawings = activeStoredDrawings.filter(isUserDrawing);
+  const storedDetectedDrawingCount = activeStoredDrawings.length - activeUserDrawings.length;
+  const detectedDrawingCount = storedDetectedDrawingCount + activePaneDetectedDrawingCount;
+  const userDrawingCount = activeUserDrawings.length;
+  const allUserDrawingsLocked = userDrawingCount > 0 && activeUserDrawings.every((drawing) => drawing.locked);
+  const activeIndicatorCount = inds.size + pineScripts.length;
+  const removeAllIndicators = () => {
+    if (!inds.size && !enabledIds.length) return;
+    setUndoInds((previous) => {
+      if (previous?.timer) clearTimeout(previous.timer);
+      const snapshot = new Set(inds);
+      const enabledScripts = [...enabledIds];
+      const hiddenSnapshot = new Set(hidden);
+      const timer = setTimeout(() => setUndoInds(null), 5_000);
+      return { snapshot, enabledScripts, hidden: hiddenSnapshot, timer };
+    });
+    setInds(new Set());
+    setEnabledIds([]);
+    setHidden((current) => {
+      const removed = new Set<string>([...inds, ...enabledIds, ...enabledIds.map((id) => `pine:${id}`)]);
+      for (const key of inds) {
+        if (isSuiteKey(key)) for (const entry of suiteModuleCatalogFor(key)) removed.add(entry.id);
+      }
+      if (![...removed].some((key) => current.has(key))) return current;
+      const next = new Set(current);
+      for (const key of removed) next.delete(key);
+      return next;
+    });
+  };
 
   return (
     <OnboardingProvider email={email}>
@@ -2676,37 +2762,59 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         ) : (
           <div className="chart-body" style={{ "--subpanes": subPanes } as React.CSSProperties}>
             <DrawingSidebar
-              tool={drawingsReadyFor(active) ? tool : null}
+              tool={drawingsReadyFor(active) ? activeDrawingTool : null}
+              creationDisabledReason={drawingCreationDisabledReason}
               magnet={magnet}
-              sticky={drawingSticky}
+              sticky={drawingCreationDisabledReason ? false : drawingKeepsActive}
+              stayActive={drawingSticky}
+              pinned={activeDrawingTool !== null && drawingPinnedTool === activeDrawingTool}
               drawingsVisible={drawingsVisible}
-              drawingCount={(drawingOwnerMatches ? (drawStore[active]?.length ?? 0) : 0) + chartBus.legend.count}
+              drawingsLocked={allUserDrawingsLocked}
+              drawingCount={activeStoredDrawings.length + activePaneDetectedDrawingCount + chartBus.legend.count}
+              userDrawingCount={userDrawingCount}
+              detectedDrawingCount={detectedDrawingCount}
+              indicatorCount={activeIndicatorCount}
               canUndo={drawingHistoryState.canUndo}
               canRedo={drawingHistoryState.canRedo}
               drawStyle={drawStyle}
               onTool={(id) => {
-                if (!drawingsReadyFor(active)) return;
+                if (!drawingsReadyFor(active) || (id !== null && drawingCreationDisabledReason)) return;
                 selectDrawingTool(id); if (id) setDrawingsVisible(true);
               }}
               onMagnet={setMagnet}
               onSticky={setDrawingSticky}
+              onPinned={setDrawingPinnedTool}
               onToggleVisibility={() => setDrawingsVisible((visible) => !visible)}
+              onToggleLock={() => {
+                const current = drawPending.current[active] ?? activeStoredDrawings;
+                const currentUsers = current.filter(isUserDrawing);
+                if (!currentUsers.length) return;
+                const lock = !currentUsers.every((drawing) => drawing.locked);
+                setSymbolDrawings(active, current.map((drawing) => (
+                  isUserDrawing(drawing) ? { ...drawing, locked: lock } : drawing
+                )));
+              }}
               onUndo={() => travelDrawingHistory(active, "undo")}
               onRedo={() => travelDrawingHistory(active, "redo")}
               onClear={(scope) => {
-                if (scope === "user") setSymbolDrawings(active, []);
-                else if (scope === "detected") detect("clear");
-                else {
+                const current = drawPending.current[active] ?? activeStoredDrawings;
+                if (scope === "user") setSymbolDrawings(active, current.filter((drawing) => !isUserDrawing(drawing)));
+                else if (scope === "detected") {
+                  setSymbolDrawings(active, current.filter(isUserDrawing));
+                  detect("clear");
+                }
+                else if (scope === "all" || scope === "everything") {
                   setSymbolDrawings(active, []);
                   detect("clearAll");
                   chartBus.legend.clear();
                 }
+                if (scope === "indicators" || scope === "everything") removeAllIndicators();
               }}
               onDrawStyle={patchDrawStyle}
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} drawingOwnerKey={currentDrawingOwnerKey} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={drawingsReadyFor(sym) ? tool : null} toolActivation={toolState.activation} drawingSticky={drawingSticky} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawingOwnerMatches ? (drawStore[sym] ?? []) : []), ...chartBus.aiDrawingsFor(sym)]} drawingsVisible={drawingsVisible} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
+                <ChartPane key={i} idx={i} symbol={sym} drawingOwnerKey={currentDrawingOwnerKey} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={drawingsReadyFor(sym) ? activeDrawingTool : null} toolActivation={toolState.activation} drawingSticky={drawingCreationDisabledReason ? false : drawingKeepsActive} drawingCreationDisabled={drawingCreationDisabledReason !== null} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawingOwnerMatches ? (drawStore[sym] ?? []) : []), ...chartBus.aiDrawingsFor(sym)]} drawingsVisible={drawingsVisible} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} onDetectedDrawingCount={i === activePane ? setActivePaneDetectedDrawingCount : undefined} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}
@@ -3142,7 +3250,13 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         <div className="undo-toast" style={{ position: "fixed", bottom: 22, left: "50%", transform: "translateX(-50%)", background: "var(--panel-3)", border: "1px solid var(--line-3)", borderRadius: "var(--r-md)", padding: "8px 16px", fontSize: 12.5, color: "var(--text)", boxShadow: "0 8px 24px -8px rgba(0,0,0,.7)", zIndex: 50, display: "flex", alignItems: "center", gap: 10 }}>
           {t("allIndicatorsRemoved")}
           <button className="btn" style={{ height: 26, fontSize: 11.5 }} onClick={() => {
-            if (undoInds) { clearTimeout(undoInds.timer); setInds(undoInds.snapshot); setUndoInds(null); }
+            if (undoInds) {
+              clearTimeout(undoInds.timer);
+              setInds(undoInds.snapshot);
+              setEnabledIds(undoInds.enabledScripts);
+              setHidden(undoInds.hidden);
+              setUndoInds(null);
+            }
           }}>{t("undo")}</button>
         </div>
       )}

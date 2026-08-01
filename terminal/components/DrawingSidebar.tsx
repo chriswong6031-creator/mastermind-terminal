@@ -6,6 +6,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -28,22 +29,37 @@ import { useT } from "@/lib/i18n";
 import { useIsMobile } from "@/lib/useMediaQuery";
 
 export type DrawingMagnetMode = "off" | "weak" | "strong";
-export type DrawingClearScope = "user" | "detected" | "all";
+export type DrawingClearScope = "user" | "detected" | "all" | "indicators" | "everything";
 export type DrawingStyle = { color: string; width: number; dash: Dash };
+type FavoritePosition = { x: number; y: number };
+type FavoritePositions = { desktop: FavoritePosition; compact: FavoritePosition };
 
 export type DrawingSidebarProps = {
   tool: DrawKind | null;
+  /** Drawing creation is retired while Replay or a multi-chart grid is active. */
+  creationDisabledReason: "replay" | "multi-chart" | null;
   magnet: DrawingMagnetMode;
+  /** Effective keep-active state: global Stay, a per-tool pin, or freehand auto-stay. */
   sticky: boolean;
+  /** The persisted global Stay in drawing mode control. */
+  stayActive: boolean;
+  /** Whether the currently armed tool was pinned with a double-click. */
+  pinned: boolean;
   drawingsVisible: boolean;
+  drawingsLocked: boolean;
   drawingCount: number;
+  userDrawingCount: number;
+  detectedDrawingCount: number;
+  indicatorCount: number;
   canUndo: boolean;
   canRedo: boolean;
   drawStyle: DrawingStyle;
   onTool: (id: DrawKind | null) => void;
   onMagnet: (mode: DrawingMagnetMode) => void;
   onSticky: (sticky: boolean) => void;
+  onPinned: (tool: DrawKind | null) => void;
   onToggleVisibility: () => void;
+  onToggleLock: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onClear: (scope: DrawingClearScope) => void;
@@ -59,6 +75,11 @@ const STYLE_DASHES = ["solid", "dashed", "dotted"] as const satisfies readonly D
 const MENU_HOVER_OPEN_MS = 200;
 const MENU_LEAVE_CLOSE_MS = 150;
 const MENU_FADE_MS = 150;
+const FAVORITES_STORAGE_KEY = "mm.drawing.favorites.v1";
+const DEFAULT_FAVORITE_POSITIONS: FavoritePositions = {
+  desktop: { x: 72, y: 12 },
+  compact: { x: 12, y: 54 },
+};
 const DASH_LABEL_KEYS: Record<Dash, string> = {
   solid: "drawingDashSolid",
   dashed: "drawingDashDashed",
@@ -79,6 +100,10 @@ const ICON_STYLE = "M4 19h16M6 15h12M8 11h8M10 7h4";
 const ICON_EYE = "M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z";
 const ICON_EYE_OFF = "M3 3l18 18M10.7 6.1A11.8 11.8 0 0 1 12 6c6.5 0 10 6 10 6a15 15 0 0 1-2.4 3.2M6.2 6.2C3.5 8 2 12 2 12s3.5 6 10 6c1.1 0 2.1-.2 3-.5M9.9 9.9a3 3 0 0 0 4.2 4.2";
 const ICON_TRASH = "M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6";
+const ICON_STAR = "M12 3.7l2.55 5.17 5.7.83-4.12 4.02.97 5.68L12 16.72 6.9 19.4l.97-5.68L3.75 9.7l5.7-.83z";
+const ICON_LOCK = "M6 10V7a6 6 0 0 1 12 0v3M5 10h14v11H5z";
+const ICON_UNLOCK = "M8 10V7a4 4 0 0 1 7.4-2M5 10h14v11H5z";
+const ICON_GRIP = "M8 7h.01M8 12h.01M8 17h.01M16 7h.01M16 12h.01M16 17h.01";
 
 function ToolIcon({ path }: { path: string }) {
   return (
@@ -111,19 +136,37 @@ function countLabel(count: number, t: Translate): string {
   return interpolate(t(count === 1 ? "drawingCountOne" : "drawingCountMany"), { n: count });
 }
 
+function finitePosition(value: unknown, fallback: FavoritePosition): FavoritePosition {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+  const candidate = value as Record<string, unknown>;
+  return {
+    x: typeof candidate.x === "number" && Number.isFinite(candidate.x) ? candidate.x : fallback.x,
+    y: typeof candidate.y === "number" && Number.isFinite(candidate.y) ? candidate.y : fallback.y,
+  };
+}
+
 export default function DrawingSidebar({
   tool,
+  creationDisabledReason,
   magnet,
   sticky,
+  stayActive,
+  pinned,
   drawingsVisible,
+  drawingsLocked,
   drawingCount,
+  userDrawingCount,
+  detectedDrawingCount,
+  indicatorCount,
   canUndo,
   canRedo,
   drawStyle,
   onTool,
   onMagnet,
   onSticky,
+  onPinned,
   onToggleVisibility,
+  onToggleLock,
   onUndo,
   onRedo,
   onClear,
@@ -134,6 +177,7 @@ export default function DrawingSidebar({
   const instanceId = useId().replaceAll(":", "");
   const sidebarRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const favoritesRef = useRef<HTMLDivElement>(null);
   const menuOpenerRef = useRef<HTMLButtonElement | null>(null);
   const toolChoiceTimerRef = useRef<number | null>(null);
   const hoverOpenTimerRef = useRef<number | null>(null);
@@ -143,12 +187,34 @@ export default function DrawingSidebar({
   const focusMenuRef = useRef(false);
   const focusAfterCloseRef = useRef<string | null>(null);
   const previousMobileRef = useRef(isMobile);
+  const favoriteDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    origin: FavoritePosition;
+  } | null>(null);
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
   const [menuPhase, setMenuPhase] = useState<MenuPhase>("open");
   const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [floatingHost, setFloatingHost] = useState<HTMLElement | null>(null);
   const [lastUsed, setLastUsed] = useState<Partial<Record<DrawingToolGroupId, DrawKind>>>(initialLastUsed);
+  const [favoriteIds, setFavoriteIds] = useState<DrawKind[]>([]);
+  const [favoritesVisible, setFavoritesVisible] = useState(true);
+  const [favoritesHydrated, setFavoritesHydrated] = useState(false);
+  const [favoritesDragging, setFavoritesDragging] = useState(false);
+  const [favoritePositions, setFavoritePositions] = useState<FavoritePositions>(DEFAULT_FAVORITE_POSITIONS);
   const selectedTool = getDrawingTool(tool);
+  const creationDisabled = creationDisabledReason !== null;
+  const favoriteMode = isMobile ? "compact" : "desktop";
+  const favoritePosition = favoritePositions[favoriteMode];
+  const favoriteTools = useMemo(
+    () => favoriteIds.flatMap((id) => {
+      const definition = getDrawingTool(id);
+      return definition ? [definition] : [];
+    }),
+    [favoriteIds],
+  );
+  const totalWorkspaceCount = drawingCount + indicatorCount;
 
   const menuDomId = (menu: MenuId) => `${instanceId}-drawing-menu-${menu}`;
 
@@ -185,10 +251,43 @@ export default function DrawingSidebar({
     if (!restoreFocus || !opener) return;
     focusToolbarControl(opener);
   }, [clearMenuTimers, focusToolbarControl]);
+  const hideFavorites = useCallback((restoreFocus: boolean) => {
+    setFavoritesVisible(false);
+    if (!restoreFocus) return;
+    const toggle = sidebarRef.current?.querySelector<HTMLButtonElement>(
+      '[data-testid="drawing-favorites-toggle"]',
+    ) ?? null;
+    focusToolbarControl(toggle);
+  }, [focusToolbarControl]);
   const captureSidebar = useCallback((node: HTMLDivElement | null) => {
     sidebarRef.current = node;
     setFloatingHost(node?.parentElement ?? null);
   }, []);
+
+  const clampFavoritePosition = useCallback((candidate: FavoritePosition): FavoritePosition => {
+    if (!floatingHost) return candidate;
+    const host = floatingHost.getBoundingClientRect();
+    const bar = favoritesRef.current?.getBoundingClientRect();
+    const styles = getComputedStyle(floatingHost);
+    const safeLeft = Number.parseFloat(styles.getPropertyValue("--drawing-safe-left")) || 0;
+    const safeRight = Number.parseFloat(styles.getPropertyValue("--drawing-safe-right")) || 0;
+    const safeTop = Number.parseFloat(styles.getPropertyValue("--drawing-safe-top")) || 0;
+    const safeBottom = Number.parseFloat(styles.getPropertyValue("--drawing-safe-bottom")) || 0;
+    const insetLeft = Math.max(8, safeLeft);
+    const insetRight = Math.max(8, safeRight);
+    const insetTop = Math.max(8, safeTop);
+    // Compact mode reserves the dock lane so the two draggable surfaces never
+    // cover each other, even after an orientation or safe-area change.
+    const insetBottom = Math.max(8, safeBottom) + (isMobile ? 66 : 0);
+    const width = bar?.width ?? 0;
+    const height = bar?.height ?? 0;
+    const maxX = Math.max(insetLeft, host.width - width - insetRight);
+    const maxY = Math.max(insetTop, host.height - height - insetBottom);
+    return {
+      x: Math.round(Math.max(insetLeft, Math.min(maxX, candidate.x))),
+      y: Math.round(Math.max(insetTop, Math.min(maxY, candidate.y))),
+    };
+  }, [floatingHost, isMobile]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -213,6 +312,15 @@ export default function DrawingSidebar({
       window.removeEventListener("keydown", handleEscape);
     };
   }, [dismissMenu, openMenu]);
+
+  useEffect(() => {
+    if (!creationDisabled || !openMenu) return;
+    const isCreationMenu = openMenu === "style"
+      || DRAWING_TOOL_GROUPS.some((group) => group.id === openMenu);
+    if (!isCreationMenu) return;
+    const frame = window.requestAnimationFrame(() => dismissMenu(false));
+    return () => window.cancelAnimationFrame(frame);
+  }, [creationDisabled, dismissMenu, openMenu]);
 
   // A menu may move between inline and portalled DOM when the responsive mode
   // changes. Close that transient surface and return focus to its logical toolbar
@@ -270,6 +378,84 @@ export default function DrawingSidebar({
     if (toolChoiceTimerRef.current !== null) window.clearTimeout(toolChoiceTimerRef.current);
     clearMenuTimers();
   }, [clearMenuTimers]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        const raw = JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY) || "{}");
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          const value = raw as Record<string, unknown>;
+          if (Array.isArray(value.ids)) {
+            const seen = new Set<DrawKind>();
+            const ids = value.ids.flatMap((id) => {
+              const definition = getDrawingTool(id);
+              if (!definition || seen.has(definition.id)) return [];
+              seen.add(definition.id);
+              return [definition.id];
+            });
+            setFavoriteIds(ids);
+          }
+          if (typeof value.visible === "boolean") setFavoritesVisible(value.visible);
+          if (value.positions && typeof value.positions === "object" && !Array.isArray(value.positions)) {
+            const positions = value.positions as Record<string, unknown>;
+            setFavoritePositions({
+              desktop: finitePosition(positions.desktop, DEFAULT_FAVORITE_POSITIONS.desktop),
+              compact: finitePosition(positions.compact, DEFAULT_FAVORITE_POSITIONS.compact),
+            });
+          }
+        }
+      } catch {}
+      setFavoritesHydrated(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    if (!favoritesHydrated) return;
+    try {
+      localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify({
+        ids: favoriteIds,
+        visible: favoritesVisible,
+        positions: favoritePositions,
+      }));
+    } catch {}
+  }, [favoriteIds, favoritePositions, favoritesHydrated, favoritesVisible]);
+
+  // Re-clamp persisted coordinates after the strip mounts, grows, or the chart
+  // host changes size. Positions are stored separately for rail and compact
+  // layouts so opening the same workspace on a phone never destroys desktop
+  // placement.
+  useLayoutEffect(() => {
+    if (!favoritesHydrated || !favoritesVisible || !favoriteTools.length || !floatingHost) return;
+    const clamp = () => {
+      setFavoritePositions((current) => {
+        const next = clampFavoritePosition(current[favoriteMode]);
+        if (next.x === current[favoriteMode].x && next.y === current[favoriteMode].y) return current;
+        return { ...current, [favoriteMode]: next };
+      });
+    };
+    clamp();
+    const observer = new ResizeObserver(clamp);
+    observer.observe(floatingHost);
+    if (favoritesRef.current) observer.observe(favoritesRef.current);
+    window.addEventListener("resize", clamp);
+    window.visualViewport?.addEventListener("resize", clamp);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", clamp);
+      window.visualViewport?.removeEventListener("resize", clamp);
+    };
+  }, [clampFavoritePosition, favoriteMode, favoriteTools.length, favoritesHydrated, favoritesVisible, floatingHost]);
+
+  // A responsive-mode change or an explicit hide can unmount the captured grip
+  // before it receives pointerup. Retire the transient drag so reopening the
+  // strip never inherits a stale grabbing state or writes desktop coordinates
+  // into the compact slot (or vice versa).
+  useEffect(() => {
+    favoriteDragRef.current = null;
+    const frame = window.requestAnimationFrame(() => setFavoritesDragging(false));
+    return () => window.cancelAnimationFrame(frame);
+  }, [favoriteMode, favoritesVisible]);
 
   // Fixed descendants (the selected-drawing settings surface on compact layouts)
   // need the chart's viewport gaps to stay chart-local. Publishing these measured
@@ -445,6 +631,7 @@ export default function DrawingSidebar({
   }
 
   function activateTool(nextTool: DrawingToolDefinition, pin?: boolean) {
+    if (creationDisabled) return;
     const registered = getDrawingTool(nextTool.id);
     if (!registered) return;
     setLastUsed((current) => (
@@ -453,10 +640,11 @@ export default function DrawingSidebar({
         : { ...current, [registered.groupId]: registered.id }
     ));
     onTool(registered.id);
-    if (pin !== undefined) onSticky(pin);
+    if (pin === true) onPinned(registered.id);
+    else if (pin === false) onPinned(null);
   }
 
-  function chooseTool(nextTool: DrawingToolDefinition, pin = false) {
+  function chooseTool(nextTool: DrawingToolDefinition, pin?: boolean) {
     activateTool(nextTool, pin);
     dismissMenu(true);
   }
@@ -490,6 +678,48 @@ export default function DrawingSidebar({
     dismissMenu(true);
   }
 
+  function toggleFavorite(nextTool: DrawingToolDefinition) {
+    const registered = getDrawingTool(nextTool.id);
+    if (!registered) return;
+    const next = favoriteIds.includes(registered.id)
+      ? favoriteIds.filter((id) => id !== registered.id)
+      : [...favoriteIds, registered.id];
+    setFavoriteIds(next);
+    setFavoritesVisible(next.length > 0);
+  }
+
+  function beginFavoriteDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!event.isPrimary || event.button !== 0) return;
+    event.preventDefault();
+    favoriteDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: favoritePosition,
+    };
+    setFavoritesDragging(true);
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+  }
+
+  function moveFavoriteDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = favoriteDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const next = clampFavoritePosition({
+      x: drag.origin.x + event.clientX - drag.startX,
+      y: drag.origin.y + event.clientY - drag.startY,
+    });
+    setFavoritePositions((current) => ({ ...current, [favoriteMode]: next }));
+  }
+
+  function endFavoriteDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = favoriteDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    favoriteDragRef.current = null;
+    setFavoritesDragging(false);
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
+  }
+
   function handleMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key === "Tab") {
       event.preventDefault();
@@ -511,7 +741,7 @@ export default function DrawingSidebar({
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     const items = Array.from(
       event.currentTarget.querySelectorAll<HTMLButtonElement>(
-        'button[role="menuitem"], button[role="menuitemradio"]',
+        'button[role="menuitem"], button[role="menuitemradio"], button[role="menuitemcheckbox"]',
       ),
     ).filter((item) => !item.disabled);
     if (!items.length) return;
@@ -534,6 +764,8 @@ export default function DrawingSidebar({
   const magnetOption = MAGNET_OPTIONS.find((option) => option.id === magnet);
   const magnetLabel = magnetOption ? t(magnetOption.labelKey) : magnet;
   const localizedDrawingCount = countLabel(drawingCount, t);
+  const localizedUserDrawingCount = countLabel(userDrawingCount, t);
+  const localizedDetectedDrawingCount = countLabel(detectedDrawingCount, t);
   const floatingMobile = (node: ReactNode) => (
     isMobile && floatingHost ? createPortal(node, floatingHost) : node
   );
@@ -549,7 +781,6 @@ export default function DrawingSidebar({
     label: string,
     options: { shortcut?: string; hint?: string; side?: "top" | "right"; key?: string | number } = {},
   ) => {
-    if (isMobile) return button;
     const content = options.hint ? (
       <span className="ds-tip-copy">
         <span className="ds-tip-title">
@@ -563,6 +794,7 @@ export default function DrawingSidebar({
       <Tip
         key={options.key}
         label={content}
+        disabled={isMobile}
         shortcut={options.hint ? undefined : options.shortcut}
         side={options.side ?? "right"}
         size={options.hint ? "card" : "mini"}
@@ -574,6 +806,7 @@ export default function DrawingSidebar({
   };
 
   return (
+    <>
     <div
       className="ds-dock"
       ref={captureSidebar}
@@ -581,6 +814,7 @@ export default function DrawingSidebar({
       aria-label={t("drawingToolbar")}
       aria-orientation={isMobile ? "horizontal" : "vertical"}
       data-testid="drawing-toolbar"
+      data-creation-disabled={creationDisabled ? creationDisabledReason : "false"}
     >
       {labeled(<button
         type="button"
@@ -589,7 +823,7 @@ export default function DrawingSidebar({
         aria-pressed={tool === null}
         data-testid="drawing-tool-cursor"
         data-tool-id="cursor"
-        onClick={() => onTool(null)}
+        onClick={() => { onPinned(null); onTool(null); }}
       >
         <ToolIcon path={ICON_CURSOR} />
       </button>, t("toolCursor"))}
@@ -633,17 +867,22 @@ export default function DrawingSidebar({
         const triggerId = `${menuId}-trigger`;
         const openGroupLabel = interpolate(t("drawingOpenGroupTools"), { group: groupLabel });
         const groupMenuLabel = interpolate(t("drawingGroupTools"), { group: groupLabel });
+        const autoKeepsActive = shown.creation.mode === "freehand";
         const mainButton = (
           <button
             type="button"
             className={`ds-btn ds-group-main${active ? " on" : ""}`}
             aria-label={`${shownLabel}${shown.shortcut ? `, ${shown.shortcut.label}` : ""}`}
             aria-pressed={active}
+            disabled={creationDisabled}
             data-sticky={active && sticky ? "true" : "false"}
             data-testid={`drawing-group-${group.id}-main`}
             data-tool-id={shown.id}
             onClick={() => activateTool(shown)}
-            onDoubleClick={() => activateTool(shown, active && sticky ? false : true)}
+            onDoubleClick={() => {
+              if (autoKeepsActive) return;
+              activateTool(shown, active && pinned ? false : true);
+            }}
           >
             <ToolIcon path={shown.iconPath} />
           </button>
@@ -657,6 +896,7 @@ export default function DrawingSidebar({
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             aria-controls={menuOpen ? menuId : undefined}
+            disabled={creationDisabled}
             data-testid={`drawing-group-${group.id}-menu-trigger`}
             onPointerEnter={(event) => scheduleGroupOpen(group.id, event)}
             onClick={(event) => toggleMenu(group.id, event)}
@@ -680,7 +920,11 @@ export default function DrawingSidebar({
               ? mainButton
               : labeled(mainButton, shownLabel, {
                   shortcut: shown.shortcut?.label,
-                  hint: t(sticky && active ? "drawingDoubleClickUnlock" : "drawingDoubleClickKeepActive"),
+                  hint: creationDisabled
+                    ? t(creationDisabledReason === "replay" ? "drawingUnavailableReplay" : "drawingUnavailableMultiChart")
+                    : autoKeepsActive
+                      ? t("drawingFreehandStaysActive")
+                      : t(pinned && active ? "drawingDoubleClickUnlock" : "drawingDoubleClickKeepActive"),
                 })}
 
             {labeled(chevronButton, openGroupLabel)}
@@ -711,19 +955,39 @@ export default function DrawingSidebar({
                           {t(candidate.sectionKey, candidate.section)}
                         </div>
                       )}
-                      <button
-                        type="button"
-                        className={`ds-fly-item${tool === candidate.id ? " on" : ""}`}
-                        role="menuitemradio"
-                        aria-checked={tool === candidate.id}
-                        data-testid={`drawing-tool-${candidate.id}`}
-                        data-tool-id={candidate.id}
-                        onClick={(event) => chooseToolFromMenu(candidate, event)}
-                      >
-                        <ToolIcon path={candidate.iconPath} />
-                        <span>{candidateLabel}</span>
-                        {candidate.shortcut && <kbd className="ds-kbd">{candidate.shortcut.label}</kbd>}
-                      </button>
+                      <div className="ds-fly-row">
+                        <button
+                          type="button"
+                          className={`ds-fly-item${tool === candidate.id ? " on" : ""}`}
+                          role="menuitemradio"
+                          aria-checked={tool === candidate.id}
+                          disabled={creationDisabled}
+                          data-testid={`drawing-tool-${candidate.id}`}
+                          data-tool-id={candidate.id}
+                          onClick={(event) => chooseToolFromMenu(candidate, event)}
+                        >
+                          <ToolIcon path={candidate.iconPath} />
+                          <span>{candidateLabel}</span>
+                          {candidate.shortcut && <kbd className="ds-kbd">{candidate.shortcut.label}</kbd>}
+                        </button>
+                        <button
+                          type="button"
+                          className={`ds-favorite-toggle${favoriteIds.includes(candidate.id) ? " on" : ""}`}
+                          role="menuitemcheckbox"
+                          aria-checked={favoriteIds.includes(candidate.id)}
+                          aria-label={interpolate(t(
+                            favoriteIds.includes(candidate.id) ? "drawingRemoveFavorite" : "drawingAddFavorite",
+                          ), { tool: candidateLabel })}
+                          data-testid={`drawing-favorite-${candidate.id}`}
+                          data-favorite-tool={candidate.id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleFavorite(candidate);
+                          }}
+                        >
+                          <ToolIcon path={ICON_STAR} />
+                        </button>
+                      </div>
                     </Fragment>
                   );
                 })}
@@ -828,32 +1092,42 @@ export default function DrawingSidebar({
 
       {labeled(<button
         type="button"
-        className={`ds-btn${sticky ? " on" : ""}`}
-        aria-label={t(sticky ? "drawingDisableKeepActive" : "drawingKeepActive")}
-        aria-pressed={sticky}
+        className={`ds-btn${stayActive ? " on" : ""}`}
+        aria-label={t(stayActive ? "drawingDisableKeepActive" : "drawingKeepActive")}
+        aria-pressed={stayActive}
         data-testid="drawing-sticky-toggle"
         data-sticky={sticky ? "true" : "false"}
-        onClick={() => onSticky(!sticky)}
+        data-stay-active={stayActive ? "true" : "false"}
+        onClick={() => { onPinned(null); onSticky(!stayActive); }}
       >
         <ToolIcon path={ICON_STICKY} />
-      </button>, t(sticky ? "drawingKeepActiveOn" : "drawingKeepActiveOff"))}
+      </button>, t(stayActive ? "drawingKeepActiveOn" : "drawingKeepActiveOff"))}
 
-      <div className="ds-group-host ds-utility-host" onPointerEnter={openMenu === "magnet" ? cancelMenuClose : undefined} onPointerLeave={handlePointerLeave}>
+      <div className="ds-group-host ds-magnet-host" onPointerEnter={openMenu === "magnet" ? cancelMenuClose : undefined} onPointerLeave={handlePointerLeave}>
+        {labeled(<button
+          type="button"
+          className={`ds-btn ds-group-main${magnet !== "off" ? " on" : ""}`}
+          aria-label={interpolate(t("drawingMagnetModeCurrent"), { mode: magnetLabel })}
+          data-testid="drawing-magnet-trigger"
+          data-magnet-mode={magnet}
+          onClick={() => onMagnet(magnet === "off" ? "weak" : "off")}
+        >
+          <ToolIcon path={ICON_MAGNET} />
+        </button>, interpolate(t("drawingMagnetCurrent"), { mode: magnetLabel }))}
+
         {labeled(<button
           type="button"
           id={`${menuDomId("magnet")}-trigger`}
-          className={`ds-btn${magnet !== "off" ? " on" : ""}`}
-          aria-label={interpolate(t("drawingMagnetModeCurrent"), { mode: magnetLabel })}
+          className="ds-group-chevron"
+          aria-label={t("drawingOpenMagnetModes")}
           aria-haspopup="menu"
           aria-expanded={openMenu === "magnet"}
           aria-controls={openMenu === "magnet" ? menuDomId("magnet") : undefined}
-          data-testid="drawing-magnet-trigger"
-          data-magnet-mode={magnet}
+          data-testid="drawing-magnet-menu-trigger"
           onClick={(event) => toggleMenu("magnet", event)}
         >
-          <ToolIcon path={ICON_MAGNET} />
-          <span className="ds-fly-arrow" aria-hidden="true" />
-        </button>, interpolate(t("drawingMagnetCurrent"), { mode: magnetLabel }))}
+          <svg viewBox="0 0 8 12" aria-hidden="true"><path d="M2 2l4 4-4 4" /></svg>
+        </button>, t("drawingOpenMagnetModes"))}
 
         {openMenu === "magnet" && floatingFlyout(
           <div
@@ -916,15 +1190,37 @@ export default function DrawingSidebar({
 
       {labeled(<button
         type="button"
+        className={`ds-btn${drawingsLocked ? " on" : ""}`}
+        aria-label={interpolate(t(drawingsLocked ? "drawingUnlockAllWithCount" : "drawingLockAllWithCount"), {
+          count: localizedUserDrawingCount,
+        })}
+        aria-pressed={drawingsLocked}
+        disabled={userDrawingCount === 0}
+        data-testid="drawing-lock-all"
+        data-drawings-locked={drawingsLocked ? "true" : "false"}
+        data-user-drawing-count={userDrawingCount}
+        onClick={onToggleLock}
+      >
+        <ToolIcon path={drawingsLocked ? ICON_UNLOCK : ICON_LOCK} />
+      </button>, interpolate(t(drawingsLocked ? "drawingUnlockAllWithCount" : "drawingLockAllWithCount"), {
+        count: localizedUserDrawingCount,
+      }))}
+
+      {labeled(<button
+        type="button"
         className={`ds-btn${drawingsVisible ? "" : " on"}`}
-        aria-label={t(drawingsVisible ? "drawingHide" : "drawingShow")}
+        aria-label={interpolate(t(drawingsVisible ? "drawingHideWithCount" : "drawingShowWithCount"), {
+          count: localizedDrawingCount,
+        })}
         aria-pressed={!drawingsVisible}
         data-testid="drawing-visibility-toggle"
         data-drawings-visible={drawingsVisible ? "true" : "false"}
         onClick={onToggleVisibility}
       >
         <ToolIcon path={drawingsVisible ? ICON_EYE : ICON_EYE_OFF} />
-      </button>, t(drawingsVisible ? "drawingHide" : "drawingShow"))}
+      </button>, interpolate(t(drawingsVisible ? "drawingHideWithCount" : "drawingShowWithCount"), {
+        count: localizedDrawingCount,
+      }))}
 
       <div className="ds-group-host ds-utility-host" onPointerEnter={openMenu === "clear" ? cancelMenuClose : undefined} onPointerLeave={handlePointerLeave}>
         {labeled(<button
@@ -965,26 +1261,31 @@ export default function DrawingSidebar({
               type="button"
               className="ds-fly-item ds-danger"
               role="menuitem"
+              disabled={userDrawingCount === 0}
               data-testid="drawing-clear-user"
               data-clear-scope="user"
               onClick={() => chooseClear("user")}
             >
               <span>{t("drawingRemoveUser")}</span>
+              <span className="ds-menu-count" aria-label={localizedUserDrawingCount}>{userDrawingCount}</span>
             </button>
             <button
               type="button"
               className="ds-fly-item ds-danger"
               role="menuitem"
+              disabled={detectedDrawingCount === 0}
               data-testid="drawing-clear-detected"
               data-clear-scope="detected"
               onClick={() => chooseClear("detected")}
             >
               <span>{t("drawingRemoveDetected")}</span>
+              <span className="ds-menu-count" aria-label={localizedDetectedDrawingCount}>{detectedDrawingCount}</span>
             </button>
             <button
               type="button"
               className="ds-fly-item ds-danger"
               role="menuitem"
+              disabled={drawingCount === 0}
               data-testid="drawing-clear-all"
               data-clear-scope="all"
               onClick={() => chooseClear("all")}
@@ -992,9 +1293,116 @@ export default function DrawingSidebar({
               <span>{t("drawingRemoveAll")}</span>
               <span className="ds-menu-count" aria-label={localizedDrawingCount}>{drawingCount}</span>
             </button>
+            <div className="ds-menu-heading ds-menu-heading-secondary" role="presentation">{t("drawingWorkspaceCleanup")}</div>
+            <button
+              type="button"
+              className="ds-fly-item ds-danger"
+              role="menuitem"
+              disabled={indicatorCount === 0}
+              data-testid="drawing-clear-indicators"
+              data-clear-scope="indicators"
+              onClick={() => chooseClear("indicators")}
+            >
+              <span>{t("drawingRemoveIndicators")}</span>
+              <span className="ds-menu-count" aria-label={interpolate(t("drawingIndicatorCount"), { n: indicatorCount })}>{indicatorCount}</span>
+            </button>
+            <button
+              type="button"
+              className="ds-fly-item ds-danger ds-danger-strong"
+              role="menuitem"
+              disabled={totalWorkspaceCount === 0}
+              data-testid="drawing-clear-everything"
+              data-clear-scope="everything"
+              onClick={() => chooseClear("everything")}
+            >
+              <span>{t("drawingRemoveEverything")}</span>
+              <span className="ds-menu-count" aria-label={interpolate(t("drawingObjectCount"), { n: totalWorkspaceCount })}>{totalWorkspaceCount}</span>
+            </button>
           </div>,
         )}
       </div>
+
+      {labeled(<button
+        type="button"
+        className={`ds-btn${favoriteIds.length > 0 && favoritesVisible ? " on" : ""}`}
+        aria-label={interpolate(t(favoritesVisible ? "drawingHideFavorites" : "drawingShowFavorites"), {
+          count: favoriteIds.length,
+        })}
+        aria-pressed={favoriteIds.length > 0 && favoritesVisible}
+        aria-disabled={favoriteIds.length === 0}
+        data-testid="drawing-favorites-toggle"
+        data-favorite-count={favoriteIds.length}
+        data-favorites-visible={favoriteIds.length > 0 && favoritesVisible ? "true" : "false"}
+        onClick={() => { if (favoriteIds.length) setFavoritesVisible((visible) => !visible); }}
+      >
+        <ToolIcon path={ICON_STAR} />
+        {favoriteIds.length > 0 && <span className="ds-count ds-favorite-count" aria-hidden="true">{favoriteIds.length}</span>}
+      </button>, interpolate(t(favoritesVisible ? "drawingHideFavorites" : "drawingShowFavorites"), {
+        count: favoriteIds.length,
+      }))}
     </div>
+
+    {favoritesHydrated && favoritesVisible && favoriteTools.length > 0 && floatingHost && createPortal(
+      <div
+        ref={favoritesRef}
+        className={`ds-favorites${favoritesDragging ? " dragging" : ""}`}
+        role="toolbar"
+        aria-label={t("drawingFavoriteTools")}
+        data-testid="drawing-favorites-strip"
+        data-favorite-count={favoriteTools.length}
+        style={{ left: favoritePosition.x, top: favoritePosition.y }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          hideFavorites(favoritesRef.current?.contains(document.activeElement) === true);
+        }}
+      >
+        <button
+          type="button"
+          className="ds-favorites-grip"
+          aria-label={t("drawingDragFavorites")}
+          data-testid="drawing-favorites-grip"
+          onPointerDown={beginFavoriteDrag}
+          onPointerMove={moveFavoriteDrag}
+          onPointerUp={endFavoriteDrag}
+          onPointerCancel={endFavoriteDrag}
+          onLostPointerCapture={endFavoriteDrag}
+        >
+          <ToolIcon path={ICON_GRIP} />
+        </button>
+        <div className="ds-favorites-scroll" role="group">
+          {favoriteTools.map((favorite) => {
+            const label = toolLabel(favorite, t);
+            const button = (
+              <button
+                type="button"
+                key={favorite.id}
+                className={`ds-favorite-tool${tool === favorite.id ? " on" : ""}`}
+                aria-label={`${label}${favorite.shortcut ? `, ${favorite.shortcut.label}` : ""}`}
+                aria-pressed={tool === favorite.id}
+                disabled={creationDisabled}
+                data-testid={`drawing-favorite-tool-${favorite.id}`}
+                data-tool-id={favorite.id}
+                data-sticky={tool === favorite.id && sticky ? "true" : "false"}
+                onClick={() => activateTool(favorite)}
+              >
+                <ToolIcon path={favorite.iconPath} />
+              </button>
+            );
+            return labeled(button, label, { shortcut: favorite.shortcut?.label, side: "top", key: favorite.id });
+          })}
+        </div>
+        <button
+          type="button"
+          className="ds-favorites-hide"
+          aria-label={t("drawingHideFavoriteStrip")}
+          data-testid="drawing-favorites-hide"
+          onClick={() => hideFavorites(true)}
+        >
+          <span aria-hidden="true">×</span>
+        </button>
+      </div>,
+      floatingHost,
+    )}
+    </>
   );
 }
