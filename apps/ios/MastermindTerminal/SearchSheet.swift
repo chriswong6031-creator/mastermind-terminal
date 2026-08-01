@@ -23,6 +23,10 @@ struct SearchSheet: View {
     @EnvironmentObject private var manifest: ManifestStore
     @EnvironmentObject private var watchlists: WatchlistStore
     @State private var query = ""
+    /// ANIM-21 — the query the *list* is built from. Typing rebuilds the whole
+    /// `LazyVStack` on every keystroke, which cannot animate and thrashes each row's logo;
+    /// a 120 ms trailing debounce lets the field stay instant while the list settles.
+    @State private var applied = ""
     @State private var category: String?
     /// Cached so the O(universe) category fold doesn't re-run three times per keystroke.
     @State private var categories: [String] = []
@@ -48,17 +52,34 @@ struct SearchSheet: View {
                 onTrailing: onClose
             )
             .padding(.top, 31.7)
+            .tvReadableWidth()
 
             chipRow
                 .padding(.top, 19.3)
+                .tvReadableWidth()
 
             resultsList
                 .padding(.top, 8.7)
         }
+        // IPAD-06 — field, chips and rows share one bounded, centred column so §2.2's
+        // 31.7 / 19.3 / 8.7 pt rhythm and §2.6's `.symbol2` trailing grid survive an 834 pt
+        // window. The overlay itself stays full-bleed `Theme.panel2`, and the column is
+        // applied per block rather than to the whole stack so the §3.2.5 row rules stay
+        // edge-to-edge (§2.1) instead of stopping 65 pt short of the page edge.
         .background(Theme.panel2.ignoresSafeArea())
         .tvToast($toast)
         .task(id: manifest.rows.count) { categories = manifest.categories }
-        .onAppear { fieldFocused = true }
+        // ANIM-10 — a 40 ms beat lets the keyboard's own 0.25 s curve overlap the surface
+        // fade instead of following it.
+        .task {
+            try? await Task.sleep(for: .milliseconds(40))
+            fieldFocused = true
+        }
+        .task(id: query) {
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            applied = query
+        }
     }
 
     // MARK: - Category chips (§3.2.4)
@@ -86,7 +107,7 @@ struct SearchSheet: View {
     // MARK: - Results (§3.2.5–§3.2.8)
 
     private var results: [String] {
-        let q = query.trimmingCharacters(in: .whitespaces)
+        let q = applied.trimmingCharacters(in: .whitespaces)
         if q.isEmpty && category == nil {
             // §3.2.8 non-empty default: recents first, else the user's own list — never an
             // alphabetical wall of the whole universe, and never a blank pane.
@@ -99,17 +120,21 @@ struct SearchSheet: View {
     private var resultsList: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                mathRow
+                mathRow.tvReadableWidth()
                 ForEach(Array(results.enumerated()), id: \.element) { index, sym in
                     // §3.2.5 — 1 pt `#414141` between rows, content-aligned at 16 pt and
                     // flush right; deliberately absent above row 1. (A math row, when one
                     // is showing, IS row 0 — so row 1 takes its divider from it.)
+                    //
+                    // The rule sits outside the readable column: content is inset, rules
+                    // run to the page edge (§2.1) — the pattern the watchlist already ships.
                     if index > 0 || mathValue != nil {
                         TVHairline.sheet(tone: .sheetRow, inset: TVSpace.s4)
                     }
-                    resultRow(sym)
+                    resultRow(sym).tvReadableWidth()
                 }
             }
+            .animation(.easeOut(duration: 0.18), value: results)
         }
         .scrollDismissesKeyboard(.immediately)
     }
@@ -199,7 +224,9 @@ struct SearchSheet: View {
     @ViewBuilder private var mathRow: some View {
         if let value = mathValue {
             HStack(spacing: TVSpace.s2) {
-                Text("= \(mathExpression)")
+                // SWEEP-L10N-MATH-PREFIX — the whole line is a format key, so a locale that
+                // writes the result marker differently can move it.
+                Text(String(format: L10n.t("= %@", model.lang), mathExpression))
                     .font(TVType.rowSecondary)
                     .foregroundStyle(Theme.text2)
                     .lineLimit(1)
@@ -214,6 +241,9 @@ struct SearchSheet: View {
             .frame(height: TVSymbolRowMetrics.symbolHeight)
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("search-math-result")
+            // ANIM-21 — the answer row drops in above the results rather than appearing
+            // between two frames of an otherwise-static list.
+            .transition(.opacity.combined(with: .move(edge: .top)))
         }
     }
 

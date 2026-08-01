@@ -3446,8 +3446,12 @@ html[data-shell="app"][data-red-up="true"]{
   --buy:#f23645; --sell:#089981;
   --up-rgb:242,54,69; --down-rgb:8,153,129;
 }
-/* canvas gradient — LWC's layout.background is transparent, so the CSS surface shows through */
-html[data-shell="app"] .pane{background:linear-gradient(180deg,#131722 0%,#181b26 100%)}
+/* canvas gradient — LWC's layout.background is transparent, so the CSS surface shows through.
+   C1/CHART-01: TV runs LIGHTEST at the top (IMG_2321.PNG x=250 samples #181A25 at y=190 →
+   #131621 at y=2200, monotonic), so the chart's DARKEST row abuts the black native chrome.
+   The pre-C1 rule ran the gradient backwards and put the brightest canvas row against that
+   seam. Native half is A3 (ChartScreen.swift). */
+html[data-shell="app"] .pane{background:linear-gradient(180deg,#181b26 0%,#131621 100%)}
 
 /* ── D1 (C24 revision) — NO toolbar row at all.
    D1 originally floated the surviving toolbar controls as pills on Row C of the canvas.
@@ -3496,10 +3500,19 @@ html[data-shell="app"] .status-symbol-name{
 }
 html[data-shell="app"] .status-market-dot{width:6px;height:6px}
 html[data-shell="app"] .status-values{gap:6px; font:700 17px/1.25 var(--font-num); font-variant-numeric:tabular-nums}
-/* Row B: OHLC / Vol / Day are scrub-only data on TV — suppressed at rest */
-html[data-shell="app"] .status-ohlc,
+/* Row B: OHLC / Vol / Day are scrub-only data on TV — suppressed at rest.
+   C6/CHART-06: the scrub REPLACEMENT now exists (ChartPanel's crosshair handler writes the
+   hovered bar into .status-ohlc via textContent and toggles .is-scrub), so Row B swaps to
+   OHLC while the crosshair is down instead of the shell simply losing the data. */
+html[data-shell="app"] .statusline:not(.is-scrub) .status-ohlc,
 html[data-shell="app"] .status-vol,
 html[data-shell="app"] .status-day{display:none}
+html[data-shell="app"] .statusline.is-scrub .status-last,
+html[data-shell="app"] .statusline.is-scrub .status-change{display:none}
+/* Row B carries ONE value at rest and FOUR under the crosshair. No TV measurement exists for the
+   scrub readout, so it reuses D3's legend-count step (13px) rather than inventing a new one; at
+   Row B's 17px a 6-digit crypto print overflows the 402pt row. */
+html[data-shell="app"] .statusline.is-scrub .status-ohlc{font-size:13px}
 html[data-shell="app"] .status-last{display:inline; font:700 17px/1.25 var(--font-num); font-variant-numeric:tabular-nums}
 /* TV chart-tab exception (master spec §6 C1): price AND change use the up/down FILL hex here,
    not the softer text token used on symbol-detail. */
@@ -3571,10 +3584,30 @@ html[data-shell="app"] .cfb-right{gap:7px; pointer-events:auto}
 html[data-shell="app"] .cfb-chip{height:20px; padding:0 7px; font:700 10px/1 var(--font-num)}
 html[data-shell="app"] .cfb-gear{width:26px; height:26px; color:#b1b5be}
 html[data-shell="app"] .cfb-gear svg{width:15px; height:15px}
+/* C8/CHART-08a — the ETH chip is permanently disabled on daily+ timeframes, where extended hours
+   are meaningless. An inert grey chip is not a control; it returns on intraday. */
+html[data-shell="app"] .cfb-chip.dis{display:none}
+/* C9/CHART-15 — 26pt is under the 44pt iOS minimum and the gear is the ONLY chart-settings entry
+   point since D1 dropped the toolbar row. Grow the TOUCH target with a transparent ::before inset,
+   never min-height on .cfb-gear itself — that inflates the drawn glyph box (the .lg-ic trap
+   documented at globals.css:1995). -9px each side → 44 × 44. */
+html[data-shell="app"] .cfb-gear{position:relative}
+html[data-shell="app"] .cfb-gear::before{content:""; position:absolute; inset:-9px; border-radius:12px}
 
 /* ── D9 — last-price axis badge: single line.
-   `tagCd.style.display` is set inline by renderPriceTag → !important is required ── */
-html[data-shell="app"] .mm-ptag-cd{display:none!important}
+   C10/CHART-07 revision: D9 hid the countdown outright, which ALSO overrode the user's
+   chartSettings.countdownVisible toggle — the setting was inert in the app. The badge already
+   measures 19px against TV's 17, so the countdown was never the size outlier. Lift it OUT of the
+   badge (absolute against .mm-ptag) instead of suppressing it, so the badge stays single-line and
+   the toggle works again.
+   CRITICAL: renderPriceTag sets `tagCd.style.display` INLINE — this rule must NOT declare
+   `display` at all, or it fights the inline value and breaks the gate in the other direction.
+   The `font:` shorthand IS set inline (createElement + cssText), so !important is required there
+   by the same rule D9 states for .lg-row. ── */
+html[data-shell="app"] .mm-ptag-cd{
+  position:absolute; top:100%; right:0; margin-top:2px;
+  font:700 10px/1 var(--font-num)!important; color:#b1b5be; background:transparent;
+}
 /* the `font:` shorthand is also set inline on these two (createElement + cssText), so — by the
    same rule the spec states for .lg-row — !important is required for the size bump to land. */
 html[data-shell="app"] .mm-ptag-px{font:700 12px/1.25 var(--font-num)!important;font-variant-numeric:tabular-nums!important}
@@ -3611,3 +3644,30 @@ html[data-shell="app"] .pane-hd{display:none}
 html[data-shell="app"]{--pane-sep:#232732; --pane-sep-h:#3d4250}
 /* no page bounce behind the canvas */
 html[data-shell="app"]{overscroll-behavior:none; background:#131722}
+
+/* ── C5/CHART-05 — brand bug as a DOM node, not the LWC text watermark.
+   createTextWatermark parks the shell bug at the bottom-left of the PRICE pane, i.e. inside the
+   volume overlay, so volume bars cross it — and TextWatermarkOptions carries no padding/offset
+   field, so the inset is unreachable through the plugin. ChartPanel passes visible:false in shell
+   mode and appends .mm-brandbug instead. bottom:38px clears the time axis; z-index:1 keeps it
+   above the canvas so no series can overpaint it. Both values are inventions (§4-A20.14).
+   Web keeps the centred 48px ghost wordmark — the node is never created there. ── */
+html[data-shell="app"] .mm-brandbug{
+  position:absolute; left:12px; bottom:38px; z-index:1;
+  font:700 13px/1 var(--font-ui); letter-spacing:.09em;
+  color:rgba(219,219,219,.30); pointer-events:none;
+}
+
+/* ── C7/CHART-09 — regular-width (iPad) branch.
+   The D-block had ZERO media queries, so an 834pt iPad canvas rendered the 402pt phone type ramp.
+   The breakpoint is IDENTICAL to ChartPanel's (min-width:700px) so type, axis font and
+   tickMarkDensity step together. The entire ramp is an invention (§4-A20.10 / §4-A20.11). ── */
+@media (min-width:700px){
+  html[data-shell="app"] .status-symbol-name{font-size:20px}
+  html[data-shell="app"] .status-values{font-size:20px}
+  html[data-shell="app"] .status-symbol-logo{width:20px;height:20px}
+  html[data-shell="app"] .lg-collapse{height:30px;min-width:48px}
+  html[data-shell="app"] .lg-cnt{font-size:15px}
+  html[data-shell="app"] .lg-name{font-size:16px;max-width:280px}
+  html[data-shell="app"] .cfb-gear{width:30px;height:30px}
+}

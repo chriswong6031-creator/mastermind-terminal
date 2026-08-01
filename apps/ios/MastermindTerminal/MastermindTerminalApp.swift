@@ -63,9 +63,18 @@ final class AppModel: ObservableObject {
 
     /// One entry point for every native search affordance, so the optional browse
     /// category is always set (or cleared) in the same breath as the mode.
+    ///
+    /// ANIM-10: the animation lives here rather than at the five call sites, so no
+    /// surface can open the search plane without the transition.
     func openSearch(_ mode: SearchSheet.Mode = .go, category: String? = nil) {
-        searchCategory = category
-        searchMode = mode
+        withAnimation(.easeOut(duration: 0.20)) {
+            searchCategory = category
+            searchMode = mode
+        }
+    }
+
+    func closeSearch() {
+        withAnimation(.easeOut(duration: 0.20)) { searchMode = nil }
     }
 }
 
@@ -75,10 +84,6 @@ struct MastermindTerminalApp: App {
     @StateObject private var manifest = ManifestStore()
     @StateObject private var watchlists = WatchlistStore()
     @StateObject private var auth = AuthService.shared
-
-    init() {
-        TVTabBarChrome.apply()
-    }
 
     var body: some Scene {
         WindowGroup {
@@ -96,57 +101,72 @@ struct MastermindTerminalApp: App {
     }
 }
 
+/// The app's root container. **Not** a `TabView` (IPAD-01): from iPadOS 18 a `TabView`
+/// built from `.tabItem` adopts the top floating capsule placement, which no
+/// `UITabBarAppearance` can reach — so a second, system-blue bar rendered above the
+/// content while `TVRootTabBar` still drew ours at the bottom, and the capsule reserved
+/// **zero** bottom inset, which put the RollerStrip underneath our own bar.
+///
+/// So the shell owns the bar outright: all five screens stay mounted in a `ZStack` (the
+/// retained chart web view is the reason they must), and the real bar is attached as a
+/// bottom `safeAreaInset` — the inset is what reserves the band, on every idiom, with no
+/// system bar in the layout at all.
 struct RootTabsView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         ZStack {
-            TabView(selection: $model.tab) {
-                WatchlistScreen()
-                    .tabItem { tabItem(L10n.t("Watchlist", model.lang), .watchlist) }
-                    .tag(AppModel.Tab.watchlist)
-                ChartScreen()
-                    .tabItem { tabItem(L10n.t("Chart", model.lang), .chart) }
-                    .tag(AppModel.Tab.chart)
-                    // C25: this — not hiding our overlay — is what actually gives the
-                    // chart the tab bar's band. The overlay is drawn *over* the system
-                    // bar's rect, but the bottom safe-area inset that reserves that rect
-                    // is `TabView`'s, and only hiding the system bar returns it.
-                    .modifier(TVSystemTabBarHidden(hidden: model.chromeMinimized))
-                ExploreScreen()
-                    .tabItem { tabItem(L10n.t("Explore", model.lang), .explore) }
-                    .tag(AppModel.Tab.explore)
-                CommunityScreen()
-                    .tabItem { tabItem(L10n.t("Community", model.lang), .community) }
-                    .tag(AppModel.Tab.community)
-                MenuScreen()
-                    .tabItem { tabItem(L10n.t("Menu", model.lang), .menu) }
-                    .tag(AppModel.Tab.menu)
+            ZStack {
+                ForEach(AppModel.Tab.ordered, id: \.self) { tab in
+                    screen(tab)
+                        // Kept mounted, not rebuilt: the chart's web view must survive a
+                        // tab switch. Hidden tabs take no touches and never paint.
+                        .opacity(model.tab == tab ? 1 : 0)
+                        .allowsHitTesting(model.tab == tab)
+                        .zIndex(model.tab == tab ? 1 : 0)
+                }
             }
-            // The system bar must never shrink/grow on scroll: the visible bar is our own
-            // fixed-height overlay, and a minimising system bar would change the bottom
-            // safe-area inset underneath it and slide content behind our fill.
-            .modifier(TVSystemTabBarInert())
-
-            // §1.10 / §2.20: the bar the user actually sees. Drawn full-bleed over the
-            // system bar's rect, below the search overlay (which still covers everything).
-            TVRootTabBar(selection: $model.tab, lang: model.lang)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                // C25: minimised chrome slides the bar off the bottom edge (and stops
-                // taking touches there) while the system bar it covers is hidden underneath.
-                .offset(y: model.chromeMinimized ? TVTabBarMetrics.totalHeight : 0)
-                .allowsHitTesting(!model.chromeMinimized)
-                .animation(.easeOut(duration: 0.22), value: model.chromeMinimized)
-                .zIndex(0.5)
+            // §1.10 / §2.20: the only bar in the app. As a safe-area inset it both draws
+            // the bar and reserves its band, so C25's minimize is a single layout change
+            // instead of an offset trick racing a system inset (IPAD-04/IPAD-13).
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !model.chromeMinimized {
+                    TVRootTabBar(selection: $model.tab, lang: model.lang)
+                        .transition(.move(edge: .bottom))
+                }
+            }
 
             if let mode = model.searchMode {
-                SearchSheet(mode: mode) { model.searchMode = nil }
+                SearchSheet(mode: mode) { model.closeSearch() }
                     .zIndex(1)
-                    .transition(.identity)
+                    // ANIM-10: the search plane still *appears* rather than sliding up
+                    // (§3.2), but not in a single frame.
+                    .transition(.opacity.combined(with: .scale(scale: 1.03)))
             }
         }
+        // The one place the width seam is published; every screen reads it from the
+        // environment rather than testing `horizontalSizeClass` itself (§6).
+        .tvWidthClass(TVWidthClass(horizontalSizeClass))
         .onAppear {
-            if ProcessInfo.processInfo.arguments.contains("-mmOpenSearch") { model.searchMode = .go }
+            if ProcessInfo.processInfo.arguments.contains("-mmOpenSearch") { model.openSearch(.go) }
+            #if DEBUG
+            // Headless §6.2 capture state: tap-only interactions get launch-arg mirrors.
+            let args = ProcessInfo.processInfo.arguments
+            if args.contains("-mmMinimize") {
+                // Pre-seed the per-orientation stores too, or the iPad restore path
+                // (ChartScreen.applyOrientation) immediately undoes the flag.
+                UserDefaults.standard.set(true, forKey: "mm.chromeMinimized.portrait")
+                UserDefaults.standard.set(true, forKey: "mm.chromeMinimized.landscape")
+                model.chromeMinimized = true
+            } else if args.contains("-mmTab") {
+                // Any other headless capture launch clears what a prior -mmMinimize run
+                // persisted — otherwise the iPad restores it and captures stop being
+                // deterministic. Real user launches (no -mmTab) keep their state.
+                UserDefaults.standard.set(false, forKey: "mm.chromeMinimized.portrait")
+                UserDefaults.standard.set(false, forKey: "mm.chromeMinimized.landscape")
+            }
+            #endif
             AuthTestDriver.runIfRequested()
         }
         // Chrome-minimize belongs to the chart and nothing else: any move off that tab
@@ -154,25 +174,30 @@ struct RootTabsView: View {
         // can never follow the user to a screen with no way to undo it.
         .onChange(of: model.tab) { _, tab in
             guard tab != .chart, model.chromeMinimized else { return }
-            withAnimation(.easeOut(duration: 0.22)) { model.chromeMinimized = false }
+            withAnimation(TVChrome.minimize) { model.chromeMinimized = false }
         }
         // Presented from the root so any tab can request it and it survives a tab switch.
         .sheet(isPresented: $model.showSignIn) { SignInScreen() }
     }
 
-    /// Feeds the **system** bar only — that bar is rendered inert (`TVTabBarChrome`) and
-    /// sits behind `TVRootTabBar`. `TabView` still needs one item per tab to build its
-    /// tabs, and keeping the real label/glyph here means the app degrades to a sane
-    /// (if non-parity) bar rather than a blank one if the overlay is ever removed.
-    /// §1.10: the label is identical in both states; selection is carried entirely by the
-    /// glyph swapping to its solid variant.
-    private func tabItem(_ title: String, _ tab: AppModel.Tab) -> some View {
-        Label {
-            Text(title)
-        } icon: {
-            TVTabGlyph.image(for: tab, selected: model.tab == tab)
+    @ViewBuilder
+    private func screen(_ tab: AppModel.Tab) -> some View {
+        switch tab {
+        case .watchlist: WatchlistScreen()
+        case .chart: ChartScreen()
+        case .explore: ExploreScreen()
+        case .community: CommunityScreen()
+        case .menu: MenuScreen()
         }
     }
+}
+
+/// The C25 chrome-minimize curve, shared by the two mutation sites that own the
+/// transaction (`ChartScreen`'s minimize rect and the leave-the-tab reset). ANIM-11: the
+/// bar carries **no** implicit `.animation` of its own, so exactly one transaction drives
+/// the inset, the chart's reclaimed height and the bar's slide together.
+enum TVChrome {
+    static let minimize: Animation = .spring(response: 0.34, dampingFraction: 0.92)
 }
 
 // MARK: - §1.10 / §2.20 the real tab bar
@@ -182,6 +207,11 @@ struct RootTabsView: View {
 private enum TVTabBarInk {
     /// Bar top (y 791.0) → icon ink top (y 797.7), less the 1 px rule we draw above it.
     static let iconTopInset: CGFloat = 6.4
+    /// §4-A20.4 — the five columns keep their **measured** 80.4 pt pitch on every idiom,
+    /// so on a wide window the column block is bounded to 402 pt and centred rather than
+    /// stretched. Widening the pitch would be pure invention; the fill and the rule stay
+    /// full-bleed because those are the only parts §1.10 measures edge-to-edge.
+    static let contentWidth: CGFloat = TVTabBarMetrics.columnPitch * 5
 }
 
 /// TradingView's bottom bar: five equal columns of `#040404`, edge to edge, under a single
@@ -190,13 +220,10 @@ private enum TVTabBarInk {
 /// no container, no pill, no accent tint anywhere (C18).
 ///
 /// Why this exists instead of `TabView`'s own bar: from iOS 26 the system tab bar renders as
-/// an inset floating glass capsule with its own rounded selection highlight, and it
-/// re-templates `.tabItem` symbol images (which is what turned the `bookmark` glyph red).
-/// `UITabBarAppearance` no longer reaches any of that, and the only opt-out is the
-/// `UIDesignRequiresCompatibility` Info.plist key — not available to a target whose
-/// Info.plist is generated from the project file. So the system bar is made inert and this
-/// one is drawn over it; `TabView` keeps owning tab lifecycle (`onAppear`/`onDisappear`,
-/// the retained chart web view) and the bottom safe-area inset.
+/// an inset floating glass capsule with its own rounded selection highlight, it re-templates
+/// `.tabItem` symbol images, and on iPad it moves to the top of the window entirely. No
+/// appearance proxy reaches any of that. `RootTabsView` therefore ships no `TabView` at all
+/// and mounts this bar as its bottom `safeAreaInset` (L5).
 struct TVRootTabBar: View {
     @Binding var selection: AppModel.Tab
     let lang: String
@@ -233,12 +260,17 @@ struct TVRootTabBar: View {
             HStack(spacing: 0) {
                 ForEach(items) { column($0) }
             }
+            // §4-A20.4 — bounded to the measured 5 × 80.4 pt block, centred; the fill it
+            // sits on stays edge-to-edge.
+            .frame(maxWidth: TVTabBarInk.contentWidth)
             .frame(maxWidth: .infinity)
             .frame(height: TVTabBarMetrics.contentHeight)
             .background(TVTabBarMetrics.background)
         }
         // The home-indicator inset below the bar is pure black with no content (§1.10).
         .background(Theme.bg.ignoresSafeArea(edges: .bottom))
+        // ANIM-12: the bar is the app's most-used control and had no feedback at all.
+        .sensoryFeedback(.selection, trigger: selection)
     }
 
     /// One of five equal 80.4 pt columns (402 / 5) — expressed as an equal share so the
@@ -246,12 +278,15 @@ struct TVRootTabBar: View {
     private func column(_ item: Item) -> some View {
         let selected = selection == item.tab
         return Button {
-            selection = item.tab
+            withAnimation(.easeOut(duration: 0.15)) { selection = item.tab }
         } label: {
             VStack(spacing: TVTabBarMetrics.iconToLabelGap) {
                 TVTabGlyph.view(for: item.tab, selected: selected)
                     .frame(height: TVTabBarMetrics.iconInk)
-                    .tvBadgeDot(item.badge)
+                    // SCREEN-04: the selected Chart shield carries the dot *inside* its own
+                    // badge, nested in a knockout notch. Letting the generic corner dot ride
+                    // on top of it as well drew two dots' worth of ink in one corner.
+                    .tvBadgeDot(item.badge && !TVTabGlyph.drawsOwnBadgeDot(for: item.tab, selected: selected))
                 Text(item.title)
                     // §1.3 `[P2]`: 12 pt **Semibold** — the pass-1 "Medium" reading was
                     // corrected by the stem measurement (5–6 px = 1.67–2.0 pt at 12 pt).
@@ -265,45 +300,9 @@ struct TVRootTabBar: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.glyph))
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-    }
-}
-
-/// C25 chrome-minimize: hides the **system** tab bar for the tab this is applied to, which
-/// is the only thing that gives the tab's content the bottom inset back. `TVRootTabBar` is
-/// an overlay in the root `ZStack`, so hiding *it* changes no layout at all — the 83 pt
-/// band it sits in is `TabView`'s safe-area inset, and `TabView` only returns that inset
-/// when its own bar is hidden. Applied per-tab (never to the `TabView`), so a tab switch
-/// restores the bar even before `AppModel.chromeMinimized` is reset.
-///
-/// `toolbarVisibility(_:for:)` is iOS 18's spelling of the iOS 16 `toolbar(_:for:)`; both
-/// are shipped so the iOS 17 deployment target keeps building without a deprecation.
-private struct TVSystemTabBarHidden: ViewModifier {
-    let hidden: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(iOS 18.0, *) {
-            content.toolbarVisibility(hidden ? .hidden : .visible, for: .tabBar)
-        } else {
-            content.toolbar(hidden ? .hidden : .visible, for: .tabBar)
-        }
-    }
-}
-
-/// Pins the system tab bar's geometry so it cannot animate out from under `TVRootTabBar`.
-/// iOS 26's bar minimises on scroll by default, which would change the bottom safe-area
-/// inset it hands to tab content while our fixed-height fill stays put.
-private struct TVSystemTabBarInert: ViewModifier {
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.tabBarMinimizeBehavior(.never)
-        } else {
-            content
-        }
     }
 }
 
@@ -313,21 +312,27 @@ private struct TVSystemTabBarInert: ViewModifier {
 /// variant, unselected = its outline variant, **no accent tint anywhere**. The Menu
 /// hamburger has no solid variant, so it doubles its stroke weight instead.
 ///
-/// Every image is rendered with `Theme.text` baked in and `.alwaysOriginal`, so neither
-/// the app's `.tint(Theme.brand2)` nor UIKit's bar tint can recolour a selected tab.
+/// SCREEN-04 is the one documented exception to "solid variant of the same base shape":
+/// measured on `IMG_2298.PNG`, TV's **selected** Chart tab is a filled shield/badge with
+/// two candles knocked out of it, not a solid bar chart. SF Symbols ships no such glyph, so
+/// it is drawn here as a path from the measurement (`TVChartTabShield`) rather than carried
+/// as a bundled vector — the imageset it replaces rendered 18 × 18.7 pt inside the 22 pt
+/// icon box, ~20 % under the measured badge. The **unselected** shield is not in the corpus
+/// (§4-A20.16), so the outline bar chart stays until a capture of it exists.
 enum TVTabGlyph {
     private struct Pair {
         let outline: String
         /// `nil` = this glyph ships no solid variant (the hamburger).
         let fill: String?
+        /// A hand-drawn vector that replaces the selected SF symbol entirely (SCREEN-04).
+        var drawsSelectedShield = false
     }
 
     private static func pair(for tab: AppModel.Tab) -> Pair {
         switch tab {
         case .watchlist: return Pair(outline: "bookmark", fill: "bookmark.fill")
-        // TV's diamond-with-candlestick-ticks mark has no SF equivalent (§1.8); this is
-        // the nearest outline/solid pair we can ship without a custom vector.
-        case .chart: return Pair(outline: "chart.bar", fill: "chart.bar.fill")
+        case .chart: return Pair(outline: "chart.bar", fill: "chart.bar.fill",
+                                 drawsSelectedShield: true)
         // `safari` is a compass with a needle — TV's Explore glyph, and its solid variant
         // is exactly the "#DBDBDB disc with the glyph knocked out" the spec describes.
         case .explore: return Pair(outline: "safari", fill: "safari.fill")
@@ -336,80 +341,132 @@ enum TVTabGlyph {
         }
     }
 
-    static func image(for tab: AppModel.Tab, selected: Bool) -> Image {
-        let glyph = pair(for: tab)
-        let name = selected ? (glyph.fill ?? glyph.outline) : glyph.outline
-        // §1.10: stroke 1.33–1.67 pt → 3.0–3.33 pt when the fill-less hamburger is active.
-        let weight: UIImage.SymbolWeight = (glyph.fill == nil && selected) ? .heavy : .regular
-        return render(name, weight: weight)
+    /// True where the glyph paints the §1.10 red dot itself, so the generic corner badge
+    /// must stand down (SCREEN-04 — the shield nests its dot in a knockout notch).
+    static func drawsOwnBadgeDot(for tab: AppModel.Tab, selected: Bool) -> Bool {
+        selected && pair(for: tab).drawsSelectedShield
     }
 
-    /// SwiftUI-native rendering for the VISIBLE bar. The UIImage pipeline above
-    /// (`paletteColors` + `withTintColor` re-wrapped in `Image`) rendered the ink
-    /// near-black on the shipped simulator — SwiftUI's monochrome symbol path with
-    /// an explicit `foregroundStyle` is deterministic, and an explicit style also
-    /// satisfies C18: no ancestor `.tint` can override it.
+    /// SwiftUI-native rendering. An explicit `foregroundStyle` satisfies C18: no ancestor
+    /// `.tint` can override it.
     @ViewBuilder
     static func view(for tab: AppModel.Tab, selected: Bool) -> some View {
         let glyph = pair(for: tab)
-        Image(systemName: selected ? (glyph.fill ?? glyph.outline) : glyph.outline)
-            .font(.system(size: TVTabBarMetrics.iconInk,
-                          weight: (glyph.fill == nil && selected) ? .heavy : .regular))
-            .foregroundStyle(Theme.text)
-    }
-
-    private static func render(_ name: String, weight: UIImage.SymbolWeight) -> Image {
-        let sized = UIImage.SymbolConfiguration(pointSize: TVTabBarMetrics.iconInk, weight: weight)
-        let coloured = UIImage.SymbolConfiguration(paletteColors: [UIColor(Theme.text)])
-        let rendered = UIImage(systemName: name, withConfiguration: sized.applying(coloured))?
-            // Flattens the symbol to one ink and marks it non-template, so no ancestor tint
-            // — ours, or a system bar's — can substitute a colour. §1.8: tab glyphs are
-            // never tinted (the four named exceptions do not include any tab glyph).
-            .withTintColor(UIColor(Theme.text), renderingMode: .alwaysOriginal)
-        return Image(uiImage: rendered ?? UIImage())
+        if selected, glyph.drawsSelectedShield {
+            TVChartTabShield()
+        } else {
+            Image(systemName: selected ? (glyph.fill ?? glyph.outline) : glyph.outline)
+                .font(.system(size: TVTabBarMetrics.iconInk,
+                              weight: (glyph.fill == nil && selected) ? .heavy : .regular))
+                .foregroundStyle(Theme.text)
+                // ANIM-12: outline → solid is a state change, not a new icon.
+                .contentTransition(.symbolEffect(.replace.offUp))
+        }
     }
 }
 
-/// Makes the **system** tab bar draw nothing, so `TVRootTabBar` is the only bar on screen.
+/// §1.10 / SCREEN-04 — the **selected** Chart tab's badge, drawn from the measurement.
 ///
-/// This used to configure the system bar to the §1.10 anatomy directly, which is correct on
-/// the classic bar and unreachable on iOS 26's: that bar is an inset floating glass capsule
-/// with its own rounded selection highlight, and it re-templates `.tabItem` symbol images.
-/// Measured against the reference frames, all three of those are visible deltas (the bar
-/// stopping ~21 pt short of each screen edge and 21 pt short of the bottom, a ~67 × 47 pt
-/// gray pill behind the selected item, and a solid red `bookmark` glyph). There is no
-/// runtime opt-out — only the `UIDesignRequiresCompatibility` Info.plist key, which this
-/// target cannot carry because its Info.plist is generated from the project file — so the
-/// system bar is stripped to nothing here and the real bar is drawn over its rect.
-/// `TabView` is kept for everything else it owns: tab lifecycle and the safe-area inset.
-enum TVTabBarChrome {
-    static func apply() {
-        let appearance = UITabBarAppearance()
-        // No material, no fill, no rule: `TVRootTabBar` draws #040404 and the 1 px #4A4A4A
-        // rule itself, full-bleed, so nothing here may bleed past that fill.
-        appearance.configureWithTransparentBackground()
-        appearance.backgroundEffect = nil
-        appearance.backgroundColor = .clear
-        appearance.shadowColor = .clear
-        appearance.shadowImage = UIImage()
+/// Measured on `IMG_2298.PNG` (3× pixels; badge ink x 325–395, y 2398–2463):
+///
+/// * The badge is **23.7 × 22.0 pt**: a flat-top pentagon with a 16 pt top edge, straight
+///   bevelled shoulders reaching full width at 39.4 % of the height, then straight edges
+///   converging on a **sharp bottom vertex**. Its point sits ~1 pt (3 device px) below the
+///   neighbouring SF glyphs' ink — the reference does the same, and the 22 pt layout frame
+///   plus the 1 pt overflow reproduces it without moving the row.
+/// * Two candles are knocked **out** of the badge: a hollow-bodied one with a wick above
+///   and below, and a shorter filled one with a wick below.
+/// * The §1.10 red dot is **⌀5.67 pt centred on the badge's top-right corner and nested
+///   into it**: the badge is cut away in a ⌀10.67 pt circle around the dot, leaving a
+///   ~2.5 pt ring of bar background between red and white. The dot is part of the badge,
+///   not a sticker floating above it — which is what the generic corner badge drew.
+///
+/// Drawn rather than bundled: the imageset this replaces resolved to 18 × 18.7 pt inside
+/// the 22 pt icon box (~20 % under the measurement) because a `scaledToFit` asset can only
+/// ever fit the box, and it could not express the knockout notch at all.
+struct TVChartTabShield: View {
+    var ink: Color = Theme.text
+    var dot: Color = Theme.downFill
 
-        let item = UITabBarItemAppearance(style: .stacked)
-        for state in [item.normal, item.selected, item.focused, item.disabled] {
-            state.iconColor = .clear
-            state.titleTextAttributes = [
-                .font: UIFont.systemFont(ofSize: 12, weight: .medium),
-                .foregroundColor: UIColor.clear,
-            ]
+    /// The badge's own measured box. The layout frame is 1 pt taller so the nested dot,
+    /// which rides 1 pt proud of the top edge, is not clipped by the canvas.
+    static let badge = CGSize(width: 23.7, height: 22.0)
+    private static let topOverflow: CGFloat = 1.0
+
+    // Fractions of the badge box (from the pixel measurement above).
+    private static let topEdgeLeading: CGFloat = 0.155
+    private static let topEdgeTrailing: CGFloat = 0.845
+    private static let shoulderY: CGFloat = 0.394
+    private static let dotCentre = CGPoint(x: 0.831, y: 0.083)
+    private static let dotDiameter: CGFloat = 5.67
+    private static let nestDiameter: CGFloat = 10.67
+
+    var body: some View {
+        Canvas { context, size in
+            let box = CGRect(x: 0, y: size.height - Self.badge.height,
+                             width: size.width, height: Self.badge.height)
+            // One isolated layer, so `destinationOut` cuts real holes in the badge and the
+            // bar's own `#040404` shows through — nothing here paints a background colour,
+            // which would have to be kept in step with the bar by hand.
+            context.drawLayer { layer in
+                layer.fill(Self.badgePath(box), with: .color(ink))
+                layer.blendMode = .destinationOut
+                layer.fill(Self.knockoutPath(box), with: .color(.black))
+                layer.blendMode = .normal
+                // The left candle's body is hollow: its interior is badge, not hole.
+                layer.fill(Path(Self.frac(box, 0.338, 0.348, 0.408, 0.470)), with: .color(ink))
+            }
+            context.fill(Path(ellipseIn: Self.circle(box, Self.dotDiameter)), with: .color(dot))
         }
-        appearance.stackedLayoutAppearance = item
-        appearance.inlineLayoutAppearance = item
-        appearance.compactInlineLayoutAppearance = item
+        .frame(width: Self.badge.width, height: Self.badge.height + Self.topOverflow)
+        .accessibilityHidden(true)
+    }
 
-        let bar = UITabBar.appearance()
-        bar.standardAppearance = appearance
-        bar.scrollEdgeAppearance = appearance
-        bar.tintColor = .clear
-        bar.unselectedItemTintColor = .clear
+    private static func badgePath(_ box: CGRect) -> Path {
+        Path { path in
+            path.move(to: point(box, topEdgeLeading, 0))
+            path.addLine(to: point(box, topEdgeTrailing, 0))
+            path.addLine(to: point(box, 1, shoulderY))
+            path.addLine(to: point(box, 0.5, 1))
+            path.addLine(to: point(box, 0, shoulderY))
+            path.closeSubpath()
+        }
+    }
+
+    /// Everything cut out of the badge: both candles and the dot's nest.
+    private static func knockoutPath(_ box: CGRect) -> Path {
+        var path = Path()
+        // Left candle — body, then the wick above and below it. Split in two so no two
+        // rectangles overlap: the candle is a hole, and a hole drawn twice is still a hole,
+        // but the hollow interior refilled afterwards depends on clean geometry.
+        path.addRect(frac(box, 0.268, 0.273, 0.479, 0.545))
+        path.addRect(frac(box, 0.338, 0.182, 0.408, 0.273))
+        path.addRect(frac(box, 0.338, 0.545, 0.408, 0.636))
+        // Right candle — filled body, wick below.
+        path.addRect(frac(box, 0.577, 0.288, 0.761, 0.409))
+        path.addRect(frac(box, 0.634, 0.409, 0.704, 0.500))
+        // The dot's nest.
+        path.addEllipse(in: circle(box, nestDiameter))
+        return path
+    }
+
+    private static func point(_ box: CGRect, _ x: CGFloat, _ y: CGFloat) -> CGPoint {
+        CGPoint(x: box.minX + box.width * x, y: box.minY + box.height * y)
+    }
+
+    private static func frac(_ box: CGRect, _ x0: CGFloat, _ y0: CGFloat,
+                             _ x1: CGFloat, _ y1: CGFloat) -> CGRect {
+        CGRect(x: box.minX + box.width * x0,
+               y: box.minY + box.height * y0,
+               width: box.width * (x1 - x0),
+               height: box.height * (y1 - y0))
+    }
+
+    /// A circle of `diameter` pt centred on the measured dot centre.
+    private static func circle(_ box: CGRect, _ diameter: CGFloat) -> CGRect {
+        let centre = point(box, dotCentre.x, dotCentre.y)
+        return CGRect(x: centre.x - diameter / 2, y: centre.y - diameter / 2,
+                      width: diameter, height: diameter)
     }
 }
 

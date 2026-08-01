@@ -39,8 +39,10 @@ struct ChartWebView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.isOpaque = false
-        webView.backgroundColor = UIColor(Theme.chartBg)
-        webView.scrollView.backgroundColor = UIColor(Theme.chartBg)
+        // CHART-01 — the backdrop that shows during first paint must be the gradient's
+        // **top** stop, which is `chartBgBottom` now that the gradient runs light→dark.
+        webView.backgroundColor = UIColor(Theme.chartBgBottom)
+        webView.scrollView.backgroundColor = UIColor(Theme.chartBgBottom)
         // The page owns scrolling/gestures; the native scroll view must not rubber-band under it.
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.scrollView.bounces = false

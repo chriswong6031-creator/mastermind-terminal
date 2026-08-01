@@ -68,6 +68,10 @@ enum L10n {
         "Research desk & deep dives": "研究台与深度分析",
 
         // Menu / account
+        // Format keys — the caller feeds them to `String(format:)`, so the placeholder must
+        // survive translation (SWEEP-L10N-VERSION, SWEEP-L10N-MATH-PREFIX).
+        "%@ alpha": "%@ Alpha 版",
+        "= %@": "= %@",
         "Account": "账户",
         "Guest": "访客",
         "Guest mode": "访客模式",
@@ -152,6 +156,23 @@ enum L10n {
         "Redo": "重做",
         "Hide menu bar": "隐藏菜单栏",
         "Show menu bar": "显示菜单栏",
+
+        // §2.19 floating wheel — long-form intervals (t-012/t-014). The toolbar chamber
+        // keeps the abbreviation; only the magnified panel spells them out.
+        "1 minute": "1分钟",
+        "5 minutes": "5分钟",
+        "15 minutes": "15分钟",
+        "30 minutes": "30分钟",
+        "1 hour": "1小时",
+        "2 hours": "2小时",
+        "4 hours": "4小时",
+        "1 day": "1天",
+        "2 days": "2天",
+        "3 days": "3天",
+        "1 week": "1周",
+        "2 weeks": "2周",
+        "1 month": "1个月",
+        "3 months": "3个月",
         "Indicators": "指标",
         "Templates": "模板",
         "Chart type": "图表类型",
@@ -171,6 +192,8 @@ enum L10n {
         "Siri shortcut": "Siri 快捷指令",
 
         // Menu (TV-parity wave)
+        "Refer a friend": "推荐好友",
+        "Invite and earn": "邀请赢奖励",
         "Messages": "消息",
         "Help Center": "帮助中心",
         "Manage subscription": "管理订阅",

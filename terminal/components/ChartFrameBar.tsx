@@ -212,6 +212,10 @@ export default function ChartFrameBar({
   const [gotoDate, setGotoDate] = useState("");
   const gearRef = useRef<HTMLDivElement>(null);
   const gotoRef = useRef<HTMLInputElement>(null);
+  // C8/CHART-08b — the native shell swaps the settings glyph for TV's hexagon nut. Read after mount
+  // (the marker is stamped pre-paint on <html>, but this component is SSR'd) so the server output —
+  // and therefore the whole browser web render — stays byte-identical under L2.
+  const [shellMode, setShellMode] = useState(false);
 
   const isIntraday = isIntradayTf(timeframe);
 
@@ -221,6 +225,7 @@ export default function ChartFrameBar({
     setClock(fmtHHMMSS(new Date()));
     setTzLabel(utcOffsetLabel());
     setMounted(true);
+    setShellMode(document.documentElement.getAttribute("data-shell") === "app");
     const id = setInterval(() => {
       setClock(fmtHHMMSS(new Date()));
       setTzLabel(utcOffsetLabel());
@@ -425,10 +430,20 @@ export default function ChartFrameBar({
             title={t("quickSettings")}
             onClick={(e) => { e.stopPropagation(); setGearOpen((o) => !o); if (gearOpen) setSubMenu(null); }}
           >
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-              <circle cx="8" cy="8" r="2.2" />
-              <path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.2 3.2l.9.9M11.9 11.9l.9.9M3.2 12.8l.9-.9M11.9 4.1l.9-.9" strokeLinecap="round" />
-            </svg>
+            {/* C8b — at the shell's 26×26 / 15px svg the eight straight radial strokes read as a
+                brightness/sun icon, not settings. TV draws a hexagon nut. House-neutral, but gated
+                on shellMode anyway so the web render stays byte-identical (L2). */}
+            {shellMode ? (
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                <path d="M8 1.7 13.4 4.85v6.3L8 14.3 2.6 11.15v-6.3z" strokeLinejoin="round" />
+                <circle cx="8" cy="8" r="2.1" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                <circle cx="8" cy="8" r="2.2" />
+                <path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.2 3.2l.9.9M11.9 11.9l.9.9M3.2 12.8l.9-.9M11.9 4.1l.9-.9" strokeLinecap="round" />
+              </svg>
+            )}
           </button>
 
           {gearOpen && (

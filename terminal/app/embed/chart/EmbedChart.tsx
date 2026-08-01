@@ -168,11 +168,12 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
         fontFamily: "var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
         attributionLogo: false,
       },
-      // Clean mode drops the verticals entirely and softens the horizontals (spec §2B: the TV
-      // sheet chart is a quiet canvas — the candles and the dashed prior close carry it).
+      // C11/CHART-11 — clean mode drops BOTH axes' gridlines (spec §2B: TV's symbol sheet has
+      // zero gridlines; only the verticals were gated before, so the sheet chart still ruled every
+      // price label). The candles and the dashed prior close carry the canvas.
       grid: {
-        vertLines: clean ? { visible: false, color: pal.grid } : { color: pal.grid },
-        horzLines: { color: pal.grid },
+        vertLines: { visible: !clean, color: pal.grid },
+        horzLines: { visible: !clean, color: pal.grid },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
@@ -199,15 +200,17 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
       wickDownColor: pal.down,
       borderVisible: false,
       priceLineVisible: false,
-      lastValueVisible: true,
+      // C11/CHART-12 — the filled last-value badge collides with the newest candles and duplicates
+      // the price already in the sheet header. TV's sheet has none. Default embeds keep it.
+      lastValueVisible: !clean,
       priceFormat: { type: "price", precision: 2, minMove: 0.01 },
     });
     candle.setData(bars.map((b) => ({ time: b.time as Time, open: b.open, high: b.high, low: b.low, close: b.close })));
     candleRef.current = candle;
 
     if (clean) {
-      // TV's dashed prior-session-close rule (spec §2B). No axis label and no title — the only
-      // floating tag on the scale stays the candle's last value.
+      // TV's dashed prior-session-close rule (spec §2B). No axis label and no title — with C11
+      // the clean price scale carries no floating tag at all, only its tick labels.
       const prev = state.quote.prev;
       if (prev != null && Number.isFinite(prev)) {
         try {
@@ -258,6 +261,20 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
       sma200Ref.current = s200;
     }
 
+    // ── C11 test hook (dev/e2e only) ───────────────────────────────────────────
+    // Candle colours, gridline visibility and the last-value badge are all canvas-drawn, so the
+    // option layer is the only assertable surface for the clean-vs-default split.
+    if (process.env.NODE_ENV !== "production") {
+      (window as any).__mmEmbedOpts = () => {
+        const o = chart.options() as any;
+        const c = candle.options() as any;
+        return {
+          up: c.upColor, down: c.downColor, lastValueVisible: c.lastValueVisible,
+          horzLines: o.grid?.horzLines?.visible ?? null, vertLines: o.grid?.vertLines?.visible ?? null,
+        };
+      };
+    }
+
     // Crosshair → header OHLC readout. Off-chart move clears it (header falls back to day quote).
     const onCrosshair = (param: MouseEventParams) => {
       if (!param.time || !param.point) {
@@ -286,6 +303,7 @@ export default function EmbedChart({ symbol, theme, lang, transparent, initialRa
 
     return () => {
       chart.unsubscribeCrosshairMove(onCrosshair);
+      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmEmbedOpts; } catch {} }
       chart.remove();
       chartRef.current = null;
       candleRef.current = null;

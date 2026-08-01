@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// Anatomy, top → bottom: utility icon row (messages + settings, both placeholder
 /// affordances per §4-A18) · profile card on `Theme.pill` `#2E2E2E` (C21 one-notch rule,
-/// D1) · one `TVPromoCard` · 44 pt `TVAccountRow` list with 0.33 pt `#4A4A4A` dividers
+/// D1) · a 2-column `TVPromoCard` row · 44 pt `TVAccountRow` list with 0.33 pt `#4A4A4A` dividers
 /// (D2/D7), sections separated by whitespace alone · destructive Sign out in fill-red
 /// `#F23645` (D5-menu). Page background is `tvBlack` full-bleed.
 ///
@@ -17,11 +17,15 @@ struct MenuScreen: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var auth: AuthService
     @Environment(\.openURL) private var openURL
+    @Environment(\.tvWidthClass) private var publishedWidthClass
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var signingOut = false
     @State private var showAbout = false
     @State private var showAlphaNotice = false
 
     private var isSignedIn: Bool { auth.user != nil }
+
+    private var widthClass: TVWidthClass { publishedWidthClass ?? TVWidthClass(horizontalSizeClass) }
 
     /// The web billing surface is a section of the Terminal's Settings panel
     /// (`components/settings/SectionBilling.tsx`, mounted by `TerminalShell`), which has
@@ -31,15 +35,23 @@ struct MenuScreen: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                // IPAD-11 — the page is one bounded, centred column; every measured rhythm
+                // (25.3 / 8 / 44 / 57) and the 44 pt `TVAccountRow` are untouched. The
+                // column is applied **per block**, not to the whole page: the list's
+                // hairlines are structural rules and stay full-bleed to the page edge on
+                // their measured 54 pt inset, exactly as the watchlist's do (§2.1).
                 VStack(spacing: 0) {
                     // §2: utility row sits directly under the status bar, no title alongside.
                     utilityRow
+                        .tvReadableWidth()
                     // §2: 25.3 pt from the utility ink to the profile card's top edge.
                     profileCard
                         .padding(.top, 25.3 - Metrics.iconHitPad)
+                        .tvReadableWidth()
                     // §2: 8 pt exactly — the profile card and the promo row are one block.
-                    promoCard
+                    promoRow
                         .padding(.top, TVSpace.s2)
+                        .tvReadableWidth()
                     // §2: 44 pt of plain whitespace, no section caption, before the list.
                     accountSection
                         .padding(.top, 44)
@@ -55,6 +67,12 @@ struct MenuScreen: View {
             .background(Theme.bg)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $showAbout) { aboutPage }
+            .onAppear {
+                #if DEBUG
+                // Headless §6.2 capture state for the pushed About frame.
+                if ProcessInfo.processInfo.arguments.contains("-mmAbout") { showAbout = true }
+                #endif
+            }
         }
         // Placeholder affordances use the app's existing "not in this alpha" notice.
         .alert(
@@ -105,7 +123,7 @@ struct MenuScreen: View {
                 .padding(Metrics.iconHitPad)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TVPressStyle(.glyph))
         .accessibilityLabel(label)
     }
 
@@ -143,7 +161,7 @@ struct MenuScreen: View {
                             .padding(.trailing, 25.3 + TVSpace.s4)
                     }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TVPressStyle(.tile))
             .accessibilityLabel(L10n.t("Sign in", model.lang))
         }
     }
@@ -200,7 +218,38 @@ struct MenuScreen: View {
         return String(letter).uppercased()
     }
 
-    // MARK: - §3.3 promo card
+    // MARK: - §3.3 promo row
+
+    /// SCREEN-03 — master §3.7.3 and `spec2-menu-settings.md:83-88` both measure **two**
+    /// cards in a 2-column grid (181 pt cell, 8 pt gutter, 16 pt margins). We shipped one,
+    /// stretched to a 369.7 pt full-width block, which is a different component from the
+    /// one measured. The second slot is the referral card; no referral flow exists, so it
+    /// ships as an explicit alpha placeholder on the same notice pattern the rest of this
+    /// screen already uses — an absent card was the only alpha gap here with no marker.
+    private var promoRow: some View {
+        // Stack spacing must be 0: with an implicit gutter, the alignment Spacers count
+        // as children and charge it twice — 181+8+181+8+Spacer = 378 pt in a 370 pt slot,
+        // which shifted the whole Menu column's margin 16 → 12 pt. The one measured 8 pt
+        // gutter is the explicit fixed spacer between the cards.
+        HStack(spacing: 0) {
+            // §6 rule 1: the 181 pt cell is measured and does not grow with the window. On
+            // the 402 pt reference device `181 + 8 + 181 + 32` is exactly the width, so
+            // the alignment spacers collapse to nothing and compact is byte-identical.
+            //
+            // §4-A20.19: in regular width the pair is **centred in the readable column**.
+            // Left-aligned, the 370 pt block sat against the column's leading edge with
+            // 318 pt of dead space beside it, which reads as a layout that ran out —
+            // whereas every other block on this page (profile card, list rows) fills the
+            // column. Centring is the conservative choice: no measured number moves, and
+            // nothing is invented to fill the gap.
+            if widthClass.isRegular { Spacer(minLength: 0) }
+            promoCard
+            Spacer().frame(width: TVSpace.s2)
+            referralCard
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, TVSpace.s4)
+    }
 
     /// Signed in → the web billing surface; guest → account creation on the marketing
     /// site. Both open in the system browser, as every external page in this app does.
@@ -217,15 +266,25 @@ struct MenuScreen: View {
         ) {
             openURL(isSignedIn ? billingURL : AppConfig.signUpURL)
         }
-        .padding(.horizontal, TVSpace.s4)
         .accessibilityIdentifier("menu-promo-card")
+    }
+
+    private var referralCard: some View {
+        TVPromoCard(
+            icon: "gift",
+            title: L10n.t("Refer a friend", model.lang),
+            subtitle: L10n.t("Invite and earn", model.lang)
+        ) {
+            showAlphaNotice = true
+        }
+        .accessibilityIdentifier("menu-referral-card")
     }
 
     // MARK: - §3.4 account list
 
     private var accountSection: some View {
         VStack(spacing: 0) {
-            languageRow
+            languageRow.tvReadableWidth()
             divider
             TVAccountRow(
                 icon: "questionmark.circle",
@@ -234,6 +293,7 @@ struct MenuScreen: View {
                 openURL(AppConfig.origin)
             }
             .accessibilityIdentifier("menu-help-center")
+            .tvReadableWidth()
             divider
             TVAccountRow(
                 icon: "info.circle",
@@ -243,6 +303,7 @@ struct MenuScreen: View {
                 showAbout = true
             }
             .accessibilityIdentifier("menu-about")
+            .tvReadableWidth()
             divider
         }
     }
@@ -252,7 +313,10 @@ struct MenuScreen: View {
             TVAccountRow(
                 icon: "rectangle.portrait.and.arrow.right",
                 title: L10n.t("Sign out", model.lang),
-                isDestructive: true
+                isDestructive: true,
+                // ANIM-19 — the in-flight state reports in the row's own chevron slot.
+                // Dimming alone left a network round-trip looking like a dead tap.
+                trailingProgress: signingOut
             ) {
                 guard !signingOut else { return }
                 signingOut = true
@@ -262,12 +326,19 @@ struct MenuScreen: View {
                 }
             }
             .opacity(signingOut ? 0.5 : 1)
+            .animation(.easeOut(duration: 0.15), value: signingOut)
             .accessibilityIdentifier("menu-sign-out")
+            .tvReadableWidth()
             divider
         }
     }
 
     /// §3.4 / D2: a true single device pixel in `#4A4A4A`, left-inset to the label column.
+    ///
+    /// Drawn **outside** the readable column on purpose (§2.1): a rule is structural and
+    /// runs to the page edge on every idiom, keeping only its measured 54 pt leading inset.
+    /// Bounding it to the 704 pt column produced a 704 pt line floating in an 834 pt page —
+    /// the same defect the watchlist already solved this way.
     private var divider: some View {
         TVHairline(leadingInset: TVAccountRow.dividerInset)
     }
@@ -287,8 +358,10 @@ struct MenuScreen: View {
                 .lineLimit(1)
                 .padding(.leading, 15.3)
             Spacer(minLength: TVSpace.s2)
-            // Bound straight to model.lang, which persists itself under "mm.lang".
-            Picker("", selection: $model.lang) {
+            // Bound to model.lang (which persists itself under "mm.lang") through a proxy
+            // so the write lands inside a transaction — ANIM-20: every language-bearing
+            // label in the app cross-fades on the flip instead of hard-cutting.
+            Picker("", selection: langSelection) {
                 Text("EN").tag("en")
                 Text("中文").tag("zh")
             }
@@ -300,25 +373,40 @@ struct MenuScreen: View {
         .accessibilityIdentifier("menu-language")
     }
 
+    private var langSelection: Binding<String> {
+        Binding(
+            get: { model.lang },
+            set: { value in withAnimation(.easeInOut(duration: 0.18)) { model.lang = value } }
+        )
+    }
+
     // MARK: - About (§3.4 "About" push target)
 
     /// Version, bridge revision, and the Logo.dev attribution the image CDN requires —
     /// the attribution is a licence term, so it stays visible and tappable.
     private var aboutPage: some View {
         ScrollView {
+            // §4-A20.20 — the pushed About page follows the same law as the tab roots: row
+            // content in the readable column, rules full-bleed on their measured 16 pt
+            // inset. A "Version ⟷ 0.1.0 alpha" row spanning 834 pt is the dead-middle
+            // defect in its purest form.
             VStack(spacing: 0) {
                 TVStatRow(
                     label: L10n.t("Version", model.lang),
-                    value: "\(AppConfig.marketingVersion) alpha"
+                    // SWEEP-L10N-VERSION — "alpha" is product copy, not a version token,
+                    // so the whole string goes through the table as a format key.
+                    value: String(format: L10n.t("%@ alpha", model.lang), AppConfig.marketingVersion)
                 )
+                .tvReadableWidth()
                 TVHairline(leadingInset: TVSpace.s4)
                 TVStatRow(
                     label: L10n.t("Bridge", model.lang),
                     value: "v\(AppConfig.bridgeVersion)"
                 )
+                .tvReadableWidth()
                 TVHairline(leadingInset: TVSpace.s4)
                 Button {
-                    openURL(URL(string: "https://logo.dev")!)
+                    openURL(Metrics.logoDevURL)
                 } label: {
                     HStack(spacing: TVSpace.s2) {
                         Text(L10n.t("Logos provided by Logo.dev", model.lang))
@@ -333,8 +421,9 @@ struct MenuScreen: View {
                     .frame(height: TVAccountRow.height)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TVPressStyle(.row))
                 .accessibilityIdentifier("about-logo-attribution")
+                .tvReadableWidth()
             }
             .padding(.top, TVSpace.s2)
         }
@@ -356,5 +445,8 @@ struct MenuScreen: View {
     private enum Metrics {
         /// Grows the 18.7–20 pt utility glyphs to a ~43 pt tap target without moving the ink.
         static let iconHitPad: CGFloat = 12
+        /// SWEEP-FORCE-UNWRAP-001 — the attribution target the Logo.dev licence requires,
+        /// built once behind a fallback rather than force-unwrapped at the call site.
+        static let logoDevURL = URL(string: "https://logo.dev") ?? AppConfig.origin
     }
 }

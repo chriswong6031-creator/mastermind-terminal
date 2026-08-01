@@ -252,6 +252,15 @@ test.describe("native shell mode", () => {
   });
 });
 
+// The statusline is innerHTML-rebuilt by paintStatus on every live-quote tick, so a Playwright
+// locator handle to one of its nodes can be detached before it is measured — and a detached node
+// reports an empty computed style. Always re-query inside the evaluate and poll the result.
+const statusNameSize = (page: import("@playwright/test").Page) =>
+  page.evaluate(() => {
+    const el = document.querySelector(".status-symbol-name");
+    return el ? parseFloat(getComputedStyle(el).fontSize) : NaN;   // NaN keeps the poll running
+  });
+
 // ── TV chart-surface parity (docs/tv-parity CHART_SURFACE_DELTA_SPEC, D0–D12) ──────────
 // Every rule under test is scoped to html[data-shell="app"]; the final test re-asserts the
 // scope law (the browser web app must be inert to all of it).
@@ -346,8 +355,9 @@ test.describe("TV chart-surface parity (shell)", () => {
     expect(await col.evaluate((el) => getComputedStyle(el).flexDirection)).toBe("column");
     await expect(page.locator(".status-ohlc")).toBeHidden();
     await expect(page.locator(".status-last")).toBeVisible();
-    const nameSize = await page.locator(".status-symbol-name").evaluate((el) => getComputedStyle(el).fontSize);
-    expect(parseFloat(nameSize)).toBeCloseTo(17, 0);
+    // C7 added the regular-width branch: 17px is the phone ramp, 20px from min-width:700px.
+    const wide = (page.viewportSize()?.width ?? 0) >= 700;
+    await expect.poll(() => statusNameSize(page), { timeout: 45_000 }).toBeCloseTo(wide ? 20 : 17, 0);
     // no element in the header may cross the viewport edge
     const rightMost = await page.evaluate(() => Math.max(
       ...[...document.querySelectorAll(".statusline *")].map((e) => e.getBoundingClientRect().right)));
@@ -367,7 +377,9 @@ test.describe("TV chart-surface parity (shell)", () => {
     expect(cs.bg).toBe("rgba(0, 0, 0, 0)");
     expect(cs.bw).toBe("1px");
     expect(cs.bc).toBe("rgb(61, 61, 61)");
-    expect(parseFloat(cs.h)).toBeCloseTo(26, 0);
+    // C7's regular-width branch grows the pill to 30px above min-width:700px.
+    const wide = (page.viewportSize()?.width ?? 0) >= 700;
+    expect(parseFloat(cs.h)).toBeCloseTo(wide ? 30 : 26, 0);
     expect(cs.top).toBeGreaterThan(50);            // clears the two-row header
     const row = page.locator(".lg-row").first();
     if (!(await row.isVisible())) await chip.click();   // expand when the legend starts collapsed
@@ -397,16 +409,37 @@ test.describe("TV chart-surface parity (shell)", () => {
     ).toBeGreaterThan(0);
   });
 
-  // G. Price badge is single-line (D9).
-  test("G · the last-price axis badge is a single line", async ({ page }) => {
+  // G. Price badge is single-line (D9) and the countdown rides BELOW it (C10).
+  test("G · the last-price axis badge is a single line with the countdown lifted out", async ({ page }) => {
     await page.goto(SHELL_URL);
     await chartReady(page);
     const tag = page.locator(".mm-ptag");
     await expect(tag).toBeVisible({ timeout: 45_000 });
-    await expect(page.locator(".mm-ptag-cd")).toBeHidden();
     const tagH = await tag.evaluate((el) => el.getBoundingClientRect().height);
     expect(tagH).toBeGreaterThan(0);
     expect(tagH).toBeLessThanOrEqual(20);          // TV measures 17pt
+    // C10/CHART-07 — D9 hid the countdown with `display:none!important`, which also overrode the
+    // user's chartSettings.countdownVisible toggle. It is now a sibling caption positioned out of
+    // the badge's flow, so the badge stays single-line AND the setting works again.
+    const cd = page.locator(".mm-ptag-cd");
+    // The shell rule must NOT declare `display` at all — renderPriceTag writes it inline from
+    // countdownVisible, and the old `display:none!important` won in ONE direction only. Drive the
+    // inline value from both sides: the computed value has to follow it every time.
+    const geom = await cd.evaluate((el) => {
+      const e = el as HTMLElement;
+      e.style.display = "none";
+      const off = getComputedStyle(e).display;
+      e.style.display = "block";
+      const s = getComputedStyle(e);
+      const r = e.getBoundingClientRect();
+      const tag = (e.closest(".mm-ptag") as HTMLElement).getBoundingClientRect();
+      return { off, on: s.display, position: s.position, size: parseFloat(s.fontSize), top: r.top, tagBottom: tag.bottom };
+    });
+    expect(geom.off).toBe("none");
+    expect(geom.on).toBe("block");
+    expect(geom.position).toBe("absolute");
+    expect(geom.size).toBeCloseTo(10, 0);
+    expect(geom.top).toBeGreaterThanOrEqual(geom.tagBottom - 1);   // sits BELOW the badge, not inside it
   });
 
   // H. Tray mode: no crowding, no duplicate identity (D11).
@@ -440,5 +473,237 @@ test.describe("TV chart-surface parity (shell)", () => {
     expect(await chip.evaluate((el) => getComputedStyle(el).borderTopColor)).toBe("rgba(0, 0, 0, 0)");
     // D12's quieter pane separator must not reach the web app either
     expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--pane-sep").trim())).toBe("#39404d");
+  });
+});
+
+// ── Polish round C1–C11 (docs/tv-parity/POLISH_ROUND_SPEC_2026-08-01.md §3) ────────────
+// Same scope law: every rule is shell-scoped or clean-gated, and test S re-proves the web app is
+// inert to all of it. The canvas-drawn contracts (axis rule, label pitch, volume band, axis font,
+// watermark) are asserted at the option layer through __mmChartAxisOpts.
+test.describe("TV chart-surface polish (shell)", () => {
+  const chartReady = async (page: import("@playwright/test").Page) => {
+    await expect(page.locator(".workspace canvas").first()).toBeVisible({ timeout: 45_000 });
+  };
+  type AxisOpts = {
+    priceBorderVisible: boolean | null; tickMarkDensity: number | null; paneTickMarkDensity: number[];
+    timeBorderColor: string | null; fontSize: number | null; volumeTop: number | null; watermarkVisible: boolean;
+  };
+  const axisOpts = async (page: import("@playwright/test").Page): Promise<AxisOpts> => {
+    await expect
+      .poll(async () => await page.evaluate(() => (window as any).__mmChartAxisOpts?.() != null), { timeout: 45_000 })
+      .toBe(true);
+    return await page.evaluate(() => (window as any).__mmChartAxisOpts());
+  };
+  // C3/C7 share ONE breakpoint with globals.css; the desktop + tablet projects are above it.
+  const isWide = (page: import("@playwright/test").Page) => (page.viewportSize()?.width ?? 0) >= 700;
+
+  // J — C1: the canvas gradient runs lightest-top so the DARKEST row meets the black native chrome.
+  test("J · the canvas gradient runs light→dark top to bottom", async ({ page }) => {
+    await page.goto(SHELL_URL);
+    await chartReady(page);
+    const bg = await page.locator(".pane").first().evaluate((el) => getComputedStyle(el).backgroundImage);
+    // computed order is authoritative: first stop = top of the pane.
+    const stops = bg.match(/rgba?\([^)]*\)/g) ?? [];
+    expect(stops.length).toBeGreaterThanOrEqual(2);
+    const top = stops[0]!, bottom = stops[stops.length - 1]!;
+    const lum = (s: string) => s.match(/[\d.]+/g)!.slice(0, 3).reduce((a, n) => a + Number(n), 0);
+    expect(lum(top)).toBeGreaterThan(lum(bottom));
+    expect(top).toBe("rgb(24, 27, 38)");                            // #181b26
+    expect(bottom).toBe("rgb(19, 22, 33)");                         // #131621 (TV's measured floor)
+  });
+
+  // K — C2: no price-scale border; the time-axis rule lightens to TV's measured #2A2D38.
+  test("K · the price scale loses its border and the time axis keeps a lighter rule", async ({ page }) => {
+    await page.goto(SHELL_URL);
+    await chartReady(page);
+    const o = await axisOpts(page);
+    expect(o.priceBorderVisible).toBe(false);
+    expect(String(o.timeBorderColor).toLowerCase()).toBe("#2a2d38");
+    // …and the assertion is not vacuous: the browser web app keeps both rules on --line.
+    await page.goto(WEB_URL);
+    await chartReady(page);
+    const w = await axisOpts(page);
+    expect(w.priceBorderVisible).toBe(true);
+    expect(String(w.timeBorderColor).toLowerCase()).not.toBe("#2a2d38");
+  });
+
+  // L — C3/C7: label pitch + the regular-width ramp, both on the one min-width:700px breakpoint.
+  test("L · gridline pitch and the regular-width type ramp step on one breakpoint", async ({ page }) => {
+    await page.goto(SHELL_URL);
+    await chartReady(page);
+    const wide = isWide(page);
+    const o = await axisOpts(page);
+    // 12px font × 3.9 = TV's measured 47 CSS px pitch. 4.6 is the regular-width invention (A20.12).
+    expect(o.tickMarkDensity).toBeCloseTo(wide ? 4.6 : 3.9, 2);
+    expect(o.fontSize).toBe(wide ? 13 : 12);
+    // every sub-pane scale carries it too, or the oscillators keep the dense default.
+    expect(o.paneTickMarkDensity.length).toBeGreaterThan(0);
+    for (const d of o.paneTickMarkDensity) expect(d).toBeCloseTo(o.tickMarkDensity!, 2);
+    // CSS half of the ramp — identical breakpoint, so type and pitch cannot drift apart.
+    // Polled: paintStatus re-renders the statusline on every live-quote tick, so a locator handle
+    // can be detached by the time it is measured (a detached node computes an empty style).
+    await expect.poll(() => statusNameSize(page), { timeout: 45_000 }).toBeCloseTo(wide ? 20 : 17, 0);
+    const gearW = await page.locator(".cfb-gear").evaluate((el) => el.getBoundingClientRect().width);
+    expect(gearW).toBeCloseTo(wide ? 30 : 26, 0);
+    // C9 — the ::before inset carries the TOUCH target past the 44pt iOS minimum. The drawn box
+    // must NOT grow with it (the .lg-ic min-height trap), so the width assertion above still holds.
+    const hit = await page.locator(".cfb-gear").evaluate((el) => {
+      const s = getComputedStyle(el, "::before");
+      return { pos: s.position, inset: Math.abs(parseFloat(s.top)), box: el.getBoundingClientRect().width };
+    });
+    expect(hit.pos).toBe("absolute");
+    expect(hit.box + 2 * hit.inset).toBeGreaterThanOrEqual(44);
+    // Web keeps the library default and the untouched axis font at every viewport.
+    await page.goto(WEB_URL);
+    await chartReady(page);
+    const w = await axisOpts(page);
+    expect(w.tickMarkDensity).toBeCloseTo(2.5, 2);
+    expect(w.fontSize).toBe(12);
+  });
+
+  // M — C4/C5: the volume band shrinks to 12% and the brand bug leaves it for a DOM node.
+  test("M · volume band is 12% and the brand bug is a DOM node clear of it", async ({ page }) => {
+    await page.goto(SHELL_URL);
+    await chartReady(page);
+    // The "volume" scale only exists once buildVol has run, which trails the first canvas paint.
+    await expect
+      .poll(async () => (await axisOpts(page)).volumeTop, { timeout: 45_000 })
+      .toBeCloseTo(0.88, 3);                         // 12% band (A20.13), was 22%
+    const o = await axisOpts(page);
+    expect(o.watermarkVisible).toBe(false);          // the LWC plugin is OFF in shell
+    const bug = page.locator(".mm-brandbug");
+    await expect(bug).toBeVisible();
+    const box = await bug.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const pane = (el.closest(".pane") as HTMLElement).getBoundingClientRect();
+      return { left: r.left - pane.left, fromBottom: pane.bottom - r.bottom, z: getComputedStyle(el).zIndex };
+    });
+    expect(box.left).toBeCloseTo(12, 0);
+    expect(box.fromBottom).toBeCloseTo(38, 0);       // clears the time axis (A20.14)
+    expect(Number(box.z)).toBeGreaterThanOrEqual(1); // above the canvas — no series can overpaint it
+  });
+
+  // N — C6: Row B carries OHLC under the crosshair and last/change at rest.
+  test("N · crosshair scrub swaps Row B to OHLC and restores it on release", async ({ page }) => {
+    await page.goto(SHELL_URL);
+    await chartReady(page);
+    const line = page.locator(".statusline");
+    await expect(page.locator(".status-ohlc")).toBeHidden();
+    await expect(page.locator(".status-last")).toBeVisible();
+
+    const canvas = page.locator(".workspace canvas").first();
+    const cb = (await canvas.boundingBox())!;
+    await page.mouse.move(cb.x + cb.width * 0.45, cb.y + cb.height * 0.4);
+    await page.mouse.move(cb.x + cb.width * 0.5, cb.y + cb.height * 0.45);
+    await expect(line).toHaveClass(/is-scrub/, { timeout: 15_000 });
+    await expect(page.locator(".status-ohlc")).toBeVisible();
+    await expect(page.locator(".status-last")).toBeHidden();
+    // all four values populated by textContent — an empty node would mean the lookup missed.
+    const vals = await page.locator(".status-ohlc b").allTextContents();
+    expect(vals).toHaveLength(4);
+    for (const v of vals) expect(v.trim()).not.toBe("");
+    // …and the handler writes textContent rather than re-rendering: across consecutive crosshair
+    // frames the OHLC text must move while the identity <img> stays the SAME node. A paintStatus()
+    // call would replace it and re-fetch the logo — C6's trap. Sampled over several frames because
+    // the live-quote poller repaints the line on its own cadence (~1 per 4 s); a handler that
+    // re-rendered would lose the node on EVERY frame, so a single clean frame is proof.
+    const xs = [0.3, 0.45, 0.6, 0.72];
+    let sameNode = 0, valuesMoved = 0;
+    for (let i = 0; i < xs.length - 1; i++) {
+      await page.mouse.move(cb.x + cb.width * xs[i]!, cb.y + cb.height * 0.45);
+      const before = await page.evaluate(() => {
+        (document.querySelector(".status-symbol-logo img") as any).__mmProbe = 1;
+        return [...document.querySelectorAll(".status-ohlc b")].map((b) => b.textContent).join("|");
+      });
+      await page.mouse.move(cb.x + cb.width * xs[i + 1]!, cb.y + cb.height * 0.45);
+      const after = await page.evaluate(() => ({
+        same: !!(document.querySelector(".status-symbol-logo img") as any).__mmProbe,
+        vals: [...document.querySelectorAll(".status-ohlc b")].map((b) => b.textContent).join("|"),
+      }));
+      if (after.same) sameNode++;
+      if (after.vals !== before) valuesMoved++;
+    }
+    expect(valuesMoved).toBeGreaterThan(0);   // non-vacuous: the readout really tracks the hovered bar
+    expect(sameNode).toBeGreaterThan(0);      // …and it never rebuilt the statusline to do it
+
+    // Release: hovering the frame bar takes the pointer off the pane, so LWC clears the crosshair
+    // and Row B comes back. (.cfb-right is the one pointer-events:auto island over the canvas.)
+    await page.locator(".cfb-gear").hover();
+    await expect(line).not.toHaveClass(/is-scrub/, { timeout: 15_000 });
+    await expect(page.locator(".status-ohlc")).toBeHidden();
+    await expect(page.locator(".status-last")).toBeVisible();
+  });
+
+  // O — C8a: the permanently-disabled ETH chip is hidden on daily, back on intraday.
+  test("O · the inert ETH chip is hidden on daily and returns intraday", async ({ page }) => {
+    await page.goto(SHELL_URL);
+    await chartReady(page);
+    const chip = page.locator(".cfb-chip", { hasText: "ETH" }).first();
+    await expect(chip).toHaveClass(/dis/);
+    await expect(chip).toBeHidden();
+    // Intraday makes it a real control again — the rule keys off `.dis`, not the timeframe.
+    await page.waitForFunction(() => (window as any).__mmShell?.version === 1);
+    await page.evaluate(() => (window as any).__mmShell.setTimeframe("5m"));
+    await page.waitForFunction(() => (window as any).__mmShell.getState().tf === "5m");
+    await expect(chip).not.toHaveClass(/dis/);
+    await expect(chip).toBeVisible();
+  });
+
+  // P — C8b: the settings glyph is TV's hexagon nut in shell, the house sun on web.
+  test("P · the settings glyph is a hexagon in shell and unchanged on web", async ({ page }) => {
+    await page.goto(SHELL_URL);
+    await chartReady(page);
+    // The swap lands on the client mount effect (the marker is read post-hydration so the SSR
+    // output stays byte-identical), which resolves after the canvas paints — hence the poll.
+    const gearPath = (p: import("@playwright/test").Page) =>
+      p.locator(".cfb-gear svg path").first().getAttribute("d");
+    await expect.poll(() => gearPath(page), { timeout: 20_000 }).toContain("M8 1.7");
+    await expect(page.locator(".cfb-gear svg circle")).toHaveCount(1);
+    await page.goto(WEB_URL);
+    await chartReady(page);
+    // …and the web glyph never changes, before or after hydration.
+    expect(await gearPath(page)).toContain("M8 1.5v1.3");
+    await page.waitForTimeout(1_000);
+    expect(await gearPath(page)).toContain("M8 1.5v1.3");
+  });
+
+  // Q — C11: only ?clean=1 changes; the default embed keeps the house v5 look.
+  test("Q · clean=1 paints the fill pair, drops gridlines and the last-value badge", async ({ page }) => {
+    const opts = async (p: import("@playwright/test").Page) => {
+      await expect.poll(async () => await p.evaluate(() => (window as any).__mmEmbedOpts?.() != null), { timeout: 45_000 }).toBe(true);
+      return await p.evaluate(() => (window as any).__mmEmbedOpts());
+    };
+    await page.goto("/embed/chart?symbol=NVDA&clean=1&hdr=0");
+    const c = await opts(page);
+    expect(String(c.up).toLowerCase()).toBe("#089981");     // fill token, not the #22AB94 text token
+    expect(String(c.down).toLowerCase()).toBe("#f23645");
+    expect(c.horzLines).toBe(false);
+    expect(c.vertLines).toBe(false);
+    expect(c.lastValueVisible).toBe(false);
+    // Default embed (no flag) is byte-identical to before: house candles, gridlines, badge.
+    await page.goto("/embed/chart?symbol=NVDA");
+    const d = await opts(page);
+    expect(String(d.up).toLowerCase()).toBe("#26c281");
+    expect(String(d.down).toLowerCase()).toBe("#f0566b");
+    expect(d.horzLines).toBe(true);
+    expect(d.vertLines).toBe(true);
+    expect(d.lastValueVisible).toBe(true);
+  });
+
+  // S — the scope law for this round: none of it reaches the browser web app.
+  test("S · every polish-round rule is inert without ?shell=app", async ({ page }) => {
+    await page.goto(WEB_URL);
+    await chartReady(page);
+    await expect(page.locator(".mm-brandbug")).toHaveCount(0);
+    await expect
+      .poll(async () => (await axisOpts(page)).volumeTop, { timeout: 45_000 })
+      .toBeCloseTo(0.78, 3);
+    expect((await axisOpts(page)).watermarkVisible).toBe(true);
+    // the gradient, the scrub class and the ETH-chip hide are all shell-only.
+    expect(await page.locator(".pane").first().evaluate((el) => getComputedStyle(el).backgroundImage)).toBe("none");
+    await expect(page.locator(".statusline.is-scrub")).toHaveCount(0);
+    await expect(page.locator(".cfb-chip.cfb-chip-adj")).toBeVisible();
+    // …and the C7 regular-width ramp never fires off the shell marker, at any viewport.
+    await expect.poll(() => statusNameSize(page), { timeout: 45_000 }).toBeLessThan(17);
   });
 });

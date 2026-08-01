@@ -62,7 +62,7 @@ import { tPlain } from "@/lib/i18n";
 import { listTemplates } from "@/lib/chartTemplates";
 import { announceTerminalVisualReady } from "@/lib/terminalBoot";
 import { assetInitial, assetLogoPath } from "@/lib/assetLogos";
-import type { ChartSettings } from "@/components/ChartFrameBar";
+import { DEFAULT_CHART_SETTINGS, type ChartSettings } from "@/components/ChartFrameBar";
 import { chartTimeAxisOptions, chartTimeSpanDays } from "@/lib/chartTimeAxis";
 
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -346,6 +346,22 @@ const shellAxis = () =>
   typeof document !== "undefined" && document.documentElement.getAttribute("data-shell") === "app";
 const axTitle = (s: string) => (shellAxis() ? "" : s);
 
+/** C3/C7 — the ONE regular-width breakpoint. Must stay byte-identical to the `@media (min-width:700px)`
+ *  branch at the end of globals.css's D-block, or the type ramp and the grid pitch step apart. */
+const SHELL_WIDE_MQ = "(min-width:700px)";
+const shellWide = () =>
+  typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(SHELL_WIDE_MQ).matches;
+/** C2 — TV keeps the horizontal time-axis rule but lighter than ours: measured `#2A2D38` at
+ *  x=300, y2133–2135 (vs our `--line` #23262F). The price scale gets NO rule at all. */
+const SHELL_TIME_AXIS_LINE = "#2a2d38";
+const axisLineColor = (fallback: string) => (shellAxis() ? SHELL_TIME_AXIS_LINE : fallback);
+/** C3 — LWC's minimum price-label pitch is `ceil(fontSize * tickMarkDensity)`. TV measures 47 CSS px,
+ *  so 12 × 3.9 = 47 exactly. Web keeps the library default (2.5 — passing it is a no-op).
+ *  The 4.6 regular-width value is an invention (§4-A20.12). */
+const shellTickDensity = () => (shellAxis() ? (shellWide() ? 4.6 : 3.9) : 2.5);
+/** C7 — the axis font rides the same breakpoint as the CSS type ramp. */
+const shellAxisFontSize = () => (shellAxis() && shellWide() ? 13 : 12);
+
 // ── color-token snapshot (re-read on mount and on the up/down color flip, Effect 5) ──
 // `axis`/`grid` resolve through the --chart-axis-text / --chart-grid indirection whose :root
 // defaults reproduce --muted / --grid exactly; only the native shell retunes them (D6).
@@ -617,6 +633,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const priceTagRef = useRef<HTMLDivElement | null>(null);  // TradingView-style last-price + countdown tag on the right axis
   const tagTimerRef = useRef<number | null>(null);          // 1s ticker so the bar-close countdown stays live
   const watermarkPluginRef = useRef<{ applyOptions: (opts: Record<string, any>) => void } | null>(null); // v5 text watermark plugin
+  const brandBugRef = useRef<HTMLDivElement | null>(null);  // C5 — shell-only DOM brand bug (never created on web)
+  // Mirrors the last `visible` passed to the watermark plugin. The plugin API is write-only
+  // (IPanePrimitiveWrapper exposes applyOptions, never options), and the wordmark is canvas-drawn,
+  // so this is the only assertable surface for C5's "plugin off in shell" contract.
+  const watermarkVisibleRef = useRef<boolean>(true);
   const lastValueVisibleRef = useRef<boolean>(true);        // mirrors chartSettings.lastValueVisible; gates the custom priceTag
   const countdownVisibleRef = useRef<boolean>(true);
   const chartSettingsRef = useRef<Partial<ChartSettings>>(chartSettings ?? {});
@@ -843,7 +864,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       priceLineVisible: false,
       lastValueVisible: false,
     }, 0);
-    try { chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } }); } catch {}
+    // C4/CHART-04 — 22% of the price pane is a slab that buries MA-200 and the brand bug; TV's
+    // sliver is ~3.5%. 12% (top 0.88) is a deliberate midpoint, not a match (§4-A20.13). The alpha
+    // in lib/indicators.ts moves WITH this: it was explicitly a compensator for the oversized band.
+    try { chart.priceScale("volume").applyOptions({ scaleMargins: { top: shellAxis() ? 0.88 : 0.78, bottom: 0 } }); } catch {}
     vs.setData(volData(rows));
     return [vs];
   };
@@ -1609,7 +1633,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // legacy call-site name kept: every builder path calls normalizeStretch(). It now rebuilds the pane
   // registry (from the freshly-assigned paneMapRef), sizes via applyStretch, and re-applies the
   // eye/tf visibility to the freshly-built series.
-  const normalizeStretch = () => { rebuildPaneMeta(); applyStretch(); applyHidden(); };
+  // C3 — createEngine only reaches the price pane's scale; every oscillator pane creates its own,
+  // so an added indicator would ship the dense default pitch next to the thinned price axis.
+  // Shell-only and a no-op on web, so the browser render is untouched.
+  const applyPaneTickDensity = () => {
+    if (!shellAxis()) return;
+    const chart = chartRef.current; if (!chart) return;
+    const tickMarkDensity = shellTickDensity();
+    try { for (const p of chart.panes()) { try { p.priceScale("right").applyOptions({ tickMarkDensity } as any); } catch {} } } catch {}
+  };
+  const normalizeStretch = () => { rebuildPaneMeta(); applyStretch(); applyHidden(); applyPaneTickDensity(); };
 
   // a genuine separator drag (normal mode only) becomes the new baseline; ignore programmatic sizing
   const captureNormal = () => { const ctl = paneCtl.current; if (ctl.maximized) return; for (const m of panesMeta.current) { if (ctl.collapsed.has(m.key)) continue; try { ctl.normal.set(m.key, m.pane.getStretchFactor()); } catch {} } };
@@ -2555,6 +2588,22 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         }
         return out;
       };
+      // C2/C3/C4/C7 test hook — the axis rule, the label pitch, the volume band and the axis font
+      // are all canvas-rendered, so the option layer is the only assertable surface.
+      (window as any).__mmChartAxisOpts = () => {
+        const c = chartRef.current; if (!c) return null;
+        const g = (fn: () => any) => { try { return fn(); } catch { return null; } };
+        const right = g(() => c.priceScale("right").options());
+        return {
+          priceBorderVisible: right?.borderVisible ?? null,
+          tickMarkDensity: right?.tickMarkDensity ?? null,
+          paneTickMarkDensity: g(() => c.panes().map((p) => p.priceScale("right").options().tickMarkDensity)) ?? [],
+          timeBorderColor: g(() => c.timeScale().options().borderColor) ?? null,
+          fontSize: g(() => (c.options() as any).layout?.fontSize) ?? null,
+          volumeTop: g(() => c.priceScale("volume").options().scaleMargins?.top) ?? null,
+          watermarkVisible: watermarkVisibleRef.current,
+        };
+      };
     }
 
     // ── create the ONE chart (the hard invariant — exactly one renderer instance — now
@@ -2564,13 +2613,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const t = tokensRef.current;
     const engine = createEngine(el, {
       width: el.clientWidth || 900, height: el.clientHeight || 600,
-      // fontSize 12 matches the settings effect (6482) so the axis does not reflow one frame after mount.
-      layout: { background: { color: "transparent" }, textColor: t.axis, fontSize: 12, attributionLogo: false, panes: { separatorColor: css("--pane-sep"), separatorHoverColor: css("--pane-sep-h") } },
+      // fontSize matches the settings effect (Effect 7) so the axis does not reflow one frame after mount.
+      layout: { background: { color: "transparent" }, textColor: t.axis, fontSize: shellAxisFontSize(), attributionLogo: false, panes: { separatorColor: css("--pane-sep"), separatorHoverColor: css("--pane-sep-h") } },
       grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
       crosshair: { mode: CrosshairMode.Normal, vertLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: t.p3 }, horzLine: { color: "rgba(214,218,227,.32)", width: 1, labelBackgroundColor: t.p3 } },
-      rightPriceScale: { borderColor: t.line, scaleMargins: { top: 0.1, bottom: 0.08 } },
+      // C2 — TV draws no price-scale border (row y=700 across x1010–1050 is uniform canvas); the axis
+      // labels float. C3 — tickMarkDensity thins the label/gridline run to TV's measured 47 CSS px.
+      rightPriceScale: { borderVisible: !shellAxis(), borderColor: t.line, tickMarkDensity: shellTickDensity(), scaleMargins: { top: 0.1, bottom: 0.08 } },
       timeScale: {
-        borderColor: t.line,
+        borderColor: axisLineColor(t.line),
         rightOffset: 6,
         barSpacing: 8,
         ...chartTimeAxisOptions(chartSettingsRef.current.hourFormat ?? "24", visibleCalendarSpanDays),
@@ -2588,22 +2639,25 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     try {
       const pane = chart.panes()[0];
       if (pane) {
-        // D10 — the shell wears a small bottom-left brand bug (TV's idiom); web keeps the
-        // centered ghost wordmark.
+        // C5 (revises D10) — the plugin's bottom-left placement puts the shell brand bug INSIDE the
+        // volume overlay, and TextWatermarkOptions carries no padding/offset field, so the inset is
+        // unreachable through it. Shell mode keeps the plugin off and paints the .mm-brandbug DOM
+        // node below instead; web keeps the centred ghost wordmark byte-for-byte.
         const wmShell = shellAxis();
         const wm = createTextWatermark(pane, {
-          visible: true,
-          horzAlign: wmShell ? "left" : "center",
-          vertAlign: wmShell ? "bottom" : "center",
+          visible: !wmShell,
+          horzAlign: "center",
+          vertAlign: "center",
           lines: [{
-            text: wmShell ? "MASTERMIND" : "Mastermind Terminal",
-            color: chartSettingsRef.current?.watermarkColor || (wmShell ? "rgba(214,218,227,0.13)" : "rgba(214,218,227,0.04)"),
-            fontSize: wmShell ? 20 : 48,
+            text: "Mastermind Terminal",
+            color: chartSettingsRef.current?.watermarkColor || "rgba(214,218,227,0.04)",
+            fontSize: 48,
             fontStyle: "bold",
             fontFamily: "var(--font-ui, system-ui, sans-serif)",
           }],
         });
         watermarkPluginRef.current = wm;
+        watermarkVisibleRef.current = !wmShell;
       }
     } catch {}
 
@@ -2618,6 +2672,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const svg = mk("svg", { class: "drawing-layer", "data-drawing-layer": "1", style: "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none" }) as SVGSVGElement;
     wrap.appendChild(svg); svgRef.current = svg;
     ensureTooltipHost(wrap);   // shared hover tooltip for premium-suite prims (ic-tip)
+    // C5 — shell brand bug. A DOM node, not the LWC watermark: the plugin has no offset field, so
+    // it cannot be lifted clear of the volume overlay. Never created on web (zero DOM delta there);
+    // all geometry lives in globals.css's .mm-brandbug rule.
+    if (shellAxis()) {
+      const bug = document.createElement("div");
+      bug.className = "mm-brandbug";
+      bug.textContent = "MASTERMIND";
+      wrap.appendChild(bug); brandBugRef.current = bug;
+    }
 
     // ── last-price tag (symbol · price · bar-close countdown) on the right axis ──
     // Replaces lightweight-charts' built-in last-value label (disabled on the price series). The
@@ -4776,10 +4839,34 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       projectionPointerId = null; scheduleRender();
     };
     const onCrosshairProjection = () => { if (projectionPointerId != null) scheduleRender(); };
+    // C6/CHART-06 — scrub OHLC. D2 hid Row B's OHLC run on the premise that TV shows it only under
+    // the crosshair, but the scrub replacement was never built, so the shell strictly LOST data the
+    // web terminal shows at rest. Writes into the existing .status-ohlc <b> nodes via textContent —
+    // a paintStatus() re-render would rebuild the identity <img> and flicker the logo on every
+    // crosshair frame. Shell-only: `.is-scrub` never appears on web.
+    const scrubStatus = (p: any) => {
+      const st = statusRef.current; if (!st) return;
+      // statusRef is the Row-A/Row-B <span> INSIDE .statusline; the D-block rules key off
+      // .statusline, so the flag belongs on the wrapper.
+      const line = st.closest(".statusline"); if (!line) return;
+      const tm = p?.time ?? null;
+      const on = tm != null;
+      if (on) {
+        const idx = barIdxMap().get(tm as any) ?? barIdxMap().get(String(tm));
+        const bar = idx != null ? barsRef.current[idx] : undefined;
+        const vals = st.querySelectorAll<HTMLElement>(".status-ohlc b");
+        if (!bar || vals.length !== 4) { line.classList.remove("is-scrub"); return; }
+        const f = (x: number) => x.toFixed(precRef.current);
+        vals[0].textContent = f(bar.o); vals[1].textContent = f(bar.h);
+        vals[2].textContent = f(bar.l); vals[3].textContent = f(bar.c);
+      }
+      line.classList.toggle("is-scrub", on);
+    };
     wrap.addEventListener("pointerdown", onProjectionPointerDown, true);
     window.addEventListener("pointerup", onProjectionPointerEnd);
     window.addEventListener("pointercancel", onProjectionPointerEnd);
     chart.subscribeCrosshairMove(onCrosshairProjection);
+    if (shellAxis()) chart.subscribeCrosshairMove(scrubStatus);
     renderSignals(); renderIndOverlays(); renderDraw();
 
     // ── pane geometry measurement → drives the legend/pane-menu overlay layer (ChartOverlays) ──
@@ -5756,7 +5843,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (dragCleanup) dragCleanup();
       drawingTransactionRef.current = false;
       window.removeEventListener("mm:snapshot", snapshot);
-      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; } catch {} }
+      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; delete (window as any).__mmChartAxisOpts; } catch {} }
       if (onKey) window.removeEventListener("keydown", onKey);
       if (winDown) window.removeEventListener("pointerdown", winDown);
       window.removeEventListener("pointerup", onProjectionPointerEnd);
@@ -6453,8 +6540,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         layout: { textColor: settings.scaleTextColor || t.axis, panes: { separatorColor: settings.paneSeparatorColor || css("--pane-sep"), separatorHoverColor: settings.paneSeparatorColor || css("--pane-sep-h") } },
         grid: { vertLines: { color: settings.gridVColor || t.grid }, horzLines: { color: settings.gridHColor || t.grid } },
         crosshair: { vertLine: { labelBackgroundColor: t.p3 }, horzLine: { labelBackgroundColor: t.p3 } },
+        // C2 — this effect re-applies borderColor only (borderVisible from createEngine survives the
+        // merge), but the time-axis rule WOULD revert to --line without the shell gate here.
         rightPriceScale: { borderColor: settings.scaleLineColor || t.line },
-        timeScale: { borderColor: settings.scaleLineColor || t.line },
+        timeScale: { borderColor: settings.scaleLineColor || axisLineColor(t.line) },
       });
     } catch {}
     if (priceS) {
@@ -6533,7 +6622,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         layout: {
           background: background as any,
           textColor: chartSettings.scaleTextColor || tokens.axis,
-          fontSize: chartSettings.scaleFontSize || 12,
+          // C7 — 12 is the SHIPPED DEFAULT, not a user choice, so it must not out-rank the shell's
+          // regular-width ramp; only a customised size wins. Web resolves to 12 either way.
+          fontSize: chartSettings.scaleFontSize && chartSettings.scaleFontSize !== DEFAULT_CHART_SETTINGS.scaleFontSize
+            ? chartSettings.scaleFontSize
+            : shellAxisFontSize(),
           panes: {
             separatorColor: chartSettings.paneSeparatorColor || css("--pane-sep"),
             separatorHoverColor: chartSettings.paneSeparatorColor || css("--pane-sep-h"),
@@ -6548,10 +6641,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           vertLine: { color: chartSettings.crosshairColor || "rgba(214,218,227,.32)", labelBackgroundColor: tokens.p3 },
           horzLine: { color: chartSettings.crosshairColor || "rgba(214,218,227,.32)", labelBackgroundColor: tokens.p3 },
         },
+        // C2 — borderVisible is never re-applied here, so createEngine's shell value survives the
+        // merge; only the time-axis colour needs the gate (see Effect 5).
         leftPriceScale: { borderColor: chartSettings.scaleLineColor || tokens.line },
         rightPriceScale: { borderColor: chartSettings.scaleLineColor || tokens.line },
         timeScale: {
-          borderColor: chartSettings.scaleLineColor || tokens.line,
+          borderColor: chartSettings.scaleLineColor || axisLineColor(tokens.line),
           rightOffset: chartSettings.rightOffsetBars ?? 10,
           ...chartTimeAxisOptions(chartSettings.hourFormat ?? "24", visibleCalendarSpanDays),
         } as any,
@@ -6559,19 +6654,23 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       // Watermark visibility — v5 uses the createTextWatermark plugin (chart-level watermark removed in v5).
       if (showWatermark != null) {
         try {
-          const wmShell = shellAxis();   // D10 — brand bug in the shell, ghost wordmark on web
+          // C5 — the plugin stays off in shell mode (it cannot be inset clear of the volume band);
+          // the .mm-brandbug DOM node carries the setting there instead.
+          const wmShell = shellAxis();
           watermarkPluginRef.current?.applyOptions({
-            visible: showWatermark,
-            horzAlign: wmShell ? "left" : "center",
-            vertAlign: wmShell ? "bottom" : "center",
+            visible: showWatermark && !wmShell,
+            horzAlign: "center",
+            vertAlign: "center",
             lines: [{
-              text: wmShell ? "MASTERMIND" : "Mastermind Terminal",
-              color: chartSettings.watermarkColor || (wmShell ? "rgba(214,218,227,0.13)" : "rgba(214,218,227,0.04)"),
-              fontSize: wmShell ? 20 : 48,
+              text: "Mastermind Terminal",
+              color: chartSettings.watermarkColor || "rgba(214,218,227,0.04)",
+              fontSize: 48,
               fontStyle: "bold",
               fontFamily: "var(--font-ui, system-ui, sans-serif)",
             }],
           });
+          watermarkVisibleRef.current = showWatermark && !wmShell;
+          if (brandBugRef.current) brandBugRef.current.style.display = showWatermark ? "" : "none";
         } catch {}
       }
       if (priceS) {

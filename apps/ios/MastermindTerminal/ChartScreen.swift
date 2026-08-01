@@ -3,15 +3,29 @@ import UIKit
 import WebKit
 
 /// Chart tab: the live web chart under a native loading/error surface, with the
-/// TV-style roller strip (symbol + timeframe wheels) docked above the tab bar in
-/// portrait. Landscape hides native chrome for the full-bleed chart. The web view
-/// stays mounted across tab switches, so returning to Chart never reloads.
+/// TV-style roller strip (symbol + timeframe wheels) docked above the tab bar.
+///
+/// **Two chrome verbs, never one (§4-A20.6).** They hide different things and must not be
+/// merged back into a single flag:
+///
+/// * `chromeMinimized` (C25's minimize rect) hides **the tab bar only** — `RootTabsView`
+///   owns that gate on its bottom `safeAreaInset`. The RollerStrip stays mounted on every
+///   idiom, because the minimize rect *lives on the strip* and is the only way back.
+///   Merging the two verbs on iPad left the screen with zero chrome and no restore control.
+/// * `hidesRollerStrip` (IPAD-05's full-bleed contract) drops the strip as well, and is
+///   **phone-landscape only** — a 390 pt-tall landscape phone has no room for it. iPad
+///   never auto-hides on rotation: an 834 pt-tall landscape window has room, so minimize
+///   is that idiom's only immersive verb and its state is remembered per orientation.
+///
+/// The web view stays mounted across tab switches, so returning to Chart never reloads.
 struct ChartScreen: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var manifest: ManifestStore
     @EnvironmentObject private var watchlists: WatchlistStore
     @EnvironmentObject private var auth: AuthService
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.tvWidthClass) private var publishedWidthClass
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @StateObject private var bridge = ShellBridge()
     @State private var loadError: String?
     @State private var blockedRoute: String?
@@ -28,6 +42,31 @@ struct ChartScreen: View {
     /// so `ready` fires again — without this the second pass would push once more.
     /// Reset only when WE load the page (retry, sign-out), never on the page's own reload.
     @State private var didPushWebSession = false
+    /// ANIM-05: the boot cover's own visibility, so its removal can be a transaction
+    /// rather than a frame-drop when `bridge.isReady` flips.
+    @State private var showsCover = true
+    /// §4-A20.6 — iPad remembers the minimize state per orientation. `false` on a phone,
+    /// where landscape is already the immersive verb.
+    @State private var isLandscape = false
+    @AppStorage("mm.chromeMinimized.portrait") private var chromeMinimizedPortrait = false
+    @AppStorage("mm.chromeMinimized.landscape") private var chromeMinimizedLandscape = false
+
+    private var widthClass: TVWidthClass { publishedWidthClass ?? TVWidthClass(horizontalSizeClass) }
+
+    /// IPAD-05 / §4-A20.6 — the **strip** gate, and nothing else.
+    ///
+    /// `verticalSizeClass != .compact` was a phone-landscape test that iPad answers
+    /// `.regular` in every orientation, Split View and Stage Manager configuration, so on
+    /// iPad the branch was a constant `true` and the full-bleed contract never fired.
+    /// Binding it to `chromeMinimized` instead was the opposite error: minimize then took
+    /// the strip away too, leaving an iPad chart with zero chrome and no restore control —
+    /// the minimize rect it needs to undo is *drawn on the strip*.
+    ///
+    /// So the strip disappears on exactly one condition: a landscape **phone**, where
+    /// there is no room for it. `chromeMinimized` never enters this expression.
+    private var hidesRollerStrip: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone && verticalSizeClass == .compact
+    }
 
     /// The symbol wheel's chambers: the active watchlist, with the current symbol
     /// appended when it isn't on the list (so the wheel always shows reality).
@@ -45,88 +84,37 @@ struct ChartScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                // §3.3.1 — the canvas is a vertical gradient `#131722 → #181B26`, not a
-                // flat black, and not the same token as the chrome above/below it. The web
-                // chart paints its own; this is the backdrop it lands on.
-                LinearGradient(
-                    colors: [Theme.chartBg, Theme.chartBgBottom],
-                    startPoint: .top, endPoint: .bottom
-                )
-                .ignoresSafeArea()
-
-                ChartWebView(
-                    bridge: bridge,
-                    onBlockedRoute: { blockedRoute = $0 },
-                    onLoadFailed: { loadError = $0 }
-                )
-
-                if !bridge.isReady && loadError == nil {
-                    LoadingCover(lang: model.lang)
-                        .task {
-                            // The page normally reports ready in a few seconds; a silent
-                            // hang (captive portal, stalled TLS) must not strand a blank cover.
-                            try? await Task.sleep(for: .seconds(25))
-                            if !bridge.isReady && loadError == nil {
-                                loadError = L10n.t("The chart is taking too long to load.", model.lang)
-                            }
-                        }
-                }
-
-                if let message = loadError {
-                    ErrorCover(message: message, lang: model.lang) {
-                        loadError = nil
-                        didPushWebSession = false
-                        bridge.reset()
-                        bridge.webView?.load(URLRequest(url: AppConfig.chartURL(symbol: model.symbol)))
-                    }
-                }
-            }
-
-            if verticalSizeClass != .compact {
-                RollerStrip(
-                    symbols: wheelSymbols,
-                    timeframes: wheelTimeframes,
-                    symbolIndex: $symbolIndex,
-                    timeframeIndex: $timeframeIndex,
-                    onSymbol: { sym in
-                        guard sym != bridge.symbol else { return }
-                        bridge.setSymbol(sym)
-                    },
-                    onTimeframe: { tf in
-                        guard tf != bridge.timeframe else { return }
-                        bridge.setTimeframe(tf)
-                    },
-                    onTapSymbol: { model.searchMode = .go },
-                    lang: model.lang,
-                    showsMoreBadge: hubUnseen,
-                    onMore: {
-                        hubUnseen = false
-                        showAnalysisHub = true
-                    },
-                    drawActive: drawToolsOn,
-                    onDraw: {
-                        drawToolsOn.toggle()
-                        bridge.setDrawTools(drawToolsOn)
-                    },
-                    shareSymbol: model.symbol,
-                    chromeMinimized: model.chromeMinimized,
-                    onToggleChrome: {
-                        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-                        // Animated at the mutation site so the tab bar's slide-out and the
-                        // chart's reclaimed safe-area inset move on the same curve.
-                        withAnimation(.easeOut(duration: 0.22)) {
-                            model.chromeMinimized.toggle()
-                        }
-                    }
-                )
-                // With the tab bar minimised away, the strip becomes the bottom-most piece
-                // of chrome — the home-indicator inset under it stays pure black (§1.10).
-                .background(Theme.bg.ignoresSafeArea(edges: .bottom))
-            }
+            chartStack
+            if !hidesRollerStrip { rollerStrip }
         }
-        .sheet(isPresented: $showAnalysisHub) {
+        // IPAD-10: `presentationDetents` are honoured only when the presented sheet's own
+        // horizontal size class is compact; in iPad regular width SwiftUI silently falls
+        // back to a centred `.formSheet`, so §3.5's 60 %-then-full anatomy collapsed into
+        // a generic card. In regular width the hub is a full-screen cover with the same
+        // internal layout and its own close control (§4-A20.5).
+        .sheet(isPresented: Binding(get: { showAnalysisHub && !widthClass.isRegular },
+                                    set: { if !$0 { showAnalysisHub = false } })) {
             AnalysisHubSheet(lang: model.lang) { showAnalysisHub = false }
+        }
+        .fullScreenCover(isPresented: Binding(get: { showAnalysisHub && widthClass.isRegular },
+                                              set: { if !$0 { showAnalysisHub = false } })) {
+            AnalysisHubSheet(lang: model.lang, isFullScreen: true) { showAnalysisHub = false }
+        }
+        .onAppear {
+            #if DEBUG
+            // Headless §6.2 capture state for the tap-only hub.
+            if ProcessInfo.processInfo.arguments.contains("-mmHub") { showAnalysisHub = true }
+            #endif
+        }
+        // §4-A20.6 — restore the minimize state this orientation was left in, and keep the
+        // two stores in step. Phone never persists: landscape is already its immersive verb.
+        .background {
+            GeometryReader { geo in
+                Color.clear
+                    .onChange(of: geo.size.width > geo.size.height, initial: true) { _, landscape in
+                        applyOrientation(landscape)
+                    }
+            }
         }
         .onChange(of: model.requestedSymbol) { _, requested in
             guard let requested else { return }
@@ -137,6 +125,9 @@ struct ChartScreen: View {
             // Not ready yet: keep the request; the isReady observer below applies it.
         }
         .onChange(of: bridge.isReady) { _, ready in
+            // ANIM-05: readiness drives the cover through its own state so the removal is
+            // a 0.28 s cross-fade. `bridge.reset()` (retry, sign-out) puts it back.
+            withAnimation(.easeOut(duration: 0.28)) { showsCover = !ready }
             guard ready else { return }
             if let pending = model.requestedSymbol {
                 bridge.setSymbol(pending)
@@ -174,6 +165,111 @@ struct ChartScreen: View {
             Button(L10n.t("OK", model.lang), role: .cancel) { blockedRoute = nil }
         } message: {
             Text(L10n.t("That area of the Terminal isn't part of the app alpha yet. It remains available on the website.", model.lang))
+        }
+    }
+
+    // MARK: - Canvas
+
+    private var chartStack: some View {
+        ZStack {
+            // §3.3.1 / CHART-01 — the canvas is a vertical gradient, and it runs
+            // **lightest at top**: `IMG_2321.PNG` samples (24,26,37) at y=190 →
+            // (19,22,33) at y=2200, monotonic. Drawn dark-at-top, the brightest canvas
+            // row butted against the pure-black toolbar, which was the visible seam.
+            LinearGradient(
+                colors: [Theme.chartBgBottom, Theme.chartBg],
+                startPoint: .top, endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            ChartWebView(
+                bridge: bridge,
+                onBlockedRoute: { blockedRoute = $0 },
+                onLoadFailed: { message in
+                    withAnimation(.easeOut(duration: 0.25)) { loadError = message }
+                }
+            )
+
+            if showsCover && loadError == nil {
+                // ANIM-05: a skeleton on the *same* gradient. The old cover filled
+                // `Theme.bg` (#000000) over the canvas and was removed in one frame —
+                // a black→navy cut on every cold launch.
+                ChartSkeleton(lang: model.lang)
+                    .transition(.opacity)
+                    .task { await failIfStalled() }
+            }
+
+            if let message = loadError {
+                ErrorCover(message: message, lang: model.lang, retry: retryLoad)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private var rollerStrip: some View {
+        RollerStrip(
+            symbols: wheelSymbols,
+            timeframes: wheelTimeframes,
+            symbolIndex: $symbolIndex,
+            timeframeIndex: $timeframeIndex,
+            onSymbol: { sym in
+                guard sym != bridge.symbol else { return }
+                bridge.setSymbol(sym)
+            },
+            onTimeframe: { tf in
+                guard tf != bridge.timeframe else { return }
+                bridge.setTimeframe(tf)
+            },
+            onTapSymbol: { model.openSearch(.go) },
+            lang: model.lang,
+            showsMoreBadge: hubUnseen,
+            onMore: openAnalysisHub,
+            drawActive: drawToolsOn,
+            onDraw: {
+                drawToolsOn.toggle()
+                bridge.setDrawTools(drawToolsOn)
+            },
+            shareSymbol: model.symbol,
+            chromeMinimized: model.chromeMinimized,
+            onToggleChrome: toggleChrome
+        )
+        // With the tab bar minimised away, the strip becomes the bottom-most piece of
+        // chrome — the home-indicator inset under it stays pure black (§1.10).
+        .background(Theme.bg.ignoresSafeArea(edges: .bottom))
+    }
+
+    /// ANIM-13: present first, clear the dot once the sheet has covered the toolbar — a
+    /// dot that vanishes under the user's finger reads as a glitch, not as "seen".
+    private func openAnalysisHub() {
+        showAnalysisHub = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            withAnimation(.easeOut(duration: 0.2)) { hubUnseen = false }
+        }
+    }
+
+    /// ANIM-11: the single transaction that owns the bar's slide, the safe-area inset it
+    /// gives back and the chart's new height. Nothing on that path animates implicitly.
+    private func toggleChrome() {
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        withAnimation(TVChrome.minimize) { model.chromeMinimized.toggle() }
+        persistChromeMinimized()
+    }
+
+    private func retryLoad() {
+        withAnimation(.easeOut(duration: 0.25)) { loadError = nil }
+        didPushWebSession = false
+        bridge.reset()
+        bridge.webView?.load(URLRequest(url: AppConfig.chartURL(symbol: model.symbol)))
+    }
+
+    /// The page normally reports ready in a few seconds; a silent hang (captive portal,
+    /// stalled TLS) must not strand a blank cover.
+    private func failIfStalled() async {
+        try? await Task.sleep(for: .seconds(25))
+        guard !bridge.isReady, loadError == nil else { return }
+        withAnimation(.easeOut(duration: 0.25)) {
+            loadError = L10n.t("The chart is taking too long to load.", model.lang)
         }
     }
 
@@ -222,6 +318,25 @@ struct ChartScreen: View {
         bridge.webView?.load(URLRequest(url: AppConfig.chartURL(symbol: model.symbol)))
     }
 
+    /// §4-A20.6. Only the iPad has a minimize state worth remembering: the phone's
+    /// immersive verb is the rotation itself, and `chromeMinimized` is never set there.
+    private func applyOrientation(_ landscape: Bool) {
+        isLandscape = landscape
+        guard UIDevice.current.userInterfaceIdiom != .phone, model.tab == .chart else { return }
+        let restored = landscape ? chromeMinimizedLandscape : chromeMinimizedPortrait
+        guard restored != model.chromeMinimized else { return }
+        withAnimation(TVChrome.minimize) { model.chromeMinimized = restored }
+    }
+
+    private func persistChromeMinimized() {
+        guard UIDevice.current.userInterfaceIdiom != .phone else { return }
+        if isLandscape {
+            chromeMinimizedLandscape = model.chromeMinimized
+        } else {
+            chromeMinimizedPortrait = model.chromeMinimized
+        }
+    }
+
     /// Programmatic wheel moves (bridge → UI). User drags flow the other way through
     /// the onSymbol/onTimeframe callbacks, which no-op when the value already matches.
     private func syncWheels() {
@@ -254,20 +369,80 @@ enum DemoDriver {
     }
 }
 
-struct LoadingCover: View {
+/// ANIM-05 — the boot surface. Deliberately draws **no background of its own**: the
+/// parent's canvas gradient shows through, so the first frame of the app is already the
+/// colour the chart lands on and the hand-off is a cross-fade, not a cut.
+///
+/// The shape is the chart's own anatomy: a right-hand price-axis rail and the three pane
+/// bands the chart will occupy (price + two oscillators), at the 5 % white / r 6 the kit
+/// uses for every skeleton, under a 1.2 s left→right shimmer.
+struct ChartSkeleton: View {
     var lang = "en"
 
+    private enum Skeleton {
+        /// The price scale the chart reserves on the right.
+        static let railWidth: CGFloat = 56
+        static let inset: CGFloat = 12
+        static let gap: CGFloat = 10
+        /// Price pane, then the two oscillator panes, as fractions of the plot height.
+        static let paneShares: [CGFloat] = [0.62, 0.19, 0.19]
+    }
+
     var body: some View {
-        ZStack {
-            Theme.bg.ignoresSafeArea()
-            VStack(spacing: 16) {
-                ProgressView()
-                    .controlSize(.large)
-                    .tint(Theme.brand2)
-                Text(L10n.t("Loading chart…", lang))
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.text2)
+        GeometryReader { geo in
+            let gaps = Skeleton.gap * CGFloat(Skeleton.paneShares.count - 1)
+            let plotHeight = max(geo.size.height - Skeleton.inset * 2 - gaps, 0)
+            HStack(alignment: .top, spacing: Skeleton.gap) {
+                VStack(spacing: Skeleton.gap) {
+                    ForEach(Array(Skeleton.paneShares.enumerated()), id: \.offset) { _, share in
+                        band.frame(maxWidth: .infinity)
+                            .frame(height: plotHeight * share)
+                    }
+                }
+                band.frame(width: Skeleton.railWidth)
             }
+            .padding(Skeleton.inset)
+            .frame(width: geo.size.width, height: geo.size.height)
+            .modifier(ChartSkeletonShimmer())
+        }
+        .accessibilityLabel(L10n.t("Loading chart…", lang))
+    }
+
+    private var band: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(Color.white.opacity(0.05))
+    }
+}
+
+/// The travelling highlight over the boot skeleton.
+///
+/// Deliberately **not** `TVKit`'s `tvShimmer()`: that mask is a bare gradient rect swept
+/// past the content's own bounds, so for part of every cycle the content sits outside the
+/// mask entirely and disappears. Here the mask is an opaque floor plus a travelling band,
+/// so the skeleton never drops below 55 % and only brightens as the highlight passes.
+private struct ChartSkeletonShimmer: ViewModifier {
+    func body(content: Content) -> some View {
+        content.phaseAnimator([0.0, 1.0]) { view, phase in
+            view.mask {
+                GeometryReader { geo in
+                    ZStack {
+                        Color.black.opacity(0.55)
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black.opacity(0.45), location: 0.5),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                        .frame(width: geo.size.width * 0.8)
+                        .offset(x: (phase * 2 - 1) * geo.size.width)
+                    }
+                }
+            }
+        } animation: { phase in
+            // Phase 0 is the instant reset, so the highlight never runs backwards.
+            phase == 1 ? .linear(duration: 1.2) : .linear(duration: 0)
         }
     }
 }
@@ -279,7 +454,10 @@ struct ErrorCover: View {
 
     var body: some View {
         ZStack {
-            Theme.bg.ignoresSafeArea()
+            // ANIM-24: a scrim, not a fill — the chart gradient stays visible behind the
+            // message, so a failed load reads as "this surface didn't arrive", not as a
+            // different, black screen.
+            Color.black.opacity(0.72).ignoresSafeArea()
             VStack(spacing: 14) {
                 Image(systemName: "wifi.exclamationmark")
                     .font(.system(size: 34))

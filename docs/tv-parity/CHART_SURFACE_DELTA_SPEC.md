@@ -415,7 +415,7 @@ axis ink appears.
 |---|---|---|
 | bull | `#26c281` (lime) | **`#089981`** (teal) |
 | bear | `#f0566b` (salmon) | **`#F23645`** |
-| chart bg | flat `#131722` | **vertical gradient `#131722` → `#181B26`** (measured `#171B27` top / `#131723` bottom) |
+| chart bg | flat `#131722` | **vertical gradient `#181B26` (top) → `#131722` (bottom)** (measured `#171B27` top / `#131723` bottom — lightest at TOP, darkest row abuts the chrome; arrow corrected 2026-08-01, C1) |
 | gridline | `#1C202B` on bg (Δ9) = `rgba(255,255,255,.04)` | `#232732` on bg (Δ12) ≈ **`rgba(255,255,255,.055)`**, pitch 47pt |
 | axis text | `#717A8E`, ink 23px | **`#B1B5BE`**, ink 23px (same size) |
 | ref badge | — | `#2961FF` |
