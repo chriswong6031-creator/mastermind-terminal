@@ -9,6 +9,8 @@ import {
   tickIntervalMs,
   fmtStamp,
   stampMinutes,
+  frameClockPositions,
+  frameGapStats,
   sessionBands,
   createEngagementTracker,
   type ReplayState,
@@ -202,6 +204,33 @@ describe("stampMinutes", () => {
     expect(stampMinutes("2500")).toBeNaN();
     expect(stampMinutes("0999")).toBeNaN();
     expect(stampMinutes("")).toBeNaN();
+  });
+});
+
+describe("observed-frame rail", () => {
+  it("positions frames by elapsed clock time rather than by index", () => {
+    // The 60-minute hole occupies most of the rail instead of looking like one normal step.
+    expect(frameClockPositions(["0930", "0935", "1035"])).toEqual([0, 5 / 65, 1]);
+  });
+
+  it("falls back to even spacing for malformed or degenerate indexes", () => {
+    expect(frameClockPositions(["bad", "also-bad", "still-bad"])).toEqual([0, 0.5, 1]);
+    expect(frameClockPositions(["0930", "0930"])).toEqual([0, 1]);
+    expect(frameClockPositions(["0930"])).toEqual([0]);
+  });
+
+  it("reports the measured median, largest gap, and irregularity", () => {
+    expect(frameGapStats(["0930", "0935", "0940", "1010"])).toEqual({
+      medianSec: 300,
+      maxSec: 1800,
+      irregular: true,
+    });
+    expect(frameGapStats(["0930", "0935", "0940"])).toEqual({
+      medianSec: 300,
+      maxSec: 300,
+      irregular: false,
+    });
+    expect(frameGapStats(["0930"])).toEqual({ medianSec: null, maxSec: null, irregular: false });
   });
 });
 

@@ -18,8 +18,8 @@ import type { Lang } from "@/lib/i18n";
 const SURFACE_LEX = {
   // ── Tab / pane header ───────────────────────────────────────────────────────
   surfaceTab: ["Surface", "曲面"],
-  surfaceTitle: ["Flow Surface", "资金流曲面"],
-  surfaceSubtitle: ["Premium flow painted by strike & time", "按行权价与时间绘制的权利金资金流"],
+  surfaceTitle: ["Intraday Flow Surface", "盘中资金流曲面"],
+  surfaceSubtitle: ["One session · observed OPRA snapshots by strike", "单个交易日 · 按行权价显示 OPRA 实测快照"],
 
   // ── Metric tabs (Net Prem live; greeks accruing) ────────────────────────────
   metricNetPrem: ["Net Prem", "净权利金"],
@@ -61,6 +61,20 @@ const SURFACE_LEX = {
     "Shift + 滚轮（或在价格轴上滚动）缩放价格轴",
   ],
 
+  // ── Time framing (x axis) ──────────────────────────────────────────────────
+  timeWindow: ["Time", "时间"],
+  timeWindowAria: ["Chart time window", "图表时间范围"],
+  timeWindowSurface: ["Surface window", "曲面窗口"],
+  timeWindowSession: ["Full session", "完整交易日"],
+  timeWindowSurfaceAria: [
+    "Fit the chart to the time covered by observed surface frames",
+    "将图表贴合到实测曲面帧覆盖的时间",
+  ],
+  timeWindowSessionAria: [
+    "Show the full selected trading session",
+    "显示所选交易日的完整时段",
+  ],
+
   // ── Crosshair readout pill ──────────────────────────────────────────────────
   strike: ["Strike", "行权价"],
 
@@ -73,6 +87,11 @@ const SURFACE_LEX = {
   observedCadence: ["observed", "实测间隔"],
   cadencePending: ["cadence pending", "频率待测"],
   sessionLabel: ["session", "交易日"],
+  dataStripSession: ["Session", "交易日"],
+  dataStripSurface: ["Surface", "曲面"],
+  dataStripPrice: ["Price", "价格"],
+  observedOnly: ["Observed only · no interpolation", "仅实测 · 不插值"],
+  observedFrames: ["observed frames", "个实测帧"],
 
   // ── Empty / loading ─────────────────────────────────────────────────────────
   surfaceEmpty: ["No surface data yet — accruing.", "暂无曲面数据 — 累积中。"],
@@ -91,6 +110,10 @@ const SURFACE_LEX = {
   replayLive: ["LIVE", "实时"],
   replayFrameOf: ["frame", "帧"],
   replayNoFrames: ["No frames — accruing.", "暂无帧 — 累积中。"],
+  frameRailAria: ["Observed surface frames", "实测曲面帧"],
+  frameRailLabel: ["Observed frames", "实测帧"],
+  frameGapIrregular: ["uneven gaps", "间隔不均"],
+  frameGapRegular: ["median gap", "中位间隔"],
 
   // ── Multi-day replay: session picker + archived-session badge ───────────────
   sessionPickerAria: ["Replay session", "回放交易日"],

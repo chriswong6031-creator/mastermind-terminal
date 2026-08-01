@@ -163,6 +163,32 @@ const Y_SPAN_MAX = 100_000;
 /** Minimum hit width of the right price gutter, for the wheel-over-axis gesture. */
 const Y_AXIS_HIT_MIN = 44;
 
+export type SurfaceTimeWindow = "surface" | "session";
+
+/**
+ * A readable x-window around the timestamps the surface actually contains. A sparse live
+ * field should occupy the chart instead of being compressed into the left edge of a full
+ * 6.5-hour canvas. Twelve minutes of context on either side preserves price lead-in and
+ * follow-through; a one-frame field still receives a useful 60-minute window.
+ */
+function observedTimeWindow(date: string, steps: string[]): { from: Time; to: Time } | null {
+  if (!date || !steps.length) return null;
+  const epochs = steps.map((s) => sessionEpoch(date, s)).filter((v) => Number.isFinite(v));
+  if (!epochs.length) return null;
+  const first = epochs[0];
+  const last = epochs[epochs.length - 1];
+  const context = 12 * 60;
+  const minimum = 60 * 60;
+  let from = first - context;
+  let to = last + context;
+  if (to - from < minimum) {
+    const extra = (minimum - (to - from)) / 2;
+    from -= extra;
+    to += extra;
+  }
+  return { from: from as Time, to: to as Time };
+}
+
 /**
  * The PRICE-anchored window: the extent of the candles that will actually be drawn,
  * padded so price occupies ~37% of the pane and the field overflows around it. The caller
@@ -245,6 +271,9 @@ export interface SurfacePaneProps {
   /** Pinned strike levels, drawn as price lines ("send to chart"). */
   pins?: SurfacePin[];
   onTogglePin?: (strike: number, metric: string, value: number | null) => void;
+  /** X-axis framing is shared across single/quad layouts by SurfaceView. */
+  timeWindow?: SurfaceTimeWindow;
+  onTimeWindowChange?: (window: SurfaceTimeWindow) => void;
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -258,10 +287,12 @@ export function SurfacePane({
   themeSig,
   pins,
   onTogglePin,
+  timeWindow = "surface",
+  onTimeWindowChange,
 }: SurfacePaneProps) {
   const { lang } = useLang();
   const t = makeSurfaceT(lang);
-  const { state: replayState, dispatch, asOfStamp, live, sessionDate, archived } = useReplay();
+  const { state: replayState, dispatch, asOfStamp, live, sessionDate } = useReplay();
   const sync = useSurfaceSync();
   const isCell = chrome === "cell";
 
@@ -298,9 +329,6 @@ export function SurfacePane({
   // handler used to construct one Date per session column on every mousemove (~390 for a
   // full 1-min day); it now binary-free scans this prebuilt array instead.
   const timeEpochsRef = useRef<number[]>([]);
-  // B9: the viewport is set ONCE per session/basis and never on a replay scrub or a
-  // metric/range toggle, which used to yank the user's zoom back on every step.
-  const fittedForRootRef = useRef<string | null>(null);
   // The vertical viewport is set on first paint and when the user explicitly changes the
   // strike range. Replay frames and metric switches must not re-enable autoscale and crush
   // the useful strikes back into a thin line.
@@ -735,21 +763,6 @@ export function SurfacePane({
       // completing its first layout, and a later frame retries.
       if (win && applyYRef.current(win[0], win[1])) priceRangeKeyRef.current = rangeKey;
     }
-    // Fit once only AFTER the selected-session candle request resolves. Fitting as soon as
-    // the field arrived used the sparse field's first/last timestamps (10:06–16:14 on the
-    // reported feed) and never expanded when the 09:30 candles arrived. An honestly empty
-    // candle response falls back to fitting the field. Replay/metric/range updates retain
-    // the user's time zoom because the basis key stays unchanged.
-    const timeFitBasis = sessionCandles.length > 0
-      ? "candles"
-      : candleSession === frame.session_date
-        ? "field"
-        : null;
-    const timeFitKey = timeFitBasis ? `${root}:${frame.session_date ?? ""}:${timeFitBasis}` : null;
-    if (timeFitKey && fittedForRootRef.current !== timeFitKey) {
-      fittedForRootRef.current = timeFitKey;
-      chartRef.current?.timeScale().fitContent();
-    }
   }, [frame, metric, rangeQ, root, sessionCandles, candleSession]);
 
   // Re-apply the shader when opacity changes (data unchanged).
@@ -847,6 +860,25 @@ export function SurfacePane({
     candle.setData([...data, ...tail] as Parameters<typeof candle.setData>[0]);
   }, [sessionCandles, live, asOfStamp, frame?.session_date]);
 
+  // ── X framing: observed field vs full selected session ──────────────────────
+  // Surface is a session-native view, not a generic daily chart. The default follows the
+  // time span the field actually covers; this is what keeps a sparse 10-frame live field
+  // readable on a phone. Full session remains one click away for open-to-close context.
+  // Replaying a frame intentionally advances the observed window. The session mode only
+  // fits after its candle request resolves, so an early field response cannot lock the axis
+  // to a partial range.
+  useEffect(() => {
+    const chart = chartRef.current;
+    const date = frame?.session_date;
+    if (!chart || !date) return;
+    if (timeWindow === "surface") {
+      const window = observedTimeWindow(date, frame.time_steps);
+      if (window) chart.timeScale().setVisibleRange(window);
+      return;
+    }
+    if (sessionCandles.length > 0 || candleSession === date) chart.timeScale().fitContent();
+  }, [timeWindow, frame?.session_date, frame?.time_steps, sessionCandles.length, candleSession]);
+
   // ── Stamps / labels ──────────────────────────────────────────────────────────
   // Plain computations — the React Compiler auto-memoizes; a manual useMemo here trips
   // preserve-manual-memoization (its inferred deps differ from the hand-written ones).
@@ -878,10 +910,10 @@ export function SurfacePane({
   };
 
   return (
-    <div style={PANE}>
+    <div style={PANE} className="obs-surf-pane">
       {/* Controls row — the quad's shared toolbar owns these in cell mode. */}
       {!isCell && (
-      <div style={CONTROLS}>
+      <div style={CONTROLS} className="obs-surf-controls">
         {/* Metric tabs — greek tabs feature-detect on the loaded frame's grids. */}
         <div style={GROUP} role="group" aria-label={t("metricLensAria")}>
           {METRICS.map((m) => {
@@ -903,6 +935,30 @@ export function SurfacePane({
               </button>
             );
           })}
+        </div>
+
+        {/* X-axis framing. "Surface window" is the useful default for a sparse live field;
+            "Full session" restores open-to-close context and makes manual pan/zoom useful. */}
+        <div style={GROUP} role="group" aria-label={t("timeWindowAria")}>
+          <span className="obs-lbl">{t("timeWindow")}</span>
+          <button
+            className={`obs-chip${timeWindow === "surface" ? " on" : ""}`}
+            style={CHIP}
+            aria-pressed={timeWindow === "surface"}
+            aria-label={t("timeWindowSurfaceAria")}
+            onClick={() => onTimeWindowChange?.("surface")}
+          >
+            {t("timeWindowSurface")}
+          </button>
+          <button
+            className={`obs-chip${timeWindow === "session" ? " on" : ""}`}
+            style={CHIP}
+            aria-pressed={timeWindow === "session"}
+            aria-label={t("timeWindowSessionAria")}
+            onClick={() => onTimeWindowChange?.("session")}
+          >
+            {t("timeWindowSession")}
+          </button>
         </div>
 
         {/* Candle interval. These controls never change or resample the field snapshots. */}
@@ -935,42 +991,67 @@ export function SurfacePane({
           <span style={SLIDER_VAL} className="num">{rangeQ === 0 ? t("rangeAll") : `±${rangeQ}`}</span>
         </label>
 
-        {/* Price-axis framing. The y window is anchored to PRICE by default — these are the
-            explicit way back to the whole strike field and back to price again. Momentary
-            actions, not a mode: no aria-pressed, no `.on` state. */}
-        <div style={GROUP} role="group" aria-label={t("yFitAria")}>
-          <button
-            className="obs-chip"
-            style={{ ...CHIP, ...(priceFit ? {} : DISABLED_CHIP) }}
-            aria-disabled={!priceFit}
-            aria-label={priceFit ? undefined : `${t("yFitPrice")} — ${t("yFitPriceNone")}`}
-            onClick={fitPrice}
-          >
-            {t("yFitPrice")}
-          </button>
-          <button
-            className="obs-chip"
-            style={{ ...CHIP, ...(hasData ? {} : DISABLED_CHIP) }}
-            aria-disabled={!hasData}
-            aria-label={hasData ? undefined : `${t("yFitStrikes")} — ${t("yFitStrikesNone")}`}
-            onClick={fitStrikes}
-          >
-            {t("yFitStrikes")}
-          </button>
-        </div>
-
-        {/* Legend — reads the ACTIVE metric's theme pair, so it keeps telling the truth
-            after a preset switch (and still flips with --up/--down on the default). */}
-        <div style={LEGEND}>
-          <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].pos})` }} /><span className="obs-lbl">{t("legendPos")}</span></span>
-          <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].neg})` }} /><span className="obs-lbl">{t("legendNeg")}</span></span>
-        </div>
       </div>
       )}
 
+      {/* Compact data contract: three separate clocks, named where the user reads them.
+          This replaces the giant amber paragraph and the on-canvas provenance sentence. */}
+      {!isCell && (
+        <div className="obs-surf-data-strip" role="status">
+          <span className="obs-surf-data-item">
+            <span className="obs-lbl">{t("dataStripSession")}</span>
+            <strong className="num">{frame?.session_date ?? "—"}</strong>
+          </span>
+          <span className="obs-surf-data-item">
+            <span className="obs-lbl">{t("dataStripSurface")}</span>
+            <strong className="num">{snapshotCount} {t("observedFrames")}</strong>
+            <span className="obs-surf-data-detail">
+              {observedCadenceSec != null ? `· ~${fmtObservedCadence(observedCadenceSec)} ${t("observedCadence")}` : `· ${t("cadencePending")}`}
+            </span>
+          </span>
+          <span className="obs-surf-data-item">
+            <span className="obs-lbl">{t("dataStripPrice")}</span>
+            <strong className="num">{effAggMin}m {t("candleInterval").toLowerCase()}</strong>
+          </span>
+          <span className="obs-surf-observed-badge">
+            <span className="obs-live-dot" aria-hidden />
+            {t("observedOnly")}
+          </span>
+          <span className="obs-surf-data-legend">
+            <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].pos})` }} /><span className="obs-lbl">{t("legendPos")}</span></span>
+            <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].neg})` }} /><span className="obs-lbl">{t("legendNeg")}</span></span>
+          </span>
+          <span className="obs-surf-data-source">{t("sourceOpra")}</span>
+        </div>
+      )}
+
       {/* Chart area */}
-      <div style={CHART_AREA}>
+      <div style={CHART_AREA} className="obs-surf-chart-area">
         <div ref={wrapRef} style={{ width: "100%", height: "100%" }} />
+
+        {/* Y framing lives on the axis it changes, instead of wrapping the main toolbar.
+            These are momentary reset actions, not modes. */}
+        {!isCell && (
+          <div className="obs-surf-yfit" role="group" aria-label={t("yFitAria")}>
+            <span className="obs-lbl">Y</span>
+            <button
+              className="obs-chip"
+              aria-disabled={!priceFit}
+              aria-label={priceFit ? undefined : `${t("yFitPrice")} — ${t("yFitPriceNone")}`}
+              onClick={fitPrice}
+            >
+              {t("yFitPrice")}
+            </button>
+            <button
+              className="obs-chip"
+              aria-disabled={!hasData}
+              aria-label={hasData ? undefined : `${t("yFitStrikes")} — ${t("yFitStrikesNone")}`}
+              onClick={fitStrikes}
+            >
+              {t("yFitStrikes")}
+            </button>
+          </div>
+        )}
 
         {/* Quad cell: the metric name lives on the cell itself (no tab strip here). */}
         {isCell && (
@@ -990,25 +1071,6 @@ export function SurfacePane({
             <span style={{ color: readout.value >= 0 ? "var(--up)" : "var(--down)", fontWeight: 700 }}>
               {fmtDollarSigned(readout.value)}
             </span>
-          </div>
-        )}
-
-        {/* Provenance row (bottom-right) — source · as-of · ACTUAL observed spacing ·
-            session date. The producer's configured target cadence is not authoritative:
-            sparse poll cycles can take far longer, so the plotted time_steps are measured.
-            Full pane only; in a quad the shared replay bar carries one stamp for all cells. */}
-        {hasData && !isCell && (
-          <div className="obs-asof" style={STAMP_PILL}>
-            {live && !archived && <span className="dot" aria-hidden />}
-            <span>{t("sourceOpra")}</span>
-            {asofLabel && <span style={{ color: "var(--text-2)" }}>· {t("asOf")} {asofLabel}</span>}
-            <span>· {snapshotCount} {t("snapshots")}</span>
-            <span>
-              · {observedCadenceSec != null
-                ? `~${fmtObservedCadence(observedCadenceSec)} ${t("observedCadence")}`
-                : t("cadencePending")}
-            </span>
-            {frame?.session_date && <span>· {frame.session_date}</span>}
           </div>
         )}
 
@@ -1108,14 +1170,6 @@ export function SurfacePane({
         />
       )}
 
-      {/* Honesty note + the y-axis gesture. The price zoom has no visible affordance of its
-          own, so the one line every user already reads carries it. */}
-      {!isCell && (
-        <div className="obs-note" style={NOTE}>
-          {t("surfaceNote")}
-          <span style={NOTE_HINT}>· {t("yZoomHint")}</span>
-        </div>
-      )}
     </div>
   );
 }
@@ -1152,10 +1206,6 @@ const SLIDER_VAL: React.CSSProperties = {
   fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
 };
 
-const LEGEND: React.CSSProperties = {
-  display: "flex", gap: "var(--sp-3)", marginLeft: "auto", alignItems: "center",
-};
-
 const LEGEND_ITEM: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: "var(--sp-1)" };
 
 const SWATCH: React.CSSProperties = { display: "inline-block", width: 10, height: 8, borderRadius: 2 };
@@ -1172,18 +1222,6 @@ const READOUT_PILL: React.CSSProperties = {
   fontFamily: "var(--font-num)", fontVariantNumeric: "tabular-nums",
 };
 
-/** Provenance row over the field: .obs-asof owns the type, this holds it to the corner
- *  and keeps it legible against the paint. .obs-asof's font shorthand resets numeric
- *  variants, so tabular-nums is re-declared (doctrine law 1). */
-const STAMP_PILL: React.CSSProperties = {
-  position: "absolute", bottom: "var(--sp-2)", right: "var(--sp-3)", zIndex: 5,
-  margin: 0, flexWrap: "wrap", gap: "var(--sp-1)",
-  padding: "3px var(--sp-2)",
-  background: "color-mix(in srgb, var(--panel) 80%, transparent)",
-  borderRadius: "var(--r-tile)", pointerEvents: "none",
-  fontVariantNumeric: "tabular-nums",
-};
-
 const EMPTY: React.CSSProperties = {
   position: "absolute", inset: 0,
   display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
@@ -1197,14 +1235,6 @@ const EMPTY_TITLE: React.CSSProperties = {
 const EMPTY_WHY: React.CSSProperties = {
   fontSize: "var(--fs-label)", lineHeight: 1.55, color: "var(--muted)", maxWidth: 440,
 };
-
-const NOTE: React.CSSProperties = { margin: "var(--sp-2) var(--sp-4)", flexShrink: 0 };
-
-/** The gesture hint on the honesty line. Kept inside .obs-note's own amber family
- *  (opacity, not a second hue) so the panel still carries one accent, and INLINE rather
- *  than a block: the note is the last child of an overflow:hidden pane, so an extra line
- *  is an extra chance for the hint to fall below the fold on a short viewport. */
-const NOTE_HINT: React.CSSProperties = { marginLeft: "var(--sp-1)", opacity: 0.78 };
 
 /** .obs-lbl supplies the micro-label type; only the pill chrome and the brighter
  *  on-canvas colour are set here (muted would sink into the heat field). */
