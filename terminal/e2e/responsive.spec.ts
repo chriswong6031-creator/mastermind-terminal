@@ -159,6 +159,49 @@ test("the canonical Terminal shell works at its supported responsive widths", as
   });
 });
 
+test("Discover loads company logos in symbol rows", async ({ page }, testInfo) => {
+  const logoRequests: string[] = [];
+  await page.route("https://img.logo.dev/**", async (route) => {
+    const url = route.request().url();
+    logoRequests.push(url);
+    if (url.includes("/ticker/MU?")) {
+      await route.fulfill({ status: 404 });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#2962ff"/><path d="M18 46 32 15l14 31-14-8z" fill="white"/></svg>',
+    });
+  });
+
+  await page.goto("/discover");
+
+  const rows = page.locator("table.scr2 tbody tr").filter({ has: page.locator(".sym-cell") });
+  await expect(rows.first()).toBeVisible();
+  const logos = rows.locator(".asset-logo");
+  await expect(logos.first()).toBeVisible();
+  await expect(logos.first().locator("img")).toBeVisible();
+  await expect.poll(() => logoRequests.length).toBeGreaterThan(0);
+  await expect(logos.first().locator("img")).toHaveAttribute("src", /https:\/\/img\.logo\.dev\/name\/Micron%20Technology/);
+
+  const iconSize = await logos.first().evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    return { width: box.width, height: box.height };
+  });
+  expect(iconSize).toEqual({ width: 24, height: 24 });
+  const overflow = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+  }));
+  expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
+
+  await page.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-discover-logos.png`),
+    fullPage: false,
+  });
+});
+
 test("regular-session performance stays primary while extended pricing is separate", async ({ page }, testInfo) => {
   const regularClose = 390.54;
   const previousClose = 393.33;
