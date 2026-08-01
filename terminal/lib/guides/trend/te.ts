@@ -3,5 +3,82 @@
 // ship with the build rather than being rsync'd like /data. Lazily imported by GuidePanel.
 // Markdown is rendered through lib/md.ts (escape-safe).
 
-export const en = "# Trend Engine\n\nOne band decides the trend, prints the entry, and manages the trade to the last target.\n\n## What you see\n\nA trailing band rides the safe side of price — under it in an uptrend, over it in a downtrend. It only ratchets toward price and never gives ground back until the trend flips, so the gap between price and band is your live risk.\n\nEach flip prints an entry pill: **BUY** under the swing low, **SELL** above the swing high. Three tiers, same signal at different grades:\n\n- **BUY** / **SELL** — a flip.\n- **BUY +** / **SELL +** — a flip arriving with momentum in the top of its own recent range.\n- **POWER BOTTOM** / **POWER TOP** — a flip straight after an exhaustion extreme. The rarest print on the chart.\n\nCircles on the band mark retests — bars where price tagged the band without breaking it. A faint background tint colors each column by trend side, so you can read the regime without studying the band. After a signal, a ladder extends right — **TP1** upward, three rungs by default and up to six, each gaining a **✓** when price trades through it — plus a stop chip stepping along behind price. An optional second band, one ATR further from price, can trail the first as a soft cloud.\n\n## How to trade it\n\nThe flip is the thesis; the retest is usually the entry. Buying the pill bar catches the whole move but needs the widest stop. Waiting for the first band retest gives a tight stop just beyond the band and an unambiguous exit — close through it and you were wrong cheaply.\n\nUse two charts: direction from the higher timeframe, signal from the lower one. A BUY on the hourly while the daily band is still bearish is a countertrend trade — size it like one.\n\nLet the ladder manage. TP1 pays for the trade, TP2–TP3 carry the expectancy, the trailing stop decides the tail. Most traders move to breakeven once **TP1 ✓** prints. Treat **+** and **POWER** as sizing information, not permission to change the rules.\n\n## Settings\n\n**Sensitivity (1–10, default 5)** — 1 = fastest flips, 10 = strongest trends only. The dial that defines the module's personality: lower it intraday, raise it on daily.\n\n**Auto-Optimize (off)** — searches recent history for the best-scoring sensitivity and applies it. The tradeoff is real: it re-tunes as new bars arrive, so the setting drifts under you and past signals can restyle — a **+** you noted last month may render plain next week. Use it once to scout a starting number, set that number by hand, then leave it off for stable history.\n\n**Trend Band, Background Tint, BUY/SELL Pills, Signal Tiers, Retest Dots** — chrome toggles, all on by default.\n\n**Shadow Band (off)** — a second band one ATR further from price than the first, filled as a soft cloud. Off by default; turn it on when you want the wider \"give it room\" line visible next to the working one.\n\n**Take Profit** — *Dynamic (ATR ladder)* places targets at volatility multiples, so they scale with the instrument; **TP Levels** sets how many, 1 to 6, default 3. *Fixed %* uses your own three percentages — **TP1 %**, **TP2 %** and **TP3 %**, default 2 / 4 / 8. *Off* hides the ladder.\n\n**Stop Loss** — *Trailing (band)* rides the band, *Fixed %* holds the set **SL %** (default 3), *Off* leaves risk to you.\n\n**Show Last (default 2)** — how many recent episodes keep full TP/SL chrome. Older signals keep their pill and lose their ladder, which is what keeps the chart readable.\n\n## Signals & alerts\n\nThe engine emits five chart-event types: **te_flip** (the flip itself, either direction, carrying the momentum percentile as its strength — the **+** tier is a grade on this event, not a separate one), **te_power** (emitted alongside a flip that follows an exhaustion extreme — power bottom or power top), **te_retest** (a band touch that held, either side), **te_tp_hit** (a target filled, strength telling you how far up the ladder) and **te_sl_hit**.\n\nAlert Center exposes the deliberate three-condition subset: **te_flip**, **te_power** and **te_tp_hit**. **te_retest** and **te_sl_hit** still appear on the chart and in its event stream, but they are chart-only and cannot currently be selected as Alert Center conditions. TP and SL are evaluated on every episode, including ones scrolled past Show Last. Confirmed chart events are final — recomputing with newer bars never rewrites a past flip. The one exception is Auto-Optimize, which changes the inputs themselves.\n";
-export const zh = "# 趋势引擎（Trend Engine）\n\n一条带子定趋势、给入场、再把这笔交易一路管到最后一个目标位。\n\n## 图上看到什么\n\n追踪带永远走在价格安全的一侧——上涨时在下方托着，下跌时在上方压着。它只朝价格方向棘轮式推进，在趋势翻转之前绝不退让，所以价格与带子之间的距离就是你当下的真实风险。\n\n每次翻转都会打出入场药丸标签：**BUY** 贴在摆动低点下方，**SELL** 贴在摆动高点上方。三个档位是同一个信号的不同成色：\n\n- 普通 **BUY** / **SELL**——一次翻转。\n- **BUY +** / **SELL +**——翻转发生时动能处于自身近期区间的高位。\n- **POWER BOTTOM** / **POWER TOP**——翻转紧跟在一次衰竭极值之后，全图最稀有的一种。\n\n带子上的小圆圈是回踩标记：价格触碰带子却没有击穿的那些K线。背景会按当前趋势方向给整列上一层很淡的底色，让你不看带子也能一眼读出所处状态。信号出现后，右侧展开目标阶梯——从 **TP1** 往上，默认三档、最多六档，价格穿过哪一档，哪一档就添上 **✓**——旁边是一枚随价格逐级跟进的止损标签。此外还可以打开第二条带子，位置比第一条再远一个 ATR，以柔和的云层跟在外侧。\n\n## 怎么用它交易\n\n翻转是论点，回踩通常才是入场点。直接打在药丸那根K线上能吃到整段行情，但止损最宽；等第一次回踩带子，止损可以紧贴带子外沿，出场条件也毫不含糊——收盘击穿，就是错了，而且错得便宜。\n\n请用两个周期：方向由大周期定，信号在小周期上取。日线带子还在空头时，小时图上的 BUY 属于逆势单，仓位就要按逆势单来给。\n\n管理交给阶梯。TP1 负责让这笔交易回本，TP2–TP3 才是期望值的来源，尾部能留多少由跟踪止损决定。多数人会在 **TP1 ✓** 出现后把止损挪到成本。**+** 与 **POWER** 是加仓幅度的依据，不是改规则的许可。\n\n## 设置项\n\n**Sensitivity 灵敏度（1–10，默认 5）**——1 = 翻转最快，10 = 只留最强趋势。决定模块性格的那个旋钮：日内调低，日线调高。\n\n**Auto-Optimize 自动优化（默认关闭）**——在近期历史里搜出表现最好的灵敏度并套用。代价必须说清楚：它随新K线不断重新调参，参数会在你不知情时漂移，已经打出的历史信号也可能改头换面——上个月记下的那个 **+**，下周可能只显示为普通信号。建议只用它探一个起始数值，然后手动写死并保持关闭，历史才稳定。\n\n**Trend Band / Background Tint / BUY/SELL Pills / Signal Tiers / Retest Dots**——纯显示开关，默认全开。\n\n**Shadow Band 影子带（默认关闭）**——第二条带子，比第一条再远一个 ATR，中间填成柔和的云层。默认关闭；想同时看到\"留足空间\"的那条外线时再打开。\n\n**Take Profit 止盈**——*Dynamic (ATR ladder)* 按波动率倍数铺目标，随标的自动放大缩小，档数由 **TP Levels** 决定（1–6，默认 3）；*Fixed %* 用你自己的三个百分比 **TP1 %**、**TP2 %**、**TP3 %**（默认 2 / 4 / 8）；*Off* 隐藏阶梯。\n\n**Stop Loss 止损**——*Trailing (band)* 贴着带子跟进，*Fixed %* 固定为 **SL %**（默认 3），*Off* 风险自理。\n\n**Show Last（默认 2）**——最近几段信号保留完整的止盈止损图元。更早的信号只留药丸、去掉阶梯，图面才不至于糊掉。\n\n## 信号与提醒\n\n引擎会产生五类图表事件：**te_flip**（翻转本身，两个方向通用，强度为动能分位——**+** 只是这个事件的成色等级，不是另一个事件）、**te_power**（紧跟衰竭极值的那次翻转会额外发出，即 power bottom / power top）、**te_retest**（带子回踩成立，多空两侧通用）、**te_tp_hit**（某一档目标达成，强度表示在阶梯上的位置）与 **te_sl_hit**。\n\n提醒中心只开放其中三种条件：**te_flip**、**te_power** 与 **te_tp_hit**。**te_retest** 和 **te_sl_hit** 仍会显示在图上并进入图表事件流，但目前只能用于图表，不能在提醒中心选作条件。止盈止损对每一段信号都会评估，包括已经滚出 Show Last 范围的那些。已确认的图表事件是终局——加载更多K线重算，绝不会改写过去的翻转。唯一的例外是自动优化，因为它改的是输入本身。\n";
+export const en = `# Trend Engine
+
+An ATR rail that flips only after price closes through it. The flip starts an episode; the same rail defines direction, retests, and trailing risk.
+
+## Read the chart
+
+- **Rail below price:** bullish regime. **Rail above price:** bearish regime. It ratchets toward price and resets only on a confirmed close-through.
+- **BUY / SELL:** the close that flipped the rail.
+- **BUY+ / SELL+:** the same flip with absolute 10-bar momentum at or above its trailing 70th percentile. It is a strength grade, not a separate trigger.
+- **POWER:** a bullish flip within ten bars of RSI reclaiming 25, or a bearish flip within ten bars of RSI falling back below 75.
+- **Dot on the rail:** price touched the rail but closed on the trend side; the retest held.
+- **TP ladder:** volatility-scaled or fixed-percentage targets. A check mark means price traded through that level.
+- **SL trail:** the rail is the stop model. The optional Shadow Band sits one ATR farther away for context only.
+
+## Use it
+
+- The flip close is the earliest entry. The first held retest offers a tighter risk line but may never arrive.
+- For a long, the thesis survives while closes stay above the rail; for a short, while closes stay below it. A close-through flips the regime and invalidates the prior direction.
+- Read higher-timeframe rail direction before taking a lower-timeframe flip. A flip against it is countertrend, not confirmation.
+- Use the target ladder to predefine exits. **+** and **POWER** grade the flip; they do not cancel the rail or stop rules.
+
+Repeated flips around a flat rail are chop. Reduce participation or raise Sensitivity instead of treating every pill as a fresh trend.
+
+## Settings
+
+- **Sensitivity (1–10, default 5)** — 1 reacts fastest; 10 uses a wider, slower rail.
+- **Auto-Optimize (off)** — chooses the best recent sensitivity. It retunes as data changes and can restyle past signals; leave it off for stable history.
+- **Trend Band / Background Tint / Pills / Tiers / Retest Dots** — display controls.
+- **Shadow Band** — optional second rail one ATR farther from price.
+- **Take Profit** — Off, Dynamic ATR ladder (1–6 levels), or three Fixed % levels.
+- **Stop Loss** — trailing rail, Fixed %, or Off.
+- **Show Last (default 2)** — episodes that retain full TP/SL graphics. Older flips remain visible.
+
+## Signals & alerts
+
+The chart emits **te_flip**, **te_power**, **te_retest**, **te_tp_hit**, and **te_sl_hit**. A Fixed % stop can emit **te_sl_hit**; a trailing-rail exit appears as the next **te_flip**. Alert Center exposes **te_flip**, **te_power**, and **te_tp_hit**; retest and stop events remain chart-only.
+
+With Auto-Optimize off, confirmed flips and event history are forward-only. TP/SL events are still evaluated when an older episode's ladder is hidden by Show Last.
+`;
+
+export const zh = `# 趋势引擎（Trend Engine）
+
+一条只在收盘穿越后才翻转的 ATR 轨道。翻转开启一段行情；同一条轨道同时定义方向、回踩与跟踪风险。
+
+## 读图
+
+- **轨道在价格下方：** 多头状态；**轨道在价格上方：** 空头状态。轨道只向价格收紧，直到收盘穿越后重置。
+- **BUY / SELL：** 让轨道翻转的那根收盘 K 线。
+- **BUY+ / SELL+：** 同一次翻转，但 10 根绝对动能达到过去窗口的第 70 百分位或更高。它是强度评级，不是另一个触发。
+- **POWER：** RSI 上穿 25 后十根内出现的看涨翻转，或 RSI 下穿 75 后十根内出现的看跌翻转。
+- **轨道圆点：** 价格触及轨道，但收盘仍在趋势一侧；回踩守住。
+- **TP 阶梯：** 按波动率或固定百分比计算的目标；打勾表示价格已触及该档。
+- **SL trail：** 轨道就是跟踪止损模型。可选 Shadow Band 位于更外侧一个 ATR，只提供参考。
+
+## 怎么用
+
+- 翻转收盘是最早进场；第一次守住轨道的回踩能缩小风险，但不一定出现。
+- 做多时，收盘保持在轨道上方，逻辑仍在；做空时反之。收盘穿越会翻转状态，并使原方向失效。
+- 先看高周期轨道方向，再处理低周期翻转。逆高周期的翻转是逆势单，不是确认。
+- 用 TP 阶梯预先定义出场。**+** 与 **POWER** 只给翻转评级，不会取消轨道或止损规则。
+
+价格围绕走平轨道反复翻转，就是震荡。减少参与，或提高 Sensitivity；不要把每个标签都当作新趋势。
+
+## 设置
+
+- **Sensitivity（1–10，默认 5）** —— 1 反应最快；10 的轨道更宽、更慢。
+- **Auto-Optimize（默认关闭）** —— 自动选择近期表现最好的灵敏度。它会随数据重新调参，并可能改变历史信号样式；需要稳定历史时保持关闭。
+- **Trend Band / Background Tint / Pills / Tiers / Retest Dots** —— 显示开关。
+- **Shadow Band** —— 比主轨道再远一个 ATR 的可选参考轨道。
+- **Take Profit** —— Off、Dynamic ATR 阶梯（1–6 档）或三档 Fixed %。
+- **Stop Loss** —— 跟踪轨道、Fixed % 或 Off。
+- **Show Last（默认 2）** —— 保留完整 TP/SL 图形的最近行情段；更早的翻转仍显示。
+
+## 信号与提醒
+
+图表会产生 **te_flip**、**te_power**、**te_retest**、**te_tp_hit** 与 **te_sl_hit**。Fixed % 止损可产生 **te_sl_hit**；跟踪轨道离场则表现为下一次 **te_flip**。提醒中心开放 **te_flip**、**te_power**、**te_tp_hit**；回踩与止损事件仅用于图表。
+
+关闭 Auto-Optimize 时，已确认翻转与事件历史只向前计算。旧行情段即使因 Show Last 隐藏了阶梯，仍会继续评估 TP/SL 事件。
+`;

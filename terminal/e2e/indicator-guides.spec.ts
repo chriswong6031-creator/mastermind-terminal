@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 async function armTerminalVisualReady(page: Page) {
   await page.addInitScript(() => {
@@ -33,6 +33,47 @@ async function openIndicatorLibrary(page: Page) {
   const library = page.locator(".imodal-library");
   await expect(library).toBeVisible({ timeout: 10_000 });
   return { library, trigger };
+}
+
+async function assertCausalProofSemantics(visual: Locator, id: string) {
+  if (id === "trend/te") {
+    const entryY = Number(await visual.locator('[data-proof-beat="entry"] .gp-visual-point').getAttribute("cy"));
+    const retest = visual.locator('[data-proof-beat="retest"]');
+    const railY = Number(await retest.getAttribute("data-rail-y"));
+    const retestY = Number(await retest.locator(".gp-visual-point").getAttribute("cy"));
+    const targets = visual.locator('[data-target-hit="true"]');
+    const targetYs = (await targets.evaluateAll((nodes) =>
+      nodes.map((node) => Number(node.getAttribute("data-target-y"))),
+    ));
+
+    expect(retestY).toBe(railY);
+    expect(targetYs).toHaveLength(3);
+    expect(targetYs.every((targetY) => targetY < entryY)).toBe(true);
+    await expect(targets.locator(":scope > text")).toHaveText(["✓", "✓", "✓"]);
+    return;
+  }
+
+  if (id === "structure/mfp") {
+    const valueAreaTop = Number(await visual.locator(".gp-visual-value-area").getAttribute("y"));
+    const acceptance = visual.locator('[data-proof-outcome="acceptance-outside"]');
+    const rejection = visual.locator('[data-proof-outcome="rejection-back-inside"]');
+    const acceptanceEndY = Number(await acceptance.locator(".gp-visual-point").getAttribute("cy"));
+    const rejectionEndY = Number(await rejection.locator(".gp-visual-point").getAttribute("cy"));
+
+    expect(acceptanceEndY).toBeLessThan(valueAreaTop);
+    expect(rejectionEndY).toBeGreaterThan(valueAreaTop);
+    await expect(acceptance).toContainText("HOLD OUTSIDE · ACCEPT");
+    await expect(rejection).toContainText("BACK INSIDE · REJECT");
+    return;
+  }
+
+  if (id === "structure/ob") {
+    const alternative = visual.locator('[data-proof-outcome="alternative-failure"]');
+    await expect(alternative).toContainText("ALTERNATIVE · CLOSE BELOW");
+    await expect.poll(() => alternative.locator("path").first().evaluate(
+      (element) => getComputedStyle(element).strokeDasharray,
+    )).not.toBe("none");
+  }
 }
 
 test("module switches and the 31-module Guide Center are accessible and responsive", async ({ page }, testInfo) => {
@@ -72,15 +113,33 @@ test("module switches and the 31-module Guide Center are accessible and responsi
   await expect(guide).toBeVisible({ timeout: 10_000 });
   await expect(page.locator(".scrim.is-suspended")).toHaveAttribute("aria-hidden", "true");
   await expect(guide.getByRole("heading", { level: 1, name: "Trend Engine" })).toBeVisible();
-  await expect(guide.getByRole("img", { name: /Manage the full trade path/ })).toBeVisible();
+  await expect(guide.getByRole("img", { name: /Follow the signal from flip to exit/ })).toBeVisible();
   await expect(guide.getByRole("list", { name: "Legend" })).toBeVisible();
-  const diagramSteps = guide.getByRole("list", { name: "Interactive diagram steps" });
-  await expect(diagramSteps).toBeVisible();
-  await expect(diagramSteps.getByRole("button")).toHaveCount(3);
-  await diagramSteps.getByRole("button").filter({ hasText: "Trend rail" }).click();
-  await expect(diagramSteps.getByRole("button").filter({ hasText: "Trend rail" })).toHaveAttribute("aria-current", "step");
-  await guide.getByRole("button", { name: /Replay walkthrough/ }).click();
-  await expect(guide.getByRole("button", { name: "Pause walkthrough" })).toBeVisible();
+  const trendProof = guide.locator('figure[data-guide-visual="trend/te"]');
+  await expect(trendProof).toHaveAttribute("data-proof-scene", "trend-engine-trade-path");
+  await expect(trendProof).toHaveAttribute("data-play-state", "playing");
+  for (const beat of ["rail-flip", "entry", "retest", "targets", "invalidation"]) {
+    await expect(trendProof.locator(`[data-proof-beat="${beat}"]`)).toHaveCount(1);
+  }
+  await assertCausalProofSemantics(trendProof, "trend/te");
+  await expect(guide.locator(".gp-visual-stage-list")).toHaveCount(0);
+  await expect(guide.locator(".gp-workflow")).toHaveCount(0);
+  await expect(guide.locator(".gp-section-number")).toHaveCount(0);
+  await expect(guide.locator(".gp-mobile-toc")).toHaveCount(0);
+  await expect(guide.getByText("Map the context", { exact: false })).toHaveCount(0);
+  await expect(guide.getByText("Decision workflow", { exact: false })).toHaveCount(0);
+
+  await guide.getByRole("button", { name: "Pause animation" }).click();
+  await expect(trendProof).toHaveAttribute("data-play-state", "paused");
+  await guide.getByRole("button", { name: "Resume animation" }).click();
+  await expect(trendProof).toHaveAttribute("data-play-state", "playing");
+  await expect(trendProof).toHaveAttribute("data-play-state", "complete", { timeout: 10_000 });
+  await trendProof.screenshot({
+    path: testInfo.outputPath(`${testInfo.project.name}-trend-engine-proof.png`),
+  });
+  await expect(guide.getByRole("button", { name: "Replay animation" })).toBeVisible();
+  await guide.getByRole("button", { name: "Replay animation" }).click();
+  await expect(trendProof).toHaveAttribute("data-play-state", "playing");
   await expect(guide.getByLabel("At a glance")).toBeVisible();
   await expect(guide.getByLabel("Current settings schema")).toBeVisible();
   await expect(guide.locator(".gp-event-list code")).toHaveText([
@@ -108,6 +167,8 @@ test("module switches and the 31-module Guide Center are accessible and responsi
 
   await expect(guide.getByRole("heading", { level: 1, name: "Flow Band" })).toBeVisible();
   await expect(guide.getByRole("img", { name: /Read direction and participation together/ })).toBeVisible();
+  await expect(guide.locator('figure[data-guide-visual="trend/fb"]')).toHaveAttribute("data-play-state", "static");
+  await expect(guide.locator(".gp-visual-playback-button")).toHaveCount(0);
   await clearGuideSearch.click();
   await expect(guideSearch).toHaveValue("");
   await expect(guideSearch).toBeFocused();
@@ -119,13 +180,19 @@ test("module switches and the 31-module Guide Center are accessible and responsi
   await chartAction.click();
   await expect(chartAction).toHaveAttribute("aria-pressed", String(chartActionWasOn));
 
-  const visibleToc = guide.locator(".gp-toc:visible, .gp-mobile-toc:visible");
-  await visibleToc.getByRole("button", { name: /Settings$/ }).click();
-  await expect.poll(
-    () => guide.locator(".gp-scroll").evaluate((element) => element.scrollTop),
-    { message: "the guide TOC should navigate its article" },
-  ).toBeGreaterThan(0);
-  await expect(guide.locator(".gp-section-settings")).toBeVisible();
+  const settingsSection = guide.locator(".gp-section-settings");
+  const visibleToc = guide.locator(".gp-toc:visible");
+  if (testInfo.project.name === "desktop") {
+    await visibleToc.getByRole("button", { name: /Settings$/ }).click();
+    await expect.poll(
+      () => guide.locator(".gp-scroll").evaluate((element) => element.scrollTop),
+      { message: "the desktop guide TOC should navigate its article" },
+    ).toBeGreaterThan(0);
+  } else {
+    await expect(visibleToc).toHaveCount(0);
+    await settingsSection.scrollIntoViewIfNeeded();
+  }
+  await expect(settingsSection).toBeVisible();
 
   const viewportFit = await guide.evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -167,44 +234,11 @@ test("module switches and the 31-module Guide Center are accessible and responsi
   await expect(library).toBeVisible();
 
   await library.getByRole("button", { name: "Systems & Presets" }).click();
-  const systemGuideTrigger = library.getByRole("button", { name: "Guide: Structure Core system" });
-  await systemGuideTrigger.click();
-  await expect(guide.getByRole("heading", { level: 1, name: "Structure Core Playbook" })).toBeVisible();
-  await expect(guide.locator(".gp-system-visual")).toBeVisible();
-  const profileLab = guide.getByLabel("Progressive system presets");
-  await expect(profileLab.locator("article")).toHaveCount(3);
-  const focusProfile = profileLab.locator("article").filter({ hasText: "Structure Focus" });
-  await focusProfile.getByRole("button", { name: "Add to chart" }).click();
-  await expect(focusProfile.getByRole("button", { name: "Current" })).toBeDisabled();
-  const workflowProfile = profileLab.locator("article").filter({ hasText: "Structure Workflow" });
-  await workflowProfile.getByRole("button", { name: "Apply profile" }).click();
-  await expect(workflowProfile.getByRole("button", { name: "Current" })).toBeDisabled();
-  await expect(guide.getByText(/Every extra layer must answer a different question/)).toBeVisible();
-  const systemSteps = guide.getByRole("group", { name: "System learning steps" });
-  const decisionAreaStep = systemSteps.getByRole("button", { name: /Locate the decision area/ });
-  await decisionAreaStep.click();
-  await expect(decisionAreaStep).toHaveAttribute("aria-current", "step");
-  await expect(guide.getByRole("heading", { level: 2, name: "Clean-first recipe" })).toBeVisible();
-  const systemViewportFit = await guide.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    return {
-      left: rect.left,
-      right: rect.right,
-      top: rect.top,
-      bottom: rect.bottom,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-      documentWidth: document.documentElement.scrollWidth,
-    };
-  });
-  expect(systemViewportFit.left).toBeGreaterThanOrEqual(-1);
-  expect(systemViewportFit.right).toBeLessThanOrEqual(systemViewportFit.viewportWidth + 1);
-  expect(systemViewportFit.top).toBeGreaterThanOrEqual(-1);
-  expect(systemViewportFit.bottom).toBeLessThanOrEqual(systemViewportFit.viewportHeight + 1);
-  expect(systemViewportFit.documentWidth).toBeLessThanOrEqual(systemViewportFit.viewportWidth + 1);
-  await page.keyboard.press("Escape");
-  await expect(guide).toBeHidden();
-  await expect(systemGuideTrigger).toBeFocused();
+  const structurePresets = library.locator(".ipreset-row").filter({ hasText: "Structure Core" });
+  await expect(structurePresets.locator("article")).toHaveCount(3);
+  await expect(library.locator(".ipreset-guide")).toHaveCount(0);
+  await expect(library.getByRole("button", { name: "Guide: Structure Core system" })).toHaveCount(0);
+  await expect(library.getByRole("button", { name: "Playbook" })).toHaveCount(0);
 
   await library.locator(".im-nav-item").filter({ hasText: "Trend Waves" }).click();
   const guideTriggerAgain = library.getByRole("button", { name: "Guide: Trend Engine" });
@@ -289,7 +323,6 @@ test("Structure profiles expose the exact Free, Insider, and Pro access matrix",
 });
 
 test("indicator controls and guides honor reduced motion", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "The reduced-motion CSS contract is shared by every viewport.");
   await page.emulateMedia({ reducedMotion: "reduce" });
   const { library } = await openIndicatorLibrary(page);
 
@@ -311,29 +344,49 @@ test("indicator controls and guides honor reduced motion", async ({ page }, test
   await expect.poll(() =>
     guide.locator(".gp-scroll").evaluate((element) => getComputedStyle(element).scrollBehavior),
   ).toBe("auto");
-  const reducedSteps = guide.getByRole("list", { name: "Interactive diagram steps" }).getByRole("button");
-  await expect(reducedSteps.nth(2)).toHaveAttribute("aria-current", "step");
-  await page.waitForTimeout(2_300);
-  await expect(reducedSteps.nth(2)).toHaveAttribute("aria-current", "step");
-  await reducedSteps.first().click();
-  await expect(reducedSteps.first()).toHaveAttribute("aria-current", "step");
+  const proofs = [
+    {
+      search: "Trend Engine",
+      id: "trend/te",
+      experience: "trend-engine-trade-path",
+      beats: ["rail-flip", "entry", "retest", "targets", "invalidation"],
+    },
+    {
+      search: "Order Blocks",
+      id: "structure/ob",
+      experience: "order-block-lifecycle",
+      beats: ["origin", "displacement", "zone", "mitigation", "rejection", "invalidation"],
+    },
+    {
+      search: "Money Flow Profile",
+      id: "structure/mfp",
+      experience: "money-flow-profile",
+      beats: ["profile-build", "poc", "value-area", "edge-test", "acceptance-rejection"],
+    },
+  ] as const;
+  const guideSearch = guide.getByRole("searchbox", { name: "Search guides" });
 
-  await page.keyboard.press("Escape");
-  await expect(guide).toBeHidden();
-  await library.getByRole("button", { name: "Systems & Presets" }).click();
-  await library.getByRole("button", { name: "Guide: Structure Core system" }).click();
-  await expect(guide.getByRole("heading", { level: 1, name: "Structure Core Playbook" })).toBeVisible();
-
-  const systemVisual = guide.locator(".gp-system-visual");
-  const systemSteps = guide.getByRole("group", { name: "System learning steps" });
-  const systemStepButtons = systemSteps.getByRole("button");
-  await expect(systemStepButtons).toHaveCount(4);
-  await expect(systemVisual).toHaveAttribute("data-stage", "4");
-  await expect(systemStepButtons.last()).toHaveAttribute("aria-current", "step");
-  await page.waitForTimeout(2_300);
-  await expect(systemVisual).toHaveAttribute("data-stage", "4");
-  await expect(systemStepButtons.last()).toHaveAttribute("aria-current", "step");
-  await systemStepButtons.first().click();
-  await expect(systemVisual).toHaveAttribute("data-stage", "1");
-  await expect(systemStepButtons.first()).toHaveAttribute("aria-current", "step");
+  for (const [index, proof] of proofs.entries()) {
+    if (index > 0) {
+      await guideSearch.fill(proof.search);
+      await guide.locator(".gp-library-modules").getByRole("button", { name: new RegExp(proof.search) }).click();
+    }
+    const visual = guide.locator(`figure[data-guide-visual="${proof.id}"]`);
+    await expect(visual).toHaveAttribute("data-proof-scene", proof.experience);
+    await expect(visual).toHaveAttribute("data-play-state", "complete");
+    await expect(visual).toHaveAttribute("data-motion", "reduced");
+    await expect(visual.locator(".gp-visual-playback-button")).toHaveCount(0);
+    for (const beat of proof.beats) {
+      const beatNode = visual.locator(`[data-proof-beat="${beat}"]`);
+      await expect(beatNode).toBeVisible();
+      await expect.poll(() => beatNode.evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
+    }
+    await assertCausalProofSemantics(visual, proof.id);
+    await visual.screenshot({
+      path: testInfo.outputPath(`${testInfo.project.name}-${proof.experience}-reduced.png`),
+    });
+  }
+  await page.waitForTimeout(1_000);
+  await expect(guide.locator('figure[data-guide-visual="structure/mfp"]')).toHaveAttribute("data-play-state", "complete");
+  await expect(guide.locator(".gp-visual-stage-list, .gp-workflow, .gp-system-visual")).toHaveCount(0);
 });

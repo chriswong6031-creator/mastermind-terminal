@@ -3,5 +3,90 @@
 // ship with the build rather than being rsync'd like /data. Lazily imported by GuidePanel.
 // Markdown is rendered through lib/md.ts (escape-safe).
 
-export const en = "# Order Blocks\n\nAn order block is the last candle that went *against* the move just before a big push began — the area where buyers or sellers stepped in, and where price often reacts when it returns.\n\n## What you see\n\n- **Tinted band** — the block, drawn from its origin candle to the right edge. Up-coloured bands are bullish (possible support), down-coloured bearish (possible resistance).\n- **Thicker edge on one side** — the outer extreme: the bottom of a bullish block, the top of a bearish one. That edge matters most.\n- **Dotted midline** — the block's halfway price, a common partial-fill entry.\n- **\"WEAK\", \"BALANCED\", \"HIGH\" or \"STRONG\" on the midline** — how the block ranks against the last 200 bars on volume, one-sidedness and impulse size. STRONG is rare.\n- **\"▶ 72%\" bar** — the same rating as a number and a length.\n- **\"▲ 87.31%\" and \"▼ 12.69%\" capsules** — the split of buying versus selling volume while the block formed. This is an *estimate* from where each candle closed inside its range, not real order-flow data.\n- **Right-edge chips like \"954 (54.8%)\" and \"+588\"** — total volume in the block, its share of the blocks currently shown, and buying minus selling.\n- **Dashed box labelled \"Breaker Block\"** — a block price already broke through. Its role flips: broken support becomes resistance.\n\n## How to trade it\n\n1. Use blocks only in the direction of the wider trend — bullish blocks while structure makes higher highs, and the reverse.\n2. Prefer HIGH or STRONG blocks that price has not returned to yet. Each touch uses some of it up.\n3. Wait for price to trade back into the band and for a candle to close rejecting it. Don't buy the first touch blindly.\n4. Enter near the midline or outer edge; stop just beyond that edge with room for a wick.\n5. First target is the swing the impulse ran to. Bank part there, move the stop to entry.\n6. If price closes through the block it is used up — stop out, and if a Breaker Block appears, watch it from the other side.\n\n**When not to use this:** on thin, low-volume symbols, where the rating and the buy/sell estimate mean little.\n\n## Settings\n\n**Detection**\n- *Detection* — Volume (big candle on heavy volume), Price Action (close through the last small pivot), or Peak (exhaustion candle at a volume spike; confirms one bar later).\n- *Impulse × ATR* — how big the pushing candle must be relative to normal range.\n- *Volume percentile* — for Volume detection, how heavy that volume must be against the last 200 bars.\n- *Block type* — show all blocks, or just bullish or bearish.\n- *Zone bounds* — use the origin candle's full range, or just its body.\n- *Mitigation* — what counts as the block being used up: Touch, Wick, Close or Average (midline).\n\n**Display**\n- *Show last* — how many live blocks stay on the chart.\n- *Breaker blocks* — keep used-up blocks as role-flipped breakers instead of deleting them.\n- *Volume internals* — the buy/sell capsules and the volume and delta chips.\n- *Rating bar* — the score bar on the midline.\n- *Tier label size* — small and grey, or large and bold.\n- *Extend right* — off means the band stops 15 bars after it forms.\n\n## Signals & alerts\n\n- **ob_created** — a new block formed and the chart event carries its rating. This event is chart-only.\n- **ob_touch** — price traded back into a live block (at most once every 5 bars per block). This is available in Alert Center.\n- **ob_break** — price broke through the block; it is used up, and becomes a breaker if enabled. This is available in Alert Center.\n\nOnly **ob_touch** and **ob_break** can currently be selected in Alert Center; **ob_created** remains available in the chart event stream.\n\n## Macro blocks\n\nThe *Macro blocks* switch adds up to three larger-scale blocks — faint dashed bands with a rating prefixed \"M-\" (\"M-STRONG\"). They mark the same idea on a slower clock, and never outnumber *Show last*.\n\n**What they actually are.** Not a real higher-timeframe feed. The chart's own candles are grouped in fours — four candles become one — and the identical detector runs over that grouped series. On a 1-hour chart a macro block is roughly a 4-hour block; on a daily chart, roughly a weekly one. Grouping starts at the left edge of the loaded history, so it is not aligned to calendar weeks or sessions. If your history is short there may be too few grouped candles to detect anything, and the layer stays empty rather than guessing.\n\n**They arrive late, and never repaint.** A group of four candles counts only once it has *closed* — that is, once the next candle after it has opened. So a macro block can show up as much as four bars after the move that created it, and its chart events (labelled \"Macro …\") are stamped on the bar the group closed on. That lag is the price of never redrawing history behind you.\n\n**How to use them.** Context, not entries. A normal block sitting inside a macro block of the same direction is the higher-quality trade; a normal block fighting a macro block just above it is the one to skip. Macro blocks carry no capsules or chips on purpose — the buy/sell split of a grouped candle would be an estimate built on an estimate, so it is not shown.\n";
-export const zh = "# 订单块（Order Blocks）\n\n订单块是大幅推动出现之前、最后那根 *反方向* 的 K 线——买方或卖方入场的价格区域，价格回到这里时往往会有反应。\n\n## 图上都有什么\n\n- **带底色的横向带** —— 订单块本身，从起始 K 线一直延伸到右边缘。涨向配色为看涨块（可能的支撑），跌向配色为看跌块（可能的阻力）。\n- **一侧更粗的边线** —— 块的外沿：看涨块的下边、看跌块的上边。这条边最关键。\n- **点状中线** —— 块的中间价，常见的部分回补进场位。\n- **中线上的评级（中文界面显示为 弱 / 均衡 / 高 / 强，英文界面为 \"WEAK\" / \"BALANCED\" / \"HIGH\" / \"STRONG\"）** —— 该块在成交量、买卖失衡程度与推动幅度上相对过去 200 根 K 线的排名。\"强\"很少见。\n- **\"▶ 72%\" 长条** —— 同一评分的数值与长度表达。\n- **\"▲ 87.31%\" 与 \"▼ 12.69%\" 胶囊条** —— 形成期间买盘与卖盘的成交量占比。这是根据每根 K 线收盘在自身区间中的位置推算出的 *估计值*，并非真实的委托流数据。\n- **右边缘的 \"954 (54.8%)\"、\"+588\" 等小标签** —— 块内总成交量、它在当前显示的各块中所占比重，以及买盘减卖盘的净额。\n- **标注\"破位块\"（Breaker Block）的虚线框** —— 已被价格击穿的块，角色反转：被跌破的支撑变成阻力。\n\n## 如何交易\n\n1. 只在大趋势方向上使用：结构不断创新高时用看涨块，反之亦然。\n2. 优先选择价格尚未回到过的\"高\"或\"强\"级别的块。每一次触碰都会消耗掉一部分挂单。\n3. 等价格回到带内，并且有一根 K 线收盘表现出拒绝。不要盲目买第一次触碰。\n4. 在中线或外沿附近进场；止损放在外沿之外，并留出影线的余量。\n5. 第一目标是推动行情所到达的那个摆动位。到位减仓，止损移到成本价。\n6. 如果价格收盘穿过整个块，它就被消耗掉了——止损离场；若转为破位块，则改从另一侧观察。\n\n**什么时候不要用：** 成交极清淡的品种，此时评级与买卖占比估计的意义都很有限。\n\n## 设置\n\n**识别**\n- *Detection* —— Volume（放量长 K 线）、Price Action（收盘突破上一个小转折点）或 Peak（成交量尖峰处的衰竭 K 线，延后一根确认）。\n- *Impulse × ATR* —— 推动 K 线相对常态波幅需要多大。\n- *Volume percentile* —— Volume 模式下，该成交量相对过去 200 根 K 线需要多重。\n- *Block type* —— 显示全部块，或只看看涨/看跌。\n- *Zone bounds* —— 用起始 K 线的完整区间，还是只用实体。\n- *Mitigation* —— 何种情况算作块被消耗：Touch、Wick、Close 或 Average（中线）。\n\n**显示**\n- *Show last* —— 图上保留多少个有效块。\n- *Breaker blocks* —— 把已消耗的块保留为角色反转的破位块，而不是删除。\n- *Volume internals* —— 买卖胶囊条与成交量、净额标签。\n- *Rating bar* —— 中线上的评分条。\n- *Tier label size* —— 小号灰字，或大号粗体。\n- *Extend right* —— 关闭后，色带在形成 15 根 K 线之后结束。\n\n## 信号与提醒\n\n- **ob_created** —— 新的订单块形成，图表事件带有它的评级。该事件只用于图表。\n- **ob_touch** —— 价格回到了有效块内（每个块最多每 5 根 K 线触发一次）。这是提醒中心可选条件。\n- **ob_break** —— 价格击穿该块，它已被消耗；若已启用，则转为破位块。这是提醒中心可选条件。\n\n目前只有 **ob_touch** 与 **ob_break** 能在提醒中心选择；**ob_created** 仍会出现在图表事件流中。\n\n## 宏观订单块（Macro blocks）\n\n打开 *Macro blocks* 开关后，会额外画出最多三个更大级别的块——浅色虚线边框的色带，评级前面带 \"M-\"（如 \"M-强\"）。它们表达的是同一套逻辑，只是换到更慢的节奏上，数量也不会超过 *Show last*。\n\n**它到底是什么。** 它不是来自真正的高周期行情源。我们把图上现有的 K 线每 4 根合成 1 根，再用完全相同的算法跑一遍这条合成序列。因此在 1 小时图上，宏观块大致相当于 4 小时块；在日线图上大致相当于周线块。分组是从已加载历史的最左端开始数的，并不对齐自然周或交易时段。如果历史数据太短，合成后的 K 线数量不足以识别任何东西，这一层就会保持为空，而不会凭空猜测。\n\n**它来得晚，但绝不重绘。** 一组 4 根 K 线只有在 *收线* 之后才算数——也就是它后面的下一根 K 线已经开出。所以宏观块最晚可能在推动行情之后 4 根 K 线才出现，其图表事件（标签以 \"Macro …\" 开头）标记在该分组收线的那根 K 线上。这点滞后，正是换取\"永不回头改写历史\"的代价。\n\n**怎么用。** 只当背景，不当进场信号。普通订单块落在同方向的宏观块内部，是质量更高的交易；普通订单块的正上方压着一个反向宏观块，就是该放弃的那一个。宏观块刻意不带胶囊条和数字标签——合成 K 线的买卖占比是\"估计之上的估计\"，所以不予显示。\n";
+export const en = `# Order Blocks
+
+A block is the last opposing candle within five bars before a qualifying impulse. It marks the range that launched displacement; it does not prove that institutional orders remain there.
+
+## Read the chart
+
+- **Tinted band** — the origin candle's full range or body. Bullish blocks sit below the impulse; bearish blocks sit above it.
+- **Heavy outer edge** — the invalidation side: bottom for bullish, top for bearish.
+- **Dotted midline** — the 50% fill reference, not an automatic entry.
+- **WEAK / BALANCED / HIGH / STRONG** — a relative grade built from formation volume, estimated imbalance, and impulse size versus the previous 200 bars. It is not a win probability.
+- **Buy/sell capsules and delta** — estimates from each candle's close inside its range, not order-book data. The right chips show block volume, its share of the visible blocks, and estimated delta.
+- **Breaker Block** — a retired block redrawn from the other side when Breaker blocks is enabled.
+
+## Use it
+
+- A block gives a **location**, not a trigger. Favor bullish blocks below price in an uptrend and bearish blocks above price in a downtrend.
+- Let price return. A wick into the band followed by a close back toward the impulse is rejection; an untouched band alone is not confirmation.
+- Put risk beyond the outer edge. With the default **Close** mitigation, a close through that edge retires the block. Touch, Wick, and Average retire it sooner.
+- A successful rejection points first to the impulse swing. A failed block ends the original thesis; an enabled breaker may then be tested from the opposite side.
+
+Skip thin symbols and charts packed with overlapping blocks. Their volume grade and estimated delta carry little information.
+
+## Settings
+
+- **Detection** — Volume requires an ATR-sized impulse plus heavy relative volume; Price Action requires a close through a confirmed pivot; Peak finds a volume-peak expansion and confirms one bar later.
+- **Impulse × ATR / Volume percentile** — tighten or loosen the Volume detector.
+- **Zone bounds / Mitigation** — choose full range or body, then define when the block retires: Touch, Wick, Close, or Average (midline).
+- **Block type / Show last / Extend right** — filter direction, limit visible live blocks, and choose indefinite or 15-bar bands.
+- **Breaker blocks** — retain retired zones as role-flipped breakers.
+- **Volume internals / Rating bar / Tier label size** — display controls only; they do not change detection.
+
+## Signals & alerts
+
+- **ob_created** — a block is confirmed; chart event only.
+- **ob_touch** — price overlaps a live block, limited to once per five bars for each block; available in Alert Center.
+- **ob_break** — the selected mitigation rule retires the block; available in Alert Center.
+
+## Macro blocks
+
+Macro blocks run the same detector on groups of four chart bars. They are an approximate 4× view, not a true higher-timeframe feed, and grouping starts at the left edge of loaded history.
+
+Only completed groups count, so a macro block can appear up to four source bars late but does not repaint. Use it as context: a normal block nested inside a same-direction macro block has alignment; a nearby opposing macro block is conflict. Macro blocks omit volume internals because that would be an estimate built on another estimate.
+`;
+
+export const zh = `# 订单块（Order Blocks）
+
+订单块是合格推动出现前五根 K 线内，最后一根反方向 K 线。它标出推动行情的起点区间，但不能证明那里仍有机构挂单。
+
+## 读图
+
+- **色带** —— 起点 K 线的完整区间或实体。看涨块位于上冲起点下方；看跌块位于下跌起点上方。
+- **加粗外沿** —— 失效边界：看涨块看下沿，看跌块看上沿。
+- **点状中线** —— 50% 回补参考，不是自动进场位。
+- **弱 / 均衡 / 高 / 强** —— 形成期成交量、估算失衡与推动幅度相对过去 200 根 K 线的综合排名；不是胜率。
+- **买卖胶囊与净量** —— 根据收盘在单根 K 线区间中的位置估算，并非订单簿数据。右侧标签显示块内成交量、其在当前可见块中的占比，以及估算净量。
+- **破位块（Breaker Block）** —— 启用 Breaker blocks 后，从另一侧显示的已退役订单块。
+
+## 怎么用
+
+- 订单块只给**位置**，不给触发。上升趋势优先看价格下方的看涨块；下降趋势反之。
+- 等价格回来。影线进入色带、随后收盘回到推动方向，才是拒绝；仅有一条未触碰色带，不算确认。
+- 风险放在加粗外沿之外。默认 **Close** 模式下，收盘穿过外沿才退役；Touch、Wick、Average 会更早退役。
+- 拒绝成立，先看推动行情的摆动高低点；订单块失效，原方向逻辑结束。若启用破位块，再观察它从另一侧被回测。
+
+成交清淡或订单块大量重叠时跳过。此时成交量评级与估算净量信息很弱。
+
+## 设置
+
+- **Detection** —— Volume 要求达到 ATR 门槛的推动与较高相对成交量；Price Action 要求收盘突破已确认转折；Peak 寻找成交量峰值推动，并延后一根确认。
+- **Impulse × ATR / Volume percentile** —— 调节 Volume 识别门槛。
+- **Zone bounds / Mitigation** —— 选择完整区间或实体，并规定何时退役：Touch、Wick、Close、Average（中线）。
+- **Block type / Show last / Extend right** —— 筛选方向、限制可见有效块数量，并选择持续延伸或 15 根后停止。
+- **Breaker blocks** —— 把退役区间保留为角色反转的破位块。
+- **Volume internals / Rating bar / Tier label size** —— 只控制显示，不改变识别结果。
+
+## 信号与提醒
+
+- **ob_created** —— 订单块确认；仅图表事件。
+- **ob_touch** —— 价格与有效块重叠；每个块五根 K 线内最多一次，可在提醒中心选择。
+- **ob_break** —— 达到所选 Mitigation 条件，订单块退役；可在提醒中心选择。
+
+## 宏观订单块（Macro blocks）
+
+宏观订单块把图上 K 线每四根合成一组，再运行同一检测器。它只是近似 4× 视图，不是真正的高周期数据；分组从已加载历史的左边缘开始。
+
+只有完整收线的分组参与计算，因此最晚会延后四根原周期 K 线出现，但不会重绘。它只用于背景：普通块嵌在同方向宏观块中代表方向一致；附近有反向宏观块则代表冲突。宏观块不显示买卖拆分，因为那会是估算之上的估算。
+`;

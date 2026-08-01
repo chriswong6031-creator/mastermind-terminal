@@ -1,0 +1,404 @@
+.figure {
+  --proof-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.proofScene {
+  isolation: isolate;
+}
+
+.figure[data-play-state="paused"] .proofScene * {
+  animation-play-state: paused !important;
+}
+
+.figure[data-motion="reduced"] .proofScene * {
+  animation: none !important;
+}
+
+/* Order Blocks: origin -> displacement -> return -> reaction -> invalidation. */
+.originHalo {
+  fill: color-mix(in srgb, var(--down) 7%, transparent);
+  stroke: color-mix(in srgb, var(--down) 70%, transparent);
+  stroke-width: 1.2;
+}
+
+.impulsePath,
+.returnPath,
+.rejectionPath,
+.failureProbe,
+.failureCross,
+.auctionBaseline,
+.valueEdge,
+.edgeApproach,
+.acceptPath,
+.rejectPath,
+.bearRail,
+.flipPath,
+.bullRailStart,
+.retestPath {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.impulsePath {
+  stroke: var(--up);
+  stroke-width: 2.4;
+  stroke-dasharray: 260;
+}
+
+.returnPath {
+  stroke: color-mix(in srgb, var(--warn) 78%, var(--muted));
+  stroke-width: 1.8;
+  stroke-dasharray: 230;
+}
+
+.rejectionPath {
+  stroke: var(--up);
+  stroke-width: 2.4;
+  stroke-dasharray: 260;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--up) 32%, transparent));
+}
+
+.zoneOuterEdge {
+  fill: none;
+  stroke: var(--down);
+  stroke-width: 1.35;
+  stroke-dasharray: 5 4;
+}
+
+.failureProbe,
+.failureCross {
+  stroke: var(--down);
+  stroke-width: 2;
+}
+
+.failureProbe {
+  opacity: 0.72;
+  stroke-dasharray: 7 6;
+}
+
+.failureCross {
+  opacity: 0.86;
+}
+
+.figure[data-motion="full"] .obOrigin {
+  animation: proofReveal 600ms var(--proof-ease) 180ms both;
+}
+
+.figure[data-motion="full"] .originHalo {
+  animation: originPulse 1300ms ease-out 420ms both;
+}
+
+.figure[data-motion="full"] .obDisplacement {
+  animation: proofReveal 650ms var(--proof-ease) 900ms both;
+}
+
+.figure[data-motion="full"] .impulsePath {
+  animation: draw260 1150ms var(--proof-ease) 900ms both;
+}
+
+.figure[data-motion="full"] .obZone rect,
+.figure[data-motion="full"] .obZone > path {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: growX 850ms var(--proof-ease) 1820ms both;
+}
+
+.figure[data-motion="full"] .obZone :global(.gp-visual-axis-label) {
+  animation: proofReveal 420ms ease-out 2350ms both;
+}
+
+.figure[data-motion="full"] .obMitigation {
+  animation: proofReveal 700ms var(--proof-ease) 2850ms both;
+}
+
+.figure[data-motion="full"] .returnPath {
+  animation: draw230 1250ms var(--proof-ease) 2750ms both;
+}
+
+.figure[data-motion="full"] .obRejection {
+  animation: proofReveal 650ms var(--proof-ease) 4300ms both;
+}
+
+.figure[data-motion="full"] .rejectionPath {
+  animation: draw260 1350ms var(--proof-ease) 4200ms both;
+}
+
+.figure[data-motion="full"] .obInvalidation {
+  animation: proofReveal 650ms var(--proof-ease) 5700ms both;
+}
+
+/* Money Flow Profile: distribution builds, POC settles, then the edge is tested. */
+.auctionBaseline {
+  stroke: rgba(151, 165, 189, 0.2);
+  stroke-width: 1;
+  stroke-dasharray: 4 5;
+}
+
+.profileBar {
+  transform-box: fill-box;
+  transform-origin: left center;
+}
+
+.valueEdge {
+  stroke: color-mix(in srgb, var(--gp-visual-accent) 70%, transparent);
+  stroke-width: 1.2;
+  stroke-dasharray: 5 4;
+}
+
+.edgeApproach {
+  stroke: var(--gp-visual-accent);
+  stroke-width: 2.2;
+  stroke-dasharray: 150;
+}
+
+.acceptPath {
+  stroke: var(--up);
+  stroke-width: 2.2;
+  stroke-dasharray: 220;
+}
+
+.rejectPath {
+  stroke: var(--down);
+  stroke-width: 1.8;
+  stroke-dasharray: 180;
+  stroke-dashoffset: 0;
+}
+
+.figure[data-motion="full"] .mfpAuction :global(.gp-visual-price-line) {
+  stroke-dasharray: 340;
+  animation: draw340 1100ms var(--proof-ease) 200ms both;
+}
+
+.figure[data-motion="full"] .mfpAuction :global(.gp-visual-axis-label),
+.figure[data-motion="full"] .auctionBaseline {
+  animation: proofReveal 500ms ease-out 700ms both;
+}
+
+.figure[data-motion="full"] .profileBar {
+  animation: growX 700ms var(--proof-ease) both;
+  animation-delay: calc(1050ms + var(--bar-index) * 70ms);
+}
+
+.figure[data-motion="full"] .mfpPoc {
+  animation: pocSettle 900ms var(--proof-ease) 2550ms both;
+}
+
+.figure[data-motion="full"] .mfpValueArea rect {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: growY 850ms var(--proof-ease) 3350ms both;
+}
+
+.figure[data-motion="full"] .mfpValueArea > path,
+.figure[data-motion="full"] .mfpValueArea :global(.gp-visual-tag) {
+  animation: proofReveal 520ms ease-out 3850ms both;
+}
+
+.figure[data-motion="full"] .mfpEdgeTest {
+  animation: proofReveal 500ms var(--proof-ease) 4400ms both;
+}
+
+.figure[data-motion="full"] .edgeApproach {
+  animation: draw150 900ms var(--proof-ease) 4250ms both;
+}
+
+.figure[data-motion="full"] .mfpOutcomes {
+  animation: proofReveal 500ms var(--proof-ease) 5350ms both;
+}
+
+.figure[data-motion="full"] .acceptPath {
+  animation: draw220 1000ms var(--proof-ease) 5200ms both;
+}
+
+.figure[data-motion="full"] .rejectPath {
+  animation: draw180 950ms var(--proof-ease) 5650ms both;
+}
+
+/* Trend Engine: rail flip -> signal -> retest -> targets, with the rail as exit. */
+.bearRail {
+  stroke: var(--down);
+  stroke-width: 1.7;
+  stroke-dasharray: 4 4;
+}
+
+.flipPath {
+  stroke: var(--up);
+  stroke-width: 2.3;
+  stroke-dasharray: 150;
+}
+
+.bullRailStart {
+  stroke: var(--up);
+  stroke-width: 1.8;
+  stroke-dasharray: 110;
+}
+
+.retestPath {
+  stroke: color-mix(in srgb, var(--warn) 72%, var(--muted));
+  stroke-width: 1.7;
+  stroke-dasharray: 150;
+}
+
+.figure[data-motion="full"] .trendFlip {
+  animation: proofReveal 600ms var(--proof-ease) 450ms both;
+}
+
+.figure[data-motion="full"] .flipPath,
+.figure[data-motion="full"] .bullRailStart {
+  animation: draw150 1100ms var(--proof-ease) 400ms both;
+}
+
+.figure[data-motion="full"] .trendEntry {
+  animation: signalLock 720ms var(--proof-ease) 1500ms both;
+}
+
+.figure[data-motion="full"] .trendRetest {
+  animation: proofReveal 700ms var(--proof-ease) 2450ms both;
+}
+
+.figure[data-motion="full"] .retestPath {
+  animation: draw150 1100ms var(--proof-ease) 2350ms both;
+}
+
+.figure[data-motion="full"] .trendInvalidation {
+  animation: proofReveal 650ms var(--proof-ease) 3300ms both;
+}
+
+.figure[data-motion="full"] .trendInvalidation > :global(.gp-visual-stop-rail) {
+  stroke-dasharray: 600;
+  animation: draw600 1650ms var(--proof-ease) 3150ms both;
+}
+
+.figure[data-motion="full"] .targetRung {
+  animation: targetLock 520ms var(--proof-ease) both;
+  animation-delay: calc(4750ms + var(--target-index) * 620ms);
+}
+
+@keyframes proofReveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes originPulse {
+  0% {
+    opacity: 0;
+    transform: scale(0.82);
+    transform-origin: center;
+    transform-box: fill-box;
+  }
+  35% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 0.72;
+    transform: scale(1);
+  }
+}
+
+@keyframes growX {
+  from {
+    opacity: 0;
+    transform: scaleX(0);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes growY {
+  from {
+    opacity: 0;
+    transform: scaleY(0.04);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes pocSettle {
+  from {
+    opacity: 0;
+    transform: translateY(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes signalLock {
+  0% {
+    opacity: 0;
+    transform: scale(0.72);
+    transform-origin: center;
+    transform-box: fill-box;
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes targetLock {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes draw150 {
+  from { stroke-dashoffset: 150; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes draw180 {
+  from { stroke-dashoffset: 180; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes draw220 {
+  from { stroke-dashoffset: 220; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes draw230 {
+  from { stroke-dashoffset: 230; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes draw260 {
+  from { stroke-dashoffset: 260; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes draw340 {
+  from { stroke-dashoffset: 340; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes draw600 {
+  from { stroke-dashoffset: 600; }
+  to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .proofScene * {
+    animation: none !important;
+  }
+}

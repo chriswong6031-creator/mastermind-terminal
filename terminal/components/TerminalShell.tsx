@@ -24,7 +24,7 @@ import { useMarketPrefs } from "@/lib/useMarketPrefs";
 import { type FinPage } from "@/components/fin/MegaPane";
 import { getFund, getOpts, getBars, type Fund, type Bar } from "@/lib/fund";
 import { allDefaults, indDefaults, withDefaults, IND_ORDER, IND_DEFS, isIndKey } from "@/lib/indicators";
-import { SUITE_DEFS, isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
+import { isSuiteKey, suiteDefaults } from "@/lib/suites/registry";
 import {
   enabledModulesForSuite,
   enabledSuiteModules,
@@ -421,9 +421,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const [indParams, setIndParams] = useState<Record<string, any>>(allDefaults());      // per-indicator params (Settings dialog)
   const [settingsKey, setSettingsKey] = useState<string | null>(null);
   const [guide, setGuide] = useState<
-    | { kind: "module"; suite: string; mod: string; label: string }
-    | { kind: "system"; suite: string; label: string }
-    | null
+    { suite: string; mod: string; label: string } | null
   >(null);
   const [sourceKey, setSourceKey] = useState<string | null>(null);                     // indicator whose Source view is open
   const activeSuiteModuleIds = useMemo(
@@ -3153,11 +3151,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           activeModules={activeSuiteModuleIds} onToggleModule={toggleSuiteModule} onOpenModuleSettings={openSettings}
           onOpenGuide={(id) => {
             const entry = getSuiteModuleCatalogEntry(id);
-            if (entry) setGuide({ kind: "module", suite: entry.suiteKey, mod: entry.moduleKey, label: entry.label });
-          }}
-          onOpenSystemGuide={(suite) => {
-            const def = SUITE_DEFS[suite];
-            if (def) setGuide({ kind: "system", suite, label: def.label });
+            if (entry) setGuide({ suite: entry.suiteKey, mod: entry.moduleKey, label: entry.label });
           }}
           scripts={scripts} enabled={enabledSet} onToggleScript={toggleScript} onRenameScript={handleRenameScript} onDeleteScript={handleDeleteScript} />
       )}
@@ -3170,21 +3164,17 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
               onClose={() => setSettingsKey(null)} />
           : <IndicatorSettings key={settingsKey} indKey={settingsKey} params={indParams[parseSuiteModuleId(settingsKey)?.suiteKey ?? settingsKey] || {}} onChange={(patch) => setIndParam(settingsKey, patch)} onClose={() => setSettingsKey(null)} onReset={() => resetIndParam(settingsKey)} userTier={userTier} onOpenGuide={(sk, mk, ml) => {
               setSettingsKey(null);
-              setGuide({ kind: "module", suite: sk, mod: mk, label: ml });
+              setGuide({ suite: sk, mod: mk, label: ml });
             }} />)}
       {sourceKey && <IndicatorSource indKey={sourceKey} onClose={() => setSourceKey(null)} />}
       {guide && (
         <GuidePanel
           suiteKey={guide.suite}
-          moduleKey={guide.kind === "module" ? guide.mod : undefined}
-          systemKey={guide.kind === "system" ? guide.suite : undefined}
+          moduleKey={guide.mod}
           moduleLabel={guide.label}
           activeModules={activeSuiteModuleIds}
-          activeSuites={inds}
-          suiteParams={indParams}
           userTier={userTier}
           onToggleModule={toggleSuiteModule}
-          onApplyPreset={applySuitePreset}
           onConfigureModule={(id) => {
             setGuide(null);
             setIndOpen(false);

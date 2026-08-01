@@ -19,25 +19,15 @@ export interface GuideVisualLegendItem {
   tone: GuideVisualTone;
 }
 
-export type GuideVisualStageId = "context" | "confirmation" | "decision";
-
-export interface GuideVisualStage {
-  id: GuideVisualStageId;
-  eyebrow: LocalizedGuideText;
-  title: LocalizedGuideText;
-  description: LocalizedGuideText;
-  tone: GuideVisualTone;
-}
-
 export interface GuideVisualMetadata {
   id: GuideVisualId;
   suiteKey: string;
   moduleKey: string;
+  experience: GuideVisualExperience;
   title: LocalizedGuideText;
   kicker: LocalizedGuideText;
   caption: LocalizedGuideText;
   legend: readonly GuideVisualLegendItem[];
-  stages: readonly GuideVisualStage[];
 }
 
 export const GUIDE_VISUAL_IDS = [
@@ -75,6 +65,17 @@ export const GUIDE_VISUAL_IDS = [
 ] as const;
 
 export type GuideVisualId = (typeof GUIDE_VISUAL_IDS)[number];
+export type GuideVisualExperience =
+  | "static"
+  | "order-block-lifecycle"
+  | "money-flow-profile"
+  | "trend-engine-trade-path";
+
+const PURPOSEFUL_EXPERIENCES: Partial<Record<GuideVisualId, GuideVisualExperience>> = {
+  "structure/ob": "order-block-lifecycle",
+  "structure/mfp": "money-flow-profile",
+  "trend/te": "trend-engine-trade-path",
+};
 
 const text = (en: string, zh: string): LocalizedGuideText => ({ en, zh });
 const legend = (
@@ -82,54 +83,6 @@ const legend = (
   zh: string,
   tone: GuideVisualTone,
 ): GuideVisualLegendItem => ({ label: text(en, zh), tone });
-
-const STAGE_BLUEPRINTS: readonly {
-  id: GuideVisualStageId;
-  eyebrow: LocalizedGuideText;
-  describe: (item: GuideVisualLegendItem) => LocalizedGuideText;
-}[] = [
-  {
-    id: "context",
-    eyebrow: text("01 · Map the context", "01 · 定位环境"),
-    describe: (item) => text(
-      `First, locate ${item.label.en}. It establishes the context for everything that follows.`,
-      `先定位${item.label.zh}。这是理解后续变化的基础环境。`,
-    ),
-  },
-  {
-    id: "confirmation",
-    eyebrow: text("02 · Confirm the change", "02 · 确认变化"),
-    describe: (item) => text(
-      `Then, wait for ${item.label.en}. It connects the setup to a measurable change instead of an assumption.`,
-      `然后等待${item.label.zh}。它把前提连接到可衡量的变化，而不是主观猜测。`,
-    ),
-  },
-  {
-    id: "decision",
-    eyebrow: text("03 · Resolve the decision", "03 · 完成决策"),
-    describe: (item) => text(
-      `Finally, read ${item.label.en}. Use it to confirm, invalidate, or manage the outcome.`,
-      `最后读取${item.label.zh}，用它确认、否定或管理最终结果。`,
-    ),
-  },
-] as const;
-
-function visualStages(items: readonly GuideVisualLegendItem[]): readonly GuideVisualStage[] {
-  if (items.length !== STAGE_BLUEPRINTS.length) {
-    throw new Error(`Guide visuals require exactly ${STAGE_BLUEPRINTS.length} semantic stages.`);
-  }
-
-  return STAGE_BLUEPRINTS.map((blueprint, index) => {
-    const item = items[index];
-    return {
-      id: blueprint.id,
-      eyebrow: blueprint.eyebrow,
-      title: item.label,
-      description: blueprint.describe(item),
-      tone: item.tone,
-    };
-  });
-}
 
 function visual(
   id: GuideVisualId,
@@ -143,11 +96,11 @@ function visual(
     id,
     suiteKey,
     moduleKey,
+    experience: PURPOSEFUL_EXPERIENCES[id] ?? "static",
     title,
     kicker,
     caption,
     legend: items,
-    stages: visualStages(items),
   };
 }
 
@@ -168,16 +121,16 @@ export const GUIDE_VISUALS: Readonly<Record<GuideVisualId, GuideVisualMetadata>>
   ),
   "structure/ob": visual(
     "structure/ob",
-    text("Trace origin, mitigation, and failure", "追踪起点、回补与失效"),
-    text("Institutional zone lifecycle", "机构区域生命周期"),
+    text("Watch one order block earn or lose relevance", "观察一个订单块如何成立或失效"),
+    text("Order-block lifecycle", "订单块生命周期"),
     text(
-      "Order blocks begin at displacement, strengthen with participation, and become breakers only after decisive invalidation.",
-      "订单块始于位移，成交参与会增强其质量；只有明确失效后才转为破坏块。",
+      "Displacement creates the zone. The first return then forks the outcome: rejection keeps it active; a close through the outer edge invalidates it.",
+      "位移创建区域。首次回补决定两种结果：拒绝反应维持有效；收盘穿越外侧边界则使其失效。",
     ),
     [
-      legend("Bullish block", "看涨订单块", "bull"),
-      legend("Bearish block", "看跌订单块", "bear"),
-      legend("Volume grade", "成交量评级", "volume"),
+      legend("Origin + displacement", "起点＋位移", "bull"),
+      legend("First mitigation", "首次回补", "warn"),
+      legend("Close-through failure", "收盘穿越失效", "bear"),
     ],
   ),
   "structure/fvg": visual(
@@ -252,16 +205,16 @@ export const GUIDE_VISUALS: Readonly<Record<GuideVisualId, GuideVisualMetadata>>
   ),
   "structure/mfp": visual(
     "structure/mfp",
-    text("Find where participation concentrates", "寻找成交参与的集中区"),
-    text("Money-flow profile", "资金流分布"),
+    text("See where the auction finds acceptance", "看清拍卖在哪里形成接受"),
+    text("Profile, value, and edge response", "分布、价值与边界反应"),
     text(
-      "The point of control marks peak participation; value-area edges frame acceptance and rejection.",
-      "控制点标记成交参与峰值；价值区边界界定市场接受与拒绝的位置。",
+      "The profile builds from participation, POC marks its peak, and price behavior at the value-area edge distinguishes acceptance from rejection.",
+      "分布由成交参与构建，POC 标记峰值；价格在价值区边界的行为区分接受与拒绝。",
     ),
     [
-      legend("Value area", "价值区", "accent"),
-      legend("Point of control", "控制点", "warn"),
-      legend("Directional flow", "方向资金流", "volume"),
+      legend("Profile", "成交分布", "volume"),
+      legend("POC + value area", "POC＋价值区", "warn"),
+      legend("Edge response", "边界反应", "accent"),
     ],
   ),
   "structure/pat": visual(
@@ -280,16 +233,16 @@ export const GUIDE_VISUALS: Readonly<Record<GuideVisualId, GuideVisualMetadata>>
   ),
   "trend/te": visual(
     "trend/te",
-    text("Manage the full trade path", "管理完整交易路径"),
-    text("Signal, target, and trailing risk", "信号、目标与追踪风险"),
+    text("Follow the signal from flip to exit", "从翻转信号一路跟踪到退出"),
+    text("Trend Engine trade path", "趋势引擎交易路径"),
     text(
-      "The trend flip starts the thesis, the adaptive rail defines invalidation, and the ladder turns expansion into staged exits.",
-      "趋势翻转建立交易逻辑，自适应轨道定义失效，目标阶梯把扩张行情转化为分批退出。",
+      "A close through the rail flips direction, a held retest keeps the thesis intact, and targets advance while the rail trails the exit.",
+      "收盘穿越轨道触发方向翻转；回测守住则逻辑延续，目标逐级推进，轨道同步追踪退出。",
     ),
     [
-      legend("Trend rail", "趋势轨道", "accent"),
-      legend("BUY / target hit", "买入／目标达成", "bull"),
-      legend("Trailing stop", "追踪止损", "bear"),
+      legend("Rail flip + signal", "轨道翻转＋信号", "bull"),
+      legend("Held retest", "回测守住", "warn"),
+      legend("Trailing invalidation", "追踪失效位", "bear"),
     ],
   ),
   "trend/fb": visual(

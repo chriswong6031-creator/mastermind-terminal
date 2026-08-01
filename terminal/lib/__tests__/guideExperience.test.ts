@@ -31,22 +31,21 @@ describe("indicator guide experience", () => {
       expect(metadata?.title.zh.trim().length, id).toBeGreaterThan(0);
       expect(metadata?.caption.en.trim().length, id).toBeGreaterThan(20);
       expect(metadata?.caption.zh.trim().length, id).toBeGreaterThan(8);
-      expect(metadata?.legend.length, id).toBe(3);
-      expect(metadata?.stages.map((stage) => stage.id), id).toEqual([
-        "context",
-        "confirmation",
-        "decision",
-      ]);
+      expect(metadata?.legend.length, id).toBeGreaterThan(0);
 
-      for (const stage of metadata?.stages ?? []) {
-        expect(stage.eyebrow.en.trim().length, `${id}/${stage.id} English eyebrow`).toBeGreaterThan(0);
-        expect(stage.eyebrow.zh.trim().length, `${id}/${stage.id} Chinese eyebrow`).toBeGreaterThan(0);
-        expect(stage.title.en.trim().length, `${id}/${stage.id} English title`).toBeGreaterThan(0);
-        expect(stage.title.zh.trim().length, `${id}/${stage.id} Chinese title`).toBeGreaterThan(0);
-        expect(stage.description.en.trim().length, `${id}/${stage.id} English description`).toBeGreaterThan(30);
-        expect(stage.description.zh.trim().length, `${id}/${stage.id} Chinese description`).toBeGreaterThan(12);
+      for (const item of metadata?.legend ?? []) {
+        expect(item.label.en.trim().length, `${id} English legend`).toBeGreaterThan(0);
+        expect(item.label.zh.trim().length, `${id} Chinese legend`).toBeGreaterThan(0);
+        expect(["bull", "bear", "accent", "warn", "muted", "volume"], id).toContain(item.tone);
       }
     }
+
+    expect(
+      GUIDE_VISUAL_IDS.filter((id) => GUIDE_VISUALS[id].experience !== "static"),
+    ).toEqual(["structure/ob", "structure/mfp", "trend/te"]);
+    expect(GUIDE_VISUALS["structure/ob"].experience).toBe("order-block-lifecycle");
+    expect(GUIDE_VISUALS["structure/mfp"].experience).toBe("money-flow-profile");
+    expect(GUIDE_VISUALS["trend/te"].experience).toBe("trend-engine-trade-path");
 
     expect(hasGuide("trend", "missing")).toBe(false);
     expect(getGuideVisualMetadata("trend", "missing")).toBeNull();
