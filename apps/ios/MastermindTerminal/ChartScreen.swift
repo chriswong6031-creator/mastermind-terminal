@@ -16,6 +16,11 @@ struct ChartScreen: View {
     @State private var blockedRoute: String?
     @State private var symbolIndex = 0
     @State private var timeframeIndex = 0
+    /// §2.18 `•••` → §3.5 Analysis hub.
+    @State private var showAnalysisHub = false
+    /// §2.18 ships a red dot on `•••` for unseen hub items; it clears once the hub is seen.
+    @State private var hubUnseen = true
+    @State private var toast: TVToastContent?
     /// Loop guard for the cookie-absent handoff: setSession makes the page reload itself,
     /// so `ready` fires again — without this the second pass would push once more.
     /// Reset only when WE load the page (retry, sign-out), never on the page's own reload.
@@ -38,7 +43,14 @@ struct ChartScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                Theme.chartBg.ignoresSafeArea()
+                // §3.3.1 — the canvas is a vertical gradient `#131722 → #181B26`, not a
+                // flat black, and not the same token as the chrome above/below it. The web
+                // chart paints its own; this is the backdrop it lands on.
+                LinearGradient(
+                    colors: [Theme.chartBg, Theme.chartBgBottom],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .ignoresSafeArea()
 
                 ChartWebView(
                     bridge: bridge,
@@ -82,9 +94,29 @@ struct ChartScreen: View {
                         guard tf != bridge.timeframe else { return }
                         bridge.setTimeframe(tf)
                     },
-                    onTapSymbol: { model.searchMode = .go }
+                    onTapSymbol: { model.searchMode = .go },
+                    lang: model.lang,
+                    showsMoreBadge: hubUnseen,
+                    onMore: {
+                        hubUnseen = false
+                        showAnalysisHub = true
+                    },
+                    onFullscreen: {
+                        // Landscape already drops every piece of native chrome for the
+                        // full-bleed chart, so the honest affordance is a hint, not a
+                        // second full-screen mode.
+                        toast = TVToastContent(
+                            icon: "rotate.right",
+                            title: L10n.t("Rotate to full screen", model.lang),
+                            subtitle: L10n.t("Landscape hides the app chrome.", model.lang)
+                        )
+                    }
                 )
             }
+        }
+        .tvToast($toast)
+        .sheet(isPresented: $showAnalysisHub) {
+            AnalysisHubSheet(lang: model.lang) { showAnalysisHub = false }
         }
         .onChange(of: model.requestedSymbol) { _, requested in
             guard let requested else { return }

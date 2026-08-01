@@ -3,11 +3,17 @@ import SwiftUI
 // Shared row anatomy for the TV-style lists: logo circle · symbol + one-language name ·
 // right-aligned price stack (price over signed colored change%). Flat dark rows with
 // hairline separators — never grouped-inset boxes.
+//
+// These primitives predate `TVKit.swift` and are retargeted to its measurements
+// (docs/tv-parity/TV_PARITY_MASTER_SPEC.md §2.1/§2.4/§2.6). New screens should compose
+// `TVSymbolRow` / `TVChipRow` / `TVHairline` directly; the types below stay so existing
+// call sites keep working, and now render at the spec's sizes.
 
 struct LogoCircle: View {
     let symbol: String
     let colorHex: String?
-    var size: CGFloat = 34
+    /// §2.6 avatar: 36 pt on the standard rows (was 34), 24 pt on `.compact`.
+    var size: CGFloat = 36
     /// Numeric tickers (CN/HK) get the company name's initial — a "0" badge says nothing.
     var nameForInitial: String = ""
     /// Manifest `sec` (used for the crypto logo family, mirroring lib/assetLogos.ts).
@@ -65,13 +71,15 @@ struct PriceStack: View {
 
     var body: some View {
         VStack(alignment: alignment, spacing: 2) {
+            // §2.6 row line 1 = 17 pt Semibold; §3.4.3 hero price = 28 pt Bold.
             Text(Self.price(last))
-                .font(.system(size: prominent ? 22 : 15, weight: prominent ? .bold : .semibold).monospacedDigit())
+                .font(.system(size: prominent ? 28 : 17, weight: prominent ? .bold : .semibold).monospacedDigit())
                 .foregroundStyle(Theme.text)
                 .accessibilityIdentifier("regular-price")
+            // §2.6 row line 2 = 15 pt Medium. Exactly 0.00 renders `Theme.text`, not green.
             Text(Self.change(chgPct))
-                .font(.system(size: prominent ? 13 : 12, weight: prominent ? .semibold : .medium).monospacedDigit())
-                .foregroundStyle((chgPct ?? 0) >= 0 ? Theme.up : Theme.down)
+                .font(.system(size: prominent ? 17 : 15, weight: prominent ? .semibold : .medium).monospacedDigit())
+                .foregroundStyle(TVFormat.changeColor(chgPct))
                 .accessibilityIdentifier("regular-change")
             if let extPrice, extPrice.isFinite, extPrice > 0 {
                 ExtendedQuoteLine(price: extPrice, change: extChgPct, session: extSession)
@@ -80,31 +88,22 @@ struct PriceStack: View {
         }
     }
 
-    static func price(_ value: Double?) -> String {
-        guard let value, value.isFinite else { return "—" }
-        return String(format: value < 10 ? "%.4f" : "%.2f", value)
-    }
+    /// Canonical formatters now live in `TVFormat` (TVKit) so one symbol never formats
+    /// two ways on two screens; these stay as the pre-existing call-site spelling.
+    static func price(_ value: Double?) -> String { TVFormat.price(value) }
 
-    static func change(_ pct: Double?) -> String {
-        guard let pct, pct.isFinite else { return "—" }
-        return String(format: "%@%.2f%%", pct >= 0 ? "+" : "", pct)
-    }
+    static func change(_ pct: Double?) -> String { TVFormat.change(pct) }
 }
 
-/// Compact third line for a pre/post/overnight print. It is intentionally a separate
-/// labeled capsule so an extended-hours percentage can never be mistaken for the EOD move.
+/// Compact third line for a pre/post/overnight print, kept visually separate so an
+/// extended-hours percentage can never be mistaken for the EOD move.
+/// §3.1.14: the 8 pt `PRE`/`AH`/`OVN` text badge is replaced by TV's moon glyph
+/// (`Theme.extHours` — the only chromatic icon in the row system) over a 13 pt line;
+/// the VoiceOver label is kept because naming the session out loud beats TV's silence.
 struct ExtendedQuoteLine: View {
     let price: Double
     let change: Double?
     let session: String?
-
-    private var shortLabel: String {
-        switch session {
-        case "pre": return "PRE"
-        case "post": return "AH"
-        default: return "OVN"
-        }
-    }
 
     private var fullLabel: String {
         switch session {
@@ -115,28 +114,26 @@ struct ExtendedQuoteLine: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
-            Text(shortLabel)
-                .font(.system(size: 8, weight: .bold))
-                .tracking(0.3)
-                .foregroundStyle(Theme.signal)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 2)
-                .background(Theme.signal.opacity(0.13), in: RoundedRectangle(cornerRadius: 3))
+        HStack(spacing: 5) {
+            Image(systemName: "moon.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(Theme.extHours)
             Text(PriceStack.price(price))
                 .foregroundStyle(Theme.text2)
             if let change, change.isFinite {
                 Text(PriceStack.change(change))
-                    .foregroundStyle(change >= 0 ? Theme.up : Theme.down)
+                    .foregroundStyle(TVFormat.changeColor(change))
             }
         }
-        .font(.system(size: 9, weight: .semibold).monospacedDigit())
+        .font(TVType.rowTertiary.monospacedDigit())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(fullLabel), \(PriceStack.price(price)), \(PriceStack.change(change))")
         .accessibilityIdentifier("extended-quote")
     }
 }
 
+/// §2.6 leading stack: ticker 17 pt Semibold `Theme.text` over name 15 pt Regular
+/// `Theme.text2` (was 15/11 in `Theme.muted`).
 struct SymbolTitle: View {
     let symbol: String
     let name: String
@@ -144,46 +141,36 @@ struct SymbolTitle: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(symbol)
-                .font(.system(size: 15, weight: .semibold))
+                .font(TVType.rowPrimary)
                 .foregroundStyle(Theme.text)
             Text(name)
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.muted)
+                .font(TVType.rowSecondary)
+                .foregroundStyle(Theme.text2)
                 .lineLimit(1)
         }
     }
 }
 
-/// TV's named-list switcher: a horizontal row of pills, active one filled.
+/// TV's named-list switcher. Now a thin wrapper over `TVChipRow` (§2.4): 33.7 pt capsules,
+/// 18 pt Bold labels, 16 pt leading inset, and **no uppercasing** — TV does not uppercase
+/// list names, and our old 12 pt uppercased chips were ~40 % too small.
 struct ListChipsRow: View {
     let names: [String]
     let activeIndex: Int
     let onPick: (Int) -> Void
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(Array(names.enumerated()), id: \.offset) { index, name in
-                    Button {
-                        onPick(index)
-                    } label: {
-                        Text(name.uppercased())
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(index == activeIndex ? Theme.text : Theme.muted)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(index == activeIndex ? Theme.panel3 : .clear, in: Capsule())
-                    }
-                }
-            }
-            .padding(.horizontal, 14)
-        }
+        TVChipRow(titles: names, selectedIndex: activeIndex, onSelect: onPick)
     }
 }
 
+/// Thin alias for `TVHairline`'s default (§2.1): a true single device pixel in
+/// `Theme.line`, the correct rule for pure-black pages and the tab-bar top edge.
+/// Sheet contexts want `TVHairline(weight: .sheet, tone: .sheetRow)`; watchlist rows on
+/// black want `TVHairline(tone: .list)`.
 struct Hairline: View {
     var body: some View {
-        Rectangle().fill(Theme.line).frame(height: 0.5)
+        TVHairline()
     }
 }
 

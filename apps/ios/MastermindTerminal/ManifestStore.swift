@@ -9,6 +9,11 @@ final class ManifestStore: ObservableObject {
         let name: String?
         let zh: String?
         let sec: String?
+        /// Listing venue — the production manifest publishes it on every row
+        /// (NASDAQ / NYSE / AMEX / HKEX / SSE / SZSE / TSX / Crypto, plus a country-name
+        /// tail). Same field `terminal/lib/markets.ts` reads; it is the exchange the
+        /// symbol-detail subtitle needs, which `sec` (a coarse search grouping) is not.
+        let mkt: String?
         let col: String?
         let last: Double?
         let chg: Double?
@@ -19,7 +24,7 @@ final class ManifestStore: ObservableObject {
         let hi52: Double?
         let lo52: Double?
 
-        private enum CodingKeys: String, CodingKey { case name, zh, sec, col, last, chg, open, high, low, vol, hi52, lo52 }
+        private enum CodingKeys: String, CodingKey { case name, zh, sec, mkt, col, last, chg, open, high, low, vol, hi52, lo52 }
 
         /// Key-path bundle for the preview stats grid.
         struct Extra {
