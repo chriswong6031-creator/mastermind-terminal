@@ -52,16 +52,19 @@ const HEADER_RIGHT: React.CSSProperties = { display: "flex", alignItems: "baseli
 const SESSIONS: React.CSSProperties = { fontSize: 10, color: "var(--muted)", fontVariantNumeric: "tabular-nums" };
 const HINT: React.CSSProperties = { fontSize: 10, color: "var(--muted)", opacity: 0.8 };
 const ROW: React.CSSProperties = { display: "flex", alignItems: "stretch", gap: 18 };
+const HISTORY_HEIGHT = 120;
 /* R1: the MEASURED element. Carries the track's flex sizing; the svg inside it is drawn at
    this box's own pixel width. min() so a 375px phone never gets a horizontal scrollbar. */
 const TRACK_WRAP: React.CSSProperties = { flex: 1, minWidth: "min(300px, 100%)", minHeight: 0 };
 const TRACK: React.CSSProperties = { display: "block", cursor: "ew-resize", outlineOffset: 2, touchAction: "none" };
 const READOUT: React.CSSProperties = {
-  display: "grid", gridTemplateColumns: "1fr", alignContent: "center", gap: 4,
-  flexShrink: 0, width: 210, padding: "8px 10px",
+  display: "grid", gridTemplateColumns: "1fr", alignContent: "center", gap: 3,
+  flexShrink: 0, width: 210, height: HISTORY_HEIGHT, boxSizing: "border-box", padding: "7px 10px",
   border: "1px solid var(--line-2)", borderRadius: "var(--r-tile, 10px)", background: "rgba(255,255,255,.025)",
 };
-const READOUT_HEAD: React.CSSProperties = { display: "flex", alignItems: "baseline", gap: 6, marginBottom: 1 };
+const READOUT_HEAD: React.CSSProperties = {
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, minWidth: 0, marginBottom: 1,
+};
 const RDATE: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: "var(--text)", fontVariantNumeric: "tabular-nums" };
 const NOW_BADGE: React.CSSProperties = {
   fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase",
@@ -91,14 +94,13 @@ const PICKER: React.CSSProperties = {
   fontVariantNumeric: "tabular-nums", maxWidth: 150,
 };
 const LOAD_BTN: React.CSSProperties = {
-  marginTop: 3, height: 22, padding: "0 8px", fontSize: 10, fontWeight: 700,
+  height: 20, padding: "0 7px", fontSize: 9.5, fontWeight: 700, whiteSpace: "nowrap",
   letterSpacing: "0.03em", background: "transparent", color: "var(--brand-2)",
   border: "1px solid var(--brand-2)", borderRadius: 6, cursor: "pointer",
-  alignSelf: "flex-start",
 };
 const VIEWING_TAG: React.CSSProperties = {
-  marginTop: 3, fontSize: 10, fontWeight: 700, letterSpacing: "0.03em",
-  color: "var(--warn)", fontVariantNumeric: "tabular-nums",
+  fontSize: 9, fontWeight: 700, letterSpacing: "0.03em", whiteSpace: "nowrap",
+  color: "var(--warn)",
 };
 
 /** Level formatter: drop a trailing ".0" on round strikes, else one decimal. */
@@ -106,7 +108,7 @@ const fmtLvl = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
 const fmtBn = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
 
 // Plot band geometry (CSS px — the viewBox is 1:1, R1).
-const H = 120;      // R4: sparkline floor
+const H = HISTORY_HEIGHT; // R4: sparkline floor and fixed readout footprint
 const PAD_L = 8;    // keeps the index-0 endpoint dot off the left edge
 const PAD_R = 40;   // right gutter: tick value labels live here
 const PAD_T = 10;
@@ -326,6 +328,18 @@ export const GexHistory = memo(function GexHistory({
             <div style={READOUT_HEAD}>
               <span style={RDATE}>{cur.date}</span>
               {isNow && <span style={NOW_BADGE}>{t("gexHistNow")}</span>}
+              {/* Keep replay actions in the existing header row. Rendering them as another
+                  grid row made the history card grow whenever the scrubber entered the past,
+                  shifting every Exposure section below it. */}
+              {canLoadCur && (
+                curIsActive ? (
+                  <span style={VIEWING_TAG}>{t("viewingSession")}</span>
+                ) : (
+                  <button style={LOAD_BTN} onClick={() => onLoadSession?.(cur.date)}>
+                    {t("loadFullLadder")}
+                  </button>
+                )
+              )}
             </div>
             <span style={STAT}>
               <span style={STAT_K}>{t("sumNetGex")}</span>
@@ -361,20 +375,6 @@ export const GexHistory = memo(function GexHistory({
                 {regimeLabel(cur.regime)}
               </span>
             </span>
-            {/* R0.10 — the scrubber's step up from scalars: load THIS session's full
-                by-strike ladder from the gex_history plane. An explicit per-date probe,
-                so it works even for sessions the dates index doesn't (yet) list; a hole
-                lands in the desk's honest missing-session state, never a fabricated
-                ladder. Hidden at the live session (the ladder below already IS it). */}
-            {canLoadCur && (
-              curIsActive ? (
-                <span style={VIEWING_TAG}>{t("viewingSession")} · {cur.date}</span>
-              ) : (
-                <button style={LOAD_BTN} onClick={() => onLoadSession?.(cur.date)}>
-                  {t("loadFullLadder")}
-                </button>
-              )
-            )}
           </div>
         )}
       </div>
