@@ -1,4 +1,130 @@
+import os
+import sys
+import time
+
+import pytest
+
+import ingest.collect_transcripts as collect
 from ingest.collect_transcripts import _infer_role, _infer_transcript_roles
+
+
+def test_unchanged_upstream_revision_skips_download_even_when_cache_is_old(
+    tmp_path, monkeypatch,
+) -> None:
+    parquet = tmp_path / "transcripts.parquet"
+    parquet.write_bytes(b"valid parquet fixture")
+    old = time.time() - ((collect.PARQUET_STALE_DAYS + 2) * 86400)
+    os.utime(parquet, (old, old))
+    cache_marker = tmp_path / "cache_revision"
+    applied_marker = tmp_path / "applied_revision"
+    revision = "etag:upstream-2026-08-01"
+
+    monkeypatch.setattr(collect, "LOCAL_PARQUET", parquet)
+    monkeypatch.setattr(collect, "MIN_PARQUET_BYTES", 1)
+    monkeypatch.setattr(collect, "PARQUET_CACHE_REVISION_MARKER", cache_marker)
+    monkeypatch.setattr(collect, "PARQUET_REVISION_MARKER", applied_marker)
+    collect._write_revision_marker(cache_marker, revision)
+    collect._write_revision_marker(applied_marker, revision)
+    monkeypatch.setattr(collect, "_probe_parquet_revision", lambda: revision)
+
+    assert collect._need_download(upstream_revision=revision) is False
+    assert collect._parquet_revision_probe_status() == (
+        collect.REVISION_UNCHANGED,
+        revision,
+        None,
+    )
+
+
+def test_changed_upstream_revision_requests_one_refresh(tmp_path, monkeypatch) -> None:
+    parquet = tmp_path / "transcripts.parquet"
+    parquet.write_bytes(b"valid parquet fixture")
+    cache_marker = tmp_path / "cache_revision"
+    applied_marker = tmp_path / "applied_revision"
+    old_revision = "etag:upstream-old"
+    new_revision = "etag:upstream-new"
+
+    monkeypatch.setattr(collect, "LOCAL_PARQUET", parquet)
+    monkeypatch.setattr(collect, "MIN_PARQUET_BYTES", 1)
+    monkeypatch.setattr(collect, "PARQUET_CACHE_REVISION_MARKER", cache_marker)
+    monkeypatch.setattr(collect, "PARQUET_REVISION_MARKER", applied_marker)
+    collect._write_revision_marker(cache_marker, old_revision)
+    collect._write_revision_marker(applied_marker, old_revision)
+    monkeypatch.setattr(collect, "_probe_parquet_revision", lambda: new_revision)
+
+    assert collect._parquet_revision_probe_status() == (
+        collect.REVISION_CHANGED,
+        new_revision,
+        None,
+    )
+    assert collect._need_download(upstream_revision=new_revision) is True
+
+
+def test_probe_failure_preserves_existing_age_fallback(tmp_path, monkeypatch) -> None:
+    parquet = tmp_path / "transcripts.parquet"
+    parquet.write_bytes(b"valid parquet fixture")
+    monkeypatch.setattr(collect, "LOCAL_PARQUET", parquet)
+    monkeypatch.setattr(collect, "MIN_PARQUET_BYTES", 1)
+
+    def failed_probe():
+        raise RuntimeError("temporary Hugging Face outage")
+
+    monkeypatch.setattr(collect, "_probe_parquet_revision", failed_probe)
+    status, revision, error = collect._parquet_revision_probe_status()
+    assert status == collect.REVISION_PROBE_FAILED
+    assert revision is None
+    assert "temporary Hugging Face outage" in (error or "")
+
+    assert collect._need_download() is False
+    old = time.time() - ((collect.PARQUET_STALE_DAYS + 2) * 86400)
+    os.utime(parquet, (old, old))
+    assert collect._need_download() is True
+
+
+def test_revision_candidate_is_written_only_after_successful_processing(
+    tmp_path, monkeypatch,
+) -> None:
+    parquet = tmp_path / "transcripts.parquet"
+    parquet.write_bytes(b"valid parquet fixture")
+    cache_marker = tmp_path / "cache_revision"
+    applied_marker = tmp_path / "applied_revision"
+    candidate = tmp_path / "revision_candidate"
+    revision = "etag:upstream-new"
+
+    monkeypatch.setattr(collect, "LOCAL_PARQUET", parquet)
+    monkeypatch.setattr(collect, "MIN_PARQUET_BYTES", 1)
+    monkeypatch.setattr(collect, "PARQUET_CACHE_REVISION_MARKER", cache_marker)
+    monkeypatch.setattr(collect, "PARQUET_REVISION_MARKER", applied_marker)
+    monkeypatch.setattr(collect, "TX_OUT", tmp_path / "tx")
+    monkeypatch.setattr(collect, "_is_running_in_dbeta_venv", lambda: True)
+    monkeypatch.setitem(sys.modules, "duckdb", object())
+    collect._write_revision_marker(cache_marker, revision)
+    collect._write_revision_marker(applied_marker, "etag:upstream-old")
+
+    args = [
+        "collect_transcripts.py",
+        "--only", "AAPL",
+        "--quarters", "1",
+        "--defer-index-publish",
+        "--upstream-revision", revision,
+        "--revision-candidate-out", str(candidate),
+    ]
+    monkeypatch.setattr(sys, "argv", args)
+    monkeypatch.setattr(collect, "process_symbol", lambda *_args: (1, ["2026Q3"]))
+
+    assert collect.main() == 0
+    assert collect._read_revision_marker(candidate) == revision
+    assert collect._read_revision_marker(applied_marker) == "etag:upstream-old"
+
+    candidate.unlink()
+
+    def failed_processing(*_args):
+        raise RuntimeError("DuckDB processing failed")
+
+    monkeypatch.setattr(collect, "process_symbol", failed_processing)
+    with pytest.raises(RuntimeError, match="DuckDB processing failed"):
+        collect.main()
+    assert not candidate.exists()
+    assert collect._read_revision_marker(applied_marker) == "etag:upstream-old"
 
 
 def test_operator_label_wins_over_people_named_in_intro() -> None:

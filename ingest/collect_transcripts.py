@@ -59,6 +59,8 @@ MANIFEST  = CA_ROOT / "terminal" / "public" / "data" / "manifest.json"
 
 PARQUET_URL   = "https://huggingface.co/datasets/defeatbeta/yahoo-finance-data/resolve/main/data/stock_earning_call_transcripts.parquet"
 LOCAL_PARQUET = TX_CACHE / "stock_earning_call_transcripts.parquet"
+PARQUET_REVISION_MARKER = TX_CACHE / ".stock_earning_call_transcripts.applied_revision"
+PARQUET_CACHE_REVISION_MARKER = TX_CACHE / ".stock_earning_call_transcripts.cache_revision"
 
 # Minimum parquet size sanity check (2 GB download is expected ~2.1 GB)
 MIN_PARQUET_BYTES = 1_000_000_000  # 1 GB — clearly incomplete if below this
@@ -66,6 +68,12 @@ MIN_PARQUET_BYTES = 1_000_000_000  # 1 GB — clearly incomplete if below this
 # Re-download the parquet if it is older than this (new quarters land in defeatbeta periodically;
 # without an age check a first download is reused forever and new transcripts are never picked up).
 PARQUET_STALE_DAYS = 14
+PARQUET_PROBE_TIMEOUT = 20
+
+REVISION_UNCHANGED = 0
+REVISION_CHANGED = 10
+REVISION_PROBE_FAILED = 11
+_REVISION_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:+/-]{8,256}$")
 
 # ---------------------------------------------------------------------------
 # Ctrl-C safety
@@ -112,33 +120,131 @@ def _is_running_in_dbeta_venv() -> bool:
 # ---------------------------------------------------------------------------
 # Download helper
 # ---------------------------------------------------------------------------
-def _need_download(refresh: bool = False) -> bool:
+def _normalize_revision_token(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    if value.startswith("W/"):
+        value = value[2:].strip()
+    value = value.strip('"')
+    return value if _REVISION_TOKEN_RE.fullmatch(value) else None
+
+
+def _revision_from_headers(headers: object) -> str | None:
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        return None
+    for header, prefix in (
+        ("X-Linked-ETag", "linked-etag"),
+        ("ETag", "etag"),
+        ("X-Xet-Hash", "xet"),
+        ("X-Repo-Commit", "repo"),
+    ):
+        value = _normalize_revision_token(getter(header))
+        if value:
+            return f"{prefix}:{value}"
+    return None
+
+
+def _read_revision_marker(path: Path | None = None) -> str | None:
+    target = Path(path) if path is not None else PARQUET_REVISION_MARKER
+    try:
+        return _normalize_revision_token(target.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError):
+        return None
+
+
+def _write_revision_marker(path: Path, revision: str) -> None:
+    value = _normalize_revision_token(revision)
+    if value is None:
+        raise ValueError(f"invalid parquet revision token: {revision!r}")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(value + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _probe_parquet_revision() -> str:
+    """Return the file-specific Hugging Face ETag without downloading its body."""
+    try:
+        req = urllib.request.Request(
+            PARQUET_URL,
+            method="HEAD",
+            headers={
+                "Accept-Encoding": "identity",
+                "User-Agent": "Mozilla/5.0 collect_transcripts/2.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=PARQUET_PROBE_TIMEOUT) as resp:
+            revision = _revision_from_headers(resp.headers)
+    except Exception as exc:
+        raise RuntimeError(f"upstream parquet revision probe failed: {exc}") from exc
+    if revision is None:
+        raise RuntimeError("upstream parquet revision probe returned no stable ETag")
+    return revision
+
+
+def _parquet_revision_probe_status() -> tuple[int, str | None, str | None]:
+    """Return ``(status, remote_revision, error)`` for the nightly cheap probe."""
+    try:
+        remote = _probe_parquet_revision()
+    except RuntimeError as exc:
+        return REVISION_PROBE_FAILED, None, str(exc)
+    local = _read_revision_marker()
+    status = REVISION_UNCHANGED if local == remote else REVISION_CHANGED
+    return status, remote, None
+
+
+def _need_download(
+    refresh: bool = False,
+    *,
+    upstream_revision: str | None = None,
+) -> bool:
     if not LOCAL_PARQUET.exists():
         return True
     if LOCAL_PARQUET.stat().st_size < MIN_PARQUET_BYTES:
         print(f"[warn] parquet too small ({LOCAL_PARQUET.stat().st_size} B) — re-downloading", flush=True)
         return True
+    if refresh:
+        print("[info] parquet refresh forced (--refresh-parquet)", flush=True)
+        return True
+    if upstream_revision is not None:
+        cached_revision = _read_revision_marker(PARQUET_CACHE_REVISION_MARKER)
+        if cached_revision != upstream_revision:
+            print(
+                f"[info] upstream parquet changed ({cached_revision or 'unknown'} → "
+                f"{upstream_revision}) — refreshing cache",
+                flush=True,
+            )
+            return True
+        return False
     age_days = (time.time() - LOCAL_PARQUET.stat().st_mtime) / 86400
-    if refresh or age_days >= PARQUET_STALE_DAYS:
-        why = "forced (--refresh-parquet)" if refresh else f"{age_days:.0f}d old ≥ {PARQUET_STALE_DAYS}d"
+    if age_days >= PARQUET_STALE_DAYS:
+        why = f"{age_days:.0f}d old ≥ {PARQUET_STALE_DAYS}d"
         print(f"[info] parquet stale ({why}) — re-downloading for new quarters", flush=True)
         return True
     return False
 
 
-def _download_parquet():
+def _download_parquet(*, expected_revision: str | None = None) -> str | None:
     TX_CACHE.mkdir(parents=True, exist_ok=True)
     tmp = LOCAL_PARQUET.with_suffix(".parquet.tmp")
     tmp.unlink(missing_ok=True)
     print(f"[download] {PARQUET_URL}", flush=True)
     print(f"  → {LOCAL_PARQUET} (~2.1 GB, may take 3–5 min)", flush=True)
 
+    downloaded_revision: str | None = None
     try:
         req = urllib.request.Request(
             PARQUET_URL,
-            headers={"User-Agent": "Mozilla/5.0 collect_transcripts/1.0"}
+            headers={
+                "Accept-Encoding": "identity",
+                "User-Agent": "Mozilla/5.0 collect_transcripts/2.0",
+            },
         )
         with urllib.request.urlopen(req, timeout=600) as resp, open(tmp, "wb") as fout:
+            downloaded_revision = _revision_from_headers(resp.headers)
             total = int(resp.headers.get("Content-Length", 0))
             done  = 0
             chunk = 1 << 20  # 1 MB
@@ -169,7 +275,13 @@ def _download_parquet():
             f"{MIN_PARQUET_BYTES}-byte safety floor"
         )
     os.replace(tmp, LOCAL_PARQUET)
+    cached_revision = downloaded_revision or _normalize_revision_token(expected_revision)
+    if cached_revision is not None:
+        _write_revision_marker(PARQUET_CACHE_REVISION_MARKER, cached_revision)
+    else:
+        PARQUET_CACHE_REVISION_MARKER.unlink(missing_ok=True)
     print(f"[download] done: {LOCAL_PARQUET.stat().st_size // 1_000_000} MB", flush=True)
+    return cached_revision
 
 
 # ---------------------------------------------------------------------------
@@ -543,11 +655,47 @@ def main() -> int:
                     help="force re-download of the transcripts parquet (else re-downloads when "
                          f"absent, undersized, or ≥{PARQUET_STALE_DAYS} days old)")
     ap.add_argument(
+        "--probe-parquet-revision",
+        action="store_true",
+        help=(
+            "HEAD-probe the upstream parquet and exit 0 if already applied, "
+            f"{REVISION_CHANGED} if changed, or {REVISION_PROBE_FAILED} if unavailable"
+        ),
+    )
+    ap.add_argument(
+        "--upstream-revision",
+        default="",
+        help="revision returned by --probe-parquet-revision; suppresses age-only redownloads",
+    )
+    ap.add_argument(
+        "--revision-candidate-out",
+        type=Path,
+        default=None,
+        help="write a successfully processed revision here for a later atomic promotion",
+    )
+    ap.add_argument(
         "--defer-index-publish",
         action="store_true",
         help="write transcript bodies only; validate and publish indexes in a later step",
     )
     args = ap.parse_args()
+
+    # The nightly freshness check must stay metadata-only and must not bootstrap
+    # the defeatbeta venv, load DuckDB, or touch the 2.2 GB parquet.
+    if args.probe_parquet_revision:
+        status, revision, error = _parquet_revision_probe_status()
+        if revision is not None:
+            print(revision)
+        if error:
+            print(f"[warn] {error}", file=sys.stderr, flush=True)
+        return status
+
+    upstream_revision = None
+    if args.upstream_revision:
+        upstream_revision = _normalize_revision_token(args.upstream_revision)
+        if upstream_revision is None:
+            print(f"[error] invalid --upstream-revision: {args.upstream_revision!r}", flush=True)
+            return 2
 
     # Re-exec in the defeatbeta venv if not already there
     if not _is_running_in_dbeta_venv():
@@ -580,11 +728,20 @@ def main() -> int:
     print(f"[info] {len(universe)} symbols | {args.quarters} quarters each", flush=True)
 
     # Ensure parquet is available
-    if _need_download(refresh=args.refresh_parquet):
-        _download_parquet()
+    downloaded_revision: str | None = None
+    if _need_download(
+        refresh=args.refresh_parquet,
+        upstream_revision=upstream_revision,
+    ):
+        downloaded_revision = _download_parquet(expected_revision=upstream_revision)
     else:
         sz_mb = LOCAL_PARQUET.stat().st_size // 1_000_000
         print(f"[info] using cached parquet: {LOCAL_PARQUET} ({sz_mb} MB)", flush=True)
+    processed_revision = (
+        downloaded_revision
+        or upstream_revision
+        or _read_revision_marker(PARQUET_CACHE_REVISION_MARKER)
+    )
 
     parquet_str = str(LOCAL_PARQUET)
     TX_OUT.mkdir(parents=True, exist_ok=True)
@@ -621,6 +778,10 @@ def main() -> int:
         return 130
 
     if args.defer_index_publish:
+        if processed_revision is not None:
+            target = args.revision_candidate_out or PARQUET_REVISION_MARKER
+            _write_revision_marker(target, processed_revision)
+            print(f"[revision] processed {processed_revision}", flush=True)
         print("[index] deferred; bodies await validated publication", flush=True)
         return 0
 
@@ -642,6 +803,10 @@ def main() -> int:
         f"{global_index['symbol_count']} symbols",
         flush=True,
     )
+    if processed_revision is not None:
+        target = args.revision_candidate_out or PARQUET_REVISION_MARKER
+        _write_revision_marker(target, processed_revision)
+        print(f"[revision] processed {processed_revision}", flush=True)
     return 0
 
 
