@@ -22,6 +22,7 @@ const TICKER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ticker_f
 const DTE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "dte_fixture.json");
 const VOL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "vol_fixture.json");
 const GEX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gex_fixture.json");
+const AGG_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "agg_fixture.json");
 const SCREENER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "screener_fixture.json");
 const CTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ctx_fixture.json");
 const LEADERS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_leaders_fixture.json");
@@ -68,6 +69,9 @@ export function isValidF(f: string): boolean {
   if (f.startsWith("ticker:") && f.length > 7) return true;
   if (f.startsWith("vol:") && f.length > 4) return true;
   if (f.startsWith("gex:") && f.length > 4) return true;
+  // Aggregate greek trend (Volland parity W2) — options_hub.aggtrend/v1, one row per
+  // session back to 2017. Prefix is disjoint from every `gex*` form above.
+  if (f.startsWith("agg:") && f.length > 4) return true;
   // Dated GEX-ladder history (R0.10): the sessions index + the per-date full ladder
   // (options_hub/gex_history — WP-GEX-SNAPSHOTS, accruing since 2026-07-16). Distinct
   // prefixes from `gex:` — the 4th char is `_`, not `:` — so neither form can be eaten
@@ -117,6 +121,7 @@ export function backendPath(f: string): string {
     return `/api/hub/gex_history/${root}/${date}`;
   }
   if (f.startsWith("gex:")) return `/api/hub/gex/${f.slice(4)}`;
+  if (f.startsWith("agg:")) return `/api/hub/aggtrend/${f.slice(4)}`;
   if (f === "oi") return "/api/hub/oi";
   if (f === "hot") return "/api/hub/hot";
   if (f === "meta") return "/api/flow/meta";
@@ -177,6 +182,7 @@ export function r2Key(f: string): string {
     return `options_hub/gex_history/${root}/${date}.json`;
   }
   if (f.startsWith("gex:")) return `options_hub/gex/${f.slice(4)}.json`;
+  if (f.startsWith("agg:")) return `options_hub/aggtrend/${f.slice(4)}.json`;
   if (f === "oi") return "options_hub/oi_movers.json";
   if (f === "hot") return "options_hub/hot_contracts.json";
   if (f === "ctx") return "options_hub/context.json";
@@ -375,6 +381,19 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     const raw = await fs.readFile(GEX_FIXTURE_FILE, "utf8");
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     return all[root] ?? {};
+  }
+  // Aggregate greek trend, keyed by root. Same wrong-root refusal as gex:/vol: —
+  // a nine-year positioning history under the wrong ticker's header would be read
+  // as fact and is far worse than an empty card.
+  if (f.startsWith("agg:")) {
+    const root = f.slice(4).toUpperCase();
+    try {
+      const raw = await fs.readFile(AGG_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[root] ?? {};
+    } catch {
+      return {};
+    }
   }
   // GEX sessions index (dated ladder replay) — keyed by ROOT. Unknown roots return an
   // honest empty list; the desk then hides the session dropdown and keeps only the

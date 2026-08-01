@@ -42,6 +42,9 @@ import { buildMarketStructure, guardedFlip, type MscMoves } from "@/lib/marketSt
 import type { MarketStructure } from "@/lib/marketStructure";
 import { makeMscT, type MscKey } from "./mscStrings";
 import { HedgingByStrikeCard, TermStructureCard, DailyHedgingCard } from "./HedgingCards";
+import { AggTrendCard, SpotVolCard, ExtremesCard } from "./TrendCards";
+import type { AggTrendPayload } from "@/lib/aggTrend";
+import type { GexMatrix } from "@/lib/gexLadder";
 import type { Lang } from "@/lib/i18n";
 import type { GexPayload } from "@/components/gexdesk/GexDeskView";
 
@@ -49,6 +52,18 @@ interface Props {
   gex: GexPayload | null;
   /** `moves:{ROOT}` — the expected-move band + its containment calibration. Optional: */
   moves: MscMoves | null;
+  /**
+   * `agg:{ROOT}` — the whole-book exposure series (options_hub.aggtrend/v1), one row per
+   * session back to 2017 for SPY and 2012 for QQQ. Optional and independently cadenced:
+   * the two W2 history cards hide themselves when it is absent rather than the tab failing.
+   */
+  agg?: AggTrendPayload | null;
+  /**
+   * `matrix:{ROOT}` — the only store carrying strike AND expiry together, which is what
+   * makes a per-horizon answer possible. Published for a subset of roots; the extremes
+   * card reports itself unavailable rather than showing blanks when it is missing.
+   */
+  matrix?: GexMatrix | null;
   /**
    * Set once this surface gains dated replay (masterplan R2). The expected-move band is a
    * CURRENT-session read, so a caller replaying an archived ladder must pass `moves: null`
@@ -69,7 +84,14 @@ const price = (v: number | null | undefined) =>
     ? "—"
     : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
-export function MarketStructureBody({ gex, moves, archived = false, lang }: Props) {
+export function MarketStructureBody({
+  gex,
+  moves,
+  agg = null,
+  matrix = null,
+  archived = false,
+  lang,
+}: Props) {
   const t = makeMscT(lang);
 
   const ms: MarketStructure | null = useMemo(() => {
@@ -141,6 +163,19 @@ export function MarketStructureBody({ gex, moves, archived = false, lang }: Prop
         <ScenarioCard ms={ms} t={t} />
         <EmCard ms={ms} t={t} levels={emLevels} archived={archived} />
         <ExpiryCard ms={ms} t={t} />
+        {/* Volland-parity W2. History is independently cadenced from the nightly ladder,
+            so each card is rendered only when its own payload arrived — a missing series
+            hides one card rather than emptying the tab. Placed after the single-session
+            cards because they answer "how does today compare", which only means something
+            once the reader has seen today. */}
+        {agg?.series?.length ? <AggTrendCard agg={agg} lang={lang} /> : null}
+        {agg?.series?.length ? <SpotVolCard agg={agg} lang={lang} /> : null}
+        <ExtremesCard
+          matrix={matrix}
+          spot={gex?.spot_ref ?? null}
+          asof={gex?.asof ?? null}
+          lang={lang}
+        />
       </div>
     </div>
   );
