@@ -7,6 +7,7 @@ import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalList
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import dynamic from "next/dynamic";
+import { flushSync } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandLockup, BrandMark } from "@/components/BrandMark";
@@ -1319,7 +1320,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     return () => window.removeEventListener("mm:drawing-style", h);
   }, [patchDrawStyle]);
   useEffect(() => {
-    const committed = () => { if (!drawingStickyRef.current) setTool(null); };
+    const committed = () => {
+      if (drawingStickyRef.current) return;
+      // This listener runs from ChartPanel's native pointerup handler. Commit
+      // cursor mode before a following discrete toolbar action can overtake the
+      // update in React's priority queue; otherwise a delayed null -> new-tool
+      // replay can transiently cancel the new tool's in-flight drawing.
+      flushSync(() => setTool(null));
+    };
     const history = (event: Event) => {
       const direction = (event as CustomEvent).detail as "undo" | "redo" | undefined;
       if (direction === "undo" || direction === "redo") travelDrawingHistory(active, direction);

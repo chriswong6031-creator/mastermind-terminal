@@ -1066,12 +1066,18 @@ test("each drawing tool keeps its own defaults and fill color contract", async (
 
   await page.getByTestId("drawing-group-shapes-menu-trigger").click();
   await page.getByTestId("drawing-tool-rect").press("Enter");
-  await page.getByTestId("drawing-style-color-2").click();
-  await dragDrawing(page, layer, { x: .35, y: .32 }, { x: .68, y: .62 });
+  await expect(page.getByTestId("drawing-group-shapes-main")).toHaveAttribute("aria-pressed", "true");
+  const red = page.getByTestId("drawing-style-color-2");
+  await red.click();
+  await expect(red).toHaveAttribute("aria-pressed", "true");
+  // Keep this placement clear of the earlier Highlighter/Fib hit regions so
+  // the assertion isolates new-tool creation from existing-drawing selection.
+  await dragDrawing(page, layer, { x: .72, y: .18 }, { x: .86, y: .38 });
+  await expect(layer.locator('g[data-drawing-kind="rect"]:not([data-id="_p"])')).toBeVisible();
   await expect.poll(() => {
     const drawing = saves.flatMap((payload) => payload.drawings ?? []).find((item) => item.kind === "rect");
     return drawing ? { color: drawing.color, fillColor: drawing.fillColor } : null;
-  }, { timeout: 5_000 }).toEqual({ color: "#f0566b", fillColor: "#f0566b" });
+  }, { timeout: 10_000 }).toEqual({ color: "#f0566b", fillColor: "#f0566b" });
 });
 
 test("pane-anchored notes stay fixed while calculated labels never open a text editor", async ({ page }) => {
