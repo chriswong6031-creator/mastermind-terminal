@@ -60,6 +60,10 @@ const StructureView = dynamic(
   () => import("@/components/structure/StructureView").then((m) => ({ default: m.StructureView })),
   { ssr: false, loading: () => <TabSkeleton /> },
 );
+const PositioningView = dynamic(
+  () => import("@/components/msc/PositioningView").then((m) => ({ default: m.PositioningView })),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
 const ProphetView = dynamic(
   () => import("@/components/prophet/ProphetView").then((m) => ({ default: m.ProphetView })),
   { ssr: false, loading: () => <TabSkeleton /> },
@@ -86,7 +90,7 @@ const TideChart = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "gex" | "surface" | "prism" | "structure" | "volatility" | "leaders" | "radar";
+export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "gex" | "surface" | "prism" | "structure" | "volatility" | "positioning" | "leaders" | "radar";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
@@ -105,6 +109,11 @@ const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   // R3 Volatility tab (IV rank / term / skew). Distinct from the retired standalone
   // "vol" surface (folded into Tickers) and from the `vol → screener` URL alias.
   { key: "volatility", enKey: "tabVolatility", zhKey: "tabVolatility" },
+  // MSC wave R0 — dealer-positioning mechanics over the SAME gex/moves payloads the
+  // Exposure desk reads (sign robustness, hedge-flow scenarios, levels in expected moves,
+  // gamma topology, front-expiry preview). Its own tab because the desk's left column is
+  // ~296px at 1440x900 and could not hold it (see MarketStructureBody's header).
+  { key: "positioning", enKey: "tabPositioning", zhKey: "tabPositioning" },
   { key: "leaders",  enKey: "tabLeaders",  zhKey: "tabLeaders" },
   { key: "radar",    enKey: "tabRadar",    zhKey: "tabRadar" },
 ];
@@ -3815,6 +3824,13 @@ export default function OptionsHubView({
           {(activeTab === "volatility" || visitedTabs.has("volatility")) && (
             <div style={{ flex: 1, overflow: "hidden", display: activeTab === "volatility" ? "flex" : "none", minHeight: 0 }}>
               <VolView />
+            </div>
+          )}
+
+          {/* ═══ POSITIONING TAB (MSC R0 — dealer-positioning mechanics) ═══ */}
+          {(activeTab === "positioning" || visitedTabs.has("positioning")) && (
+            <div style={{ flex: 1, overflow: "hidden", display: activeTab === "positioning" ? "flex" : "none", minHeight: 0 }}>
+              <PositioningView />
             </div>
           )}
 

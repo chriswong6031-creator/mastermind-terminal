@@ -47,11 +47,12 @@ const HUB_KEY: Record<string, TabKey> = {
   prism: "prism",
   structure: "structure",
   volatility: "volatility",
+  positioning: "positioning",
   prophet: "prophet",
 };
 
 // The tabs the hub is allowed to render under Research (canonical hub keys).
-const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "surface", "prism", "structure", "volatility", "prophet"];
+const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "surface", "prism", "structure", "volatility", "positioning", "prophet"];
 
 const DEFAULT_TAB: TabKey = "tape";
 
@@ -68,6 +69,7 @@ const TABS: WorkspaceTab[] = [
   { key: "prism", labelKey: "wtPrism" },
   { key: "structure", labelKey: "wtStructure" },
   { key: "volatility", labelKey: "wtVolatility" },
+  { key: "positioning", labelKey: "wtPositioning" },
   { key: "prophet", labelKey: "wtProphet" },
 ];
 
@@ -81,7 +83,7 @@ const FUNDAMENTALS_HREF = "/analysis";
 const PAGE_KEY: Record<TabKey, string> = {
   tape: "tape", desk: "desk", tide: "tide", tickers: "tickers",
   screener: "vol", gex: "gex", surface: "surface", prism: "prism",
-  structure: "structure", volatility: "volatility", prophet: "prophet",
+  structure: "structure", volatility: "volatility", positioning: "positioning", prophet: "prophet",
   leaders: "tape", radar: "tape", // never shown here (redirected to Discover)
 };
 
