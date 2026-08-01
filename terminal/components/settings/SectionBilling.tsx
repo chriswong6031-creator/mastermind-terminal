@@ -3,8 +3,8 @@ import { useState } from "react";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 import { Group, IconCheck, IconExtLink, Msg, Row, SectionHead } from "./icons";
 import {
-  ACS_PLAN_FEATURES, ACS_PRICE, ACS_UPGRADE_URL, acsDate, acsTierLabelKey,
-  acsUpgradeIsInApp, acsUpgradeLabelKey, type AcsPlan, type SectionProps,
+  ACS_PLAN_FEATURES, ACS_PRICE, ACS_UPGRADE_URL, acsDate, acsNormalizeTier,
+  acsTierLabelKey, acsUpgradeIsInApp, acsUpgradeLabelKey, type AcsPlan, type SectionProps,
 } from "./types";
 
 // ── Billing ──────────────────────────────────────────────────────────────────
@@ -52,7 +52,10 @@ export default function SectionBilling({ t, lang, onClose, plan, planErr }: Bill
   const [portalBusy, setPortalBusy] = useState(false);
   const [portalMsg, setPortalMsg] = useState("");
 
-  const tier = plan?.tier || "free";
+  // The raw /api/me tier, aliased to the effective one before ANY lookup: the
+  // ACS_PRICE / ACS_PLAN_FEATURES tables are keyed by effective tier, so an
+  // un-aliased `essential` would miss both (no price line, Free feature list).
+  const tier = acsNormalizeTier(plan?.tier);
   const interval = plan?.interval || null;
   const paid = tier !== "free";
   const upgradeKey = acsUpgradeLabelKey(tier, interval);

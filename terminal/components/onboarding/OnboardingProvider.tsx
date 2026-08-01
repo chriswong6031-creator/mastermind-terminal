@@ -102,7 +102,10 @@ export function OnboardingProvider({ email, children }: { email: string; childre
     const isResume = sp.get("onboard") === "resume";
     if (!wantSignup && !wantSignin) return;
 
-    const planParam = sp.get("plan");
+    // `?plan=essential` is the billing authority's new name for the SAME plan the
+    // sheet knows as `insider` — aliased to the existing PlanKey rather than added
+    // as a new one, so every step (rail, pricing, checkout) keeps one key.
+    const planParam = sp.get("plan") === "essential" ? "insider" : sp.get("plan");
     const periodParam = sp.get("period");
     if (planParam === "insider" || planParam === "pro" || planParam === "free") setPlan(planParam);
     if (periodParam === "monthly" || periodParam === "annual") setPeriod(periodParam);
