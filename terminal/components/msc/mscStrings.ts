@@ -367,8 +367,16 @@ const MSC_LEX = {
   // ── W3 · Floating strike (delta-space exposure) ────────────────────────────
   fsTitle: ["The book in delta space", "以 Delta 视角看持仓"],
   fsLead: [
-    "The same exposure, filed by call-equivalent delta instead of by strike. A strike is a fixed price; a delta band stays the same object as spot travels and time passes.",
-    "同一敞口，按看涨等效 Delta 而非行权价归类。行权价是固定价格；Delta 区间在现价移动与时间流逝中仍指向同一对象。",
+    "Exposure filed by call-equivalent delta rather than by strike. A strike is a fixed price; a delta band stays the same object as spot travels and time passes.",
+    "按看涨等效 Delta 而非行权价归类的敞口。行权价是固定价格；Delta 区间在现价移动与时间流逝中仍指向同一对象。",
+  ],
+  // ⚠️ This card and the by-strike chart above it are NOT the same population, and the
+  // copy must not imply they are. by_strike is windowed to ±20% of spot and capped at
+  // 160 rows; this is the whole book — deliberately, because the far wings are where a
+  // delta view earns its keep. Their totals therefore differ on any real index root.
+  fsCoverage: [
+    "Covers the whole book, including strikes beyond the ±20% window the by-strike chart draws — so the two do not sum to the same total.",
+    "涵盖全部持仓，包括按行权价图表所绘 ±20% 窗口以外的行权价——因此两者合计并不相等。",
   ],
   fsPeak: ["Heaviest band {b}", "最重区间 {b}"],
   fsLegend: [
