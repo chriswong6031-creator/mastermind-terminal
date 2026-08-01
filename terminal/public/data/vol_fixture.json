@@ -4,6 +4,9 @@
     "asof": "2026-07-05T16:05:00Z",
     "root": "NVDA",
     "iv_rank_252": 72.4,
+    "iv_rank_all": 64.7,
+    "coverage_days_all": 1256,
+    "since_all": "2021-07-06",
     "atm_iv": 58.2,
     "iv_52w_hi": 89.1,
     "iv_52w_lo": 29.8,
@@ -23,6 +26,8 @@
       {
         "exp": "2026-07-11",
         "points": [
+          {"strike": 60, "call_iv": 197.2, "put_iv": 104.8},
+          {"strike": 75, "call_iv": 142.1, "put_iv": 92.4},
           {"strike": 95, "call_iv": 72.5, "put_iv": 81.2},
           {"strike": 100, "call_iv": 69.8, "put_iv": 77.8},
           {"strike": 105, "call_iv": 66.1, "put_iv": 74.2},
@@ -36,7 +41,8 @@
           {"strike": 145, "call_iv": 59.1, "put_iv": 61.2},
           {"strike": 150, "call_iv": 60.3, "put_iv": 60.8},
           {"strike": 155, "call_iv": 61.8, "put_iv": 60.9},
-          {"strike": 160, "call_iv": 63.8, "put_iv": 61.4}
+          {"strike": 160, "call_iv": 63.8, "put_iv": 61.4},
+          {"strike": 195, "call_iv": 84.2, "put_iv": 148.6}
         ]
       },
       {
@@ -84,6 +90,9 @@
     "asof": "2026-07-05T16:05:00Z",
     "root": "SPY",
     "iv_rank_252": 38.1,
+    "iv_rank_all": 41.2,
+    "coverage_days_all": 2143,
+    "since_all": "2018-01-03",
     "atm_iv": 16.2,
     "iv_52w_hi": 48.1,
     "iv_52w_lo": 8.8,
@@ -164,6 +173,9 @@
     "asof": "2026-07-05T16:05:00Z",
     "root": "QQQ",
     "iv_rank_252": null,
+    "iv_rank_all": null,
+    "coverage_days_all": 62,
+    "since_all": "2026-05-03",
     "atm_iv": 19.8,
     "iv_52w_hi": 54.1,
     "iv_52w_lo": 11.2,
