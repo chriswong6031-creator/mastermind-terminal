@@ -370,11 +370,11 @@ export interface TxSegment {
 }
 
 export interface Transcript {
-  schema: string; // "mastermind.tx/v1"
+  schema: "mastermind.tx/v1";
   ticker: string;
   id: string; // "2026Q3"
   period: string; // "Q3 FY2026"
-  date: string;
+  date: string | null;
   title: string;
   segments: TxSegment[];
 }
@@ -450,31 +450,73 @@ export async function getInsider(sym: string): Promise<Insider | null> {
   return data;
 }
 
-/**
- * getTx — fetch a gzipped transcript and inflate via DecompressionStream("gzip").
- * Graceful null when the file is absent (negative-cached) or the browser lacks gzip streams.
- */
-export async function getTx(sym: string, id: string): Promise<Transcript | null> {
-  const key = "tx:" + sym + ":" + id;
-  if (negHit(key)) return null;
-  const url = "/data/tx/" + sym + "/" + id + ".json.gz";
+const TX_ID_RE = /^\d{4}Q[1-4]$/;
+const TX_TICKER_RE = /^[A-Z0-9.^-]+$/;
+
+export function transcriptBodyUrl(sym: string, id: string): string | null {
+  const ticker = sym.trim().toUpperCase();
+  if (!TX_TICKER_RE.test(ticker) || !TX_ID_RE.test(id)) return null;
+  return `/data/tx/${ticker}/${id}.json.gz`;
+}
+
+/** Strictly validate an untrusted transcript body before a component reads it. */
+export function normalizeTranscript(raw: unknown, expectedSym: string, expectedId: string): Transcript | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const ticker = expectedSym.trim().toUpperCase();
+  if (
+    obj.schema !== "mastermind.tx/v1"
+    || obj.ticker !== ticker
+    || obj.id !== expectedId
+    || typeof obj.period !== "string"
+    || !obj.period.trim()
+    || typeof obj.title !== "string"
+    || !obj.title.trim()
+    || (obj.date !== null && typeof obj.date !== "string")
+    || !Array.isArray(obj.segments)
+  ) return null;
+  const segments: TxSegment[] = [];
+  for (const rawSegment of obj.segments) {
+    if (!rawSegment || typeof rawSegment !== "object") return null;
+    const segment = rawSegment as Record<string, unknown>;
+    if (
+      typeof segment.speaker !== "string"
+      || typeof segment.role !== "string"
+      || typeof segment.text !== "string"
+      || !segment.text.trim()
+    ) return null;
+    segments.push({ speaker: segment.speaker, role: segment.role, text: segment.text });
+  }
+  return {
+    schema: "mastermind.tx/v1",
+    ticker,
+    id: expectedId,
+    period: obj.period.trim(),
+    date: obj.date as string | null,
+    title: obj.title.trim(),
+    segments,
+  };
+}
+
+/** Fetch, inflate, and validate a transcript without a sticky failure cache. */
+export async function getTx(
+  sym: string,
+  id: string,
+  options: { retryNonce?: number } = {},
+): Promise<Transcript | null> {
+  const baseUrl = transcriptBodyUrl(sym, id);
+  if (!baseUrl) return null;
+  const url = options.retryNonce ? `${baseUrl}?retry=${options.retryNonce}` : baseUrl;
   try {
-    const r = await fetch(url);
-    if (!r.ok || !r.body) {
-      negMark(key);
-      return null;
-    }
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok || !r.body) return null;
     // DecompressionStream is standard in modern browsers; guard for older ones.
-    const DS = (globalThis as any).DecompressionStream;
-    if (typeof DS !== "function") {
-      negMark(key);
-      return null;
-    }
+    const DS = globalThis.DecompressionStream;
+    if (typeof DS !== "function") return null;
     const stream = r.body.pipeThrough(new DS("gzip"));
     const text = await new Response(stream).text();
-    return JSON.parse(text) as Transcript;
+    return normalizeTranscript(JSON.parse(text), sym, id);
   } catch {
-    negMark(key);
     return null;
   }
 }

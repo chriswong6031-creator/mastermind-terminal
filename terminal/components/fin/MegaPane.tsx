@@ -1,7 +1,7 @@
 "use client";
 /**
  * MegaPane — the in-shell full-coverage fundamentals overlay (BUILD-SPEC R7/R8,
- * §3.4 FE2a). NOT a route: a fixed z-90 overlay above the workspace. Hosts nine
+ * §3.4 FE2a). NOT a route: a fixed z-90 overlay above the workspace. Hosts twelve
  * pages — the six TV "Financials" tabs (overview/statements/statistics/dividends/
  * earnings/revenue) plus sibling dashboards (forecast/technicals/seasonals). The
  * former deep-analysis ("mastermind") page was merged into the OracleDash
@@ -20,7 +20,7 @@
  * FE3 mounts this and passes {sym, fund, quote, bars}. Sibling page components
  * (FE2b/FE2c/FE2d) are imported by name — they land in parallel.
  */
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLang } from "../../lib/i18n";
 import { pick } from "../../lib/finFormat";
 import type { Fund, Bar } from "../../lib/fund";
@@ -38,9 +38,10 @@ import SeasonalsPage from "./SeasonalsPage";
 import InsiderPage from "./InsiderPage";
 import TechLabPanel from "./TechLabPanel";
 import TranscriptDrawer from "./TranscriptDrawer";
-import { useState } from "react";
+import TranscriptsPage from "./TranscriptsPage";
+import { isTranscriptId } from "../../lib/transcripts";
 
-/** The ten hostable pages. First six share the Financials tab bar. The former deep-analysis
+/** The twelve hostable pages share one fundamentals/research tab bar. The former deep-analysis
  *  ("mastermind") page was merged into the OracleDash Research-Desk surface. */
 export type FinPage =
   | "overview"
@@ -48,6 +49,7 @@ export type FinPage =
   | "statistics"
   | "dividends"
   | "earnings"
+  | "transcripts"
   | "revenue"
   | "forecast"
   | "technicals"
@@ -56,7 +58,7 @@ export type FinPage =
   | "lab";
 
 /** The pages that share the TV "Financials" tab pill bar. */
-const FIN_TABS: FinPage[] = ["overview", "statements", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast", "technicals", "insider", "lab"];
+export const FIN_PAGES: readonly FinPage[] = ["overview", "statements", "transcripts", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast", "technicals", "insider", "lab"];
 
 const PAGE_LABELS: Record<FinPage, [string, string]> = {
   overview: ["Overview", "概览"],
@@ -64,6 +66,7 @@ const PAGE_LABELS: Record<FinPage, [string, string]> = {
   statistics: ["Statistics", "统计"],
   dividends: ["Dividends", "股息"],
   earnings: ["Earnings", "盈利"],
+  transcripts: ["Transcripts", "电话会"],
   revenue: ["Revenue", "营收"],
   forecast: ["Analyst", "分析师"],
   technicals: ["Technicals", "技术面"],
@@ -96,7 +99,7 @@ export interface MegaPaneProps {
    */
   mode?: "overlay" | "workspace";
   /** Full intel/v1 payload (for the Lab tab). Optional — Lab shows empty state when absent. */
-  intel?: any | null;
+  intel?: unknown | null;
 }
 
 export default function MegaPane({
@@ -116,10 +119,38 @@ export default function MegaPane({
   const { lang } = useLang();
   const zh = lang === "zh";
   const [txId, setTxId] = useState<string | null>(null);
+  const previousSym = useRef(sym);
+  const initialTxHydration = useRef(false);
+  const initialPaneSync = useRef(false);
   // Read the current drawer state inside the (once-registered) Esc handler
   // without re-subscribing the window listener on every txId change.
   const txOpenRef = useRef(false);
-  txOpenRef.current = txId != null;
+  useEffect(() => {
+    txOpenRef.current = txId != null;
+  }, [txId]);
+
+  // URL cleanup belongs to the explicit close action. An unmount can also be a
+  // route or symbol transition; mutating the *new* location from that cleanup
+  // used to erase valid transcript deep links during navigation.
+  const closePane = useCallback(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("pane");
+    url.searchParams.delete("tx");
+    window.history.replaceState(window.history.state, "", url.toString());
+    onClose();
+  }, [onClose]);
+
+  // A transcript ID belongs to exactly one ticker. Never carry an open drawer
+  // across symbol changes, even if both symbols happen to share a fiscal ID.
+  useEffect(() => {
+    if (previousSym.current !== sym) {
+      previousSym.current = sym;
+      setTxId(null);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("tx");
+      window.history.replaceState(window.history.state, "", url.toString());
+    }
+  }, [sym]);
 
   const displayName = name || fund?.ticker || sym;
   const initial = (displayName || sym).trim().charAt(0).toUpperCase();
@@ -134,12 +165,12 @@ export default function MegaPane({
       if (e.key === "Escape") {
         if (txOpenRef.current) return; // drawer owns Esc while open
         e.stopPropagation();
-        onClose();
+        closePane();
       }
     };
     window.addEventListener("keydown", onKey, { capture: true });
-    return () => window.removeEventListener("keydown", onKey, { capture: true } as any);
-  }, [onClose]);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [closePane]);
 
   // ── body scroll lock while open (overlay mode only — workspace scrolls inside its slot) ──
   useEffect(() => {
@@ -155,21 +186,47 @@ export default function MegaPane({
   useEffect(() => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
+    // The parent hydrates `page` from the same incoming query string in its own
+    // effect. Preserve that first valid target instead of replacing it with the
+    // component's default page before hydration has completed.
+    if (!initialPaneSync.current) {
+      initialPaneSync.current = true;
+      if (url.searchParams.has("pane")) return;
+    }
     if (url.searchParams.get("pane") !== page) {
       url.searchParams.set("pane", page);
       window.history.replaceState(window.history.state, "", url.toString());
     }
   }, [page]);
-  // strip ?pane= on unmount so a reload after close doesn't reopen it
+  // Hydrate an optional transcript deep-link after the client URL is available.
+  // Changing away from the archive closes the document and clears its URL key.
   useEffect(() => {
-    return () => {
-      if (typeof window === "undefined") return;
-      const url = new URL(window.location.href);
-      if (url.searchParams.has("pane")) {
-        url.searchParams.delete("pane");
-        window.history.replaceState(window.history.state, "", url.toString());
-      }
-    };
+    const url = new URL(window.location.href);
+    const urlTargetsTranscripts = url.searchParams.get("page") === "transcripts"
+      || url.searchParams.get("pane") === "transcripts";
+    if (page === "transcripts" || (!initialTxHydration.current && urlTargetsTranscripts)) {
+      const linkedId = url.searchParams.get("tx");
+      setTxId(linkedId && isTranscriptId(linkedId) ? linkedId : null);
+    } else {
+      setTxId(null);
+      url.searchParams.delete("tx");
+      window.history.replaceState(window.history.state, "", url.toString());
+    }
+    initialTxHydration.current = true;
+  }, [page]);
+
+  const openTranscript = useCallback((id: string) => {
+    if (!isTranscriptId(id)) return;
+    setTxId(id);
+    const url = new URL(window.location.href);
+    url.searchParams.set("tx", id);
+    window.history.replaceState(window.history.state, "", url.toString());
+  }, []);
+  const closeTranscript = useCallback(() => {
+    setTxId(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("tx");
+    window.history.replaceState(window.history.state, "", url.toString());
   }, []);
 
   const navigate = useCallback((p: FinPage) => onPage(p), [onPage]);
@@ -178,11 +235,11 @@ export default function MegaPane({
 
   return (
     <>
-      {!workspace && <div className="fin-scrim" onClick={onClose} aria-hidden />}
+      {!workspace && <div className="fin-scrim" onClick={closePane} aria-hidden />}
       <div className={`fin-pane${workspace ? " fin-pane--workspace" : ""}`} role="dialog" aria-modal="true" aria-label={`${displayName} · ${pageTitle}`}>
         {/* ── header ── */}
         <div className="fin-head">
-          <button className="fin-head-back" onClick={onClose}>
+          <button className="fin-head-back" onClick={closePane}>
             <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden style={{ fill: "none", stroke: "currentColor", strokeWidth: 2 }}>
               <path d="M15 18l-6-6 6-6" />
             </svg>
@@ -196,9 +253,9 @@ export default function MegaPane({
           </span>
         </div>
 
-        {/* ── Financials tab pill bar (six tabs) ── */}
+        {/* ── Financials and research tab bar ── */}
         <div className="fin-tabs" role="tablist">
-          {FIN_TABS.map((t) => (
+          {FIN_PAGES.map((t) => (
             <button
               key={t}
               className={"fin-tab" + (page === t ? " on" : "")}
@@ -215,7 +272,10 @@ export default function MegaPane({
         <div className="fin-body" key={page}>
           {page === "overview" && <OverviewPage sym={sym} fund={fund} name={displayName} onNavigate={navigate} />}
           {page === "statements" && (
-            <StatementsPage sym={sym} fund={fund} name={displayName} onOpenTx={(id) => setTxId(id)} />
+            <StatementsPage sym={sym} fund={fund} name={displayName} onOpenTx={openTranscript} />
+          )}
+          {page === "transcripts" && (
+            <TranscriptsPage sym={sym} fund={fund} onOpenTx={openTranscript} />
           )}
           {page === "statistics" && <StatisticsPage fund={fund} quote={quote} zh={zh} sym={sym} />}
           {page === "dividends" && <DividendsPage sym={sym} fund={fund} zh={zh} />}
@@ -230,7 +290,7 @@ export default function MegaPane({
       </div>
 
       {/* ── transcript slide-in (own Esc handler above this pane's) ── */}
-      {txId && <TranscriptDrawer sym={sym} id={txId} name={displayName} onClose={() => setTxId(null)} />}
+      {txId && <TranscriptDrawer key={`${sym}:${txId}`} sym={sym} id={txId} name={displayName} onClose={closeTranscript} />}
     </>
   );
 }
