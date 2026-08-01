@@ -23,6 +23,10 @@ const MSC_LEX = {
   panelSub: ["Dealer positioning mechanics", "做市商持仓机制"],
   tierA: ["Magnitude", "量级"],
   tierB: ["Signed estimate", "带符号估计"],
+  // Same honesty tier as `tierA` — convention-independent — but "Magnitude" was written
+  // for the gamma cards and says nothing true about a regression between two quoted
+  // series. Same guarantee, accurate word.
+  tierMeasured: ["Measured", "实测"],
   tierAWhy: [
     "Depends on gamma magnitude and open interest only — the dealer-sign assumption cannot change this reading.",
     "仅取决于伽马量级与未平仓量——做市商符号假设不会改变该读数。",
@@ -254,6 +258,98 @@ const MSC_LEX = {
   ],
   expNone: ["No expiration breakdown for this ticker yet.", "该品种暂无按到期日数据。"],
   expNoAfter: ["Only one expiration published — no after-expiry preview.", "仅发布一个到期日——无到期后预览。"],
+
+  // ── W2 · Aggregate greek trend ─────────────────────────────────────────────
+  atTitle: ["Positioning vs its own history", "持仓与自身历史对比"],
+  atLead: [
+    "One number per session for the whole book. A dollar figure means little alone; where it sits in its own record is the reading.",
+    "全账簿每个交易日一个数值。单看金额意义有限；它在自身历史中的位置才是要点。",
+  ],
+  atTierWhy: [
+    "The level inherits the dealer-sign assumption. The percentile is sturdier: the same assumption applies to every session, so a constant sign error largely cancels when today is ranked against its own record.",
+    "绝对水平沿用做市商符号假设；百分位更稳健：该假设对每个交易日一致，将今日与自身历史排名时，恒定的符号误差大体相互抵销。",
+  ],
+  atVega: ["Vega", "维加"],
+  atWin1y: ["1Y", "1年"],
+  atWin3y: ["3Y", "3年"],
+  atWinAll: ["All", "全部"],
+  atWinAria: ["History window", "历史窗口"],
+  atToday: ["Latest", "最新"],
+  atRank: ["Rank in window", "窗口内排名"],
+  atTypical: ["Median", "中位数"],
+  atRange: ["Usual range", "常见区间"],
+  atCoverage: ["{n} sessions since {since}.", "自 {since} 起共 {n} 个交易日。"],
+  atTruncated: [
+    "Shorter than the window requested — the published history does not reach that far.",
+    "短于所选窗口——已发布历史未覆盖该长度。",
+  ],
+  atBandLegend: [
+    "Shaded band = the 5th–95th percentile of this window; dashed line = its median.",
+    "阴影带为该窗口的第 5–95 百分位；虚线为其中位数。",
+  ],
+  atNone: ["No positioning history published for this ticker yet.", "该品种暂无持仓历史数据。"],
+
+  // ── W2 · Spot–vol relationship ─────────────────────────────────────────────
+  svTitle: ["Spot–vol relationship", "现货与波动率关系"],
+  svLead: [
+    "Daily change in at-the-money implied vol regressed on the day's move. The gauge asks whether vol moved more than the move usually implies — not whether vol is high.",
+    "以当日涨跌幅回归平值隐含波动率的日变化。仪表衡量的是波动率相对该涨跌幅是否反应过度，而非波动率本身是否偏高。",
+  ],
+  svTierWhy: [
+    "Two market-quoted series regressed against each other, with n and R² stated. No dealer-sign assumption enters this reading.",
+    "两组市场报价序列的回归，并给出样本量与判定系数。该读数不涉及做市商符号假设。",
+  ],
+  svBeta: ["Vol pts per +1%", "每 +1% 的波动点"],
+  svR2: ["Explained", "可解释比例"],
+  svVerdict: ["Today", "今日"],
+  svOver: ["Overvixed", "波动率偏高"],
+  svUnder: ["Undervixed", "波动率偏低"],
+  svInline: ["In line", "符合"],
+  svUnknown: ["Not graded", "未评级"],
+  svGaugeAria: ["Vol reaction versus the regression", "波动率反应与回归对比"],
+  svToday: [
+    "Latest session moved {r}; implied vol changed {a} pts against {p} expected.",
+    "最新交易日涨跌 {r}；隐含波动率变化 {a} 点，预期为 {p} 点。",
+  ],
+  svLegend: [
+    "Fitted over the last {n} sessions. Ring marks the latest session.",
+    "基于最近 {n} 个交易日拟合。圆环标记最新交易日。",
+  ],
+  svNone: [
+    "Not enough paired sessions to fit a relationship yet ({n} so far).",
+    "配对交易日不足，暂无法拟合关系（当前 {n} 个）。",
+  ],
+
+  // ── W2 · Positioning extremes by horizon ───────────────────────────────────
+  exTitle: ["Where gamma sits, by horizon", "各期限的伽马集中位置"],
+  exLead: [
+    "The heaviest gamma strike each side of spot, split by time to expiry. Near-dated concentration decays within days; far-dated persists.",
+    "按到期时间划分，现价两侧伽马最重的行权价。近月集中度数日内即衰减，远月则持续存在。",
+  ],
+  exTierWhy: [
+    "Measures where dealer gamma concentrates, under the payload's sign convention. It is not a claim that price will respect these levels — a graded version arrives with the level report card.",
+    "在数据的符号约定下衡量做市商伽马的集中位置；并非断言价格会尊重这些水平——评级版本将随水平评分卡推出。",
+  ],
+  exColHorizon: ["Horizon", "期限"],
+  exColBelow: ["Heaviest below", "下方最重"],
+  exColAbove: ["Heaviest above", "上方最重"],
+  exNear: ["0–5 days", "0–5 天"],
+  exSwing: ["6–30 days", "6–30 天"],
+  exFar: ["31+ days", "31 天以上"],
+  exUnknown: ["no data", "无数据"],
+  exNoWall: ["none", "无"],
+  exNone: [
+    "No strike-by-expiry grid published for this ticker — the horizon split needs both axes together.",
+    "该品种未发布行权价×到期日网格——按期限拆分需要两个维度同时具备。",
+  ],
+  exLegend: [
+    "Strike prices. Blank means no concentration on that side; “no data” means this horizon is not covered.",
+    "为行权价。“无”表示该侧无集中；“无数据”表示该期限未覆盖。",
+  ],
+  exDisclose: [
+    "Concentration of dealer gamma — not a forecast that these levels hold.",
+    "为做市商伽马的集中位置，并非这些水平将保持有效的预测。",
+  ],
 } as const;
 
 type MscKey = keyof typeof MSC_LEX;

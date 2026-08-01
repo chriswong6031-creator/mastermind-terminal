@@ -28,6 +28,8 @@ import { trackSearch } from "@/lib/searchTrack";
 import { makeMscT } from "./mscStrings";
 import { MarketStructureBody } from "./MarketStructureBody";
 import type { MscMoves } from "@/lib/marketStructure";
+import type { AggTrendPayload } from "@/lib/aggTrend";
+import type { GexMatrix } from "@/lib/gexLadder";
 import type { GexPayload } from "@/components/gexdesk/GexDeskView";
 
 const DEFAULT_ROOT = "SPY";
@@ -73,6 +75,11 @@ export function PositioningView() {
   const [inputVal, setInputVal] = useState(DEFAULT_ROOT);
   const [gex, setGex] = useState<GexPayload | null>(null);
   const [moves, setMoves] = useState<MscMoves | null>(null);
+  // W2 history cards. Both stores are optional and independently cadenced from the
+  // nightly ladder, so neither is allowed to gate loading or error state — a root with
+  // no published history still renders the full single-session tab.
+  const [agg, setAgg] = useState<AggTrendPayload | null>(null);
+  const [matrix, setMatrix] = useState<GexMatrix | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const reqRef = useRef(0);
@@ -100,6 +107,25 @@ export function PositioningView() {
       setMoves(mp && "expected_move" in mp ? mp : null);
       setError(g == null);
       setLoading(false);
+
+      // W2 history, fetched AFTER the tab has already rendered. Both stores are optional
+      // and much larger than the ladder (a nine-year SPY series is ~250KB), so blocking
+      // the first paint on them would make every root feel slower to serve two cards that
+      // are not the reason anyone opened the tab.
+      void (async () => {
+        const [a, mx] = await Promise.all([
+          flowGet(`agg:${root}`).catch(() => null),
+          flowGet(`matrix:${root}`).catch(() => null),
+        ]);
+        if (reqRef.current !== req) return;
+        const ap = pickRoot<AggTrendPayload & { root?: unknown }>(a, root);
+        setAgg(ap && Array.isArray(ap.series) && ap.series.length > 0 ? ap : null);
+        // The matrix payload is not root-keyed the way gex/agg are, but it does carry its
+        // own root — reuse the same refusal so another ticker's strike×expiry grid can
+        // never render under this ticker's header.
+        const mxp = pickRoot<GexMatrix & { root?: unknown }>(mx, root);
+        setMatrix(mxp && Array.isArray(mxp.cells) && mxp.cells.length > 0 ? mxp : null);
+      })();
     })();
   }, [root]);
 
@@ -111,6 +137,8 @@ export function PositioningView() {
       setError(false);
       setGex(null);
       setMoves(null);
+      setAgg(null);
+      setMatrix(null);
       setRoot(next);
     }
   }, [inputVal, root]);
@@ -197,7 +225,7 @@ export function PositioningView() {
             <div>{t("emptyWhy").replace("{sym}", root)}</div>
           </div>
         ) : (
-          <MarketStructureBody gex={gex} moves={moves} lang={lang} />
+          <MarketStructureBody gex={gex} moves={moves} agg={agg} matrix={matrix} lang={lang} />
         )}
       </div>
     </div>
