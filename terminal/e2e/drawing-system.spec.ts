@@ -171,16 +171,28 @@ async function dragDrawing(
   layer: Locator,
   start: { x: number; y: number },
   end: { x: number; y: number },
+  stepPauseMs = 0,
 ) {
   const box = await layer.boundingBox();
   expect(box).not.toBeNull();
   await page.mouse.move(box!.x + box!.width * start.x, box!.y + box!.height * start.y);
   await page.mouse.down();
-  await page.mouse.move(
-    box!.x + box!.width * end.x,
-    box!.y + box!.height * end.y,
-    { steps: 8 },
-  );
+  if (stepPauseMs > 0) {
+    for (let step = 1; step <= 8; step += 1) {
+      const progress = step / 8;
+      await page.mouse.move(
+        box!.x + box!.width * (start.x + (end.x - start.x) * progress),
+        box!.y + box!.height * (start.y + (end.y - start.y) * progress),
+      );
+      await page.waitForTimeout(stepPauseMs);
+    }
+  } else {
+    await page.mouse.move(
+      box!.x + box!.width * end.x,
+      box!.y + box!.height * end.y,
+      { steps: 8 },
+    );
+  }
   await page.mouse.up();
 }
 
@@ -1070,9 +1082,23 @@ test("each drawing tool keeps its own defaults and fill color contract", async (
   const red = page.getByTestId("drawing-style-color-2");
   await red.click();
   await expect(red).toHaveAttribute("aria-pressed", "true");
+  // Escape must cancel the whole pointer transaction, including capture and
+  // the palette's temporary click-through state, before another drag begins.
+  const layerBox = await layer.boundingBox();
+  expect(layerBox).not.toBeNull();
+  await page.mouse.move(layerBox!.x + layerBox!.width * .72, layerBox!.y + layerBox!.height * .18);
+  await page.mouse.down();
+  await page.mouse.move(layerBox!.x + layerBox!.width * .77, layerBox!.y + layerBox!.height * .24);
+  const creationPalette = page.locator(".drawing-creation-palette");
+  await expect(creationPalette).toHaveCSS("pointer-events", "none");
+  await page.keyboard.press("Escape");
+  await expect(creationPalette).toHaveCSS("pointer-events", "auto");
+  await page.mouse.up();
   // Keep this placement clear of the earlier Highlighter/Fib hit regions so
   // the assertion isolates new-tool creation from existing-drawing selection.
-  await dragDrawing(page, layer, { x: .72, y: .18 }, { x: .86, y: .38 });
+  // A paced drag gives the endpoint palette time to follow every pointer step;
+  // it must remain click-through until the creation transaction finishes.
+  await dragDrawing(page, layer, { x: .72, y: .18 }, { x: .86, y: .38 }, 24);
   await expect(layer.locator('g[data-drawing-kind="rect"]:not([data-id="_p"])')).toBeVisible();
   await expect.poll(() => {
     const drawing = saves.flatMap((payload) => payload.drawings ?? []).find((item) => item.kind === "rect");

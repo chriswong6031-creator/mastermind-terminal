@@ -2938,6 +2938,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     cancelPendingDrawingRef.current = () => {
       const current = pending;
       pending = null;
+      if (creationPaletteRef.current) creationPaletteRef.current.style.pointerEvents = "auto";
       if (current?.pointerId != null) {
         try { if (svg.hasPointerCapture(current.pointerId)) svg.releasePointerCapture(current.pointerId); } catch {}
       }
@@ -4994,6 +4995,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       positionCreationPalette(ev.clientX, ev.clientY);
       const { x, y } = rectXY(ev); const a = snap(x, y, ev);
       const spec = getDrawingTool(tl); if (!spec) return;
+      // The palette follows the pointer by a small offset. During a paced
+      // diagonal drag its previous frame can otherwise move underneath the
+      // next pointer sample and steal the gesture before pointerup. Keep it
+      // visible, but make it click-through until this creation transaction
+      // ends; swatches become interactive again immediately on release.
+      creationPalette.style.pointerEvents = "none";
       if (spec.creation.mode === "one-point") {
         pending = {
           kind: spec.id,
@@ -5081,6 +5088,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     svg.addEventListener("pointerup", (ev) => {
       if (!pending) return;
       if (pending.pointerId != null && pending.pointerId !== ev.pointerId) return;
+      creationPalette.style.pointerEvents = "auto";
       const { x, y } = rectXY(ev), b = snap(x, y, ev), current = pending;
       try { if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId); } catch {}
       if (current.mode === "multi") {
@@ -5119,6 +5127,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     });
     svg.addEventListener("pointercancel", (ev) => {
       if (!pending || (pending.pointerId != null && pending.pointerId !== ev.pointerId)) return;
+      creationPalette.style.pointerEvents = "auto";
       try { if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId); } catch {}
       if (pending.mode === "multi" && pending.points.length) {
         pending.pointerId = undefined; pending.candidate = undefined;
@@ -5170,7 +5179,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (!activeRef.current) return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase(); if (tag === "input" || tag === "textarea") return;
       if (e.key === "Escape") {
-        if (pending) { pending = null; renderDraw(); return; }
+        if (pending) { cancelPendingDrawingRef.current(); return; }
         // Esc deselects; double-Esc (within 500ms) resets the chart view (the gesture that replaces the
         // former ⌥R — Alt+R is now the Rectangle tool as the sidebar advertises).
         const now = Date.now();
