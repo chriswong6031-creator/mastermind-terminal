@@ -9,6 +9,10 @@ import {
   buildMarketStructure,
   guardedFlip,
   isPlausibleFlip,
+  hedgeProfile,
+  termStructure,
+  tenorBand,
+  dailyHedging,
   TILT_FRAGILE_ABS,
   REACHABLE_EM,
   type MscStrikeRow,
@@ -398,5 +402,161 @@ describe("buildMarketStructure", () => {
     expect(ms.topology.absGammaStrike).toBeNull();
     expect(ms.expiry.nExp).toBe(0);
     expect(ms.em.levels).toEqual([]);
+  });
+});
+
+// ─── Volland-parity wave 1 ────────────────────────────────────────────────────────────
+
+describe("hedgeProfile", () => {
+  it("negates the position change — a hedge is the mirror of the exposure", () => {
+    const p = hedgeProfile(ROWS, "gamma", 100);
+    // strike 100 carries gamma_net +40 ⇒ dealers must SELL 40
+    expect(p.rows.find((r) => r.strike === 100)!.hedgeMn).toBe(-40);
+    // strike 90 carries −30 ⇒ dealers must BUY 30
+    expect(p.rows.find((r) => r.strike === 90)!.hedgeMn).toBe(30);
+  });
+
+  it("anchors the cumulative curve at spot for second-order greeks", () => {
+    const p = hedgeProfile(ROWS, "gamma", 100);
+    expect(p.anchored).toBe(true);
+    // Walking UP from spot: the first strike at/above spot carries its own value only.
+    const at100 = p.cumulative.find((c) => c.strike === 100)!;
+    expect(at100.cumMn).toBe(-40);
+    // 110 accumulates 100 and 110 together: −40 + −20
+    expect(p.cumulative.find((c) => c.strike === 110)!.cumMn).toBe(-60);
+    // Walking DOWN from spot, 90 is the only strike below: +30
+    expect(p.cumulative.find((c) => c.strike === 90)!.cumMn).toBe(30);
+  });
+
+  it("uses a plain running total for first-order greeks", () => {
+    const p = hedgeProfile(ROWS, "delta", 100);
+    expect(p.anchored).toBe(false);
+    // plain cumsum of the negated deltas, low strike upward: 100, 100-200, ...
+    expect(p.cumulative[0].cumMn).toBe(100);
+    expect(p.cumulative[1].cumMn).toBe(-100);
+    expect(p.cumulative[2].cumMn).toBe(-150);
+  });
+
+  it("falls back to a plain total when spot is unknown", () => {
+    expect(hedgeProfile(ROWS, "gamma", null).anchored).toBe(false);
+    expect(hedgeProfile(ROWS, "gamma", 0).anchored).toBe(false);
+  });
+
+  it("labels the per-unit move each greek is quoted against", () => {
+    expect(hedgeProfile(ROWS, "gamma", 100).perUnit).toBe("1% spot");
+    expect(hedgeProfile(ROWS, "vanna", 100).perUnit).toBe("1 vol point");
+    expect(hedgeProfile(ROWS, "charm", 100).perUnit).toBe("1 day");
+    expect(hedgeProfile(ROWS, "delta", 100).perUnit).toBe("position");
+  });
+
+  it("skips strikes with no value for the selected lens instead of zero-filling", () => {
+    const sparse: MscStrikeRow[] = [
+      { strike: 1, gamma_net: 5, gamma_call: 5, gamma_put: 0 },
+      { strike: 2, gamma_net: 5, gamma_call: 5, gamma_put: 0, vanna_net: 3 },
+    ];
+    expect(hedgeProfile(sparse, "vanna", 1.5).rows).toHaveLength(1);
+  });
+
+  it("survives an empty ladder", () => {
+    const p = hedgeProfile([], "gamma", 100);
+    expect(p.rows).toEqual([]);
+    expect(p.cumulative).toEqual([]);
+    expect(p.maxAbsMn).toBe(0);
+  });
+});
+
+describe("tenorBand", () => {
+  it("buckets by the gap between expirations, per the documented thresholds", () => {
+    expect(tenorBand(1)).toBe("daily");
+    expect(tenorBand(5)).toBe("daily");
+    expect(tenorBand(6)).toBe("weekly");
+    expect(tenorBand(10)).toBe("weekly");
+    expect(tenorBand(11)).toBe("monthly");
+    expect(tenorBand(35)).toBe("monthly");
+    expect(tenorBand(36)).toBe("quarterly");
+    expect(tenorBand(360)).toBe("quarterly");
+    expect(tenorBand(361)).toBe("annual");
+  });
+});
+
+describe("termStructure", () => {
+  const EXPS: MscExpiryRow[] = [
+    { exp: "2026-08-21", gamma_net: 10, delta_net: 40 },
+    { exp: "2026-08-03", gamma_net: 60, delta_net: 200 },
+    { exp: "2026-08-06", gamma_net: -30, delta_net: -60 },
+  ];
+
+  it("sorts by date, negates to a requirement, and accumulates from the nearest expiry", () => {
+    const t = termStructure(EXPS, "gamma", "2026-08-01");
+    expect(t.nodes.map((n) => n.exp)).toEqual(["2026-08-03", "2026-08-06", "2026-08-21"]);
+    expect(t.nodes[0].hedgeMn).toBe(-60);
+    expect(t.nodes[1].hedgeMn).toBe(30);
+    expect(t.nodes[0].cumMn).toBe(-60);
+    expect(t.nodes[1].cumMn).toBe(-30);
+    expect(t.nodes[2].cumMn).toBe(-40);
+  });
+
+  it("computes DTE from the payload asof, never the wall clock", () => {
+    const t = termStructure(EXPS, "gamma", "2026-08-01");
+    expect(t.nodes[0].dte).toBe(2);
+    expect(t.nodes[2].dte).toBe(20);
+    // a different asof moves every DTE, proving it isn't reading "now"
+    const t2 = termStructure(EXPS, "gamma", "2026-07-01");
+    expect(t2.nodes[0].dte).toBe(33);
+  });
+
+  it("bands each node by the gap to the NEXT expiration", () => {
+    const t = termStructure(EXPS, "gamma", "2026-08-01");
+    expect(t.nodes[0].gapDays).toBe(3);
+    expect(t.nodes[0].band).toBe("daily");
+    expect(t.nodes[1].gapDays).toBe(15);
+    expect(t.nodes[1].band).toBe("monthly");
+    // the last expiration has no next, so no band rather than a guessed one
+    expect(t.nodes[2].gapDays).toBeNull();
+    expect(t.nodes[2].band).toBeNull();
+  });
+
+  it("degrades without an asof rather than inventing DTEs", () => {
+    const t = termStructure(EXPS, "gamma", null);
+    expect(t.nodes.every((n) => n.dte === null)).toBe(true);
+    // gaps are expiry-to-expiry, so they survive a missing asof
+    expect(t.nodes[0].gapDays).toBe(3);
+  });
+
+  it("returns an honest empty for no expirations", () => {
+    expect(termStructure(null, "gamma", "2026-08-01").nodes).toEqual([]);
+  });
+});
+
+describe("dailyHedging", () => {
+  it("scales the spot leg by the ticker's own expected move, not a nominal 1%", () => {
+    const d = dailyHedging(aggregate(ROWS), 2.0);
+    // gamma 30 $mn per +1% ⇒ over a 2σ%... 2% move: dealers sell 60
+    expect(d.fromSpotMn).toBeCloseTo(-60, 10);
+    expect(d.emPct).toBe(2.0);
+  });
+
+  it("takes the time leg straight from charm and the vol leg from vanna", () => {
+    const d = dailyHedging(aggregate(ROWS), 1.0, 1);
+    expect(d.fromTimeMn).toBeCloseTo(-2, 10);
+    expect(d.fromVolMn).toBeCloseTo(-30, 10);
+    expect(d.totalMn).toBeCloseTo(-2 - 30 - 30, 10);
+  });
+
+  it("nulls a component whose lens is absent rather than counting it as zero", () => {
+    const bare = aggregate([{ strike: 1, gamma_net: 10, gamma_call: 10, gamma_put: 0 }]);
+    const d = dailyHedging(bare, 1.0);
+    expect(d.fromTimeMn).toBeNull();
+    expect(d.fromVolMn).toBeNull();
+    expect(d.volPts).toBeNull();
+    expect(d.totalMn).toBeCloseTo(-10, 10);
+  });
+
+  it("nulls the spot leg without an expected move", () => {
+    const d = dailyHedging(aggregate(ROWS), null);
+    expect(d.fromSpotMn).toBeNull();
+    expect(d.emPct).toBeNull();
+    // the other legs still stand
+    expect(d.totalMn).toBeCloseTo(-32, 10);
   });
 });
