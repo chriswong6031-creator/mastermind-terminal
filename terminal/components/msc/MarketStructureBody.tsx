@@ -38,7 +38,7 @@
 import React, { useMemo } from "react";
 import { Tip } from "@/components/ui/Tip";
 import { fmtMn, fmtMnMag } from "@/lib/gexLadder";
-import { buildMarketStructure, type MscMoves } from "@/lib/marketStructure";
+import { buildMarketStructure, guardedFlip, type MscMoves } from "@/lib/marketStructure";
 import type { MarketStructure } from "@/lib/marketStructure";
 import { makeMscT, type MscKey } from "./mscStrings";
 import type { Lang } from "@/lib/i18n";
@@ -82,7 +82,11 @@ export function MarketStructureBody({ gex, moves, archived = false, lang }: Prop
       levels: [
         { key: "call_wall", price: gex.call_wall },
         { key: "put_wall", price: gex.put_wall },
-        { key: "flip", price: gex.gamma_flip },
+        // Same guard the Exposure desk applies, from the same helper — the two surfaces
+        // must not disagree about which flips are drawable. See the helper's comment and
+        // docs/audits/2026-08-01-market-structure-core/gamma-flip-defect-rca.md; delete
+        // both call sites when MSC R1.1 repairs the builder.
+        { key: "flip", price: guardedFlip(gex.gamma_flip, gex.spot_ref) },
         { key: "max_pain", price: gex.max_pain ?? null },
         { key: "magnet", price: gex.magnet ?? null },
       ],

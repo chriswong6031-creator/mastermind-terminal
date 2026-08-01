@@ -52,6 +52,7 @@ import type { GexStatePayload } from "./MarketStateCard";
 import { GexGuide } from "./GexGuide";
 import { EodContextBelt } from "@/components/eodcontext/EodContextBelt";
 import { isGexDates, gexSessionOf } from "@/lib/gexSessions";
+import { guardedFlip } from "@/lib/marketStructure";
 import {
   LENS_ALL,
   matrixExpiryCoverage,
@@ -333,13 +334,12 @@ export function GexDeskView() {
 
   const isIndex = isIndexProduct(ticker);
 
-  // Guard a nonsense gamma_flip: the builder's zero-crossing detection sometimes
-  // returns a strike far from spot (e.g. 285 vs spot 748). If the flip is outside
-  // ±20% of spot it isn't a real dealer flip — drop it rather than draw a bogus line.
-  const rawFlip = activePayload?.gamma_flip ?? null;
-  const gammaFlip = rawFlip != null && spot != null && spot > 0 && Math.abs(rawFlip - spot) / spot <= 0.20
-    ? rawFlip
-    : null;
+  // Guard a nonsense gamma_flip. The threshold used to live inline here; it now sits in
+  // lib/marketStructure.ts so this desk and the Positioning tab cannot disagree about
+  // which flips are drawable, and so the whole workaround is deleted in one place when
+  // MSC R1.1 repairs the builder. Root cause + measurements:
+  // docs/audits/2026-08-01-market-structure-core/gamma-flip-defect-rca.md
+  const gammaFlip = guardedFlip(activePayload?.gamma_flip ?? null, spot);
   const levels = {
     callWall: activePayload?.call_wall ?? null,
     putWall: activePayload?.put_wall ?? null,
