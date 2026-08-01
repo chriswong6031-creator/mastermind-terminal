@@ -85,46 +85,6 @@ export const REACHABLE_EM = 1.5;
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
-// ─── Gamma-flip plausibility guard (TEMPORARY — delete when MSC R1.1 lands) ──────────
-
-/**
- * How far from spot a published `gamma_flip` may sit before we refuse to draw it.
- *
- * ⚠️ This is a WORKAROUND for a confirmed upstream defect, not a modelling choice.
- * `engine/options_hub.py::_find_gamma_flip` computes the zero-crossing of the running
- * partial sum of dealer gamma ACROSS THE STRIKE LADDER with gammas frozen at today's
- * spot — a different mathematical object from the real flip, which is the hypothetical
- * spot at which the whole book, RE-PRICED there, has zero net gamma. `engine/gex_engine.py`
- * already computes the latter correctly on a ±25% spot grid; the hub payload just doesn't
- * call it. Measured live 2026-08-01: SPY published 275.0 against spot 741.69, QQQ 249.8
- * against 683.55, SPX 8676.93 against 7437.63, IWM null.
- *
- * Full root cause, numeric reproduction and fix spec:
- * docs/audits/2026-08-01-market-structure-core/gamma-flip-defect-rca.md
- *
- * ⚠️ It only catches the GROSS failures. SPX (16.7%) and NVDA (12.6%) sit inside this
- * band and still render — a known, disclosed limitation of the guard. The real repair is
- * masterplan R1.1; **delete this helper and both call sites then.**
- */
-export const FLIP_PLAUSIBLE_PCT = 0.2;
-
-/** True when a published gamma flip is close enough to spot to be worth drawing at all. */
-export function isPlausibleFlip(
-  flip: number | null | undefined,
-  spot: number | null | undefined,
-): boolean {
-  if (!isNum(flip) || !isNum(spot) || spot <= 0) return false;
-  return Math.abs(flip - spot) / spot <= FLIP_PLAUSIBLE_PCT;
-}
-
-/** The published flip when it is plausible, else null. */
-export function guardedFlip(
-  flip: number | null | undefined,
-  spot: number | null | undefined,
-): number | null {
-  return isPlausibleFlip(flip, spot) ? (flip as number) : null;
-}
-
 // ─── Aggregates ──────────────────────────────────────────────────────────────────────
 
 export interface AggregateResult {
