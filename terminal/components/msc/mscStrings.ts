@@ -27,6 +27,15 @@ const MSC_LEX = {
   // for the gamma cards and says nothing true about a regression between two quoted
   // series. Same guarantee, accurate word.
   tierMeasured: ["Measured", "实测"],
+  // ⚠️ The expected-move card is MIXED and takes the weaker label deliberately. The
+  // distances it measures are convention-independent arithmetic over prices and a
+  // quoted vol band; the LEVELS being measured (call wall, put wall, flip) are signed
+  // net-gamma outputs and are not. A reader acts on the level, so the card discloses at
+  // the level's tier, and this string names the split instead of hiding it.
+  emTierWhy: [
+    "The expected-move distances are convention-independent arithmetic. The levels they measure — call wall, put wall, flip — are signed net-gamma outputs and inherit the dealer-sign assumption.",
+    "预期波动距离本身与符号约定无关；但所衡量的水平（看涨墙、看跌墙、翻转点）为带符号净伽马的输出，沿用做市商符号假设。",
+  ],
   tierAWhy: [
     "Depends on gamma magnitude and open interest only — the dealer-sign assumption cannot change this reading.",
     "仅取决于伽马量级与未平仓量——做市商符号假设不会改变该读数。",

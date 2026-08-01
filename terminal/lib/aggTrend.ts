@@ -395,9 +395,20 @@ export interface ExtremesResult {
 }
 
 interface MatrixLike {
+  /** The matrix's OWN session. Authoritative over the caller's when present. */
+  asof?: string | null;
   spot?: number | null;
   cells?: { strike: number; expiry: string; gex: number | null }[];
 }
+
+/**
+ * Calendar days the matrix may trail the ladder before its horizons are untrustworthy.
+ *
+ * Matches MAX_SESSION_GAP_DAYS in gexLadder.ts, which guards the same store for the
+ * same reason: 4 covers a long weekend plus a Monday holiday, and anything wider is the
+ * documented "matrix fell behind" failure mode rather than ordinary cadence.
+ */
+export const MATRIX_MAX_GAP_DAYS = 4;
 
 const DOLLARS_PER_MN = 1e6;
 
@@ -427,12 +438,32 @@ export function extremes(
     cells: 0,
   }));
   const cells = matrix?.cells;
-  const s = isNum(spot) ? spot : isNum(matrix?.spot) ? (matrix.spot as number) : null;
-  if (!Array.isArray(cells) || cells.length === 0 || s == null || s <= 0 || !asof) {
-    return { rows, available: false };
-  }
-  const asofMs = Date.parse(`${asof.slice(0, 10)}T00:00:00Z`);
+  if (!Array.isArray(cells) || cells.length === 0) return { rows, available: false };
+
+  // ⚠️ Date and price the matrix by the MATRIX's own session, not the ladder's.
+  //
+  // These are two independently-cadenced stores. Using the ladder's asof to compute
+  // days-to-expiry re-bands every cell into the wrong horizon; using the ladder's spot
+  // to decide which side of the money a strike sits on can flip a support into a
+  // resistance outright. Both produce a full, confident table describing a session that
+  // is not the one the reader is looking at.
+  const mAsof = typeof matrix?.asof === "string" && matrix.asof ? matrix.asof : asof;
+  const mSpot = isNum(matrix?.spot) ? (matrix.spot as number) : isNum(spot) ? spot : null;
+  if (mSpot == null || mSpot <= 0 || !mAsof) return { rows, available: false };
+
+  const asofMs = Date.parse(`${mAsof.slice(0, 10)}T00:00:00Z`);
   if (!Number.isFinite(asofMs)) return { rows, available: false };
+
+  // Refuse outright when the two stores have drifted apart: a horizon table built from
+  // a stale grid under a fresh header is worse than no table.
+  if (typeof asof === "string" && asof) {
+    const ladderMs = Date.parse(`${asof.slice(0, 10)}T00:00:00Z`);
+    if (Number.isFinite(ladderMs)
+        && Math.abs(ladderMs - asofMs) > MATRIX_MAX_GAP_DAYS * 86_400_000) {
+      return { rows, available: false };
+    }
+  }
+  const s = mSpot;
 
   // strike → $mn, per horizon band.
   const byBand = new Map<HorizonKey, Map<number, number>>();
