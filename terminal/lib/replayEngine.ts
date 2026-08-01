@@ -167,6 +167,54 @@ export function stampMinutes(stamp: string): number {
   return h * 60 + m;
 }
 
+/**
+ * Position every stored frame on an observed-time rail.
+ *
+ * A native range input spaces values evenly, which is actively misleading when the store
+ * contains 10:02, 10:07, then 11:41: the thumb moves one identical notch while the chart
+ * jumps 94 minutes. These fractions preserve the wall-clock distance between frames so a
+ * missing interval is visible before the user scrubs into it. Malformed/degenerate indexes
+ * fall back to even spacing rather than producing an unusable rail.
+ */
+export function frameClockPositions(stamps: string[]): number[] {
+  if (stamps.length <= 1) return stamps.map(() => 0);
+  const mins = stamps.map(stampMinutes);
+  if (mins.some((m) => !Number.isFinite(m))) {
+    return stamps.map((_, i) => i / (stamps.length - 1));
+  }
+  const first = mins[0];
+  const last = mins[mins.length - 1];
+  if (last <= first) return stamps.map((_, i) => i / (stamps.length - 1));
+  return mins.map((m) => Math.min(1, Math.max(0, (m - first) / (last - first))));
+}
+
+export interface FrameGapStats {
+  /** Median observed spacing, in seconds. Null until two valid frames exist. */
+  medianSec: number | null;
+  /** Largest observed spacing, in seconds. Null until two valid frames exist. */
+  maxSec: number | null;
+  /** True when the largest gap is materially larger than the typical spacing. */
+  irregular: boolean;
+}
+
+/** Measured index spacing; this describes what was stored, never a configured target. */
+export function frameGapStats(stamps: string[]): FrameGapStats {
+  if (stamps.length < 2) return { medianSec: null, maxSec: null, irregular: false };
+  const mins = stamps.map(stampMinutes);
+  if (mins.some((m) => !Number.isFinite(m))) {
+    return { medianSec: null, maxSec: null, irregular: false };
+  }
+  const gaps = mins.slice(1).map((m, i) => (m - mins[i]) * 60).filter((v) => v > 0);
+  if (!gaps.length) return { medianSec: null, maxSec: null, irregular: false };
+  const ordered = [...gaps].sort((a, b) => a - b);
+  const mid = Math.floor(ordered.length / 2);
+  const medianSec = ordered.length % 2
+    ? ordered[mid]
+    : (ordered[mid - 1] + ordered[mid]) / 2;
+  const maxSec = ordered[ordered.length - 1];
+  return { medianSec, maxSec, irregular: maxSec > Math.max(medianSec * 1.8, medianSec + 120) };
+}
+
 // ─── Scrubber annotations: session structure ────────────────────────────────
 //
 // The three session landmarks the replay track can annotate WITHOUT any extra data: the RTH

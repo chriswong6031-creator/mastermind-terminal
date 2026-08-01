@@ -17,7 +17,14 @@ import React from "react";
 import { useReplay } from "./replayContext";
 import { makeSurfaceT } from "./surfaceStrings";
 import type { SurfaceKey } from "./surfaceStrings";
-import { REPLAY_SPEEDS, fmtStamp, sessionBands, type ScrubberBandKey } from "@/lib/replayEngine";
+import {
+  REPLAY_SPEEDS,
+  fmtStamp,
+  frameClockPositions,
+  frameGapStats,
+  sessionBands,
+  type ScrubberBandKey,
+} from "@/lib/replayEngine";
 import type { Lang } from "@/lib/i18n";
 
 /** Label + aria key per session-structure band. */
@@ -26,6 +33,15 @@ const BAND_STR: Record<ScrubberBandKey, { label: SurfaceKey; aria: SurfaceKey }>
   power: { label: "bandPower", aria: "bandPowerAria" },
   close: { label: "bandClose", aria: "bandCloseAria" },
 };
+
+function fmtGap(seconds: number | null): string {
+  if (seconds == null) return "—";
+  if (seconds >= 60) {
+    const mins = seconds / 60;
+    return `${Number.isInteger(mins) ? mins.toFixed(0) : mins.toFixed(1)}m`;
+  }
+  return `${Math.round(seconds)}s`;
+}
 
 export function ReplayBar({
   lang,
@@ -44,20 +60,23 @@ export function ReplayBar({
   const { stamps, frame, playing, speed } = state;
   const hasFrames = stamps.length > 0;
   const bands = sessionBands(stamps);
+  const positions = frameClockPositions(stamps);
+  const gaps = frameGapStats(stamps);
+  const currentPosition = positions[frame] ?? 0;
   const showPicker = sessions.length > 0 && !!onSessionDate;
   // Transport geometry, dimmed when there is nothing to step through. The .obs-chip
   // primitive has no :disabled state of its own, so the affordance is carried here.
   const btn: React.CSSProperties = hasFrames ? ICON_BTN : { ...ICON_BTN, ...ICON_BTN_OFF };
 
   return (
-    <div style={BAR} role="group" aria-label="replay">
+    <div style={BAR} className="obs-surf-replay" role="group" aria-label="replay">
       {/* Session picker — multi-day replay. A native select keeps the keyboard and the
           mobile pickers for free, and stays out of the replay keybinds (the provider
           ignores keys while a form control has focus). */}
       {showPicker && (
         <select
           style={SESSION_SELECT}
-          className="num"
+          className="num obs-surf-replay-session"
           aria-label={t("sessionPickerAria")}
           value={sessionDate ?? ""}
           onChange={(e) => onSessionDate!(e.target.value || null)}
@@ -72,7 +91,7 @@ export function ReplayBar({
       {/* Transport buttons — .obs-chip shell at a 36px tap target. Play carries the
           primary-action tint at rest and goes fully brand-filled (.on) while running,
           so "is it playing?" is answerable from across the desk. */}
-      <div style={BTN_GROUP}>
+      <div style={BTN_GROUP} className="obs-surf-replay-transport">
         <button className="obs-chip" style={btn} aria-label={t("replayFirst")} disabled={!hasFrames}
           onClick={() => dispatch({ type: "toFirst" })}>
           <Icon d="M18 6l-6 6 6 6M8 6v12" />
@@ -98,7 +117,7 @@ export function ReplayBar({
       </div>
 
       {/* Speeds */}
-      <div style={SPEED_GROUP} role="group" aria-label={t("replaySpeedAria")}>
+      <div style={SPEED_GROUP} className="obs-surf-replay-speeds" role="group" aria-label={t("replaySpeedAria")}>
         {REPLAY_SPEEDS.map((s) => (
           <button key={s} className={`obs-chip${speed === s ? " on" : ""}`} style={SPEED_CHIP}
             aria-pressed={speed === s} onClick={() => dispatch({ type: "setSpeed", speed: s })}>
@@ -107,13 +126,19 @@ export function ReplayBar({
         ))}
       </div>
 
-      {/* Scrubber + its session-structure rail. The rail is an annotation strip above the
-          track, not an overlay on it: a native range input insets its own track by half a
-          thumb, and a strip that pretended to align pixel-exactly with the handle would be
-          claiming a precision it doesn't have. The exact time always reads out to the right. */}
-      <div style={SCRUB_WRAP}>
+      {/* Observed-frame rail. Dots sit at their real wall-clock positions, so a missing
+          interval becomes a visible gap instead of one innocent-looking range-input notch. */}
+      <div style={SCRUB_WRAP} className="obs-surf-replay-rail-wrap">
+        <div className="obs-surf-replay-rail-head">
+          <span>{t("frameRailLabel")}</span>
+          {gaps.medianSec != null && (
+            <span className={gaps.irregular ? "is-irregular" : ""}>
+              {gaps.irregular ? t("frameGapIrregular") : t("frameGapRegular")} · {fmtGap(gaps.medianSec)}
+            </span>
+          )}
+        </div>
         {hasFrames && bands.length > 0 && (
-          <div style={BAND_RAIL} role="group" aria-label={t("bandsAria")}>
+          <div style={BAND_RAIL} className="obs-surf-replay-bands" role="group" aria-label={t("bandsAria")}>
             {bands.map((b) => {
               const isSpan = b.to > b.from;
               const s = BAND_STR[b.key];
@@ -144,21 +169,44 @@ export function ReplayBar({
             })}
           </div>
         )}
-        <input
-          type="range"
-          style={SCRUB}
-          min={0}
-          max={Math.max(0, stamps.length - 1)}
-          step={1}
-          value={frame}
-          disabled={!hasFrames}
-          aria-label={t("replayScrubAria")}
-          onChange={(e) => dispatch({ type: "setFrame", frame: Number(e.target.value) })}
-        />
+        <div
+          className={`obs-surf-frame-rail${hasFrames ? "" : " is-disabled"}`}
+          role="slider"
+          tabIndex={hasFrames ? 0 : -1}
+          aria-valuemin={1}
+          aria-valuemax={Math.max(1, stamps.length)}
+          aria-valuenow={hasFrames ? frame + 1 : 1}
+          aria-valuetext={hasFrames ? `${fmtStamp(asOfStamp)}, ${frame + 1} of ${stamps.length}` : t("replayNoFrames")}
+          aria-label={t("frameRailAria")}
+          onPointerDown={(e) => {
+            if (!hasFrames) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const at = Math.min(1, Math.max(0, (e.clientX - rect.left) / Math.max(1, rect.width)));
+            let nearest = 0;
+            let distance = Infinity;
+            positions.forEach((p, i) => {
+              const d = Math.abs(p - at);
+              if (d < distance) { distance = d; nearest = i; }
+            });
+            dispatch({ type: "setFrame", frame: nearest });
+          }}
+        >
+          <span className="obs-surf-frame-track" aria-hidden />
+          <span className="obs-surf-frame-progress" style={{ width: `${currentPosition * 100}%` }} aria-hidden />
+          {stamps.map((stamp, i) => (
+            <span
+              key={`${stamp}:${i}`}
+              className={`obs-surf-frame-dot${i === frame ? " is-current" : i < frame ? " is-past" : ""}`}
+              style={{ left: `${(positions[i] ?? 0) * 100}%` }}
+              aria-hidden
+              data-frame-position={(positions[i] ?? 0).toFixed(4)}
+            />
+          ))}
+        </div>
       </div>
 
       {/* Time + frame counter + LIVE / archived-session badge */}
-      <div style={READOUT}>
+      <div style={READOUT} className="obs-surf-replay-readout">
         {hasFrames ? (
           <>
             <span style={STAMP_TXT} className="num">{fmtStamp(asOfStamp)}</span>
@@ -273,16 +321,6 @@ const SCRUB_WRAP: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 2,
-};
-
-// Behaviour untouched (native range, same min/max/step/handlers) — a slightly taller
-// track just makes the session easier to land on.
-const SCRUB: React.CSSProperties = {
-  width: "100%",
-  margin: 0,
-  height: 6,
-  accentColor: "var(--brand)",
-  cursor: "pointer",
 };
 
 const BAND_RAIL: React.CSSProperties = {

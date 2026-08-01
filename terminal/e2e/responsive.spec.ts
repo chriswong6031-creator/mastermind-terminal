@@ -329,7 +329,7 @@ test("Prophet fills its Options workspace at every supported width", async ({ pa
   expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
 });
 
-test("Flow Surface opens on a readable selected-session viewport at every supported width", async ({ page }, testInfo) => {
+test("Intraday Surface separates session, observed frames, and candle interval at every supported width", async ({ page }, testInfo) => {
   const candleResponsePromise = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return url.pathname === "/api/intraday" &&
@@ -338,7 +338,7 @@ test("Flow Surface opens on a readable selected-session viewport at every suppor
   });
   await page.goto("/options?tab=surface");
 
-  await expect(page.getByText("Flow Surface", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Intraday Flow Surface", { exact: true })).toBeVisible({ timeout: 15_000 });
   const candleInterval = page.getByRole("group", { name: "Candle interval" });
   await expect(candleInterval).toBeVisible();
   await expect(candleInterval).toContainText("Candles");
@@ -356,12 +356,26 @@ test("Flow Surface opens on a readable selected-session viewport at every suppor
   const dayStart = Date.UTC(2026, 6, 6) / 1000;
   expect(candlePayload.bars?.every((bar) => bar[0] >= dayStart && bar[0] < dayStart + 86_400)).toBe(true);
 
-  const provenance = page.locator(".obs-asof").filter({ hasText: "snapshots" });
-  await expect(provenance).toContainText("78 snapshots");
-  await expect(provenance).toContainText("~5m observed");
-  await expect(page.locator(".obs-note")).toContainText("One selected-session OPRA per-strike field");
-  await expect(page.locator(".obs-note")).toContainText("Candle intervals change price bars only");
-  await expect(page.locator(".obs-note")).toContainText("past fields appear in the session picker when retained");
+  const contractStrip = page.locator(".obs-surf-data-strip");
+  await expect(contractStrip).toContainText("Session");
+  await expect(contractStrip).toContainText("2026-07-06");
+  await expect(contractStrip).toContainText("78 observed frames");
+  await expect(contractStrip).toContainText("~5m observed");
+  await expect(contractStrip).toContainText("Price");
+  await expect(contractStrip).toContainText("5m candles");
+  await expect(contractStrip).toContainText("Observed only · no interpolation");
+
+  const timeWindow = page.getByRole("group", { name: "Chart time window" });
+  await expect(timeWindow).toBeVisible();
+  await expect(timeWindow.locator("button").filter({ hasText: "Surface window" })).toHaveAttribute("aria-pressed", "true");
+  await expect(timeWindow.locator("button").filter({ hasText: "Full session" })).toHaveAttribute("aria-pressed", "false");
+
+  const frameRail = page.locator(".obs-surf-frame-rail");
+  await expect(frameRail).toHaveAttribute("role", "slider");
+  await expect(frameRail).toHaveAttribute("aria-valuemax", "78");
+  await expect(page.locator(".obs-surf-frame-dot")).toHaveCount(78);
+  const chartBox = await page.locator(".obs-surf-chart-area").boundingBox();
+  expect(chartBox?.width ?? 0).toBeGreaterThan(300);
 
   const overflow = await page.evaluate(() => ({
     viewport: window.innerWidth,

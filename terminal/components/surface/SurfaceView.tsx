@@ -32,7 +32,7 @@ import { useFlowStream } from "@/lib/flowStream";
 import { flowGet } from "@/lib/flowClientCache";
 import { isSurfaceDates, isSurfaceIndex } from "@/lib/surfaceContract";
 import { ReplayProvider, useReplay } from "./replayContext";
-import { SurfacePane } from "./SurfacePane";
+import { SurfacePane, type SurfaceTimeWindow } from "./SurfacePane";
 import { ReplayBar } from "./ReplayBar";
 import { SessionFlowPane } from "./SessionFlowPane";
 import { SurfaceSyncProvider } from "./surfaceSync";
@@ -63,11 +63,13 @@ interface TidePayload { minutes?: TideLite[]; session_date?: string }
  * (Space / arrows / Home / End) only fire while this group is engaged.
  */
 function GroupRoot({
-  root, view, aggMin, themeSig, pins, onTogglePin, tideMinutes, tideDate, sessions, onSessionDate,
+  root, view, aggMin, timeWindow, onTimeWindow, themeSig, pins, onTogglePin, tideMinutes, tideDate, sessions, onSessionDate,
 }: {
   root: string;
   view: ViewMode;
   aggMin: number;
+  timeWindow: SurfaceTimeWindow;
+  onTimeWindow: (window: SurfaceTimeWindow) => void;
   themeSig: string;
   pins: SurfacePin[];
   onTogglePin: (strike: number, metric: string, value: number | null) => void;
@@ -78,7 +80,9 @@ function GroupRoot({
 }) {
   const { lang } = useLang();
   const { bindGroupRef, archived } = useReplay();
-  const [sessionOpen, setSessionOpen] = useState(true);
+  // Surface is the primary workspace; the supporting tide stays one click away without
+  // taking half the chart on first load (especially at laptop and mobile heights).
+  const [sessionOpen, setSessionOpen] = useState(false);
 
   return (
     <div ref={bindGroupRef} tabIndex={-1} style={GROUP_ROOT}>
@@ -88,6 +92,8 @@ function GroupRoot({
           themeSig={themeSig}
           pins={pins}
           onTogglePin={onTogglePin}
+          timeWindow={timeWindow}
+          onTimeWindowChange={onTimeWindow}
         />
       ) : (
         <SurfaceSyncProvider>
@@ -103,6 +109,8 @@ function GroupRoot({
                   themeSig={themeSig}
                   pins={pins}
                   onTogglePin={onTogglePin}
+                  timeWindow={timeWindow}
+                  onTimeWindowChange={onTimeWindow}
                 />
               </div>
             ))}
@@ -146,6 +154,7 @@ export function SurfaceView() {
   const [missingRoot, setMissingRoot] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>("single");
   const [aggMin, setAggMin] = useState(5);
+  const [timeWindow, setTimeWindow] = useState<SurfaceTimeWindow>("surface");
   const [pins, setPins] = useState<SurfacePin[]>([]);
   // Restored from localStorage in the initializer. Safe because OptionsHubView loads this
   // view with `ssr: false`, so there is no server render to mismatch against — and
@@ -229,13 +238,13 @@ export function SurfaceView() {
   return (
     <div ref={rootRef} style={{ ...OUTER, ...themeVars }} className="obs obs-ambient">
       {/* ── Toolbar ──────────────────────────────────────────────────────────── */}
-      <div style={HEAD}>
+      <div style={HEAD} className="obs-surf-head">
         <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
           <span style={TITLE}>{t("surfaceTitle")}</span>
           <span style={SUBTITLE}>{t("surfaceSubtitle")}</span>
         </div>
 
-        <div style={TOOLS}>
+        <div style={TOOLS} className="obs-surf-head-tools">
           {/* View: single field vs the 2×2 metric grid */}
           <div style={GROUP} role="group" aria-label={t("viewAria")}>
             <button className={`obs-chip${view === "single" ? " on" : ""}`} style={CHIP}
@@ -261,6 +270,20 @@ export function SurfaceView() {
             </div>
           )}
 
+          {view === "quad" && (
+            <div style={GROUP} role="group" aria-label={t("timeWindowAria")}>
+              <span className="obs-lbl">{t("timeWindow")}</span>
+              <button className={`obs-chip${timeWindow === "surface" ? " on" : ""}`} style={CHIP}
+                aria-pressed={timeWindow === "surface"} onClick={() => setTimeWindow("surface")}>
+                {t("timeWindowSurface")}
+              </button>
+              <button className={`obs-chip${timeWindow === "session" ? " on" : ""}`} style={CHIP}
+                aria-pressed={timeWindow === "session"} onClick={() => setTimeWindow("session")}>
+                {t("timeWindowSession")}
+              </button>
+            </div>
+          )}
+
           <SurfaceStylePopover
             lang={lang}
             theme={theme}
@@ -274,6 +297,7 @@ export function SurfaceView() {
           <div style={TICKER_GROUP}>
             <input
               style={TICKER_INPUT}
+              className="obs-surf-root-input"
               list="surface-roots"
               value={inputVal}
               onChange={(e) => setInputVal(e.target.value.toUpperCase())}
@@ -347,6 +371,8 @@ export function SurfaceView() {
             root={root}
             view={view}
             aggMin={aggMin}
+            timeWindow={timeWindow}
+            onTimeWindow={setTimeWindow}
             themeSig={themeSig}
             pins={pins}
             onTogglePin={togglePin}
