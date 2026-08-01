@@ -263,6 +263,42 @@ Full detail in `docs/audits/2026-08-01-market-structure-core/repo-integration-ma
   **No R2 publisher yet — this is the single most valuable unlit asset we own.**
 - 60 GB EOD store with a 51 GB full greek surface, 2017→present, 380+ roots.
 
+### 2.1 ⚠️ Measured on LIVE production R2 (2026-08-01) — the flip defect is real and shipping
+
+Predicted from the code, then confirmed against the public R2 payloads. **Two builders publish a
+`gamma_flip` for the same root and they disagree catastrophically:**
+
+| Root | spot | `options_hub/gex` flip | distance | plausible? |
+|---|---|---|---|---|
+| SPY | 741.69 | **275.0** | **62.9% away** | no |
+| QQQ | 683.55 | **249.8** | **63.5% away** | no |
+| SPX | 7437.63 | **8676.93** | **16.7% away** (above both walls) | no |
+| NVDA | 195.04 | 219.55 | 12.6% away | doubtful |
+| IWM | 292.59 | `null` | — | absent |
+
+Against `options_structure/gex_state/SPY.json`, whose flip is computed by a **different** builder
+(`engine/gex_state.py`): **752.2 with spot 750.72 — 0.2% away.** Sane.
+
+So the Exposure desk currently renders a nonsense flip in its summary bar and ladder while the
+Market State card beside it renders a sane one. The cause is exactly what §2's table predicted:
+`engine/options_hub.py::_find_gamma_flip` takes the nearest zero-crossing of *cumulative net GEX by
+strike*, which on a put-heavy book walks the cumulative sum far down the ladder; `gex_state` does
+not use that method. **The fixture hides it** — `gex_fixture.json` carries a sane SPY flip of 748.3,
+which is why every local verification pass has looked correct.
+
+Consequences for sequencing:
+- **R1.1 is promoted to the critical path** and is no longer a refinement — it is a live-data repair.
+  Route the hub payload's flip through `engine/gex_engine.py`'s existing ±25% spot-grid
+  re-evaluation, and reconcile against `gex_state` before cutting over.
+- The Positioning tab's **levels-in-expected-moves module surfaces this on sight**: SPY's flip
+  renders at **69 expected moves away, tagged "far"**, instead of being drawn as a confident level.
+  That is the honesty tiering doing its job, and it is why the module ships in wave 1.
+- Add a **cross-builder agreement check** (hub flip vs gex_state flip, alert past a tolerance) to the
+  R0.9 dead-man switch set — two builders silently disagreeing by 63% is exactly the class of failure
+  that no freshness anchor catches.
+- Separately: `options_structure/gex_state/SPY.json` was stamped **2026-07-17** while
+  `options_hub/gex/SPY.json` was **2026-07-30** — a 13-day-stale lane, its own R0.9 item.
+
 **Where our math is behind the category:**
 
 | Gap | Detail | Fix |
