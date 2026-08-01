@@ -81,6 +81,25 @@ const THIN: React.CSSProperties = {
   minHeight: 64, padding: "10px 2px",
 };
 const THIN_WHY: React.CSSProperties = { fontSize: 10.5, color: "var(--muted)", lineHeight: 1.5, maxWidth: 460 };
+/* Dated-replay controls (R0.10). The select mirrors the ticker input's inset idiom at the
+   strip's compact scale; the load button is a quiet bordered action, not a primary CTA —
+   replay is an inspection tool, not a headline feature. */
+const PICKER: React.CSSProperties = {
+  height: 24, padding: "0 6px", fontSize: 10.5, fontWeight: 600,
+  background: "var(--inset)", color: "var(--text)",
+  border: "1px solid var(--line)", borderRadius: 6, outline: "none",
+  fontVariantNumeric: "tabular-nums", maxWidth: 150,
+};
+const LOAD_BTN: React.CSSProperties = {
+  marginTop: 3, height: 22, padding: "0 8px", fontSize: 10, fontWeight: 700,
+  letterSpacing: "0.03em", background: "transparent", color: "var(--brand-2)",
+  border: "1px solid var(--brand-2)", borderRadius: 6, cursor: "pointer",
+  alignSelf: "flex-start",
+};
+const VIEWING_TAG: React.CSSProperties = {
+  marginTop: 3, fontSize: 10, fontWeight: 700, letterSpacing: "0.03em",
+  color: "var(--warn)", fontVariantNumeric: "tabular-nums",
+};
 
 /** Level formatter: drop a trailing ".0" on round strikes, else one decimal. */
 const fmtLvl = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
@@ -96,9 +115,25 @@ const PAD_B = 10;
 export const GexHistory = memo(function GexHistory({
   history,
   lang,
+  sessionDates,
+  activeSession,
+  liveDate,
+  onLoadSession,
 }: {
   history: GexPayload["history"];
   lang: Lang;
+  /**
+   * Dated-replay wiring (R0.10) — all optional so the strip renders unchanged where the
+   * desk doesn't offer replay. `sessionDates` is the gex_history dates.json index
+   * (newest-first, validated by isGexDates upstream; null = index absent → dropdown
+   * hidden, the readout's explicit per-date probe remains). `liveDate` is the live
+   * payload's own session, filtered out of the dropdown (loading it would just replay
+   * the present). `onLoadSession(null)` returns to live.
+   */
+  sessionDates?: string[] | null;
+  activeSession?: string | null;
+  liveDate?: string | null;
+  onLoadSession?: (date: string | null) => void;
 }) {
   const t = makeGexT(lang);
   // R7: non-finite sessions are dropped BEFORE the extents are taken — one NaN used to drag
@@ -171,11 +206,38 @@ export const GexHistory = memo(function GexHistory({
   };
   const regimeShifted = !!prev && !!cur && prev.regime !== cur.regime;
 
+  // Dropdown dates: the index minus the live session (loading "today" as an archive is a
+  // no-op wearing a chip). The dropdown enumerates ONLY what the index promises — blind
+  // probing is the readout button's explicit, one-date-per-click job.
+  const pickerDates = (sessionDates ?? []).filter((d) => d !== liveDate);
+  const showPicker = !!onLoadSession && pickerDates.length > 0;
+  // The scrubbed session can be loaded as a full ladder when it isn't the live one.
+  const canLoadCur = !!onLoadSession && !!cur && !isNow && cur.date !== liveDate;
+  const curIsActive = !!cur && activeSession === cur.date;
+
   return (
     <div style={WRAP} className="obs obs-gex-history">
       <div style={HEADER}>
         <span style={LABEL}>{t("gexHistTitle")}</span>
         <span style={HEADER_RIGHT}>
+          {showPicker && (
+            <select
+              style={PICKER}
+              value={activeSession ?? ""}
+              aria-label={t("sessionPickerAria")}
+              onChange={(e) => onLoadSession?.(e.target.value || null)}
+            >
+              <option value="">{t("sessionLive")}</option>
+              {/* A session loaded via the readout probe may be absent from the index
+                  (that's the point of the probe) — keep the select honest about it. */}
+              {activeSession && !pickerDates.includes(activeSession) && (
+                <option value={activeSession}>{activeSession}</option>
+              )}
+              {pickerDates.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          )}
           {hasSeries && <span style={HINT}>{t("gexHistScrubHint")}</span>}
           <span style={SESSIONS}>{rows.length} {t("gexHistSessions")}</span>
         </span>
@@ -299,6 +361,20 @@ export const GexHistory = memo(function GexHistory({
                 {regimeLabel(cur.regime)}
               </span>
             </span>
+            {/* R0.10 — the scrubber's step up from scalars: load THIS session's full
+                by-strike ladder from the gex_history plane. An explicit per-date probe,
+                so it works even for sessions the dates index doesn't (yet) list; a hole
+                lands in the desk's honest missing-session state, never a fabricated
+                ladder. Hidden at the live session (the ladder below already IS it). */}
+            {canLoadCur && (
+              curIsActive ? (
+                <span style={VIEWING_TAG}>{t("viewingSession")} · {cur.date}</span>
+              ) : (
+                <button style={LOAD_BTN} onClick={() => onLoadSession?.(cur.date)}>
+                  {t("loadFullLadder")}
+                </button>
+              )
+            )}
           </div>
         )}
       </div>
