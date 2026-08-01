@@ -1,13 +1,14 @@
 "use client";
 
-import { useId, type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode } from "react";
 import {
   getGuideVisualMetadata,
   localizeGuideText,
   type GuideLanguage,
   type GuideVisualId,
 } from "@/lib/guides/experience";
-import { useGuidePlayback } from "./useGuidePlayback";
+import styles from "./GuideVisual.module.css";
+import { GUIDE_PROOF_DURATION_MS, useGuidePlayback } from "./useGuidePlayback";
 
 export interface GuideVisualProps {
   suiteKey: string;
@@ -354,28 +355,74 @@ function StructureMarketScene({ lang }: { lang: GuideLanguage }) {
 
 function StructureOrderBlockScene({ lang }: { lang: GuideLanguage }) {
   const l = (en: string, zh: string) => lang === "zh" ? zh : en;
+  const leadIn: readonly CandleDatum[] = [
+    [72, 178, 164, 188, 153],
+    [106, 164, 184, 193, 154],
+    [140, 181, 205, 216, 169],
+  ];
+  const origin: readonly CandleDatum[] = [[174, 201, 229, 241, 191]];
+  const displacement: readonly CandleDatum[] = [
+    [210, 230, 176, 238, 164],
+    [246, 177, 143, 187, 132],
+    [282, 144, 116, 154, 105],
+    [318, 117, 94, 127, 84],
+  ];
+  const returnLeg: readonly CandleDatum[] = [
+    [354, 95, 119, 130, 86],
+    [390, 118, 151, 161, 108],
+    [426, 150, 184, 195, 140],
+    [462, 183, 217, 230, 174],
+  ];
+  const rejection: readonly CandleDatum[] = [
+    [498, 218, 170, 227, 158],
+    [534, 171, 139, 180, 128],
+    [570, 140, 108, 151, 98],
+    [606, 109, 78, 119, 68],
+    [642, 79, 58, 91, 49],
+  ];
   return (
     <>
       <Grid />
-      <g className="gp-visual-zone gp-visual-zone-bull">
-        <rect x="68" y="221" width="398" height="45" rx="8" />
-        <path d="M68 221H466" />
+      <g className={styles.obLeadIn} aria-hidden="true">
+        <Candles data={leadIn} opacity={0.58} />
       </g>
-      <g className="gp-visual-zone gp-visual-zone-bear">
-        <rect x="348" y="76" width="308" height="43" rx="8" />
-        <path d="M348 119H656" />
+      <g className={styles.obOrigin} data-proof-beat="origin">
+        <rect className={styles.originHalo} x="158" y="187" width="32" height="58" rx="8" />
+        <Candles data={origin} />
+        <Tag x={105} y={254} tone="bear" width={136}>{l("ORIGIN CANDLE", "起始 K 线")}</Tag>
       </g>
-      <Candles />
-      <Tag x={80} y={273} tone="bull" width={112}>{l("BULLISH OB", "看涨订单块")}</Tag>
-      <Tag x={516} y={44} tone="bear" width={118}>{l("BEARISH OB", "看跌订单块")}</Tag>
-      <g className="gp-visual-volume-grade">
-        {[18, 29, 41, 54].map((height, index) => (
-          <rect key={height} x={94 + index * 18} y={210 - height} width="11" height={height} rx="3" />
-        ))}
+      <g className={styles.obDisplacement} data-proof-beat="displacement">
+        <Candles data={displacement} />
+        <path className={styles.impulsePath} d="M174 229L210 176L246 143L282 116L318 94" />
+        <Tag x={220} y={57} tone="bull" width={132}>{l("DISPLACEMENT", "位移确认")}</Tag>
       </g>
-      <Point x={260} y={245} tone="bull" r={7} />
-      <AxisLabel x={180} y={196}>{l("MITIGATION + VOLUME", "回补＋成交量")}</AxisLabel>
-      <Arrow x1={254} y1={187} x2={260} y2={235} tone="bull" />
+      <g className={`gp-visual-zone gp-visual-zone-bull ${styles.obZone}`} data-proof-beat="zone">
+        <rect x="158" y="201" width="510" height="42" rx="8" />
+        <path className={styles.zoneOuterEdge} d="M158 243H668" />
+        <AxisLabel x={202} y={236}>{l("ACTIVE UNTIL A CLOSE BELOW", "收盘跌破前保持有效")}</AxisLabel>
+      </g>
+      <g className={styles.obMitigation} data-proof-beat="mitigation">
+        <Candles data={returnLeg} />
+        <path className={styles.returnPath} d="M318 94C365 99 407 144 462 217" />
+        <Point x={462} y={217} tone="warn" r={7} />
+        <Tag x={390} y={251} tone="warn" width={130}>{l("FIRST RETURN", "首次回补")}</Tag>
+      </g>
+      <g className={styles.obRejection} data-proof-beat="rejection">
+        <Candles data={rejection} />
+        <path className={styles.rejectionPath} d="M462 217C500 198 545 129 642 58" />
+        <Tag x={510} y={46} tone="bull" width={126}>{l("REJECTION", "拒绝后延续")}</Tag>
+      </g>
+      <g
+        className={styles.obInvalidation}
+        data-proof-beat="invalidation"
+        data-proof-outcome="alternative-failure"
+      >
+        <path className={styles.failureProbe} d="M462 217C482 238 505 270 536 282" />
+        <path className={styles.failureCross} d="M526 276L546 288M546 276L526 288" />
+        <Tag x={438} y={300} tone="bear" width={230}>
+          {l("ALTERNATIVE · CLOSE BELOW", "另一结果 · 收盘跌破")}
+        </Tag>
+      </g>
     </>
   );
 }
@@ -490,25 +537,67 @@ function StructureSrScene({ lang }: { lang: GuideLanguage }) {
 
 function StructureMfpScene({ lang }: { lang: GuideLanguage }) {
   const l = (en: string, zh: string) => lang === "zh" ? zh : en;
-  const profile = [42, 66, 98, 138, 190, 246, 286, 224, 168, 116, 74, 48];
+  const profile = [48, 72, 108, 152, 202, 248, 286, 238, 184, 128, 82, 54];
+  const pricePath = "M58 253C102 238 120 201 160 208S211 155 242 168";
+  const valueAreaTop = 97;
   return (
     <>
       <Grid />
-      <Candles data={SWING_CANDLES} opacity={0.52} />
-      <rect className="gp-visual-value-area" x="350" y="102" width="312" height="136" rx="10" />
-      <g className="gp-visual-profile">
+      <g className={styles.mfpAuction} aria-hidden="true">
+        <path className="gp-visual-price-line" d={pricePath} />
+        <path className={styles.auctionBaseline} d="M330 42V318" />
+        <AxisLabel x={56} y={305}>{l("AUCTION BUILDS THE PROFILE", "价格拍卖构建分布")}</AxisLabel>
+      </g>
+      <g className={`gp-visual-profile ${styles.mfpProfile}`} data-proof-beat="profile-build">
         {profile.map((width, index) => (
-          <rect key={`${width}-${index}`} x={660 - width} y={61 + index * 19} width={width} height="12" rx="4" />
+          <rect
+            className={styles.profileBar}
+            key={`${width}-${index}`}
+            x="344"
+            y={57 + index * 20}
+            width={width}
+            height="13"
+            rx="4"
+            style={{ "--bar-index": index } as CSSProperties}
+          />
         ))}
       </g>
-      <path className="gp-visual-poc" d="M352 168H668" />
-      <Tag x={560} y={141} tone="warn" width={76}>POC</Tag>
-      <AxisLabel x={362} y={95}>{l("VALUE AREA", "价值区")}</AxisLabel>
-      <g className="gp-visual-flow-split">
-        <rect x="382" y="276" width="146" height="14" rx="7" />
-        <rect x="528" y="276" width="104" height="14" rx="7" />
+      <g className={styles.mfpPoc} data-proof-beat="poc">
+        <path className="gp-visual-poc" d="M330 177H668" />
+        <Tag x={588} y={150} tone="warn" width={70}>POC</Tag>
       </g>
-      <AxisLabel x={382} y={310}>{l("BUY / SELL PARTICIPATION", "买入／卖出参与")}</AxisLabel>
+      <g className={styles.mfpValueArea} data-proof-beat="value-area">
+        <rect className="gp-visual-value-area" x="330" y={valueAreaTop} width="338" height="160" rx="10" />
+        <path className={styles.valueEdge} d={`M330 ${valueAreaTop}H668M330 257H668`} />
+        <Tag x={340} y={268} tone="accent" width={102}>{l("VALUE AREA", "价值区")}</Tag>
+      </g>
+      <g className={styles.mfpEdgeTest} data-proof-beat="edge-test">
+        <path className={styles.edgeApproach} d={`M242 168C275 151 302 126 330 ${valueAreaTop}`} />
+        <Point x={330} y={valueAreaTop} tone="accent" r={7} />
+        <AxisLabel x={222} y={148}>{l("TEST THE EDGE", "测试价值区边界")}</AxisLabel>
+      </g>
+      <g className={styles.mfpOutcomes} data-proof-beat="acceptance-rejection">
+        <g data-proof-outcome="acceptance-outside">
+          <path
+            className={styles.acceptPath}
+            d={`M330 ${valueAreaTop}C360 82 392 75 424 78S480 69 526 72`}
+          />
+          <Point x={526} y={72} tone="bull" r={5} />
+          <Tag x={488} y={42} tone="bull" width={180}>
+            {l("HOLD OUTSIDE · ACCEPT", "区外企稳 · 接受")}
+          </Tag>
+        </g>
+        <g data-proof-outcome="rejection-back-inside">
+          <path
+            className={styles.rejectPath}
+            d={`M330 ${valueAreaTop}C362 80 390 76 415 82C435 88 441 118 478 137`}
+          />
+          <Point x={478} y={137} tone="bear" r={5} />
+          <Tag x={470} y={110} tone="bear" width={198}>
+            {l("BACK INSIDE · REJECT", "返回区内 · 拒绝")}
+          </Tag>
+        </g>
+      </g>
     </>
   );
 }
@@ -535,22 +624,79 @@ function StructurePatternScene({ lang }: { lang: GuideLanguage }) {
 
 function TrendEngineScene({ lang }: { lang: GuideLanguage }) {
   const l = (en: string, zh: string) => lang === "zh" ? zh : en;
+  const railY = 166;
+  const retestX = 324;
+  const beforeFlip: readonly CandleDatum[] = [
+    [72, 113, 139, 151, 102],
+    [108, 138, 121, 148, 110],
+    [144, 122, 151, 163, 111],
+    [180, 150, 132, 160, 121],
+  ];
+  const flipAndDrive: readonly CandleDatum[] = [
+    [216, 133, 102, 143, 91],
+    [252, 103, 78, 113, 68],
+    [288, 79, 98, 109, 69],
+  ];
+  const retestAndTrend: readonly CandleDatum[] = [
+    [retestX, 97, 128, railY, 87],
+    [360, 127, 110, 137, 99],
+    [396, 111, 87, 121, 76],
+    [432, 88, 101, 112, 78],
+    [468, 100, 72, 110, 61],
+    [504, 73, 84, 95, 63],
+    [540, 83, 55, 93, 44],
+    [576, 56, 68, 79, 46],
+    [612, 67, 42, 77, 32],
+  ];
   return (
     <>
       <Grid />
-      <Candles />
-      <path className="gp-visual-trend-band-shadow" d="M58 267 C151 258 207 232 275 218 S398 163 454 152 S566 103 672 93" />
-      <path className="gp-visual-trend-band" d="M58 257 C151 248 207 222 275 208 S398 153 454 142 S566 93 672 83" />
-      <path className="gp-visual-stop-rail" d="M300 246H386V204H474V158H574V119H674" />
-      <Tag x={268} y={220} tone="bull" width={72}>BUY+</Tag>
-      {[["TP1", 151], ["TP2", 111], ["TP3", 71]].map(([label, y], index) => (
-        <g className="gp-visual-target-rung" key={String(label)}>
-          <path d={`M430 ${y}H650`} />
-          <Tag x={358} y={Number(y) - 12} tone={index === 2 ? "warn" : "bull"} width={58}>{label}</Tag>
-          {index < 2 && <text x="658" y={Number(y) + 5}>✓</text>}
-        </g>
-      ))}
-      <Tag x={565} y={124} tone="bear" width={76}>{l("TRAIL", "追踪")}</Tag>
+      <g className={styles.trendContext} aria-hidden="true">
+        <Candles data={beforeFlip} opacity={0.62} />
+        <path className={styles.bearRail} d="M58 91H202V116H232" />
+        <AxisLabel x={60} y={77}>{l("BEAR RAIL", "空头轨道")}</AxisLabel>
+      </g>
+      <g className={styles.trendFlip} data-proof-beat="rail-flip">
+        <Candles data={flipAndDrive} />
+        <path className={styles.flipPath} d="M180 132L216 102L252 78" />
+        <path className={styles.bullRailStart} d={`M206 ${railY}H342`} />
+      </g>
+      <g className={styles.trendEntry} data-proof-beat="entry">
+        <Point x={216} y={102} tone="bull" r={8} />
+        <Arrow x1={275} y1={213} x2={220} y2={112} tone="bull" />
+        <Tag x={244} y={210} tone="bull" width={86}>BUY +</Tag>
+      </g>
+      <g
+        className={styles.trendRetest}
+        data-proof-beat="retest"
+        data-retest-x={retestX}
+        data-rail-y={railY}
+      >
+        <Candles data={retestAndTrend} />
+        <path className={styles.retestPath} d={`M288 98C301 109 313 145 ${retestX} ${railY}C337 157 350 123 360 110`} />
+        <Point x={retestX} y={railY} tone="warn" r={7} />
+        <Arrow x1={390} y1={255} x2={329} y2={176} tone="warn" />
+        <Tag x={338} y={258} tone="warn" width={124}>{l("HELD RETEST", "回测守住")}</Tag>
+      </g>
+      <g className={styles.trendInvalidation} data-proof-beat="invalidation">
+        <path className="gp-visual-stop-rail" d="M206 166H342V158H414V133H486V111H558V88H646" />
+        <Tag x={506} y={214} tone="bear" width={124}>{l("TRAIL = EXIT", "轨道 = 退出")}</Tag>
+      </g>
+      <g className={styles.trendTargets} data-proof-beat="targets">
+        {[["TP1", 90], ["TP2", 64], ["TP3", 38]].map(([label, y], index) => (
+          <g
+            className={`gp-visual-target-rung ${styles.targetRung}`}
+            data-target-hit="true"
+            data-target-y={y}
+            key={String(label)}
+            style={{ "--target-index": index } as CSSProperties}
+          >
+            <path d={`M420 ${y}H668`} />
+            <Tag x={354} y={Number(y) - 12} tone={index === 2 ? "warn" : "bull"} width={58}>{label}</Tag>
+            <text x="676" y={Number(y) + 5}>✓</text>
+          </g>
+        ))}
+      </g>
     </>
   );
 }
@@ -842,63 +988,6 @@ function VisualScene({ id, lang }: { id: GuideVisualId; lang: GuideLanguage }) {
   }
 }
 
-const STAGE_SLICES = [
-  { x: 0, width: 252 },
-  { x: 244, width: 252 },
-  { x: 488, width: 232 },
-] as const;
-
-function StagedVisualScene({
-  id,
-  lang,
-  activeStage,
-  prefersReducedMotion,
-  instanceId,
-}: {
-  id: GuideVisualId;
-  lang: GuideLanguage;
-  activeStage: number;
-  prefersReducedMotion: boolean;
-  instanceId: string;
-}) {
-  const clipPrefix = `gp-stage-${id.replace("/", "-")}-${instanceId}`;
-
-  return (
-    <>
-      <defs aria-hidden="true">
-        {STAGE_SLICES.map((slice, index) => (
-          <clipPath id={`${clipPrefix}-${index}`} key={`${clipPrefix}-${index}`}>
-            <rect x={slice.x} y="0" width={slice.width} height="360" />
-          </clipPath>
-        ))}
-      </defs>
-      {STAGE_SLICES.map((_, index) => {
-        const revealed = activeStage >= index;
-        return (
-          <g
-            aria-hidden="true"
-            className={`gp-visual-scene-stage gp-visual-scene-stage-${index + 1}`}
-            clipPath={`url(#${clipPrefix}-${index})`}
-            data-revealed={revealed ? "true" : "false"}
-            key={`${id}-stage-${index}`}
-            style={{
-              opacity: revealed ? 1 : 0,
-              transform: revealed ? "translateY(0)" : "translateY(8px)",
-              transformBox: "fill-box",
-              transformOrigin: "center",
-              transition: prefersReducedMotion
-                ? "none"
-                : "opacity 480ms cubic-bezier(0.22, 1, 0.36, 1), transform 480ms cubic-bezier(0.22, 1, 0.36, 1)",
-            }}
-          >
-            <VisualScene id={id} lang={lang} />
-          </g>
-        );
-      })}
-    </>
-  );
-}
-
 const SUITE_ACCENTS: Record<string, string> = {
   structure: "#70a5ff",
   trend: "#3ee2b8",
@@ -915,17 +1004,17 @@ const SUITE_ACCENTS: Record<string, string> = {
  * legacy GuidePanel styles.
  */
 export default function GuideVisual({ suiteKey, moduleKey, lang }: GuideVisualProps) {
-  const instanceId = useId().replaceAll(":", "");
   const metadata = getGuideVisualMetadata(suiteKey, moduleKey);
+  const isPurposefulAnimation = !!metadata && metadata.experience !== "static";
   const {
-    activeStage,
-    isPlaying,
+    playState,
+    playbackRun,
     pause,
     prefersReducedMotion,
     replay,
     rootRef,
-    selectStage,
-  } = useGuidePlayback(`${suiteKey}/${moduleKey}`);
+    resume,
+  } = useGuidePlayback(`${suiteKey}/${moduleKey}`, isPurposefulAnimation);
   if (!metadata) return null;
 
   const title = localizeGuideText(metadata.title, lang);
@@ -936,44 +1025,60 @@ export default function GuideVisual({ suiteKey, moduleKey, lang }: GuideVisualPr
   const descriptionId = `gp-visual-description-${safeId}`;
   const style = {
     "--gp-visual-accent": SUITE_ACCENTS[suiteKey] ?? SUITE_ACCENTS.structure,
+    "--guide-proof-duration": `${GUIDE_PROOF_DURATION_MS}ms`,
   } as CSSProperties;
-  const currentStage = metadata.stages[activeStage];
-  const pauseLabel = lang === "zh" ? "暂停讲解" : "Pause walkthrough";
-  const replayLabel = prefersReducedMotion
-    ? lang === "zh" ? "从第一步开始" : "Start from step one"
-    : lang === "zh" ? "重播讲解" : "Replay walkthrough";
+  const playbackLabel = playState === "playing"
+    ? (lang === "zh" ? "暂停动画" : "Pause animation")
+    : playState === "paused"
+      ? (lang === "zh" ? "继续动画" : "Resume animation")
+      : (lang === "zh" ? "重播动画" : "Replay animation");
+  const playbackText = playState === "playing"
+    ? (lang === "zh" ? "暂停" : "Pause")
+    : playState === "paused"
+      ? (lang === "zh" ? "继续" : "Resume")
+      : (lang === "zh" ? "重播" : "Replay");
+  const playbackIcon = playState === "playing" ? "Ⅱ" : playState === "paused" ? "▶" : "↻";
+  const togglePlayback = playState === "playing"
+    ? pause
+    : playState === "paused"
+      ? resume
+      : replay;
 
   return (
     <figure
-      className={`gp-visual gp-visual-${suiteKey}`}
-      data-active-stage={currentStage.id}
+      className={`gp-visual gp-visual-${suiteKey} ${styles.figure}`}
+      data-guide-visual={metadata.id}
+      data-motion={prefersReducedMotion ? "reduced" : "full"}
+      data-play-state={isPurposefulAnimation ? playState : "static"}
+      data-proof-scene={isPurposefulAnimation ? metadata.experience : undefined}
       ref={rootRef}
       style={style}
     >
       <div className="gp-visual-frame">
         <div className="gp-visual-topline">
           <span className="gp-visual-kicker">{kicker}</span>
-          <div className="gp-visual-player-status">
-            <span className="gp-visual-live" aria-hidden="true">
-              <i className="gp-visual-live-dot" />MASTERCLASS
-            </span>
-            <button
-              aria-label={isPlaying ? pauseLabel : replayLabel}
-              className="gp-visual-playback-button"
-              onClick={isPlaying ? pause : replay}
-              type="button"
-            >
-              <span aria-hidden="true">{isPlaying ? "Ⅱ" : "↻"}</span>
-              <span className="gp-visual-playback-label">
-                {isPlaying
-                  ? lang === "zh" ? "暂停" : "Pause"
-                  : lang === "zh" ? "重播" : "Replay"}
+          {isPurposefulAnimation && (
+            <div className="gp-visual-player-status">
+              <span className="gp-visual-live" aria-hidden="true">
+                <i className="gp-visual-live-dot" />{lang === "zh" ? "模型" : "MODEL"}
               </span>
-            </button>
-          </div>
+              {!prefersReducedMotion && (
+                <button
+                  aria-label={playbackLabel}
+                  className="gp-visual-playback-button"
+                  onClick={togglePlayback}
+                  type="button"
+                >
+                  <span aria-hidden="true">{playbackIcon}</span>
+                  <span className="gp-visual-playback-label">{playbackText}</span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <svg
-          className="gp-visual-svg"
+          className={`gp-visual-svg${isPurposefulAnimation ? ` ${styles.proofScene}` : ""}`}
+          key={isPurposefulAnimation ? `${metadata.id}-${playbackRun}` : metadata.id}
           viewBox="0 0 720 360"
           preserveAspectRatio="xMidYMid meet"
           role="img"
@@ -982,13 +1087,7 @@ export default function GuideVisual({ suiteKey, moduleKey, lang }: GuideVisualPr
           <title id={titleId}>{title}</title>
           <desc id={descriptionId}>{caption}</desc>
           <rect className="gp-visual-canvas" x="1" y="1" width="718" height="358" rx="18" />
-          <StagedVisualScene
-            activeStage={activeStage}
-            id={metadata.id}
-            instanceId={instanceId}
-            lang={lang}
-            prefersReducedMotion={prefersReducedMotion}
-          />
+          <VisualScene id={metadata.id} lang={lang} />
         </svg>
       </div>
       <figcaption className="gp-visual-caption">
@@ -1008,49 +1107,6 @@ export default function GuideVisual({ suiteKey, moduleKey, lang }: GuideVisualPr
           ))}
         </ul>
       </figcaption>
-      <div
-        aria-atomic="true"
-        aria-live="polite"
-        className="gp-visual-stage-announcement"
-        role="status"
-      >
-        {localizeGuideText(currentStage.eyebrow, lang)}:{" "}
-        {localizeGuideText(currentStage.title, lang)}
-      </div>
-      <ol
-        aria-label={lang === "zh" ? "互动图解步骤" : "Interactive diagram steps"}
-        className="gp-visual-stage-list"
-      >
-        {metadata.stages.map((stage, index) => {
-          const selected = index === activeStage;
-          const revealed = index <= activeStage;
-          return (
-            <li
-              className={`gp-visual-stage-item gp-visual-stage-item-${stage.tone}`}
-              data-revealed={revealed ? "true" : "false"}
-              data-selected={selected ? "true" : "false"}
-              key={stage.id}
-            >
-              <button
-                aria-current={selected ? "step" : undefined}
-                className="gp-visual-stage-button"
-                onClick={() => selectStage(index)}
-                type="button"
-              >
-                <span className="gp-visual-stage-eyebrow">
-                  {localizeGuideText(stage.eyebrow, lang)}
-                </span>
-                <span className="gp-visual-stage-title">
-                  {localizeGuideText(stage.title, lang)}
-                </span>
-                <span className="gp-visual-stage-description">
-                  {localizeGuideText(stage.description, lang)}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
     </figure>
   );
 }

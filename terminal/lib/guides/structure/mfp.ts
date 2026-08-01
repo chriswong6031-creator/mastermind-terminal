@@ -3,6 +3,74 @@
 // ship with the build rather than being rsync'd like /data. Lazily imported by GuidePanel.
 // Markdown is rendered through lib/md.ts (escape-safe).
 
-export const en = "# Money Flow Profile\n\nWhere the volume actually lives: a sideways profile of traded volume by price, split into buying and selling pressure.\n\n## What you see\n\nHorizontal bars anchored to the right edge, one per price level. Bar length is the level's share of traded volume; bar color is the side that dominated there — the buy color when buying pressure won that level, the sell color when selling did. A brighter overlay inside each bar shows the buy share directly.\n\nThe **POC** line (point of control) marks the level that mattered most under your chosen metric, with a small POC chip. Dashed lines bracket the **value area** — the tight band of levels where the chosen share of all business was done. Levels with a strength of 60%+ carry a small percentage label.\n\nOne honest note printed right on the profile: the buy/sell split is an **estimate worked out from candle shape** — this chart has no order-book feed, and pretending otherwise would be lying.\n\n## How to trade it\n\n1. Price above the value area with a rising profile shoulder below = acceptance higher; dips toward the area's upper edge are the higher-odds buys.\n2. The POC acts like a magnet in quiet conditions — mean-reversion trades target it.\n3. Long, thin profile tails are levels the market rejected fast; expect price to move quickly through them again.\n4. A heavy sell-colored shelf overhead is real overhead supply — respect it when planning targets.\n5. When NOT to use this: right after a gap or a regime break, the lookback window mixes two different markets — shorten the length or wait for the profile to rebuild.\n\n## Settings\n\n**Length (100–1000, default 400)** — how many bars feed the profile.\n\n**Levels (10–40, default 24)** — how many price rows the range is split into.\n\n**POC Metric (Money flow / Positive delta / Negative delta / Strength, default Money flow)** — what \"mattered most\" means: dollars traded, strongest net buying, strongest net selling, or raw volume.\n\n**Value Area (on) + VA % (50–90, default 70)** — draw the value-area brackets and choose how much of the business they must contain.\n\n**Labels (on)** — the per-level strength percentages.\n\n## Signals & alerts\n\nOne chart event, **mfp_poc_touch**, is emitted when the closing price crosses the profile's point of control. It uses a cooldown so chop across the level does not spam the chart event tape. **mfp_poc_touch is chart-only today** and cannot be selected as an Alert Center condition. The profile itself re-forms as bars arrive; the event is evaluated bar by bar and never rewrites its history.\n";
+export const en = `# Money Flow Profile
 
-export const zh = "# 资金流剖面\n\n成交量真正聚集的位置：按价格分层的横向成交剖面，并拆分出买方与卖方压力。\n\n## 图上都有什么\n\n锚定在右侧的横向条形，每个价位一条。条的长度是该价位的成交占比；颜色代表在该价位占优的一方——买方压力占优用买方色，卖方占优用卖方色。条内更亮的叠加层直接显示买方占比。\n\n**POC** 线（控制点）标出在所选指标下最重要的价位，并带有 POC 小标签。虚线框出**价值区**——完成了指定份额成交的紧凑价位带。强度达到 60% 以上的价位带有百分比小标签。\n\n剖面上直接印着一句诚实说明：买卖拆分是**由K线形态估算**——本图没有订单簿数据，假装有就是撒谎。\n\n## 如何交易\n\n1. 价格站上价值区、下方剖面肩部抬升 = 更高位置获得接受；回踩价值区上沿是胜率更高的买点。\n2. 平静行情中 POC 像磁铁——均值回归交易以它为目标。\n3. 细长的剖面尾部是市场快速拒绝过的价位；预期价格再次快速穿过。\n4. 头顶厚重的卖方色平台是真实的上方供给——设定目标时要尊重它。\n5. 何时不适用：跳空或行情性质突变之后，回看窗口混合了两个不同的市场——缩短 Length 或等待剖面重建。\n\n## 设置\n\n**Length 长度（100–1000，默认 400）** — 多少根K线参与计算。\n\n**Levels 层数（10–40，默认 24）** — 价格区间被分成多少层。\n\n**POC Metric 控制点指标（Money flow / Positive delta / Negative delta / Strength，默认 Money flow）** — \"最重要\"的定义：成交金额、最强净买入、最强净卖出、或原始成交量。\n\n**Value Area 价值区（默认开）+ VA %（50–90，默认 70）** — 绘制价值区边界并选择其须包含的成交份额。\n\n**Labels 标签（默认开）** — 每层的强度百分比。\n\n## 信号与提醒\n\n收盘价穿越剖面控制点时会产生一类图表事件 **mfp_poc_touch**。它带有冷却时间，价位附近的震荡不会在图表事件带上刷屏。**mfp_poc_touch 目前只用于图表**，不能在提醒中心选作条件。剖面本身随新K线重塑；事件逐根K线判定，历史不会被改写。\n";
+A rolling volume map by price. It shows where the current lookback found balance, where participation thinned out, and whether price is being accepted outside that balance.
+
+## Read the chart
+
+- **Horizontal bar length** — total volume in that price bin relative to the busiest bin.
+- **Bar color and bright slice** — estimated sell/buy pressure and estimated buy share. Both come from candle shape, not trade tape or an order book.
+- **POC** — the winning bin under the selected metric. With the default Money flow metric, it is the bin with the largest sum of price × volume; Level strength instead selects the highest-volume bin.
+- **VAH / VAL** — the value-area edges. Starting at POC, the profile adds the heavier neighboring bin until it contains the selected share of volume.
+- **Strength %** — that bin's volume versus the busiest bin, shown only on heavier rows.
+
+## Use it
+
+- **Inside VAH–VAL:** price is in balance. POC is the center of business, not a directional signal.
+- **Close outside, then hold the edge:** acceptance. Continuation remains valid while price stays outside the value area.
+- **Probe outside, then close back inside:** rejection. In a balanced market, POC is the first mean-reversion reference.
+- **Thin rows:** little volume traded there. Price may cross them quickly; they are not guaranteed gaps.
+
+After a gap or regime break, the lookback mixes two markets. Shorten Lookback or wait for the profile to rebuild.
+
+## Settings
+
+- **Lookback (100–1000, default 400)** — bars included in the rolling profile.
+- **Levels (10–40, default 24)** — number of price bins.
+- **POC Metric** — Money flow, Delta +, Delta −, or Level strength (total volume).
+- **Value Area / Value Area % (50–90, default 70)** — show VAH/VAL and set the enclosed volume share.
+- **Labels** — show POC, VAH/VAL, and heavier-row strength values.
+
+## Signals & alerts
+
+**mfp_poc_touch** prints when consecutive closes cross the current POC, with a five-bar cooldown. It is chart-only and cannot be selected in Alert Center.
+
+The profile and POC recalculate as the rolling window moves. Treat the event as contact with the **current** profile, not a permanent historical level.
+`;
+
+export const zh = `# 资金流剖面
+
+按价格统计的滚动成交量地图。它显示当前回看窗口内的平衡区、低参与区，以及价格是否在平衡区外获得接受。
+
+## 读图
+
+- **横条长度** —— 该价位档的成交量，相对最繁忙价位档的比例。
+- **颜色与亮色切片** —— 估算卖压/买压与估算买方占比。两者都来自 K 线形态，不是逐笔成交或订单簿数据。
+- **POC** —— 所选指标的最高价位档。默认 Money flow 选择 price × volume 总和最高的价位档；Level strength 才选择成交量最高的价位档。
+- **VAH / VAL** —— 价值区上下沿。从 POC 开始，每次纳入成交量更大的相邻价位档，直到覆盖设定成交量比例。
+- **Strength %** —— 该价位档成交量相对最繁忙价位档的比例；只在较重价位档显示。
+
+## 怎么用
+
+- **价格在 VAH–VAL 内：** 市场处于平衡。POC 是成交中心，不是方向信号。
+- **收盘离开价值区，随后守住边界：** 接受。价格保持在区外，延续逻辑才成立。
+- **刺出价值区，随后收回区内：** 拒绝。平衡行情中，POC 是第一个均值回归参考。
+- **细价位档：** 历史成交较少，价格可能快速穿过，但不是必然的真空区。
+
+跳空或行情性质突变后，回看窗口会混合两个市场。缩短 Lookback，或等待剖面重建。
+
+## 设置
+
+- **Lookback（100–1000，默认 400）** —— 参与滚动剖面的 K 线数量。
+- **Levels（10–40，默认 24）** —— 价格分档数量。
+- **POC Metric** —— Money flow、Delta +、Delta − 或 Level strength（总成交量）。
+- **Value Area / Value Area %（50–90，默认 70）** —— 显示 VAH/VAL，并设定价值区须覆盖的成交量比例。
+- **Labels** —— 显示 POC、VAH/VAL 与较重价位档的强度值。
+
+## 信号与提醒
+
+连续两个收盘价穿越当前 POC 时，会产生 **mfp_poc_touch**；同类事件有五根 K 线冷却。它目前只用于图表，不能在提醒中心选择。
+
+剖面与 POC 会随滚动窗口重新计算。请把该事件理解为价格接触**当前**剖面，而不是永久不变的历史价位。
+`;

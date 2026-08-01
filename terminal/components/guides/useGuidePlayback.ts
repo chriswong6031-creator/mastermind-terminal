@@ -8,40 +8,45 @@ import {
   type RefObject,
 } from "react";
 
-const LAST_STAGE = 2;
-const STAGE_DURATION_MS = 2200;
+export const GUIDE_PROOF_DURATION_MS = 7600;
+
+type PlaybackStatus = "playing" | "paused" | "complete";
+export type GuidePlayState = "playing" | "paused" | "complete";
 
 interface GuidePlayback {
-  activeStage: number;
-  isPlaying: boolean;
+  playState: GuidePlayState;
+  playbackRun: number;
   prefersReducedMotion: boolean;
   rootRef: RefObject<HTMLElement | null>;
   pause: () => void;
   replay: () => void;
-  selectStage: (stage: number) => void;
+  resume: () => void;
 }
 
 /**
- * Runs a visual's short, finite teaching sequence only while it can be seen.
+ * Runs one finite causal proof only while it is visible.
  *
- * The hook deliberately does not loop. Reduced-motion users receive the complete
- * final schematic immediately and can still inspect each stage with discrete
- * controls.
+ * Time spent off-screen or in a background tab is not counted. Reduced-motion
+ * users receive the completed diagram immediately, and static guide diagrams
+ * never opt into playback at all.
  */
-export function useGuidePlayback(playbackKey: string): GuidePlayback {
+export function useGuidePlayback(
+  playbackKey: string,
+  enabled: boolean,
+): GuidePlayback {
   const rootRef = useRef<HTMLElement | null>(null);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(() => (
     typeof window !== "undefined"
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches
   ));
-  const [activeStage, setActiveStage] = useState(
-    prefersReducedMotion ? LAST_STAGE : 0,
-  );
-  const [isPlaying, setIsPlaying] = useState(!prefersReducedMotion);
+  const [status, setStatus] = useState<PlaybackStatus>(() => (
+    enabled && !prefersReducedMotion ? "playing" : "complete"
+  ));
+  const [playbackRun, setPlaybackRun] = useState(0);
   const [isIntersecting, setIsIntersecting] = useState(false);
   const [isDocumentVisible, setIsDocumentVisible] = useState(true);
-  const resetKey = `${playbackKey}:${prefersReducedMotion ? "reduced" : "animated"}`;
-  const [previousResetKey, setPreviousResetKey] = useState(resetKey);
+  const remainingMsRef = useRef(GUIDE_PROOF_DURATION_MS);
+  const resetKeyRef = useRef(`${playbackKey}:${enabled}:${prefersReducedMotion}`);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -50,11 +55,14 @@ export function useGuidePlayback(playbackKey: string): GuidePlayback {
     return () => media.removeEventListener("change", onChange);
   }, []);
 
-  if (previousResetKey !== resetKey) {
-    setPreviousResetKey(resetKey);
-    setActiveStage(prefersReducedMotion ? LAST_STAGE : 0);
-    setIsPlaying(!prefersReducedMotion);
-  }
+  useEffect(() => {
+    const resetKey = `${playbackKey}:${enabled}:${prefersReducedMotion}`;
+    if (resetKeyRef.current === resetKey) return;
+    resetKeyRef.current = resetKey;
+    remainingMsRef.current = GUIDE_PROOF_DURATION_MS;
+    setPlaybackRun((run) => run + 1);
+    setStatus(enabled && !prefersReducedMotion ? "playing" : "complete");
+  }, [enabled, playbackKey, prefersReducedMotion]);
 
   useEffect(() => {
     const syncVisibility = () => {
@@ -67,7 +75,7 @@ export function useGuidePlayback(playbackKey: string): GuidePlayback {
 
   useEffect(() => {
     const node = rootRef.current;
-    if (!node || typeof IntersectionObserver === "undefined") {
+    if (!enabled || !node || typeof IntersectionObserver === "undefined") {
       setIsIntersecting(true);
       return;
     }
@@ -78,52 +86,61 @@ export function useGuidePlayback(playbackKey: string): GuidePlayback {
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [playbackKey]);
+  }, [enabled, playbackKey]);
+
+  const isActivelyPlaying = enabled
+    && !prefersReducedMotion
+    && status === "playing"
+    && isIntersecting
+    && isDocumentVisible;
 
   useEffect(() => {
-    if (
-      prefersReducedMotion
-      || !isPlaying
-      || !isIntersecting
-      || !isDocumentVisible
-      || activeStage >= LAST_STAGE
-    ) {
-      return;
-    }
+    if (!isActivelyPlaying) return;
 
+    const startedAt = performance.now();
+    const scheduledDuration = remainingMsRef.current;
+    let completed = false;
     const timer = window.setTimeout(() => {
-      const next = Math.min(activeStage + 1, LAST_STAGE);
-      setActiveStage(next);
-      if (next === LAST_STAGE) setIsPlaying(false);
-    }, STAGE_DURATION_MS);
-    return () => window.clearTimeout(timer);
-  }, [
-    activeStage,
-    isDocumentVisible,
-    isIntersecting,
-    isPlaying,
-    prefersReducedMotion,
-  ]);
+      completed = true;
+      remainingMsRef.current = 0;
+      setStatus("complete");
+    }, scheduledDuration);
 
-  const pause = useCallback(() => setIsPlaying(false), []);
+    return () => {
+      window.clearTimeout(timer);
+      if (!completed) {
+        remainingMsRef.current = Math.max(
+          0,
+          scheduledDuration - (performance.now() - startedAt),
+        );
+      }
+    };
+  }, [isActivelyPlaying]);
 
-  const replay = useCallback(() => {
-    setActiveStage(0);
-    setIsPlaying(!prefersReducedMotion);
-  }, [prefersReducedMotion]);
-
-  const selectStage = useCallback((stage: number) => {
-    setActiveStage(Math.max(0, Math.min(stage, LAST_STAGE)));
-    setIsPlaying(false);
+  const pause = useCallback(() => setStatus("paused"), []);
+  const resume = useCallback(() => {
+    if (remainingMsRef.current > 0) setStatus("playing");
   }, []);
+  const replay = useCallback(() => {
+    if (!enabled || prefersReducedMotion) return;
+    remainingMsRef.current = GUIDE_PROOF_DURATION_MS;
+    setPlaybackRun((run) => run + 1);
+    setStatus("playing");
+  }, [enabled, prefersReducedMotion]);
+
+  const playState: GuidePlayState = prefersReducedMotion || !enabled || status === "complete"
+    ? "complete"
+    : isActivelyPlaying
+      ? "playing"
+      : "paused";
 
   return {
-    activeStage,
-    isPlaying,
+    playState,
+    playbackRun,
     prefersReducedMotion,
     rootRef,
     pause,
     replay,
-    selectStage,
+    resume,
   };
 }

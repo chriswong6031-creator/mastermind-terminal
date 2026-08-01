@@ -176,7 +176,6 @@ export interface IndicatorsModalProps {
   onToggleModule?: (id: string) => void;
   onOpenModuleSettings?: (id: string) => void;
   onOpenGuide?: (id: string) => void;
-  onOpenSystemGuide?: (suiteKey: string) => void;
   scripts?: UserScript[];
   enabled?: Set<string>;
   onToggleScript?: (id: string) => void;
@@ -197,7 +196,6 @@ export default function IndicatorsModal({
   onToggleModule,
   onOpenModuleSettings,
   onOpenGuide,
-  onOpenSystemGuide,
   scripts = [],
   enabled,
   onToggleScript,
@@ -760,18 +758,6 @@ export default function IndicatorsModal({
                   </span>
                   <span>{lang === "zh" ? category?.descriptionZh : category?.description}</span>
                 </span>
-                {onOpenSystemGuide && (
-                  <button
-                    type="button"
-                    className="ipreset-guide"
-                    data-guide-system={key}
-                    aria-label={`${copy("Guide", "指南")}: ${label} ${copy("system", "系统")}`}
-                    onClick={() => onOpenSystemGuide(key)}
-                  >
-                    <GuideMark />
-                    <span>{copy("Playbook", "作战手册")}</span>
-                  </button>
-                )}
               </div>
               <div className="ipreset-profiles">
                 {suitePresetsFor(key).map((preset, index) => {
