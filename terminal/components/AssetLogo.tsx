@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { assetInitial, assetLogoPath } from "@/lib/assetLogos";
+import { assetInitial, assetLogoNamePath, assetLogoPath } from "@/lib/assetLogos";
 
 export default function AssetLogo({
   symbol,
@@ -18,8 +18,14 @@ export default function AssetLogo({
   size?: number;
   className?: string;
 }) {
-  const src = assetLogoPath(symbol, market || undefined);
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const tickerSrc = assetLogoPath(symbol, market || undefined);
+  const cleanName = name?.trim();
+  const nameSrc = cleanName && cleanName.toUpperCase() !== symbol.trim().toUpperCase()
+    ? assetLogoNamePath(cleanName)
+    : null;
+  const sources = nameSrc ? [tickerSrc, nameSrc] : [tickerSrc];
+  const [failedSources, setFailedSources] = useState<string[]>([]);
+  const src = sources.find((candidate) => !failedSources.includes(candidate));
 
   return (
     <span
@@ -29,7 +35,7 @@ export default function AssetLogo({
       aria-hidden="true"
     >
       <span className="asset-logo-fallback">{assetInitial(symbol)}</span>
-      {failedSrc !== src && (
+      {src && (
         // Direct CDN rendering keeps the integration within Logo.dev's fair-use policy.
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -40,7 +46,9 @@ export default function AssetLogo({
           loading="lazy"
           decoding="async"
           referrerPolicy="origin"
-          onError={() => setFailedSrc(src)}
+          onError={() => setFailedSources((failed) => (
+            failed.includes(src) ? failed : [...failed, src]
+          ))}
         />
       )}
     </span>

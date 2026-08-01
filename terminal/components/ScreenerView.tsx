@@ -8,6 +8,7 @@ import { MARKET_TKEY } from "@/lib/markets";
 import { getJSON, invalidate } from "@/lib/dataCache";
 import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
+import AssetLogo from "@/components/AssetLogo";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * PHASE-2 DATA PLUMBING — deliberately NOT built in this component (D5-6).
@@ -831,7 +832,14 @@ export default function ScreenerView({ email }: { email: string }) {
               const symCell = (
                 <td>
                   <div className="sym-cell">
-                    <span className="ic" style={{ background: r.col }}>{r.sym[0]}</span>
+                    <AssetLogo
+                      className="ic"
+                      symbol={r.sym}
+                      name={r.name}
+                      market={r.mkt || r.sec}
+                      color={r.col}
+                      size={density === "k" ? 20 : 24}
+                    />
                     <div>
                       <div className="tk">{r.sym}</div>
                       <div className="nm">{displayName(r, lang)}</div>

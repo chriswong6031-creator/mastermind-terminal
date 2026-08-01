@@ -17,6 +17,8 @@ import SignupGate from "@/components/gates/SignupGate";
 export const metadata: Metadata = { title: "Discover · Mastermind Terminal" };
 
 export default async function DiscoverPage() {
+  if (process.env.TERMINAL_E2E_FIXTURE === "1") return <DiscoverWorkspace />;
+
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
   if (typeof data?.claims?.sub !== "string") return <SignupGate surface="discover" />;
