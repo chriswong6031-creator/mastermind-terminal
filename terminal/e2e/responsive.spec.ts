@@ -755,6 +755,12 @@ test("Exposure desk replays an archived session's full ladder at every supported
   // an empty column that reads as breakage.
   await expect(page.getByText("Archived session", { exact: true })).toBeVisible();
 
+  // Conditional replay actions must not resize the history strip. The original
+  // implementation added the button as another readout row and shifted the entire
+  // ladder section whenever keyboard or pointer scrubbing entered a prior session.
+  const historyCard = page.locator(".obs-gex-history");
+  const latestHeight = await historyCard.evaluate((el) => el.getBoundingClientRect().height);
+
   // The scrubber probes a session the index does NOT list (2026-07-07 — the fixture's
   // deliberate accrual hole, the prod 07-18/07-20 class): honest missing-session state,
   // never a fabricated ladder.
@@ -763,7 +769,11 @@ test("Exposure desk replays an archived session's full ladder at every supported
   await page.keyboard.press("Home");
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowRight");
-  await page.getByRole("button", { name: "Load full ladder" }).click();
+  const loadFullLadder = page.getByRole("button", { name: "Load full ladder" });
+  await expect(loadFullLadder).toBeVisible();
+  const replayHeight = await historyCard.evaluate((el) => el.getBoundingClientRect().height);
+  expect(Math.abs(replayHeight - latestHeight)).toBeLessThanOrEqual(1);
+  await loadFullLadder.click();
   await expect(chip).toContainText("archived session · 2026-07-07");
   const missing = page.getByTestId("gex-archived-missing");
   await expect(missing).toBeVisible();
