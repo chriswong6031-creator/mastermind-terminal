@@ -447,7 +447,16 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const [replayOn, setReplayOn] = useState(false); const [replayIdx, setReplayIdx] = useState<number | null>(null); const [total, setTotal] = useState(0); const [playing, setPlaying] = useState(false); const [speed, setSpeed] = useState(1);
   const playRef = useRef<any>(null);
   // §7 state
-  const [tool, setTool] = useState<DrawKind | null>(null);
+  // Tool identity and activation travel together. The epoch makes one-shot
+  // commit resets replay-safe even when the user immediately re-arms the same
+  // tool under React concurrent rendering.
+  const [toolState, setToolState] = useState<{ kind: DrawKind | null; activation: number }>({ kind: null, activation: 0 });
+  const tool = toolState.kind;
+  const selectDrawingTool = useCallback((kind: DrawKind | null) => {
+    setToolState((current) => kind === null
+      ? (current.kind === null ? current : { ...current, kind: null })
+      : { kind, activation: current.activation + 1 });
+  }, []);
   const [detectCmd, setDetectCmd] = useState<DetectCmd>(null);
   const [detectOpen, setDetectOpen] = useState(false);
   const [intel, setIntel] = useState<any>(null);
@@ -1300,13 +1309,13 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     const h = (e: Event) => {
       const id = (e as CustomEvent).detail as unknown;
       if (id === null || isDrawingToolId(id)) {
-        setTool(id);
+        selectDrawingTool(id);
         if (id !== null) setDrawingsVisible(true);
       }
     };
     window.addEventListener("mm:set-tool", h);
     return () => window.removeEventListener("mm:set-tool", h);
-  }, []);
+  }, [selectDrawingTool]);
   // The chart-local creation palette uses the same controlled style state as
   // the rail palette, so wheel/swatches stay synchronized and persist for the
   // next drawing instead of becoming an isolated canvas-only preference.
@@ -1320,13 +1329,21 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     return () => window.removeEventListener("mm:drawing-style", h);
   }, [patchDrawStyle]);
   useEffect(() => {
-    const committed = () => {
+    const committed = (event: Event) => {
       if (drawingStickyRef.current) return;
+      const detail = (event as CustomEvent<{ kind?: unknown; activation?: unknown }>).detail;
+      const committedKind = detail?.kind;
+      const committedActivation = detail?.activation;
+      if (!isDrawingToolId(committedKind) || !Number.isSafeInteger(committedActivation)) return;
       // This listener runs from ChartPanel's native pointerup handler. Commit
       // cursor mode before a following discrete toolbar action can overtake the
-      // update in React's priority queue; otherwise a delayed null -> new-tool
-      // replay can transiently cancel the new tool's in-flight drawing.
-      flushSync(() => setTool(null));
+      // update in React's priority queue. The functional identity + epoch guard
+      // makes a replayed old commit a no-op after any newer activation.
+      flushSync(() => setToolState((current) => (
+        current.kind === committedKind && current.activation === committedActivation
+          ? { ...current, kind: null }
+          : current
+      )));
     };
     const history = (event: Event) => {
       const direction = (event as CustomEvent).detail as "undo" | "redo" | undefined;
@@ -2669,7 +2686,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
               drawStyle={drawStyle}
               onTool={(id) => {
                 if (!drawingsReadyFor(active)) return;
-                setTool(id); if (id) setDrawingsVisible(true);
+                selectDrawingTool(id); if (id) setDrawingsVisible(true);
               }}
               onMagnet={setMagnet}
               onSticky={setDrawingSticky}
@@ -2689,7 +2706,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
             />
             <div className="pane-grid" data-n={panes.length}>
               {panes.map((sym, i) => (
-                <ChartPane key={i} idx={i} symbol={sym} drawingOwnerKey={currentDrawingOwnerKey} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={drawingsReadyFor(sym) ? tool : null} drawingSticky={drawingSticky} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawingOwnerMatches ? (drawStore[sym] ?? []) : []), ...chartBus.aiDrawingsFor(sym)]} drawingsVisible={drawingsVisible} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
+                <ChartPane key={i} idx={i} symbol={sym} drawingOwnerKey={currentDrawingOwnerKey} isActive={i === activePane} onActivate={setActivePane} row={paneRows[i]} tf={paneTfs[i] ?? "D"} chartType={chartType} inds={inds} tool={drawingsReadyFor(sym) ? tool : null} toolActivation={toolState.activation} drawingSticky={drawingSticky} drawStyle={drawStyle} detectCmd={detectCmd} compare={compare} compareCfg={compareCfg} magnet={magnet} replayIdx={replayOn ? replayIdx : null} onMeta={(mm) => setTotal(mm.total)} drawings={[...(drawingOwnerMatches ? (drawStore[sym] ?? []) : []), ...chartBus.aiDrawingsFor(sym)]} drawingsVisible={drawingsVisible} onDrawingsChange={(d) => setSymbolDrawings(sym, d)} liveQuote={quotes[sym] ?? null} indParams={indParams} hidden={hidden} onToggleHidden={toggleHidden} onRemoveInd={removeInd} onOpenSettings={openSettings} onOpenSource={openSource} pineScripts={pineScripts} dayMode={dtm} userTier={userTier}
                   onAddAlert={(price) => { window.location.href = `/alerts?sym=${encodeURIComponent(active)}&price=${encodeURIComponent(price.toFixed(4))}&type=price_above`; }}
                   onTableView={() => setTableViewOpen(true)}
                   onObjectTree={() => setObjectTreeOpen((o) => !o)}

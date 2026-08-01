@@ -1079,6 +1079,17 @@ test("each drawing tool keeps its own defaults and fill color contract", async (
   await page.getByTestId("drawing-group-shapes-menu-trigger").click();
   await page.getByTestId("drawing-tool-rect").press("Enter");
   await expect(page.getByTestId("drawing-group-shapes-main")).toHaveAttribute("aria-pressed", "true");
+  const rectangleActivation = Number(await layer.getAttribute("data-tool-activation"));
+  expect(rectangleActivation).toBeGreaterThan(1);
+  // A replayed commit from an older activation of this same tool must not
+  // disarm the newly selected Rectangle transaction.
+  await page.evaluate(({ activation }) => {
+    window.dispatchEvent(new CustomEvent("mm:drawing-committed", {
+      detail: { kind: "rect", activation: activation - 1 },
+    }));
+  }, { activation: rectangleActivation });
+  await expect(page.getByTestId("drawing-group-shapes-main")).toHaveAttribute("aria-pressed", "true");
+  await expect(layer).toHaveAttribute("data-tool-activation", String(rectangleActivation));
   const red = page.getByTestId("drawing-style-color-2");
   await red.click();
   await expect(red).toHaveAttribute("aria-pressed", "true");
@@ -1088,7 +1099,6 @@ test("each drawing tool keeps its own defaults and fill color contract", async (
   expect(layerBox).not.toBeNull();
   await page.mouse.move(layerBox!.x + layerBox!.width * .72, layerBox!.y + layerBox!.height * .18);
   await page.mouse.down();
-  await page.mouse.move(layerBox!.x + layerBox!.width * .77, layerBox!.y + layerBox!.height * .24);
   const creationPalette = page.locator(".drawing-creation-palette");
   await expect(creationPalette).toHaveCSS("pointer-events", "none");
   await page.keyboard.press("Escape");

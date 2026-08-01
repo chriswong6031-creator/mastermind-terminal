@@ -343,11 +343,11 @@ const SUBPANE_ORDER = ["rsi", "stochrsi", "macd", "rsistack", "accum", "rvol", "
 // Bases that carry a fresher-than-EOD price we can splice onto the last daily bar.
 const SPLICE_BASES = new Set(["LIVE", "DELAYED_15M"]);
 
-export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, drawingSticky = false, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = "off", compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
+export default function ChartPanel({ symbol, chartType = "candles", indicators, timeframe = "D", replayIdx = null, onMeta, tool = null, toolActivation = 0, drawingSticky = false, drawStyle, drawings = [], onDrawingsChange, detectCmd = null, magnet = "off", compare = [], compareCfg = EMPTY_OBJ, isActive = true, syncId = null, liveQuote = null,
   indParams = EMPTY_OBJ, hidden = EMPTY_SET, onToggleHidden, onRemoveInd, onOpenSettings, onOpenSource, pineScripts = EMPTY_PINE, chartSettings, onChartApi, extHours = false,
   instrumentName, instrumentMarket, instrumentColor, onAddAlert, onTableView, onObjectTree, onOpenSettingsModal, lockedVLine = null, onSetLockedVLine, onIndRowsAt, dayMode = false, onPaneCount, companyName = "", userTier = "free" }:
   { symbol: string; companyName?: string; chartType?: string; indicators: Set<string>; timeframe?: string; replayIdx?: number | null; onMeta?: (m: { total: number }) => void;
-    tool?: DrawKind | null; drawingSticky?: boolean; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: "off" | "weak" | "strong" | boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
+    tool?: DrawKind | null; toolActivation?: number; drawingSticky?: boolean; drawStyle?: { color: string; width: number; dash: "solid" | "dashed" | "dotted" }; drawings?: Drawing[]; onDrawingsChange?: (d: Drawing[]) => void; detectCmd?: DetectCmd; magnet?: "off" | "weak" | "strong" | boolean; compare?: string[]; compareCfg?: Record<string, CmpCfg>; isActive?: boolean; syncId?: number | null; liveQuote?: LiveQuote;
     indParams?: Record<string, any>; hidden?: Set<string>; onToggleHidden?: (key: string) => void; onRemoveInd?: (key: string) => void; onOpenSettings?: (key: string) => void; onOpenSource?: (key: string) => void; pineScripts?: PineScript[];
     chartSettings?: Partial<ChartSettings>;
     instrumentName?: string;
@@ -576,6 +576,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const drawRef = useRef<Drawing[]>(drawings);
   const drawingTransactionRef = useRef(false);
   const toolRef = useRef<DrawKind | null>(tool);
+  const toolActivationRef = useRef(toolActivation);
   const drawingStickyRef = useRef(drawingSticky);
   const clearDrawingSelectionRef = useRef<() => void>(() => {});
   const styleRef = useRef(drawStyle);
@@ -698,7 +699,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // drag or native color/range transaction. Do not replace that in-flight
   // draft with the last committed prop snapshot.
   if (!drawingTransactionRef.current) drawRef.current = drawings;
-  toolRef.current = tool; drawingStickyRef.current = drawingSticky; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
+  toolRef.current = tool; toolActivationRef.current = toolActivation; drawingStickyRef.current = drawingSticky; onChangeRef.current = onDrawingsChange; magnetRef.current = magnet; styleRef.current = drawStyle;
   // keep the data-effect's non-trigger props readable from the mount closures without re-subscribing
   chartTypeRef.current = chartType; timeframeRef.current = timeframe; compareRef.current = compare || []; compareCfgRef.current = compareCfg; indicatorsRef.current = indicators; syncIdRef.current = syncId; replayIdxRef.current = replayIdx; liveQuoteRef.current = liveQuote; symbolRef.current = symbol; companyNameRef.current = companyName;
   lastValueVisibleRef.current = chartSettings?.lastValueVisible !== false;
@@ -3696,6 +3697,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       newKind: DrawKind = "text",
       newPoints: Drawing["points"] = [at],
       newMeta?: Drawing["meta"],
+      activation = toolActivationRef.current,
     ) => {
       if (textEditEl) { try { textEditEl.remove(); } catch {} textEditEl = null; } textEditRef.current = null;
       const paneAnchor = paneAnchorOf(existing?.meta ?? newMeta);
@@ -3717,7 +3719,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (existing) onChangeRef.current?.(val ? drawRef.current.map((d) => d.id === existing.id ? { ...d, text: val } : d) : drawRef.current.filter((d) => d.id !== existing.id));
         else if (val) {
           const next: Drawing = { id: uid(), kind: newKind, points: newPoints, text: val, fontSize: fs, ...applyStyle(newKind), ...(newMeta ? { meta: newMeta } : {}) };
-          sel = drawingStickyRef.current ? null : next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit();
+          sel = drawingStickyRef.current ? null : next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit(newKind, activation);
         }
       };
       inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); commit(true); } else if (e.key === "Escape") { e.preventDefault(); commit(false); } });
@@ -4588,8 +4590,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         fontSize: defaults?.fontSize,
       };
     };
-    const announceCommit = () => {
-      try { window.dispatchEvent(new CustomEvent("mm:drawing-committed")); } catch {}
+    const announceCommit = (kind: Drawing["kind"], activation = toolActivationRef.current) => {
+      // Include the committed tool so the controlled shell can retire only the
+      // selection that produced this object. Under a busy concurrent render an
+      // older one-shot update must never clear a newer tool choice.
+      try { window.dispatchEvent(new CustomEvent("mm:drawing-committed", { detail: { kind, activation } })); } catch {}
     };
     let semanticTimesCache: { signature: string; times: string[] } = { signature: "", times: [] };
     const semanticTimes = () => {
@@ -4603,7 +4608,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         : points;
     const commitDrawing = (kind: Drawing["kind"], points: Drawing["points"], meta?: Drawing["meta"]) => {
       const next: Drawing = { id: uid(), kind, points: materializePoints(kind, points), ...applyStyle(kind), ...(meta ? { meta } : {}) };
-      sel = drawingStickyRef.current ? null : next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit();
+      sel = drawingStickyRef.current ? null : next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit(kind);
     };
 
     // Media tools deliberately pause between geometry placement and persistence.
@@ -4730,15 +4735,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       return { panel, body, status, close };
     };
 
-    const appendMediaDrawing = (next: Drawing) => {
+    const appendMediaDrawing = (next: Drawing, activation: number) => {
       closeMediaSurface(false);
       sel = drawingStickyRef.current ? null : next.id;
       drawRef.current = [...drawRef.current, next];
       onChangeRef.current?.([...drawRef.current]);
-      announceCommit();
+      announceCommit(next.kind, activation);
     };
 
-    const openMediaChoicePicker = (kind: "emoji" | "icon", point: Drawing["points"][number], x: number, y: number) => {
+    const openMediaChoicePicker = (kind: "emoji" | "icon", point: Drawing["points"][number], x: number, y: number, activation = toolActivationRef.current) => {
       const copy = mediaCopy();
       const { panel, body } = createMediaSurface(kind, kind === "emoji" ? copy.emojiTitle : copy.iconTitle, x, y);
       body.classList.add("drawing-media-choice-grid");
@@ -4759,7 +4764,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
               id: uid(), kind: "emoji", points: [point], ...applyStyle("emoji"),
               text: emoji.glyph, fontSize: 30,
               meta: { mediaType: "emoji", emojiLabel: emoji.label },
-            });
+            }, activation);
           });
         } else {
           const icon = choice as DrawingMediaIcon;
@@ -4770,7 +4775,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           button.addEventListener("click", () => appendMediaDrawing({
             id: uid(), kind: "icon", points: [point], ...applyStyle("icon"), text: icon.id,
             meta: { mediaType: "icon", iconId: icon.id, iconLabel: icon.label },
-          }));
+          }, activation));
         }
         buttons.push(button); body.appendChild(button);
       });
@@ -4796,7 +4801,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       probe.src = src;
     });
 
-    const openImageUpload = (points: Drawing["points"], x: number, y: number) => {
+    const openImageUpload = (points: Drawing["points"], x: number, y: number, activation = toolActivationRef.current) => {
       const copy = mediaCopy();
       const { panel, body, status } = createMediaSurface("image", copy.imageTitle, x, y);
       const help = document.createElement("p"); help.className = "drawing-media-picker-help"; help.textContent = copy.imageHelp;
@@ -4842,7 +4847,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             if (payloadBytes > DRAWING_IMAGE_PAYLOAD_BUDGET) {
               browse.disabled = false; cancel.disabled = false; setStatus(copy.payloadError, "error"); browse.focus({ preventScroll: true }); return;
             }
-            appendMediaDrawing(next);
+            appendMediaDrawing(next, activation);
           } catch {
             if (!panel.isConnected) return;
             browse.disabled = false; cancel.disabled = false; setStatus(copy.decodeError, "error"); browse.focus({ preventScroll: true });
@@ -6162,9 +6167,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     cancelPendingDrawingRef.current();
     cancelMediaToolRef.current(tool);
     const svg = svgRef.current;
-    if (svg) { svg.style.pointerEvents = tool ? "auto" : "none"; svg.style.cursor = tool ? "crosshair" : "default"; }
+    if (svg) {
+      svg.style.pointerEvents = tool ? "auto" : "none";
+      svg.style.cursor = tool ? "crosshair" : "default";
+      svg.dataset.toolActivation = String(toolActivation);
+    }
     if (!tool && creationPaletteRef.current) creationPaletteRef.current.style.display = "none";
-  }, [tool]);
+  }, [tool, toolActivation]);
   useEffect(() => { renderRef.current?.(); }, [drawings]);
 
   // ── unchanged: detection commands → append auto-drawings (or clear) ──
