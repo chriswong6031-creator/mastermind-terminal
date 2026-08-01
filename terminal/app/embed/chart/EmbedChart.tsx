@@ -737,6 +737,10 @@ function StyleTag({ pal }: { pal: EmbedPalette }) {
   /* ── clean=1 — TV symbol-sheet mini chart (docs/tv-parity/spec-symbol-detail.md §2B) ──
      Everything below is scoped to [data-clean="1"]; the default widget is untouched. */
   .embed-root[data-clean="1"] .embed-header{padding:6px 12px 8px;min-height:0;}
+  /* TV's mini chart carries no brand accent and no attribution (the app IS the brand,
+     and the attribution collides with the time-axis labels at 300pt heights). */
+  .embed-root[data-clean="1"] .embed-ribbon,
+  .embed-root[data-clean="1"] .embed-attr{display:none;}
   /* flex-basis:100% ⇒ the chips always own a full row (the header is flex-wrap:wrap), so
      clean+hdr=1 puts them under the quote instead of fighting it for the same line. */
   .embed-root[data-clean="1"] .embed-head-right{flex:1 1 100%;justify-content:flex-start;gap:0;}

@@ -3131,6 +3131,9 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 .shell-app[data-dossier="1"] .rail-body{display:block;flex:none;padding:0;gap:0;overflow:visible;min-height:0}
 /* The watchlist board is the sheet's one irrelevant surface — the native list owns it. */
 .shell-app[data-dossier="1"] .rail .wl-board{display:none}
+/* the native sheet header already carries symbol identity + hero price — the slice
+   repeating them right under the content tabs reads as a bug (TV shows it once) */
+.shell-app[data-dossier="1"] .detail-hd{display:none}
 .shell-app[data-dossier="1"] .detail-board{
   display:block;flex:none;height:auto;min-height:0;overflow:visible;
   border:0;border-radius:0;background:transparent
