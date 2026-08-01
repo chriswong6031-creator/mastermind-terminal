@@ -2929,6 +2929,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     };
     type PendingDrawing = {
       kind: Drawing["kind"];
+      // Bind the gesture to the exact toolbar activation that began it. The
+      // same tool can be re-armed before a native pointerup/text/media callback
+      // runs, so sampling the mutable ref at commit time could retire the newer
+      // selection instead of the transaction that actually produced the object.
+      activation: number;
       points: Drawing["points"];
       mode: "point" | "text" | "drag" | "multi" | "freehand";
       pointerId?: number;
@@ -4606,9 +4611,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       getDrawingTool(kind)?.creation.semanticPointCount
         ? materializeSemanticPoints(kind, points, semanticTimes(), precRef.current)
         : points;
-    const commitDrawing = (kind: Drawing["kind"], points: Drawing["points"], meta?: Drawing["meta"]) => {
+    const commitDrawing = (kind: Drawing["kind"], points: Drawing["points"], meta: Drawing["meta"] | undefined, activation: number) => {
       const next: Drawing = { id: uid(), kind, points: materializePoints(kind, points), ...applyStyle(kind), ...(meta ? { meta } : {}) };
-      sel = drawingStickyRef.current ? null : next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit(kind);
+      sel = drawingStickyRef.current ? null : next.id; drawRef.current = [...drawRef.current, next]; onChangeRef.current?.([...drawRef.current]); announceCommit(kind, activation);
     };
 
     // Media tools deliberately pause between geometry placement and persistence.
@@ -4997,6 +5002,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // creation / erase (bubble; svg is pointer-events:auto only when a tool is active)
     svg.addEventListener("pointerdown", (ev) => {
       const tl = toolRef.current; if (!tl || !ev.isPrimary || ev.button !== 0) return;
+      const activation = toolActivationRef.current;
       positionCreationPalette(ev.clientX, ev.clientY);
       const { x, y } = rectXY(ev); const a = snap(x, y, ev);
       const spec = getDrawingTool(tl); if (!spec) return;
@@ -5009,6 +5015,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (spec.creation.mode === "one-point") {
         pending = {
           kind: spec.id,
+          activation,
           points: [],
           mode: spec.capabilities.includes("textInput") ? "text" : "point",
           pointerId: ev.pointerId,
@@ -5019,19 +5026,21 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         renderDraw(); return;
       }
       if (spec.creation.mode === "two-point") {
-        pending = { kind: spec.id, points: [a], mode: "drag", pointerId: ev.pointerId };
+        pending = { kind: spec.id, activation, points: [a], mode: "drag", pointerId: ev.pointerId };
         try { svg.setPointerCapture(ev.pointerId); } catch {}
         return;
       }
       if (spec.creation.mode === "freehand") {
-        pending = { kind: spec.id, points: [a], mode: "freehand", pointerId: ev.pointerId };
+        pending = { kind: spec.id, activation, points: [a], mode: "freehand", pointerId: ev.pointerId };
         try { svg.setPointerCapture(ev.pointerId); } catch {}
         return;
       }
       // Fixed and variable tools commit click-by-click. Variable paths finish on
       // a repeated final anchor / native double-click; fixed tools auto-commit at
       // their declarative 3–7 point count.
-      if (!pending || pending.kind !== spec.id || pending.mode !== "multi") pending = { kind: spec.id, points: [], mode: "multi" };
+      if (!pending || pending.kind !== spec.id || pending.mode !== "multi" || pending.activation !== activation) {
+        pending = { kind: spec.id, activation, points: [], mode: "multi" };
+      }
       if (pending.pointerId != null) return;
       pending.pointerId = ev.pointerId; pending.candidate = a;
       try { svg.setPointerCapture(ev.pointerId); } catch {}
@@ -5044,6 +5053,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (activeTool && spec?.creation.mode === "variable-multi" && pending?.kind === activeTool && pending.mode === "multi") {
         ev.stopPropagation(); ev.preventDefault();
         const points = [...pending.points];
+        const activation = pending.activation;
         // The second click in a dblclick repeats the endpoint. Persist one clean
         // control anchor while still honoring the repeated-last finish gesture.
         while (points.length > 1) {
@@ -5052,7 +5062,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           if (lx == null || ly == null || px == null || py == null || Math.hypot(lx - px, ly - py) > 3) break;
           points.pop();
         }
-        if (points.length >= spec.creation.minPoints) { pending = null; commitDrawing(activeTool, points.slice(0, spec.creation.maxPoints)); renderDraw(); }
+        if (points.length >= spec.creation.minPoints) { pending = null; commitDrawing(activeTool, points.slice(0, spec.creation.maxPoints), undefined, activation); renderDraw(); }
         return;
       }
       const id = idAt(ev); const d = drawRef.current.find((x) => x.id === id);
@@ -5106,29 +5116,29 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const required = spec?.creation.mode === "fixed-multi" && typeof spec.creation.pointCount === "number" ? spec.creation.pointCount : Infinity;
         const repeatedFinish = repeatedAnchor && spec?.creation.mode === "variable-multi" && current.points.length >= spec.creation.minPoints;
         if (current.points.length >= required || repeatedFinish || (spec?.creation.mode === "variable-multi" && current.points.length >= spec.creation.maxPoints)) {
-          const points = [...current.points]; pending = null; commitDrawing(current.kind, points);
+          const points = [...current.points]; pending = null; commitDrawing(current.kind, points, undefined, current.activation);
         } else renderDraw();
         return;
       }
       pending = null;
       const currentMeta = getDrawingTool(current.kind)?.creation.anchorSpace === "pane" ? paneMetaAt(x, y, current.meta) : current.meta;
-      if (current.mode === "text") { openTextEditor(b, undefined, current.kind, [b], currentMeta); renderDraw(); return; }
+      if (current.mode === "text") { openTextEditor(b, undefined, current.kind, [b], currentMeta, current.activation); renderDraw(); return; }
       if (current.mode === "point") {
-        if (current.kind === "emoji" || current.kind === "icon") openMediaChoicePicker(current.kind, b, x, y);
-        else commitDrawing(current.kind, [b], currentMeta);
+        if (current.kind === "emoji" || current.kind === "icon") openMediaChoicePicker(current.kind, b, x, y, current.activation);
+        else commitDrawing(current.kind, [b], currentMeta, current.activation);
         renderDraw(); return;
       }
       const maxPoints = getDrawingTool(current.kind)?.creation.maxPoints ?? 64;
       const points = current.mode === "freehand" ? [...current.points, b].slice(0, maxPoints) : [current.points[0], b];
       const a = points[0], last = points[points.length - 1];
       if (!a || !last || (Math.abs((xOf(a.t) ?? 0) - (xOf(last.t) ?? 0)) < 3 && Math.abs((yOf(a.p) ?? 0) - (yOf(last.p) ?? 0)) < 3)) { renderDraw(); return; }
-      if (current.kind === "image") { openImageUpload(points, x, y); renderDraw(); return; }
+      if (current.kind === "image") { openImageUpload(points, x, y, current.activation); renderDraw(); return; }
       if (getDrawingTool(current.kind)?.capabilities.includes("textInput")) {
-        openTextEditor(last, undefined, current.kind, points, currentMeta);
+        openTextEditor(last, undefined, current.kind, points, currentMeta, current.activation);
         renderDraw();
         return;
       }
-      commitDrawing(current.kind, points, currentMeta); renderDraw();
+      commitDrawing(current.kind, points, currentMeta, current.activation); renderDraw();
     });
     svg.addEventListener("pointercancel", (ev) => {
       if (!pending || (pending.pointerId != null && pending.pointerId !== ev.pointerId)) return;
@@ -5146,6 +5156,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const onShiftMeasure = (ev: PointerEvent) => {
       if (!ev.shiftKey || toolRef.current || !activeRef.current || ev.button !== 0) return;
       const startXY = rectXY(ev), a = snap(startXY.x, startXY.y, ev);
+      const activation = toolActivationRef.current;
       ev.preventDefault(); ev.stopPropagation();
       const move = (e: PointerEvent) => {
         const xy = rectXY(e), b = snap(xy.x, xy.y, e);
@@ -5162,7 +5173,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       const end = (e: PointerEvent) => {
         cleanupMeasure();
         const xy = rectXY(e), b = snap(xy.x, xy.y, e);
-        if (Math.hypot((xOf(a.t) ?? 0) - (xOf(b.t) ?? 0), (yOf(a.p) ?? 0) - (yOf(b.p) ?? 0)) >= 3) commitDrawing("measure", [a, b]);
+        if (Math.hypot((xOf(a.t) ?? 0) - (xOf(b.t) ?? 0), (yOf(a.p) ?? 0) - (yOf(b.p) ?? 0)) >= 3) commitDrawing("measure", [a, b], undefined, activation);
         else renderDraw();
       };
       const cancel = () => { cleanupMeasure(); renderDraw(); };
