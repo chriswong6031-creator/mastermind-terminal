@@ -29,6 +29,7 @@ import { makeMscT } from "./mscStrings";
 import { MarketStructureBody } from "./MarketStructureBody";
 import type { MscMoves } from "@/lib/marketStructure";
 import type { AggTrendPayload } from "@/lib/aggTrend";
+import type { QuadPayload } from "@/lib/quadBoard";
 import type { GexMatrix } from "@/lib/gexLadder";
 import type { GexPayload } from "@/components/gexdesk/GexDeskView";
 
@@ -80,6 +81,11 @@ export function PositioningView() {
   // no published history still renders the full single-session tab.
   const [agg, setAgg] = useState<AggTrendPayload | null>(null);
   const [matrix, setMatrix] = useState<GexMatrix | null>(null);
+  // The cross-root board is ONE artifact shared by every root, so it is fetched once and
+  // deliberately NOT reset when the root changes — re-fetching the same file on every
+  // ticker change would be pure waste. flowClientCache dedupes it anyway; not clearing it
+  // also means the screener never blinks out while a new root's ladder loads.
+  const [quad, setQuad] = useState<QuadPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const reqRef = useRef(0);
@@ -113,9 +119,10 @@ export function PositioningView() {
       // the first paint on them would make every root feel slower to serve two cards that
       // are not the reason anyone opened the tab.
       void (async () => {
-        const [a, mx] = await Promise.all([
+        const [a, mx, q] = await Promise.all([
           flowGet(`agg:${root}`).catch(() => null),
           flowGet(`matrix:${root}`).catch(() => null),
+          flowGet("quad").catch(() => null),
         ]);
         if (reqRef.current !== req) return;
         const ap = pickRoot<AggTrendPayload & { root?: unknown }>(a, root);
@@ -125,6 +132,9 @@ export function PositioningView() {
         // never render under this ticker's header.
         const mxp = pickRoot<GexMatrix & { root?: unknown }>(mx, root);
         setMatrix(mxp && Array.isArray(mxp.cells) && mxp.cells.length > 0 ? mxp : null);
+        // Not root-keyed: one board, every root on it.
+        const qp = q as QuadPayload | null;
+        setQuad(qp && Array.isArray(qp.rows) && qp.rows.length > 0 ? qp : null);
       })();
     })();
   }, [root]);
@@ -225,7 +235,15 @@ export function PositioningView() {
             <div>{t("emptyWhy").replace("{sym}", root)}</div>
           </div>
         ) : (
-          <MarketStructureBody gex={gex} moves={moves} agg={agg} matrix={matrix} lang={lang} />
+          <MarketStructureBody
+            gex={gex}
+            moves={moves}
+            agg={agg}
+            matrix={matrix}
+            quad={quad}
+            root={root}
+            lang={lang}
+          />
         )}
       </div>
     </div>

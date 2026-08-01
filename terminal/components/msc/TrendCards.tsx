@@ -100,7 +100,13 @@ export function AggTrendCard({
 }) {
   const t = makeMscT(lang);
   const [greek, setGreek] = useState<TrendGreek>("gamma");
-  const [win, setWin] = useState<TrendWindowKey>("all");
+  // Defaults to 1Y, not All, and the reason is measured. Dealer exposure scales with the
+  // underlying — gamma with S², vanna and charm with S — so a nine-year series carries a
+  // growth trend: SPY's yearly median vanna climbed 3.54bn (2017) to 5.07bn (2026) while
+  // spot went 225 to 741. A rank against all of that partly measures how much the market
+  // GREW. The full series stays one click away, where the drift is visible on the chart
+  // and the footnote names it.
+  const [win, setWin] = useState<TrendWindowKey>("1y");
   const boxRef = useRef<HTMLDivElement | null>(null);
   const W = useChartWidth(boxRef, 640);
 
@@ -277,6 +283,7 @@ export function AggTrendCard({
             {ts.truncated ? ` ${t("atTruncated")}` : ""}
           </p>
           <p style={FOOT}>{t("atBandLegend")}</p>
+          {win === "all" && <p style={FOOT}>{t("atDrift")}</p>}
         </>
       )}
     </section>

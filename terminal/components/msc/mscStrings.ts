@@ -288,6 +288,10 @@ const MSC_LEX = {
     "阴影带为该窗口的第 5–95 百分位；虚线为其中位数。",
   ],
   atNone: ["No positioning history published for this ticker yet.", "该品种暂无持仓历史数据。"],
+  atDrift: [
+    "Over a long window the rank partly reflects growth: exposure scales with the underlying, and this one has risen a long way since the series began. Shorter windows compare like with like.",
+    "长窗口下的排名部分反映规模增长：敞口随标的价格放大，而该标的自序列起点以来涨幅可观。较短窗口的对比更为同类可比。",
+  ],
 
   // ── W2 · Spot–vol relationship ─────────────────────────────────────────────
   svTitle: ["Spot–vol relationship", "现货与波动率关系"],
@@ -349,6 +353,60 @@ const MSC_LEX = {
   exDisclose: [
     "Concentration of dealer gamma — not a forecast that these levels hold.",
     "为做市商伽马的集中位置，并非这些水平将保持有效的预测。",
+  ],
+
+  // ── W3 · Floating strike (delta-space exposure) ────────────────────────────
+  fsTitle: ["The book in delta space", "以 Delta 视角看持仓"],
+  fsLead: [
+    "The same exposure, filed by call-equivalent delta instead of by strike. A strike is a fixed price; a delta band stays the same object as spot travels and time passes.",
+    "同一敞口，按看涨等效 Delta 而非行权价归类。行权价是固定价格；Delta 区间在现价移动与时间流逝中仍指向同一对象。",
+  ],
+  fsPeak: ["Heaviest band {b}", "最重区间 {b}"],
+  fsLegend: [
+    "Dashed line = 50Δ, the at-the-money band. Puts are folded onto the call axis: a −30Δ put sits with the 70Δ calls.",
+    "虚线为 50Δ（平值区间）。看跌期权折算到看涨轴：−30Δ 看跌与 70Δ 看涨同区间。",
+  ],
+  fsScale: ["Largest band {v}.", "最大区间 {v}。"],
+  fsNone: [
+    "No delta breakdown published for this ticker yet.",
+    "该品种暂无按 Delta 拆分数据。",
+  ],
+
+  // ── W3 · Cross-root screener ───────────────────────────────────────────────
+  qdTitle: ["Which names sit at a positioning extreme", "哪些标的处于持仓极端"],
+  qdLead: [
+    "Every root ranked against its own recent history, not against the others on screen. A percentile is a claim about that ticker; “most negative on the board” is a claim about the board.",
+    "每个标的与自身近期历史对比排名，而非与屏幕上其他标的对比。百分位是关于该标的的判断；“全表最负”只是关于这张表的判断。",
+  ],
+  qdTierWhy: [
+    "Both axes inherit the dealer-sign convention. Ranking each root against its own record is the sturdier half: the same assumption applies to every session, so a constant sign error largely cancels.",
+    "两轴均沿用做市商符号假设。将每个标的与自身历史排名更为稳健：该假设对每个交易日一致，恒定符号误差大体抵销。",
+  ],
+  qdAxisX: ["Dealer gamma percentile →", "做市商伽马百分位 →"],
+  qdAmpVol: ["Amplify · vol-sensitive", "放大 · 对波动敏感"],
+  qdAmpStable: ["Amplify · vol-quiet", "放大 · 波动平静"],
+  qdDampVol: ["Dampen · vol-sensitive", "抑制 · 对波动敏感"],
+  qdDampStable: ["Dampen · vol-quiet", "抑制 · 波动平静"],
+  qdColRoot: ["Root", "标的"],
+  qdColGamma: ["Gamma pct · $", "伽马百分位 · 金额"],
+  qdColVanna: ["Vanna pct · $", "Vanna 百分位 · 金额"],
+  qdColRegime: ["Hedging regime", "对冲机制"],
+  qdWindow: [
+    "Ranked within each root's trailing {d} sessions, not its whole history — over nine years the rank would partly measure how much the market grew.",
+    "在每个标的最近 {d} 个交易日内排名，而非全部历史——若取九年，排名将部分反映市场规模的增长。",
+  ],
+  qdLegend: [
+    "{n} roots. Horizontal = dealer gamma percentile (left: hedging amplifies a move). Vertical = dealer vanna percentile (top: a vol move forces hedging). Highlighted points are at a historical extreme.",
+    "共 {n} 个标的。横轴为做市商伽马百分位（左侧：对冲放大波动）。纵轴为做市商 Vanna 百分位（上方：波动变化迫使对冲）。高亮点处于历史极端。",
+  ],
+  qdMinHistory: [
+    "A root needs {d} sessions of history before it is ranked.",
+    "标的需具备 {d} 个交易日历史方可参与排名。",
+  ],
+  qdSkipped: ["{n} skipped for thin history: {r}.", "{n} 个因历史过短被排除：{r}。"],
+  qdNone: [
+    "The cross-root board has not been published yet.",
+    "跨标的看板尚未发布。",
   ],
 } as const;
 
