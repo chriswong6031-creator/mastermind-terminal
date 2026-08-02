@@ -96,6 +96,34 @@ export function VolSkewPanel({
   const callSegs = useMemo(() => finiteSegments(pts, (p) => Number(p.call_iv)), [pts]);
   const putSegs = useMemo(() => finiteSegments(pts, (p) => Number(p.put_iv)), [pts]);
 
+  // ── Skew read (R2.3): put IV at 95% of the ATM strike − call IV at 105% ─────
+  // Linear interpolation over the FULL chain (the trim must not hide the wings
+  // the read needs); null when either side lacks bracketing finite quotes.
+  const skewRead = useMemo(() => {
+    if (atmProxy == null) return null;
+    const interp = (target: number, leg: "call_iv" | "put_iv"): number | null => {
+      const rows = allPts.filter((p) => Number.isFinite(Number(p[leg])));
+      if (rows.length < 2) return null;
+      if (target < rows[0].strike || target > rows[rows.length - 1].strike) return null;
+      for (let i = 1; i < rows.length; i++) {
+        if (rows[i].strike >= target) {
+          const a = rows[i - 1];
+          const b = rows[i];
+          const f = b.strike === a.strike ? 0 : (target - a.strike) / (b.strike - a.strike);
+          return Number(a[leg]) + (Number(b[leg]) - Number(a[leg])) * f;
+        }
+      }
+      return null;
+    };
+    const put95 = interp(atmProxy * 0.95, "put_iv");
+    const call105 = interp(atmProxy * 1.05, "call_iv");
+    if (put95 == null || call105 == null) return null;
+    const v = put95 - call105;
+    const biasKey: "skewPutBias" | "skewCallBias" | "skewFlat" =
+      v > 0.5 ? "skewPutBias" : v < -0.5 ? "skewCallBias" : "skewFlat";
+    return { v, biasKey };
+  }, [allPts, atmProxy]);
+
   const drawable =
     pts.length >= 2 && (callSegs.some((s) => s.length >= 2) || putSegs.some((s) => s.length >= 2));
 
@@ -156,6 +184,14 @@ export function VolSkewPanel({
             </button>
           ))}
           <span style={{ flex: 1 }} />
+          {skewRead && (
+            <Tip label={t("skewReadTip")} size="card">
+              <span style={{ ...NEUTRAL_CHIP, cursor: "help", fontVariantNumeric: "tabular-nums" }} tabIndex={0}>
+                {t("skewRead")} {skewRead.v > 0 ? "+" : skewRead.v < 0 ? "−" : ""}
+                {Math.abs(skewRead.v).toFixed(1)} · {t(skewRead.biasKey)}
+              </span>
+            </Tip>
+          )}
           {trimming && (
             <Tip label={t("skewTrimTip")} size="card">
               <button type="button" style={{ ...NEUTRAL_CHIP, cursor: "help" }}>

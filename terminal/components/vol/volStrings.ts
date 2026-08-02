@@ -95,6 +95,41 @@ const VOL_LEX = {
     "默认隐藏偏离平值行权价 ±20% 以外的行权价 — 深度实值报价的隐含波动率不可靠。切换到完整链可查看全部。",
   ],
   skewStrikeAxis:    ["Strike", "行权价"],
+
+  // ── VRP regime panel (R2.3 — level + trend + velocity, regime-dynamics law) ──
+  vrpTitle:          ["Volatility risk premium — regime", "波动率风险溢价 — 状态"],
+  vrpDerived:        ["band derived from published closes + nightly IV", "区间由已发布收盘价与每晚IV推导"],
+  vrpNow:            ["VRP now", "当前VRP"],
+  vrpUnit:           ["IV − RV20, vol pts", "IV − RV20（波动点）"],
+  vrpRegime:         ["Regime", "状态"],
+  vrpCompressed:     ["Compressed", "压缩"],
+  vrpNormal:         ["Normal", "正常"],
+  vrpElevated:       ["Elevated", "偏高"],
+  vrpUnknown:        ["Not enough history", "历史不足"],
+  vrpPctile:         ["{p}th pct of 1y", "1年第{p}百分位"],
+  vrpTrend:          ["5-session trend", "5日趋势"],
+  vrpTrendCaption:   ["vol pts", "波动点"],
+  vrpVelocity:       ["1-session change", "1日变化"],
+  vrpVelocityCaption:["vol pts", "波动点"],
+  vrpEmptyTitle:     ["No VRP history for this name", "该品种暂无VRP历史"],
+  vrpEmptyWhy: [
+    "The regime band needs the aggregate-trend store (spot + IV per session); it has not been published for this root.",
+    "状态区间需要聚合趋势数据（每日现价与IV）；该标的尚未发布。",
+  ],
+
+  // ── Skew read (95–105% moneyness, from the drawn expiry) ───────────────────
+  skewRead:          ["Skew 95–105%", "偏斜 95–105%"],
+  skewReadTip: [
+    "Put IV interpolated at 95% of the ATM strike minus call IV at 105%, for the expiry drawn below. Positive = downside protection costs more — the equity-normal put bias.",
+    "以下方到期链计算：95% 平值行权价处的看跌IV减 105% 处的看涨IV。正值＝下行保护更贵——股票市场常见的看跌偏斜。",
+  ],
+  skewPutBias:       ["put bias", "看跌偏斜"],
+  skewCallBias:      ["call bias", "看涨偏斜"],
+  skewFlat:          ["flat", "平坦"],
+
+  // ── Term slope chips ────────────────────────────────────────────────────────
+  termSlopeFront:    ["0→30d {v} pts", "0→30天 {v} 点"],
+  termSlopeBack:     ["30→90d {v} pts", "30→90天 {v} 点"],
 } as const;
 
 type VolDeskKey = keyof typeof VOL_LEX;
