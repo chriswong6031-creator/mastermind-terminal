@@ -39,6 +39,7 @@ import InsiderPage from "./InsiderPage";
 import TechLabPanel from "./TechLabPanel";
 import TranscriptDrawer from "./TranscriptDrawer";
 import TranscriptsPage from "./TranscriptsPage";
+import CompanyIntelligencePage from "./CompanyIntelligencePage";
 import { isTranscriptId } from "../../lib/transcripts";
 
 /** The twelve hostable pages share one fundamentals/research tab bar. The former deep-analysis
@@ -49,6 +50,7 @@ export type FinPage =
   | "statistics"
   | "dividends"
   | "earnings"
+  | "intelligence"
   | "transcripts"
   | "revenue"
   | "forecast"
@@ -58,7 +60,7 @@ export type FinPage =
   | "lab";
 
 /** The pages that share the TV "Financials" tab pill bar. */
-export const FIN_PAGES: readonly FinPage[] = ["overview", "statements", "transcripts", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast", "technicals", "insider", "lab"];
+export const FIN_PAGES: readonly FinPage[] = ["overview", "intelligence", "statements", "transcripts", "statistics", "dividends", "earnings", "revenue", "seasonals", "forecast", "technicals", "insider", "lab"];
 
 const PAGE_LABELS: Record<FinPage, [string, string]> = {
   overview: ["Overview", "概览"],
@@ -66,6 +68,7 @@ const PAGE_LABELS: Record<FinPage, [string, string]> = {
   statistics: ["Statistics", "统计"],
   dividends: ["Dividends", "股息"],
   earnings: ["Earnings", "盈利"],
+  intelligence: ["Intelligence", "公司情报"],
   transcripts: ["Transcripts", "电话会"],
   revenue: ["Revenue", "营收"],
   forecast: ["Analyst", "分析师"],
@@ -125,6 +128,7 @@ export default function MegaPane({
   // Read the current drawer state inside the (once-registered) Esc handler
   // without re-subscribing the window listener on every txId change.
   const txOpenRef = useRef(false);
+  const intelligenceEvidenceOpenRef = useRef(false);
   useEffect(() => {
     txOpenRef.current = txId != null;
   }, [txId]);
@@ -161,16 +165,20 @@ export default function MegaPane({
   // early-return here whenever a drawer is open (regardless of listener order),
   // so Esc closes the drawer BEFORE the pane.
   useEffect(() => {
+    // The standalone analysis workspace is embedded in its route. Escape must
+    // never send a reader away from that workspace; only the true overlay
+    // variant owns the route-changing close affordance.
+    if (workspace) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (txOpenRef.current) return; // drawer owns Esc while open
+        if (txOpenRef.current || intelligenceEvidenceOpenRef.current) return; // nested inspector/drawer owns Esc
         e.stopPropagation();
         closePane();
       }
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [closePane]);
+  }, [closePane, workspace]);
 
   // ── body scroll lock while open (overlay mode only — workspace scrolls inside its slot) ──
   useEffect(() => {
@@ -228,15 +236,35 @@ export default function MegaPane({
     url.searchParams.delete("tx");
     window.history.replaceState(window.history.state, "", url.toString());
   }, []);
+  const setIntelligenceEvidenceOpen = useCallback((open: boolean) => {
+    intelligenceEvidenceOpenRef.current = open;
+  }, []);
 
   const navigate = useCallback((p: FinPage) => onPage(p), [onPage]);
+
+  const moveTabFocus = useCallback((current: FinPage, key: string) => {
+    const index = FIN_PAGES.indexOf(current);
+    const next = key === "ArrowRight" ? (index + 1) % FIN_PAGES.length
+      : key === "ArrowLeft" ? (index - 1 + FIN_PAGES.length) % FIN_PAGES.length
+        : key === "Home" ? 0 : key === "End" ? FIN_PAGES.length - 1 : -1;
+    if (next < 0) return false;
+    const target = FIN_PAGES[next];
+    onPage(target);
+    window.requestAnimationFrame(() => document.getElementById(`fin-tab-${target}`)?.focus());
+    return true;
+  }, [onPage]);
 
   const pageTitle = pick(zh, PAGE_LABELS[page][0], PAGE_LABELS[page][1]);
 
   return (
     <>
       {!workspace && <div className="fin-scrim" onClick={closePane} aria-hidden />}
-      <div className={`fin-pane${workspace ? " fin-pane--workspace" : ""}`} role="dialog" aria-modal="true" aria-label={`${displayName} · ${pageTitle}`}>
+      <div
+        className={`fin-pane${workspace ? " fin-pane--workspace" : ""}`}
+        role={workspace ? "region" : "dialog"}
+        aria-modal={workspace ? undefined : true}
+        aria-label={`${displayName} · ${pageTitle}`}
+      >
         {/* ── header ── */}
         <div className="fin-head">
           <button className="fin-head-back" onClick={closePane}>
@@ -259,9 +287,15 @@ export default function MegaPane({
             <button
               key={t}
               className={"fin-tab" + (page === t ? " on" : "")}
+              id={`fin-tab-${t}`}
               role="tab"
               aria-selected={page === t}
+              aria-controls="fin-active-panel"
+              tabIndex={page === t ? 0 : -1}
               onClick={() => onPage(t)}
+              onKeyDown={(event) => {
+                if (moveTabFocus(t, event.key)) event.preventDefault();
+              }}
             >
               {pick(zh, PAGE_LABELS[t][0], PAGE_LABELS[t][1])}
             </button>
@@ -269,8 +303,16 @@ export default function MegaPane({
         </div>
 
         {/* ── body ── */}
-        <div className="fin-body" key={page}>
+        <div className="fin-body" key={page} id="fin-active-panel" role="tabpanel" aria-labelledby={`fin-tab-${page}`}>
           {page === "overview" && <OverviewPage sym={sym} fund={fund} name={displayName} onNavigate={navigate} />}
+          {page === "intelligence" && (
+            <CompanyIntelligencePage
+              sym={sym}
+              name={displayName}
+              onOpenTx={openTranscript}
+              onEvidenceOpenChange={setIntelligenceEvidenceOpen}
+            />
+          )}
           {page === "statements" && (
             <StatementsPage sym={sym} fund={fund} name={displayName} onOpenTx={openTranscript} />
           )}

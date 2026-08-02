@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef } from "react";
+import { handoffMastermindBrainSymbol, type MastermindBrainHost } from "@/lib/mastermindBrain";
 
 // Mounts the production Mastermind Brain widget (mm_brain.js) into the Terminal, replacing
 // the old CopilotPanel. The widget is a self-contained IIFE that reads window.MM_BRAIN_CFG
@@ -33,6 +34,11 @@ export default function BrainWidget({
 
   useEffect(() => {
     symRef.current = active;
+    // The script is a document-level singleton and can outlive this component
+    // during a client-side /terminal -> /analysis navigation.  Rebind the
+    // shared getter on every active-symbol change so a subsequent handoff
+    // cannot keep querying an unmounted component's stale ref.
+    handoffMastermindBrainSymbol(active);
   }, [active]);
   useEffect(() => {
     onCommandRef.current = onCommand;
@@ -48,14 +54,14 @@ export default function BrainWidget({
   // and the widget itself is a singleton — guard on both the mounted flag and an existing tag.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const w = window as any;
+    const w = window as unknown as MastermindBrainHost;
     if (w.MMBrain?.mounted) return;
     if (document.querySelector(`script[src="${SCRIPT_SRC}"]`)) return;
 
     w.MM_BRAIN_CFG = {
       anchor: "top", // no built-in launcher; host calls window.MMBrain.open()/.toggle()
       api: "", // same-origin — /api/brain/* with credentials:'include'
-      symbol: () => symRef.current,
+      symbol: () => w.__MM_BRAIN_ACTIVE_SYMBOL__ || symRef.current,
       onCommand: (j: any) => onCommandRef.current?.(j),
       onAnnotate: (j: any) => onAnnotateRef.current?.(j),
       onAuthRequired: () => onAuthRequiredRef.current?.(),

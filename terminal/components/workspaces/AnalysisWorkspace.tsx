@@ -5,6 +5,7 @@ import MegaPane, { FIN_PAGES as FIN_PAGE_LIST, type FinPage } from "@/components
 import { getFund, getBars, type Fund, type Bar } from "@/lib/fund";
 import { getJSON } from "@/lib/dataCache";
 import { useLang } from "@/lib/i18n";
+import { normalizeAnalysisSymbol } from "@/lib/analysisSymbol";
 
 /**
  * Analysis workspace composer (Wave-2 IA) — the `/analysis` body.
@@ -16,8 +17,8 @@ import { useLang } from "@/lib/i18n";
  * supplies the two things TerminalShell supplies around it: (1) a per-symbol data
  * load (intel/fund/bars/quote) and (2) symbol + sub-page context.
  *
- * ── URL state (shallow, window.history.replaceState — the app-router idiom that
- *    avoids the useSearchParams CSR-bailout, per Discover/Research composers) ──
+ * ── URL state (seeded by the server page, then kept shallow with
+ *    window.history.replaceState to avoid a useSearchParams CSR bailout) ──
  *   ?symbol=<TICKER>  the active symbol (default NVDA). Changing it rewrites the
  *                     param so a copied /analysis URL reproduces the view.
  *   ?page=<FinPage>   the active sub-page (default overview). Validated against
@@ -38,32 +39,45 @@ import { useLang } from "@/lib/i18n";
 const FIN_PAGES = new Set<FinPage>(FIN_PAGE_LIST);
 const DEFAULT_SYMBOL = "NVDA";
 const DEFAULT_PAGE: FinPage = "overview";
+/**
+ * A symbol is an identifier, never a path fragment.  Keep this distinct from
+ * the more permissive server-side market-data validators: the analysis route
+ * accepts conventional dotted/dashed tickers and leading-index carets, but
+ * rejects separators, repeated delimiters, and any other shape that could be
+ * mistaken for a route or silently normalised into another company.
+ */
 // Light live-quote refresh; matches the /api/quote snapshot cadence (TTL 5s). We
 // poll a touch slower to avoid needless load on a single-symbol page.
 const QUOTE_REFRESH_MS = 15_000;
 
-export default function AnalysisWorkspace() {
+export interface AnalysisWorkspaceProps {
+  initialSymbol?: string;
+  initialPage?: string;
+}
+
+export default function AnalysisWorkspace({ initialSymbol, initialPage }: AnalysisWorkspaceProps) {
   const { lang } = useLang();
   const router = useRouter();
 
-  const [sym, setSym] = useState<string>(DEFAULT_SYMBOL);
-  const [page, setPage] = useState<FinPage>(DEFAULT_PAGE);
+  const requestedSymbol = initialSymbol?.trim().toUpperCase() || "";
+  const normalizedInitialSymbol = normalizeAnalysisSymbol(initialSymbol);
+  const seededSymbol = normalizedInitialSymbol ?? DEFAULT_SYMBOL;
+  const seededPage = initialPage && FIN_PAGES.has(initialPage as FinPage) ? initialPage as FinPage : DEFAULT_PAGE;
+  const [sym, setSym] = useState<string>(seededSymbol);
+  // An explicit malformed query must not quietly become NVDA.  The invalid
+  // state deliberately stops all company-data effects below and leaves the
+  // address bar intact so a shared bad link is visible and debuggable.
+  const [invalidSymbol, setInvalidSymbol] = useState<string | null>(
+    requestedSymbol && !normalizedInitialSymbol ? requestedSymbol : null,
+  );
+  const [page, setPage] = useState<FinPage>(seededPage);
 
   const [intel, setIntel] = useState<any | null>(null);
   const [fund, setFund] = useState<Fund | null>(null);
   const [fundLoading, setFundLoading] = useState(true);
   const [bars, setBars] = useState<Bar[]>([]);
   const [last, setLast] = useState<number | null>(null);
-
-  // ── seed sym + page from the URL on mount (client-only; no useSearchParams) ──
-  useEffect(() => {
-    const q = new URLSearchParams(window.location.search);
-    const rawSym = (q.get("symbol") || "").trim().toUpperCase();
-    if (rawSym) setSym(rawSym);
-    const rawPage = q.get("page") as FinPage | null;
-    if (rawPage && FIN_PAGES.has(rawPage)) setPage(rawPage);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const symbolInputRef = useRef<HTMLInputElement>(null);
 
   // Shared shallow-URL writer — set a search param without navigating (dodges the
   // useSearchParams CSR-bailout, matching the Discover/Research composers).
@@ -76,8 +90,9 @@ export default function AnalysisWorkspace() {
 
   // ── symbol change → rewrite ?symbol= shallowly ──
   useEffect(() => {
+    if (invalidSymbol) return;
     writeParam("symbol", sym);
-  }, [sym, writeParam]);
+  }, [invalidSymbol, sym, writeParam]);
 
   // ── sub-page change (MegaPane onPage) → state + ?page= shallowly ──
   const onPage = useCallback((p: FinPage) => {
@@ -87,6 +102,7 @@ export default function AnalysisWorkspace() {
 
   // ── per-symbol data load (see header note; mirrors TerminalShell ~576-605) ──
   useEffect(() => {
+    if (invalidSymbol) return;
     let alive = true;
     setIntel(null); setFund(null); setBars([]); setLast(null); setFundLoading(true);
     getJSON(`/data/${sym}.intel.json`).then((d) => { if (alive) setIntel(d); }).catch(() => {});
@@ -96,12 +112,13 @@ export default function AnalysisWorkspace() {
       .catch(() => {})
       .finally(() => { if (alive) setFundLoading(false); });
     return () => { alive = false; };
-  }, [sym]);
+  }, [invalidSymbol, sym]);
 
   // ── live quote (single symbol): initial fetch + light refresh, race-guarded ──
   // MegaPane consumes only quote.last (Statistics "Current" column, forecast spot),
   // so we extract quotes[sym].last from /api/quote?syms=<SYM> and pass { last }.
   useEffect(() => {
+    if (invalidSymbol) return;
     let alive = true;
     const load = async () => {
       try {
@@ -115,7 +132,7 @@ export default function AnalysisWorkspace() {
     load();
     const id = window.setInterval(load, QUOTE_REFRESH_MS);
     return () => { alive = false; window.clearInterval(id); };
-  }, [sym]);
+  }, [invalidSymbol, sym]);
 
   // ── symbol-switch input: uppercases + commits on Enter (see file note) ──
   // v1 uses a minimal input rather than SearchModal: SearchModal requires manifest,
@@ -124,9 +141,17 @@ export default function AnalysisWorkspace() {
   const [draft, setDraft] = useState("");
   const commitDraft = useCallback(() => {
     const next = draft.trim().toUpperCase();
-    if (next && next !== sym) setSym(next);
+    if (!next) return;
+    const valid = normalizeAnalysisSymbol(next);
+    if (!valid) {
+      setInvalidSymbol(next);
+      writeParam("symbol", next);
+      return;
+    }
+    setInvalidSymbol(null);
+    if (valid !== sym) setSym(valid);
     setDraft("");
-  }, [draft, sym]);
+  }, [draft, sym, writeParam]);
 
   // ── onClose (workspace) → jump to the chart for this symbol ──
   const onClose = useCallback(() => {
@@ -134,47 +159,79 @@ export default function AnalysisWorkspace() {
   }, [router, sym]);
 
   const zh = lang === "zh";
+  const contextSymbol = invalidSymbol ?? sym;
 
   return (
     // Root IS the (shell) .app2 grid cell (like DiscoverWorkspace). Flex-column so
     // MegaPane's .fin-pane--workspace (flex:1) fills the remaining height below the
     // header row. On ≤860px MegaPane's CSS reverts to a fixed full-screen overlay.
-    <div className="main2 ws-shell" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      {/* header row — matches the workspace tab-strip header padding + border */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderBottom: "1px solid var(--line)", flexShrink: 0 }}>
-        <span style={{ fontWeight: 600, fontSize: 13, letterSpacing: 0.2 }} aria-label={zh ? "当前标的" : "Current symbol"}>{sym}</span>
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value.toUpperCase())}
-          onKeyDown={(e) => { if (e.key === "Enter") commitDraft(); }}
-          onBlur={commitDraft}
-          placeholder={zh ? "切换标的…" : "Change symbol…"}
-          aria-label={zh ? "切换标的" : "Change symbol"}
-          spellCheck={false}
-          autoCapitalize="characters"
-          autoCorrect="off"
-          style={{
-            width: 140, height: 26, padding: "0 8px", fontSize: 12,
-            textTransform: "uppercase", color: "var(--fg)", background: "var(--bg)",
-            border: "1px solid var(--line)", borderRadius: 4, outline: "none",
-          }}
-        />
+    <div className="main2 ws-shell analysis-shell">
+      <div className="analysis-context-bar">
+        <div className="analysis-context-identity">
+          <span className="analysis-context-mark" aria-hidden>{invalidSymbol ? "!" : contextSymbol.charAt(0)}</span>
+          <span>
+            <small>{zh ? "研究工作区" : "RESEARCH WORKSPACE"}</small>
+            <strong aria-label={zh ? "当前标的" : "Current symbol"}>{contextSymbol}</strong>
+          </span>
+        </div>
+        <form
+          className="analysis-symbol-form"
+          onSubmit={(event) => { event.preventDefault(); commitDraft(); }}
+          role="search"
+        >
+          <label htmlFor="analysis-symbol-input">{zh ? "切换标的" : "Switch company"}</label>
+          <div>
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+            <input
+              id="analysis-symbol-input"
+              ref={symbolInputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value.toUpperCase())}
+              placeholder={zh ? "输入代码…" : "Ticker…"}
+              aria-label={zh ? "切换标的" : "Change symbol"}
+              spellCheck={false}
+              autoCapitalize="characters"
+              autoCorrect="off"
+            />
+            <button type="submit" disabled={!draft.trim()}>{zh ? "打开" : "Open"}</button>
+          </div>
+        </form>
+        <div className="analysis-context-freshness" aria-label={zh ? "公司研究工作区" : "Company research workspace"}>
+          <i />
+          <span>{zh ? "公司研究" : "Company research"}</span>
+        </div>
       </div>
 
-      <MegaPane
-        sym={sym}
-        fund={fund}
-        fundLoading={fundLoading}
-        quote={{ last }}
-        bars={bars}
-        page={page}
-        onPage={onPage}
-        onClose={onClose}
-        // name omitted: MegaPane resolves its own header via fund?.ticker || sym
-        // (TerminalShell feeds a manifest name we don't load; the fallback is correct).
-        mode="workspace"
-        intel={intel}
-      />
+      {invalidSymbol ? (
+        <section className="analysis-invalid-state" role="status" aria-live="polite">
+          <span className="analysis-invalid-mark" aria-hidden>!</span>
+          <div>
+            <p className="fin-eyebrow">{zh ? "未解析标的" : "UNRESOLVED SYMBOL"}</p>
+            <h1>{zh ? "无法打开该公司研究页" : "This company research page was not opened"}</h1>
+            <p>{zh
+              ? `“${invalidSymbol}” 不是受支持的代码格式。系统未将其替换为 ${DEFAULT_SYMBOL}，也未请求公司数据。`
+              : `“${invalidSymbol}” is not a supported symbol format. It was not substituted with ${DEFAULT_SYMBOL}, and no company data was requested.`}</p>
+            <button className="btn btn-primary" onClick={() => symbolInputRef.current?.focus()}>
+              {zh ? "输入有效代码" : "Enter a valid symbol"}
+            </button>
+          </div>
+        </section>
+      ) : (
+        <MegaPane
+          sym={sym}
+          fund={fund}
+          fundLoading={fundLoading}
+          quote={{ last }}
+          bars={bars}
+          page={page}
+          onPage={onPage}
+          onClose={onClose}
+          // name omitted: MegaPane resolves its own header via fund?.ticker || sym
+          // (TerminalShell feeds a manifest name we don't load; the fallback is correct).
+          mode="workspace"
+          intel={intel}
+        />
+      )}
     </div>
   );
 }
