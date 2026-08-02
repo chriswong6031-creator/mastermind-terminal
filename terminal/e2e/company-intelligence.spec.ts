@@ -149,7 +149,7 @@ function themeContextFixture() {
     company_intelligence: {
       generation_id: "a".repeat(24),
       context_sha256: "9".repeat(64),
-      latest_event_id: "NVDA-2026Q1",
+      latest_event_id: "cie_d8488221fd8c710c53d6537d",
       latest_event_call_date: "2026-05-20",
     },
     exposures: [{

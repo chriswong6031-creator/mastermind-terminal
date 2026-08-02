@@ -142,18 +142,19 @@ function ContextCard({ context, state }: { context: CompanyThemeExposure; state:
 }
 
 export default function CompanyThemeContextCard({ ticker, selectedEventId, selectedEventLabel, onUseLatest }: CompanyThemeContextCardProps) {
-  const [result, setResult] = useState<CompanyThemeExposureResult | null>(null);
+  const [loaded, setLoaded] = useState<{ key: string; result: CompanyThemeExposureResult } | null>(null);
   const [nonce, setNonce] = useState(0);
+  const requestKey = `${ticker}:${nonce}`;
 
   useEffect(() => {
     const controller = new AbortController();
-    setResult(null);
     getCompanyThemeExposure(ticker, { signal: controller.signal, retryNonce: nonce })
-      .then((value) => { if (!controller.signal.aborted) setResult(value); })
-      .catch(() => { if (!controller.signal.aborted) setResult({ ok: false, state: "error", error: { code: "upstream_unavailable", message: "Company theme context request failed", retryable: true } }); });
+      .then((result) => { if (!controller.signal.aborted) setLoaded({ key: requestKey, result }); })
+      .catch(() => { if (!controller.signal.aborted) setLoaded({ key: requestKey, result: { ok: false, state: "error", error: { code: "upstream_unavailable", message: "Company theme context request failed", retryable: true } } }); });
     return () => controller.abort();
-  }, [nonce, ticker]);
+  }, [nonce, requestKey, ticker]);
 
+  const result = loaded?.key === requestKey ? loaded.result : null;
   const latestEventId = result?.ok ? result.context.company_intelligence.latest_event_id : null;
   const selectedHistorical = !!latestEventId && latestEventId !== selectedEventId;
   const state = useMemo(() => result ? effectiveState(result) : "partial", [result]);
