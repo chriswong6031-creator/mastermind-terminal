@@ -515,7 +515,19 @@ waves follow M1 ops discipline.
 > in `terminal/lib/optionsLevels.ts` (19 tests). Ride-along fixes: the guest `mm.inds`
 > reload-clobber (anon clamp racing hydration — the one persist key missing the mount guard) and
 > the eye-toggle silent no-op for price-line-only overlays (slevels/pivots included).
-> **R3.2/R3.3 remain open** (ticker-page block, screener columns, watchlist regime dot).
+> **R3.2 SHIPPED 2026-08-02** (macro #4292 + terminal #334): the first cross-root positioning
+> aggregate on R2 (`options_structure/gex_state/_index.json`, built by build_gex_board, riding
+> `git add site/` + the launchd R2 mirror — arrives with the Monday 16:00 mirror run), the
+> ticker page's LIVE "Options · dealer positioning" block (the old gamma block was dead twice
+> over: `deep`-gated with no caller AND reading analysis.gex, which fresh intel payloads no
+> longer carry; it also role-inverted the wall colours), and three screener `msc_*` columns
+> (six-state regime word/colour from the ONE table in `lib/mscGlance.ts`, risk-rank sortable;
+> net GEX polarity; dist-to-flip). Degrade-to-absent everywhere; free UX unchanged.
+> **R3.3 watchlist dot DEFERRED with the mechanism on record:** the index arrival commits a
+> span into every watchlist row at once, and that one commit landing inside a phone
+> double-tap window eats the pane-maximize gesture (mobile-chart-chrome e2e, cold-reproducible
+> vs a clean base; startTransition cannot help — the commit phase is synchronous). Ship it
+> only with a per-row, jank-free paint path. Command-tab gauges also still open.
 
 ### R0 — Wave 1: the Positioning panel *(terminal only, zero data-plane dependency)* — **THIS SESSION**
 
