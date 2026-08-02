@@ -277,7 +277,7 @@ test("a locked search result remains keyboard reachable through its guide action
   await expect(guide.getByRole("heading", { level: 1, name: "Trend Engine" })).toBeVisible();
 });
 
-test("Structure profiles expose the exact Free, Insider, and Pro access matrix", async ({ page }, testInfo) => {
+test("Structure profiles expose the exact Free, Essential, and Pro access matrix", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The entitlement gate is shared by every viewport.");
 
   const profiles = [
@@ -285,12 +285,17 @@ test("Structure profiles expose the exact Free, Insider, and Pro access matrix",
     "Structure Workflow",
     "Complete Structure Research",
   ] as const;
+  // The `insider` row is the pre-rename name for `essential` and is asserted to unlock the
+  // IDENTICAL set. It is not a leftover: a cached page or an un-migrated /api/me payload can
+  // send it at any time, and this is the only place the alias is proved end-to-end through the
+  // real client boundary rather than against normalizeSubscriptionTier directly.
   const matrix = [
     { tier: "free", available: [] },
+    { tier: "essential", available: ["Structure Focus", "Structure Workflow"] },
     { tier: "insider", available: ["Structure Focus", "Structure Workflow"] },
     { tier: "pro", available: [...profiles] },
   ] as const;
-  let currentTier: "free" | "insider" | "pro" = "free";
+  let currentTier: "free" | "essential" | "insider" | "pro" = "free";
 
   // /api/me is the production client boundary for entitlement display. Varying only this
   // response exercises the real tier normalization and avoids test-only auth/session mutation.

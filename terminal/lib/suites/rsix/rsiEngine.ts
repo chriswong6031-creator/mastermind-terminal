@@ -488,7 +488,7 @@ export const RSI_ENGINE_MODULE: SuiteModuleDef = {
   key: "eng",
   label: "RSI Engine",
   tag: "RE",
-  tier: "insider",
+  tier: "essential",
   defaultOn: true,
   fields: FIELDS,
   defaults: DEFAULTS,

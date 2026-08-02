@@ -24,7 +24,7 @@ export async function GET(req: Request): Promise<Response> {
   if (!rl.ok) return tooMany(rl);
   // Options data is a PAID feature — enforced SERVER-SIDE against the macro-api
   // entitlement authority: the `terminal_live_options` feature from /api/me
-  // (config/plans.yml — insider + pro, incl. trial), NOT profiles.is_pro (a UI
+  // (config/plans.yml — essential + pro, incl. trial), NOT profiles.is_pro (a UI
   // hint that can drift; see AGENTS.md). Dev fixture mode is exempt.
   if (process.env.FLOW_FIXTURE !== "1" && !(await hasLiveOptions())) {
     return NextResponse.json(

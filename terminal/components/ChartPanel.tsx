@@ -575,7 +575,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const onPaneCountRef = useRef(onPaneCount); onPaneCountRef.current = onPaneCount;
   const lastPaneCountRef = useRef<number>(-1);   // last reported count to avoid redundant calls
 
-  const suiteTierRank = (tier: SuiteTier): number => tier === "pro" ? 2 : tier === "insider" ? 1 : 0;
+  // `insider` is the pre-rename name for `essential`; still ranked so a stale cached tier can
+  // never fail CLOSED here (the renderer refusing to draw) while the picker fails OPEN.
+  const suiteTierRank = (tier: SuiteTier | "insider"): number =>
+    tier === "pro" ? 2 : tier === "essential" || tier === "insider" ? 1 : 0;
   const canRenderSuiteModule = (entry: SuiteModuleCatalogEntry): boolean =>
     suiteTierRank(userTierRef.current) >= suiteTierRank(entry.tier);
   const activeSuiteModules = (suiteKey: string): SuiteModuleCatalogEntry[] =>
@@ -6477,7 +6480,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   }, [indParamsKey]);
 
   // Entitlements resolve asynchronously after the chart can already be painted. Rebuild when the
-  // tier changes so persisted Insider/Pro modules and their shared panes appear immediately after
+  // tier changes so persisted Essential/Pro modules and their shared panes appear immediately after
   // `/api/me` upgrades the initial fail-closed Free tier (and disappear on a downgrade).
   const tierMounted = useRef(false);
   useEffect(() => {

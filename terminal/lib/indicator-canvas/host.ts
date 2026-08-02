@@ -4,7 +4,7 @@
 //   1. resolve SuiteColors from CSS custom properties ONCE per render pass (modules never read CSS);
 //   2. convert ChartPanel's bars (string|number time) to SuiteBar[] (numeric epoch seconds) ONCE;
 //   3. split the flat "<module>.<field>" params blob per module and merge module defaults under it;
-//   4. gate modules by entitlement tier (free < insider < pro) — locked modules are SKIPPED and
+//   4. gate modules by entitlement tier (free < essential < pro) — locked modules are SKIPPED and
 //      reported back so the UI can render an upsell row;
 //   5. run each enabled module inside try/catch (a broken module must never blank the chart);
 //   6. enforce MAX_PRIMS_PER_MODULE / MAX_TOTAL_PRIMS;
@@ -143,7 +143,11 @@ function toSuiteBars(rows: SuiteHostInput["bars"]): SuiteBar[] {
 
 // ──────────────────────────────────────────────────────────────────────────────── tier & params
 
-const TIER_RANK: Record<SuiteTier, number> = { free: 0, insider: 1, pro: 2 };
+// `insider` is the pre-rename name for `essential` and is still accepted here: a stale cached
+// page or a `mm.devTier` written before the rename can hand this side an old string, and the
+// renderer fails CLOSED — an unranked tier would silently refuse to draw a paid subscriber's
+// modules. Read-tolerance only; nothing writes the old name back.
+const TIER_RANK: Record<SuiteTier | "insider", number> = { free: 0, essential: 1, insider: 1, pro: 2 };
 
 function tierRank(t: SuiteTier | undefined): number {
   return TIER_RANK[(t ?? "free") as SuiteTier] ?? 0;

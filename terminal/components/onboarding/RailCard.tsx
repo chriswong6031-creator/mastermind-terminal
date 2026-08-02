@@ -37,7 +37,7 @@ function stepEntries(paid: boolean): StepEntry[] {
 // Tier hue CSS var per plan key — mirrors onboarding.css tokens.
 const HUE: Record<PlanKey, string> = {
   free: "var(--ob-free)",
-  insider: "var(--ob-insider)",
+  essential: "var(--ob-essential)",
   pro: "var(--ob-pro)",
 };
 
@@ -78,7 +78,7 @@ export function AccountCard({ snap }: { snap: WizardSnapshot }) {
       {tiered && (
         <div className="ob-acct-tier">
           <span className="ob-acct-tier-nm" style={{ color: hue }}>
-            {t(snap.plan === "free" ? "obPlanFree" : snap.plan === "insider" ? "obPlanInsider" : "obPlanPro")}
+            {t(snap.plan === "free" ? "obPlanFree" : snap.plan === "essential" ? "obPlanInsider" : "obPlanPro")}
           </span>
           {snap.trialActive && snap.plan !== "free" && (
             // Non-directional hue = the tier hue (never --up/--down, which flip in zh).

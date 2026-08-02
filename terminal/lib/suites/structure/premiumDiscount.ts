@@ -499,7 +499,7 @@ export const PREMIUM_DISCOUNT_MODULE: SuiteModuleDef = {
   key: "pd",
   label: "Premium & Discount",
   tag: "PD",
-  tier: "insider",
+  tier: "essential",
   defaultOn: false,
   fields: FIELDS,
   defaults: DEFAULTS,

@@ -47,7 +47,7 @@ const PRESETS: Readonly<Record<string, readonly SuitePresetRecipe[]>> = {
         zh: "仅显示市场结构——用清晰的 BOS 与 CHoCH 地图判断方向。",
       },
       modules: ["ms"],
-      minTier: "insider",
+      minTier: "essential",
     },
     {
       id: "workflow",
@@ -57,7 +57,7 @@ const PRESETS: Readonly<Record<string, readonly SuitePresetRecipe[]>> = {
         zh: "组合方向、失衡与区间位置，不加载完整研究工具栈。",
       },
       modules: ["ms", "fvg", "pd"],
-      minTier: "insider",
+      minTier: "essential",
     },
     {
       id: "research",
@@ -89,7 +89,7 @@ const PRESETS: Readonly<Record<string, readonly SuitePresetRecipe[]>> = {
         zh: "组合趋势入场、参与度确认与蜡烛状态环境。",
       },
       modules: ["te", "fb", "cp"],
-      minTier: "insider",
+      minTier: "essential",
     },
     {
       id: "research",
@@ -111,7 +111,7 @@ const PRESETS: Readonly<Record<string, readonly SuitePresetRecipe[]>> = {
         zh: "仅显示核心动量波，不叠加信号、资金流或仪表盘。",
       },
       modules: ["wave"],
-      minTier: "insider",
+      minTier: "essential",
     },
     {
       id: "workflow",
@@ -121,7 +121,7 @@ const PRESETS: Readonly<Record<string, readonly SuitePresetRecipe[]>> = {
         zh: "组合脉冲波及其确认后的转折与延续信号。",
       },
       modules: ["wave", "sig"],
-      minTier: "insider",
+      minTier: "essential",
     },
     {
       id: "research",
@@ -143,7 +143,7 @@ const PRESETS: Readonly<Record<string, readonly SuitePresetRecipe[]>> = {
         zh: "仅启用可配置 RSI 引擎，保持清晰的动量判断。",
       },
       modules: ["eng"],
-      minTier: "insider",
+      minTier: "essential",
     },
     {
       id: "workflow",
@@ -153,7 +153,7 @@ const PRESETS: Readonly<Record<string, readonly SuitePresetRecipe[]>> = {
         zh: "组合 RSI 引擎、反转信号与偏离跟进信号。",
       },
       modules: ["eng", "sig"],
-      minTier: "insider",
+      minTier: "essential",
     },
     {
       id: "research",
@@ -175,7 +175,7 @@ const PRESETS: Readonly<Record<string, readonly SuitePresetRecipe[]>> = {
         zh: "仅启用标准化 MACD 引擎，保持清晰的动量判断。",
       },
       modules: ["eng"],
-      minTier: "insider",
+      minTier: "essential",
     },
     {
       id: "workflow",
@@ -185,7 +185,7 @@ const PRESETS: Readonly<Record<string, readonly SuitePresetRecipe[]>> = {
         zh: "组合引擎、反转信号与柱状图，形成实用工作流。",
       },
       modules: ["eng", "sig", "hist"],
-      minTier: "insider",
+      minTier: "essential",
     },
     {
       id: "research",
@@ -208,7 +208,7 @@ export const DEFAULT_SUITE_PRESET: Readonly<Record<string, SuitePresetId>> = {
   macdx: "focused",
 };
 
-const TIER_RANK: Record<SuiteTier, number> = { free: 0, insider: 1, pro: 2 };
+const TIER_RANK: Record<SuiteTier, number> = { free: 0, essential: 1, pro: 2 };
 
 function requiredTier(suiteKey: string, modules: readonly string[]): SuiteTier | null {
   const suite = SUITE_DEFS[suiteKey];

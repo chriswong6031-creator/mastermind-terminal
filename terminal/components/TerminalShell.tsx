@@ -49,6 +49,7 @@ import {
   type SuitePresetId,
 } from "@/lib/suites/presets";
 import { useEntitlement } from "@/lib/useEntitlement";
+import { normalizeDevTierOverride } from "@/lib/subscriptionTier";
 import { useChartBus } from "@/lib/useChartBus";
 import { isV2Envelope, type IndicatorSpec } from "@/lib/chartBus";
 import SeasonalityCard from "@/components/SeasonalityCard";
@@ -386,15 +387,18 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const { prefs: marketPrefs, ready: prefsReady, enableAll: showAllMarkets } = useMarketPrefs(email);
   // premium-suite UI gate — client hint only, fail-closed to "free" (server authority stays macro-api)
   const ent = useEntitlement(email);
-  // dev-only tier override (localStorage mm.devTier = "insider" | "pro") — read post-mount to avoid
-  // a hydration mismatch; the whole branch constant-folds away in production builds.
-  const [devTier, setDevTier] = useState<"insider" | "pro" | null>(null);
+  // dev-only tier override (localStorage mm.devTier = "essential" | "pro") — read post-mount to
+  // avoid a hydration mismatch; the whole branch constant-folds away in production builds.
+  // `insider` is the pre-rename name and is still ACCEPTED on read: a dev machine's localStorage
+  // was written before the flip and no migration can reach it. Normalized on read, never written
+  // back — devTier only ever holds a canonical value.
+  const [devTier, setDevTier] = useState<"essential" | "pro" | null>(null);
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
-    const v = localStorage.getItem("mm.devTier");
-    if (v === "insider" || v === "pro") setDevTier(v);
+    setDevTier(normalizeDevTierOverride(localStorage.getItem("mm.devTier")));
   }, []);
-  const userTier: "free" | "insider" | "pro" = devTier ?? (ent.tier === "insider" || ent.tier === "pro" ? ent.tier : "free");
+  // ent.tier is already normalized by useEntitlement (legacy `insider` → `essential`).
+  const userTier: "free" | "essential" | "pro" = devTier ?? (ent.tier === "essential" || ent.tier === "pro" ? ent.tier : "free");
 
   const seed0 = initialSymbol || symbols.find((s) => s.symbol === "NVDA")?.symbol || symbols[0]?.symbol || "NVDA";
   const [panes, setPanes] = useState<string[]>([seed0]);
@@ -1972,7 +1976,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (!isSuiteKey(k)) return;
     const profile = resolveSuitePreset(k, presetId);
     if (!profile) return;
-    const tierRank = (tier: "free" | "insider" | "pro") => tier === "pro" ? 2 : tier === "insider" ? 1 : 0;
+    const tierRank = (tier: "free" | "essential" | "pro") => tier === "pro" ? 2 : tier === "essential" ? 1 : 0;
     if (tierRank(profile.minTier) > tierRank(userTier)) return;
     const parentActive = inds.has(k);
     const preset = applySuitePresetParams(k, profile.id, indParams[k]);
@@ -2004,7 +2008,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const toggleSuiteModule = useCallback((id: string) => {
     const entry = getSuiteModuleCatalogEntry(id);
     if (!entry) return;
-    const tierRank = (tier: "free" | "insider" | "pro") => tier === "pro" ? 2 : tier === "insider" ? 1 : 0;
+    const tierRank = (tier: "free" | "essential" | "pro") => tier === "pro" ? 2 : tier === "essential" ? 1 : 0;
     if (tierRank(entry.tier) > tierRank(userTier)) return;
 
     const parentActive = inds.has(entry.suiteKey);

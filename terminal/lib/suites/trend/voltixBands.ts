@@ -442,7 +442,7 @@ export const VOLT_BANDS_MODULE: SuiteModuleDef = {
   key: "vb",
   label: "Volt Bands",
   tag: "VB",
-  tier: "insider",
+  tier: "essential",
   defaultOn: false,
   fields: FIELDS,
   defaults: DEFAULTS,

@@ -365,7 +365,7 @@ export const PULSE_WAVE_MODULE: SuiteModuleDef = {
   key: "wave",
   label: "Pulse Wave",
   tag: "PW",
-  tier: "insider",
+  tier: "essential",
   defaultOn: true,
   fields: FIELDS,
   defaults: DEFAULTS,

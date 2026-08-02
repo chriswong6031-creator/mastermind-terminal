@@ -8,10 +8,10 @@ import {
 const PRICING_URL = "https://www.mastermind-x.com/#pricing";
 
 const HUE: Record<PlanKey, string> = {
-  free: "var(--ob-free)", insider: "var(--ob-insider)", pro: "var(--ob-pro)",
+  free: "var(--ob-free)", essential: "var(--ob-essential)", pro: "var(--ob-pro)",
 };
 const NAME_KEY: Record<PlanKey, string> = {
-  free: "obPlanFree", insider: "obPlanInsider", pro: "obPlanPro",
+  free: "obPlanFree", essential: "obPlanInsider", pro: "obPlanPro",
 };
 
 function SCk() { return <svg className="ob-sck" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>; }
@@ -119,9 +119,9 @@ export default function StepPlan({ plan, period, setPlan, setPeriod }: StepPlanP
               <div>
                 <div className="ob-slist-lbl miss">{t("obWhatYouMiss")}</div>
                 <ul className="ob-slist">
-                  <Row miss chip={<span className="ob-mini-chip insider">{t("obPlanInsider")}</span>}>{t("obFreeMiss1")}</Row>
-                  <Row miss chip={<span className="ob-mini-chip insider">{t("obPlanInsider")}</span>}>{t("obFreeMiss2")}</Row>
-                  <Row miss chip={<span className="ob-mini-chip insider">{t("obPlanInsider")}</span>}>{t("obFreeMiss3")}</Row>
+                  <Row miss chip={<span className="ob-mini-chip essential">{t("obPlanInsider")}</span>}>{t("obFreeMiss1")}</Row>
+                  <Row miss chip={<span className="ob-mini-chip essential">{t("obPlanInsider")}</span>}>{t("obFreeMiss2")}</Row>
+                  <Row miss chip={<span className="ob-mini-chip essential">{t("obPlanInsider")}</span>}>{t("obFreeMiss3")}</Row>
                   <Row miss chip={<span className="ob-mini-chip pro">{t("obPlanPro")}</span>}>{t("obFreeMiss4")}</Row>
                 </ul>
               </div>
@@ -129,7 +129,7 @@ export default function StepPlan({ plan, period, setPlan, setPeriod }: StepPlanP
           </>
         )}
 
-        {plan === "insider" && (
+        {plan === "essential" && (
           <>
             <div className="ob-summary-hd">{t("obInsiderHd")}</div>
             <ul className="ob-slist">

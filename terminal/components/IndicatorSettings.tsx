@@ -73,11 +73,14 @@ function VisRow({ label, unitMax, val, onChange }: { label: string; unitMax: num
 // persistence containers. Settings therefore still use the flat indParams[suiteKey] blob with
 // "<module>.<field>" keys. Passing a legacy suite id preserves the original accordion editor.
 
-type Tier = "free" | "insider" | "pro";
-const TIER_RANK: Record<Tier, number> = { free: 0, insider: 1, pro: 2 };
-const TIER_LABEL: Record<SuiteTier, string> = { free: "FREE", insider: "INSIDER", pro: "PRO" };
-// insider = brand accent, pro = the AI violet. Never up/down (tier is not a direction).
-const TIER_COLOR: Record<SuiteTier, string> = { free: "var(--muted)", insider: "var(--brand-2)", pro: "var(--ai)" };
+type Tier = "free" | "essential" | "pro";
+const TIER_RANK: Record<Tier, number> = { free: 0, essential: 1, pro: 2 };
+// KEYS are the canonical tier values; VALUES are user-facing copy and are deliberately unchanged
+// by this rename — the Terminal's display copy still reads "INSIDER" everywhere (i18n included),
+// and flipping it is a separate, bilingual copy change. Internal value ≠ label.
+const TIER_LABEL: Record<SuiteTier, string> = { free: "FREE", essential: "INSIDER", pro: "PRO" };
+// essential = brand accent, pro = the AI violet. Never up/down (tier is not a direction).
+const TIER_COLOR: Record<SuiteTier, string> = { free: "var(--muted)", essential: "var(--brand-2)", pro: "var(--ai)" };
 
 const SIZE_OPTS = [{ v: 0, label: "Tiny" }, { v: 1, label: "Small" }, { v: 2, label: "Normal" }, { v: 3, label: "Large" }];
 const LINESTYLE_OPTS = [{ v: "solid", label: "Solid" }, { v: "dashed", label: "Dashed" }, { v: "dotted", label: "Dotted" }];

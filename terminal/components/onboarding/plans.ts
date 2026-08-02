@@ -3,8 +3,8 @@
 // Mirrors the macro repo's config/plans.yml. The canonical Stripe lookup_keys and
 // unit-amount cents (as of 2026-07-23) are:
 //
-//   insider_monthly  =  6900  ($69/mo)
-//   insider_annual   = 58800  ($588/yr → $49/mo)
+//   insider_monthly  =  6900  ($69/mo)   ← Stripe lookup_key, NOT renamed by the tier rename
+//   insider_annual   = 58800  ($588/yr → $49/mo)   ← ditto: an existing Stripe object's key
 //   pro_monthly      =  9900  ($99/mo)
 //   pro_annual       = 82800  ($828/yr → $69/mo)
 //   trial_days       = 7
@@ -24,7 +24,7 @@ interface PlanCents {
 
 // Raw cents — the only hand-entered numbers in this file.
 const CENTS: Record<Exclude<PlanKey, "free">, PlanCents> = {
-  insider: { monthly: 6900, annual: 58800 },
+  essential: { monthly: 6900, annual: 58800 },
   pro: { monthly: 9900, annual: 82800 },
 };
 
@@ -58,7 +58,7 @@ export function savePct(key: Exclude<PlanKey, "free">): number {
 
 /** The best (largest) save% across paid tiers — powers the period-toggle badge. */
 export function bestSavePct(): number {
-  return Math.max(savePct("insider"), savePct("pro"));
+  return Math.max(savePct("essential"), savePct("pro"));
 }
 
 /**
@@ -71,20 +71,20 @@ export function firstInvoiceTotal(key: Exclude<PlanKey, "free">, period: Period)
   return period === "annual" ? annualBilled(key) : monthlyPrice(key);
 }
 
-/** Extra $/mo (annual) that upgrades Insider → Pro, e.g. 20. Powers the wedge row. */
+/** Extra $/mo (annual) that upgrades Essential → Pro, e.g. 20. Powers the wedge row. */
 export function proWedgePerMonth(): number {
-  return perMonth("pro", "annual") - perMonth("insider", "annual");
+  return perMonth("pro", "annual") - perMonth("essential", "annual");
 }
 
 // Static display shape per tier (name + hue token). Copy/feature lists live in the
 // i18n LEX (translated); this const carries only structure + the CSS hue variable.
 export interface PlanDisplay {
   key: PlanKey;
-  hueVar: string; // CSS var name defined in onboarding.css (--ob-free / --ob-insider / --ob-pro)
+  hueVar: string; // CSS var name defined in onboarding.css (--ob-free / --ob-essential / --ob-pro)
 }
 
 export const PLANS: PlanDisplay[] = [
   { key: "free", hueVar: "--ob-free" },
-  { key: "insider", hueVar: "--ob-insider" },
+  { key: "essential", hueVar: "--ob-essential" },
   { key: "pro", hueVar: "--ob-pro" },
 ];

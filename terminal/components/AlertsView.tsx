@@ -22,11 +22,11 @@ import { useEntitlement } from "@/lib/useEntitlement";
 type Alert = { id: string; symbol: string; condition: any; active: boolean; created_at: string };
 
 // ── suite-event catalog (lib/suiteAlerts.ts is the authority for events + tiers) ──
-type Tier = "free" | "insider" | "pro";
+type Tier = "free" | "essential" | "pro";
 type CatalogEvt = SuiteAlertEventDef;
-const TIER_RANK: Record<Tier, number> = { free: 0, insider: 1, pro: 2 };
+const TIER_RANK: Record<Tier, number> = { free: 0, essential: 1, pro: 2 };
 /** Unrecognized tier → "pro": an event never renders as free on a typo. */
-const evtTier = (e: CatalogEvt): Tier => (e.tier === "free" || e.tier === "insider" ? e.tier : "pro");
+const evtTier = (e: CatalogEvt): Tier => (e.tier === "free" || e.tier === "essential" ? e.tier : "pro");
 /** Distinct suites in catalog order (the picker's first cascade step). */
 const SUITE_KEYS = Array.from(new Set(SUITE_ALERT_EVENTS.map((e) => e.suite)));
 
@@ -112,7 +112,8 @@ export default function AlertsView({ email }: { email: string }) {
   // default for a guest AND on any read failure, so the picker fails CLOSED by construction;
   // the route re-checks server-side against the billing authority (this is display only).
   const ent = useEntitlement(email);
-  const userTier: Tier = ent.tier === "insider" || ent.tier === "pro" ? ent.tier : "free";
+  // ent.tier is already normalized by useEntitlement (legacy `insider` → `essential`).
+  const userTier: Tier = ent.tier === "essential" || ent.tier === "pro" ? ent.tier : "free";
   const isLockedEvt = (e: CatalogEvt) => TIER_RANK[userTier] < TIER_RANK[evtTier(e)];
   const [suiteKey, setSuiteKey] = useState<string>(SUITE_KEYS[0] ?? "");
   const [suiteEvent, setSuiteEvent] = useState<string>(

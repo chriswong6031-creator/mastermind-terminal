@@ -28,7 +28,7 @@ export default function OptionsPaywall() {
         </ul>
         <button
           type="button"
-          onClick={() => onboarding.open("signup", { plan: "insider" })}
+          onClick={() => onboarding.open("signup", { plan: "essential" })}
           style={{ width: "100%", padding: "11px 16px", background: "var(--brand)", color: "#fff", border: "none", borderRadius: "var(--r-md)", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}
         >{t("opwCta")}</button>
         <p style={{ fontSize: 11.5, color: "var(--text)", opacity: 0.5, margin: "12px 0 0" }}>{t("opwSub")}</p>

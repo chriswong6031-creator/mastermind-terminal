@@ -228,7 +228,31 @@ export interface SuiteField {
   showIf?: { key: string; eq: any };                       // conditional visibility within module
 }
 
-export type SuiteTier = "free" | "insider" | "pro";
+/**
+ * Module entitlement levels. Mirrors SubscriptionTier (lib/subscriptionTier.ts) by design — the
+ * two namespaces are joined by rank comparisons that fail in OPPOSITE directions on a mismatch
+ * (the picker fails OPEN, the renderer fails CLOSED), so they must be renamed in one commit.
+ *
+ * `essential` was called `insider` before the billing rename; the old name is still accepted
+ * inbound everywhere a tier can arrive from storage or a cached page, and never written back.
+ */
+export type SuiteTier = "free" | "essential" | "pro";
+
+/**
+ * Tier → the badge/chip TEXT and the CSS modifier suffix.
+ *
+ * The internal value and the user-facing label are separate concerns: this rename flipped the
+ * VALUE to `essential` while the Terminal's display copy still reads "Insider" everywhere (i18n
+ * LEX included). Chips that used to interpolate the raw tier (`im-tier-${tier}` + `{tier}` as
+ * text) would otherwise have silently started saying "ESSENTIAL" in three places and nowhere
+ * else — an unreviewed copy change smuggled in by a value rename. Route them through here so a
+ * future display rename is one edit in one file.
+ */
+export const SUITE_TIER_LABEL: Record<SuiteTier, string> = {
+  free: "free",
+  essential: "insider",
+  pro: "pro",
+};
 
 export interface SuiteModuleDef {
   key: string;      // short, e.g. "ms", "ob", "fvg"
