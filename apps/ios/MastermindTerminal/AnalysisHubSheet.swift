@@ -121,6 +121,13 @@ struct AnalysisHubSheet: View {
             isFullScreen ? [.large] : [.fraction(0.6), .large],
             selection: $detent
         )
+        // §3.5's "chart stays visible" is undimmed visibility: the system scrim would
+        // grey the chart at the 60 % detent, and the reference dims only the raised
+        // sheet (`tvScrim`, §1.6 / §4-A20.28). Moot under `isFullScreen` — a
+        // `.fullScreenCover` discards presentation modifiers — so `.automatic` there.
+        .presentationBackgroundInteraction(
+            isFullScreen ? .automatic : .enabled(upThrough: .fraction(0.6))
+        )
         // R2.2 — `.scrolls` reserved every downward drag for the ScrollView, so the sheet
         // could only be grown by the ~30 pt grabber band and TV's "drag the body up to
         // full" never worked. `.resizes` gives the drag to the sheet until it reaches
