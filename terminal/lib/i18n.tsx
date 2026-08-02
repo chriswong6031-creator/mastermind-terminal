@@ -1274,6 +1274,7 @@ const LEX: Record<string, [string, string]> = {
   olNoCov: ["no options coverage", "无期权数据覆盖"],
   olGate: ["requires Insider/Pro", "需 Insider/Pro"],
   olUnavail: ["levels unavailable", "关键位暂不可用"],
+  olNoDate: ["undated snapshot", "无日期快照"],
   olLoading: ["loading…", "加载中…"],
   // ─── Leaders tab ──────────────────────────────────────────────────────────
   tabLeaders: ["Leaders", "资金领袖"],
