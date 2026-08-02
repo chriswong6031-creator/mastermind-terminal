@@ -730,6 +730,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     status: "loading" | "ok" | "empty" | "unavailable" | "ineligible";
     res: OptLevelsResult | null;
   } | null>(null);
+  // The symbol whose bars are ACTUALLY on the price series (stamped at each setData).
+  // symbolRef flips the instant the prop renders — long before Effect 2's bars land — so a
+  // cache-hit gex fetch resolving in a microtask would otherwise draw the NEW root's levels
+  // over the OLD symbol's candles (permanently, when the bars fetch dead-ends).
+  const chartDataSymRef = useRef<string>("");
   // US options only — same market gate the extended-hours line uses.
   const optLevelsEligible = (sym: string) => classify(sym) === "us" && !isMacroSymbol(sym);
 
@@ -738,6 +743,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   useEffect(() => { const h = () => setCsNonce((n) => n + 1); window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
   // suite colors resolve from CSS tokens — drop the cache on an up/down flip so the next frame re-reads
   useEffect(() => { const h = () => { suiteColorsRef.current = null; }; window.addEventListener("mm:updown", h); return () => window.removeEventListener("mm:updown", h); }, []);
+  // Options Levels bakes tPlain() titles into canvas price-line labels at build time — rebuild on a
+  // language flip or zh axis titles persist into the EN view (LEX law: no cross-language leaks).
+  useEffect(() => {
+    const h = () => {
+      if (!indicatorsRef.current.has("optlevels")) return;
+      try { buildOptLevels(); applyHidden(); rebuildPaneMeta(); } catch {}
+    };
+    window.addEventListener("mm:lang", h);
+    return () => window.removeEventListener("mm:lang", h);
+    // eslint-disable-next-line
+  }, []);
   // CMX W3: keep the active-pane coordinate registration in sync with isActive (the chart mount effect
   // only re-runs on symbol/tf changes). Register when active, and clear our entry on deactivate/unmount
   // only if it's still ours (last-writer-wins — never clobber another pane that became active after us).
@@ -1443,6 +1459,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const priceS = priceSeriesRef.current; if (!priceS) return [];
     const st = optLevelsStateRef.current;
     if (!st || st.sym !== symbolRef.current || st.status !== "ok" || !st.res) return [];
+    // Never draw until this symbol's bars are on the canvas (see chartDataSymRef) — the
+    // Effect-2 build path re-runs this builder right after setData, so nothing is lost.
+    if (chartDataSymRef.current !== symbolRef.current) return [];
     const p = P("optlevels");
     const css = (n: string, fb: string) =>
       getComputedStyle(document.documentElement).getPropertyValue(n).trim() || fb;
@@ -1755,7 +1774,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           fresh.res.signed ? tPlain("olSigned") : "",
           age > 3 ? tPlain("olStale").replace("{n}", String(age)) : "",
         ].filter(Boolean);
-        note = parts.join(" · ");
+        // Undated + unsigned (a Tier-A-only set with a malformed asof): still say SOMETHING
+        // about provenance rather than rendering a bare, unqualified row.
+        note = parts.length ? parts.join(" · ") : tPlain("olNoDate");
       } else if (fresh.status === "empty") note = tPlain("olNoCov");
       else note = userTierRef.current === "free" ? tPlain("olGate") : tPlain("olUnavail");
       overlayEntries.push({ key: "optlevels", label: note ? `${labelOf("optlevels")} — ${note}` : labelOf("optlevels"), kind: "overlay", isPine: false });
@@ -6071,6 +6092,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             if (rawBars.length && isIntradayRef.current) {
               try { if (indicatorsRef.current.has("slevels")) buildSlevels(onChart); } catch {}
               try { if (indicatorsRef.current.has("pivots")) buildPivots(onChart); } catch {}
+              // The builders create lines visible — re-assert the eye or a hidden
+              // slevels/pivots silently resurrects (the pooled-line eye is real now).
+              try { applyHidden(); } catch {}
             }
           }).catch(() => { /* silent — slevels/pivots will render with empty history */ });
         }
@@ -6085,6 +6109,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (chartType === "baseline" && onChart.length) priceS!.applyOptions({ baseValue: { type: "price", price: onChart[0].c } });
         priceS!.setData(priceData(onChart) as any);
         cpMark(`chart-painted[${symbol}]`);
+        chartDataSymRef.current = symbol;
         announceTerminalVisualReady(symbol);
         clearAllIndicators();
         buildAllIndicators(onChart, closes);
@@ -6206,6 +6231,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (chartType === "baseline" && onChart.length) priceS!.applyOptions({ baseValue: { type: "price", price: onChart[0].c } });
       priceS!.setData(priceData(onChart) as any);
       cpMark(`chart-painted[${symbol}]`);   // first candle on canvas
+      chartDataSymRef.current = symbol;
       announceTerminalVisualReady(symbol);
 
       // ── PERF-FIX (a): indicators — on same-symbol TF/chartType switch, update series data in-place
@@ -6525,10 +6551,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     rebuildPaneMeta();
     Promise.all([flowGet(`gex:${root}`), flowGet(`moves:${root}`)]).then(([g, m]) => {
       if (!alive || symbolRef.current !== sym) return;
-      if (g == null) {
+      if (g == null && m == null) {
+        // Both lanes hard-failed (prod surfaces a missing/uncovered root's artifact as a
+        // 503 → flowGet null, NOT the fixture's 200 {}) — could be no coverage OR an
+        // outage; "unavailable" is the honest umbrella.
         optLevelsStateRef.current = { sym, status: "unavailable", res: null };
       } else {
-        const res = deriveOptLevels(g, m, root);
+        // g == null with a live moves payload is the real-world partial publish (the two
+        // lanes are separate publishers) — derive from an empty gex shell so the Tier-A
+        // EM band still draws instead of being discarded.
+        const res = deriveOptLevels(g ?? {}, m, root);
         optLevelsStateRef.current = { sym, status: res.status, res };
       }
       // First-load race (slevels precedent): Effect 2/3 may have already built against an
@@ -6710,7 +6742,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // cvd baseline colors, ttmsq momentum shades, adx ±DI, pivots R/S price lines. Flips are rare —
     // the full rebuild path is the sanctioned fix (skip on mount: csNonce 0 = initial run).
     if (csNonce > 0 && barsRef.current.length) {
-      const dtDirectional = ["cvd", "ttmsq", "adx", "pivots"];
+      const dtDirectional = ["cvd", "ttmsq", "adx", "pivots", "optlevels"];
       if (dtDirectional.some((k) => indicatorsRef.current.has(k))) { try { rebuildIndicators(); } catch {} }
     }
     renderSignalsRef.current(); renderRef.current();

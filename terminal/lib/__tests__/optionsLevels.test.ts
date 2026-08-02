@@ -104,6 +104,24 @@ describe("deriveOptLevels", () => {
     expect(byKey(r.levels).gamma_flip).toBe(133.0); // |133−135.7| < |100−135.7|
   });
 
+  it("sanity-gates the flip to ±30% of spot — the historical wrong-estimator case draws nothing", () => {
+    // The retired cumulative estimator printed SPY 275 against spot 741.69 (memory:
+    // gamma-flip-defect). A stale payload like that must yield NO flip line, not a wrong one.
+    const g = { ...gexFull, root: "SPY", spot_ref: 741.69, gamma_flip: 275.0, call_wall: 760, put_wall: 740, by_strike: [], profile: null };
+    const keys = deriveOptLevels(g, null, "SPY").levels.map((l) => l.key);
+    expect(keys).not.toContain("gamma_flip");
+    expect(keys).toContain("call_wall"); // the rest of the set is unaffected
+  });
+
+  it("out-of-band crossings are dropped; an in-band scalar then still qualifies", () => {
+    const g = {
+      ...gexFull,
+      gamma_flip: 132.0,
+      profile: { grid: [100, 180], gamma_bn: [-1, 1], crossings: [500.0] }, // impossible for a ±25% grid
+    };
+    expect(byKey(deriveOptLevels(g, null, "NVDA").levels).gamma_flip).toBe(132.0);
+  });
+
   it("falls back to the scalar when crossings are absent or unusable", () => {
     const g = { ...gexFull, profile: { grid: [], gamma_bn: [], crossings: [] } };
     expect(byKey(deriveOptLevels(g, null, "NVDA").levels).gamma_flip).toBe(130.0);

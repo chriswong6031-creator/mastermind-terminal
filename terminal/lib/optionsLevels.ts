@@ -108,16 +108,27 @@ export function sessionsOldEt(asofDate: string, todayEt?: string): number {
   return n;
 }
 
-/** Flip = profile crossing nearest spot when the re-priced curve exists, else the scalar. */
+/**
+ * The profile grid spans ±25% of spot — a "flip" further than ±30% cannot have come from
+ * that evaluation and is either a stale pre-repair scalar (the retired cumulative
+ * estimator printed SPY 275 against spot 742) or garbage. Better no line than a wrong one.
+ */
+export const FLIP_MAX_DIST_PCT = 0.30;
+
+/** Flip = profile crossing nearest spot when the re-priced curve exists, else the scalar
+ *  — both sanity-gated to the grid's own reachable band around spot. */
 function flipOf(gp: GexSubset, spot: number | null): number | null {
+  const inBand = (v: number): boolean =>
+    spot == null || Math.abs(v / spot - 1) <= FLIP_MAX_DIST_PCT;
   const crossings = gp.profile?.crossings;
   if (Array.isArray(crossings) && spot != null) {
-    const valid = crossings.filter((c): c is number => posNum(c) != null);
+    const valid = crossings.filter((c): c is number => posNum(c) != null && inBand(c));
     if (valid.length) {
       return valid.reduce((a, b) => (Math.abs(b - spot) < Math.abs(a - spot) ? b : a));
     }
   }
-  return posNum(gp.gamma_flip);
+  const scalar = posNum(gp.gamma_flip);
+  return scalar != null && inBand(scalar) ? scalar : null;
 }
 
 /**
