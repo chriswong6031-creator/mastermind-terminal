@@ -895,9 +895,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
     if (!wsMounted.current) { wsMounted.current = true; return; }
     if (!initialSymbol) localStorage.setItem("mm.ws", JSON.stringify({ panes, paneTfs, split, sync, activePane, lockedVLine }));
   }, [panes, paneTfs, split, sync, activePane, lockedVLine]);
-  useEffect(() => { localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   // skip the mount-pass write (state is still the pre-load default) — otherwise a reload/discard
-  // landing inside the mount→load window can permanently clobber the saved value with the default
+  // landing inside the mount→load window can permanently clobber the saved value with the default.
+  // mm.inds was the one key WITHOUT this guard: on the mount pass the anon clamp (MAX_ANON_IND)
+  // fires against the 4-item default before hydration lands, the unguarded write recorded the
+  // clamped default, and dev StrictMode's second hydration pass then read the clobbered value —
+  // permanently resetting a guest's saved set to ["ema","vol","macd"] on every reload.
+  const indsMounted = useRef(false);
+  useEffect(() => { if (!indsMounted.current) { indsMounted.current = true; return; } localStorage.setItem("mm.inds", JSON.stringify([...inds])); }, [inds]);
   const hidMounted = useRef(false); const ipMounted = useRef(false); const cmpCfgMounted = useRef(false);
   const favTFMounted = useRef(false); const setMounted = useRef(false); const dtmMounted = useRef(false);
   useEffect(() => { if (!hidMounted.current) { hidMounted.current = true; return; } localStorage.setItem("mm.indHidden", JSON.stringify([...hidden])); }, [hidden]);
