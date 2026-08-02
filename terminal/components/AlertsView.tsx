@@ -45,6 +45,9 @@ const COND_TYPES = [
 const OPT_TYPES: { v: OptKind; tkey: string }[] = [
   { v: "opt_gamma_flip", tkey: "condOptGammaFlip" },
   { v: "opt_wall_touch", tkey: "condOptWall" },
+  { v: "opt_wall_migration", tkey: "condOptWallMigration" },
+  { v: "opt_sign_fragile", tkey: "condOptSignFragile" },
+  { v: "opt_opex_concentration", tkey: "condOptOpex" },
   { v: "opt_premium_burst", tkey: "condOptBurst" },
   { v: "opt_0dte_spike", tkey: "condOpt0dte" },
   { v: "opt_surface_pocket", tkey: "condOptPocket" },
@@ -398,6 +401,21 @@ export default function AlertsView({ email }: { email: string }) {
                   </>
                 )}
                 {optKind === "opt_0dte_spike" && (
+                  <label className="opt-field">{t("optSharePct")}<input aria-label={t("optSharePct")} type="number" step="1" min="0" max="100" value={optParams.share_pct ?? ""} onChange={(e) => setP({ share_pct: parseFloat(e.target.value) })} style={numStyle} /></label>
+                )}
+                {optKind === "opt_wall_migration" && (
+                  <>
+                    <select aria-label={t("optWall")} value={optParams.wall} onChange={(e) => setP({ wall: e.target.value as "call" | "put" })}>
+                      <option value="call">{t("optWallCall")}</option>
+                      <option value="put">{t("optWallPut")}</option>
+                    </select>
+                    <label className="opt-field">{t("optMinMovePct")}<input aria-label={t("optMinMovePct")} type="number" step="0.1" min="0" value={optParams.min_move_pct ?? ""} onChange={(e) => setP({ min_move_pct: parseFloat(e.target.value) })} style={numStyle} /></label>
+                  </>
+                )}
+                {optKind === "opt_sign_fragile" && (
+                  <label className="opt-field">{t("optTiltPct")}<input aria-label={t("optTiltPct")} type="number" step="1" min="0" max="100" value={optParams.tilt_pct ?? ""} onChange={(e) => setP({ tilt_pct: parseFloat(e.target.value) })} style={numStyle} /></label>
+                )}
+                {optKind === "opt_opex_concentration" && (
                   <label className="opt-field">{t("optSharePct")}<input aria-label={t("optSharePct")} type="number" step="1" min="0" max="100" value={optParams.share_pct ?? ""} onChange={(e) => setP({ share_pct: parseFloat(e.target.value) })} style={numStyle} /></label>
                 )}
                 {optKind === "opt_surface_pocket" && (

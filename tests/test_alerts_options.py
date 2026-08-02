@@ -557,3 +557,174 @@ def test_real_dte_fixture_0dte_evaluable_not_null():
     fired, val, _, _ = _eval({"type": "opt_0dte_spike", "root": "SPY"}, StubFlow(dte=dte))
     assert fired is not None  # 0d bucket IS present → NOT null (honest: real ~8% share)
     assert isinstance(val, (int, float))
+
+
+# ─── (b2) wall migration — parity with evalWallMigration ─────────────────────
+
+
+def _gx_mig(call_wall, spot=745.0):
+    return {"root": "SPY", "spot_ref": spot, "call_wall": call_wall, "put_wall": 700.0,
+            "asof": "2026-07-31"}
+
+
+class TestWallMigration:
+    COND = {"type": "opt_wall_migration", "root": "SPY", "wall": "call"}
+
+    def test_first_observation_arms_without_firing(self):
+        fired, value, note, nxt = _eval(self.COND, StubFlow(gex=_gx_mig(760.0)))
+        assert fired is False
+        assert nxt == {"level": 760.0}
+
+    def test_fires_on_restrike_at_or_above_min_move(self):
+        cond = {**self.COND, "_wm": {"level": 760.0}}
+        fired, value, note, nxt = _eval(cond, StubFlow(gex=_gx_mig(765.0)))
+        assert fired is True
+        assert value == 765.0
+        assert "760.0 → 765.0" in note or "760 → 765" in note
+        assert "EOD build" in note
+        assert nxt == {"level": 765.0}
+
+    def test_subthreshold_jitter_updates_anchor_without_firing(self):
+        cond = {**self.COND, "_wm": {"level": 760.0}}
+        fired, _v, _n, nxt = _eval(cond, StubFlow(gex=_gx_mig(761.0)))  # 0.13% < 0.4%
+        assert fired is False
+        assert nxt == {"level": 761.0}
+
+    def test_custom_min_move_pct(self):
+        cond = {**self.COND, "min_move_pct": 0.1, "_wm": {"level": 760.0}}
+        fired, *_ = _eval(cond, StubFlow(gex=_gx_mig(761.0)))
+        assert fired is True
+
+    def test_put_wall_watched_when_asked(self):
+        cond = {"type": "opt_wall_migration", "root": "SPY", "wall": "put", "_wm": {"level": 700.0}}
+        gx = {"root": "SPY", "spot_ref": 745.0, "call_wall": 760.0, "put_wall": 706.0,
+              "asof": "2026-07-31"}
+        fired, _v, note, _n = _eval(cond, StubFlow(gex=gx))
+        assert fired is True
+        assert "put wall" in note
+
+    def test_missing_wall_is_honest_null_and_preserves_state(self):
+        cond = {**self.COND, "_wm": {"level": 760.0}}
+        fired, _v, _n, nxt = _eval(cond, StubFlow(gex={"root": "SPY", "spot_ref": 745.0}))
+        assert fired is None
+        assert nxt == {"level": 760.0}
+
+
+# ─── (b3) sign fragility — parity with evalSignFragile ───────────────────────
+
+
+def _gx_tilt(call_abs, put_abs):
+    return {"root": "SPY", "spot_ref": 745.0, "asof": "2026-07-31",
+            "by_strike": [
+                {"gamma_call": call_abs * 0.6, "gamma_put": -put_abs * 0.5},
+                {"gamma_call": call_abs * 0.4, "gamma_put": -put_abs * 0.5},
+            ]}
+
+
+class TestSignFragile:
+    COND = {"type": "opt_sign_fragile", "root": "SPY"}
+
+    def test_first_observation_arms_even_when_already_fragile(self):
+        fired, _v, _n, nxt = _eval(self.COND, StubFlow(gex=_gx_tilt(100.0, 95.0)))
+        assert fired is False
+        assert nxt == {"fragile": True}
+
+    def test_fires_on_robust_to_fragile_transition(self):
+        cond = {**self.COND, "_sf": {"fragile": False}}
+        fired, value, note, _n = _eval(cond, StubFlow(gex=_gx_tilt(100.0, 95.0)))
+        assert fired is True
+        assert abs(value - 2.6) < 0.1
+        assert "dealer-sign assumption" in note
+
+    def test_no_refire_while_fragile(self):
+        cond = {**self.COND, "_sf": {"fragile": True}}
+        fired, *_ = _eval(cond, StubFlow(gex=_gx_tilt(100.0, 95.0)))
+        assert fired is False
+
+    def test_robust_book_never_fires(self):
+        cond = {**self.COND, "_sf": {"fragile": False}}
+        fired, _v, _n, nxt = _eval(cond, StubFlow(gex=_gx_tilt(100.0, 50.0)))  # tilt 33%
+        assert fired is False
+        assert nxt == {"fragile": False}
+
+    def test_custom_tilt_threshold(self):
+        cond = {**self.COND, "tilt_pct": 40, "_sf": {"fragile": False}}
+        fired, *_ = _eval(cond, StubFlow(gex=_gx_tilt(100.0, 50.0)))
+        assert fired is True
+
+    def test_empty_ladder_is_honest_null(self):
+        assert _eval(self.COND, StubFlow(gex={"root": "SPY", "by_strike": []}))[0] is None
+        assert _eval(self.COND, StubFlow(gex={"root": "SPY"}))[0] is None
+
+
+# ─── (b4) OPEX concentration — parity with evalOpexConcentration ─────────────
+
+
+def _gx_opex(front_mn, rest):
+    # deliberately out of order: the evaluator must sort by exp, not trust row order
+    return {"root": "SPY", "spot_ref": 745.0, "asof": "2026-07-31",
+            "by_expiry": [
+                {"exp": "2026-09-18", "gamma_net": rest[0] if rest else 0.0},
+                {"exp": "2026-08-03", "gamma_net": front_mn},
+                {"exp": "2026-08-21", "gamma_net": rest[1] if len(rest) > 1 else 0.0},
+            ]}
+
+
+class TestOpexConcentration:
+    COND = {"type": "opt_opex_concentration", "root": "SPY"}
+
+    def test_first_observation_arms_without_firing(self):
+        fired, _v, _n, nxt = _eval(self.COND, StubFlow(gex=_gx_opex(80.0, [10.0, 10.0])))
+        assert fired is False
+        assert nxt == {"above": True}
+
+    def test_fires_on_enter_with_front_exp_named(self):
+        cond = {**self.COND, "_oc": {"above": False}}
+        fired, value, note, _n = _eval(cond, StubFlow(gex=_gx_opex(50.0, [30.0, 20.0])))
+        assert fired is True
+        assert value == 50.0
+        assert "2026-08-03" in note
+        assert "OPEX" in note
+
+    def test_absolute_gamma_per_expiry(self):
+        cond = {**self.COND, "_oc": {"above": False}}
+        fired, value, *_ = _eval(cond, StubFlow(gex=_gx_opex(-50.0, [30.0, 20.0])))
+        assert fired is True
+        assert value == 50.0
+
+    def test_below_threshold_records_state_without_firing(self):
+        cond = {**self.COND, "_oc": {"above": False}}
+        fired, _v, _n, nxt = _eval(cond, StubFlow(gex=_gx_opex(20.0, [50.0, 30.0])))
+        assert fired is False
+        assert nxt == {"above": False}
+
+    def test_no_refire_while_concentrated(self):
+        cond = {**self.COND, "_oc": {"above": True}}
+        fired, *_ = _eval(cond, StubFlow(gex=_gx_opex(50.0, [30.0, 20.0])))
+        assert fired is False
+
+    def test_missing_breakdown_is_honest_null(self):
+        assert _eval(self.COND, StubFlow(gex={"root": "SPY"}))[0] is None
+        assert _eval(self.COND, StubFlow(gex={"root": "SPY", "by_expiry": []}))[0] is None
+
+
+def test_new_types_registered_with_expected_state_keys():
+    """The registry rows are the wiring the API allow-list + UI rely on."""
+    assert ae._OPT_EVALUATORS["opt_wall_migration"][0] == "_wm"
+    assert ae._OPT_EVALUATORS["opt_sign_fragile"][0] == "_sf"
+    assert ae._OPT_EVALUATORS["opt_opex_concentration"][0] == "_oc"
+
+
+def test_new_types_fire_on_the_real_gex_fixture_shape():
+    """Smoke against the SAME fixture the terminal ships — field names must line up."""
+    import json
+    gx = json.loads((DATA / "gex_fixture.json").read_text())["SPY"]
+    # sign_fragile: real ladder computes a tilt without erroring
+    fired, value, _note, nxt = _eval({"type": "opt_sign_fragile", "root": "SPY"}, StubFlow(gex=gx))
+    assert fired is False and isinstance(value, float) and isinstance(nxt.get("fragile"), bool)
+    # opex: real by_expiry computes a share
+    fired2, value2, _n2, nxt2 = _eval({"type": "opt_opex_concentration", "root": "SPY"}, StubFlow(gex=gx))
+    assert fired2 is False and isinstance(value2, float) and isinstance(nxt2.get("above"), bool)
+    # wall migration arms off the real call wall
+    fired3, value3, _n3, nxt3 = _eval({"type": "opt_wall_migration", "root": "SPY"}, StubFlow(gex=gx))
+    assert fired3 is False and nxt3 == {"level": gx["call_wall"]}

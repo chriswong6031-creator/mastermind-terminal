@@ -833,6 +833,11 @@ const LEX: Record<string, [string, string]> = {
   condCatOptions: ["Options flow", "期权流"],
   condOptGammaFlip: ["Crosses gamma flip", "上穿/下穿 gamma 翻转位"],
   condOptWall: ["Nears a gamma wall", "接近 gamma 墙"],
+  // Market Structure Core §8: positioning-change alerts (the wall RE-STRIKING is a
+  // positioning event, not a price touch — distinct from condOptWall above).
+  condOptWallMigration: ["Wall re-strikes (migrates)", "gamma 墙换位"],
+  condOptSignFragile: ["Gamma sign turns fragile", "伽马符号变脆弱"],
+  condOptOpex: ["Front-expiry gamma concentrates", "近月伽马集中（OPEX）"],
   condOptBurst: ["Premium at an unusual pace", "权利金异常速度"],
   condOpt0dte: ["0DTE share spikes", "0DTE 占比激增"],
   optRoot: ["Root", "标的"],
@@ -842,6 +847,8 @@ const LEX: Record<string, [string, string]> = {
   optWallCall: ["Call wall", "看涨墙"],
   optWallPut: ["Put wall", "看跌墙"],
   optWindowMin: ["window (min)", "窗口（分钟）"],
+  optMinMovePct: ["min move (% of spot)", "最小移动（现价 %）"],
+  optTiltPct: ["tilt threshold %", "倾斜阈值 %"],
   optZ: ["σ threshold", "σ 阈值"],
   optLeg: ["leg", "腿"],
   optLegNcp: ["Net-call premium", "净看涨权利金"],

@@ -39,6 +39,19 @@ Condition contract (see terminal/components/AlertsView.tsx COND_TYPES):
                                                     (default 55). Missing "0d" bucket → SKIP (honest
                                                     disable). Fire-once per stamp on cond._zd. Reads
                                                     Flow.dte().
+  {type:"opt_wall_migration", root, wall, min_move_pct?}  fires when the call|put wall RE-STRIKES
+                                                    between nightly builds by ≥ min_move_pct% of
+                                                    spot (default 0.4) — a POSITIONING change, not
+                                                    a price touch. First obs arms. State cond._wm=
+                                                    {level}. Reads Flow.gex(root).
+  {type:"opt_sign_fragile", root, tilt_pct?}        fires when the ladder's gamma tilt (the sign-
+                                                    robustness statistic the Positioning tab renders)
+                                                    drops below tilt_pct% (default 12) — ENTER only.
+                                                    State cond._sf={fragile}. Reads Flow.gex(root).
+  {type:"opt_opex_concentration", root, share_pct?} fires when the front expiry carries ≥ share_pct%
+                                                    (default 35) of gross gamma — the OPEX-unwind
+                                                    window. ENTER only; state cond._oc={above}.
+                                                    Reads Flow.gex(root).
   {type:"opt_surface_pocket", root, k?, near_pct?, metric?}  fires when a single strike × interval
                                                     cell on the newest Flow-Surface snapshot, at a
                                                     strike within near_pct% of spot (default 5),
@@ -414,6 +427,110 @@ def _eval_wall(cond: dict, gx, prev: dict):
     return False, spot, "", nxt
 
 
+def _eval_wall_migration(cond: dict, gx, prev: dict):
+    """Ports evalWallMigration — fires when the wall RE-STRIKES (a positioning change),
+    not when price touches it. Nobody in the category alerts on this (masterplan §8).
+
+    State cond._wm = {level}. First observation ARMS (stores the wall strike, never
+    fires); a later run fires when the published wall differs from the stored one by
+    ≥ min_move_pct% of spot (default 0.4 — one $1 SPY strike is ~0.13%, so the default
+    ignores grid jitter and catches genuine migrations). EOD-cadence data: the wall can
+    only move once a night, and the state machine survives the 5-min cron between builds.
+    """
+    spot = gx.get("spot_ref") if isinstance(gx, dict) else None
+    wall_side = "put" if cond.get("wall") == "put" else "call"
+    wall = (gx.get("put_wall") if wall_side == "put" else gx.get("call_wall")) if isinstance(gx, dict) else None
+    if not _finite(spot) or spot == 0 or not _finite(wall):
+        return None, None, "wall level unavailable", prev
+    min_move = cond["min_move_pct"] if _finite(cond.get("min_move_pct")) else 0.4
+    prior = prev.get("level") if _finite(prev.get("level")) else None
+    nxt = {"level": wall}
+    if prior is None:
+        return False, wall, "", nxt
+    moved_pct = (abs(wall - prior) / spot) * 100
+    if wall != prior and moved_pct >= min_move:
+        root = cond.get("root") or (gx.get("root") if isinstance(gx, dict) else None) or "the underlying"
+        arrow = "up" if wall > prior else "down"
+        note = (f"{root} {wall_side} wall migrated {prior:g} → {wall:g} "
+                f"({arrow} {moved_pct:.1f}% of spot) — positioning re-struck, EOD build · {_as_of(gx.get('asof'))}")
+        return True, wall, note, nxt
+    # sub-threshold jitter still updates the anchor so a slow drift cannot fire late
+    return False, wall, "", nxt
+
+
+def _eval_sign_fragile(cond: dict, gx, prev: dict):
+    """Ports evalSignFragile — fires when the net-gamma SIGN becomes convention-fragile.
+
+    tilt = |Σ|gamma_call| − Σ|gamma_put|| / (Σ|gamma_call| + Σ|gamma_put|) over the
+    published ladder — the SAME statistic the Positioning tab's sign-robustness card and
+    the Neural Web's sign_confidence render (one definition, three surfaces). Below
+    tilt_pct% (default 12, the tab's fragile threshold) a small change of dealer-sign
+    convention flips the regime read. State cond._sf = {fragile}: first obs arms; fires
+    on the ENTER transition robust→fragile.
+    """
+    rows = gx.get("by_strike") if isinstance(gx, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return None, None, "ladder unavailable", prev
+    call_abs = put_abs = 0.0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        c, p = r.get("gamma_call"), r.get("gamma_put")
+        if _finite(c):
+            call_abs += abs(c)
+        if _finite(p):
+            put_abs += abs(p)
+    total = call_abs + put_abs
+    if not total > 0:
+        return None, None, "no gamma in the published window", prev
+    tilt_pct = (abs(call_abs - put_abs) / total) * 100
+    thresh = cond["tilt_pct"] if _finite(cond.get("tilt_pct")) else 12.0
+    fragile = tilt_pct < thresh
+    prior = prev.get("fragile") if isinstance(prev.get("fragile"), bool) else None
+    nxt = {"fragile": fragile}
+    if fragile and prior is False:
+        root = cond.get("root") or (gx.get("root") if isinstance(gx, dict) else None) or "the underlying"
+        note = (f"{root} gamma tilt collapsed to {tilt_pct:.1f}% (< {thresh:g}%) — the long/short-gamma "
+                f"read now depends on the dealer-sign assumption, EOD build · {_as_of(gx.get('asof'))}")
+        return True, round(tilt_pct, 1), note, nxt
+    return False, round(tilt_pct, 1), "", nxt
+
+
+def _eval_opex_concentration(cond: dict, gx, prev: dict):
+    """Ports evalOpexConcentration — fires when the front expiry carries ≥ share_pct% of
+    gross gamma (default 35, the Neural Web's opex_window threshold).
+
+    share = |gamma_net(front exp)| / Σ|gamma_net| over by_expiry, front = earliest
+    expiration — the same arithmetic as the tab's front-expiry module and
+    options_plane._expiring_share. The regime a desk reads under concentration is carried
+    by contracts about to disappear. State cond._oc = {above}: first obs arms; fires on
+    ENTER.
+    """
+    rows = gx.get("by_expiry") if isinstance(gx, dict) else None
+    if not isinstance(rows, list):
+        return None, None, "expiration breakdown unavailable", prev
+    vals = [(str(r.get("exp") or ""), r.get("gamma_net")) for r in rows
+            if isinstance(r, dict) and _finite(r.get("gamma_net"))]
+    if not vals:
+        return None, None, "expiration breakdown unavailable", prev
+    vals.sort(key=lambda t: t[0])
+    total = sum(abs(v) for _, v in vals)
+    if not total > 0:
+        return None, None, "no gamma in the expiration breakdown", prev
+    front_exp, front_val = vals[0]
+    share = (abs(front_val) / total) * 100
+    thresh = cond["share_pct"] if _finite(cond.get("share_pct")) else 35.0
+    above = share >= thresh
+    prior = prev.get("above") if isinstance(prev.get("above"), bool) else None
+    nxt = {"above": above}
+    if above and prior is False:
+        root = cond.get("root") or (gx.get("root") if isinstance(gx, dict) else None) or "the underlying"
+        note = (f"{root} front expiry {front_exp} carries {share:.0f}% of gross gamma (≥ {thresh:g}%) — "
+                f"OPEX-unwind window, today's structure rolls off at that date, EOD build · {_as_of(gx.get('asof'))}")
+        return True, round(share, 1), note, nxt
+    return False, round(share, 1), "", nxt
+
+
 def _eval_premium_burst(cond: dict, tide, prev: dict):
     """Ports evalPremiumBurst — per-minute-delta z on the cumulative leg, fire-once per stamp.
 
@@ -575,6 +692,11 @@ _OPT_EVALUATORS = {
     "opt_premium_burst": ("_pb", _eval_premium_burst, lambda cond, flow: flow.tide()),
     "opt_0dte_spike": ("_zd", _eval_0dte, lambda cond, flow: flow.dte()),
     "opt_surface_pocket": ("_sp", _eval_surface_pocket, lambda cond, flow: flow.surface(cond.get("root") or "")),
+    # Market Structure Core §8 (2026-08-01). The masterplan sketched these as msc_*;
+    # they ship under the opt_* prefix every existing options type already uses.
+    "opt_wall_migration": ("_wm", _eval_wall_migration, lambda cond, flow: flow.gex(cond.get("root") or "")),
+    "opt_sign_fragile": ("_sf", _eval_sign_fragile, lambda cond, flow: flow.gex(cond.get("root") or "")),
+    "opt_opex_concentration": ("_oc", _eval_opex_concentration, lambda cond, flow: flow.gex(cond.get("root") or "")),
 }
 
 

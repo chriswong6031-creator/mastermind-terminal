@@ -42,6 +42,10 @@ export type GexPayload = {
   call_wall?: number;
   put_wall?: number;
   asof?: string;
+  /** Per-strike ladder — the sign-fragility statistic reads the two gross sides. */
+  by_strike?: { gamma_call?: number | null; gamma_put?: number | null }[];
+  /** Per-expiration breakdown — the OPEX-concentration share reads gamma_net. */
+  by_expiry?: { exp?: string; gamma_net?: number | null }[];
 };
 export type TidePoint = { t: string; ncp: number; npp: number };
 export type TidePayload = { minutes?: TidePoint[]; asof?: string; session_date?: string };
@@ -129,6 +133,136 @@ export function evalWallProximity(
     return { fired: true, value: spot, note, nextState };
   }
   return { fired: false, value: spot, note: "", nextState };
+}
+
+// ─── (b2) wall migration ─────────────────────────────────────────────────────
+// cond {type:"opt_wall_migration", root, wall:"call"|"put", min_move_pct?} — fires
+// when the wall RE-STRIKES between nightly builds (a positioning change, not a
+// price touch — masterplan §8; nobody in the category alerts on this). First
+// observation ARMS (stores the wall strike). Sub-threshold jitter still updates
+// the stored anchor so a slow drift cannot fire late.
+export type WallMigrationCond = {
+  type: "opt_wall_migration";
+  root?: string;
+  wall?: "call" | "put";
+  min_move_pct?: number;
+};
+
+export function evalWallMigration(
+  cond: WallMigrationCond,
+  gx: GexPayload | null | undefined,
+  prev: Record<string, unknown> | null | undefined,
+): EvalResult {
+  const p = prev || {};
+  const spot = gx?.spot_ref;
+  const wallSide = cond.wall === "put" ? "put" : "call";
+  const wall = wallSide === "put" ? gx?.put_wall : gx?.call_wall;
+  if (!isNum(spot) || spot === 0 || !isNum(wall)) {
+    return { fired: null, value: null, note: "wall level unavailable", nextState: p };
+  }
+  const minMove = isNum(cond.min_move_pct) ? cond.min_move_pct : 0.4;
+  const prior = isNum(p.level) ? (p.level as number) : undefined;
+  const nextState = { level: wall };
+  if (prior === undefined) return { fired: false, value: wall, note: "", nextState };
+  const movedPct = (Math.abs(wall - prior) / spot) * 100;
+  if (wall !== prior && movedPct >= minMove) {
+    const root = cond.root || gx?.root || "the underlying";
+    const arrow = wall > prior ? "up" : "down";
+    const note =
+      `${root} ${wallSide} wall migrated ${prior} → ${wall} (${arrow} ${movedPct.toFixed(1)}% of spot) — ` +
+      `positioning re-struck, EOD build · ${asOf(gx?.asof)}`;
+    return { fired: true, value: wall, note, nextState };
+  }
+  return { fired: false, value: wall, note: "", nextState };
+}
+
+// ─── (b3) sign fragility ─────────────────────────────────────────────────────
+// cond {type:"opt_sign_fragile", root, tilt_pct?} — fires when the ladder's gamma
+// tilt (the SAME sign-robustness statistic the Positioning tab and the Neural Web
+// render) drops below tilt_pct% (default 12): the long/short-gamma read now
+// depends on the dealer-sign assumption. ENTER only; first observation arms.
+export type SignFragileCond = { type: "opt_sign_fragile"; root?: string; tilt_pct?: number };
+
+export function evalSignFragile(
+  cond: SignFragileCond,
+  gx: GexPayload | null | undefined,
+  prev: Record<string, unknown> | null | undefined,
+): EvalResult {
+  const p = prev || {};
+  const rows = gx?.by_strike;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return { fired: null, value: null, note: "ladder unavailable", nextState: p };
+  }
+  let callAbs = 0;
+  let putAbs = 0;
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    if (isNum(r.gamma_call)) callAbs += Math.abs(r.gamma_call);
+    if (isNum(r.gamma_put)) putAbs += Math.abs(r.gamma_put);
+  }
+  const total = callAbs + putAbs;
+  if (!(total > 0)) {
+    return { fired: null, value: null, note: "no gamma in the published window", nextState: p };
+  }
+  const tiltPct = (Math.abs(callAbs - putAbs) / total) * 100;
+  const thresh = isNum(cond.tilt_pct) ? cond.tilt_pct : 12;
+  const fragile = tiltPct < thresh;
+  const prior = typeof p.fragile === "boolean" ? (p.fragile as boolean) : undefined;
+  const nextState = { fragile };
+  if (fragile && prior === false) {
+    const root = cond.root || gx?.root || "the underlying";
+    const note =
+      `${root} gamma tilt collapsed to ${tiltPct.toFixed(1)}% (< ${thresh}%) — the long/short-gamma read ` +
+      `now depends on the dealer-sign assumption, EOD build · ${asOf(gx?.asof)}`;
+    return { fired: true, value: round(tiltPct, 1), note, nextState };
+  }
+  return { fired: false, value: round(tiltPct, 1), note: "", nextState };
+}
+
+// ─── (b4) OPEX concentration ─────────────────────────────────────────────────
+// cond {type:"opt_opex_concentration", root, share_pct?} — fires when the FRONT
+// expiry carries ≥ share_pct% (default 35, the Neural Web's opex_window bar) of
+// gross gamma: the structure a desk reads today rolls off at that date. ENTER
+// only; first observation arms.
+export type OpexConcentrationCond = { type: "opt_opex_concentration"; root?: string; share_pct?: number };
+
+export function evalOpexConcentration(
+  cond: OpexConcentrationCond,
+  gx: GexPayload | null | undefined,
+  prev: Record<string, unknown> | null | undefined,
+): EvalResult {
+  const p = prev || {};
+  const rows = gx?.by_expiry;
+  if (!Array.isArray(rows)) {
+    return { fired: null, value: null, note: "expiration breakdown unavailable", nextState: p };
+  }
+  const vals: { exp: string; v: number }[] = [];
+  for (const r of rows) {
+    if (r && typeof r === "object" && isNum(r.gamma_net)) {
+      vals.push({ exp: String(r.exp ?? ""), v: r.gamma_net });
+    }
+  }
+  if (!vals.length) {
+    return { fired: null, value: null, note: "expiration breakdown unavailable", nextState: p };
+  }
+  vals.sort((a, b) => (a.exp < b.exp ? -1 : a.exp > b.exp ? 1 : 0));
+  const total = vals.reduce((s, x) => s + Math.abs(x.v), 0);
+  if (!(total > 0)) {
+    return { fired: null, value: null, note: "no gamma in the expiration breakdown", nextState: p };
+  }
+  const share = (Math.abs(vals[0].v) / total) * 100;
+  const thresh = isNum(cond.share_pct) ? cond.share_pct : 35;
+  const above = share >= thresh;
+  const prior = typeof p.above === "boolean" ? (p.above as boolean) : undefined;
+  const nextState = { above };
+  if (above && prior === false) {
+    const root = cond.root || gx?.root || "the underlying";
+    const note =
+      `${root} front expiry ${vals[0].exp} carries ${share.toFixed(0)}% of gross gamma (≥ ${thresh}%) — ` +
+      `OPEX-unwind window, today's structure rolls off at that date, EOD build · ${asOf(gx?.asof)}`;
+    return { fired: true, value: round(share, 1), note, nextState };
+  }
+  return { fired: false, value: round(share, 1), note: "", nextState };
 }
 
 // ─── (c) premium burst ───────────────────────────────────────────────────────
@@ -471,7 +605,10 @@ export type OptKind =
   | "opt_wall_touch"
   | "opt_premium_burst"
   | "opt_0dte_spike"
-  | "opt_surface_pocket";
+  | "opt_surface_pocket"
+  | "opt_wall_migration"
+  | "opt_sign_fragile"
+  | "opt_opex_concentration";
 
 export type OptParams = {
   band_pct?: number;
@@ -483,6 +620,8 @@ export type OptParams = {
   share_pct?: number;
   k?: number;
   near_pct?: number;
+  min_move_pct?: number;
+  tilt_pct?: number;
 };
 
 /**
@@ -513,6 +652,21 @@ export function buildOptCondition(kind: OptKind, root: string, params: OptParams
     const c: Record<string, unknown> = { type: kind, root: r };
     if (isNum(params.k)) c.k = params.k;
     if (isNum(params.near_pct)) c.near_pct = params.near_pct;
+    return c;
+  }
+  if (kind === "opt_wall_migration") {
+    const c: Record<string, unknown> = { type: kind, root: r, wall: params.wall === "put" ? "put" : "call" };
+    if (isNum(params.min_move_pct)) c.min_move_pct = params.min_move_pct;
+    return c;
+  }
+  if (kind === "opt_sign_fragile") {
+    const c: Record<string, unknown> = { type: kind, root: r };
+    if (isNum(params.tilt_pct)) c.tilt_pct = params.tilt_pct;
+    return c;
+  }
+  if (kind === "opt_opex_concentration") {
+    const c: Record<string, unknown> = { type: kind, root: r };
+    if (isNum(params.share_pct)) c.share_pct = params.share_pct;
     return c;
   }
   // opt_0dte_spike
@@ -555,6 +709,27 @@ export function optAlertPreview(cond: Record<string, unknown>, lang: "en" | "zh"
     return zh
       ? `当 ${root} 平值附近（±${near}%）某个行权价在期权面上异常放量时提醒我`
       : `Alert me when a strike lights up hot on the ${root} surface (within ${near}% of spot)`;
+  }
+  if (type === "opt_wall_migration") {
+    const wall = cond.wall === "put" ? "put" : "call";
+    const min = isNum(cond.min_move_pct) ? (cond.min_move_pct as number) : 0.4;
+    if (zh) {
+      const wz = wall === "put" ? "看跌墙" : "看涨墙";
+      return `当 ${root} 的${wz}换到新行权价（移动 ≥ 现价的 ${min}%）时提醒我`;
+    }
+    return `Alert me when the ${root} ${wall} wall re-strikes (moves ≥ ${min}% of spot)`;
+  }
+  if (type === "opt_sign_fragile") {
+    const tilt = isNum(cond.tilt_pct) ? (cond.tilt_pct as number) : 12;
+    return zh
+      ? `当 ${root} 的伽马倾斜跌破 ${tilt}%（多空伽马判断变得依赖符号假设）时提醒我`
+      : `Alert me when the ${root} gamma tilt drops below ${tilt}% (the long/short read turns assumption-fragile)`;
+  }
+  if (type === "opt_opex_concentration") {
+    const share = isNum(cond.share_pct) ? (cond.share_pct as number) : 35;
+    return zh
+      ? `当 ${root} 近月到期伽马占比达到 ${share}% 以上（OPEX 展仓窗口）时提醒我`
+      : `Alert me when the ${root} front expiry carries ${share}%+ of gross gamma (OPEX-unwind window)`;
   }
   // opt_0dte_spike
   const share = isNum(cond.share_pct) ? (cond.share_pct as number) : 55;

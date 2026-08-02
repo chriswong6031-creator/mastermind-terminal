@@ -16,6 +16,8 @@ async function uid() {
 const LEGACY_TYPES = new Set(["signal", "regime", "price", "rsi"]);
 const OPT_TYPES = new Set([
   "opt_gamma_flip", "opt_wall_touch", "opt_premium_burst", "opt_0dte_spike", "opt_surface_pocket",
+  // Market Structure Core §8 (2026-08-01): positioning-change alerts.
+  "opt_wall_migration", "opt_sign_fragile", "opt_opex_concentration",
 ]);
 const SUITE_TYPE = "suite_event";
 const SUITE_SEQ_TYPE = "suite_sequence"; // two-step "A then B within N bars" (same suite lane)
