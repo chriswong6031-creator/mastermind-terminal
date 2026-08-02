@@ -8,9 +8,14 @@ import UIKit
 /// inset. Rows 1 and 2 are `TVGhostButton` at 55.7 pt — **outline, transparent fill**
 /// (§3.5.2/C6 resolved the "filled `#2C2C2E`" claim in `spec-chart.md` §2.4 as wrong for
 /// BOTH rows). A full-bleed 1 pt `#4A4A4A` divider follows: §3.5.3's only edge-to-edge
-/// line. Then the §3.5.4 gradient CTA, and the TOOLS / INFO / MORE captions over `TVTile`
-/// grids at the §2.10 metrics (2-col 180.7 pt / gutter 8.3; 3-col 117.3 pt / gutter 9;
-/// 72 pt tall, r 12), with the §3.5.7 red dot on Alerts and Save.
+/// line. Then the TOOLS / INFO / MORE captions over `TVTile` grids at the §2.10 metrics
+/// (2-col 180.7 pt / gutter 8.3; 3-col 117.3 pt / gutter 9; 72 pt tall, r 12), with the
+/// §3.5.7 red dot on Alerts and Save.
+///
+/// R2.2 deleted the §3.5.4 "Trade with your broker" gradient CTA outright. It was drawn
+/// to spec and inert, but the alpha ships no broker connectivity of any kind, and a
+/// trading affordance that cannot trade is the one placeholder the sheet should not
+/// carry. There is no CTA between the divider and TOOLS.
 ///
 /// Inventory is the reference's, in the reference's order (§3.5.6 + `spec-chart.md` §2.4):
 /// TOOLS = Indicators · Compare · Alerts · Bar Replay, then the 3-up Indicator templates ·
@@ -24,14 +29,13 @@ import UIKit
 /// `presentationDetents` from the presented content, which keeps the host screen's file
 /// untouched.
 ///
-/// Every control here is a **placeholder affordance except Symbol details**: the structure
-/// is TV's, but chart tooling — indicators, chart type, the object tree, layout persistence,
-/// broker connectivity — is rendered and computed by the web Terminal per `AGENTS.md`, so
-/// each tile answers with the app's existing "Not in this alpha" notice rather than
-/// pretending to act. "Trade with your broker" is drawn to spec and stays inert: broker
-/// connectivity is excluded from the alpha, and the honest answer to a tap is the notice.
-/// When a tile can push a published Terminal surface, it swaps its `action` and nothing
-/// else about this file changes.
+/// Chart tooling is rendered and computed by the web Terminal per `AGENTS.md`, so a tile
+/// is real exactly when the web has a surface to open. Indicators and Compare (R2.2) hand
+/// the request back over the bridge — `openPanel` opens the page's own modal, so there is
+/// still one implementation of the indicator picker — and Symbol details opens the native
+/// detail sheet. The rest answer with the app's existing "Not in this alpha" notice rather
+/// than pretending to act; when one of them gains a published Terminal surface it swaps
+/// its `action` and nothing else about this file changes.
 struct AnalysisHubSheet: View {
     var lang: String = "en"
     /// Optional host override for the Symbol-details tile. **Default `nil`**, so the
@@ -50,6 +54,13 @@ struct AnalysisHubSheet: View {
     /// suppressed and the circular close is the only dismissal. Default `false` keeps every
     /// compact call site byte-identical.
     var isFullScreen = false
+    /// R2.2 — "open one of the page's own modals": `"indicators"` | `"compare"`. The host
+    /// dismisses the hub and posts `openPanel`. Default `nil` keeps every existing call
+    /// site compiling, and leaves both tiles as placeholders when no host handles them.
+    var onOpenPanel: ((String) -> Void)? = nil
+    /// DEBUG capture only (`-mmHubFull`): start at the `.large` detent instead of the 60 %
+    /// one. Both detents stay installed, so the drag still works in the captured state.
+    var startsExpanded = false
     let onClose: () -> Void
 
     @EnvironmentObject private var model: AppModel
@@ -62,6 +73,9 @@ struct AnalysisHubSheet: View {
     /// ANIM-23: set alongside `detail = nil` and consumed in `onDismiss`, so the hub's own
     /// close never races the detail sheet's dismissal animation.
     @State private var closesAfterDetail = false
+    /// R2.2 — the live detent, so `.resizes` has something to drive and `-mmHubFull` has
+    /// somewhere to start.
+    @State private var detent: PresentationDetent = .fraction(0.6)
 
     var body: some View {
         ZStack {
@@ -94,7 +108,6 @@ struct AnalysisHubSheet: View {
                     TVHairline.sheet()
                         .padding(.top, TVSpace.s5)
 
-                    brokerCTA.tvReadableWidth()
                     toolsSection.tvReadableWidth()
                     infoSection.tvReadableWidth()
                     moreSection.tvReadableWidth()
@@ -104,10 +117,18 @@ struct AnalysisHubSheet: View {
         }
         // §3.5 / `spec-chart.md` §2.4: opens partial (~60 %), swipes up to full. Applied
         // only where the system honours it — see `isFullScreen`.
-        .presentationDetents(isFullScreen ? [.large] : [.fraction(0.6), .large])
-        // With two detents, a drag that starts on the grid must scroll the grid, not resize
-        // the sheet; the header/grabber band above the scroll view still drags it to .large.
-        .presentationContentInteraction(.scrolls)
+        .presentationDetents(
+            isFullScreen ? [.large] : [.fraction(0.6), .large],
+            selection: $detent
+        )
+        // R2.2 — `.scrolls` reserved every downward drag for the ScrollView, so the sheet
+        // could only be grown by the ~30 pt grabber band and TV's "drag the body up to
+        // full" never worked. `.resizes` gives the drag to the sheet until it reaches
+        // `.large`, after which the ScrollView takes it — which is TV's behaviour.
+        .presentationContentInteraction(.resizes)
+        // The selection must be a member of the installed set, so the one-detent
+        // (`isFullScreen`) case moves with it.
+        .onAppear { if startsExpanded || isFullScreen { detent = .large } }
         // The kit draws TV's grabber (36.7 × 5.3 pt, 8 pt below the top edge); the system
         // indicator would double it.
         .presentationDragIndicator(.hidden)
@@ -208,19 +229,6 @@ struct AnalysisHubSheet: View {
         return localized == "Open layout" ? "Open" : localized
     }
 
-    // MARK: - §3.5.4 broker CTA
-
-    /// Drawn to spec (70 pt, `#2C2C2E` fill, 1.5 pt pink→blue gradient border) and inert:
-    /// broker connectivity is excluded from the alpha, so a tap gets the same honest
-    /// notice every other placeholder gives. It is never a trading path.
-    private var brokerCTA: some View {
-        TVGradientCTA(title: L10n.t("Trade with your broker", lang), icon: "chevron.right.2") {
-            placeholder()
-        }
-        .padding(.top, TVSpace.block)
-        .accessibilityHint(L10n.t("Not in this alpha", lang))
-    }
-
     // MARK: - §3.5.5/§3.5.6 tile grids
 
     private var toolsSection: some View {
@@ -228,8 +236,8 @@ struct AnalysisHubSheet: View {
             TVSectionCaption(text: L10n.t("Tools", lang))
 
             LazyVGrid(columns: TVGrid.columns(2), spacing: TVGrid.rowGap) {
-                tile("chart.xyaxis.line", L10n.t("Indicators", lang))
-                tile("plus.square.on.square", L10n.t("Compare", lang))
+                panelTile("chart.xyaxis.line", L10n.t("Indicators", lang), panel: "indicators")
+                panelTile("plus.square.on.square", L10n.t("Compare", lang), panel: "compare")
                 // §3.5.7 — the red dot rides Alerts and Save.
                 tile("bell", L10n.t("Alerts", lang), badge: true)
                 tile("play.rectangle", L10n.t("Bar Replay", lang))
@@ -280,6 +288,21 @@ struct AnalysisHubSheet: View {
     private func tile(_ icon: String, _ title: String, badge: Bool = false) -> some View {
         TVTile(icon: icon, title: title, showsBadge: badge) { placeholder() }
             .accessibilityHint(L10n.t("Not in this alpha", lang))
+    }
+
+    /// R2.2 — a tile that hands the request to the page: close the hub so the chart is
+    /// unobstructed, then ask the web to open its own modal. Without a host to take it
+    /// (the default `onOpenPanel == nil`) the tile stays an honest placeholder.
+    @ViewBuilder
+    private func panelTile(_ icon: String, _ title: String, panel: String) -> some View {
+        if let onOpenPanel {
+            TVTile(icon: icon, title: title) {
+                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                onOpenPanel(panel)
+            }
+        } else {
+            tile(icon, title)
+        }
     }
 
     /// Symbol details, for real. `model.symbol` is the chart's current symbol (ChartScreen

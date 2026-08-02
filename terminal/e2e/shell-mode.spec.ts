@@ -240,6 +240,64 @@ test.describe("native shell mode", () => {
     await expect(page.locator("aside.rail")).toHaveCount(1);
   });
 
+  // ── R2.5 bridge additions: tool activation, panels, history, richer payloads ──────────
+  test("bridge v1 R2 additions drive drawings, panels and history", async ({ page }) => {
+    // Stand in for the WKWebView message handler so the outbound payloads can be read back.
+    await page.addInitScript(() => {
+      const posts: unknown[] = [];
+      (window as unknown as { __mmPosts: unknown[] }).__mmPosts = posts;
+      (window as unknown as { webkit: unknown }).webkit = {
+        messageHandlers: { mm: { postMessage: (message: unknown) => posts.push(message) } },
+      };
+    });
+    await page.goto(SHELL_URL);
+    await page.waitForFunction(() => (window as any).__mmShell?.version === 1);
+
+    // `ready` carries the favourites and the whole engine tool inventory, so the native sheet
+    // never hardcodes an engine list.
+    const posted = () => page.evaluate(() => (window as any).__mmPosts as any[]);
+    const ready = (await posted()).find((message) => message.type === "ready");
+    expect(ready.availableTimeframes.length).toBeGreaterThan(5);
+    expect(ready.favTimeframes).toEqual(["D", "3D", "W", "1M"]);
+    expect(ready.drawTools.length).toBeGreaterThan(50);
+    expect(ready.drawTools.find((tool: any) => tool.id === "trendline"))
+      .toEqual({ id: "trendline", label: "Trend Line", group: "trendlines" });
+    expect([...new Set(ready.drawTools.map((tool: any) => tool.group))].sort())
+      .toEqual(["gannfib", "patterns", "tools", "trendlines"]);
+
+    // …and every stateChanged repeats them, so a native shell that missed `ready` still catches up.
+    await page.evaluate(() => (window as any).__mmShell.setTimeframe("W"));
+    await page.waitForFunction(() => (window as any).__mmShell.getState().tf === "W");
+    await expect.poll(async () => {
+      const state = (await posted()).filter((message) => message.type === "stateChanged").at(-1);
+      return { tf: state?.tf, favs: state?.favTimeframes, tools: state?.drawTools?.length > 50 };
+    }).toEqual({ tf: "W", favs: ["D", "3D", "W", "1M"], tools: true });
+
+    // setDrawTool arms the tool through the dock's own path — and the dock stays hidden.
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__mmShell.setDrawTool("trendline")), { timeout: 20_000 })
+      .toBe(true);
+    await expect(page.getByTestId("drawing-group-lines-main")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("drawing-group-lines-main")).toHaveAttribute("data-tool-id", "trendline");
+    await expect(page.locator(".ds-dock")).toBeHidden();
+    await expect(page.locator(".ds-favorites")).toBeHidden();
+    expect(await page.evaluate(() => (window as any).__mmShell.setDrawTool("not-a-tool"))).toBe(false);
+
+    // Undo/redo are real history calls; an empty stack is a safe no-op, not a throw.
+    expect(await page.evaluate(() => (window as any).__mmShell.drawUndo())).toBe(false);
+    expect(await page.evaluate(() => (window as any).__mmShell.drawRedo())).toBe(false);
+
+    // openPanel raises the WEB modal — one implementation of each, wherever it is asked for.
+    expect(await page.evaluate(() => (window as any).__mmShell.openPanel("indicators"))).toBe(true);
+    await expect(page.locator("#indicator-library-dialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#indicator-library-dialog")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__mmShell.openPanel("compare"))).toBe(true);
+    await expect(page.locator(".smodal-cmp")).toBeVisible();
+    await page.keyboard.press("Escape");
+    expect(await page.evaluate(() => (window as any).__mmShell.openPanel("nope" as never))).toBe(false);
+  });
+
   test("normal mode is untouched", async ({ page }) => {
     await page.goto("/terminal?symbol=NVDA");
     // Chrome present in the DOM (viewport CSS decides visibility)…
@@ -463,7 +521,9 @@ test.describe("TV chart-surface parity (shell)", () => {
     await page.goto(WEB_URL);
     await chartReady(page);
     expect(await page.locator(".chart-tabs").evaluate((el) => getComputedStyle(el).position)).not.toBe("absolute");
-    await expect(page.locator(".chart-tabs .ct")).toBeVisible();
+    // The toolbar row survives on the web at every width the web still ships it — R2.2 retired it
+    // on the PHONE (≤640px) in favour of the roller strip, which is not a shell-parity rule.
+    if ((page.viewportSize()?.width ?? 1440) > 640) await expect(page.locator(".chart-tabs .ct")).toBeVisible();
     await expect(page.locator(".cfb-left")).toBeVisible();
     await expect(page.locator(".status-last")).toBeHidden();
     await expect(page.locator(".chart-frame-bar")).toBeVisible();

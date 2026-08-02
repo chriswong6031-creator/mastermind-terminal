@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useIsMobile } from "@/lib/useMediaQuery";
+import { useIsMobile, useIsPhone } from "@/lib/useMediaQuery";
 import MobileSheet from "@/components/ui/MobileSheet";
 import { DndContext, PointerSensor, KeyboardSensor, useDroppable, useSensor, useSensors, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
@@ -55,6 +55,11 @@ const GuidePanel = dynamic(() => import("@/components/GuidePanel"), { ssr: false
 const IndicatorSource = dynamic(() => import("@/components/IndicatorSource"), { ssr: false });
 const CompareSettings = dynamic(() => import("@/components/CompareSettings"), { ssr: false });
 const ChartObjectTree = dynamic(() => import("@/components/ChartObjectTree"), { ssr: false });
+// Phone-only chart chrome (R2): the bottom roller strip and the two sheets it raises. Never
+// server-rendered — the phone breakpoint is a client media query, and shell mode brings its own.
+const RollerStrip = dynamic(() => import("@/components/mobile/RollerStrip"), { ssr: false });
+const DrawingsSheet = dynamic(() => import("@/components/mobile/DrawingsSheet"), { ssr: false });
+const AnalysisHubSheet = dynamic(() => import("@/components/mobile/AnalysisHubSheet"), { ssr: false });
 // BrainWidget mounts the production Mastermind Brain widget (mm_brain.js) — it renders null
 // and only injects a cross-origin <script>, so ssr:false / dynamic isn't needed.
 import BrainWidget from "@/components/BrainWidget";
@@ -76,6 +81,8 @@ import {
 } from "@/lib/drawings";
 import { readDrawingOutbox, writeDrawingOutbox, type DrawingOutbox } from "@/lib/drawingOutbox";
 import { FREEHAND_DRAWING_KINDS, getDrawingTool, isDrawingToolId } from "@/lib/drawingTools";
+import { SHELL_DRAW_TOOLS } from "@/lib/drawingTaxonomy";
+import { type ShellPanelId } from "@/lib/platform/contract";
 import SettingsButton from "@/components/settings/SettingsButton";
 import { SettingsProvider } from "@/components/settings/SettingsProvider";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
@@ -436,6 +443,12 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // id → script, in a ref so the legend callbacks (declared above the derivations) can look it up
   const scriptByIdRef = useRef<Record<string, UserScript>>({});
   const [favTF, setFavTF] = useState<string[]>(["D", "3D", "W", "1M"]);
+  // Starred timeframes in canonical order — the phone interval wheel and the native wheel
+  // (bridge payload favTimeframes) rotate exactly what the TF grid's stars saved.
+  const favTfOrder = useMemo(
+    () => [...favTF].filter((entry) => TF_CANONICAL_ORDER.includes(entry)).sort((a, b) => tfSortKey(a) - tfSortKey(b)),
+    [favTF],
+  );
   const [set, setSet] = useState<WatchlistSettings>(DEFAULT_WATCHLIST_SETTINGS);
   // ── F1 flags: symbol → color; persisted inside mm.wls additively (read below) ──
   const [flags, setFlags] = useState<Record<string, string>>({});
@@ -600,6 +613,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const t = useT();
   const { lang } = useLang();
   const isMobile = useIsMobile();
+  // Narrower than isMobile on purpose — the tablet contract viewport keeps the desktop-era chrome.
+  const isPhone = useIsPhone();
   const navPath = usePathname();
   // ── urlSearch: window.location.search alternative to useSearchParams() ──────
   // TerminalShell is always dynamically-rendered (server-side, on demand) so the
@@ -625,6 +640,12 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   }, []);
   // mobile + fullscreen + expanded-analysis state
   const [fullChart, setFullChart] = useState(false);
+  // ── phone chart chrome (R2): the roller strip's two sheets ──
+  const [drawSheetOpen, setDrawSheetOpen] = useState(false);
+  const [hubOpen, setHubOpen] = useState(false);
+  // Optimistic "seen" so the ••• badge cannot flash before localStorage is read on mount.
+  const [hubSeen, setHubSeen] = useState(true);
+  useEffect(() => { try { setHubSeen(localStorage.getItem("mm.hubSeen") === "1"); } catch {} }, []);
   // SSR-consistent default; the persisted width is read after mount (below) so the server- and
   // client-rendered `--rail-w` style always agree on the first paint (no hydration mismatch).
   const [railW, setRailW] = useState<number>(360);
@@ -2312,12 +2333,37 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // so the bridge adds no second symbol/TF pathway (lib/platform/shellBridge.ts).
   const shellStateRef = useRef({ sym: "", tf: "" });
   shellStateRef.current = { sym: active, tf };
+  // The R2.5 commands read their handlers through this ref: the bridge installs ONCE per shell
+  // session (re-installing would re-announce `ready`), while the handlers below close over state
+  // that changes every render. Populated after the drawing helpers are declared.
+  const shellCmdRef = useRef<{
+    favTimeframes: string[];
+    setDrawTool: (id: string) => boolean;
+    drawUndo: () => boolean;
+    drawRedo: () => boolean;
+    openPanel: (id: ShellPanelId) => boolean;
+  }>({
+    favTimeframes: [],
+    setDrawTool: () => false,
+    drawUndo: () => false,
+    drawRedo: () => false,
+    openPanel: () => false,
+  });
   useEffect(() => {
     if (!shellMode) return;
-    return initShellBridge({ getState: () => shellStateRef.current });
+    return initShellBridge({
+      getState: () => shellStateRef.current,
+      getPayload: () => ({ favTimeframes: shellCmdRef.current.favTimeframes, drawTools: SHELL_DRAW_TOOLS }),
+      setDrawTool: (id) => shellCmdRef.current.setDrawTool(id),
+      drawUndo: () => shellCmdRef.current.drawUndo(),
+      drawRedo: () => shellCmdRef.current.drawRedo(),
+      openPanel: (id) => shellCmdRef.current.openPanel(id),
+    });
   }, [shellMode]);
   useEffect(() => { if (shellMode) postToShell({ type: "symbolChanged", sym: active }); }, [shellMode, active]);
-  useEffect(() => { if (shellMode) postToShell({ type: "stateChanged", tf }); }, [shellMode, tf]);
+  useEffect(() => {
+    if (shellMode) postToShell({ type: "stateChanged", tf, favTimeframes: favTfOrder, drawTools: [...SHELL_DRAW_TOOLS] });
+  }, [shellMode, tf, favTfOrder]);
 
   // ── Chart Bus v2 (CMX W1) ──────────────────────────────────────────────────────────────────
   // The v2 typed drawing/command vocabulary. v1 envelopes stay on handleBrainCommand below; a v:2
@@ -2471,6 +2517,14 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const currentDrawingOwnerKey = email ? `account:${email}` : "guest";
   const drawingOwnerMatches = drawingOwnerKey === currentDrawingOwnerKey;
   const drawingsReadyFor = (sym: string) => drawingOwnerMatches && (!loggedIn || drawStore[sym] !== undefined);
+  // ONE activation path for every surface that arms a tool — the desktop dock, the phone Drawings
+  // sheet, and the native bridge's setDrawTool. Returns whether the tool actually armed.
+  const activateDrawingTool = (id: DrawKind | null) => {
+    if (!drawingsReadyFor(active) || (id !== null && drawingCreationDisabledReason)) return false;
+    selectDrawingTool(id);
+    if (id) setDrawingsVisible(true);
+    return true;
+  };
   const activeStoredDrawings = drawingOwnerMatches ? (drawStore[active] ?? []) : [];
   const activeUserDrawings = activeStoredDrawings.filter(isUserDrawing);
   const storedDetectedDrawingCount = activeStoredDrawings.length - activeUserDrawings.length;
@@ -2506,6 +2560,47 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   // detail rail is the whole surface: no chart workspace, no watchlist board, natural page scroll.
   // Only meaningful inside shell mode (the page prop already ANDs the two; belt-and-braces here).
   const dossierMode = shellMode && shellDossier;
+
+  // ── phone roller strip + native bridge command surface ──────────────────────────────────────
+  // The symbol wheel rotates the ACTIVE watchlist (the charted symbol appended when it is not a
+  // member); the interval wheel rotates the starred timeframes, falling back to the canonical list
+  // when the user has starred none. Both wheels always contain their current value.
+  const stripSymbols = useMemo(() => {
+    const list = wl.map((row) => row.symbol).filter(Boolean);
+    return list.includes(active) ? list : [...list, active];
+  }, [wl, active]);
+  const stripTimeframes = useMemo(() => {
+    const base = favTfOrder.length ? favTfOrder : [...TF_CANONICAL_ORDER];
+    return base.includes(tf) ? base : [...base, tf].sort((a, b) => tfSortKey(a) - tfSortKey(b));
+  }, [favTfOrder, tf]);
+  const openDrawingsSheet = () => {
+    setHubOpen(false);
+    setDrawSheetOpen(true);
+  };
+  const openAnalysisHub = () => {
+    setDrawSheetOpen(false);
+    setHubOpen(true);
+    if (!hubSeen) { setHubSeen(true); try { localStorage.setItem("mm.hubSeen", "1"); } catch {} }
+  };
+  shellCmdRef.current = {
+    favTimeframes: favTfOrder,
+    setDrawTool: (id) => (isDrawingToolId(id) ? activateDrawingTool(id) : false),
+    drawUndo: () => {
+      if (!drawingHistoryState.canUndo) return false;
+      travelDrawingHistory(active, "undo");
+      return true;
+    },
+    drawRedo: () => {
+      if (!drawingHistoryState.canRedo) return false;
+      travelDrawingHistory(active, "redo");
+      return true;
+    },
+    openPanel: (id) => {
+      if (id === "indicators") { setIndOpen(true); return true; }
+      if (id === "compare") { setSearchMode("compare"); setSeed(""); setSearchOpen(true); return true; }
+      return false;
+    },
+  };
 
   return (
     <OnboardingProvider email={email}>
@@ -2782,10 +2877,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
               canUndo={drawingHistoryState.canUndo}
               canRedo={drawingHistoryState.canRedo}
               drawStyle={drawStyle}
-              onTool={(id) => {
-                if (!drawingsReadyFor(active) || (id !== null && drawingCreationDisabledReason)) return;
-                selectDrawingTool(id); if (id) setDrawingsVisible(true);
-              }}
+              onTool={(id) => { activateDrawingTool(id); }}
               onMagnet={setMagnet}
               onSticky={setDrawingSticky}
               onPinned={setDrawingPinnedTool}
@@ -2895,6 +2987,53 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         )}
       </section>
       )}
+
+      {/* ── phone chart chrome (R2.1–R2.3) ──────────────────────────────────────────────────────
+          The bottom roller strip and the two sheets it raises replace the phone's floating drawing
+          dock and top toolbar row. A direct child of .app so it survives the expanded-chart mode
+          (which only hides .app's other direct children), and never rendered in shell mode — the
+          installable app draws its own native strip. Tablet/desktop never mount any of it. */}
+      {!shellMode && isPhone && (<>
+        <RollerStrip
+          symbols={stripSymbols}
+          symbol={active}
+          onSymbol={pick}
+          onTapSymbol={() => { setSeed(""); setSearchMode("go"); setSearchOpen(true); }}
+          timeframes={stripTimeframes}
+          timeframe={tf}
+          onTimeframe={(next) => { if (FUNCTIONAL.has(next)) setTf(next); }}
+          onDraw={openDrawingsSheet}
+          drawActive={activeDrawingTool !== null}
+          onMore={openAnalysisHub}
+          moreBadge={!hubSeen}
+          onUndo={() => travelDrawingHistory(active, "undo")}
+          onRedo={() => travelDrawingHistory(active, "redo")}
+          canUndo={drawingHistoryState.canUndo}
+          canRedo={drawingHistoryState.canRedo}
+        />
+        <DrawingsSheet
+          open={drawSheetOpen}
+          onClose={() => setDrawSheetOpen(false)}
+          activeTool={activeDrawingTool}
+          onPick={(id) => { activateDrawingTool(id); }}
+        />
+        <AnalysisHubSheet
+          open={hubOpen}
+          onClose={() => setHubOpen(false)}
+          onAction={(action) => {
+            setHubOpen(false);
+            if (action === "indicators") setIndOpen(true);
+            else if (action === "compare") { setSearchMode("compare"); setSeed(""); setSearchOpen(true); }
+            else if (action === "alerts") window.location.assign(`/alerts?sym=${encodeURIComponent(active)}`);
+            else if (action === "symbolDetails") {
+              setFullChart(false);
+              // The dossier is the page's own scroll position on a phone, not a modal.
+              window.requestAnimationFrame(() =>
+                document.querySelector(".detail-board")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+            }
+          }}
+        />
+      </>)}
 
       {/* The rail and the chart workspace are INDEPENDENT surfaces (the rail's intel/fund/opts
           fetches never touch ChartPanel), so shell mode drops the rail while dossier mode keeps

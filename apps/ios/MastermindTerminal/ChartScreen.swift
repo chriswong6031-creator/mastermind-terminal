@@ -33,9 +33,11 @@ struct ChartScreen: View {
     @State private var timeframeIndex = 0
     /// §2.18 `•••` → §3.5 Analysis hub.
     @State private var showAnalysisHub = false
-    /// Whether the web chart's drawing toolbar is shown (hidden by default in shell mode);
-    /// re-applied on every page ready since a reload resets the page to hidden.
-    @State private var drawToolsOn = false
+    /// R2.1 — the pencil now presents the native Drawings sheet. It no longer reveals the
+    /// web chart's own dock (`setDrawTools`), which stays hidden in shell mode.
+    @State private var showDrawings = false
+    /// DEBUG capture only: `-mmHubFull` opens the hub already at its full detent.
+    @State private var hubStartsExpanded = false
     /// §2.18 ships a red dot on `•••` for unseen hub items; it clears once the hub is seen.
     @State private var hubUnseen = true
     /// Loop guard for the cookie-absent handoff: setSession makes the page reload itself,
@@ -76,8 +78,18 @@ struct ChartScreen: View {
         return syms
     }
 
+    /// R2.4 — the interval wheel rotates the user's STARRED timeframes when the page has
+    /// any, with the live interval appended if it isn't starred (the wheel always shows
+    /// reality, the same rule `wheelSymbols` follows). The page's canonical list, then a
+    /// local list, remain the fallbacks — the wheel must never be empty.
     private var wheelTimeframes: [String] {
-        bridge.availableTimeframes.isEmpty
+        let favourites = bridge.favTimeframes
+        if !favourites.isEmpty {
+            var tfs = favourites
+            if !bridge.timeframe.isEmpty, !tfs.contains(bridge.timeframe) { tfs.append(bridge.timeframe) }
+            return tfs
+        }
+        return bridge.availableTimeframes.isEmpty
             ? ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "D", "2D", "3D", "W", "2W", "1M", "3M"]
             : bridge.availableTimeframes
     }
@@ -94,16 +106,46 @@ struct ChartScreen: View {
         // internal layout and its own close control (§4-A20.5).
         .sheet(isPresented: Binding(get: { showAnalysisHub && !widthClass.isRegular },
                                     set: { if !$0 { showAnalysisHub = false } })) {
-            AnalysisHubSheet(lang: model.lang) { showAnalysisHub = false }
+            AnalysisHubSheet(
+                lang: model.lang,
+                onOpenPanel: openWebPanel,
+                startsExpanded: hubStartsExpanded
+            ) { showAnalysisHub = false }
         }
         .fullScreenCover(isPresented: Binding(get: { showAnalysisHub && widthClass.isRegular },
                                               set: { if !$0 { showAnalysisHub = false } })) {
-            AnalysisHubSheet(lang: model.lang, isFullScreen: true) { showAnalysisHub = false }
+            AnalysisHubSheet(
+                lang: model.lang,
+                isFullScreen: true,
+                onOpenPanel: openWebPanel
+            ) { showAnalysisHub = false }
+        }
+        // R2.1 — the pencil's sheet. `.large` and the rest of its anatomy live on the
+        // presented view, so this call site carries only the inventory and the two hooks.
+        .sheet(isPresented: $showDrawings) {
+            DrawingsSheet(
+                tools: bridge.drawTools,
+                lang: model.lang,
+                onPick: { tool in
+                    showDrawings = false
+                    bridge.setDrawTool(tool.id)
+                },
+                onClose: { showDrawings = false }
+            )
         }
         .onAppear {
             #if DEBUG
-            // Headless §6.2 capture state for the tap-only hub.
-            if ProcessInfo.processInfo.arguments.contains("-mmHub") { showAnalysisHub = true }
+            // Headless §6.2 capture states. `-mmHub` is the hub at its 60 % detent,
+            // `-mmHubFull` the same sheet already dragged to full, `-mmDraw` the R2.1
+            // Drawings sheet.
+            let args = ProcessInfo.processInfo.arguments
+            if args.contains("-mmHubFull") {
+                hubStartsExpanded = true
+                showAnalysisHub = true
+            } else if args.contains("-mmHub") {
+                showAnalysisHub = true
+            }
+            if args.contains("-mmDraw") { showDrawings = true }
             #endif
         }
         // §4-A20.6 — restore the minimize state this orientation was left in, and keep the
@@ -136,8 +178,6 @@ struct ChartScreen: View {
             // The page bootstraps its language from its own storage; this covers the first
             // load after a native toggle, when that storage is still empty or stale.
             bridge.setLang(model.lang)
-            // A (re)loaded page defaults its drawing toolbar hidden — restore the toggle.
-            if drawToolsOn { bridge.setDrawTools(true) }
             Task { await flushWebSession() }
             syncWheels()
             DemoDriver.runIfRequested(bridge: bridge, watchlists: watchlists)
@@ -157,6 +197,8 @@ struct ChartScreen: View {
             syncWheels()
         }
         .onChange(of: bridge.timeframe) { _, _ in syncWheels() }
+        // R2.4 — favourites can land after the wheel has already been built.
+        .onChange(of: bridge.favTimeframes) { _, _ in syncWheels() }
         .onAppear { syncWheels() }
         .alert(
             Text(L10n.t("Not in this alpha", model.lang)),
@@ -224,11 +266,10 @@ struct ChartScreen: View {
             lang: model.lang,
             showsMoreBadge: hubUnseen,
             onMore: openAnalysisHub,
-            drawActive: drawToolsOn,
-            onDraw: {
-                drawToolsOn.toggle()
-                bridge.setDrawTools(drawToolsOn)
-            },
+            drawActive: showDrawings,
+            onDraw: { showDrawings = true },
+            onUndo: { drawHistory { bridge.drawUndo() } },
+            onRedo: { drawHistory { bridge.drawRedo() } },
             shareSymbol: model.symbol,
             chromeMinimized: model.chromeMinimized,
             onToggleChrome: toggleChrome
@@ -246,6 +287,26 @@ struct ChartScreen: View {
             try? await Task.sleep(for: .milliseconds(350))
             withAnimation(.easeOut(duration: 0.2)) { hubUnseen = false }
         }
+    }
+
+    /// R2.1 — drawing history is the renderer's, so the strip's undo/redo can only ask.
+    /// Before the page is ready there is nothing to ask, and the control falls back to the
+    /// placeholder acknowledgement (`.soft`) the strip used while these were inert: the
+    /// touch is answered, and nothing is silently dropped.
+    private func drawHistory(_ send: () -> Void) {
+        guard bridge.isReady else {
+            UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+            return
+        }
+        send()
+    }
+
+    /// R2.2 — the hub's Indicators/Compare tiles. The hub closes first so the page's own
+    /// modal is not opened behind a sheet.
+    private func openWebPanel(_ panel: String) {
+        showAnalysisHub = false
+        guard bridge.isReady else { return }
+        bridge.openPanel(panel)
     }
 
     /// ANIM-11: the single transaction that owns the bar's slide, the safe-area inset it

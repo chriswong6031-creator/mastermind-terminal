@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { openIndicatorLibrary as openLibraryEntryPoint } from "./phoneChrome";
 
 async function armTerminalVisualReady(page: Page) {
   await page.addInitScript(() => {
@@ -25,10 +26,9 @@ async function openIndicatorLibrary(page: Page) {
   await expect(page.locator(".chart-wrap canvas").first()).toBeVisible();
   await waitForTerminalVisualReady(page);
 
+  // The phone reaches the library through the roller strip's hub, not a toolbar button (R2.2).
   const trigger = page.locator(".indicator-library-trigger");
-  await expect(trigger).toBeVisible();
-  await trigger.scrollIntoViewIfNeeded();
-  await trigger.click();
+  await openLibraryEntryPoint(page);
 
   const library = page.locator(".imodal-library");
   await expect(library).toBeVisible({ timeout: 10_000 });

@@ -280,7 +280,9 @@ test("drawing toolbar and favorite controls retain focus across responsive remou
   const lineGroup = page.getByTestId("drawing-group-lines-main");
   await lineGroup.focus();
   await expect(lineGroup).toBeFocused();
-  await page.setViewportSize({ width: 390, height: 844 });
+  // 820x1180 is the compact-dock breakpoint now: R2.1 removed the dock from the PHONE
+  // (≤640px) altogether, so the dock's own responsive remount is a tablet transition.
+  await page.setViewportSize({ width: 820, height: 1180 });
   await expect(page.getByTestId("drawing-group-lines-main")).toBeFocused();
 
   const favoriteTool = page.getByTestId("drawing-favorite-tool-trendline");

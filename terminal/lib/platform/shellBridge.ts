@@ -1,5 +1,11 @@
 "use client";
-import { SHELL_BRIDGE_VERSION, type MmShellApi, type ShellOutboundMessage } from "@/lib/platform/contract";
+import {
+  SHELL_BRIDGE_VERSION,
+  type MmShellApi,
+  type ShellDrawTool,
+  type ShellOutboundMessage,
+  type ShellPanelId,
+} from "@/lib/platform/contract";
 import { TF_CANONICAL_ORDER } from "@/lib/startTf";
 import { applyLang } from "@/lib/i18n";
 
@@ -11,13 +17,26 @@ export function postToShell(msg: ShellOutboundMessage) {
   } catch { /* not hosted by a shell */ }
 }
 
+export type ShellBridgeHooks = {
+  getState: () => { sym: string; tf: string };
+  /** Extras that ride the `ready` notification (and every stateChanged post from the shell). */
+  getPayload: () => { favTimeframes: string[]; drawTools: readonly ShellDrawTool[] };
+  /** R2.5 commands — each reuses the web's own code path, never a second implementation. */
+  setDrawTool: (id: string) => boolean;
+  drawUndo: () => boolean;
+  drawRedo: () => boolean;
+  openPanel: (id: ShellPanelId) => boolean;
+};
+
+const PANEL_IDS: readonly ShellPanelId[] = ["indicators", "compare"];
+
 /**
  * Install `window.__mmShell` and announce `ready`. Commands deliberately ride the SAME seams
  * the product already exposes — `mm:embedded-symbol` (dashboard warm-iframe symbol switch) and
  * `mm:set-tf` (TF toolbar) — so the bridge adds no second symbol/TF pathway to maintain.
  * Returns the uninstaller (used on unmount / shell-mode teardown).
  */
-export function initShellBridge(hooks: { getState: () => { sym: string; tf: string } }): () => void {
+export function initShellBridge(hooks: ShellBridgeHooks): () => void {
   const api: MmShellApi = {
     version: SHELL_BRIDGE_VERSION,
     setSymbol: (sym) => {
@@ -35,6 +54,10 @@ export function initShellBridge(hooks: { getState: () => { sym: string; tf: stri
       document.querySelector(".app")?.classList.toggle("shell-draw", !!visible);
       return true;
     },
+    setDrawTool: (id) => hooks.setDrawTool(String(id || "")),
+    drawUndo: () => hooks.drawUndo(),
+    drawRedo: () => hooks.drawRedo(),
+    openPanel: (id) => (PANEL_IDS.includes(id as ShellPanelId) ? hooks.openPanel(id as ShellPanelId) : false),
     restoreState: ({ sym, tf } = {}) => {
       if (sym) api.setSymbol(sym);
       if (tf) api.setTimeframe(tf);
@@ -50,7 +73,14 @@ export function initShellBridge(hooks: { getState: () => { sym: string; tf: stri
     getState: () => hooks.getState(),
   };
   (window as unknown as { __mmShell?: MmShellApi }).__mmShell = api;
-  postToShell({ type: "ready", bridgeVersion: SHELL_BRIDGE_VERSION, availableTimeframes: [...TF_CANONICAL_ORDER] });
+  const payload = hooks.getPayload();
+  postToShell({
+    type: "ready",
+    bridgeVersion: SHELL_BRIDGE_VERSION,
+    availableTimeframes: [...TF_CANONICAL_ORDER],
+    favTimeframes: [...payload.favTimeframes],
+    drawTools: [...payload.drawTools],
+  });
   return () => {
     const w = window as unknown as { __mmShell?: MmShellApi };
     if (w.__mmShell === api) w.__mmShell = undefined;

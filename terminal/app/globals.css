@@ -3671,3 +3671,174 @@ html[data-shell="app"] .mm-brandbug{
   html[data-shell="app"] .lg-name{font-size:16px;max-width:280px}
   html[data-shell="app"] .cfb-gear{width:30px;height:30px}
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PHONE CHART CHROME — roller strip · Drawings sheet · Analysis hub (R2.1–R2.4)
+   Reference: TradingView iOS, measured (IMG_2366-68 for the Drawings sheet;
+   apps/ios/MastermindTerminal/RollerStrip.swift for the strip geometry).
+
+   ⚠️ BREAKPOINT: every layout rule here is gated on max-width:640px — the PHONE
+   breakpoint, deliberately NARROWER than the ≤860px responsive-shell breakpoint
+   used everywhere above. The 820×1180 tablet contract viewport sits between the
+   two and must keep the existing chrome pixel-for-pixel. lib/useMediaQuery.ts
+   (PHONE_QUERY) mirrors this number for the JS half — change both together.
+
+   Scope: `.app:not(.shell-app)` — the installable app draws its own native strip
+   and its own Drawings sheet, so the shell WebView never sees any of this.
+   Kept at the very END of the cascade so source order backs up specificity.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width:640px){
+  /* R2.2 — the top toolbar row (TF pills + edit pencil + chart-type + Indicators)
+     is replaced by the strip's wheels and its ••• hub. Phone only. */
+  .app:not(.shell-app) .chart-tabs{display:none}
+  /* R2.1 — the floating drawing dock and its favourites bar are gone from the phone
+     entirely; the strip's pencil raises the Drawings sheet instead. Beats the
+     `.chart-body>.ds-dock` phone-dock rule above on specificity AND source order. */
+  .app:not(.shell-app) .chart-body>.ds-dock,
+  .app:not(.shell-app) .ds-dock,
+  .app:not(.shell-app) .ds-favorites{display:none}
+  /* R2.3 — the strip is fixed chrome; the page ends above it. */
+  .app:not(.shell-app){padding-bottom:calc(51.7px + env(safe-area-inset-bottom,0px))}
+  /* …and it persists in the expanded-chart mode, which is why the fixed workspace
+     stops short of it rather than painting underneath. */
+  .app.fs:not(.shell-app) .workspace{inset:0 0 calc(51.7px + env(safe-area-inset-bottom,0px)) 0}
+  /* R2.3 fold rule — the chart takes the whole band the toolbar row used to occupy
+     (it now starts 48px higher) and the height is tuned so that at rest the fold —
+     the strip's top edge — lands JUST UNDER the GOLDEN ORACLE / RESEARCH DESK row
+     with TREND below it. At the 390x844 contract viewport with the default two
+     sub-panes that is 60.4svh; the per-sub-pane step is gentler than the ≤860px
+     rule's so a four-oscillator workspace still clears the cards. The svh twin of
+     the vh declaration follows the same mid-scroll-resize reasoning as the rule it
+     supersedes. Guarded by mobile-chart-chrome.spec.ts. */
+  .app:not(.shell-app) .chart-body{height:min(calc(46.4vh + var(--subpanes,0)*7vh), 80vh)}
+  .app:not(.shell-app) .chart-body{height:min(calc(46.4svh + var(--subpanes,0)*7svh), 80svh)}
+}
+
+/* ── the strip itself (§2.18 / C25 of the native spec) ──────────────────────────
+   [ FIXED: symbol wheel · interval wheel ] [ 16px fade ] [ SCROLLABLE cluster ].
+   z-index clears the expanded chart workspace (80) and the chart's own overlays. */
+.mrs{
+  position:fixed;left:0;right:0;bottom:0;z-index:90;box-sizing:border-box;
+  display:flex;align-items:flex-start;
+  height:calc(51.7px + env(safe-area-inset-bottom,0px));
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  background:#000;border-top:1px solid #4a4a4a;
+  -webkit-user-select:none;user-select:none
+}
+/* Anchored: nothing the cluster does may move the labels. */
+.mrs-wheels{display:flex;flex:none;padding-left:13.3px}
+.mrs-cluster{
+  position:relative;flex:1;min-width:0;height:51.7px;overflow-x:auto;overflow-y:hidden;
+  scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x;
+  -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 16px);
+  mask-image:linear-gradient(90deg,transparent 0,#000 16px)
+}
+.mrs-cluster::-webkit-scrollbar{display:none}
+/* min-width:100% + flex-end parks the cluster at the trailing edge when it fits
+   (tablet-sized phones in landscape) and lets it overflow — and scroll — when it
+   does not. 14px clears the fade so the pencil reads at full ink at rest. */
+.mrs-cluster-row{display:flex;align-items:center;gap:14px;min-width:100%;width:max-content;height:51.7px;padding:0 12px 0 14px;justify-content:flex-end}
+.mrs-ic{
+  position:relative;display:grid;place-items:center;width:28px;height:28px;min-width:28px;flex:none;
+  padding:0;border:0;border-radius:8px;background:transparent;color:#fff;cursor:pointer
+}
+/* §1.8 touch target without inflating the drawn 28px glyph box (the .lg-ic trap). */
+.mrs-ic::before{content:"";position:absolute;inset:-8px -3px;border-radius:12px}
+.mrs-ic svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.mrs-ic.on{background:#2a2a2a}
+.mrs-ic:disabled{opacity:.32;cursor:default}
+.mrs-ic:active:not(:disabled){opacity:.45;transform:scale(.9)}
+.mrs-ic:focus-visible,.mrs-wheel:focus-visible{outline:2px solid var(--brand-2);outline-offset:2px}
+.mrs-dot{position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:#f23645}
+.mrs-div{width:1px;height:24px;flex:none;background:#3d3d3d}
+.mrs-toast{position:absolute;right:12px;bottom:calc(100% + 8px);padding:6px 10px;border-radius:8px;background:rgba(20,22,28,.94);border:1px solid var(--pop-edge);color:var(--text);font:600 11px/1 var(--font-ui)}
+
+/* ── the value wheels (WheelMetrics: 23px pitch, ghosts at 34%, full size) ──
+   The rows are clipped by the strip exactly as TV crops its own ghost chambers
+   against the bar's rules — the cut is the reference, not an artefact to hide. */
+.mrs-wheel{position:relative;height:51.7px;overflow:hidden;flex:none;touch-action:none;cursor:grab}
+.mrs-wheel-track{position:absolute;left:0;right:0;top:50%;transition:transform 180ms var(--ease-out)}
+.mrs-wheel.is-dragging .mrs-wheel-track{transition:none}
+.mrs-wheel-item{
+  position:absolute;left:0;right:0;height:23px;
+  font:700 17px/23px var(--font-num);font-variant-numeric:tabular-nums;color:#fff;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:6px
+}
+
+/* ── Drawings sheet (IMG_2366-68) ─────────────────────────────────────────────
+   Rides MobileSheet for the grabber, focus containment, scrim and drag-dismiss;
+   the anatomy below the title is this surface's own. */
+.msheet.mdraw-sheet{max-height:92dvh;background:var(--pop-bg-modal)}
+/* TV's 34pt title sits left; the circled close is positioned against the SHEET (which is
+   position:fixed, so it is the containing block) rather than living inside the title element —
+   that keeps the dialog's accessible name to the word "Drawings". */
+.mdraw-sheet .msheet-title{padding:0 60px 8px 16px;font:800 34px/1.1 var(--font-ui);letter-spacing:-.02em;color:var(--text)}
+.mdraw-close{
+  position:absolute;top:16px;right:16px;z-index:3;display:grid;place-items:center;width:34px;height:34px;
+  border:0;border-radius:50%;background:rgba(255,255,255,.09);color:var(--text-2);cursor:pointer
+}
+.mdraw-close::before{content:"";position:absolute;inset:-5px;border-radius:50%}
+.mdraw-close svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round}
+.mdraw-top{position:sticky;top:0;z-index:2;padding-top:4px;background:var(--pop-bg-modal)}
+.mdraw-search{display:flex;align-items:center;gap:9px;height:44px;margin:0 16px;padding:0 13px;border-radius:12px;background:rgba(255,255,255,.07)}
+.mdraw-search svg{width:19px;height:19px;flex:none;fill:none;stroke:var(--text-dim);stroke-width:1.8;stroke-linecap:round}
+.mdraw-search input{flex:1;min-width:0;height:100%;border:0;background:transparent;color:var(--text);font:500 16px/1 var(--font-ui);outline:none}
+.mdraw-search input::placeholder{color:var(--text-dim)}
+.mdraw-cats{display:flex;gap:4px;padding:12px 16px 10px;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x}
+.mdraw-cats::-webkit-scrollbar{display:none}
+.mdraw-cat{
+  height:40px;padding:0 15px;flex:none;border:0;border-radius:11px;background:transparent;
+  color:var(--text-dim);font:700 16px/1 var(--font-ui);white-space:nowrap;cursor:pointer
+}
+.mdraw-cat.on{background:rgba(255,255,255,.11);color:var(--text)}
+.mdraw-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:2px 16px 20px}
+.mdraw-tile{
+  display:flex;min-height:100px;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  padding:12px 6px;border:1px solid transparent;border-radius:12px;background:rgba(255,255,255,.055);cursor:pointer
+}
+.mdraw-tile:active{background:rgba(255,255,255,.1)}
+.mdraw-tile.on{border-color:color-mix(in srgb,var(--brand-2) 42%,transparent);background:color-mix(in srgb,var(--brand) 16%,transparent)}
+.mdraw-tile-ic{width:44px;height:44px;flex:none;fill:none;stroke:var(--text);stroke-width:1.1;stroke-linecap:round;stroke-linejoin:round}
+.mdraw-tile span{color:var(--text-2);font:600 12px/1.25 var(--font-ui);text-align:center}
+.mdraw-empty{padding:26px 16px;color:var(--muted);font:500 13px/1.4 var(--font-ui);text-align:center}
+
+/* ── Analysis hub (native spec §3.5) — 60% detent that DRAGS to full ──────────── */
+.mhub-scrim{position:fixed;inset:0;z-index:220;background:var(--pop-scrim);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);animation:msheet-scrim-in 200ms ease forwards}
+.mhub{
+  position:fixed;left:0;right:0;bottom:0;z-index:221;display:flex;flex-direction:column;box-sizing:border-box;
+  border-top:1px solid var(--pop-edge);border-radius:var(--pop-r) var(--pop-r) 0 0;
+  background:var(--pop-bg-modal);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);
+  box-shadow:var(--pop-shadow);padding-bottom:env(safe-area-inset-bottom);
+  animation:msheet-up 260ms cubic-bezier(.32,.72,.24,1) forwards;
+  transition:height 240ms cubic-bezier(.32,.72,.24,1);touch-action:none
+}
+.mhub.is-dragging{transition:none}
+/* The dialog container is focused programmatically on present — that is a keyboard anchor, not a
+   focus ring the user asked for. Its controls keep their own :focus-visible treatment. */
+.mhub:focus{outline:none}
+.mhub-grip{display:flex;justify-content:center;padding:10px 0 4px;flex:none}
+.mhub-grip span{width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,.22)}
+.mhub-hd{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 16px 10px;flex:none}
+.mhub-hd b{font:800 22px/1.15 var(--font-ui);color:var(--text)}
+.mhub-close{position:relative;display:grid;place-items:center;width:34px;height:34px;flex:none;border:0;border-radius:50%;background:rgba(255,255,255,.09);color:var(--text-2);cursor:pointer}
+.mhub-close::before{content:"";position:absolute;inset:-5px;border-radius:50%}
+.mhub-close svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round}
+.mhub-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-bottom:16px;touch-action:pan-y}
+.mhub-ghd{padding:10px 16px 6px;color:var(--text-dim);font:700 10px/1 var(--font-ui);letter-spacing:.09em;text-transform:uppercase}
+.mhub-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:0 16px}
+.mhub-tile{
+  position:relative;display:flex;min-height:84px;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  padding:10px 4px;border:0;border-radius:12px;background:rgba(255,255,255,.055);color:var(--text-2);cursor:pointer
+}
+.mhub-tile:active{background:rgba(255,255,255,.1)}
+.mhub-tile svg{width:24px;height:24px;fill:none;stroke:var(--text);stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.mhub-tile span{font:600 11.5px/1.2 var(--font-ui);text-align:center}
+/* Ghosts are structure without a lie about what the alpha ships. */
+.mhub-tile.ghost{cursor:default;opacity:.42;padding-bottom:18px}
+.mhub-tile.ghost:active{background:rgba(255,255,255,.055)}
+.mhub-ghost-tag{position:absolute;left:0;right:0;bottom:5px;color:var(--text-dim);font:600 8px/1 var(--font-ui);font-style:normal;text-align:center}
+
+@media (prefers-reduced-motion:reduce){
+  .mrs-wheel-track,.mhub,.mhub-scrim,.msheet.mdraw-sheet{transition:none!important;animation:none!important}
+}

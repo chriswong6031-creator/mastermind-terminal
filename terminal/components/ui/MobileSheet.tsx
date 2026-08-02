@@ -9,6 +9,8 @@ export interface MobileSheetProps {
   ariaLabel?: string;
   children: React.ReactNode;
   maxHeight?: string;
+  /** Extra class on the sheet root, for surfaces with their own anatomy (e.g. the Drawings sheet). */
+  className?: string;
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -64,6 +66,7 @@ export default function MobileSheet({
   ariaLabel,
   children,
   maxHeight,
+  className,
 }: MobileSheetProps) {
   // Track mount so createPortal only fires client-side.
   const [mounted, setMounted] = useState(false);
@@ -312,7 +315,7 @@ export default function MobileSheet({
       {open && (
         <div
           ref={sheetRef}
-          className="msheet"
+          className={className ? `msheet ${className}` : "msheet"}
           style={{
             ...(maxHeight ? { maxHeight } : {}),
             ...(reduceMotion ? { animation: "none" } : {}),

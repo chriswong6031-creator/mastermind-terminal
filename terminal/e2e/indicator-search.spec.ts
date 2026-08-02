@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { isPhoneViewport, openIndicatorLibrary } from "./phoneChrome";
 
 async function armTerminalVisualReady(page: Page) {
   await page.addInitScript(() => {
@@ -25,9 +26,9 @@ test("Indicator Library search is ranked, responsive, and keyboard complete", as
   await expect(page.locator(".chart-wrap canvas").first()).toBeVisible();
   await waitForTerminalVisualReady(page);
 
+  // The phone reaches the library through the roller strip's hub, not a toolbar button (R2.2).
   const trigger = page.locator(".indicator-library-trigger");
-  await trigger.scrollIntoViewIfNeeded();
-  await trigger.click();
+  await openIndicatorLibrary(page);
 
   const modal = page.locator(".imodal-library");
   const searchShell = modal.locator(".im-search-shell");
@@ -165,7 +166,9 @@ test("Indicator Library search is ranked, responsive, and keyboard complete", as
   await expect(modal).toBeVisible({ timeout: 10_000 });
   await page.keyboard.press("Escape");
   await expect(modal).toBeHidden();
-  await expect(trigger).toBeFocused();
+  // On the phone the invoking control is a hub tile that dismissed itself with the hub, so there
+  // is no element left to restore focus to; the toolbar button is the invoker everywhere else.
+  if (!isPhoneViewport(page)) await expect(trigger).toBeFocused();
 });
 
 test("Indicator Library honors reduced motion without losing focus treatment", async ({ page }, testInfo) => {
