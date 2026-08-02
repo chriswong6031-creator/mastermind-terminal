@@ -488,11 +488,22 @@ waves follow M1 ops discipline.
 > shipped in full** — flip estimator repaired end to end (live + 450 archived snapshots) AND the
 > §4.2 `profile` block now publishes (macro #4219) with the Terminal ProfileCard. **R1.4 shipped**
 > (percentile-clamped strike×expiry heat, MatrixHeatCard). **§6 producer shipped** (macro #4199).
-> **NOT DONE:** R1.2 (pressure fields), R1.3 (full re-pricing scenario grid), all of R2 (msc/v1
-> payload, U-CHAIN publisher, vol grammar depth, the Level Report Card — still the flagship gap,
-> pin calibration), R3 (chart overlay — highest-utility integration), R4/R5/R6/R7, Prophet §7,
-> alerts §8. Sibling defect repaired late: `options_matrix._compute_levels` carried a FIFTH copy
-> of the cumulative-flip estimator (live at 594.28 vs SPY 741.69) — retired in macro #4219.
+> **NOT DONE:** R1.2 (pressure fields), R1.3 (full re-pricing scenario grid), R2.1 (msc/v1
+> payload), R2.2 (U-CHAIN publisher), R2.5 (pin calibration), R3 (chart overlay — highest-utility
+> integration), R4/R5/R6/R7, Prophet §7. Sibling defect repaired late: `options_matrix.
+> _compute_levels` carried a FIFTH copy of the cumulative-flip estimator (live at 594.28 vs SPY
+> 741.69) — retired in macro #4219.
+>
+> **LATER THE SAME EVENING:** **§8 alerts SHIPPED** (terminal #318: `opt_wall_migration` /
+> `opt_sign_fragile` / `opt_opex_concentration`; flip-cross already existed as `opt_gamma_flip`;
+> deployed, VPS cron live). **R2.3 vol grammar SHIPPED** (terminal #314: VRP regime with
+> trend+velocity, skew read, term slopes). **R2.4 v1 SHIPPED END TO END** (macro #4229 publisher →
+> R2 `options_hub/level_grades/`, terminal #321 GradesCard): the LIVE Level Report Card — and its
+> first run is a research result: **across 15,490 graded single-name boards, NO role beats the
+> coin-flip null under the close-side hold test** (call wall 49.0% [47.1–50.9] n=2,599; walls-
+> containment 67.6%, EM-band containment 93.3%). Memory: `level-hold-rates-no-edge`. R2.4b owns
+> the stronger nulls + intraday-containment variants + the INDEX grading lane (SPY/SPX/QQQ have
+> zero graded boards today — the card shows the labelled universe aggregate for them).
 
 ### R0 — Wave 1: the Positioning panel *(terminal only, zero data-plane dependency)* — **THIS SESSION**
 
