@@ -159,6 +159,74 @@ describe("company theme exposure R2 verification", () => {
     install((url) => new Response(JSON.stringify(url.endsWith("companies/NVDA.json") ? { ...body, company: { ticker: "AAPL" } } : root)));
     expect(await resolveCompanyThemeExposureFromR2("NVDA", "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev")).toMatchObject({ ok: false, error: { code: "invalid_payload" } });
   });
+
+  it("binds the company object to manifest and current Company Intelligence lineage", async () => {
+    const body = context();
+    body.company_intelligence.generation_id = "7".repeat(24);
+    const root = manifest(body);
+    install((url) => new Response(JSON.stringify(url.endsWith("companies/NVDA.json") ? body : root)));
+    await expect(resolveCompanyThemeExposureFromR2(
+      "NVDA",
+      "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev",
+      { expectedCompanyIntelligence: { generation_id: companyGeneration, latest_event_id: "NVDA-2026Q1" } },
+    )).resolves.toMatchObject({ ok: false, error: { code: "invalid_payload" } });
+
+    __resetCompanyThemeExposureCacheForTests();
+    calls = [];
+    const aligned = context();
+    const alignedRoot = manifest(aligned);
+    install((url) => new Response(JSON.stringify(url.endsWith("companies/NVDA.json") ? aligned : alignedRoot)));
+    await expect(resolveCompanyThemeExposureFromR2(
+      "NVDA",
+      "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev",
+      { expectedCompanyIntelligence: { generation_id: companyGeneration, latest_event_id: "NVDA-2025Q4" } },
+    )).resolves.toMatchObject({ ok: false, error: { code: "invalid_payload" } });
+  });
+
+  it("requires matching generation timestamp and theme-state receipt", async () => {
+    const body = context();
+    body.generated_at = "2026-08-01T12:01:00Z";
+    const root = manifest(body);
+    root.generated_at = "2026-08-01T12:00:00Z";
+    install((url) => new Response(JSON.stringify(url.endsWith("companies/NVDA.json") ? body : root)));
+    await expect(resolveCompanyThemeExposureFromR2("NVDA", "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev"))
+      .resolves.toMatchObject({ ok: false, error: { code: "invalid_payload" } });
+
+    __resetCompanyThemeExposureCacheForTests();
+    calls = [];
+    const receiptMismatch = context();
+    receiptMismatch.theme_state.sha256 = "2".repeat(64);
+    const receiptRoot = manifest(receiptMismatch);
+    install((url) => new Response(JSON.stringify(url.endsWith("companies/NVDA.json") ? receiptMismatch : receiptRoot)));
+    await expect(resolveCompanyThemeExposureFromR2("NVDA", "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev"))
+      .resolves.toMatchObject({ ok: false, error: { code: "invalid_payload" } });
+  });
+
+  it("serves a stale fallback only while its Company Intelligence lineage still matches", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const body = context();
+    const root = manifest(body);
+    install((url) => new Response(JSON.stringify(url.endsWith("companies/NVDA.json") ? body : root)));
+    await expect(resolveCompanyThemeExposureFromR2(
+      "NVDA",
+      "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev",
+      { expectedCompanyIntelligence: { generation_id: companyGeneration, latest_event_id: "NVDA-2026Q1" } },
+    )).resolves.toMatchObject({ ok: true, state: "ready" });
+
+    now += 31_000;
+    install(() => new Response("upstream down", { status: 503 }));
+    await expect(resolveCompanyThemeExposureFromR2(
+      "NVDA",
+      "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev",
+      { expectedCompanyIntelligence: { generation_id: companyGeneration, latest_event_id: "NVDA-2026Q1" } },
+    )).resolves.toMatchObject({ ok: true, state: "stale" });
+    await expect(resolveCompanyThemeExposureFromR2(
+      "NVDA",
+      "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev",
+      { expectedCompanyIntelligence: { generation_id: companyGeneration, latest_event_id: "NVDA-2025Q4" } },
+    )).resolves.toMatchObject({ ok: false, error: { code: "upstream_unavailable" } });
+  });
 });
 
 describe("company theme exposure browser client", () => {

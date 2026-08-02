@@ -102,6 +102,12 @@ export type CompanyThemeExposureResult =
   | { ok: true; state: CompanyThemeExposureState; context: CompanyThemeExposure }
   | { ok: false; state: "error"; error: { code: CompanyThemeExposureErrorCode; message: string; retryable: boolean } };
 
+export interface CompanyThemeExposureLineageExpectation {
+  /** Current, independently verified Company Intelligence identity. */
+  generation_id: string;
+  latest_event_id: string | null;
+}
+
 type JsonObject = Record<string, unknown>;
 type FetchedJson = { kind: "ok"; raw: unknown; bytes: Uint8Array } | { kind: "missing" } | { kind: "failure" };
 type ManifestSnapshot = { manifest: CompanyThemeExposureManifest; at: number };
@@ -360,6 +366,25 @@ function ready(context: CompanyThemeExposure, state: CompanyThemeExposureState =
   return { ok: true, state, context };
 }
 
+function sameThemeState(left: CompanyThemeStateReceipt, right: CompanyThemeStateReceipt): boolean {
+  return left.status === right.status && left.as_of === right.as_of && left.sha256 === right.sha256;
+}
+
+function matchesLineage(
+  context: CompanyThemeExposure,
+  manifest: CompanyThemeExposureManifest,
+  expected?: CompanyThemeExposureLineageExpectation,
+): boolean {
+  return context.generation_id === manifest.generation_id
+    && context.generated_at === manifest.generated_at
+    && context.company_intelligence.generation_id === manifest.source.company_intelligence.generation_id
+    && sameThemeState(context.theme_state, manifest.source.theme_state)
+    && (!expected || (
+      context.company_intelligence.generation_id === expected.generation_id
+      && context.company_intelligence.latest_event_id === expected.latest_event_id
+    ));
+}
+
 function validR2Base(base: string): string | null {
   try {
     const parsed = new URL(base);
@@ -489,35 +514,45 @@ async function loadVerifiedManifest(base: string, signal?: AbortSignal): Promise
 export async function resolveCompanyThemeExposureFromR2(
   symbol: string,
   base: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; expectedCompanyIntelligence?: CompanyThemeExposureLineageExpectation } = {},
 ): Promise<CompanyThemeExposureResult> {
   const ticker = normalizeCompanyIntelligenceSymbol(symbol);
   if (!ticker) return error("invalid_symbol", "Invalid ticker", false);
+  const expected = options.expectedCompanyIntelligence;
+  if (expected && (!validGeneration(expected.generation_id)
+    || (expected.latest_event_id !== null && !string(expected.latest_event_id, 128)))) {
+    return error("invalid_payload", "Current Company Intelligence identity is invalid", true);
+  }
   const safeBase = validR2Base(base);
   if (!safeBase) return error("upstream_unavailable", "Company theme context is unavailable", true);
   const manifestRead = await loadVerifiedManifest(safeBase, options.signal);
   if (manifestRead === "invalid") return error("invalid_payload", "Company theme context publication is invalid", true);
   if (!manifestRead) return error("upstream_unavailable", "Company theme context is unavailable", true);
   const { manifest, stale } = manifestRead;
+  if (expected && manifest.source.company_intelligence.generation_id !== expected.generation_id) {
+    return error("invalid_payload", "Company theme context is not aligned with current Company Intelligence", true);
+  }
   const receipt = manifest.files[`companies/${ticker}.json`];
   const cached = contextCache.get(`${manifest.generation_id}:${ticker}`);
   const lastGood = lastGoodByTicker.get(ticker);
-  if (stale) return cached ? ready(cached.context, "stale") : lastGood ? ready(lastGood.context, "stale")
+  const cachedContext = cached && matchesLineage(cached.context, manifest, expected) ? cached.context : null;
+  const lastGoodContext = lastGood && matchesLineage(lastGood.context, manifest, expected) ? lastGood.context : null;
+  if (stale) return cachedContext ? ready(cachedContext, "stale") : lastGoodContext ? ready(lastGoodContext, "stale")
     : error("upstream_unavailable", "Company theme context is temporarily unavailable", true);
   if (!receipt) return error("not_found", "Company theme context is not covered", false);
   const now = Date.now();
-  if (cached && now - cached.at < CONTEXT_TTL_MS) return ready(cached.context);
+  if (cachedContext && cached && now - cached.at < CONTEXT_TTL_MS) return ready(cachedContext);
   const url = `${safeBase}/company_theme_exposure/generations/${manifest.generation_id}/companies/${ticker}.json`;
   const fetched = await fetchJson(url, options.signal);
-  if (fetched.kind === "missing") return lastGood ? ready(lastGood.context, "stale")
+  if (fetched.kind === "missing") return lastGoodContext ? ready(lastGoodContext, "stale")
     : error("invalid_payload", "Company theme context publication is incomplete", true);
-  if (fetched.kind !== "ok") return cached ? ready(cached.context, "stale") : lastGood ? ready(lastGood.context, "stale")
+  if (fetched.kind !== "ok") return cachedContext ? ready(cachedContext, "stale") : lastGoodContext ? ready(lastGoodContext, "stale")
     : error("upstream_unavailable", "Company theme context is temporarily unavailable", true);
   const hash = await sha256Hex(fetched.bytes);
-  if (fetched.bytes.byteLength !== receipt.bytes || hash !== receipt.sha256) return cached ? ready(cached.context, "stale") : lastGood ? ready(lastGood.context, "stale")
+  if (fetched.bytes.byteLength !== receipt.bytes || hash !== receipt.sha256) return cachedContext ? ready(cachedContext, "stale") : lastGoodContext ? ready(lastGoodContext, "stale")
     : error("invalid_payload", "Company theme context failed its manifest receipt", true);
   const context = normalizeCompanyThemeExposure(fetched.raw, ticker, manifest.generation_id);
-  if (!context) return cached ? ready(cached.context, "stale") : lastGood ? ready(lastGood.context, "stale")
+  if (!context || !matchesLineage(context, manifest, expected)) return cachedContext ? ready(cachedContext, "stale") : lastGoodContext ? ready(lastGoodContext, "stale")
     : error("invalid_payload", "Company theme context payload is invalid", true);
   remember(`${manifest.generation_id}:${ticker}`, ticker, context, now);
   return ready(context);

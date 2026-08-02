@@ -456,13 +456,15 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
               <CompanyThemeContextCard
                 ticker={ticker}
                 selectedEventId={event.event_id}
+                companyIntelligenceGenerationId={activeContext.generation_id}
+                latestEventId={activeContext.latest_event_id}
                 selectedEventLabel={eventPeriod(event)}
-                onUseLatest={() => {
-                  const latest = events[0];
+                onUseLatest={activeContext.latest_event_id ? () => {
+                  const latest = events.find((candidate) => candidate.event_id === activeContext.latest_event_id);
                   if (!latest) return;
                   setEventState({ sym: ticker, id: latest.event_id });
                   setEvidence(null);
-                }}
+                } : undefined}
               />
 
               <section className="ci-material">

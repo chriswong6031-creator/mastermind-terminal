@@ -13,6 +13,9 @@ import {
 export interface CompanyThemeContextCardProps {
   ticker: string;
   selectedEventId: string;
+  /** Identity from the already verified Company Intelligence workspace. */
+  companyIntelligenceGenerationId: string;
+  latestEventId: string | null;
   /** The event period already rendered in the Company Intelligence selector. */
   selectedEventLabel: string;
   onUseLatest?: () => void;
@@ -42,6 +45,20 @@ function stateLabel(state: "ready" | "partial" | "stale", zh: boolean): string {
   return pick(zh, "Partial", "部分覆盖");
 }
 
+function themeStateLabel(state: CompanyThemeExposure["theme_state"]["status"], zh: boolean): string {
+  if (state === "fresh") return pick(zh, "Fresh", "新鲜");
+  if (state === "stale") return pick(zh, "Stale", "已过期");
+  if (state === "missing") return pick(zh, "Missing", "缺失");
+  return pick(zh, "Invalid", "无效");
+}
+
+function errorCopy(code: "invalid_symbol" | "not_found" | "unauthorized" | "upstream_unavailable" | "invalid_payload", zh: boolean): string {
+  if (code === "unauthorized") return pick(zh, "Sign in to use verified company theme context.", "登录后可使用已验证的公司主题背景。");
+  if (code === "invalid_payload") return pick(zh, "The published theme context did not pass its lineage checks.", "已发布的主题背景未通过来源链验证。");
+  if (code === "invalid_symbol") return pick(zh, "This ticker is not valid for theme context.", "该代码无法用于主题背景。");
+  return pick(zh, "The verified theme context could not be reached. Try again shortly.", "暂时无法获取已验证的主题背景，请稍后重试。");
+}
+
 function effectiveState(result: CompanyThemeExposureResult): "ready" | "partial" | "stale" {
   if (!result.ok) return "partial";
   return result.state === "stale" ? "stale" : result.context.status;
@@ -67,7 +84,8 @@ function EventBoundary({ label, onUseLatest }: { label: string; onUseLatest?: ()
 }
 
 function LoadingCard() {
-  return <section className="ci-theme-card ci-theme-loading" aria-busy="true" aria-label="Loading verified company theme context"><span className="fin-skel" /><span className="fin-skel" /><span className="fin-skel" /></section>;
+  const { lang } = useLang();
+  return <section className="ci-theme-card ci-theme-loading" aria-busy="true" aria-label={pick(lang === "zh", "Loading verified company theme context", "正在加载已验证的公司主题背景")}><span className="fin-skel" /><span className="fin-skel" /><span className="fin-skel" /></section>;
 }
 
 function ContextCard({ context, state }: { context: CompanyThemeExposure; state: "ready" | "partial" | "stale" }) {
@@ -123,7 +141,7 @@ function ContextCard({ context, state }: { context: CompanyThemeExposure; state:
       {(context.warnings.length > 0 || context.coverage.unmapped_basket_count > 0) && <div className="ci-theme-warning" role="status"><span aria-hidden>!</span><p>{context.warnings.map((item) => warning(item, zh)).join(" ") || pick(zh, "Some active curated baskets are excluded from the crosswalk; no label is inferred.", "部分活跃策展篮子被排除在映射之外；不会推断标签。")}</p></div>}
 
       <div className="ci-theme-footer">
-        <span>{pick(zh, "Theme state", "主题状态")} <b>{context.theme_state.status}</b>{context.theme_state.as_of ? <time className="num" dateTime={context.theme_state.as_of}>{context.theme_state.as_of}</time> : null}</span>
+        <span>{pick(zh, "Theme state", "主题状态")} <b>{themeStateLabel(context.theme_state.status, zh)}</b>{context.theme_state.as_of ? <time className="num" dateTime={context.theme_state.as_of}>{context.theme_state.as_of}</time> : null}</span>
         <button className="ci-theme-receipts" aria-expanded={receiptsOpen} aria-controls="ci-theme-receipts" onClick={() => setReceiptsOpen((open) => !open)}>{pick(zh, receiptsOpen ? "Hide receipts" : "View receipts", receiptsOpen ? "隐藏凭证" : "查看凭证")}</button>
       </div>
 
@@ -141,22 +159,31 @@ function ContextCard({ context, state }: { context: CompanyThemeExposure; state:
   );
 }
 
-export default function CompanyThemeContextCard({ ticker, selectedEventId, selectedEventLabel, onUseLatest }: CompanyThemeContextCardProps) {
+export default function CompanyThemeContextCard({
+  ticker,
+  selectedEventId,
+  companyIntelligenceGenerationId,
+  latestEventId,
+  selectedEventLabel,
+  onUseLatest,
+}: CompanyThemeContextCardProps) {
   const [loaded, setLoaded] = useState<{ key: string; result: CompanyThemeExposureResult } | null>(null);
   const [nonce, setNonce] = useState(0);
-  const requestKey = `${ticker}:${nonce}`;
+  const selectedHistorical = !!latestEventId && latestEventId !== selectedEventId;
+  const requestKey = `${ticker}:${companyIntelligenceGenerationId}:${latestEventId ?? "none"}:${nonce}`;
 
   useEffect(() => {
+    // Current-vs-historical is owned by the already loaded Company Intelligence
+    // record. A missing or lagging sidecar must never decide that boundary.
+    if (selectedHistorical) return;
     const controller = new AbortController();
     getCompanyThemeExposure(ticker, { signal: controller.signal, retryNonce: nonce })
       .then((result) => { if (!controller.signal.aborted) setLoaded({ key: requestKey, result }); })
       .catch(() => { if (!controller.signal.aborted) setLoaded({ key: requestKey, result: { ok: false, state: "error", error: { code: "upstream_unavailable", message: "Company theme context request failed", retryable: true } } }); });
     return () => controller.abort();
-  }, [nonce, requestKey, ticker]);
+  }, [nonce, requestKey, selectedHistorical, ticker]);
 
   const result = loaded?.key === requestKey ? loaded.result : null;
-  const latestEventId = result?.ok ? result.context.company_intelligence.latest_event_id : null;
-  const selectedHistorical = !!latestEventId && latestEventId !== selectedEventId;
   const state = useMemo(() => result ? effectiveState(result) : "partial", [result]);
   const { lang } = useLang();
   const zh = lang === "zh";
@@ -165,7 +192,11 @@ export default function CompanyThemeContextCard({ ticker, selectedEventId, selec
   if (!result) return <LoadingCard />;
   if (!result.ok) {
     if (result.error.code === "not_found") return null;
-    return <section className="ci-theme-card ci-theme-unavailable" role="status"><div><span className="ci-theme-kicker">{pick(zh, "CURRENT THEME CONTEXT", "当前主题背景")}</span><h3>{pick(zh, "Verified theme context unavailable", "已验证主题背景暂不可用")}</h3><p>{result.error.message}</p></div>{result.error.retryable && <button className="btn btn-ghost" onClick={() => setNonce(Date.now())}>{pick(zh, "Retry", "重试")}</button>}</section>;
+    return <section className="ci-theme-card ci-theme-unavailable" role="status"><div><span className="ci-theme-kicker">{pick(zh, "CURRENT THEME CONTEXT", "当前主题背景")}</span><h3>{pick(zh, "Verified theme context unavailable", "已验证主题背景暂不可用")}</h3><p>{errorCopy(result.error.code, zh)}</p></div>{result.error.retryable && <button className="btn btn-ghost" onClick={() => setNonce(Date.now())}>{pick(zh, "Retry", "重试")}</button>}</section>;
+  }
+  if (result.context.company_intelligence.generation_id !== companyIntelligenceGenerationId
+    || result.context.company_intelligence.latest_event_id !== latestEventId) {
+    return <section className="ci-theme-card ci-theme-unavailable" role="status"><div><span className="ci-theme-kicker">{pick(zh, "CURRENT THEME CONTEXT", "当前主题背景")}</span><h3>{pick(zh, "Theme context is refreshing", "主题背景正在刷新")}</h3><p>{pick(zh, "The sidecar is not pinned to this Company Intelligence generation, so it is quarantined until publication catches up.", "主题侧车尚未锚定当前公司情报版本，因此在发布追平前不会展示。")}</p></div><button className="btn btn-ghost" onClick={() => setNonce(Date.now())}>{pick(zh, "Retry", "重试")}</button></section>;
   }
   return <ContextCard context={result.context} state={state} />;
 }
