@@ -77,6 +77,11 @@ async function assertCausalProofSemantics(visual: Locator, id: string) {
 }
 
 test("module switches and the 31-module Guide Center are accessible and responsive", async ({ page }, testInfo) => {
+  // ~109 actions across the library, the Guide Center and the settings sheet. The CI trace for
+  // this test measured 30.43s of work with every assertion PASSING — it was failing purely on
+  // the 30s default budget, with no headroom for a loaded shared dev server (the suite is
+  // fullyParallel against one Next server). The work is legitimate, so widen the budget.
+  test.slow();
   const { library } = await openIndicatorLibrary(page);
 
   await library.locator(".im-nav-item").filter({ hasText: "Trend Waves" }).click();
@@ -277,25 +282,27 @@ test("a locked search result remains keyboard reachable through its guide action
   await expect(guide.getByRole("heading", { level: 1, name: "Trend Engine" })).toBeVisible();
 });
 
-test("Structure profiles expose the exact Free, Essential, and Pro access matrix", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "The entitlement gate is shared by every viewport.");
+const STRUCTURE_PROFILES = [
+  "Structure Focus",
+  "Structure Workflow",
+  "Complete Structure Research",
+] as const;
 
-  const profiles = [
-    "Structure Focus",
-    "Structure Workflow",
-    "Complete Structure Research",
-  ] as const;
-  // The `insider` row is the pre-rename name for `essential` and is asserted to unlock the
-  // IDENTICAL set. It is not a leftover: a cached page or an un-migrated /api/me payload can
-  // send it at any time, and this is the only place the alias is proved end-to-end through the
-  // real client boundary rather than against normalizeSubscriptionTier directly.
-  const matrix = [
-    { tier: "free", available: [] },
-    { tier: "essential", available: ["Structure Focus", "Structure Workflow"] },
-    { tier: "insider", available: ["Structure Focus", "Structure Workflow"] },
-    { tier: "pro", available: [...profiles] },
-  ] as const;
-  let currentTier: "free" | "essential" | "insider" | "pro" = "free";
+/**
+ * Drive the Structure preset gate at a given /api/me tier and assert exactly which profiles
+ * are addable.
+ *
+ * COST NOTE — each row costs a FULL Terminal navigation (page load, chart canvas paint,
+ * hydration flag, open the library, switch to Systems & Presets): ~8.5s measured, against
+ * a 30s per-test budget. The assertions themselves take ~0.15s. That ratio is why the rows
+ * are split across tests instead of looped in one: a four-row loop does not fit, and a
+ * three-row loop clears the budget by only ~4s.
+ */
+async function assertStructureAccessMatrix(
+  page: Page,
+  rows: ReadonlyArray<{ tier: string; available: readonly string[] }>,
+) {
+  let currentTier = rows[0].tier;
 
   // /api/me is the production client boundary for entitlement display. Varying only this
   // response exercises the real tier normalization and avoids test-only auth/session mutation.
@@ -307,24 +314,50 @@ test("Structure profiles expose the exact Free, Essential, and Pro access matrix
     });
   });
 
-  for (const row of matrix) {
+  for (const row of rows) {
     currentTier = row.tier;
     const { library } = await openIndicatorLibrary(page);
     await library.getByRole("button", { name: "Systems & Presets" }).click();
 
     const structure = library.locator(".ipreset-row").filter({ hasText: "Structure Core" });
     const available = new Set<string>(row.available);
-    for (const profileName of profiles) {
+    for (const profileName of STRUCTURE_PROFILES) {
       const profile = structure.locator("article").filter({ hasText: profileName });
       if (available.has(profileName)) {
-        await expect(profile.getByRole("button", { name: `Add: ${profileName}` })).toBeVisible();
+        await expect(profile.getByRole("button", { name: `Add: ${profileName}` }), `${row.tier}: ${profileName}`).toBeVisible();
         await expect(profile.getByRole("link", { name: `${profileName} — upgrade required` })).toHaveCount(0);
       } else {
-        await expect(profile.getByRole("link", { name: `${profileName} — upgrade required` })).toBeVisible();
+        await expect(profile.getByRole("link", { name: `${profileName} — upgrade required` }), `${row.tier}: ${profileName}`).toBeVisible();
         await expect(profile.getByRole("button", { name: `Add: ${profileName}` })).toHaveCount(0);
       }
     }
   }
+}
+
+test("Structure profiles expose the exact Free, Essential, and Pro access matrix", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "The entitlement gate is shared by every viewport.");
+  test.slow(); // three full Terminal navigations — see assertStructureAccessMatrix's cost note.
+
+  await assertStructureAccessMatrix(page, [
+    { tier: "free", available: [] },
+    { tier: "essential", available: ["Structure Focus", "Structure Workflow"] },
+    { tier: "pro", available: [...STRUCTURE_PROFILES] },
+  ]);
+});
+
+// Its own test rather than a fourth row above: the rows do not share state (each one reloads
+// the Terminal from scratch), so splitting costs nothing and buys each half its own budget.
+test("a legacy `insider` tier unlocks exactly what `essential` does", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "The entitlement gate is shared by every viewport.");
+
+  // `insider` is the pre-rename name for `essential`, accepted inbound permanently — a cached
+  // page or an un-migrated /api/me payload can send it at any time. This is the only place the
+  // alias is proved through the real client boundary rather than against
+  // normalizeSubscriptionTier directly, so the expectation is deliberately spelled out as the
+  // same set the `essential` row asserts above rather than shared with it by reference.
+  await assertStructureAccessMatrix(page, [
+    { tier: "insider", available: ["Structure Focus", "Structure Workflow"] },
+  ]);
 });
 
 test("indicator controls and guides honor reduced motion", async ({ page }, testInfo) => {
