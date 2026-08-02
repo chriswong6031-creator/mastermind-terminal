@@ -12,14 +12,16 @@ import {
 } from "../../lib/companyIntelligence";
 import CompanySourceManifest from "./CompanySourceManifest";
 import EvidenceRail, { type CompanyEvidenceSelection } from "./EvidenceRail";
+import TranscriptSearchWorkspace from "./TranscriptSearchWorkspace";
 import { openMastermindBrainForSymbol } from "../../lib/mastermindBrain";
+import type { TranscriptOpenTarget } from "../../lib/transcriptSearch";
 
 type Lens = "brief" | "transcript" | "history" | "topics" | "sources";
 
 export interface CompanyIntelligencePageProps {
   sym: string;
   name?: string | null;
-  onOpenTx: (id: string) => void;
+  onOpenTx: (target: string | TranscriptOpenTarget) => void;
   onEvidenceOpenChange?: (open: boolean) => void;
 }
 
@@ -192,6 +194,15 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
   const [evidenceOverlay, setEvidenceOverlay] = useState(false);
   const evidenceTriggerRef = useRef<HTMLElement | null>(null);
   const receiptsButtonRef = useRef<HTMLButtonElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+
+  const selectLens = useCallback((next: Lens) => {
+    setLens(next);
+    // The lens bar remains sticky while a reader is deep in a long transcript.
+    // Bring the newly-selected panel back beneath that bar so its first rows
+    // are never painted underneath the navigation surface.
+    window.requestAnimationFrame(() => workspaceRef.current?.scrollIntoView({ block: "start", behavior: "auto" }));
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -237,6 +248,14 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
   const result = loading ? null : load.result;
   const context = result?.ok ? result.context : null;
   const events = useMemo(() => context ? allEvents(context) : [], [context]);
+  const transcriptSearchEvents = useMemo(() => events.map((candidate) => ({
+    event_id: candidate.event_id,
+    label: eventPeriod(candidate),
+    call_date: candidate.call_date,
+    transcript_id: transcriptId(preferredSource(candidate, "transcript")),
+    fiscal_year: candidate.fiscal_year,
+    fiscal_quarter: candidate.fiscal_quarter,
+  })), [events]);
   const selectedId = eventState.sym === ticker ? eventState.id : "";
   const event = events.find((candidate) => candidate.event_id === selectedId) ?? events[0] ?? null;
 
@@ -399,7 +418,7 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
             aria-controls={`ci-panel-${item}`}
             tabIndex={lens === item ? 0 : -1}
             className={lens === item ? "on" : ""}
-            onClick={() => setLens(item)}
+            onClick={() => selectLens(item)}
             onKeyDown={(key) => {
               const current = LENSES.indexOf(item);
               const target = key.key === "ArrowRight" ? (current + 1) % LENSES.length
@@ -407,7 +426,7 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
                   : key.key === "Home" ? 0 : key.key === "End" ? LENSES.length - 1 : -1;
               if (target < 0) return;
               key.preventDefault();
-              setLens(LENSES[target]);
+              selectLens(LENSES[target]);
               document.getElementById(`ci-tab-${LENSES[target]}`)?.focus();
             }}
           >
@@ -417,7 +436,7 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
         ))}
       </nav>
 
-      <div className={`ci-workspace${evidenceOpen ? " evidence-open" : ""}`}>
+      <div ref={workspaceRef} className={`ci-workspace${evidenceOpen ? " evidence-open" : ""}`}>
         <main className="ci-canvas" id={`ci-panel-${lens}`} role="tabpanel" aria-labelledby={`ci-tab-${lens}`}>
           {lens === "brief" && (
             <div className="ci-brief">
@@ -488,6 +507,12 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
               ) : (
                 <EmptyState title={pick(zh, "Transcript body unavailable", "电话会正文不可用")} why={pick(zh, "Event metadata is retained, but this fiscal period does not resolve to a validated transcript document.", "事件元数据已保留，但该财季尚未关联到通过验证的电话会文档。")} />
               )}
+              <TranscriptSearchWorkspace
+                ticker={ticker}
+                events={transcriptSearchEvents}
+                initialEventId={event.event_id}
+                onOpenTranscript={onOpenTx}
+              />
               <CompanySourceManifest event={event} onOpenTranscript={onOpenTx} />
             </section>
           )}

@@ -41,6 +41,7 @@ import TranscriptDrawer from "./TranscriptDrawer";
 import TranscriptsPage from "./TranscriptsPage";
 import CompanyIntelligencePage from "./CompanyIntelligencePage";
 import { isTranscriptId } from "../../lib/transcripts";
+import type { TranscriptOpenTarget } from "../../lib/transcriptSearch";
 
 /** The twelve hostable pages share one fundamentals/research tab bar. The former deep-analysis
  *  ("mastermind") page was merged into the OracleDash Research-Desk surface. */
@@ -121,17 +122,17 @@ export default function MegaPane({
   const workspace = mode === "workspace";
   const { lang } = useLang();
   const zh = lang === "zh";
-  const [txId, setTxId] = useState<string | null>(null);
+  const [txTarget, setTxTarget] = useState<TranscriptOpenTarget | null>(null);
   const previousSym = useRef(sym);
   const initialTxHydration = useRef(false);
   const initialPaneSync = useRef(false);
   // Read the current drawer state inside the (once-registered) Esc handler
-  // without re-subscribing the window listener on every txId change.
+  // without re-subscribing the window listener on every drawer state change.
   const txOpenRef = useRef(false);
   const intelligenceEvidenceOpenRef = useRef(false);
   useEffect(() => {
-    txOpenRef.current = txId != null;
-  }, [txId]);
+    txOpenRef.current = txTarget != null;
+  }, [txTarget]);
 
   // URL cleanup belongs to the explicit close action. An unmount can also be a
   // route or symbol transition; mutating the *new* location from that cleanup
@@ -149,7 +150,7 @@ export default function MegaPane({
   useEffect(() => {
     if (previousSym.current !== sym) {
       previousSym.current = sym;
-      setTxId(null);
+      setTxTarget(null);
       const url = new URL(window.location.href);
       url.searchParams.delete("tx");
       window.history.replaceState(window.history.state, "", url.toString());
@@ -214,24 +215,25 @@ export default function MegaPane({
       || url.searchParams.get("pane") === "transcripts";
     if (page === "transcripts" || (!initialTxHydration.current && urlTargetsTranscripts)) {
       const linkedId = url.searchParams.get("tx");
-      setTxId(linkedId && isTranscriptId(linkedId) ? linkedId : null);
+      setTxTarget(linkedId && isTranscriptId(linkedId) ? { id: linkedId } : null);
     } else {
-      setTxId(null);
+      setTxTarget(null);
       url.searchParams.delete("tx");
       window.history.replaceState(window.history.state, "", url.toString());
     }
     initialTxHydration.current = true;
   }, [page]);
 
-  const openTranscript = useCallback((id: string) => {
-    if (!isTranscriptId(id)) return;
-    setTxId(id);
+  const openTranscript = useCallback((target: string | TranscriptOpenTarget) => {
+    const resolved = typeof target === "string" ? { id: target } : target;
+    if (!isTranscriptId(resolved.id)) return;
+    setTxTarget(resolved);
     const url = new URL(window.location.href);
-    url.searchParams.set("tx", id);
+    url.searchParams.set("tx", resolved.id);
     window.history.replaceState(window.history.state, "", url.toString());
   }, []);
   const closeTranscript = useCallback(() => {
-    setTxId(null);
+    setTxTarget(null);
     const url = new URL(window.location.href);
     url.searchParams.delete("tx");
     window.history.replaceState(window.history.state, "", url.toString());
@@ -332,7 +334,7 @@ export default function MegaPane({
       </div>
 
       {/* ── transcript slide-in (own Esc handler above this pane's) ── */}
-      {txId && <TranscriptDrawer key={`${sym}:${txId}`} sym={sym} id={txId} name={displayName} onClose={closeTranscript} />}
+      {txTarget && <TranscriptDrawer key={`${sym}:${txTarget.id}:${txTarget.segment_index ?? ""}:${txTarget.expected_document_sha256 ?? ""}:${txTarget.query ?? ""}`} sym={sym} id={txTarget.id} name={displayName} focus={txTarget} onClose={closeTranscript} />}
     </>
   );
 }
