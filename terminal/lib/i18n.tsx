@@ -5,6 +5,14 @@ export type Lang = "en" | "zh";
 
 // UI-chrome lexicon: key -> [English, 中文]. Dynamic data (prices, symbols, AI prose) is handled
 // elsewhere (the copilot is told to answer in the active language); this covers the static shell.
+//
+// TIER NAMES: the paid middle tier is displayed as "Essential" — English in BOTH locales, the
+// same convention the macro site and Stripe use (macro leaves tier names untranslated in zh).
+// The `*Insider*` KEY NAMES below are dictionary ids from the pre-rename era, kept deliberately:
+// renaming them is churn across every call site with nothing user-visible to show for it, and
+// macro's own SD_L table kept `tierInsider` for the same reason. Read a key name as an id, never
+// as copy. The SEC sense of the word is a different domain and stays "Insider"/"内部人" — the
+// Form-4 desks in obFreeMiss3 / obInsider4 are that sense, not the tier.
 const LEX: Record<string, [string, string]> = {
   // settings
   settings: ["Settings", "设置"],
@@ -39,7 +47,7 @@ const LEX: Record<string, [string, string]> = {
   suiteLockedHint: ["Included with a paid plan — upgrade to unlock", "付费计划专享 — 升级解锁"],
   suiteModulesWord: ["modules", "个模块"],
   isSuiteStyleHint: ["Suite styling lives with each module's inputs.", "套件样式在各模块的设置中。"],
-  isSuiteUnlockInsider: ["Unlocks with INSIDER", "订阅 INSIDER 解锁"],
+  isSuiteUnlockInsider: ["Unlocks with ESSENTIAL", "订阅 ESSENTIAL 解锁"],
   isSuiteUnlockPro: ["Unlocks with PRO", "订阅 PRO 解锁"],
   suiteTrend: ["Trend Waves", "趋势波段"],
   suitePulse: ["Pulse Oscillator", "脉冲震荡指标"],
@@ -583,13 +591,13 @@ const LEX: Record<string, [string, string]> = {
   gateSignupCta: ["Sign up free →", "免费注册 →"],
   // Options paywall (/options — the terminal_live_options entitlement gate)
   opwTitle: ["Unlock the Options desk", "解锁期权终端"],
-  opwBody: ["Live options flow, chains, exposure (GEX) and unusual activity. Access requires an Insider or Pro plan — sign up to start the free 7-day trial.", "实时期权流、期权链、Gamma 敞口 (GEX) 与异动侦测。需订阅 Insider 或 Pro 计划方可使用 —— 注册即可开启 7 天免费试用。"],
+  opwBody: ["Live options flow, chains, exposure (GEX) and unusual activity. Access requires an Essential or Pro plan — sign up to start the free 7-day trial.", "实时期权流、期权链、Gamma 敞口 (GEX) 与异动侦测。需订阅 Essential 或 Pro 计划方可使用 —— 注册即可开启 7 天免费试用。"],
   opwF1: ["Live order-flow tape", "实时期权流水"],
   opwF2: ["Option chains & greeks", "期权链与希腊字母"],
   opwF3: ["Gamma exposure (GEX)", "Gamma 敞口 (GEX)"],
   opwF4: ["Unusual & sweep detection", "异动与扫单侦测"],
   opwCta: ["Start 7-day free trial", "开启 7 天免费试用"],
-  opwSub: ["Insider & Pro · cancel anytime", "Insider 与 Pro · 随时取消"],
+  opwSub: ["Essential & Pro · cancel anytime", "Essential 与 Pro · 随时取消"],
   // Sign-up gate (components/gates/SignupGate.tsx) — shown to signed-out visitors on the
   // five member workspaces. The chart (/terminal) stays open to guests; these do not.
   sgEyebrow: ["Free account", "免费账户"],
@@ -1272,7 +1280,7 @@ const LEX: Record<string, [string, string]> = {
   olStale: ["{n} sessions old", "已过 {n} 个交易日"],
   olUsOnly: ["US options only", "仅美股期权"],
   olNoCov: ["no options coverage", "无期权数据覆盖"],
-  olGate: ["requires Insider/Pro", "需 Insider/Pro"],
+  olGate: ["requires Essential/Pro", "需 Essential/Pro"],
   olUnavail: ["levels unavailable", "关键位暂不可用"],
   olNoDate: ["undated snapshot", "无日期快照"],
   olLoading: ["loading…", "加载中…"],
@@ -1429,7 +1437,7 @@ const LEX: Record<string, [string, string]> = {
   obPeriodMonthly: ["Monthly", "月付"],
   obSaveBadge: ["Save {n}%", "省 {n}%"],
   obPlanFree: ["Free", "免费版"],
-  obPlanInsider: ["Insider", "Insider"],
+  obPlanInsider: ["Essential", "Essential"],
   obPlanPro: ["Pro", "Pro"],
   obMostPopular: ["Most popular", "最受欢迎"],
   obPlanFreePrice: ["Free", "免费"],
@@ -1457,7 +1465,7 @@ const LEX: Record<string, [string, string]> = {
   obWedge: ["+${n}/mo more gets you everything in Pro", "每月再加 ${n}，即可获得 Pro 全部内容"],
   obWedgeBtn: ["Switch to Pro", "切换到 Pro"],
   // summary — pro
-  obProHd: ["Everything in Insider, plus…", "Insider 全部内容，另加……"],
+  obProHd: ["Everything in Essential, plus…", "Essential 全部内容，另加……"],
   obPro1: ["50 Pro AI dives a month", "每月 50 次 Pro AI"],
   obPro2: ["Mastermind + institutional research reports", "Mastermind 与机构研究报告"],
   obProResearchFine: ["JPM · Citi · Morgan Stanley · UBS · Goldman Sachs · BofA", "JPM · Citi · Morgan Stanley · UBS · Goldman Sachs · BofA"],
@@ -1514,8 +1522,8 @@ const LEX: Record<string, [string, string]> = {
   obTrialChip: ["trial", "试用"],
   // settings menu tier line
   obTierFree: ["Free", "免费版"],
-  obTierInsider: ["Insider", "Insider"],
-  obTierInsiderTrial: ["Insider · trial", "Insider · 试用"],
+  obTierInsider: ["Essential", "Essential"],
+  obTierInsiderTrial: ["Essential · trial", "Essential · 试用"],
   obTierPro: ["Pro", "Pro"],
   obTierProTrial: ["Pro · trial", "Pro · 试用"],
   // step 3 CTA — replaces the external-link "start trial" for paid
@@ -1587,7 +1595,7 @@ const LEX: Record<string, [string, string]> = {
   acsBilledMonthly: ["billed monthly", "按月结算"],
   acsPerMo: ["/mo", "/月"],
   acsTierFree: ["Free", "免费版"],
-  acsTierInsider: ["Insider", "Insider"],
+  acsTierInsider: ["Essential", "Essential"],
   acsTierPro: ["Pro", "Pro"],
   acsPlanTrialUntil: ["Trial until", "试用至"],
   acsPlanRenews: ["Renews", "续订于"],
@@ -1616,7 +1624,7 @@ const LEX: Record<string, [string, string]> = {
   acsFeatInsider2: ["Full Terminal + live options", "完整 Terminal + 实时期权"],
   acsFeatInsider3: ["300 Mastermind questions a month", "每月 300 次 Mastermind 提问"],
   acsFeatInsider4: ["10 deep research questions a month", "每月 10 次深度研究提问"],
-  acsFeatPro1: ["Everything in Insider", "Insider 全部功能"],
+  acsFeatPro1: ["Everything in Essential", "Essential 全部功能"],
   acsFeatPro2: ["Unlimited Mastermind questions", "无限量 Mastermind 提问"],
   acsFeatPro3: ["150 deep research questions a month", "每月 150 次深度研究提问"],
   acsFeatPro4: ["Priority research answers", "研究问题优先解答"],
@@ -1630,7 +1638,7 @@ const LEX: Record<string, [string, string]> = {
   acsResetsWeekly: ["Resets every Monday.", "每周一重置。"],
   acsUnlimited: ["Unlimited", "无限"],
   acsUnlimitedNote: ["No monthly cap on your plan.", "你的方案没有每月上限。"],
-  acsDeepLockedFree: ["Included with Insider and Pro.", "Insider 与 Pro 方案包含。"],
+  acsDeepLockedFree: ["Included with Essential and Pro.", "Essential 与 Pro 方案包含。"],
   acsUsageErr: ["Couldn't load usage — please try again.", "无法加载用量，请重试。"],
   acsCapMonth: ["This month", "本月"],
   acsCapWeek: ["This week", "本周"],
@@ -1639,7 +1647,7 @@ const LEX: Record<string, [string, string]> = {
   acsNudgeLowT: ["Running low", "额度不多了"],
   acsNudgeLowS: ["Upgrade for more questions every month.", "升级即可每月获得更多提问额度。"],
   acsNudgeGetT: ["Want deeper answers?", "想要更深入的回答？"],
-  acsNudgeGetS: ["Insider and Pro add deep research questions.", "Insider 与 Pro 提供深度研究提问。"],
+  acsNudgeGetS: ["Essential and Pro add deep research questions.", "Essential 与 Pro 提供深度研究提问。"],
   acsUpgrade: ["Upgrade", "升级"],
   // preferences
   acsDeskGroup: ["Your desk", "你的台席"],

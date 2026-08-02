@@ -182,7 +182,7 @@ function ModuleSection({ m, values, locked, expanded, onToggle, onChange, onGuid
   const on = !!values[`${m.key}.on`] && !locked;
   const setOn = () => { if (!locked) onChange({ [`${m.key}.on`]: !on }); };
   const shown = m.fields.filter((f) => !f.showIf || sameVal(values[`${m.key}.${f.showIf.key}`], f.showIf.eq));
-  const unlockNote = m.tier === "pro" ? t("isSuiteUnlockPro", "Unlocks with PRO") : t("isSuiteUnlockInsider", "Unlocks with INSIDER");
+  const unlockNote = m.tier === "pro" ? t("isSuiteUnlockPro", "Unlocks with PRO") : t("isSuiteUnlockInsider", "Unlocks with ESSENTIAL");
   return (
     <div className={`is-mod${locked ? " locked" : ""}${on ? "" : " off"}`}>
       <div className="is-mod-h"
@@ -316,7 +316,7 @@ export default function IndicatorSettings({ indKey, moduleTarget, params, onChan
           {activeTab === "inputs" && (moduleEntry && directModule ? (
             directLocked ? (
               <div className="is-empty">
-                {directModule.tier === "pro" ? t("isSuiteUnlockPro", "Unlocks with PRO") : t("isSuiteUnlockInsider", "Unlocks with INSIDER")}
+                {directModule.tier === "pro" ? t("isSuiteUnlockPro", "Unlocks with PRO") : t("isSuiteUnlockInsider", "Unlocks with ESSENTIAL")}
               </div>
             ) : (
               <div className="is-sec">

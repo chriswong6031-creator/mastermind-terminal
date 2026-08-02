@@ -982,10 +982,14 @@ describe("SuiteTier ↔ SubscriptionTier namespace parity", () => {
   });
 
   it("display copy is decoupled from the tier VALUE", () => {
-    // The chips render SUITE_TIER_LABEL, not the raw tier, so flipping the internal value
-    // cannot silently change user-facing copy. Guards the reverse mistake too: deleting the
-    // map and interpolating the tier again would start printing "ESSENTIAL" in three places.
-    expect(SUITE_TIER_LABEL.essential).toBe("insider");
+    // Two separate pins, and after T3 they need reading apart. The `toBe` calls pin the
+    // user-facing COPY (T2 held it at "insider" while the value moved; T3 flipped it to
+    // "essential" to match the macro site and Stripe) — they no longer prove the chips went
+    // through the map, because label and value now spell the same word. The source
+    // assertions below are what pin the INDIRECTION: delete the map and interpolate the raw
+    // tier again and they fail, which is the only reason the next copy change stays
+    // reviewable instead of riding along on a value rename.
+    expect(SUITE_TIER_LABEL.essential).toBe("essential");
     expect(SUITE_TIER_LABEL.pro).toBe("pro");
     expect(SUITE_TIER_LABEL.free).toBe("free");
     for (const [file, needle] of [
