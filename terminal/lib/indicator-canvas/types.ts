@@ -241,16 +241,21 @@ export type SuiteTier = "free" | "essential" | "pro";
 /**
  * Tier → the badge/chip TEXT and the CSS modifier suffix.
  *
- * The internal value and the user-facing label are separate concerns: this rename flipped the
- * VALUE to `essential` while the Terminal's display copy still reads "Insider" everywhere (i18n
- * LEX included). Chips that used to interpolate the raw tier (`im-tier-${tier}` + `{tier}` as
- * text) would otherwise have silently started saying "ESSENTIAL" in three places and nowhere
- * else — an unreviewed copy change smuggled in by a value rename. Route them through here so a
- * future display rename is one edit in one file.
+ * The internal value and the user-facing label stay separate concerns even though they now
+ * spell the same word. T2 flipped the VALUE to `essential` and deliberately held the display
+ * copy at "Insider"; T3 (this map's `essential` entry, the i18n LEX, and the `.im-tier-*` /
+ * `.gp-tier-*` rules keyed off these strings) completed the user-visible rename to "Essential",
+ * matching the macro site and Stripe. Chips must keep routing through here rather than
+ * interpolating the raw tier: that is what made the copy change reviewable instead of a silent
+ * side effect of a value rename, and it is what keeps the next display rename one edit.
+ *
+ * Whatever label lands here also becomes a CSS modifier suffix (`im-tier-${label}`), so a new
+ * value needs a matching rule in app/globals.css — pinned in both directions by
+ * lib/__tests__/suiteAlerts.test.ts.
  */
 export const SUITE_TIER_LABEL: Record<SuiteTier, string> = {
   free: "free",
-  essential: "insider",
+  essential: "essential",
   pro: "pro",
 };
 

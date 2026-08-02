@@ -8,7 +8,7 @@
 //
 // Deliberately the same card as components/OptionsPaywall.tsx — one gate shape for
 // the whole app, only the copy and the CTA target differ (free account here, the
-// Insider/Pro paywall there). Matches the locked v5 idiom — panel/line tokens + the
+// Essential/Pro paywall there). Matches the locked v5 idiom — panel/line tokens + the
 // brand-blue accent. Bilingual via LEX t().
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 import { useT } from "@/lib/i18n";
