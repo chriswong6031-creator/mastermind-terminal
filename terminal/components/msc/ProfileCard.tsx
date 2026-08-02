@@ -41,6 +41,12 @@ export function ProfileCard({
   gex: GexPayload | null;
   lang: Lang;
 }) {
+  // Measured live on 2026-08-01, first production profile: SPY's re-priced curve
+  // read −1.36bn at spot while the feed-greek headline read +5.64bn — a genuine
+  // sign disagreement on a near-flip book (tilt 11%, "Fragile"). Two estimators of
+  // one quantity silently disagreeing is this program's core defect class, so when
+  // it happens the card SAYS so instead of letting the reader spot the
+  // contradiction across two cards.
   const t = makeMscT(lang);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const W = useChartWidth(boxRef, 640);
@@ -94,6 +100,18 @@ export function ProfileCard({
       ? crossings.reduce((a, b) => (Math.abs(b - spot) < Math.abs(a - spot) ? b : a))
       : crossings[0];
   }, [crossings, spot]);
+
+  // Sign disagreement between the curve at spot (re-derived from quoted IV) and the
+  // feed-greek headline. Only asserted when both are comfortably non-zero.
+  const signSplit = useMemo(() => {
+    if (!data || !isNum(spot)) return false;
+    const net = gex?.net_gex_bn;
+    if (!isNum(net) || Math.abs(net) < 0.05) return false;
+    let nearest = data[0];
+    for (const d of data) if (Math.abs(d.x - spot) < Math.abs(nearest.x - spot)) nearest = d;
+    if (Math.abs(nearest.y) < 0.05) return false;
+    return nearest.y > 0 !== net > 0;
+  }, [data, spot, gex]);
 
   return (
     <MscCard
@@ -214,6 +232,11 @@ export function ProfileCard({
           </div>
 
           <CardSpacer />
+          {signSplit && (
+            <CardFoot>
+              <span style={{ color: "var(--warn)" }}>{t("pfSignSplit")}</span>
+            </CardFoot>
+          )}
           <CardFoot>
             {t("pfLegend").replace("{p}", String(p?.span_pct ?? 25))}
             {crossings.length > 1 ? ` · ${t("pfMulti").replace("{n}", String(crossings.length))}` : ""}
