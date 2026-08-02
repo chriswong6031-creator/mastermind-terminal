@@ -3778,6 +3778,19 @@ html[data-shell="app"] .mm-brandbug{
   }
 }
 
+/* ── symbol swap (R2c) ────────────────────────────────────────────────────────
+   The renderer survives a ticker change, so the OUTGOING chart stays painted while
+   the new bars load: it dims and desaturates, then the new symbol snaps in when it
+   has really drawn (ChartPane listens for mm:terminal-visual-ready). The dim is the
+   whole point — a blank canvas for a second was the alternative. `filter` is applied
+   ONLY while swapping: it would otherwise make .chart-wrap a containing block for the
+   position:fixed drawing-settings popover. */
+.pane .chart-wrap{transition:opacity 160ms var(--ease-out),filter 160ms var(--ease-out)}
+.pane.is-swapping .chart-wrap{opacity:.45;filter:saturate(.3);pointer-events:none}
+@media (prefers-reduced-motion:reduce){
+  .pane .chart-wrap{transition:none}
+}
+
 /* ── the strip itself (§2.18 / C25 of the native spec) ──────────────────────────
    [ FIXED: symbol wheel · interval wheel ] [ 16px fade ] [ SCROLLABLE cluster ].
    R2c: it is the workspace's last flex child — the foot of the chart column, in the
