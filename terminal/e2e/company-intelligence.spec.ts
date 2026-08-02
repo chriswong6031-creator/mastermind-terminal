@@ -124,6 +124,77 @@ function contextFixture() {
   };
 }
 
+function sourceSearchFixture(phrase: string, eventIds: string[]) {
+  const documents = [
+    {
+      event_id: "NVDA-2026Q1",
+      transcript_id: "2026Q1",
+      segment_index: 18,
+      speaker: "Jensen Huang",
+      role: "Chief Executive Officer",
+      section: "prepared",
+      excerpt: "Data center demand remained broad across cloud, enterprise, and sovereign AI customers.",
+    },
+    {
+      event_id: "NVDA-2026Q1",
+      transcript_id: "2026Q1",
+      segment_index: 27,
+      speaker: "Colette Kress",
+      role: "Chief Financial Officer",
+      section: "qa",
+      excerpt: "We continue to see data center demand across our compute platforms and networking products.",
+    },
+    {
+      event_id: "NVDA-2025Q4",
+      transcript_id: "2025Q4",
+      segment_index: 14,
+      speaker: "Jensen Huang",
+      role: "Chief Executive Officer",
+      section: "prepared",
+      excerpt: "Data center demand expanded as customers prepared new infrastructure deployments.",
+    },
+  ];
+  const sha = "f".repeat(64);
+  const searched = eventIds.length ? eventIds : documents.map((document) => document.event_id);
+  const spans = documents.flatMap((document) => {
+    if (!searched.includes(document.event_id)) return [];
+    const start = document.excerpt.toLowerCase().indexOf(phrase.toLowerCase());
+    if (start < 0) return [];
+    return [{
+      span_id: `span:${document.event_id}:${document.segment_index}:${start}`,
+      event_id: document.event_id,
+      transcript_id: document.transcript_id,
+      ticker: "NVDA",
+      document_sha256: sha,
+      segment_index: document.segment_index,
+      char_start: start,
+      char_end: start + phrase.length,
+      speaker: document.speaker,
+      role: document.role,
+      section: document.section,
+      excerpt: document.excerpt,
+      matched_text: document.excerpt.slice(start, start + phrase.length),
+      receipt: {
+        revision_id: "revision-20260801-e2e",
+        document_sha256: sha,
+        indexed_at: "2026-08-01T12:00:00Z",
+        source_label: "E2E verification fixture — not published research",
+        source_url: `/data/tx/NVDA/${document.transcript_id}.json.gz`,
+        verification: "verified",
+      },
+    }];
+  });
+  return {
+    schema: "mastermind.company-source-search/v1",
+    state: "ready",
+    ticker: "NVDA",
+    query: phrase,
+    corpus_revision: "revision-20260801-e2e",
+    searched_event_ids: [...new Set(searched)],
+    spans,
+  };
+}
+
 async function openCompanyIntelligence(page: Page) {
   await page.route("**/api/company-intelligence/NVDA**", async (route) => {
     await route.fulfill({ json: { ok: true, state: "ready", context: contextFixture() } });
@@ -216,6 +287,38 @@ test("Company Intelligence keeps its context and evidence workflow responsive", 
     path: testInfo.outputPath(`${testInfo.project.name}-company-intelligence.png`),
     fullPage: false,
   });
+});
+
+test("literal transcript search and compare preserve exact source receipts", async ({ page }, testInfo) => {
+  await page.route("**/api/company-source-search/NVDA**", async (route) => {
+    const url = new URL(route.request().url());
+    const phrase = url.searchParams.get("q") || "";
+    await route.fulfill({ json: sourceSearchFixture(phrase, url.searchParams.getAll("event")) });
+  });
+  await openCompanyIntelligence(page);
+  const transcript = page.locator(".ci-lenses").getByRole("tab").nth(1);
+  await transcript.click();
+  await expect(page.locator(".ci-ts-hero h3")).toBeVisible();
+
+  const search = page.locator(".ci-ts-search");
+  await search.locator("input").fill("data center");
+  await search.locator(".btn").click();
+  await expect(page.locator(".ci-ts-results .ci-ts-span")).toHaveCount(2);
+  await expect(page.locator(".ci-ts-results mark").first()).toHaveText("Data center");
+
+  const receipt = page.locator(".ci-ts-results .ci-ts-span-actions button").nth(1);
+  await receipt.click();
+  await expect(page.locator(".ci-ts-dialog")).toBeVisible();
+  await expect(page.locator(".ci-ts-dialog code").nth(1)).toHaveText("f".repeat(64));
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".ci-ts-dialog")).toHaveCount(0);
+  await expect(receipt).toBeFocused();
+
+  await page.locator(".ci-ts-compare-controls > .btn").click();
+  await expect(page.locator(".ci-ts-compare-grid")).toBeVisible();
+  await expect(page.locator(".ci-ts-compare-col")).toHaveCount(2);
+  await expectNoDocumentOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath(`transcript-search-compare-${testInfo.project.name}.png`), fullPage: false });
 });
 
 test("Analysis symbol URLs preserve valid market identifiers and refuse malformed ones", async ({ page }) => {

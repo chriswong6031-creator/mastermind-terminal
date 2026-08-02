@@ -12,6 +12,7 @@ import {
 } from "../../lib/companyIntelligence";
 import CompanySourceManifest from "./CompanySourceManifest";
 import EvidenceRail, { type CompanyEvidenceSelection } from "./EvidenceRail";
+import TranscriptSearchWorkspace from "./TranscriptSearchWorkspace";
 import { openMastermindBrainForSymbol } from "../../lib/mastermindBrain";
 
 type Lens = "brief" | "transcript" | "history" | "topics" | "sources";
@@ -237,6 +238,12 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
   const result = loading ? null : load.result;
   const context = result?.ok ? result.context : null;
   const events = useMemo(() => context ? allEvents(context) : [], [context]);
+  const transcriptSearchEvents = useMemo(() => events.map((candidate) => ({
+    event_id: candidate.event_id,
+    label: eventPeriod(candidate),
+    call_date: candidate.call_date,
+    transcript_id: transcriptId(preferredSource(candidate, "transcript")),
+  })), [events]);
   const selectedId = eventState.sym === ticker ? eventState.id : "";
   const event = events.find((candidate) => candidate.event_id === selectedId) ?? events[0] ?? null;
 
@@ -488,6 +495,12 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
               ) : (
                 <EmptyState title={pick(zh, "Transcript body unavailable", "电话会正文不可用")} why={pick(zh, "Event metadata is retained, but this fiscal period does not resolve to a validated transcript document.", "事件元数据已保留，但该财季尚未关联到通过验证的电话会文档。")} />
               )}
+              <TranscriptSearchWorkspace
+                ticker={ticker}
+                events={transcriptSearchEvents}
+                initialEventId={event.event_id}
+                onOpenTranscript={onOpenTx}
+              />
               <CompanySourceManifest event={event} onOpenTranscript={onOpenTx} />
             </section>
           )}
