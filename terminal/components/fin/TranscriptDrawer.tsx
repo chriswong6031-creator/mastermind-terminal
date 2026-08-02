@@ -4,7 +4,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "
 import { useLang } from "../../lib/i18n";
 import { fmtDate, pick } from "../../lib/finFormat";
 import { getTx, transcriptBodyUrl, type Transcript } from "../../lib/fund";
-import { classifyTranscriptQaStart } from "../../lib/transcriptSearch";
+import { classifyTranscriptQaChapter } from "../../lib/transcriptSearch";
 
 export interface TranscriptDrawerProps {
   sym: string;
@@ -102,7 +102,9 @@ export default function TranscriptDrawer({ sym, id, name, onClose }: TranscriptD
   const loading = load.key !== requestKey;
   const state: "loading" | "ok" | "error" = loading ? "loading" : load.error ? "error" : "ok";
   const tx = loading ? null : load.transcript;
-  const qaStart = useMemo(() => tx ? classifyTranscriptQaStart(tx.segments).index : null, [tx]);
+  // The transition sentence remains prepared remarks; jump only to verified
+  // operator/analyst intake so the Q&A control cannot land on a false handoff.
+  const qaStart = useMemo(() => tx ? classifyTranscriptQaChapter(tx.segments).qa_start_index : null, [tx]);
   const speakers = useMemo(() => tx
     ? [...new Set(tx.segments.map((segment) => segment.speaker.trim()).filter(Boolean))].sort()
     : [], [tx]);

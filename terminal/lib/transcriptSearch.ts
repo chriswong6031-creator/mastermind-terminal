@@ -13,6 +13,7 @@ import { normalizeTranscript, transcriptBodyUrl, type Transcript, type TxSegment
 
 export const TRANSCRIPT_REVISION_ROOT_URL = "/data/tx/index.json";
 export const TRANSCRIPT_SPAN_SCHEMA = "mastermind.tx-span/v1" as const;
+export const TRANSCRIPT_SPAN_LOCATOR_SCHEMA = "mastermind.tx-span-locator/v1" as const;
 
 const TRANSCRIPT_ID = /^\d{4}Q[1-4]$/;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -43,23 +44,37 @@ export interface TranscriptRevisionRoot {
   calls_by_ticker: ReadonlyMap<string, readonly TranscriptRevisionRef[]>;
 }
 
-export interface TranscriptSpan {
-  schema: typeof TRANSCRIPT_SPAN_SCHEMA;
-  /** Revision-bound, UTF-8-byte-addressed immutable reference. */
-  span_id: string;
-  ticker: string;
-  transcript_id: string;
+/**
+ * Server-resolvable source coordinates. They deliberately remain beside the
+ * opaque receipt ID: an ID alone must never be parsed into authority.
+ */
+export interface TranscriptSpanLocator {
+  schema: typeof TRANSCRIPT_SPAN_LOCATOR_SCHEMA;
+  /** Stable public document key: `<ticker>/<fiscal-period>`. */
+  document_key: string;
   body_sha256: string;
   segment_index: number;
   start_byte: number;
   end_byte: number;
+  /** SHA-256 of the full UTF-8 segment text used by this byte range. */
+  segment_text_sha256: string;
 }
+
+export type TranscriptSpan = Omit<TranscriptSpanLocator, "schema"> & {
+  schema: typeof TRANSCRIPT_SPAN_SCHEMA;
+  /** Opaque `txs1_<sha256(canonical locator)>` source reference. */
+  span_id: string;
+  ticker: string;
+  transcript_id: string;
+};
 
 export interface RevisionVerifiedTranscript {
   transcript: Transcript;
   revision: TranscriptRevisionRef;
-  qa_start: number | null;
-  qa_reason: TranscriptQaBoundary["reason"];
+  transition_index: number | null;
+  qa_start_index: number | null;
+  transition_reason: TranscriptQaChapter["transition_reason"];
+  qa_start_reason: TranscriptQaChapter["qa_start_reason"];
 }
 
 export type TranscriptRevisionResult =
@@ -74,9 +89,13 @@ export type TranscriptStaleRevisionReason =
   | "body_invalid"
   | "body_hash_mismatch";
 
-export interface TranscriptQaBoundary {
-  index: number | null;
-  reason: "explicit_transition" | "operator_question_queue" | "analyst_role" | "none";
+export interface TranscriptQaChapter {
+  /** The management/IR handoff into Q&A, which is not itself a question turn. */
+  transition_index: number | null;
+  /** The first confirmed operator intake or explicit analyst turn. */
+  qa_start_index: number | null;
+  transition_reason: "explicit_transition" | "none";
+  qa_start_reason: "operator_intake" | "analyst_turn" | "standalone_operator_intake" | "standalone_analyst_turn" | "none";
 }
 
 export interface TranscriptSearchQuery {
@@ -101,7 +120,7 @@ export interface TranscriptSearchHit {
   segment_index: number;
   speaker: string;
   role: string;
-  section: "prepared" | "qa" | "unknown";
+  section: "prepared" | "qa_transition" | "qa" | "unknown";
   excerpt: string;
   matches: TranscriptSearchMatch[];
   phrase_matches: number;
@@ -223,12 +242,16 @@ function canonicalJson(value: unknown): string | null {
   return `{${entries.join(",")}}`;
 }
 
+async function sha256Utf8(value: string): Promise<string | null> {
+  if (!globalThis.crypto?.subtle) return null;
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /** Canonical SHA-256 matches the producer's sorted UTF-8 JSON receipt. */
 export async function canonicalTranscriptBodySha256(raw: unknown): Promise<string | null> {
   const canonical = canonicalJson(raw);
-  if (canonical === null || !globalThis.crypto?.subtle) return null;
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return canonical === null ? null : sha256Utf8(canonical);
 }
 
 async function fetchRoot(fetcher: FetchLike, signal?: AbortSignal): Promise<TranscriptRevisionRoot | "unavailable"> {
@@ -327,8 +350,18 @@ async function fetchRevisionFromRoot(
   if (!actualHash || actualHash !== revision.body_sha256) {
     return { status: "stale_revision", ticker, id, reason: "body_hash_mismatch" };
   }
-  const qa = classifyTranscriptQaStart(transcript.segments);
-  return { status: "ready", document: { transcript, revision, qa_start: qa.index, qa_reason: qa.reason } };
+  const chapter = classifyTranscriptQaChapter(transcript.segments);
+  return {
+    status: "ready",
+    document: {
+      transcript,
+      revision,
+      transition_index: chapter.transition_index,
+      qa_start_index: chapter.qa_start_index,
+      transition_reason: chapter.transition_reason,
+      qa_start_reason: chapter.qa_start_reason,
+    },
+  };
 }
 
 /** Fetch one document only after resolving its advertised root revision. */
@@ -354,22 +387,77 @@ function isAnalyst(segment: TxSegment): boolean {
 }
 
 /**
- * Conservative Q&A boundary classifier.
+ * Conservative Q&A chapter classifier.
  *
- * It accepts only an explicit transition, an operator's actual question queue,
- * or an explicit analyst role.  A boilerplate operator disclaimer mentioning
- * "question-and-answer" cannot create a false Q&A section (the old NVDA bug).
+ * A management/IR transition is merely a handoff. It becomes Q&A only after a
+ * real operator intake or explicit analyst turn appears within the bounded
+ * confirmation window. This keeps a stale "we will take questions" sentence
+ * from reclassifying the rest of a malformed call as Q&A.
  */
-export function classifyTranscriptQaStart(segments: readonly TxSegment[]): TranscriptQaBoundary {
-  const explicitTransition = /\b(?:we\s+(?:will|are(?:\s+now)?\s+going\s+to)|we'll)\s+(?:now\s+)?(?:transition|move|turn|open|begin|start)\s+(?:to|into)\s+(?:the\s+)?(?:q\s*(?:&|and)\s*a|questions?\s*(?:&|and)\s*answers?)\b/i;
-  const operatorQueue = /\b(?:our|the)\s+(?:first|next|last)\s+question\s+(?:comes?|is|will\s+(?:come|be))\b|\b(?:we\s+will|we'll)\s+(?:go\s+ahead\s+and\s+)?take\s+(?:our|the)\s+(?:first|next|last)\s+question\b/i;
+export function classifyTranscriptQaChapter(segments: readonly TxSegment[]): TranscriptQaChapter {
+  const confirmationWindow = 4;
+  const explicitTransition = /\b(?:we\s+(?:will|are(?:\s+now)?\s+going\s+to)|we'll)\s+(?:now\s+)?(?:transition|move|open|begin|start)\s+(?:to|into)\s+(?:the\s+)?(?:q\s*(?:&|and)\s*a|questions?\s*(?:&|and)\s*answers?)\b|\b(?:this\s+concludes?\s+(?:our\s+)?prepared\s+remarks?|(?:we(?:'re|\s+are)|i(?:'m|\s+am))\s+happy|(?:[a-z]+(?:\s+and\s+(?:i|[a-z]+))?\s+will\s+be\s+happy))\b[\s\S]{0,180}\b(?:open\s+(?:the\s+)?call\s+for|take)\s+(?:your\s+)?questions?\b/i;
+  const operatorIntake = /\b(?:our|the|your)\s+(?:first|next|last)\s+question\s+(?:comes?|is|will\s+(?:come|be))\b|\b(?:we\s+will|we'll)\s+(?:go\s+ahead\s+and\s+)?take\s+(?:our|the|your)\s+(?:first|next|last)\s+question\b/i;
+  const intakeAt = (index: number): TranscriptQaChapter["qa_start_reason"] | null => {
+    const segment = segments[index];
+    if (isOperator(segment) && operatorIntake.test(segment.text)) return "operator_intake";
+    if (isAnalyst(segment)) return "analyst_turn";
+    return null;
+  };
+  let unresolvedTransition: number | null = null;
   for (let index = 0; index < segments.length; index += 1) {
     const segment = segments[index];
-    if (explicitTransition.test(segment.text)) return { index, reason: "explicit_transition" };
-    if (isOperator(segment) && operatorQueue.test(segment.text)) return { index, reason: "operator_question_queue" };
-    if (isAnalyst(segment)) return { index, reason: "analyst_role" };
+    if (!explicitTransition.test(segment.text)) continue;
+    for (let candidate = index + 1; candidate <= Math.min(segments.length - 1, index + confirmationWindow); candidate += 1) {
+      const reason = intakeAt(candidate);
+      if (reason) {
+        return {
+          transition_index: index,
+          qa_start_index: candidate,
+          transition_reason: "explicit_transition",
+          qa_start_reason: reason,
+        };
+      }
+    }
+    // Preserve the first unmatched transition as a visible chapter cue, but
+    // do not promote any later prose into Q&A without a fresh confirmation.
+    unresolvedTransition ??= index;
   }
-  return { index: null, reason: "none" };
+  // A declared transition is an assertion with a bounded proof obligation.
+  // Do not let a much later operator sentence retroactively make it Q&A.
+  if (unresolvedTransition !== null) {
+    return {
+      transition_index: unresolvedTransition,
+      qa_start_index: null,
+      transition_reason: "explicit_transition",
+      qa_start_reason: "none",
+    };
+  }
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (isOperator(segment) && operatorIntake.test(segment.text)) {
+      return {
+        transition_index: null,
+        qa_start_index: index,
+        transition_reason: "none",
+        qa_start_reason: "standalone_operator_intake",
+      };
+    }
+    if (isAnalyst(segment)) {
+      return {
+        transition_index: null,
+        qa_start_index: index,
+        transition_reason: "none",
+        qa_start_reason: "standalone_analyst_turn",
+      };
+    }
+  }
+  return {
+    transition_index: unresolvedTransition,
+    qa_start_index: null,
+    transition_reason: unresolvedTransition === null ? "none" : "explicit_transition",
+    qa_start_reason: "none",
+  };
 }
 
 function tokenize(value: string): string[] {
@@ -404,50 +492,66 @@ function utf8Offset(text: string, utf16Offset: number): number | null {
   return hasUnsafeUtf16Boundary(text, utf16Offset) ? null : new TextEncoder().encode(text.slice(0, utf16Offset)).byteLength;
 }
 
-/** Create a revision-bound, UTF-8 byte range source pointer. */
-export function makeTranscriptSpan(
+/**
+ * Canonical source coordinates used to derive the opaque span receipt. This is
+ * also the validation boundary for any server-side span resolver.
+ */
+export function canonicalTranscriptSpanLocator(locator: TranscriptSpanLocator): string | null {
+  if (locator.schema !== TRANSCRIPT_SPAN_LOCATOR_SCHEMA
+    || !/^[A-Z0-9](?:[A-Z0-9.-]{0,14}[A-Z0-9])?\/\d{4}Q[1-4]$/.test(locator.document_key)
+    || !SHA256.test(locator.body_sha256)
+    || !SHA256.test(locator.segment_text_sha256)
+    || !Number.isSafeInteger(locator.segment_index) || locator.segment_index < 0
+    || !Number.isSafeInteger(locator.start_byte) || locator.start_byte < 0
+    || !Number.isSafeInteger(locator.end_byte) || locator.end_byte <= locator.start_byte) return null;
+  return canonicalJson({
+    schema: locator.schema,
+    document_key: locator.document_key,
+    body_sha256: locator.body_sha256,
+    segment_index: locator.segment_index,
+    start_byte: locator.start_byte,
+    end_byte: locator.end_byte,
+    segment_text_sha256: locator.segment_text_sha256,
+  });
+}
+
+/** Create a revision-bound, UTF-8 byte range source pointer and receipt. */
+export async function makeTranscriptSpan(
   revision: Pick<TranscriptRevisionRef, "ticker" | "id" | "body_sha256">,
   segmentIndex: number,
   text: string,
   startUtf16: number,
   endUtf16: number,
-): TranscriptSpan | null {
+): Promise<TranscriptSpan | null> {
   if (normalizeTranscriptTicker(revision.ticker) !== revision.ticker || !normalizeTranscriptSearchId(revision.id)
     || !revision.body_sha256 || !SHA256.test(revision.body_sha256) || !Number.isInteger(segmentIndex) || segmentIndex < 0
-    || startUtf16 > endUtf16) return null;
+    || startUtf16 > endUtf16 || hasUnsafeUtf16Boundary(text, startUtf16) || hasUnsafeUtf16Boundary(text, endUtf16)) return null;
   const startByte = utf8Offset(text, startUtf16);
   const endByte = utf8Offset(text, endUtf16);
   if (startByte === null || endByte === null || endByte <= startByte) return null;
-  const spanId = `txs.v1/${revision.ticker}/${revision.id}/${revision.body_sha256}/${segmentIndex}/${startByte}-${endByte}`;
-  return {
-    schema: TRANSCRIPT_SPAN_SCHEMA,
-    span_id: spanId,
-    ticker: revision.ticker,
-    transcript_id: revision.id,
+  const locator: TranscriptSpanLocator = {
+    schema: TRANSCRIPT_SPAN_LOCATOR_SCHEMA,
+    document_key: `${revision.ticker}/${revision.id}`,
     body_sha256: revision.body_sha256,
     segment_index: segmentIndex,
     start_byte: startByte,
     end_byte: endByte,
+    segment_text_sha256: await sha256Utf8(text) ?? "",
+  };
+  const canonicalLocator = canonicalTranscriptSpanLocator(locator);
+  const receiptHash = canonicalLocator === null ? null : await sha256Utf8(canonicalLocator);
+  if (!receiptHash) return null;
+  return {
+    ...locator,
+    schema: TRANSCRIPT_SPAN_SCHEMA,
+    span_id: `txs1_${receiptHash}`,
+    ticker: revision.ticker,
+    transcript_id: revision.id,
   };
 }
 
-export function parseTranscriptSpanId(value: string): TranscriptSpan | null {
-  const match = /^txs\.v1\/([A-Z0-9](?:[A-Z0-9.-]{0,14}[A-Z0-9])?)\/(\d{4}Q[1-4])\/([a-f0-9]{64})\/(\d+)\/(\d+)-(\d+)$/.exec(value);
-  if (!match) return null;
-  const [, ticker, id, bodySha, segmentIndex, startByte, endByte] = match;
-  const start = Number(startByte);
-  const end = Number(endByte);
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end <= start) return null;
-  return {
-    schema: TRANSCRIPT_SPAN_SCHEMA,
-    span_id: value,
-    ticker,
-    transcript_id: id,
-    body_sha256: bodySha,
-    segment_index: Number(segmentIndex),
-    start_byte: start,
-    end_byte: end,
-  };
+export function isTranscriptSpanId(value: unknown): value is `txs1_${string}` {
+  return typeof value === "string" && /^txs1_[a-f0-9]{64}$/.test(value);
 }
 
 function excerpt(text: string, start: number, end: number): string {
@@ -456,7 +560,14 @@ function excerpt(text: string, start: number, end: number): string {
   return `${left > 0 ? "…" : ""}${text.slice(left, right).trim()}${right < text.length ? "…" : ""}`;
 }
 
-function searchDocument(document: RevisionVerifiedTranscript, query: TranscriptSearchQuery): TranscriptSearchHit[] {
+function sectionForSegment(document: RevisionVerifiedTranscript, segmentIndex: number): TranscriptSearchHit["section"] {
+  if (document.transition_index === segmentIndex) return "qa_transition";
+  if (document.qa_start_index !== null && segmentIndex >= document.qa_start_index) return "qa";
+  if (document.transition_index !== null || document.qa_start_index !== null) return "prepared";
+  return "unknown";
+}
+
+async function searchDocument(document: RevisionVerifiedTranscript, query: TranscriptSearchQuery): Promise<TranscriptSearchHit[]> {
   if (!query.raw || (!query.phrases.length && !query.tokens.length)) return [];
   const output: TranscriptSearchHit[] = [];
   for (let segmentIndex = 0; segmentIndex < document.transcript.segments.length; segmentIndex += 1) {
@@ -470,7 +581,7 @@ function searchDocument(document: RevisionVerifiedTranscript, query: TranscriptS
       const phrase = phraseRef.slice(2);
       const start = lower.indexOf(phrase.toLocaleLowerCase());
       if (start < 0) continue;
-      const span = makeTranscriptSpan(document.revision, segmentIndex, segment.text, start, start + phrase.length);
+      const span = await makeTranscriptSpan(document.revision, segmentIndex, segment.text, start, start + phrase.length);
       if (!span) continue;
       phraseMatches += 1;
       matches.push({ kind, term: phrase, span });
@@ -478,7 +589,7 @@ function searchDocument(document: RevisionVerifiedTranscript, query: TranscriptS
     const matchedTokens = query.tokens.filter((token) => tokenSet.has(token));
     for (const token of matchedTokens) {
       const start = lower.indexOf(token);
-      const span = start < 0 ? null : makeTranscriptSpan(document.revision, segmentIndex, segment.text, start, start + token.length);
+      const span = start < 0 ? null : await makeTranscriptSpan(document.revision, segmentIndex, segment.text, start, start + token.length);
       if (span) matches.push({ kind: "token", term: token, span });
     }
     const tokenCoverage = query.tokens.length ? matchedTokens.length / query.tokens.length : 0;
@@ -499,7 +610,7 @@ function searchDocument(document: RevisionVerifiedTranscript, query: TranscriptS
       segment_index: segmentIndex,
       speaker: segment.speaker,
       role: segment.role,
-      section: document.qa_start === null ? "unknown" : segmentIndex >= document.qa_start ? "qa" : "prepared",
+      section: sectionForSegment(document, segmentIndex),
       excerpt: excerpt(segment.text, matchStart, matchStart + 1),
       matches,
       phrase_matches: phraseMatches,
@@ -554,7 +665,7 @@ export async function searchTickerTranscripts(
   }
   if (!documents.length && staleRevisions.length) return { status: "stale_revision", ticker, query, stale_revisions: staleRevisions };
   if (!documents.length) return { status: "unavailable", ticker, query, message: "Transcript bodies could not be reached" };
-  const hits = documents.flatMap((document) => searchDocument(document, query)).sort((a, b) =>
+  const hits = (await Promise.all(documents.map((document) => searchDocument(document, query)))).flat().sort((a, b) =>
     b.phrase_matches - a.phrase_matches
     || b.token_coverage - a.token_coverage
     || (b.date ?? "").localeCompare(a.date ?? "")
