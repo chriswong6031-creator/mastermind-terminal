@@ -1276,6 +1276,10 @@ const LEX: Record<string, [string, string]> = {
   olUnavail: ["levels unavailable", "关键位暂不可用"],
   olNoDate: ["undated snapshot", "无日期快照"],
   olLoading: ["loading…", "加载中…"],
+  // ─── R3.2 screener msc_* positioning columns ─────────────────────────────
+  colMscRegime: ["γ regime", "γ 状态"],
+  colMscNetGex: ["Net GEX", "净GEX"],
+  colMscFlip: ["To flip", "距翻转"],
   // ─── Leaders tab ──────────────────────────────────────────────────────────
   tabLeaders: ["Leaders", "资金领袖"],
   leadersTitle: ["Flow Leadership", "资金领先"],
