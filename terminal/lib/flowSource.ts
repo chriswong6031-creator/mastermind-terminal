@@ -24,6 +24,7 @@ const VOL_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "vol_fixture
 const GEX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gex_fixture.json");
 const AGG_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "agg_fixture.json");
 const QUAD_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "quad_fixture.json");
+const GRADES_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "grades_fixture.json");
 const SCREENER_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "screener_fixture.json");
 const CTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "ctx_fixture.json");
 const LEADERS_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "flow_leaders_fixture.json");
@@ -102,6 +103,11 @@ export function isValidF(f: string): boolean {
   // Cross-root positioning board (W3). A whole-file artifact, deliberately NOT under
   // the `agg:` prefix — `agg:quad` would be a legal-looking read for a root named quad.
   if (f === "quad") return true;
+  // Level Report Card (MSC R2.4): per-root scorecard + the cross-universe aggregate.
+  // `_universe` is NOT a root (isValidRoot rejects the underscore), so it gets its own
+  // literal f — a wildcard through the root form could smuggle path segments.
+  if (f.startsWith("grades:")) return isValidRoot(f.slice(7));
+  if (f === "grades_universe") return true;
   // Dated GEX-ladder history (R0.10): the sessions index + the per-date full ladder
   // (options_hub/gex_history — WP-GEX-SNAPSHOTS, accruing since 2026-07-16). Distinct
   // prefixes from `gex:` — the 4th char is `_`, not `:` — so neither form can be eaten
@@ -166,6 +172,8 @@ export function backendPath(f: string): string {
   if (f.startsWith("gex:")) return `/api/hub/gex/${f.slice(4)}`;
   if (f.startsWith("agg:")) return `/api/hub/aggtrend/${f.slice(4)}`;
   if (f === "quad") return "/api/hub/quad";
+  if (f.startsWith("grades:")) return `/api/hub/level_grades/${f.slice(7)}`;
+  if (f === "grades_universe") return "/api/hub/level_grades/_universe";
   if (f === "oi") return "/api/hub/oi";
   if (f === "hot") return "/api/hub/hot";
   if (f === "meta") return "/api/flow/meta";
@@ -228,6 +236,8 @@ export function r2Key(f: string): string {
   if (f.startsWith("gex:")) return `options_hub/gex/${f.slice(4)}.json`;
   if (f.startsWith("agg:")) return `options_hub/aggtrend/${f.slice(4)}.json`;
   if (f === "quad") return "options_hub/quad.json";
+  if (f.startsWith("grades:")) return `options_hub/level_grades/${f.slice(7)}.json`;
+  if (f === "grades_universe") return "options_hub/level_grades/_universe.json";
   if (f === "oi") return "options_hub/oi_movers.json";
   if (f === "hot") return "options_hub/hot_contracts.json";
   if (f === "ctx") return "options_hub/context.json";
@@ -431,6 +441,18 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
     try {
       const raw = await fs.readFile(QUAD_FIXTURE_FILE, "utf8");
       return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  // Level report cards, keyed by root ("_universe" for the aggregate). Wrong-root
+  // refusal as everywhere: a hold-rate under the wrong ticker's header reads as fact.
+  if (f.startsWith("grades:") || f === "grades_universe") {
+    const key = f === "grades_universe" ? "_universe" : f.slice(7).toUpperCase();
+    try {
+      const raw = await fs.readFile(GRADES_FIXTURE_FILE, "utf8");
+      const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      return all[key] ?? {};
     } catch {
       return {};
     }

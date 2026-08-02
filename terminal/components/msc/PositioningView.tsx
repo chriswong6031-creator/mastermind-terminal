@@ -30,6 +30,7 @@ import { MarketStructureBody } from "./MarketStructureBody";
 import type { MscMoves } from "@/lib/marketStructure";
 import type { AggTrendPayload } from "@/lib/aggTrend";
 import type { QuadPayload } from "@/lib/quadBoard";
+import type { GradesPayload } from "./GradesCard";
 import type { GexMatrix } from "@/lib/gexLadder";
 import type { GexPayload } from "@/components/gexdesk/GexDeskView";
 
@@ -86,6 +87,10 @@ export function PositioningView() {
   // ticker change would be pure waste. flowClientCache dedupes it anyway; not clearing it
   // also means the screener never blinks out while a new root's ladder loads.
   const [quad, setQuad] = useState<QuadPayload | null>(null);
+  // R2.4 report cards: the root's own (single names) + the universe aggregate
+  // (context for uncovered roots). Both tiny, both optional, both non-gating.
+  const [grades, setGrades] = useState<GradesPayload | null>(null);
+  const [gradesUni, setGradesUni] = useState<GradesPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const reqRef = useRef(0);
@@ -119,10 +124,12 @@ export function PositioningView() {
       // the first paint on them would make every root feel slower to serve two cards that
       // are not the reason anyone opened the tab.
       void (async () => {
-        const [a, mx, q] = await Promise.all([
+        const [a, mx, q, gr, gu] = await Promise.all([
           flowGet(`agg:${root}`).catch(() => null),
           flowGet(`matrix:${root}`).catch(() => null),
           flowGet("quad").catch(() => null),
+          flowGet(`grades:${root}`).catch(() => null),
+          flowGet("grades_universe").catch(() => null),
         ]);
         if (reqRef.current !== req) return;
         const ap = pickRoot<AggTrendPayload & { root?: unknown }>(a, root);
@@ -135,6 +142,14 @@ export function PositioningView() {
         // Not root-keyed: one board, every root on it.
         const qp = q as QuadPayload | null;
         setQuad(qp && Array.isArray(qp.rows) && qp.rows.length > 0 ? qp : null);
+        const grp = pickRoot<GradesPayload & { root?: unknown }>(gr, root);
+        setGrades(grp && grp.roles && Object.keys(grp.roles).length > 0 ? grp : null);
+        const gup = gu as (GradesPayload & { root?: string }) | null;
+        setGradesUni(
+          gup && gup.roles && Object.keys(gup.roles).length > 0 && gup.root === "_universe"
+            ? gup
+            : null,
+        );
       })();
     })();
   }, [root]);
@@ -149,6 +164,7 @@ export function PositioningView() {
       setMoves(null);
       setAgg(null);
       setMatrix(null);
+      setGrades(null);
       setRoot(next);
     }
   }, [inputVal, root]);
@@ -240,6 +256,8 @@ export function PositioningView() {
             agg={agg}
             matrix={matrix}
             quad={quad}
+            grades={grades}
+            gradesUniverse={gradesUni}
             root={root}
             lang={lang}
           />
