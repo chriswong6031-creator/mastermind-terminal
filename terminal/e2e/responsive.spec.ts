@@ -118,10 +118,17 @@ test("the canonical Terminal shell works at its supported responsive widths", as
 
   if (!desktop) {
     // Tapping the mobile ticker is navigation into the watchlist hub, not an implicit search.
+    // R2c: the phone presents that hub as a drag-to-size drawer, the tablet as the centred
+    // near-full-page sheet. Same content and same verbs either way — only the frame differs.
+    const phone = testInfo.project.name === "mobile";
     await page.locator(".m-symbar").click();
-    const searchHub = page.locator(".smodal-hub");
+    const searchHub = page.locator(phone ? ".msheet-search" : ".smodal-hub");
     const searchInput = searchHub.getByPlaceholder("Symbol, ISIN, or CUSIP");
     const viewToggle = searchHub.locator(".sh-view-toggle");
+    const closeSearch = async () => {
+      if (phone) await page.keyboard.press("Escape");
+      else await searchHub.locator(".smodal-title-bar .esc").click();
+    };
     await expect(searchHub.locator(".s-home")).toBeVisible();
     await expect(searchInput).not.toBeFocused();
     await expect(viewToggle).toHaveText("Recent");
@@ -150,13 +157,13 @@ test("the canonical Terminal shell works at its supported responsive widths", as
     // Typing a symbol is not a view. Leaving without opening AAPL must not add it to Recent.
     await searchInput.fill("AAPL");
     await expect(searchHub.locator(".sres .r").first().locator(".tk")).toHaveText("AAPL");
-    await searchHub.locator(".smodal-title-bar .esc").click();
-    await expect(searchHub).toBeHidden();
+    await closeSearch();
+    await expect(searchHub).toHaveCount(0);
     await page.locator(".m-symbar").click();
     await searchHub.locator(".sh-view-toggle").click();
     await expect(searchHub.locator(".sres .tk")).toHaveText(["NVDA"]);
-    await searchHub.locator(".smodal-title-bar .esc").click();
-    await expect(searchHub).toBeHidden();
+    await closeSearch();
+    await expect(searchHub).toHaveCount(0);
   }
 
   const overflow = await page.evaluate(() => ({

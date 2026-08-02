@@ -3834,7 +3834,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       bar.dataset.drawingId = d.id;
       const sw = (a: boolean) => (a ? " on" : "");
       const currentColor = normalizeHexColor(d.color) || COLORS[0];
-      let h = quickBarColors(currentColor).map((cc, index) => `<button data-c="${cc}" data-color-role="${index === 0 ? "current" : "recent"}" class="dsw${sw(index === 0)}" style="background:${cc}" aria-label="${escH(tPlain("drawingColorValue").replace("{color}", cc))}"></button>`).join("");
+      // The colour controls share one wrapper so a narrow layout can cluster them into a single
+      // slot instead of spending four. `display:contents` keeps every wider layout unchanged.
+      let h = `<span class="bar-colors">${quickBarColors(currentColor).map((cc, index) => `<button data-c="${cc}" data-color-role="${index === 0 ? "current" : "recent"}" class="dsw${sw(index === 0)}" style="background:${cc}" aria-label="${escH(tPlain("drawingColorValue").replace("{color}", cc))}"></button>`).join("")}</span>`;
       if (getDrawingTool(d.kind)?.capabilities.includes("fontSize")) {
         h += `<span class="bar-sep"></span>` + [["12", "S"], ["16", "M"], ["22", "L"]].map(([fs, l]) => `<button data-fs="${fs}" class="dfi${sw((d.fontSize ?? 13) === +fs)}" aria-label="${escH(tPlain("drawingTextSizeOption").replace("{size}", l))}">${l}</button>`).join("");
       } else if (getDrawingTool(d.kind)?.capabilities.some((cap) => cap === "width" || cap === "dash")) {
@@ -3860,7 +3862,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       custom.className = "bar-custom-color"; custom.type = "color"; custom.value = currentColor; custom.dataset.previousColor = currentColor;
       custom.setAttribute("aria-label", tPlain("drawingCustomColorAria")); custom.setAttribute("data-custom-color", "1");
       picker.append(pickerPreview, pickerPlus, custom);
-      bar.insertBefore(picker, bar.querySelector(".bar-sep"));
+      (bar.querySelector(".bar-colors") ?? bar).appendChild(picker);
       const lock = document.createElement("button");
       lock.className = "bar-act" + (d.locked ? " on" : ""); lock.type = "button";
       lock.setAttribute("aria-label", d.locked ? tPlain("drawingUnlock") : tPlain("drawingLock")); lock.setAttribute("data-lock", "1"); lock.textContent = d.locked ? "●" : "○"; bar.appendChild(lock);
@@ -4118,7 +4120,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (ax != null && ay != null) {
           const sig = barSignature(d);
           if (sig !== barSig) { buildBar(d); barSig = sig; }
-          bar.style.display = "flex";
+          // Clear rather than pin to flex — the stylesheet owns the layout (the phone stands the
+          // inspector up as a two-column grid), and an inline display would outrank it. Hiding
+          // still uses inline `none`, which is what the visibility checks read.
+          bar.style.display = "";
           if (barManualFor !== sel) { barManual = null; barManualFor = sel; }
           bar.style.left = (barManual?.x ?? Math.max(4, Math.min(el!.clientWidth - bar.offsetWidth - 4, ax - 8))) + "px";
           const naturalTop = getDrawingTool(d.kind)?.capabilities.includes("fontSize")

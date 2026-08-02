@@ -7,7 +7,8 @@ import { DRAWING_TOOL_REGISTRY } from "../lib/drawingTools";
 // test proves the tablet and desktop projects are inert to all of it.
 
 const PHONE_MAX = 640;
-const STRIP_H = 51.7;
+/** R2c: 46px, in flow at the foot of the chart column (was 51.7px pinned to the viewport). */
+const STRIP_H = 46;
 
 const phone = (page: Page) => (page.viewportSize()?.width ?? 1440) <= PHONE_MAX;
 
@@ -49,24 +50,34 @@ test("phone: the roller strip replaces the top toolbar row and the floating dock
   await expect(page.locator(".chart-tabs")).toBeHidden();
   await expect(page.locator(".ds-dock")).toBeHidden();
   await expect(page.locator(".ds-favorites")).toBeHidden();
+  // R2c — and the strip owns the interval alone: the in-chart range row is retired here, so the
+  // phone never carries two interval controls.
+  await expect(page.locator(".chart-frame-bar")).toBeHidden();
 
   const strip = page.getByTestId("roller-strip");
   await expect(strip).toBeVisible();
   const geom = await strip.evaluate((el) => {
     const style = getComputedStyle(el);
     const rect = el.getBoundingClientRect();
+    const chart = document.querySelector(".chart-body")!.getBoundingClientRect();
     return {
-      height: rect.height, bottom: rect.bottom, left: rect.left,
-      vh: window.innerHeight, vw: window.innerWidth,
+      height: rect.height, top: rect.top, left: rect.left, width: rect.width,
+      chartBottom: chart.bottom, vh: window.innerHeight, vw: window.innerWidth,
       background: style.backgroundColor, position: style.position, borderTop: style.borderTopWidth,
+      appPadBottom: getComputedStyle(document.querySelector(".app")!).paddingBottom,
     };
   });
-  expect(geom.position).toBe("fixed");
+  // R2c — the strip rides at the FOOT OF THE CHART COLUMN, not pinned to the viewport: it takes
+  // the seat the range row vacated, so the two read as one instrument.
+  expect(geom.position).toBe("relative");
+  expect(geom.top).toBeCloseTo(geom.chartBottom, 0);
   expect(geom.height).toBeCloseTo(STRIP_H, 0);
-  expect(geom.bottom).toBeCloseTo(geom.vh, 0);
   expect(geom.left).toBe(0);
+  expect(geom.width).toBeCloseTo(geom.vw, 0);
   expect(geom.background).toBe("rgb(0, 0, 0)");
   expect(parseFloat(geom.borderTop)).toBeCloseTo(1, 1);
+  // Nothing is pinned any more, so the page owes the strip no reserved band.
+  expect(parseFloat(geom.appPadBottom)).toBeCloseTo(0, 0);
 
   // Measured wheel geometry: symbol ink from 13.3px, 83.4px wide; interval 54px.
   const wheels = await page.evaluate(() => {
@@ -294,30 +305,121 @@ test("phone: the fold sits under the oracle cards and the strip survives the exp
   test.skip(!phone(page), "The fold rule is a phone-viewport contract.");
   await openTerminal(page);
 
-  // R2.3 — at rest the GOLDEN ORACLE / RESEARCH DESK row is visible above the strip and TREND
-  // is below the fold, so the chart keeps the tallest possible band.
-  const fold = await page.evaluate(() => window.innerHeight - 51.7);
+  // R2.3 — at rest the GOLDEN ORACLE / RESEARCH DESK row still clears the fold, so the chart
+  // keeps the tallest band that leaves the verdicts readable without a scroll. R2c moved the
+  // strip into the chart column, and the chart body gave up exactly its height, so the rail
+  // below lands where it always did.
+  const fold = await page.evaluate(() => window.innerHeight);
   const signals = (await page.locator(".detail-scroll .sig-btn").boundingBox())!;
   expect(signals.y + signals.height).toBeLessThanOrEqual(fold + 1);
   const trend = (await page.locator(".detail-scroll .trend-row").first().boundingBox())!;
-  expect(trend.y).toBeGreaterThanOrEqual(fold - 1);
+  expect(trend.y).toBeGreaterThan(signals.y);
 
-  // The strip persists in the expanded chart, and the chart stops short of it rather than
-  // hiding its own time axis underneath.
+  // The strip persists in the expanded chart as the column's foot, and the canvas stops at its
+  // top edge rather than hiding its own time axis underneath.
   await page.locator(".chart-fs-float").click();
   await expect(page.locator(".app.fs")).toHaveCount(1);
   await expect(page.getByTestId("roller-strip")).toBeVisible();
-  const clearance = await page.evaluate(() => {
+  const expanded = await page.evaluate(() => {
     const workspace = document.querySelector(".workspace")!.getBoundingClientRect();
+    const body = document.querySelector(".chart-body")!.getBoundingClientRect();
     const strip = document.querySelector('[data-testid="roller-strip"]')!.getBoundingClientRect();
-    return strip.top - workspace.bottom;
+    return { chartToStrip: strip.top - body.bottom, stripToEdge: window.innerHeight - strip.bottom, filled: body.height / workspace.height };
   });
-  expect(clearance).toBeGreaterThanOrEqual(-1);
+  expect(expanded.chartToStrip).toBeCloseTo(0, 0);
+  expect(expanded.stripToEdge).toBeCloseTo(0, 0);
+  // …and the expanded chart really does fill the workspace it was given.
+  expect(expanded.filled).toBeGreaterThan(0.9);
+});
+
+test("phone: tapping the symbol wheel opens the ticker picker as a drawer", async ({ page }) => {
+  test.skip(!phone(page), "R2c gives the phone the drawer; the tablet keeps the centred sheet.");
+  await openTerminal(page);
+
+  // TV's verb, and ours: the selected chamber IS the search button — there is no separate one.
+  const wheel = (await page.getByTestId("roller-symbol").boundingBox())!;
+  await page.touchscreen.tap(wheel.x + wheel.width / 2, wheel.y + wheel.height / 2);
+
+  const drawer = page.locator(".msheet.msheet-search");
+  await expect(drawer).toBeVisible();
+  await expect(drawer).toHaveAttribute("data-detent", "initial");
+  // The same 62% the Drawings sheet presents at — one drawer idiom on this phone…
+  const ratio = () => drawer.evaluate((el) => el.getBoundingClientRect().height / window.innerHeight);
+  expect(await ratio()).toBeCloseTo(0.62, 1);
+  // …over a chart that stays live and undimmed beneath it.
+  await expect(page.locator(".chart-wrap canvas").first()).toBeVisible();
+  expect(await page.locator(".msheet-scrim").evaluate((el) => getComputedStyle(el).backgroundColor))
+    .toBe("rgba(0, 0, 0, 0)");
+
+  // Navigation, not a search: the field is present but was never focused, so no keyboard.
+  await expect(drawer.getByPlaceholder("Symbol, ISIN, or CUSIP")).not.toBeFocused();
+  await expect(drawer.locator(".s-home")).toBeVisible();
+
+  // The BODY is the scroller, so a drag that starts on a row moves the sheet.
+  const row = (await drawer.locator(".sres .r").first().boundingBox())!;
+  await pointerDrag(page, ".msheet.msheet-search", { x: row.x + row.width * 0.4, y: row.y + 4 }, -240);
+  await expect(drawer).toHaveAttribute("data-detent", "full");
+  expect(await ratio()).toBeGreaterThan(0.9);
+
+  // A short, quick flick down steps one detent back rather than needing a full-height drag.
+  await pointerDrag(page, ".msheet.msheet-search", { x: 195, y: 120 }, 70);
+  await expect(drawer).toHaveAttribute("data-detent", "initial");
+  // The snap animates, and a drag reads the height it starts from — let it land first.
+  await expect.poll(ratio).toBeCloseTo(0.62, 1);
+
+  // …and the same short flick from the resting detent dismisses it.
+  const GRABBER = ".msheet.msheet-search .msheet-handle-wrap";
+  const grabber = (await page.locator(GRABBER).boundingBox())!;
+  await pointerDrag(page, GRABBER, { x: grabber.x + grabber.width / 2, y: grabber.y + 2 }, 70);
+  await expect(drawer).toHaveCount(0);
+
+  // Picking a symbol from the drawer charts it and closes — the tap still lands even though the
+  // row is also the drag surface.
+  await page.touchscreen.tap(wheel.x + wheel.width / 2, wheel.y + wheel.height / 2);
+  await expect(drawer).toBeVisible();
+  await drawer.getByPlaceholder("Symbol, ISIN, or CUSIP").fill("AAPL");
+  const hit = drawer.locator(".sres .r").first();
+  await expect(hit.locator(".tk")).toHaveText("AAPL");
+  await hit.click();
+  await expect(drawer).toHaveCount(0);
+  await expect(page.getByTestId("roller-symbol")).toHaveAttribute("aria-valuetext", "AAPL");
+});
+
+test("phone: the fullscreen control is the only expansion affordance", async ({ page }) => {
+  test.skip(!phone(page), "R2c retires the per-pane strip on the phone only.");
+  // `always` is the loudest the setting gets — if the per-pane maximize survives anywhere it
+  // survives here, and a phone would then carry two expand buttons stacked over the canvas.
+  await page.addInitScript(() => localStorage.setItem("mm.chartSettings", JSON.stringify({ paneButtons: "always" })));
+  await openTerminal(page);
+
+  await expect(page.locator(".chart-fs-float")).toBeVisible();
+  const paneOps = page.locator(".pane-ops");
+  for (let i = 0; i < await paneOps.count(); i += 1) await expect(paneOps.nth(i)).toBeHidden();
+
+  // Double-tap remains the phone's maximize verb, so nothing was lost with the button: the price
+  // pane swallows the sub-panes' band and a second double-tap hands it back.
+  const priceBand = () => page.evaluate(() => Math.max(
+    ...Array.from(document.querySelectorAll(".chart-wrap canvas")).map((c) => c.getBoundingClientRect().height)));
+  const wrap = (await page.locator(".chart-wrap").first().boundingBox())!;
+  const point = { x: wrap.x + wrap.width * 0.4, y: wrap.y + wrap.height * 0.3 };
+  const doubleTap = async () => {
+    await page.touchscreen.tap(point.x, point.y);
+    await page.waitForTimeout(70);
+    await page.touchscreen.tap(point.x, point.y);
+  };
+  const atRest = await priceBand();
+  await doubleTap();
+  await expect.poll(priceBand).toBeGreaterThan(atRest * 1.15);
+  const maximized = await priceBand();
+  await doubleTap();
+  await expect.poll(priceBand).toBeLessThan(maximized * 0.85);
 });
 
 test("tablet and desktop never see the phone chrome", async ({ page }) => {
   test.skip(phone(page), "This is the scope law for the wider projects.");
   await openTerminal(page);
+  // The range row and the per-pane controls are phone-only retirements.
+  await expect(page.locator(".chart-frame-bar")).toBeVisible();
 
   await expect(page.getByTestId("roller-strip")).toHaveCount(0);
   await expect(page.getByRole("dialog", { name: "Drawings" })).toHaveCount(0);

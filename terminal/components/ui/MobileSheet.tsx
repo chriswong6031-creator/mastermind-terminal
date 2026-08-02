@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { resolveDetentRelease } from "@/lib/sheetDetent";
 
 export interface MobileSheetProps {
   open: boolean;
@@ -18,6 +19,13 @@ export interface MobileSheetProps {
    * content height and the dismiss-only transform drag every other surface uses.
    */
   detents?: readonly [number, number];
+  /**
+   * Where focus lands on present. `first` (the default) takes the sheet's first control, which is
+   * what a menu wants. `sheet` parks focus on the dialog itself — for surfaces whose first control
+   * is a text field they do NOT want to summon a keyboard for, like the phone ticker picker, where
+   * opening the drawer is navigation rather than a request to type.
+   */
+  initialFocus?: "first" | "sheet";
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -39,10 +47,14 @@ const SWIPE_CLOSE_MS = 270;
 
 // Interactive content a drag must never steal the pointer from; both drag mechanics honour it.
 const DRAG_EXEMPT_SELECTOR = "button, a[href], input, select, textarea, label, summary, [role='button'], [role='option'], [role='menuitem'], .msheet-row, [data-no-sheet-drag]";
-/** A released detent drag this far below the initial detent dismisses instead of snapping back. */
-const DETENT_DISMISS_SLACK = 90;
 /** Floor for the live drag height, so a fast flick can't invert the sheet before release. */
 const DETENT_MIN_HEIGHT = 80;
+/**
+ * Travel before a detent drag takes the pointer. Capturing on pointerdown would retarget the
+ * click to the sheet root, so a TAP on a plain (non-button) row — a search result, say — would
+ * never reach its handler. Below this the gesture is still a tap and the sheet stays put.
+ */
+const DETENT_DRAG_SLOP = 4;
 
 function focusableElements(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((element) => {
@@ -82,6 +94,7 @@ export default function MobileSheet({
   maxHeight,
   className,
   detents,
+  initialFocus = "first",
 }: MobileSheetProps) {
   // Track mount so createPortal only fires client-side.
   const [mounted, setMounted] = useState(false);
@@ -111,14 +124,16 @@ export default function MobileSheet({
 
   // ── Two-detent drag (opt-in via `detents`) ─────────────────────────────────────────────────
   // Twin: components/mobile/AnalysisHubSheet.tsx, whose 60↔96 hub drag this mirrors. The hub
-  // keeps its own copy because its scrim, markup and focus model are not this component's.
+  // keeps its own copy because its scrim, markup and focus model are not this component's — but
+  // the release decision they must agree on is shared, in lib/sheetDetent.ts.
   const [atFullDetent, setAtFullDetent] = useState(false);
   const [liveDetentHeight, setLiveDetentHeight] = useState<number | null>(null);
   // liveHeight mirrors liveDetentHeight: release must read the height the last MOVE produced, and
   // a burst of pointer events inside one task would leave the state value a render behind.
-  const detentRef = useRef<{ startY: number; startH: number; pointerId: number | null; liveHeight: number | null }>(
-    { startY: 0, startH: 0, pointerId: null, liveHeight: null },
-  );
+  const detentRef = useRef<{
+    startY: number; startH: number; pointerId: number | null; liveHeight: number | null;
+    lastY: number; lastT: number; velocity: number; captured: boolean;
+  }>({ startY: 0, startH: 0, pointerId: null, liveHeight: null, lastY: 0, lastT: 0, velocity: 0, captured: false });
   // Each presentation starts at the first detent (React's adjust-state-on-prop-change pattern).
   const [wasOpen, setWasOpen] = useState(open);
   if (wasOpen !== open) {
@@ -164,10 +179,10 @@ export default function MobileSheet({
       : null;
 
     const focusFrame = window.requestAnimationFrame(() => {
-      const initialFocus = sheet.querySelector<HTMLElement>("[data-autofocus], [autofocus]")
-        ?? focusableElements(sheet)[0]
+      const target = sheet.querySelector<HTMLElement>("[data-autofocus], [autofocus]")
+        ?? (initialFocus === "sheet" ? sheet : focusableElements(sheet)[0])
         ?? sheet;
-      initialFocus.focus({ preventScroll: true });
+      target.focus({ preventScroll: true });
     });
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -210,7 +225,7 @@ export default function MobileSheet({
       previousFocusRef.current = null;
       if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
     };
-  }, [mounted, open]);
+  }, [mounted, open, initialFocus]);
 
   function clearCloseTimer() {
     if (closeTimerRef.current === null) return;
@@ -341,43 +356,78 @@ export default function MobileSheet({
     const scrollEl = sheet.querySelector<HTMLElement>(".msheet-body");
     // Anywhere on the grabber/header, or on the body while it is scrolled to the top.
     if (!isHandle && (!scrollEl || scrollEl.scrollTop > 0 || target.closest?.(DRAG_EXEMPT_SELECTOR))) return;
+    // Deliberately NOT capturing yet — see DETENT_DRAG_SLOP.
     detentRef.current = {
       startY: e.clientY,
       startH: sheet.getBoundingClientRect().height,
       pointerId: e.pointerId,
       liveHeight: null,
+      lastY: e.clientY,
+      lastT: e.timeStamp,
+      velocity: 0,
+      captured: false,
     };
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // Synthetic events and browser gesture arbitration may deny capture.
-    }
   }
 
   function onDetentMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (!detents || detentRef.current.pointerId !== e.pointerId) return;
+    const drag = detentRef.current;
+    if (!detents || drag.pointerId !== e.pointerId) return;
+    if (!drag.captured) {
+      if (Math.abs(e.clientY - drag.startY) < DETENT_DRAG_SLOP) return;
+      drag.captured = true;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Synthetic events and browser gesture arbitration may deny capture.
+      }
+    }
     const max = window.innerHeight * (detents[1] / 100);
     const height = Math.min(max, Math.max(
       DETENT_MIN_HEIGHT,
-      detentRef.current.startH - (e.clientY - detentRef.current.startY),
+      drag.startH - (e.clientY - drag.startY),
     ));
-    detentRef.current.liveHeight = height;
+    // Positive velocity is downward — the direction that shrinks the sheet.
+    drag.velocity = (e.clientY - drag.lastY) / Math.max(1, e.timeStamp - drag.lastT);
+    drag.lastY = e.clientY;
+    drag.lastT = e.timeStamp;
+    drag.liveHeight = height;
     setLiveDetentHeight(height);
   }
 
   function onDetentUp(e: React.PointerEvent<HTMLDivElement>) {
-    if (!detents || detentRef.current.pointerId !== e.pointerId) return;
-    detentRef.current.pointerId = null;
-    releasePointer(e.pointerId);
-    const height = detentRef.current.liveHeight;
-    detentRef.current.liveHeight = null;
+    const drag = detentRef.current;
+    if (!detents || drag.pointerId !== e.pointerId) return;
+    drag.pointerId = null;
+    if (drag.captured) releasePointer(e.pointerId);
+    drag.captured = false;
+    const height = drag.liveHeight;
+    const { startH, velocity } = drag;
+    drag.liveHeight = null;
+    drag.velocity = 0;
     setLiveDetentHeight(null);
     if (height == null) return;
-    const initial = window.innerHeight * (detents[0] / 100);
-    const upperBand = (initial + window.innerHeight * (detents[1] / 100)) / 2;
-    if (height >= upperBand) setAtFullDetent(true);
-    else if (height < initial - DETENT_DISMISS_SLACK) closeNow();
-    else setAtFullDetent(false);
+    const landing = resolveDetentRelease({
+      height,
+      startHeight: startH,
+      velocity,
+      initial: window.innerHeight * (detents[0] / 100),
+      full: window.innerHeight * (detents[1] / 100),
+    });
+    if (landing === "dismiss") closeNow();
+    else setAtFullDetent(landing === "full");
+  }
+
+  /** A cancelled pointer is the system taking the gesture away, not a decision: abandon the
+   *  drag and let the sheet settle back on the detent it already had. */
+  function onDetentCancel(e: React.PointerEvent<HTMLDivElement>) {
+    const drag = detentRef.current;
+    if (!detents || drag.pointerId !== e.pointerId) return;
+    drag.pointerId = null;
+    drag.liveHeight = null;
+    drag.velocity = 0;
+    if (drag.captured) releasePointer(e.pointerId);
+    drag.captured = false;
+    setLiveDetentHeight(null);
   }
 
   if (!mounted) return null;
@@ -431,7 +481,7 @@ export default function MobileSheet({
           onPointerDown={detents ? onDetentDown : onPointerDown}
           onPointerMove={detents ? onDetentMove : onPointerMove}
           onPointerUp={detents ? onDetentUp : onPointerUp}
-          onPointerCancel={detents ? onDetentUp : onPointerCancel}
+          onPointerCancel={detents ? onDetentCancel : onPointerCancel}
           onLostPointerCapture={detents ? undefined : onLostPointerCapture}
           onClick={(e) => e.stopPropagation()}
         >

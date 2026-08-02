@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "@/lib/i18n";
+import { resolveDetentRelease } from "@/lib/sheetDetent";
 
 export type HubAction = "indicators" | "compare" | "alerts" | "symbolDetails";
 
@@ -52,9 +53,10 @@ export default function AnalysisHubSheet({ open, onClose, onAction }: AnalysisHu
   const sheetRef = useRef<HTMLDivElement>(null);
   // liveH mirrors dragH: the release handler must read the height the last MOVE produced, and a
   // burst of pointer events inside one task would leave the state value a render behind.
-  const drag = useRef<{ startY: number; startH: number; id: number | null; liveH: number | null }>(
-    { startY: 0, startH: 0, id: null, liveH: null },
-  );
+  const drag = useRef<{
+    startY: number; startH: number; id: number | null; liveH: number | null;
+    lastY: number; lastT: number; velocity: number; captured: boolean;
+  }>({ startY: 0, startH: 0, id: null, liveH: null, lastY: 0, lastT: 0, velocity: 0, captured: false });
   const onCloseRef = useRef(onClose);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
@@ -97,30 +99,64 @@ export default function AnalysisHubSheet({ open, onClose, onAction }: AnalysisHu
       startH: sheet.getBoundingClientRect().height,
       id: event.pointerId,
       liveH: null,
+      lastY: event.clientY,
+      lastT: event.timeStamp,
+      velocity: 0,
+      captured: false,
     };
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* gesture arbitration */ }
+    // Capture waits for real travel: taking the pointer on pointerdown retargets the click to the
+    // sheet, which would cost a plain (non-button) child its tap. MobileSheet's twin does the same.
   }
 
   function moveDrag(event: React.PointerEvent<HTMLDivElement>) {
-    if (drag.current.id !== event.pointerId) return;
+    const state = drag.current;
+    if (state.id !== event.pointerId) return;
+    if (!state.captured) {
+      if (Math.abs(event.clientY - state.startY) < 4) return;
+      state.captured = true;
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* gesture arbitration */ }
+    }
     const max = window.innerHeight * FULL;
-    const height = Math.min(max, Math.max(80, drag.current.startH - (event.clientY - drag.current.startY)));
-    drag.current.liveH = height;
+    const height = Math.min(max, Math.max(80, state.startH - (event.clientY - state.startY)));
+    // Positive velocity is downward — the direction that shrinks the sheet.
+    state.velocity = (event.clientY - state.lastY) / Math.max(1, event.timeStamp - state.lastT);
+    state.lastY = event.clientY;
+    state.lastT = event.timeStamp;
+    state.liveH = height;
     setDragH(height);
   }
 
   function endDrag(event: React.PointerEvent<HTMLDivElement>) {
-    if (drag.current.id !== event.pointerId) return;
-    drag.current.id = null;
-    const height = drag.current.liveH;
-    drag.current.liveH = null;
+    const state = drag.current;
+    if (state.id !== event.pointerId) return;
+    state.id = null;
+    state.captured = false;
+    const height = state.liveH;
+    const { startH, velocity } = state;
+    state.liveH = null;
+    state.velocity = 0;
     setDragH(null);
     if (height == null) return;
-    const half = window.innerHeight * HALF;
-    const upperBand = (half + window.innerHeight * FULL) / 2;
-    if (height >= upperBand) setFull(true);
-    else if (height < half - 90) onCloseRef.current();
-    else setFull(false);
+    const landing = resolveDetentRelease({
+      height,
+      startHeight: startH,
+      velocity,
+      initial: window.innerHeight * HALF,
+      full: window.innerHeight * FULL,
+    });
+    if (landing === "dismiss") onCloseRef.current();
+    else setFull(landing === "full");
+  }
+
+  /** A cancelled pointer is the system taking the gesture away, not a decision. */
+  function cancelDrag(event: React.PointerEvent<HTMLDivElement>) {
+    const state = drag.current;
+    if (state.id !== event.pointerId) return;
+    state.id = null;
+    state.captured = false;
+    state.liveH = null;
+    state.velocity = 0;
+    setDragH(null);
   }
 
   if (!mounted || !open) return null;
@@ -155,7 +191,7 @@ export default function AnalysisHubSheet({ open, onClose, onAction }: AnalysisHu
         onPointerDown={startDrag}
         onPointerMove={moveDrag}
         onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+        onPointerCancel={cancelDrag}
       >
         <div className="mhub-grip" data-handle="1"><span /></div>
         <div className="mhub-hd" data-handle="1">
