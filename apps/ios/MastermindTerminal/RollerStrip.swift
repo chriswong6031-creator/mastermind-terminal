@@ -28,11 +28,13 @@ import UIKit
 /// The cluster is wider than any phone on purpose — TV clips its own trailing icons the
 /// same way (§2.18 "fullscreen … clipped at right edge") — so it scrolls.
 ///
-/// Magnet / undo / redo are placeholder affordances: correctly-styled controls that
-/// acknowledge the touch and do nothing (snap and drawing-undo live in the chart renderer,
-/// which per `AGENTS.md` stays in `terminal/`). The pencil toggles the renderer's own
-/// drawing toolbar over the bridge (`setDrawTools`); `•••` presents the Analysis hub;
-/// minimize collapses the app's bottom menu into the chart; share is real OS share.
+/// Magnet is the one remaining placeholder affordance: a correctly-styled control that
+/// acknowledges the touch and does nothing (snap lives in the chart renderer, which per
+/// `AGENTS.md` stays in `terminal/`). R2.1 made the rest real — undo/redo drive the
+/// renderer's own drawing history over the bridge (`drawUndo`/`drawRedo`), and the pencil
+/// opens the native Drawings sheet rather than revealing the web dock. `•••` presents the
+/// Analysis hub; minimize collapses the app's bottom menu into the chart; share is real
+/// OS share.
 struct RollerStrip: View {
     /// §2.18: measured 739.3 → 791.0 pt.
     static let height: CGFloat = 51.7
@@ -60,9 +62,13 @@ struct RollerStrip: View {
     /// §2.18 — the `•••` icon carries the universal red dot while the hub holds unseen items.
     var showsMoreBadge: Bool = true
     var onMore: () -> Void = {}
-    /// Pencil state + toggle: mirrors whether the web chart's drawing toolbar is shown.
+    /// Pencil state + action: active while the native Drawings sheet is up (R2.1).
     var drawActive: Bool = false
     var onDraw: () -> Void = {}
+    /// R2.1 — real drawing history. The host decides what a tap does before the page is
+    /// ready; the strip only reports the touch.
+    var onUndo: () -> Void = {}
+    var onRedo: () -> Void = {}
     /// The chart's live symbol — what the share sheet links to (the wheel index can lag a
     /// programmatic symbol change by a frame; the bridge's value is the truth).
     var shareSymbol: String = AppConfig.defaultSymbol
@@ -223,8 +229,8 @@ struct RollerStrip: View {
             ToolbarIcon(
                 glyph: .uturn(forward: false),
                 label: L10n.t("Undo", lang),
-                isPlaceholder: true,
-                lang: lang
+                lang: lang,
+                action: onUndo
             )
             ToolbarIcon(
                 glyph: .minimizeRect,
@@ -238,8 +244,8 @@ struct RollerStrip: View {
             ToolbarIcon(
                 glyph: .uturn(forward: true),
                 label: L10n.t("Redo", lang),
-                isPlaceholder: true,
-                lang: lang
+                lang: lang,
+                action: onRedo
             )
 
             // Real OS share of the public chart link — no `shell=app`, so the recipient

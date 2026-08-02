@@ -1,4 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
+import { isPhoneViewport } from "./phoneChrome";
+
+// Both tests exercise the shared MobileSheet through whichever surface the viewport ships: the
+// timeframe sheet behind the toolbar's edit pencil on tablet, and the R2 Drawings sheet behind
+// the roller strip's pencil on the phone (the phone has no toolbar row any more).
+function sheetEntry(page: Page) {
+  return isPhoneViewport(page)
+    ? { trigger: page.getByTestId("roller-draw"), name: "Drawings" }
+    : { trigger: page.locator(".tfbtn-edit"), name: "Timeframe" };
+}
 
 async function openTerminal(page: Page) {
   await page.addInitScript(() => {
@@ -21,25 +31,28 @@ test("mobile sheet is labelled, contains focus, and restores its trigger", async
   test.skip(testInfo.project.name === "desktop", "MobileSheet is rendered only at responsive widths.");
   await openTerminal(page);
 
-  const trigger = page.locator(".tfbtn-edit");
+  const { trigger, name } = sheetEntry(page);
   await trigger.focus();
   await trigger.click();
 
-  const sheet = page.getByRole("dialog", { name: "Timeframe" });
+  const sheet = page.getByRole("dialog", { name });
   await expect(sheet).toBeVisible();
   const titleId = await sheet.getAttribute("aria-labelledby");
   expect(titleId).toBeTruthy();
   await expect(sheet.locator(".msheet-title")).toHaveAttribute("id", titleId!);
-  await expect(sheet.locator(".msheet-title")).toHaveText("Timeframe");
-  await expect(sheet).toBeFocused();
+  await expect(sheet.locator(".msheet-title")).toContainText(name);
 
-  // The timeframe sheet currently has no native tab stops. Tab must therefore
-  // stay on the dialog instead of leaking into the chart behind it.
+  // Focus lands inside the dialog — on the sheet itself when it carries no tab stops (the
+  // timeframe list), on its first control otherwise (the Drawings sheet's close button).
+  const focusContained = () => sheet.evaluate((element) => element.contains(document.activeElement));
+  await expect.poll(focusContained).toBe(true);
+
+  // Tab must never leak into the chart behind the sheet.
   await page.keyboard.press("Tab");
-  await expect(sheet).toBeFocused();
+  await expect.poll(focusContained).toBe(true);
   await trigger.focus();
   await page.keyboard.press("Shift+Tab");
-  await expect(sheet).toBeFocused();
+  await expect.poll(focusContained).toBe(true);
 
   await page.keyboard.press("Escape");
   await expect(sheet).toBeHidden();
@@ -51,10 +64,10 @@ test("reduced-motion swipe cancellation resets cleanly and dismissal is immediat
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openTerminal(page);
 
-  const trigger = page.locator(".tfbtn-edit");
+  const { trigger, name } = sheetEntry(page);
   await trigger.focus();
   await trigger.click();
-  const sheet = page.getByRole("dialog", { name: "Timeframe" });
+  const sheet = page.getByRole("dialog", { name });
   const handle = sheet.locator("[data-handle='1']");
   await expect(sheet).toBeVisible();
 

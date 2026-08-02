@@ -64,11 +64,23 @@ test("the canonical Terminal shell works at its supported responsive widths", as
     await page.mouse.click((page.viewportSize()?.width ?? 390) - 8, 100);
     await expect(page.locator(".m-drawer.open")).toBeHidden();
 
-    await page.locator(".tfbtn-edit").click();
-    await expect(page.locator(".msheet")).toBeVisible();
-    await expect(page.locator(".msheet-row").filter({ hasText: /^4h/ })).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.locator(".msheet")).toBeHidden();
+    if (testInfo.project.name === "mobile") {
+      // R2: the phone's top toolbar row and floating drawing dock are replaced by the bottom
+      // roller strip — its wheels own symbol + interval and its pencil/••• own the sheets.
+      // mobile-chart-chrome.spec.ts covers that chrome in full.
+      await expect(page.locator(".chart-tabs")).toBeHidden();
+      await expect(page.locator(".ds-dock")).toBeHidden();
+      const strip = page.getByTestId("roller-strip");
+      await expect(strip).toBeVisible();
+      await expect(page.getByTestId("roller-symbol")).toHaveAttribute("aria-valuetext", "NVDA");
+      await expect(page.getByTestId("roller-interval")).toBeVisible();
+    } else {
+      await page.locator(".tfbtn-edit").click();
+      await expect(page.locator(".msheet")).toBeVisible();
+      await expect(page.locator(".msheet-row").filter({ hasText: /^4h/ })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(page.locator(".msheet")).toBeHidden();
+    }
   }
 
   const settingsButton = desktop

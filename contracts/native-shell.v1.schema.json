@@ -3,14 +3,34 @@
   "$id": "native-shell.v1.schema.json",
   "title": "Mastermind native shell bridge v1 — web→native messages",
   "description": "Messages the Terminal posts to the native host (webkit.messageHandlers.mm) when loaded with ?shell=app. Commands flow native→web through the window.__mmShell API typed in terminal/lib/platform/contract.ts. Version bumps are bridge-lane changes per docs/NATIVE_APPS_ALPHA_MASTERPLAN_2026-07-30.md §6.",
+  "definitions": {
+    "drawTool": {
+      "type": "object",
+      "description": "One engine drawing tool advertised to the native Drawings sheet (R2.5). label is EN; native localizes it.",
+      "required": ["id", "label", "group"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "group": { "enum": ["favorites", "tools", "trendlines", "gannfib", "patterns"] }
+      },
+      "additionalProperties": false
+    },
+    "favTimeframes": {
+      "type": "array",
+      "description": "The user's starred timeframes. Empty = no favourites saved; the native wheel falls back to availableTimeframes.",
+      "items": { "type": "string" }
+    }
+  },
   "oneOf": [
     {
       "type": "object",
-      "required": ["type", "bridgeVersion", "availableTimeframes"],
+      "required": ["type", "bridgeVersion", "availableTimeframes", "favTimeframes", "drawTools"],
       "properties": {
         "type": { "const": "ready" },
         "bridgeVersion": { "type": "integer", "minimum": 1 },
-        "availableTimeframes": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+        "availableTimeframes": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "favTimeframes": { "$ref": "#/definitions/favTimeframes" },
+        "drawTools": { "type": "array", "items": { "$ref": "#/definitions/drawTool" }, "minItems": 1 }
       },
       "additionalProperties": false
     },
@@ -22,8 +42,13 @@
     },
     {
       "type": "object",
-      "required": ["type", "tf"],
-      "properties": { "type": { "const": "stateChanged" }, "tf": { "type": "string", "minLength": 1 } },
+      "required": ["type", "tf", "favTimeframes", "drawTools"],
+      "properties": {
+        "type": { "const": "stateChanged" },
+        "tf": { "type": "string", "minLength": 1 },
+        "favTimeframes": { "$ref": "#/definitions/favTimeframes" },
+        "drawTools": { "type": "array", "items": { "$ref": "#/definitions/drawTool" }, "minItems": 1 }
+      },
       "additionalProperties": false
     },
     {

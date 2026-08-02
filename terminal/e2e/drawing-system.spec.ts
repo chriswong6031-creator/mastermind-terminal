@@ -1,5 +1,13 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { DRAWING_TOOL_REGISTRY } from "../lib/drawingTools";
+import { PHONE_MAX } from "./phoneChrome";
+
+// R2.1 retired the floating drawing dock on the PHONE (≤640px): the roller strip's pencil raises
+// the Drawings sheet instead. Dock contracts therefore run at the tablet and desktop projects,
+// where the dock still ships; the phone's own chrome is covered by mobile-chart-chrome.spec.ts
+// and by the collision test below.
+const SKIP_PHONE = "The phone has no floating dock since R2.1 — see mobile-chart-chrome.spec.ts.";
+const isPhone = (page: Page) => (page.viewportSize()?.width ?? 1440) <= PHONE_MAX;
 
 // Allows this suite to target an already-running same-worktree server when another
 // local Next process owns the shared dev lock. The repository Playwright config
@@ -253,6 +261,7 @@ async function expectNoDocumentOverflow(page: Page) {
 }
 
 test("drawing registry and precision controls stay complete at every responsive width", async ({ page }) => {
+  test.skip(isPhone(page), SKIP_PHONE);
   await openTerminal(page);
 
   const toolbar = page.getByTestId("drawing-toolbar");
@@ -475,6 +484,7 @@ test("desktop drawing labels and hover flyouts match the OpenMarket interaction 
 });
 
 test("favorite drawing tools are keyboard-reachable, draggable, responsive, and persistent", async ({ page }) => {
+  test.skip(isPhone(page), SKIP_PHONE);
   await openTerminal(page);
 
   const compact = (page.viewportSize()?.width ?? 1440) <= 860;
@@ -576,7 +586,9 @@ test("portalled drawing surfaces honor reduced motion and keep focus across the 
     return { animationName: style.animationName, transitionDuration: style.transitionDuration };
   })).toEqual({ animationName: "none", transitionDuration: "0s" });
 
-  await page.setViewportSize({ width: 390, height: 844 });
+  // 820x1180 is the compact-dock breakpoint now: R2.1 removed the dock from the PHONE
+  // (≤640px) altogether, so the dock's own responsive remount is a tablet transition.
+  await page.setViewportSize({ width: 820, height: 1180 });
   await expect(toolbar).toHaveAttribute("aria-orientation", "horizontal");
   await expect(linesMenu).toBeHidden();
   await expect(linesTrigger).toBeFocused();
@@ -598,20 +610,20 @@ test("portalled drawing surfaces honor reduced motion and keep focus across the 
   await expect(lineTool).toBeFocused();
 });
 
-test("mobile drawing chrome keeps one collision-free editing surface", async ({ page }) => {
-  test.skip(page.viewportSize()?.width !== 390, "The reported regression is pinned to 390×844.");
+test("phone drawing chrome keeps one collision-free editing surface", async ({ page }) => {
+  test.skip(page.viewportSize()?.width !== 390, "The reported regression is pinned to 390\u00d7844.");
   await openTerminal(page);
 
   const chartBody = page.locator(".chart-body");
   const details = page.locator(".detail-board").first();
-  const dock = page.getByTestId("drawing-toolbar");
   const layer = page.locator(".pane.on .drawing-layer");
-  const lineTool = page.getByTestId("drawing-group-lines-main");
-  const sticky = page.getByTestId("drawing-sticky-toggle");
-  const palette = page.getByTestId("drawing-style-palette");
-  const styleTrigger = page.getByTestId("drawing-style-trigger");
   const selectionToolbar = page.getByRole("toolbar", { name: "Selected drawing properties" });
   const lines = layer.locator('g[data-drawing-kind="trendline"]:not([data-id="_p"])');
+
+  // R2.1 — the floating dock (the original source of this collision) is gone from the phone
+  // entirely; the roller strip's pencil is the only way to arm a tool here.
+  await expect(page.getByTestId("drawing-toolbar")).toBeHidden();
+  await expect(page.getByTestId("roller-strip")).toBeVisible();
 
   // Custom properties mirror iOS landscape safe-area env() values and make the
   // horizontal inset contract deterministic in desktop Chromium CI.
@@ -620,96 +632,72 @@ test("mobile drawing chrome keeps one collision-free editing surface", async ({ 
     body.style.setProperty("--drawing-safe-left", "31px");
     body.style.setProperty("--drawing-safe-right", "27px");
   });
-
-  const safeDock = await expectChartLocal(page, dock, { directChild: true, clearOfDetails: true });
-  expect(safeDock.left - safeDock.bodyLeft).toBeGreaterThanOrEqual(31);
-  expect(safeDock.bodyRight - safeDock.right).toBeGreaterThanOrEqual(27);
   await expectNoDocumentOverflow(page);
   const initialLayout = await Promise.all([
     chartBody.boundingBox(),
     details.boundingBox(),
   ]);
 
-  await lineTool.click();
-  await sticky.click();
-  await expect(sticky).toHaveAttribute("data-sticky", "true");
-  await expect(styleTrigger).toBeVisible();
-  await expect(palette).toBeHidden();
+  await page.getByTestId("roller-draw").click();
+  await page.getByTestId("drawings-tile-trendline").click();
+  await expect(page.getByRole("dialog", { name: "Drawings" })).toBeHidden();
+
+  // One-shot placement hands the chart back to the cursor and raises the object inspector —
+  // which must be the ONLY floating editing surface on screen.
   await dragDrawing(page, layer, { x: 0.25, y: 0.35 }, { x: 0.57, y: 0.52 });
   await expect(lines).toHaveCount(1);
-  await expect(lineTool).toHaveAttribute("aria-pressed", "true");
-  await expect(selectionToolbar).toBeHidden();
-  await expect(palette).toBeHidden();
-
-  // Turning sticky off leaves the armed tool in place; its next placement is one-shot
-  // and must replace the pre-draw controls with the selected-object inspector.
-  await sticky.click();
-  await expect(sticky).toHaveAttribute("data-sticky", "false");
-  await dragDrawing(page, layer, { x: 0.35, y: 0.62 }, { x: 0.67, y: 0.43 });
-  await expect(lines).toHaveCount(2);
   await expect(page.getByTestId("drawing-tool-cursor")).toHaveAttribute("aria-pressed", "true");
-  await expect(styleTrigger).toBeHidden();
-  await expect(palette).toBeHidden();
   await expect(selectionToolbar).toBeVisible();
   const inspectorMetrics = await expectChartLocal(page, selectionToolbar, { clearOfDetails: true });
-  const dockMetrics = await expectChartLocal(page, dock, { directChild: true, clearOfDetails: true });
-  expect(inspectorMetrics.bottom).toBeLessThanOrEqual(dockMetrics.top + 1);
   expect(await page.locator("[data-testid='drawing-style-palette'], .draw-bar").evaluateAll((elements) =>
     elements.filter((element) => {
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
     }).length)).toBe(1);
+  // …and it never reaches under the fixed roller strip.
+  const stripTop = await page.getByTestId("roller-strip").evaluate((element) => element.getBoundingClientRect().top);
+  expect(inspectorMetrics.bottom).toBeLessThanOrEqual(stripTop + 1);
 
   // The settings panel remains a renderer-owned descendant, but its fixed box is
-  // clamped to the measured chart host rather than the full viewport.
-  await selectionToolbar.locator("[data-settings]").click();
+  // clamped to the measured chart host rather than the full viewport. Pin the page at the top
+  // before opening it: the inspector rides the chart body, and a scrolled document parks it
+  // either under the mobile bar or under the fixed roller strip, where no click can land.
+  // Polled because the chart's own late layout work can scroll the document back under us.
+  // The inspector is itself a horizontal scroller wider than a phone, so the gear starts off to
+  // the right of the viewport; bring both scrollers to rest before asking for a real click.
+  const settingsTrigger = selectionToolbar.locator("[data-settings]");
+  const viewportWidth = page.viewportSize()?.width ?? 390;
+  await expect.poll(async () => {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await settingsTrigger.scrollIntoViewIfNeeded();
+    const box = await settingsTrigger.boundingBox();
+    const clear = box !== null
+      && box.y > 60 && box.y + box.height < 780
+      && box.x >= 0 && box.x + box.width <= viewportWidth;
+    return clear ? "clear" : "obscured";
+  }, { message: "the inspector should settle clear of the mobile bar and the roller strip" })
+    .toBe("clear");
+  await settingsTrigger.click();
   const settings = selectionToolbar.locator(".draw-settings");
   const settingsMetrics = await expectChartLocal(page, settings, { clearOfDetails: true });
   expect(settingsMetrics.left - settingsMetrics.bodyLeft).toBeGreaterThanOrEqual(31);
   expect(settingsMetrics.bodyRight - settingsMetrics.right).toBeGreaterThanOrEqual(27);
-  await selectionToolbar.locator("[data-settings]").click();
+  await settingsTrigger.click();
   await expect(settings).toBeHidden();
 
-  // The trash flyout must overlay inside the chart instead of expanding the page or
-  // pushing the company detail card down (the original mobile breakage).
-  const clearTrigger = page.getByTestId("drawing-clear-trigger");
-  await clearTrigger.click();
-  const clearMenu = page.getByTestId("drawing-clear-menu");
-  await expect(selectionToolbar).toBeHidden();
-  const clearMetrics = await expectChartLocal(page, clearMenu, { directChild: true, clearOfDetails: true });
-  expect(clearMetrics.left - clearMetrics.bodyLeft).toBeGreaterThanOrEqual(31);
-  expect(clearMetrics.bodyRight - clearMetrics.right).toBeGreaterThanOrEqual(27);
+  // Raising the Drawings sheet must overlay the page rather than expand it or push the company
+  // detail card down (the original mobile breakage, re-asserted against the new surface).
+  await page.getByTestId("roller-draw").click();
+  await expect(page.getByRole("dialog", { name: "Drawings" })).toBeVisible();
   await expectNoDocumentOverflow(page);
-  const openLayout = await Promise.all([
-    chartBody.boundingBox(),
-    details.boundingBox(),
-  ]);
-  expect(openLayout).toEqual(initialLayout);
+  expect(await Promise.all([chartBody.boundingBox(), details.boundingBox()])).toEqual(initialLayout);
   await page.keyboard.press("Escape");
-  await expect(clearMenu).toBeHidden();
-  await expect(clearTrigger).toBeFocused();
-
-  // Re-select a drawing, then arm another tool and open its style palette. The
-  // inspector must be torn down so the exact stacked-palette mobile regression
-  // cannot return.
-  await lines.last().locator('line[stroke="transparent"]').first().click({ force: true });
-  await expect(selectionToolbar).toBeVisible();
-  await lineTool.click();
-  await expect(selectionToolbar).toBeHidden();
-  await expect(styleTrigger).toBeVisible();
-  await styleTrigger.click();
-  await expect(palette).toBeVisible();
-  expect(await page.locator("[data-testid='drawing-style-palette'], .draw-bar").evaluateAll((elements) =>
-    elements.filter((element) => {
-      const style = getComputedStyle(element);
-      const rect = element.getBoundingClientRect();
-      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-    }).length)).toBe(1);
-  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Drawings" })).toBeHidden();
 });
 
 test("chart-type catalog exposes and applies the new line and area families", async ({ page }) => {
+  test.skip(isPhone(page), SKIP_PHONE);
   await openTerminal(page);
 
   const popover = page.locator(".chart-type-pop");
@@ -1310,6 +1298,7 @@ test("pane-anchored notes stay fixed while calculated labels never open a text e
 });
 
 test("media tools choose and persist real emoji, icons, and bounded local images", async ({ page }) => {
+  test.skip(isPhone(page), SKIP_PHONE);
   const saves: DrawingSavePayload[] = [];
   await openTerminal(page, { onPut: (payload) => saves.push(payload) });
   const layer = page.locator(".pane.on .drawing-layer");
@@ -1441,6 +1430,7 @@ test("the drawing cap rejects object 501 without evicting object 1", async ({ pa
 });
 
 test("account drawing loads fail closed and retry without issuing a destructive save", async ({ page }) => {
+  test.skip(isPhone(page), SKIP_PHONE);
   let getCount = 0;
   let putCount = 0;
   await page.route("**/api/drawings**", async (route) => {
