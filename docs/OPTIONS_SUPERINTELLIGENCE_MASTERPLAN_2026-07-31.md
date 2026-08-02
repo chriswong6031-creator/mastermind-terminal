@@ -11,6 +11,42 @@ Golden Oracle / GC-v2 stack, the Research Desk, technicals, and the macro labs �
 
 ---
 
+## ⚡ EXECUTION LEDGER — live wave status (update this section IN THE SAME PR as your work)
+
+**Coordination protocol (multi-session law):** chat memory does not travel between sessions or accounts — this
+section is the shared truth. Before starting ANY options-estate work: (1) read this section + the sibling docs
+below + the `options-suite-parity-program` memory ledger; (2) CLAIM your lane by editing this section (mark
+`IN FLIGHT` + branch name) in your first PR; (3) flip it to `DONE` with PR numbers when merged. Unclaimed lanes
+are fair game; claimed lanes are not.
+
+**Sibling programs (do not duplicate their scope):**
+- `docs/MARKET_STRUCTURE_CORE_MASTERPLAN_2026-08-01.md` — dealer-positioning / gamma-structure / vol-mechanics
+  intelligence (MenthorQ/SpotGamma/VolSignals/IVolatility class). Division of labour: THIS doc = "see every
+  print, replay every minute" (tape, filters, playback, IA); MSC = "interpret what the inventory does to price."
+  MSC also wires into Prophet — **R6 spine design must be co-authored with MSC's signal layer, not built twice.**
+- `docs/VOLLAND_PARITY_PLAN_2026-08-01.md` — Volland-class parity lane.
+
+| Wave / item | Status (as of 2026-08-01) |
+|---|---|
+| R0.1 chain-heat relight | ✅ DONE 07-31 — relit on M1, artifact verified current on public R2 |
+| R0 repair wave (seal, cadence, schema v2, two-tier, U-CHAIN, dead-man) | ✅ DONE 07-31 — macro #4152 (+ #4222 weekend hub runs). Cadence root-cause: jar was fine; wildcard+time-window returned silently empty. **VERIFY GATE Mon 08-03:** live `meta.json` shows `delta_mode: time_window` + `two_tier: true` |
+| R0.7 Prophet dormant wires | ✅ DONE — terminal fixture #282 (index: `last_price` + nested state); verify overlay component + fields in the next nightly `prophet/index.json` |
+| R0.10 dated GEX-ladder replay (slice 3) | ✅ DONE + LIVE 07-31 — terminal #283 deployed; macro #4153 (`dates.json` + self-heal); accrual holes healed |
+| R3 Volatility tab | ✅ DONE + LIVE 07-31 — #287; extended by #314 (VRP regime level+trend+velocity, skew read, term slopes) |
+| R3 Structure tab (OI suite) | ✅ DONE — #291 (OI ladder / OI-time / max pain / OI change) |
+| R3 Positioning / exposure profile / dealer heat | ✅ DONE under MSC — #298 (program of record + Positioning tab), #312 (production sweep + 40 audit fixes), macro #4219 |
+| R1 tape-truth classifier (sweep/block/golden, 5-tier side, per-trade greeks) | 🔓 OPEN — **gated on first full session of captured conditions (schema v2 live since #4152; earliest build day Mon 08-03).** Calibrate vs QuantData UI before dropping `~` prefixes |
+| R2 intraday store extension (tier-1 roots) + universal playback wrapper | 🔓 OPEN — U-CHAIN accruing since 07-31; wrapper spec in §4-R2; fix the surface stamp-index head-follow gap with it |
+| R2 slice-3 deep backfill (2017→ ladder reconstruction + ladder-level validation) | 🔓 OPEN — macro side; `audit_overlap` extension is the honesty gate |
+| R3 remaining: Interval Map · multi-metric heatmap+MVC · Statistics suite · Vol Drift · PRISM VEX/UNUSUAL re-check | 🔓 OPEN — Interval Map/Vol Drift want U-CHAIN accrual (~1wk); Statistics buildable now (exchange codes retained); VEX/UNUSUAL: verify vanna grids + 30d baseline then light |
+| R4 Filter Groups + alert generalization + page/global filter bus | 🔓 OPEN — design pinned §4-R4; enriched schema (R1) is its vocabulary, but the engine + Supabase persistence can start against existing fields |
+| R5 IA restructure (7 categories) + blind-spot surfaces (0DTE dash, largest-trades, chain browser, P/C history, exp-vs-realized, export) | 🔓 OPEN — ⚠️ coordinate with open PR #164 (sidebar IA, /research→/options) before starting |
+| R6 Prophet superintelligence (spine, multi-lane origination, live re-score, distribution) | 🔓 OPEN — co-design with MSC's signal layer (see sibling note above); R0.7 prerequisites landed |
+| R7 dark pool / equities feed | ⛔ GATED — owner spend decision (Polygon TRF vs Databento) still open |
+| R8 composability (My-Pages) | ⛔ GATED — after R5 |
+
+---
+
 ## 0. Why the last program stalled — audit verdict (2026-07-31)
 
 Fresh evidence: live logged-in walkthrough of v3.quantdata.us (all 7 built-in pages, the full Add-Tool catalog, Filter
