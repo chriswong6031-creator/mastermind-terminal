@@ -4,6 +4,9 @@ import path from "path";
 import {
   evalGammaFlipCross,
   evalWallProximity,
+  evalWallMigration,
+  evalSignFragile,
+  evalOpexConcentration,
   evalPremiumBurst,
   eval0dteShare,
   evalSurfaceHotPocket,
@@ -630,5 +633,185 @@ describe("optAlertPreview + buildOptCondition", () => {
     expect(c).toEqual({ type: "opt_gamma_flip", root: "SPY" }); // no band_pct → evaluator uses 0.05
     // preview still renders defaults
     expect(optAlertPreview(c, "en")).toContain("crosses its gamma flip");
+  });
+});
+
+// ─── (b2) wall migration ─────────────────────────────────────────────────────
+describe("evalWallMigration — re-strike state machine", () => {
+  const gx = (callWall: number, spot = 745): GexPayload =>
+    ({ root: "SPY", spot_ref: spot, call_wall: callWall, put_wall: 700, asof: "2026-07-31" });
+  const cond = { type: "opt_wall_migration" as const, root: "SPY", wall: "call" as const };
+
+  it("first observation arms without firing (records the wall strike)", () => {
+    const r = evalWallMigration(cond, gx(760), {});
+    expect(r.fired).toBe(false);
+    expect(r.nextState.level).toBe(760);
+  });
+
+  it("fires when the wall re-strikes by ≥ min_move_pct of spot", () => {
+    // 760 → 765 on spot 745 = 0.67% ≥ default 0.4%
+    const r = evalWallMigration(cond, gx(765), { level: 760 });
+    expect(r.fired).toBe(true);
+    expect(r.value).toBe(765);
+    expect(r.note).toContain("760 → 765");
+    expect(r.note).toContain("EOD build");
+    expect(r.nextState.level).toBe(765);
+  });
+
+  it("sub-threshold jitter does not fire but STILL updates the anchor (no late fire from drift)", () => {
+    // one $1 strike on spot 745 = 0.13% < 0.4%
+    const r = evalWallMigration(cond, gx(761), { level: 760 });
+    expect(r.fired).toBe(false);
+    expect(r.nextState.level).toBe(761);
+  });
+
+  it("respects a custom min_move_pct", () => {
+    const tight = { ...cond, min_move_pct: 0.1 };
+    const r = evalWallMigration(tight, gx(761), { level: 760 });
+    expect(r.fired).toBe(true);
+  });
+
+  it("watches the PUT wall when asked", () => {
+    const putCond = { type: "opt_wall_migration" as const, root: "SPY", wall: "put" as const };
+    const gxPut: GexPayload = { root: "SPY", spot_ref: 745, call_wall: 760, put_wall: 706, asof: "2026-07-31" };
+    const r = evalWallMigration(putCond, gxPut, { level: 700 });
+    expect(r.fired).toBe(true);
+    expect(r.note).toContain("put wall");
+  });
+
+  it("missing wall or spot → honest null, state preserved", () => {
+    const r = evalWallMigration(cond, { root: "SPY", spot_ref: 745 }, { level: 760 });
+    expect(r.fired).toBe(null);
+    expect(r.nextState.level).toBe(760);
+  });
+});
+
+// ─── (b3) sign fragility ─────────────────────────────────────────────────────
+describe("evalSignFragile — tilt-collapse transition", () => {
+  const gx = (callAbs: number, putAbs: number): GexPayload => ({
+    root: "SPY",
+    spot_ref: 745,
+    asof: "2026-07-31",
+    by_strike: [
+      { gamma_call: callAbs * 0.6, gamma_put: -putAbs * 0.5 },
+      { gamma_call: callAbs * 0.4, gamma_put: -putAbs * 0.5 },
+    ],
+  });
+  const cond = { type: "opt_sign_fragile" as const, root: "SPY" };
+
+  it("first observation arms without firing, even when already fragile", () => {
+    const r = evalSignFragile(cond, gx(100, 95), {}); // tilt 2.56% < 12
+    expect(r.fired).toBe(false);
+    expect(r.nextState.fragile).toBe(true);
+  });
+
+  it("fires on the robust→fragile transition with the tilt in the note", () => {
+    const r = evalSignFragile(cond, gx(100, 95), { fragile: false });
+    expect(r.fired).toBe(true);
+    expect(r.value).toBeCloseTo(2.6, 1);
+    expect(r.note).toContain("dealer-sign assumption");
+  });
+
+  it("does not re-fire while it stays fragile", () => {
+    const r = evalSignFragile(cond, gx(100, 95), { fragile: true });
+    expect(r.fired).toBe(false);
+  });
+
+  it("a robust book never fires (tilt above the default 12%)", () => {
+    const r = evalSignFragile(cond, gx(100, 50), { fragile: false }); // tilt 33%
+    expect(r.fired).toBe(false);
+    expect(r.nextState.fragile).toBe(false);
+  });
+
+  it("respects a custom tilt_pct threshold", () => {
+    const wide = { ...cond, tilt_pct: 40 };
+    const r = evalSignFragile(wide, gx(100, 50), { fragile: false }); // tilt 33% < 40
+    expect(r.fired).toBe(true);
+  });
+
+  it("empty or gamma-less ladder → honest null", () => {
+    expect(evalSignFragile(cond, { root: "SPY", by_strike: [] }, {}).fired).toBe(null);
+    expect(evalSignFragile(cond, { root: "SPY" }, {}).fired).toBe(null);
+  });
+});
+
+// ─── (b4) OPEX concentration ─────────────────────────────────────────────────
+describe("evalOpexConcentration — front-expiry share transition", () => {
+  const gx = (frontMn: number, restMn: number[]): GexPayload => ({
+    root: "SPY",
+    spot_ref: 745,
+    asof: "2026-07-31",
+    by_expiry: [
+      // deliberately out of order: the evaluator must sort by exp, not trust row order
+      { exp: "2026-09-18", gamma_net: restMn[0] ?? 0 },
+      { exp: "2026-08-03", gamma_net: frontMn },
+      { exp: "2026-08-21", gamma_net: restMn[1] ?? 0 },
+    ],
+  });
+  const cond = { type: "opt_opex_concentration" as const, root: "SPY" };
+
+  it("first observation arms without firing", () => {
+    const r = evalOpexConcentration(cond, gx(80, [10, 10]), {}); // 80%
+    expect(r.fired).toBe(false);
+    expect(r.nextState.above).toBe(true);
+  });
+
+  it("fires on ENTER above the default 35% with the front exp named", () => {
+    const r = evalOpexConcentration(cond, gx(50, [30, 20]), { above: false }); // 50%
+    expect(r.fired).toBe(true);
+    expect(r.value).toBe(50);
+    expect(r.note).toContain("2026-08-03");
+    expect(r.note).toContain("OPEX");
+  });
+
+  it("uses ABSOLUTE gamma per expiry (a negative front leg still concentrates)", () => {
+    const r = evalOpexConcentration(cond, gx(-50, [30, 20]), { above: false });
+    expect(r.fired).toBe(true);
+    expect(r.value).toBe(50);
+  });
+
+  it("below threshold never fires and records above=false", () => {
+    const r = evalOpexConcentration(cond, gx(20, [50, 30]), { above: false }); // 20%
+    expect(r.fired).toBe(false);
+    expect(r.nextState.above).toBe(false);
+  });
+
+  it("does not re-fire while it stays concentrated", () => {
+    const r = evalOpexConcentration(cond, gx(50, [30, 20]), { above: true });
+    expect(r.fired).toBe(false);
+  });
+
+  it("missing/empty breakdown → honest null", () => {
+    expect(evalOpexConcentration(cond, { root: "SPY" }, {}).fired).toBe(null);
+    expect(evalOpexConcentration(cond, { root: "SPY", by_expiry: [] }, {}).fired).toBe(null);
+  });
+});
+
+// ─── §8 builder + preview coverage for the three new kinds ───────────────────
+describe("buildOptCondition + optAlertPreview — §8 kinds", () => {
+  it("wall migration builds {type, root, wall} with optional min_move_pct", () => {
+    expect(buildOptCondition("opt_wall_migration", "spy", {})).toEqual({
+      type: "opt_wall_migration", root: "SPY", wall: "call",
+    });
+    expect(buildOptCondition("opt_wall_migration", "SPY", { wall: "put", min_move_pct: 0.8 })).toEqual({
+      type: "opt_wall_migration", root: "SPY", wall: "put", min_move_pct: 0.8,
+    });
+  });
+
+  it("sign fragile / opex build minimal conditions with optional thresholds", () => {
+    expect(buildOptCondition("opt_sign_fragile", "qqq", {})).toEqual({ type: "opt_sign_fragile", root: "QQQ" });
+    expect(buildOptCondition("opt_opex_concentration", "QQQ", { share_pct: 40 })).toEqual({
+      type: "opt_opex_concentration", root: "QQQ", share_pct: 40,
+    });
+  });
+
+  it("previews read in both languages with defaults named", () => {
+    const en = optAlertPreview({ type: "opt_wall_migration", root: "SPY", wall: "call" }, "en");
+    expect(en).toContain("re-strikes");
+    expect(en).toContain("0.4");
+    const zh = optAlertPreview({ type: "opt_sign_fragile", root: "SPY" }, "zh");
+    expect(zh).toContain("12");
+    const opex = optAlertPreview({ type: "opt_opex_concentration", root: "SPY", share_pct: 40 }, "en");
+    expect(opex).toContain("40");
   });
 });
