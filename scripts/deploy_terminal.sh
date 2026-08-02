@@ -114,8 +114,10 @@ $SSH "$BOX" "cd $DEST && [ -f .next.new/BUILD_ID ] && systemctl stop $SVC \
 ok=0; code=000
 for i in $(seq 1 10); do
   sleep 3
-  # probe /login (public 200) — '/' 307-redirects to /terminal and would never be 200
-  code="$($SSH "$BOX" "curl -s -o /dev/null -w '%{http_code}' -m 6 http://127.0.0.1:3000/login" 2>/dev/null)"
+  # /login intentionally redirects into Terminal's single onboarding surface.
+  # Probe that public destination directly so a healthy redirect contract does
+  # not trigger a false rollback after the new BUILD_ID is already serving.
+  code="$($SSH "$BOX" "curl -s -o /dev/null -w '%{http_code}' -m 6 'http://127.0.0.1:3000/terminal?signin=1'" 2>/dev/null)"
   [ "$code" = 200 ] && { ok=1; break; }
 done
 srv="$($SSH "$BOX" "cat $DEST/.next/BUILD_ID 2>/dev/null" 2>/dev/null)"
