@@ -19,7 +19,7 @@ import { makeStructureT } from "./structureStrings";
 import type { OiChangePayload, OiChangeRow } from "./structureTypes";
 import { fmtOi, fmtDelta, ProvenanceLine, PanelEmpty, NEUTRAL_CHIP } from "./structureShared";
 
-type SortKey = "d_oi" | "d_oi_pct" | "oi" | "oi_prev" | "dte" | "strike";
+type SortKey = "d_oi" | "d_oi_pct" | "oi" | "oi_prev" | "dte";
 
 export function OiChangePanel({
   rootPayload,
@@ -146,7 +146,7 @@ export function OiChangePanel({
                   <td style={TD}>
                     {r.d_oi_pct == null
                       ? <span style={NEW_CHIP}>{t("newContract")}</span>
-                      : `${r.d_oi_pct > 0 ? "+" : ""}${r.d_oi_pct.toFixed(1)}%`}
+                      : `${r.d_oi_pct > 0 ? "+" : r.d_oi_pct < 0 ? "−" : ""}${Math.abs(r.d_oi_pct).toFixed(1)}%`}
                   </td>
                   <td style={TD}>{r.mid != null && Number.isFinite(r.mid) ? r.mid.toFixed(2) : "—"}</td>
                 </tr>

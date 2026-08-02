@@ -121,7 +121,9 @@ export function MaxPainTimePanel({
             ))}
             {xLabels.map((p) => (
               <text key={p.exp} x={xOf(p.dte)} y={H - 8} textAnchor="middle" style={AXIS_TXT}>
-                {p.exp.slice(5)}
+                {/* Cross-year expiries keep their year — a bare "03-19" after
+                    "12-18" reads as out of order on a DTE-mapped axis. */}
+                {p.exp.slice(0, 4) === pts[0]?.exp.slice(0, 4) ? p.exp.slice(5) : p.exp.slice(2)}
               </text>
             ))}
           </svg>

@@ -101,6 +101,19 @@ export interface GexPayload {
     charm_net?: number | null;
     n?: number | null;
   }[];
+  /**
+   * The §4.2 exposure PROFILE — net dealer gamma re-priced across a ±25% spot grid,
+   * from the SAME evaluation that produces gamma_flip (macro engine
+   * gex_engine.gamma_profile). Optional: payloads before 2026-08-02 predate it, and
+   * an iv-sparse chain publishes null.
+   */
+  profile?: {
+    method?: string;
+    span_pct?: number;
+    grid: number[];
+    gamma_bn: number[];
+    crossings?: number[];
+  } | null;
   // Optional extended fields (may come from richer server payload)
   hvl?: number | null;
   magnet?: number | null;

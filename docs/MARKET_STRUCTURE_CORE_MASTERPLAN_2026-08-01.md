@@ -482,6 +482,18 @@ Waves are numbered R0–R7. Each names its host, its honesty gate, and its exit 
 follow the standing delivery chain (commit → PR → CI → merge → deploy → marker-verify); data-plane
 waves follow M1 ops discipline.
 
+> **STATUS LEDGER (2026-08-01, evening — kept honest after the operator's review).** A compaction
+> summary earlier today called this program "complete"; it was not, and the operator caught it.
+> The truth: **R0 shipped** (Positioning tab, PR #298 + the production-sweep rebuild). **R1.1
+> shipped in full** — flip estimator repaired end to end (live + 450 archived snapshots) AND the
+> §4.2 `profile` block now publishes (macro #4219) with the Terminal ProfileCard. **R1.4 shipped**
+> (percentile-clamped strike×expiry heat, MatrixHeatCard). **§6 producer shipped** (macro #4199).
+> **NOT DONE:** R1.2 (pressure fields), R1.3 (full re-pricing scenario grid), all of R2 (msc/v1
+> payload, U-CHAIN publisher, vol grammar depth, the Level Report Card — still the flagship gap,
+> pin calibration), R3 (chart overlay — highest-utility integration), R4/R5/R6/R7, Prophet §7,
+> alerts §8. Sibling defect repaired late: `options_matrix._compute_levels` carried a FIFTH copy
+> of the cumulative-flip estimator (live at 594.28 vs SPY 741.69) — retired in macro #4219.
+
 ### R0 — Wave 1: the Positioning panel *(terminal only, zero data-plane dependency)* — **THIS SESSION**
 
 Everything here is arithmetic on payloads the Exposure desk **already fetches**

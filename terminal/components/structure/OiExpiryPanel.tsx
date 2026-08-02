@@ -110,7 +110,8 @@ export function OiExpiryPanel({
                   fill={PUT_COLOR} opacity={0.85} rx={1} />
                 {labeled.has(i) && (
                   <text x={xOf(i)} y={H - 8} textAnchor="middle" style={AXIS_TXT}>
-                    {r.exp.slice(5)}
+                    {/* Cross-year expiries keep their year (matches MaxPainTimePanel). */}
+                    {r.exp.slice(0, 4) === rows[0]?.exp.slice(0, 4) ? r.exp.slice(5) : r.exp.slice(2)}
                   </text>
                 )}
               </g>

@@ -80,7 +80,15 @@ export function OiTimePanel({
 
   const { values: yTicks } = niceTicks(y0, y1, 4);
   const xLabels = useMemo(
-    () => thinLabels(finite, (p) => xOf(p.e), 62),
+    () => {
+      // Pixel-thin, then drop consecutive labels that RENDER identically — on a
+      // wide desktop 62px is under a month of sessions, so two kept labels can
+      // fall in the same YY-MM (the R5 duplicate-tick failure, on a date axis).
+      const kept = thinLabels(finite, (p) => xOf(p.e), 62);
+      return kept.filter(
+        (p, i) => i === 0 || p.date.slice(2, 7) !== kept[i - 1].date.slice(2, 7),
+      );
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [finite, w, e0, e1],
   );

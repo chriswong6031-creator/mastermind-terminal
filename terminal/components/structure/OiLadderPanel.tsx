@@ -155,11 +155,16 @@ export function OiLadderPanel({
                 {fmtTick(r.strike, strikeStep)}
               </text>
             ))}
-            {/* spot reference */}
+            {/* spot reference — the label gets a panel-colour backing rect so it
+                stays legible over the longest call bar around the spot strike. */}
             {spotIn && (
               <g>
                 <line x1={PAD.l} x2={w - PAD.r} y1={yOf(spotRef as number)} y2={yOf(spotRef as number)}
                   stroke="var(--muted)" strokeDasharray="4 3" strokeWidth={1} />
+                <rect
+                  x={w - PAD.r - 92} y={yOf(spotRef as number) - 13} width={92} height={12}
+                  fill="var(--panel, #14161a)" opacity={0.82} rx={2}
+                />
                 <text x={w - PAD.r - 2} y={yOf(spotRef as number) - 3} textAnchor="end" style={REF_TXT}>
                   {t("spotLabel")} {(spotRef as number).toFixed(2)}
                 </text>

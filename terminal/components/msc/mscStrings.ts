@@ -21,6 +21,81 @@ const MSC_LEX = {
   // ── Drawer chrome ──────────────────────────────────────────────────────────
   panelTitle: ["Positioning Core", "持仓结构核心"],
   panelSub: ["Dealer positioning mechanics", "做市商持仓机制"],
+
+  // ── Section rules (the tab's narrative order) ──────────────────────────────
+  secToday: ["Today's structure", "当日结构"],
+  secHistory: ["Against its own history", "对比自身历史"],
+  secMarket: ["Across the market", "横向市场对比"],
+
+  // ── Key levels rail (EM frame + gamma topology, merged) ────────────────────
+  klTitle: ["Key levels", "关键水平"],
+  klSpot: ["Spot", "现价"],
+
+  // ── Exposure profile (§4.2 — the flagship curve) ───────────────────────────
+  pfTitle: ["Exposure profile", "敞口曲线"],
+  pfLead: [
+    "Net dealer gamma with the whole book RE-PRICED at each hypothetical spot — exposure as a function of price, not just at today's. The zero crossing nearest spot IS the gamma flip; the curve and the flip come from one evaluation and cannot disagree.",
+    "将全部持仓在每个假设现价处重新定价后的净做市商伽马——敞口是价格的函数，而非仅在当前价位。最接近现价的零点即伽马翻转位；曲线与翻转位出自同一次计算，不会相互矛盾。",
+  ],
+  pfUnit: ["$bn per +1% spot", "每 +1% 标的（十亿美元）"],
+  pfDampen: ["dealers dampen", "做市商抑制波动"],
+  pfAmplify: ["dealers amplify", "做市商放大波动"],
+  pfLegend: [
+    "±{p}% spot grid, re-priced from quoted IV — the same evaluation that produces the published flip",
+    "±{p}% 现价网格，按市场隐含波动率重新定价——与已发布翻转位出自同一次计算",
+  ],
+  pfMulti: ["{n} zero crossings — the nearest to spot is the flip", "{n} 个零点——距现价最近者为翻转位"],
+  pfNone: [
+    "No profile published for this ladder yet — it ships with the next nightly build; the flip scalar above already uses the same grid method.",
+    "该梯图暂未发布敞口曲线——将随下一次夜间构建发布；上方翻转位标量已采用相同网格方法。",
+  ],
+
+  // ── Ranked gamma strikes (SpotGamma Large Gamma Strikes / MenthorQ GEX 1..n) ─
+  rkTitle: ["Largest gamma strikes", "伽马最大的行权价"],
+  rkLead: [
+    "The strikes carrying the most absolute gamma, ranked — the market's scalp-target vocabulary (GEX 1…n), with each strike priced in expected-move units.",
+    "按绝对伽马排序的行权价——市场常用的短线目标词汇（GEX 1…n），并以预期波动单位标注距离。",
+  ],
+  rkFoot: [
+    "Magnitude only — convention-independent. Distance in expected moves; a graded hold-rate arrives with the level report card.",
+    "仅按量级——与符号约定无关。距离以预期波动计；持守胜率评级将随水平评分卡推出。",
+  ],
+
+  // ── Strike × expiry heat (R1.4) ────────────────────────────────────────────
+  hmTitle: ["Dealer heat · strike × expiry", "做市商热力 · 行权价 × 到期日"],
+  hmLead: [
+    "The whole grid at once: where in price AND time the book concentrates. Net hedge renders the tab's one axis — dollars a continuously hedged dealer transacts per +1% spot; OI and volume are raw contract counts; ΔOI is the day's build or unwind.",
+    "一图纵览全局：持仓在价格与时间两个维度上的集中位置。净对冲沿用本页统一坐标——标的每 +1% 时持续对冲的做市商需交易的美元量；未平仓与成交量为原始合约数；ΔOI 为当日增减仓。",
+  ],
+  hmMetricHedge: ["Net hedge", "净对冲"],
+  hmMetricOi: ["OI", "未平仓"],
+  hmMetricVol: ["Volume", "成交量"],
+  hmMetricDoi: ["ΔOI", "ΔOI"],
+  hmMetricAria: ["Heat metric", "热力指标"],
+  hmWindow: [
+    "±{p}% window · {n}/{full} strikes · {e} expirations",
+    "±{p}% 窗口 · {n}/{full} 个行权价 · {e} 个到期日",
+  ],
+  hmMoreExp: ["+{n} later expirations not shown", "另有 {n} 个较远到期日未显示"],
+  hmBucket: ["strikes summed into {b}-wide rows", "行权价按 {b} 宽度归并为行"],
+  hmNone: [
+    "No strike × expiry grid published for this ticker.",
+    "该品种未发布行权价 × 到期日网格。",
+  ],
+  hmLegendHedge: [
+    "Positive = dealers buy · negative = dealers sell · colour saturates at the 5–95th percentile so one strike cannot wash out the field",
+    "正值＝做市商买入 · 负值＝做市商卖出 · 颜色在第 5–95 百分位处饱和，单一行权价不会淹没整个网格",
+  ],
+  hmLegendDoi: [
+    "Positive = OI built · negative = OI unwound · colour saturates at the 5–95th percentile",
+    "正值＝增仓 · 负值＝减仓 · 颜色在第 5–95 百分位处饱和",
+  ],
+  hmLegendMag: [
+    "Contracts, calls plus puts · colour saturates at the 5–95th percentile",
+    "合约数（看涨加看跌）· 颜色在第 5–95 百分位处饱和",
+  ],
+  hmWalls: ["CW = call wall · PW = put wall", "CW＝看涨墙 · PW＝看跌墙"],
+  hmSpotNote: ["dashed line = spot", "虚线＝现价"],
   tierA: ["Magnitude", "量级"],
   tierB: ["Signed estimate", "带符号估计"],
   // Same honesty tier as `tierA` — convention-independent — but "Magnitude" was written
@@ -225,6 +300,9 @@ const MSC_LEX = {
   dhTime: ["From time passing", "来自时间流逝"],
   dhTotal: ["Total", "合计"],
   dhOneDay: ["1 day", "1 天"],
+  // Unit chips that previously leaked English into the zh view ("123d", "+1 pt").
+  dteUnit: ["{n}d", "{n}天"],
+  volPtNote: ["+{n} pt", "+{n} 点"],
   dhAbsent: ["not published", "未发布"],
   dhLegend: ["Positive = dealers buy · negative = dealers sell", "正值＝做市商买入 · 负值＝做市商卖出"],
   dhDisclose: [
@@ -315,8 +393,12 @@ const MSC_LEX = {
   svBeta: ["Vol pts per +1%", "每 +1% 的波动点"],
   svR2: ["Explained", "可解释比例"],
   svVerdict: ["Today", "今日"],
-  svOver: ["Overvixed", "波动率偏高"],
-  svUnder: ["Undervixed", "波动率偏低"],
+  // ⚠️ REACTION words, not LEVEL words. The verdict grades the residual of today's
+  // vol change against what today's spot move usually implies — svLead explicitly
+  // disavows "is vol high". A zh reading of 偏高/偏低 would claim exactly the thing
+  // the lead says this card does not measure.
+  svOver: ["Overvixed", "波动率反应过度"],
+  svUnder: ["Undervixed", "波动率反应不足"],
   svInline: ["In line", "符合"],
   svUnknown: ["Not graded", "未评级"],
   svGaugeAria: ["Vol reaction versus the regression", "波动率反应与回归对比"],
@@ -356,8 +438,8 @@ const MSC_LEX = {
     "该品种未发布行权价×到期日网格——按期限拆分需要两个维度同时具备。",
   ],
   exLegend: [
-    "Strike prices. Blank means no concentration on that side; “no data” means this horizon is not covered.",
-    "为行权价。“无”表示该侧无集中；“无数据”表示该期限未覆盖。",
+    "Strike prices — the heaviest |gamma| each side, any sign. “none” means no strikes on that side; “no data” means this horizon is not covered.",
+    "为行权价——每侧 |伽马| 最重者，不限符号。“无”表示该侧无行权价；“无数据”表示该期限未覆盖。",
   ],
   exDisclose: [
     "Concentration of dealer gamma — not a forecast that these levels hold.",
@@ -400,6 +482,15 @@ const MSC_LEX = {
     "两轴均沿用做市商符号假设。将每个标的与自身历史排名更为稳健：该假设对每个交易日一致，恒定符号误差大体抵销。",
   ],
   qdAxisX: ["Dealer gamma percentile →", "做市商伽马百分位 →"],
+  qdAxisY: ["Dealer vanna percentile →", "做市商 Vanna 百分位 →"],
+  qdColGammaPct: ["Γ pct", "Γ 百分位"],
+  qdColGammaUsd: ["Γ $", "Γ 金额"],
+  qdColVannaPct: ["V pct", "V 百分位"],
+  qdColVannaUsd: ["V $", "V 金额"],
+  qdFootMeta: [
+    "{n} roots · ranked within each root's trailing {d} sessions · needs {m}+ sessions of history",
+    "共 {n} 个标的 · 在各自最近 {d} 个交易日内排名 · 需 {m}+ 个交易日历史",
+  ],
   qdAmpVol: ["Amplify · vol-sensitive", "放大 · 对波动敏感"],
   qdAmpStable: ["Amplify · vol-quiet", "放大 · 波动平静"],
   qdDampVol: ["Dampen · vol-sensitive", "抑制 · 对波动敏感"],

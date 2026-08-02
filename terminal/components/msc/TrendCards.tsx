@@ -1,32 +1,22 @@
 "use client";
 /**
- * TrendCards — Volland-parity wave 2 (docs/VOLLAND_PARITY_PLAN_2026-08-01.md §5 W2).
+ * TrendCards — the book against its own history (Volland-parity W2, rebuilt in the
+ * 2026-08-01 production sweep).
  *
- * W1 answered "how big is the hedging requirement". These answer "how big **relative to
- * its own history**", which a single session can never answer.
+ * Sweep changes, each answering a defect the operator saw on production:
+ *   • Trend chart axis: the first pass thinned per-POINT date labels by a 54px gap —
+ *     ~25 seven-character labels packed edge to edge, an unreadable smear. Labels are
+ *     now built from MONTH/YEAR BOUNDARIES (year-only past three years of span), then
+ *     thinned by pixel gap. A date axis labels calendar boundaries, not samples.
+ *   • Chart height to ≥190px (svgChart R4 minimum for a labelled x-axis).
+ *   • Copy discipline (MscCard): explanation in the ⓘ, one visible foot line.
  *
- *   1. Aggregate greek trend  — the whole-book series with its own p05–p95 band and
- *      today's percentile. Volland shows ~5 months; our store reaches 2017 (SPY) and
- *      2012 (QQQ), so the same chart spans Volmageddon, 2020 and 2022.
- *   2. Spot–vol relationship  — regress daily ATM-IV change on daily spot return, and
- *      grade today's vol move against what that move usually implies.
- *   3. Positioning extremes   — where gamma concentrates, split by horizon, from the
- *      one store that carries strike AND expiry together.
- *
- * THE PERCENTILE IS THE PRODUCT. The dealer-sign convention makes the *level* a Tier B
- * estimate; ranking today against its own history applies the same assumption to every
- * session, so a constant sign error largely cancels. Every card leads with the rank.
- *
- * SVG LAW (components/charts/svgChart.ts): measured 1:1 viewBox, padDomain over finite
- * values, niceTicks with step-derived precision, labels thinned by PIXEL GAP.
- *
- * COLOUR LAW: the trend line is --brand-2 (a series, not a transaction). The hedging
- * side tints stay --flow-buy/--flow-sell, which do not invert under the East-Asian
- * convention. Verdict words are always spelled out so colour is never load-bearing.
+ * THE PERCENTILE IS THE PRODUCT (unchanged): the level is Tier B; today's rank against
+ * the same book under the same convention is the sturdier read, and every card leads
+ * with it.
  */
 
 import React, { useMemo, useRef, useState } from "react";
-import { Tip } from "@/components/ui/Tip";
 import { fmtTick, niceTicks, padDomain, thinLabels, useChartWidth } from "@/components/charts/svgChart";
 import {
   decimate,
@@ -41,9 +31,10 @@ import {
   type TrendWindowKey,
 } from "@/lib/aggTrend";
 import { makeMscT, type MscKey } from "./mscStrings";
+import { MscCard, CardFoot, CardSpacer } from "./MscCard";
 import type { Lang } from "@/lib/i18n";
 
-const H = 176;
+const H = 200;
 const PAD = { l: 8, r: 56, t: 10, b: 20 };
 
 const GREEK_KEY: Record<TrendGreek, MscKey> = {
@@ -78,15 +69,53 @@ function fmtPct(v: number | null | undefined, digits = 0): string {
   return typeof v === "number" && Number.isFinite(v) ? `${v.toFixed(digits)}%` : "—";
 }
 
-/** 12.5 → "12th", 1 → "1st". Ordinals read faster than "12.5th percentile". */
-function ordinal(p: number | null | undefined): string {
+/**
+ * 12.5 → "12th" (EN) / "第12" (zh) — ordinals read faster than "12.5th percentile",
+ * and an English "th" leaking into the zh view violates the i18n law.
+ */
+function ordinal(p: number | null | undefined, lang: Lang): string {
   if (typeof p !== "number" || !Number.isFinite(p)) return "—";
   const n = Math.max(0, Math.min(100, Math.round(p)));
+  if (lang === "zh") return `第${n}`;
   const rem100 = n % 100;
   const rem10 = n % 10;
   const suffix =
     rem100 >= 11 && rem100 <= 13 ? "th" : rem10 === 1 ? "st" : rem10 === 2 ? "nd" : rem10 === 3 ? "rd" : "th";
   return `${n}${suffix}`;
+}
+
+/**
+ * Date-axis labels from CALENDAR BOUNDARIES, not samples. Month starts while the span
+ * is ≤ 3 years (first label and Januaries carry the year); year starts beyond that.
+ * The result still goes through thinLabels — boundaries can crowd at narrow widths.
+ */
+function boundaryLabels(
+  points: readonly { d: string }[],
+  sx: (i: number) => number,
+): { x: number; label: string }[] {
+  if (points.length < 2) return [];
+  const years = new Set<string>();
+  for (const p of points) years.add(p.d.slice(0, 4));
+  const yearOnly = years.size > 3;
+  const out: { x: number; label: string }[] = [];
+  let prevY = "";
+  let prevYm = "";
+  points.forEach((p, i) => {
+    const y = p.d.slice(0, 4);
+    const ym = p.d.slice(0, 7);
+    if (yearOnly) {
+      if (y !== prevY) {
+        prevY = y;
+        out.push({ x: sx(i), label: y });
+      }
+    } else if (ym !== prevYm) {
+      const label = prevYm === "" || y !== prevY ? ym : p.d.slice(5, 7);
+      prevYm = ym;
+      prevY = y;
+      out.push({ x: sx(i), label });
+    }
+  });
+  return out;
 }
 
 // ─── Card 1: aggregate greek trend ───────────────────────────────────────────────────
@@ -100,12 +129,9 @@ export function AggTrendCard({
 }) {
   const t = makeMscT(lang);
   const [greek, setGreek] = useState<TrendGreek>("gamma");
-  // Defaults to 1Y, not All, and the reason is measured. Dealer exposure scales with the
-  // underlying — gamma with S², vanna and charm with S — so a nine-year series carries a
-  // growth trend: SPY's yearly median vanna climbed 3.54bn (2017) to 5.07bn (2026) while
-  // spot went 225 to 741. A rank against all of that partly measures how much the market
-  // GREW. The full series stays one click away, where the drift is visible on the chart
-  // and the footnote names it.
+  // Defaults to 1Y, not All: dealer exposure scales with the underlying (gamma with S²),
+  // so a nine-year rank partly measures market growth. The full series stays one click
+  // away, where the drift is visible and the foot names it.
   const [win, setWin] = useState<TrendWindowKey>("1y");
   const boxRef = useRef<HTMLDivElement | null>(null);
   const W = useChartWidth(boxRef, 640);
@@ -120,41 +146,43 @@ export function AggTrendCard({
   const geom = useMemo(() => {
     if (!hasData) return null;
     const ys = ts.points.map((p) => p.v);
-    // Zero is unioned in: which side of zero the book sits on is the headline fact,
-    // and a domain that excludes it would hide a regime change entirely.
-    const [y0, y1] = padDomain(Math.min(...ys), Math.max(...ys), {
+    // Zero is ALWAYS in this domain — which side of zero the book sits on is the
+    // headline fact. padDomain's includeZero only unions when the data straddles
+    // zero, so a one-sided window (SPY gamma positive for a whole year is common)
+    // would silently drop the reference line; force it here.
+    let [y0, y1] = padDomain(Math.min(...ys), Math.max(...ys), {
       padFrac: 0.08,
       includeZero: true,
     });
+    y0 = Math.min(y0, 0);
+    y1 = Math.max(y1, 0);
     const n = ts.points.length;
     const sx = (i: number) => PAD.l + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW);
     const sy = (v: number) => PAD.t + innerH - ((v - y0) / (y1 - y0 || 1)) * innerH;
-    // One min/max pair per pixel column. Keeps every extreme at its own date while
-    // cutting a 2,400-point nine-year series to what the plot can actually resolve —
-    // at 390px that would otherwise be seven points per pixel.
+    // One min/max pair per pixel column — every extreme survives at its own date.
     const drawn = decimate(ts.points, Math.max(1, Math.round(innerW)));
-    // Date labels thinned by PIXEL GAP at their mapped positions, per the chart law —
-    // a series can be 252 or 3,558 points long and i % n would collide at one of them.
-    const labels = thinLabels(
-      ts.points.map((p, i) => ({ x: sx(i), label: p.d.slice(0, 7) })),
-      (l) => l.x,
-      54,
-    );
+    // Calendar-boundary labels, thinned by PIXEL GAP (the sweep's axis fix).
+    const labels = thinLabels(boundaryLabels(ts.points, sx), (l) => l.x, 64);
     return { y0, y1, sx, sy, ticks: niceTicks(y0, y1, 4), labels, drawn };
   }, [ts, hasData, innerW, innerH]);
 
-  const unit = agg?.units?.[greek];
+  // The payload's `units` map is English prose — rendering it verbatim leaks EN
+  // into the zh view. The unit is determined by the greek, so it maps to LEX.
+  const unitKey: MscKey =
+    greek === "gamma" ? "unitSpot"
+      : greek === "vanna" || greek === "vega" ? "unitVol"
+      : greek === "charm" ? "unitDay"
+      : "unitPosition";
 
   return (
-    <section style={{ ...CARD, gridColumn: "1 / -1" }}>
-      <header style={CARD_HD}>
-        <span className="obs-lbl">{t("atTitle")}</span>
-        <Tip label={t("atTierWhy")} side="top" size="card">
-          <span style={TIER_CHIP} tabIndex={0}>{t("tierB")}</span>
-        </Tip>
-      </header>
-      <p style={LEAD}>{t("atLead")}</p>
-
+    <MscCard
+      title={t("atTitle")}
+      info={`${t("atLead")} ${t("atBandLegend")}`}
+      tier={t("tierB")}
+      tierWhy={t("atTierWhy")}
+      headRight={<span style={UNIT}>$bn · {t(unitKey)}</span>}
+      span={8}
+    >
       <div style={CTRL_ROW}>
         <div style={CHIP_GROUP} role="group" aria-label={t("hgGreekAria")}>
           {TREND_GREEKS.map((g) => (
@@ -182,7 +210,6 @@ export function AggTrendCard({
             </button>
           ))}
         </div>
-        {unit && <span style={UNIT}>{unit}</span>}
       </div>
 
       {!hasData ? (
@@ -192,13 +219,15 @@ export function AggTrendCard({
           <div style={STAT_ROW}>
             <div style={STAT}>
               <span style={LEG_LBL}>{t("atToday")}</span>
-              <span style={{ ...LEG_VAL, color: stats.last != null && stats.last < 0 ? "var(--flow-sell)" : "var(--flow-buy)" }}>
-                {fmtBnSigned(stats.last)}
-              </span>
+              {/* Neutral tint on purpose: this is an exposure LEVEL, and the flow
+                  colours are reserved for transaction sides — positive dealer gamma
+                  means dealers SELL strength, so a "buy" green here would assert the
+                  opposite trade. */}
+              <span style={LEG_VAL}>{fmtBnSigned(stats.last)}</span>
             </div>
             <div style={STAT}>
               <span style={LEG_LBL}>{t("atRank")}</span>
-              <span style={{ ...LEG_VAL, fontWeight: 700 }}>{ordinal(stats.pctile)}</span>
+              <span style={{ ...LEG_VAL, fontWeight: 700 }}>{ordinal(stats.pctile, lang)}</span>
             </div>
             <div style={STAT}>
               <span style={LEG_LBL}>{t("atTypical")}</span>
@@ -254,9 +283,7 @@ export function AggTrendCard({
                   fill="var(--brand)"
                 />
                 {geom.labels.map((l) => {
-                  // A centre-anchored label at either end hangs half outside the viewBox
-                  // and renders clipped ("2024-07" reads as "24-07"). Anchoring by edge
-                  // proximity keeps the text inside without guessing its pixel width.
+                  // Edge-proximity anchoring keeps end labels inside the viewBox.
                   const anchor =
                     l.x - PAD.l < 20 ? "start" : PAD.l + innerW - l.x < 20 ? "end" : "middle";
                   return (
@@ -276,17 +303,16 @@ export function AggTrendCard({
             )}
           </div>
 
-          <p style={FOOT}>
+          <CardFoot>
             {t("atCoverage")
               .replace("{n}", String(ts.n))
               .replace("{since}", ts.since ?? "—")}
-            {ts.truncated ? ` ${t("atTruncated")}` : ""}
-          </p>
-          <p style={FOOT}>{t("atBandLegend")}</p>
-          {win === "all" && <p style={FOOT}>{t("atDrift")}</p>}
+            {ts.truncated ? ` · ${t("atTruncated")}` : ""}
+            {win === "all" ? ` · ${t("atDrift")}` : ""}
+          </CardFoot>
         </>
       )}
-    </section>
+    </MscCard>
   );
 }
 
@@ -304,8 +330,8 @@ export function SpotVolCard({
   const W = useChartWidth(boxRef, 320);
   const sv = useMemo(() => spotVol(agg?.series, 252), [agg]);
 
-  const CH = 132;
-  const CPAD = { l: 8, r: 34, t: 8, b: 18 };
+  const CH = 148;
+  const CPAD = { l: 8, r: 34, t: 8, b: 8 };
   const innerW = Math.max(40, W - CPAD.l - CPAD.r);
   const innerH = CH - CPAD.t - CPAD.b;
 
@@ -327,17 +353,15 @@ export function SpotVolCard({
       : "svUnknown";
 
   return (
-    <section style={CARD}>
-      <header style={CARD_HD}>
-        <span className="obs-lbl">{t("svTitle")}</span>
-        <Tip label={t("svTierWhy")} side="top" size="card">
-          <span style={TIER_CHIP} tabIndex={0}>{t("tierMeasured")}</span>
-        </Tip>
-      </header>
-      <p style={LEAD}>{t("svLead")}</p>
-
+    <MscCard
+      title={t("svTitle")}
+      info={`${t("svLead")} ${t("svLegend").replace("{n}", String(sv.n))}`}
+      tier={t("tierMeasured")}
+      tierWhy={t("svTierWhy")}
+      span={4}
+    >
       {sv.beta == null ? (
-        <p style={FOOT}>{t("svNone").replace("{n}", String(sv.n))}</p>
+        <CardFoot>{t("svNone").replace("{n}", String(sv.n))}</CardFoot>
       ) : (
         <>
           <div style={STAT_ROW}>
@@ -366,8 +390,7 @@ export function SpotVolCard({
             </div>
           </div>
 
-          {/* Overvixed ↔ undervixed dial. A bounded scalar reads faster on a track than
-              as a number — the one Volland design idea that genuinely earns its pixels. */}
+          {/* Overvixed ↔ undervixed dial — a bounded scalar reads faster on a track. */}
           {sv.gauge != null && (
             <div style={GAUGE_WRAP} aria-label={t("svGaugeAria")}>
               <div style={GAUGE_TRACK}>
@@ -421,7 +444,6 @@ export function SpotVolCard({
                     opacity={0.55}
                   />
                 ))}
-                {/* the fitted line across the plotted x-domain */}
                 <line
                   x1={geom.sx(geom.x0)}
                   y1={geom.sy((sv.intercept ?? 0) + sv.beta * geom.x0)}
@@ -444,16 +466,16 @@ export function SpotVolCard({
             )}
           </div>
 
-          <p style={FOOT}>
+          <CardSpacer />
+          <CardFoot>
             {t("svToday")
               .replace("{r}", fmtPct(sv.lastReturnPct, 2))
               .replace("{a}", (sv.lastIvChangePts ?? 0).toFixed(2))
               .replace("{p}", (sv.predictedPts ?? 0).toFixed(2))}
-          </p>
-          <p style={FOOT}>{t("svLegend").replace("{n}", String(sv.n))}</p>
+          </CardFoot>
         </>
       )}
-    </section>
+    </MscCard>
   );
 }
 
@@ -474,17 +496,15 @@ export function ExtremesCard({
   const ex = useMemo(() => extremes(matrix, spot, asof), [matrix, spot, asof]);
 
   return (
-    <section style={CARD}>
-      <header style={CARD_HD}>
-        <span className="obs-lbl">{t("exTitle")}</span>
-        <Tip label={t("exTierWhy")} side="top" size="card">
-          <span style={TIER_CHIP} tabIndex={0}>{t("tierB")}</span>
-        </Tip>
-      </header>
-      <p style={LEAD}>{t("exLead")}</p>
-
+    <MscCard
+      title={t("exTitle")}
+      info={`${t("exLead")} ${t("exLegend")}`}
+      tier={t("tierB")}
+      tierWhy={t("exTierWhy")}
+      span={4}
+    >
       {!ex.available ? (
-        <p style={FOOT}>{t("exNone")}</p>
+        <CardFoot>{t("exNone")}</CardFoot>
       ) : (
         <>
           <table style={TABLE}>
@@ -496,67 +516,55 @@ export function ExtremesCard({
               </tr>
             </thead>
             <tbody>
+              {/* Strikes render NEUTRAL and through price(): these are magnitude
+                  concentrations (heaviest |gamma| each side, any sign), and the flow
+                  colours are reserved for transaction sides. */}
               {ex.rows.map((r) => (
                 <tr key={r.horizon}>
-                  <td style={TD}>{t(HORIZON_KEY[r.horizon])}</td>
-                  <td style={{ ...TD, textAlign: "right", color: r.cells === 0 ? "var(--text-dim)" : "var(--flow-sell)" }}>
-                    {r.cells === 0 ? t("exUnknown") : r.support == null ? t("exNoWall") : r.support}
+                  <td style={{ ...TD, whiteSpace: "nowrap" }}>{t(HORIZON_KEY[r.horizon])}</td>
+                  <td style={{ ...TD, textAlign: "right", color: r.cells === 0 || r.support == null ? "var(--text-dim)" : "var(--text)" }}>
+                    {r.cells === 0
+                      ? t("exUnknown")
+                      : r.support == null
+                        ? t("exNoWall")
+                        : r.support.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                   </td>
-                  <td style={{ ...TD, textAlign: "right", color: r.cells === 0 ? "var(--text-dim)" : "var(--flow-buy)" }}>
-                    {r.cells === 0 ? t("exUnknown") : r.resistance == null ? t("exNoWall") : r.resistance}
+                  <td style={{ ...TD, textAlign: "right", color: r.cells === 0 || r.resistance == null ? "var(--text-dim)" : "var(--text)" }}>
+                    {r.cells === 0
+                      ? t("exUnknown")
+                      : r.resistance == null
+                        ? t("exNoWall")
+                        : r.resistance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <p style={FOOT}>{t("exLegend")}</p>
-          <p style={FOOT}>{t("exDisclose")}</p>
+          <CardSpacer />
+          <CardFoot>{t("exDisclose")}</CardFoot>
         </>
       )}
-    </section>
+    </MscCard>
   );
 }
 
-// ─── Styles (v5 tokens; mirrors HedgingCards) ───────────────────────────────────────
-
-const CARD: React.CSSProperties = {
-  background: "var(--panel-2)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-tile)",
-  padding: "9px 10px 10px",
-  minWidth: 0,
-};
-
-const CARD_HD: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "space-between",
-  gap: 8, marginBottom: 5,
-};
-
-const TIER_CHIP: React.CSSProperties = {
-  fontSize: "var(--fs-micro)", letterSpacing: ".04em", textTransform: "uppercase",
-  color: "var(--text-dim)", border: "1px solid var(--line-2)", borderRadius: 999,
-  padding: "1px 6px", whiteSpace: "nowrap", cursor: "help",
-};
-
-const LEAD: React.CSSProperties = {
-  margin: "0 0 8px", fontSize: 11, lineHeight: 1.45, color: "var(--muted)",
-};
+// ─── Local styles (v5 tokens) ────────────────────────────────────────────────────────
 
 const CTRL_ROW: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6,
 };
 
-const CHIP_GROUP: React.CSSProperties = { display: "flex", gap: 3 };
+const CHIP_GROUP: React.CSSProperties = { display: "flex", gap: 3, flexWrap: "wrap" };
 
 const CHIP: React.CSSProperties = { fontSize: 10, padding: "2px 7px" };
 
 const UNIT: React.CSSProperties = {
   fontSize: "var(--fs-micro)", letterSpacing: ".03em", color: "var(--text-dim)",
-  textTransform: "uppercase", marginLeft: "auto",
+  textTransform: "uppercase", whiteSpace: "nowrap",
 };
 
 const STAT_ROW: React.CSSProperties = {
-  display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 8,
+  display: "flex", gap: "6px 16px", flexWrap: "wrap", marginBottom: 8,
 };
 
 const STAT: React.CSSProperties = {
@@ -600,7 +608,7 @@ const TABLE: React.CSSProperties = { width: "100%", borderCollapse: "collapse", 
 const TH: React.CSSProperties = {
   textAlign: "left", fontWeight: 500, fontSize: "var(--fs-micro)", letterSpacing: ".04em",
   textTransform: "uppercase", color: "var(--text-dim)", padding: "3px 5px",
-  borderBottom: "1px solid var(--line)",
+  borderBottom: "1px solid var(--line)", whiteSpace: "nowrap",
 };
 
 const TD: React.CSSProperties = {
@@ -610,8 +618,4 @@ const TD: React.CSSProperties = {
 
 const EMPTY_SM: React.CSSProperties = {
   padding: "24px 8px", textAlign: "center", fontSize: 11, color: "var(--muted)",
-};
-
-const FOOT: React.CSSProperties = {
-  margin: "0 0 4px", fontSize: 10, lineHeight: 1.5, color: "var(--muted)",
 };

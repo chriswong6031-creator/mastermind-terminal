@@ -122,8 +122,13 @@ export function StructureView() {
         let data: unknown = null;
         try { data = await flowGet("oi_change"); } catch { data = null; }
         const rec = data && typeof data === "object" ? (data as OiChangePayload) : null;
-        setCross(rec && Array.isArray(rec.rows) ? rec : null);
+        const ok = rec != null && Array.isArray(rec.rows);
+        setCross(ok ? rec : null);
         setCrossLoading(false);
+        // One-shot ONLY on success. Leaving the ref latched after a transient
+        // failure made the All-roots board permanently empty until a full reload —
+        // re-toggling the scope now retries.
+        if (!ok) crossReqRef.current = false;
       })();
     }
   }, []);

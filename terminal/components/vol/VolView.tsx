@@ -84,7 +84,13 @@ export function VolView() {
       }
       if (reqRef.current !== req) return;
       if (data == null) {
-        setError(true);
+        // A null here is almost always an UNCOVERED root (the nightly build's R2 key
+        // does not exist → /api/flow 5xx → flowGet null), not a broken desk. On prod
+        // this rendered "Could not load" for every name outside the build — the
+        // honest state is the coverage-gap empty, which also tells the reader what
+        // to do about it.
+        setPayload(null);
+        setError(false);
         setLoading(false);
         return;
       }

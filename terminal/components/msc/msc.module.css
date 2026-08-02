@@ -1,0 +1,211 @@
+/**
+ * msc.module.css — layout system for the Positioning tab.
+ *
+ * WHY THIS EXISTS (2026-08-01 production-quality sweep): the first pass laid thirteen
+ * heterogeneous cards into one `repeat(auto-fit, minmax(248px, 1fr))` grid. Auto
+ * placement packed short stat cards beside tall tables, every row stretched to its
+ * tallest member, and the tab rendered as voids and orphans. The operator called it
+ * garbage; the operator was right.
+ *
+ * The fix is editorial, not algorithmic: a 12-column grid with EXPLICIT spans, cards
+ * curated into rows of similar height, and section rules that group the tab into three
+ * questions — today's structure, the book against its own history, the cross-market
+ * board. Breakpoints match the responsive contract (1440 / 820 / 390): 12 columns by
+ * default, everything ≥ s5 goes full-width under 1100px while s3/s4 pair up, and one
+ * column under 640px.
+ */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+
+.s3 { grid-column: span 3; min-width: 0; }
+.s4 { grid-column: span 4; min-width: 0; }
+.s5 { grid-column: span 5; min-width: 0; }
+.s6 { grid-column: span 6; min-width: 0; }
+.s7 { grid-column: span 7; min-width: 0; }
+.s8 { grid-column: span 8; min-width: 0; }
+.s12 { grid-column: 1 / -1; min-width: 0; }
+
+@media (max-width: 1100px) {
+  .s3, .s4 { grid-column: span 6; }
+  .s5, .s6, .s7, .s8 { grid-column: 1 / -1; }
+}
+
+@media (max-width: 640px) {
+  .s3, .s4, .s5, .s6, .s7, .s8 { grid-column: 1 / -1; }
+}
+
+/* ── Section rule: a labelled hairline that carries the tab's narrative order ── */
+
+.rule {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 0;
+  min-width: 0;
+}
+
+.ruleLabel {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-dim, #8a8f98);
+  white-space: nowrap;
+}
+
+.ruleHint {
+  font-size: 10px;
+  color: var(--text-dim, #8a8f98);
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.rule::after {
+  content: "";
+  flex: 1 1 24px;
+  min-width: 24px;
+  height: 1px;
+  background: var(--line, rgba(255, 255, 255, 0.08));
+}
+
+/* ── Card chrome ─────────────────────────────────────────────────────────────── */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--panel-2, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  border-radius: var(--r-tile, 10px);
+  padding: 10px 12px 10px;
+}
+
+.cardHd {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+  min-width: 0;
+}
+
+.cardTitle {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text, #e8eaed);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* The ⓘ affordance: the card's one-paragraph explanation lives in its Tip, not in
+   permanent copy. Keyboard-reachable (tabIndex on the consumer side). */
+.infoDot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 1px solid var(--line-2, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 650;
+  font-style: normal;
+  color: var(--text-dim, #8a8f98);
+  cursor: help;
+  user-select: none;
+}
+
+.cardHdRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tierChip {
+  font-size: var(--fs-micro, 9px);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim, #8a8f98);
+  border: 1px solid var(--line-2, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Pushes a card's provenance foot to the bottom edge so curated rows keep their
+   baselines aligned instead of ragged-bottoming. */
+.spacer { flex: 1 1 auto; min-height: 0; }
+
+.foot {
+  margin: 6px 0 0;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--muted, #7d828b);
+}
+
+/* ── Heatmap ────────────────────────────────────────────────────────────────── */
+
+.heatScroll {
+  overflow-x: auto;
+  min-width: 0;
+  /* the row-hover highlight needs the rows to keep their intrinsic width */
+}
+
+.heatTable {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.heatTable th {
+  position: sticky;
+  top: 0;
+  font-size: 9px;
+  font-weight: 550;
+  letter-spacing: 0.03em;
+  color: var(--text-dim, #8a8f98);
+  padding: 2px 3px;
+  text-align: center;
+  white-space: nowrap;
+  background: var(--panel-2, rgba(20, 22, 26, 1));
+}
+
+.heatTable td {
+  padding: 0;
+  height: 15px;
+  min-width: 30px;
+  text-align: center;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: transparent; /* value text appears on row hover only */
+  border: 1px solid var(--panel-2, rgba(20, 22, 26, 1));
+}
+
+.heatTable tbody tr:hover td { color: var(--text, #e8eaed); }
+
+.heatStrike {
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2, #b6bac1) !important;
+  text-align: right !important;
+  padding: 0 6px 0 2px !important;
+  white-space: nowrap;
+}
+
+.heatSpotRow td {
+  border-top: 1px dashed var(--text-2, #b6bac1);
+}
