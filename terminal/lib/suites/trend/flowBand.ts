@@ -713,7 +713,7 @@ export const FLOW_BAND_MODULE: SuiteModuleDef = {
   key: "fb",
   label: "Flow Band",
   tag: "FB",
-  tier: "insider",
+  tier: "essential",
   defaultOn: false,
   fields: FIELDS,
   defaults: DEFAULTS,

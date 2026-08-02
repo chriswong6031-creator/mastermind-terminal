@@ -11,9 +11,9 @@
 
 .ob-root {
   /* Tier hues — scoped so they never leak. Violet = the Opus/Pro tier hue from the
-     macro plans page. Free borrows the muted grey; Insider borrows brand-2. */
+     macro plans page. Free borrows the muted grey; Essential borrows brand-2. */
   --ob-free: var(--muted);
-  --ob-insider: var(--brand-2);
+  --ob-essential: var(--brand-2);
   --ob-pro: #8b5cf6;
   /* Resolved per-selection accent (set inline where the summary/CTA needs the live hue). */
 }
@@ -486,7 +486,7 @@
   flex: none;
   align-self: center;
 }
-.ob-mini-chip.insider { color: var(--ob-insider); background: color-mix(in srgb, var(--ob-insider) 15%, transparent); }
+.ob-mini-chip.essential { color: var(--ob-essential); background: color-mix(in srgb, var(--ob-essential) 15%, transparent); }
 .ob-mini-chip.pro { color: var(--ob-pro); background: color-mix(in srgb, var(--ob-pro) 16%, transparent); }
 .ob-mini-chip.soon { color: var(--muted); background: var(--panel-3); border: 1px solid var(--line); }
 

@@ -7,7 +7,7 @@ import type {
   OnboardMode, OnboardingSheetProps, OnboardPrefs, PlanKey, Period, PendingPrefs, WizardStash,
 } from "./types";
 import {
-  LS_PENDING_PREFS, LS_ONBOARD_RESUME, SS_WIZARD, type OnboardResumeStash,
+  LS_PENDING_PREFS, LS_ONBOARD_RESUME, SS_WIZARD, normalizePlanKey, type OnboardResumeStash,
   STEP_ACCOUNT, STEP_PREFS, STEP_PLAN, STEP_BILLING, STEP_DONE,
 } from "./types";
 import RailCard, { MobileStepper, type WizardSnapshot } from "./RailCard";
@@ -28,7 +28,7 @@ const emptyPrefs: OnboardPrefs = { market_focus: [], trade_types: [], theme_pref
 // through unchanged. Missing/garbage → step 1.
 function remapStashStep(raw: Partial<WizardStash>): number {
   const s = typeof raw.step === "number" && raw.step >= 1 ? raw.step : STEP_ACCOUNT;
-  const paid = raw.plan === "insider" || raw.plan === "pro";
+  const paid = normalizePlanKey(raw.plan) === "essential" || raw.plan === "pro";
   // W1 stash never had trialActive/trialEnd; treat a step-4 W1 stash as the old Done.
   const isW1Shape = raw.trialActive === undefined && raw.trialEnd === undefined;
   if (isW1Shape && s >= STEP_BILLING) {
@@ -66,7 +66,8 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
   const [email, setEmail] = useState(stash?.email ?? props.email);
   const [password, setPassword] = useState("");
   const [prefs, setPrefs] = useState<OnboardPrefs>(stash?.prefs ?? emptyPrefs);
-  const [plan, setPlan] = useState<PlanKey>(stash?.plan ?? props.initialPlan ?? "pro");
+  // Stash reads normalize: a tab opened before the rename still holds `insider`.
+  const [plan, setPlan] = useState<PlanKey>(normalizePlanKey(stash?.plan) ?? props.initialPlan ?? "pro");
   const [period, setPeriod] = useState<Period>(stash?.period ?? props.initialPeriod ?? "annual");
   const [confirmPending, setConfirmPending] = useState(stash?.confirmPending ?? false);
   // W2: an in-sheet Stripe trial has started (drives the Done "trial live" copy + rail chip).
@@ -74,7 +75,7 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
   const [trialEnd, setTrialEnd] = useState<number | null>(stash?.trialEnd ?? null);
   const [drag, setDrag] = useState({ x: 0, y: 0 }); // header-drag translate
 
-  const paid = plan === "insider" || plan === "pro";
+  const paid = plan === "essential" || plan === "pro";
 
   // Persist the live wizard (signup mode only) so a remount resumes in place; the
   // stash is cleared by handleClose once the flow reaches Done.
@@ -104,7 +105,8 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
         const stash = JSON.parse(raw) as Partial<OnboardResumeStash>;
         if (stash.firstName) { setFirstName(stash.firstName); stashedName = true; }
         if (stash.lastName) setLastName(stash.lastName);
-        if (stash.plan === "free" || stash.plan === "insider" || stash.plan === "pro") setPlan(stash.plan);
+        const resumedPlan = normalizePlanKey(stash.plan);
+        if (resumedPlan) setPlan(resumedPlan);
         if (stash.period === "monthly" || stash.period === "annual") setPeriod(stash.period);
         if (stash.prefs && typeof stash.prefs === "object") setPrefs((p) => ({ ...p, ...stash.prefs }));
       }

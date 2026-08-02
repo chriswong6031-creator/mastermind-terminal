@@ -559,7 +559,7 @@ export const SMART_SR_MODULE: SuiteModuleDef = {
   key: "sr",
   label: "Smart S/R",
   tag: "SR",
-  tier: "insider",
+  tier: "essential",
   defaultOn: false,
   fields: FIELDS,
   defaults: DEFAULTS,

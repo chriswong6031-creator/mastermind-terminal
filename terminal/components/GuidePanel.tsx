@@ -22,7 +22,7 @@ import {
   suiteModuleId,
   type SuiteModuleCatalogEntry,
 } from "@/lib/suites/catalog";
-import type { SuiteField, SuiteTier } from "@/lib/indicator-canvas/types";
+import { SUITE_TIER_LABEL, type SuiteField, type SuiteTier } from "@/lib/indicator-canvas/types";
 
 export interface GuidePanelProps {
   suiteKey: string;
@@ -37,7 +37,7 @@ export interface GuidePanelProps {
 
 type Status = "loading" | "ready" | "missing";
 
-const TIER_RANK: Record<SuiteTier, number> = { free: 0, insider: 1, pro: 2 };
+const TIER_RANK: Record<SuiteTier, number> = { free: 0, essential: 1, pro: 2 };
 const SECTION_ICON: Record<GuideSectionKind, "eye" | "route" | "tune" | "bell" | "book"> = {
   anatomy: "eye",
   playbook: "route",
@@ -553,7 +553,7 @@ export default function GuidePanel({
                       <div className="gp-breadcrumb">
                         <span>{localizedSuite}</span>
                         <span>{surfaceLabel(entry.surface, zh)}</span>
-                        <span className={`gp-tier gp-tier-${entry.tier}`}>{entry.tier}</span>
+                        <span className={`gp-tier gp-tier-${SUITE_TIER_LABEL[entry.tier]}`}>{SUITE_TIER_LABEL[entry.tier]}</span>
                       </div>
                       <h1 id="guide-center-title">{title}</h1>
                       <div className="gp-lede" dangerouslySetInnerHTML={{ __html: document.introHtml }} />

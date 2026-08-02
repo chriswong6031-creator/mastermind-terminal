@@ -1623,13 +1623,13 @@ describe("contract hygiene", () => {
   it("carries the registered identity for every W1 module", () => {
     const idOf = (m: SuiteModuleDef) => [m.key, m.label, m.tag, m.tier, m.defaultOn];
     expect(W1_MODULES.map(idOf)).toEqual([
-      ["pd", "Premium & Discount", "PD", "insider", false],
+      ["pd", "Premium & Discount", "PD", "essential", false],
       ["liq", "Liquidity", "LIQ", "pro", false],
       ["sfp", "Swing Failure", "SFP", "pro", false],
-      ["te", "Trend Engine", "TE", "insider", true],
-      ["vb", "Volt Bands", "VB", "insider", false],
+      ["te", "Trend Engine", "TE", "essential", true],
+      ["vb", "Volt Bands", "VB", "essential", false],
       ["cp", "Candle Painter", "CP", "free", true],
-      ["fb", "Flow Band", "FB", "insider", false],
+      ["fb", "Flow Band", "FB", "essential", false],
     ]);
     expect(new Set(ALL_MODULES.map((m) => m.key)).size).toBe(ALL_MODULES.length);
     expect(new Set(ALL_MODULES.map((m) => m.tag)).size).toBe(ALL_MODULES.length);
@@ -3368,18 +3368,18 @@ describe("W2 contract hygiene", () => {
     }
     const idOf = (m: SuiteModuleDef) => [m.key, m.label, m.tag, m.tier, m.defaultOn];
     expect(W2_MODULES.map(idOf)).toEqual([
-      ["wave", "Pulse Wave", "PW", "insider", true],
-      ["sig", "Pulse Signals", "PS", "insider", true],
+      ["wave", "Pulse Wave", "PW", "essential", true],
+      ["sig", "Pulse Signals", "PS", "essential", true],
       ["div", "Divergences", "DV", "pro", true],
       ["vmap", "Volume Mapping", "VM", "pro", false],
       ["flow", "Money Flows", "MF", "pro", false],
-      ["eng", "RSI Engine", "RE", "insider", true],
-      ["sig", "RSI Signals", "RS", "insider", true],
+      ["eng", "RSI Engine", "RE", "essential", true],
+      ["sig", "RSI Signals", "RS", "essential", true],
       ["div", "RSI Divergence", "RD", "pro", true],
       ["chan", "RSI Channels", "RC", "pro", false],
-      ["eng", "MACD Engine", "ME", "insider", true],
-      ["sig", "MACD Signals", "MS", "insider", true],
-      ["hist", "Histogram", "MH", "insider", true],
+      ["eng", "MACD Engine", "ME", "essential", true],
+      ["sig", "MACD Signals", "MS", "essential", true],
+      ["hist", "Histogram", "MH", "essential", true],
       ["div", "MACD Divergence", "MD", "pro", true],
       ["trend", "Phase Trend", "MT", "pro", false],
     ]);

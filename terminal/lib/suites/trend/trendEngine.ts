@@ -873,7 +873,7 @@ export const TREND_ENGINE_MODULE: SuiteModuleDef = {
   key: "te",
   label: "Trend Engine",
   tag: "TE",
-  tier: "insider",
+  tier: "essential",
   defaultOn: true,
   fields: FIELDS,
   defaults: DEFAULTS,

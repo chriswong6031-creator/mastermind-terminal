@@ -28,7 +28,7 @@ export default function StepDone({ firstName, email, confirmPending, trialActive
     ? t("obDoneTitleNamed").replace("{firstName}", name)
     : t("obDoneTitle");
 
-  const tierName = plan === "insider" ? t("obPlanInsider") : plan === "pro" ? t("obPlanPro") : "";
+  const tierName = plan === "essential" ? t("obPlanInsider") : plan === "pro" ? t("obPlanPro") : "";
 
   return (
     <div className="ob-fade">

@@ -6,7 +6,7 @@
 //   1. CATALOG INTEGRITY vs the REAL registry. Every SUITE_ALERT_EVENTS row claims a {suite,
 //      module, tier} and an event name. The suite and module are resolved against SUITE_DEFS,
 //      the tier is compared to the OWNING module's registered tier (the POST route gates
-//      entitlement off this number — a stale copy silently sells a pro module at insider), and
+//      entitlement off this number — a stale copy silently sells a pro module at essential), and
 //      the event string is grepped out of the module's own source file, so a renamed/removed
 //      event type cannot keep an alert in the picker that can never fire.
 //   2. `validateSuiteCondition` — the accept/reject matrix the route depends on. It returns a
@@ -43,7 +43,9 @@ import {
   type SuiteSequenceState,
 } from "../suiteAlerts";
 import { SUITE_DEFS, SUITE_ORDER } from "../suites/registry";
-import type { SuiteEvent } from "../indicator-canvas/types";
+import { SUITE_TIER_LABEL, type SuiteEvent, type SuiteTier } from "../indicator-canvas/types";
+import { suitePresetsFor } from "../suites/presets";
+import { normalizeSubscriptionTier } from "../subscriptionTier";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -133,7 +135,7 @@ describe("SUITE_ALERT_EVENTS catalog", () => {
       expect(d.en.length, `${d.event}: empty English name`).toBeGreaterThan(0);
       expect(/[一-鿿]/.test(d.en), `${d.event}: CJK in the English name`).toBe(false);
       expect(d.tkey.startsWith("suiteEv"), `${d.event}: LEX key convention`).toBe(true);
-      expect(["free", "insider", "pro"]).toContain(d.tier);
+      expect(["free", "essential", "pro"]).toContain(d.tier);
       expect(typeof d.dirs).toBe("boolean");
       expect(typeof d.strength).toBe("boolean");
     }
@@ -876,10 +878,10 @@ describe("suiteSequencePreview", () => {
 // ─── 8. the sequence entitlement law (highest tier across the steps) ──────────
 
 describe("sequence entitlement", () => {
-  const RANK = { free: 0, insider: 1, pro: 2 } as const;
+  const RANK = { free: 0, essential: 1, pro: 2 } as const;
   /** The law the alerts POST route implements: a chain is entitled only when EVERY step is. */
-  const seqTier = (events: string[]): "free" | "insider" | "pro" => {
-    let t: "free" | "insider" | "pro" = "free";
+  const seqTier = (events: string[]): "free" | "essential" | "pro" => {
+    let t: "free" | "essential" | "pro" = "free";
     for (const e of events) {
       const d = suiteAlertEventDef(e);
       const st = d ? d.tier : "pro"; // fail closed on anything unknown
@@ -900,9 +902,9 @@ describe("sequence entitlement", () => {
         );
       }
     }
-    // the concrete case the route must not get wrong: insider BOS + pro OB touch = pro
+    // the concrete case the route must not get wrong: essential BOS + pro OB touch = pro
     expect(seqTier(["bos", "ob_touch"])).toBe("pro");
-    expect(seqTier(["bos", "choch"])).toBe("insider");
+    expect(seqTier(["bos", "choch"])).toBe("essential");
     expect(seqTier(["bos", "not_an_event"]), "unknown step fails closed").toBe("pro");
   });
 
@@ -925,5 +927,87 @@ describe("sequence entitlement", () => {
     expect(src).toContain("validateSuiteSequence");
     expect(src).toContain('"suite_sequence"');
     expect(src.includes("rank[st] > rank[tier]"), "route must keep the HIGHEST step tier").toBe(true);
+  });
+});
+
+// ─── 9. the two tier NAMESPACES must never drift apart ────────────────────────
+//
+// SuiteTier (lib/indicator-canvas/types.ts) and SubscriptionTier (lib/subscriptionTier.ts)
+// are separate unions that are compared by RANK at runtime, and they fail in OPPOSITE
+// directions when they disagree: IndicatorsModal / AlertsView fail OPEN (the picker
+// advertises modules as unlocked) while ChartPanel / indicator-canvas host fail CLOSED
+// (the renderer refuses to draw them). A split therefore ships a picker that sells
+// modules the chart will not paint — with no error anywhere.
+//
+// TypeScript cannot catch it: the two unions are structurally independent, so renaming
+// one compiles cleanly. These are the RUNTIME witnesses that keep the rename atomic.
+
+describe("SuiteTier ↔ SubscriptionTier namespace parity", () => {
+  /** Every tier value that actually appears anywhere in the suite plane. */
+  const suiteTierValues = (): SuiteTier[] => {
+    const seen = new Set<SuiteTier>();
+    for (const suiteKey of SUITE_ORDER) {
+      for (const m of SUITE_DEFS[suiteKey].modules) seen.add(m.tier);
+    }
+    for (const d of SUITE_ALERT_EVENTS) seen.add(d.tier);
+    for (const suiteKey of SUITE_ORDER) {
+      for (const p of suitePresetsFor(suiteKey)) seen.add(p.minTier);
+    }
+    return [...seen];
+  };
+
+  it("every SuiteTier in use is a canonical SubscriptionTier value", () => {
+    // The load-bearing assertion. If SuiteTier says "insider" while SubscriptionTier has
+    // been flipped to "essential", normalizeSubscriptionTier("insider") returns
+    // "essential" and this fails — and vice versa. Neither namespace can move alone.
+    const values = suiteTierValues();
+    expect(values.length, "no module declares a tier — the census is broken").toBeGreaterThan(1);
+    for (const t of values) {
+      expect(normalizeSubscriptionTier(t), `SuiteTier "${t}" is not a canonical billing tier`).toBe(t);
+    }
+  });
+
+  it("the paid middle tier is present on both sides under the same name", () => {
+    // Pins the actual rename rather than just self-consistency: a codebase that renamed
+    // BOTH namespaces to some third value would pass the test above but fail here.
+    expect(normalizeSubscriptionTier("essential")).toBe("essential");
+    expect(suiteTierValues()).toContain("essential");
+    expect(suiteTierValues()).not.toContain("insider");
+  });
+
+  it("the pre-rename `insider` still entitles as `essential` on the billing side", () => {
+    // Permanent inbound alias — cached pages / mm.devTier / onboarding stashes carry it.
+    expect(normalizeSubscriptionTier("insider")).toBe("essential");
+    expect(normalizeSubscriptionTier("insider")).toBe(normalizeSubscriptionTier("essential"));
+  });
+
+  it("display copy is decoupled from the tier VALUE", () => {
+    // The chips render SUITE_TIER_LABEL, not the raw tier, so flipping the internal value
+    // cannot silently change user-facing copy. Guards the reverse mistake too: deleting the
+    // map and interpolating the tier again would start printing "ESSENTIAL" in three places.
+    expect(SUITE_TIER_LABEL.essential).toBe("insider");
+    expect(SUITE_TIER_LABEL.pro).toBe("pro");
+    expect(SUITE_TIER_LABEL.free).toBe("free");
+    for (const [file, needle] of [
+      ["IndicatorsModal.tsx", "SUITE_TIER_LABEL"],
+      ["GuidePanel.tsx", "SUITE_TIER_LABEL"],
+    ] as const) {
+      const src = readFileSync(join(__dirname, "..", "..", "components", file), "utf8");
+      expect(src.includes(needle), `${file} must render tier chips via ${needle}`).toBe(true);
+      expect(/im-tier-\$\{(?!SUITE_TIER_LABEL)/.test(src), `${file}: raw tier interpolated into a class`).toBe(false);
+      expect(/gp-tier-\$\{(?!SUITE_TIER_LABEL)/.test(src), `${file}: raw tier interpolated into a class`).toBe(false);
+    }
+  });
+
+  it("every tier chip class the labels produce has a real CSS rule", () => {
+    // The other half of the decoupling. SUITE_TIER_LABEL feeds a class-name TEMPLATE, so a
+    // label the stylesheet does not know about renders an UNSTYLED chip — visible only by
+    // looking at it, which no unit test does. Pin both directions of the join.
+    const css = readFileSync(join(__dirname, "..", "..", "app", "globals.css"), "utf8");
+    for (const tier of ["essential", "pro"] as const) {
+      const label = SUITE_TIER_LABEL[tier];
+      expect(css.includes(`.im-tier-${label}{`), `no .im-tier-${label} rule for tier "${tier}"`).toBe(true);
+      expect(css.includes(`.gp-tier-${label}{`), `no .gp-tier-${label} rule for tier "${tier}"`).toBe(true);
+    }
   });
 });

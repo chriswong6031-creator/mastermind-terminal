@@ -314,7 +314,7 @@ export const PULSE_SIGNALS_MODULE: SuiteModuleDef = {
   key: "sig",
   label: "Pulse Signals",
   tag: "PS",
-  tier: "insider",
+  tier: "essential",
   defaultOn: true,
   fields: FIELDS,
   defaults: DEFAULTS,

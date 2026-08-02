@@ -7,8 +7,28 @@
 // against it standalone.
 
 export type OnboardMode = "signup" | "signin";
-export type PlanKey = "free" | "insider" | "pro";
+export type PlanKey = "free" | "essential" | "pro";
 export type Period = "monthly" | "annual";
+
+/**
+ * Coerce anything that can hand this flow a plan — `?plan=`, the SS_WIZARD stash,
+ * the SS_OPEN stash, the LS_ONBOARD_RESUME stash — into a canonical PlanKey.
+ *
+ * `insider` is the PRE-RENAME name for `essential` and is accepted here FOREVER, not
+ * transitionally: a tab opened before the rename keeps its sessionStorage stash for
+ * the life of that tab, `mm.onboardResume` survives an OAuth round-trip in
+ * localStorage, and a cached landing page can still emit `?plan=insider`. None of
+ * those can be migrated. Read-tolerance only — every write is canonical, so a stash
+ * re-saved by this build comes back as `essential`.
+ *
+ * Unknown / missing → null, so callers keep their own default rather than silently
+ * landing a user on the wrong plan.
+ */
+export function normalizePlanKey(value: unknown): PlanKey | null {
+  if (value === "essential" || value === "insider") return "essential";
+  if (value === "free" || value === "pro") return value;
+  return null;
+}
 
 export interface OnboardingSheetProps {
   mode: OnboardMode;

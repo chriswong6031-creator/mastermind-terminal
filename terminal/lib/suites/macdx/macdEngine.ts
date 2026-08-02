@@ -504,7 +504,7 @@ export const MACD_ENGINE_MODULE: SuiteModuleDef = {
   key: "eng",
   label: "MACD Engine",
   tag: "ME",
-  tier: "insider",
+  tier: "essential",
   defaultOn: true,
   fields: FIELDS,
   defaults: DEFAULTS,

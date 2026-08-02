@@ -29,7 +29,15 @@ const MOCK_USER: AcsUser = {
 
 const PLANS: Record<string, AcsPlan> = {
   free: { tier: "free", status: "none" },
-  "insider · trial": {
+  "essential · trial": {
+    tier: "essential", status: "trialing", interval: "monthly",
+    current_period_end: "2026-08-12T00:00:00.000Z", source: "stripe",
+  },
+  // The pre-rename name for the SAME entitlement. Kept as its own fixture so the
+  // inbound alias is VISUALLY provable: this row and "essential · trial" must render
+  // an identical Billing tab (label, price line, feature list, upgrade CTA). A cached
+  // page or an un-migrated payload can still send `insider` at any time.
+  "insider · trial (legacy alias)": {
     tier: "insider", status: "trialing", interval: "monthly",
     current_period_end: "2026-08-12T00:00:00.000Z", source: "stripe",
   },
@@ -50,8 +58,8 @@ const PLANS: Record<string, AcsPlan> = {
 
 const USAGE: Record<string, AcsUsage> = {
   free: { tier: "free", quotas: { fast: { remaining: 3, limit: 5, period: "week" }, pro: { remaining: 0, limit: 0 } } },
-  low: { tier: "insider", quotas: { fast: { remaining: 24, limit: 300, period: "month" }, pro: { remaining: 1, limit: 10, period: "month" } } },
-  healthy: { tier: "insider", quotas: { fast: { remaining: 212, limit: 300, period: "month" }, pro: { remaining: 8, limit: 10, period: "month" } } },
+  low: { tier: "essential", quotas: { fast: { remaining: 24, limit: 300, period: "month" }, pro: { remaining: 1, limit: 10, period: "month" } } },
+  healthy: { tier: "essential", quotas: { fast: { remaining: 212, limit: 300, period: "month" }, pro: { remaining: 8, limit: 10, period: "month" } } },
   unlimited: { tier: "pro", quotas: { fast: { remaining: 0, limit: -1 }, pro: { remaining: 96, limit: 150, period: "month" } } },
 };
 

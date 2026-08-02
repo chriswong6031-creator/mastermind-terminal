@@ -25,10 +25,10 @@ const SUITE_SEQ_TYPE = "suite_sequence"; // two-step "A then B within N bars" (s
 const MAX_ALERTS_PER_USER = 50;
 
 /** Owning tier of a catalog event; unknown event → "pro" so an unlisted event fails CLOSED. */
-function eventTier(suite: unknown, event: unknown): "free" | "insider" | "pro" {
+function eventTier(suite: unknown, event: unknown): "free" | "essential" | "pro" {
   const hit = SUITE_ALERT_EVENTS.find((e) => e.suite === suite && e.event === event);
   if (!hit) return "pro";
-  return hit.tier === "free" || hit.tier === "insider" ? hit.tier : "pro";
+  return hit.tier === "free" || hit.tier === "essential" ? hit.tier : "pro";
 }
 
 export async function GET() {
@@ -58,11 +58,11 @@ export async function POST(req: Request) {
     // Gate tier: the single event's tier, or for a sequence the HIGHEST tier across its
     // step events — a sequence is entitled only when every step is. eventTier fails
     // CLOSED ("pro") on any unknown event, and the validator already vetted the steps.
-    let tier: "free" | "insider" | "pro";
+    let tier: "free" | "essential" | "pro";
     if (type === SUITE_TYPE) {
       tier = eventTier(condition.suite, condition.event);
     } else {
-      const rank = { free: 0, insider: 1, pro: 2 } as const;
+      const rank = { free: 0, essential: 1, pro: 2 } as const;
       const steps = Array.isArray(condition.steps) ? (condition.steps as Array<{ event?: unknown }>) : [];
       tier = steps.length ? "free" : "pro"; // empty steps cannot pass validation — fail closed anyway
       for (const s of steps) {

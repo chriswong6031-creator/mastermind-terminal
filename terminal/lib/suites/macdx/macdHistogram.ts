@@ -210,7 +210,7 @@ export const MACD_HISTOGRAM_MODULE: SuiteModuleDef = {
   key: "hist",
   label: "Histogram",
   tag: "MH",
-  tier: "insider",
+  tier: "essential",
   defaultOn: true,
   fields: FIELDS,
   defaults: DEFAULTS,

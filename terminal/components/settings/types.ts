@@ -66,23 +66,24 @@ export function acsDate(iso: string | null | undefined, lang: "en" | "zh"): stri
  * through verbatim and narrows nothing), so the raw→effective aliasing that
  * lib/subscriptionTier.ts does for the chart has to happen here too.
  *
- * `essential` is the billing authority's new name for the SAME entitlement as
- * `insider`; the macro-side rename lands after this tolerance ships. Without the
- * alias an Essential subscriber's Billing tab reads "Free" — wrong label, wrong
- * feature list, no price line, wrong upgrade CTA — while still being charged.
+ * `essential` is now the canonical name on both sides. `insider` was the old name
+ * for the SAME entitlement and stays ACCEPTED INBOUND FOREVER — a cached page or a
+ * pre-rename payload can still carry it, and without the alias that subscriber's
+ * Billing tab reads "Free" — wrong label, wrong feature list, no price line, wrong
+ * upgrade CTA — while still being charged. Inbound-only: nothing writes it back.
  *
  * `unlimited` is deliberately NOT folded into `pro` here: the label/feature/CTA
  * helpers each treat it distinctly (a lifetime grant has nothing left to buy).
  */
 export function acsNormalizeTier(tier: string | undefined): string {
-  return tier === "essential" ? "insider" : tier || "free";
+  return tier === "insider" ? "essential" : tier || "free";
 }
 
 /** Tier → display label key. Unlimited reads as Pro (it is an uncapped Pro). */
 export function acsTierLabelKey(tier: string | undefined): string {
   const tr = acsNormalizeTier(tier);
   if (tr === "pro" || tr === "unlimited") return "acsTierPro";
-  if (tr === "insider") return "acsTierInsider";
+  if (tr === "essential") return "acsTierInsider";
   return "acsTierFree";
 }
 
@@ -93,7 +94,7 @@ export function acsTierLabelKey(tier: string | undefined): string {
  * the user is paying without a second network call.
  */
 export const ACS_PRICE: Record<string, { monthly: number; annual: number; annualYr: number }> = {
-  insider: { monthly: 69, annual: 49, annualYr: 588 },
+  essential: { monthly: 69, annual: 49, annualYr: 588 },
   pro: { monthly: 99, annual: 69, annualYr: 828 },
 };
 
@@ -108,7 +109,7 @@ export const ACS_PRICE: Record<string, { monthly: number; annual: number; annual
  */
 export const ACS_PLAN_FEATURES: Record<string, string[]> = {
   free: ["acsFeatFree1", "acsFeatFree2", "acsFeatFree3", "acsFeatFree4"],
-  insider: ["acsFeatInsider1", "acsFeatInsider2", "acsFeatInsider3", "acsFeatInsider4"],
+  essential: ["acsFeatInsider1", "acsFeatInsider2", "acsFeatInsider3", "acsFeatInsider4"],
   pro: ["acsFeatPro1", "acsFeatPro2", "acsFeatPro3", "acsFeatPro4"],
   unlimited: ["acsFeatPro1", "acsFeatPro2", "acsFeatPro3", "acsFeatPro4"],
 };
@@ -120,7 +121,7 @@ export const ACS_PLAN_FEATURES: Record<string, string[]> = {
  * onboarding sheet does that natively, so it stays in-app (operator default:
  * Pro / annual preselected).
  *
- * Every other move (Insider → Pro, monthly → annual) is a CHANGE to a live
+ * Every other move (Essential → Pro, monthly → annual) is a CHANGE to a live
  * subscription with proration, which the Terminal's sheet cannot perform: only
  * the landing's upgrade flow talks to that gateway lane. Those open the landing
  * in a new tab rather than pretending in-app.
@@ -140,6 +141,6 @@ export function acsUpgradeLabelKey(
   if (tr === "unlimited") return null;
   if (tr === "pro" && interval === "annual") return null;
   if (tr === "free") return "acsChoosePlan";
-  if (tr === "insider") return "acsUpgradePro";
+  if (tr === "essential") return "acsUpgradePro";
   return "acsSwitchAnnual";
 }

@@ -31,7 +31,7 @@ export interface SuiteAlertEventDef {
   event: string;                      // SuiteEvent.type emitted by the owning module
   suite: string;                      // suite key in lib/suites/registry.ts
   module: string;                     // owning module key within the suite
-  tier: "free" | "insider" | "pro";   // the OWNING module's tier (verified vs registry)
+  tier: "free" | "essential" | "pro"; // the OWNING module's tier (verified vs registry)
   dirs: boolean;                      // event carries a bull/bear direction (dir filter valid)
   strength: boolean;                  // event carries a 0..100 strength (minStrength valid)
   tkey: string;                       // LEX key for the localized event name
@@ -47,34 +47,34 @@ export interface SuiteAlertEventDef {
  */
 export const SUITE_ALERT_EVENTS: SuiteAlertEventDef[] = [
   // Structure Core
-  { event: "bos",             suite: "structure", module: "ms",   tier: "insider", dirs: true, strength: false, tkey: "suiteEvBos",           en: "Break of structure (BOS)" },
-  { event: "choch",           suite: "structure", module: "ms",   tier: "insider", dirs: true, strength: false, tkey: "suiteEvChoch",         en: "Change of character (CHoCH)" },
-  { event: "cisd",            suite: "structure", module: "ms",   tier: "insider", dirs: true, strength: false, tkey: "suiteEvCisd",          en: "CISD (failed delivery)" },
-  { event: "ob_touch",        suite: "structure", module: "ob",   tier: "pro",     dirs: true, strength: true,  tkey: "suiteEvObTouch",       en: "Order block touch" },
-  { event: "ob_break",        suite: "structure", module: "ob",   tier: "pro",     dirs: true, strength: true,  tkey: "suiteEvObBreak",       en: "Order block break" },
-  { event: "fvg_retest",      suite: "structure", module: "fvg",  tier: "insider", dirs: true, strength: true,  tkey: "suiteEvFvgRetest",     en: "Fair value gap retest" },
-  { event: "ifvg",            suite: "structure", module: "fvg",  tier: "insider", dirs: true, strength: true,  tkey: "suiteEvIfvg",          en: "Inverted FVG" },
-  { event: "liq_grab",        suite: "structure", module: "liq",  tier: "pro",     dirs: true, strength: true,  tkey: "suiteEvLiqGrab",       en: "Liquidity grab" },
-  { event: "sfp",             suite: "structure", module: "sfp",  tier: "pro",     dirs: true, strength: true,  tkey: "suiteEvSfp",           en: "Swing failure pattern (SFP)" },
-  { event: "pd_golden_touch", suite: "structure", module: "pd",   tier: "insider", dirs: true, strength: true,  tkey: "suiteEvPdGoldenTouch", en: "Golden zone touch" },
+  { event: "bos",             suite: "structure", module: "ms",   tier: "essential", dirs: true, strength: false, tkey: "suiteEvBos",           en: "Break of structure (BOS)" },
+  { event: "choch",           suite: "structure", module: "ms",   tier: "essential", dirs: true, strength: false, tkey: "suiteEvChoch",         en: "Change of character (CHoCH)" },
+  { event: "cisd",            suite: "structure", module: "ms",   tier: "essential", dirs: true, strength: false, tkey: "suiteEvCisd",          en: "CISD (failed delivery)" },
+  { event: "ob_touch",        suite: "structure", module: "ob",   tier: "pro",       dirs: true, strength: true,  tkey: "suiteEvObTouch",       en: "Order block touch" },
+  { event: "ob_break",        suite: "structure", module: "ob",   tier: "pro",       dirs: true, strength: true,  tkey: "suiteEvObBreak",       en: "Order block break" },
+  { event: "fvg_retest",      suite: "structure", module: "fvg",  tier: "essential", dirs: true, strength: true,  tkey: "suiteEvFvgRetest",     en: "Fair value gap retest" },
+  { event: "ifvg",            suite: "structure", module: "fvg",  tier: "essential", dirs: true, strength: true,  tkey: "suiteEvIfvg",          en: "Inverted FVG" },
+  { event: "liq_grab",        suite: "structure", module: "liq",  tier: "pro",       dirs: true, strength: true,  tkey: "suiteEvLiqGrab",       en: "Liquidity grab" },
+  { event: "sfp",             suite: "structure", module: "sfp",  tier: "pro",       dirs: true, strength: true,  tkey: "suiteEvSfp",           en: "Swing failure pattern (SFP)" },
+  { event: "pd_golden_touch", suite: "structure", module: "pd",   tier: "essential", dirs: true, strength: true,  tkey: "suiteEvPdGoldenTouch", en: "Golden zone touch" },
   // Trend Waves
-  { event: "te_flip",         suite: "trend",     module: "te",   tier: "insider", dirs: true, strength: true,  tkey: "suiteEvTeFlip",        en: "Trend Engine flip" },
-  { event: "te_power",        suite: "trend",     module: "te",   tier: "insider", dirs: true, strength: true,  tkey: "suiteEvTePower",       en: "Trend Engine power move" },
-  { event: "te_tp_hit",       suite: "trend",     module: "te",   tier: "insider", dirs: true, strength: true,  tkey: "suiteEvTeTpHit",       en: "Trend Engine take-profit hit" },
-  { event: "fb_turn",         suite: "trend",     module: "fb",   tier: "insider", dirs: true, strength: true,  tkey: "suiteEvFbTurn",        en: "Flow Band turn" },
-  { event: "vb_retest",       suite: "trend",     module: "vb",   tier: "insider", dirs: true, strength: true,  tkey: "suiteEvVbRetest",      en: "Voltix band retest" },
+  { event: "te_flip",         suite: "trend",     module: "te",   tier: "essential", dirs: true, strength: true,  tkey: "suiteEvTeFlip",        en: "Trend Engine flip" },
+  { event: "te_power",        suite: "trend",     module: "te",   tier: "essential", dirs: true, strength: true,  tkey: "suiteEvTePower",       en: "Trend Engine power move" },
+  { event: "te_tp_hit",       suite: "trend",     module: "te",   tier: "essential", dirs: true, strength: true,  tkey: "suiteEvTeTpHit",       en: "Trend Engine take-profit hit" },
+  { event: "fb_turn",         suite: "trend",     module: "fb",   tier: "essential", dirs: true, strength: true,  tkey: "suiteEvFbTurn",        en: "Flow Band turn" },
+  { event: "vb_retest",       suite: "trend",     module: "vb",   tier: "essential", dirs: true, strength: true,  tkey: "suiteEvVbRetest",      en: "Voltix band retest" },
   // Pulse Oscillator
-  { event: "pulse_buy",       suite: "pulse",     module: "sig",  tier: "insider", dirs: true, strength: true,  tkey: "suiteEvPulseBuy",      en: "Pulse buy signal" },
-  { event: "pulse_sell",      suite: "pulse",     module: "sig",  tier: "insider", dirs: true, strength: true,  tkey: "suiteEvPulseSell",     en: "Pulse sell signal" },
-  { event: "pulse_div",       suite: "pulse",     module: "div",  tier: "pro",     dirs: true, strength: true,  tkey: "suiteEvPulseDiv",      en: "Pulse divergence" },
+  { event: "pulse_buy",       suite: "pulse",     module: "sig",  tier: "essential", dirs: true, strength: true,  tkey: "suiteEvPulseBuy",      en: "Pulse buy signal" },
+  { event: "pulse_sell",      suite: "pulse",     module: "sig",  tier: "essential", dirs: true, strength: true,  tkey: "suiteEvPulseSell",     en: "Pulse sell signal" },
+  { event: "pulse_div",       suite: "pulse",     module: "div",  tier: "pro",       dirs: true, strength: true,  tkey: "suiteEvPulseDiv",      en: "Pulse divergence" },
   // RSI Ultimate
-  { event: "rsix_reversal",   suite: "rsix",      module: "sig",  tier: "insider", dirs: true, strength: true,  tkey: "suiteEvRsixReversal",  en: "RSI reversal signal" },
-  { event: "rsix_div",        suite: "rsix",      module: "div",  tier: "pro",     dirs: true, strength: true,  tkey: "suiteEvRsixDiv",       en: "RSI divergence" },
-  { event: "rsix_chan_break", suite: "rsix",      module: "chan", tier: "pro",     dirs: true, strength: true,  tkey: "suiteEvRsixChanBreak", en: "RSI channel break" },
+  { event: "rsix_reversal",   suite: "rsix",      module: "sig",  tier: "essential", dirs: true, strength: true,  tkey: "suiteEvRsixReversal",  en: "RSI reversal signal" },
+  { event: "rsix_div",        suite: "rsix",      module: "div",  tier: "pro",       dirs: true, strength: true,  tkey: "suiteEvRsixDiv",       en: "RSI divergence" },
+  { event: "rsix_chan_break", suite: "rsix",      module: "chan", tier: "pro",       dirs: true, strength: true,  tkey: "suiteEvRsixChanBreak", en: "RSI channel break" },
   // MACD Ultimate
-  { event: "macdx_signal",    suite: "macdx",     module: "sig",  tier: "insider", dirs: true, strength: true,  tkey: "suiteEvMacdxSignal",   en: "MACD cross signal" },
-  { event: "macdx_div",       suite: "macdx",     module: "div",  tier: "pro",     dirs: true, strength: true,  tkey: "suiteEvMacdxDiv",      en: "MACD divergence" },
-  { event: "macdx_hist_flip", suite: "macdx",     module: "hist", tier: "insider", dirs: true, strength: true,  tkey: "suiteEvMacdxHistFlip", en: "MACD histogram flip" },
+  { event: "macdx_signal",    suite: "macdx",     module: "sig",  tier: "essential", dirs: true, strength: true,  tkey: "suiteEvMacdxSignal",   en: "MACD cross signal" },
+  { event: "macdx_div",       suite: "macdx",     module: "div",  tier: "pro",       dirs: true, strength: true,  tkey: "suiteEvMacdxDiv",      en: "MACD divergence" },
+  { event: "macdx_hist_flip", suite: "macdx",     module: "hist", tier: "essential", dirs: true, strength: true,  tkey: "suiteEvMacdxHistFlip", en: "MACD histogram flip" },
 ];
 
 /** zh display names for suiteAlertPreview (the catalog stays UI-framework-free; LEX

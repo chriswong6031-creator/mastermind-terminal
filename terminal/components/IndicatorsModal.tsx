@@ -30,6 +30,7 @@ import {
   type SuitePresetId,
 } from "@/lib/suites/presets";
 import { SUITE_DEFS, SUITE_ORDER } from "@/lib/suites/registry";
+import { SUITE_TIER_LABEL } from "@/lib/indicator-canvas/types";
 
 type ClassicIndicator = { key: string; label: string; mm?: boolean; tkey?: string };
 
@@ -88,8 +89,8 @@ type IndicatorSearchValue =
   | { kind: "classic"; item: ClassicIndicator; category: string }
   | { kind: "script"; script: UserScript };
 
-type Tier = "free" | "insider" | "pro";
-const TIER_RANK: Record<Tier, number> = { free: 0, insider: 1, pro: 2 };
+type Tier = "free" | "essential" | "pro";
+const TIER_RANK: Record<Tier, number> = { free: 0, essential: 1, pro: 2 };
 
 /** Highest module tier — shown on the preset row so its full reach is explicit. */
 const suiteTopTier = (key: string): Tier => {
@@ -512,7 +513,7 @@ export default function IndicatorsModal({
           <span className="imod-copy">
             <span className="imod-titleline">
               <strong>{entry.label}</strong>
-              <span className={`im-tier im-tier-${entry.tier}`}>{entry.tier}</span>
+              <span className={`im-tier im-tier-${SUITE_TIER_LABEL[entry.tier]}`}>{SUITE_TIER_LABEL[entry.tier]}</span>
             </span>
             <span className="imod-crumb">
               {suiteLabel}<span aria-hidden="true"> / </span>{surfaceLabel}
@@ -751,7 +752,7 @@ export default function IndicatorsModal({
                 <span className="ipreset-copy">
                   <span className="ipreset-title">
                     <strong>{label}</strong>
-                    <span className={`im-tier im-tier-${top}`}>{top}</span>
+                    <span className={`im-tier im-tier-${SUITE_TIER_LABEL[top]}`}>{SUITE_TIER_LABEL[top]}</span>
                     {added && (
                       <small className={`ipreset-status${current ? "" : " custom"}`}>
                         {current
@@ -775,7 +776,7 @@ export default function IndicatorsModal({
                     >
                       <div className="ipreset-profile-top">
                         <span>{String(index + 1).padStart(2, "0")}</span>
-                        <small className={`im-tier im-tier-${preset.minTier}`}>{preset.minTier}</small>
+                        <small className={`im-tier im-tier-${SUITE_TIER_LABEL[preset.minTier]}`}>{SUITE_TIER_LABEL[preset.minTier]}</small>
                       </div>
                       <strong>{lang === "zh" ? preset.name.zh : preset.name.en}</strong>
                       <p>{lang === "zh" ? preset.description.zh : preset.description.en}</p>

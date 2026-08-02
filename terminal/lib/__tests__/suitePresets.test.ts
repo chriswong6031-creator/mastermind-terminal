@@ -11,7 +11,7 @@ import {
   validateSuitePresets,
 } from "../suites/presets";
 
-const TIER_RANK = { free: 0, insider: 1, pro: 2 } as const;
+const TIER_RANK = { free: 0, essential: 1, pro: 2 } as const;
 
 describe("progressive suite presets", () => {
   it("covers every suite with three stable, bilingual, progressively broader recipes", () => {

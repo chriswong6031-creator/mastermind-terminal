@@ -8,10 +8,10 @@ import { perMonth, annualBilled, firstInvoiceTotal, TRIAL_DAYS } from "./plans";
 
 // Tier hue CSS var per plan key — mirrors onboarding.css tokens.
 const HUE: Record<PlanKey, string> = {
-  free: "var(--ob-free)", insider: "var(--ob-insider)", pro: "var(--ob-pro)",
+  free: "var(--ob-free)", essential: "var(--ob-essential)", pro: "var(--ob-pro)",
 };
 const NAME_KEY: Record<Exclude<PlanKey, "free">, string> = {
-  insider: "obPlanInsider", pro: "obPlanPro",
+  essential: "obPlanInsider", pro: "obPlanPro",
 };
 
 // The Inter stack, mirrored from globals.css --font-ui, for the Stripe iframe (which

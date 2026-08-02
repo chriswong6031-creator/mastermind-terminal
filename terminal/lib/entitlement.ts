@@ -143,20 +143,20 @@ async function fetchEntitlementCached(
   return p;
 }
 
-/** The live-options feature flag (config/plans.yml — insider + pro, incl. trial). */
+/** The live-options feature flag (config/plans.yml — essential + pro, incl. trial). */
 const LIVE_OPTIONS = {
   id: "live_options",
   ok: (e: Entitlement) => e.features.includes("terminal_live_options"),
 };
 
-/** Live-options surface — the `terminal_live_options` feature (insider + pro, incl. trial). */
+/** Live-options surface — the `terminal_live_options` feature (essential + pro, incl. trial). */
 export async function hasLiveOptions(): Promise<boolean> {
   const e = await fetchEntitlementCached(LIVE_OPTIONS);
   return !!e && LIVE_OPTIONS.ok(e);
 }
 
 /**
- * Any PAID account (insider or pro, incl. 7-day trial). Used where the surface
+ * Any PAID account (essential or pro, incl. 7-day trial). Used where the surface
  * isn't broken out as its own feature in config/plans.yml — e.g. Pine-script
  * save — matching the legacy `is_pro` boolean's "any paid" semantics. If a
  * surface should be pro-ONLY, gate on `tier === "pro"` instead.

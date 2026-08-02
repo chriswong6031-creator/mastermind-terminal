@@ -35,7 +35,7 @@ export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onAc
     /** B3: forwarded to ChartPanel to notify TerminalShell of sub-pane count changes. */
     onPaneCount?: (n: number) => void;
     /** Entitlement tier — UI gate for premium suite modules. */
-    userTier?: "free" | "insider" | "pro";
+    userTier?: "free" | "essential" | "pro";
   }) {
   const { lang } = useLang();
   const [auto, setAuto] = useState<Drawing[]>([]);

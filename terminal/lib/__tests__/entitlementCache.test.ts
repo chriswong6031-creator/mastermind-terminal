@@ -147,7 +147,7 @@ describe("entitlement — authorization outcomes are unchanged by caching", () =
     expect(meCalls).toHaveLength(2);
 
     // User upgrades mid-session — no TTL to wait out.
-    nextAnswer = () => ({ tier: "insider", features: ["terminal_live_options"] });
+    nextAnswer = () => ({ tier: "essential", features: ["terminal_live_options"] });
     expect(await hasLiveOptions()).toBe(true);
   });
 
@@ -173,6 +173,12 @@ describe("entitlement — authorization outcomes are unchanged by caching", () =
     nextAnswer = () => ({ tier: "free", features: ["terminal_live_options"] });
     expect(await isPaidTier()).toBe(false);
 
+    nextAnswer = () => ({ tier: "essential", features: [] });
+    expect(await isPaidTier()).toBe(true);
+
+    // The pre-rename name is accepted inbound forever — a gateway or cached payload
+    // that still says `insider` must entitle exactly as `essential` does, not fail
+    // closed to Free. Alias parity at the server gate.
     nextAnswer = () => ({ tier: "insider", features: [] });
     expect(await isPaidTier()).toBe(true);
 

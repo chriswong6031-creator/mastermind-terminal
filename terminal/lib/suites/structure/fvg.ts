@@ -611,7 +611,7 @@ export const FVG_MODULE: SuiteModuleDef = {
   key: "fvg",
   label: "Fair Value Gaps",
   tag: "FVG",
-  tier: "insider",
+  tier: "essential",
   defaultOn: true,
   fields: FIELDS,
   defaults: DEFAULTS,

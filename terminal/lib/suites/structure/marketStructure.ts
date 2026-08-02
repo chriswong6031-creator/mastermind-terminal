@@ -651,7 +651,7 @@ export const MARKET_STRUCTURE_MODULE: SuiteModuleDef = {
   key: "ms",
   label: "Market Structure",
   tag: "MS",
-  tier: "insider",
+  tier: "essential",
   defaultOn: true,
   fields: FIELDS,
   defaults: DEFAULTS,

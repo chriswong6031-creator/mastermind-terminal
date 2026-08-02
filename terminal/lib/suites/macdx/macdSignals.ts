@@ -181,7 +181,7 @@ export const MACD_SIGNALS_MODULE: SuiteModuleDef = {
   key: "sig",
   label: "MACD Signals",
   tag: "MS",
-  tier: "insider",
+  tier: "essential",
   defaultOn: true,
   fields: FIELDS,
   defaults: DEFAULTS,

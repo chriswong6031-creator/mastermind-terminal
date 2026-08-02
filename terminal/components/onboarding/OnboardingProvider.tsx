@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { createClient } from "@/lib/supabase/client";
-import { LS_PENDING_PREFS, SS_OPEN, type OnboardMode, type PlanKey, type Period, type OnboardingSheetProps } from "./types";
+import { LS_PENDING_PREFS, SS_OPEN, normalizePlanKey, type OnboardMode, type PlanKey, type Period, type OnboardingSheetProps } from "./types";
 
 // The wizard itself is code-split (ssr:false) so it never bloats first paint — it only loads
 // when the user actually opens onboarding. Generic pinned to the shared contract so the JSX
@@ -79,7 +79,9 @@ export function OnboardingProvider({ email, children }: { email: string; childre
     if (!saved?.open) return;
     if (saved.mode === "signin") { if (email !== "") return; setMode("signin"); }
     else setMode("signup");
-    if (saved.plan) setPlan(saved.plan);
+    // A stash written before the rename can still hold `insider` — normalize on READ.
+    const savedPlan = normalizePlanKey(saved.plan);
+    if (savedPlan) setPlan(savedPlan);
     if (saved.period) setPeriod(saved.period);
     setIsOpen(true);
     setEverOpened(true);
@@ -102,12 +104,12 @@ export function OnboardingProvider({ email, children }: { email: string; childre
     const isResume = sp.get("onboard") === "resume";
     if (!wantSignup && !wantSignin) return;
 
-    // `?plan=essential` is the billing authority's new name for the SAME plan the
-    // sheet knows as `insider` — aliased to the existing PlanKey rather than added
-    // as a new one, so every step (rail, pricing, checkout) keeps one key.
-    const planParam = sp.get("plan") === "essential" ? "insider" : sp.get("plan");
+    // `essential` is the canonical plan key. `?plan=insider` still arrives from cached
+    // landing pages and old links, and normalizePlanKey folds it onto `essential` so
+    // every step (rail, pricing, checkout) sees one key.
+    const planParam = normalizePlanKey(sp.get("plan"));
     const periodParam = sp.get("period");
-    if (planParam === "insider" || planParam === "pro" || planParam === "free") setPlan(planParam);
+    if (planParam) setPlan(planParam);
     if (periodParam === "monthly" || periodParam === "annual") setPeriod(periodParam);
 
     setMode(wantSignin && !wantSignup ? "signin" : "signup");

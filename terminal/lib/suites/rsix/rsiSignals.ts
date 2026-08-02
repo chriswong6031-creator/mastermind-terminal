@@ -360,7 +360,7 @@ export const RSI_SIGNALS_MODULE: SuiteModuleDef = {
   key: "sig",
   label: "RSI Signals",
   tag: "RS",
-  tier: "insider",
+  tier: "essential",
   defaultOn: true,
   fields: FIELDS,
   defaults: DEFAULTS,
