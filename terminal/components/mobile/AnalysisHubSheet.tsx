@@ -41,7 +41,8 @@ const FULL = 0.96;
 /**
  * The phone Analysis hub — the ••• of the roller strip. Presents at 60% of the viewport and DRAGS
  * to full (and back), matching the native hub's detents; the body scrolls once it is at full.
- * The two detents are why this is not a MobileSheet: that component's drag is dismiss-only.
+ * The drag below is the twin of MobileSheet's `detents` prop, kept here rather than shared because
+ * this surface has its own scrim, markup and focus model — change one and check the other.
  */
 export default function AnalysisHubSheet({ open, onClose, onAction }: AnalysisHubSheetProps) {
   const t = useT();

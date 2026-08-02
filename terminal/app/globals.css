@@ -3766,10 +3766,22 @@ html[data-shell="app"] .mm-brandbug{
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:6px
 }
 
+/* ── MobileSheet's opt-in two-detent presentation (the `detents` prop) ────────
+   The component owns the height itself (inline: the resting detent, and the live
+   drag in px), so this rule is only the snap animation and the gesture routing.
+   Same shape as .mhub below — the two are twins, not one mechanic behind two
+   class names. touch-action:none keeps the grabber/header drag off the page
+   scroller; .msheet-body re-opens the vertical pan it needs for its own scroll,
+   and .mdraw-cats keeps its pan-x. */
+.msheet.is-detent{transition:height 240ms cubic-bezier(.32,.72,.24,1);touch-action:none}
+.msheet.is-detent.is-dragging{transition:none}
+.msheet.is-detent .msheet-body{touch-action:pan-y}
+
 /* ── Drawings sheet (IMG_2366-68) ─────────────────────────────────────────────
-   Rides MobileSheet for the grabber, focus containment, scrim and drag-dismiss;
-   the anatomy below the title is this surface's own. */
-.msheet.mdraw-sheet{max-height:92dvh;background:var(--pop-bg-modal)}
+   Rides MobileSheet for the grabber, focus containment, scrim and the 62↔96
+   detent drag; the anatomy below the title is this surface's own. Its height is
+   the detent prop's, never a max-height here. */
+.msheet.mdraw-sheet{background:var(--pop-bg-modal)}
 /* TV's 34pt title sits left; the circled close is positioned against the SHEET (which is
    position:fixed, so it is the containing block) rather than living inside the title element —
    that keeps the dialog's accessible name to the word "Drawings". */
@@ -3840,5 +3852,5 @@ html[data-shell="app"] .mm-brandbug{
 .mhub-ghost-tag{position:absolute;left:0;right:0;bottom:5px;color:var(--text-dim);font:600 8px/1 var(--font-ui);font-style:normal;text-align:center}
 
 @media (prefers-reduced-motion:reduce){
-  .mrs-wheel-track,.mhub,.mhub-scrim,.msheet.mdraw-sheet{transition:none!important;animation:none!important}
+  .mrs-wheel-track,.mhub,.mhub-scrim,.msheet.is-detent,.msheet.mdraw-sheet{transition:none!important;animation:none!important}
 }

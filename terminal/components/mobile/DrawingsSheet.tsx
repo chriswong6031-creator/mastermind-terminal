@@ -21,14 +21,18 @@ export type DrawingsSheetProps = {
   onPick: (id: DrawKind) => void;
 };
 
+// TV presents Drawings at ~62% of the screen with the chart still live above it (IMG_2366) and
+// drags the grabber to full; apps/ios ships the same pair as [.fraction(0.62), .large].
+const DETENTS = [62, 96] as const;
+
 /**
  * The phone "Drawings" sheet — TV's anatomy measured from IMG_2366-68: grabber · title + circled
  * close · search pill · horizontally scrollable category pills · 3-column tile grid, presented at
- * ~92% height over the chart. Content is OUR registry only (lib/drawingTaxonomy.ts maps the nine
- * engine families onto TV's five tabs), so there is no tile that does nothing.
+ * the 62% detent over a live chart. Content is OUR registry only (lib/drawingTaxonomy.ts maps the
+ * nine engine families onto TV's five tabs), so there is no tile that does nothing.
  *
- * MobileSheet supplies the grabber, focus containment, scrim and drag-to-dismiss; everything below
- * the title is this surface's own anatomy (.mdraw-*).
+ * MobileSheet supplies the grabber, focus containment, scrim and the two-detent drag; everything
+ * below the title is this surface's own anatomy (.mdraw-*).
  */
 export default function DrawingsSheet({ open, onClose, activeTool, onPick }: DrawingsSheetProps) {
   const t = useT();
@@ -78,7 +82,7 @@ export default function DrawingsSheet({ open, onClose, activeTool, onPick }: Dra
       open={open}
       onClose={onClose}
       className="mdraw-sheet"
-      maxHeight="92dvh"
+      detents={DETENTS}
       title={t("drawSheetTitle")}
     >
       <button className="mdraw-close" onClick={onClose} aria-label={t("sheetClose")} data-testid="drawings-sheet-close">

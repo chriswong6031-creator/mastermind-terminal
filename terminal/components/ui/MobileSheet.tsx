@@ -11,6 +11,13 @@ export interface MobileSheetProps {
   maxHeight?: string;
   /** Extra class on the sheet root, for surfaces with their own anatomy (e.g. the Drawings sheet). */
   className?: string;
+  /**
+   * Opt-in two-detent presentation, `[initial, full]` as percentages of the viewport height.
+   * The sheet presents at `initial` with the page alive above it, the grabber/header drags it to
+   * `full` and back, and a drag down from `initial` dismisses. Omit it and the sheet keeps its
+   * content height and the dismiss-only transform drag every other surface uses.
+   */
+  detents?: readonly [number, number];
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -29,6 +36,13 @@ const FOCUSABLE_SELECTOR = [
 
 const SWIPE_TRANSITION = "transform 260ms cubic-bezier(.32,.72,.24,1)";
 const SWIPE_CLOSE_MS = 270;
+
+// Interactive content a drag must never steal the pointer from; both drag mechanics honour it.
+const DRAG_EXEMPT_SELECTOR = "button, a[href], input, select, textarea, label, summary, [role='button'], [role='option'], [role='menuitem'], .msheet-row, [data-no-sheet-drag]";
+/** A released detent drag this far below the initial detent dismisses instead of snapping back. */
+const DETENT_DISMISS_SLACK = 90;
+/** Floor for the live drag height, so a fast flick can't invert the sheet before release. */
+const DETENT_MIN_HEIGHT = 80;
 
 function focusableElements(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((element) => {
@@ -67,6 +81,7 @@ export default function MobileSheet({
   children,
   maxHeight,
   className,
+  detents,
 }: MobileSheetProps) {
   // Track mount so createPortal only fires client-side.
   const [mounted, setMounted] = useState(false);
@@ -93,6 +108,23 @@ export default function MobileSheet({
     reducedMotionPreferred,
     reducedMotionServerSnapshot,
   );
+
+  // ── Two-detent drag (opt-in via `detents`) ─────────────────────────────────────────────────
+  // Twin: components/mobile/AnalysisHubSheet.tsx, whose 60↔96 hub drag this mirrors. The hub
+  // keeps its own copy because its scrim, markup and focus model are not this component's.
+  const [atFullDetent, setAtFullDetent] = useState(false);
+  const [liveDetentHeight, setLiveDetentHeight] = useState<number | null>(null);
+  // liveHeight mirrors liveDetentHeight: release must read the height the last MOVE produced, and
+  // a burst of pointer events inside one task would leave the state value a render behind.
+  const detentRef = useRef<{ startY: number; startH: number; pointerId: number | null; liveHeight: number | null }>(
+    { startY: 0, startH: 0, pointerId: null, liveHeight: null },
+  );
+  // Each presentation starts at the first detent (React's adjust-state-on-prop-change pattern).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (!open) { setAtFullDetent(false); setLiveDetentHeight(null); }
+  }
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -239,9 +271,7 @@ export default function MobileSheet({
     // Leave interactive content alone so chart-type rows and other sheet
     // controls receive a complete click; swipe remains available from the
     // handle, header/background, and non-interactive content.
-    if (!isHandle && target.closest?.(
-      "button, a[href], input, select, textarea, label, summary, [role='button'], [role='option'], [role='menuitem'], .msheet-row, [data-no-sheet-drag]",
-    )) return;
+    if (!isHandle && target.closest?.(DRAG_EXEMPT_SELECTOR)) return;
     dragRef.current = {
       startY: e.clientY,
       startT: Date.now(),
@@ -300,7 +330,74 @@ export default function MobileSheet({
     }
   }
 
+  // Detent drag — the same three handlers as above, but moving HEIGHT rather than transform so the
+  // sheet grows and shrinks against a live page instead of sliding off it.
+  function onDetentDown(e: React.PointerEvent<HTMLDivElement>) {
+    const sheet = sheetRef.current;
+    if (!sheet || !detents || !e.isPrimary) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    const isHandle = !!target.closest?.('[data-handle="1"]');
+    const scrollEl = sheet.querySelector<HTMLElement>(".msheet-body");
+    // Anywhere on the grabber/header, or on the body while it is scrolled to the top.
+    if (!isHandle && (!scrollEl || scrollEl.scrollTop > 0 || target.closest?.(DRAG_EXEMPT_SELECTOR))) return;
+    detentRef.current = {
+      startY: e.clientY,
+      startH: sheet.getBoundingClientRect().height,
+      pointerId: e.pointerId,
+      liveHeight: null,
+    };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Synthetic events and browser gesture arbitration may deny capture.
+    }
+  }
+
+  function onDetentMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!detents || detentRef.current.pointerId !== e.pointerId) return;
+    const max = window.innerHeight * (detents[1] / 100);
+    const height = Math.min(max, Math.max(
+      DETENT_MIN_HEIGHT,
+      detentRef.current.startH - (e.clientY - detentRef.current.startY),
+    ));
+    detentRef.current.liveHeight = height;
+    setLiveDetentHeight(height);
+  }
+
+  function onDetentUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (!detents || detentRef.current.pointerId !== e.pointerId) return;
+    detentRef.current.pointerId = null;
+    releasePointer(e.pointerId);
+    const height = detentRef.current.liveHeight;
+    detentRef.current.liveHeight = null;
+    setLiveDetentHeight(null);
+    if (height == null) return;
+    const initial = window.innerHeight * (detents[0] / 100);
+    const upperBand = (initial + window.innerHeight * (detents[1] / 100)) / 2;
+    if (height >= upperBand) setAtFullDetent(true);
+    else if (height < initial - DETENT_DISMISS_SLACK) closeNow();
+    else setAtFullDetent(false);
+  }
+
   if (!mounted) return null;
+
+  // In detent mode the height is inline (this component owns both the resting detent and the live
+  // drag); globals.css only carries the snap animation and the gesture routing.
+  const detentStyle = detents
+    ? {
+      height: liveDetentHeight != null
+        ? `${liveDetentHeight}px`
+        : `${atFullDetent ? detents[1] : detents[0]}dvh`,
+      maxHeight: `${detents[1]}dvh`,
+    }
+    : null;
+  const rootClass = [
+    "msheet",
+    className,
+    detents ? "is-detent" : null,
+    liveDetentHeight != null ? "is-dragging" : null,
+  ].filter(Boolean).join(" ");
 
   const node = (
     <>
@@ -315,9 +412,10 @@ export default function MobileSheet({
       {open && (
         <div
           ref={sheetRef}
-          className={className ? `msheet ${className}` : "msheet"}
+          className={rootClass}
           style={{
             ...(maxHeight ? { maxHeight } : {}),
+            ...(detentStyle ?? {}),
             ...(reduceMotion ? { animation: "none" } : {}),
           }}
           role="dialog"
@@ -325,18 +423,23 @@ export default function MobileSheet({
           aria-labelledby={hasTitle ? titleId : undefined}
           aria-label={hasTitle ? undefined : (ariaLabel ?? "Sheet")}
           tabIndex={-1}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerCancel}
-          onLostPointerCapture={onLostPointerCapture}
+          data-detent={detents ? (atFullDetent ? "full" : "initial") : undefined}
+          onPointerDown={detents ? onDetentDown : onPointerDown}
+          onPointerMove={detents ? onDetentMove : onPointerMove}
+          onPointerUp={detents ? onDetentUp : onPointerUp}
+          onPointerCancel={detents ? onDetentUp : onPointerCancel}
+          onLostPointerCapture={detents ? undefined : onLostPointerCapture}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Grab handle — drag target (detected via data-handle in the sheet's own handlers) */}
           <div className="msheet-handle-wrap" data-handle="1">
             <div className="msheet-handle" />
           </div>
-          {hasTitle && <div id={titleId} className="msheet-title">{title}</div>}
+          {/* A detented sheet drags from the header too, so the grabber is not the only grip once
+              the body is scrolled; the dismiss-only sheets keep the handle as their sole one. */}
+          {hasTitle && (
+            <div id={titleId} className="msheet-title" data-handle={detents ? "1" : undefined}>{title}</div>
+          )}
           <div className="msheet-body">{children}</div>
         </div>
       )}
