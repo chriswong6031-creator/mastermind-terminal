@@ -141,7 +141,7 @@ export default function AnalysisHubSheet({ open, onClose, onAction }: AnalysisHu
 
   return createPortal(
     <>
-      <div className="mhub-scrim" onClick={onClose} aria-hidden="true" />
+      <div className={`mhub-scrim${full ? " at-full" : ""}`} onClick={onClose} aria-hidden="true" />
       <div
         ref={sheetRef}
         className={`mhub${full ? " is-full" : ""}${dragH != null ? " is-dragging" : ""}`}
