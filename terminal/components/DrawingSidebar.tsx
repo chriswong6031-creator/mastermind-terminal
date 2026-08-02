@@ -927,7 +927,7 @@ export default function DrawingSidebar({
                       : t(pinned && active ? "drawingDoubleClickUnlock" : "drawingDoubleClickKeepActive"),
                 })}
 
-            {labeled(chevronButton, openGroupLabel)}
+            {chevronButton}
 
             {menuOpen && floatingFlyout(
               <div
@@ -1115,7 +1115,7 @@ export default function DrawingSidebar({
           <ToolIcon path={ICON_MAGNET} />
         </button>, interpolate(t("drawingMagnetCurrent"), { mode: magnetLabel }))}
 
-        {labeled(<button
+        <button
           type="button"
           id={`${menuDomId("magnet")}-trigger`}
           className="ds-group-chevron"
@@ -1127,7 +1127,7 @@ export default function DrawingSidebar({
           onClick={(event) => toggleMenu("magnet", event)}
         >
           <svg viewBox="0 0 8 12" aria-hidden="true"><path d="M2 2l4 4-4 4" /></svg>
-        </button>, t("drawingOpenMagnetModes"))}
+        </button>
 
         {openMenu === "magnet" && floatingFlyout(
           <div

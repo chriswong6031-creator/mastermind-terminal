@@ -413,6 +413,10 @@ test("desktop drawing labels and hover flyouts match the OpenMarket interaction 
 
   const chevron = page.getByTestId("drawing-group-lines-menu-trigger");
   const menu = page.getByTestId("drawing-group-lines-menu");
+  await chevron.focus();
+  await expect(page.getByRole("tooltip").filter({ hasText: /^Open / })).toHaveCount(0);
+  await page.getByTestId("drawing-magnet-menu-trigger").focus();
+  await expect(page.getByRole("tooltip").filter({ hasText: "Open magnet modes" })).toHaveCount(0);
   await page.evaluate(() => {
     const timedWindow = window as Window & {
       __mmDrawingHoverTiming?: { enteredAt: number | null; openedAfter: number | null };
