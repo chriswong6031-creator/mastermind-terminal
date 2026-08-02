@@ -35,6 +35,7 @@ import { HedgingByStrikeCard, TermStructureCard, DailyHedgingCard } from "./Hedg
 import { AggTrendCard, SpotVolCard, ExtremesCard } from "./TrendCards";
 import { FloatingStrikeCard, QuadScreenerCard } from "./QuadCards";
 import { MatrixHeatCard } from "./MatrixHeatCard";
+import { GradesCard, type GradesPayload } from "./GradesCard";
 import { ProfileCard } from "./ProfileCard";
 import { useChartWidth } from "@/components/charts/svgChart";
 import s from "./msc.module.css";
@@ -54,6 +55,9 @@ interface Props {
   matrix?: GexMatrix | null;
   /** `quad` — one cross-root board shared by every root. Optional. */
   quad?: QuadPayload | null;
+  /** R2.4 report cards — the root's own and the universe aggregate. Optional. */
+  grades?: GradesPayload | null;
+  gradesUniverse?: GradesPayload | null;
   root?: string;
   /** Dated-replay mode (R2): the EM band never travels with an archived ladder. */
   archived?: boolean;
@@ -75,6 +79,8 @@ export function MarketStructureBody({
   agg = null,
   matrix = null,
   quad = null,
+  grades = null,
+  gradesUniverse = null,
   root = "",
   archived = false,
   lang,
@@ -175,6 +181,14 @@ export function MarketStructureBody({
         matrix={matrix}
         spot={gex?.spot_ref ?? null}
         asof={gex?.asof ?? null}
+        lang={lang}
+      />
+      {/* R2.4 — the graded record closes the history section: after "how does today
+          compare", the reader asks "and do these levels actually hold?" */}
+      <GradesCard
+        rootGrades={grades}
+        universeGrades={gradesUniverse}
+        root={root}
         lang={lang}
       />
 

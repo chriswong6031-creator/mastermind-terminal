@@ -478,6 +478,53 @@ const MSC_LEX = {
     "该品种暂无按 Delta 拆分数据。",
   ],
 
+  // ── R2.4 · The live Level Report Card ──────────────────────────────────────
+  gcTitle: ["Level report card — {sym}", "水平评分卡 — {sym}"],
+  gcTitleUniverse: ["Level report card — graded universe", "水平评分卡 — 已评级全体"],
+  gcLead: [
+    "Every published level, graded against the NEXT session and recomputed nightly: a level counts as touched when the next session trades through it, and as held when the close finishes on the defending side. The category sells static hit-rates nobody can audit; this one you can.",
+    "每个已发布水平均按下一交易日评级并每晚重算：下一交易日成交穿越该价位记为触及；收盘停在防守一侧记为守住。业内出售无法审计的静态胜率；这份可以审计。",
+  ],
+  gcTierWhy: [
+    "Measured frequencies with Wilson 95% intervals, judged against a stated null. Not a claim that any level will hold — when the record does not beat the null, the card says so.",
+    "以 Wilson 95% 区间给出的实测频率，并与明示的基准对比。并非任何水平将守住的断言——当记录未胜过基准时，本卡直言。",
+  ],
+  gcNull: [
+    "The null is a coin flip (50%) on the two-sided hold definition; stronger nulls (equidistant strike, prior-day extremes) arrive with the next grading stage.",
+    "基准为双侧守住定义下的抛硬币（50%）；更强基准（等距行权价、前日极值）将随下一评级阶段推出。",
+  ],
+  gcScopeRoot: ["{n} boards, this root", "本标的 {n} 个盘面"],
+  gcScopeUniverse: ["{n} boards · single-name universe", "{n} 个盘面 · 个股全体"],
+  gcUncovered: [
+    "No graded history for {sym} yet — the grading lane covers single names; the figures below are the graded UNIVERSE, shown as context, not this ticker's record.",
+    "{sym} 暂无评级历史——评级流水线目前覆盖个股；下方数字为已评级全体，仅作参照，并非该标的自身记录。",
+  ],
+  gcColRole: ["Level", "水平"],
+  gcColTouches: ["Scored touches", "有效触及"],
+  gcColHold: ["P(hold)", "守住率"],
+  gcColCi: ["95% CI", "95% 区间"],
+  gcColNull: ["vs null", "对比基准"],
+  gcBeats: ["beats null", "胜过基准"],
+  gcNoEdge: ["no edge", "无优势"],
+  gcAnchor: ["Anchor", "锚定位"],
+  gcCluster: ["Cluster", "聚集位"],
+  gcCounter: ["Counter", "反向位"],
+  gcTrapdoor: ["Trapdoor", "陷阱位"],
+  gcLaunchpad: ["Launchpad", "发射位"],
+  gcWallContained: ["Close inside the walls", "收盘位于两墙之间"],
+  gcBandContained: ["Range inside the EM band", "波幅位于预期区间内"],
+  gcFlipTouches: ["Flip touches · mean |move|", "翻转触及 · 平均|波动|"],
+  gcWindow: ["Window", "统计窗口"],
+  gcNoneBeat: [
+    "Under the close-side test no role currently beats the coin-flip null — which is exactly why this desk makes no support/resistance claims.",
+    "在收盘侧检验下，当前没有任何水平类型胜过抛硬币基准——这正是本页不做支撑/阻力断言的原因。",
+  ],
+  gcSomeBeat: [
+    "Roles marked “beats null” cleared the coin-flip bar at 95% confidence in this window.",
+    "标注“胜过基准”的类型在本窗口内以 95% 置信度越过抛硬币基准。",
+  ],
+  gcRecomputed: ["Recomputed nightly by the grading lane", "由评级流水线每晚重算"],
+
   // ── W3 · Cross-root screener ───────────────────────────────────────────────
   qdTitle: ["Which names sit at a positioning extreme", "哪些标的处于持仓极端"],
   qdLead: [
