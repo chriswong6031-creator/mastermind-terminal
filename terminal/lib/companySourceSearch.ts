@@ -59,6 +59,12 @@ export interface CompanySourceSearchReady {
   query: string;
   spans: CompanySourceSpan[];
   searched_event_ids: string[];
+  /** Exact count unless the event is listed in `count_capped_event_ids`; then a lower bound. */
+  match_count_by_event: Record<string, number>;
+  /** Events whose literal scan stopped at the producer's bounded safety ceiling. */
+  count_capped_event_ids: string[];
+  /** True when `spans` omits known matches or an event count is a lower bound. */
+  truncated: boolean;
   corpus_revision: string;
 }
 
@@ -75,6 +81,7 @@ export interface CompanySourceSearchStaleRevision {
   query: string;
   message: string;
   spans: CompanySourceSpan[];
+  searched_event_ids: string[];
   corpus_revision: string;
 }
 
@@ -133,6 +140,10 @@ const MAX_SPANS = 60;
 const MAX_EXCERPT = 2_400;
 const MAX_TEXT = 1_200;
 const MAX_EVENTS = 12;
+const MAX_MATCH_COUNT = 10_000;
+// Coordinates address the full validated source segment, not the shortened UI
+// excerpt. Keep this aligned with the server's bounded 12 MiB transcript body.
+const MAX_SOURCE_COORDINATE_BYTES = 12 * 1024 * 1024;
 
 function record(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null;
@@ -176,6 +187,10 @@ export function normalizeTranscriptLiteralPhrase(value: string): string | null {
     && ((compact.startsWith('"') && compact.endsWith('"')) || (compact.startsWith("'") && compact.endsWith("'")))
     ? compact.slice(1, -1).trim()
     : compact;
+  // One-character scans produce little research value and can turn a bounded
+  // transcript into millions of candidate offsets. Count Unicode scalars so a
+  // valid astral character is not mistaken for two characters.
+  if (Array.from(quoted).length < 2) return null;
   // Exact byte receipts cannot represent an unpaired UTF-16 surrogate. Reject
   // it at the request boundary instead of returning a misleading zero-hit
   // response after span construction refuses the invalid character boundary.
@@ -221,8 +236,8 @@ function normalizeSpan(raw: unknown, ticker: string, phrase: string): CompanySou
   const candidateTicker = string(value.ticker, 16)?.toUpperCase();
   const document_sha256 = string(value.document_sha256, 64);
   const segment_index = integer(value.segment_index, 0, 1_000_000);
-  const start_byte = integer(value.start_byte, 0, MAX_EXCERPT * 4);
-  const end_byte = integer(value.end_byte, 1, MAX_EXCERPT * 4);
+  const start_byte = integer(value.start_byte, 0, MAX_SOURCE_COORDINATE_BYTES);
+  const end_byte = integer(value.end_byte, 1, MAX_SOURCE_COORDINATE_BYTES);
   const segment_text_sha256 = string(value.segment_text_sha256, 64);
   const speaker = string(value.speaker, 240);
   const role = value.role === null ? null : string(value.role, 240);
@@ -265,6 +280,28 @@ function normalizeEventIds(value: unknown): string[] | null {
   return ids.length === value.length && new Set(ids).size === ids.length ? ids : null;
 }
 
+function normalizeMatchCounts(value: unknown, eventIds: readonly string[]): Record<string, number> | null {
+  const counts = record(value);
+  if (!counts || Object.keys(counts).length !== eventIds.length) return null;
+  const normalized: Record<string, number> = {};
+  for (const eventId of eventIds) {
+    const count = integer(counts[eventId], 0, MAX_MATCH_COUNT);
+    if (count === null) return null;
+    normalized[eventId] = count;
+  }
+  return Object.keys(counts).every((eventId) => eventIds.includes(eventId)) ? normalized : null;
+}
+
+function normalizeCappedEventIds(value: unknown, eventIds: readonly string[]): string[] | null {
+  if (!Array.isArray(value) || value.length > eventIds.length) return null;
+  const ids = value.map((id) => string(id, 160)).filter((id): id is string => !!id && SAFE_EVENT.test(id));
+  return ids.length === value.length
+    && new Set(ids).size === ids.length
+    && ids.every((eventId) => eventIds.includes(eventId))
+    ? ids
+    : null;
+}
+
 /** Closed parser for producer output. Invalid envelopes never reach a reader. */
 export function normalizeCompanySourceSearchResult(raw: unknown, tickerInput: string, phraseInput: string): CompanySourceSearchResult | null {
   const ticker = normalizeCompanySourceSearchTicker(tickerInput);
@@ -301,9 +338,20 @@ export function normalizeCompanySourceSearchResult(raw: unknown, tickerInput: st
   if (safeSpans.some((span) => !searched_event_ids.includes(span.event_id))) return null;
   if (state === "ready" && safeSpans.some((span) => span.receipt.verification !== "verified")) return null;
   if (state === "stale_revision" && safeSpans.some((span) => span.receipt.verification !== "stale_revision")) return null;
-  if (state === "ready") return { state, ticker, query: phrase, spans: safeSpans, searched_event_ids, corpus_revision };
+  if (state === "ready") {
+    const match_count_by_event = normalizeMatchCounts(value.match_count_by_event, searched_event_ids);
+    const count_capped_event_ids = normalizeCappedEventIds(value.count_capped_event_ids, searched_event_ids);
+    if (!match_count_by_event || !count_capped_event_ids || typeof value.truncated !== "boolean") return null;
+    const renderedByEvent = Object.fromEntries(searched_event_ids.map((eventId) => [eventId, 0])) as Record<string, number>;
+    for (const span of safeSpans) renderedByEvent[span.event_id] += 1;
+    const totalMatches = searched_event_ids.reduce((sum, eventId) => sum + match_count_by_event[eventId], 0);
+    if (searched_event_ids.some((eventId) => renderedByEvent[eventId] > match_count_by_event[eventId]
+      || (match_count_by_event[eventId] > 0 && renderedByEvent[eventId] === 0))
+      || value.truncated !== (count_capped_event_ids.length > 0 || totalMatches > safeSpans.length)) return null;
+    return { state, ticker, query: phrase, spans: safeSpans, searched_event_ids, match_count_by_event, count_capped_event_ids, truncated: value.truncated, corpus_revision };
+  }
   const message = string(value.message, 600);
-  return message ? { state, ticker, query: phrase, message, spans: safeSpans, corpus_revision } : null;
+  return message ? { state, ticker, query: phrase, message, spans: safeSpans, searched_event_ids, corpus_revision } : null;
 }
 
 function errorResult(ticker: string, phrase: string, message: string, retryable: boolean): CompanySourceSearchError {
@@ -332,6 +380,14 @@ function validRequestedEvents(ticker: string, value: CompanySourceSearchEvent[])
   // but the route receives this validated ticker separately and verifies the
   // immutable fiscal identity before it touches the archive.
   return ticker ? safe : null;
+}
+
+function responseMatchesRequestScope(result: CompanySourceSearchResult, events: readonly CompanySourceSearchEvent[]): boolean {
+  if (result.state !== "ready" && result.state !== "stale_revision") return true;
+  const expected = new Map(events.map((event) => [event.event_id, event.transcript_id!]));
+  if (result.searched_event_ids.length !== expected.size
+    || result.searched_event_ids.some((eventId) => !expected.has(eventId))) return false;
+  return result.spans.every((span) => expected.get(span.event_id) === span.transcript_id);
 }
 
 async function requestProducer(
@@ -369,7 +425,7 @@ async function requestProducer(
       return errorResult(ticker, phrase, `Source search request failed (${response.status}).`, response.status >= 500);
     }
     const normalized = normalizeCompanySourceSearchResult(raw, ticker, phrase);
-    if (normalized) return normalized;
+    if (normalized && responseMatchesRequestScope(normalized, events)) return normalized;
     // A missing/changed route is an integration failure, never evidence that a
     // company has no transcript coverage.
     if (response.status === 404) return errorResult(ticker, phrase, "Exact source search endpoint is unavailable.", true);
@@ -449,7 +505,9 @@ export function createFixtureCompanySourceSearchAdapter(): CompanySourceSearchAd
           receipt,
         } satisfies CompanySourceSpan];
       });
-    return { state: "ready", ticker, query: phrase, spans, searched_event_ids: [...new Set(eventIds)], corpus_revision: revision };
+    const searched_event_ids = [...new Set(eventIds)];
+    const match_count_by_event = Object.fromEntries(searched_event_ids.map((eventId) => [eventId, spans.filter((span) => span.event_id === eventId).length]));
+    return { state: "ready", ticker, query: phrase, spans, searched_event_ids, match_count_by_event, count_capped_event_ids: [], truncated: false, corpus_revision: revision };
   };
   return { search: (request) => make(request), compare: (request) => make(request, true) };
 }

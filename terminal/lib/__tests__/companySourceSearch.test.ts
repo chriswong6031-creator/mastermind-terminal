@@ -16,6 +16,9 @@ function envelope(overrides: Record<string, unknown> = {}) {
     query: "data center",
     corpus_revision: "revision-20260801-test",
     searched_event_ids: ["NVDA-2026Q1"],
+    match_count_by_event: { "NVDA-2026Q1": 1 },
+    count_capped_event_ids: [],
+    truncated: false,
     spans: [{
       span_id: `txs1_${"b".repeat(64)}`,
       event_id: "NVDA-2026Q1",
@@ -51,6 +54,8 @@ describe("exact transcript search boundary", () => {
     expect(normalizeTranscriptLiteralPhrase('  "data   center"  ')).toBe("data center");
     expect(normalizeTranscriptLiteralPhrase("'data center'")).toBe("data center");
     expect(normalizeTranscriptLiteralPhrase("   ")).toBeNull();
+    expect(normalizeTranscriptLiteralPhrase("a")).toBeNull();
+    expect(normalizeTranscriptLiteralPhrase("数")).toBeNull();
     expect(normalizeTranscriptLiteralPhrase("data \ud800center")).toBeNull();
   });
 
@@ -79,6 +84,23 @@ describe("exact transcript search boundary", () => {
 
     const outOfScope = envelope({ searched_event_ids: ["NVDA-2025Q4"] });
     expect(normalizeCompanySourceSearchResult(outOfScope, "NVDA", "data center")).toBeNull();
+
+    // Source coordinates address the complete segment, not the 2.4K display
+    // excerpt. A multibyte prefix can legitimately put a match far past 9.6K.
+    const multibyteStart = new TextEncoder().encode("数".repeat(5_000)).byteLength;
+    const longSegment = envelope();
+    (longSegment.spans as Array<Record<string, unknown>>)[0].start_byte = multibyteStart;
+    (longSegment.spans as Array<Record<string, unknown>>)[0].end_byte = multibyteStart + 11;
+    expect(normalizeCompanySourceSearchResult(longSegment, "NVDA", "data center"))
+      .toMatchObject({ state: "ready", spans: [{ start_byte: 15_000, end_byte: 15_011 }] });
+
+    const capped = envelope({
+      match_count_by_event: { "NVDA-2026Q1": 10_000 },
+      count_capped_event_ids: ["NVDA-2026Q1"],
+      truncated: true,
+    });
+    expect(normalizeCompanySourceSearchResult(capped, "NVDA", "data center"))
+      .toMatchObject({ state: "ready", count_capped_event_ids: ["NVDA-2026Q1"], truncated: true });
   });
 
   it("treats a missing source-search route as an integration error, never as coverage", async () => {
@@ -92,6 +114,27 @@ describe("exact transcript search boundary", () => {
       expect.stringContaining("/api/company-source-search/NVDA?"),
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it("rejects producer scope substitutions and event-to-transcript remapping", async () => {
+    const requested = [{ event_id: "NVDA-2026Q1", transcript_id: "2026Q1", fiscal_year: 2026, fiscal_quarter: 1, label: "Q1 FY2026", call_date: "2026-05-20" }];
+    const wrongScope = envelope({
+      searched_event_ids: ["NVDA-2025Q4"],
+      match_count_by_event: { "NVDA-2025Q4": 0 },
+      count_capped_event_ids: [],
+      truncated: false,
+      spans: [],
+    });
+    const remapped = envelope();
+    (remapped.spans as Array<Record<string, unknown>>)[0].transcript_id = "2025Q4";
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify(wrongScope), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(remapped), { status: 200 }));
+
+    await expect(browserCompanySourceSearchAdapter.search({ ticker: "NVDA", phrase: "data center", events: requested }))
+      .resolves.toMatchObject({ state: "error", message: expect.stringContaining("invalid verification envelope") });
+    await expect(browserCompanySourceSearchAdapter.search({ ticker: "NVDA", phrase: "data center", events: requested }))
+      .resolves.toMatchObject({ state: "error", message: expect.stringContaining("invalid verification envelope") });
   });
 
   it("keeps fixture content quarantined behind a deterministic adapter seam", async () => {

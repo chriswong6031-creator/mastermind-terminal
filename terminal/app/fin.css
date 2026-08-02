@@ -661,6 +661,7 @@
 /* ── TranscriptDrawer ── */
 /* Transcript source hand-offs are modal: they must sit above the global
    settings affordance (z-index:228), not merely above the Fin workspace. */
+.fin-tx-modal-root{display:contents}
 .fin-drawer-scrim{position:fixed;inset:0;z-index:240;background:rgba(4,5,7,.4);animation:fin-fade .12s ease}
 .fin-tx-drawer{z-index:241}
 .fin-tx-drawer-head{align-items:flex-start}

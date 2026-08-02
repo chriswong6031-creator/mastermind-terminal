@@ -194,6 +194,15 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
   const [evidenceOverlay, setEvidenceOverlay] = useState(false);
   const evidenceTriggerRef = useRef<HTMLElement | null>(null);
   const receiptsButtonRef = useRef<HTMLButtonElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+
+  const selectLens = useCallback((next: Lens) => {
+    setLens(next);
+    // The lens bar remains sticky while a reader is deep in a long transcript.
+    // Bring the newly-selected panel back beneath that bar so its first rows
+    // are never painted underneath the navigation surface.
+    window.requestAnimationFrame(() => workspaceRef.current?.scrollIntoView({ block: "start", behavior: "auto" }));
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -409,7 +418,7 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
             aria-controls={`ci-panel-${item}`}
             tabIndex={lens === item ? 0 : -1}
             className={lens === item ? "on" : ""}
-            onClick={() => setLens(item)}
+            onClick={() => selectLens(item)}
             onKeyDown={(key) => {
               const current = LENSES.indexOf(item);
               const target = key.key === "ArrowRight" ? (current + 1) % LENSES.length
@@ -417,7 +426,7 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
                   : key.key === "Home" ? 0 : key.key === "End" ? LENSES.length - 1 : -1;
               if (target < 0) return;
               key.preventDefault();
-              setLens(LENSES[target]);
+              selectLens(LENSES[target]);
               document.getElementById(`ci-tab-${LENSES[target]}`)?.focus();
             }}
           >
@@ -427,7 +436,7 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
         ))}
       </nav>
 
-      <div className={`ci-workspace${evidenceOpen ? " evidence-open" : ""}`}>
+      <div ref={workspaceRef} className={`ci-workspace${evidenceOpen ? " evidence-open" : ""}`}>
         <main className="ci-canvas" id={`ci-panel-${lens}`} role="tabpanel" aria-labelledby={`ci-tab-${lens}`}>
           {lens === "brief" && (
             <div className="ci-brief">

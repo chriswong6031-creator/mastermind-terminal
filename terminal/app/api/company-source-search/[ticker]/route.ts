@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { rateLimit, tooMany } from "@/lib/rateLimit";
+import { rateLimit } from "@/lib/rateLimit";
 import { createClient } from "@/lib/supabase/server";
 import { normalizeCompanySourceSearchTicker, normalizeTranscriptLiteralPhrase, type CompanySourceSearchResult } from "@/lib/companySourceSearch";
 import {
@@ -49,14 +49,25 @@ function statusFor(payload: CompanySourceSearchResult): number {
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ ticker: string }> }): Promise<Response> {
-  const limited = rateLimit(req, { name: "company-source-search", max: 30 });
-  if (!limited.ok) return tooMany(limited);
-
   const { ticker: rawTicker } = await params;
   const ticker = normalizeCompanySourceSearchTicker(rawTicker);
   const url = new URL(req.url);
   const rawQuery = url.searchParams.get("q") ?? "";
   const query = normalizeTranscriptLiteralPhrase(rawQuery);
+  const limited = rateLimit(req, { name: "company-source-search", max: 30 });
+  if (!limited.ok) {
+    return NextResponse.json({
+      schema: "mastermind.company-source-search/v1",
+      state: "unavailable",
+      ticker: ticker ?? "",
+      query: query ?? "",
+      message: "Exact transcript search is temporarily rate limited.",
+      retryable: true,
+    }, {
+      status: 429,
+      headers: { ...NO_STORE, "Retry-After": String(limited.retryAfterSec) },
+    });
+  }
   if (!ticker || ticker !== rawTicker || rawQuery.length > MAX_QUERY || !query) {
     return response(envelope(ticker ?? "", query ?? "", "Enter one literal query of at most 240 characters.", false), 400);
   }

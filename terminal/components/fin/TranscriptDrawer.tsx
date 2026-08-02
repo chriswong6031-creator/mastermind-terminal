@@ -56,6 +56,7 @@ export default function TranscriptDrawer({ sym, id, name, focus, onClose }: Tran
   const [section, setSection] = useState<Section>("all");
   const [speaker, setSpeaker] = useState("all");
   const [copied, setCopied] = useState<string | null>(null);
+  const modalRootRef = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -87,9 +88,38 @@ export default function TranscriptDrawer({ sym, id, name, focus, onClose }: Tran
 
   useEffect(() => {
     if (!mounted) return;
+    const modalRoot = modalRootRef.current;
+    if (!modalRoot || modalRoot.parentElement !== document.body) return;
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const scrollContainer = returnFocusRef.current?.closest<HTMLElement>(".fin-body") ?? null;
+    const scrollTop = scrollContainer?.scrollTop ?? 0;
+    const scrollLeft = scrollContainer?.scrollLeft ?? 0;
+    const windowX = window.scrollX;
+    const windowY = window.scrollY;
+    const bodyOverflow = document.body.style.overflow;
+    const rootOverflow = document.documentElement.style.overflow;
+    const background = [...document.body.children]
+      .filter((child): child is HTMLElement => child !== modalRoot && child instanceof HTMLElement);
+    const prior = background.map((child) => ({ child, hadInert: child.hasAttribute("inert") }));
+
+    prior.forEach(({ child }) => child.setAttribute("inert", ""));
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
     closeRef.current?.focus();
-    return () => returnFocusRef.current?.focus();
+
+    return () => {
+      prior.forEach(({ child, hadInert }) => {
+        if (!hadInert) child.removeAttribute("inert");
+      });
+      document.body.style.overflow = bodyOverflow;
+      document.documentElement.style.overflow = rootOverflow;
+      if (scrollContainer) {
+        scrollContainer.scrollTop = scrollTop;
+        scrollContainer.scrollLeft = scrollLeft;
+      }
+      window.scrollTo(windowX, windowY);
+      returnFocusRef.current?.focus({ preventScroll: true });
+    };
   }, [mounted]);
 
   useEffect(() => {
@@ -179,7 +209,7 @@ export default function TranscriptDrawer({ sym, id, name, focus, onClose }: Tran
   }
 
   const node = (
-    <>
+    <div ref={modalRootRef} className="fin-tx-modal-root">
       <div className="fin-drawer-scrim" onClick={onClose} aria-hidden />
       <aside ref={drawerRef} className="fin-drawer fin-tx-drawer" role="dialog" aria-modal="true" aria-labelledby="fin-tx-drawer-title">
         <div className="fin-drawer-h fin-tx-drawer-head">
@@ -300,7 +330,7 @@ export default function TranscriptDrawer({ sym, id, name, focus, onClose }: Tran
           ))}
         </div>
       </aside>
-    </>
+    </div>
   );
   return mounted ? createPortal(node, document.body) : null;
 }

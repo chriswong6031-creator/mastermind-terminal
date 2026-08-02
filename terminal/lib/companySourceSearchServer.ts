@@ -36,9 +36,11 @@ export const COMPANY_SOURCE_SEARCH_MAX_COMPRESSED_BODY_BYTES = 4 * 1024 * 1024;
 export const COMPANY_SOURCE_SEARCH_MAX_DECOMPRESSED_BODY_BYTES = 12 * 1024 * 1024;
 export const COMPANY_SOURCE_SEARCH_MAX_CALLS = 12;
 export const COMPANY_SOURCE_SEARCH_MAX_SPANS = 60;
+export const COMPANY_SOURCE_SEARCH_MAX_MATCHES_PER_EVENT = 10_000;
 
 const ROOT_CACHE_TTL_MS = 30_000;
 const BODY_CACHE_TTL_MS = 30_000;
+const BODY_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 6_000;
 const SAFE_EVENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -68,13 +70,15 @@ type RootSnapshot = {
 };
 
 type ReadyBody = { document: RevisionVerifiedTranscript; event_id: string };
+type LiteralScan = { event_id: string; spans: CompanySourceSpan[]; match_count: number; count_capped: boolean };
 type BodyRead =
   | { kind: "ready"; body: ReadyBody }
   | { kind: "stale"; reason: string }
   | { kind: "unavailable"; message: string };
 
 let rootCache: RootSnapshot | null = null;
-const bodyCache = new Map<string, { document: RevisionVerifiedTranscript; at: number }>();
+const bodyCache = new Map<string, { document: RevisionVerifiedTranscript; at: number; bytes: number }>();
+let bodyCacheBytes = 0;
 
 function error(ticker: string, query: string, message: string, retryable: boolean): CompanySourceSearchResult {
   return { state: "error", ticker, query, message, retryable };
@@ -276,6 +280,10 @@ async function loadVerifiedBody(
   const cacheKey = `${snapshot.revision_id}:${ticker}/${revision.id}:${revision.body_sha256}`;
   const cached = bodyCache.get(cacheKey);
   if (cached && Date.now() - cached.at < BODY_CACHE_TTL_MS) return { kind: "ready", body: { document: cached.document, event_id: call.event_id } };
+  if (cached) {
+    bodyCache.delete(cacheKey);
+    bodyCacheBytes -= cached.bytes;
+  }
 
   const origin = validArchiveOrigin(COMPANY_SOURCE_SEARCH_ARCHIVE_ORIGIN);
   if (!origin) return { kind: "unavailable", message: "The transcript archive origin is unavailable." };
@@ -308,8 +316,14 @@ async function loadVerifiedBody(
     transition_reason: chapter.transition_reason,
     qa_start_reason: chapter.qa_start_reason,
   };
-  if (!bodyCache.has(cacheKey) && bodyCache.size >= 256) bodyCache.delete(bodyCache.keys().next().value as string);
-  bodyCache.set(cacheKey, { document, at: Date.now() });
+  while (bodyCache.size > 0 && (bodyCache.size >= 256 || bodyCacheBytes + decoded.byteLength > BODY_CACHE_MAX_BYTES)) {
+    const oldestKey = bodyCache.keys().next().value as string;
+    const oldest = bodyCache.get(oldestKey);
+    bodyCache.delete(oldestKey);
+    bodyCacheBytes -= oldest?.bytes ?? 0;
+  }
+  bodyCache.set(cacheKey, { document, at: Date.now(), bytes: decoded.byteLength });
+  bodyCacheBytes += decoded.byteLength;
   return { kind: "ready", body: { document, event_id: call.event_id } };
 }
 
@@ -325,45 +339,71 @@ function exactExcerpt(text: string, start: number, end: number): string {
   return `${left > 0 ? "…" : ""}${text.slice(left, right).trim()}${right < text.length ? "…" : ""}`;
 }
 
-async function literalSpans(item: ReadyBody, ticker: string, phrase: string, snapshot: RootSnapshot): Promise<CompanySourceSpan[]> {
+async function literalSpans(item: ReadyBody, ticker: string, phrase: string, snapshot: RootSnapshot): Promise<LiteralScan> {
   const output: CompanySourceSpan[] = [];
+  let matchCount = 0;
+  let countCapped = false;
   const needle = phrase.toLocaleLowerCase();
   const { document, event_id } = item;
-  for (let segmentIndex = 0; segmentIndex < document.transcript.segments.length; segmentIndex += 1) {
+  segments: for (let segmentIndex = 0; segmentIndex < document.transcript.segments.length; segmentIndex += 1) {
     const segment = document.transcript.segments[segmentIndex];
     const lower = segment.text.toLocaleLowerCase();
     let start = lower.indexOf(needle);
-    while (start >= 0 && output.length < COMPANY_SOURCE_SEARCH_MAX_SPANS) {
+    while (start >= 0) {
+      if (matchCount >= COMPANY_SOURCE_SEARCH_MAX_MATCHES_PER_EVENT) {
+        countCapped = true;
+        break segments;
+      }
       const end = start + phrase.length;
-      const pointer = await makeTranscriptSpan(document.revision, segmentIndex, segment.text, start, end);
-      if (!pointer) return [];
-      output.push({
-        span_id: pointer.span_id,
-        event_id,
-        transcript_id: document.transcript.id,
-        ticker,
-        document_sha256: document.revision.body_sha256!,
-        segment_index: segmentIndex,
-        start_byte: pointer.start_byte,
-        end_byte: pointer.end_byte,
-        segment_text_sha256: pointer.segment_text_sha256,
-        speaker: segment.speaker,
-        role: segment.role || null,
-        section: sectionFor(document, segmentIndex),
-        excerpt: exactExcerpt(segment.text, start, end),
-        matched_text: segment.text.slice(start, end),
-        receipt: {
-          revision_id: snapshot.revision_id,
+      matchCount += 1;
+      if (output.length < COMPANY_SOURCE_SEARCH_MAX_SPANS) {
+        const pointer = await makeTranscriptSpan(document.revision, segmentIndex, segment.text, start, end);
+        if (!pointer) return { event_id, spans: [], match_count: 0, count_capped: false };
+        output.push({
+          span_id: pointer.span_id,
+          event_id,
+          transcript_id: document.transcript.id,
+          ticker,
           document_sha256: document.revision.body_sha256!,
-          indexed_at: snapshot.indexed_at,
-          source_label: "Committed Mastermind transcript archive",
-          source_url: `${COMPANY_SOURCE_SEARCH_ARCHIVE_ORIGIN}/data/tx/${ticker}/${document.transcript.id}.json.gz`,
-          verification: "verified",
-        },
-      });
+          segment_index: segmentIndex,
+          start_byte: pointer.start_byte,
+          end_byte: pointer.end_byte,
+          segment_text_sha256: pointer.segment_text_sha256,
+          speaker: segment.speaker,
+          role: segment.role || null,
+          section: sectionFor(document, segmentIndex),
+          excerpt: exactExcerpt(segment.text, start, end),
+          matched_text: segment.text.slice(start, end),
+          receipt: {
+            revision_id: snapshot.revision_id,
+            document_sha256: document.revision.body_sha256!,
+            indexed_at: snapshot.indexed_at,
+            source_label: "Committed Mastermind transcript archive",
+            source_url: `${COMPANY_SOURCE_SEARCH_ARCHIVE_ORIGIN}/data/tx/${ticker}/${document.transcript.id}.json.gz`,
+            verification: "verified",
+          },
+        });
+      }
       start = lower.indexOf(needle, end);
     }
-    if (output.length >= COMPANY_SOURCE_SEARCH_MAX_SPANS) break;
+  }
+  return { event_id, spans: output, match_count: matchCount, count_capped: countCapped };
+}
+
+function fairSpanAllocation(scans: readonly LiteralScan[]): CompanySourceSpan[] {
+  const output: CompanySourceSpan[] = [];
+  let round = 0;
+  while (output.length < COMPANY_SOURCE_SEARCH_MAX_SPANS) {
+    let added = false;
+    for (const scan of scans) {
+      const span = scan.spans[round];
+      if (!span) continue;
+      output.push(span);
+      added = true;
+      if (output.length >= COMPANY_SOURCE_SEARCH_MAX_SPANS) break;
+    }
+    if (!added) break;
+    round += 1;
   }
   return output;
 }
@@ -402,18 +442,23 @@ export async function resolveCompanySourceSearchFromArchive(
   if (unreachable) return unavailable(ticker, phrase, unreachable.message);
   const stale = reads.find((read): read is Extract<BodyRead, { kind: "stale" }> => read.kind === "stale");
   if (stale) {
-    return { state: "stale_revision", ticker, query: phrase, message: stale.reason, spans: [], corpus_revision: snapshot.revision_id };
+    return { state: "stale_revision", ticker, query: phrase, message: stale.reason, spans: [], searched_event_ids: calls.map((call) => call.event_id), corpus_revision: snapshot.revision_id };
   }
   const ready = reads as Array<Extract<BodyRead, { kind: "ready" }>>;
-  const spans = (await Promise.all(ready.map((read) => literalSpans(read.body, ticker, phrase, snapshot))))
-    .flat()
-    .slice(0, COMPANY_SOURCE_SEARCH_MAX_SPANS);
+  const scans = await Promise.all(ready.map((read) => literalSpans(read.body, ticker, phrase, snapshot)));
+  const spans = fairSpanAllocation(scans);
+  const match_count_by_event = Object.fromEntries(scans.map((scan) => [scan.event_id, scan.match_count]));
+  const count_capped_event_ids = scans.filter((scan) => scan.count_capped).map((scan) => scan.event_id);
+  const totalMatches = scans.reduce((sum, scan) => sum + scan.match_count, 0);
   return {
     state: "ready",
     ticker,
     query: phrase,
     spans,
     searched_event_ids: calls.map((call) => call.event_id),
+    match_count_by_event,
+    count_capped_event_ids,
+    truncated: count_capped_event_ids.length > 0 || totalMatches > spans.length,
     corpus_revision: snapshot.revision_id,
   };
 }
@@ -462,4 +507,5 @@ export function createCompanySourceSearchE2eFetch(): FetchLike {
 export function __resetCompanySourceSearchArchiveCacheForTests(): void {
   rootCache = null;
   bodyCache.clear();
+  bodyCacheBytes = 0;
 }

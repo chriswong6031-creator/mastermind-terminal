@@ -104,6 +104,19 @@ describe("company source search archive boundary", () => {
     ]);
   });
 
+  it("keeps UTF-8 byte authority for matches beyond the shortened display excerpt", async () => {
+    const prefix = "数".repeat(5_000);
+    const document = body("2026Q1", [{ speaker: "CEO", role: "CEO", text: `${prefix}data center demand.` }]);
+    const result = await resolveCompanySourceSearchFromArchive(request(["2026Q1"]), {
+      fetcher: archiveFetch(await rootFor([document]), [document]),
+    });
+    expect(result).toMatchObject({ state: "ready" });
+    if (result.state === "ready") {
+      expect(result.spans[0]).toMatchObject({ start_byte: 15_000, end_byte: 15_011 });
+      expect(result.spans[0].excerpt.length).toBeLessThan(400);
+    }
+  });
+
   it("is literal only: token-only rearrangements do not become a hit", async () => {
     const document = body("2026Q1", [{ speaker: "CEO", role: "CEO", text: "Center demand for data is different." }]);
     const result = await resolveCompanySourceSearchFromArchive(request(["2026Q1"]), { fetcher: archiveFetch(await rootFor([document]), [document]) });
@@ -173,5 +186,46 @@ describe("company source search archive boundary", () => {
       ...request(["2026Q1"]), mode: "compare", left_event_id: cie("2026Q1"), right_event_id: cie("2026Q1"),
     }, { fetcher: archiveFetch(await rootFor([document]), [document]) });
     expect(compare).toMatchObject({ state: "error", retryable: false });
+  });
+
+  it("allocates a capped result set fairly so a dense left call cannot starve the right call", async () => {
+    const left = body("2026Q1", [{ speaker: "CEO", role: "CEO", text: Array.from({ length: 60 }, () => "data center").join(" | ") }]);
+    const right = body("2025Q4", [{ speaker: "CEO", role: "CEO", text: "One data center mention." }]);
+    const calls = ["2026Q1", "2025Q4"].map((id) => ({ event_id: cie(id), transcript_id: id }));
+    const result = await resolveCompanySourceSearchFromArchive({
+      ticker: "NVDA",
+      phrase: "data center",
+      mode: "compare",
+      calls,
+      left_event_id: cie("2026Q1"),
+      right_event_id: cie("2025Q4"),
+    }, { fetcher: archiveFetch(await rootFor([left, right]), [left, right]) });
+
+    expect(result).toMatchObject({
+      state: "ready",
+      truncated: true,
+      match_count_by_event: { [cie("2026Q1")]: 60, [cie("2025Q4")]: 1 },
+      count_capped_event_ids: [],
+    });
+    if (result.state === "ready") {
+      expect(result.spans).toHaveLength(60);
+      expect(result.spans.filter((span) => span.event_id === cie("2026Q1"))).toHaveLength(59);
+      expect(result.spans.filter((span) => span.event_id === cie("2025Q4"))).toHaveLength(1);
+    }
+  });
+
+  it("bounds pathological scans and marks the per-event count as a lower bound", async () => {
+    const document = body("2026Q1", [{ speaker: "CEO", role: "CEO", text: Array.from({ length: 10_001 }, () => "aa").join(" | ") }]);
+    const result = await resolveCompanySourceSearchFromArchive(request(["2026Q1"], "aa"), {
+      fetcher: archiveFetch(await rootFor([document]), [document]),
+    });
+
+    expect(result).toMatchObject({
+      state: "ready",
+      match_count_by_event: { [cie("2026Q1")]: 10_000 },
+      count_capped_event_ids: [cie("2026Q1")],
+      truncated: true,
+    });
+    if (result.state === "ready") expect(result.spans).toHaveLength(60);
   });
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useLang } from "../../lib/i18n";
 import { pick } from "../../lib/finFormat";
 import {
@@ -55,10 +56,21 @@ function localized(zh: boolean, chinese: string, english: string): string {
   return pick(zh, english, chinese);
 }
 
+function totalExactMatches(result: Extract<CompanySourceSearchResult, { state: "ready" }>): number {
+  return Object.values(result.match_count_by_event).reduce((sum, count) => sum + count, 0);
+}
+
 function resultLabel(result: CompanySourceSearchResult, zh: boolean): string {
-  if (result.state === "ready") return result.spans.length
-    ? localized(zh, `${result.spans.length} 个精确命中`, `${result.spans.length} exact matches`)
-    : localized(zh, "未找到精确命中", "No exact matches");
+  if (result.state === "ready") {
+    const total = totalExactMatches(result);
+    if (total === 0) return localized(zh, "未找到精确命中", "No exact matches");
+    if (result.count_capped_event_ids.length > 0) {
+      return localized(zh, `至少 ${total} 个精确命中 · 显示 ${result.spans.length} 个`, `At least ${total} exact matches · ${result.spans.length} shown`);
+    }
+    return result.truncated
+      ? localized(zh, `${total} 个精确命中 · 显示 ${result.spans.length} 个`, `${total} exact matches · ${result.spans.length} shown`)
+      : localized(zh, `${total} 个精确命中`, `${total} exact matches`);
+  }
   if (result.state === "not_covered") return localized(zh, "尚未覆盖", "Not covered");
   if (result.state === "stale_revision") return localized(zh, "版本已过期", "Revision stale");
   if (result.state === "unavailable") return localized(zh, "来源暂不可用", "Source unavailable");
@@ -66,16 +78,21 @@ function resultLabel(result: CompanySourceSearchResult, zh: boolean): string {
 }
 
 function stateCopy(result: CompanySourceSearchResult, zh: boolean): string {
-  if (result.state === "not_covered") return result.message;
-  if (result.state === "stale_revision") return result.message;
-  if (result.state === "error" || result.state === "unavailable") return result.message;
-  if (result.spans.length === 0) {
-    return pick(
+  if (result.state === "not_covered") return localized(zh, "该公司或选定事件目前没有已提交的电话会正文。", "This company or selected event does not have a committed transcript body yet.");
+  if (result.state === "stale_revision") return localized(zh, "选定的电话会修订已发生变化。请刷新公司情报后重新搜索。", "The selected transcript revision changed. Refresh Company Intelligence and run the search again.");
+  if (result.state === "unavailable") return localized(zh, "已验证的电话会来源暂时不可用。请重试，搜索范围不会自动扩大。", "The verified transcript source is temporarily unavailable. Retry without broadening the search.");
+  if (result.state === "error") return result.retryable
+    ? localized(zh, "精确来源搜索未能完成。请重试。", "Exact source search did not complete. Please retry.")
+    : localized(zh, "请检查搜索短语与所选事件后重试。", "Check the phrase and selected events, then try again.");
+  if (totalExactMatches(result) === 0) {
+    return localized(
       zh,
       "已在选定事件中进行精确字面匹配；没有段落包含该短语。系统没有扩展、改写或推断关联内容。",
       "The selected events were checked for this literal phrase. No segment contains it; no expansion, paraphrase, or inferred relevance was used.",
     );
   }
+  if (result.count_capped_event_ids.length > 0) return localized(zh, "结果按事件公平分配显示；标为“至少”的总数在每事件安全上限处停止计数。", "Shown results are allocated fairly across events; totals marked “at least” stopped counting at the per-event safety ceiling.");
+  if (result.truncated) return localized(zh, "结果按事件公平分配显示；总数包含因显示上限而省略的精确命中。", "Shown results are allocated fairly across events; totals include exact matches omitted by the display cap.");
   return localized(zh, "每项均为带修订凭证的字面匹配。", "Every result is a literal match with a revision receipt.");
 }
 
@@ -100,7 +117,7 @@ function ResultState({ result, zh, onRetry }: { result: CompanySourceSearchResul
       <span className="ci-ts-state-mark" aria-hidden>{kind === "ready" ? "✓" : kind === "empty" ? "⌕" : kind === "stale_revision" ? "!" : "—"}</span>
       <div>
         <strong>{resultLabel(result, zh)}</strong>
-        <p>{stateCopy(result, zh)}</p>
+        <p title={result.state === "ready" ? undefined : result.message}>{stateCopy(result, zh)}</p>
       </div>
       {(result.state === "error" || result.state === "unavailable") && result.retryable && <button className="btn btn-ghost" onClick={onRetry}>{localized(zh, "重试", "Retry")}</button>}
     </div>
@@ -151,15 +168,59 @@ function ReceiptDialog({
   zh: boolean;
   onClose: () => void;
 }) {
+  const [mounted, setMounted] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setMounted(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+    const wrap = wrapRef.current;
+    if (!wrap || wrap.parentElement !== document.body) return;
+
+    const activeBeforeOpen = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const scrollContainer = activeBeforeOpen?.closest<HTMLElement>(".fin-body") ?? null;
+    const scrollTop = scrollContainer?.scrollTop ?? 0;
+    const scrollLeft = scrollContainer?.scrollLeft ?? 0;
+    const windowX = window.scrollX;
+    const windowY = window.scrollY;
+    const bodyOverflow = document.body.style.overflow;
+    const rootOverflow = document.documentElement.style.overflow;
+    const background = [...document.body.children]
+      .filter((child): child is HTMLElement => child !== wrap && child instanceof HTMLElement);
+    const prior = background.map((child) => ({ child, hadInert: child.hasAttribute("inert") }));
+
+    prior.forEach(({ child }) => child.setAttribute("inert", ""));
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+
+    return () => {
+      prior.forEach(({ child, hadInert }) => {
+        if (!hadInert) child.removeAttribute("inert");
+      });
+      document.body.style.overflow = bodyOverflow;
+      document.documentElement.style.overflow = rootOverflow;
+      if (scrollContainer) {
+        scrollContainer.scrollTop = scrollTop;
+        scrollContainer.scrollLeft = scrollLeft;
+      }
+      window.scrollTo(windowX, windowY);
+      activeBeforeOpen?.focus({ preventScroll: true });
+    };
+  }, [mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
     closeRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopImmediatePropagation();
         event.stopPropagation();
         onClose();
         return;
@@ -181,35 +242,16 @@ function ReceiptDialog({
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
-
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const parent = wrap?.parentElement;
-    if (!wrap || !parent) return;
-    const background = [...parent.children].filter((child) => child !== wrap) as HTMLElement[];
-    const prior = background.map((child) => ({ child, hadInert: child.hasAttribute("inert") }));
-    const bodyOverflow = document.body.style.overflow;
-    const scrollY = window.scrollY;
-    prior.forEach(({ child }) => child.setAttribute("inert", ""));
-    document.body.style.overflow = "hidden";
-    return () => {
-      prior.forEach(({ child, hadInert }) => {
-        if (!hadInert) child.removeAttribute("inert");
-      });
-      document.body.style.overflow = bodyOverflow;
-      window.scrollTo(0, scrollY);
-    };
-  }, []);
+  }, [mounted, onClose]);
 
   const receipt = span.receipt;
-  return (
+  const node = (
     <div ref={wrapRef} className="ci-ts-dialog-wrap" role="presentation">
       <button className="ci-ts-dialog-scrim" aria-label={localized(zh, "关闭来源凭证", "Close source receipt")} onClick={onClose} />
       <aside ref={dialogRef} className="ci-ts-dialog" role="dialog" aria-modal="true" aria-labelledby="ci-ts-receipt-title">
         <header>
           <div>
-            <span className="fin-eyebrow">{localized(zh, "不可变来源凭证", "IMMUTABLE SOURCE RECEIPT")}</span>
+            <span className="fin-eyebrow">{localized(zh, "修订绑定来源凭证", "REVISION-BOUND SOURCE RECEIPT")}</span>
             <h3 id="ci-ts-receipt-title">{span.speaker} · {span.transcript_id}</h3>
           </div>
           <button ref={closeRef} className="ci-icon-button" onClick={onClose} aria-label={localized(zh, "关闭来源凭证", "Close source receipt")}>×</button>
@@ -227,6 +269,7 @@ function ReceiptDialog({
       </aside>
     </div>
   );
+  return mounted ? createPortal(node, document.body) : null;
 }
 
 function compareColumns(
@@ -263,6 +306,10 @@ export default function TranscriptSearchWorkspace({
   const compareAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    searchAbortRef.current?.abort();
+    compareAbortRef.current?.abort();
+    searchRequestIdRef.current += 1;
+    compareRequestIdRef.current += 1;
     // The selected calls are derived from a new producer context. Schedule the
     // reset after this render so the external-context sync does not create a
     // synchronous render cascade while the Intelligence payload is resolving.
@@ -272,6 +319,7 @@ export default function TranscriptSearchWorkspace({
       setRightEventId(sourceEvents.find((event) => event.event_id !== initialSourceEventId)?.event_id ?? "");
       setSearch({ phase: "idle", result: null });
       setCompare({ phase: "idle", result: null });
+      setReceiptSpan(null);
     });
     return () => window.cancelAnimationFrame(frame);
   }, [ticker, initialSourceEventId, sourceEvents]);
@@ -279,6 +327,18 @@ export default function TranscriptSearchWorkspace({
   useEffect(() => () => {
     searchAbortRef.current?.abort();
     compareAbortRef.current?.abort();
+  }, []);
+
+  const invalidateSearch = useCallback(() => {
+    searchAbortRef.current?.abort();
+    searchRequestIdRef.current += 1;
+    setSearch({ phase: "idle", result: null });
+  }, []);
+
+  const invalidateCompare = useCallback(() => {
+    compareAbortRef.current?.abort();
+    compareRequestIdRef.current += 1;
+    setCompare({ phase: "idle", result: null });
   }, []);
 
   const eventById = useMemo(() => new Map(events.map((event) => [event.event_id, event])), [events]);
@@ -289,12 +349,13 @@ export default function TranscriptSearchWorkspace({
   const normalizedPhrase = normalizeTranscriptLiteralPhrase(phrase);
 
   const toggleEvent = useCallback((eventId: string) => {
+    invalidateSearch();
     setSelectedIds((current) => current.includes(eventId)
       // The control means "search these events", never an ambiguous empty
       // selection that silently broadens a reader's search to all history.
       ? (current.length === 1 ? current : current.filter((candidate) => candidate !== eventId))
       : [...current, eventId]);
-  }, []);
+  }, [invalidateSearch]);
 
   const runSearch = useCallback(async () => {
     const query = normalizeTranscriptLiteralPhrase(phrase);
@@ -352,7 +413,7 @@ export default function TranscriptSearchWorkspace({
   }, []);
   const closeReceipt = useCallback(() => {
     setReceiptSpan(null);
-    window.requestAnimationFrame(() => receiptTriggerRef.current?.focus());
+    window.requestAnimationFrame(() => receiptTriggerRef.current?.focus({ preventScroll: true }));
   }, []);
 
   const [leftSpans, rightSpans] = compareColumns(compare.result, leftEventId, rightEventId);
@@ -363,7 +424,7 @@ export default function TranscriptSearchWorkspace({
         <div>
           <span className="fin-eyebrow">{localized(zh, "修订绑定的文本发现", "REVISION-BOUND TEXT DISCOVERY")}</span>
           <h3 id="ci-ts-title">{localized(zh, "在电话会中找到准确出处", "Find exact words across calls")}</h3>
-          <p>{localized(zh, "仅做字面短语匹配。结果携带段落、发言人、章节和不可变文档修订凭证；没有 AI 摘要或扩展匹配。", "Literal phrase matching only. Every result carries its segment, speaker, section, and immutable document receipt — no AI summary or expanded match.")}</p>
+          <p>{localized(zh, "仅做字面短语匹配。结果携带段落、发言人、章节和修订绑定的文档凭证；没有 AI 摘要或扩展匹配。", "Literal phrase matching only. Every result carries its segment, speaker, section, and revision-bound document receipt — no AI summary or expanded match.")}</p>
         </div>
         <span className="ci-ts-contract"><i />{localized(zh, "精确跨度 · 仅背景", "Exact spans · context only")}</span>
       </header>
@@ -374,11 +435,15 @@ export default function TranscriptSearchWorkspace({
           <span aria-hidden>⌕</span>
           <input
             value={phrase}
-            onChange={(event) => setPhrase(event.target.value)}
+            onChange={(event) => {
+              invalidateSearch();
+              invalidateCompare();
+              setPhrase(event.target.value);
+            }}
             placeholder={localized(zh, "输入短语，例如 “data center demand”", "Enter a phrase, e.g. “data center demand”")}
             spellCheck={false}
           />
-          {phrase && <button type="button" onClick={() => { setPhrase(""); setSearch({ phase: "idle", result: null }); setCompare({ phase: "idle", result: null }); }} aria-label={localized(zh, "清除搜索", "Clear search")}>×</button>}
+          {phrase && <button type="button" onClick={() => { invalidateSearch(); invalidateCompare(); setPhrase(""); }} aria-label={localized(zh, "清除搜索", "Clear search")}>×</button>}
         </label>
         <button className="btn btn-primary" type="submit" disabled={search.phase === "loading"}>{search.phase === "loading" ? localized(zh, "正在搜索…", "Searching…") : localized(zh, "搜索准确短语", "Search exact phrase")}</button>
       </form>
@@ -409,9 +474,9 @@ export default function TranscriptSearchWorkspace({
           <span>{localized(zh, "无模型改写", "No model paraphrase")}</span>
         </div>
         <div className="ci-ts-compare-controls">
-          <label><span>{localized(zh, "左侧事件", "Left event")}</span><select value={leftEventId} onChange={(event) => setLeftEventId(event.target.value)}>{sourceEvents.map((event) => <option key={event.event_id} value={event.event_id}>{event.label} · {event.call_date}</option>)}</select></label>
+          <label><span>{localized(zh, "左侧事件", "Left event")}</span><select value={leftEventId} onChange={(event) => { invalidateCompare(); setLeftEventId(event.target.value); }}>{sourceEvents.map((event) => <option key={event.event_id} value={event.event_id}>{event.label} · {event.call_date}</option>)}</select></label>
           <span className="ci-ts-compare-swap" aria-hidden>⇄</span>
-          <label><span>{localized(zh, "右侧事件", "Right event")}</span><select value={rightEventId} onChange={(event) => setRightEventId(event.target.value)}>{sourceEvents.map((event) => <option key={event.event_id} value={event.event_id}>{event.label} · {event.call_date}</option>)}</select></label>
+          <label><span>{localized(zh, "右侧事件", "Right event")}</span><select value={rightEventId} onChange={(event) => { invalidateCompare(); setRightEventId(event.target.value); }}>{sourceEvents.map((event) => <option key={event.event_id} value={event.event_id}>{event.label} · {event.call_date}</option>)}</select></label>
           <button className="btn btn-ghost" type="button" onClick={() => void runCompare()} disabled={compare.phase === "loading" || !normalizedPhrase || sourceEvents.length < 2}>{compare.phase === "loading" ? localized(zh, "正在比较…", "Comparing…") : localized(zh, "对比准确出处", "Compare exact excerpts")}</button>
         </div>
 
@@ -423,9 +488,11 @@ export default function TranscriptSearchWorkspace({
             {([leftEventId, rightEventId] as const).map((eventId, index) => {
               const event = eventById.get(eventId);
               const spans = index === 0 ? leftSpans : rightSpans;
+              const total = compare.result?.state === "ready" ? compare.result.match_count_by_event[eventId] ?? spans.length : spans.length;
+              const countCapped = compare.result?.state === "ready" && compare.result.count_capped_event_ids.includes(eventId);
               return <div className="ci-ts-compare-col" key={eventId}>
-                <header><div><strong>{event?.label ?? eventId}</strong><small>{event?.call_date}</small></div><span className="num">{spans.length}</span></header>
-                {spans.length ? spans.map((span) => <SpanCard key={span.span_id} span={span} phrase={compare.result!.query} zh={zh} onOpenTranscript={onOpenTranscript} onReceipt={openReceipt} />) : <div className="ci-ts-compare-empty">{localized(zh, "该事件没有此精确短语。", "This event contains no exact phrase match.")}</div>}
+                <header><div><strong>{event?.label ?? eventId}</strong><small>{event?.call_date}</small></div><span className="num" title={countCapped ? localized(zh, `显示 ${spans.length} 个；至少 ${total} 个命中`, `${spans.length} shown; at least ${total} matches`) : total > spans.length ? localized(zh, `显示 ${spans.length} / 共 ${total} 个`, `${spans.length} of ${total} shown`) : undefined}>{countCapped ? `≥${total}` : total}</span></header>
+                {total > 0 ? spans.map((span) => <SpanCard key={span.span_id} span={span} phrase={compare.result!.query} zh={zh} onOpenTranscript={onOpenTranscript} onReceipt={openReceipt} />) : <div className="ci-ts-compare-empty">{localized(zh, "该事件没有此精确短语。", "This event contains no exact phrase match.")}</div>}
               </div>;
             })}
           </div>

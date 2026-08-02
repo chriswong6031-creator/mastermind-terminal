@@ -220,9 +220,35 @@ test("Company Intelligence keeps its context and evidence workflow responsive", 
   // The lens bar is its own roving tablist inside the Intelligence page; this
   // assertion protects it from being swallowed by the outer Financials tabs.
   const topics = page.locator(".ci-lenses").getByRole("tab", { name: "Topics" });
+  // Start from the deliberately taller transcript workspace so both Terminal
+  // hosts (inner .fin-body scroller and document scroller) exercise the same
+  // sticky-lens reveal contract.
+  await page.locator(".ci-lenses").getByRole("tab").nth(1).click();
+  await expect(page.locator(".ci-ts-explorer")).toBeVisible();
+  await page.locator(".ci-ts-explorer").evaluate((element) => {
+    const inner = element.closest<HTMLElement>(".fin-body");
+    element.style.minHeight = `${(inner?.clientHeight ?? window.innerHeight) + 800}px`;
+  });
+  const deepScroll = await page.evaluate(() => {
+    const inner = document.querySelector<HTMLElement>(".fin-body");
+    if (inner) inner.scrollTop = inner.scrollHeight;
+    window.scrollTo(0, document.documentElement.scrollHeight);
+    return { inner: inner?.scrollTop ?? 0, windowY: window.scrollY };
+  });
+  expect(Math.max(deepScroll.inner, deepScroll.windowY)).toBeGreaterThan(0);
   await topics.click();
   await expect(topics).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("#ci-panel-topics")).toContainText("What entered, persisted, or dropped");
+  await expect.poll(() => page.evaluate(() => {
+    const lenses = document.querySelector(".ci-lenses")?.getBoundingClientRect();
+    const workspace = document.querySelector(".ci-workspace")?.getBoundingClientRect();
+    return !!lenses && !!workspace && workspace.top >= lenses.bottom - 1;
+  })).toBe(true);
+  const afterReveal = await page.evaluate(() => ({
+    inner: document.querySelector<HTMLElement>(".fin-body")?.scrollTop ?? 0,
+    windowY: window.scrollY,
+  }));
+  expect(afterReveal.inner < deepScroll.inner || afterReveal.windowY < deepScroll.windowY).toBe(true);
   await expectNoDocumentOverflow(page);
 
   await page.screenshot({
@@ -241,30 +267,153 @@ test("literal transcript search and compare use the local revision-verified BFF"
   await expect(page.locator(".ci-ts-hero h3")).toBeVisible();
 
   const search = page.locator(".ci-ts-search");
+  await search.locator("input").fill("quantum bicycle");
+  await search.locator(".btn").click();
+  await expect(page.locator(".ci-ts-state.empty strong")).toHaveText("No exact matches");
+  await expect(page.locator(".ci-ts-state.empty p")).toHaveText("The selected events were checked for this literal phrase. No segment contains it; no expansion, paraphrase, or inferred relevance was used.");
+
   await search.locator("input").fill("data center");
   await search.locator(".btn").click();
   await expect(page.locator(".ci-ts-results .ci-ts-span")).toHaveCount(2);
   await expect(page.locator(".ci-ts-results mark").first()).toHaveText("Data center");
   await expect(page.locator(".ci-ts-hero")).toContainText("Find exact words across calls");
 
-  await page.locator(".ci-ts-results .ci-ts-span-actions button").first().click();
+  const settings = page.locator('button[aria-label="Settings"]');
+  const sourceButton = page.locator(".ci-ts-results .ci-ts-span-actions button").first();
+  await sourceButton.scrollIntoViewIfNeeded();
+  const scrollBeforeDrawer = await page.evaluate(() => ({
+    inner: document.querySelector<HTMLElement>(".fin-body")?.scrollTop ?? 0,
+    windowX: window.scrollX,
+    windowY: window.scrollY,
+  }));
+  await sourceButton.click();
+  const drawerRoot = page.locator(".fin-tx-modal-root");
   await expect(page.locator(".fin-tx-drawer")).toBeVisible();
   await expect(page.locator('.fin-tx-seg[data-segment="1"]')).toBeFocused();
+  expect(await drawerRoot.evaluate((element) => element.parentElement === document.body)).toBe(true);
+  expect(Number(await page.locator(".fin-tx-drawer").evaluate((element) => getComputedStyle(element).zIndex))).toBeGreaterThanOrEqual(241);
+  await expect(page.locator("body")).toHaveCSS("overflow", "hidden");
+  await expect(page.locator("html")).toHaveCSS("overflow", "hidden");
+  expect(await settings.count()).toBeGreaterThan(0);
+  expect(await settings.evaluateAll((buttons) => buttons.every((button) => !!button.closest("[inert]")))).toBe(true);
+  await settings.first().evaluate((button) => (button as HTMLElement).focus());
+  expect(await page.evaluate(() => !!document.activeElement?.closest(".fin-tx-drawer"))).toBe(true);
   await page.getByRole("button", { name: "Close transcript" }).click();
+  await expect(page.locator(".fin-tx-drawer")).toHaveCount(0);
+  await expect(sourceButton).toBeFocused();
+  expect(await settings.evaluateAll((buttons) => buttons.every((button) => !button.closest("[inert]")))).toBe(true);
+  await expect.poll(() => page.evaluate(() => ({
+    inner: document.querySelector<HTMLElement>(".fin-body")?.scrollTop ?? 0,
+    windowX: window.scrollX,
+    windowY: window.scrollY,
+  }))).toEqual(scrollBeforeDrawer);
 
   const receipt = page.locator(".ci-ts-results .ci-ts-span-actions button").nth(1);
+  await receipt.scrollIntoViewIfNeeded();
+  const scrollBeforeReceipt = await page.evaluate(() => ({
+    inner: document.querySelector<HTMLElement>(".fin-body")?.scrollTop ?? 0,
+    windowX: window.scrollX,
+    windowY: window.scrollY,
+  }));
   await receipt.click();
+  const receiptWrap = page.locator(".ci-ts-dialog-wrap");
+  const receiptClose = page.getByRole("button", { name: "Close source receipt" }).last();
   await expect(page.locator(".ci-ts-dialog")).toBeVisible();
+  await expect(receiptClose).toBeFocused();
   await expect(page.locator(".ci-ts-dialog code").nth(1)).toHaveText(/^[a-f0-9]{64}$/);
+  expect(await receiptWrap.evaluate((element) => element.parentElement === document.body)).toBe(true);
+  expect(Number(await receiptWrap.evaluate((element) => getComputedStyle(element).zIndex))).toBeGreaterThanOrEqual(260);
+  await expect(page.locator("body")).toHaveCSS("overflow", "hidden");
+  await expect(page.locator("html")).toHaveCSS("overflow", "hidden");
+
+  expect(await settings.count()).toBeGreaterThan(0);
+  expect(await settings.evaluateAll((buttons) => buttons.every((button) => !!button.closest("[inert]")))).toBe(true);
+  expect(await settings.first().evaluate((button) => {
+    const bounds = button.getBoundingClientRect();
+    const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+    return hit === button || button.contains(hit);
+  })).toBe(false);
+  await settings.first().evaluate((button) => (button as HTMLElement).focus());
+  expect(await page.evaluate(() => !!document.activeElement?.closest(".ci-ts-dialog"))).toBe(true);
+  await expect(page.locator(".acs-overlay.open")).toHaveCount(0);
+
   await page.keyboard.press("Escape");
   await expect(page.locator(".ci-ts-dialog")).toHaveCount(0);
   await expect(receipt).toBeFocused();
+  expect(await settings.evaluateAll((buttons) => buttons.every((button) => !button.closest("[inert]")))).toBe(true);
+  await expect.poll(() => page.evaluate(() => ({
+    inner: document.querySelector<HTMLElement>(".fin-body")?.scrollTop ?? 0,
+    windowX: window.scrollX,
+    windowY: window.scrollY,
+  }))).toEqual(scrollBeforeReceipt);
 
   await page.locator(".ci-ts-compare-controls > .btn").click();
   await expect(page.locator(".ci-ts-compare-grid")).toBeVisible();
   await expect(page.locator(".ci-ts-compare-col")).toHaveCount(2);
   await expectNoDocumentOverflow(page);
   await page.screenshot({ path: testInfo.outputPath(`transcript-search-compare-${testInfo.project.name}.png`), fullPage: false });
+});
+
+test("editing a transcript query invalidates an older in-flight result", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.endsWith("desktop"), "one desktop race contract is sufficient");
+  let releaseResponse!: () => void;
+  let markRequested!: () => void;
+  const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
+  const requestSeen = new Promise<void>((resolve) => { markRequested = resolve; });
+  await page.route("**/api/company-source-search/NVDA?**", async (route) => {
+    markRequested();
+    await responseGate;
+    await route.fulfill({
+      json: {
+        schema: "mastermind.company-source-search/v1",
+        state: "ready",
+        ticker: "NVDA",
+        query: "data center",
+        searched_event_ids: ["cie_d8488221fd8c710c53d6537d"],
+        match_count_by_event: { cie_d8488221fd8c710c53d6537d: 1 },
+        count_capped_event_ids: [],
+        truncated: false,
+        corpus_revision: "txroot-race-20260801",
+        spans: [{
+          span_id: `txs1_${"f".repeat(64)}`,
+          event_id: "cie_d8488221fd8c710c53d6537d",
+          transcript_id: "2026Q1",
+          ticker: "NVDA",
+          document_sha256: "c".repeat(64),
+          segment_index: 0,
+          start_byte: 0,
+          end_byte: 11,
+          segment_text_sha256: "d".repeat(64),
+          speaker: "Jensen Huang",
+          role: "Chief Executive Officer",
+          section: "prepared",
+          excerpt: "Data center demand remained broad.",
+          matched_text: "Data center",
+          receipt: {
+            revision_id: "txroot-race-20260801",
+            document_sha256: "c".repeat(64),
+            indexed_at: "2026-08-01T12:00:00Z",
+            source_label: "Committed Mastermind transcript archive",
+            source_url: "/data/tx/NVDA/2026Q1.json.gz",
+            verification: "verified",
+          },
+        }],
+      },
+    });
+  });
+
+  await openCompanyIntelligence(page);
+  await page.locator(".ci-lenses").getByRole("tab").nth(1).click();
+  const search = page.locator(".ci-ts-search");
+  await search.locator("input").fill("data center");
+  await search.locator(".btn").click();
+  await requestSeen;
+  await expect(search.locator(".btn")).toHaveText("Searching…");
+  await search.locator("input").fill("quantum bicycle");
+  releaseResponse();
+  await expect(search.locator(".btn")).toHaveText("Search exact phrase");
+  await expect(page.locator(".ci-ts-state")).toHaveCount(0);
+  await expect(page.locator(".ci-ts-results")).toHaveCount(0);
 });
 
 test("Analysis symbol URLs preserve valid market identifiers and refuse malformed ones", async ({ page }) => {
@@ -385,6 +534,11 @@ test("transcript search copy switches cleanly between English and Chinese", asyn
   await openCompanyIntelligence(page, "公司情报");
   await page.locator(".ci-lenses").getByRole("tab", { name: "电话会", exact: true }).click();
   await expect(page.locator(".ci-ts-hero h3")).toHaveText("在电话会中找到准确出处");
-  await expect(page.getByRole("button", { name: "搜索准确短语" })).toBeVisible();
+  const search = page.locator(".ci-ts-search");
+  await expect(search.getByRole("button", { name: "搜索准确短语" })).toBeVisible();
+  await search.locator("input").fill("quantum bicycle");
+  await search.getByRole("button", { name: "搜索准确短语" }).click();
+  await expect(page.locator(".ci-ts-state.empty strong")).toHaveText("未找到精确命中");
+  await expect(page.locator(".ci-ts-state.empty p")).toHaveText("已在选定事件中进行精确字面匹配；没有段落包含该短语。系统没有扩展、改写或推断关联内容。");
   await expectNoDocumentOverflow(page);
 });
