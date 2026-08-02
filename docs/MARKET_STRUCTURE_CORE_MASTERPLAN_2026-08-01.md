@@ -504,6 +504,18 @@ waves follow M1 ops discipline.
 > containment 67.6%, EM-band containment 93.3%). Memory: `level-hold-rates-no-edge`. R2.4b owns
 > the stronger nulls + intraday-containment variants + the INDEX grading lane (SPY/SPX/QQQ have
 > zero graded boards today — the card shows the labelled universe aggregate for them).
+>
+> **2026-08-02: R3.1 SHIPPED** (terminal #326): **options levels on the price chart** — the
+> registry indicator "Options Levels" (opt-in, default OFF) draws call/put walls, the gamma flip
+> (profile-crossing preferred), the abs-gamma strike (yields to a coinciding wall) and the
+> published EM band as price rails from `gex:`+`moves:`, with the legend row as the provenance
+> surface (`EOD {date} · signed estimate`, stale >3 sessions; the signed-estimate disclosure rides
+> ONLY when a wall/flip is drawn — EM-only partial publishes are Tier A). Discoverability law
+> respected: non-US / no-coverage / gated states annotate the row, never vanish. Pure derivation
+> in `terminal/lib/optionsLevels.ts` (19 tests). Ride-along fixes: the guest `mm.inds`
+> reload-clobber (anon clamp racing hydration — the one persist key missing the mount guard) and
+> the eye-toggle silent no-op for price-line-only overlays (slevels/pivots included).
+> **R3.2/R3.3 remain open** (ticker-page block, screener columns, watchlist regime dot).
 
 ### R0 — Wave 1: the Positioning panel *(terminal only, zero data-plane dependency)* — **THIS SESSION**
 
