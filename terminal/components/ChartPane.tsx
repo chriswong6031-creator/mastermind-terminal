@@ -79,6 +79,31 @@ export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onAc
   }, [patchSettings]);
 
   useEffect(() => { setAuto([]); }, [symbol, tf]);   // detection is timeframe-specific — reset on change
+
+  // ── Symbol swap (R2c) ───────────────────────────────────────────────────────────────────────
+  // The renderer survives a ticker change now (see lib/drawingOwnership), so the OUTGOING chart
+  // stays painted while the new bars load. Dim it for that stretch and let the new symbol snap
+  // in when it is really on screen — `mm:terminal-visual-ready` fires after two frames, so it
+  // means pixels, not "setData returned". A blank canvas for a second was the alternative.
+  const [swapping, setSwapping] = useState(false);
+  const swappedOnce = useRef(false);
+  useEffect(() => {
+    // The first paint has nothing to cross-fade from.
+    if (!swappedOnce.current) { swappedOnce.current = true; return; }
+    setSwapping(true);
+    const settle = (event: Event) => {
+      const painted = (event as CustomEvent<{ symbol?: string }>).detail?.symbol;
+      if (!painted || painted === symbol) setSwapping(false);
+    };
+    window.addEventListener("mm:terminal-visual-ready", settle);
+    // A symbol that never announces (a dead feed, a failed fetch) must not dim the chart forever.
+    const failsafe = window.setTimeout(() => setSwapping(false), 4_000);
+    return () => {
+      window.removeEventListener("mm:terminal-visual-ready", settle);
+      window.clearTimeout(failsafe);
+      setSwapping(false);
+    };
+  }, [symbol]);
   useEffect(() => { onDetectedDrawingCount?.(auto.length); }, [auto.length, onDetectedDrawingCount]);
   const merged = useMemo(() => {
     if (!drawingsVisible) return [];
@@ -109,7 +134,7 @@ export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onAc
       : row?.zh || row?.name || symbol;
 
   return (
-    <div className={`pane${isActive ? " on" : ""}`} onPointerDownCapture={() => { if (!isActive) onActivate(idx); }}>
+    <div className={`pane${isActive ? " on" : ""}${swapping ? " is-swapping" : ""}`} data-swapping={swapping ? "1" : undefined} onPointerDownCapture={() => { if (!isActive) onActivate(idx); }}>
       <div className="pane-hd">
         {chartSettings.showLogo && <AssetLogo className="pic" symbol={symbol} name={row?.zh || row?.name} market={marketLabel} color={row?.col} size={18} />}
         {chartSettings.showSymbolName && <b>{title}</b>}
@@ -119,7 +144,9 @@ export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onAc
       </div>
       {/* Authentication is a hard renderer boundary. Remounting tears down
           native pointer listeners, captures, pending creators, and inspector
-          drafts before a stale transaction can call the next owner's callback. */}
+          drafts before a stale transaction can call the next owner's callback.
+          The SYMBOL is deliberately not part of that identity — see
+          lib/drawingOwnership.ts and the swap state above. */}
       <ChartPanel
         symbol={symbol} companyName={displayName(row, lang)} chartType={chartType} indicators={inds} timeframe={tf}
         replayIdx={isActive ? replayIdx : null} onMeta={isActive ? onMeta : undefined}
@@ -137,7 +164,7 @@ export default function ChartPane({ idx, symbol, drawingOwnerKey, isActive, onAc
         chartSettings={panelSettings}
         onChartApi={setChartApi}
         extHours={extendedEligible && chartSettings.extHours}
-        key={drawingPanelInstanceKey(drawingOwnerKey, symbol)}
+        key={drawingPanelInstanceKey(drawingOwnerKey)}
         onAddAlert={isActive ? onAddAlert : undefined}
         onTableView={isActive ? onTableView : undefined}
         onObjectTree={isActive ? onObjectTree : undefined}

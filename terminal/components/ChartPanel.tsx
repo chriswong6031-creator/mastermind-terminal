@@ -6554,6 +6554,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // eslint-disable-next-line
   }, [symbol]);
 
+  // A symbol change no longer unmounts this renderer, so the teardown that used to end an
+  // in-flight drawing transaction never runs. End it here instead: a half-drawn trendline, an
+  // open media tool, or an inspector pointed at the previous ticker's drawing must not survive
+  // onto the next chart. Drawings themselves arrive as a prop and re-render on their own.
+  const symbolTransactionRef = useRef(symbol);
+  useEffect(() => {
+    if (symbolTransactionRef.current === symbol) return;
+    symbolTransactionRef.current = symbol;
+    cancelPendingDrawingRef.current?.();
+    cancelMediaToolRef.current?.(null);
+    clearDrawingSelectionRef.current?.();
+  }, [symbol]);
+
   // ────────────────────────────────────────────────────────────────────────────
   // EFFECT 5 — style [csNonce]. Re-read tokens; recolor chart + price + volume. NO createChart/removeSeries.
   // ────────────────────────────────────────────────────────────────────────────

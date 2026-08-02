@@ -1469,3 +1469,61 @@ test("account drawing loads fail closed and retry without issuing a destructive 
   await page.waitForTimeout(750);
   expect(putCount).toBe(0);
 });
+
+test("a symbol change keeps the renderer alive and never leaks the old symbol's drawings", async ({ page }) => {
+  test.skip(isPhone(page), "The dock is the tool source here; the phone path is its own spec.");
+  await openTerminal(page);
+
+  // Draw a trendline on NVDA.
+  const layer = page.locator(".pane.on .drawing-layer");
+  const lines = layer.locator('g[data-drawing-kind="trendline"]:not([data-id="_p"])');
+  await page.getByTestId("drawing-group-lines-main").click();
+  await dragDrawing(page, layer, { x: 0.28, y: 0.34 }, { x: 0.55, y: 0.52 });
+  await expect(lines).toHaveCount(1);
+
+  // Tag the live canvas. If a symbol change tore the renderer down — which is what used to
+  // happen, and what left the chart blank for about a second — this node would not come back.
+  await page.evaluate(() => {
+    (document.querySelector(".chart-wrap canvas") as HTMLCanvasElement & { __mmSurvivor?: number }).__mmSurvivor = 1;
+  });
+
+  // Hold the incoming symbol's bars so the swap window is observable — this IS the second the
+  // chart used to spend blank. Reduced motion removes the 160ms ramp, so the dim is a value to
+  // read rather than a moving target.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(/\/data\/AAPL\.(json|slice\.json)/, async (route) => { await held; await route.continue(); });
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("mm:embedded-symbol", { detail: { symbol: "AAPL" } })));
+
+  // Mid-swap: the OUTGOING chart is still on screen, dimmed and desaturated — not blank.
+  const pane = page.locator(".pane.on");
+  await expect(pane).toHaveAttribute("data-swapping", "1");
+  expect(await page.locator(".pane.on .chart-wrap").evaluate((el) => getComputedStyle(el).opacity)).toBe("0.45");
+  expect(await page.locator(".pane.on .chart-wrap").evaluate((el) => getComputedStyle(el).filter)).toContain("saturate");
+
+  release();
+  await expect.poll(() => page.locator(".pane.on .pane-hd b, .m-symbar").first().innerText()).toContain("AAPL");
+
+  // Same canvas node, so the chart was never torn down…
+  expect(await page.evaluate(() => Boolean(
+    (document.querySelector(".chart-wrap canvas") as HTMLCanvasElement & { __mmSurvivor?: number })?.__mmSurvivor,
+  ))).toBe(true);
+  // …and the swap settles rather than leaving the chart dimmed.
+  await expect(pane).not.toHaveAttribute("data-swapping", "1");
+  await expect.poll(() => page.locator(".pane.on .chart-wrap").evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+
+  // NVDA's trendline must not follow the symbol over.
+  await expect(lines).toHaveCount(0);
+
+  // …and the same renderer carries the round trip back, still without a teardown. (The drawings
+  // themselves are re-fetched per symbol, which this suite stubs empty — their persistence is
+  // the store's contract, covered elsewhere.)
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("mm:embedded-symbol", { detail: { symbol: "NVDA" } })));
+  await expect.poll(() => page.locator(".pane.on .pane-hd b, .m-symbar").first().innerText()).toContain("NVDA");
+  await expect(pane).not.toHaveAttribute("data-swapping", "1");
+  expect(await page.evaluate(() => Boolean(
+    (document.querySelector(".chart-wrap canvas") as HTMLCanvasElement & { __mmSurvivor?: number })?.__mmSurvivor,
+  ))).toBe(true);
+});
