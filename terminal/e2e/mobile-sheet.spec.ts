@@ -3,11 +3,13 @@ import { isPhoneViewport } from "./phoneChrome";
 
 // Both tests exercise the shared MobileSheet through whichever surface the viewport ships: the
 // timeframe sheet behind the toolbar's edit pencil on tablet, and the R2 Drawings sheet behind
-// the roller strip's pencil on the phone (the phone has no toolbar row any more).
+// the roller strip's pencil on the phone (the phone has no toolbar row any more). The two ride
+// different drag mechanics — the Drawings sheet opts into `detents`, which moves HEIGHT, while
+// the timeframe sheet keeps the dismiss-only transform drag — so the swipe test asserts per-entry.
 function sheetEntry(page: Page) {
   return isPhoneViewport(page)
-    ? { trigger: page.getByTestId("roller-draw"), name: "Drawings" }
-    : { trigger: page.locator(".tfbtn-edit"), name: "Timeframe" };
+    ? { trigger: page.getByTestId("roller-draw"), name: "Drawings", detented: true }
+    : { trigger: page.locator(".tfbtn-edit"), name: "Timeframe", detented: false };
 }
 
 async function openTerminal(page: Page) {
@@ -64,12 +66,21 @@ test("reduced-motion swipe cancellation resets cleanly and dismissal is immediat
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openTerminal(page);
 
-  const { trigger, name } = sheetEntry(page);
+  const { trigger, name, detented } = sheetEntry(page);
   await trigger.focus();
   await trigger.click();
   const sheet = page.getByRole("dialog", { name });
-  const handle = sheet.locator("[data-handle='1']");
+  // The grabber specifically — a detented sheet also marks its header as a drag handle.
+  const handle = sheet.locator(".msheet-handle-wrap");
   await expect(sheet).toBeVisible();
+
+  // What a live 54px pull is expected to have moved, in the sheet's own mechanic.
+  const restHeight = await sheet.evaluate((element) => element.getBoundingClientRect().height);
+  const moved = () => (detented
+    ? sheet.evaluate((element) => `${Math.round(element.getBoundingClientRect().height)}px`)
+    : sheet.evaluate((element) => element.style.transform));
+  const atRest = detented ? `${Math.round(restHeight)}px` : "";
+  const pulled = detented ? `${Math.round(restHeight) - 54}px` : "translateY(54px)";
 
   const box = await handle.boundingBox();
   expect(box).not.toBeNull();
@@ -86,11 +97,10 @@ test("reduced-motion swipe cancellation resets cleanly and dismissal is immediat
 
   await handle.dispatchEvent("pointerdown", pointer);
   await sheet.dispatchEvent("pointermove", { ...pointer, clientY: startY + 54 });
-  await expect.poll(() => sheet.evaluate((element) => element.style.transform))
-    .toBe("translateY(54px)");
+  await expect.poll(moved).toBe(pulled);
   await sheet.dispatchEvent("pointercancel", { ...pointer, clientY: startY + 54, buttons: 0 });
   await expect(sheet).toBeVisible();
-  await expect.poll(() => sheet.evaluate((element) => element.style.transform)).toBe("");
+  await expect.poll(moved).toBe(atRest);
 
   await handle.dispatchEvent("pointerdown", { ...pointer, pointerId: 8 });
   await sheet.dispatchEvent("pointermove", { ...pointer, pointerId: 8, clientY: startY + 120 });

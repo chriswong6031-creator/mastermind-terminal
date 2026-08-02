@@ -136,8 +136,8 @@ test("phone: the pencil opens the TV Drawings sheet and a tile arms the tool", a
   await expect(sheet.locator(".mdraw-cat")).toHaveCount(5);
   expect(await sheet.locator(".mdraw-grid").evaluate((el) =>
     getComputedStyle(el).gridTemplateColumns.split(" ").length)).toBe(3);
-  const sheetHeight = await sheet.evaluate((el) => el.getBoundingClientRect().height / window.innerHeight);
-  expect(sheetHeight).toBeGreaterThan(0.8);
+  // Every presentation starts back at the 62% detent (geometry is its own test below).
+  await expect(sheet).toHaveAttribute("data-detent", "initial");
 
   // Content is OUR registry, mapped into TV's taxonomy — no invented tiles, nothing dropped.
   const lines = DRAWING_TOOL_REGISTRY.find((group) => group.id === "lines")!.tools.map((tool) => tool.id);
@@ -169,6 +169,54 @@ test("phone: the pencil opens the TV Drawings sheet and a tile arms the tool", a
   await expect(sheet.locator(".mdraw-tile")).toHaveCount(1);
   await page.getByTestId("drawings-sheet-close").click();
   await expect(sheet).toBeHidden();
+});
+
+test("phone: the Drawings sheet opens at 62% over a live chart and drags to full", async ({ page }) => {
+  test.skip(!phone(page), "The Drawings sheet is the phone replacement for the dock.");
+  await openTerminal(page);
+
+  const SHEET = ".msheet.mdraw-sheet";
+  await page.getByTestId("roller-draw").click();
+  const sheet = page.locator(SHEET);
+  await expect(sheet).toBeVisible();
+
+  // TV presents Drawings at ~62% of the screen with the chart still drawing above it (IMG_2366);
+  // apps/ios ships the same [.fraction(0.62), .large] pair.
+  const ratio = () => sheet.evaluate((el) => el.getBoundingClientRect().height / window.innerHeight);
+  await expect(sheet).toHaveAttribute("data-detent", "initial");
+  expect(await ratio()).toBeCloseTo(0.62, 1);
+  await expect(page.locator(".chart-wrap canvas").first()).toBeVisible();
+
+  // The tile grid scrolls INSIDE the sheet at both detents — the sheet never grows to fit it.
+  await page.getByTestId("drawings-cat-tools").click();
+  const gridScrolls = () => sheet.locator(".msheet-body")
+    .evaluate((el) => el.scrollHeight > el.clientHeight + 1);
+  expect(await gridScrolls()).toBe(true);
+
+  // Both grips drag, and they keep working once the grid is scrolled — which it now is, because
+  // focusing a category pill scrolls the body. A drag off the plain background is refused there,
+  // exactly as it is on a scrolled hub.
+  const GRABBER = `${SHEET} .msheet-handle-wrap`;
+  const HEADER = `${SHEET} .msheet-title`;
+  const drag = async (grip: string, dy: number) => {
+    const box = (await page.locator(grip).boundingBox())!;
+    await pointerDrag(page, grip, { x: box.x + box.width / 2, y: box.y + 2 }, dy);
+  };
+
+  // Grabber up expands to full…
+  await drag(GRABBER, -260);
+  await expect(sheet).toHaveAttribute("data-detent", "full");
+  expect(await ratio()).toBeGreaterThan(0.9);
+  expect(await gridScrolls()).toBe(true);
+
+  // …header back down returns to 62%…
+  await drag(HEADER, 240);
+  await expect(sheet).toHaveAttribute("data-detent", "initial");
+  expect(await ratio()).toBeCloseTo(0.62, 1);
+
+  // …and dragging down again from 62% dismisses.
+  await drag(GRABBER, 200);
+  await expect(sheet).toHaveCount(0);
 });
 
 test("phone: ••• opens the analysis hub at 60% and drags to full", async ({ page }) => {
