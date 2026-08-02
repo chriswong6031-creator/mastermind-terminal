@@ -8,6 +8,12 @@ import { MARKET_TKEY } from "@/lib/markets";
 import { getJSON, invalidate } from "@/lib/dataCache";
 import { trackSearch } from "@/lib/searchTrack";
 import { verdictIsStale } from "@/lib/signalVerdict";
+// R3.2 msc_* positioning columns: one cross-root index fetch joined by symbol (the
+// heatmap's flowMap pattern). Entitlement 403 / outage → null → the columns never
+// render and the table is exactly what it was (degrade-to-absent, "do not fake it").
+import { flowGet } from "@/lib/flowClientCache";
+import { parseGlanceIndex, REGIME_COLORS, REGIME_RANK, type GexRegime, type GlanceIndex } from "@/lib/mscGlance";
+import { makeGexT } from "@/components/gexdesk/gexStrings";
 import AssetLogo from "@/components/AssetLogo";
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -50,6 +56,9 @@ type Row = {
   offHi: number | null;   // % away from the 52-week high (negative = below)
   offLo: number | null;   // % above the 52-week low
   mktId: MarketId;        // marketOf(sym, row), precomputed for the market select
+  // R3.2 msc_* positioning columns — joined from gexstate_index AFTER load. mscRank is the
+  // sortable scalar (REGIME_RANK — structural risk PIN→CASCADE); mscRegime the display word.
+  mscRank?: number | null; mscRegime?: GexRegime | null; mscNetGex?: number | null; mscFlip?: number | null;
 };
 
 type Sig = "any" | "buy" | "sell" | "tracked";
@@ -77,12 +86,13 @@ const DEFAULT_FILTERS: FilterState = {
 
 type SortKey =
   | "sym" | "last" | "chg" | "dv" | "mcap" | "offHi" | "gics"
-  | "verdict" | "regimeBull" | "wr" | "pf" | "cagr";
+  | "verdict" | "regimeBull" | "wr" | "pf" | "cagr"
+  | "mscRank" | "mscNetGex" | "mscFlip";
 
 // Column sets per view. The signal columns exist for the Oracle-tracked names only, so they
 // are shown ONLY while a signal-scoped filter is on — that is what keeps 5-of-9 columns from
 // rendering "—" for 99% of the universe.
-const U_KEYS: SortKey[] = ["sym", "last", "chg", "dv", "mcap", "offHi", "gics", "verdict"];
+const U_KEYS: SortKey[] = ["sym", "last", "chg", "dv", "mcap", "offHi", "gics", "mscRank", "mscNetGex", "mscFlip", "verdict"];
 const S_KEYS: SortKey[] = ["sym", "last", "chg", "verdict", "regimeBull", "wr", "pf", "cagr", "dv"];
 const DEF_SORT_U: { k: SortKey; dir: 1 | -1 } = { k: "dv", dir: -1 };   // defensible over the whole universe
 const DEF_SORT_S: { k: SortKey; dir: 1 | -1 } = { k: "cagr", dir: -1 }; // every visible row has it here
@@ -325,6 +335,25 @@ export default function ScreenerView({ email }: { email: string }) {
     return () => { alive = false; };
   }, [reloadN]);
 
+  // R3.2: one cross-root positioning fetch per mount (EOD data — no polling).
+  const [glance, setGlance] = useState<GlanceIndex | null>(null);
+  const gexT = useMemo(() => makeGexT(lang), [lang]);
+  useEffect(() => {
+    let alive = true;
+    flowGet("gexstate_index").then((d) => { if (alive) setGlance(parseGlanceIndex(d)); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  // Join by symbol (heatmap flowMap pattern) — rows without coverage keep null msc fields
+  // (comparator sorts nulls last); no index at all leaves `rows` untouched.
+  const rowsJoined = useMemo(() => {
+    if (!glance) return rows;
+    return rows.map((r) => {
+      const g = glance.rows.get(r.sym);
+      return g ? { ...r, mscRank: REGIME_RANK[g.regime], mscRegime: g.regime, mscNetGex: g.netGexBn, mscFlip: g.distToFlipPct } : r;
+    });
+  }, [rows, glance]);
+
   const retry = useCallback(() => {
     invalidate("/data/manifest.json");
     setErr(false);
@@ -378,7 +407,7 @@ export default function ScreenerView({ email }: { email: string }) {
     let hidden = 0;
     const from = new Set<MarketId>();
 
-    const base = rows.filter((r) => {
+    const base = rowsJoined.filter((r) => {
       if (!f.unpriced && r.last == null) return false;
       if (explicitMkt && r.mktId !== f.market) return false;
       if (f.asset !== "all" && r.sec !== f.asset) return false;
@@ -427,7 +456,7 @@ export default function ScreenerView({ email }: { email: string }) {
     });
 
     return { view: sorted, nBuy: b, nSell: s, hiddenN: hidden, hiddenFrom: Array.from(from) };
-  }, [rows, f, search, effSort, prefs, prefsReady, showAllMarkets]);
+  }, [rowsJoined, f, search, effSort, prefs, prefsReady, showAllMarkets]);
 
   // ── virtualization window ──────────────────────────────────────────────
   const rowH = density === "k" ? ROW_H_COMPACT : ROW_H_COMFORT;
@@ -517,6 +546,13 @@ export default function ScreenerView({ email }: { email: string }) {
       { k: "mcap", label: t("colMcap"), w: "76px" },
       { k: "offHi", label: t("colOffHigh"), w: "66px" },
       { k: "gics", label: t("colSector"), w: "110px" },
+      // R3.2 msc_* columns exist only while the positioning index is loaded — the thead
+      // and the tbody share this ONE condition so the positional cells can't misalign.
+      ...(glance ? [
+        { k: "mscRank" as SortKey, label: t("colMscRegime"), w: "78px" },
+        { k: "mscNetGex" as SortKey, label: t("colMscNetGex"), w: "70px" },
+        { k: "mscFlip" as SortKey, label: t("colMscFlip"), w: "64px" },
+      ] : []),
       { k: "verdict", label: t("signalCol"), w: "66px" },
     ];
 
@@ -887,6 +923,16 @@ export default function ScreenerView({ email }: { email: string }) {
                       {/* position, not day direction — never up/down coloured */}
                       <td>{r.offHi == null ? "—" : `${r.offHi > 0 ? "+" : ""}${r.offHi.toFixed(1)}%`}</td>
                       <td className="scr2-sec">{r.gics ? gicsLabel(r.gics) : "—"}</td>
+                      {glance && (
+                        <>
+                          {/* γ regime — the desk's word + colour (one table, lib/mscGlance) */}
+                          <td>{r.mscRegime ? <span style={{ color: REGIME_COLORS[r.mscRegime] }}>{gexT(`regime${r.mscRegime}`) || r.mscRegime}</span> : "—"}</td>
+                          {/* net dealer gamma — polarity tone (the desk's POSITIVE/NEGATIVE pairing) */}
+                          <td className={r.mscNetGex != null ? (r.mscNetGex >= 0 ? "up" : "down") : ""}>{r.mscNetGex != null ? `${r.mscNetGex >= 0 ? "+" : ""}${r.mscNetGex.toFixed(1)}B` : "—"}</td>
+                          {/* distance to flip — position, not day direction (offHi precedent) */}
+                          <td>{r.mscFlip != null ? `${r.mscFlip > 0 ? "+" : ""}${r.mscFlip.toFixed(1)}%` : "—"}</td>
+                        </>
+                      )}
                       {sigCell}
                     </>
                   )}

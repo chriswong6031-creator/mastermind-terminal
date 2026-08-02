@@ -34,6 +34,9 @@ import type { Lang } from "@/lib/i18n";
 import type { GexPayload } from "./GexDeskView";
 import { RingGauge } from "@/components/ui/RingGauge";
 import { Tip } from "@/components/ui/Tip";
+// R3.2: the regime colour table lives in lib/mscGlance.ts so the desk and every
+// glance surface (screener columns, watchlist dot, ticker block) read ONE table.
+import { REGIME_COLORS } from "@/lib/mscGlance";
 
 // ─── Schema (gexstate/v1) ────────────────────────────────────────────────────
 
@@ -92,15 +95,7 @@ export interface GexStatePayload {
  */
 const FLIP_VIOLET = "var(--cat-2, var(--ai))";
 
-const REGIME_COLORS: Record<string, string> = {
-  PIN:        "var(--up)",
-  DRIFT:      "var(--brand-2)",
-  RANGE:      "var(--brand-2)",
-  TRANSITION: "var(--signal)",
-  TREND:      "var(--down)",
-  CASCADE:    "var(--down)",
-  UNKNOWN:    "var(--muted)",
-};
+// (regime colours: see the REGIME_COLORS import at the top — one table for every surface)
 
 // ─── Derived metrics ──────────────────────────────────────────────────────────
 

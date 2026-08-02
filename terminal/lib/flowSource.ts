@@ -33,6 +33,7 @@ const TCTX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "tctx_fixtu
 const OICONF_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "oiconf_fixture.json");
 const CHAINHEAT_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "chain_heat_fixture.json");
 const GEXSTATE_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gexstate_fixture.json");
+const GEXSTATE_INDEX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "gexstate_index_fixture.json");
 const MATRIX_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "matrix_fixture.json");
 const MANIFEST_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "manifest.json");
 const PROPHET_FIXTURE_FILE = path.join(process.cwd(), "public", "data", "prophet_fixture.json");
@@ -119,6 +120,10 @@ export function isValidF(f: string): boolean {
   }
   if (f.startsWith("tctx:")) return isValidRoot(f.slice(5));
   if (f.startsWith("gexstate:")) return isValidRoot(f.slice(9));
+  // R3.2/R3.3: the cross-root positioning aggregate (screener columns, watchlist dot,
+  // ticker block). `_index` is NOT a root (underscore), so it gets its own literal f —
+  // same reasoning as grades_universe. Disjoint from `gexstate:` (char 9 is `_` vs `:`).
+  if (f === "gexstate_index") return true;
   if (f.startsWith("matrix:")) return isValidRoot(f.slice(7));
   // Surface replay store: surface_idx:{ROOT} (frame index) + surface:{ROOT}:{STAMP} (one frame).
   if (f.startsWith("surface_idx:")) return isValidRoot(f.slice(12));
@@ -190,6 +195,7 @@ export function backendPath(f: string): string {
   if (f.startsWith("tctx:")) return `/api/hub/tctx/${f.slice(5)}`;
   if (f === "chainheat") return "/api/flow/chainheat";
   if (f.startsWith("gexstate:")) return `/api/hub/gexstate/${f.slice(9)}`;
+  if (f === "gexstate_index") return "/api/hub/gexstate/_index";
   if (f.startsWith("matrix:")) return `/api/hub/matrix/${f.slice(7)}`;
   // Surface store: /api/flow/surface/{ROOT}/idx  and  /api/flow/surface/{ROOT}/{STAMP}
   // Dated variants first — the longer prefixes are disjoint from the today-paths, but
@@ -257,6 +263,7 @@ export function r2Key(f: string): string {
   if (f.startsWith("tctx:")) return `options_hub/tickers_ctx/${f.slice(5)}.json`;
   if (f === "chainheat") return "live_flow/chain_heat_current.json";
   if (f.startsWith("gexstate:")) return `options_structure/gex_state/${f.slice(9)}.json`;
+  if (f === "gexstate_index") return "options_structure/gex_state/_index.json";
   if (f.startsWith("matrix:")) return `options_structure/matrix/${f.slice(7)}.json`;
   // Surface store on R2: live_flow/surface/{ROOT}/idx.json + live_flow/surface/{ROOT}/{STAMP}.json
   // plus the date-keyed copies the poller writes beside them (macro build_flow_surface.py):
@@ -614,6 +621,15 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
       }
       const all = parsed as Record<string, Record<string, unknown>>;
       return all[root] ?? {};
+    } catch { return {}; }
+  }
+  // R3.2/R3.3: the cross-root aggregate. Dev serves its own fixture file (index-shaped —
+  // schema/asof/n_roots/rows) so screener columns + watchlist dots exercise the real
+  // parse path; a missing file returns {} = prod's honest degrade-to-absent.
+  if (f === "gexstate_index") {
+    try {
+      const raw = await fs.readFile(GEXSTATE_INDEX_FIXTURE_FILE, "utf8");
+      return JSON.parse(raw) as Record<string, unknown>;
     } catch { return {}; }
   }
   // Expiry matrix, keyed by root. In production the store exists only for some roots and

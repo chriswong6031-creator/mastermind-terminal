@@ -19,6 +19,15 @@ import ChartPane from "@/components/ChartPane";
 import ChartConductor from "@/components/ChartConductor";
 import { intradayCapable } from "@/components/ChartPanel";
 import { classify } from "@/lib/intradaySources";
+import { isMacroSymbol } from "@/lib/macroSymbols";
+import { flowGet } from "@/lib/flowClientCache";
+// R3.2 glance layer: the rail block's per-root gexstate read. Entitlement-gated at
+// /api/flow — a 403 nulls out and the rail renders exactly as before (free UX unchanged).
+// NOTE (R3.3 deferred): the watchlist regime dot was built and then pulled — its index
+// payload commits a new span into every row at once, and that one commit landing inside
+// a phone double-tap window eats the pane-maximize gesture (mobile-chart-chrome e2e,
+// cold-reproducible). A dot needs a per-row, jank-free paint path before it ships.
+import { parseGlanceState } from "@/lib/mscGlance";
 import { DEFAULT_START_TF, TF_CANONICAL_ORDER, readStartTf, resolveStartTf } from "@/lib/startTf";
 import { useMarketPrefs } from "@/lib/useMarketPrefs";
 import { FIN_PAGES, type FinPage } from "@/components/fin/MegaPane";
@@ -476,6 +485,8 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const [detectCmd, setDetectCmd] = useState<DetectCmd>(null);
   const [detectOpen, setDetectOpen] = useState(false);
   const [intel, setIntel] = useState<any>(null);
+  // R3.2: the ticker page's dealer-positioning block (raw gexstate:{ROOT}; StockAnalysis parses)
+  const [railGex, setRailGex] = useState<unknown>(null);
   const [layouts, setLayouts] = useState<any[]>([]); const [layoutOpen, setLayoutOpen] = useState(false); const [layoutName, setLayoutName] = useState("");
   const [livePx, setLivePx] = useState<number | null>(null);
   // symbol-keyed live top-of-book — ONE source for the header AND every watchlist row (via a single
@@ -1163,6 +1174,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   useEffect(() => {
     let alive = true;
     setIntel(null); setLivePx(null); setSlice(null); setFund(null); setOpts(null); setBars([]); setFundLoading(true);
+    setRailGex(null);
     // immediate: chart-shared OHLC and 6KB slice (signal verdict for the rail badge)
     getJSON(`/data/${active}.slice.json`).then((d) => { if (alive) setSlice(d); });
     getBars(active).then((b) => { if (alive) setBars(b); }).catch(() => {});
@@ -1176,6 +1188,10 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
         getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {}).finally(() => { if (alive) setFundLoading(false); });
         getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
+        // R3.2: positioning block data — US options names only; 403/absence nulls out silently
+        if (classify(active) === "us" && !isMacroSymbol(active)) {
+          flowGet(`gexstate:${active.toUpperCase()}`).then((d) => { if (alive) setRailGex(d); }).catch(() => {});
+        }
       }, { timeout: 2000 });
       cancelDeferred = () => cancelIdleCallback(id);
     } else {
@@ -1184,6 +1200,9 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
         getJSON(`/data/${active}.intel.json`).then((d) => { if (alive) setIntel(d); });
         getFund(active).then((d) => { if (alive) setFund(d); }).catch(() => {}).finally(() => { if (alive) setFundLoading(false); });
         getOpts(active).then((d) => { if (alive) setOpts(d); }).catch(() => {});
+        if (classify(active) === "us" && !isMacroSymbol(active)) {
+          flowGet(`gexstate:${active.toUpperCase()}`).then((d) => { if (alive) setRailGex(d); }).catch(() => {});
+        }
       }, 0);
       cancelDeferred = () => clearTimeout(id);
     }
@@ -3254,7 +3273,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
               </div>
               {/* Seasonality is injected via beforeIv so it renders BETWEEN the Analyst gauge and Implied
                   Volatility (order: analysis → Seasonality → IV) rather than after the whole card. */}
-              <StockAnalysis intel={intel} row={m} fund={fund} opts={opts} bars={bars} onOpenPane={(p) => setPaneOpen(p)} onOpenSignals={() => setSignalsOpen(true)}
+              <StockAnalysis intel={intel} row={m} fund={fund} opts={opts} bars={bars} glance={parseGlanceState(railGex, active)} onOpenPane={(p) => setPaneOpen(p)} onOpenSignals={() => setSignalsOpen(true)}
                 beforeIv={<div style={{ padding: 12 }}><SeasonalityCard symbol={active} onOpenPane={() => setPaneOpen("seasonals")} /></div>} />
               {/* ── bottom button group (after Seasonality): full analysis + Ask AI ── */}
               <div className="sa-btn-group">
