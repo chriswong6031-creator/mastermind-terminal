@@ -29,6 +29,8 @@ import { makeVolT } from "./volStrings";
 import type { VolPayload } from "./volTypes";
 import { ProvenanceLine, fmtPct, fmtRank } from "./volShared";
 import { VolHistoryPanel } from "./VolHistoryPanel";
+import { VolVrpPanel } from "./VolVrpPanel";
+import type { AggTrendPayload } from "@/lib/aggTrend";
 import { VolTermPanel } from "./VolTermPanel";
 import { VolSkewPanel } from "./VolSkewPanel";
 
@@ -64,6 +66,9 @@ export function VolView() {
   const [root, setRoot] = useState(DEFAULT_ROOT);
   const [inputVal, setInputVal] = useState(DEFAULT_ROOT);
   const [payload, setPayload] = useState<VolPayload | null>(null);
+  // `agg:{ROOT}` — the aggregate-trend store, fetched non-gating for the VRP
+  // regime band. Optional: its absence hides one panel, never the tab.
+  const [agg, setAgg] = useState<AggTrendPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const reqRef = useRef(0);
@@ -100,6 +105,23 @@ export function VolView() {
       const ok = typeof rec.root === "string" && rec.root.toUpperCase() === root;
       setPayload(ok ? rec : null);
       setLoading(false);
+
+      // VRP regime context, after first paint (the series is ~250KB for SPY).
+      void (async () => {
+        const a = (await flowGet(`agg:${root}`).catch(() => null)) as
+          | (AggTrendPayload & { root?: string })
+          | Record<string, unknown>
+          | null;
+        if (reqRef.current !== req) return;
+        const inner = (a && typeof a === "object" && !("series" in a) && (a as Record<string, unknown>)[root]
+          ? (a as Record<string, unknown>)[root]
+          : a) as (AggTrendPayload & { root?: string }) | null;
+        const okA =
+          inner != null &&
+          Array.isArray(inner.series) &&
+          (typeof inner.root !== "string" || inner.root.toUpperCase() === root);
+        setAgg(okA ? inner : null);
+      })();
     })();
   }, [root]);
 
@@ -110,6 +132,7 @@ export function VolView() {
       setLoading(true);
       setError(false);
       setPayload(null);
+      setAgg(null);
       setRoot(next);
     }
   }, [inputVal, root]);
@@ -254,6 +277,9 @@ export function VolView() {
               iv52wLo={lo52}
               lang={lang}
             />
+
+            {/* ═══ Panel B2 — VRP regime (R2.3) ═══════════════════════════ */}
+            <VolVrpPanel vrp={payload.vrp} agg={agg} lang={lang} />
 
             {/* ═══ Panel C — term structure ═══════════════════════════════ */}
             <VolTermPanel term={payload.term} lang={lang} />

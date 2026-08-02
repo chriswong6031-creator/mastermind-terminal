@@ -89,6 +89,23 @@ export function VolTermPanel({
 
   const markers = pts.filter((p) => p.dte <= MARKER_MAX_DTE);
 
+  // Slope chips (R2.3): the two segments a desk actually quotes — front→~30d and
+  // ~30d→~90d, in vol points. Suppressed when the curve lacks the anchor tenors.
+  const slopes = useMemo(() => {
+    if (pts.length < 2) return [] as { key: "termSlopeFront" | "termSlopeBack"; v: number }[];
+    const nearest = (target: number) =>
+      pts.reduce((a, b) => (Math.abs(b.dte - target) < Math.abs(a.dte - target) ? b : a));
+    const front = pts[0];
+    const d30 = nearest(30);
+    const d90 = nearest(90);
+    const out: { key: "termSlopeFront" | "termSlopeBack"; v: number }[] = [];
+    if (d30 !== front && Math.abs(d30.dte - 30) <= 15) out.push({ key: "termSlopeFront", v: d30.v - front.v });
+    if (d90 !== d30 && Math.abs(d90.dte - 90) <= 45) out.push({ key: "termSlopeBack", v: d90.v - d30.v });
+    return out;
+  }, [pts]);
+
+  const fmtSlope = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(1)}`;
+
   return (
     <section className="fin-card" style={{ minWidth: 0 }}>
       <div className="fin-card-h">
@@ -103,6 +120,11 @@ export function VolTermPanel({
             {t(structure.key)}
           </span>
         )}
+        {slopes.map((s) => (
+          <span key={s.key} style={{ ...NEUTRAL_CHIP, fontVariantNumeric: "tabular-nums" }}>
+            {t(s.key).replace("{v}", fmtSlope(s.v))}
+          </span>
+        ))}
       </div>
       <div ref={boxRef} style={{ width: "100%", minWidth: 0 }}>
         {!drawable ? (
