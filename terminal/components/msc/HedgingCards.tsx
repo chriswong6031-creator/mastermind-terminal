@@ -396,7 +396,10 @@ export function DailyHedgingCard({
   const d = useMemo(() => dailyHedging(agg, emPct1sig), [agg, emPct1sig]);
 
   const legs: { key: MscKey; v: number | null; note: string }[] = [
-    { key: "dhSpot", v: d.fromSpotMn, note: d.emPct == null ? "" : `±${d.emPct.toFixed(2)}%` },
+    // "+", not "±": dailyHedging computes the leg for a one-sigma move UP — a down
+    // move mirrors the gamma leg's sign, and a ± label would claim a symmetry the
+    // number does not have (adversarial-audit finding, deferred then fixed).
+    { key: "dhSpot", v: d.fromSpotMn, note: d.emPct == null ? "" : `+${d.emPct.toFixed(2)}%` },
     {
       key: "dhVol",
       v: d.fromVolMn,

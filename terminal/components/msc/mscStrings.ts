@@ -49,6 +49,13 @@ const MSC_LEX = {
     "No profile published for this ladder yet — it ships with the next nightly build; the flip scalar above already uses the same grid method.",
     "该梯图暂未发布敞口曲线——将随下一次夜间构建发布；上方翻转位标量已采用相同网格方法。",
   ],
+  // Measured live on the first production profile (SPY 2026-07-31): curve −1.4bn at
+  // spot vs headline +5.6bn. Near the flip, two honest estimators of one book can
+  // disagree on sign — the card says so rather than leaving a silent contradiction.
+  pfSignSplit: [
+    "The re-priced curve and the feed-greek headline disagree on today's sign — the book is near its flip and the sign is not resolved. See Sign robustness.",
+    "重定价曲线与源数据希腊值的合计在当日符号上不一致——持仓临近翻转位，符号尚无定论。参见符号稳健性。",
+  ],
 
   // ── Ranked gamma strikes (SpotGamma Large Gamma Strikes / MenthorQ GEX 1..n) ─
   rkTitle: ["Largest gamma strikes", "伽马最大的行权价"],
@@ -306,8 +313,8 @@ const MSC_LEX = {
   dhAbsent: ["not published", "未发布"],
   dhLegend: ["Positive = dealers buy · negative = dealers sell", "正值＝做市商买入 · 负值＝做市商卖出"],
   dhDisclose: [
-    "The spot leg uses this ticker's own one-sigma expected move rather than a nominal 1%, so the figure reads as a typical day. Legs are independent first-order estimates and do not compound; a greek we do not publish is shown absent, never counted as zero.",
-    "标的分项采用该品种自身的 1σ 预期波动而非名义 1%，因此该数值代表典型交易日。各分项为彼此独立的一阶估计，不做复合；未发布的希腊值显示为缺失，绝不按零计入。",
+    "The spot leg uses this ticker's own one-sigma expected move UP rather than a nominal 1% — a down move mirrors that leg's sign. Legs are independent first-order estimates and do not compound; a greek we do not publish is shown absent and its leg is left out of the total (so the total covers only the legs shown).",
+    "标的分项采用该品种自身向上 1σ 的预期波动而非名义 1%——向下波动时该分项符号相反。各分项为彼此独立的一阶估计，不做复合；未发布的希腊值显示为缺失，其分项不计入合计（合计仅涵盖所示分项）。",
   ],
   emArchived: [
     "The expected-move band is a current-session read and did not travel with the archived ladder — distances are shown in percent only.",
