@@ -2192,6 +2192,11 @@ body.col-resizing .wl-rz::after{background:var(--brand)}
 @keyframes msheet-up{from{transform:translateY(100%)}to{transform:translateY(0)}}
 @keyframes msheet-scrim-in{from{opacity:0}to{opacity:1}}
 .msheet-scrim{position:fixed;inset:0;background:var(--pop-scrim);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:220;animation:msheet-scrim-in 200ms ease forwards}
+/* Detent presentations keep the page live above the sheet (TV IMG_2366: crisp chart over the 62%
+   Drawings sheet) — the scrim element stays for tap-outside dismiss, but the dim waits for the
+   full detent. Background-color only: backdrop-filter cannot fade, it would pop at first paint. */
+.msheet-scrim.is-detent{background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;animation:none;transition:background-color 200ms ease}
+.msheet-scrim.is-detent.at-full{background:var(--pop-scrim)}
 .msheet{position:fixed;left:0;right:0;bottom:0;border-radius:var(--pop-r) var(--pop-r) 0 0;background:var(--pop-bg-modal);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border-top:1px solid var(--pop-edge);box-shadow:var(--pop-shadow);padding-bottom:env(safe-area-inset-bottom);max-height:min(72dvh,620px);z-index:221;animation:msheet-up 260ms cubic-bezier(.32,.72,.24,1) forwards;display:flex;flex-direction:column}
 .msheet-handle-wrap{padding:10px 0 4px;display:flex;justify-content:center;flex:none;touch-action:none}
 .msheet-handle{width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,.22)}
@@ -3816,7 +3821,10 @@ html[data-shell="app"] .mm-brandbug{
 .mdraw-empty{padding:26px 16px;color:var(--muted);font:500 13px/1.4 var(--font-ui);text-align:center}
 
 /* ── Analysis hub (native spec §3.5) — 60% detent that DRAGS to full ──────────── */
-.mhub-scrim{position:fixed;inset:0;z-index:220;background:var(--pop-scrim);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);animation:msheet-scrim-in 200ms ease forwards}
+/* The hub is always detented, so its scrim follows the .msheet-scrim.is-detent law: transparent
+   over a live page at 60%, dimming only at full. */
+.mhub-scrim{position:fixed;inset:0;z-index:220;background:transparent;transition:background-color 200ms ease}
+.mhub-scrim.at-full{background:var(--pop-scrim)}
 .mhub{
   position:fixed;left:0;right:0;bottom:0;z-index:221;display:flex;flex-direction:column;box-sizing:border-box;
   border-top:1px solid var(--pop-edge);border-radius:var(--pop-r) var(--pop-r) 0 0;
@@ -3852,5 +3860,5 @@ html[data-shell="app"] .mm-brandbug{
 .mhub-ghost-tag{position:absolute;left:0;right:0;bottom:5px;color:var(--text-dim);font:600 8px/1 var(--font-ui);font-style:normal;text-align:center}
 
 @media (prefers-reduced-motion:reduce){
-  .mrs-wheel-track,.mhub,.mhub-scrim,.msheet.is-detent,.msheet.mdraw-sheet{transition:none!important;animation:none!important}
+  .mrs-wheel-track,.mhub,.mhub-scrim,.msheet-scrim.is-detent,.msheet.is-detent,.msheet.mdraw-sheet{transition:none!important;animation:none!important}
 }

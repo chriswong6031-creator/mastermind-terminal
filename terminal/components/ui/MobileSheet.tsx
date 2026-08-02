@@ -403,7 +403,11 @@ export default function MobileSheet({
     <>
       {open && (
         <div
-          className="msheet-scrim"
+          // A detented sheet keeps the page live above it (TV parity), so its scrim stays
+          // transparent until the full detent — the element itself remains the tap-outside target.
+          className={detents
+            ? `msheet-scrim is-detent${atFullDetent ? " at-full" : ""}`
+            : "msheet-scrim"}
           style={reduceMotion ? { animation: "none" } : undefined}
           onClick={closeNow}
           aria-hidden="true"

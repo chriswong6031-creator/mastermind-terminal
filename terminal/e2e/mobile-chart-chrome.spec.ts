@@ -187,6 +187,15 @@ test("phone: the Drawings sheet opens at 62% over a live chart and drags to full
   expect(await ratio()).toBeCloseTo(0.62, 1);
   await expect(page.locator(".chart-wrap canvas").first()).toBeVisible();
 
+  // …and the chart above stays CRISP: TV paints no dim and no blur over it at 62%. The scrim
+  // element itself remains (it is the tap-outside dismiss target); only its paint is withheld
+  // until the full detent.
+  const scrimLook = () => page.locator(".msheet-scrim").evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { bg: cs.backgroundColor, blur: cs.backdropFilter };
+  });
+  expect(await scrimLook()).toEqual({ bg: "rgba(0, 0, 0, 0)", blur: "none" });
+
   // The tile grid scrolls INSIDE the sheet at both detents — the sheet never grows to fit it.
   await page.getByTestId("drawings-cat-tools").click();
   const gridScrolls = () => sheet.locator(".msheet-body")
@@ -208,11 +217,16 @@ test("phone: the Drawings sheet opens at 62% over a live chart and drags to full
   await expect(sheet).toHaveAttribute("data-detent", "full");
   expect(await ratio()).toBeGreaterThan(0.9);
   expect(await gridScrolls()).toBe(true);
+  // …where the dim (and only the dim — never a blur) arrives.
+  await expect.poll(async () => (await scrimLook()).bg).toBe("rgba(5, 7, 11, 0.55)");
 
-  // …header back down returns to 62%…
+  // …header back down returns to 62%. The release point sits ~0.675 of the viewport and the
+  // sheet ANIMATES to the detent from there, so poll for the resting height rather than racing
+  // the 240ms snap.
   await drag(HEADER, 240);
   await expect(sheet).toHaveAttribute("data-detent", "initial");
-  expect(await ratio()).toBeCloseTo(0.62, 1);
+  await expect.poll(ratio).toBeCloseTo(0.62, 1);
+  await expect.poll(async () => (await scrimLook()).bg).toBe("rgba(0, 0, 0, 0)");
 
   // …and dragging down again from 62% dismisses.
   await drag(GRABBER, 200);
@@ -237,14 +251,24 @@ test("phone: ••• opens the analysis hub at 60% and drags to full", async (
   // No broker CTA anywhere in the hub — ours never sells an execution venue.
   await expect(hub.getByText(/broker/i)).toHaveCount(0);
 
+  // Same scrim law as the Drawings sheet: the page above the half detent stays undimmed and
+  // unblurred; the dim belongs to the full detent alone.
+  const hubScrimLook = () => page.locator(".mhub-scrim").evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { bg: cs.backgroundColor, blur: cs.backdropFilter };
+  });
+  expect(await hubScrimLook()).toEqual({ bg: "rgba(0, 0, 0, 0)", blur: "none" });
+
   // Dragging the grabber up expands to full; dragging it back down returns to 60%.
   const grip = (await hub.locator(".mhub-grip").boundingBox())!;
   await pointerDrag(page, '[data-testid="analysis-hub"]', { x: grip.x + grip.width / 2, y: grip.y + 2 }, -260);
   await expect(hub).toHaveAttribute("data-detent", "full");
   expect(await ratio()).toBeGreaterThan(0.9);
+  await expect.poll(async () => (await hubScrimLook()).bg).toBe("rgba(5, 7, 11, 0.55)");
   const gripFull = (await hub.locator(".mhub-grip").boundingBox())!;
   await pointerDrag(page, '[data-testid="analysis-hub"]', { x: gripFull.x + gripFull.width / 2, y: gripFull.y + 2 }, 240);
   await expect(hub).toHaveAttribute("data-detent", "half");
+  await expect.poll(async () => (await hubScrimLook()).bg).toBe("rgba(0, 0, 0, 0)");
 
   // Indicators is REAL: the hub dismisses and the web's own library opens.
   await page.getByTestId("hub-tile-indicators").click();
