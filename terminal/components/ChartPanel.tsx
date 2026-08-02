@@ -39,6 +39,8 @@ import { isMacroSymbol, macroOnEtAxis } from "@/lib/macroSymbols";
 import { sessionVwap, openingRange, sessionLevels, pivotLevels, rvolSeries, ttmSqueeze, adx as calcAdx, cvdApprox, type Bar as IMBar, type DailyBar } from "@/lib/intradayMath";
 import { attachSessionShading, detachSessionShading, type SessionShadingPrimitive } from "@/lib/sessionShading";
 import { IND_DEFS, withDefaults, isIndKey } from "@/lib/indicators";
+import { flowGet } from "@/lib/flowClientCache";
+import { deriveOptLevels, sessionsOldEt, type OptLevelsResult } from "@/lib/optionsLevels";
 import { computeSuite, resolveSuiteColors } from "@/lib/indicator-canvas/host";
 import { renderPrims, ensureTooltipHost } from "@/lib/indicator-canvas/render";
 import { paintCandleData } from "@/lib/indicator-canvas/candlePaint";
@@ -719,6 +721,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Daily OHLC bars cached for slevels/pivots (fetched async during intraday builds; keyed by symbol).
   const dailyCacheRef = useRef<{ sym: string; bars: DailyBar[] } | null>(null);
+  // Options Levels overlay (R3.1): fetched gex+moves derivation, keyed by symbol so a stale
+  // root's levels can never draw on another ticker's chart. status: "loading" (fetch in
+  // flight), "ok"/"empty" (derivation result), "unavailable" (fetch returned null — the
+  // /api/flow entitlement 403 or a transient failure), "ineligible" (non-US symbol).
+  const optLevelsStateRef = useRef<{
+    sym: string;
+    status: "loading" | "ok" | "empty" | "unavailable" | "ineligible";
+    res: OptLevelsResult | null;
+  } | null>(null);
+  // US options only — same market gate the extended-hours line uses.
+  const optLevelsEligible = (sym: string) => classify(sym) === "us" && !isMacroSymbol(sym);
 
   // rebuild the CHART STYLE (not the chart) when the up/down color scheme flips (Effect 5)
   const [csNonce, setCsNonce] = useState(0);
@@ -1419,6 +1432,43 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return [];
   };
 
+  // buildOptLevels: Options Levels (R3.1) as createPriceLine on the price series.
+  // Draws from optLevelsStateRef (populated by the fetch effect) — data-fed, so unlike
+  // slevels/pivots there is nothing to compute from `rows`; the guard against a stale
+  // root is the sym key on the state ref. Colors resolve from the options desk's level
+  // convention at build time (LWC renders to canvas and cannot resolve var()); put wall
+  // rides var(--down) so the East-Asian flip stays correct (directional-color law).
+  const buildOptLevels = (): ISeriesApi<any>[] => {
+    removeIndPriceLines("optlevels");   // defensive: never double-draw this key's lines
+    const priceS = priceSeriesRef.current; if (!priceS) return [];
+    const st = optLevelsStateRef.current;
+    if (!st || st.sym !== symbolRef.current || st.status !== "ok" || !st.res) return [];
+    const p = P("optlevels");
+    const css = (n: string, fb: string) =>
+      getComputedStyle(document.documentElement).getPropertyValue(n).trim() || fb;
+    const style: Record<string, { on: boolean; color: string; lineStyle: number; lineWidth: number; title: string }> = {
+      call_wall: { on: p.cw !== false, color: css("--brand-2", "#4d82ff"), lineStyle: 0, lineWidth: 1, title: tPlain("olCw") },
+      put_wall: { on: p.pw !== false, color: css("--down", "#f0566b"), lineStyle: 0, lineWidth: 1, title: tPlain("olPw") },
+      gamma_flip: { on: p.flip !== false, color: css("--ai", "#9d86ff"), lineStyle: 2 /* dashed — signed estimate */, lineWidth: 1, title: tPlain("olFlip") },
+      abs_gamma: { on: p.ags !== false, color: css("--signal", "#e8b339"), lineStyle: 1 /* dotted */, lineWidth: 1, title: tPlain("olAgs") },
+      em_hi: { on: p.em !== false, color: css("--muted", "#8b93a3"), lineStyle: 1, lineWidth: 1, title: tPlain("olEmHi") },
+      em_lo: { on: p.em !== false, color: css("--muted", "#8b93a3"), lineStyle: 1, lineWidth: 1, title: tPlain("olEmLo") },
+    };
+    for (const lv of st.res.levels) {
+      const s = style[lv.key];
+      if (!s || !s.on) continue;
+      try {
+        const pl = priceS.createPriceLine({
+          price: lv.price, color: s.color, lineWidth: s.lineWidth,
+          lineStyle: s.lineStyle, axisLabelVisible: true, title: s.title,
+        } as any);
+        pushIndPriceLine("optlevels", pl);
+      } catch {}
+    }
+    // no LWC series — sentinel entry keeps OVERLAY_KEYS / Effect 3 tracking consistent
+    return [];
+  };
+
   // buildRvol: Relative Volume — histogram (slot) + line (cum) + 1.0 reference line.
   const buildRvol = (chart: IChartApi, rows: Bar[], pane: number): ISeriesApi<any>[] => {
     if (!isIntradayRef.current) return [];
@@ -1685,6 +1735,31 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // Gaps & Demand: signal-layer overlay (no plotted series, like the oracle) — drawn in renderSignals.
     // Registry-backed, so it keeps its Settings/Source/eye/remove menu.
     if (inds.has("gaps")) overlayEntries.push({ key: "gaps", label: labelOf("gaps"), kind: "overlay", isPine: false });
+    // Options Levels (R3.1): data-fed price-line overlay — no plotted series. The legend row is
+    // the overlay's provenance surface (discoverability law: annotate, never vanish): EOD session
+    // date + the Tier-B "signed estimate" disclosure when drawn, otherwise WHY nothing is drawn
+    // (non-US symbol, no coverage, entitlement, loading). Nightly EOD data — never a LIVE badge.
+    if (inds.has("optlevels")) {
+      const st = optLevelsStateRef.current;
+      const fresh = st && st.sym === symbolRef.current ? st : null;
+      let note: string;
+      if (!optLevelsEligible(symbolRef.current)) note = tPlain("olUsOnly");
+      else if (!fresh || fresh.status === "loading") note = tPlain("olLoading");
+      else if (fresh.status === "ok" && fresh.res) {
+        const d = fresh.res.asofDate;
+        const age = d ? sessionsOldEt(d) : 0;
+        // Tier discipline (§4.1): "signed estimate" rides ONLY when a dealer-signed level
+        // (wall/flip) is drawn; an EM-only set is Tier A arithmetic and carries no disclosure.
+        const parts = [
+          d ? tPlain("olEod").replace("{date}", d.slice(5)) : "",
+          fresh.res.signed ? tPlain("olSigned") : "",
+          age > 3 ? tPlain("olStale").replace("{n}", String(age)) : "",
+        ].filter(Boolean);
+        note = parts.join(" · ");
+      } else if (fresh.status === "empty") note = tPlain("olNoCov");
+      else note = userTierRef.current === "free" ? tPlain("olGate") : tPlain("olUnavail");
+      overlayEntries.push({ key: "optlevels", label: note ? `${labelOf("optlevels")} — ${note}` : labelOf("optlevels"), kind: "overlay", isPine: false });
+    }
     // Lab signals: descriptive research markers (default OFF, drawn in renderSignals).
     // Intraday-only SUB-PANE indicators (rvol/cvd) on daily TFs: their builders return [] so the
     // sub-pane meta loop below has no pane to anchor a row to — surface them here in the price-pane
@@ -1805,6 +1880,12 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     for (const [k, arr] of SB) {
       const vis = !h.has(k) && tfVisible(k); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} }
     }
+    // price-line-only overlays (slevels/pivots/optlevels) plot no series — the eye must flip
+    // their pooled IPriceLines directly or the toggle silently no-ops on them.
+    for (const [k, lines] of indPriceLinesRef.current) {
+      const vis = !h.has(k) && tfVisible(k);
+      for (const pl of lines) { try { pl.applyOptions({ lineVisible: vis, axisLabelVisible: vis } as any); } catch {} }
+    }
     // custom scripts: eye toggle by scriptId (no tf-visibility gating — scripts don't declare _vis)
     for (const [id, arr] of pineSeriesRef.current) { const vis = !h.has(id); for (const s of arr) { try { s.applyOptions({ visible: vis } as any); } catch {} } }
     // compare series: eye toggle by cmpKey(sym)
@@ -1867,6 +1948,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (inds.has("orb")) indSeriesRef.current.set("orb", buildOrb(rows));
     if (inds.has("slevels")) indSeriesRef.current.set("slevels", buildSlevels(rows));
     if (inds.has("pivots")) indSeriesRef.current.set("pivots", buildPivots(rows));
+    if (inds.has("optlevels")) indSeriesRef.current.set("optlevels", buildOptLevels());
     // If ribbon is NOT active, ensure normal candle colors
     if (!inds.has("ribbon")) restoreNormalCandleColors(rows);
     let pane = 1;
@@ -6204,7 +6286,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // snapshot the visible range so a view-preserving toggle can restore it after series churn (§0.4)
     viewSavedRef.current = PRESERVE_VIEW_ON_INDICATOR_TOGGLE ? (() => { try { const r = chart.timeScale().getVisibleLogicalRange(); return r ? { from: r.from as number, to: r.to as number } : null; } catch { return null; } })() : null;
 
-    const OVERLAY_KEYS = ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "rvwap", "wvwap", "vprofile", "volbox", "svwap", "orb", "slevels", "pivots"] as const;
+    const OVERLAY_KEYS = ["ema", "bb", "vwap", "vol", "ichimoku", "ribbon", "supertrend", "avwap", "rvwap", "wvwap", "vprofile", "volbox", "svwap", "orb", "slevels", "pivots", "optlevels"] as const;
     const wantOverlays = new Set<string>(OVERLAY_KEYS.filter((k) => indicators.has(k)));
     const haveOverlays = new Set<string>(OVERLAY_KEYS.filter((k) => indSeriesRef.current.has(k) || indOverlayRef.current[k]));
     const wantSub = activeSubpanes();                                   // canonical-order sub-pane keys
@@ -6216,8 +6298,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       delete indOverlayRef.current[k];
       // Restore candle colors when ribbon is removed
       if (k === "ribbon") restoreNormalCandleColors(rows);
-      // Remove ONLY this indicator's price lines (keyed pool — the other of slevels/pivots keeps its lines).
-      if (k === "slevels" || k === "pivots") removeIndPriceLines(k);
+      // Remove ONLY this indicator's price lines (keyed pool — the others keep their lines).
+      if (k === "slevels" || k === "pivots" || k === "optlevels") removeIndPriceLines(k);
     }
     for (const k of wantOverlays) if (!haveOverlays.has(k)) {
       if (k === "ema") indSeriesRef.current.set("ema", buildEma(chart, rows, closes));
@@ -6236,6 +6318,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       else if (k === "orb") indSeriesRef.current.set("orb", buildOrb(rows));
       else if (k === "slevels") indSeriesRef.current.set("slevels", buildSlevels(rows));
       else if (k === "pivots") indSeriesRef.current.set("pivots", buildPivots(rows));
+      else if (k === "optlevels") indSeriesRef.current.set("optlevels", buildOptLevels());
     }
 
     // ── sub-pane topology decision (§pane-topology decision table) ──
@@ -6421,6 +6504,42 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     return () => { alive = false; };
     // eslint-disable-next-line
   }, [hasLab, symbol]);
+
+  // ── EFFECT 3-optlevels — fetch gex+moves when the Options Levels overlay is ON ──────
+  // Mirrors Effect 3-lab: one-shot fetch on toggle-on / symbol change with an alive-flag
+  // cancel. flowGet dedupes + SWR-caches and returns null on a hard error (including the
+  // /api/flow entitlement 403) — that renders as the legend's gate/unavailable note, the
+  // chart never throws on a gated fetch. Ineligible (non-US) symbols skip the network.
+  const hasOptLevels = indicators.has("optlevels");
+  useEffect(() => {
+    if (!hasOptLevels) { optLevelsStateRef.current = null; return; }
+    const sym = symbolRef.current; if (!sym) return;
+    if (!optLevelsEligible(sym)) {
+      optLevelsStateRef.current = { sym, status: "ineligible", res: null };
+      rebuildPaneMeta();
+      return;
+    }
+    let alive = true;
+    const root = sym.toUpperCase();
+    optLevelsStateRef.current = { sym, status: "loading", res: null };
+    rebuildPaneMeta();
+    Promise.all([flowGet(`gex:${root}`), flowGet(`moves:${root}`)]).then(([g, m]) => {
+      if (!alive || symbolRef.current !== sym) return;
+      if (g == null) {
+        optLevelsStateRef.current = { sym, status: "unavailable", res: null };
+      } else {
+        const res = deriveOptLevels(g, m, root);
+        optLevelsStateRef.current = { sym, status: res.status, res };
+      }
+      // First-load race (slevels precedent): Effect 2/3 may have already built against an
+      // empty state ref — the builder is idempotent (clears its own price-line pool, adds
+      // no LWC series), so re-run it directly now that data exists, then re-assert the eye.
+      try { if (indicatorsRef.current.has("optlevels")) { buildOptLevels(); applyHidden(); } } catch {}
+      rebuildPaneMeta();
+    }).catch(() => {});
+    return () => { alive = false; };
+    // eslint-disable-next-line
+  }, [hasOptLevels, symbol]);
 
   // ── EFFECT 3c — custom scripts [pineKey]. Add / remove / param-edit a script WITHOUT touching the
   //   built-in indicators (do NOT clearAllIndicators — that would flash + reset every built-in). Only

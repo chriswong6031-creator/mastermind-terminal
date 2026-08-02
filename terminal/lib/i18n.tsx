@@ -1257,6 +1257,24 @@ const LEX: Record<string, [string, string]> = {
   dsLunch: ["LUNCH", "午休"],
   intradayOnly: ["Intraday timeframes only", "仅限日内周期"],
   rvolNoBase: ["insufficient history (n<3)", "历史数据不足 (n<3)"],
+  // ─── Options Levels chart overlay (R3.1) ─────────────────────────────────
+  indOptLevels: ["Options Levels", "期权关键位"],
+  // price-line axis titles — short codes, sized for the canvas label
+  olCw: ["CW", "看涨墙"],
+  olPw: ["PW", "看跌墙"],
+  olFlip: ["FLIP", "伽马翻转"],
+  olAgs: ["ABS γ", "绝对伽马"],
+  olEmHi: ["EM+", "EM+"],
+  olEmLo: ["EM−", "EM−"],
+  // legend-row provenance / states (suffix after "—", mirrors the intradayOnly pattern)
+  olEod: ["EOD {date}", "收盘 {date}"],
+  olSigned: ["signed estimate", "带符号估计"],
+  olStale: ["{n} sessions old", "已过 {n} 个交易日"],
+  olUsOnly: ["US options only", "仅美股期权"],
+  olNoCov: ["no options coverage", "无期权数据覆盖"],
+  olGate: ["requires Insider/Pro", "需 Insider/Pro"],
+  olUnavail: ["levels unavailable", "关键位暂不可用"],
+  olLoading: ["loading…", "加载中…"],
   // ─── Leaders tab ──────────────────────────────────────────────────────────
   tabLeaders: ["Leaders", "资金领袖"],
   leadersTitle: ["Flow Leadership", "资金领先"],

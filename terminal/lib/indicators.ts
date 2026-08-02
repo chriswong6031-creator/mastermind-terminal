@@ -13,7 +13,9 @@ export type IndKey = "ema" | "bb" | "vwap" | "vol" | "rsi" | "stochrsi" | "macd"
   | "ichimoku" | "ribbon" | "supertrend" | "avwap" | "rvwap" | "wvwap" | "vprofile" | "volbox"
   | "rsistack" | "accum" | "_lab"
   // Day Trade suite
-  | "svwap" | "orb" | "slevels" | "pivots" | "rvol" | "ttmsq" | "adx" | "cvd";
+  | "svwap" | "orb" | "slevels" | "pivots" | "rvol" | "ttmsq" | "adx" | "cvd"
+  // Market Structure Core (R3.1) — dealer-positioning levels from the nightly options build
+  | "optlevels";
 export type IndKind = "overlay" | "pane";
 export type FieldType = "number" | "color" | "bool";
 
@@ -43,6 +45,8 @@ export const IND_ORDER: IndKey[] = [
   "ichimoku", "ribbon", "supertrend", "avwap", "rvwap", "wvwap", "vprofile", "volbox",
   // Day Trade suite overlays (price pane)
   "svwap", "orb", "slevels", "pivots",
+  // Options positioning levels (price pane, data-fed — nightly options build)
+  "optlevels",
   "rsi", "stochrsi", "macd", "rsistack", "accum",
   // Day Trade suite sub-panes
   "rvol", "ttmsq", "adx", "cvd",
@@ -646,6 +650,38 @@ indicator("Session Levels", overlay = true)
 // PWH/PWL: prior ISO week high/low from daily bars (dotted, faint).
 // Implemented as createPriceLine() on the price series. PriceLines excluded from autoscale.
 // Daily bars via dataCache.getOhlc(sym). Implementation: intradayMath.sessionLevels()`,
+  },
+
+  optlevels: {
+    key: "optlevels", label: "Options Levels", tag: "OptLvl", kind: "overlay",
+    defaults: {
+      cw: true, pw: true, flip: true, ags: true, em: true,
+      // Colors are NOT user-editable: they resolve from the options desk's level
+      // convention at build time (call wall var(--brand-2), put wall var(--down) —
+      // directional-color law, East-Asian flip safe — flip var(--ai) violet, abs-gamma
+      // var(--signal) amber, EM band muted). The chart and the Exposure desk must never
+      // disagree about which colour a level is.
+    },
+    fields: [
+      { key: "cw", label: "Show call wall", type: "bool", group: "inputs" },
+      { key: "pw", label: "Show put wall", type: "bool", group: "inputs" },
+      { key: "flip", label: "Show gamma flip", type: "bool", group: "inputs" },
+      { key: "ags", label: "Show absolute-gamma strike", type: "bool", group: "inputs" },
+      { key: "em", label: "Show expected-move band", type: "bool", group: "inputs" },
+    ],
+    source: `//@version=6
+indicator("Options Levels", overlay = true)
+// DISPLAY-TIER DESCRIPTIVE — dealer-positioning landmarks from the nightly options build
+// (options_hub.gex/v1 + options_hub.moves/v1; EOD open interest, refreshed nightly).
+// CW/PW: strikes with the largest net call/put dealer gamma. FLIP: zero-gamma spot from
+// the re-priced profile curve (crossing nearest spot; scalar fallback). ABS γ: argmax of
+// |gamma_call|+|gamma_put| (yields to a wall at the same strike). EM±: the published
+// expected-move band at its calibrated multiplier.
+// HONESTY: positioning landmarks, NOT support/resistance — the live Level Report Card
+// measures single-name P(hold | touched) ≈ coin flip for every role. Walls/flip inherit
+// the dealer-sign convention (signed estimate); the EM band is arithmetic on quoted
+// prices. Levels are EOD as-of the legend date; nothing here is live.
+// Implemented as createPriceLine() set; excluded from autoscale. lib/optionsLevels.ts`,
   },
 
   pivots: {

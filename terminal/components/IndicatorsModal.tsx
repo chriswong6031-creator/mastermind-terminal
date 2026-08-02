@@ -34,7 +34,11 @@ import { SUITE_DEFS, SUITE_ORDER } from "@/lib/suites/registry";
 type ClassicIndicator = { key: string; label: string; mm?: boolean; tkey?: string };
 
 const CATS: Record<string, ClassicIndicator[]> = {
-  Mastermind: [{ key: "_oracle", label: "Golden Oracle Confluence", mm: true }],
+  Mastermind: [
+    { key: "_oracle", label: "Golden Oracle Confluence", mm: true },
+    // R3.1 — dealer-positioning levels (walls/flip/abs-γ/EM band) from the nightly options build
+    { key: "optlevels", label: "Options Levels", mm: true, tkey: "indOptLevels" },
+  ],
   Trend: [
     { key: "ema", label: "Moving Averages (EMA 20/50/200)" },
     { key: "bb", label: "Bollinger Bands" },
