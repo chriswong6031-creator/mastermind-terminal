@@ -18,9 +18,29 @@ import SignupGate from "@/components/gates/SignupGate";
 
 export const metadata: Metadata = { title: "Analysis · Mastermind Terminal" };
 
-export default async function AnalysisPage() {
+interface AnalysisPageProps {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+function firstParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export default async function AnalysisPage({ searchParams }: AnalysisPageProps) {
+  const query = await searchParams;
+  const workspace = (
+    <AnalysisWorkspace
+      initialSymbol={firstParam(query.symbol)}
+      initialPage={firstParam(query.page) ?? firstParam(query.pane)}
+    />
+  );
+  // Local visual QA needs the real workspace without manufacturing a Supabase
+  // session. The production build can never activate this escape hatch.
+  if (process.env.NODE_ENV !== "production" && process.env.ANALYSIS_LOCAL_PREVIEW === "1") {
+    return workspace;
+  }
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
   if (typeof data?.claims?.sub !== "string") return <SignupGate surface="analysis" />;
-  return <AnalysisWorkspace />;
+  return workspace;
 }
