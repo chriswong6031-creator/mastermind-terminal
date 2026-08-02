@@ -447,7 +447,7 @@ export default function TranscriptSearchWorkspace({
         </label>
         <button className="btn btn-primary" type="submit" disabled={search.phase === "loading"}>{search.phase === "loading" ? localized(zh, "正在搜索…", "Searching…") : localized(zh, "搜索准确短语", "Search exact phrase")}</button>
       </form>
-      <p className="ci-ts-hint">{localized(zh, "可选引号用于标记短语；系统仍按精确字面文本匹配。", "Quotes are optional phrase delimiters; matching remains exact and literal.")}</p>
+      <p className="ci-ts-hint">{localized(zh, "请输入 2–240 个字符；可选引号仅用于标记短语，匹配仍按精确字面文本进行。", "Use 2–240 characters; optional quotes only delimit the phrase, and matching remains exact and literal.")}</p>
 
       <div className="ci-ts-filters" role="group" aria-label={localized(zh, "按事件筛选", "Filter by event")}>
         <div><span>{localized(zh, "搜索事件", "Search events")}</span><small>{localized(zh, "选择一个或多个", "Choose one or more")}</small></div>
