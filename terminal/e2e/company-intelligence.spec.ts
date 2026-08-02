@@ -137,10 +137,45 @@ function contextFixture() {
   };
 }
 
+function themeContextFixture() {
+  return {
+    schema: "company_theme_exposure.v1",
+    authority: "context_only",
+    is_context_only: true,
+    generated_at: "2026-08-01T12:00:00Z",
+    generation_id: "f".repeat(24),
+    status: "partial",
+    company: { ticker: "NVDA" },
+    company_intelligence: {
+      generation_id: "a".repeat(24),
+      context_sha256: "9".repeat(64),
+      latest_event_id: "NVDA-2026Q1",
+      latest_event_call_date: "2026-05-20",
+    },
+    exposures: [{
+      theme_id: "ai_infrastructure",
+      name_en: "AI Infrastructure",
+      name_zh: "人工智能基础设施",
+      basket_id: "ai_semiconductors",
+      mapping_qualifier: "proxy",
+    }],
+    coverage: { status: "mixed", active_basket_count: 2, mapped_basket_count: 1, unmapped_basket_count: 1 },
+    theme_state: { status: "stale", as_of: "2026-07-28", sha256: "8".repeat(64) },
+    warnings: ["active_membership_unmapped", "theme_state_stale"],
+  };
+}
+
+async function routeThemeContext(page: Page) {
+  await page.route("**/api/company-theme-context/NVDA**", async (route) => {
+    await route.fulfill({ json: { ok: true, state: "partial", context: themeContextFixture() } });
+  });
+}
+
 async function openCompanyIntelligence(page: Page, intelligenceLabel = "Intelligence") {
   await page.route("**/api/company-intelligence/NVDA**", async (route) => {
     await route.fulfill({ json: { ok: true, state: "ready", context: contextFixture() } });
   });
+  await routeThemeContext(page);
   await page.goto("/analysis?symbol=NVDA&page=intelligence");
   // This is a server-seeded deep link, not a client-side redirect from Overview.
   await expect(page.locator(".fin-tabs").getByRole("tab", { name: intelligenceLabel, exact: true }))
@@ -160,9 +195,13 @@ async function expectNoDocumentOverflow(page: Page) {
 test("Company Intelligence keeps its context and evidence workflow responsive", async ({ page }, testInfo) => {
   await openCompanyIntelligence(page);
   await expectNoDocumentOverflow(page);
+  await expect(page.getByRole("heading", { name: "Curated basket context" })).toBeVisible();
+  await expect(page.locator(".ci-theme-card")).toContainText("AI Infrastructure");
+  await expect(page.locator(".ci-theme-card")).toContainText("Proxy crosswalk");
+  await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-company-theme-context.png`), fullPage: false });
 
   const evidence = page.locator(".ci-evidence");
-  const receipts = page.getByRole("button", { name: "View receipts" });
+  const receipts = page.locator(".ci-receipts-button");
   const desktop = testInfo.project.name.endsWith("desktop");
 
   if (desktop) {
@@ -468,6 +507,18 @@ test("evidence receipts follow producer field lineage instead of guessing a sour
   await expect(page.locator(".ci-evidence-note")).toContainText("not attributed to this source alone");
 });
 
+test("theme context stays pinned to the latest event and makes its receipts inspectable", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.endsWith("desktop"), "one desktop semantic flow is sufficient");
+  await openCompanyIntelligence(page);
+  await page.getByLabel("Select company event").selectOption({ label: "Q4 FY2025 · 2026-02-19" });
+  await expect(page.locator(".ci-theme-boundary")).toContainText("Pinned to the latest reported event");
+  await page.getByRole("button", { name: "Use latest event" }).click();
+  await expect(page.getByRole("heading", { name: "Curated basket context" })).toBeVisible();
+  await page.getByRole("button", { name: "View receipts" }).last().click();
+  await expect(page.locator(".ci-theme-receipts-panel")).toContainText("Latest event pin");
+  await expect(page.locator(".ci-theme-receipts-panel")).toContainText("Context only");
+});
+
 test("general highlights are not relabelled as Constructive without explicit positive lineage", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.endsWith("desktop"), "one desktop semantic-label contract is sufficient");
   const fixture = contextFixture();
@@ -516,11 +567,14 @@ test("Company Intelligence preserves its mobile workflow in Chinese", async ({ p
   await page.route("**/api/company-intelligence/NVDA**", async (route) => {
     await route.fulfill({ json: { ok: true, state: "ready", context: contextFixture() } });
   });
+  await routeThemeContext(page);
   await page.goto("/analysis?symbol=NVDA&page=intelligence");
   await expect(page.locator(".fin-tabs").getByRole("tab", { name: "公司情报", exact: true }))
     .toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("button", { name: "查看凭证" })).toBeVisible();
+  await expect(page.locator(".ci-hero").getByRole("button", { name: "查看凭证" })).toBeVisible();
   await expect(page.getByRole("button", { name: "询问 Mastermind" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "策展篮子背景" })).toBeVisible();
+  await expect(page.locator(".ci-theme-card")).toContainText("代理映射");
   await expectNoDocumentOverflow(page);
   await page.screenshot({
     path: testInfo.outputPath("mobile-company-intelligence-zh.png"),
