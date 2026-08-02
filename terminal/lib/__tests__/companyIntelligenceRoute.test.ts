@@ -4,6 +4,7 @@ import {
   __resetCompanyIntelligenceCacheForTests,
   COMPANY_INTELLIGENCE_MAX_R2_JSON_BYTES,
   resolveCompanyIntelligenceFromR2,
+  resolveCompanyIntelligenceLineageFromR2,
 } from "@/lib/companyIntelligence";
 
 const metrics = () => ({
@@ -40,8 +41,9 @@ const manifest = (generation = "a".repeat(24), body: unknown = context("NVDA", g
   const wire = JSON.stringify(body);
   return ({
   schema: "company_intelligence_manifest.v1", generation_id: generation, generated_at: "2026-08-01T12:00:00Z", company_count: 1, event_count: 1, latest_event_date: "2026-05-28",
-  source: { earnings_manifest: { generation_id: "b".repeat(24), sha256: "b".repeat(64) }, tx_index: { schema: "mastermind.tx-index/v1", generation_id: "c".repeat(24), sha256: "c".repeat(64) } },
+  source: { earnings_manifest: { generation_id: "b".repeat(24), observed_counts: { history_rows: 1, history_tickers: 1, score_rows: 0, score_tickers: 0 }, sha256: "b".repeat(64) }, tx_index: { schema: "mastermind.tx-index/v1", generation_id: "c".repeat(24), sha256: "c".repeat(64) } },
   files: { "companies/NVDA.json": { sha256: createHash("sha256").update(wire).digest("hex"), bytes: Buffer.byteLength(wire) } }, status: "ready", warnings: [],
+  operational: { history_rows_rejected: 0 },
   });
 };
 
@@ -138,6 +140,46 @@ describe("/api/company-intelligence/[symbol]", () => {
     const result = await resolveCompanyIntelligenceFromR2("NVDA", "https://example.invalid");
     expect(result).toMatchObject({ ok: false, state: "error", error: { code: "upstream_unavailable" } });
     expect(calls).toHaveLength(0);
+  });
+
+  it("exposes exact company and immutable-manifest receipts to server-side sidecars", async () => {
+    const generation = "d".repeat(24);
+    const body = context("NVDA", generation);
+    const root = manifest(generation, body);
+    const rootWire = JSON.stringify(root);
+    installR2((url) => {
+      if (url.endsWith(`/generations/${generation}/companies/NVDA.json`)) return new Response(JSON.stringify(body));
+      if (url.endsWith("manifest.json")) return new Response(rootWire);
+      return new Response("missing", { status: 404 });
+    });
+    const resolved = await resolveCompanyIntelligenceLineageFromR2(
+      "NVDA", "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev",
+    );
+    expect(resolved.result).toMatchObject({ ok: true, context: { generation_id: generation } });
+    expect(resolved.lineage).toEqual({
+      generation_id: generation,
+      latest_event_id: "NVDA-2026Q1",
+      latest_event_call_date: "2026-05-28",
+      context_sha256: root.files["companies/NVDA.json"].sha256,
+      manifest_sha256: createHash("sha256").update(rootWire).digest("hex"),
+    });
+    expect(calls).toHaveLength(3);
+  });
+
+  it("refuses to mint sidecar lineage from a drifting immutable manifest", async () => {
+    const generation = "d".repeat(24);
+    const body = context("NVDA", generation);
+    const root = manifest(generation, body);
+    installR2((url) => {
+      if (url.endsWith(`/generations/${generation}/companies/NVDA.json`)) return new Response(JSON.stringify(body));
+      if (url.endsWith(`/generations/${generation}/manifest.json`)) return new Response(JSON.stringify({ ...root, generated_at: "2026-08-01T12:01:00Z" }));
+      return new Response(JSON.stringify(root));
+    });
+    const resolved = await resolveCompanyIntelligenceLineageFromR2(
+      "NVDA", "https://pub-f7ffb4441c5f4ad983ca56ec7c651c61.r2.dev",
+    );
+    expect(resolved.result).toMatchObject({ ok: false, error: { code: "invalid_payload" } });
+    expect(resolved.lineage).toBeNull();
   });
 
   it("rejects a response whose final URL leaves the pinned R2 bucket", async () => {

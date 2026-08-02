@@ -165,9 +165,85 @@ function themeContextFixture() {
   };
 }
 
+function institutionalContextFixture() {
+  return {
+    schema: "company_institutional_context.v1",
+    authority: "context_only",
+    is_context_only: true,
+    generated_at: "2026-08-01T12:00:00Z",
+    generation_id: "7".repeat(24),
+    status: "ready",
+    company: { ticker: "NVDA" },
+    company_intelligence: {
+      generation_id: "a".repeat(24),
+      context_sha256: "6".repeat(64),
+      latest_event_id: "cie_d8488221fd8c710c53d6537d",
+      latest_event_call_date: "2026-05-20",
+    },
+    period: {
+      build_as_of: "2026-08-01",
+      consensus_period: "2026-03-31",
+      comparison_period: "2025-12-31",
+      filing_window_closed_on: "2026-05-15",
+      consensus_available_on: "2026-05-15",
+      latest_reporting_filing_date: "2026-05-15",
+    },
+    coverage: {
+      configured_manager_count: 4,
+      active_manager_count: 3,
+      closed_manager_count: 1,
+      reporting_manager_count: 3,
+      missing_manager_count: 0,
+      comparison_reporting_manager_count: 3,
+      comparison_missing_manager_count: 0,
+      resolved_position_count: 3,
+      unresolved_position_count: 0,
+    },
+    positions: [
+      {
+        manager: "alpha", manager_name: "Alpha Capital", manager_style: "quality_growth", manager_grade: "A",
+        action: "add", is_current_holder: true, value_usd: 12_000_000, book_weight_pct: 2.4, shares: 40_000,
+        shares_change_pct: 25, period_end: "2026-03-31", filing_date: "2026-05-14",
+        snapshot: { path: "data/smart_money/alpha/2026-03-31.parquet", sha256: "1".repeat(64), bytes: 2400 },
+      },
+      {
+        manager: "gamma", manager_name: "Gamma Investments", manager_style: "compounder", manager_grade: "A-",
+        action: "hold", is_current_holder: true, value_usd: 8_000_000, book_weight_pct: 1.8, shares: 26_000,
+        shares_change_pct: 2, period_end: "2026-03-31", filing_date: "2026-05-15",
+        snapshot: { path: "data/smart_money/gamma/2026-03-31.parquet", sha256: "2".repeat(64), bytes: 2100 },
+      },
+      {
+        manager: "beta", manager_name: "Beta Partners", manager_style: "value", manager_grade: "B+",
+        action: "trim", is_current_holder: true, value_usd: 8_000_000, book_weight_pct: 1.2, shares: 20_000,
+        shares_change_pct: -15, period_end: "2026-03-31", filing_date: "2026-05-15",
+        snapshot: { path: "data/smart_money/beta/2026-03-31.parquet", sha256: "3".repeat(64), bytes: 2200 },
+      },
+    ],
+    consensus: {
+      current_holder_count: 3, buyer_count: 1, trimmer_count: 1, exit_count: 0, unknown_move_count: 0,
+      total_value_usd: 28_000_000, ownership_hhi: 0.346939, max_book_weight_pct: 2.4, avg_book_weight_pct: 1.8,
+    },
+    trend: {
+      status: "available", direction: "accumulating", eligible_period_count: 3,
+      periods: [
+        { period_end: "2025-09-30", available_on: "2025-11-14", reporting_manager_count: 3, missing_manager_count: 0, holder_count: 1, total_value_usd: 9_000_000, eligible: true },
+        { period_end: "2025-12-31", available_on: "2026-02-17", reporting_manager_count: 3, missing_manager_count: 0, holder_count: 2, total_value_usd: 18_000_000, eligible: true },
+        { period_end: "2026-03-31", available_on: "2026-05-15", reporting_manager_count: 3, missing_manager_count: 0, holder_count: 3, total_value_usd: 28_000_000, eligible: true },
+      ],
+    },
+    warnings: [],
+  };
+}
+
 async function routeThemeContext(page: Page) {
   await page.route("**/api/company-theme-context/NVDA**", async (route) => {
     await route.fulfill({ json: { ok: true, state: "partial", context: themeContextFixture() } });
+  });
+}
+
+async function routeInstitutionalContext(page: Page) {
+  await page.route("**/api/company-institutional-context/NVDA**", async (route) => {
+    await route.fulfill({ json: { ok: true, state: "ready", context: institutionalContextFixture() } });
   });
 }
 
@@ -184,6 +260,10 @@ async function openCompanyIntelligence(page: Page, intelligenceLabel = "Intellig
   await expect(page.getByRole("heading", { name: "NVIDIA Corporation" })).toBeVisible();
 }
 
+test.beforeEach(async ({ page }) => {
+  await routeInstitutionalContext(page);
+});
+
 async function expectNoDocumentOverflow(page: Page) {
   const width = await page.evaluate(() => ({
     viewport: document.documentElement.clientWidth,
@@ -198,7 +278,13 @@ test("Company Intelligence keeps its context and evidence workflow responsive", 
   await expect(page.getByRole("heading", { name: "Curated basket context" })).toBeVisible();
   await expect(page.locator(".ci-theme-card")).toContainText("AI Infrastructure");
   await expect(page.locator(".ci-theme-card")).toContainText("Proxy crosswalk");
+  await expect(page.getByRole("heading", { name: "3 tracked managers reported a position" })).toBeVisible();
+  const institutionalCard = page.locator(".ci-inst-card");
+  await expect(institutionalCard).toContainText("Alpha Capital");
+  await expect(institutionalCard).toContainText("HHI within this roster");
   await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-company-theme-context.png`), fullPage: false });
+  await institutionalCard.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`${testInfo.project.name}-company-institutional-context.png`), fullPage: false });
 
   const evidence = page.locator(".ci-evidence");
   const receipts = page.locator(".ci-receipts-button");
@@ -526,7 +612,7 @@ test("theme context stays pinned to the latest event and makes its receipts insp
   await openCompanyIntelligence(page);
   await page.getByLabel("Select company event").selectOption({ label: "Q4 FY2025 · 2026-02-19" });
   await expect(page.locator(".ci-theme-boundary")).toContainText("Pinned to the latest reported event");
-  await page.getByRole("button", { name: "Use latest event" }).click();
+  await page.locator(".ci-theme-boundary").getByRole("button", { name: "Use latest event" }).click();
   await expect(page.getByRole("heading", { name: "Curated basket context" })).toBeVisible();
   const themeReceipts = page.getByRole("button", { name: "View receipts" }).last();
   expect((await themeReceipts.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(40);
@@ -551,8 +637,29 @@ test("current-event authority survives a theme-sidecar outage", async ({ page },
   await expect(page.locator(".ci-theme-unavailable")).not.toContainText("opaque server failure");
   await page.getByLabel("Select company event").selectOption({ label: "Q4 FY2025 · 2026-02-19" });
   await expect(page.locator(".ci-theme-boundary")).toContainText("Q4 FY2025 is historical");
-  await page.getByRole("button", { name: "Use latest event" }).click();
+  await page.locator(".ci-theme-boundary").getByRole("button", { name: "Use latest event" }).click();
   await expect(page.getByLabel("Select company event")).toHaveValue("cie_d8488221fd8c710c53d6537d");
+});
+
+test("institutional context preserves point-in-time boundaries and receipt provenance", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.endsWith("desktop"), "one desktop provenance flow is sufficient");
+  await openCompanyIntelligence(page);
+  const card = page.locator(".ci-inst-card");
+  await expect(card).toContainText("13F · reported with filing lag");
+  await expect(card).toContainText("$28M");
+  await expect(card).toContainText("Accumulating");
+  const provenance = card.getByRole("button", { name: "View provenance" });
+  expect((await provenance.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(40);
+  await provenance.click();
+  await expect(page.locator(".ci-inst-receipts-panel")).toContainText("Company-context receipt");
+  await expect(page.locator(".ci-inst-receipts-panel")).toContainText("Context only");
+
+  await page.getByLabel("Select company event").selectOption({ label: "Q4 FY2025 · 2026-02-19" });
+  const boundary = page.locator(".ci-inst-boundary");
+  await expect(boundary).toContainText("today's filing set is not mixed into that older record");
+  await expect(boundary).not.toContainText("Alpha Capital");
+  await boundary.getByRole("button", { name: "Use latest event" }).click();
+  await expect(page.getByRole("heading", { name: "3 tracked managers reported a position" })).toBeVisible();
 });
 
 test("a lagging theme sidecar is quarantined instead of relabelling the latest event", async ({ page }, testInfo) => {
@@ -629,6 +736,8 @@ test("Company Intelligence preserves its mobile workflow in Chinese", async ({ p
   await expect(page.locator(".ci-theme-card")).toContainText("代理映射");
   await expect(page.locator(".ci-theme-footer")).toContainText("已过期");
   await expect(page.locator(".ci-theme-footer")).not.toContainText("stale");
+  await expect(page.getByRole("heading", { name: "3 家追踪管理人申报持仓" })).toBeVisible();
+  await expect(page.locator(".ci-inst-card")).toContainText("仅限该名册的 HHI");
   await expectNoDocumentOverflow(page);
   await page.screenshot({
     path: testInfo.outputPath("mobile-company-intelligence-zh.png"),

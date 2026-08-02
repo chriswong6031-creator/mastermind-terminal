@@ -135,12 +135,22 @@ export interface CompanyIntelligenceManifest {
   event_count: number;
   latest_event_date: string | null;
   source: {
-    earnings_manifest: { generation_id: string; sha256: string };
+    earnings_manifest: {
+      generation_id: string;
+      sha256: string;
+      observed_counts: {
+        history_rows: number;
+        history_tickers: number;
+        score_rows: number;
+        score_tickers: number;
+      };
+    };
     tx_index: { schema: string; generation_id: string; sha256: string };
   };
   files: Record<string, CompanyIntelligenceManifestFile>;
   status: "ready" | "degraded" | "empty";
   warnings: string[];
+  operational: { history_rows_rejected: number };
 }
 
 export type CompanyIntelligenceErrorCode =
@@ -160,6 +170,20 @@ export type CompanyIntelligenceResult =
     state: "error";
     error: { code: CompanyIntelligenceErrorCode; message: string; retryable: boolean };
   };
+
+/** Server-only receipts that bind a verified company object to its manifest. */
+export interface CompanyIntelligenceVerifiedLineage {
+  generation_id: string;
+  latest_event_id: string | null;
+  latest_event_call_date: string | null;
+  context_sha256: string;
+  manifest_sha256: string;
+}
+
+export interface CompanyIntelligenceLineageResolution {
+  result: CompanyIntelligenceResult;
+  lineage: CompanyIntelligenceVerifiedLineage | null;
+}
 
 type ServerResolution = CompanyIntelligenceResult;
 type JsonRecord = Record<string, unknown>;
@@ -209,6 +233,7 @@ const SOURCE_REFS = new Set<CompanyIntelligenceSourceRef>(["earnings_history", "
 type ManifestCache = { data: CompanyIntelligenceManifest; at: number };
 type ContextCache = { data: CompanyIntelligenceContext; at: number };
 let manifestCache: ManifestCache | null = null;
+let verifiedManifestReceiptCache: { generation_id: string; sha256: string; at: number } | null = null;
 const contextCache = new Map<string, ContextCache>();
 const lastGoodContextByTicker = new Map<string, ContextCache>();
 
@@ -216,6 +241,11 @@ function object(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as JsonRecord
     : null;
+}
+
+function exactKeys(value: JsonRecord, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
 }
 
 function validDate(value: unknown): value is string {
@@ -613,7 +643,8 @@ export function normalizeCompanyIntelligence(
 /** Strict manifest normalizer. It validates every file key before route code uses one. */
 export function normalizeCompanyIntelligenceManifest(raw: unknown): CompanyIntelligenceManifest | null {
   const obj = object(raw);
-  if (!obj || obj.schema !== COMPANY_INTELLIGENCE_MANIFEST_SCHEMA || !validTimestamp(obj.generated_at)) return null;
+  if (!obj || !exactKeys(obj, ["schema", "generation_id", "generated_at", "company_count", "event_count", "latest_event_date", "source", "files", "status", "warnings", "operational"])
+    || obj.schema !== COMPANY_INTELLIGENCE_MANIFEST_SCHEMA || !validTimestamp(obj.generated_at)) return null;
   const generationId = typeof obj.generation_id === "string" ? obj.generation_id : "";
   const companyCount = boundedInt(obj.company_count, 0, MAX_MANIFEST_FILES);
   const eventCount = boundedInt(obj.event_count, 0, MAX_MANIFEST_FILES * MAX_HISTORY);
@@ -623,11 +654,24 @@ export function normalizeCompanyIntelligenceManifest(raw: unknown): CompanyIntel
   const source = object(obj.source);
   const earnings = source && object(source.earnings_manifest);
   const txIndex = source && object(source.tx_index);
+  const observed = earnings && object(earnings.observed_counts);
   const earningsGeneration = earnings && typeof earnings.generation_id === "string" ? earnings.generation_id : "";
   const txGeneration = txIndex && typeof txIndex.generation_id === "string" ? txIndex.generation_id : "";
   const txSchema = txIndex && requiredString(txIndex.schema, MAX_SCHEMA);
-  if (!earnings || !txIndex || !isCompanyIntelligenceGenerationId(earningsGeneration) || !validSha(earnings.sha256)
+  if (!source || !exactKeys(source, ["earnings_manifest", "tx_index"])
+    || !earnings || !exactKeys(earnings, ["generation_id", "observed_counts", "sha256"])
+    || !observed || !exactKeys(observed, ["history_rows", "history_tickers", "score_rows", "score_tickers"])
+    || !txIndex || !exactKeys(txIndex, ["schema", "generation_id", "sha256"])
+    || !isCompanyIntelligenceGenerationId(earningsGeneration) || !validSha(earnings.sha256)
     || !isCompanyIntelligenceGenerationId(txGeneration) || !validSha(txIndex.sha256) || !txSchema) return null;
+  const historyRows = boundedInt(observed.history_rows, 0, 100_000_000);
+  const historyTickers = boundedInt(observed.history_tickers, 0, MAX_MANIFEST_FILES);
+  const scoreRows = boundedInt(observed.score_rows, 0, 100_000_000);
+  const scoreTickers = boundedInt(observed.score_tickers, 0, MAX_MANIFEST_FILES);
+  const operational = object(obj.operational);
+  const rejectedRows = operational && exactKeys(operational, ["history_rows_rejected"])
+    ? boundedInt(operational.history_rows_rejected, 0, 100_000_000) : null;
+  if (historyRows === null || historyTickers === null || scoreRows === null || scoreTickers === null || rejectedRows === null) return null;
   const filesRaw = object(obj.files);
   if (!filesRaw || Object.keys(filesRaw).length > MAX_MANIFEST_FILES) return null;
   const files: Record<string, CompanyIntelligenceManifestFile> = {};
@@ -649,12 +693,17 @@ export function normalizeCompanyIntelligenceManifest(raw: unknown): CompanyIntel
     event_count: eventCount,
     latest_event_date: latestEventDate,
     source: {
-      earnings_manifest: { generation_id: earningsGeneration, sha256: earnings.sha256 },
+      earnings_manifest: {
+        generation_id: earningsGeneration,
+        observed_counts: { history_rows: historyRows, history_tickers: historyTickers, score_rows: scoreRows, score_tickers: scoreTickers },
+        sha256: earnings.sha256,
+      },
       tx_index: { schema: txSchema, generation_id: txGeneration, sha256: txIndex.sha256 },
     },
     files,
     status: obj.status,
     warnings,
+    operational: { history_rows_rejected: rejectedRows },
   };
 }
 
@@ -768,6 +817,24 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+function canonicalJson(value: unknown): string | null {
+  try {
+    const normalize = (item: unknown): unknown => {
+      if (Array.isArray(item)) return item.map(normalize);
+      if (item !== null && typeof item === "object") {
+        const source = item as Record<string, unknown>;
+        const target: Record<string, unknown> = {};
+        for (const key of Object.keys(source).sort()) target[key] = normalize(source[key]);
+        return target;
+      }
+      return item;
+    };
+    return JSON.stringify(normalize(value));
+  } catch {
+    return null;
+  }
+}
+
 function rememberContext(key: string, ticker: string, context: CompanyIntelligenceContext, at: number): void {
   if (!contextCache.has(key) && contextCache.size >= MAX_CONTEXT_CACHE_ENTRIES) {
     const oldest = contextCache.keys().next().value as string | undefined;
@@ -852,6 +919,59 @@ export async function resolveCompanyIntelligenceFromR2(
   return contextResult(context);
 }
 
+/**
+ * Resolve Company Intelligence and expose the exact producer receipts to a
+ * server-side sidecar consumer. The browser-facing result remains unchanged.
+ */
+export async function resolveCompanyIntelligenceLineageFromR2(
+  symbol: string,
+  base: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<CompanyIntelligenceLineageResolution> {
+  const result = await resolveCompanyIntelligenceFromR2(symbol, base, options);
+  if (!result.ok) return { result, lineage: null };
+  const ticker = normalizeCompanyIntelligenceSymbol(symbol);
+  const safeBase = validateR2Base(base);
+  if (!ticker || !safeBase) {
+    return { result: error("upstream_unavailable", "Company intelligence lineage is unavailable", true), lineage: null };
+  }
+  const manifestRead = await loadManifest(safeBase, options.signal);
+  if (!manifestRead || manifestRead === "invalid") {
+    return { result: error("invalid_payload", "Company intelligence lineage is invalid", true), lineage: null };
+  }
+  const { manifest } = manifestRead;
+  const receipt = manifest.files[`companies/${ticker}.json`];
+  const manifestJson = canonicalJson(manifest);
+  if (!receipt || !manifestJson || manifest.generation_id !== result.context.generation_id) {
+    return { result: error("invalid_payload", "Company intelligence lineage is not aligned", true), lineage: null };
+  }
+  let manifestSha = verifiedManifestReceiptCache?.generation_id === manifest.generation_id
+    && Date.now() - verifiedManifestReceiptCache.at < MANIFEST_TTL_MS
+    ? verifiedManifestReceiptCache.sha256 : null;
+  if (!manifestSha) {
+    const immutable = await fetchJson(`${safeBase}/company_intelligence/generations/${manifest.generation_id}/manifest.json`, options.signal);
+    if (immutable.kind !== "ok") {
+      return { result: error("invalid_payload", "Company intelligence immutable manifest is unavailable", true), lineage: null };
+    }
+    const immutableManifest = normalizeCompanyIntelligenceManifest(immutable.raw);
+    if (!immutableManifest || canonicalJson(immutable.raw) !== manifestJson || immutableManifest.generation_id !== manifest.generation_id) {
+      return { result: error("invalid_payload", "Company intelligence immutable manifest is not aligned", true), lineage: null };
+    }
+    manifestSha = await sha256Hex(immutable.bytes);
+    verifiedManifestReceiptCache = { generation_id: manifest.generation_id, sha256: manifestSha, at: Date.now() };
+  }
+  return {
+    result,
+    lineage: {
+      generation_id: manifest.generation_id,
+      latest_event_id: result.context.latest_event_id,
+      latest_event_call_date: result.context.latest_event?.call_date ?? null,
+      context_sha256: receipt.sha256,
+      manifest_sha256: manifestSha,
+    },
+  };
+}
+
 /** Client-side same-origin BFF call. It never exposes the R2 URL to a component. */
 export async function getCompanyIntelligence(
   symbol: string,
@@ -903,6 +1023,7 @@ export function isCompanyIntelligenceAvailable(result: CompanyIntelligenceResult
 /** Test-only cache reset; production paths never call this. */
 export function __resetCompanyIntelligenceCacheForTests(): void {
   manifestCache = null;
+  verifiedManifestReceiptCache = null;
   contextCache.clear();
   lastGoodContextByTicker.clear();
 }

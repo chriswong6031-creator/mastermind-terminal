@@ -14,6 +14,7 @@ import CompanySourceManifest from "./CompanySourceManifest";
 import EvidenceRail, { type CompanyEvidenceSelection } from "./EvidenceRail";
 import TranscriptSearchWorkspace from "./TranscriptSearchWorkspace";
 import CompanyThemeContextCard from "./CompanyThemeContextCard";
+import CompanyInstitutionalContextCard from "./CompanyInstitutionalContextCard";
 import { openMastermindBrainForSymbol } from "../../lib/mastermindBrain";
 import type { TranscriptOpenTarget } from "../../lib/transcriptSearch";
 
@@ -454,6 +455,20 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
               </section>
 
               <CompanyThemeContextCard
+                ticker={ticker}
+                selectedEventId={event.event_id}
+                companyIntelligenceGenerationId={activeContext.generation_id}
+                latestEventId={activeContext.latest_event_id}
+                selectedEventLabel={eventPeriod(event)}
+                onUseLatest={activeContext.latest_event_id ? () => {
+                  const latest = events.find((candidate) => candidate.event_id === activeContext.latest_event_id);
+                  if (!latest) return;
+                  setEventState({ sym: ticker, id: latest.event_id });
+                  setEvidence(null);
+                } : undefined}
+              />
+
+              <CompanyInstitutionalContextCard
                 ticker={ticker}
                 selectedEventId={event.event_id}
                 companyIntelligenceGenerationId={activeContext.generation_id}

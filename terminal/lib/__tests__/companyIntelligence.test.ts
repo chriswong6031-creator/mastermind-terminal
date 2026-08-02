@@ -94,12 +94,17 @@ export const manifest = (generation = "a".repeat(24)) => ({
   event_count: 1,
   latest_event_date: "2026-05-28",
   source: {
-    earnings_manifest: { generation_id: "b".repeat(24), sha256: "b".repeat(64) },
+    earnings_manifest: {
+      generation_id: "b".repeat(24),
+      observed_counts: { history_rows: 1, history_tickers: 1, score_rows: 0, score_tickers: 0 },
+      sha256: "b".repeat(64),
+    },
     tx_index: { schema: "mastermind.tx-index/v1", generation_id: "c".repeat(24), sha256: "c".repeat(64) },
   },
   files: { "companies/NVDA.json": { sha256: "d".repeat(64), bytes: 2048 } },
   status: "ready",
   warnings: [],
+  operational: { history_rows_rejected: 0 },
 });
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
