@@ -167,11 +167,20 @@ export function MaxPainPanel({
               </text>
             ))}
             {/* reference lines under the series */}
+            {/* Reference labels flip to end-anchor past ~70% of the plot — a
+                start-anchored label on a line near the window's right edge runs
+                off the SVG and clips (max pain is guaranteed inside the window,
+                including at its edge). */}
             {mpIn && (
               <g>
                 <line x1={xOf(maxPain as number)} x2={xOf(maxPain as number)} y1={PLOT_PAD.t} y2={H - PLOT_PAD.b}
                   stroke="var(--text-2)" strokeDasharray="4 3" strokeWidth={1.1} />
-                <text x={xOf(maxPain as number) + 4} y={PLOT_PAD.t + 10} style={REF_TXT}>
+                <text
+                  x={xOf(maxPain as number) + (xOf(maxPain as number) > PLOT_PAD.l + (w - PLOT_PAD.l - PLOT_PAD.r) * 0.7 ? -4 : 4)}
+                  y={PLOT_PAD.t + 10}
+                  textAnchor={xOf(maxPain as number) > PLOT_PAD.l + (w - PLOT_PAD.l - PLOT_PAD.r) * 0.7 ? "end" : "start"}
+                  style={REF_TXT}
+                >
                   {t("maxPainStrike").replace("{k}", String(maxPain))}
                 </text>
               </g>
@@ -180,7 +189,12 @@ export function MaxPainPanel({
               <g>
                 <line x1={xOf(spotRef as number)} x2={xOf(spotRef as number)} y1={PLOT_PAD.t} y2={H - PLOT_PAD.b}
                   stroke="var(--muted)" strokeDasharray="2 3" strokeWidth={1} />
-                <text x={xOf(spotRef as number) + 4} y={PLOT_PAD.t + 22} style={REF_TXT}>
+                <text
+                  x={xOf(spotRef as number) + (xOf(spotRef as number) > PLOT_PAD.l + (w - PLOT_PAD.l - PLOT_PAD.r) * 0.7 ? -4 : 4)}
+                  y={PLOT_PAD.t + 22}
+                  textAnchor={xOf(spotRef as number) > PLOT_PAD.l + (w - PLOT_PAD.l - PLOT_PAD.r) * 0.7 ? "end" : "start"}
+                  style={REF_TXT}
+                >
                   {t("spotLabel")} {(spotRef as number).toFixed(2)}
                 </text>
               </g>

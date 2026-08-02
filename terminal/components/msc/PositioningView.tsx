@@ -199,7 +199,6 @@ export function PositioningView() {
             ))}
           </datalist>
         </div>
-        <span style={SUBTITLE}>{t("panelSub")}</span>
         <div style={CONTROLS_RIGHT}>
           {asofDate && (
             <span
@@ -289,11 +288,6 @@ const TICKER_INPUT: React.CSSProperties = {
   fontWeight: 600,
   letterSpacing: ".02em",
   outline: "none",
-};
-
-const SUBTITLE: React.CSSProperties = {
-  fontSize: 11,
-  color: "var(--muted)",
 };
 
 const ASOF_CHIP: React.CSSProperties = {

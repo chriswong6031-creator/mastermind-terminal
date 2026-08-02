@@ -48,7 +48,10 @@ const VOL_LEX = {
   statRangeAria:     ["Current ATM IV position inside the 52-week range", "当前平值IV在52周区间中的位置"],
 
   // ── Panel B — ATM IV history ───────────────────────────────────────────────
-  histTitle:         ["ATM IV — 90-day history", "平值IV — 90日历史"],
+  histTitle:         ["ATM IV history", "平值IV历史"],
+  // Coverage is disclosed from the data (the old title asserted "90-day" over
+  // whatever history[] actually held).
+  histCoverage:      ["{n} sessions · since {d}", "{n} 个交易日 · 自 {d}"],
   histEmptyTitle:    ["Not enough IV history to draw yet", "IV历史数据不足，暂无法绘制"],
   histEmptyWhy: [
     "The history line needs at least 10 sessions of ATM IV.",

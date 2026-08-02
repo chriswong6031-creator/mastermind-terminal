@@ -244,7 +244,12 @@ export function PrismView() {
     call_wall:   matrix?.levels?.call_wall   ?? gexState?.call_wall  ?? null,
     put_support: matrix?.levels?.put_support ?? gexState?.put_wall   ?? null,
     hvl:         matrix?.levels?.hvl         ?? gexState?.hvl        ?? gexState?.magnet ?? null,
-    gamma_flip:  matrix?.levels?.gamma_flip  ?? gexState?.gamma_flip ?? null,
+    // ⚠️ gex_state FIRST for the flip. The matrix builder's levels block still
+    // carries the retired cumulative-by-strike estimator (measured live 2026-08-01:
+    // SPY levels.gamma_flip 594.28 against spot 741.69, while gex_state's spot-grid
+    // flip was sane) — prefer the builder that uses the profile method until the
+    // matrix lane is repaired and republished end to end.
+    gamma_flip:  gexState?.gamma_flip        ?? matrix?.levels?.gamma_flip ?? null,
     max_pain:    matrix?.levels?.max_pain    ?? null,
   };
 

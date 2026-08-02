@@ -60,9 +60,13 @@ describe("windowStats", () => {
     expect(s.p95).toBeCloseTo(9.55, 6);
   });
 
-  it("places the last value in its own distribution", () => {
-    expect(windowStats([1, 2, 3, 4, 10])!.pctile).toBeCloseTo(80, 6);
-    expect(windowStats([10, 4, 3, 2, 1])!.pctile).toBeCloseTo(0, 6);
+  it("places the last value in its own distribution (midrank on ties)", () => {
+    // (less + equal/2) / n — the last value always ties itself once, so the max
+    // of five reads 90th, the min 10th, and a FLAT series reads 50th instead of
+    // the old strict-less 0th ("extreme low" for an unexceptional value).
+    expect(windowStats([1, 2, 3, 4, 10])!.pctile).toBeCloseTo(90, 6);
+    expect(windowStats([10, 4, 3, 2, 1])!.pctile).toBeCloseTo(10, 6);
+    expect(windowStats([5, 5, 5, 5])!.pctile).toBeCloseTo(50, 6);
   });
 
   it("declines rather than guessing on fewer than two observations", () => {
@@ -127,13 +131,18 @@ describe("trendSeries", () => {
 
 // ─── spotVol ─────────────────────────────────────────────────────────────────────────
 
+/** Sequential calendar dates — spotVol drops pairs more than a long weekend apart. */
+function seqDate(i: number): string {
+  return new Date(Date.UTC(2024, 0, 2) + i * 86_400_000).toISOString().slice(0, 10);
+}
+
 /** n sessions where IV change is exactly `beta` vol points per +1% spot, plus noise. */
 function spotVolSeries(n: number, beta: number, noise = 0): AggPoint[] {
   const out: AggPoint[] = [];
   let s = 100;
   let iv = 0.2;
   for (let i = 0; i < n; i++) {
-    out.push({ d: `2024-${String((i % 12) + 1).padStart(2, "0")}-${String((i % 28) + 1).padStart(2, "0")}`, s, iv });
+    out.push({ d: seqDate(i), s, iv });
     // Deterministic pseudo-random return so the test never flakes.
     const r = Math.sin(i * 1.7) * 1.5;
     const wobble = noise * Math.cos(i * 2.3);
@@ -162,7 +171,7 @@ describe("spotVol", () => {
     const s = spotVolSeries(200, -0.8, 0.3);
     // Append a session whose IV jumps far more than the spot move implies.
     const last = s[s.length - 1];
-    s.push({ d: "2024-12-31", s: last.s! * 0.999, iv: last.iv! + 0.05 });
+    s.push({ d: seqDate(200), s: last.s! * 0.999, iv: last.iv! + 0.05 });
     const r = spotVol(s, 252);
     expect(r.residZ!).toBeGreaterThan(VOL_RESID_Z);
     expect(r.verdict).toBe("overvixed");
@@ -173,7 +182,7 @@ describe("spotVol", () => {
   it("calls the mirror case 'undervixed'", () => {
     const s = spotVolSeries(200, -0.8, 0.3);
     const last = s[s.length - 1];
-    s.push({ d: "2024-12-31", s: last.s! * 0.999, iv: last.iv! - 0.05 });
+    s.push({ d: seqDate(200), s: last.s! * 0.999, iv: last.iv! - 0.05 });
     const r = spotVol(s, 252);
     expect(r.residZ!).toBeLessThan(-VOL_RESID_Z);
     expect(r.verdict).toBe("undervixed");
@@ -183,7 +192,7 @@ describe("spotVol", () => {
   it("clamps the gauge so one outlier cannot peg the needle", () => {
     const s = spotVolSeries(200, -0.8, 0.3);
     const last = s[s.length - 1];
-    s.push({ d: "2024-12-31", s: last.s!, iv: last.iv! + 5 }); // absurd
+    s.push({ d: seqDate(200), s: last.s!, iv: last.iv! + 5 }); // absurd
     const r = spotVol(s, 252);
     expect(r.gauge).toBe(1);
   });
@@ -213,7 +222,7 @@ describe("spotVol", () => {
 
   it("declines when spot never moves (no variance to regress on)", () => {
     const flat: AggPoint[] = Array.from({ length: 100 }, (_, i) => ({
-      d: `2024-01-${String((i % 28) + 1).padStart(2, "0")}`, s: 100, iv: 0.2 + i / 1000,
+      d: seqDate(i), s: 100, iv: 0.2 + i / 1000,
     }));
     expect(spotVol(flat).beta).toBeNull();
   });
@@ -268,16 +277,27 @@ describe("extremes", () => {
     expect(near.resistanceMn).toBeCloseTo(70, 6);
   });
 
-  it("only considers positive gamma above spot and negative below", () => {
-    // A negative cell above spot is not resistance and must not be picked as one.
+  it("picks the heaviest |gamma| on each side regardless of sign", () => {
+    // The first pass filtered by sign (above needed +, below needed −), which
+    // silently discarded a dominant negative-gamma strike below spot — exactly
+    // the strike a short-gamma cascade pivots on — and reported "none".
     const r = extremes(
-      { cells: [cell(105, "2026-08-03", -99), cell(107, "2026-08-03", 5)] },
+      {
+        cells: [
+          cell(105, "2026-08-03", -99), // heaviest above, negative — must win
+          cell(107, "2026-08-03", 5),
+          cell(95, "2026-08-03", -200), // heaviest below, negative — must win
+          cell(97, "2026-08-03", 10),
+        ],
+      },
       100,
       ASOF,
     );
     const near = r.rows.find((x) => x.horizon === "near")!;
-    expect(near.resistance).toBe(107);
-    expect(near.support).toBeNull();
+    expect(near.resistance).toBe(105);
+    expect(near.resistanceMn).toBeLessThan(0); // the signed value travels with it
+    expect(near.support).toBe(95);
+    expect(near.supportMn).toBeLessThan(0);
   });
 
   it("distinguishes 'no data' from 'no wall' via the cell count", () => {

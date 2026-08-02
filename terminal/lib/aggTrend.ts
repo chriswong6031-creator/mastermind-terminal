@@ -111,7 +111,11 @@ export interface TrendSeries {
   truncated: boolean;
 }
 
-/** Distribution summary. Mirrors engine/agg_trend._stats so both sides agree. */
+/**
+ * Distribution summary. Mirrors engine/agg_trend._stats so both sides agree —
+ * with one deliberate exception: `pctile` uses midrank on ties (see below); the
+ * engine is being aligned to the same definition in the macro repo.
+ */
 export function windowStats(values: number[]): AggStats | null {
   const v = values.filter(isNum);
   if (v.length < 2) return null;
@@ -137,7 +141,13 @@ export function windowStats(values: number[]): AggStats | null {
     p95: q(0.95),
     max: sorted[sorted.length - 1],
     last,
-    pctile: (v.filter((x) => x < last).length / v.length) * 100,
+    // Midrank on ties: strict-less rank reads a value tying the window minimum as
+    // "0th percentile" — an extreme-low claim about an unexceptional value. With
+    // (less + equal/2) a flat series reads ~50th, which is the honest answer.
+    pctile:
+      ((v.filter((x) => x < last).length + v.filter((x) => x === last).length / 2) /
+        v.length) *
+      100,
     n: v.length,
   };
 }
@@ -291,13 +301,19 @@ export function spotVol(
   if (!Array.isArray(series) || series.length < 2) return EMPTY_SPOTVOL;
 
   // Consecutive sessions only where BOTH spot and IV are present on both ends: a gap
-  // would otherwise contribute a multi-day change labelled as a daily one.
+  // would otherwise contribute a multi-day change labelled as a daily one. "Gap" means
+  // the CALENDAR too — a missing session row would silently pair Friday with the next
+  // Thursday, so any pair more than ~a long weekend apart is dropped outright.
+  const MAX_PAIR_GAP_MS = 4 * 86_400_000;
   const obs: { x: number; y: number }[] = [];
   for (let i = 1; i < series.length; i++) {
     const a = series[i - 1];
     const b = series[i];
     if (!isNum(a?.s) || !isNum(b?.s) || a.s <= 0) continue;
     if (!isNum(a?.iv) || !isNum(b?.iv)) continue;
+    const ta = Date.parse(`${String(a.d ?? "").slice(0, 10)}T00:00:00Z`);
+    const tb = Date.parse(`${String(b.d ?? "").slice(0, 10)}T00:00:00Z`);
+    if (Number.isFinite(ta) && Number.isFinite(tb) && tb - ta > MAX_PAIR_GAP_MS) continue;
     obs.push({
       x: ((b.s - a.s) / a.s) * 100,
       y: (b.iv - a.iv) * 100, // fraction → vol points
@@ -399,6 +415,13 @@ interface MatrixLike {
   asof?: string | null;
   spot?: number | null;
   cells?: { strike: number; expiry: string; gex: number | null }[];
+  /**
+   * Prod carries the SESSION date here while the top-level `asof` is the build
+   * timestamp (observed live: asof 2026-07-31T23:00Z over a 2026-07-30 chain).
+   * Anchoring DTE on the build stamp bands every cell one day short, so this
+   * wins when present.
+   */
+  _build_meta?: { asof_date?: string | null } | null;
 }
 
 /**
@@ -447,7 +470,13 @@ export function extremes(
   // to decide which side of the money a strike sits on can flip a support into a
   // resistance outright. Both produce a full, confident table describing a session that
   // is not the one the reader is looking at.
-  const mAsof = typeof matrix?.asof === "string" && matrix.asof ? matrix.asof : asof;
+  const buildAsof = matrix?._build_meta?.asof_date;
+  const mAsof =
+    typeof buildAsof === "string" && buildAsof
+      ? buildAsof
+      : typeof matrix?.asof === "string" && matrix.asof
+        ? matrix.asof
+        : asof;
   const mSpot = isNum(matrix?.spot) ? (matrix.spot as number) : isNum(spot) ? spot : null;
   if (mSpot == null || mSpot <= 0 || !mAsof) return { rows, available: false };
 
@@ -486,11 +515,16 @@ export function extremes(
   for (const row of rows) {
     const m = byBand.get(row.horizon)!;
     row.cells = counts.get(row.horizon) ?? 0;
+    // Heaviest by MAGNITUDE on each side, any sign — exactly what the card's copy
+    // promises. The first pass filtered by sign (above needed mn>0, below mn<0),
+    // which silently discarded e.g. a dominant negative-gamma strike below spot —
+    // precisely the strike a short-gamma cascade pivots on — and showed "none".
+    // The signed $mn travels with the strike so a consumer still sees the side.
     let bestAbove: [number, number] | null = null;
     let bestBelow: [number, number] | null = null;
     for (const [k, mn] of m) {
-      if (k > s && mn > 0 && (bestAbove == null || mn > bestAbove[1])) bestAbove = [k, mn];
-      if (k < s && mn < 0 && (bestBelow == null || mn < bestBelow[1])) bestBelow = [k, mn];
+      if (k > s && (bestAbove == null || Math.abs(mn) > Math.abs(bestAbove[1]))) bestAbove = [k, mn];
+      if (k < s && (bestBelow == null || Math.abs(mn) > Math.abs(bestBelow[1]))) bestBelow = [k, mn];
     }
     row.resistance = bestAbove?.[0] ?? null;
     row.resistanceMn = bestAbove?.[1] ?? null;

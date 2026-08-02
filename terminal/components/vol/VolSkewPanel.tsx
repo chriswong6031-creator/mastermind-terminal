@@ -21,7 +21,7 @@ import { Tip } from "@/components/ui/Tip";
 import { makeVolT } from "./volStrings";
 import type { VolSmileExp, VolSmilePoint } from "./volTypes";
 import {
-  finiteSegments, ProvenanceLine, PanelEmpty, PLOT_PAD, AXIS_TXT, NEUTRAL_CHIP,
+  finiteSegments, ProvenanceLine, PanelEmpty, PLOT_PAD, AXIS_TXT, REF_TXT, NEUTRAL_CHIP,
 } from "./volShared";
 
 const H = 210; // two overlaid series + legend want a little more than the 190 floor
@@ -163,14 +163,18 @@ export function VolSkewPanel({
               </button>
             </Tip>
           )}
-          <button
-            className={`chip${fullChain ? " on" : ""}`}
-            style={EXP_CHIP}
-            aria-pressed={fullChain}
-            onClick={() => setFullChain((v) => !v)}
-          >
-            {t("skewFullChain")}
-          </button>
+          {/* Only offered when the trim actually removed strikes — otherwise the
+              toggle highlights and changes nothing, a dead control. */}
+          {(fullChain || trimmedPts.length < allPts.length) && (
+            <button
+              className={`chip${fullChain ? " on" : ""}`}
+              style={EXP_CHIP}
+              aria-pressed={fullChain}
+              onClick={() => setFullChain((v) => !v)}
+            >
+              {t("skewFullChain")}
+            </button>
+          )}
         </div>
       )}
       <div ref={boxRef} style={{ width: "100%", minWidth: 0 }}>
@@ -191,6 +195,10 @@ export function VolSkewPanel({
                 {fmtTick(v, xStep)}
               </text>
             ))}
+            {/* x-axis caption, inside the plot band (mirrors VolTermPanel) */}
+            <text x={w - PLOT_PAD.r} y={PLOT_PAD.t + 10} textAnchor="end" style={REF_TXT}>
+              {t("skewStrikeAxis")}
+            </text>
             {callSegs.map((seg, i) => (
               <path key={`c${i}`} d={pathOf(seg, "call_iv")} fill="none" stroke={CALL_COLOR}
                 strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />

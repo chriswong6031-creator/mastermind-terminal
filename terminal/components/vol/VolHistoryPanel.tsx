@@ -97,7 +97,18 @@ export function VolHistoryPanel({
 
   return (
     <section className="fin-card" style={{ minWidth: 0 }}>
-      <div className="fin-card-h">{t("histTitle")}</div>
+      <div className="fin-card-h" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span>{t("histTitle")}</span>
+        {/* Coverage disclosed from the DATA, not asserted by the title — a
+            short-history root must not be labelled a 90-day read. */}
+        {drawable && (
+          <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
+            {t("histCoverage")
+              .replace("{n}", String(finite.length))
+              .replace("{d}", finite[0].date.slice(0, 10))}
+          </span>
+        )}
+      </div>
       <div ref={boxRef} style={{ width: "100%", minWidth: 0 }}>
         {!drawable ? (
           <PanelEmpty title={t("histEmptyTitle")} why={t("histEmptyWhy")} minHeight={H} />
@@ -136,12 +147,19 @@ export function VolHistoryPanel({
                 strokeLinecap="round"
               />
             ))}
-            {/* x labels — thinned by rendered pixel gap (R6) */}
-            {xLabels.map((p) => (
-              <text key={p.date} x={xOf(p.e)} y={H - 8} textAnchor="middle" style={AXIS_TXT}>
-                {p.date.slice(5)}
-              </text>
-            ))}
+            {/* x labels — thinned by rendered pixel gap (R6). Edge labels anchor
+                inward: thinLabels always keeps the endpoints, and a middle-anchored
+                label at x = w − PLOT_PAD.r hangs half outside the viewBox. */}
+            {xLabels.map((p) => {
+              const x = xOf(p.e);
+              const anchor =
+                x > w - PLOT_PAD.r - 18 ? "end" : x < PLOT_PAD.l + 18 ? "start" : "middle";
+              return (
+                <text key={p.date} x={x} y={H - 8} textAnchor={anchor} style={AXIS_TXT}>
+                  {p.date.slice(5)}
+                </text>
+              );
+            })}
           </svg>
         )}
       </div>

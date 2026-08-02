@@ -942,8 +942,11 @@ const LEX: Record<string, [string, string]> = {
   tabScreener: ["Screener", "筛选"],
   tabVol: ["Vol", "波动率"],
   tabVolatility: ["Volatility", "波动率"],
+  // zh disambiguation: Structure is the OI suite (open-interest distribution),
+  // Positioning is dealer positioning — the two must never share a label, or the
+  // zh tab bar shows two identical tabs side by side (shipped live 2026-08-01).
   tabPositioning: ["Positioning", "持仓结构"],
-  tabStructure: ["Structure", "持仓结构"],
+  tabStructure: ["Structure", "未平仓分布"],
   tabGex: ["Exposure", "敞口"],
   tabSurface: ["Surface", "曲面"],
   tabPrism: ["PRISM", "矩阵"],
@@ -964,7 +967,7 @@ const LEX: Record<string, [string, string]> = {
   wtPrism: ["PRISM", "矩阵"],
   wtVolatility: ["Volatility", "波动率"],
   wtPositioning: ["Positioning", "持仓结构"],
-  wtStructure: ["Structure", "持仓结构"],
+  wtStructure: ["Structure", "未平仓分布"],
   wtProphet: ["Prophet", "先知"],
   wtFundamentals: ["Fundamentals", "基本面"],
   wtAlerts: ["Alerts", "提醒"],

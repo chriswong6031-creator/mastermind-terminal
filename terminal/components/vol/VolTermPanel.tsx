@@ -122,8 +122,9 @@ export function VolTermPanel({
                 {fmtTick(v, xStep)}
               </text>
             ))}
-            {/* x-axis caption */}
-            <text x={w - PLOT_PAD.r} y={PLOT_PAD.t - 2} textAnchor="end" style={REF_TXT}>
+            {/* x-axis caption — INSIDE the plot band: at PLOT_PAD.t−2 the 9px em-box
+                top sat at y≈1 and fonts with taller ascents clipped at the SVG edge. */}
+            <text x={w - PLOT_PAD.r} y={PLOT_PAD.t + 10} textAnchor="end" style={REF_TXT}>
               {t("termXAxis")}
             </text>
             <path

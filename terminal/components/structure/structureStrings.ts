@@ -39,8 +39,8 @@ const STRUCTURE_LEX = {
   ],
   // Shared per-panel provenance footer — the t-1 law rides on EVERY panel.
   provenance: [
-    "options_hub · nightly EOD · OI is the prior session's report (t-1)",
-    "options_hub · 每晚收盘数据 · 未平仓为上一交易日申报 (t-1)",
+    "options_hub · nightly EOD · OI is the prior session's report (t‑1)",
+    "options_hub · 每晚收盘数据 · 未平仓为上一交易日申报 (t‑1)",
   ],
 
   // ── OI by strike ───────────────────────────────────────────────────────────

@@ -1,26 +1,23 @@
 "use client";
 /**
- * QuadCards — Volland-parity wave 3 (docs/VOLLAND_PARITY_PLAN_2026-08-01.md §5 W3).
+ * QuadCards — delta-space book + cross-root screener (Volland-parity W3, rebuilt in the
+ * 2026-08-01 production sweep).
  *
- *   1. Floating strike   — the same book indexed by call-equivalent delta rather than by
- *      strike. A strike is a fixed price; a delta is a position relative to where the
- *      market actually is, so the 0.25-delta wing stays the same object week to week
- *      while "the 750 strike" quietly becomes something else.
- *   2. Cross-root screener — every root ranked against ITS OWN nine-year history on two
- *      axes: dealer gamma (does hedging dampen or amplify) and dealer vanna (does a vol
- *      move force hedging). Volland normalises across whatever is on screen; ranking
- *      against each root's own record is both more meaningful and immune to which roots
- *      happen to be included.
+ * Sweep changes, each answering a defect the operator saw on production:
+ *   • The screener's quadrant counts sat in a space-between legend row, so every count
+ *     visually bound to the NEXT quadrant's label ("…VOL-SENSITIVE  10  AMPLIFY…" read as
+ *     "10 AMPLIFY"). Counts now render INSIDE their own quadrant corner, on the plot.
+ *   • The scatter was a full-width 260px void with 2px dots. It is now ~58% width beside
+ *     its extremes table, 300px tall, dots sized to be seen, both axes titled.
+ *   • The extremes table sat under the plot pushing the card past 600px; it sits beside
+ *     the plot, with percentile and dollars as separate columns.
+ *   • Delta-space chart to ≥190px (svgChart R4) with the ⓘ carrying the population note.
  *
- * SVG LAW (components/charts/svgChart.ts): measured 1:1 viewBox, padDomain over finite
- * values, niceTicks with step-derived precision, labels thinned by PIXEL GAP.
- *
- * COLOUR LAW: hedging is a transaction side, so --flow-buy/--flow-sell (which do not
- * invert under the East-Asian convention). Every readout names the side in words.
+ * SVG LAW (svgChart.ts R1–R9) and COLOUR LAW (--flow-buy/--flow-sell for transaction
+ * sides; --warn for severity; never --up/--down) unchanged.
  */
 
 import React, { useMemo, useRef, useState } from "react";
-import { Tip } from "@/components/ui/Tip";
 import { fmtMn, fmtMnMag } from "@/lib/gexLadder";
 import { fmtTick, niceTicks, padDomain, useChartWidth } from "@/components/charts/svgChart";
 import {
@@ -33,6 +30,7 @@ import {
   type Quadrant,
 } from "@/lib/quadBoard";
 import { makeMscT, type MscKey } from "./mscStrings";
+import { MscCard, CardFoot, CardSpacer } from "./MscCard";
 import type { Lang } from "@/lib/i18n";
 
 const GREEKS: { key: BucketGreek; labelKey: MscKey }[] = [
@@ -52,10 +50,10 @@ const QUADRANT_KEY: Record<Quadrant, MscKey> = {
 const sideColor = (v: number) =>
   v > 0 ? "var(--flow-buy)" : v < 0 ? "var(--flow-sell)" : "var(--text-dim)";
 
-// ─── Card 1: floating strike ─────────────────────────────────────────────────────────
+// ─── Card 1: the book in delta space ─────────────────────────────────────────────────
 
-const FH = 160;
-const FPAD = { l: 8, r: 52, t: 10, b: 22 };
+const FH = 192;
+const FPAD = { l: 8, r: 52, t: 12, b: 20 };
 
 export function FloatingStrikeCard({
   byDelta,
@@ -76,8 +74,8 @@ export function FloatingStrikeCard({
   const geom = useMemo(() => {
     if (f.buckets.length < 2) return null;
     const ys = f.buckets.map((b) => b.hedgeMn);
-    // The delta axis is bounded by definition — 0 to 1 — so it is drawn to its full
-    // extent rather than to the occupied range. An empty wing IS the information.
+    // The delta axis is bounded by definition — 0 to 1 — and is drawn to its full
+    // extent. An empty wing IS the information: nobody owns those deltas.
     const sx = (v: number) => FPAD.l + v * innerW;
     const [y0, y1] = padDomain(Math.min(...ys), Math.max(...ys), {
       padFrac: 0.12,
@@ -88,17 +86,18 @@ export function FloatingStrikeCard({
   }, [f.buckets, innerW, innerH]);
 
   return (
-    <section style={{ ...CARD, gridColumn: "1 / -1" }}>
-      <header style={CARD_HD}>
-        <span className="obs-lbl">{t("fsTitle")}</span>
-        <Tip label={t("tierBWhy")} side="top" size="card">
-          <span style={TIER_CHIP} tabIndex={0}>{t("tierB")}</span>
-        </Tip>
-      </header>
-      <p style={LEAD}>{t("fsLead")}</p>
-
+    <MscCard
+      title={t("fsTitle")}
+      info={`${t("fsLead")} ${t("fsCoverage")}`}
+      tier={t("tierB")}
+      tierWhy={t("tierBWhy")}
+      headRight={
+        f.peak ? <span style={UNIT}>{t("fsPeak").replace("{b}", bucketLabel(f.peak))}</span> : undefined
+      }
+      span={8}
+    >
       {f.buckets.length < 2 || !geom ? (
-        <p style={FOOT}>{t("fsNone")}</p>
+        <CardFoot>{t("fsNone")}</CardFoot>
       ) : (
         <>
           <div style={CTRL_ROW}>
@@ -115,11 +114,6 @@ export function FloatingStrikeCard({
                 </button>
               ))}
             </div>
-            {f.peak && (
-              <span style={UNIT}>
-                {t("fsPeak").replace("{b}", bucketLabel(f.peak))}
-              </span>
-            )}
           </div>
 
           <div ref={boxRef} style={{ width: "100%" }}>
@@ -174,19 +168,21 @@ export function FloatingStrikeCard({
             </svg>
           </div>
 
-          <p style={FOOT}>{t("fsLegend")}</p>
-          <p style={FOOT}>{t("fsCoverage")}</p>
-          <p style={FOOT}>{t("fsScale").replace("{v}", fmtMnMag(f.maxAbsMn))}</p>
+          <CardSpacer />
+          <CardFoot>
+            {t("fsLegend")} {t("fsScale").replace("{v}", fmtMnMag(f.maxAbsMn))}
+          </CardFoot>
         </>
       )}
-    </section>
+    </MscCard>
   );
 }
 
 // ─── Card 2: cross-root screener ─────────────────────────────────────────────────────
 
-const QH = 260;
-const QPAD = { l: 30, r: 12, t: 12, b: 26 };
+const QH = 300;
+const QPAD = { l: 34, r: 14, t: 14, b: 30 };
+const TABLE_MAX = 10;
 
 export function QuadScreenerCard({
   quad,
@@ -208,201 +204,201 @@ export function QuadScreenerCard({
   const sx = (p: number) => QPAD.l + (p / 100) * innerW;
   const sy = (p: number) => QPAD.t + innerH - (p / 100) * innerH;
 
+  // Table rows: the committed root pinned first (when ranked), then the extremes.
+  const tableRows = useMemo(() => {
+    const mine = b.rows.find((r) => r.root === root);
+    const rest = b.extremes.filter((r) => r.root !== root).slice(0, TABLE_MAX);
+    return mine ? [mine, ...rest].slice(0, TABLE_MAX) : rest;
+  }, [b, root]);
+
   if (!b.rows.length) {
     return (
-      <section style={{ ...CARD, gridColumn: "1 / -1" }}>
-        <header style={CARD_HD}>
-          <span className="obs-lbl">{t("qdTitle")}</span>
-        </header>
-        <p style={FOOT}>{t("qdNone")}</p>
-      </section>
+      <MscCard title={t("qdTitle")} span={12}>
+        <CardFoot>{t("qdNone")}</CardFoot>
+      </MscCard>
     );
   }
 
+  // Corner copy: x < 50 = hedging amplifies (dealer gamma low in its own record);
+  // y ≥ 50 = a vol move forces hedging (vanna high). Counts live in their corner.
+  const corners: { q: Quadrant; x: number; y: number; anchor: "start" | "end" }[] = [
+    { q: "amplify_volsens", x: QPAD.l + 6, y: QPAD.t + 12, anchor: "start" },
+    { q: "dampen_volsens", x: QPAD.l + innerW - 6, y: QPAD.t + 12, anchor: "end" },
+    { q: "amplify_stable", x: QPAD.l + 6, y: QPAD.t + innerH - 6, anchor: "start" },
+    { q: "dampen_stable", x: QPAD.l + innerW - 6, y: QPAD.t + innerH - 6, anchor: "end" },
+  ];
+
   return (
-    <section style={{ ...CARD, gridColumn: "1 / -1" }}>
-      <header style={CARD_HD}>
-        <span className="obs-lbl">{t("qdTitle")}</span>
-        <Tip label={t("qdTierWhy")} side="top" size="card">
-          <span style={TIER_CHIP} tabIndex={0}>{t("tierB")}</span>
-        </Tip>
-      </header>
-      <p style={LEAD}>{t("qdLead")}</p>
+    <MscCard
+      title={t("qdTitle")}
+      info={`${t("qdLead")} ${t("qdWindow").replace("{d}", String(b.pctileWindowDays ?? 252))}`}
+      tier={t("tierB")}
+      tierWhy={t("qdTierWhy")}
+      span={12}
+    >
+      <div style={SPLIT}>
+        <div ref={boxRef} style={SPLIT_CHART}>
+          <svg width={W} height={QH} viewBox={`0 0 ${W} ${QH}`} role="img" aria-label={t("qdTitle")}>
+            {/* Quadrant dividers at the median of each axis. */}
+            <line x1={sx(50)} x2={sx(50)} y1={QPAD.t} y2={QPAD.t + innerH} stroke="var(--line-2)" strokeWidth={0.75} />
+            <line x1={QPAD.l} x2={QPAD.l + innerW} y1={sy(50)} y2={sy(50)} stroke="var(--line-2)" strokeWidth={0.75} />
+            <rect
+              x={QPAD.l} y={QPAD.t} width={innerW} height={innerH}
+              fill="none" stroke="var(--hairline)" strokeWidth={0.5}
+            />
 
-      <div ref={boxRef} style={{ width: "100%" }}>
-        <svg width={W} height={QH} viewBox={`0 0 ${W} ${QH}`} role="img" aria-label={t("qdTitle")}>
-          {/* Quadrant dividers at the median of each axis. */}
-          <line x1={sx(50)} x2={sx(50)} y1={QPAD.t} y2={QPAD.t + innerH} stroke="var(--line-2)" strokeWidth={0.75} />
-          <line x1={QPAD.l} x2={QPAD.l + innerW} y1={sy(50)} y2={sy(50)} stroke="var(--line-2)" strokeWidth={0.75} />
-          {[0, 25, 50, 75, 100].map((p) => (
-            <g key={p}>
-              <text x={sx(p)} y={QH - 12} fill="var(--text-dim)" fontSize={9} textAnchor={p === 0 ? "start" : p === 100 ? "end" : "middle"}>
-                {p}
+            {/* Quadrant names + counts, in their own corners (the misbinding fix). */}
+            {corners.map((c) => (
+              <text key={c.q} x={c.x} y={c.y} fontSize={8.5} fill="var(--text-dim)" textAnchor={c.anchor} opacity={0.9}>
+                {t(QUADRANT_KEY[c.q])} · {b.counts[c.q]}
               </text>
-              <text x={QPAD.l - 5} y={sy(p) + 3} fill="var(--text-dim)" fontSize={9} textAnchor="end">
-                {p}
-              </text>
-            </g>
-          ))}
-
-          {b.rows.map((r) => {
-            const mine = r.root === root;
-            const x = sx(r.gamma_pctile);
-            const y = sy(r.vanna_pctile);
-            return (
-              <g key={r.root}>
-                <circle
-                  cx={x}
-                  cy={y}
-                  r={mine ? 4 : r.extreme ? 3 : 2.2}
-                  fill={mine ? "var(--brand)" : r.extreme ? "var(--warn)" : "var(--text-dim)"}
-                  opacity={mine ? 1 : r.extreme ? 0.9 : 0.5}
-                />
-                {(mine || r.extreme) && (
-                  <text
-                    x={x + 5}
-                    y={y + 3}
-                    fill={mine ? "var(--brand)" : "var(--text-2)"}
-                    fontSize={9}
-                    fontWeight={mine ? 700 : 500}
-                  >
-                    {r.root}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-          <text x={QPAD.l + innerW / 2} y={QH - 1} fill="var(--text-dim)" fontSize={9} textAnchor="middle">
-            {t("qdAxisX")}
-          </text>
-        </svg>
-      </div>
-
-      <div style={LEGEND_GRID}>
-        {(Object.keys(QUADRANT_KEY) as Quadrant[]).map((q) => (
-          <div key={q} style={LEGEND_CELL}>
-            <span style={LEG_LBL}>{t(QUADRANT_KEY[q])}</span>
-            <span style={LEG_VAL}>{b.counts[q]}</span>
-          </div>
-        ))}
-      </div>
-
-      {b.extremes.length > 0 && (
-        <table style={TABLE}>
-          <thead>
-            <tr>
-              <th style={TH}>{t("qdColRoot")}</th>
-              <th style={{ ...TH, textAlign: "right" }}>{t("qdColGamma")}</th>
-              <th style={{ ...TH, textAlign: "right" }}>{t("qdColVanna")}</th>
-              <th style={TH}>{t("qdColRegime")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {b.extremes.slice(0, 8).map((r) => (
-              <tr key={r.root}>
-                <td style={{ ...TD, fontWeight: r.root === root ? 700 : 500 }}>{r.root}</td>
-                <td style={{ ...TD, textAlign: "right" }}>
-                  {r.gamma_pctile.toFixed(0)}
-                  <span style={SUB}> · {r.gamma_bn == null ? "—" : fmtMn(r.gamma_bn * 1000)}</span>
-                </td>
-                <td style={{ ...TD, textAlign: "right" }}>
-                  {r.vanna_pctile.toFixed(0)}
-                  <span style={SUB}> · {r.vanna_bn == null ? "—" : fmtMn(r.vanna_bn * 1000)}</span>
-                </td>
-                <td style={TD}>{t(QUADRANT_KEY[r.quadrant])}</td>
-              </tr>
             ))}
-          </tbody>
-        </table>
-      )}
 
-      <p style={FOOT}>{t("qdLegend").replace("{n}", String(b.rows.length))}</p>
-      {b.pctileWindowDays != null && (
-        <p style={FOOT}>{t("qdWindow").replace("{d}", String(b.pctileWindowDays))}</p>
-      )}
-      {b.minHistoryDays != null && (
-        <p style={FOOT}>
-          {t("qdMinHistory").replace("{d}", String(b.minHistoryDays))}
-          {b.skipped.length > 0
-            ? ` ${t("qdSkipped").replace("{n}", String(b.skipped.length)).replace("{r}", b.skipped.slice(0, 6).join(", "))}`
-            : ""}
-        </p>
-      )}
-    </section>
+            {[0, 25, 50, 75, 100].map((p) => (
+              <g key={p}>
+                <text x={sx(p)} y={QH - 18} fill="var(--text-dim)" fontSize={9} textAnchor={p === 0 ? "start" : p === 100 ? "end" : "middle"}>
+                  {p}
+                </text>
+                <text x={QPAD.l - 5} y={sy(p) + 3} fill="var(--text-dim)" fontSize={9} textAnchor="end">
+                  {p}
+                </text>
+              </g>
+            ))}
+
+            {b.rows.map((r) => {
+              const mine = r.root === root;
+              const x = sx(r.gamma_pctile);
+              const y = sy(r.vanna_pctile);
+              // Narrow plots label only the committed root — seven extremes pinned
+              // at the 98th–100th percentile shoulder-to-shoulder turn into an
+              // unreadable smear at 390px; the table beside carries their names.
+              const labelled = mine || (r.extreme && W >= 560);
+              const flip = x > QPAD.l + innerW - 44;
+              return (
+                <g key={r.root}>
+                  {mine && (
+                    <circle cx={x} cy={y} r={7} fill="none" stroke="var(--brand)" strokeWidth={1} opacity={0.5} />
+                  )}
+                  <circle
+                    cx={x}
+                    cy={y}
+                    r={mine ? 4 : r.extreme ? 3.25 : 2.75}
+                    fill={mine ? "var(--brand)" : r.extreme ? "var(--warn)" : "var(--text-dim)"}
+                    opacity={mine ? 1 : r.extreme ? 0.9 : 0.55}
+                  />
+                  {labelled && (
+                    <text
+                      x={flip ? x - 6 : x + 6}
+                      y={y + 3}
+                      fill={mine ? "var(--brand)" : "var(--text-2)"}
+                      fontSize={9}
+                      fontWeight={mine ? 700 : 500}
+                      textAnchor={flip ? "end" : "start"}
+                    >
+                      {r.root}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+
+            <text x={QPAD.l + innerW / 2} y={QH - 4} fill="var(--text-dim)" fontSize={9} textAnchor="middle">
+              {t("qdAxisX")}
+            </text>
+            <text
+              x={0} y={0} fill="var(--text-dim)" fontSize={9} textAnchor="middle"
+              transform={`translate(10 ${QPAD.t + innerH / 2}) rotate(-90)`}
+            >
+              {t("qdAxisY")}
+            </text>
+          </svg>
+        </div>
+
+        <div style={{ ...SPLIT_TABLE, overflowX: "auto" }}>
+          {tableRows.length > 0 && (
+            <table style={TABLE}>
+              <thead>
+                <tr>
+                  <th style={TH}>{t("qdColRoot")}</th>
+                  <th style={{ ...TH, textAlign: "right" }}>{t("qdColGammaPct")}</th>
+                  <th style={{ ...TH, textAlign: "right" }}>{t("qdColGammaUsd")}</th>
+                  <th style={{ ...TH, textAlign: "right" }}>{t("qdColVannaPct")}</th>
+                  <th style={{ ...TH, textAlign: "right" }}>{t("qdColVannaUsd")}</th>
+                  <th style={TH}>{t("qdColRegime")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tableRows.map((r) => {
+                  const mine = r.root === root;
+                  return (
+                    <tr key={r.root} style={mine ? { background: "color-mix(in srgb, var(--brand) 7%, transparent)" } : undefined}>
+                      <td style={{ ...TD, fontWeight: mine ? 700 : 500, color: mine ? "var(--brand)" : "var(--text)" }}>
+                        {r.root}
+                      </td>
+                      <td style={{ ...TD, textAlign: "right" }}>{r.gamma_pctile.toFixed(0)}</td>
+                      <td style={{ ...TD, textAlign: "right", color: "var(--text-2)" }}>
+                        {r.gamma_bn == null ? "—" : fmtMn(r.gamma_bn * 1000)}
+                      </td>
+                      <td style={{ ...TD, textAlign: "right" }}>{r.vanna_pctile.toFixed(0)}</td>
+                      <td style={{ ...TD, textAlign: "right", color: "var(--text-2)" }}>
+                        {r.vanna_bn == null ? "—" : fmtMn(r.vanna_bn * 1000)}
+                      </td>
+                      <td style={{ ...TD, whiteSpace: "nowrap" }}>{t(QUADRANT_KEY[r.quadrant])}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      <CardSpacer />
+      <CardFoot>
+        {t("qdFootMeta")
+          .replace("{n}", String(b.rows.length))
+          .replace("{d}", String(b.pctileWindowDays ?? 252))
+          .replace("{m}", String(b.minHistoryDays ?? 250))}
+        {b.skipped.length > 0
+          ? ` · ${t("qdSkipped").replace("{n}", String(b.skipped.length)).replace("{r}", b.skipped.slice(0, 6).join(", "))}`
+          : ""}
+      </CardFoot>
+    </MscCard>
   );
 }
 
-// ─── Styles (v5 tokens; mirrors HedgingCards / TrendCards) ──────────────────────────
-
-const CARD: React.CSSProperties = {
-  background: "var(--panel-2)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-tile)",
-  padding: "9px 10px 10px",
-  minWidth: 0,
-};
-
-const CARD_HD: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "space-between",
-  gap: 8, marginBottom: 5,
-};
-
-const TIER_CHIP: React.CSSProperties = {
-  fontSize: "var(--fs-micro)", letterSpacing: ".04em", textTransform: "uppercase",
-  color: "var(--text-dim)", border: "1px solid var(--line-2)", borderRadius: 999,
-  padding: "1px 6px", whiteSpace: "nowrap", cursor: "help",
-};
-
-const LEAD: React.CSSProperties = {
-  margin: "0 0 8px", fontSize: 11, lineHeight: 1.45, color: "var(--muted)",
-};
+// ─── Local styles (v5 tokens) ────────────────────────────────────────────────────────
 
 const CTRL_ROW: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6,
 };
 
-const CHIP_GROUP: React.CSSProperties = { display: "flex", gap: 3 };
+const CHIP_GROUP: React.CSSProperties = { display: "flex", gap: 3, flexWrap: "wrap" };
 
 const CHIP: React.CSSProperties = { fontSize: 10, padding: "2px 7px" };
 
 const UNIT: React.CSSProperties = {
   fontSize: "var(--fs-micro)", letterSpacing: ".03em", color: "var(--text-dim)",
-  textTransform: "uppercase", marginLeft: "auto",
+  textTransform: "uppercase", whiteSpace: "nowrap",
 };
 
-const LEGEND_GRID: React.CSSProperties = {
-  display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-  gap: 6, margin: "6px 0 8px",
+const SPLIT: React.CSSProperties = {
+  display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-start", minWidth: 0,
 };
 
-const LEGEND_CELL: React.CSSProperties = {
-  display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 6,
-};
+const SPLIT_CHART: React.CSSProperties = { flex: "1 1 460px", minWidth: 320 };
 
-const LEG_LBL: React.CSSProperties = {
-  fontSize: "var(--fs-micro)", letterSpacing: ".04em", textTransform: "uppercase",
-  color: "var(--text-dim)",
-};
-
-const LEG_VAL: React.CSSProperties = {
-  fontSize: 13, fontWeight: 600, fontVariantNumeric: "tabular-nums",
-};
+const SPLIT_TABLE: React.CSSProperties = { flex: "1 1 340px", minWidth: 300 };
 
 const TABLE: React.CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 11 };
 
 const TH: React.CSSProperties = {
   textAlign: "left", fontWeight: 500, fontSize: "var(--fs-micro)", letterSpacing: ".04em",
   textTransform: "uppercase", color: "var(--text-dim)", padding: "3px 5px",
-  borderBottom: "1px solid var(--line)",
+  borderBottom: "1px solid var(--line)", whiteSpace: "nowrap",
 };
 
 const TD: React.CSSProperties = {
   padding: "3px 5px", color: "var(--text)", borderBottom: "1px solid var(--hairline)",
   fontVariantNumeric: "tabular-nums",
-};
-
-const SUB: React.CSSProperties = { color: "var(--text-dim)", fontSize: 10 };
-
-const FOOT: React.CSSProperties = {
-  margin: "0 0 4px", fontSize: 10, lineHeight: 1.5, color: "var(--muted)",
 };
