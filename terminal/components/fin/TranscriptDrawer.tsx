@@ -3,7 +3,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLang } from "../../lib/i18n";
 import { fmtDate, pick } from "../../lib/finFormat";
-import { getTx, transcriptBodyUrl, type Transcript, type TxSegment } from "../../lib/fund";
+import { getTx, transcriptBodyUrl, type Transcript } from "../../lib/fund";
+import { classifyTranscriptQaStart } from "../../lib/transcriptSearch";
 
 export interface TranscriptDrawerProps {
   sym: string;
@@ -17,19 +18,6 @@ interface TranscriptLoad {
   key: string;
   transcript: Transcript | null;
   error: boolean;
-}
-
-function findQaStart(segments: TxSegment[]): number | null {
-  const qaPattern = /question(?:-and-answer|s and answers|s)?/i;
-  for (let i = 0; i < segments.length; i += 1) {
-    const segment = segments[i];
-    if (segment.role.trim().toLowerCase() === "analyst") return i;
-    if (
-      (segment.role.trim().toLowerCase() === "operator" || segment.speaker.trim().toLowerCase() === "operator")
-      && qaPattern.test(segment.text)
-    ) return i;
-  }
-  return null;
 }
 
 function highlighted(text: string, query: string) {
@@ -114,7 +102,7 @@ export default function TranscriptDrawer({ sym, id, name, onClose }: TranscriptD
   const loading = load.key !== requestKey;
   const state: "loading" | "ok" | "error" = loading ? "loading" : load.error ? "error" : "ok";
   const tx = loading ? null : load.transcript;
-  const qaStart = useMemo(() => tx ? findQaStart(tx.segments) : null, [tx]);
+  const qaStart = useMemo(() => tx ? classifyTranscriptQaStart(tx.segments).index : null, [tx]);
   const speakers = useMemo(() => tx
     ? [...new Set(tx.segments.map((segment) => segment.speaker.trim()).filter(Boolean))].sort()
     : [], [tx]);
