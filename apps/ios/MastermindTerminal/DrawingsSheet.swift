@@ -91,6 +91,10 @@ struct DrawingsSheet: View {
         // IMG_2366 measures TV's sheet opening at ~62% (top edge y≈989/2622) with the
         // chart alive above it; dragging expands to full. Same verb as the Analysis hub.
         .presentationDetents([.fraction(0.62), .large])
+        // "Alive" is literal: IMG_2366's chart band is at full ink, so the system's
+        // default partial-detent scrim must not dim it. `tvScrim` (§1.6) belongs only to
+        // the raised sheet — the `.large` dim stays (§4-A20.28).
+        .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.62)))
         .presentationContentInteraction(.resizes)
         // The kit draws TV's grabber; the system indicator would double it.
         .presentationDragIndicator(.hidden)
