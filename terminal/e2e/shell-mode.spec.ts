@@ -523,11 +523,16 @@ test.describe("TV chart-surface parity (shell)", () => {
     expect(await page.locator(".chart-tabs").evaluate((el) => getComputedStyle(el).position)).not.toBe("absolute");
     // The toolbar row survives on the web at every width the web still ships it — R2.2 retired it
     // on the PHONE (≤640px) in favour of the roller strip, which is not a shell-parity rule.
-    if ((page.viewportSize()?.width ?? 1440) > 640) await expect(page.locator(".chart-tabs .ct")).toBeVisible();
-    await expect(page.locator(".cfb-left")).toBeVisible();
+    const web = (page.viewportSize()?.width ?? 1440) > 640;
+    if (web) await expect(page.locator(".chart-tabs .ct")).toBeVisible();
     await expect(page.locator(".status-last")).toBeHidden();
-    await expect(page.locator(".chart-frame-bar")).toBeVisible();
-    expect(await page.locator(".chart-frame-bar").evaluate((el) => getComputedStyle(el).position)).toBe("relative");
+    // R2c retired the range row on the PHONE too — also not a shell-parity rule, so the row's
+    // web presence is only assertable where the web still ships it.
+    if (web) {
+      await expect(page.locator(".cfb-left")).toBeVisible();
+      await expect(page.locator(".chart-frame-bar")).toBeVisible();
+      expect(await page.locator(".chart-frame-bar").evaluate((el) => getComputedStyle(el).position)).toBe("relative");
+    }
     const chip = page.locator(".lg-collapse").first();
     expect(await chip.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("1px");
     expect(await chip.evaluate((el) => getComputedStyle(el).borderTopColor)).toBe("rgba(0, 0, 0, 0)");
@@ -762,7 +767,10 @@ test.describe("TV chart-surface polish (shell)", () => {
     // the gradient, the scrub class and the ETH-chip hide are all shell-only.
     expect(await page.locator(".pane").first().evaluate((el) => getComputedStyle(el).backgroundImage)).toBe("none");
     await expect(page.locator(".statusline.is-scrub")).toHaveCount(0);
-    await expect(page.locator(".cfb-chip.cfb-chip-adj")).toBeVisible();
+    // …at every width that still carries the range row (R2c retired it on the phone).
+    if ((page.viewportSize()?.width ?? 1440) > 640) {
+      await expect(page.locator(".cfb-chip.cfb-chip-adj")).toBeVisible();
+    }
     // …and the C7 regular-width ramp never fires off the shell marker, at any viewport.
     await expect.poll(() => statusNameSize(page), { timeout: 45_000 }).toBeLessThan(17);
   });

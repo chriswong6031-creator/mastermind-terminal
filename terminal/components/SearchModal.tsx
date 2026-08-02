@@ -13,12 +13,17 @@ import {
 } from "@/lib/markets";
 import { categoryBrowse, tabOf } from "@/lib/searchCategory";
 import { FLAG_COLORS, FLAG_DEFAULT } from "@/lib/flagPalette";
+import { useIsPhone } from "@/lib/useMediaQuery";
+import MobileSheet from "@/components/ui/MobileSheet";
 
 export { FLAG_COLORS, FLAG_DEFAULT } from "@/lib/flagPalette";
 
 type Row = { name: string; col: string; verdict: string | null; vts?: string | null; mkt?: string; zh?: string; sec?: string };
 type ListInfo = { name: string; count: number; symbols: { symbol: string; section: string }[] };
 const isBuy = (v: string | null) => v === "BUY" || v === "REBUY" || v === "RECLAIM";
+
+/** The phone ticker picker presents at the Drawings sheet's detents — one drawer idiom. */
+const SEARCH_DETENTS = [62, 96] as const;
 
 // Category tab order + their i18n keys (bilingual labels — no hardcoded English in JSX).
 const CATS: { id: string; key: string }[] = [
@@ -116,6 +121,7 @@ export default function SearchModal({
   const cmp = mode === "compare";
   const isAdd = mode === "add";
   const signedIn = !!email;
+  const phoneDrawer = useIsPhone() && mode === "go";
 
   // Only "go" mode has a watchlist home. Focusing the field or using the mobile Recent action
   // moves to search explicitly; it stays there until navigation completes or Watchlist is chosen.
@@ -436,15 +442,8 @@ export default function SearchModal({
     );
   }
 
-  return (
-    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`smodal${cmp ? " smodal-cmp" : ""}${isAdd ? " smodal-add" : ""}${mode === "go" ? " smodal-hub" : ""}`} onClick={(e) => e.stopPropagation()}>
-        {/* Header with title */}
-        <div className="smodal-title-bar">
-          <span className="smodal-title">{t(titleKey)}</span>
-          <span className="esc" onClick={onClose}>ESC</span>
-        </div>
-
+  const body = (
+      <>
         {cmp && (
           <div className="scmp-h">
             <span className="scmp-t">
@@ -731,7 +730,37 @@ export default function SearchModal({
         {isAdd && (
           <div className="smodal-hint">{t("shiftClickHint")}</div>
         )}
+      </>
+  );
 
+  // R2c — on the phone the ticker picker is a DRAWER, the idiom the Drawings sheet established:
+  // it presents over a live chart at 62%, drags to full and back, and a short flick down
+  // dismisses it. Compare and Add Symbol keep the centred modal — they are sub-tasks of a
+  // surface that is already open, not the phone's primary navigation.
+  if (phoneDrawer) {
+    return (
+      <MobileSheet
+        open
+        onClose={onClose}
+        title={t(titleKey)}
+        detents={SEARCH_DETENTS}
+        className="msheet-search"
+        initialFocus="sheet"
+      >
+        {body}
+      </MobileSheet>
+    );
+  }
+
+  return (
+    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className={`smodal${cmp ? " smodal-cmp" : ""}${isAdd ? " smodal-add" : ""}${mode === "go" ? " smodal-hub" : ""}`} onClick={(e) => e.stopPropagation()}>
+        {/* Header with title */}
+        <div className="smodal-title-bar">
+          <span className="smodal-title">{t(titleKey)}</span>
+          <span className="esc" onClick={onClose}>ESC</span>
+        </div>
+        {body}
       </div>
     </div>
   );

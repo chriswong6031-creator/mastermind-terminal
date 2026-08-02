@@ -2990,32 +2990,37 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
             )}
           </div>
         )}
+        {/* The strip is the foot of the chart column, directly under the canvas and in place of
+            the range row (hidden on phone) — TV's anatomy. As the workspace's last flex child it
+            rides the expanded-chart mode too, where the flex:1 chart body yields it its height. */}
+        {!shellMode && isPhone && (
+          <RollerStrip
+            symbols={stripSymbols}
+            symbol={active}
+            onSymbol={pick}
+            onTapSymbol={() => { setSeed(""); setSearchMode("go"); setSearchOpen(true); }}
+            timeframes={stripTimeframes}
+            timeframe={tf}
+            onTimeframe={(next) => { if (FUNCTIONAL.has(next)) setTf(next); }}
+            onDraw={openDrawingsSheet}
+            drawActive={activeDrawingTool !== null}
+            onMore={openAnalysisHub}
+            moreBadge={!hubSeen}
+            onUndo={() => travelDrawingHistory(active, "undo")}
+            onRedo={() => travelDrawingHistory(active, "redo")}
+            canUndo={drawingHistoryState.canUndo}
+            canRedo={drawingHistoryState.canRedo}
+          />
+        )}
       </section>
       )}
 
       {/* ── phone chart chrome (R2.1–R2.3) ──────────────────────────────────────────────────────
-          The bottom roller strip and the two sheets it raises replace the phone's floating drawing
-          dock and top toolbar row. A direct child of .app so it survives the expanded-chart mode
-          (which only hides .app's other direct children), and never rendered in shell mode — the
-          installable app draws its own native strip. Tablet/desktop never mount any of it. */}
+          The sheets the strip raises replace the phone's floating drawing dock and top toolbar
+          row. They portal to the body, so they sit here rather than in the workspace; the strip
+          itself lives at the foot of the workspace, directly under the chart. Never rendered in
+          shell mode — the installable app draws its own native strip. */}
       {!shellMode && isPhone && (<>
-        <RollerStrip
-          symbols={stripSymbols}
-          symbol={active}
-          onSymbol={pick}
-          onTapSymbol={() => { setSeed(""); setSearchMode("go"); setSearchOpen(true); }}
-          timeframes={stripTimeframes}
-          timeframe={tf}
-          onTimeframe={(next) => { if (FUNCTIONAL.has(next)) setTf(next); }}
-          onDraw={openDrawingsSheet}
-          drawActive={activeDrawingTool !== null}
-          onMore={openAnalysisHub}
-          moreBadge={!hubSeen}
-          onUndo={() => travelDrawingHistory(active, "undo")}
-          onRedo={() => travelDrawingHistory(active, "redo")}
-          canUndo={drawingHistoryState.canUndo}
-          canRedo={drawingHistoryState.canRedo}
-        />
         <DrawingsSheet
           open={drawSheetOpen}
           onClose={() => setDrawSheetOpen(false)}
