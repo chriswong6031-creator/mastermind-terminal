@@ -998,4 +998,16 @@ describe("SuiteTier ↔ SubscriptionTier namespace parity", () => {
       expect(/gp-tier-\$\{(?!SUITE_TIER_LABEL)/.test(src), `${file}: raw tier interpolated into a class`).toBe(false);
     }
   });
+
+  it("every tier chip class the labels produce has a real CSS rule", () => {
+    // The other half of the decoupling. SUITE_TIER_LABEL feeds a class-name TEMPLATE, so a
+    // label the stylesheet does not know about renders an UNSTYLED chip — visible only by
+    // looking at it, which no unit test does. Pin both directions of the join.
+    const css = readFileSync(join(__dirname, "..", "..", "app", "globals.css"), "utf8");
+    for (const tier of ["essential", "pro"] as const) {
+      const label = SUITE_TIER_LABEL[tier];
+      expect(css.includes(`.im-tier-${label}{`), `no .im-tier-${label} rule for tier "${tier}"`).toBe(true);
+      expect(css.includes(`.gp-tier-${label}{`), `no .gp-tier-${label} rule for tier "${tier}"`).toBe(true);
+    }
+  });
 });
