@@ -12,6 +12,7 @@ import {
   type CompanySourceSearchResult,
   type CompanySourceSpan,
 } from "../../lib/companySourceSearch";
+import type { TranscriptOpenTarget } from "../../lib/transcriptSearch";
 
 type RequestPhase = "idle" | "loading" | "settled";
 
@@ -24,7 +25,7 @@ export interface TranscriptSearchWorkspaceProps {
   ticker: string;
   events: CompanySourceSearchEvent[];
   initialEventId: string;
-  onOpenTranscript: (id: string) => void;
+  onOpenTranscript: (target: TranscriptOpenTarget) => void;
   /** Tests may inject the deterministic fixture adapter; production uses the BFF. */
   adapter?: CompanySourceSearchAdapter;
 }
@@ -47,19 +48,27 @@ function highlightExact(text: string, needle: string): ReactNode {
   return parts.length ? parts : text;
 }
 
+// This workspace was authored with the Chinese source copy first.  `pick`
+// deliberately accepts English first across Terminal, so keep the inversion in
+// one named helper rather than letting it leak into every visible string.
+function localized(zh: boolean, chinese: string, english: string): string {
+  return pick(zh, english, chinese);
+}
+
 function resultLabel(result: CompanySourceSearchResult, zh: boolean): string {
   if (result.state === "ready") return result.spans.length
-    ? pick(zh, `${result.spans.length} 个精确命中`, `${result.spans.length} exact matches`)
-    : pick(zh, "未找到精确命中", "No exact matches");
-  if (result.state === "not_covered") return pick(zh, "尚未覆盖", "Not covered");
-  if (result.state === "stale_revision") return pick(zh, "版本已过期", "Revision stale");
-  return pick(zh, "请求未完成", "Request unavailable");
+    ? localized(zh, `${result.spans.length} 个精确命中`, `${result.spans.length} exact matches`)
+    : localized(zh, "未找到精确命中", "No exact matches");
+  if (result.state === "not_covered") return localized(zh, "尚未覆盖", "Not covered");
+  if (result.state === "stale_revision") return localized(zh, "版本已过期", "Revision stale");
+  if (result.state === "unavailable") return localized(zh, "来源暂不可用", "Source unavailable");
+  return localized(zh, "请求未完成", "Request unavailable");
 }
 
 function stateCopy(result: CompanySourceSearchResult, zh: boolean): string {
   if (result.state === "not_covered") return result.message;
   if (result.state === "stale_revision") return result.message;
-  if (result.state === "error") return result.message;
+  if (result.state === "error" || result.state === "unavailable") return result.message;
   if (result.spans.length === 0) {
     return pick(
       zh,
@@ -67,11 +76,21 @@ function stateCopy(result: CompanySourceSearchResult, zh: boolean): string {
       "The selected events were checked for this literal phrase. No segment contains it; no expansion, paraphrase, or inferred relevance was used.",
     );
   }
-  return pick(zh, "每项均为带修订凭证的字面匹配。", "Every result is a literal match with a revision receipt.");
+  return localized(zh, "每项均为带修订凭证的字面匹配。", "Every result is a literal match with a revision receipt.");
 }
 
 function EventName({ event, zh }: { event: CompanySourceSearchEvent; zh: boolean }) {
-  return <>{event.label}{event.call_date ? <small>{event.call_date}</small> : null}{!event.transcript_id && <i title={pick(zh, "未关联已验证电话会正文", "No verified transcript body linked")}>!</i>}</>;
+  return <>{event.label}{event.call_date ? <small>{event.call_date}</small> : null}{!event.transcript_id && <i title={localized(zh, "未关联已验证电话会正文", "No verified transcript body linked")}>!</i>}</>;
+}
+
+function linkedEvents(events: readonly CompanySourceSearchEvent[]): CompanySourceSearchEvent[] {
+  return events.filter((event) => !!event.transcript_id);
+}
+
+function initialLinkedEventId(events: readonly CompanySourceSearchEvent[], preferred: string): string {
+  return events.find((event) => event.event_id === preferred && event.transcript_id)?.event_id
+    ?? events.find((event) => event.transcript_id)?.event_id
+    ?? "";
 }
 
 function ResultState({ result, zh, onRetry }: { result: CompanySourceSearchResult; zh: boolean; onRetry: () => void }) {
@@ -83,7 +102,7 @@ function ResultState({ result, zh, onRetry }: { result: CompanySourceSearchResul
         <strong>{resultLabel(result, zh)}</strong>
         <p>{stateCopy(result, zh)}</p>
       </div>
-      {result.state === "error" && result.retryable && <button className="btn btn-ghost" onClick={onRetry}>{pick(zh, "重试", "Retry")}</button>}
+      {(result.state === "error" || result.state === "unavailable") && result.retryable && <button className="btn btn-ghost" onClick={onRetry}>{localized(zh, "重试", "Retry")}</button>}
     </div>
   );
 }
@@ -98,19 +117,19 @@ function SpanCard({
   span: CompanySourceSpan;
   phrase: string;
   zh: boolean;
-  onOpenTranscript: (id: string) => void;
+  onOpenTranscript: (target: TranscriptOpenTarget) => void;
   onReceipt: (span: CompanySourceSpan, trigger: HTMLButtonElement) => void;
 }) {
   return (
     <article className="ci-ts-span" data-span-id={span.span_id}>
       <header>
         <div className="ci-ts-span-identity">
-          <span className={`ci-ts-section ${span.section}`}>{span.section === "qa" ? "Q&A" : span.section === "prepared" ? pick(zh, "陈述", "Prepared") : pick(zh, "未知段落", "Unclassified")}</span>
-          <span className="ci-ts-segment num">{pick(zh, "段", "Segment")} {span.segment_index + 1}</span>
+          <span className={`ci-ts-section ${span.section}`}>{span.section === "qa" ? "Q&A" : span.section === "prepared" ? localized(zh, "陈述", "Prepared") : localized(zh, "未知段落", "Unclassified")}</span>
+          <span className="ci-ts-segment num">{localized(zh, "段", "Segment")} {span.segment_index + 1}</span>
         </div>
         <div className="ci-ts-span-actions">
-          <button className="ci-ts-link" onClick={() => onOpenTranscript(span.transcript_id)}>{pick(zh, "打开原文", "Open source")}</button>
-          <button className="ci-ts-link" onClick={(event) => onReceipt(span, event.currentTarget)}>{pick(zh, "凭证", "Receipt")}</button>
+          <button className="ci-ts-link" onClick={() => onOpenTranscript({ id: span.transcript_id, segment_index: span.segment_index, expected_document_sha256: span.document_sha256, query: phrase })}>{localized(zh, "打开原文", "Open source")}</button>
+          <button className="ci-ts-link" onClick={(event) => onReceipt(span, event.currentTarget)}>{localized(zh, "凭证", "Receipt")}</button>
         </div>
       </header>
       <div className="ci-ts-speaker">
@@ -118,7 +137,7 @@ function SpanCard({
         {span.role && <span>{span.role}</span>}
       </div>
       <p>{highlightExact(span.excerpt, phrase)}</p>
-      <footer><code>{span.transcript_id}</code><span>{span.receipt.verification === "verified" ? pick(zh, "已验证修订", "Verified revision") : pick(zh, "过期修订", "Stale revision")}</span></footer>
+      <footer><code>{span.transcript_id}</code><span>{span.receipt.verification === "verified" ? localized(zh, "已验证修订", "Verified revision") : localized(zh, "过期修订", "Stale revision")}</span></footer>
     </article>
   );
 }
@@ -134,6 +153,7 @@ function ReceiptDialog({
 }) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -163,27 +183,47 @@ function ReceiptDialog({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
 
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const parent = wrap?.parentElement;
+    if (!wrap || !parent) return;
+    const background = [...parent.children].filter((child) => child !== wrap) as HTMLElement[];
+    const prior = background.map((child) => ({ child, hadInert: child.hasAttribute("inert") }));
+    const bodyOverflow = document.body.style.overflow;
+    const scrollY = window.scrollY;
+    prior.forEach(({ child }) => child.setAttribute("inert", ""));
+    document.body.style.overflow = "hidden";
+    return () => {
+      prior.forEach(({ child, hadInert }) => {
+        if (!hadInert) child.removeAttribute("inert");
+      });
+      document.body.style.overflow = bodyOverflow;
+      window.scrollTo(0, scrollY);
+    };
+  }, []);
+
   const receipt = span.receipt;
   return (
-    <div className="ci-ts-dialog-wrap" role="presentation">
-      <button className="ci-ts-dialog-scrim" aria-label={pick(zh, "关闭来源凭证", "Close source receipt")} onClick={onClose} />
+    <div ref={wrapRef} className="ci-ts-dialog-wrap" role="presentation">
+      <button className="ci-ts-dialog-scrim" aria-label={localized(zh, "关闭来源凭证", "Close source receipt")} onClick={onClose} />
       <aside ref={dialogRef} className="ci-ts-dialog" role="dialog" aria-modal="true" aria-labelledby="ci-ts-receipt-title">
         <header>
           <div>
-            <span className="fin-eyebrow">{pick(zh, "不可变来源凭证", "IMMUTABLE SOURCE RECEIPT")}</span>
+            <span className="fin-eyebrow">{localized(zh, "不可变来源凭证", "IMMUTABLE SOURCE RECEIPT")}</span>
             <h3 id="ci-ts-receipt-title">{span.speaker} · {span.transcript_id}</h3>
           </div>
-          <button ref={closeRef} className="ci-icon-button" onClick={onClose} aria-label={pick(zh, "关闭来源凭证", "Close source receipt")}>×</button>
+          <button ref={closeRef} className="ci-icon-button" onClick={onClose} aria-label={localized(zh, "关闭来源凭证", "Close source receipt")}>×</button>
         </header>
         <dl>
-          <div><dt>{pick(zh, "验证状态", "Verification")}</dt><dd><span className={`ci-ts-verify ${receipt.verification}`}>{receipt.verification === "verified" ? pick(zh, "已验证", "Verified") : pick(zh, "版本已过期", "Revision stale")}</span></dd></div>
-          <div><dt>{pick(zh, "索引版本", "Corpus revision")}</dt><dd><code>{receipt.revision_id}</code></dd></div>
-          <div><dt>{pick(zh, "文档 SHA-256", "Document SHA-256")}</dt><dd><code>{receipt.document_sha256}</code></dd></div>
-          <div><dt>{pick(zh, "段落坐标", "Segment coordinates")}</dt><dd><code>{span.segment_index}:{span.char_start}-{span.char_end}</code></dd></div>
-          <div><dt>{pick(zh, "索引时间", "Indexed at")}</dt><dd><time dateTime={receipt.indexed_at}>{receipt.indexed_at.replace("T", " ").replace("Z", " UTC")}</time></dd></div>
-          <div><dt>{pick(zh, "来源", "Source")}</dt><dd>{receipt.source_url ? <a href={receipt.source_url} target="_blank" rel="noreferrer">{receipt.source_label} ↗</a> : receipt.source_label}</dd></div>
+          <div><dt>{localized(zh, "验证状态", "Verification")}</dt><dd><span className={`ci-ts-verify ${receipt.verification}`}>{receipt.verification === "verified" ? localized(zh, "已验证", "Verified") : localized(zh, "版本已过期", "Revision stale")}</span></dd></div>
+          <div><dt>{localized(zh, "索引版本", "Corpus revision")}</dt><dd><code>{receipt.revision_id}</code></dd></div>
+          <div><dt>{localized(zh, "文档 SHA-256", "Document SHA-256")}</dt><dd><code>{receipt.document_sha256}</code></dd></div>
+          <div><dt>{localized(zh, "UTF-8 字节坐标", "UTF-8 byte coordinates")}</dt><dd><code>{span.segment_index}:{span.start_byte}-{span.end_byte}</code></dd></div>
+          <div><dt>{localized(zh, "段落文本 SHA-256", "Segment text SHA-256")}</dt><dd><code>{span.segment_text_sha256}</code></dd></div>
+          <div><dt>{localized(zh, "索引时间", "Indexed at")}</dt><dd><time dateTime={receipt.indexed_at}>{receipt.indexed_at.replace("T", " ").replace("Z", " UTC")}</time></dd></div>
+          <div><dt>{localized(zh, "来源", "Source")}</dt><dd>{receipt.source_url ? <a href={receipt.source_url} target="_blank" rel="noreferrer">{receipt.source_label} ↗</a> : receipt.source_label}</dd></div>
         </dl>
-        <p className="ci-ts-dialog-note">{pick(zh, "此窗口显示服务器签发的修订与坐标；Terminal 不生成、拼接或重新解释原始文本。", "This receipt exposes server-issued revision and coordinates; Terminal does not generate, join, or reinterpret source text.")}</p>
+        <p className="ci-ts-dialog-note">{localized(zh, "此窗口显示服务器签发的修订与坐标；Terminal 不生成、拼接或重新解释原始文本。", "This receipt exposes server-issued revision and coordinates; Terminal does not generate, join, or reinterpret source text.")}</p>
       </aside>
     </div>
   );
@@ -207,25 +247,45 @@ export default function TranscriptSearchWorkspace({
 }: TranscriptSearchWorkspaceProps) {
   const { lang } = useLang();
   const zh = lang === "zh";
+  const sourceEvents = useMemo(() => linkedEvents(events), [events]);
+  const initialSourceEventId = useMemo(() => initialLinkedEventId(events, initialEventId), [events, initialEventId]);
   const [phrase, setPhrase] = useState("");
-  const [selectedIds, setSelectedIds] = useState<string[]>(initialEventId ? [initialEventId] : []);
+  const [selectedIds, setSelectedIds] = useState<string[]>(initialSourceEventId ? [initialSourceEventId] : []);
   const [search, setSearch] = useState<RequestState>({ phase: "idle", result: null });
   const [compare, setCompare] = useState<RequestState>({ phase: "idle", result: null });
-  const [leftEventId, setLeftEventId] = useState(initialEventId || events[0]?.event_id || "");
-  const [rightEventId, setRightEventId] = useState(events.find((event) => event.event_id !== initialEventId)?.event_id ?? "");
+  const [leftEventId, setLeftEventId] = useState(initialSourceEventId);
+  const [rightEventId, setRightEventId] = useState(sourceEvents.find((event) => event.event_id !== initialSourceEventId)?.event_id ?? "");
   const [receiptSpan, setReceiptSpan] = useState<CompanySourceSpan | null>(null);
   const receiptTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const requestIdRef = useRef(0);
+  const searchRequestIdRef = useRef(0);
+  const compareRequestIdRef = useRef(0);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const compareAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    setSelectedIds(initialEventId ? [initialEventId] : []);
-    setLeftEventId(initialEventId || events[0]?.event_id || "");
-    setRightEventId(events.find((event) => event.event_id !== initialEventId)?.event_id ?? "");
-    setSearch({ phase: "idle", result: null });
-    setCompare({ phase: "idle", result: null });
-  }, [ticker, initialEventId, events]);
+    // The selected calls are derived from a new producer context. Schedule the
+    // reset after this render so the external-context sync does not create a
+    // synchronous render cascade while the Intelligence payload is resolving.
+    const frame = window.requestAnimationFrame(() => {
+      setSelectedIds(initialSourceEventId ? [initialSourceEventId] : []);
+      setLeftEventId(initialSourceEventId);
+      setRightEventId(sourceEvents.find((event) => event.event_id !== initialSourceEventId)?.event_id ?? "");
+      setSearch({ phase: "idle", result: null });
+      setCompare({ phase: "idle", result: null });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [ticker, initialSourceEventId, sourceEvents]);
+
+  useEffect(() => () => {
+    searchAbortRef.current?.abort();
+    compareAbortRef.current?.abort();
+  }, []);
 
   const eventById = useMemo(() => new Map(events.map((event) => [event.event_id, event])), [events]);
+  const selectedEvents = useMemo(
+    () => selectedIds.map((eventId) => eventById.get(eventId)).filter((event): event is CompanySourceSearchEvent => !!event),
+    [eventById, selectedIds],
+  );
   const normalizedPhrase = normalizeTranscriptLiteralPhrase(phrase);
 
   const toggleEvent = useCallback((eventId: string) => {
@@ -242,16 +302,19 @@ export default function TranscriptSearchWorkspace({
       setSearch({ phase: "settled", result: { state: "error", ticker, query: "", message: "Enter a literal phrase to search.", retryable: false } });
       return;
     }
-    const requestId = ++requestIdRef.current;
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    const requestId = ++searchRequestIdRef.current;
     setSearch({ phase: "loading", result: null });
     try {
-      const result = await adapter.search({ ticker, phrase: query, event_ids: selectedIds });
-      if (requestId === requestIdRef.current) setSearch({ phase: "settled", result });
+      const result = await adapter.search({ ticker, phrase: query, events: selectedEvents, signal: controller.signal });
+      if (requestId === searchRequestIdRef.current) setSearch({ phase: "settled", result });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
-      if (requestId === requestIdRef.current) setSearch({ phase: "settled", result: { state: "error", ticker, query, message: "Source search was interrupted.", retryable: true } });
+      if (requestId === searchRequestIdRef.current) setSearch({ phase: "settled", result: { state: "error", ticker, query, message: "Source search was interrupted.", retryable: true } });
     }
-  }, [adapter, phrase, selectedIds, ticker]);
+  }, [adapter, phrase, selectedEvents, ticker]);
 
   const runCompare = useCallback(async () => {
     const query = normalizeTranscriptLiteralPhrase(phrase);
@@ -259,23 +322,29 @@ export default function TranscriptSearchWorkspace({
       setCompare({ phase: "settled", result: { state: "error", ticker, query: query ?? "", message: "Enter a literal phrase and select two different events to compare.", retryable: false } });
       return;
     }
-    const requestId = ++requestIdRef.current;
+    compareAbortRef.current?.abort();
+    const controller = new AbortController();
+    compareAbortRef.current = controller;
+    const requestId = ++compareRequestIdRef.current;
     setCompare({ phase: "loading", result: null });
     const request: CompanySourceCompareRequest = {
       ticker,
       phrase: query,
-      event_ids: [leftEventId, rightEventId],
+      events: [leftEventId, rightEventId]
+        .map((eventId) => eventById.get(eventId))
+        .filter((event): event is CompanySourceSearchEvent => !!event),
       left_event_id: leftEventId,
       right_event_id: rightEventId,
+      signal: controller.signal,
     };
     try {
       const result = await adapter.compare(request);
-      if (requestId === requestIdRef.current) setCompare({ phase: "settled", result });
+      if (requestId === compareRequestIdRef.current) setCompare({ phase: "settled", result });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
-      if (requestId === requestIdRef.current) setCompare({ phase: "settled", result: { state: "error", ticker, query, message: "Exact comparison was interrupted.", retryable: true } });
+      if (requestId === compareRequestIdRef.current) setCompare({ phase: "settled", result: { state: "error", ticker, query, message: "Exact comparison was interrupted.", retryable: true } });
     }
-  }, [adapter, leftEventId, phrase, rightEventId, ticker]);
+  }, [adapter, eventById, leftEventId, phrase, rightEventId, ticker]);
 
   const openReceipt = useCallback((span: CompanySourceSpan, trigger: HTMLButtonElement) => {
     receiptTriggerRef.current = trigger;
@@ -292,59 +361,61 @@ export default function TranscriptSearchWorkspace({
     <section className="ci-ts-explorer" aria-labelledby="ci-ts-title">
       <header className="ci-ts-hero">
         <div>
-          <span className="fin-eyebrow">{pick(zh, "修订绑定的文本发现", "REVISION-BOUND TEXT DISCOVERY")}</span>
-          <h3 id="ci-ts-title">{pick(zh, "在电话会中找到准确出处", "Find exact words across calls")}</h3>
-          <p>{pick(zh, "仅做字面短语匹配。结果携带段落、发言人、章节和不可变文档修订凭证；没有 AI 摘要或扩展匹配。", "Literal phrase matching only. Every result carries its segment, speaker, section, and immutable document receipt — no AI summary or expanded match.")}</p>
+          <span className="fin-eyebrow">{localized(zh, "修订绑定的文本发现", "REVISION-BOUND TEXT DISCOVERY")}</span>
+          <h3 id="ci-ts-title">{localized(zh, "在电话会中找到准确出处", "Find exact words across calls")}</h3>
+          <p>{localized(zh, "仅做字面短语匹配。结果携带段落、发言人、章节和不可变文档修订凭证；没有 AI 摘要或扩展匹配。", "Literal phrase matching only. Every result carries its segment, speaker, section, and immutable document receipt — no AI summary or expanded match.")}</p>
         </div>
-        <span className="ci-ts-contract"><i />{pick(zh, "精确跨度 · 仅背景", "Exact spans · context only")}</span>
+        <span className="ci-ts-contract"><i />{localized(zh, "精确跨度 · 仅背景", "Exact spans · context only")}</span>
       </header>
 
       <form className="ci-ts-search" role="search" onSubmit={(event) => { event.preventDefault(); void runSearch(); }}>
         <label>
-          <span className="fin-skel-sr">{pick(zh, "搜索准确短语", "Search exact phrase")}</span>
+          <span className="fin-skel-sr">{localized(zh, "搜索准确短语", "Search exact phrase")}</span>
           <span aria-hidden>⌕</span>
           <input
             value={phrase}
             onChange={(event) => setPhrase(event.target.value)}
-            placeholder={pick(zh, "输入短语，例如 “data center demand”", "Enter a phrase, e.g. “data center demand”")}
+            placeholder={localized(zh, "输入短语，例如 “data center demand”", "Enter a phrase, e.g. “data center demand”")}
             spellCheck={false}
           />
-          {phrase && <button type="button" onClick={() => { setPhrase(""); setSearch({ phase: "idle", result: null }); setCompare({ phase: "idle", result: null }); }} aria-label={pick(zh, "清除搜索", "Clear search")}>×</button>}
+          {phrase && <button type="button" onClick={() => { setPhrase(""); setSearch({ phase: "idle", result: null }); setCompare({ phase: "idle", result: null }); }} aria-label={localized(zh, "清除搜索", "Clear search")}>×</button>}
         </label>
-        <button className="btn btn-primary" type="submit" disabled={search.phase === "loading"}>{search.phase === "loading" ? pick(zh, "正在搜索…", "Searching…") : pick(zh, "搜索准确短语", "Search exact phrase")}</button>
+        <button className="btn btn-primary" type="submit" disabled={search.phase === "loading"}>{search.phase === "loading" ? localized(zh, "正在搜索…", "Searching…") : localized(zh, "搜索准确短语", "Search exact phrase")}</button>
       </form>
-      <p className="ci-ts-hint">{pick(zh, "可选引号用于标记短语；系统仍按精确字面文本匹配。", "Quotes are optional phrase delimiters; matching remains exact and literal.")}</p>
+      <p className="ci-ts-hint">{localized(zh, "可选引号用于标记短语；系统仍按精确字面文本匹配。", "Quotes are optional phrase delimiters; matching remains exact and literal.")}</p>
 
-      <div className="ci-ts-filters" role="group" aria-label={pick(zh, "按事件筛选", "Filter by event")}>
-        <div><span>{pick(zh, "搜索事件", "Search events")}</span><small>{pick(zh, "选择一个或多个", "Choose one or more")}</small></div>
+      <div className="ci-ts-filters" role="group" aria-label={localized(zh, "按事件筛选", "Filter by event")}>
+        <div><span>{localized(zh, "搜索事件", "Search events")}</span><small>{localized(zh, "选择一个或多个", "Choose one or more")}</small></div>
         <div className="ci-ts-event-chips">
           {events.map((event) => {
             const selected = selectedIds.includes(event.event_id);
-            return <button key={event.event_id} type="button" className={selected ? "on" : ""} aria-pressed={selected} onClick={() => toggleEvent(event.event_id)}><EventName event={event} zh={zh} /></button>;
+            return <button key={event.event_id} type="button" className={selected ? "on" : ""} aria-pressed={selected} disabled={!event.transcript_id} onClick={() => toggleEvent(event.event_id)}><EventName event={event} zh={zh} /></button>;
           })}
         </div>
       </div>
 
-      {search.phase === "loading" && <div className="ci-ts-loading" role="status" aria-live="polite"><span className="ci-ts-pulse" aria-hidden /><span>{pick(zh, "正在验证来源修订…", "Verifying source revisions…")}</span></div>}
+      {search.phase === "loading" && <div className="ci-ts-loading" role="status" aria-live="polite"><span className="ci-ts-pulse" aria-hidden /><span>{localized(zh, "正在验证来源修订…", "Verifying source revisions…")}</span></div>}
       {search.phase === "settled" && search.result && <ResultState result={search.result} zh={zh} onRetry={() => void runSearch()} />}
 
       {search.result && search.result.state === "ready" && search.result.spans.length > 0 && (
-        <div className="ci-ts-results" aria-label={pick(zh, "准确文本命中", "Exact text matches")}>
+        <div className="ci-ts-results" aria-label={localized(zh, "准确文本命中", "Exact text matches")}>
           {search.result.spans.map((span) => <SpanCard key={span.span_id} span={span} phrase={search.result!.query} zh={zh} onOpenTranscript={onOpenTranscript} onReceipt={openReceipt} />)}
         </div>
       )}
 
       <section className="ci-ts-compare" aria-labelledby="ci-ts-compare-title">
         <div className="ci-ts-compare-head">
-          <div><span className="fin-eyebrow">{pick(zh, "叙事对比", "NARRATIVE COMPARE")}</span><h4 id="ci-ts-compare-title">{pick(zh, "并列查看两个事件中的相同短语", "Place the same phrase beside two events")}</h4></div>
-          <span>{pick(zh, "无模型改写", "No model paraphrase")}</span>
+          <div><span className="fin-eyebrow">{localized(zh, "叙事对比", "NARRATIVE COMPARE")}</span><h4 id="ci-ts-compare-title">{localized(zh, "并列查看两个事件中的相同短语", "Place the same phrase beside two events")}</h4></div>
+          <span>{localized(zh, "无模型改写", "No model paraphrase")}</span>
         </div>
         <div className="ci-ts-compare-controls">
-          <label><span>{pick(zh, "左侧事件", "Left event")}</span><select value={leftEventId} onChange={(event) => setLeftEventId(event.target.value)}>{events.map((event) => <option key={event.event_id} value={event.event_id}>{event.label} · {event.call_date}</option>)}</select></label>
+          <label><span>{localized(zh, "左侧事件", "Left event")}</span><select value={leftEventId} onChange={(event) => setLeftEventId(event.target.value)}>{sourceEvents.map((event) => <option key={event.event_id} value={event.event_id}>{event.label} · {event.call_date}</option>)}</select></label>
           <span className="ci-ts-compare-swap" aria-hidden>⇄</span>
-          <label><span>{pick(zh, "右侧事件", "Right event")}</span><select value={rightEventId} onChange={(event) => setRightEventId(event.target.value)}>{events.map((event) => <option key={event.event_id} value={event.event_id}>{event.label} · {event.call_date}</option>)}</select></label>
-          <button className="btn btn-ghost" type="button" onClick={() => void runCompare()} disabled={compare.phase === "loading" || !normalizedPhrase}>{compare.phase === "loading" ? pick(zh, "正在比较…", "Comparing…") : pick(zh, "对比准确出处", "Compare exact excerpts")}</button>
+          <label><span>{localized(zh, "右侧事件", "Right event")}</span><select value={rightEventId} onChange={(event) => setRightEventId(event.target.value)}>{sourceEvents.map((event) => <option key={event.event_id} value={event.event_id}>{event.label} · {event.call_date}</option>)}</select></label>
+          <button className="btn btn-ghost" type="button" onClick={() => void runCompare()} disabled={compare.phase === "loading" || !normalizedPhrase || sourceEvents.length < 2}>{compare.phase === "loading" ? localized(zh, "正在比较…", "Comparing…") : localized(zh, "对比准确出处", "Compare exact excerpts")}</button>
         </div>
+
+        {sourceEvents.length < 2 && <p className="ci-ts-compare-prompt">{localized(zh, "并列比较需要两个关联了已验证电话会正文的事件。", "Side-by-side comparison requires two events linked to verified transcript bodies.")}</p>}
 
         {compare.phase === "settled" && compare.result && <ResultState result={compare.result} zh={zh} onRetry={() => void runCompare()} />}
         {compare.result?.state === "ready" && compare.result.spans.length > 0 && (
@@ -354,12 +425,12 @@ export default function TranscriptSearchWorkspace({
               const spans = index === 0 ? leftSpans : rightSpans;
               return <div className="ci-ts-compare-col" key={eventId}>
                 <header><div><strong>{event?.label ?? eventId}</strong><small>{event?.call_date}</small></div><span className="num">{spans.length}</span></header>
-                {spans.length ? spans.map((span) => <SpanCard key={span.span_id} span={span} phrase={compare.result!.query} zh={zh} onOpenTranscript={onOpenTranscript} onReceipt={openReceipt} />) : <div className="ci-ts-compare-empty">{pick(zh, "该事件没有此精确短语。", "This event contains no exact phrase match.")}</div>}
+                {spans.length ? spans.map((span) => <SpanCard key={span.span_id} span={span} phrase={compare.result!.query} zh={zh} onOpenTranscript={onOpenTranscript} onReceipt={openReceipt} />) : <div className="ci-ts-compare-empty">{localized(zh, "该事件没有此精确短语。", "This event contains no exact phrase match.")}</div>}
               </div>;
             })}
           </div>
         )}
-        {compare.phase === "idle" && <p className="ci-ts-compare-prompt">{pick(zh, "输入一个准确短语，然后选择两个不同事件以并列比较原始片段。", "Enter an exact phrase, then select two different events to compare the raw excerpts side by side.")}</p>}
+        {compare.phase === "idle" && <p className="ci-ts-compare-prompt">{localized(zh, "输入一个准确短语，然后选择两个不同事件以并列比较原始片段。", "Enter an exact phrase, then select two different events to compare the raw excerpts side by side.")}</p>}
       </section>
 
       {receiptSpan && <ReceiptDialog span={receiptSpan} zh={zh} onClose={closeReceipt} />}

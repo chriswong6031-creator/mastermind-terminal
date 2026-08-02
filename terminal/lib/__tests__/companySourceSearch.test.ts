@@ -17,14 +17,15 @@ function envelope(overrides: Record<string, unknown> = {}) {
     corpus_revision: "revision-20260801-test",
     searched_event_ids: ["NVDA-2026Q1"],
     spans: [{
-      span_id: "span:NVDA-2026Q1:3:0:11",
+      span_id: `txs1_${"b".repeat(64)}`,
       event_id: "NVDA-2026Q1",
       transcript_id: "2026Q1",
       ticker: "NVDA",
       document_sha256: SHA,
       segment_index: 3,
-      char_start: 0,
-      char_end: 11,
+      start_byte: 0,
+      end_byte: 11,
+      segment_text_sha256: "c".repeat(64),
       speaker: "Example Speaker",
       role: "Chief Executive Officer",
       section: "prepared",
@@ -50,6 +51,7 @@ describe("exact transcript search boundary", () => {
     expect(normalizeTranscriptLiteralPhrase('  "data   center"  ')).toBe("data center");
     expect(normalizeTranscriptLiteralPhrase("'data center'")).toBe("data center");
     expect(normalizeTranscriptLiteralPhrase("   ")).toBeNull();
+    expect(normalizeTranscriptLiteralPhrase("data \ud800center")).toBeNull();
   });
 
   it("accepts only a span that is bound to its exact document revision", () => {
@@ -74,15 +76,18 @@ describe("exact transcript search boundary", () => {
     const mixedRevision = envelope();
     ((mixedRevision.spans as Array<Record<string, unknown>>)[0].receipt as Record<string, unknown>).revision_id = "another-revision-20260801";
     expect(normalizeCompanySourceSearchResult(mixedRevision, "NVDA", "data center")).toBeNull();
+
+    const outOfScope = envelope({ searched_event_ids: ["NVDA-2025Q4"] });
+    expect(normalizeCompanySourceSearchResult(outOfScope, "NVDA", "data center")).toBeNull();
   });
 
-  it("treats a missing future producer route as not covered, not an empty search", async () => {
+  it("treats a missing source-search route as an integration error, never as coverage", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("missing", { status: 404 }));
     await expect(browserCompanySourceSearchAdapter.search({
       ticker: "NVDA",
       phrase: "data center",
-      event_ids: ["NVDA-2026Q1"],
-    })).resolves.toMatchObject({ state: "not_covered", ticker: "NVDA" });
+      events: [{ event_id: "NVDA-2026Q1", transcript_id: "2026Q1", fiscal_year: 2026, fiscal_quarter: 1, label: "Q1 FY2026", call_date: "2026-05-20" }],
+    })).resolves.toMatchObject({ state: "error", ticker: "NVDA" });
     expect(fetchSpy).toHaveBeenCalledWith(
       expect.stringContaining("/api/company-source-search/NVDA?"),
       expect.objectContaining({ cache: "no-store" }),
@@ -94,7 +99,7 @@ describe("exact transcript search boundary", () => {
     const searched = await adapter.search({
       ticker: "NVDA",
       phrase: "data center",
-      event_ids: ["NVDA-2026Q1"],
+      events: [{ event_id: "NVDA-2026Q1", transcript_id: "2026Q1", fiscal_year: 2026, fiscal_quarter: 1, label: "Q1 FY2026", call_date: "2026-05-20" }],
     });
     expect(searched.state).toBe("ready");
     if (searched.state === "ready") {
@@ -105,7 +110,10 @@ describe("exact transcript search boundary", () => {
     const compared = await adapter.compare({
       ticker: "NVDA",
       phrase: "data center",
-      event_ids: ["NVDA-2025Q4", "NVDA-2026Q1"],
+      events: [
+        { event_id: "NVDA-2025Q4", transcript_id: "2025Q4", fiscal_year: 2025, fiscal_quarter: 4, label: "Q4 FY2025", call_date: "2026-02-19" },
+        { event_id: "NVDA-2026Q1", transcript_id: "2026Q1", fiscal_year: 2026, fiscal_quarter: 1, label: "Q1 FY2026", call_date: "2026-05-20" },
+      ],
       left_event_id: "NVDA-2025Q4",
       right_event_id: "NVDA-2026Q1",
     });

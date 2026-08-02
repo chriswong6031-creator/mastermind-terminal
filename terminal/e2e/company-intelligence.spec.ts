@@ -1,6 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
+import { gzipSync } from "node:zlib";
 
 const SHA = "a".repeat(64);
+const drawerFixtureBody = {
+  schema: "mastermind.tx/v1",
+  ticker: "NVDA",
+  id: "2026Q1",
+  period: "Q1 FY2026",
+  date: "2026-05-20",
+  title: "NVIDIA Earnings Call Q1 FY2026",
+  segments: [
+    { speaker: "Jensen Huang", role: "Chief Executive Officer", text: "Data center demand remained broad across cloud, enterprise, and sovereign AI customers." },
+    { speaker: "Colette Kress", role: "Chief Financial Officer", text: "We continue to see data center demand across our compute platforms and networking products." },
+  ],
+};
 
 const metrics = (overrides: Record<string, number | null> = {}) => ({
   sentiment: 68,
@@ -76,14 +89,14 @@ function event(id: string, fiscalYear: number, fiscalQuarter: number, callDate: 
 
 function contextFixture() {
   const latest = event(
-    "NVDA-2026Q1",
+    "cie_d8488221fd8c710c53d6537d",
     2026,
     1,
     "2026-05-20",
     "NVIDIA reported broad platform demand, with revenue growth and gross-margin discipline remaining central to the event read-through.",
   );
   const prior = event(
-    "NVDA-2025Q4",
+    "cie_4c0410e7c4358283cf37a557",
     2025,
     4,
     "2026-02-19",
@@ -124,84 +137,13 @@ function contextFixture() {
   };
 }
 
-function sourceSearchFixture(phrase: string, eventIds: string[]) {
-  const documents = [
-    {
-      event_id: "NVDA-2026Q1",
-      transcript_id: "2026Q1",
-      segment_index: 18,
-      speaker: "Jensen Huang",
-      role: "Chief Executive Officer",
-      section: "prepared",
-      excerpt: "Data center demand remained broad across cloud, enterprise, and sovereign AI customers.",
-    },
-    {
-      event_id: "NVDA-2026Q1",
-      transcript_id: "2026Q1",
-      segment_index: 27,
-      speaker: "Colette Kress",
-      role: "Chief Financial Officer",
-      section: "qa",
-      excerpt: "We continue to see data center demand across our compute platforms and networking products.",
-    },
-    {
-      event_id: "NVDA-2025Q4",
-      transcript_id: "2025Q4",
-      segment_index: 14,
-      speaker: "Jensen Huang",
-      role: "Chief Executive Officer",
-      section: "prepared",
-      excerpt: "Data center demand expanded as customers prepared new infrastructure deployments.",
-    },
-  ];
-  const sha = "f".repeat(64);
-  const searched = eventIds.length ? eventIds : documents.map((document) => document.event_id);
-  const spans = documents.flatMap((document) => {
-    if (!searched.includes(document.event_id)) return [];
-    const start = document.excerpt.toLowerCase().indexOf(phrase.toLowerCase());
-    if (start < 0) return [];
-    return [{
-      span_id: `span:${document.event_id}:${document.segment_index}:${start}`,
-      event_id: document.event_id,
-      transcript_id: document.transcript_id,
-      ticker: "NVDA",
-      document_sha256: sha,
-      segment_index: document.segment_index,
-      char_start: start,
-      char_end: start + phrase.length,
-      speaker: document.speaker,
-      role: document.role,
-      section: document.section,
-      excerpt: document.excerpt,
-      matched_text: document.excerpt.slice(start, start + phrase.length),
-      receipt: {
-        revision_id: "revision-20260801-e2e",
-        document_sha256: sha,
-        indexed_at: "2026-08-01T12:00:00Z",
-        source_label: "E2E verification fixture — not published research",
-        source_url: `/data/tx/NVDA/${document.transcript_id}.json.gz`,
-        verification: "verified",
-      },
-    }];
-  });
-  return {
-    schema: "mastermind.company-source-search/v1",
-    state: "ready",
-    ticker: "NVDA",
-    query: phrase,
-    corpus_revision: "revision-20260801-e2e",
-    searched_event_ids: [...new Set(searched)],
-    spans,
-  };
-}
-
-async function openCompanyIntelligence(page: Page) {
+async function openCompanyIntelligence(page: Page, intelligenceLabel = "Intelligence") {
   await page.route("**/api/company-intelligence/NVDA**", async (route) => {
     await route.fulfill({ json: { ok: true, state: "ready", context: contextFixture() } });
   });
   await page.goto("/analysis?symbol=NVDA&page=intelligence");
   // This is a server-seeded deep link, not a client-side redirect from Overview.
-  await expect(page.locator(".fin-tabs").getByRole("tab", { name: "Intelligence", exact: true }))
+  await expect(page.locator(".fin-tabs").getByRole("tab", { name: intelligenceLabel, exact: true }))
     .toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".ci-page")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("heading", { name: "NVIDIA Corporation" })).toBeVisible();
@@ -289,11 +231,9 @@ test("Company Intelligence keeps its context and evidence workflow responsive", 
   });
 });
 
-test("literal transcript search and compare preserve exact source receipts", async ({ page }, testInfo) => {
-  await page.route("**/api/company-source-search/NVDA**", async (route) => {
-    const url = new URL(route.request().url());
-    const phrase = url.searchParams.get("q") || "";
-    await route.fulfill({ json: sourceSearchFixture(phrase, url.searchParams.getAll("event")) });
+test("literal transcript search and compare use the local revision-verified BFF", async ({ page }, testInfo) => {
+  await page.route("**/data/tx/NVDA/2026Q1.json.gz", async (route) => {
+    await route.fulfill({ body: gzipSync(JSON.stringify(drawerFixtureBody)), headers: { "content-type": "application/gzip" } });
   });
   await openCompanyIntelligence(page);
   const transcript = page.locator(".ci-lenses").getByRole("tab").nth(1);
@@ -305,11 +245,17 @@ test("literal transcript search and compare preserve exact source receipts", asy
   await search.locator(".btn").click();
   await expect(page.locator(".ci-ts-results .ci-ts-span")).toHaveCount(2);
   await expect(page.locator(".ci-ts-results mark").first()).toHaveText("Data center");
+  await expect(page.locator(".ci-ts-hero")).toContainText("Find exact words across calls");
+
+  await page.locator(".ci-ts-results .ci-ts-span-actions button").first().click();
+  await expect(page.locator(".fin-tx-drawer")).toBeVisible();
+  await expect(page.locator('.fin-tx-seg[data-segment="1"]')).toBeFocused();
+  await page.getByRole("button", { name: "Close transcript" }).click();
 
   const receipt = page.locator(".ci-ts-results .ci-ts-span-actions button").nth(1);
   await receipt.click();
   await expect(page.locator(".ci-ts-dialog")).toBeVisible();
-  await expect(page.locator(".ci-ts-dialog code").nth(1)).toHaveText("f".repeat(64));
+  await expect(page.locator(".ci-ts-dialog code").nth(1)).toHaveText(/^[a-f0-9]{64}$/);
   await page.keyboard.press("Escape");
   await expect(page.locator(".ci-ts-dialog")).toHaveCount(0);
   await expect(receipt).toBeFocused();
@@ -431,4 +377,14 @@ test("Company Intelligence preserves its mobile workflow in Chinese", async ({ p
     path: testInfo.outputPath("mobile-company-intelligence-zh.png"),
     fullPage: false,
   });
+});
+
+test("transcript search copy switches cleanly between English and Chinese", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.endsWith("mobile"), "one mobile bilingual interaction contract is sufficient");
+  await page.addInitScript(() => window.localStorage.setItem("mm.lang", "zh"));
+  await openCompanyIntelligence(page, "公司情报");
+  await page.locator(".ci-lenses").getByRole("tab", { name: "电话会", exact: true }).click();
+  await expect(page.locator(".ci-ts-hero h3")).toHaveText("在电话会中找到准确出处");
+  await expect(page.getByRole("button", { name: "搜索准确短语" })).toBeVisible();
+  await expectNoDocumentOverflow(page);
 });

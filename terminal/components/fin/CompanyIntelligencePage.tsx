@@ -14,13 +14,14 @@ import CompanySourceManifest from "./CompanySourceManifest";
 import EvidenceRail, { type CompanyEvidenceSelection } from "./EvidenceRail";
 import TranscriptSearchWorkspace from "./TranscriptSearchWorkspace";
 import { openMastermindBrainForSymbol } from "../../lib/mastermindBrain";
+import type { TranscriptOpenTarget } from "../../lib/transcriptSearch";
 
 type Lens = "brief" | "transcript" | "history" | "topics" | "sources";
 
 export interface CompanyIntelligencePageProps {
   sym: string;
   name?: string | null;
-  onOpenTx: (id: string) => void;
+  onOpenTx: (target: string | TranscriptOpenTarget) => void;
   onEvidenceOpenChange?: (open: boolean) => void;
 }
 
@@ -243,6 +244,8 @@ export default function CompanyIntelligencePage({ sym, name, onOpenTx, onEvidenc
     label: eventPeriod(candidate),
     call_date: candidate.call_date,
     transcript_id: transcriptId(preferredSource(candidate, "transcript")),
+    fiscal_year: candidate.fiscal_year,
+    fiscal_quarter: candidate.fiscal_quarter,
   })), [events]);
   const selectedId = eventState.sym === ticker ? eventState.id : "";
   const event = events.find((candidate) => candidate.event_id === selectedId) ?? events[0] ?? null;

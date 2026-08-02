@@ -68,6 +68,14 @@ export type TranscriptSpan = Omit<TranscriptSpanLocator, "schema"> & {
   transcript_id: string;
 };
 
+/** A source-search result can open the existing reader at an exact verified segment. */
+export interface TranscriptOpenTarget {
+  id: string;
+  segment_index?: number;
+  expected_document_sha256?: string;
+  query?: string;
+}
+
 export interface RevisionVerifiedTranscript {
   transcript: Transcript;
   revision: TranscriptRevisionRef;

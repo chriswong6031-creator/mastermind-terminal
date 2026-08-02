@@ -1,15 +1,18 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useLang } from "../../lib/i18n";
 import { fmtDate, pick } from "../../lib/finFormat";
 import { getTx, transcriptBodyUrl, type Transcript } from "../../lib/fund";
-import { classifyTranscriptQaChapter } from "../../lib/transcriptSearch";
+import { canonicalTranscriptBodySha256, classifyTranscriptQaChapter, type TranscriptOpenTarget } from "../../lib/transcriptSearch";
 
 export interface TranscriptDrawerProps {
   sym: string;
   id: string;
   name?: string | null;
+  /** Optional exact source-search target; strings from the library remain broad reader opens. */
+  focus?: Omit<TranscriptOpenTarget, "id">;
   onClose: () => void;
 }
 
@@ -38,38 +41,56 @@ function highlighted(text: string, query: string) {
   return parts;
 }
 
-export default function TranscriptDrawer({ sym, id, name, onClose }: TranscriptDrawerProps) {
+export default function TranscriptDrawer({ sym, id, name, focus, onClose }: TranscriptDrawerProps) {
   const { lang } = useLang();
   const zh = lang === "zh";
+  // The reader can be invoked from the embedded Analysis workspace, whose
+  // stacking context sits below Terminal's global controls. Mounting the modal
+  // at `body` makes its scrim a real interaction boundary rather than a visual
+  // layer that Settings can still click through.
+  const [mounted, setMounted] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
   const requestKey = `${sym}:${id}:${retryNonce}`;
   const [load, setLoad] = useState<TranscriptLoad>({ key: "", transcript: null, error: false });
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => focus?.query ?? "");
   const [section, setSection] = useState<Section>("all");
   const [speaker, setSpeaker] = useState("all");
   const [copied, setCopied] = useState<string | null>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const jumpedTargetRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setMounted(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   useEffect(() => {
     let alive = true;
     getTx(sym, id, { retryNonce })
-      .then((transcript) => {
+      .then(async (transcript) => {
         if (!alive) return;
-        setLoad({ key: requestKey, transcript, error: !transcript });
+        // A source-search handoff is only useful if the raw drawer body still
+        // matches the exact revision it showed. Do not jump to a corrected or
+        // mismatched document and make it look like the same evidence.
+        const expected = focus?.expected_document_sha256;
+        const actual = transcript && expected ? await canonicalTranscriptBodySha256(transcript) : null;
+        if (!alive) return;
+        setLoad({ key: requestKey, transcript, error: !transcript || (!!expected && actual !== expected) });
       })
       .catch(() => alive && setLoad({ key: requestKey, transcript: null, error: true }));
     return () => {
       alive = false;
     };
-  }, [sym, id, requestKey, retryNonce]);
+  }, [sym, id, requestKey, retryNonce, focus?.expected_document_sha256]);
 
   useEffect(() => {
+    if (!mounted) return;
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeRef.current?.focus();
     return () => returnFocusRef.current?.focus();
-  }, []);
+  }, [mounted]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -128,6 +149,17 @@ export default function TranscriptDrawer({ sym, id, name, onClose }: TranscriptD
   const title = tx?.title || `${name || sym} · ${id}`;
   const rawUrl = transcriptBodyUrl(sym, id);
 
+  useEffect(() => {
+    if (!tx || load.error || focus?.segment_index === undefined) return;
+    const targetKey = `${sym}:${id}:${focus.segment_index}:${focus.expected_document_sha256 ?? ""}`;
+    if (jumpedTargetRef.current === targetKey) return;
+    const target = document.querySelector<HTMLElement>(`.fin-tx-seg[data-segment="${focus.segment_index + 1}"]`);
+    if (!target) return;
+    jumpedTargetRef.current = targetKey;
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    target.focus({ preventScroll: true });
+  }, [focus?.expected_document_sha256, focus?.segment_index, id, load.error, sym, tx]);
+
   async function copyText(value: string, key: string) {
     try {
       await navigator.clipboard.writeText(value);
@@ -146,7 +178,7 @@ export default function TranscriptDrawer({ sym, id, name, onClose }: TranscriptD
     await copyText(url.toString(), "link");
   }
 
-  return (
+  const node = (
     <>
       <div className="fin-drawer-scrim" onClick={onClose} aria-hidden />
       <aside ref={drawerRef} className="fin-drawer fin-tx-drawer" role="dialog" aria-modal="true" aria-labelledby="fin-tx-drawer-title">
@@ -241,7 +273,7 @@ export default function TranscriptDrawer({ sym, id, name, onClose }: TranscriptD
           {state === "ok" && tx && filtered.map(({ segment, index }) => (
             <Fragment key={index}>
               {firstVisibleQa === index && <div className="fin-tx-section" id="fin-tx-qa">{pick(zh, "Questions & answers", "问答环节")}</div>}
-              <article className="fin-tx-seg" data-segment={index + 1}>
+              <article className="fin-tx-seg" data-segment={index + 1} tabIndex={focus?.segment_index === index ? -1 : undefined}>
                 <header>
                   <span>
                     <b className="fin-tx-speaker">{highlighted(segment.speaker || pick(zh, "Unknown speaker", "未知发言人"), query)}</b>
@@ -270,4 +302,5 @@ export default function TranscriptDrawer({ sym, id, name, onClose }: TranscriptD
       </aside>
     </>
   );
+  return mounted ? createPortal(node, document.body) : null;
 }
