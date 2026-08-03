@@ -77,6 +77,26 @@ const PROV_LINE: React.CSSProperties = {
 /** Shared plot paddings + text styles for the SVG panels. */
 export const PLOT_PAD = { l: 52, r: 14, t: 12, b: 24 } as const;
 
+/**
+ * Row-1 shared height law: OiLadderPanel's chart grows with its strike-row
+ * count (dense chains need more vertical room to stay readable); OiExpiryPanel
+ * is otherwise a fixed 210px. Left alone the two cards land unevenly sized
+ * whenever the ladder isn't near its floor. StructureView computes this ONCE
+ * from the same by_strike row count OiLadderPanel itself filters to, and
+ * passes it to BOTH panels as a shared height prop — so row 1 always lands
+ * card-height-equal regardless of chain density. Matches OiLadderPanel's own
+ * PAD.t(16)+PAD.b(22)=38 chrome constant; keep them in sync if either panel's
+ * padding changes.
+ */
+export const OI_LADDER_H_MIN = 220;
+export const OI_LADDER_H_MAX = 440;
+export const OI_LADDER_ROW_PX = 7;
+export const OI_LADDER_PAD_TB = 38;
+
+export function oiLadderHeight(rowCount: number): number {
+  return Math.max(OI_LADDER_H_MIN, Math.min(OI_LADDER_H_MAX, rowCount * OI_LADDER_ROW_PX + OI_LADDER_PAD_TB));
+}
+
 export const AXIS_TXT: React.CSSProperties = {
   fontSize: 10,
   fill: "var(--muted)",

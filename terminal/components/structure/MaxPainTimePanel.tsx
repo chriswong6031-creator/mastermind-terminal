@@ -11,7 +11,7 @@
 
 import React, { useMemo, useRef } from "react";
 import {
-  useChartWidth, niceTicks, fmtTick, thinLabels, padDomain, MIN_CHART_H,
+  useChartWidth, niceTicks, fmtTick, thinLabels, padDomain,
 } from "@/components/charts/svgChart";
 import type { Lang } from "@/lib/i18n";
 import { makeStructureT } from "./structureStrings";
@@ -20,7 +20,13 @@ import {
   ProvenanceLine, PanelEmpty, PLOT_PAD, AXIS_TXT, REF_TXT,
 } from "./structureShared";
 
-const H = MIN_CHART_H.axis;
+// Local override, not MIN_CHART_H.axis (190). MaxPainPanel (H=230) also
+// carries an exp-picker chip row (CONTROLS_ROW, ~62px) that this panel does
+// not — matching svg heights alone (230=230) would NOT make the card totals
+// equal. 292 is the height that closes that chrome gap so both row-3 cards
+// land offsetHeight-equal (measured, not just the SVG). Re-measure both
+// before changing either.
+const H = 292;
 const SERIES_COLOR = "var(--brand-2)";
 
 interface Pt { exp: string; dte: number; k: number }

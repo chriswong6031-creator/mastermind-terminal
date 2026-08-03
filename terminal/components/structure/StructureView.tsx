@@ -23,7 +23,7 @@
  * so a slow root can't clobber a newer pick (VolView convention).
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flowGet } from "@/lib/flowClientCache";
 import { useLang } from "@/lib/i18n";
 import { GEX_AUTOCOMPLETE_ROOTS } from "@/lib/optionsRoots";
@@ -31,7 +31,7 @@ import { trackSearch } from "@/lib/searchTrack";
 import { Tip } from "@/components/ui/Tip";
 import { makeStructureT } from "./structureStrings";
 import type { MaxPainPayload, OiChangePayload, OiTimePayload } from "./structureTypes";
-import { NEUTRAL_CHIP } from "./structureShared";
+import { NEUTRAL_CHIP, oiLadderHeight } from "./structureShared";
 import { OiLadderPanel } from "./OiLadderPanel";
 import { OiExpiryPanel } from "./OiExpiryPanel";
 import { OiTimePanel } from "./OiTimePanel";
@@ -164,6 +164,17 @@ export function StructureView() {
     (oiTime?.history?.length ?? 0) > 0 ||
     (oiChange?.rows?.length ?? 0) > 0;
 
+  // Row-1 shared height (see structureShared.oiLadderHeight): computed here
+  // from the SAME by_strike row count OiLadderPanel itself filters to, then
+  // handed to both OiLadderPanel and OiExpiryPanel so the pair stays
+  // card-height-equal regardless of chain density (dense ladders grow taller,
+  // and OiExpiryPanel now grows with them instead of sitting fixed at 210).
+  const ladderRowCount = useMemo(
+    () => (maxPain?.by_strike ?? []).filter((r) => Number.isFinite(Number(r?.strike))).length,
+    [maxPain],
+  );
+  const ladderH = oiLadderHeight(ladderRowCount);
+
   return (
     <div style={OUTER}>
       {/* ── Controls bar ──────────────────────────────────────────────────── */}
@@ -229,11 +240,13 @@ export function StructureView() {
               byStrikeFullN={maxPain?.by_strike_full_n}
               spotRef={maxPain?.spot_ref}
               lang={lang}
+              sharedH={ladderH}
             />
             <OiExpiryPanel
               expiries={maxPain?.expiries}
               expiriesFullN={maxPain?.expiries_full_n}
               lang={lang}
+              sharedH={ladderH}
             />
             <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
               <OiTimePanel history={oiTime?.history} lang={lang} />
