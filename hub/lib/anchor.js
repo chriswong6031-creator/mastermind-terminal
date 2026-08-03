@@ -29,6 +29,11 @@ const fs = require("fs");
 const https = require("https");
 const log = require("./log");
 
+// A daily bar can roll from "yesterday is the tail" to "today is the tail" without
+// changing the ET session-date cache key. Re-stat active symbols often enough to catch
+// that same-session atomic swap, while still bounding filesystem work across clients.
+const DAILY_FILE_CHECK_MIN_INTERVAL = 5 * 1000;
+
 // ET date formatter — same logic as polygon.js:etDate.
 const ET_DATE_FMT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York",
@@ -76,13 +81,36 @@ class AnchorCache {
     this._cache = new Map();
     // in-flight Polygon REST promises to avoid parallel requests for the same sym.
     this._inflight = new Map();
+    // Accepted daily-file identity + last stat time for each session key. The file
+    // normally swaps once after the close; tracking dev/ino/size/mtime catches both
+    // atomic rename and in-place replacement without statting on every quote read.
+    this._dailyVersions = new Map();
+    this._dailyCheckedAt = new Map();
   }
 
-  // Synchronous fast path: returns cached anchor for (sym, today-ET) or null.
-  // Callers should call resolveAnchor() async if they need it fresh.
+  // Synchronous fast path: returns the anchor for (sym, today-ET) or null.
+  // A bounded file-version check refreshes a cached anchor when today's bar rolls.
   get(sym, nowMs) {
-    const key = `${sym}::${etDate(nowMs)}`;
-    return this._cache.get(key) || null;
+    const sessionDate = etDate(nowMs);
+    const key = `${sym}::${sessionDate}`;
+    const hit = this._cache.get(key) || null;
+    if (!hit) return null;
+
+    const lastCheck = this._dailyCheckedAt.get(key) || 0;
+    if (nowMs - lastCheck < DAILY_FILE_CHECK_MIN_INTERVAL) return hit;
+    this._dailyCheckedAt.set(key, nowMs);
+
+    const currentVersion = this._dailyFileVersion(sym);
+    const acceptedVersion = this._dailyVersions.get(key);
+    if (currentVersion === acceptedVersion) return hit;
+
+    // _fromDailyFile is synchronous (all of its I/O is readFileSync/statSync), so
+    // the first request after a roll receives the corrected close immediately.
+    const refreshed = this._fromDailyFile(sym, sessionDate, nowMs);
+    if (!refreshed) return hit; // corrupt/in-flight replacement: retain last-good and retry
+    this._cache.set(key, refreshed);
+    log.info("anchor refreshed after daily-file roll", sym, `sessionDate=${sessionDate}`);
+    return refreshed;
   }
 
   // Async: ensure anchor for (sym, today-ET) is resolved and return it.
@@ -90,7 +118,7 @@ class AnchorCache {
   async resolve(sym, nowMs) {
     const sessionDate = etDate(nowMs);
     const key = `${sym}::${sessionDate}`;
-    const hit = this._cache.get(key);
+    const hit = this.get(sym, nowMs);
     if (hit) return hit;
 
     // Coalesce concurrent resolves for the same key.
@@ -118,6 +146,12 @@ class AnchorCache {
     for (const k of this._cache.keys()) {
       if (!k.endsWith(`::${today}`)) { this._cache.delete(k); pruned++; }
     }
+    for (const k of this._dailyVersions.keys()) {
+      if (!k.endsWith(`::${today}`)) this._dailyVersions.delete(k);
+    }
+    for (const k of this._dailyCheckedAt.keys()) {
+      if (!k.endsWith(`::${today}`)) this._dailyCheckedAt.delete(k);
+    }
     if (pruned) log.info("anchor cache pruned", pruned, "stale sessions");
   }
 
@@ -125,7 +159,7 @@ class AnchorCache {
 
   async _resolve(sym, sessionDate, nowMs) {
     // (a) Daily file
-    const fromFile = await this._fromDailyFile(sym, sessionDate, nowMs);
+    const fromFile = this._fromDailyFile(sym, sessionDate, nowMs);
     if (fromFile) return fromFile;
 
     // (b) Polygon REST
@@ -138,14 +172,35 @@ class AnchorCache {
     return this._manifestFallback(sym);
   }
 
-  async _fromDailyFile(sym, sessionDate, nowMs) {
+  _dailyFileVersion(sym) {
+    try {
+      const st = fs.statSync(`${this.dataDir}/${sym}.json`);
+      return `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`;
+    } catch {
+      return null;
+    }
+  }
+
+  _fromDailyFile(sym, sessionDate, nowMs) {
     const fpath = `${this.dataDir}/${sym}.json`;
+    const key = `${sym}::${sessionDate}`;
+    this._dailyCheckedAt.set(key, nowMs);
+    const versionBefore = this._dailyFileVersion(sym);
+    if (versionBefore == null) {
+      this._dailyVersions.set(key, null);
+      return null;
+    }
     let raw;
     try {
       raw = fs.readFileSync(fpath, "utf8");
     } catch {
       return null; // file absent
     }
+
+    // If an atomic replacement raced our read, reject this pass and retry after
+    // the bounded check interval rather than pairing old contents with a new stamp.
+    const versionAfter = this._dailyFileVersion(sym);
+    if (versionAfter !== versionBefore) return null;
 
     let data;
     try { data = JSON.parse(raw); } catch { return null; }
@@ -200,6 +255,7 @@ class AnchorCache {
     if (prevSessionChg != null && Number.isFinite(prevSessionChg)) {
       anchor.prevSessionChg = prevSessionChg;
     }
+    this._dailyVersions.set(key, versionAfter);
     log.every(`anchor-${sym}`, "DEBUG", "anchor from daily_file", sym, `prevClose=${prevClose}`, `sessionDate=${sessionDate}`);
     return anchor;
   }
