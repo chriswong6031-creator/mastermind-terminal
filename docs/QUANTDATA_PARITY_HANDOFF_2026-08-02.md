@@ -181,3 +181,57 @@ QuantData census §1 walked screen-by-screen with every capability marked
 **have / have-better / gated(named gate)** — zero "missing" rows left, the IA reorganized
 per §5 with #164 resolved, intraday store live and feeding both programs, and the live-data
 tier wired with honest basis labels. Ledger flipped as you go, in the same PRs.
+
+---
+
+## 9. Continuation-session rulings (2026-08-03, appended by the taking-over session)
+
+0. **P0 Tickers-drill crash — root-caused, fixed in this PR.** `volData.atm_iv.toFixed(1)`
+   (OptionsHubView.tsx:2999) with only a root-match guard; the nightly contract
+   legitimately ships `atm_iv: null` (`_empty_vol`, engine/options_hub.py, written and
+   uploaded unconditionally) for thinly-covered roots, so any such name in the rail
+   crashed the whole app to the root error boundary. Introduced by f6a6dc60 (#212) which
+   dropped the old `* 100` null-coercion; invisible to tsc because the local `VolPayload`
+   typed `atm_iv: number` (every other declaration in the repo is nullable) behind an
+   `as unknown as` cast. Fix: sibling-chip honest-null idiom + type widened to
+   `number | null`. Live-reproduced pre-fix and re-verified post-fix by injecting an
+   `_empty_vol`-shaped `f=vol:` payload. Not caused by #334/#338/#340; fixture mode masks
+   it (all three vol fixtures carry numeric atm_iv). No macro-side change needed — a null
+   ATM IV is honest display-tier data; the terminal must guard.
+
+1. **PR #164 — CLOSED as superseded (W0 item done).** Evidence: 295 commits stale,
+   single-commit PR; master independently ships its entire intent (flat 7-item AppNav,
+   every redirect incl. `/research→/options`); the one substantive design disagreement
+   (Leaders/Radar home) is resolved on master in the §5-R5 direction (→ Discover), which
+   #164 contradicted. Rebasing would re-litigate a settled design against the masterplan.
+   Salvage check outstanding: #164's multi-watchlist pill switcher — not confirmed present
+   on master's PortfolioView; if missing it is a small separate lane, not an R5 blocker.
+2. **Exposure vs PRISM — operator's overlap complaint adjudicated by executing §5.3**
+   (PRISM merges into Exposure). PRISM and gexdesk were same-commit siblings (PR #20)
+   never differentiated; PRISM's charter lenses (VEX/UNUSUAL) never lit while Exposure
+   shipped vanna/charm live; PRISM's MatrixGrid painted dealer GEX in price-direction
+   tokens (inverts under zh east theme) with the opposite sign of MSC's MatrixHeatCard one
+   tab away. Merge build: shared sign-correct matrix renderer (MSC conventions, PRISM's
+   controls: 4|8 cols, scope, ±range, norm, Σ column, badges), Confluence + HeatSeeker
+   ported, OiMoversRail dropped (duplicates Screener ΔOI preset), `?tab=prism` aliased to
+   Exposure, `terminal/components/prism/` deleted after port.
+2b. **Surface "bland chart" ruling** — the field is ALREADY a continuous gradient; the
+   defect is raw day-max normalization (one outlier crushes the field;
+   `gridMaxAbs` in `lib/surfaceContract.ts`). Fix = the 5–95 percentile normalization MSC
+   already validated (R1.4/MatrixHeatCard), plus zero-new-data signal overlays consuming
+   shipped payloads: walls/flip/EM lines (`lib/optionsLevels.ts`), regime chip
+   (`lib/mscGlance.ts` over `gexstate:`), OI-Δ top-strike highlights (`oi_change:`), each
+   with nightly "as of" provenance (no LIVE chrome). Palette/intensity-curve/contour work
+   is NOT ours: pre-registered MSC R1.2 (still open) — do not build unilaterally.
+   2nd-order-greek overlays stay gated on a U-CHAIN R2 publisher (none exists).
+3. **Volatility/Structure whitespace** — root-caused (VRP's extra 4-tile KPI row vs 190px
+   sibling charts; Structure's mixed fixed/dynamic pair heights). Fix per operator's own
+   suggestion: equalize card totals (raise ATM-IV-History + Term, trim VRP; Structure row-1
+   pair driven by one shared ladder-height calc, row-3 pair equalized).
+4. **"Static fields" liveness read** — confirmed accurate and BY DESIGN (nightly EOD, one
+   SWR fetch per root, honest "as of" chips, deliberately no LIVE chrome). The genuine fix
+   is the W3/R2 intraday store keystone, not cosmetic polling; do not fake live chrome.
+5. **Live-feed purchase (directive §1.3)** — still UNANSWERED as of this session; the
+   operator has not yet named the feed/tier. Re-ask on next contact; R1 calibration basis,
+   R4 alert latency, R7, and live-chrome re-gating all remain provisional until recorded
+   here.
