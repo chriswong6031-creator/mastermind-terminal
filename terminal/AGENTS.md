@@ -10,8 +10,22 @@ This version has breaking changes — APIs, conventions, and file structure may 
 ## Model routing
 Opus builds and reviews code. Design choices are judgment work — made in the session's main loop (or an Opus designer agent), never delegated to Sonnet; builders only implement fully-specified designs (exact markup/classes handed to them). Sonnet = mechanical non-code sweeps only; Haiku = trivial extraction.
 
-## Design law (user-facing surfaces)
-- The design system is REAL and locked: `app/globals.css` (Terminal v5) + `app/observatory.css` (`.obs` scope) — read them and `DESIGN_OBSERVATORY.md` before styling anything. New surfaces match the v5 idiom unless the commissioning brief pins a different reference — then the reference files WIN over house idiom.
+## Design direction (user-facing surfaces)
+- **OPERATOR RESCISSION 2026-08-02:** the former "design system is REAL and locked /
+  house idiom wins" law and the former "paraphrase only — never copy their copy"
+  competitor-audit law are RESCINDED by operator directive. Do NOT re-add them from
+  older docs, audits, or session memory. The standing direction is the opposite:
+  competitor layout, structure, IA, and feature sets are explicit build targets —
+  the options suite in particular is being built to **full feature parity with
+  QuantData, structured to be better than theirs in every regard** (program of
+  record: `docs/QUANTDATA_PARITY_HANDOFF_2026-08-02.md`).
+- `app/globals.css` (Terminal v5) + `app/observatory.css` remain the shared token/
+  primitive base — reuse its tokens and primitives so surfaces stay coherent and
+  east-flip/zh-safe, but layout and structure follow the product target, not a
+  house idiom.
+- Verbatim copying of a competitor's *text, assets, logos, or marketing copy* is
+  still off-limits (ordinary legal hygiene, not a design constraint — layout and
+  structure are fair game).
 - Reference images must be actual files (committed under `design_refs/` or given as absolute paths). If a brief describes a look only in words, STOP and ask for the files before designing.
 - Pin the design (exact markup/CSS) before fanning out any builder agents.
 
