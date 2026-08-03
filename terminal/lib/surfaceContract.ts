@@ -530,6 +530,35 @@ export function archivedOverlayPolicy(isArchived: boolean): ArchivedOverlayPolic
   };
 }
 
+// ─── Price-line host bookkeeping (N1) ─────────────────────────────────────────
+
+/** A drawn LWC price line, tagged with the series it was actually created on. */
+export interface HostedLine {
+  host: unknown;
+  line: unknown;
+}
+
+/**
+ * N1: remove every line from the host it was ACTUALLY drawn on — never a "whichever host
+ * this cleanup run currently resolves to" variable passed in separately. Lightweight-
+ * Charts' `removePriceLine()` is a silent no-op for a line belonging to a DIFFERENT
+ * series (no throw, no effect), so SurfacePane's Levels/OI-Δ overlay effects used to leak:
+ * a host flip between the run that drew a set of lines and the run that cleans them up
+ * (F4/R1 — the candle series gaining or losing its first plotted bar) orphaned the old
+ * host's lines, drawn a second time on the new host, doubling every wall/flip/EM level.
+ * Mirrors the pins reconciliation idiom (`pinLinesRef`'s `series` field), which already
+ * stored the host per-entry and was never affected by this bug.
+ */
+export function removeHostedLines(records: HostedLine[]): void {
+  for (const rec of records) {
+    try {
+      (rec.host as { removePriceLine: (line: unknown) => void }).removePriceLine(rec.line);
+    } catch {
+      /* host already torn down (chart remount) — nothing left to clean up */
+    }
+  }
+}
+
 // ─── Greek metric enablement (Wave 2E feature-detection) ─────────────────────
 
 /**

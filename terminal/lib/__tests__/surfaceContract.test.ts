@@ -23,6 +23,8 @@ import {
   isSurfaceDates,
   truncateSessionAt,
   archivedOverlayPolicy,
+  removeHostedLines,
+  type HostedLine,
   type SurfaceIndex,
   type SurfaceFrame,
   type SessionPoint,
@@ -508,6 +510,67 @@ describe("archivedOverlayPolicy", () => {
       regimeWithdrawn: true,
       oiDeltaWithdrawn: true,
     });
+  });
+});
+
+// ── N1: price lines must be removed from the host they were drawn on ────────
+// SurfacePane's Levels/OI-Δ overlay effects used to remove via "whichever host this
+// cleanup run currently resolves to" — a real host object, but not necessarily the one a
+// given line was CREATED on. Lightweight-Charts' removePriceLine() is a silent no-op for a
+// line belonging to a different series (no throw), so a host flip between the draw run and
+// the cleanup run (F4/R1: the candle series gaining/losing its first plotted bar) orphaned
+// the old host's lines while new ones were drawn on the new host — every wall/flip/EM
+// level doubled. removeHostedLines is the fix: it always reads the host stored ON the
+// record, never a separately-passed "current" host.
+describe("removeHostedLines", () => {
+  it("dispatches each line's removal to its OWN stored host, not a shared/other host", () => {
+    const removedA: unknown[] = [];
+    const removedB: unknown[] = [];
+    const hostA = { removePriceLine: (l: unknown) => removedA.push(l) };
+    const hostB = { removePriceLine: (l: unknown) => removedB.push(l) };
+    // Mixed set (some records on hostA, some on hostB, interleaved) proves per-record
+    // dispatch rather than "everything goes wherever the loop happens to point" — the
+    // exact shape of a real draw-run-A-then-B / cleanup-mixed scenario.
+    const records: HostedLine[] = [
+      { host: hostA, line: "call_wall" },
+      { host: hostB, line: "put_wall" },
+      { host: hostA, line: "gamma_flip" },
+    ];
+    removeHostedLines(records);
+    expect(removedA).toEqual(["call_wall", "gamma_flip"]);
+    expect(removedB).toEqual(["put_wall"]);
+  });
+
+  it("simulates the actual N1 scenario: a host flip between the draw run and the cleanup run still removes via the ORIGINAL host", () => {
+    // Run 1 draws on the heat series (no candle bars drawn yet — hasDrawnBars=false).
+    const heatSeries = { removePriceLine: (l: unknown) => heatRemoved.push(l), createPriceLine: (o: unknown) => o };
+    const heatRemoved: unknown[] = [];
+    const drawn: HostedLine[] = [
+      { host: heatSeries, line: heatSeries.createPriceLine({ price: 100 }) },
+      { host: heatSeries, line: heatSeries.createPriceLine({ price: 105 }) },
+    ];
+    // The candle series gains its first bar — hasDrawnBars flips true — run 2 resolves a
+    // DIFFERENT current host (the candle series) and must clean up run 1's lines first,
+    // BEFORE it ever draws anything on the candle series itself.
+    const candleRemoved: unknown[] = [];
+    removeHostedLines(drawn); // the cleanup step of run 2
+    expect(heatRemoved.length).toBe(2); // removed from where they actually live
+    expect(candleRemoved.length).toBe(0); // never touches the new (unrelated) host
+  });
+
+  it("a host whose removePriceLine throws (already torn down, e.g. chart remount) does not stop the rest from being removed", () => {
+    const removed: unknown[] = [];
+    const dead = { removePriceLine: () => { throw new Error("series removed"); } };
+    const alive = { removePriceLine: (l: unknown) => removed.push(l) };
+    expect(() => removeHostedLines([
+      { host: dead, line: "a" },
+      { host: alive, line: "b" },
+    ])).not.toThrow();
+    expect(removed).toEqual(["b"]);
+  });
+
+  it("empty input is a no-op", () => {
+    expect(() => removeHostedLines([])).not.toThrow();
   });
 });
 

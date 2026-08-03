@@ -67,6 +67,7 @@ import {
   metricEnabled,
   observedSurfaceCadenceSec,
   parseOiChangeRows,
+  removeHostedLines,
   topOiChangeStrikes,
   type SurfaceFrame,
   type MatrixCell,
@@ -405,10 +406,17 @@ export function SurfacePane({
   // Options-levels overlay lines (call/put wall, flip, EM band), keyed by OptLevelKey —
   // redrawn wholesale on toggle/data change (small, fixed-size set; unlike pins there is
   // nothing to reconcile incrementally).
-  const levelLinesRef = useRef<{ key: string; line: unknown }[]>([]);
+  // N1: each entry carries the HOST it was drawn on (same idiom as pinLinesRef's `series`
+  // field below) — a host flip (F4/R1: candle series gains/loses its first plotted bar)
+  // between the draw run and a later cleanup run must remove each line from the series it
+  // actually lives on. LWC's removePriceLine() is a silent no-op for a line belonging to a
+  // DIFFERENT series, so removing via "whichever host this effect run currently resolves
+  // to" orphaned the old host's lines — the exact set doubling this fixes.
+  const levelLinesRef = useRef<{ key: string; host: unknown; line: unknown }[]>([]);
   // OI Δ strike-axis badges: lineVisible:false price lines (axis-label-only markers), one
   // per top-N strike — "subtle... on the field's strike axis", never a full-width line.
-  const oiLinesRef = useRef<unknown[]>([]);
+  // N1: same host-per-entry fix as levelLinesRef above.
+  const oiLinesRef = useRef<{ host: unknown; line: unknown }[]>([]);
   // F1: request counter for the archived-Levels dated fetch (gex_at:{root}:{sessionDate})
   // — mirrors GexDeskView.loadSession's sessionReqRef, dropping a stale response that
   // resolves after a newer pick (or a return-to-live) already superseded it.
@@ -430,14 +438,36 @@ export function SurfacePane({
     () => candleSessionDate ? filterBarsToSessionDate(candles, candleSessionDate) : [],
     [candles, candleSessionDate],
   );
-  // F4: candleSeriesRef.current is assigned UNCONDITIONALLY once the chart mounts (the
+  // F4/R1: candleSeriesRef.current is assigned UNCONDITIONALLY once the chart mounts (the
   // candle series is always created — see the mount effect below), so
   // `candleSeriesRef.current ?? heatSeriesRef.current` never actually falls back, even
-  // when the candle series has ZERO plotted rows (an illiquid root, or a replay scrub
-  // before this session's first candle) — and Lightweight-Charts draws NO price line on a
-  // series with no data. Host selection for every price-line overlay (pins, Levels, OI Δ)
-  // must key on DATA PRESENCE, not ref truthiness.
-  const hasCandleData = sessionCandles.length > 0;
+  // when the candle series has ZERO plotted rows — and Lightweight-Charts draws NO price
+  // line on a series with no data. Host selection for every price-line overlay (pins,
+  // Levels, OI Δ) must key on DATA PRESENCE, not ref truthiness.
+  //
+  // `sessionCandles.length` alone is NOT that presence signal: the candle series below is
+  // fed CUTOFF-filtered bars plus a whitespace tail (PIT truncation to the replay stamp),
+  // so a scrub before this session's first drawn bar leaves the series with zero real plot
+  // rows (LWC: null firstValue, no price line drawable) while `sessionCandles.length` is
+  // still > 0 (the whitespace tail alone). The cutoff computation is hoisted here so both
+  // the candle-draw effect below and host selection agree on what's actually plotted.
+  const cutoffBars = useMemo(() => {
+    if (!sessionCandles.length) return { cutoff: Infinity, kept: [] as Bar6[], drawn: [] as Bar6[] };
+    const date = frame?.session_date;
+    let cutoff = Infinity;
+    if (!live && asOfStamp && date && asOfStamp.length >= 4) {
+      const e = sessionEpoch(date, `${asOfStamp.slice(0, 2)}:${asOfStamp.slice(2, 4)}`);
+      if (Number.isFinite(e)) cutoff = e;
+    }
+    const kept = sessionCandles.filter((b, i, arr) => i === 0 || b[0] !== arr[i - 1][0]);
+    const drawn = kept.filter((b) => b[0] <= cutoff);
+    return { cutoff, kept, drawn };
+  }, [sessionCandles, live, asOfStamp, frame?.session_date]);
+  // The boolean host selection actually needs. It only flips at the empty/non-empty
+  // boundary (not per-frame during ordinary playback once past the first drawn bar), so
+  // this doesn't churn the price-line effects on every scrub tick — see N1 above for why a
+  // flip, however rare, must be orphan-safe (each line remembers the host it was drawn on).
+  const hasDrawnBars = cutoffBars.drawn.length > 0;
 
   // Apply the shader to the heat series from the CURRENT frame/metric/opacity/colors.
   // Ref-backed (reads *Ref values) so the chart-mount effect and the MutationObserver
@@ -1018,13 +1048,15 @@ export function SurfacePane({
   // attached to the candle series when candles exist and to the heat series otherwise —
   // they share the right price scale, so the level lands in the same place either way, and
   // a root with no candle data (illiquid, or fixture) still gets its pins drawn.
-  // F4: host selection keys on `hasCandleData` (DATA presence), not `candleSeriesRef.
+  // F4/R1: host selection keys on `hasDrawnBars` (whether the candle series actually has
+  // plotted rows right now, not merely `sessionCandles.length`), not `candleSeriesRef.
   // current` truthiness — the candle series is always non-null once mounted, so a
   // `?? heatSeriesRef.current` fallback never actually fired, and LWC draws no price line
   // on a series with zero plotted rows (illiquid root, or a replay scrub before this
-  // session's first candle) — silently vanishing pins while the chip still read "on".
+  // session's first DRAWN candle — sessionCandles can be non-empty from the whitespace
+  // tail alone) — silently vanishing pins while the chip still read "on".
   useEffect(() => {
-    const host = hasCandleData ? candleSeriesRef.current : heatSeriesRef.current;
+    const host = hasDrawnBars ? candleSeriesRef.current : heatSeriesRef.current;
     if (!host) return;
     const want = new Map((pins ?? []).map((p) => [p.id, p]));
     const drawn = pinLinesRef.current; // NOT the replay `live` flag — different thing
@@ -1050,7 +1082,7 @@ export function SurfacePane({
         /* LWC rejected the level (no price scale yet) — the chip still lists it */
       }
     }
-  }, [pins, hasCandleData]);
+  }, [pins, hasDrawnBars]);
 
   // ── Options-levels overlay ("Levels" toggle) — call wall / put wall / gamma flip / abs-γ
   // / EM band as createPriceLine, mirroring ChartPanel's Options Levels overlay idiom
@@ -1060,13 +1092,17 @@ export function SurfacePane({
   // `optLevels` is already the F1-effective result (archived → the dated derivation only,
   // live → the live one) — this effect never has to branch on `overlayPolicy` itself.
   useEffect(() => {
-    const host = hasCandleData ? candleSeriesRef.current : heatSeriesRef.current; // F4
+    const host = hasDrawnBars ? candleSeriesRef.current : heatSeriesRef.current; // F4/R1
     if (!host) return;
     const h = host as unknown as {
       createPriceLine: (o: unknown) => unknown;
       removePriceLine: (l: unknown) => void;
     };
-    for (const rec of levelLinesRef.current) { try { h.removePriceLine(rec.line); } catch {} }
+    // N1: remove each line from the host it was ACTUALLY drawn on (lib/surfaceContract
+    // removeHostedLines), not the host this run resolves to — a run can start after a
+    // host flip (candle series gains/loses its first plotted bar between draws), and
+    // removePriceLine() silently no-ops on a foreign series.
+    removeHostedLines(levelLinesRef.current);
     levelLinesRef.current = [];
     if (!levelsOn || optLevels.status !== "ok") return;
     const style: Record<OptLevelKey, { color: string; dash: number; title: string }> = {
@@ -1085,26 +1121,27 @@ export function SurfacePane({
           price: lv.price, color: s.color, lineWidth: 1, lineStyle: s.dash,
           axisLabelVisible: true, title: s.title,
         });
-        levelLinesRef.current.push({ key: lv.key, line });
+        levelLinesRef.current.push({ key: lv.key, host, line });
       } catch {
         /* LWC rejected the level (no price scale yet) — the toggle stays on and retries
            on the next data/root change. */
       }
     }
-  }, [levelsOn, optLevels, t, hasCandleData]);
+  }, [levelsOn, optLevels, t, hasDrawnBars]);
 
   // ── OI Δ toggle: badge the top-5 strikes by |ΔOI| on the strike axis. `lineVisible:
   // false` draws NOTHING across the pane's width — only the coloured axis-label badge —
   // so this reads as a subtle strike-axis marker (per the brief) rather than a second set
   // of full-width lines competing visually with the Levels overlay.
   useEffect(() => {
-    const host = hasCandleData ? candleSeriesRef.current : heatSeriesRef.current; // F4
+    const host = hasDrawnBars ? candleSeriesRef.current : heatSeriesRef.current; // F4/R1
     if (!host) return;
     const h = host as unknown as {
       createPriceLine: (o: unknown) => unknown;
       removePriceLine: (l: unknown) => void;
     };
-    for (const line of oiLinesRef.current) { try { h.removePriceLine(line); } catch {} }
+    // N1: remove from the host each line was actually drawn on (see levelLinesRef above).
+    removeHostedLines(oiLinesRef.current);
     oiLinesRef.current = [];
     // F1: withdrawn outright during an archived session — never draw badges from TODAY's
     // oi_change: data under a past session's field.
@@ -1117,12 +1154,12 @@ export function SurfacePane({
           lineVisible: false, axisLabelVisible: true,
           axisLabelColor: badge, axisLabelTextColor: "#1a1d24",
         });
-        oiLinesRef.current.push(line);
+        oiLinesRef.current.push({ host, line });
       } catch {
         /* LWC rejected the level (no price scale yet) — retries on the next data change. */
       }
     }
-  }, [oiDeltaOn, topOiStrikes, hasCandleData, overlayPolicy.oiDeltaWithdrawn]);
+  }, [oiDeltaOn, topOiStrikes, hasDrawnBars, overlayPolicy.oiDeltaWithdrawn]);
 
   // Candles → chart.
   // PIT: the heat field is server-truncated to the scrubbed stamp, so the candles must stop
@@ -1133,16 +1170,11 @@ export function SurfacePane({
     const candle = candleSeriesRef.current;
     if (!candle) return;
     if (!sessionCandles.length) { candle.setData([]); return; }
-    const date = frame?.session_date;
-    let cutoff = Infinity;
-    if (!live && asOfStamp && date && asOfStamp.length >= 4) {
-      const e = sessionEpoch(date, `${asOfStamp.slice(0, 2)}:${asOfStamp.slice(2, 4)}`);
-      if (Number.isFinite(e)) cutoff = e;
-    }
-    const kept = sessionCandles.filter((b, i, arr) => i === 0 || b[0] !== arr[i - 1][0]);
-    const data = kept
-      .filter((b) => b[0] <= cutoff)
-      .map((b) => ({ time: b[0] as unknown as Time, open: b[1], high: b[2], low: b[3], close: b[4] }));
+    // R1: cutoff/kept/drawn now come from the `cutoffBars` memo above — the SAME
+    // computation `hasDrawnBars` reads, so the candle series' actual plotted rows and the
+    // price-line overlays' host selection can never disagree about what's drawn.
+    const { cutoff, kept, drawn } = cutoffBars;
+    const data = drawn.map((b) => ({ time: b[0] as unknown as Time, open: b[1], high: b[2], low: b[3], close: b[4] }));
     // Keep the time axis on the WHOLE session by padding the cut tail with whitespace points.
     // This is half of a pair: the padding extends the scale to 15:56, and `fixLeftEdge` on the
     // time scale stops Lightweight-Charts re-anchoring the shorter series to the right edge.
@@ -1153,7 +1185,7 @@ export function SurfacePane({
     // candlestick series does, so the whitespace lives here.)
     const tail = kept.filter((b) => b[0] > cutoff).map((b) => ({ time: b[0] as unknown as Time }));
     candle.setData([...data, ...tail] as Parameters<typeof candle.setData>[0]);
-  }, [sessionCandles, live, asOfStamp, frame?.session_date]);
+  }, [sessionCandles, cutoffBars]);
 
   // ── X framing: observed field vs full selected session ──────────────────────
   // Surface is a session-native view, not a generic daily chart. The default follows the
@@ -1233,17 +1265,32 @@ export function SurfacePane({
     ? (archivedOptLevels.status === "ok" ? archivedOptLevels.asofDate : null)
     : (optLevels.status === "ok" ? optLevels.asofDate : null);
 
+  // R2: mirrors levelsFetchState above — loading / hard-fetch-failure (outage or gate) /
+  // genuine no-coverage used to all collapse into oiDeltaNote's "no coverage" fallback
+  // (a fetch still in flight, or `flowGet` returning null on a hard failure, read
+  // identically to "this root just has no OI-change coverage").
+  const oiChangeFetchState: "loading" | "ok" | "unavailable" =
+    !oiChangeStore || oiChangeStore.root !== root
+      ? "loading"
+      : oiChangeStore.data == null
+        ? "unavailable"
+        : "ok";
   const oiChangeAsofDate = (() => {
-    if (!oiChangeStore || oiChangeStore.root !== root) return null;
+    if (oiChangeFetchState !== "ok" || !oiChangeStore) return null;
     const raw = (oiChangeStore.data as { asof?: unknown } | null)?.asof;
     const s = typeof raw === "string" ? raw.slice(0, 10) : "";
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
   })();
   // F11: Σ|ΔOI| conflates strikes being built and strikes being unwound — the note leads
   // with that honesty phrase (mirrors the toggle's aria-label) rather than only the date.
-  const oiDeltaNote = oiChangeCells.length
-    ? `${t("oiDeltaMoversNote")} · ${nightlyDateNote(oiChangeAsofDate, false)}`
-    : t("nightlyNoCov");
+  const oiDeltaNote =
+    oiChangeFetchState === "loading"
+      ? t("nightlyLoading")
+      : oiChangeFetchState === "unavailable"
+        ? t("nightlyUnavail")
+        : oiChangeCells.length
+          ? `${t("oiDeltaMoversNote")} · ${nightlyDateNote(oiChangeAsofDate, false)}`
+          : t("nightlyNoCov");
 
   // ── Regime chip (pane header) — same vocabulary/colour table the screener, watchlist
   // dot and ticker page already use (lib/mscGlance REGIME_COLORS + gexStrings `regime*`).
@@ -1251,8 +1298,17 @@ export function SurfacePane({
   // ride with it, same as MarketStateCard / StockAnalysis.
   const regimeLabel = glanceRow ? gexT(`regime${glanceRow.regime}` as Parameters<typeof gexT>[0]) || glanceRow.regime : null;
   const regimeNote = glanceRow ? nightlyDateNote(glanceRow.asofDate, true) : "";
+  // R3: the ≤460px compact-slot text — whichever of dist-to-flip/stability the payload
+  // actually carries, preferring dist-to-flip when both are present (it is more directly
+  // actionable — "how far to the regime boundary" — than a stability score). Null when
+  // neither is present, matching the verbose spans' own per-field null-guards above.
+  const regimeCompactStat = glanceRow?.distToFlipPct != null
+    ? `${Math.abs(glanceRow.distToFlipPct).toFixed(1)}% ${t("regimeToFlip")}`
+    : glanceRow?.stabilityPct != null
+      ? `${Math.round(glanceRow.stabilityPct)}% ${t("regimeStability")}`
+      : null;
   // F6: compact "· MM-DD" form, shown ONLY at ≤460px alongside the regime label + the
-  // dist-to-flip% detail, which the REGIME-DYNAMICS LAW above requires never ship alone.
+  // regimeCompactStat detail, which the REGIME-DYNAMICS LAW above requires never ship alone.
   const shortDateNote = (asofDate: string | null): string => (asofDate ? `· ${asofDate.slice(5)}` : "");
 
   // ── Y framing (explicit) ─────────────────────────────────────────────────────
@@ -1385,7 +1441,10 @@ export function SurfacePane({
           <button
             className={`obs-chip${oiDeltaOn ? " on" : ""}`}
             style={{ ...CHIP, ...(overlayPolicy.oiDeltaWithdrawn ? DISABLED_CHIP : {}) }}
-            aria-pressed={oiDeltaOn}
+            // NIT: aria-pressed is a toggle-state attribute — dropped entirely (not just
+            // `false`) while the control is aria-disabled/withdrawn, and restored once the
+            // session goes live again.
+            aria-pressed={overlayPolicy.oiDeltaWithdrawn ? undefined : oiDeltaOn}
             aria-disabled={overlayPolicy.oiDeltaWithdrawn}
             aria-label={
               overlayPolicy.oiDeltaWithdrawn
@@ -1397,7 +1456,11 @@ export function SurfacePane({
             {t("oiDeltaToggle")}
           </button>
           {overlayPolicy.oiDeltaWithdrawn ? (
-            <span style={WITHDRAWN_NOTE}>{t("archivedOverlaysWithdrawn")}</span>
+            // NIT: hidden together with its (aria-disabled, already display:none at
+            // ≤460px) control at that width — the regime chip's WITHDRAWN_NOTE copy below
+            // already discloses "Regime state AND OI Δ..." on its own, so this second copy
+            // is the verbose remainder there, not the only disclosure.
+            <span className="obs-surf-oi-withdrawn-note" style={WITHDRAWN_NOTE}>{t("archivedOverlaysWithdrawn")}</span>
           ) : oiDeltaOn && (
             <>
               <span className="obs-surf-data-detail">{oiDeltaNote}</span>
@@ -1459,11 +1522,8 @@ export function SurfacePane({
           ) : glanceRow && regimeLabel && (
             <span className="obs-surf-data-item" aria-label={t("regimeChipAria")}>
               <strong className="num" style={{ color: REGIME_COLORS[glanceRow.regime] }}>{regimeLabel}</strong>
-              {/* F6: dist-to-flip% carries the `obs-surf-data-compact` modifier so it
-                  survives the ≤460px verbose-note hide — the regime label must never ship
-                  alone (mscGlance.ts REGIME-DYNAMICS LAW, lines 14-16). */}
               {glanceRow.distToFlipPct != null && (
-                <span className="obs-surf-data-detail obs-surf-data-compact">
+                <span className="obs-surf-data-detail">
                   {Math.abs(glanceRow.distToFlipPct).toFixed(1)}% {t("regimeToFlip")}
                 </span>
               )}
@@ -1473,6 +1533,14 @@ export function SurfacePane({
                 </span>
               )}
               <span className="obs-surf-data-detail">{regimeNote}</span>
+              {/* R3: ≤460px compact slot — whichever of dist-to-flip/stability the payload
+                  actually carries (preferring dist-to-flip when both are present), not
+                  dist-to-flip only. A payload with stability but a null dist_to_flip used
+                  to ship the regime label bare at this width once the verbose spans above
+                  were hidden (mscGlance.ts REGIME-DYNAMICS LAW, lines 14-16). */}
+              {regimeCompactStat && (
+                <span className="obs-surf-compact-only">{regimeCompactStat}</span>
+              )}
               {glanceRow.asofDate && (
                 <span className="obs-surf-compact-only">{shortDateNote(glanceRow.asofDate)}</span>
               )}
