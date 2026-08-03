@@ -528,6 +528,33 @@ waves follow M1 ops discipline.
 > double-tap window eats the pane-maximize gesture (mobile-chart-chrome e2e, cold-reproducible
 > vs a clean base; startTransition cannot help — the commit phase is synchronous). Ship it
 > only with a per-row, jank-free paint path. Command-tab gauges also still open.
+>
+> **2026-08-02 (same evening): R2.4b SHIPPED** (macro #4336 + terminal #338). The Report
+> Card's two open holes closed together. **Index lane:** SPY/SPX/QQQ/IWM/DIA/SPXW had zero
+> graded boards because `data/stocks` carries no ETF/index bars — new
+> `scripts/refresh_index_bars.py` maintains `data/levels/index_bars/` (yfinance adjusted
+> basis, ^GSPC for SPX, SPXW aliases to SPX bars at load), the driver gained
+> `--universe index`, and the grader wrapper drains an index backfill queue FIRST (own
+> state file, one year-chunk per pass; the 2026 chunk was kicked immediately on m1 so the
+> first per-root index cards publish the same evening). Index runs never `--publish` the
+> track-record JSON — that R2 artifact stays the stocks-universe study; index results flow
+> through grades.parquet → per-root `level_grades/` cards. **Stronger nulls:** every
+> touch-role node also grades its equidistant-mirror strike (2·spot − strike, identical
+> close-side test) and every board the prior-day extremes as pseudo-walls;
+> `beats_equidistant_null` demands the real Wilson LOWER bound clear the null's measured
+> rate. First real run behaved exactly as the no-edge finding predicts (mirror null held
+> 10/20 on the July index smoke). **Intraday variants (threshold-free):**
+> `wall_range_contained` (35% on the smoke vs 62% close test), `band_close_contained`,
+> per-node `pierce_pct` medians. All columns additive — a pre-R2.4b parquet degrades to
+> the exact v1 card (tested). GradesCard: verdicts vs the measured null (tick moves off
+> 50%), three new board stats, EN/zh de-hardcoded from the coin flip. Ride-alongs: the
+> two WP-C1 grader suites were never CI-named (back-wired, two-halves), and
+> `grades_fixture.json` was never committed with v1 (#321) — it sat under a local
+> `.git/info/exclude` glob, so CI/fixture sessions silently rendered no grades card;
+> force-added with R2.4b fields on `_universe` + NVDA, AMD kept pre-R2.4b as fallback
+> coverage. ⚠️ 2025 stocks boards were mid-grade under v1 code when this deployed —
+> that year lacks null columns until requeued (drop `2025` from
+> `backfill_done_years.txt` after the index queue drains, one extra night).
 
 ### R0 — Wave 1: the Positioning panel *(terminal only, zero data-plane dependency)* — **THIS SESSION**
 
