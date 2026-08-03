@@ -22,6 +22,7 @@ import {
   isSessionDate,
   isSurfaceDates,
   truncateSessionAt,
+  archivedOverlayPolicy,
   type SurfaceIndex,
   type SurfaceFrame,
   type SessionPoint,
@@ -411,6 +412,42 @@ describe("parseOiChangeRows", () => {
     expect(parseOiChangeRows({ rows: "not an array" })).toEqual([]);
     expect(parseOiChangeRows({ rows: [null, 5, "x"] })).toEqual([]);
   });
+
+  // F8: root is optional (back-compat with every call site above, none of which passes
+  // one) but a caller that fetched a root-keyed key must be able to reject a stale-root
+  // payload — the payload's own top-level `root`, AND each row's `root` where present
+  // (the cross-root board's rows carry one; a per-root payload should not, but a badge
+  // must never wear another ticker's structure — same law as optionsLevels' pickRootPayload).
+  it("rejects a payload whose top-level root does not match, when a root is given", () => {
+    const raw = { root: "QQQ", rows: [{ strike: 500, d_oi: 100 }] };
+    expect(parseOiChangeRows(raw, "SPY")).toEqual([]);
+    expect(parseOiChangeRows(raw, "QQQ")).toEqual([{ strike: 500, d_oi: 100 }]);
+  });
+
+  it("without a root argument, a mismatched top-level root is NOT checked (back-compat)", () => {
+    const raw = { root: "QQQ", rows: [{ strike: 500, d_oi: 100 }] };
+    expect(parseOiChangeRows(raw)).toEqual([{ strike: 500, d_oi: 100 }]);
+  });
+
+  it("drops individual rows carrying a foreign root, keeping same-root rows", () => {
+    const raw = {
+      root: "SPY",
+      rows: [
+        { root: "SPY", strike: 745, d_oi: 100 },
+        { root: "NVDA", strike: 300, d_oi: 500 },
+        { strike: 750, d_oi: 50 }, // no per-row root — not rejected on that basis
+      ],
+    };
+    expect(parseOiChangeRows(raw, "SPY")).toEqual([
+      { strike: 745, d_oi: 100 },
+      { strike: 750, d_oi: 50 },
+    ]);
+  });
+
+  it("root match is case-insensitive", () => {
+    const raw = { root: "spy", rows: [{ strike: 745, d_oi: 100 }] };
+    expect(parseOiChangeRows(raw, "SPY")).toEqual([{ strike: 745, d_oi: 100 }]);
+  });
 });
 
 describe("topOiChangeStrikes", () => {
@@ -443,6 +480,34 @@ describe("topOiChangeStrikes", () => {
     const rows = [{ strike: NaN, d_oi: 999 }, { strike: 700, d_oi: 10 }] as OiChangeCell[];
     const top = topOiChangeStrikes(rows, 5);
     expect([...top.keys()]).toEqual([700]);
+  });
+});
+
+// ── F1: archived-session overlay withdrawal policy ───────────────────────────
+// SurfacePane has no jsdom/component test harness in this repo (vitest runs in the NODE
+// environment — see surfaceTheme.test.ts), so the F1 regression guard targets the pure
+// policy function the component actually reads to decide what to render/draw, rather
+// than a rendered tree. The function takes ONLY `isArchived` (no payload), so a passing
+// test here proves the withdrawal is a SESSION-STATE decision — not something that could
+// flip back on merely because a gexstate:/oi_change: fetch happens to resolve with data
+// (i.e. it asserts the withdrawal itself, not just an absence a missing fetch would also
+// produce). Levels staying live (dated twin exists) is asserted in the SAME test so a
+// future edit can't silently withdraw all three overlays together.
+describe("archivedOverlayPolicy", () => {
+  it("live session: nothing is withdrawn, Levels reads the live gex:/moves: pair", () => {
+    expect(archivedOverlayPolicy(false)).toEqual({
+      useDatedLevels: false,
+      regimeWithdrawn: false,
+      oiDeltaWithdrawn: false,
+    });
+  });
+
+  it("archived session: regime + OI Δ withdrawn, Levels switches to the dated payload", () => {
+    expect(archivedOverlayPolicy(true)).toEqual({
+      useDatedLevels: true,
+      regimeWithdrawn: true,
+      oiDeltaWithdrawn: true,
+    });
   });
 });
 

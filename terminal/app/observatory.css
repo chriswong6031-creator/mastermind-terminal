@@ -1845,6 +1845,10 @@
   font-weight: 650;
 }
 .obs-surf-data-detail { color: var(--muted); }
+/* F6: compact-only provenance — hidden everywhere except the ≤460px query below, where
+   it survives the `.obs-surf-data-detail { display: none }` blanket hide so the regime
+   label, and the Levels/OI Δ notes, don't ship bare (mscGlance.ts REGIME-DYNAMICS LAW). */
+.obs-surf-compact-only { display: none; }
 .obs-surf-observed-badge {
   display: inline-flex;
   align-items: center;
@@ -2031,6 +2035,15 @@
   .obs-surf-replay-speeds button { min-width: 28px !important; padding-inline: 6px !important; }
   .obs-surf-replay-readout .obs-tag { display: none; }
   .obs-surf-data-detail { display: none; }
+  /* F6: two carve-outs that survive the blanket hide above —
+       (1) `.obs-surf-data-compact`: dist-to-flip% on the regime chip stays visible
+           (higher-specificity pair beats the single-class hide regardless of order);
+       (2) `.obs-surf-compact-only`: a short "· MM-DD" date, rendered ONLY at this width
+           (the full nightly-provenance sentence is what got hidden above) — used by the
+           regime chip and the Levels/OI Δ toggle notes so none of the three overlays goes
+           bare or loses its EOD date on a phone. */
+  .obs-surf-data-detail.obs-surf-data-compact { display: inline; }
+  .obs-surf-compact-only { display: inline; }
   .obs-surf-yfit { right: 46px; }
   .obs-surf-yfit .obs-chip { padding-inline: 5px; }
 }

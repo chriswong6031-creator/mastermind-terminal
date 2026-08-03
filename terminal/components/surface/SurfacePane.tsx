@@ -57,6 +57,7 @@ import {
   type Rgb,
 } from "@/lib/heatSeries";
 import {
+  archivedOverlayPolicy,
   buildHeatBars,
   filterFrameToRange,
   gridMaxAbs,
@@ -79,9 +80,16 @@ import { useSurfaceSync } from "./surfaceSync";
 import type { SurfacePin } from "./surfacePins";
 import type { ContrastMode } from "./surfaceTheme";
 import { EodReplayTag } from "./EodReplayTag";
-import { deriveOptLevels, sessionsOldEt, type OptLevelKey } from "@/lib/optionsLevels";
+import { deriveOptLevels, sessionsOldEt, type OptLevelKey, type OptLevelsResult } from "@/lib/optionsLevels";
 import { parseGlanceState, REGIME_COLORS } from "@/lib/mscGlance";
 import { makeGexT } from "@/components/gexdesk/gexStrings";
+
+/** Shared empty OptLevelsResult — used when a derive-memo's store isn't for the current
+ *  root/session yet (F8 stale-root gate), so the pane reads "no coverage" rather than
+ *  undefined during the gap between a root/session switch and its fetch resolving. */
+const EMPTY_OPT_LEVELS: OptLevelsResult = {
+  status: "empty", levels: [], asofDate: null, signed: false, spot: null, netGexBn: null,
+};
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -306,9 +314,13 @@ export function SurfacePane({
   onTimeWindowChange,
 }: SurfacePaneProps) {
   const { lang } = useLang();
-  const t = makeSurfaceT(lang);
-  const gexT = makeGexT(lang);
-  const { state: replayState, dispatch, asOfStamp, live, sessionDate } = useReplay();
+  // F3: memoized on [lang] — these used to be fresh closures on EVERY render, and since
+  // the Levels overlay effect below has `t` in its dep list, that tore down and recreated
+  // up to 6 price lines on every crosshair mousemove (which re-renders via setReadout/
+  // setHover). A stable function identity across a lang-unchanged render fixes it.
+  const t = useMemo(() => makeSurfaceT(lang), [lang]);
+  const gexT = useMemo(() => makeGexT(lang), [lang]);
+  const { state: replayState, dispatch, asOfStamp, live, sessionDate, archived } = useReplay();
   const sync = useSurfaceSync();
   const isCell = chrome === "cell";
   // Nightly-derived overlays (Levels / regime / OI Δ) never truncate or interpolate to the
@@ -342,10 +354,24 @@ export function SurfacePane({
   // the pane's other session controls (opacity/range/agg), none of which survive a reload.
   const [levelsOn, setLevelsOn] = useState(false);
   const [oiDeltaOn, setOiDeltaOn] = useState(false);
-  const [gexRaw, setGexRaw] = useState<unknown>(null);
-  const [movesRaw, setMovesRaw] = useState<unknown>(null);
-  const [gexStateRaw, setGexStateRaw] = useState<unknown>(null);
-  const [oiChangeRaw, setOiChangeRaw] = useState<unknown>(null);
+  // F8: {root, ...} tuples rather than bare payload state, so a derive-memo can gate on
+  // `store.root === root` and never read the PREVIOUS root's payload as if it were the
+  // new root's while its own fetch is still in flight (same outcome GexDeskView gets by
+  // nulling statePayload/matrix synchronously on ticker change — this achieves it via the
+  // read-side gate instead of a write-side clear).
+  const [levelsStore, setLevelsStore] = useState<{ root: string; gex: unknown; moves: unknown } | null>(null);
+  const [regimeStore, setRegimeStore] = useState<{ root: string; data: unknown } | null>(null);
+  const [oiChangeStore, setOiChangeStore] = useState<{ root: string; data: unknown } | null>(null);
+  // F1: the ARCHIVED session's own dated Levels payload (gex_at:{root}:{date}) — kept
+  // separate from `levelsStore` (the live gex:/moves: pair) so switching sessions can
+  // never mix a dated snapshot into the live derivation or vice versa.
+  const [archivedLevelsStore, setArchivedLevelsStore] =
+    useState<{ root: string; sessionDate: string; gex: unknown } | null>(null);
+  const [archivedLevelsLoading, setArchivedLevelsLoading] = useState(false);
+  // True when the picked session has no published dated snapshot (accrual hole / a date
+  // predating the gex_history plane) — its own honest state, never a silent fallback to
+  // live gex:/moves:.
+  const [archivedLevelsMissing, setArchivedLevelsMissing] = useState(false);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -383,6 +409,10 @@ export function SurfacePane({
   // OI Δ strike-axis badges: lineVisible:false price lines (axis-label-only markers), one
   // per top-N strike — "subtle... on the field's strike axis", never a full-width line.
   const oiLinesRef = useRef<unknown[]>([]);
+  // F1: request counter for the archived-Levels dated fetch (gex_at:{root}:{sessionDate})
+  // — mirrors GexDeskView.loadSession's sessionReqRef, dropping a stale response that
+  // resolves after a newer pick (or a return-to-live) already superseded it.
+  const archivedLevelsReqRef = useRef(0);
   // The crosshair handler is registered once at mount; reading sync through a ref keeps it
   // off the mount effect's dep list (and out of stale-closure territory).
   const syncRef = useRef({ sync, id: syncId });
@@ -400,6 +430,14 @@ export function SurfacePane({
     () => candleSessionDate ? filterBarsToSessionDate(candles, candleSessionDate) : [],
     [candles, candleSessionDate],
   );
+  // F4: candleSeriesRef.current is assigned UNCONDITIONALLY once the chart mounts (the
+  // candle series is always created — see the mount effect below), so
+  // `candleSeriesRef.current ?? heatSeriesRef.current` never actually falls back, even
+  // when the candle series has ZERO plotted rows (an illiquid root, or a replay scrub
+  // before this session's first candle) — and Lightweight-Charts draws NO price line on a
+  // series with no data. Host selection for every price-line overlay (pins, Levels, OI Δ)
+  // must key on DATA PRESENCE, not ref truthiness.
+  const hasCandleData = sessionCandles.length > 0;
 
   // Apply the shader to the heat series from the CURRENT frame/metric/opacity/colors.
   // Ref-backed (reads *Ref values) so the chart-mount effect and the MutationObserver
@@ -416,27 +454,22 @@ export function SurfacePane({
     const maxAbs = grid ? (contrastRef.current === "raw" ? gridMaxAbs(grid) : gridPercentileAbs(grid)) : 0;
     const { pos, neg } = colorsRef.current;
     const W = opacityRef.current;
+    // F9: re-measured properly (double requestAnimationFrame awaited before checksumming
+    // the canvas, instead of a synchronous read) — the prior "pane doesn't repaint" claim
+    // does not hold up against the pinned lightweight-charts 5.2.0 source. Series.
+    // applyOptions() (below) calls model._internal_updateSource(this), which fires
+    // _private__invalidate() at InvalidationLevel.Light — the SAME requestAnimationFrame-
+    // scheduled _private__invalidateHandler the removed chart-level `applyOptions({})`
+    // no-op rode (it forced InvalidationLevel.Full instead; ChartModel._internal_
+    // applyOptions unconditionally ends in _internal_fullUpdate(), even for `{}`). A
+    // synchronous pixel-checksum taken immediately after either call reads the canvas
+    // BEFORE that rAF-scheduled frame has painted — that race, not a real invalidation
+    // gap, is what the original measurement caught. The series call already schedules its
+    // own repaint; no forced chart-level no-op is needed.
     heat.applyOptions({
       cellShader: (amount: number) => heatShade(amount, maxAbs, pos, neg, W),
       opacity: W,
     } as Partial<HeatSeriesOptions>);
-    // Pre-existing gap uncovered while building this: lightweight-charts' custom-series
-    // applyOptions() does NOT reliably invalidate the pane when only a function-valued
-    // option (cellShader) changes and every primitive option (opacity/theme) stays at the
-    // same VALUE — confirmed by pixel-checksumming the canvas before/after a Contrast
-    // toggle AND before/after a colour-preset switch (surfaceTheme's `themeSig` path, which
-    // rides this same ref): both left the canvas byte-for-byte unchanged despite the
-    // closure genuinely capturing new values (verified via the renderer's own inputs). A
-    // re-shade that paints nothing defeats R1.4's whole purpose, so force one.
-    //
-    // Re-driving heat.setData() was tried and rejected: calling it a SECOND time on this
-    // custom series intermittently blanked the pane — plausibly a transient invalid
-    // visibleRange while LWC reprocesses the bars, which the X-framing effect (keyed on
-    // frame/session, not on contrast/opacity/theme) never re-runs to repair afterward.
-    // A chart-level no-op applyOptions is the documented lightweight-charts trick for
-    // forcing every pane's next animation frame to redraw from its series' ALREADY-CURRENT
-    // data/options (just set above) — it never touches series data or the time scale.
-    chartRef.current?.applyOptions({});
   });
 
   // Commit a y window. THE single writer of the price scale's visible range: every path
@@ -492,7 +525,8 @@ export function SurfacePane({
 
   // ── Fetch the frame for the scrubbed stamp ───────────────────────────────────
   // All state writes happen inside the async task (never synchronously in the effect
-  // body) so the React Compiler doesn't flag a cascading-render setState.
+  // body) so mounting doesn't fire a synchronous cascading re-render before the fetch
+  // even starts.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -566,11 +600,17 @@ export function SurfacePane({
   // These are the SAME options_hub / options_structure payloads ChartPanel's Options
   // Levels overlay and the screener/watchlist/ticker regime dot already read — fetched
   // here (not stamp-keyed: nightly data has no intraday history to re-fetch per scrub).
+  // F8: no explicit "clear on root switch" call is needed here — every derive-memo below
+  // is gated on `store.root === root`, so a store still holding the PREVIOUS root's
+  // payload while this fetch is in flight already reads as unusable/stale there (same
+  // outcome GexDeskView gets by nulling statePayload/matrix synchronously on ticker
+  // change; this achieves it via the read-side gate instead, which avoids a synchronous
+  // setState directly in the effect body — see react-hooks/set-state-in-effect).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const [g, m] = await Promise.all([flowGet(`gex:${root}`), flowGet(`moves:${root}`)]);
-      if (!cancelled) { setGexRaw(g); setMovesRaw(m); }
+      if (!cancelled) setLevelsStore({ root, gex: g, moves: m });
     })();
     return () => { cancelled = true; };
   }, [root]);
@@ -579,7 +619,7 @@ export function SurfacePane({
     let cancelled = false;
     (async () => {
       const data = await flowGet(`gexstate:${root}`);
-      if (!cancelled) setGexStateRaw(data);
+      if (!cancelled) setRegimeStore({ root, data });
     })();
     return () => { cancelled = true; };
   }, [root]);
@@ -588,16 +628,87 @@ export function SurfacePane({
     let cancelled = false;
     (async () => {
       const data = await flowGet(`oi_change:${root}`);
-      if (!cancelled) setOiChangeRaw(data);
+      if (!cancelled) setOiChangeStore({ root, data });
     })();
     return () => { cancelled = true; };
   }, [root]);
 
+  // ── F1: archived-session Levels — the dated gex_at:{root}:{sessionDate} twin ────────
+  // Mirrors GexDeskView.loadSession: a request counter drops a stale response (a slow
+  // probe superseded by a newer pick, or a return-to-live). `gex_dates:{root}` is an
+  // ENUMERATION aid for the desk's own session picker elsewhere, never a fetch gate (see
+  // GexDeskView's own comment on `sessionDates` — "the scrubber's explicit per-date probe
+  // still works") — SurfacePane has no picker of its own, so it probes the specific date
+  // `sessionDate` (owned by the shared ReplayProvider) directly, exactly like the desk's
+  // scrubber does. `gex_at:` carries the identical options_hub.gex/v1 schema as the live
+  // `gex:` key, so it derives through the SAME deriveOptLevels the live path uses below —
+  // never a second, drifting implementation.
+  useEffect(() => {
+    const req = ++archivedLevelsReqRef.current;
+    // The whole body (including the synchronous "reset" branches) runs inside the async
+    // task rather than directly in the effect body — same reasoning as the frame-fetch
+    // effect above (react-hooks/set-state-in-effect): a setState call textually inside a
+    // nested async function is not "synchronously within the effect".
+    void (async () => {
+      if (!archived || !sessionDate) {
+        setArchivedLevelsStore(null);
+        setArchivedLevelsLoading(false);
+        setArchivedLevelsMissing(false);
+        return;
+      }
+      setArchivedLevelsStore(null);
+      setArchivedLevelsLoading(true);
+      setArchivedLevelsMissing(false);
+      const data = await flowGet(`gex_at:${root}:${sessionDate}`);
+      if (archivedLevelsReqRef.current !== req) return; // superseded — drop
+      const rec = data as { by_strike?: unknown } | null;
+      const ok = !!rec && Array.isArray(rec.by_strike) && rec.by_strike.length > 0;
+      setArchivedLevelsStore(ok ? { root, sessionDate, gex: data } : null);
+      setArchivedLevelsMissing(!ok);
+      setArchivedLevelsLoading(false);
+    })();
+  }, [root, sessionDate, archived]);
+
+  // F1: which overlays may draw during an archived session (lib/surfaceContract) —
+  // regime + OI Δ are withdrawn outright (no dated twin); Levels stays live, sourced ONLY
+  // from the dated payload above.
+  const overlayPolicy = archivedOverlayPolicy(archived);
+
   // Pure derivations (lib/optionsLevels, lib/mscGlance, lib/surfaceContract) — never
-  // recomputed on a replay scrub, only when the root or the raw payload changes.
-  const optLevels = useMemo(() => deriveOptLevels(gexRaw, movesRaw, root), [gexRaw, movesRaw, root]);
-  const glanceRow = useMemo(() => parseGlanceState(gexStateRaw, root), [gexStateRaw, root]);
-  const oiChangeCells = useMemo(() => parseOiChangeRows(oiChangeRaw), [oiChangeRaw]);
+  // recomputed on a replay scrub, only when the root/session or the raw payload changes.
+  // F8: each is gated on `store.root === root` so a root switch mid-flight can never
+  // derive against the previous ticker's payload.
+  const liveOptLevels = useMemo(
+    () => (levelsStore && levelsStore.root === root ? deriveOptLevels(levelsStore.gex, levelsStore.moves, root) : EMPTY_OPT_LEVELS),
+    [levelsStore, root],
+  );
+  // F1: derived from the DATED payload only, with movesRaw=null — there is no dated
+  // `moves:` twin, and deriveOptLevels already treats a null movesRaw as "drop only the
+  // EM band" (see optionsLevels.test.ts "missing moves drops only the EM band"), so this
+  // reuses that existing, already-tested path rather than a new EM-omission branch.
+  const archivedOptLevels = useMemo(
+    () => (archivedLevelsStore && archivedLevelsStore.root === root && archivedLevelsStore.sessionDate === sessionDate
+      ? deriveOptLevels(archivedLevelsStore.gex, null, root)
+      : EMPTY_OPT_LEVELS),
+    [archivedLevelsStore, root, sessionDate],
+  );
+  // The effective Levels result every consumer below draws from. During an archived
+  // session this is ALWAYS archivedOptLevels — liveOptLevels is never read for drawing,
+  // satisfying F1's "do NOT run deriveOptLevels(live gex, live moves) for an archived
+  // session" (liveOptLevels still computes — hooks can't branch — it is simply unused).
+  const optLevels = overlayPolicy.useDatedLevels ? archivedOptLevels : liveOptLevels;
+
+  // Regime + OI Δ: the memos still compute during an archived session (hooks can't
+  // branch), but are never rendered or drawn while overlayPolicy.regimeWithdrawn /
+  // .oiDeltaWithdrawn is true — see the render section and the two overlay effects below.
+  const glanceRow = useMemo(
+    () => (regimeStore && regimeStore.root === root ? parseGlanceState(regimeStore.data, root) : null),
+    [regimeStore, root],
+  );
+  const oiChangeCells = useMemo(
+    () => (oiChangeStore && oiChangeStore.root === root ? parseOiChangeRows(oiChangeStore.data, root) : []),
+    [oiChangeStore, root],
+  );
   const topOiStrikes = useMemo(() => topOiChangeStrikes(oiChangeCells, 5), [oiChangeCells]);
 
   // ── Intraday candles (per agg) ───────────────────────────────────────────────
@@ -907,8 +1018,13 @@ export function SurfacePane({
   // attached to the candle series when candles exist and to the heat series otherwise —
   // they share the right price scale, so the level lands in the same place either way, and
   // a root with no candle data (illiquid, or fixture) still gets its pins drawn.
+  // F4: host selection keys on `hasCandleData` (DATA presence), not `candleSeriesRef.
+  // current` truthiness — the candle series is always non-null once mounted, so a
+  // `?? heatSeriesRef.current` fallback never actually fired, and LWC draws no price line
+  // on a series with zero plotted rows (illiquid root, or a replay scrub before this
+  // session's first candle) — silently vanishing pins while the chip still read "on".
   useEffect(() => {
-    const host = candleSeriesRef.current ?? heatSeriesRef.current;
+    const host = hasCandleData ? candleSeriesRef.current : heatSeriesRef.current;
     if (!host) return;
     const want = new Map((pins ?? []).map((p) => [p.id, p]));
     const drawn = pinLinesRef.current; // NOT the replay `live` flag — different thing
@@ -934,15 +1050,17 @@ export function SurfacePane({
         /* LWC rejected the level (no price scale yet) — the chip still lists it */
       }
     }
-  }, [pins]);
+  }, [pins, hasCandleData]);
 
   // ── Options-levels overlay ("Levels" toggle) — call wall / put wall / gamma flip / abs-γ
   // / EM band as createPriceLine, mirroring ChartPanel's Options Levels overlay idiom
   // exactly (same colours, same dash convention: solid walls, dashed flip, dotted abs-γ/EM)
   // so a level reads the same whether it's found on the price chart or the surface field.
   // Redrawn wholesale (not reconciled like pins) — the set is small and fixed-shape.
+  // `optLevels` is already the F1-effective result (archived → the dated derivation only,
+  // live → the live one) — this effect never has to branch on `overlayPolicy` itself.
   useEffect(() => {
-    const host = candleSeriesRef.current ?? heatSeriesRef.current;
+    const host = hasCandleData ? candleSeriesRef.current : heatSeriesRef.current; // F4
     if (!host) return;
     const h = host as unknown as {
       createPriceLine: (o: unknown) => unknown;
@@ -973,14 +1091,14 @@ export function SurfacePane({
            on the next data/root change. */
       }
     }
-  }, [levelsOn, optLevels, t]);
+  }, [levelsOn, optLevels, t, hasCandleData]);
 
   // ── OI Δ toggle: badge the top-5 strikes by |ΔOI| on the strike axis. `lineVisible:
   // false` draws NOTHING across the pane's width — only the coloured axis-label badge —
   // so this reads as a subtle strike-axis marker (per the brief) rather than a second set
   // of full-width lines competing visually with the Levels overlay.
   useEffect(() => {
-    const host = candleSeriesRef.current ?? heatSeriesRef.current;
+    const host = hasCandleData ? candleSeriesRef.current : heatSeriesRef.current; // F4
     if (!host) return;
     const h = host as unknown as {
       createPriceLine: (o: unknown) => unknown;
@@ -988,7 +1106,9 @@ export function SurfacePane({
     };
     for (const line of oiLinesRef.current) { try { h.removePriceLine(line); } catch {} }
     oiLinesRef.current = [];
-    if (!oiDeltaOn || !topOiStrikes.size) return;
+    // F1: withdrawn outright during an archived session — never draw badges from TODAY's
+    // oi_change: data under a past session's field.
+    if (!oiDeltaOn || overlayPolicy.oiDeltaWithdrawn || !topOiStrikes.size) return;
     const badge = css("--signal") || "#e8b339";
     for (const strike of topOiStrikes.keys()) {
       try {
@@ -1002,7 +1122,7 @@ export function SurfacePane({
         /* LWC rejected the level (no price scale yet) — retries on the next data change. */
       }
     }
-  }, [oiDeltaOn, topOiStrikes]);
+  }, [oiDeltaOn, topOiStrikes, hasCandleData, overlayPolicy.oiDeltaWithdrawn]);
 
   // Candles → chart.
   // PIT: the heat field is server-truncated to the scrubbed stamp, so the candles must stop
@@ -1055,8 +1175,7 @@ export function SurfacePane({
   }, [timeWindow, frame?.session_date, frame?.time_steps, sessionCandles.length, candleSession]);
 
   // ── Stamps / labels ──────────────────────────────────────────────────────────
-  // Plain computations — the React Compiler auto-memoizes; a manual useMemo here trips
-  // preserve-manual-memoization (its inferred deps differ from the hand-written ones).
+  // Plain computations, cheap enough to run every render — no memoization needed.
   const asofLabel = fmtAsofLabel(frame?.asof);
   const snapshotCount = frame?.time_steps.length ?? 0;
   const observedCadenceSec = frame ? observedSurfaceCadenceSec(frame.time_steps) : null;
@@ -1080,14 +1199,51 @@ export function SurfacePane({
     ].filter(Boolean);
     return parts.length ? parts.join(" · ") : t("nightlyNoDate");
   };
-  const levelsNote =
-    optLevels.status === "ok" ? nightlyDateNote(optLevels.asofDate, optLevels.signed) : t("nightlyNoCov");
+  // F5: loading / hard-fetch-failure (outage or entitlement gate) / genuine no-coverage
+  // used to all collapse into the same "no coverage for this root" string. Split to
+  // mirror ChartPanel's Options Levels legend split (ChartPanel.tsx optLevelsStateRef
+  // block, ~1755-1786): `flowGet` returns null on BOTH lanes hard-failing (an outage or a
+  // 403 gate reads identically to "no coverage" upstream) — status "unavailable" is that
+  // honest umbrella, distinct from a genuinely empty derivation.
+  const levelsFetchState: "loading" | "ok" | "unavailable" =
+    !levelsStore || levelsStore.root !== root
+      ? "loading"
+      : levelsStore.gex == null && levelsStore.moves == null
+        ? "unavailable"
+        : "ok";
+  // F1: archived Levels — loading / no-dated-snapshot / EM-omitted-but-drawn / no-coverage.
+  const levelsNote = overlayPolicy.useDatedLevels
+    ? archivedLevelsLoading
+      ? t("nightlyLoading")
+      : archivedLevelsMissing
+        ? t("archivedLevelsMissing")
+        : archivedOptLevels.status === "ok"
+          // F1b: no dated `moves:` twin exists, so the EM band is ALWAYS omitted while
+          // replaying — the note says so rather than silently dropping two of six lines.
+          ? `${nightlyDateNote(archivedOptLevels.asofDate, archivedOptLevels.signed)} · ${t("archivedEmOmitted")}`
+          : t("nightlyNoCov")
+    : levelsFetchState === "loading"
+      ? t("nightlyLoading")
+      : levelsFetchState === "unavailable"
+        ? t("nightlyUnavail")
+        : optLevels.status === "ok" ? nightlyDateNote(optLevels.asofDate, optLevels.signed) : t("nightlyNoCov");
+  // F6: the EOD date alone, survives the ≤460px hide of the full sentence above (see
+  // .obs-surf-compact-only in observatory.css).
+  const levelsCompactDate = overlayPolicy.useDatedLevels
+    ? (archivedOptLevels.status === "ok" ? archivedOptLevels.asofDate : null)
+    : (optLevels.status === "ok" ? optLevels.asofDate : null);
+
   const oiChangeAsofDate = (() => {
-    const raw = (oiChangeRaw as { asof?: unknown } | null)?.asof;
+    if (!oiChangeStore || oiChangeStore.root !== root) return null;
+    const raw = (oiChangeStore.data as { asof?: unknown } | null)?.asof;
     const s = typeof raw === "string" ? raw.slice(0, 10) : "";
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
   })();
-  const oiDeltaNote = oiChangeCells.length ? nightlyDateNote(oiChangeAsofDate, false) : t("nightlyNoCov");
+  // F11: Σ|ΔOI| conflates strikes being built and strikes being unwound — the note leads
+  // with that honesty phrase (mirrors the toggle's aria-label) rather than only the date.
+  const oiDeltaNote = oiChangeCells.length
+    ? `${t("oiDeltaMoversNote")} · ${nightlyDateNote(oiChangeAsofDate, false)}`
+    : t("nightlyNoCov");
 
   // ── Regime chip (pane header) — same vocabulary/colour table the screener, watchlist
   // dot and ticker page already use (lib/mscGlance REGIME_COLORS + gexStrings `regime*`).
@@ -1095,6 +1251,9 @@ export function SurfacePane({
   // ride with it, same as MarketStateCard / StockAnalysis.
   const regimeLabel = glanceRow ? gexT(`regime${glanceRow.regime}` as Parameters<typeof gexT>[0]) || glanceRow.regime : null;
   const regimeNote = glanceRow ? nightlyDateNote(glanceRow.asofDate, true) : "";
+  // F6: compact "· MM-DD" form, shown ONLY at ≤460px alongside the regime label + the
+  // dist-to-flip% detail, which the REGIME-DYNAMICS LAW above requires never ship alone.
+  const shortDateNote = (asofDate: string | null): string => (asofDate ? `· ${asofDate.slice(5)}` : "");
 
   // ── Y framing (explicit) ─────────────────────────────────────────────────────
   // Both chips write through applyYRef — the same single writer the automatic framing and
@@ -1213,23 +1372,47 @@ export function SurfacePane({
             {t("levelsToggle")}
           </button>
           {levelsOn && (
-            <span className="obs-surf-data-detail">{levelsNote}</span>
+            <>
+              <span className="obs-surf-data-detail">{levelsNote}</span>
+              {levelsCompactDate && (
+                <span className="obs-surf-compact-only">{shortDateNote(levelsCompactDate)}</span>
+              )}
+            </>
           )}
+          {/* F1: OI Δ has no dated twin — withdrawn outright during an archived session
+              (never merely disabled-because-no-data-loaded-yet; see archivedOverlayPolicy
+              in lib/surfaceContract). */}
           <button
             className={`obs-chip${oiDeltaOn ? " on" : ""}`}
-            style={CHIP}
+            style={{ ...CHIP, ...(overlayPolicy.oiDeltaWithdrawn ? DISABLED_CHIP : {}) }}
             aria-pressed={oiDeltaOn}
-            aria-label={t("oiDeltaToggleAria")}
-            onClick={() => setOiDeltaOn((v) => !v)}
+            aria-disabled={overlayPolicy.oiDeltaWithdrawn}
+            aria-label={
+              overlayPolicy.oiDeltaWithdrawn
+                ? `${t("oiDeltaToggle")} — ${t("archivedOverlaysWithdrawn")}`
+                : t("oiDeltaToggleAria")
+            }
+            onClick={() => !overlayPolicy.oiDeltaWithdrawn && setOiDeltaOn((v) => !v)}
           >
             {t("oiDeltaToggle")}
           </button>
-          {oiDeltaOn && (
-            <span className="obs-surf-data-detail">{oiDeltaNote}</span>
+          {overlayPolicy.oiDeltaWithdrawn ? (
+            <span style={WITHDRAWN_NOTE}>{t("archivedOverlaysWithdrawn")}</span>
+          ) : oiDeltaOn && (
+            <>
+              <span className="obs-surf-data-detail">{oiDeltaNote}</span>
+              {oiChangeAsofDate && (
+                <span className="obs-surf-compact-only">{shortDateNote(oiChangeAsofDate)}</span>
+              )}
+            </>
           )}
           {/* Covers all THREE nightly overlays (Levels, OI Δ, and the always-on regime
-              chip below) — renders nothing unless a replay is active and off its head. */}
-          {(levelsOn || oiDeltaOn || !!glanceRow) && <EodReplayTag lang={lang} />}
+              chip below) — renders nothing unless a replay is active and off its head.
+              Regime is excluded once withdrawn (F1): no chip is drawn from glanceRow then,
+              so a tag referencing it would dangle. */}
+          {(levelsOn || oiDeltaOn || (!!glanceRow && !overlayPolicy.regimeWithdrawn)) && (
+            <EodReplayTag lang={lang} />
+          )}
         </div>
 
       </div>
@@ -1264,21 +1447,35 @@ export function SurfacePane({
           </span>
           {/* Regime chip — nightly gexstate:{ROOT}, same word/colour as the screener's msc_*
               column, the watchlist dot and the ticker page's positioning block. Never stands
-              alone: dist-to-flip (when the payload carries it) rides beside it. */}
-          {glanceRow && regimeLabel && (
+              alone: dist-to-flip (when the payload carries it) rides beside it.
+              F1c: withdrawn outright during an archived session — gexstate: has no dated
+              twin, so this replaces the chip entirely rather than showing TODAY's regime
+              under a past session's field (same honest-withdrawn idiom as GexDeskView's
+              archived pane, post-#344). */}
+          {overlayPolicy.regimeWithdrawn ? (
+            <span className="obs-surf-data-item" aria-label={t("regimeChipAria")}>
+              <span style={WITHDRAWN_NOTE}>{t("archivedOverlaysWithdrawn")}</span>
+            </span>
+          ) : glanceRow && regimeLabel && (
             <span className="obs-surf-data-item" aria-label={t("regimeChipAria")}>
               <strong className="num" style={{ color: REGIME_COLORS[glanceRow.regime] }}>{regimeLabel}</strong>
+              {/* F6: dist-to-flip% carries the `obs-surf-data-compact` modifier so it
+                  survives the ≤460px verbose-note hide — the regime label must never ship
+                  alone (mscGlance.ts REGIME-DYNAMICS LAW, lines 14-16). */}
+              {glanceRow.distToFlipPct != null && (
+                <span className="obs-surf-data-detail obs-surf-data-compact">
+                  {Math.abs(glanceRow.distToFlipPct).toFixed(1)}% {t("regimeToFlip")}
+                </span>
+              )}
               {glanceRow.stabilityPct != null && (
                 <span className="obs-surf-data-detail">
                   {Math.round(glanceRow.stabilityPct)}% {t("regimeStability")}
                 </span>
               )}
-              {glanceRow.distToFlipPct != null && (
-                <span className="obs-surf-data-detail">
-                  {Math.abs(glanceRow.distToFlipPct).toFixed(1)}% {t("regimeToFlip")}
-                </span>
-              )}
               <span className="obs-surf-data-detail">{regimeNote}</span>
+              {glanceRow.asofDate && (
+                <span className="obs-surf-compact-only">{shortDateNote(glanceRow.asofDate)}</span>
+              )}
             </span>
           )}
           <span className="obs-surf-data-source">{t("sourceOpra")}</span>
@@ -1454,6 +1651,13 @@ const CHIP: React.CSSProperties = {
 };
 
 const DISABLED_CHIP: React.CSSProperties = { opacity: 0.4, cursor: "not-allowed" };
+
+/** F1c: the honest-withdrawn note for regime/OI Δ during an archived session. A plain
+ *  inline style (not `.obs-surf-data-detail`) so it survives the ≤460px hide — it IS the
+ *  primary content of that slot while archived, never verbose remainder. */
+const WITHDRAWN_NOTE: React.CSSProperties = {
+  fontSize: "var(--fs-micro)", color: "var(--muted)", lineHeight: 1.4,
+};
 
 const ACCRUING_DOT: React.CSSProperties = { marginLeft: 3, color: "var(--signal)", fontWeight: 900 };
 
