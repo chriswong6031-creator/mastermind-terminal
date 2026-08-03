@@ -240,6 +240,43 @@ const SURFACE_LEX = {
     "主题默认跟随涨跌色，因此会随语言习惯自动切换。",
   ],
 
+  // ── Contrast (R1.4 percentile normalization — "kill the bland") ─────────────
+  styleContrast: ["Contrast", "对比度"],
+  styleContrastAria: ["Field colour intensity", "曲面颜色强度"],
+  styleContrastBalanced: ["Balanced (5–95)", "均衡（5–95）"],
+  styleContrastRaw: ["Raw", "原始"],
+  styleContrastNote: [
+    "Balanced clamps colour intensity to the 95th percentile of this frame's cells, so one outlier strike-minute cannot wash out the rest of the field. Raw uses the literal max.",
+    "均衡模式将颜色强度截取到本帧数据的第95百分位，避免单个异常行权价-分钟冲淡整个曲面色彩。原始模式使用实际最大值。",
+  ],
+
+  // ── Nightly overlays: level lines / regime chip / OI Δ (all EOD-derived, drawn
+  //     under an intraday field — see the toggle-row provenance note) ──────────
+  overlaysGroup: ["Overlays", "叠加层"],
+  overlaysAria: ["Nightly structural overlays", "隔夜结构叠加层"],
+  levelsToggle: ["Levels", "关键位"],
+  levelsToggleAria: ["Options levels overlay — call wall, put wall, gamma flip, expected move", "期权关键位叠加 — 看涨墙、看跌墙、伽马翻转、预期波动"],
+  levelCallWall: ["Call wall", "看涨墙"],
+  levelPutWall: ["Put wall", "看跌墙"],
+  levelFlip: ["Gamma flip", "伽马翻转"],
+  levelAbsGamma: ["Abs γ", "绝对伽马"],
+  levelEmHi: ["EM+", "EM+"],
+  levelEmLo: ["EM−", "EM−"],
+  oiDeltaToggle: ["OI Δ", "未平仓变动"],
+  oiDeltaToggleAria: ["Highlight the 5 strikes with the largest open-interest change", "高亮未平仓量变动最大的5个行权价"],
+  regimeChipAria: ["Gamma regime", "伽马状态"],
+  regimeToFlip: ["to flip", "距翻转"],
+  regimeStability: ["stability", "稳定度"],
+  // Shared nightly-provenance idiom (mirrors ChartPanel's Options Levels legend row) —
+  // every overlay sourced from a nightly options_hub/gex_state payload under this
+  // intraday field carries the SAME "as of {date}" language, never a LIVE badge.
+  nightlyAsOf: ["EOD {date}", "收盘 {date}"],
+  nightlySigned: ["signed estimate", "带符号估计"],
+  nightlyStale: ["{n} sessions old", "已过 {n} 个交易日"],
+  nightlyNoDate: ["undated snapshot", "无日期快照"],
+  nightlyNoCov: ["no coverage for this root", "该标的暂无数据覆盖"],
+  nightlyLoading: ["loading…", "加载中…"],
+
   // ── Alert from the drill modal ──────────────────────────────────────────────
   alertAtStrike: ["Alert me at this strike", "在该行权价提醒我"],
   alertCreating: ["Creating…", "创建中…"],

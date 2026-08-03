@@ -43,7 +43,9 @@ import {
   loadTheme,
   saveTheme,
   themeSignature,
+  effectiveContrast,
   type SurfaceTheme,
+  type ContrastMode,
 } from "./surfaceTheme";
 import { addPin, removePin, pinId, type SurfacePin } from "./surfacePins";
 
@@ -63,7 +65,7 @@ interface TidePayload { minutes?: TideLite[]; session_date?: string }
  * (Space / arrows / Home / End) only fire while this group is engaged.
  */
 function GroupRoot({
-  root, view, aggMin, timeWindow, onTimeWindow, themeSig, pins, onTogglePin, tideMinutes, tideDate, sessions, onSessionDate,
+  root, view, aggMin, timeWindow, onTimeWindow, themeSig, contrastMode, pins, onTogglePin, tideMinutes, tideDate, sessions, onSessionDate,
 }: {
   root: string;
   view: ViewMode;
@@ -71,6 +73,7 @@ function GroupRoot({
   timeWindow: SurfaceTimeWindow;
   onTimeWindow: (window: SurfaceTimeWindow) => void;
   themeSig: string;
+  contrastMode: ContrastMode;
   pins: SurfacePin[];
   onTogglePin: (strike: number, metric: string, value: number | null) => void;
   tideMinutes: TideLite[];
@@ -90,6 +93,7 @@ function GroupRoot({
         <SurfacePane
           root={root}
           themeSig={themeSig}
+          contrastMode={contrastMode}
           pins={pins}
           onTogglePin={onTogglePin}
           timeWindow={timeWindow}
@@ -107,6 +111,7 @@ function GroupRoot({
                   syncId={m}
                   aggMinOverride={aggMin}
                   themeSig={themeSig}
+                  contrastMode={contrastMode}
                   pins={pins}
                   onTogglePin={onTogglePin}
                   timeWindow={timeWindow}
@@ -201,6 +206,7 @@ export function SurfaceView() {
   // properties means the new values are on the DOM before any pane reads them.
   const themeSig = themeSignature(theme);
   const themeVars = surfaceThemeVars(theme) as React.CSSProperties;
+  const contrastMode = effectiveContrast(theme);
 
   function commitTheme(next: SurfaceTheme) {
     setTheme(next);
@@ -374,6 +380,7 @@ export function SurfaceView() {
             timeWindow={timeWindow}
             onTimeWindow={setTimeWindow}
             themeSig={themeSig}
+            contrastMode={contrastMode}
             pins={pins}
             onTogglePin={togglePin}
             tideMinutes={tideMinutes}

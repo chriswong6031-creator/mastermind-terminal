@@ -22,7 +22,10 @@ import {
   PRESETS,
   PRESET_KEYS,
   THEME_METRICS,
+  CONTRAST_MODES,
   effectivePair,
+  effectiveContrast,
+  type ContrastMode,
   type PresetKey,
   type SurfaceTheme,
   type ThemeMetric,
@@ -49,6 +52,14 @@ const PRESET_LABEL: Record<PresetKey, "presetDefault" | "presetColorblind" | "pr
   colorblind: "presetColorblind",
   mono: "presetMono",
   classic: "presetClassic",
+};
+
+/** R1.4: the day-max normalizer clamps to the 95th percentile by default ("Balanced") —
+ *  one outlier strike-minute can no longer wash out the rest of the field. "Raw" restores
+ *  the pre-R1.4 max(|min|,|max|) behaviour for anyone who wants the literal extreme. */
+const CONTRAST_LABEL: Record<ContrastMode, "styleContrastBalanced" | "styleContrastRaw"> = {
+  balanced: "styleContrastBalanced",
+  raw: "styleContrastRaw",
 };
 
 interface Props {
@@ -97,8 +108,14 @@ export function SurfaceStylePopover({ lang, theme, open, onOpenChange, onChange 
 
   function setPreset(preset: PresetKey) {
     // Choosing a preset clears hand-tuned overrides — otherwise the preset visibly
-    // "doesn't apply" to whichever metric was customised earlier.
-    onChange({ preset, custom: {} });
+    // "doesn't apply" to whichever metric was customised earlier. Contrast is a SEPARATE
+    // axis (intensity, not hue) and must survive a preset switch — dropping it here would
+    // silently bounce a "Raw" pick back to "Balanced" every time someone tries a palette.
+    onChange({ preset, custom: {}, contrast: theme.contrast });
+  }
+
+  function setContrast(contrast: ContrastMode) {
+    onChange({ ...theme, contrast });
   }
 
   function setPair(metric: ThemeMetric, side: "pos" | "neg", hex: string) {
@@ -154,7 +171,31 @@ export function SurfaceStylePopover({ lang, theme, open, onOpenChange, onChange 
           aria-label={t("styleAria")}
           style={{ top: pos.top, left: pos.left }}
         >
-          <div className="obs-surf-style-hd">
+          {/* R1.4 contrast: a SEPARATE axis from the pos/neg hue below (intensity, not
+              colour) — clamping the day-max normalizer to the 95th percentile is the
+              default fix for a field that reads bland because one outlier strike-minute
+              ate the whole colour range. "Raw" is the pre-R1.4 literal-max behaviour. */}
+          <div className="obs-lbl">{t("styleContrast")}</div>
+          <div
+            className="obs-surf-style-presets"
+            role="group"
+            aria-label={t("styleContrastAria")}
+            style={{ marginTop: 4 }}
+          >
+            {CONTRAST_MODES.map((mode) => (
+              <button
+                key={mode}
+                className="obs-surf-style-preset"
+                aria-pressed={effectiveContrast(theme) === mode}
+                onClick={() => setContrast(mode)}
+              >
+                {t(CONTRAST_LABEL[mode])}
+              </button>
+            ))}
+          </div>
+          <div className="obs-surf-style-note">{t("styleContrastNote")}</div>
+
+          <div className="obs-surf-style-hd" style={{ marginTop: "var(--sp-3)" }}>
             <span className="obs-lbl">{t("stylePresets")}</span>
             <button
               className="obs-surf-pins-clear"

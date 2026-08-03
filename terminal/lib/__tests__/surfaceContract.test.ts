@@ -5,6 +5,9 @@ import {
   checkIndexFilesContract,
   levelStep,
   gridMaxAbs,
+  gridPercentileAbs,
+  parseOiChangeRows,
+  topOiChangeStrikes,
   observedSurfaceCadenceSec,
   buildHeatBars,
   filterFrameToRange,
@@ -23,6 +26,7 @@ import {
   type SurfaceFrame,
   type SessionPoint,
   type MatrixCell,
+  type OiChangeCell,
 } from "@/lib/surfaceContract";
 import type { Time } from "lightweight-charts";
 
@@ -107,6 +111,53 @@ describe("levelStep / gridMaxAbs", () => {
   });
   it("gridMaxAbs ignores non-finite", () => {
     expect(gridMaxAbs([[Infinity, 3], [NaN, -4]])).toBe(4);
+  });
+});
+
+describe("gridPercentileAbs — R1.4 percentile-range normalizer ('kill the bland')", () => {
+  it("all-zero grid: no distribution to compress, degrades to gridMaxAbs's own answer (0)", () => {
+    const grid = [[0, 0, 0], [0, 0, 0]];
+    expect(gridPercentileAbs(grid)).toBe(0);
+    expect(gridPercentileAbs(grid)).toBe(gridMaxAbs(grid));
+  });
+
+  it("single-cell outlier (the rest zero): the one nonzero value IS the 95th percentile", () => {
+    const grid = [[0, 0, 0, 0], [0, 0, 0, 1000]];
+    expect(gridPercentileAbs(grid)).toBe(1000);
+    expect(gridPercentileAbs(grid)).toBe(gridMaxAbs(grid));
+  });
+
+  it("uniform grid: percentile is a no-op — every nonzero cell shares the same magnitude", () => {
+    const grid = [[5, -5, 5], [-5, 5, -5]];
+    expect(gridPercentileAbs(grid)).toBe(5);
+    expect(gridPercentileAbs(grid)).toBe(gridMaxAbs(grid));
+  });
+
+  it("a monster outlier among many small cells: p95 clamps BELOW the raw max — the fix", () => {
+    // 19 small cells (magnitude 1..19) + one outlier at 1000. gridMaxAbs would be 1000
+    // (washing out the small cells under heatShade's o = |amount|/maxAbs); the 95th
+    // percentile excludes the single largest of 20 values and lands on the second-largest.
+    const small = Array.from({ length: 19 }, (_, i) => i + 1); // 1..19
+    const grid = [[...small, 1000]];
+    expect(gridMaxAbs(grid)).toBe(1000);
+    expect(gridPercentileAbs(grid)).toBe(19);
+    expect(gridPercentileAbs(grid)).toBeLessThan(gridMaxAbs(grid));
+  });
+
+  it("negative cells contribute by |magnitude|, same ranking as gridMaxAbs uses", () => {
+    // Same shape as the monster-outlier case, sign-flipped: a negative outlier must be
+    // excluded by the SAME magnitude ranking as a positive one — heatShade only ever sees
+    // |amount|, so the normalizer must too.
+    const small = Array.from({ length: 19 }, (_, i) => -(i + 1)); // -1..-19
+    const grid = [[...small, -1000]];
+    expect(gridMaxAbs(grid)).toBe(1000);
+    expect(gridPercentileAbs(grid)).toBe(19);
+    expect(gridPercentileAbs(grid)).toBeLessThan(gridMaxAbs(grid));
+  });
+
+  it("custom percentile parameter (e.g. the raw max via p=100)", () => {
+    const grid = [[1, 2, 3, 4, 5]];
+    expect(gridPercentileAbs(grid, 100)).toBe(gridMaxAbs(grid));
   });
 });
 
@@ -339,6 +390,59 @@ describe("topExpiriesForStrike", () => {
     expect(topExpiriesForStrike([], 750)).toEqual([]);
     expect(topExpiriesForStrike(null, 750)).toEqual([]);
     expect(topExpiriesForStrike(undefined, 750)).toEqual([]);
+  });
+});
+
+// ── OI Δ strike ranking (options_hub.oi_change/v1, nightly) ─────────────────
+
+describe("parseOiChangeRows", () => {
+  it("extracts {strike, d_oi} from a well-formed rows array", () => {
+    const raw = { rows: [{ strike: 745, d_oi: 100, exp: "2026-08-21" }, { strike: 750, d_oi: -50 }] };
+    expect(parseOiChangeRows(raw)).toEqual([{ strike: 745, d_oi: 100 }, { strike: 750, d_oi: -50 }]);
+  });
+  it("drops rows with a non-finite strike or d_oi", () => {
+    const raw = { rows: [{ strike: 745, d_oi: 100 }, { strike: "nope", d_oi: 50 }, { strike: 750, d_oi: null }] };
+    expect(parseOiChangeRows(raw)).toEqual([{ strike: 745, d_oi: 100 }]);
+  });
+  it("returns [] for a missing/malformed rows array — never throws", () => {
+    expect(parseOiChangeRows(null)).toEqual([]);
+    expect(parseOiChangeRows(undefined)).toEqual([]);
+    expect(parseOiChangeRows({})).toEqual([]);
+    expect(parseOiChangeRows({ rows: "not an array" })).toEqual([]);
+    expect(parseOiChangeRows({ rows: [null, 5, "x"] })).toEqual([]);
+  });
+});
+
+describe("topOiChangeStrikes", () => {
+  it("ranks strikes by Σ|d_oi| across expiries/rights at that strike, top-N only", () => {
+    const rows: OiChangeCell[] = [
+      { strike: 700, d_oi: 12000 },
+      { strike: 745, d_oi: -9000 },
+      { strike: 745, d_oi: -500 }, // combines with the row above → 9500 at 745
+      { strike: 760, d_oi: 18000 },
+      { strike: 800, d_oi: 7000 },
+      { strike: 810, d_oi: 5000 },
+    ];
+    const top = topOiChangeStrikes(rows, 3);
+    expect([...top.keys()]).toEqual([760, 700, 745]);
+    expect(top.get(745)).toBe(9500); // 9000 + 500 combined
+    expect(top.size).toBe(3);
+  });
+  it("respects N=5 default and a custom n", () => {
+    const rows: OiChangeCell[] = Array.from({ length: 10 }, (_, i) => ({ strike: i, d_oi: i + 1 }));
+    expect(topOiChangeStrikes(rows).size).toBe(5);
+    expect(topOiChangeStrikes(rows, 2).size).toBe(2);
+    expect(topOiChangeStrikes(rows, 0).size).toBe(0);
+  });
+  it("returns an empty map for no rows, never fabricating a highlight", () => {
+    expect(topOiChangeStrikes([]).size).toBe(0);
+    expect(topOiChangeStrikes(null).size).toBe(0);
+    expect(topOiChangeStrikes(undefined).size).toBe(0);
+  });
+  it("drops non-finite strike/d_oi rows before ranking", () => {
+    const rows = [{ strike: NaN, d_oi: 999 }, { strike: 700, d_oi: 10 }] as OiChangeCell[];
+    const top = topOiChangeStrikes(rows, 5);
+    expect([...top.keys()]).toEqual([700]);
   });
 });
 
