@@ -243,7 +243,9 @@ const SURFACE_LEX = {
   // ── Contrast (R1.4 percentile normalization — "kill the bland") ─────────────
   styleContrast: ["Contrast", "对比度"],
   styleContrastAria: ["Field colour intensity", "曲面颜色强度"],
-  styleContrastBalanced: ["Balanced (5–95)", "均衡（5–95）"],
+  // F7: the code implements a 95th-percentile CEILING only (no low-end floor) — "(5–95)"
+  // implied a two-sided band that was never built. "(p95)" names exactly what runs.
+  styleContrastBalanced: ["Balanced (p95)", "均衡（p95）"],
   styleContrastRaw: ["Raw", "原始"],
   styleContrastNote: [
     "Balanced clamps colour intensity to the 95th percentile of this frame's cells, so one outlier strike-minute cannot wash out the rest of the field. Raw uses the literal max.",
@@ -263,7 +265,17 @@ const SURFACE_LEX = {
   levelEmHi: ["EM+", "EM+"],
   levelEmLo: ["EM−", "EM−"],
   oiDeltaToggle: ["OI Δ", "未平仓变动"],
-  oiDeltaToggleAria: ["Highlight the 5 strikes with the largest open-interest change", "高亮未平仓量变动最大的5个行权价"],
+  // F11: Σ|ΔOI| across the movers list conflates strikes being BUILT and strikes being
+  // UNWOUND (a strike can rank #1 purely from a large unwind) — "largest change" alone
+  // read as directional-flavoured; "(built or shed)" says plainly it is neither.
+  oiDeltaToggleAria: [
+    "Highlight the 5 strikes with the largest open-interest changes (built or shed)",
+    "高亮未平仓量变动最大的5个行权价（新增或减仓）",
+  ],
+  oiDeltaMoversNote: [
+    "largest open-interest changes (built or shed)",
+    "未平仓量变动最大（新增或减仓）",
+  ],
   regimeChipAria: ["Gamma regime", "伽马状态"],
   regimeToFlip: ["to flip", "距翻转"],
   regimeStability: ["stability", "稳定度"],
@@ -276,6 +288,26 @@ const SURFACE_LEX = {
   nightlyNoDate: ["undated snapshot", "无日期快照"],
   nightlyNoCov: ["no coverage for this root", "该标的暂无数据覆盖"],
   nightlyLoading: ["loading…", "加载中…"],
+  // F5: split from nightlyNoCov — an empty-status derivation (genuinely no coverage) must
+  // not read the same as a hard fetch failure/outage/entitlement gate. Mirrors ChartPanel's
+  // olUnavail exactly (same English string, same idea) so "levels unavailable" means one
+  // thing across the app.
+  nightlyUnavail: ["levels unavailable", "关键位暂不可用"],
+
+  // ── Archived-session overlay honesty (F1) ───────────────────────────────────
+  // Levels stays live during replay (gex_at:{ROOT}:{DATE} has a dated twin); regime and
+  // OI Δ do not and are withdrawn outright — see lib/surfaceContract archivedOverlayPolicy
+  // and GexDeskView's isArchived branch / archivedPaneNote (post-#344), whose honest-
+  // withdrawn idiom this mirrors for the Surface tab.
+  archivedLevelsMissing: ["no dated snapshot for this session", "该交易日无历史快照"],
+  archivedEmOmitted: [
+    "EM band unavailable for archived sessions",
+    "历史交易日不提供预期波动区间",
+  ],
+  archivedOverlaysWithdrawn: [
+    "Regime state and OI Δ describe the current session only — hidden while replaying an archived field.",
+    "伽马状态与未平仓变动仅描述当前交易日——回放已归档曲面时予以隐藏。",
+  ],
 
   // ── Alert from the drill modal ──────────────────────────────────────────────
   alertAtStrike: ["Alert me at this strike", "在该行权价提醒我"],

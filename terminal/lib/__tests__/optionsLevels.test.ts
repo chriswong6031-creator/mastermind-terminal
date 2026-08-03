@@ -177,4 +177,23 @@ describe("deriveOptLevels", () => {
     const g = { ...gexFull, asof: "yesterday-ish" };
     expect(deriveOptLevels(g, null, "NVDA").asofDate).toBeNull();
   });
+
+  // F1: SurfacePane's archived-session Levels overlay derives from a DATED payload
+  // (gex_at:{root}:{sessionDate} — same options_hub.gex/v1 schema as live gex:) with
+  // movesRaw=null (there is no dated moves: twin), reusing this exact function rather
+  // than a second implementation. This pins THAT specific contract by name so a future
+  // change to deriveOptLevels can't silently break the archived path without a red here,
+  // even though the underlying mechanic is the same one "missing moves drops only the EM
+  // band" already covers above.
+  it("archived session: a dated gex_at: snapshot derives walls/flip from ITS OWN scalars, EM band always omitted (no dated moves: twin)", () => {
+    const datedSnapshot = { ...gexFull, asof: "2026-07-15T21:00:00Z", call_wall: 145.0, put_wall: 118.0 };
+    const r = deriveOptLevels(datedSnapshot, null, "NVDA");
+    expect(r.status).toBe("ok");
+    expect(byKey(r.levels).call_wall).toBe(145.0);
+    expect(byKey(r.levels).put_wall).toBe(118.0);
+    expect(r.levels.map((l) => l.key)).not.toContain("em_hi");
+    expect(r.levels.map((l) => l.key)).not.toContain("em_lo");
+    expect(r.asofDate).toBe("2026-07-15");
+    expect(r.signed).toBe(true); // a wall/flip is drawn — Tier-B disclosure applies
+  });
 });

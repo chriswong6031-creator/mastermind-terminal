@@ -14,6 +14,7 @@ import {
   serializeTheme,
   loadTheme,
   saveTheme,
+  nextThemeForPreset,
   type SurfaceTheme,
 } from "@/components/surface/surfaceTheme";
 
@@ -262,17 +263,40 @@ describe("persistence", () => {
     expect(JSON.parse(serializeTheme(legacy)).contrast).toBe("balanced");
   });
 
-  it("choosing a colour preset does not reset an existing contrast choice", () => {
-    // Regression guard for setPreset in SurfaceStylePopover, which used to construct a
-    // brand-new theme object (`{ preset, custom: {} }`) that silently dropped `contrast`.
-    const theme: SurfaceTheme = { preset: "classic", custom: {}, contrast: "raw" };
-    // setPreset's actual behaviour: { preset: next, custom: {}, contrast: theme.contrast }
-    const next: SurfaceTheme = { preset: "mono", custom: {}, contrast: theme.contrast };
-    expect(next.contrast).toBe("raw");
-  });
-
   it("a blocked/full localStorage never breaks the pane", () => {
     g.window = { localStorage: storageStub(true) };
     expect(() => saveTheme({ preset: "mono", custom: {} })).not.toThrow();
+  });
+});
+
+// F2: real tests of the extracted transform — the previous version of this suite
+// re-implemented `{ preset: next, custom: {}, contrast: theme.contrast }` inline and
+// asserted that literal against itself (a tautology that could never fail regardless of
+// what SurfaceStylePopover's setPreset actually did). These call the exported function.
+describe("nextThemeForPreset", () => {
+  it("preset switch preserves the existing contrast choice", () => {
+    // Regression guard: setPreset in SurfaceStylePopover used to construct a brand-new
+    // theme object (`{ preset, custom: {} }`) that silently dropped `contrast`.
+    const theme: SurfaceTheme = { preset: "classic", custom: {}, contrast: "raw" };
+    expect(nextThemeForPreset(theme, "mono")).toEqual({ preset: "mono", custom: {}, contrast: "raw" });
+  });
+
+  it("preset switch clears hand-tuned per-metric overrides", () => {
+    const theme: SurfaceTheme = {
+      preset: "default",
+      custom: { netprem: { pos: "#111111", neg: "#222222" } },
+      contrast: "balanced",
+    };
+    expect(nextThemeForPreset(theme, "classic")).toEqual({ preset: "classic", custom: {}, contrast: "balanced" });
+  });
+
+  it("a legacy theme blob with no contrast field degrades to balanced", () => {
+    const legacy = { preset: "classic", custom: {} } as SurfaceTheme;
+    expect(nextThemeForPreset(legacy, "mono").contrast).toBe("balanced");
+  });
+
+  it("never trusts an unknown/hostile stored contrast value either", () => {
+    const hostile = { preset: "classic", custom: {}, contrast: "extreme" } as unknown as SurfaceTheme;
+    expect(nextThemeForPreset(hostile, "mono").contrast).toBe("balanced");
   });
 });

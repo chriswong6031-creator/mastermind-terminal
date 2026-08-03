@@ -430,14 +430,28 @@ export interface OiChangeCell {
  * empty `rows` array yields [], which the caller then treats as "no OI-change coverage"
  * rather than fabricating a highlight. Mirrors the defensive parse SurfacePane already
  * does for `matrix:{ROOT}`.
+ *
+ * F8: `root` is optional but should always be passed by a caller that fetched a
+ * root-keyed key (`oi_change:{ROOT}`) — it rejects a payload whose own top-level `root`
+ * doesn't match (a stale-root race: the state still holds the previous ticker's response
+ * when the fetch effect re-fires), and drops any ROW carrying a foreign `root` (the
+ * cross-root board's rows do carry one; a per-root payload should not, but a badge must
+ * never wear another ticker's structure — same law as optionsLevels' pickRootPayload).
  */
-export function parseOiChangeRows(raw: unknown): OiChangeCell[] {
+export function parseOiChangeRows(raw: unknown, root?: string): OiChangeCell[] {
+  if (root) {
+    const payloadRoot = (raw as { root?: unknown } | null)?.root;
+    if (typeof payloadRoot === "string" && payloadRoot.toUpperCase() !== root.toUpperCase()) {
+      return [];
+    }
+  }
   const rows = (raw as { rows?: unknown })?.rows;
   if (!Array.isArray(rows)) return [];
   const out: OiChangeCell[] = [];
   for (const r of rows) {
     if (!r || typeof r !== "object") continue;
     const rec = r as Record<string, unknown>;
+    if (root && typeof rec.root === "string" && rec.root.toUpperCase() !== root.toUpperCase()) continue;
     const strike = Number(rec.strike);
     // d_oi must ALREADY be a number — unlike `strike`, coercing a null/missing d_oi would
     // turn "not populated" into a false literal 0 (Number(null) === 0), which would then
@@ -451,13 +465,18 @@ export function parseOiChangeRows(raw: unknown): OiChangeCell[] {
 }
 
 /**
- * The top-N strikes by |ΔOI|, summed across every expiry/right at that strike (a strike's
- * total OI-change footprint, not one contract's). Returns strike → summed |d_oi|, ordered
- * by descending magnitude is NOT preserved by a Map — callers that need rank order should
- * read `[...map.entries()]` and re-sort, or just test membership (`map.has(strike)`), which
- * is all the strike-axis badge needs. Rows with the same strike across different
- * expiries/rights are meant to combine (a strike can carry a wall of ΔOI split across its
- * option chain) — matches MSC's numDoi flattening convention for the same payload family.
+ * The top-N strikes by |ΔOI|, summed across every expiry/right at that strike PRESENT IN
+ * `rows`. F11: `rows` is itself the upstream's own top contract-level movers list
+ * (`options_hub.oi_change/v1`, capped/ranked upstream) — not a full per-strike OI ledger —
+ * so this is each strike's footprint AMONG THE CONTRACTS THAT MADE THE UPSTREAM CUT, not
+ * its true total footprint across the whole chain. Returns strike → summed |d_oi|.
+ * F10: JS `Map` DOES preserve insertion order, and `top` is sorted descending before being
+ * inserted below — so iterating the returned Map (`[...map.entries()]` / `map.keys()`)
+ * already yields strikes in descending-|ΔOI| rank order; no re-sort is needed. The
+ * strike-axis badge itself only needs membership (`map.has(strike)`). Rows with the same
+ * strike across different expiries/rights are meant to combine (a strike can carry a wall
+ * of ΔOI split across its option chain) — matches MSC's numDoi flattening convention for
+ * the same payload family.
  */
 export function topOiChangeStrikes(rows: OiChangeCell[] | null | undefined, n = 5): Map<number, number> {
   const out = new Map<number, number>();
@@ -470,6 +489,74 @@ export function topOiChangeStrikes(rows: OiChangeCell[] | null | undefined, n = 
   const top = [...byStrike.entries()].sort((a, b) => b[1] - a[1]).slice(0, Math.max(0, n));
   for (const [strike, mag] of top) out.set(strike, mag);
   return out;
+}
+
+// ─── Archived-session overlay policy (F1) ─────────────────────────────────────
+
+/**
+ * Which of SurfacePane's three nightly overlays (Levels / regime chip / OI Δ) may draw
+ * during an archived session, and which are withdrawn outright.
+ *
+ * `gexstate:{ROOT}` (regime) and `oi_change:{ROOT}` (OI Δ) are CURRENT-session-only
+ * stores with no dated twin — rendering them under a replayed session would silently
+ * paint today's numbers over a past session's field, the exact cross-session lookahead
+ * this policy exists to prevent (same law as the Exposure desk's archived pane, see
+ * GexDeskView's `isArchived` branch + `archivedPaneNote`, post-#344). They are WITHDRAWN,
+ * never merely "absent because no data loaded yet" — the two states must read differently.
+ *
+ * `gex_at:{ROOT}:{DATE}` (Levels) DOES have a dated twin (the gex_history plane), so
+ * Levels stays live, sourced ONLY from that dated payload (see deriveOptLevels called
+ * with a null `movesRaw` — there is no dated `moves:` twin either, so the EM band drops
+ * on its own via deriveOptLevels' existing "missing moves" path).
+ *
+ * Deliberately takes ONLY `isArchived` (no payload) — the withdrawal is a SESSION-STATE
+ * decision, not a data-presence one, so this function's shape itself proves regime/OI Δ
+ * cannot flip back on just because a fetch happens to resolve with data.
+ */
+export interface ArchivedOverlayPolicy {
+  /** Levels overlay stays live, sourced from the dated gex_at: payload only. */
+  useDatedLevels: boolean;
+  /** Regime chip is withdrawn (current-session-only store). */
+  regimeWithdrawn: boolean;
+  /** OI Δ toggle/badges are withdrawn (current-session-only store). */
+  oiDeltaWithdrawn: boolean;
+}
+
+export function archivedOverlayPolicy(isArchived: boolean): ArchivedOverlayPolicy {
+  return {
+    useDatedLevels: isArchived,
+    regimeWithdrawn: isArchived,
+    oiDeltaWithdrawn: isArchived,
+  };
+}
+
+// ─── Price-line host bookkeeping (N1) ─────────────────────────────────────────
+
+/** A drawn LWC price line, tagged with the series it was actually created on. */
+export interface HostedLine {
+  host: unknown;
+  line: unknown;
+}
+
+/**
+ * N1: remove every line from the host it was ACTUALLY drawn on — never a "whichever host
+ * this cleanup run currently resolves to" variable passed in separately. Lightweight-
+ * Charts' `removePriceLine()` is a silent no-op for a line belonging to a DIFFERENT
+ * series (no throw, no effect), so SurfacePane's Levels/OI-Δ overlay effects used to leak:
+ * a host flip between the run that drew a set of lines and the run that cleans them up
+ * (F4/R1 — the candle series gaining or losing its first plotted bar) orphaned the old
+ * host's lines, drawn a second time on the new host, doubling every wall/flip/EM level.
+ * Mirrors the pins reconciliation idiom (`pinLinesRef`'s `series` field), which already
+ * stored the host per-entry and was never affected by this bug.
+ */
+export function removeHostedLines(records: HostedLine[]): void {
+  for (const rec of records) {
+    try {
+      (rec.host as { removePriceLine: (line: unknown) => void }).removePriceLine(rec.line);
+    } catch {
+      /* host already torn down (chart remount) — nothing left to clean up */
+    }
+  }
 }
 
 // ─── Greek metric enablement (Wave 2E feature-detection) ─────────────────────

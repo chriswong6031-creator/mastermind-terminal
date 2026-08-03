@@ -61,6 +61,20 @@ export function effectiveContrast(theme: SurfaceTheme): ContrastMode {
 }
 
 /**
+ * F2: the transform SurfaceStylePopover's preset picker applies, extracted so the real
+ * function (not an inline copy) is what the test suite pins. Choosing a preset clears
+ * hand-tuned per-metric overrides — otherwise the preset visibly "doesn't apply" to
+ * whichever metric was customised earlier. Contrast is a SEPARATE axis (intensity, not
+ * hue) and must survive a preset switch, so it is carried forward through
+ * `effectiveContrast` rather than read off `theme.contrast` directly — that also fixes a
+ * legacy theme blob with no `contrast` field, which now degrades to "balanced" here
+ * instead of forwarding `undefined`.
+ */
+export function nextThemeForPreset(theme: SurfaceTheme, preset: PresetKey): SurfaceTheme {
+  return { preset, custom: {}, contrast: effectiveContrast(theme) };
+}
+
+/**
  * Preset palettes. `default` is intentionally null — it means "inherit the theme's
  * directional tokens" (see the module note), not a hard-coded pair.
  *

@@ -213,8 +213,8 @@ export function SurfaceView() {
     saveTheme(next);
   }
 
-  // Plain handlers — the React Compiler memoizes; a manual useCallback trips
-  // preserve-manual-memoization here.
+  // Plain handlers, recreated each render — cheap closures that aren't handed to a
+  // memoized child or an effect dep list, so referential stability buys nothing here.
   const commit = () => {
     const r = inputVal.trim().toUpperCase();
     if (!r || r === root) return;

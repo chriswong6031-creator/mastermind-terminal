@@ -22,6 +22,9 @@ import {
   isSessionDate,
   isSurfaceDates,
   truncateSessionAt,
+  archivedOverlayPolicy,
+  removeHostedLines,
+  type HostedLine,
   type SurfaceIndex,
   type SurfaceFrame,
   type SessionPoint,
@@ -411,6 +414,42 @@ describe("parseOiChangeRows", () => {
     expect(parseOiChangeRows({ rows: "not an array" })).toEqual([]);
     expect(parseOiChangeRows({ rows: [null, 5, "x"] })).toEqual([]);
   });
+
+  // F8: root is optional (back-compat with every call site above, none of which passes
+  // one) but a caller that fetched a root-keyed key must be able to reject a stale-root
+  // payload — the payload's own top-level `root`, AND each row's `root` where present
+  // (the cross-root board's rows carry one; a per-root payload should not, but a badge
+  // must never wear another ticker's structure — same law as optionsLevels' pickRootPayload).
+  it("rejects a payload whose top-level root does not match, when a root is given", () => {
+    const raw = { root: "QQQ", rows: [{ strike: 500, d_oi: 100 }] };
+    expect(parseOiChangeRows(raw, "SPY")).toEqual([]);
+    expect(parseOiChangeRows(raw, "QQQ")).toEqual([{ strike: 500, d_oi: 100 }]);
+  });
+
+  it("without a root argument, a mismatched top-level root is NOT checked (back-compat)", () => {
+    const raw = { root: "QQQ", rows: [{ strike: 500, d_oi: 100 }] };
+    expect(parseOiChangeRows(raw)).toEqual([{ strike: 500, d_oi: 100 }]);
+  });
+
+  it("drops individual rows carrying a foreign root, keeping same-root rows", () => {
+    const raw = {
+      root: "SPY",
+      rows: [
+        { root: "SPY", strike: 745, d_oi: 100 },
+        { root: "NVDA", strike: 300, d_oi: 500 },
+        { strike: 750, d_oi: 50 }, // no per-row root — not rejected on that basis
+      ],
+    };
+    expect(parseOiChangeRows(raw, "SPY")).toEqual([
+      { strike: 745, d_oi: 100 },
+      { strike: 750, d_oi: 50 },
+    ]);
+  });
+
+  it("root match is case-insensitive", () => {
+    const raw = { root: "spy", rows: [{ strike: 745, d_oi: 100 }] };
+    expect(parseOiChangeRows(raw, "SPY")).toEqual([{ strike: 745, d_oi: 100 }]);
+  });
 });
 
 describe("topOiChangeStrikes", () => {
@@ -443,6 +482,95 @@ describe("topOiChangeStrikes", () => {
     const rows = [{ strike: NaN, d_oi: 999 }, { strike: 700, d_oi: 10 }] as OiChangeCell[];
     const top = topOiChangeStrikes(rows, 5);
     expect([...top.keys()]).toEqual([700]);
+  });
+});
+
+// ── F1: archived-session overlay withdrawal policy ───────────────────────────
+// SurfacePane has no jsdom/component test harness in this repo (vitest runs in the NODE
+// environment — see surfaceTheme.test.ts), so the F1 regression guard targets the pure
+// policy function the component actually reads to decide what to render/draw, rather
+// than a rendered tree. The function takes ONLY `isArchived` (no payload), so a passing
+// test here proves the withdrawal is a SESSION-STATE decision — not something that could
+// flip back on merely because a gexstate:/oi_change: fetch happens to resolve with data
+// (i.e. it asserts the withdrawal itself, not just an absence a missing fetch would also
+// produce). Levels staying live (dated twin exists) is asserted in the SAME test so a
+// future edit can't silently withdraw all three overlays together.
+describe("archivedOverlayPolicy", () => {
+  it("live session: nothing is withdrawn, Levels reads the live gex:/moves: pair", () => {
+    expect(archivedOverlayPolicy(false)).toEqual({
+      useDatedLevels: false,
+      regimeWithdrawn: false,
+      oiDeltaWithdrawn: false,
+    });
+  });
+
+  it("archived session: regime + OI Δ withdrawn, Levels switches to the dated payload", () => {
+    expect(archivedOverlayPolicy(true)).toEqual({
+      useDatedLevels: true,
+      regimeWithdrawn: true,
+      oiDeltaWithdrawn: true,
+    });
+  });
+});
+
+// ── N1: price lines must be removed from the host they were drawn on ────────
+// SurfacePane's Levels/OI-Δ overlay effects used to remove via "whichever host this
+// cleanup run currently resolves to" — a real host object, but not necessarily the one a
+// given line was CREATED on. Lightweight-Charts' removePriceLine() is a silent no-op for a
+// line belonging to a different series (no throw), so a host flip between the draw run and
+// the cleanup run (F4/R1: the candle series gaining/losing its first plotted bar) orphaned
+// the old host's lines while new ones were drawn on the new host — every wall/flip/EM
+// level doubled. removeHostedLines is the fix: it always reads the host stored ON the
+// record, never a separately-passed "current" host.
+describe("removeHostedLines", () => {
+  it("dispatches each line's removal to its OWN stored host, not a shared/other host", () => {
+    const removedA: unknown[] = [];
+    const removedB: unknown[] = [];
+    const hostA = { removePriceLine: (l: unknown) => removedA.push(l) };
+    const hostB = { removePriceLine: (l: unknown) => removedB.push(l) };
+    // Mixed set (some records on hostA, some on hostB, interleaved) proves per-record
+    // dispatch rather than "everything goes wherever the loop happens to point" — the
+    // exact shape of a real draw-run-A-then-B / cleanup-mixed scenario.
+    const records: HostedLine[] = [
+      { host: hostA, line: "call_wall" },
+      { host: hostB, line: "put_wall" },
+      { host: hostA, line: "gamma_flip" },
+    ];
+    removeHostedLines(records);
+    expect(removedA).toEqual(["call_wall", "gamma_flip"]);
+    expect(removedB).toEqual(["put_wall"]);
+  });
+
+  it("simulates the actual N1 scenario: a host flip between the draw run and the cleanup run still removes via the ORIGINAL host", () => {
+    // Run 1 draws on the heat series (no candle bars drawn yet — hasDrawnBars=false).
+    const heatSeries = { removePriceLine: (l: unknown) => heatRemoved.push(l), createPriceLine: (o: unknown) => o };
+    const heatRemoved: unknown[] = [];
+    const drawn: HostedLine[] = [
+      { host: heatSeries, line: heatSeries.createPriceLine({ price: 100 }) },
+      { host: heatSeries, line: heatSeries.createPriceLine({ price: 105 }) },
+    ];
+    // The candle series gains its first bar — hasDrawnBars flips true — run 2 resolves a
+    // DIFFERENT current host (the candle series) and must clean up run 1's lines first,
+    // BEFORE it ever draws anything on the candle series itself.
+    const candleRemoved: unknown[] = [];
+    removeHostedLines(drawn); // the cleanup step of run 2
+    expect(heatRemoved.length).toBe(2); // removed from where they actually live
+    expect(candleRemoved.length).toBe(0); // never touches the new (unrelated) host
+  });
+
+  it("a host whose removePriceLine throws (already torn down, e.g. chart remount) does not stop the rest from being removed", () => {
+    const removed: unknown[] = [];
+    const dead = { removePriceLine: () => { throw new Error("series removed"); } };
+    const alive = { removePriceLine: (l: unknown) => removed.push(l) };
+    expect(() => removeHostedLines([
+      { host: dead, line: "a" },
+      { host: alive, line: "b" },
+    ])).not.toThrow();
+    expect(removed).toEqual(["b"]);
+  });
+
+  it("empty input is a no-op", () => {
+    expect(() => removeHostedLines([])).not.toThrow();
   });
 });
 

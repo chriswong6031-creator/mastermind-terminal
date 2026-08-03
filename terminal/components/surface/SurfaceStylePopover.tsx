@@ -25,6 +25,7 @@ import {
   CONTRAST_MODES,
   effectivePair,
   effectiveContrast,
+  nextThemeForPreset,
   type ContrastMode,
   type PresetKey,
   type SurfaceTheme,
@@ -107,11 +108,9 @@ export function SurfaceStylePopover({ lang, theme, open, onOpenChange, onChange 
   }
 
   function setPreset(preset: PresetKey) {
-    // Choosing a preset clears hand-tuned overrides — otherwise the preset visibly
-    // "doesn't apply" to whichever metric was customised earlier. Contrast is a SEPARATE
-    // axis (intensity, not hue) and must survive a preset switch — dropping it here would
-    // silently bounce a "Raw" pick back to "Balanced" every time someone tries a palette.
-    onChange({ preset, custom: {}, contrast: theme.contrast });
+    // F2: the transform itself lives in surfaceTheme.ts (nextThemeForPreset) so the test
+    // suite pins the REAL function rather than a copy of this call site.
+    onChange(nextThemeForPreset(theme, preset));
   }
 
   function setContrast(contrast: ContrastMode) {
