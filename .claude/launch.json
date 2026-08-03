@@ -264,6 +264,25 @@
         "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
         "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
       }
+    },
+    {
+      "name": "tab-seed",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:fixture",
+        "--",
+        "-p",
+        "3265"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/determined-pascal-40b3f9/terminal",
+      "port": 3265,
+      "env": {
+        "FLOW_FIXTURE": "1",
+        "NW_FIXTURE": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
     }
   ]
 }

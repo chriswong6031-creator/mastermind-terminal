@@ -1445,8 +1445,9 @@ type ScreenerPreset = "top_prem" | "unusual_z" | "fresh" | "doi" | "zerodte" | "
 /**
  * OptionsHubView — the Research workspace engine (Wave-2 IA).
  *
- * Two modes, controlled by props (all optional; the no-prop call is the legacy
- * self-contained hub used by any remaining direct mount):
+ * Two modes, controlled by props (all optional; every live mount is CONTROLLED —
+ * the uncontrolled no-prop form survives only as the self-managed fallback and
+ * no longer reads the URL):
  *
  *  • CONTROLLED (page-driven): the Research page owns tab state in the URL (`?tab=`)
  *    via WorkspaceTabs and passes `activeTab` + `onTab`. In this mode the hub does
@@ -1510,41 +1511,34 @@ export default function OptionsHubView({
   }, [allowedTabs]);
 
   // ── Tab state ─────────────────────────────────────────────────────────────
-  // Uncontrolled mode seeds from the URL ?tab= (legacy). Controlled mode mirrors
-  // the page's `controlledTab` and never reads/writes the URL itself.
+  // Controlled mode mirrors the page's `controlledTab`. Uncontrolled mode is
+  // self-managed from `defaultTab` — URL seeding is the PAGE's job (see
+  // OptionsWorkspace, which resolves ?tab= synchronously via useSearchParams;
+  // the hub's old post-mount ?tab= → setState seed was the flaky deep-link hop,
+  // and its last uncontrolled consumer — the retired /flow mount — is gone).
   const [internalTab, setInternalTab] = useState<TabKey>(defaultTab);
   const activeTab: TabKey = controlled ? (controlledTab ?? defaultTab) : internalTab;
 
   // Track which tabs have been visited so they stay mounted (keep-alive pattern).
-  const [visitedTabs, setVisitedTabs] = useState<Set<TabKey>>(() => new Set<TabKey>([defaultTab]));
-
-  // Keep-alive bookkeeping for the controlled tab (the page moved it, so record it here).
-  useEffect(() => {
-    setVisitedTabs((prev) => (prev.has(activeTab) ? prev : new Set(prev).add(activeTab)));
-  }, [activeTab]);
-
-  // Uncontrolled: seed the initial tab from ?tab=, clamped to the allowed set.
-  useEffect(() => {
-    if (controlled) return;
-    const params = new URLSearchParams(window.location.search);
-    const raw = params.get("tab");
-    // §5.3 retired the PRISM tab into the Exposure desk's matrix view. The alias lives
-    // on BOTH entry points (here and OptionsWorkspace's HUB_KEY) so an old deep-link
-    // resolves whether the hub runs controlled or not. GexDeskView reads the same
-    // ?tab=prism to open on the matrix rather than the ladder.
-    const tab = (raw === "prism" ? "gex" : raw) as TabKey | null;
-    if (tab && renderableTabs.has(tab) && TABS.some((tb) => tb.key === tab)) {
-      setInternalTab(tab);
-      setVisitedTabs((prev) => { const next = new Set(prev); next.add(tab); return next; });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Seeded from the FIRST activeTab (not defaultTab) so a controlled deep-link
+  // renders only its own tab from the very first pass. Later visits are recorded
+  // during render (React's derived-state idiom — an effect here was a needless
+  // extra render and a react-hooks/set-state-in-effect finding); the active
+  // body itself always mounts via the `activeTab === key` disjuncts below, so
+  // this set only keeps previously-visited tabs alive after you switch away.
+  // NOTE: the §5.3 ?tab=prism → Exposure alias lives in OptionsWorkspace's
+  // HUB_KEY (the controlled entry point) — the uncontrolled copy of it died
+  // with this seed; GexDeskView still reads ?tab=prism to open on the matrix.
+  const [visitedTabs, setVisitedTabs] = useState<Set<TabKey>>(() => new Set<TabKey>([activeTab]));
+  if (!visitedTabs.has(activeTab)) {
+    setVisitedTabs(new Set(visitedTabs).add(activeTab));
+  }
 
   function switchTab(tab: TabKey) {
     // Guard: never switch to a tab the hub can't render (e.g. a stray internal
     // jump under a restricted allowedTabs set that didn't opt the tab in).
+    // Visited-tab bookkeeping happens in render (above) once activeTab moves.
     if (!renderableTabs.has(tab)) return;
-    setVisitedTabs((prev) => { const next = new Set(prev); next.add(tab); return next; });
     if (controlled) {
       onTab!(tab);
       return;
