@@ -10,9 +10,16 @@
  * leads with the measured rate AND the verdict against the null — and when nothing
  * beats it, it says so plainly. That IS the differentiator: a grade you can audit.
  *
- * COVERAGE HONESTY: the grading lane covers single names. For an uncovered root
- * (SPY/SPX/QQQ today) the card shows the cross-universe aggregate, explicitly labelled
- * as universe context — never dressed as the root's own record.
+ * COVERAGE HONESTY: for a root the grading lane hasn't covered yet the card shows the
+ * cross-universe aggregate, explicitly labelled as universe context — never dressed as
+ * the root's own record. (R2.4b added the index lane, so SPY/SPX/QQQ earn their own
+ * cards as its backfill queue drains.)
+ *
+ * R2.4b nulls: when a card carries them, the verdict column judges each role against
+ * the EQUIDISTANT null (the identical hold test on the strike mirrored across spot) and
+ * shows that null's measured rate; the CI whisker's tick moves to it. Older cards fall
+ * back to the coin-flip 0.5. Board stats gain the stricter/looser intraday containment
+ * variants and the prior-day-range null.
  *
  * No support/resistance vocabulary anywhere — "held" is defined in the ⓘ and is a
  * measured frequency, not a recommendation.
@@ -31,6 +38,15 @@ export interface GradeRole {
   p_hold?: number | null;
   ci95?: [number, number] | null;
   beats_null?: boolean | null;
+  /** R2.4b: the equidistant-mirror null's own record (absent on pre-R2.4b cards). */
+  null_equidistant?: { scored?: number; held?: number; p_hold?: number | null } | null;
+  beats_equidistant_null?: boolean | null;
+  median_pierce_pct?: number | null;
+}
+
+interface BoardRate {
+  rate?: number | null;
+  n?: number;
 }
 
 export interface GradesPayload {
@@ -38,7 +54,19 @@ export interface GradesPayload {
   root?: string;
   asof?: string | null;
   window?: { since?: string | null; until?: string | null; sessions?: number | null } | null;
-  boards?: { n?: number; wall_contained_rate?: number | null; band_contained_rate?: number | null } | null;
+  boards?: {
+    n?: number;
+    wall_contained_rate?: number | null;
+    band_contained_rate?: number | null;
+    wall_range_contained?: BoardRate | null;
+    band_close_contained?: BoardRate | null;
+    prevday_null?: {
+      high_held?: BoardRate | null;
+      low_held?: BoardRate | null;
+      range_contained_close?: BoardRate | null;
+      range_contained_range?: BoardRate | null;
+    } | null;
+  } | null;
   roles?: Record<string, GradeRole> | null;
   flip?: { touched?: number; mean_abs_post_move_pct?: number | null } | null;
   coverage_note?: string | null;
@@ -118,7 +146,10 @@ export function GradesCard({
               {rows.map((r) => {
                 const d = g.roles![r.key]!;
                 const ci = Array.isArray(d.ci95) && d.ci95.length === 2 ? d.ci95 : null;
-                const beats = d.beats_null === true;
+                // R2.4b: judge vs the measured equidistant null when the card carries
+                // it; older cards keep the coin-flip verdict and its 50% tick.
+                const nullP = isNum(d.null_equidistant?.p_hold) ? d.null_equidistant!.p_hold! : null;
+                const beats = (nullP != null ? d.beats_equidistant_null : d.beats_null) === true;
                 return (
                   <tr key={r.key}>
                     <td style={{ ...TD, whiteSpace: "nowrap" }}>{t(r.labelKey)}</td>
@@ -127,9 +158,14 @@ export function GradesCard({
                     </td>
                     <td style={{ ...TD, textAlign: "right", fontWeight: 600 }}>{pct1(d.p_hold)}</td>
                     <td style={TD}>
-                      {/* CI whisker on a fixed 0–100% track with the null tick at 50 */}
+                      {/* CI whisker on a fixed 0–100% track; the tick marks the null */}
                       <span style={CI_TRACK} aria-hidden>
-                        <span style={CI_NULL_TICK} />
+                        <span
+                          style={{
+                            ...CI_NULL_TICK,
+                            left: `${((nullP ?? 0.5) * 100).toFixed(1)}%`,
+                          }}
+                        />
                         {ci && (
                           <span
                             style={{
@@ -147,6 +183,11 @@ export function GradesCard({
                     </td>
                     <td style={{ ...TD, whiteSpace: "nowrap", color: beats ? "var(--signal)" : "var(--text-dim)" }}>
                       {beats ? t("gcBeats") : t("gcNoEdge")}
+                      {nullP != null && (
+                        <span style={NULL_AT}>
+                          {t("gcNullAt").replace("{p}", pct1(nullP))}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -159,6 +200,18 @@ export function GradesCard({
           <div style={STAT_COL}>
             <Stat label={t("gcWallContained")} value={pct1(boards.wall_contained_rate)} />
             <Stat label={t("gcBandContained")} value={pct1(boards.band_contained_rate)} />
+            {isNum(boards.wall_range_contained?.rate) && (
+              <Stat label={t("gcWallRange")} value={pct1(boards.wall_range_contained!.rate)} />
+            )}
+            {isNum(boards.band_close_contained?.rate) && (
+              <Stat label={t("gcBandClose")} value={pct1(boards.band_close_contained!.rate)} />
+            )}
+            {isNum(boards.prevday_null?.range_contained_close?.rate) && (
+              <Stat
+                label={t("gcPrevdayClose")}
+                value={pct1(boards.prevday_null!.range_contained_close!.rate)}
+              />
+            )}
             <Stat
               label={t("gcFlipTouches")}
               value={
@@ -236,8 +289,12 @@ const CI_TRACK: React.CSSProperties = {
 };
 
 const CI_NULL_TICK: React.CSSProperties = {
-  position: "absolute", left: "50%", top: 0, bottom: 0, width: 1,
+  position: "absolute", top: 0, bottom: 0, width: 1,
   background: "var(--line-3)",
+};
+
+const NULL_AT: React.CSSProperties = {
+  marginLeft: 6, fontSize: 10, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums",
 };
 
 const CI_BAND: React.CSSProperties = {
