@@ -2188,6 +2188,16 @@
 /* Market State card = an independent scroll region; sections scroll, never squash. */
 .obs-gex-state { min-height: 0; }
 .obs-gex-state > * { flex-shrink: 0; }
+/* Phone/tablet page-scroll mode (globals.css ≤860px makes .app2/.main2 auto-height):
+   with no definite ancestor height, the ladder region's flex:1 1 0px + min-height:0
+   hypothetical size is 0px and there is no free space to grow into — the ladder,
+   expiry bars and matrix lens all render invisible. Floor the region to a windowed
+   band; StrikeLadder's internal scroller handles the rest. !important because the
+   floor must beat the component's inline min-height:0 (same mechanics as the
+   .obs-surf-chart-area floor above). */
+@media (max-width: 860px) {
+  .obs-gexdesk-ladder-region { min-height: min(430px, 62dvh) !important; }
+}
 /* Drawer variant for living INSIDE the left column's capped height budget
    (canonicalises the inline XDRAWER_ROOT/XDRAWER_BODY mechanics). */
 .obs-xdrawer--inline { display: flex; flex-direction: column; min-height: 0; flex-shrink: 1; }

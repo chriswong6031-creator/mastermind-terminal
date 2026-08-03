@@ -687,8 +687,11 @@ export function GexDeskView() {
           </div>
           {/* Ladder region — the ONLY part of the left column that flexes. It owns its own
               overflow, so the drawer below can expand without pushing anything out of the
-              desk (and, crucially, without changing the RIGHT column's height at all). */}
-          <div style={LADDER_REGION}>
+              desk (and, crucially, without changing the RIGHT column's height at all).
+              The class carries the ≤860px floor (observatory.css): in the phone/tablet
+              page-scroll mode every ancestor height is auto, so flex:1 1 0px resolves to
+              a 0px band and the whole ladder vanishes. */}
+          <div style={LADDER_REGION} className="obs-gexdesk-ladder-region">
             {isArchived && archivedLoading ? (
               <div style={LADDER_LOADING}>{t("archivedLoading")}</div>
             ) : isArchived && archivedMissing ? (
