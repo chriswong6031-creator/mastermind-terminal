@@ -89,7 +89,7 @@ export const LS_PENDING_PREFS = "mm.pendingPrefs";
 //  Free path jumps 3 → 5 (numbering stays stable so the stash stays coherent — the
 //  Billing step simply has no free variant). The stepper hides the Billing entry
 //  unless a paid plan is selected. Stale W1-shaped stashes (which used step 4 as
-//  Done) must rehydrate without crashing: see remapStashStep in OnboardingSheet.
+//  Done) must rehydrate without crashing: see normalizeWizardStash below.
 export const STEP_ACCOUNT = 1;
 export const STEP_PREFS = 2;
 export const STEP_PLAN = 3;
@@ -123,3 +123,59 @@ export interface WizardStash {
 // flow finishes (Done → close) . Passwords are never stashed.
 export const SS_WIZARD = "mm.onboardWizard";   // sheet: step/name/email/prefs/plan/flags
 export const SS_OPEN = "mm.onboardOpen";       // provider: {open, mode, plan, period}
+
+// ── Stash read-normalization ──────────────────────────────────────────────────
+//
+// A tab keeps its stash for its whole life, so a read can meet ANY historical
+// deploy's shape — that is why normalizePlanKey exists, and why remapping W1 step
+// numbers lives here too. These normalizers extend the same read-tolerance to the
+// WHOLE stash: every field is coerced to a known-good value, so consumers always
+// get a complete WizardStash (or null = "no usable stash"), never a partial shape.
+// A stash whose prefs object had lost its arrays once crashed the sheet into the
+// error boundary (the rail AccountCard reads market_focus.length). Writes stay
+// canonical; only reads tolerate.
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : [];
+}
+
+export function normalizeOnboardPrefs(value: unknown): OnboardPrefs {
+  const raw = (value && typeof value === "object" && !Array.isArray(value) ? value : {}) as
+    Partial<Record<keyof OnboardPrefs, unknown>>;
+  return {
+    market_focus: stringArray(raw.market_focus),
+    trade_types: stringArray(raw.trade_types),
+    theme_pref: raw.theme_pref === "light" || raw.theme_pref === "auto" ? raw.theme_pref : "dark",
+  };
+}
+
+// Rehydrate a stashed step under the W2 five-step model, tolerating stale W1-shaped
+// stashes. In W1, step 4 meant DONE (there was no Billing step). If a stale stash
+// lands here, remap: a paid plan with step ≥ 4 → Billing (STEP_BILLING); anything
+// else at the old terminal step → Done. Fresh W2 stashes already carry 1–5 and pass
+// through unchanged. Missing/garbage → step 1.
+function normalizeStashStep(raw: Partial<Record<keyof WizardStash, unknown>>): number {
+  const s = typeof raw.step === "number" && raw.step >= STEP_ACCOUNT ? Math.floor(raw.step) : STEP_ACCOUNT;
+  const paid = normalizePlanKey(raw.plan) === "essential" || raw.plan === "pro";
+  // W1 stash never had trialActive/trialEnd; treat a step-4 W1 stash as the old Done.
+  const isW1Shape = raw.trialActive === undefined && raw.trialEnd === undefined;
+  if (isW1Shape && s >= STEP_BILLING) return paid ? STEP_BILLING : STEP_DONE;
+  return Math.min(s, STEP_DONE);
+}
+
+export function normalizeWizardStash(value: unknown): WizardStash | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Partial<Record<keyof WizardStash, unknown>>;
+  return {
+    step: normalizeStashStep(raw),
+    firstName: typeof raw.firstName === "string" ? raw.firstName : "",
+    lastName: typeof raw.lastName === "string" ? raw.lastName : "",
+    email: typeof raw.email === "string" ? raw.email : "",
+    prefs: normalizeOnboardPrefs(raw.prefs),
+    plan: normalizePlanKey(raw.plan) ?? "pro",
+    period: raw.period === "monthly" || raw.period === "annual" ? raw.period : "annual",
+    confirmPending: raw.confirmPending === true,
+    trialActive: raw.trialActive === true,
+    trialEnd: typeof raw.trialEnd === "number" && Number.isFinite(raw.trialEnd) ? raw.trialEnd : null,
+  };
+}
