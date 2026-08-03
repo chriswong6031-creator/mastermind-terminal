@@ -178,6 +178,90 @@ describe("AnchorCache daily file rolled for today", () => {
   });
 });
 
+// ── AnchorCache — same-session daily-file roll (MSFT 2026-08-03 regression) ──
+
+describe("AnchorCache refreshes when the daily file rolls inside one ET session", () => {
+  const { Store } = require("../lib/store");
+  const NOW_AFTERHOURS = Date.UTC(2026, 7, 3, 21, 0); // 17:00 ET
+  const CLOSE_DAY_BEFORE = 451.10;
+  const CLOSE_PREVIOUS = 464.72;
+  const CLOSE_TODAY = 487.65;
+  const EXT_PRICE = 484.02;
+  let tmpDir;
+
+  after(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("updates regular and AH baselines without waiting for the next session date", async () => {
+    tmpDir = makeTmpDir();
+    // Hub warmed this anchor during RTH, before today's daily bar existed.
+    writeDailyFile(tmpDir, "MSFT", [
+      bar("2026-07-30", CLOSE_DAY_BEFORE),
+      bar("2026-07-31", CLOSE_PREVIOUS),
+    ]);
+    const manifestPath = path.join(tmpDir, "manifest.json");
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      as_of: "2026-07-31",
+      symbols: { MSFT: { last: CLOSE_PREVIOUS, chg: 3.0192861893150087 } },
+    }));
+
+    let store;
+    const cache = new AnchorCache({
+      dataDir: tmpDir,
+      apiKey: "",
+      getManifest: () => store ? store.manifest : null,
+    });
+    store = new Store(manifestPath, cache);
+    store.loadManifestIfStale(true);
+    await cache.resolve("MSFT", NOW_AFTERHOURS);
+    store.setQuote("MSFT", { last: 489.13, market: "us" }, NOW_AFTERHOURS);
+
+    const stale = store.getQuotes(["MSFT"], NOW_AFTERHOURS).MSFT;
+    const previousSessionMove = (CLOSE_PREVIOUS - CLOSE_DAY_BEFORE) / CLOSE_DAY_BEFORE * 100;
+    assert.ok(Math.abs(stale.chg - previousSessionMove) < 0.001,
+      "fixture reproduces the stale +3.02% completed-session value");
+    assert.equal(stale.close, undefined, "today's close is absent before the file rolls");
+
+    // The EOD writer atomically replaces the file after the cache key already exists.
+    writeDailyFile(tmpDir, "MSFT", [
+      bar("2026-07-30", CLOSE_DAY_BEFORE),
+      bar("2026-07-31", CLOSE_PREVIOUS),
+      bar("2026-08-03", CLOSE_TODAY),
+    ]);
+
+    let closeRef = null;
+    const extFeed = {
+      getExt(_sym, _now, reference) {
+        closeRef = reference;
+        return {
+          extPrice: EXT_PRICE,
+          extChg: (EXT_PRICE - reference) / reference * 100,
+          extTs: Math.floor(NOW_AFTERHOURS / 1000),
+          extSession: "post",
+        };
+      },
+    };
+    const corrected = store.getQuotes(
+      ["MSFT"],
+      NOW_AFTERHOURS + 6_000,
+      extFeed,
+    ).MSFT;
+
+    const expectedRegular = (CLOSE_TODAY - CLOSE_PREVIOUS) / CLOSE_PREVIOUS * 100;
+    const expectedExt = (EXT_PRICE - CLOSE_TODAY) / CLOSE_TODAY * 100;
+    assert.equal(corrected.prevClose, CLOSE_PREVIOUS);
+    assert.equal(corrected.close, CLOSE_TODAY, "same-session file roll supplies today's official close");
+    assert.ok(Math.abs(corrected.chg - expectedRegular) < 0.001,
+      `regular chg=${corrected.chg} expected≈${expectedRegular}`);
+    assert.equal(corrected.prevSessionChg, undefined,
+      "stale previous-session move is removed once today's close exists");
+    assert.equal(closeRef, CLOSE_TODAY, "AH baseline is today's official close");
+    assert.ok(Math.abs(corrected.extChg - expectedExt) < 0.001,
+      `AH chg=${corrected.extChg} expected≈${expectedExt}`);
+  });
+});
+
 // ── AnchorCache — manifest fallback when no daily file ──
 
 describe("AnchorCache manifest fallback", () => {
