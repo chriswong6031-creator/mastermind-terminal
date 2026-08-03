@@ -2015,6 +2015,15 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
   .pine-side{width:100%;height:auto;max-height:36dvh;border-top:1px solid var(--line);flex:none}
   .editor-head{flex-wrap:wrap;height:auto;padding:6px 10px;gap:6px}
   .editor-head .badge{font-size:9px}
+  /* ── Exposure desk: give the ladder/matrix band a real height in document-flow mode.
+       Here the shell is content-sized (html/body height:auto above), so the desk column has
+       no viewport-derived height and LADDER_REGION's inline flex-basis:0px contributes ZERO
+       content height — StrikeLadder / ExpiryBars / the matrix rendered 0px tall on phones.
+       flex:none needs !important to beat that inline `flex:1 1 0px`; the band scrolls
+       internally, so the expiry drawer below simply lengthens the page when it opens
+       (desktop >860px keeps the flexing v7b containment geometry untouched). ── */
+  .obs-gex-ladder{flex:none!important;height:clamp(260px,62vh,560px)}
+  .obs-gex-ladder{height:clamp(260px,62svh,560px)}
   /* ── Fix 5: font floors (prevent sub-11px text at ≤860px) ── */
   .flow-flag-chip,.flow-dte-chip,.flow-mny-chip{font-size:11px}
   .pill{font-size:11px}

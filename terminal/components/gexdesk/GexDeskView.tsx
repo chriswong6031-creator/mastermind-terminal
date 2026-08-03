@@ -637,8 +637,11 @@ export function GexDeskView() {
           </div>
           {/* Ladder region — the ONLY part of the left column that flexes. It owns its own
               overflow, so the drawer below can expand without pushing anything out of the
-              desk (and, crucially, without changing the RIGHT column's height at all). */}
-          <div style={LADDER_REGION}>
+              desk (and, crucially, without changing the RIGHT column's height at all).
+              `.obs-gex-ladder` exists solely for the ≤860px shell (globals.css): there the
+              app is document-flow, every ancestor is content-sized, and flex-basis 0px
+              contributes zero content height — the ladder rendered 0px tall on phones. */}
+          <div className="obs-gex-ladder" style={LADDER_REGION}>
             {isArchived && archivedLoading ? (
               <div style={LADDER_LOADING}>{t("archivedLoading")}</div>
             ) : isArchived && archivedMissing ? (
