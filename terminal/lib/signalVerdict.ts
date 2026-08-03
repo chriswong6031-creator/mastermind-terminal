@@ -175,8 +175,10 @@ export function computeStance(st: OracleState, trend: StanceTrend, zh: boolean):
 // Golden Oracle verdict for the rail card. Sources, in trust order:
 //   1. slice.indicator.signals — the newest marker the engine did NOT refuse
 //      (quality !== 'regime_blocked'): the dated verdict anchor. A fresh anchor renders as
-//      the event (RECLAIM = soft/unscored authority); a stale/undated anchor demotes to the
-//      sub-line echo and the primary becomes the STANCE from state (computeStance).
+//      the event (RECLAIM = soft/unscored authority); when the anchor is stale/undated, a
+//      FRESH refused entry trigger (regime_blocked tail) renders first-class as an amber
+//      "Entry trigger — regime-blocked" caution, else the primary becomes the STANCE from
+//      state (computeStance).
 //   2. manifest row.verdict (scored lane) — undated fallback when there is no slice: dimmed.
 // Either way this is a swing-timing overlay read (3D bars), never an investment view — the
 // horizon rides along in `note` so the button tooltip says so.
@@ -236,11 +238,52 @@ export function oracleVerdict(
     };
   }
 
+  const hasRegime = st != null && (st.position_hint !== undefined || st.strong_bull !== undefined
+    || st.extended !== undefined || st.weeklyBull !== undefined || st.above200 !== undefined);
+
+  // ── stale/absent anchor but a FRESH refused entry trigger: first-class caution ──
+  // 2026-08-02 (600547.SS washout diagnosis): the engine's entry trigger fired at the
+  // low and was regime-vetoed; rendering only the stale-SELL stance buried the one dated
+  // fact the panel exists to surface. A fresh refused trigger is now the primary read —
+  // amber caution rung (non-flipping --signal), hollow glyph, explicit "not an entry"
+  // language — and the stance demotes to tooltip context. Never green, never a Buy verb
+  // (stance law); the engine's refusal stays the scored-lane truth (raw=BLOCKED_ENTRY,
+  // never the event type, so no consumer can mistake it for an anchorable signal).
+  const btU = blockedTail ? String(blockedTail.type).toUpperCase() : null;
+  const btKnownTs = signalKnownTs(blockedTail);
+  const btAge = ageDays(btKnownTs, now);
+  if (blockedTail && btU && (BUYISH.includes(btU) || btU === "RECLAIM")
+      && btAge != null && btAge <= ORACLE_STALE_DAYS) {
+    const notes: string[] = [
+      zh ? "入场触发被趋势闸拦截 — 非入场信号" : "entry trigger blocked by the regime gate — not an entry",
+      horizon,
+    ];
+    if (blockedTail.price != null) notes.push(`@ ${blockedTail.price}`);
+    if (blockedTail.quality_reason) notes.push(String(blockedTail.quality_reason));
+    const btStance = st && hasRegime ? computeStance(st, trend, zh) : null;
+    if (btStance) notes.push(`${zh ? "当前姿态" : "current stance"}: ${btStance.label}`);
+    const btEcho = effU ?? scored ?? mv;
+    if (btEcho) {
+      notes.push(
+        `${zh ? "上次信号" : "last signal"}: ${eventLabel(btEcho, zh)}` +
+        (effKnownTs ? ` · ${fmtDate(effKnownTs, zh)}` : "") +
+        (eff?.price != null ? ` @ ${eff.price}` : ""),
+      );
+    }
+    return {
+      label: zh ? "买点触发 — 趋势闸拦截" : "Entry trigger — regime-blocked",
+      color: "var(--signal)",
+      raw: "BLOCKED_ENTRY",
+      sub: fmtDate(btKnownTs!, zh),
+      dim: false,
+      soft: true,
+      note: notes.join(" · "),
+    };
+  }
+
   // ── stale or undated: the stance is the primary; the event demotes to a dated echo ──
   // Only when the state actually carries regime fields — a bare {last_signal} (legacy
   // shape) has nothing honest to stand on and keeps the dated/dimmed event render.
-  const hasRegime = st != null && (st.position_hint !== undefined || st.strong_bull !== undefined
-    || st.extended !== undefined || st.weeklyBull !== undefined || st.above200 !== undefined);
   if (st && hasRegime) {
     const stance = computeStance(st, trend, zh);
     if (stance) {

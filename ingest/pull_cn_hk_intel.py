@@ -301,12 +301,46 @@ def build_flows(src: dict, market: str, lrow=None):
     }
 
 
+# ── ai_lean mapping ────────────────────────────────────────────────────────────
+# Same table as pull_macro_intel._map_ai_dir (the canonical band×entry mapping —
+# tests/test_cn_hk_tape.py pins the two implementations together). Inlined rather
+# than imported because this bridge is deliberately stdlib-only (pull_macro_intel
+# pulls in build_polygon_universe at import, which the launchd cnhk lane must not).
+# The legacy tone read survives only as the no-band fallback: older/lite site JSONs
+# without view.decision.band keep their previous lean instead of going blank.
+_BUY_ENTRIES = frozenset({"buy_now", "buy_soon", "partial"})
+_EXIT_ENTRIES = frozenset({"exit", "topping"})
+
+
+def _map_ai_dir(band, entry_status, tone) -> str:
+    b = (band or "").lower().strip()
+    e = (entry_status or "").lower().strip()
+    if not b:
+        return "BULL" if tone == "go" else "BEAR" if tone in ("avoid", "stop", "sell") else "NEUTRAL"
+    if b == "low" or e in _EXIT_ENTRIES:
+        return "BEAR"
+    if b in ("high", "constructive") and e in _BUY_ENTRIES:
+        return "BULL"
+    return "NEUTRAL"
+
+
 def build_tape(src: dict, decision: dict) -> dict:
     tone = (decision.get("tone") or "").lower()
-    ai_dir = "BULL" if tone == "go" else "BEAR" if tone in ("avoid", "stop", "sell") else "WAIT"
+    band = decision.get("band")
+    entry_status = g(src, "entry_signal", "status")
+    score = g(src, "conviction", "score")
+    ai_dir = _map_ai_dir(band, entry_status, tone)
+    # consistency guard (parity with pull_macro_intel): a lean that contradicts its
+    # own conviction score demotes to NEUTRAL rather than lying.
+    if ai_dir == "BULL" and isinstance(score, (int, float)) and score < 55:
+        ai_dir = "NEUTRAL"
+    if ai_dir == "BEAR" and isinstance(score, (int, float)) and score > 65:
+        ai_dir = "NEUTRAL"
     return {
-        "ai_lean": {"dir": ai_dir, "score": g(src, "conviction", "score")},
-        "conviction": g(src, "conviction", "score"),
+        "ai_lean": {"dir": ai_dir, "score": score,
+                    "band": (band or None), "entry": (entry_status or None)},
+        "asof": src.get("asof"),
+        "conviction": score,
         "regime": g(src, "ladder", "regime_label"),
         "gex_flip": None, "call_wall": None, "put_wall": None, "short_pct": None,
     }
