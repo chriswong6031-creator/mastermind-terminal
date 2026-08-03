@@ -49,6 +49,11 @@ export interface HeatSeekerPick {
 interface HeatSeekerCardProps {
   pick: HeatSeekerPick | null;
   spot: number | null;
+  /**
+   * The session the PICK describes (`matrix._build_meta.asof_date`), so staleness and
+   * DTE read off the same clock as the matrix grid. Null falls back to the wall clock.
+   */
+  sessionAnchor?: string | null;
   lang: Lang;
 }
 
@@ -68,11 +73,22 @@ function fmtExpiry(exp: string): string {
   }
 }
 
-function dteDays(exp: string): number {
+/**
+ * Days to expiry measured from the SNAPSHOT's session, never the wall clock.
+ *
+ * The pick is published by the same nightly matrix build that feeds the grid beside it,
+ * and that grid labels its columns off `_build_meta.asof_date`. Anchoring this card to
+ * `Date.now()` put "0DTE" next to a column the grid called "3d" whenever the store lagged
+ * a day — two different clocks describing one payload.
+ */
+function dteDays(exp: string, sessionAnchor: string | null): number {
   try {
-    const now = Date.now();
+    const base = sessionAnchor
+      ? new Date(sessionAnchor + "T20:00:00Z").getTime()
+      : Date.now();
     const ms = new Date(expDate(exp) + "T20:00:00Z").getTime();
-    return Math.max(0, Math.round((ms - now) / 86_400_000));
+    if (!Number.isFinite(ms) || !Number.isFinite(base)) return 0;
+    return Math.max(0, Math.round((ms - base) / 86_400_000));
   } catch {
     return 0;
   }
@@ -104,27 +120,42 @@ export function heatSeekerConfPct(confidence: unknown): number | null {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
-  // Engine one-shot payloads can carry an expired pick; never surface those.
-  {
-    const raw = pick?.expiry ? new Date(expDate(pick.expiry) + "T20:00:00Z").getTime() : NaN;
-    if (!Number.isFinite(raw) || raw < Date.now()) {
-      return null;
-    }
-  }
-
+export function HeatSeekerCard({ pick, spot, sessionAnchor = null, lang }: HeatSeekerCardProps) {
   const t = makeGexT(lang);
 
-  if (!pick) {
+  // Staleness is judged against the SNAPSHOT's session, not today: a Friday pick viewed
+  // on Monday is still the pick that Friday's build published. Judging it by wall clock
+  // made the whole card vanish every time the nightly matrix store lagged.
+  //
+  // And an unusable pick renders the honest empty state — it must never `return null`,
+  // which silently removed the card from the rail with no explanation. (That was the
+  // pre-existing bug that made the `heatSeekerNull` branch below unreachable: a null pick
+  // hit the expiry guard first and returned nothing at all.)
+  const expiryMs = pick?.expiry
+    ? new Date(expDate(pick.expiry) + "T20:00:00Z").getTime()
+    : NaN;
+  // ONE wall-clock read, and only as the fallback when no session anchor was supplied
+  // (a second `Date.now()` here would add a fresh impure-render site for no benefit).
+  const parsedAnchor = sessionAnchor
+    ? new Date(sessionAnchor + "T20:00:00Z").getTime()
+    : NaN;
+  const anchor = Number.isFinite(parsedAnchor) ? parsedAnchor : Date.now();
+  const usable = !!pick && Number.isFinite(expiryMs) && expiryMs >= anchor;
+
+  if (!usable) {
+    // Two different facts, two different sentences: nothing was published vs something
+    // was published and has since expired. Collapsing them would assert "load is shared
+    // across levels" about a chain the builder never said that about.
+    const reason = pick ? "heatSeekerStale" : "heatSeekerNull";
     return (
       <div className="obs-card" style={CARD_NULL}>
         <span style={NULL_STAR}>☆</span>
-        <span style={NULL_TEXT}>{t("heatSeekerNull")}</span>
+        <span style={NULL_TEXT}>{t(reason)}</span>
       </div>
     );
   }
 
-  const dte = dteDays(pick.expiry);
+  const dte = dteDays(pick.expiry, sessionAnchor);
   const strike = finite(pick.strike);
   const ratio = finite(pick.standout_ratio);
   const pct = spot != null && strike != null ? spotPct(strike, spot) : null;

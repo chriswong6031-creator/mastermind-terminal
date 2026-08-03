@@ -262,13 +262,9 @@ export function GexDeskView() {
   // Returns the doc as well as storing it: the matrix view's CONFLUENCE mode refetches
   // SPY/QQQ/IWM through this same reader, so there is one matrix fetch path on the desk.
   const readMatrix = useCallback(async (root: string): Promise<MatrixDoc | null> => {
-    const data = await safeFetch<MatrixDoc | Record<string, MatrixDoc>>(
-      `/api/flow?f=matrix:${root}`
-    );
-    if (!data) return null;
-    const doc =
-      ((data as Record<string, MatrixDoc>)[root] as MatrixDoc | undefined) ??
-      (data as MatrixDoc);
+    // `matrix:{ROOT}` is published FLAT — the desk's pre-§5.3 reader never unwrapped a
+    // by-root envelope and its expiry lens works in prod, so no `data[root]` step here.
+    const doc = await safeFetch<MatrixDoc>(`/api/flow?f=matrix:${root}`);
     // A payload without a cells array — the fixture's honest {} for an unknown root, or
     // a malformed upstream doc — resolves to null, which is what routes to the desk's
     // placeholder states (the same place a prod 503 for a missing matrix lands).
@@ -680,7 +676,10 @@ export function GexDeskView() {
               className={`chip${view === "matrix" ? " on" : ""}`}
               style={VIEW_CHIP}
               aria-pressed={view === "matrix"}
-              aria-label={t("viewMatrixFull")}
+              /* No aria-label here on purpose: an aria-label OUTRANKS the visible text in
+                 accessible-name computation, so "Matrix" became unreachable by its own
+                 label (getByRole("button", { name: "Matrix" }) could never match). The
+                 visible text is a perfectly good accessible name. */
               onClick={() => setView("matrix")}
             >
               {t("viewMatrix")}
@@ -713,6 +712,16 @@ export function GexDeskView() {
                 <div style={LADDER_EMPTY_WHY}>
                   {t("gexNoSnapshotWhy").replace("{sym}", ticker)}
                 </div>
+              </div>
+            ) : isArchived && view === "matrix" ? (
+              /* The matrix store is a CURRENT-session read with no dated twin (like the
+                 EOD belt and the state card). Rendering it inside an archived frame would
+                 caption today's grid with a settled past session — the exact cross-session
+                 adjacency replay mode exists to prevent. The view is NOT switched out from
+                 under the user; the gap is named instead. */
+              <div style={LADDER_EMPTY} data-testid="gex-archived-matrix">
+                <div style={LADDER_EMPTY_TITLE}>{t("archivedMatrixTitle")}</div>
+                <div style={LADDER_EMPTY_WHY}>{t("archivedMatrixNote")}</div>
               </div>
             ) : view === "matrix" ? (
               <ExposureMatrix
@@ -802,11 +811,14 @@ export function GexDeskView() {
                 heat_seeker field. It rode in from the retired PRISM tab (§5.3) rather
                 than dying with it. A current-session read like the state card below,
                 so it is withdrawn during archived replay along with them. */}
-            <HeatSeekerCard
-              pick={matrix?.heat_seeker ?? null}
-              spot={matrix?.spot ?? spot ?? null}
-              lang={lang}
-            />
+            <div style={HEATSEEKER_SLOT}>
+              <HeatSeekerCard
+                pick={matrix?.heat_seeker ?? null}
+                spot={matrix?.spot ?? spot ?? null}
+                sessionAnchor={matrix?._build_meta?.asof_date ?? null}
+                lang={lang}
+              />
+            </div>
             <MarketStateCard
               statePayload={statePayload}
               gexPayload={gexPayload}
@@ -1004,6 +1016,18 @@ const ARCHIVED_PANE_NOTE: React.CSSProperties = {
  * used to live on MarketStateCard's CARD_OUTER: sized only by BODY_ROW's height, so a
  * drawer opening in the LEFT column can never re-flow what is in here.
  */
+/**
+ * Fixed slot for the HeatSeeker card. The card mounts asynchronously (it waits on the
+ * matrix fetch) and can swap between its pick and its empty state at any time. Without a
+ * reserved height that swap changes RIGHT_RAIL's scrollHeight underneath MarketStateCard,
+ * and a rail scrolled part-way jumps — the same class of defect the v7b containment fix
+ * removed one level up.
+ */
+const HEATSEEKER_SLOT: React.CSSProperties = {
+  flexShrink: 0,
+  minHeight: 96,
+};
+
 const RIGHT_RAIL: React.CSSProperties = {
   borderLeft: "1px solid var(--hairline)",
   display: "flex",

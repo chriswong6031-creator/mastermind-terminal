@@ -417,7 +417,11 @@ export interface LevelBadge {
 export const LEVEL_BADGE_COLORS: Record<LevelBadgeKey, string> = {
   levelFlip: "var(--ai)",
   levelWall: "var(--brand-2)",
-  levelSupport: "var(--down)",
+  // --danger, not --down: a structural level is not a price direction, and --down is
+  // redefined by html[data-updown="east"]. --danger is the health family (never flipped)
+  // and is the SAME hue #f0566b that --down resolves to in the west theme, so the badge
+  // looks identical to before and simply stops inverting.
+  levelSupport: "var(--danger)",
   levelMagnet: "var(--signal)",
   levelMaxPain: "var(--text-2)",
 };
@@ -527,6 +531,9 @@ export function StrikeExpiryMatrix({
   if (variant === "card") {
     // ── Positioning's card. This markup is the pre-§5.3 MatrixHeatCard body verbatim;
     //    it must stay byte-identical, so nothing opt-in may leak into this branch.
+    //    (`scaleFor` is shared with the desk branch and DOES honour perCol — the card
+    //    simply never asks for it: MatrixHeatCard leaves `normalization` at its "global"
+    //    default, so grid.perCol is null and scaleFor always returns the global scale.)
     return (
       <div className={classes?.scroll}>
         <table className={classes?.table}>

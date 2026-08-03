@@ -44,10 +44,17 @@ import {
 
 type Mode = "single" | "confluence";
 type DteColCount = 4 | 8;
-/** Strike window each side of spot, in PERCENT — comparable across roots, unlike a
- *  strike COUNT (PRISM's original), which meant ±40 dollars on SPY and ±200 on a
- *  $5-spaced name. */
-type StrikeRangePct = 10 | 20 | 40;
+/**
+ * Strike window each side of spot, in PERCENT — comparable across roots, unlike a strike
+ * COUNT (PRISM's original), which meant ±40 dollars on SPY and ±200 on a $5-spaced name.
+ *
+ * Sized against a PROD ladder, not the thin fixture: real SPY publishes ~281 strikes at
+ * $1 spanning roughly ±19% of spot, so a ±20% and a ±40% window both clamped to the whole
+ * ladder and produced the SAME $5-bucket grid — two chips, one picture. These three
+ * diverge: ±3% keeps native $1 rows inside DESK_MAX_ROWS, ±6% and ±12% coarsen and widen.
+ * ±6% is the default (PRISM's old ±40-strikes default was ≈±5.3% on that ladder).
+ */
+type StrikeRangePct = 3 | 6 | 12;
 
 const METRICS: { key: MatrixMetric; labelKey: GexDeskKey }[] = [
   { key: "hedge", labelKey: "mtxMetricHedge" },
@@ -63,9 +70,9 @@ const SCOPES: { key: MatrixScope; labelKey: GexDeskKey }[] = [
 ];
 
 const RANGES: { key: StrikeRangePct; labelKey: GexDeskKey }[] = [
-  { key: 10, labelKey: "range10" },
-  { key: 20, labelKey: "range20" },
-  { key: 40, labelKey: "range40" },
+  { key: 3, labelKey: "range3" },
+  { key: 6, labelKey: "range6" },
+  { key: 12, labelKey: "range12" },
 ];
 
 const NORMS: { key: MatrixNorm; labelKey: GexDeskKey }[] = [
@@ -99,11 +106,14 @@ export function ExposureMatrix({
   const [metric, setMetric] = useState<MatrixMetric>("hedge");
   const [scope, setScope] = useState<MatrixScope>("default");
   const [cols, setCols] = useState<DteColCount>(4);
-  const [range, setRange] = useState<StrikeRangePct>(40);
+  const [range, setRange] = useState<StrikeRangePct>(6);
   const [norm, setNorm] = useState<MatrixNorm>("column");
 
-  // ALL scope widens the column budget and makes Σ the primary read (PRISM's rule).
-  const effectiveCols: number = scope === "all" ? 8 : cols;
+  // ALL scope makes Σ the primary read, so it must actually SHOW every expiry the
+  // payload carries — a hard 8 shipped "ALL Σ" with "+3 later expirations not shown"
+  // printed beside it. Capped at 16 so a 40-expiry LEAPS chain still renders.
+  const nExpAll = matrix?.expiries?.length ?? 0;
+  const effectiveCols: number = scope === "all" ? Math.min(16, Math.max(8, nExpAll)) : cols;
 
   const grid = useMemo(
     () =>
@@ -240,7 +250,7 @@ export function ExposureMatrix({
       </div>
 
       {/* ── Honesty banner (signed metrics only) ────────────────────────── */}
-      {(metric === "hedge" || metric === "doi") && (
+      {mode === "single" && (metric === "hedge" || metric === "doi") && (
         <div className="obs-note" style={BANNER}>{t("magnitudeFirst")}</div>
       )}
 

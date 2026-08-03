@@ -68,8 +68,8 @@ interface BucketRow {
   nearestStrikes: Record<ConfIndex, number | null>;
 }
 
-/** gexStrings keys for the four structural level markers. */
-type LevelKey = "levelFlip" | "levelWall" | "levelSupport" | "levelMagnet";
+/** gexStrings keys for the structural level markers this board can honestly claim. */
+type LevelKey = "levelWall" | "levelSupport" | "levelMagnet";
 
 interface AlignmentChip {
   pct: number;
@@ -80,14 +80,24 @@ interface AlignmentChip {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function nearestBucket(pct: number): number {
+/**
+ * Snap a % offset to its nearest band — or null when it is off the board.
+ *
+ * Without the distance guard a level at +9% snapped to the +2.4% edge band and drew an
+ * "aligned" chip on a row it has nothing to do with. BAND_TOLERANCE_PCT matches the 0.8%
+ * tolerance computeBucketRows already applies to strikes, so the two halves of this grid
+ * agree on what "near a band" means.
+ */
+const BAND_TOLERANCE_PCT = 0.8;
+
+function nearestBucket(pct: number): number | null {
   let best = CONF_BANDS[0];
   let bestDist = Infinity;
   for (const b of CONF_BANDS) {
     const d = Math.abs(pct - b);
     if (d < bestDist) { bestDist = d; best = b; }
   }
-  return best;
+  return bestDist > BAND_TOLERANCE_PCT ? null : best;
 }
 
 function fmtPct(p: number): string {
@@ -142,8 +152,13 @@ function computeBucketRows(
 function detectAlignments(payloads: Record<ConfIndex, MatrixDoc | null>): AlignmentChip[] {
   const chips: AlignmentChip[] = [];
   // `label` is a gexStrings key so the chip text is bilingual, never baked English.
+  //
+  // NO gamma_flip ROW. This board reads each index's matrix doc DIRECTLY, and that doc's
+  // levels block still carries the retired cumulative-by-strike flip estimator (see
+  // matrixDoc.mergeMatrixLevels — the desk prefers gex_state for exactly this reason).
+  // There is no per-root gex_state here to merge against, so the honest move is to make
+  // no flip claim at all rather than align three indices on a known-bad number.
   const levelTypes: { key: keyof MatrixLevels; label: LevelKey }[] = [
-    { key: "gamma_flip",   label: "levelFlip" },
     { key: "call_wall",    label: "levelWall" },
     { key: "put_support",  label: "levelSupport" },
     { key: "hvl",          label: "levelMagnet" },
@@ -168,6 +183,9 @@ function detectAlignments(payloads: Record<ConfIndex, MatrixDoc | null>): Alignm
 
     const avgPct = pctValues.reduce((a, b) => a + b, 0) / pctValues.length;
     const bucket = nearestBucket(avgPct);
+    // Off the board entirely — the levels agree with each other but sit outside the
+    // ±2.4% window this grid draws, so there is no row to chip.
+    if (bucket === null) continue;
 
     chips.push({
       pct: bucket,

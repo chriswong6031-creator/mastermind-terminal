@@ -11,16 +11,21 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_MAX_COLS,
+  DEFAULT_MAX_ROWS,
+  DEFAULT_WINDOW_PCT,
   buildLevelBadgeMap,
   buildMatrixGrid,
   estimateStrikeStep,
   fmtMatrixCell,
   isSignedMetric,
+  matrixCellBg,
   matrixCellTone,
   matrixCellValue,
   type MatrixMetric,
   type StrikeExpiryDoc,
 } from "@/components/shared/StrikeExpiryMatrix";
+import { mergeMatrixLevels } from "@/components/gexdesk/matrixDoc";
 import fixture from "@/public/data/matrix_fixture.json";
 
 const SPY = (fixture as Record<string, unknown>).SPY as StrikeExpiryDoc & {
@@ -162,12 +167,32 @@ describe("expiry scope is anchored to the payload's session, never the wall cloc
 });
 
 describe("grid construction", () => {
+  // The exported constants ARE Positioning's contract — assert them directly. Asserting
+  // `strikes.length <= 41` would pass just as happily if a future edit narrowed the
+  // default window to ±1%, which is exactly the drift this test exists to catch.
   it("keeps Positioning's defaults — ±8%, 41 rows, 14 cols, global scale, no Σ", () => {
+    expect(DEFAULT_WINDOW_PCT).toBe(8);
+    expect(DEFAULT_MAX_ROWS).toBe(41);
+    expect(DEFAULT_MAX_COLS).toBe(14);
     const grid = buildMatrixGrid({ matrix: SPY, metric: "hedge" })!;
-    expect(grid.strikes.length).toBeLessThanOrEqual(41);
-    expect(grid.exps.length).toBeLessThanOrEqual(14);
     expect(grid.perCol).toBeNull();
     expect(grid.sigma.size).toBe(0);
+  });
+
+  it("pins the exact cell fill string at a known scale", () => {
+    // sqrt(1) * 78 = 78.0% of the buy tone; the alpha curve and the token are both
+    // load-bearing, so pin the whole produced string rather than a substring.
+    expect(matrixCellBg(10, { hi: 10, lo: 0 }, "hedge")).toBe(
+      "color-mix(in srgb, var(--flow-buy) 78.0%, transparent)"
+    );
+    // sqrt(0.25) * 78 = 39.0%, negative side.
+    expect(matrixCellBg(-2.5, { hi: 10, lo: 0 }, "hedge")).toBe(
+      "color-mix(in srgb, var(--flow-sell) 39.0%, transparent)"
+    );
+    // Floor: a non-zero cell never fades below 4% or it reads as "no data".
+    expect(matrixCellBg(0.0001, { hi: 1e9, lo: 0 }, "hedge")).toBe(
+      "color-mix(in srgb, var(--flow-buy) 4.0%, transparent)"
+    );
   });
 
   it("opts into per-column scales and the Σ column only when asked", () => {
@@ -197,5 +222,134 @@ describe("grid construction", () => {
     expect(buildMatrixGrid({ matrix: {}, metric: "hedge" })).toBeNull();
     expect(buildMatrixGrid({ matrix: null, metric: "hedge" })).toBeNull();
     expect(buildMatrixGrid({ matrix: { cells: [] }, metric: "hedge" })).toBeNull();
+  });
+});
+
+// ─── F3: the levels merge (matrixDoc.mergeMatrixLevels) ───────────────────────
+//
+// This is the "one levels provenance" half of §5.3 and it had ZERO coverage. Worse, the
+// fixtures could not have proven it: matrix_fixture and gexstate_fixture both carry
+// gamma_flip 748.25, so BOTH merge orderings produce the identical badge — a live-desk
+// screenshot showing FLIP@748 is vacuous as evidence. Every case below is DIVERGENT.
+describe("mergeMatrixLevels — gex_state wins the flip, the matrix wins the rest", () => {
+  // The measured defect this guard exists for (2026-08-01): the matrix builder's levels
+  // block still ships the retired cumulative-by-strike estimator, which put SPY's flip at
+  // 594.28 against a spot of 741.69 while gex_state's spot-grid flip was sane.
+  it("prefers gex_state's flip over the matrix's retired estimator", () => {
+    const merged = mergeMatrixLevels(
+      { levels: { gamma_flip: 594.28 } },
+      { gamma_flip: 748.25 }
+    );
+    expect(merged.gamma_flip).toBe(748.25);
+  });
+
+  it("falls back to the matrix flip only when gex_state has none", () => {
+    expect(mergeMatrixLevels({ levels: { gamma_flip: 594.28 } }, null).gamma_flip).toBe(594.28);
+    expect(mergeMatrixLevels({ levels: { gamma_flip: 594.28 } }, {}).gamma_flip).toBe(594.28);
+    expect(mergeMatrixLevels({ levels: { gamma_flip: 594.28 } }, { gamma_flip: null }).gamma_flip).toBe(594.28);
+  });
+
+  it("reports no flip when neither source has one", () => {
+    expect(mergeMatrixLevels({ levels: {} }, {}).gamma_flip).toBeNull();
+    expect(mergeMatrixLevels(null, null).gamma_flip).toBeNull();
+  });
+
+  // Every NON-flip level is strike-resolved in the matrix, so the matrix wins there —
+  // the opposite ordering from the flip. Divergent values prove which side won.
+  it("prefers the MATRIX for walls, support, magnet and max pain", () => {
+    const merged = mergeMatrixLevels(
+      { levels: { call_wall: 760, put_support: 740, hvl: 750, max_pain: 745 } },
+      { call_wall: 999, put_wall: 111, hvl: 222, magnet: 333 }
+    );
+    expect(merged.call_wall).toBe(760);
+    expect(merged.put_support).toBe(740);
+    expect(merged.hvl).toBe(750);
+    expect(merged.max_pain).toBe(745);
+  });
+
+  // gex_state names it `put_wall`; every matrix surface calls it `put_support`.
+  it("remaps gex_state's put_wall onto put_support when the matrix has none", () => {
+    expect(mergeMatrixLevels({ levels: {} }, { put_wall: 741 }).put_support).toBe(741);
+    expect(mergeMatrixLevels(null, { put_wall: 741 }).put_support).toBe(741);
+  });
+
+  it("walks the hvl → magnet chain on the gex_state side", () => {
+    expect(mergeMatrixLevels({ levels: {} }, { hvl: 750, magnet: 999 }).hvl).toBe(750);
+    expect(mergeMatrixLevels({ levels: {} }, { magnet: 999 }).hvl).toBe(999);
+    expect(mergeMatrixLevels({ levels: {} }, { hvl: null, magnet: 999 }).hvl).toBe(999);
+  });
+
+  // max_pain has no gex_state twin at all — it must not silently borrow another field.
+  it("never invents max_pain from gex_state", () => {
+    expect(mergeMatrixLevels({ levels: {} }, { magnet: 333, call_wall: 760 }).max_pain).toBeNull();
+  });
+
+  it("survives a doc with no levels block at all", () => {
+    expect(mergeMatrixLevels({}, { gamma_flip: 748.25 })).toEqual({
+      call_wall: null, put_support: null, hvl: null, gamma_flip: 748.25, max_pain: null,
+    });
+  });
+});
+
+// ─── F6: the strike-window chips must produce DIFFERENT grids on a PROD ladder ─
+//
+// The thin fixture (40 strikes over ±4.7%) cannot show this: every window swallows the
+// whole ladder, so all chips agree and a fixture-based test would pass on a broken set.
+// Real SPY publishes ~281 strikes at $1 spacing over roughly ±19% — build that.
+describe("strike-window chips diverge on a production-shaped ladder", () => {
+  const SPOT = 750;
+  const prodLadder: StrikeExpiryDoc = {
+    _build_meta: { asof_date: "2026-01-02" },
+    spot: SPOT,
+    cells: Array.from({ length: 281 }, (_, i) => ({
+      strike: 610 + i,                 // 610 … 890  ($1 spacing, ~±18.7% of spot)
+      expiry: "2026-01-16",
+      gex: (i % 7) * 1e6 - 3e6,
+    })),
+  };
+
+  const gridFor = (windowPct: number) =>
+    buildMatrixGrid({ matrix: prodLadder, metric: "hedge", windowPct, maxRows: 81, maxCols: 4 })!;
+
+  it("gives ±3% native $1 rows inside the row budget", () => {
+    const g = gridFor(3);
+    expect(g.bucket).toBe(1);
+    expect(g.strikes.length).toBeLessThanOrEqual(81);
+    expect(g.strikes.length).toBeGreaterThan(40);
+  });
+
+  it("produces three genuinely different grids for ±3 / ±6 / ±12", () => {
+    const shapes = [3, 6, 12].map((p) => {
+      const g = gridFor(p);
+      return `${g.bucket}@${g.strikes.length}`;
+    });
+    // Measured: 1@45, 2.5@37, 2.5@73 — three distinct (bucket, rows) pairs.
+    expect(new Set(shapes).size, `grids collapsed: ${shapes.join(", ")}`).toBe(3);
+  });
+
+  // Row count is deliberately NOT monotonic in the window: a narrower window earns a
+  // FINER bucket, so ±3% draws MORE rows (45 native $1) than ±6% (37 at $2.5). The
+  // monotonic quantity is the price span covered, asserted below — not the row count.
+  it("trades row resolution for reach as the window widens", () => {
+    expect(gridFor(3).bucket).toBeLessThan(gridFor(6).bucket);
+    expect(gridFor(3).strikes.length).toBeGreaterThan(gridFor(6).strikes.length);
+  });
+
+  it("widens the covered price span monotonically", () => {
+    const spans = [3, 6, 12].map((p) => {
+      const k = gridFor(p).strikes;
+      return Math.max(...k) - Math.min(...k);
+    });
+    expect(spans[0]).toBeLessThan(spans[1]);
+    expect(spans[1]).toBeLessThan(spans[2]);
+  });
+
+  // THE regression this replaces: ±20% and ±40% both exceeded the ladder's own ±18.7%
+  // span, so both clamped to the whole ladder and rendered the identical grid.
+  it("shows why the retired ±20/±40 pair was one picture, not two", () => {
+    const a = gridFor(20);
+    const b = gridFor(40);
+    expect(a.bucket).toBe(b.bucket);
+    expect(a.strikes.length).toBe(b.strikes.length);
   });
 });

@@ -395,6 +395,11 @@ const GEX_LEX = {
     "This session was never published to the ladder history plane — an archive gap, not a data error. Pick another date or return to the latest session.",
     "该交易日的完整梯图未发布到历史层——属于归档缺口，并非数据错误。请选择其他日期或返回最新交易日。",
   ],
+  archivedMatrixTitle: ["Matrix unavailable while replaying", "回放时矩阵不可用"],
+  archivedMatrixNote:  [
+    "The strike × expiry matrix is a current-session store with no dated twin — showing today's grid under an archived session would be the cross-session mix replay mode exists to prevent. Return to the latest session to use it.",
+    "行权价×到期日矩阵仅有当前交易日数据，没有对应的历史快照——在已归档交易日下显示今日网格，正是回放模式要避免的跨交易日混用。请返回最新交易日后使用。",
+  ],
   archivedPaneTitle:  ["Archived session", "已归档交易日"],
   archivedPaneNote:   [
     "Market state and the EOD context belt describe the current session only — hidden while replaying an archived ladder.",
@@ -425,9 +430,13 @@ const GEX_LEX = {
   scope0dte:       ["0DTE", "0DTE"],
   scopeAll:        ["ALL Σ", "全部Σ"],
   mtxScopeAria:    ["Expiry scope", "到期日范围"],
-  range10:         ["±10%", "±10%"],
-  range20:         ["±20%", "±20%"],
-  range40:         ["±40%", "±40%"],
+  // Windows are PERCENT of spot. Scaled to a prod ladder, not to the thin fixture: a
+  // real SPY chain runs ~281 strikes at $1 over roughly ±19%, so ±20%/±40% both clamped
+  // to the WHOLE ladder and rendered the identical $5-bucket grid. ±3/±6/±12 keep three
+  // genuinely different reads, and ±3% lands native $1 resolution inside DESK_MAX_ROWS.
+  range3:          ["±3%", "±3%"],
+  range6:          ["±6%", "±6%"],
+  range12:         ["±12%", "±12%"],
   strikeRangeLabel:["RANGE", "区间"],
   mtxRangeAria:    ["Strike window around spot", "现价周边行权价区间"],
   normColumn:      ["PER-COL", "按列"],
@@ -520,6 +529,12 @@ const GEX_LEX = {
   heatSeekerNull:       [
     "No standout pick — load is shared across levels.",
     "无突出精选 — 仓位分布于多个价位。",
+  ],
+  // A DIFFERENT fact from "no pick": the build published one, but it expired on or before
+  // the session this snapshot describes. Saying "load is shared" there would be a guess.
+  heatSeekerStale:      [
+    "The published pick expired within this snapshot's session — nothing current to show.",
+    "已发布的精选在本快照交易日内已到期 — 暂无有效标的。",
   ],
 } as const;
 
