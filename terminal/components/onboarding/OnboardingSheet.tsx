@@ -7,7 +7,8 @@ import type {
   OnboardMode, OnboardingSheetProps, OnboardPrefs, PlanKey, Period, PendingPrefs, WizardStash,
 } from "./types";
 import {
-  LS_PENDING_PREFS, LS_ONBOARD_RESUME, SS_WIZARD, normalizePlanKey, type OnboardResumeStash,
+  LS_PENDING_PREFS, LS_ONBOARD_RESUME, SS_WIZARD, normalizePlanKey, normalizeOnboardPrefs,
+  normalizeWizardStash, type OnboardResumeStash,
   STEP_ACCOUNT, STEP_PREFS, STEP_PLAN, STEP_BILLING, STEP_DONE,
 } from "./types";
 import RailCard, { MobileStepper, type WizardSnapshot } from "./RailCard";
@@ -21,29 +22,13 @@ const DRAG_MIN_WIDTH = 861; // drag disabled under this viewport width
 
 const emptyPrefs: OnboardPrefs = { market_focus: [], trade_types: [], theme_pref: "dark" };
 
-// Rehydrate a stashed step under the W2 five-step model, tolerating stale W1-shaped
-// stashes. In W1, step 4 meant DONE (there was no Billing step). If a stale stash
-// lands here, remap: a paid plan with step ≥ 4 → Billing (STEP_BILLING); anything
-// else at the old terminal step → Done. Fresh W2 stashes already carry 1–5 and pass
-// through unchanged. Missing/garbage → step 1.
-function remapStashStep(raw: Partial<WizardStash>): number {
-  const s = typeof raw.step === "number" && raw.step >= 1 ? raw.step : STEP_ACCOUNT;
-  const paid = normalizePlanKey(raw.plan) === "essential" || raw.plan === "pro";
-  // W1 stash never had trialActive/trialEnd; treat a step-4 W1 stash as the old Done.
-  const isW1Shape = raw.trialActive === undefined && raw.trialEnd === undefined;
-  if (isW1Shape && s >= STEP_BILLING) {
-    // Old W1 "step 4 = Done": paid → land on the new Billing step, free → Done.
-    return paid ? STEP_BILLING : STEP_DONE;
-  }
-  return Math.min(s, STEP_DONE);
-}
-
-function readWizardStash(): Partial<WizardStash> | null {
+// Read boundary for SS_WIZARD: the stash may be ANY historical deploy's shape (the
+// tab outlives deploys), so it is normalized field-by-field into a complete
+// WizardStash — including the W1→W2 step remap — before any consumer sees it.
+function readWizardStash(): WizardStash | null {
   try {
     const raw = sessionStorage.getItem(SS_WIZARD);
-    if (!raw) return null;
-    const v = JSON.parse(raw);
-    return v && typeof v === "object" ? (v as Partial<WizardStash>) : null;
+    return raw ? normalizeWizardStash(JSON.parse(raw)) : null;
   } catch { return null; }
 }
 
@@ -56,18 +41,19 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
   // ── Wizard state ─────────────────────────────────────────────────────────────
   // Lazily rehydrated from the per-tab stash so the mid-flow wizard survives the
   // client-tree remount that router.refresh() causes at the step-1→2 boundary.
-  const stashRef = useRef<Partial<WizardStash> | null | undefined>(undefined);
+  const stashRef = useRef<WizardStash | null | undefined>(undefined);
   if (stashRef.current === undefined) stashRef.current = props.mode === "signup" ? readWizardStash() : null;
   const stash = stashRef.current;
   const [mode, setMode] = useState<OnboardMode>(props.mode);
-  const [step, setStep] = useState(stash ? remapStashStep(stash) : STEP_ACCOUNT);
+  const [step, setStep] = useState(stash?.step ?? STEP_ACCOUNT);
   const [firstName, setFirstName] = useState(stash?.firstName ?? "");
   const [lastName, setLastName] = useState(stash?.lastName ?? "");
   const [email, setEmail] = useState(stash?.email ?? props.email);
   const [password, setPassword] = useState("");
   const [prefs, setPrefs] = useState<OnboardPrefs>(stash?.prefs ?? emptyPrefs);
-  // Stash reads normalize: a tab opened before the rename still holds `insider`.
-  const [plan, setPlan] = useState<PlanKey>(normalizePlanKey(stash?.plan) ?? props.initialPlan ?? "pro");
+  // A normalized stash already carries a canonical plan (`insider` folded onto
+  // `essential`); a deep-link preselect only applies when there is no stash.
+  const [plan, setPlan] = useState<PlanKey>(stash?.plan ?? props.initialPlan ?? "pro");
   const [period, setPeriod] = useState<Period>(stash?.period ?? props.initialPeriod ?? "annual");
   const [confirmPending, setConfirmPending] = useState(stash?.confirmPending ?? false);
   // W2: an in-sheet Stripe trial has started (drives the Done "trial live" copy + rail chip).
@@ -108,7 +94,7 @@ export default function OnboardingSheet(props: OnboardingSheetProps) {
         const resumedPlan = normalizePlanKey(stash.plan);
         if (resumedPlan) setPlan(resumedPlan);
         if (stash.period === "monthly" || stash.period === "annual") setPeriod(stash.period);
-        if (stash.prefs && typeof stash.prefs === "object") setPrefs((p) => ({ ...p, ...stash.prefs }));
+        if (stash.prefs && typeof stash.prefs === "object") setPrefs((p) => normalizeOnboardPrefs({ ...p, ...stash.prefs }));
       }
       localStorage.removeItem(LS_ONBOARD_RESUME);
     } catch { /* storage blocked — degrade to getUser name below */ }
