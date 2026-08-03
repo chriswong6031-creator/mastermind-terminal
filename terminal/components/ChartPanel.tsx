@@ -19,6 +19,7 @@ import {
 } from "lightweight-charts";
 import { createEngine, type ChartEngine } from "@/lib/chart-engine";
 import { clampAxisZoom, axisZoomMargins, wheelDeltaToZoomStep, type AxisMargins } from "@/lib/chart-engine/axisZoom";
+import { normalizedChartLogicalRange } from "@/lib/chart-engine/viewReset";
 import { keepIndicatorPaneAxisLabelsOnly } from "@/lib/indicatorPaneSeries";
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engine/host";
@@ -2379,8 +2380,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Apply the default view (recent ~240 window in normal mode; fit the slice in replay).
   const applyView = (rows: Bar[], replay: number | null) => {
     const chart = chartRef.current; if (!chart) return;
-    const DEFAULT_VIEW = 240, n = rows.length;
-    try { if (replay == null && n > DEFAULT_VIEW) chart.timeScale().setVisibleLogicalRange({ from: n - DEFAULT_VIEW, to: n - 1 + 6 }); else chart.timeScale().fitContent(); } catch {}
+    const range = normalizedChartLogicalRange(rows.length, replay != null);
+    try { if (range) chart.timeScale().setVisibleLogicalRange(range); else chart.timeScale().fitContent(); } catch {}
   };
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -2708,6 +2709,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           fontSize: g(() => (c.options() as any).layout?.fontSize) ?? null,
           volumeTop: g(() => c.priceScale("volume").options().scaleMargins?.top) ?? null,
           watermarkVisible: watermarkVisibleRef.current,
+          rowCount: barsRef.current.length,
+          timeframe: timeframeRef.current,
+          visibleRange: g(() => c.timeScale().getVisibleLogicalRange()),
+          priceAutoScale: g(() => priceSeriesRef.current?.priceScale().options().autoScale) ?? null,
         };
       };
     }
@@ -4379,7 +4384,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       }
       hideCtx();
       if (!a) return;
-      if (a === "reset") { try { chart.timeScale().fitContent(); } catch {} }
+      if (a === "reset") normalizeChartView();
       else if (a === "copypx") { try { navigator.clipboard.writeText(String(ctxPt.p)); } catch {} }
       else if (a === "alert") { onAddAlertRef.current?.(ctxPt.p); }
       else if (a === "lockv") {
@@ -5110,6 +5115,24 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       try { paneScale(pane.key, pane.paneIndex)?.applyOptions({ scaleMargins: { ...st.base } }); } catch {}
       scheduleRender();
     };
+    function normalizeChartView() {
+      const panes = paneLayoutRef.current.length
+        ? paneLayoutRef.current
+        : [{ key: "__price__", paneIndex: 0 }];
+      for (const pane of panes) {
+        const scale = paneScale(pane.key, pane.paneIndex); if (!scale) continue;
+        const st = axisZoomState.get(pane.key);
+        try {
+          scale.applyOptions(st
+            ? { autoScale: true, scaleMargins: { ...st.base } }
+            : { autoScale: true });
+        } catch {}
+      }
+      axisZoomState.clear();
+      applyView(barsRef.current, replayIdxRef.current);
+      scheduleRender();
+      scheduleMeasure();
+    }
     // B1: touch double-tap handler — two qualifying taps (down→up <300ms, <12px displacement) within
     // 350ms and <40px of each other → trigger the same pane maximize-toggle as dblclick.
     const onTouchDown = (e: PointerEvent) => {
@@ -5858,7 +5881,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         // Esc deselects; double-Esc (within 500ms) resets the chart view (the gesture that replaces the
         // former ⌥R — Alt+R is now the Rectangle tool as the sidebar advertises).
         const now = Date.now();
-        if (now - lastEscTs < 500) { lastEscTs = 0; if (toolRef.current) { try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: null })); } catch {} } try { chart.timeScale().fitContent(); } catch {} }
+        if (now - lastEscTs < 500) { lastEscTs = 0; if (toolRef.current) { try { window.dispatchEvent(new CustomEvent("mm:set-tool", { detail: null })); } catch {} } normalizeChartView(); }
         else { lastEscTs = now; if (sel) { sel = null; renderDraw(); } }
       }
       else if ((e.key === "Delete" || e.key === "Backspace") && sel && replayIdxRef.current == null) { e.preventDefault(); const s = sel; sel = null; onChangeRef.current?.(drawRef.current.filter((d) => d.id !== s)); }
