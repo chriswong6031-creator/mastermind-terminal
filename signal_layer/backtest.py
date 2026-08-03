@@ -35,6 +35,7 @@ def run_backtest(
     fixed: bool = True,
     use_cut_exit: bool = False,
     use_reclaim_entry: bool = False,
+    extra_entries: "np.ndarray | None" = None,
     cost_bps: float = 3.0,
     slippage_bps: float = 1.0,
     bar_quality: str = "synthetic_open_deepstore",
@@ -69,6 +70,13 @@ def run_backtest(
     byte-identical to the baseline in both modes. CALLERS gate the lane per symbol:
     decay-class instruments (``confluence_v2.reclaim_eligible`` False) must pass False —
     this module is symbol-agnostic by design (it sees only a close series).
+
+    ``extra_entries`` (LAB-ONLY; docs/PREREG_WASHOUT_REVERSAL.md): an optional bool mask
+    aligned to the non-NaN signal rows; a True at row ``i`` acts as an additional entry
+    signal (filled at ``i+1`` close like every other signal) attributed
+    ``entry_kind="washout"``. Production emission paths pass None — this parameter exists
+    so ``washout_lab`` can price candidate lanes under byte-identical exit semantics
+    without forking this loop. No scored/production behaviour changes while it is None.
     """
     sig = oracle.compute_signals(close.dropna(), bar_anchor=bar_anchor, week_parity=week_parity)
     if sig.empty:
@@ -102,6 +110,13 @@ def run_backtest(
     macd_live = (rows["macd"] >= rows["sig"]).to_numpy(dtype=bool)
     blocked_arr = ((rows["CB"] | rows["revBuy"]) & rows["bear_block"]).to_numpy(dtype=bool)
 
+    wo_arr = None
+    if extra_entries is not None:
+        wo_arr = np.asarray(extra_entries, dtype=bool)
+        if len(wo_arr) != len(rows):
+            raise ValueError(f"extra_entries length {len(wo_arr)} != signal rows {len(rows)}")
+    tag_kind = use_reclaim_entry or wo_arr is not None
+
     side_cost = (cost_bps + slippage_bps) / 1e4   # charged per side (entry, exit)
 
     pos = 0
@@ -131,12 +146,16 @@ def run_backtest(
                     and i - sell_anchor[0] >= RECLAIM_DEBOUNCE_BARS
                     and close_arr[i] > sell_anchor[1] and wb_arr[i] and a200_arr[i]):
                 reclaim_now = "reclaim"
-        if pos == 0 and (enter[i] or reclaim_now):
+        if pos == 0 and (enter[i] or reclaim_now or (wo_arr is not None and wo_arr[i])):
             pos = 1
             entry_close = float(px.iloc[i + 1])
             entry_dt = dates[i + 1]
             entry_i = i + 1
-            entry_kind = reclaim_now if (reclaim_now and not enter[i]) else "signal"
+            # attribution priority: a scored signal > reclaim > washout (a bar that fires
+            # two lanes is credited to the stronger-authority lane, never double-counted)
+            entry_kind = ("signal" if enter[i]
+                          else reclaim_now if reclaim_now
+                          else "washout")
             sell_anchor = block_anchor = None
             eq *= (1 - side_cost)                 # entry cost
         elif pos == 1 and exit_[i]:
@@ -148,7 +167,7 @@ def run_backtest(
             t = _trade(len(trades) + 1, entry_dt, dates[i + 1],
                        entry_close, exit_close, net, gross,
                        i + 1 - entry_i, reason, bar_quality)
-            if use_reclaim_entry:                 # per-lane attribution (published in the
+            if tag_kind:                          # per-lane attribution (published in the
                 t["entry_kind"] = entry_kind      # promoted emission; schema is open)
             trades.append(t)
             pos = 0
@@ -161,7 +180,7 @@ def run_backtest(
         t = _trade(len(trades) + 1, entry_dt, dates[-1],
                    entry_close, exit_close, net, gross,
                    len(rows) - 1 - entry_i, "eod", bar_quality)
-        if use_reclaim_entry:
+        if tag_kind:
             t["entry_kind"] = entry_kind
         trades.append(t)
 
