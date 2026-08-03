@@ -751,7 +751,7 @@ rather than averaged away.
 
 - **News feeds** (`DAYTRADE_SUITE_SPEC.md` §0 stands).
 - ~~**Their visual language.** Parity is capability parity; the v5/v7 Terminal idiom is ours.~~ *(rescinded)*
-- **Any vendor's verbatim text, assets or logos.** Layout and structure are fair game.
+- **Vendor logos/brand marks.** Everything else — text, assets, layout, structure — is fair game (operator call, 2026-08-02).
 - **Unfalsifiable claims.** No trademarked "trigger" line whose statistics we cannot reproduce
   nightly. If we cannot grade it, it ships grey or not at all.
 - **Point-estimate positioning.** We will not label the largest open-interest strike "dealer gamma"

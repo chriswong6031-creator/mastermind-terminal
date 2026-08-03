@@ -23,9 +23,8 @@ Opus builds and reviews code. Design choices are judgment work — made in the s
   primitive base — reuse its tokens and primitives so surfaces stay coherent and
   east-flip/zh-safe, but layout and structure follow the product target, not a
   house idiom.
-- Verbatim copying of a competitor's *text, assets, logos, or marketing copy* is
-  still off-limits (ordinary legal hygiene, not a design constraint — layout and
-  structure are fair game).
+- Only competitor *logos and brand marks* stay out of the product (operator call,
+  2026-08-02). Text, assets, layout, structure: fair game.
 - Reference images must be actual files (committed under `design_refs/` or given as absolute paths). If a brief describes a look only in words, STOP and ask for the files before designing.
 - Pin the design (exact markup/CSS) before fanning out any builder agents.
 

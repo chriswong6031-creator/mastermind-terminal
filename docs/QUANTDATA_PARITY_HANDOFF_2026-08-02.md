@@ -35,9 +35,10 @@ Operator rescission, 2026-08-02 (also stamped in `terminal/AGENTS.md` and MSC ma
 - ~~"paraphrase only — never copy their copy" as a design/feature constraint~~ — **RESCINDED.**
 
 These sentences still appear in older audit files and possibly in stale session memories.
-**Do not re-add them to any law file, and do not let them shape build decisions.** The one
-surviving sliver is ordinary legal hygiene: don't paste their *verbatim text, assets, or
-logos* into our product. Layout, structure, IA, feature semantics: fair game and the target.
+**Do not re-add them to any law file, and do not let them shape build decisions.** Per the
+operator (2026-08-02 follow-up): the ONLY thing that stays out of the product is their
+*logos/brand marks*. Text, assets, layout, structure, IA, feature semantics: fair game and
+the target.
 
 Terminal v5 tokens/primitives (`app/globals.css`) remain the shared *implementation base*
 (theming, east-flip/zh safety, responsive plumbing) — use its tokens so surfaces stay
