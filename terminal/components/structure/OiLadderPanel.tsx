@@ -17,7 +17,7 @@ import { makeStructureT } from "./structureStrings";
 import type { OiStrikeRow } from "./structureTypes";
 import {
   CALL_COLOR, PUT_COLOR, fmtOi, ProvenanceLine, PanelEmpty,
-  AXIS_TXT, REF_TXT, NEUTRAL_CHIP, LEGEND_ITEM, LEGEND_SWATCH,
+  AXIS_TXT, REF_TXT, NEUTRAL_CHIP, LEGEND_ITEM, LEGEND_SWATCH, oiLadderHeight,
 } from "./structureShared";
 
 const PAD = { l: 52, r: 14, t: 16, b: 22 } as const;
@@ -27,11 +27,17 @@ export function OiLadderPanel({
   byStrikeFullN,
   spotRef,
   lang,
+  sharedH,
 }: {
   byStrike: OiStrikeRow[] | undefined;
   byStrikeFullN: number | undefined;
   spotRef: number | null | undefined;
   lang: Lang;
+  /** Row-1 shared height (see structureShared.oiLadderHeight) — StructureView
+   *  computes this from the same row count and passes it to OiExpiryPanel too
+   *  so the pair lands card-height-equal. Falls back to this panel's own
+   *  row-count formula when absent (standalone use / no data yet). */
+  sharedH?: number;
 }) {
   const t = makeStructureT(lang);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -52,7 +58,9 @@ export function OiLadderPanel({
   const drawable = rows.length >= 3;
 
   // Height scales with row count so dense ladders stay readable (capped).
-  const H = Math.max(220, Math.min(440, rows.length * 7 + PAD.t + PAD.b));
+  // sharedH (from StructureView) takes priority so this stays in lockstep
+  // with OiExpiryPanel — see structureShared.oiLadderHeight.
+  const H = sharedH ?? oiLadderHeight(rows.length);
 
   const [k0, k1] = useMemo(() => {
     if (!drawable) return [0, 1] as [number, number];

@@ -27,7 +27,12 @@ import { ProvenanceLine, PanelEmpty } from "./volShared";
 import type { AggTrendPayload } from "@/lib/aggTrend";
 import type { Lang } from "@/lib/i18n";
 
-const H = 190;
+// 169, not 190 — this card carries an extra fin-kpis stat row (4 tiles,
+// ~78-79px) that VolHistoryPanel/VolTermPanel don't, so its chart needs to be
+// shorter for the three CARD TOTALS to land equal (see the matching comment
+// in VolHistoryPanel.tsx H=250 / VolTermPanel.tsx H=244). Re-measure all
+// three via offsetHeight before changing.
+const H = 169;
 const PAD = { l: 8, r: 40, t: 12, b: 20 };
 /** Regime band percentiles within the trailing window. */
 const WINDOW = 252;

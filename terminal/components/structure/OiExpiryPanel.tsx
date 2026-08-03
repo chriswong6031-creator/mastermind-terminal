@@ -20,20 +20,27 @@ import {
   PLOT_PAD, AXIS_TXT, NEUTRAL_CHIP, LEGEND_ITEM, LEGEND_SWATCH,
 } from "./structureShared";
 
-const H = 210;
+const DEFAULT_H = 210;
 
 export function OiExpiryPanel({
   expiries,
   expiriesFullN,
   lang,
+  sharedH,
 }: {
   expiries: MaxPainExpRow[] | undefined;
   expiriesFullN: number | undefined;
   lang: Lang;
+  /** Row-1 shared height (see structureShared.oiLadderHeight) — StructureView
+   *  passes OiLadderPanel's own row-driven height here so the pair lands
+   *  card-height-equal regardless of chain density. Falls back to the fixed
+   *  210px default when absent (standalone use / no data yet). */
+  sharedH?: number;
 }) {
   const t = makeStructureT(lang);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const w = useChartWidth(boxRef);
+  const H = sharedH ?? DEFAULT_H;
 
   const rows = useMemo(() => {
     const out = (expiries ?? [])

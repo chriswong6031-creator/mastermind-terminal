@@ -12,7 +12,7 @@
 
 import React, { useMemo, useRef } from "react";
 import {
-  useChartWidth, niceTicks, fmtTick, thinLabels, padDomain, MIN_CHART_H,
+  useChartWidth, niceTicks, fmtTick, thinLabels, padDomain,
 } from "@/components/charts/svgChart";
 import type { Lang } from "@/lib/i18n";
 import { makeVolT } from "./volStrings";
@@ -21,7 +21,13 @@ import {
   finiteSegments, ProvenanceLine, PanelEmpty, PLOT_PAD, AXIS_TXT, REF_TXT,
 } from "./volShared";
 
-const H = MIN_CHART_H.axis; // 190 — labelled x-axis minimum (R4)
+// Local override, not MIN_CHART_H.axis (190) — this panel sits beside
+// VolTermPanel (H=244) and VolVrpPanel (H=169, extra fin-kpis row) in the
+// same grid row; 250 is the height that makes the three CARD TOTALS land
+// equal (measured via offsetHeight, not just the SVG). Do not change this
+// without re-measuring all three siblings — see VolVrpPanel.tsx and
+// VolTermPanel.tsx for the matching comment.
+const H = 250;
 
 interface Pt { date: string; e: number; v: number }
 

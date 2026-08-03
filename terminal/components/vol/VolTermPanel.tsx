@@ -11,7 +11,7 @@
 
 import React, { useMemo, useRef } from "react";
 import {
-  useChartWidth, niceTicks, fmtTick, thinLabels, padDomain, MIN_CHART_H,
+  useChartWidth, niceTicks, fmtTick, thinLabels, padDomain,
 } from "@/components/charts/svgChart";
 import type { Lang } from "@/lib/i18n";
 import { makeVolT } from "./volStrings";
@@ -20,7 +20,11 @@ import {
   ProvenanceLine, PanelEmpty, PLOT_PAD, AXIS_TXT, REF_TXT, NEUTRAL_CHIP,
 } from "./volShared";
 
-const H = MIN_CHART_H.axis; // 190 — labelled x-axis minimum (R4)
+// Local override, not MIN_CHART_H.axis (190) — see the matching comment in
+// VolHistoryPanel.tsx: 244 is the height that makes this card's TOTAL land
+// equal to VolHistoryPanel (H=250) and VolVrpPanel (H=169) once each panel's
+// own chrome (header/chip row, provenance line) is accounted for.
+const H = 244;
 const MARKER_MAX_DTE = 60;
 
 interface Pt { dte: number; exp: string; v: number }
