@@ -48,10 +48,6 @@ const SessionFlowPane = dynamic(
   () => import("@/components/surface/SessionFlowPane").then((m) => ({ default: m.SessionFlowPane })),
   { ssr: false, loading: () => <TabSkeleton /> },
 );
-const PrismView = dynamic(
-  () => import("@/components/prism/PrismView").then((m) => ({ default: m.PrismView })),
-  { ssr: false, loading: () => <TabSkeleton /> },
-);
 const VolView = dynamic(
   () => import("@/components/vol/VolView").then((m) => ({ default: m.VolView })),
   { ssr: false, loading: () => <TabSkeleton /> },
@@ -90,7 +86,7 @@ const TideChart = dynamic(
 
 // ─── Tab definition ─────────────────────────────────────────────────────────
 
-export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "gex" | "surface" | "prism" | "structure" | "volatility" | "positioning" | "leaders" | "radar";
+export type TabKey = "prophet" | "desk" | "tape" | "tide" | "tickers" | "screener" | "gex" | "surface" | "structure" | "volatility" | "positioning" | "leaders" | "radar";
 
 const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   { key: "prophet",  enKey: "tabProphet",  zhKey: "tabProphet" },
@@ -102,7 +98,6 @@ const TABS: { key: TabKey; enKey: string; zhKey: string }[] = [
   // "vol" tab removed from bar — vol surface now lives in the Tickers tab right column
   { key: "gex",      enKey: "tabGex",      zhKey: "tabGex" },
   { key: "surface",  enKey: "tabSurface",  zhKey: "tabSurface" },
-  { key: "prism",    enKey: "tabPrism",    zhKey: "tabPrism" },
   // R3 Structure tab (OI suite: ladder / OI-time / max pain / OI change) —
   // ordered before Volatility per the masterplan §5 category order.
   { key: "structure", enKey: "tabStructure", zhKey: "tabStructure" },
@@ -1532,7 +1527,12 @@ export default function OptionsHubView({
   useEffect(() => {
     if (controlled) return;
     const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab") as TabKey | null;
+    const raw = params.get("tab");
+    // §5.3 retired the PRISM tab into the Exposure desk's matrix view. The alias lives
+    // on BOTH entry points (here and OptionsWorkspace's HUB_KEY) so an old deep-link
+    // resolves whether the hub runs controlled or not. GexDeskView reads the same
+    // ?tab=prism to open on the matrix rather than the ladder.
+    const tab = (raw === "prism" ? "gex" : raw) as TabKey | null;
     if (tab && renderableTabs.has(tab) && TABS.some((tb) => tb.key === tab)) {
       setInternalTab(tab);
       setVisitedTabs((prev) => { const next = new Set(prev); next.add(tab); return next; });
@@ -3808,12 +3808,6 @@ export default function OptionsHubView({
             </div>
           )}
 
-          {/* ═══ PRISM TAB ══════════════════════════════════════════════════ */}
-          {(activeTab === "prism" || visitedTabs.has("prism")) && (
-            <div style={{ flex: 1, overflow: "hidden", display: activeTab === "prism" ? "flex" : "none", minHeight: 0 }}>
-              <PrismView />
-            </div>
-          )}
 
           {/* ═══ STRUCTURE TAB (R3 — OI ladder / OI-time / max pain / OI change) ═ */}
           {(activeTab === "structure" || visitedTabs.has("structure")) && (

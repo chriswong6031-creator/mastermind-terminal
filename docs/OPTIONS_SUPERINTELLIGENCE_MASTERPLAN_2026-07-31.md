@@ -46,7 +46,7 @@ are fair game; claimed lanes are not.
 | R1 tape-truth classifier (sweep/block/golden, 5-tier side, per-trade greeks) | 🔓 OPEN — **gated on first full session of captured conditions (schema v2 live since #4152; earliest build day Mon 08-03).** Calibrate vs QuantData UI before dropping `~` prefixes |
 | R2 intraday store extension (tier-1 roots) + universal playback wrapper | 🔓 OPEN — U-CHAIN accruing since 07-31; wrapper spec in §4-R2; fix the surface stamp-index head-follow gap with it |
 | R2 slice-3 deep backfill (2017→ ladder reconstruction + ladder-level validation) | 🔓 OPEN — macro side; `audit_overlap` extension is the honesty gate |
-| R3 remaining: Interval Map · multi-metric heatmap+MVC · Statistics suite · Vol Drift · PRISM VEX/UNUSUAL re-check | 🔓 OPEN — Interval Map/Vol Drift want U-CHAIN accrual (~1wk); Statistics buildable now (exchange codes retained); VEX/UNUSUAL: verify vanna grids + 30d baseline then light |
+| R3 remaining: Interval Map · multi-metric heatmap+MVC · Statistics suite · Vol Drift · Exposure-matrix VEX/UNUSUAL-equivalent lenses | 🔓 OPEN — Interval Map/Vol Drift want U-CHAIN accrual (~1wk); Statistics buildable now (exchange codes retained); VEX/UNUSUAL: verify vanna grids + 30d baseline, then light the equivalent lenses on the **Exposure matrix** (PRISM retired into Exposure, §5.3 done — PR #344) |
 | R4 Filter Groups + alert generalization + page/global filter bus | 🔓 OPEN — design pinned §4-R4; enriched schema (R1) is its vocabulary, but the engine + Supabase persistence can start against existing fields |
 | R5 IA restructure (7 categories) + blind-spot surfaces (0DTE dash, largest-trades, chain browser, P/C history, exp-vs-realized, export) | 🔓 OPEN — first slice IN FLIGHT 08-03: §5.3 PRISM→Exposure merge (branch `claude/prism-exposure-merge-20260803`; retire PRISM tab, shared sign-correct matrix renderer, port Confluence + HeatSeeker, `?tab=prism` alias). **PR #164 RESOLVED 08-03: closed as superseded** — master already ships its flat-sidebar intent (AppNav 7-item, next.config redirects) and resolves the one design conflict (Leaders/Radar → Discover) in R5's direction; nothing to re-implement; salvage check pending: multi-watchlist pill switcher on PortfolioView |
 | 2026-08-03 continuation session (this session's claims) | IN FLIGHT — P0 Tickers-drill crash hotfix; Volatility/Structure card-height equalization (branch `claude/vol-structure-layout-20260802`); Surface granularity upgrade (gradient + msc-consuming signal overlays, spec from census lane); Exposure/PRISM adjudication executed per §5.3 (see R5 row) |
@@ -178,7 +178,7 @@ Market Map (sector treemap) · Stock Price/Time. News: tagged News Feed.
 - Dark pool: FINRA CNMS daily short volume + weekly ATS only (honest "not prints, not live" chip). No TRF feed.
 
 **Terminal `/options` (11-tab hub)**: prophet · desk (Flow Desk) · tape · tide · tickers · screener · gex (Exposure)
-· surface · prism · leaders · radar. SSE spine live on feed/gex/tide/hub-tape. Exposure desk: GEX/DEX/VEX/CHEX
+· surface · leaders · radar (`prism` retired to a `?tab=prism` → Exposure alias, §5.3). SSE spine live on feed/gex/tide/hub-tape. Exposure desk: GEX/DEX/VEX/CHEX
 switcher, by-expiration, dist-to-flip, EOD context belt, scalar session scrubber (#210/#211). Surface tab: the only
 true replay (multi-day, ReplayBar, replayBus). PRISM: 6 lenses, VEX/UNUSUAL disabled-with-reasons. 15 IA defects
 catalogued (tab aliasing `vol→screener`, tape/desk duplication, 3 unrelated "strike ladder" idioms, 3 expiry-term
@@ -298,7 +298,7 @@ CHEX/net-prem/net-vol/OI/IV/…, MVC marker) · exposure normalization modes (1%
 1.9 GB OI history, Max Pain + Max Pain/Time, OI Change table) · Vol suite (Volatility Drift ARV-vs-IV intraday,
 IV Rank with configurable lookback, Skew, Term Structure — from the vol payload + U-CHAIN IV) · Statistics
 (contract stats, trade-side stats, market share by exchange from retained exchange codes) · Net Flow/Net Drift
-upgrade (click-reveals-largest-trades-per-interval, Net Drift Cross events) · **PRISM VEX/UNUSUAL lenses turn ON**
+upgrade (click-reveals-largest-trades-per-interval, Net Drift Cross events) · **VEX/UNUSUAL-equivalent lenses turn ON, on the Exposure matrix** (PRISM retired, §5.3)
 (vanna grids from U-CHAIN make VEX honest; the 30-d unusual baseline has accrued since 07-24 — verify, then light).
 
 ### R4 — Filter Groups, alerts, and the workspace bus (terminal + Supabase)
@@ -353,7 +353,7 @@ Categories (workspace tab row), each hosting sub-views via the existing Workspac
 2. **Flow** — tape (enriched R1 columns) + Net Flow/Drift + 0DTE dashboard + largest trades. One filter system
    (R4), one preset library; card view (old Flow Desk) and table view (old Tape) become **view modes of one
    surface**, ending the duplication.
-3. **Exposure** — the gexdesk suite + Interval Map + multi-metric Heat Map + universal playback; PRISM merges here
+3. **Exposure** — the gexdesk suite + Interval Map + multi-metric Heat Map + universal playback; PRISM merged here ✅ §5.3 (PR #344): Matrix view + Confluence + HeatSeeker, one shared renderer with Positioning
    as the matrix view (one ladder idiom, one levels provenance, one expiry render).
 4. **Structure** — OI suite: chain browser, OI by strike/expiry, OI change, Max Pain (+/Time), OI/Time.
 5. **Volatility** — Vol Drift, IV Rank, Skew, Term Structure, expected-vs-realized moves.

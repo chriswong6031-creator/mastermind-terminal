@@ -12,11 +12,11 @@ professional user thinks "find → analyze → automate → review".
 |---|---|---|---|
 | **Chart** | `/terminal` | analyze one name deeply | unchanged — the stable center (own shell, chart toolbar, rail, in-shell fundamentals MegaPane) |
 | **Discover** | `/discover?tab=…` | find setups | `screener` Stock Screener (ex-/screener) · `heatmap` Heatmap (ex-/heatmap) · `leaders` Leaders (ex-flow tab) · `radar` Leader Radar (ex-flow tab) |
-| **Research** | `/research?tab=…` | market/options intelligence | `tape` Options Tape · `desk` Flow Desk · `tide` Tide · `tickers` Tickers · `vol` Options Screener (ex-flow "screener"/vol) · `gex` GEX · `prism` PRISM · `prophet` Prophet · `fundamentals` → deep-links `/terminal?pane=overview` (cross-jump, labeled) |
+| **Research** | `/research?tab=…` | market/options intelligence | `tape` Options Tape · `desk` Flow Desk · `tide` Tide · `tickers` Tickers · `vol` Options Screener (ex-flow "screener"/vol) · `gex` Exposure (`prism` is a retired alias onto it — §5.3) · `prophet` Prophet · `fundamentals` → deep-links `/terminal?pane=overview` (cross-jump, labeled) |
 | **Automate** | `/automate?tab=…` | set-and-forget | `alerts` Alerts (ex-/alerts) · `scripts` Pine Scripts (ex-/scripts) |
 | **Portfolio** | `/portfolio` | review holdings/conviction | unchanged content |
 
-Naming rules: plain-word tab labels; proprietary names (GEX/PRISM/Prophet) survive as tab
+Naming rules: plain-word tab labels; proprietary names (GEX/Prophet) survive as tab
 labels only WITH their existing zh translations — never as top-level destinations. The
 "Screener" collision resolves by label: Discover › **Stock Screener** vs Research ›
 **Options Screener**. The old "Analyst" rail item disappears (fundamentals reachable from

@@ -726,30 +726,22 @@ function PassportBlock({
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
+/**
+ * CONTAINMENT (v7b, re-homed in §5.3): the rail's width, left edge and — critically —
+ * its bounded scroll region now live ONE level up, on GexDeskView's RIGHT_RAIL, because
+ * the rail holds two cards (HeatSeeker + this one) instead of one. The invariant is
+ * unchanged and still load-bearing: the rail is sized only by the desk's two-pane row,
+ * so a drawer opening in the LEFT column can never change this card's scroll geometry —
+ * that was what left it "pushed up" with its header parked off-screen after a collapse.
+ * `minHeight:0` here lets the card shrink inside that rail rather than forcing it taller.
+ */
 const CARD_OUTER: React.CSSProperties = {
-  borderLeft: "1px solid var(--hairline)",
   borderRadius: 0,
   display: "flex",
   flexDirection: "column",
-  /* 340px rail on desktop; on a phone the row has already wrapped, so cap at the track
-     width instead of demanding 300px minimum and pushing a horizontal scrollbar. */
   minWidth: 0,
-  width: 360,
   maxWidth: "100%",
-  flexShrink: 0,
-  /* CONTAINMENT (v7b): this card is its OWN scroll region, sized only by the desk's
-     two-pane row. `minHeight:0` lets it actually shrink to the row instead of forcing the
-     row taller; `alignSelf:stretch` + `maxHeight:100%` pin it to the row's cross size in a
-     wrapping flex container. Nothing here reads a sibling's height, so a drawer opening in
-     the left column can no longer change this card's scroll geometry — that was what left
-     it "pushed up" with its header parked off-screen after a collapse. */
   minHeight: 0,
-  alignSelf: "stretch",
-  maxHeight: "100%",
-  overflowY: "auto",
-  overscrollBehavior: "contain",
-  scrollbarWidth: "thin" as const,
-  scrollbarColor: "var(--line-3) transparent",
 };
 
 const CARD_HEADER: React.CSSProperties = {

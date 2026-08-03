@@ -280,7 +280,7 @@
 /* ─── Modern scroll primitive ────────────────────────────────────────────── */
 /*
  * .obs-scroll — apply to any internal scroll region across Observatory surfaces
- * (flow feed, chain heat, radar, watchlist, GEX ladder, PRISM overflow, tickers).
+ * (flow feed, chain heat, radar, watchlist, GEX ladder, exposure matrix overflow, tickers).
  * Thin 8px track-transparent thumb from --muted token, hover-brightens.
  * Firefox: scrollbar-width:thin for the muted color pair.
  */

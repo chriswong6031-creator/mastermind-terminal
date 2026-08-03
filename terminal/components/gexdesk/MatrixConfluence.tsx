@@ -1,32 +1,47 @@
 "use client";
 /**
- * ConfluenceView — SPY + QQQ + IWM side-by-side aligned GEX matrix.
+ * MatrixConfluence — SPY + QQQ + IWM side-by-side, aligned on % from spot.
  *
- * Fetches matrix for SPY, QQQ, IWM independently.
- * Normalizes strikes to % from spot in fixed PR_CONF_BANDS buckets (prism_spec §11):
- *   [-2.4, -2.0, -1.6, -1.2, -0.8, -0.4, 0, +0.4, +0.8, +1.2, +1.6, +2.0, +2.4]
- *   (13 rows, each maps nearest actual strike to its % offset)
+ * §5.3: ported from components/prism/ConfluenceView.tsx when the PRISM tab was retired.
+ * Logic kept (bands, nearest-strike mapping, alignment detection, thresholds); TWO
+ * things changed, both required by the merge:
  *
- * Lens is the parent's activeLens but GEX is the primary confluence lens.
- * Alignment chips: when flip/wall/support levels from gexstate land within 0.5%
- * across >= 2 indices, a chip appears in an "alignment" column.
+ *   1. COLOUR/SIGN. It painted RAW gex on --up-rgb/--down-rgb, so the same payload read
+ *      the opposite way from the Positioning card AND inverted under the zh east
+ *      convention on a quantity that is not a price direction. It now renders through
+ *      components/shared/StrikeExpiryMatrix's metric law — net dealer hedge on the
+ *      aggressor-side pair, which never flips.
+ *   2. The `activeLens` prop was accepted and then never read — the metric control did
+ *      nothing here. It is wired: the chips now move this grid too.
+ *
+ * Normalizes strikes to % from spot in fixed CONF_BANDS buckets:
+ *   [-2.4 … 0 … +2.4] (13 rows, each mapping the nearest actual strike to its % offset)
+ *
+ * Alignment chips: when flip/wall/support levels land within 0.5% across >= 2 indices,
+ * a chip appears in the alignment column.
  *
  * HONESTY DOCTRINE:
- *   - "descriptive — not a recommendation" note on the panel header.
- *   - "Index-only, descriptive" note under the alignment legend.
+ *   - "descriptive — not a recommendation" on the panel header.
+ *   - "Index-only, descriptive" under the alignment legend.
  *   - No "signal" language; alignment = structural observation.
- *   - Sign is assumed dealer-convention, caveated via magnitudeFirst banner.
+ *   - Sign is assumed dealer-convention, caveated via the magnitudeFirst banner.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { makePrismT } from "./prismStrings";
-import type { ActiveLens } from "./LensBar";
+import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
-import type { MatrixPayload } from "./PrismView";
+import type { MatrixDoc } from "./matrixDoc";
+import {
+  fmtMatrixCell,
+  matrixCellTone,
+  matrixCellValue,
+  type MatrixLevels,
+  type MatrixMetric,
+} from "@/components/shared/StrikeExpiryMatrix";
 
-// ─── Constants (prism_spec §11 PR_CONF_BANDS) ─────────────────────────────────
+// ─── Constants (confluence bands) ─────────────────────────────────────────────
 
-const PR_CONF_BANDS = [2.4, 2.0, 1.6, 1.2, 0.8, 0.4, 0, -0.4, -0.8, -1.2, -1.6, -2.0, -2.4];
+const CONF_BANDS = [2.4, 2.0, 1.6, 1.2, 0.8, 0.4, 0, -0.4, -0.8, -1.2, -1.6, -2.0, -2.4];
 
 const CONF_INDICES = ["SPY", "QQQ", "IWM"] as const;
 type ConfIndex = typeof CONF_INDICES[number];
@@ -35,26 +50,26 @@ const ALIGNMENT_THRESHOLD = 0.5; // % — levels within this are "aligned"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface ConfluenceViewProps {
-  fetchMatrix: (root: string) => Promise<MatrixPayload | null>;
-  activeLens: ActiveLens;
+interface MatrixConfluenceProps {
+  fetchMatrix: (root: string) => Promise<MatrixDoc | null>;
+  metric: MatrixMetric;
   lang: Lang;
 }
 
 interface IndexData {
-  payload: MatrixPayload | null;
+  payload: MatrixDoc | null;
   loading: boolean;
   error: boolean;
 }
 
 interface BucketRow {
   pct: number;          // % offset (e.g. +1.2, 0.0, -0.8)
-  values: Record<ConfIndex, number | null>;  // GEX sum per index for nearest strike
+  values: Record<ConfIndex, number | null>;  // metric value for the nearest strike
   nearestStrikes: Record<ConfIndex, number | null>;
 }
 
-/** prismStrings keys for the five structural level markers (shared with MatrixGrid). */
-type LevelKey = "levelFlip" | "levelWall" | "levelSupport" | "levelMagnet";
+/** gexStrings keys for the structural level markers this board can honestly claim. */
+type LevelKey = "levelWall" | "levelSupport" | "levelMagnet";
 
 interface AlignmentChip {
   pct: number;
@@ -65,14 +80,24 @@ interface AlignmentChip {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function nearestBucket(pct: number): number {
-  let best = PR_CONF_BANDS[0];
+/**
+ * Snap a % offset to its nearest band — or null when it is off the board.
+ *
+ * Without the distance guard a level at +9% snapped to the +2.4% edge band and drew an
+ * "aligned" chip on a row it has nothing to do with. BAND_TOLERANCE_PCT matches the 0.8%
+ * tolerance computeBucketRows already applies to strikes, so the two halves of this grid
+ * agree on what "near a band" means.
+ */
+const BAND_TOLERANCE_PCT = 0.8;
+
+function nearestBucket(pct: number): number | null {
+  let best = CONF_BANDS[0];
   let bestDist = Infinity;
-  for (const b of PR_CONF_BANDS) {
+  for (const b of CONF_BANDS) {
     const d = Math.abs(pct - b);
     if (d < bestDist) { bestDist = d; best = b; }
   }
-  return best;
+  return bestDist > BAND_TOLERANCE_PCT ? null : best;
 }
 
 function fmtPct(p: number): string {
@@ -80,18 +105,16 @@ function fmtPct(p: number): string {
   return `${sign}${p.toFixed(1)}%`;
 }
 
-function fmtGex(v: number | null): string {
+function fmtValue(v: number | null, metric: MatrixMetric): string {
   if (v == null || !Number.isFinite(v)) return "—";
-  const sign = v >= 0 ? "+" : "-";
-  const abs = Math.abs(v);
-  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(1)}B`;
-  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
-  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(0)}K`;
-  return `${sign}$${abs.toFixed(0)}`;
+  return fmtMatrixCell(v, metric);
 }
 
-function computeBucketRows(payloads: Record<ConfIndex, MatrixPayload | null>): BucketRow[] {
-  return PR_CONF_BANDS.map((band) => {
+function computeBucketRows(
+  payloads: Record<ConfIndex, MatrixDoc | null>,
+  metric: MatrixMetric
+): BucketRow[] {
+  return CONF_BANDS.map((band) => {
     const values: Record<ConfIndex, number | null> = { SPY: null, QQQ: null, IWM: null };
     const nearestStrikes: Record<ConfIndex, number | null> = { SPY: null, QQQ: null, IWM: null };
 
@@ -103,7 +126,7 @@ function computeBucketRows(payloads: Record<ConfIndex, MatrixPayload | null>): B
       // Find the actual strike nearest this band's pct offset
       let bestStrike: number | null = null;
       let bestDist = Infinity;
-      for (const s of payload.strikes) {
+      for (const s of payload.strikes ?? []) {
         const strikePct = ((s - spot) / spot) * 100;
         const d = Math.abs(strikePct - band);
         if (d < bestDist) { bestDist = d; bestStrike = s; }
@@ -112,24 +135,30 @@ function computeBucketRows(payloads: Record<ConfIndex, MatrixPayload | null>): B
 
       nearestStrikes[idx] = bestStrike;
 
-      // Sum GEX for this strike across all expiries (near-term only, use first expiry)
-      const firstExp = payload.expiries[0];
+      // Near-term read: the first published expiry, through the SHARED metric law
+      // (net hedge for the signed metric — never raw gex).
+      const firstExp = payload.expiries?.[0];
       if (!firstExp) continue;
       const cell = payload.cells.find(
         (c) => c.strike === bestStrike && c.expiry === firstExp
       );
-      values[idx] = cell?.gex ?? null;
+      values[idx] = cell ? matrixCellValue(cell, metric) : null;
     }
 
     return { pct: band, values, nearestStrikes };
   });
 }
 
-function detectAlignments(payloads: Record<ConfIndex, MatrixPayload | null>): AlignmentChip[] {
+function detectAlignments(payloads: Record<ConfIndex, MatrixDoc | null>): AlignmentChip[] {
   const chips: AlignmentChip[] = [];
-  // `label` is a prismStrings key so the chip text is bilingual, never baked English.
-  const levelTypes: { key: keyof MatrixPayload["levels"]; label: LevelKey }[] = [
-    { key: "gamma_flip",   label: "levelFlip" },
+  // `label` is a gexStrings key so the chip text is bilingual, never baked English.
+  //
+  // NO gamma_flip ROW. This board reads each index's matrix doc DIRECTLY, and that doc's
+  // levels block still carries the retired cumulative-by-strike flip estimator (see
+  // matrixDoc.mergeMatrixLevels — the desk prefers gex_state for exactly this reason).
+  // There is no per-root gex_state here to merge against, so the honest move is to make
+  // no flip claim at all rather than align three indices on a known-bad number.
+  const levelTypes: { key: keyof MatrixLevels; label: LevelKey }[] = [
     { key: "call_wall",    label: "levelWall" },
     { key: "put_support",  label: "levelSupport" },
     { key: "hvl",          label: "levelMagnet" },
@@ -154,6 +183,9 @@ function detectAlignments(payloads: Record<ConfIndex, MatrixPayload | null>): Al
 
     const avgPct = pctValues.reduce((a, b) => a + b, 0) / pctValues.length;
     const bucket = nearestBucket(avgPct);
+    // Off the board entirely — the levels agree with each other but sit outside the
+    // ±2.4% window this grid draws, so there is no row to chip.
+    if (bucket === null) continue;
 
     chips.push({
       pct: bucket,
@@ -168,8 +200,8 @@ function detectAlignments(payloads: Record<ConfIndex, MatrixPayload | null>): Al
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function ConfluenceView({ fetchMatrix, activeLens, lang }: ConfluenceViewProps) {
-  const t = makePrismT(lang);
+export function MatrixConfluence({ fetchMatrix, metric, lang }: MatrixConfluenceProps) {
+  const t = makeGexT(lang);
 
   const [data, setData] = useState<Record<ConfIndex, IndexData>>({
     SPY: { payload: null, loading: true, error: false },
@@ -204,30 +236,30 @@ export function ConfluenceView({ fetchMatrix, activeLens, lang }: ConfluenceView
   }, [fetchAll]);
 
   const anyLoading = CONF_INDICES.some((idx) => data[idx].loading);
-  const payloads: Record<ConfIndex, MatrixPayload | null> = {
+  const payloads: Record<ConfIndex, MatrixDoc | null> = {
     SPY: data.SPY.payload,
     QQQ: data.QQQ.payload,
     IWM: data.IWM.payload,
   };
 
-  const bucketRows = computeBucketRows(payloads);
+  const bucketRows = computeBucketRows(payloads, metric);
   const alignments = detectAlignments(payloads);
 
-  // Max abs GEX across all cells for color scaling
-  const allGex = bucketRows.flatMap((r) =>
+  // Max abs value across visible cells — the scale the eye compares within this grid.
+  const allMags = bucketRows.flatMap((r) =>
     CONF_INDICES.map((idx) => Math.abs(r.values[idx] ?? 0))
   ).filter((v) => v > 0);
-  const maxGex = allGex.length > 0 ? Math.max(...allGex) : 1;
+  const maxMag = allMags.length > 0 ? Math.max(...allMags) : 1;
 
-  // Signed fill rides the --up-rgb / --down-rgb triplets so the East-Asian red-up
-  // flip (html[data-updown="east"]) repaints the confluence grid with it.
+  // Fill rides the SHARED metric tone (components/shared/StrikeExpiryMatrix). For the
+  // hedge metric that is the aggressor-side pair, which globals.css deliberately keeps
+  // out of the html[data-updown="east"] flip — a dealer hedge is a transaction side,
+  // not a price direction. This grid used to ride --up-rgb/--down-rgb and inverted.
   function cellColor(v: number | null): string {
-    if (v == null) return "transparent";
-    const intensity = Math.min(1, Math.abs(v) / maxGex);
-    const a = 0.08 + intensity * 0.55;
-    return v >= 0
-      ? `rgba(var(--up-rgb),${a.toFixed(2)})`
-      : `rgba(var(--down-rgb),${a.toFixed(2)})`;
+    if (v == null || v === 0) return "transparent";
+    const intensity = Math.min(1, Math.abs(v) / maxMag);
+    const pct = (8 + intensity * 55).toFixed(1);
+    return `color-mix(in srgb, ${matrixCellTone(v, metric)} ${pct}%, transparent)`;
   }
 
   // Build alignment map: band -> AlignmentChip[]
@@ -320,14 +352,12 @@ export function ConfluenceView({ fetchMatrix, activeLens, lang }: ConfluenceView
                       style={{
                         ...CELL_VAL,
                         color:
-                          v == null
+                          v == null || v === 0
                             ? "var(--muted)"
-                            : v >= 0
-                            ? "color-mix(in srgb, #fff 26%, var(--up))"
-                            : "color-mix(in srgb, #fff 26%, var(--down))",
+                            : `color-mix(in srgb, #fff 26%, ${matrixCellTone(v, metric)})`,
                       }}
                     >
-                      {fmtGex(v)}
+                      {fmtValue(v, metric)}
                     </span>
                     {strike != null && (
                       <span className="num" style={STRIKE_HINT}>${strike}</span>
@@ -344,7 +374,7 @@ export function ConfluenceView({ fetchMatrix, activeLens, lang }: ConfluenceView
                     className="obs-tag"
                     style={{
                       ...ALIGN_CHIP,
-                      "--c": chip.count >= 3 ? "var(--up)" : "var(--brand-2)",
+                      "--c": chip.count >= 3 ? "var(--signal)" : "var(--brand-2)",
                     } as React.CSSProperties}
                   >
                     {chip.count >= 3 ? t("confluence3of3") : t("confluence2of3")}
@@ -537,7 +567,8 @@ const ALIGN_COL: React.CSSProperties = {
 
 /**
  * Dense override for `.obs-tag` in a 24px band row. The tint itself rides `--c`:
- * 3/3 alignment = var(--up), 2/3 = var(--brand-2).
+ * 3/3 alignment = var(--signal), 2/3 = var(--brand-2). Neither is a direction token:
+ * an alignment COUNT is not a price direction, so it must not flip with the zh east theme.
  */
 const ALIGN_CHIP: React.CSSProperties = {
   fontSize: 7.5,

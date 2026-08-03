@@ -992,7 +992,6 @@ const LEX: Record<string, [string, string]> = {
   tabStructure: ["Structure", "未平仓分布"],
   tabGex: ["Exposure", "敞口"],
   tabSurface: ["Surface", "曲面"],
-  tabPrism: ["PRISM", "矩阵"],
   tabProphet: ["Prophet", "先知"],
   // ─── Wave-2 workspace sub-tab labels (WorkspaceTabs registries) ───────────────
   // Disambiguated screeners: Discover › Stock Screener vs Research › Options Screener.
@@ -1007,7 +1006,6 @@ const LEX: Record<string, [string, string]> = {
   wtTickers: ["Tickers", "个股"],
   wtOptionsScreener: ["Options Screener", "期权筛选器"],
   wtGex: ["Exposure", "敞口"],
-  wtPrism: ["PRISM", "矩阵"],
   wtVolatility: ["Volatility", "波动率"],
   wtPositioning: ["Positioning", "持仓结构"],
   wtStructure: ["Structure", "未平仓分布"],

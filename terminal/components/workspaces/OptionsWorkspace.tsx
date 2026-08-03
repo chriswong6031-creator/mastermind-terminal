@@ -15,8 +15,10 @@ import { useLang } from "@/lib/i18n";
  * composer is the single writer of the active tab.
  *
  * Tab registry order per spec:
- *   tape · desk · tide · tickers · vol (Options Screener) · gex · surface · prism ·
+ *   tape · desk · tide · tickers · vol (Options Screener) · gex · surface ·
  *   structure · volatility · prophet.
+ * (PRISM was retired in masterplan §5.3 — merged into the Exposure desk's matrix view.
+ * `?tab=prism` is now an alias onto `gex`; see HUB_KEY.)
  * NOTE the two distinct keys: `vol` is a load-bearing legacy alias for the Options
  * SCREENER (do not touch); `volatility` is the R3 Volatility tab (IV rank / term /
  * skew, per-root options_hub.vol payloads); `structure` is the R3 OI suite
@@ -44,7 +46,9 @@ const HUB_KEY: Record<string, TabKey> = {
   screener: "screener", // legacy flow ?tab=screener alias
   gex: "gex",
   surface: "surface",
-  prism: "prism",
+  // §5.3: PRISM retired into the Exposure desk. Old deep-links keep working — they
+  // land on `gex`, and GexDeskView opens on its MATRIX view (it reads ?tab=prism too).
+  prism: "gex",
   structure: "structure",
   volatility: "volatility",
   positioning: "positioning",
@@ -52,7 +56,7 @@ const HUB_KEY: Record<string, TabKey> = {
 };
 
 // The tabs the hub is allowed to render under Research (canonical hub keys).
-const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "surface", "prism", "structure", "volatility", "positioning", "prophet"];
+const RESEARCH_ALLOWED: TabKey[] = ["tape", "desk", "tide", "tickers", "screener", "gex", "surface", "structure", "volatility", "positioning", "prophet"];
 
 const DEFAULT_TAB: TabKey = "tape";
 
@@ -66,7 +70,6 @@ const TABS: WorkspaceTab[] = [
   { key: "vol", labelKey: "wtOptionsScreener" },
   { key: "gex", labelKey: "wtGex" },
   { key: "surface", labelKey: "tabSurface" },
-  { key: "prism", labelKey: "wtPrism" },
   { key: "structure", labelKey: "wtStructure" },
   { key: "volatility", labelKey: "wtVolatility" },
   { key: "positioning", labelKey: "wtPositioning" },
@@ -82,7 +85,7 @@ const FUNDAMENTALS_HREF = "/analysis";
 // the canonical entries; `screener` maps back to the `vol` pill).
 const PAGE_KEY: Record<TabKey, string> = {
   tape: "tape", desk: "desk", tide: "tide", tickers: "tickers",
-  screener: "vol", gex: "gex", surface: "surface", prism: "prism",
+  screener: "vol", gex: "gex", surface: "surface",
   structure: "structure", volatility: "volatility", positioning: "positioning", prophet: "prophet",
   leaders: "tape", radar: "tape", // never shown here (redirected to Discover)
 };

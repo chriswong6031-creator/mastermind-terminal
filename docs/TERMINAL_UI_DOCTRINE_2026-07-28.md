@@ -177,7 +177,9 @@ Shared CSS files (`globals.css`, `fin.css`, `observatory.css`, `onboarding.css`)
 - **`/options`** — `components/workspaces/OptionsWorkspace.tsx` drives
   `components/OptionsHubView.tsx` (shell + inline tabs: tape, tide, tickers, screener +
   topbar) which lazy-loads: `components/flowdesk/*` (Desk), `components/gexdesk/*`
-  (GEX), `components/prism/*` (PRISM), `components/prophet/*` (Prophet),
+  (GEX), `components/shared/StrikeExpiryMatrix.tsx` + `components/gexdesk/{ExposureMatrix,MatrixConfluence,HeatSeekerCard}.tsx`
+  (the ex-PRISM surfaces, merged into Exposure by §5.3 — `components/prism/*` is retired),
+  `components/prophet/*` (Prophet),
   `components/surface/*` (Surface). Shared chrome: `components/chrome/WorkspaceTabs.tsx`.
 - Shared primitives: `components/ui/{ArcGauge,RingGauge,Tip,MobileSheet}.tsx`.
 - Out of scope: chart shell (`ChartPanel`, toolbars), `/discover` (heatmap/screener),

@@ -3,7 +3,7 @@
 /**
  * Tip — the ONE tooltip primitive (v6). Retires six ad-hoc systems: native
  * title=, the two globals.css [data-tip]::after variants, and the hand-rolled
- * React tips (Treemap / MatrixGrid / StrikeLadder / FlowCard / ConfidencePanel).
+ * React tips (Treemap / StrikeExpiryMatrix / StrikeLadder / FlowCard / ConfidencePanel).
  *
  * Behaviour (TradingView feel):
  *  - fixed-position PORTAL to <body> → escapes every overflow:hidden pane.

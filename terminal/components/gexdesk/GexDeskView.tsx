@@ -50,6 +50,9 @@ import { ExposureExpiryDrawer } from "./ExposureExpiryDrawer";
 import { MarketStateCard } from "./MarketStateCard";
 import type { GexStatePayload } from "./MarketStateCard";
 import { GexGuide } from "./GexGuide";
+import { ExposureMatrix } from "./ExposureMatrix";
+import { HeatSeekerCard } from "./HeatSeekerCard";
+import { mergeMatrixLevels, type MatrixDoc } from "./matrixDoc";
 import { EodContextBelt } from "@/components/eodcontext/EodContextBelt";
 import { isGexDates, gexSessionOf } from "@/lib/gexSessions";
 import {
@@ -58,7 +61,6 @@ import {
   matrixLensByStrike,
   matrixSessionsAgree,
   type ExpiryLens,
-  type GexMatrix,
 } from "@/lib/gexLadder";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -186,7 +188,19 @@ export function GexDeskView() {
   const [ticker, setTicker]           = useState("SPY");
   const [inputVal, setInputVal]       = useState("SPY");
   const [greek, setGreek]             = useState<GreekLens>("gamma");
-  const [view, setView]               = useState<"strike" | "expiry">("strike");
+  // Exposure axis. §5.3 added "matrix" — the strike × expiry grid merged in from the
+  // retired PRISM tab. Ladder ("strike") stays the default; a /options?tab=prism deep
+  // link is what opens on "matrix" (see the URL effect below).
+  const [view, setView]               = useState<"strike" | "expiry" | "matrix">(() => {
+    // Deep-link law: the TARGET side handles the alias. /options?tab=prism used to be
+    // the PRISM tab; it now lands here, and it must land on the MATRIX view or the old
+    // link dead-ends on a ladder the user did not ask for. Read synchronously (this
+    // view is dynamic({ssr:false}), so there is no hydration pass to mismatch) — an
+    // effect would flash the ladder first and could race the workspace's URL rewrite.
+    if (typeof window === "undefined") return "strike";
+    const q = new URLSearchParams(window.location.search);
+    return q.get("tab") === "prism" || q.get("view") === "matrix" ? "matrix" : "strike";
+  });
   const [statePayload, setStatePayload] = useState<GexStatePayload | null>(null);
   // Expiry lens — All / 0DTE / All−0DTE / one expiration. Owned here because BOTH the
   // ladder and the summary bar have to be scoped by it (it used to be ladder-local state
@@ -195,7 +209,7 @@ export function GexDeskView() {
   // options_structure.matrix — the ONLY store carrying strike × expiry together, so it is
   // what makes the lens real. Best-effort: it exists only for some roots (and can run a
   // different session than the gex payload) — absent → the lens reports itself unavailable.
-  const [matrix, setMatrix] = useState<GexMatrix | null>(null);
+  const [matrix, setMatrix] = useState<MatrixDoc | null>(null);
   // ── Dated session replay (R0.10) ──────────────────────────────────────────
   // sessionDates = the gex_history dates.json index (null = absent/invalid → no dropdown;
   // the scrubber's explicit per-date probe still works — the index is an enumeration aid,
@@ -245,10 +259,21 @@ export function GexDeskView() {
   // Matrix cells feed the expiry lens AND the ladder hover top-3 expiry breakdown.
   // Best-effort: the payload (options_structure.matrix) exists only for some roots —
   // absent → the lens goes dark with a reason and the breakdown is simply omitted.
-  const fetchMatrix = useCallback(async (root: string) => {
-    const data = await safeFetch<GexMatrix>(`/api/flow?f=matrix:${root}`);
-    setMatrix(Array.isArray(data?.cells) ? data : null);
+  // Returns the doc as well as storing it: the matrix view's CONFLUENCE mode refetches
+  // SPY/QQQ/IWM through this same reader, so there is one matrix fetch path on the desk.
+  const readMatrix = useCallback(async (root: string): Promise<MatrixDoc | null> => {
+    // `matrix:{ROOT}` is published FLAT — the desk's pre-§5.3 reader never unwrapped a
+    // by-root envelope and its expiry lens works in prod, so no `data[root]` step here.
+    const doc = await safeFetch<MatrixDoc>(`/api/flow?f=matrix:${root}`);
+    // A payload without a cells array — the fixture's honest {} for an unknown root, or
+    // a malformed upstream doc — resolves to null, which is what routes to the desk's
+    // placeholder states (the same place a prod 503 for a missing matrix lands).
+    return Array.isArray(doc?.cells) ? doc : null;
   }, []);
+
+  const fetchMatrix = useCallback(async (root: string) => {
+    setMatrix(await readMatrix(root));
+  }, [readMatrix]);
 
   // Sessions index for the dated-ladder plane. Validated (isGexDates) before it drives
   // the dropdown: a malformed index degrades to no-dropdown, never a coerced list.
@@ -428,6 +453,14 @@ export function GexDeskView() {
     greek === "gamma"
       ? levels
       : { callWall: null, putWall: null, gammaFlip: null, hvl: null };
+
+  // ONE levels provenance for the matrix view (§5.3): gex_state wins the flip, because
+  // the matrix builder's own levels block still carries the retired cumulative-by-strike
+  // estimator. See matrixDoc.mergeMatrixLevels for the measurement and the RCA link.
+  const matrixLevels = useMemo(
+    () => mergeMatrixLevels(matrix, statePayload),
+    [matrix, statePayload]
+  );
 
   // Format spot for display
   const spotStr =
@@ -614,7 +647,12 @@ export function GexDeskView() {
 
         {/* ── Left pane: Guide + Ladder ─────────────────────────────────── */}
         <div style={LEFT_PANE}>
-          <GexGuide lang={lang} />
+          {/* GexGuide documents the LADDER's colour ramp (greek exposure on the
+              direction tokens). The matrix view paints a dealer HEDGE on the
+              aggressor-side pair — a different, deliberately non-flipping law — so
+              showing the ladder's legend beside it would teach the wrong key, and it
+              costs ~70px the 40-row grid needs. The matrix ships its own legend. */}
+          {view !== "matrix" && <GexGuide lang={lang} />}
           {/* Exposure axis: By Strike (ladder) / By Expiration (bars). The by_expiry
               series is already in the payload — previously used only as a filter. */}
           <div style={VIEW_TOGGLE_ROW} role="group" aria-label={t("viewAria")}>
@@ -633,6 +671,18 @@ export function GexDeskView() {
               onClick={() => setView("expiry")}
             >
               {t("viewByExpiry")}
+            </button>
+            <button
+              className={`chip${view === "matrix" ? " on" : ""}`}
+              style={VIEW_CHIP}
+              aria-pressed={view === "matrix"}
+              /* No aria-label here on purpose: an aria-label OUTRANKS the visible text in
+                 accessible-name computation, so "Matrix" became unreachable by its own
+                 label (getByRole("button", { name: "Matrix" }) could never match). The
+                 visible text is a perfectly good accessible name. */
+              onClick={() => setView("matrix")}
+            >
+              {t("viewMatrix")}
             </button>
           </div>
           {/* Ladder region — the ONLY part of the left column that flexes. It owns its own
@@ -663,6 +713,24 @@ export function GexDeskView() {
                   {t("gexNoSnapshotWhy").replace("{sym}", ticker)}
                 </div>
               </div>
+            ) : isArchived && view === "matrix" ? (
+              /* The matrix store is a CURRENT-session read with no dated twin (like the
+                 EOD belt and the state card). Rendering it inside an archived frame would
+                 caption today's grid with a settled past session — the exact cross-session
+                 adjacency replay mode exists to prevent. The view is NOT switched out from
+                 under the user; the gap is named instead. */
+              <div style={LADDER_EMPTY} data-testid="gex-archived-matrix">
+                <div style={LADDER_EMPTY_TITLE}>{t("archivedMatrixTitle")}</div>
+                <div style={LADDER_EMPTY_WHY}>{t("archivedMatrixNote")}</div>
+              </div>
+            ) : view === "matrix" ? (
+              <ExposureMatrix
+                matrix={matrix}
+                levels={matrixLevels}
+                spot={spot}
+                fetchMatrix={readMatrix}
+                lang={lang}
+              />
             ) : view === "strike" ? (
               <StrikeLadder
                 strikes={activePayload?.by_strike ?? []}
@@ -700,6 +768,10 @@ export function GexDeskView() {
               to recover. Scoped here, expanding/collapsing can only ever re-flow the
               ladder (which has its own internal scroll and self-restores), and the right
               column's height never changes. */}
+          {/* Withdrawn in matrix view: the drawer is a by-expiry term structure of the
+              greek ladder, and the matrix IS the strike × expiry breakdown — keeping both
+              would duplicate the expiry axis under two different colour conventions. */}
+          {view !== "matrix" && (
           <div style={XDRAWER_SLOT}>
             <ExposureExpiryDrawer
               byExpiry={activePayload?.by_expiry ?? null}
@@ -708,6 +780,7 @@ export function GexDeskView() {
               lang={lang}
             />
           </div>
+          )}
         </div>
 
         {/* ── Right pane: Market state ──────────────────────────────────────
@@ -733,12 +806,26 @@ export function GexDeskView() {
             </div>
           </div>
         ) : (
-          <MarketStateCard
-            statePayload={statePayload}
-            gexPayload={gexPayload}
-            isIndexProduct={isIndex}
-            lang={lang}
-          />
+          <div style={RIGHT_RAIL}>
+            {/* HeatSeeker — the ONLY consumer of the matrix payload's published
+                heat_seeker field. It rode in from the retired PRISM tab (§5.3) rather
+                than dying with it. A current-session read like the state card below,
+                so it is withdrawn during archived replay along with them. */}
+            <div style={HEATSEEKER_SLOT}>
+              <HeatSeekerCard
+                pick={matrix?.heat_seeker ?? null}
+                spot={matrix?.spot ?? spot ?? null}
+                sessionAnchor={matrix?._build_meta?.asof_date ?? null}
+                lang={lang}
+              />
+            </div>
+            <MarketStateCard
+              statePayload={statePayload}
+              gexPayload={gexPayload}
+              isIndexProduct={isIndex}
+              lang={lang}
+            />
+          </div>
         )}
       </div>
     </div>
@@ -920,6 +1007,45 @@ const ARCHIVED_PANE_NOTE: React.CSSProperties = {
   fontSize: 11,
   color: "var(--muted)",
   lineHeight: 1.55,
+};
+
+/**
+ * The desk's RIGHT RAIL. §5.3 made it a container: it now holds the HeatSeeker pick
+ * (which rode in from the retired PRISM tab) above the Market State card. The rail —
+ * not the card — is the bounded scroll region, carrying the containment invariant that
+ * used to live on MarketStateCard's CARD_OUTER: sized only by BODY_ROW's height, so a
+ * drawer opening in the LEFT column can never re-flow what is in here.
+ */
+/**
+ * Fixed slot for the HeatSeeker card. The card mounts asynchronously (it waits on the
+ * matrix fetch) and can swap between its pick and its empty state at any time. Without a
+ * reserved height that swap changes RIGHT_RAIL's scrollHeight underneath MarketStateCard,
+ * and a rail scrolled part-way jumps — the same class of defect the v7b containment fix
+ * removed one level up.
+ */
+const HEATSEEKER_SLOT: React.CSSProperties = {
+  flexShrink: 0,
+  minHeight: 96,
+};
+
+const RIGHT_RAIL: React.CSSProperties = {
+  borderLeft: "1px solid var(--hairline)",
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--sp-2)",
+  /* 360px rail on desktop; on a phone the row has already wrapped, so cap at the track
+     width instead of demanding a minimum and pushing a horizontal scrollbar. */
+  width: 360,
+  minWidth: 0,
+  maxWidth: "100%",
+  flexShrink: 0,
+  minHeight: 0,
+  alignSelf: "stretch",
+  maxHeight: "100%",
+  overflowY: "auto",
+  overscrollBehavior: "contain",
+  scrollbarWidth: "thin" as const,
+  scrollbarColor: "var(--line-3) transparent",
 };
 
 const LOADING_BADGE: React.CSSProperties = {

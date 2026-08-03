@@ -70,7 +70,7 @@ R3 partially done: Volatility tab, Structure/OI suite shipped.
 
 **MSC program (sibling, shipped through 08-02 — includes surfaces a QD census would count):**
 - `/options` tabs live: Options Tape · Flow Desk · Tide · Tickers · Options Screener ·
-  Exposure · Surface · PRISM · Structure · Volatility · **Positioning** · Prophet.
+  Exposure (incl. the Matrix view, ex-PRISM) · Surface · Structure · Volatility · **Positioning** · Prophet.
 - Positioning tab: exposure profile (spot-grid re-priced curve + flip), dealer heat
   strike×expiry (5–95 pctile), ranked gamma strikes, sign-robustness w*, hedge-flow grid,
   front-expiry book, **Level Report Card** (live graded hold-rates vs equidistant-mirror +
@@ -119,7 +119,7 @@ ONCE in this program; MSC consumes frames from it.** Mark the MSC ledger's R2.2 
 directive made concrete — it moves the last EOD plane (dealer positioning) intraday.
 
 **W4 — R3 remainder:** Statistics suite (buildable immediately — exchange codes retained);
-Interval Map + Vol Drift (U-CHAIN accrual sufficient ~08-07); PRISM VEX/UNUSUAL re-check
+Interval Map + Vol Drift (U-CHAIN accrual sufficient ~08-07); Exposure-matrix VEX/UNUSUAL-equivalent re-check
 (verify vanna grids + 30d baseline, then light).
 
 **W5 — R4 Filter Groups + alert generalization + filter bus.** Engine + Supabase persistence
