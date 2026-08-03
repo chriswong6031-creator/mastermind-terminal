@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import OptionsWorkspace from "@/components/workspaces/OptionsWorkspace";
 import OptionsPaywall from "@/components/OptionsPaywall";
@@ -23,5 +24,14 @@ export default async function OptionsPage() {
   // FLOW_FIXTURE=1 (dev/CI) is exempt, mirroring /api/flow — fixture sessions
   // preview the workspace without auth; the var is never set in prod.
   if (process.env.FLOW_FIXTURE !== "1" && !(await hasLiveOptions())) return <OptionsPaywall />;
-  return <OptionsWorkspace />;
+  // Suspense: OptionsWorkspace reads useSearchParams (?tab= deep-link seeding).
+  // This route is always dynamically rendered today (force-dynamic (shell)
+  // layout + the entitlement read above), so the params resolve server-side and
+  // the boundary never suspends — it exists so a future rendering-mode change
+  // degrades to a CSR bailout here instead of a build error.
+  return (
+    <Suspense fallback={null}>
+      <OptionsWorkspace />
+    </Suspense>
+  );
 }
