@@ -490,8 +490,8 @@ const MSC_LEX = {
     "以 Wilson 95% 区间给出的实测频率，并与明示的基准对比。并非任何水平将守住的断言——当记录未胜过基准时，本卡直言。",
   ],
   gcNull: [
-    "Where the record carries them, each role is judged against an EQUIDISTANT null — the same hold test on a level mirrored across spot, same distance, zero positioning information — and each board against the prior-day extremes; older windows fall back to the coin-flip 50%. A level earns “beats null” only when its Wilson lower bound clears its null's measured rate.",
-    "在记录覆盖之处，每类水平以等距基准评判——同一守住检验施加于以现价镜像、同距离但不含持仓信息的价位——每个盘面另与前日极值对比；较早窗口回退为抛硬币 50%。仅当 Wilson 下界越过其基准实测值时，才标注“胜过基准”。",
+    "Where the record carries them, each role is judged against an EQUIDISTANT null — the same hold test on a level mirrored across spot, same distance, zero positioning information — and each board against the prior-day extremes; older windows fall back to the coin-flip 50%. A level earns “beats null” only when the two records' intervals separate: its Wilson lower bound must clear the null's Wilson upper bound. The mirror sits on the opposite side of spot, so that comparison also absorbs up/down asymmetry — the side-matched null is the prior-day extreme.",
+    "在记录覆盖之处，每类水平以等距基准评判——同一守住检验施加于以现价镜像、同距离但不含持仓信息的价位——每个盘面另与前日极值对比；较早窗口回退为抛硬币 50%。仅当两条记录的区间彼此分离——其 Wilson 下界越过基准的 Wilson 上界——才标注“胜过基准”。镜像位处于现价另一侧，该对比亦包含涨跌不对称；同侧基准为前日极值。",
   ],
   gcScopeRoot: ["{n} boards, this root", "本标的 {n} 个盘面"],
   gcScopeUniverse: ["{n} boards · graded universe", "{n} 个盘面 · 已评级全体"],
