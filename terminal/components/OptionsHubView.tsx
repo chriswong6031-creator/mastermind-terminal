@@ -222,7 +222,7 @@ interface VolSmileExp { exp: string; points: VolSmilePoint[] }
 interface VolHistPoint { date: string; iv_rank: number | null; atm_iv: number; close: number }
 interface VolPayload {
   schema?: string; asof: string; root: string;
-  iv_rank_252: number | null; atm_iv: number;
+  iv_rank_252: number | null; atm_iv: number | null;
   iv_52w_hi: number; iv_52w_lo: number;
   rv20: number; vrp: number;
   spot_ref?: number;
@@ -2996,7 +2996,9 @@ export default function OptionsHubView({
                           <>
                             <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-tile)", padding: "5px 10px", background: "var(--panel)" }}>
                               <div className="obs-lbl">{t("tickersAtmIv", "ATM IV")}</div>
-                              <div className="num" style={{ fontWeight: 650, fontSize: 13, marginTop: 4, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{volData.atm_iv.toFixed(1)}%</div>
+                              <div className="num" style={{ fontWeight: 650, fontSize: 13, marginTop: 4, color: volData.atm_iv == null ? "var(--text-dim)" : "var(--text)", fontVariantNumeric: "tabular-nums" }}>
+                                {volData.atm_iv != null ? `${volData.atm_iv.toFixed(1)}%` : (lang === "zh" ? "积累中" : "—")}
+                              </div>
                             </div>
                             <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-tile)", padding: "5px 10px", background: "var(--panel)" }}>
                               <div className="obs-lbl">{t("tickersIvRank", "IV Rank")}</div>
