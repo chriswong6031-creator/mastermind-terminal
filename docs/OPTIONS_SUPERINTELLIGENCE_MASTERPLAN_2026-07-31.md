@@ -13,6 +13,14 @@ Golden Oracle / GC-v2 stack, the Research Desk, technicals, and the macro labs �
 
 ## ⚡ EXECUTION LEDGER — live wave status (update this section IN THE SAME PR as your work)
 
+> **⚠️ 2026-08-02 OPERATOR DIRECTIVES — read `docs/QUANTDATA_PARITY_HANDOFF_2026-08-02.md`
+> FIRST.** It carries: (1) the rescission of the house-idiom + paraphrase-only laws —
+> QuantData's layout/structure/IA are now explicit build targets, full parity structured to
+> be better in every regard; (2) the intraday-transition mandate; (3) live data arriving
+> ~08-04/05 with the marketing launch (re-gate data-gated items; ask which feed was bought);
+> (4) the renewed priority order (IA restructure W1, promoted) and the MSC collision map
+> (the intraday store is a shared keystone: build once here, MSC consumes).
+
 **Coordination protocol (multi-session law):** chat memory does not travel between sessions or accounts — this
 section is the shared truth. Before starting ANY options-estate work: (1) read this section + the sibling docs
 below + the `options-suite-parity-program` memory ledger; (2) CLAIM your lane by editing this section (mark

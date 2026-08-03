@@ -744,9 +744,14 @@ rather than averaged away.
 
 ## 9. What we deliberately do not copy
 
+> **OPERATOR RESCISSION 2026-08-02:** the "visual language / house idiom" and
+> "paraphrase-only" constraints below are RESCINDED. Competitor layout, structure and
+> IA are explicit build targets (see `docs/QUANTDATA_PARITY_HANDOFF_2026-08-02.md`).
+> Only the text/asset hygiene line and the honesty constraints below remain in force.
+
 - **News feeds** (`DAYTRADE_SUITE_SPEC.md` §0 stands).
-- **Their visual language.** Parity is capability parity; the v5/v7 Terminal idiom is ours.
-- **Any vendor's copy, assets or marketing text.** Every teardown in this program is paraphrase.
+- ~~**Their visual language.** Parity is capability parity; the v5/v7 Terminal idiom is ours.~~ *(rescinded)*
+- **Vendor logos/brand marks.** Everything else — text, assets, layout, structure — is fair game (operator call, 2026-08-02).
 - **Unfalsifiable claims.** No trademarked "trigger" line whose statistics we cannot reproduce
   nightly. If we cannot grade it, it ships grey or not at all.
 - **Point-estimate positioning.** We will not label the largest open-interest strike "dealer gamma"
