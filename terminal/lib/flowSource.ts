@@ -634,8 +634,8 @@ export async function fixtureFor(f: string): Promise<Record<string, unknown>> {
   }
   // Expiry matrix, keyed by root. In production the store exists only for some roots and
   // every consumer is built for absence (GexDeskView/SurfacePane gate on an array `cells`;
-  // PrismView nulls a cells-less payload before MatrixGrid). Unknown roots return {} — the
-  // old SPY fallback fed the Prism SPY/QQQ/IWM confluence board the same SPY matrix three
+  // GexDeskView.readMatrix nulls a cells-less payload before the grid). Unknown roots
+  // return {} — the old SPY fallback fed the SPY/QQQ/IWM confluence board the same matrix three
   // times over, fabricating perfect cross-index alignment in dev.
   if (f.startsWith("matrix:")) {
     const root = f.slice(7).toUpperCase();

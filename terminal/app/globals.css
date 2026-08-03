@@ -97,7 +97,7 @@
   --shadow-2:0 8px 24px rgba(0,0,0,.45);
   --shadow-3:0 18px 44px -14px rgba(0,0,0,.6);
   --rail:var(--brand);
-  /* tier aliases for tokens referenced by DayStatsStrip/MatrixGrid but never defined
+  /* tier aliases for tokens referenced by DayStatsStrip/StrikeExpiryMatrix but never defined
      (inside gradients an undefined token invalidates the whole declaration) */
   --surface-1:var(--panel-2);
   --text-1:var(--text);

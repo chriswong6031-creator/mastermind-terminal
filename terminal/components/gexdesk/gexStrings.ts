@@ -400,6 +400,127 @@ const GEX_LEX = {
     "Market state and the EOD context belt describe the current session only — hidden while replaying an archived ladder.",
     "市场状态与收盘背景条仅描述当前交易日——回放已归档梯图时予以隐藏。",
   ],
+
+  // ══ §5.3 — the matrix view, merged in from the retired PRISM tab ═══════════
+  // Copy moved from components/prism/prismStrings.ts with its zh translations intact.
+  // The PRISM lens names (GEX/VEX/UNUSUAL) did NOT come with it: the matrix now speaks
+  // the same net-hedge metric set as the Positioning tab's card, because both render
+  // through components/shared/StrikeExpiryMatrix.
+
+  // ── View switcher ──────────────────────────────────────────────────────────
+  viewMatrix:      ["Matrix", "矩阵"],
+  viewMatrixFull:  ["Strike × expiry matrix", "行权价 × 到期日矩阵"],
+
+  // ── Matrix metric chips (mirror the Positioning card's metric set) ─────────
+  mtxMetricHedge:  ["Net hedge", "净对冲"],
+  mtxMetricOi:     ["OI", "未平仓"],
+  mtxMetricVol:    ["Volume", "成交量"],
+  mtxMetricDoi:    ["ΔOI", "ΔOI"],
+  mtxMetricAria:   ["Matrix metric", "矩阵指标"],
+
+  // ── Matrix controls ────────────────────────────────────────────────────────
+  mtxColsLabel:    ["COLS", "列数"],
+  mtxColsAria:     ["Expiry column count", "到期日列数"],
+  scopeDefault:    ["DEFAULT", "默认"],
+  scope0dte:       ["0DTE", "0DTE"],
+  scopeAll:        ["ALL Σ", "全部Σ"],
+  mtxScopeAria:    ["Expiry scope", "到期日范围"],
+  range10:         ["±10%", "±10%"],
+  range20:         ["±20%", "±20%"],
+  range40:         ["±40%", "±40%"],
+  strikeRangeLabel:["RANGE", "区间"],
+  mtxRangeAria:    ["Strike window around spot", "现价周边行权价区间"],
+  normColumn:      ["PER-COL", "按列"],
+  normGlobal:      ["GLOBAL", "全局"],
+  mtxNormAria:     ["Colour normalization", "配色归一化"],
+
+  // ── Matrix column headers / legend ─────────────────────────────────────────
+  colStrike:       ["Strike", "行权价"],
+  colSpotPct:      ["% from Spot", "距现价%"],
+  mtxSigmaAria:    ["Sum across the visible expirations", "可见到期日合计"],
+  legendTitle:     ["Level markers", "关键价位标记"],
+  spotLabel:       ["Spot", "现价"],
+
+  // ── Level badges (strike-row markers) ──────────────────────────────────────
+  levelWall:       ["WALL", "看涨墙"],
+  levelSupport:    ["SUPPORT", "看跌墙"],
+  levelFlip:       ["FLIP", "翻转"],
+  levelMagnet:     ["MAGNET", "磁吸"],
+  levelMaxPain:    ["MAX PAIN", "最大痛苦"],
+  levelSpot:       ["SPOT", "现价"],
+
+  // ── Matrix honesty copy ────────────────────────────────────────────────────
+  // The matrix store is nightly EOD — never dressed in live chrome. This chip states
+  // the session the CELLS describe, which is not always the ladder's own session.
+  mtxAsOfLabel:    ["Matrix session", "矩阵交易日"],
+  mtxEodNote:      [
+    "Nightly end-of-day snapshot — not a live feed.",
+    "每晚收盘快照——非实时数据。",
+  ],
+  mtxHedgeLegend:  [
+    "Cells are net dealer hedge per +1% spot ($mn) — a transaction side, not a price direction.",
+    "单元格为每上涨1%的做市商净对冲额（百万美元）——表示交易方向，而非价格涨跌。",
+  ],
+  mtxDoiLegend:    [
+    "PIT: OI[t-1] − OI[t-2] — contracts added vs removed, per cell.",
+    "定点快照：OI[t-1]−OI[t-2] — 每格新增与减少的合约数。",
+  ],
+  mtxMagLegend:    [
+    "Magnitude only — call + put, in contracts. Not call/put-signed.",
+    "仅数量级 — 认购+认沽，单位：张。不区分认购/认沽方向。",
+  ],
+  mtxWindow:       [
+    "±{p}% of spot · {n} of {full} strikes · {e} expirations",
+    "现价±{p}% · {full}个行权价中的{n}个 · {e}个到期日",
+  ],
+  mtxBucket:       ["strikes summed into {b}-wide rows", "行权价按 {b} 宽度归并为行"],
+  mtxMoreExp:      ["+{n} later expirations not shown", "另有 {n} 个较远到期日未显示"],
+  mtxNone:         [
+    "No strike × expiry matrix published for this root.",
+    "该品种暂无行权价×到期日矩阵数据。",
+  ],
+  magnitudeFirst:  [
+    "Sign is an assumption, not a fact. Magnitude is the reliable read.",
+    "符号为假设而非事实。数量级才是可靠读数。",
+  ],
+  descriptiveOnly: [
+    "Descriptive — not a recommendation. Index complex only.",
+    "仅供描述 — 非交易建议。仅限指数组合。",
+  ],
+
+  // ── Confluence (SPY + QQQ + IWM), ported from prism/ConfluenceView ─────────
+  modeSingle:         ["SINGLE", "单品种"],
+  modeConfluence:     ["CONFLUENCE", "联合"],
+  mtxModeAria:        ["Matrix mode", "矩阵模式"],
+  confluenceTitle:    ["Confluence", "联合视图"],
+  confluenceNote:     [
+    "Strikes normalized to % from spot — index-only, descriptive. This is not a trading signal.",
+    "行权价以距现价百分比表示 — 仅限指数，仅供描述。这不是交易信号。",
+  ],
+  confluenceAligned:  ["levels aligned — index complex", "水平对齐 — 指数组合"],
+  confluence2of3:     ["2/3 aligned", "2/3对齐"],
+  confluence3of3:     ["3/3 aligned", "3/3对齐"],
+  confluenceEmpty:    [
+    "No alignment detected across indices at this metric.",
+    "当前指标下指数间未检测到对齐。",
+  ],
+
+  // ── HeatSeeker card, ported from prism/HeatSeekerCard ─────────────────────
+  heatSeekerTitle:      ["HeatSeeker Pick", "热点精选"],
+  heatSeekerDisclaimer: [
+    "descriptive — not a recommendation",
+    "仅供描述 — 非交易建议",
+  ],
+  heatSeekerExpiry:     ["Expiry", "到期日"],
+  heatSeekerRatio:      ["Standout ratio", "突出比率"],
+  // The engine field is a 0..1 FRACTION rendered as a percent — the unit rides the
+  // label so the bare ring numeral can never be misread as a tier or a raw score.
+  heatSeekerConfUnit:   ["Confidence %", "置信度 %"],
+  heatSeekerFromSpot:   ["from spot", "距现价"],
+  heatSeekerNull:       [
+    "No standout pick — load is shared across levels.",
+    "无突出精选 — 仓位分布于多个价位。",
+  ],
 } as const;
 
 type GexDeskKey = keyof typeof GEX_LEX;

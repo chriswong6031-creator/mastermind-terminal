@@ -1,4 +1,5 @@
-// PRISM heat-seeker confidence — one convention, producer-side.
+// HeatSeeker confidence — one convention, producer-side.
+// (§5.3 moved the card from the retired PRISM tab into the Exposure desk's right rail.)
 //
 // `options_structure.matrix/v1` heat_seeker.confidence is a 0..1 FRACTION, not a
 // "low"/"medium"/"high" tier. The builder (macro `engine/options_matrix.py`
@@ -21,7 +22,7 @@
 import { describe, it, expect } from "vitest";
 import { promises as fs } from "fs";
 import path from "path";
-import { heatSeekerConfPct } from "@/components/prism/HeatSeekerCard";
+import { heatSeekerConfPct } from "@/components/gexdesk/HeatSeekerCard";
 
 const MATRIX_FIXTURE = path.join(process.cwd(), "public", "data", "matrix_fixture.json");
 

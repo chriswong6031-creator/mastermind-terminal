@@ -5,13 +5,13 @@
 //   1. HONEST EMPTY. fixtureFor("<feed>:<ROOT>") for a root the fixture does not carry must
 //      return {} — never the first key's payload, never a designated default. The fallbacks
 //      dressed the QQQ Tickers drill in NVDA's tctx z-chips, rendered a substituted root's
-//      IV percentile on the Exposure Desk's Structure strip, and fed the Prism SPY/QQQ/IWM
+//      IV percentile on the Exposure Desk's Structure strip, and fed the SPY/QQQ/IWM
 //      confluence board the same SPY matrix three times over (fabricated alignment). {} lands
 //      each consumer in the same absent state a prod 503 for a missing root produces.
 //   2. ENTRY INTEGRITY. Each fixture entry must be renderable under its OWN key: vol/matrix
 //      docs carry root === key (OptionsHubView renders vol only when payload.root matches the
 //      selection — a mis-keyed entry would be invisible, not an error), tctx docs carry the
-//      exact five z-keys the chips iterate, and matrix docs carry the arrays MatrixGrid and
+//      exact five z-keys the chips iterate, and matrix docs carry the arrays StrikeExpiryMatrix and
 //      SurfacePane iterate unconditionally.
 import { describe, it, expect } from "vitest";
 import { promises as fs } from "fs";
@@ -71,7 +71,7 @@ describe("fixtureFor vol:/tctx:/matrix: — root keying", () => {
     expect(await fixtureFor("tctx:qqq")).toEqual(doc);
   });
 
-  it("serves each Prism confluence root its OWN matrix — three distinct ladders, never SPY's thrice", async () => {
+  it("serves each confluence root its OWN matrix — three distinct ladders, never SPY's thrice", async () => {
     // The retired `all["SPY"]` fallback made the board's three indices identical in dev;
     // #216 replaced it with an honest {} (two "—" columns), and the QQQ/IWM entries now make
     // all three columns real. The failure this guards is a silent regression to one ladder
@@ -138,7 +138,7 @@ describe("hub fixtures — entry integrity (every root)", () => {
       const strikeSet = new Set(e.strikes);
       const expSet = new Set(e.expiries);
       for (const c of e.cells) {
-        // SurfacePane parses strike/expiry/gex off every cell; MatrixGrid buckets cells by
+        // SurfacePane parses strike/expiry/gex off every cell; StrikeExpiryMatrix buckets cells by
         // the strike × expiry axes — a cell referencing an unlisted axis renders as a hole.
         expect(Number.isFinite(c.strike), `${key} cell strike`).toBe(true);
         expect(strikeSet.has(c.strike), `${key} cell strike ${c.strike} listed`).toBe(true);
@@ -157,7 +157,7 @@ describe("hub fixtures — entry integrity (every root)", () => {
 
       for (const [name, v] of Object.entries(e.levels)) {
         if (v == null || name === "gamma_flip") continue;
-        // MatrixGrid badges a level onto the row whose strike it matches; a level off the
+        // StrikeExpiryMatrix badges a level onto the row whose strike it matches; a level off the
         // axis is a badge that never renders.
         expect(strikeSet.has(v), `${key} level ${name}=${v} listed`).toBe(true);
       }
@@ -199,18 +199,18 @@ describe("hub fixtures — entry integrity (every root)", () => {
   });
 });
 
-// ─── Prism CONFLUENCE board ───────────────────────────────────────────────────
-// ConfluenceView hard-codes SPY/QQQ/IWM and is the surface the retired matrix fallback
+// ─── CONFLUENCE board (gexdesk/MatrixConfluence) ──────────────────────────────
+// MatrixConfluence hard-codes SPY/QQQ/IWM and is the surface the retired matrix fallback
 // damaged worst (one SPY ladder rendered three times = fabricated alignment at every level).
 // These re-implement its own math against the fixture so the dev board's demo state is a
 // locked property of the data, not something re-derived by hand each time it is touched.
-describe("matrix fixture — the Prism confluence board renders three real ladders", () => {
+describe("matrix fixture — the confluence board renders three real ladders", () => {
   const BANDS = [2.4, 2.0, 1.6, 1.2, 0.8, 0.4, 0, -0.4, -0.8, -1.2, -1.6, -2.0, -2.4];
   const INDICES = ["SPY", "QQQ", "IWM"] as const;
   const ALIGNMENT_THRESHOLD = 0.5;
   const BAND_TOLERANCE = 0.8;
 
-  /** ConfluenceView.nearestBucket — strict `<` means the first band wins a tie. */
+  /** MatrixConfluence.nearestBucket — strict `<` means the first band wins a tie. */
   const nearestBucket = (pct: number) =>
     BANDS.reduce((best, b) => (Math.abs(pct - b) < Math.abs(pct - best) ? b : best), BANDS[0]);
 

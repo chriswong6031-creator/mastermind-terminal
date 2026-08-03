@@ -1,6 +1,10 @@
 "use client";
 /**
- * HeatSeekerCard — renders the artifact's heat_seeker pick.
+ * HeatSeekerCard — renders the matrix artifact's heat_seeker pick.
+ *
+ * §5.3: moved verbatim from components/prism/ when the PRISM tab was retired — it is
+ * the ONLY consumer of the published `heat_seeker` field, so it rides into the Exposure
+ * desk's right rail rather than dying with the tab. Strings moved to gexStrings.
  *
  * Shows: strike / expiry / lens / standout_ratio / confidence
  * Carries verbatim disclaimer: "descriptive — not a recommendation"
@@ -15,7 +19,7 @@
  */
 
 import React from "react";
-import { makePrismT } from "./prismStrings";
+import { makeGexT } from "./gexStrings";
 import type { Lang } from "@/lib/i18n";
 import { RingGauge } from "@/components/ui/RingGauge";
 
@@ -109,7 +113,7 @@ export function HeatSeekerCard({ pick, spot, lang }: HeatSeekerCardProps) {
     }
   }
 
-  const t = makePrismT(lang);
+  const t = makeGexT(lang);
 
   if (!pick) {
     return (

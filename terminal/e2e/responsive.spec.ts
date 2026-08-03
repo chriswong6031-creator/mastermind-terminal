@@ -450,19 +450,28 @@ test("Intraday Surface separates session, observed frames, and candle interval a
   });
 });
 
-test("PRISM defaults to the full strike window at every supported width", async ({ page }, testInfo) => {
+test("the retired ?tab=prism deep-link opens the Exposure matrix at every supported width", async ({ page }, testInfo) => {
+  // §5.3 merged PRISM into the Exposure desk. The old deep-link must not 404 or dead-end
+  // on the ladder: the TARGET side (GexDeskView) resolves the alias onto its matrix view.
   await page.goto("/options?tab=prism");
 
-  const range40 = page.getByRole("button", { name: "±40", exact: true });
-  await expect(range40).toBeVisible({ timeout: 15_000 });
+  const matrixChip = page.getByRole("button", { name: "Matrix", exact: true });
+  await expect(matrixChip).toBeVisible({ timeout: 15_000 });
+  await expect(matrixChip).toHaveAttribute("aria-pressed", "true");
+
+  // The matrix opens on the widest strike window, as PRISM did.
+  const range40 = page.getByRole("button", { name: "±40%", exact: true });
   await expect(range40).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("button", { name: "±10", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("button", { name: "±10%", exact: true })).toHaveAttribute("aria-pressed", "false");
+
+  // Nightly EOD provenance is stated on the view — never live chrome.
+  await expect(page.getByTestId("matrix-asof")).toBeVisible();
 
   const matrix = page.locator("table").filter({
     has: page.getByRole("columnheader", { name: "Strike", exact: true }),
   });
   await expect(matrix).toBeVisible();
-  await expect.poll(() => matrix.locator("tbody > tr").count()).toBeGreaterThanOrEqual(40);
+  await expect.poll(() => matrix.locator("tbody > tr").count()).toBeGreaterThanOrEqual(20);
 
   const overflow = await page.evaluate(() => ({
     viewport: window.innerWidth,
@@ -470,7 +479,7 @@ test("PRISM defaults to the full strike window at every supported width", async 
   }));
   expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
   await page.screenshot({
-    path: testInfo.outputPath(`${testInfo.project.name}-prism-full-strikes.png`),
+    path: testInfo.outputPath(`${testInfo.project.name}-exposure-matrix.png`),
     fullPage: false,
   });
 });
