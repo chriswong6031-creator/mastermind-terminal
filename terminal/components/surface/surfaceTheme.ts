@@ -32,13 +32,33 @@ export type SurfacePalette = Record<ThemeMetric, ColorPair>;
 export type PresetKey = "default" | "colorblind" | "mono" | "classic";
 export const PRESET_KEYS: PresetKey[] = ["default", "colorblind", "mono", "classic"];
 
+/**
+ * Field colour-INTENSITY normalization (masterplan R1.4 — separate axis from the
+ * pos/neg hue preset above). `balanced` clamps the shader's day-max input to the 95th
+ * percentile of |cell| (lib/surfaceContract gridPercentileAbs) so one outlier
+ * strike-minute cannot wash out the rest of the field; `raw` is the pre-R1.4
+ * max(|min|,|max|) behaviour (gridMaxAbs). Lives on the same persisted theme object as
+ * the preset/custom pairs — one "Style" popover, one storage key.
+ */
+export type ContrastMode = "balanced" | "raw";
+export const CONTRAST_MODES: ContrastMode[] = ["balanced", "raw"];
+export const DEFAULT_CONTRAST: ContrastMode = "balanced";
+
 export interface SurfaceTheme {
   preset: PresetKey;
   /** Per-metric overrides layered ON TOP of the preset (a custom picker edit). */
   custom: Partial<SurfacePalette>;
+  /** @default "balanced" — see ContrastMode. Optional so an old stored theme (pre-R1.4)
+   *  degrades to the new default rather than a missing/undefined mode. */
+  contrast?: ContrastMode;
 }
 
-export const DEFAULT_THEME: SurfaceTheme = { preset: "default", custom: {} };
+export const DEFAULT_THEME: SurfaceTheme = { preset: "default", custom: {}, contrast: DEFAULT_CONTRAST };
+
+/** The effective contrast mode — a stored theme predating this field defaults to balanced. */
+export function effectiveContrast(theme: SurfaceTheme): ContrastMode {
+  return theme.contrast === "raw" ? "raw" : "balanced";
+}
 
 /**
  * Preset palettes. `default` is intentionally null — it means "inherit the theme's
@@ -170,14 +190,21 @@ export function parseTheme(raw: string | null): SurfaceTheme {
       const pair = src[metric] as ColorPair | undefined;
       if (pair && isHex(pair.pos) && isHex(pair.neg)) custom[metric] = { pos: pair.pos, neg: pair.neg };
     }
-    return { preset, custom };
+    // An unknown/missing value (including every pre-R1.4 stored theme) degrades to the
+    // default rather than throwing or silently going "raw" behind the user's back.
+    const contrast: ContrastMode = o?.contrast === "raw" ? "raw" : DEFAULT_CONTRAST;
+    return { preset, custom, contrast };
   } catch {
     return DEFAULT_THEME;
   }
 }
 
 export function serializeTheme(theme: SurfaceTheme): string {
-  return JSON.stringify({ preset: theme.preset, custom: theme.custom ?? {} });
+  return JSON.stringify({
+    preset: theme.preset,
+    custom: theme.custom ?? {},
+    contrast: effectiveContrast(theme),
+  });
 }
 
 /** SSR-safe read (returns the default with no window). */

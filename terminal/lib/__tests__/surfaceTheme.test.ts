@@ -205,12 +205,12 @@ describe("persistence", () => {
   });
 
   it("survives serialize → parse unchanged", () => {
-    const theme: SurfaceTheme = { preset: "mono", custom: { vanna: { pos: "#abcdef", neg: "#fedcba" } } };
+    const theme: SurfaceTheme = { preset: "mono", custom: { vanna: { pos: "#abcdef", neg: "#fedcba" } }, contrast: "raw" };
     expect(parseTheme(serializeTheme(theme))).toEqual(theme);
   });
 
   it("save → load round-trips through localStorage under the versioned key", () => {
-    const theme: SurfaceTheme = { preset: "colorblind", custom: { charm: { pos: "#101010", neg: "#202020" } } };
+    const theme: SurfaceTheme = { preset: "colorblind", custom: { charm: { pos: "#101010", neg: "#202020" } }, contrast: "balanced" };
     saveTheme(theme);
     expect(loadTheme()).toEqual(theme);
     const storage = (g.window as { localStorage: Storage }).localStorage;
@@ -231,13 +231,44 @@ describe("persistence", () => {
 
   it("strips a non-hex custom colour from stored state", () => {
     const hostile = '{"preset":"default","custom":{"netprem":{"pos":"url(javascript:1)","neg":"#fff"}}}';
-    expect(parseTheme(hostile)).toEqual({ preset: "default", custom: {} });
+    expect(parseTheme(hostile)).toEqual({ preset: "default", custom: {}, contrast: "balanced" });
   });
 
   it("keeps valid custom entries while dropping invalid siblings", () => {
     const mixed =
       '{"preset":"mono","custom":{"netprem":{"pos":"#111","neg":"#222"},"charm":{"pos":"nope","neg":"#333"}}}';
-    expect(parseTheme(mixed)).toEqual({ preset: "mono", custom: { netprem: { pos: "#111", neg: "#222" } } });
+    expect(parseTheme(mixed)).toEqual({ preset: "mono", custom: { netprem: { pos: "#111", neg: "#222" } }, contrast: "balanced" });
+  });
+
+  // ── R1.4 contrast field — a SEPARATE persisted axis from preset/custom (intensity,
+  // not hue). "Toggle states persist sanely": the SurfaceStylePopover Contrast toggle
+  // rides the same THEME_STORAGE_KEY as the preset it sits beside in the popover.
+  it("round-trips an explicit \"raw\" contrast through serialize → parse", () => {
+    const theme: SurfaceTheme = { preset: "default", custom: {}, contrast: "raw" };
+    expect(parseTheme(serializeTheme(theme)).contrast).toBe("raw");
+  });
+
+  it("degrades a missing contrast field (pre-R1.4 stored theme) to balanced", () => {
+    const preR14 = '{"preset":"classic","custom":{}}';
+    expect(parseTheme(preR14).contrast).toBe("balanced");
+  });
+
+  it("degrades an unknown contrast value to balanced, never trusting it", () => {
+    expect(parseTheme('{"preset":"default","custom":{},"contrast":"extreme"}').contrast).toBe("balanced");
+  });
+
+  it("serializeTheme always writes an explicit contrast value, even when the input theme omits it", () => {
+    const legacy = { preset: "default", custom: {} } as SurfaceTheme;
+    expect(JSON.parse(serializeTheme(legacy)).contrast).toBe("balanced");
+  });
+
+  it("choosing a colour preset does not reset an existing contrast choice", () => {
+    // Regression guard for setPreset in SurfaceStylePopover, which used to construct a
+    // brand-new theme object (`{ preset, custom: {} }`) that silently dropped `contrast`.
+    const theme: SurfaceTheme = { preset: "classic", custom: {}, contrast: "raw" };
+    // setPreset's actual behaviour: { preset: next, custom: {}, contrast: theme.contrast }
+    const next: SurfaceTheme = { preset: "mono", custom: {}, contrast: theme.contrast };
+    expect(next.contrast).toBe("raw");
   });
 
   it("a blocked/full localStorage never breaks the pane", () => {

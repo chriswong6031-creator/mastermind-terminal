@@ -60,10 +60,13 @@ import {
   buildHeatBars,
   filterFrameToRange,
   gridMaxAbs,
+  gridPercentileAbs,
   isSurfaceFrame,
   isSurfaceIndex,
   metricEnabled,
   observedSurfaceCadenceSec,
+  parseOiChangeRows,
+  topOiChangeStrikes,
   type SurfaceFrame,
   type MatrixCell,
 } from "@/lib/surfaceContract";
@@ -74,6 +77,11 @@ import { makeSurfaceT } from "./surfaceStrings";
 import type { SurfaceKey } from "./surfaceStrings";
 import { useSurfaceSync } from "./surfaceSync";
 import type { SurfacePin } from "./surfacePins";
+import type { ContrastMode } from "./surfaceTheme";
+import { EodReplayTag } from "./EodReplayTag";
+import { deriveOptLevels, sessionsOldEt, type OptLevelKey } from "@/lib/optionsLevels";
+import { parseGlanceState, REGIME_COLORS } from "@/lib/mscGlance";
+import { makeGexT } from "@/components/gexdesk/gexStrings";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -268,6 +276,12 @@ export interface SurfacePaneProps {
    * is never torn down for a recolour.
    */
   themeSig?: string;
+  /**
+   * R1.4: which day-max normalizer feeds the shader — the 95th-percentile "Balanced"
+   * default (kills the wash-out from one outlier strike-minute) or the pre-R1.4 "Raw"
+   * literal max. Set from SurfaceView's persisted theme, same as `themeSig`.
+   */
+  contrastMode?: ContrastMode;
   /** Pinned strike levels, drawn as price lines ("send to chart"). */
   pins?: SurfacePin[];
   onTogglePin?: (strike: number, metric: string, value: number | null) => void;
@@ -285,6 +299,7 @@ export function SurfacePane({
   syncId,
   aggMinOverride,
   themeSig,
+  contrastMode = "balanced",
   pins,
   onTogglePin,
   timeWindow = "surface",
@@ -292,9 +307,15 @@ export function SurfacePane({
 }: SurfacePaneProps) {
   const { lang } = useLang();
   const t = makeSurfaceT(lang);
+  const gexT = makeGexT(lang);
   const { state: replayState, dispatch, asOfStamp, live, sessionDate } = useReplay();
   const sync = useSurfaceSync();
   const isCell = chrome === "cell";
+  // Nightly-derived overlays (Levels / regime / OI Δ) never truncate or interpolate to the
+  // scrubbed minute — there is no intraday history behind gex:/gexstate:/oi_change:, so
+  // truncating them would be fabrication. Off the live head they keep showing the value
+  // they genuinely describe and wear EodReplayTag, exactly like the GEX ladder (T-B).
+  // EodReplayTag reads its own off-head state from replayBus — no local mirror needed.
 
   // A quad cell is pinned to one metric by its parent; the full pane owns its own via the
   // tab strip. Deriving rather than mirroring into state keeps the two from drifting.
@@ -316,6 +337,16 @@ export function SurfacePane({
   // Per-strike-per-expiry cells for the modal's expiry breakdown (matrix payload; optional).
   const [matrixCells, setMatrixCells] = useState<MatrixCell[] | null>(null);
 
+  // ── Nightly overlays (Levels / regime chip / OI Δ) — opt-in, session-only toggles.
+  // Not persisted (unlike the Contrast toggle, which lives on the theme): these mirror
+  // the pane's other session controls (opacity/range/agg), none of which survive a reload.
+  const [levelsOn, setLevelsOn] = useState(false);
+  const [oiDeltaOn, setOiDeltaOn] = useState(false);
+  const [gexRaw, setGexRaw] = useState<unknown>(null);
+  const [movesRaw, setMovesRaw] = useState<unknown>(null);
+  const [gexStateRaw, setGexStateRaw] = useState<unknown>(null);
+  const [oiChangeRaw, setOiChangeRaw] = useState<unknown>(null);
+
   const wrapRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const heatSeriesRef = useRef<ISeriesApi<"Custom"> | null>(null);
@@ -324,6 +355,8 @@ export function SurfacePane({
   const frameRef = useRef<SurfaceFrame | null>(null);
   const metricRef = useRef<Metric>("netprem");
   const opacityRef = useRef<number>(1);
+  // R1.4: which day-max normalizer applyShaderRef reads — set from the `contrastMode` prop.
+  const contrastRef = useRef<ContrastMode>("balanced");
   const hoverIdxRef = useRef<number | null>(null); // latest hovered strike idx for click→modal
   // B9: the frame's time axis in display epochs, rebuilt ONCE per frame. The crosshair
   // handler used to construct one Date per session column on every mousemove (~390 for a
@@ -343,12 +376,20 @@ export function SurfacePane({
   const stampsRef = useRef<string[]>([]);
   // Live price lines for pinned strikes, by pin id (send-to-chart).
   const pinLinesRef = useRef<Map<string, { series: ISeriesApi<"Candlestick"> | ISeriesApi<"Custom">; line: unknown }>>(new Map());
+  // Options-levels overlay lines (call/put wall, flip, EM band), keyed by OptLevelKey —
+  // redrawn wholesale on toggle/data change (small, fixed-size set; unlike pins there is
+  // nothing to reconcile incrementally).
+  const levelLinesRef = useRef<{ key: string; line: unknown }[]>([]);
+  // OI Δ strike-axis badges: lineVisible:false price lines (axis-label-only markers), one
+  // per top-N strike — "subtle... on the field's strike axis", never a full-width line.
+  const oiLinesRef = useRef<unknown[]>([]);
   // The crosshair handler is registered once at mount; reading sync through a ref keeps it
   // off the mount effect's dep list (and out of stale-closure territory).
   const syncRef = useRef({ sync, id: syncId });
   useEffect(() => { syncRef.current = { sync, id: syncId }; }, [sync, syncId]);
   useEffect(() => { metricRef.current = metric; }, [metric]);
   useEffect(() => { opacityRef.current = opacity; }, [opacity]);
+  useEffect(() => { contrastRef.current = contrastMode; }, [contrastMode]);
   useEffect(() => { hoverIdxRef.current = hover?.strikeIdx ?? null; }, [hover]);
   const effAggMin = aggMinOverride ?? aggMin;
   // The route slices server-side so a single-session pane does not receive 20,000 deep
@@ -367,13 +408,35 @@ export function SurfacePane({
     const heat = heatSeriesRef.current;
     if (!heat) return;
     const grid = frameRef.current?.grids[metricRef.current];
-    const maxAbs = grid ? gridMaxAbs(grid) : 0;
+    // R1.4 ("kill the bland"): Balanced clamps the day-max normalizer to the 95th
+    // percentile of |cell| (gridPercentileAbs) instead of the single largest cell, so one
+    // outlier strike-minute cannot wash out the rest of the field. heatShade itself is
+    // untouched — its o = min(1, |amount|/maxAbs) clamp already saturates everything past
+    // the percentile to full intensity. Raw keeps the pre-R1.4 literal max.
+    const maxAbs = grid ? (contrastRef.current === "raw" ? gridMaxAbs(grid) : gridPercentileAbs(grid)) : 0;
     const { pos, neg } = colorsRef.current;
     const W = opacityRef.current;
     heat.applyOptions({
       cellShader: (amount: number) => heatShade(amount, maxAbs, pos, neg, W),
       opacity: W,
     } as Partial<HeatSeriesOptions>);
+    // Pre-existing gap uncovered while building this: lightweight-charts' custom-series
+    // applyOptions() does NOT reliably invalidate the pane when only a function-valued
+    // option (cellShader) changes and every primitive option (opacity/theme) stays at the
+    // same VALUE — confirmed by pixel-checksumming the canvas before/after a Contrast
+    // toggle AND before/after a colour-preset switch (surfaceTheme's `themeSig` path, which
+    // rides this same ref): both left the canvas byte-for-byte unchanged despite the
+    // closure genuinely capturing new values (verified via the renderer's own inputs). A
+    // re-shade that paints nothing defeats R1.4's whole purpose, so force one.
+    //
+    // Re-driving heat.setData() was tried and rejected: calling it a SECOND time on this
+    // custom series intermittently blanked the pane — plausibly a transient invalid
+    // visibleRange while LWC reprocesses the bars, which the X-framing effect (keyed on
+    // frame/session, not on contrast/opacity/theme) never re-runs to repair afterward.
+    // A chart-level no-op applyOptions is the documented lightweight-charts trick for
+    // forcing every pane's next animation frame to redraw from its series' ALREADY-CURRENT
+    // data/options (just set above) — it never touches series data or the time scale.
+    chartRef.current?.applyOptions({});
   });
 
   // Commit a y window. THE single writer of the price scale's visible range: every path
@@ -498,6 +561,44 @@ export function SurfacePane({
     })();
     return () => { cancelled = true; };
   }, [root]);
+
+  // ── Nightly overlays: options levels + regime + OI Δ (root-keyed, once per root) ─────
+  // These are the SAME options_hub / options_structure payloads ChartPanel's Options
+  // Levels overlay and the screener/watchlist/ticker regime dot already read — fetched
+  // here (not stamp-keyed: nightly data has no intraday history to re-fetch per scrub).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [g, m] = await Promise.all([flowGet(`gex:${root}`), flowGet(`moves:${root}`)]);
+      if (!cancelled) { setGexRaw(g); setMovesRaw(m); }
+    })();
+    return () => { cancelled = true; };
+  }, [root]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const data = await flowGet(`gexstate:${root}`);
+      if (!cancelled) setGexStateRaw(data);
+    })();
+    return () => { cancelled = true; };
+  }, [root]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const data = await flowGet(`oi_change:${root}`);
+      if (!cancelled) setOiChangeRaw(data);
+    })();
+    return () => { cancelled = true; };
+  }, [root]);
+
+  // Pure derivations (lib/optionsLevels, lib/mscGlance, lib/surfaceContract) — never
+  // recomputed on a replay scrub, only when the root or the raw payload changes.
+  const optLevels = useMemo(() => deriveOptLevels(gexRaw, movesRaw, root), [gexRaw, movesRaw, root]);
+  const glanceRow = useMemo(() => parseGlanceState(gexStateRaw, root), [gexStateRaw, root]);
+  const oiChangeCells = useMemo(() => parseOiChangeRows(oiChangeRaw), [oiChangeRaw]);
+  const topOiStrikes = useMemo(() => topOiChangeStrikes(oiChangeCells, 5), [oiChangeCells]);
 
   // ── Intraday candles (per agg) ───────────────────────────────────────────────
   useEffect(() => {
@@ -727,6 +828,8 @@ export function SurfacePane({
       // The removed chart took its price lines with it; drop the handles so a remount
       // re-creates them from `pins` instead of holding references to a dead chart.
       pinLines.clear();
+      levelLinesRef.current = [];
+      oiLinesRef.current = [];
     };
   }, []);
 
@@ -767,6 +870,10 @@ export function SurfacePane({
 
   // Re-apply the shader when opacity changes (data unchanged).
   useEffect(() => { applyShaderRef.current(); }, [opacity]);
+
+  // Re-apply the shader when the Contrast mode changes (R1.4) — the frame doesn't change,
+  // only which day-max normalizer feeds heatShade.
+  useEffect(() => { applyShaderRef.current(); }, [contrastMode]);
 
   // ── Theme engine: recolour in place, no remount ─────────────────────────────
   // The pane's colours come from CSS custom properties, and the theme writes those onto an
@@ -828,6 +935,74 @@ export function SurfacePane({
       }
     }
   }, [pins]);
+
+  // ── Options-levels overlay ("Levels" toggle) — call wall / put wall / gamma flip / abs-γ
+  // / EM band as createPriceLine, mirroring ChartPanel's Options Levels overlay idiom
+  // exactly (same colours, same dash convention: solid walls, dashed flip, dotted abs-γ/EM)
+  // so a level reads the same whether it's found on the price chart or the surface field.
+  // Redrawn wholesale (not reconciled like pins) — the set is small and fixed-shape.
+  useEffect(() => {
+    const host = candleSeriesRef.current ?? heatSeriesRef.current;
+    if (!host) return;
+    const h = host as unknown as {
+      createPriceLine: (o: unknown) => unknown;
+      removePriceLine: (l: unknown) => void;
+    };
+    for (const rec of levelLinesRef.current) { try { h.removePriceLine(rec.line); } catch {} }
+    levelLinesRef.current = [];
+    if (!levelsOn || optLevels.status !== "ok") return;
+    const style: Record<OptLevelKey, { color: string; dash: number; title: string }> = {
+      call_wall: { color: css("--brand-2") || "#4d82ff", dash: 0, title: t("levelCallWall") },
+      put_wall: { color: css("--down") || "#f0566b", dash: 0, title: t("levelPutWall") },
+      gamma_flip: { color: css("--ai") || "#9d86ff", dash: 2, title: t("levelFlip") },
+      abs_gamma: { color: css("--signal") || "#e8b339", dash: 1, title: t("levelAbsGamma") },
+      em_hi: { color: css("--muted") || "#8b93a3", dash: 1, title: t("levelEmHi") },
+      em_lo: { color: css("--muted") || "#8b93a3", dash: 1, title: t("levelEmLo") },
+    };
+    for (const lv of optLevels.levels) {
+      const s = style[lv.key];
+      if (!s) continue;
+      try {
+        const line = h.createPriceLine({
+          price: lv.price, color: s.color, lineWidth: 1, lineStyle: s.dash,
+          axisLabelVisible: true, title: s.title,
+        });
+        levelLinesRef.current.push({ key: lv.key, line });
+      } catch {
+        /* LWC rejected the level (no price scale yet) — the toggle stays on and retries
+           on the next data/root change. */
+      }
+    }
+  }, [levelsOn, optLevels, t]);
+
+  // ── OI Δ toggle: badge the top-5 strikes by |ΔOI| on the strike axis. `lineVisible:
+  // false` draws NOTHING across the pane's width — only the coloured axis-label badge —
+  // so this reads as a subtle strike-axis marker (per the brief) rather than a second set
+  // of full-width lines competing visually with the Levels overlay.
+  useEffect(() => {
+    const host = candleSeriesRef.current ?? heatSeriesRef.current;
+    if (!host) return;
+    const h = host as unknown as {
+      createPriceLine: (o: unknown) => unknown;
+      removePriceLine: (l: unknown) => void;
+    };
+    for (const line of oiLinesRef.current) { try { h.removePriceLine(line); } catch {} }
+    oiLinesRef.current = [];
+    if (!oiDeltaOn || !topOiStrikes.size) return;
+    const badge = css("--signal") || "#e8b339";
+    for (const strike of topOiStrikes.keys()) {
+      try {
+        const line = h.createPriceLine({
+          price: strike, color: badge, lineWidth: 1, lineStyle: 0,
+          lineVisible: false, axisLabelVisible: true,
+          axisLabelColor: badge, axisLabelTextColor: "#1a1d24",
+        });
+        oiLinesRef.current.push(line);
+      } catch {
+        /* LWC rejected the level (no price scale yet) — retries on the next data change. */
+      }
+    }
+  }, [oiDeltaOn, topOiStrikes]);
 
   // Candles → chart.
   // PIT: the heat field is server-truncated to the scrubbed stamp, so the candles must stop
@@ -891,6 +1066,35 @@ export function SurfacePane({
   // field instead of leaving a blank rectangle with no explanation.
   const cellAccruing = isCell && !!fixedMetric && fixedMetric !== "netprem" && !metricEnabled(frame, fixedMetric);
   const pinnedHere = hover ? (pins ?? []).some((p) => p.strike === hover.strike) : false;
+
+  // ── Nightly-overlay provenance notes (honesty tiering) ───────────────────────
+  // Mirrors ChartPanel's Options Levels legend-row construction exactly (same "EOD
+  // {date}", "signed estimate", "{n} sessions old" vocabulary) — these are the same
+  // options_hub payloads, so they read the same wherever they're drawn.
+  const nightlyDateNote = (asofDate: string | null, signed: boolean): string => {
+    const age = asofDate ? sessionsOldEt(asofDate) : 0;
+    const parts = [
+      asofDate ? t("nightlyAsOf").replace("{date}", asofDate.slice(5)) : "",
+      signed ? t("nightlySigned") : "",
+      age > 3 ? t("nightlyStale").replace("{n}", String(age)) : "",
+    ].filter(Boolean);
+    return parts.length ? parts.join(" · ") : t("nightlyNoDate");
+  };
+  const levelsNote =
+    optLevels.status === "ok" ? nightlyDateNote(optLevels.asofDate, optLevels.signed) : t("nightlyNoCov");
+  const oiChangeAsofDate = (() => {
+    const raw = (oiChangeRaw as { asof?: unknown } | null)?.asof;
+    const s = typeof raw === "string" ? raw.slice(0, 10) : "";
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  })();
+  const oiDeltaNote = oiChangeCells.length ? nightlyDateNote(oiChangeAsofDate, false) : t("nightlyNoCov");
+
+  // ── Regime chip (pane header) — same vocabulary/colour table the screener, watchlist
+  // dot and ticker page already use (lib/mscGlance REGIME_COLORS + gexStrings `regime*`).
+  // REGIME-DYNAMICS LAW: the state word never stands alone — stability and dist-to-flip
+  // ride with it, same as MarketStateCard / StockAnalysis.
+  const regimeLabel = glanceRow ? gexT(`regime${glanceRow.regime}` as Parameters<typeof gexT>[0]) || glanceRow.regime : null;
+  const regimeNote = glanceRow ? nightlyDateNote(glanceRow.asofDate, true) : "";
 
   // ── Y framing (explicit) ─────────────────────────────────────────────────────
   // Both chips write through applyYRef — the same single writer the automatic framing and
@@ -991,6 +1195,43 @@ export function SurfacePane({
           <span style={SLIDER_VAL} className="num">{rangeQ === 0 ? t("rangeAll") : `±${rangeQ}`}</span>
         </label>
 
+        {/* Nightly overlays: options levels + OI Δ. Both are options_hub/gex_state EOD
+            payloads drawn under an intraday field — each toggle carries its own "as of
+            {date}" provenance so it never reads as LIVE, matching ChartPanel's Options
+            Levels legend-row idiom. Off the replay head both keep showing the value they
+            genuinely describe (no intraday history to truncate to) and the shared
+            EodReplayTag below says so once. */}
+        <div style={GROUP} role="group" aria-label={t("overlaysAria")}>
+          <span className="obs-lbl">{t("overlaysGroup")}</span>
+          <button
+            className={`obs-chip${levelsOn ? " on" : ""}`}
+            style={CHIP}
+            aria-pressed={levelsOn}
+            aria-label={t("levelsToggleAria")}
+            onClick={() => setLevelsOn((v) => !v)}
+          >
+            {t("levelsToggle")}
+          </button>
+          {levelsOn && (
+            <span className="obs-surf-data-detail">{levelsNote}</span>
+          )}
+          <button
+            className={`obs-chip${oiDeltaOn ? " on" : ""}`}
+            style={CHIP}
+            aria-pressed={oiDeltaOn}
+            aria-label={t("oiDeltaToggleAria")}
+            onClick={() => setOiDeltaOn((v) => !v)}
+          >
+            {t("oiDeltaToggle")}
+          </button>
+          {oiDeltaOn && (
+            <span className="obs-surf-data-detail">{oiDeltaNote}</span>
+          )}
+          {/* Covers all THREE nightly overlays (Levels, OI Δ, and the always-on regime
+              chip below) — renders nothing unless a replay is active and off its head. */}
+          {(levelsOn || oiDeltaOn || !!glanceRow) && <EodReplayTag lang={lang} />}
+        </div>
+
       </div>
       )}
 
@@ -1021,6 +1262,25 @@ export function SurfacePane({
             <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].pos})` }} /><span className="obs-lbl">{t("legendPos")}</span></span>
             <span style={LEGEND_ITEM}><span style={{ ...SWATCH, background: `var(${METRIC_CSS[metric].neg})` }} /><span className="obs-lbl">{t("legendNeg")}</span></span>
           </span>
+          {/* Regime chip — nightly gexstate:{ROOT}, same word/colour as the screener's msc_*
+              column, the watchlist dot and the ticker page's positioning block. Never stands
+              alone: dist-to-flip (when the payload carries it) rides beside it. */}
+          {glanceRow && regimeLabel && (
+            <span className="obs-surf-data-item" aria-label={t("regimeChipAria")}>
+              <strong className="num" style={{ color: REGIME_COLORS[glanceRow.regime] }}>{regimeLabel}</strong>
+              {glanceRow.stabilityPct != null && (
+                <span className="obs-surf-data-detail">
+                  {Math.round(glanceRow.stabilityPct)}% {t("regimeStability")}
+                </span>
+              )}
+              {glanceRow.distToFlipPct != null && (
+                <span className="obs-surf-data-detail">
+                  {Math.abs(glanceRow.distToFlipPct).toFixed(1)}% {t("regimeToFlip")}
+                </span>
+              )}
+              <span className="obs-surf-data-detail">{regimeNote}</span>
+            </span>
+          )}
           <span className="obs-surf-data-source">{t("sourceOpra")}</span>
         </div>
       )}

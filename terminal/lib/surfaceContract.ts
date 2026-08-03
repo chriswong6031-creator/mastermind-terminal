@@ -163,6 +163,37 @@ export function gridMaxAbs(grid: number[][]): number {
 }
 
 /**
+ * Percentile-range variant of `gridMaxAbs` (masterplan R1.4, "kill the bland") — the
+ * shader's day-max normalizer clamps to the Pth percentile of |cell| (default 95th)
+ * instead of the single largest cell, mirroring MatrixHeatCard's validated `pctile()`
+ * (components/msc/MatrixHeatCard.tsx). ONE outlier strike-minute cannot wash out the rest
+ * of the field.
+ *
+ * heatShade already computes `o = min(1, |amount| / maxAbs)` — passing this function's
+ * result as `maxAbs` is the entire fix: every cell beyond the Pth percentile saturates to
+ * full intensity for free, with no change to heatShade's curve/palette (out of scope; the
+ * MSC sibling program's R1.2 owns contour lines / configurable intensity curves).
+ *
+ * Zero cells are excluded from the distribution (a mostly-empty column must not pull the
+ * percentile index toward the outlier). A grid with 0 or 1 distinct nonzero magnitudes
+ * degrades to that value (or 0, gridMaxAbs's own answer for an all-zero grid) —
+ * percentile is a no-op until there is a distribution worth compressing.
+ */
+export function gridPercentileAbs(grid: number[][], p = 95): number {
+  const mags: number[] = [];
+  for (const row of grid) {
+    for (const v of row) {
+      const a = Math.abs(v);
+      if (Number.isFinite(a) && a > 0) mags.push(a);
+    }
+  }
+  if (!mags.length) return 0;
+  mags.sort((a, b) => a - b);
+  const idx = Math.min(mags.length - 1, Math.max(0, Math.ceil((p / 100) * mags.length) - 1));
+  return mags[idx];
+}
+
+/**
  * Median observed interval between surface columns, in seconds.
  *
  * The snapshot producer carries a configured target cadence, but a full poll cycle can
@@ -383,6 +414,62 @@ export type ExpiryPanelState = "none" | "live" | "stale";
 export function expiryPanelState(expiryCount: number, replayLive: boolean): ExpiryPanelState {
   if (expiryCount <= 0) return "none";
   return replayLive ? "live" : "stale";
+}
+
+// ─── OI Δ strike ranking (options_hub.oi_change/v1, nightly) ────────────────
+
+/** Structural subset of an `oi_change:{ROOT}` row this module reads. */
+export interface OiChangeCell {
+  strike: number;
+  d_oi: number;
+}
+
+/**
+ * Parse `oi_change:{ROOT}`'s `rows` array into the minimal {strike, d_oi} shape,
+ * dropping anything non-finite. Never throws on a malformed payload — an absent or
+ * empty `rows` array yields [], which the caller then treats as "no OI-change coverage"
+ * rather than fabricating a highlight. Mirrors the defensive parse SurfacePane already
+ * does for `matrix:{ROOT}`.
+ */
+export function parseOiChangeRows(raw: unknown): OiChangeCell[] {
+  const rows = (raw as { rows?: unknown })?.rows;
+  if (!Array.isArray(rows)) return [];
+  const out: OiChangeCell[] = [];
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    const rec = r as Record<string, unknown>;
+    const strike = Number(rec.strike);
+    // d_oi must ALREADY be a number — unlike `strike`, coercing a null/missing d_oi would
+    // turn "not populated" into a false literal 0 (Number(null) === 0), which would then
+    // rank as a real (if uncompetitive) "no change" reading instead of being dropped.
+    const dOi = rec.d_oi;
+    if (Number.isFinite(strike) && typeof dOi === "number" && Number.isFinite(dOi)) {
+      out.push({ strike, d_oi: dOi });
+    }
+  }
+  return out;
+}
+
+/**
+ * The top-N strikes by |ΔOI|, summed across every expiry/right at that strike (a strike's
+ * total OI-change footprint, not one contract's). Returns strike → summed |d_oi|, ordered
+ * by descending magnitude is NOT preserved by a Map — callers that need rank order should
+ * read `[...map.entries()]` and re-sort, or just test membership (`map.has(strike)`), which
+ * is all the strike-axis badge needs. Rows with the same strike across different
+ * expiries/rights are meant to combine (a strike can carry a wall of ΔOI split across its
+ * option chain) — matches MSC's numDoi flattening convention for the same payload family.
+ */
+export function topOiChangeStrikes(rows: OiChangeCell[] | null | undefined, n = 5): Map<number, number> {
+  const out = new Map<number, number>();
+  if (!rows || !rows.length) return out;
+  const byStrike = new Map<number, number>();
+  for (const r of rows) {
+    if (!Number.isFinite(r.strike) || !Number.isFinite(r.d_oi)) continue;
+    byStrike.set(r.strike, (byStrike.get(r.strike) ?? 0) + Math.abs(r.d_oi));
+  }
+  const top = [...byStrike.entries()].sort((a, b) => b[1] - a[1]).slice(0, Math.max(0, n));
+  for (const [strike, mag] of top) out.set(strike, mag);
+  return out;
 }
 
 // ─── Greek metric enablement (Wave 2E feature-detection) ─────────────────────
