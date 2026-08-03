@@ -877,6 +877,18 @@ test("Exposure desk replays an archived session's full ladder at every supported
   await expect(page.getByRole("group", { name: "Strike range" })).toBeVisible();
   await expect(page.getByTestId("gex-archived-chip")).toHaveCount(0);
 
+  // The ladder region must be a real band at every width. In the ≤860px
+  // page-scroll mode its flex:1 1 0px used to resolve against auto-height
+  // ancestors to a 0px band — the ladder/expiry-bars/lens were invisible on
+  // phones while these visibility checks stayed green (children overflow the
+  // clipped region, so their boxes are non-empty). Guard the region itself.
+  // 150 < the ~198px the 1440×900 desk actually yields and far above the 0px
+  // failure mode; phones/tablets floor at min(430px, 62dvh).
+  const ladderRegionH = await page
+    .locator(".obs-gexdesk-ladder-region")
+    .evaluate((el) => el.getBoundingClientRect().height);
+  expect(ladderRegionH).toBeGreaterThanOrEqual(150);
+
   // Pick an archived session → that session's FULL ladder, labelled as archived.
   await picker.selectOption("2026-07-02");
   const chip = page.getByTestId("gex-archived-chip");
