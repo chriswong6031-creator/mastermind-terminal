@@ -19,7 +19,7 @@ import {
 } from "lightweight-charts";
 import { createEngine, type ChartEngine } from "@/lib/chart-engine";
 import { clampAxisZoom, axisZoomMargins, wheelDeltaToZoomStep, type AxisMargins } from "@/lib/chart-engine/axisZoom";
-import { normalizedChartLogicalRange } from "@/lib/chart-engine/viewReset";
+import { DEFAULT_CHART_RIGHT_OFFSET, normalizedChartLogicalRange } from "@/lib/chart-engine/viewReset";
 import { keepIndicatorPaneAxisLabelsOnly } from "@/lib/indicatorPaneSeries";
 import { runPine, type RunResult } from "@/lib/pine-engine";
 import { createPineHost, type PineHost, type PineResult } from "@/lib/pine-engine/host";
@@ -2380,7 +2380,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // Apply the default view (recent ~240 window in normal mode; fit the slice in replay).
   const applyView = (rows: Bar[], replay: number | null) => {
     const chart = chartRef.current; if (!chart) return;
-    const range = normalizedChartLogicalRange(rows.length, replay != null);
+    let plotWidth: number | undefined;
+    try { plotWidth = chart.timeScale().width(); } catch {}
+    const range = normalizedChartLogicalRange(rows.length, replay != null, plotWidth);
     try { if (range) chart.timeScale().setVisibleLogicalRange(range); else chart.timeScale().fitContent(); } catch {}
   };
 
@@ -2713,6 +2715,16 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           timeframe: timeframeRef.current,
           visibleRange: g(() => c.timeScale().getVisibleLogicalRange()),
           priceAutoScale: g(() => priceSeriesRef.current?.priceScale().options().autoScale) ?? null,
+          lastBarX: g(() => {
+            const last = barsRef.current[barsRef.current.length - 1];
+            return last ? c.timeScale().timeToCoordinate(last.time as any) : null;
+          }),
+          priceTagLeft: g(() => {
+            const tag = priceTagRef.current, wrap = wrapElRef.current;
+            return tag && wrap
+              ? tag.getBoundingClientRect().left - wrap.getBoundingClientRect().left
+              : null;
+          }),
         };
       };
     }
@@ -2733,7 +2745,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       rightPriceScale: { borderVisible: !shellAxis(), borderColor: t.line, tickMarkDensity: shellTickDensity(), scaleMargins: { top: 0.1, bottom: 0.08 } },
       timeScale: {
         borderColor: axisLineColor(t.line),
-        rightOffset: 6,
+        rightOffset: chartSettingsRef.current.rightOffsetBars ?? DEFAULT_CHART_RIGHT_OFFSET,
         barSpacing: 8,
         ...chartTimeAxisOptions(chartSettingsRef.current.hourFormat ?? "24", visibleCalendarSpanDays),
       },

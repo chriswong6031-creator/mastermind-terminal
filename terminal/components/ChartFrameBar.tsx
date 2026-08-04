@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { type IChartApi, PriceScaleMode } from "lightweight-charts";
+import { DEFAULT_CHART_RIGHT_OFFSET } from "@/lib/chart-engine/viewReset";
 import { isIntradayTf } from "@/lib/intradaySources";
 import { useT } from "@/lib/i18n";
 
@@ -76,7 +77,7 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   crosshairMode: 0,
   scaleMarginsTop: 10,
   scaleMarginsBottom: 8,
-  rightOffsetBars: 10,
+  rightOffsetBars: DEFAULT_CHART_RIGHT_OFFSET,
   scaleTextColor: "",
   scaleFontSize: 12,
   scaleLineColor: "",
