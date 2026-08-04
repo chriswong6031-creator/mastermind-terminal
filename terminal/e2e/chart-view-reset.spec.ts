@@ -9,6 +9,8 @@ type ChartViewState = {
   timeframe: string;
   visibleRange: { from: number; to: number } | null;
   priceAutoScale: boolean | null;
+  lastBarX: number | null;
+  priceTagLeft: number | null;
 };
 
 async function chartViewState(page: Page): Promise<ChartViewState | null> {
@@ -32,6 +34,17 @@ async function expectNormalizedView(page: Page) {
     to: (await chartViewState(page))!.rowCount - 1 + DEFAULT_CHART_RIGHT_OFFSET,
   });
 }
+
+test("New chart tickers reserve space between the latest candle and symbol tag", async ({ page }) => {
+  await page.goto("/terminal?symbol=AAPL");
+  await expect(page.locator(".chart-wrap canvas").first()).toBeVisible({ timeout: 45_000 });
+
+  await expect.poll(async () => {
+    const state = await chartViewState(page);
+    if (state?.lastBarX == null || state.priceTagLeft == null) return null;
+    return Math.round(state.priceTagLeft - state.lastBarX);
+  }, { timeout: 45_000 }).toBeGreaterThanOrEqual(12);
+});
 
 test("Reset chart view restores the recent weekly window", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The context-menu reset gesture is desktop-only.");

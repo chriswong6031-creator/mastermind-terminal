@@ -2,10 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CHART_RIGHT_OFFSET,
   DEFAULT_CHART_VIEW_BARS,
+  defaultChartRightOffset,
   normalizedChartLogicalRange,
 } from "@/lib/chart-engine/viewReset";
 
 describe("normalizedChartLogicalRange", () => {
+  it("reserves enough future bars to clear the last-price symbol tag", () => {
+    expect(DEFAULT_CHART_RIGHT_OFFSET).toBe(24);
+    expect(defaultChartRightOffset(904)).toBe(24);
+    expect(defaultChartRightOffset(329)).toBe(77);
+  });
+
   it("restores the recent default window instead of fitting a long history", () => {
     expect(normalizedChartLogicalRange(1_200, false)).toEqual({
       from: 1_200 - DEFAULT_CHART_VIEW_BARS,
