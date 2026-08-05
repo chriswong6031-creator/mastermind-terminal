@@ -826,12 +826,89 @@ export const VIS_UNITS: { key: VisUnit; label: string; max: number }[] = [
   { key: "months", label: "Months", max: 12 },
 ];
 
+// ── Up / Down colors setting (Settings → Terminal) ────────────────────────────────────────────
+// The operator picks the direction convention: WEST = green up / red down, EAST = red up / green
+// down (CN/HK/TW/MO). It is stamped pre-paint on <html data-updown> by app/layout.tsx and carried
+// through CSS by var(--up)/var(--down) — but lightweight-charts paints to CANVAS and cannot resolve
+// a CSS var, so every directional indicator color has to be swapped in JS instead.
+//
+// The registry defaults above stay the WEST pair: they are what `mm.indParams` persists and what
+// the Settings dialog swatches show. DIR_FIELDS names the style params that carry price-DIRECTION
+// semantics; indDefaults()/withDefaults() rewrite such a param to the ACTIVE convention whenever it
+// still holds a convention default. A color the user actually picked matches neither convention's
+// default for that field, so an explicit override always wins over the setting.
+//
+// Params that merely happen to use a green or a red are deliberately NOT listed — rsistack.col1 is
+// one of three palette slots (RSI 7/14/21) and svwap.b3Col is a σ-band magnitude. Neither is a
+// direction, so flipping them under `east` would state something untrue.
+export const DIR_FIELDS: Partial<Record<IndKey, Record<string, "up" | "down">>> = {
+  vol: { upCol: "up", downCol: "down" },
+  stochrsi: { kCol: "up", dCol: "down" },
+  macd: { upHist: "up", downHist: "down" },
+  gaps: { gapUpCol: "up", gapDownCol: "down" },
+  ichimoku: { spanACol: "up", spanBCol: "down" },
+  ribbon: { colUp: "up", colDn: "down", fillUp: "up", fillDn: "down" },
+  supertrend: { colUp: "up", colDn: "down" },
+};
+
+// The two directional hue families, web + native shell (see COL). Only the RGB triple moves —
+// notation and alpha are preserved — so every tint (0.12 … 1) flips with its base color.
+const HUE_RGB_PAIRS: [string, string][] = [["38,194,129", "240,86,107"], ["8,153,129", "242,54,69"]];
+const HUE_HEX_RGB: Record<string, string> = {
+  "#26c281": "38,194,129", "#f0566b": "240,86,107", "#089981": "8,153,129", "#f23645": "242,54,69",
+};
+const RGB_TWIN = new Map<string, string>();
+const RGB_TO_HEX = new Map<string, string>();
+for (const [u, d] of HUE_RGB_PAIRS) { RGB_TWIN.set(u, d); RGB_TWIN.set(d, u); }
+for (const [hex, rgb] of Object.entries(HUE_HEX_RGB)) RGB_TO_HEX.set(rgb, hex);
+
+/** The opposite-convention twin of a directional default, or null if `v` is not one of them. */
+function hueTwin(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  const asHex = HUE_HEX_RGB[s.toLowerCase()];
+  if (asHex) { const t = RGB_TWIN.get(asHex); return t ? RGB_TO_HEX.get(t) ?? null : null; }
+  const m = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,([^)]*))?\)$/i.exec(s);
+  if (!m) return null;
+  const twin = RGB_TWIN.get(`${+m[1]},${+m[2]},${+m[3]}`);
+  if (!twin) return null;
+  return m[4] != null ? `rgba(${twin},${m[4].trim()})` : `rgb(${twin})`;
+}
+
+/** True when the operator's Up/Down colors setting is East (red = up). SSR reads as West. */
+export function isEastUpDown(): boolean {
+  return typeof document !== "undefined"
+    && document.documentElement.getAttribute("data-updown") === "east";
+}
+
+/**
+ * Rewrite `params`' directional style colors to the active Up/Down convention, in place.
+ * Only ever called on a freshly-built params object (indDefaults / withDefaults below).
+ */
+export function applyUpDownConvention(key: string, params: Record<string, any>): Record<string, any> {
+  const map = isIndKey(key) ? DIR_FIELDS[key] : undefined;
+  if (!map) return params;
+  const east = isEastUpDown();
+  const base = IND_DEFS[key as IndKey].defaults;
+  for (const field of Object.keys(map)) {
+    const west = base[field];
+    const twin = hueTwin(west);
+    if (typeof west !== "string" || !twin) continue;
+    const cur = params[field];
+    if (cur !== west && cur !== twin) continue;   // user picked their own → the setting must not touch it
+    params[field] = east ? twin : west;
+  }
+  return params;
+}
+
 export function indDefaults(key: string): Record<string, any> {
-  return isIndKey(key) ? { ...IND_DEFS[key].defaults, _vis: defaultVis() } : {};
+  return isIndKey(key)
+    ? applyUpDownConvention(key, { ...IND_DEFS[key].defaults, _vis: defaultVis() })
+    : {};
 }
 // merge persisted params over the registry defaults so older saved params backfill new fields
 export function withDefaults(key: string, params?: Record<string, any> | null): Record<string, any> {
-  return { ...indDefaults(key), ...(params || {}) };
+  return applyUpDownConvention(key, { ...indDefaults(key), ...(params || {}) });
 }
 export function allDefaults(): Record<string, Record<string, any>> {
   const o: Record<string, Record<string, any>> = {};
