@@ -46,6 +46,47 @@ export function resample(bars: Bar6[], minutes: number): Bar6[] {
   return out;
 }
 
+// ── Session-segment bucketing (markets whose day is split by a midday break) ──
+// `resample` keys on absolute clock boundaries, which is wrong for a session that neither opens on
+// the hour nor runs continuously. On HKEX it produced a 09:00 candle holding 30 minutes of the
+// 09:30 open, a one-print 12:00 stub from the lunch-boundary tick, and a separate 16:00 candle for
+// the closing-auction prints — three artefacts per session, which at 4h was 3 bars where 2 belong.
+// Bucketing anchors to each SEGMENT's open instead: a candle starts when trading starts, never
+// spans the break, and prints outside continuous trading (a pre-open or closing-auction tick) clamp
+// into the nearest real candle rather than opening a stub of their own.
+// Minutes-from-midnight in the market's own wall clock, which IS the display epoch's UTC clock.
+export type SessionSegment = { start: number; end: number };
+export const HK_SESSION_SEGMENTS: SessionSegment[] = [
+  { start: 9 * 60 + 30, end: 12 * 60 },   // morning:   09:30–12:00
+  { start: 13 * 60, end: 16 * 60 },       // afternoon: 13:00–16:00 (16:01–16:08 auction folds into the last candle)
+];
+
+function segmentBucket(epoch: number, minutes: number, segments: SessionSegment[]): number {
+  const dayStart = Math.floor(epoch / 86400) * 86400;
+  const minute = (epoch - dayStart) / 60;
+  // the last segment whose open has passed — so a lunch-break print belongs to the morning, and
+  // anything before the first open belongs to the first candle of the day.
+  let seg = segments[0];
+  for (const s of segments) if (minute >= s.start) seg = s;
+  const lastIdx = Math.max(0, Math.ceil((seg.end - seg.start) / minutes) - 1);
+  const idx = Math.min(Math.max(0, Math.floor((minute - seg.start) / minutes)), lastIdx);
+  return dayStart + (seg.start + idx * minutes) * 60;
+}
+
+export function resampleSessionSegments(bars: Bar6[], minutes: number, segments: SessionSegment[]): Bar6[] {
+  if (minutes <= 0 || bars.length === 0) return bars;
+  const out: Bar6[] = [];
+  let cur: Bar6 | null = null;
+  let key = Number.NaN;
+  for (const b of bars) {
+    const bucket = segmentBucket(b[0], minutes, segments);
+    if (bucket !== key) { if (cur) out.push(cur); key = bucket; cur = [bucket, b[1], b[2], b[3], b[4], b[5]]; }
+    else { cur![2] = Math.max(cur![2], b[2]); cur![3] = Math.min(cur![3], b[3]); cur![4] = b[4]; cur![5] += b[5]; }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 export type UsEquitySession = "regular" | "extended";
 const US_REGULAR_START = 9 * 60 + 30;
 const US_REGULAR_END = 16 * 60;

@@ -2,6 +2,23 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "hk-intraday",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3271"
+      ],
+      "cwd": "/Users/chriswong/Documents/Cluade/charting-app/.claude/worktrees/options-analytics-platform-rebuild-5817fe/terminal",
+      "port": 3271,
+      "env": {
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:1",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "guest-preview-key"
+      }
+    },
+    {
       "name": "terminal-wt-ui",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
