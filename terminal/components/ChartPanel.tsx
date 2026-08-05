@@ -371,6 +371,21 @@ const shellAxisFontSize = () => (shellAxis() && shellWide() ? 13 : 12);
 type Tokens = { up: string; down: string; grid: string; axis: string; line: string; p3: string; link: string; warn: string; buy: string; sell: string; mut: string; brand2: string };
 const readTokens = (): Tokens => ({ up: css("--up"), down: css("--down"), grid: css("--chart-grid") || css("--grid"), axis: css("--chart-axis-text") || css("--muted"), line: css("--line"), p3: css("--panel-3"), link: css("--link"), warn: css("--warn"), buy: css("--buy"), sell: css("--sell"), mut: css("--muted"), brand2: css("--brand-2") });
 
+// Directional tint. LWC paints to canvas and cannot resolve var(--up)/var(--down), so every shaded
+// directional band has to be built in JS from the LIVE token — hardcoding the green/red rgba is what
+// kept these bands on the western convention under html[data-updown="east"]. Non-color input (and
+// any notation this doesn't parse) passes through untouched rather than drawing transparent.
+const withAlpha = (col: string, a: number): string => {
+  const s = (col || "").trim();
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(s);
+  if (hex) {
+    const h = hex[1].length === 3 ? hex[1].split("").map((c) => c + c).join("") : hex[1];
+    return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
+  }
+  const m = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i.exec(s);
+  return m ? `rgba(${+m[1]},${+m[2]},${+m[3]},${a})` : s;
+};
+
 // ── the canonical sub-pane order (parity with the base's sequential pane assignment) ──
 // overlays (ema/bb/vwap/vol + new DT overlays) always live in pane 0.
 // every sub-pane indicator gets its OWN pane (rsi and stochrsi were formerly a shared "osc" pane).
@@ -844,8 +859,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (chartTypeRef.current === "baseline") return chart.addSeries(BaselineSeries, {
       ...common,
       baseValue: { type: "price", price: 0 }, relativeGradient: true, lineWidth: 2,
-      topLineColor: t.up, topFillColor1: "rgba(38,194,129,.28)", topFillColor2: "rgba(38,194,129,.03)",
-      bottomLineColor: t.down, bottomFillColor1: "rgba(240,86,107,.03)", bottomFillColor2: "rgba(240,86,107,.28)",
+      topLineColor: t.up, topFillColor1: withAlpha(t.up, 0.28), topFillColor2: withAlpha(t.up, 0.03),
+      bottomLineColor: t.down, bottomFillColor1: withAlpha(t.down, 0.03), bottomFillColor2: withAlpha(t.down, 0.28),
     }, 0);
     if (chartTypeRef.current === "bars") return chart.addSeries(BarSeries, { ...common, upColor: settings.candleUpColor || t.up, downColor: settings.candleDownColor || t.down }, 0);
     return chart.addSeries(CandlestickSeries, {
@@ -861,8 +876,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     }, 0);
   };
 
-  // per-indicator params merged over the registry defaults (drives the Settings dialog + the math/style)
+  // per-indicator params merged over the registry defaults (drives the Settings dialog + the math/style).
+  // withDefaults() also resolves directional style colors against the active Up/Down setting.
   const P = (k: string) => withDefaults(k, indParamsRef.current[k]);
+  // Live --up/--down for canvas-painted indicator colors. tokensRef is filled on mount (Effect 1)
+  // and re-read on the Up/Down flip (Effect 5); the literals cover only the pre-mount window.
+  const dirUp = () => tokensRef.current.up || "#26c281";
+  const dirDown = () => tokensRef.current.down || "#f0566b";
   const labelOf = (k: string) => (isIndKey(k) ? IND_DEFS[k].label : k);
 
   // ── indicator builders (param-driven; params flow from the Settings dialog via indParams) ──
@@ -913,11 +933,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   };
   // CM_Stochastic crossover-highlight bars (Pine bgcolor port): value 1 (full-pane
   // via the fixed 0..1 autoscale on scale "stochsig") at a bullish/bearish cross,
-  // whitespace elsewhere so only signal bars draw. Green when %K crosses ABOVE %D
-  // while %K < lowLine; red when %K crosses BELOW %D while %K > upLine.
+  // whitespace elsewhere so only signal bars draw. A bull cross (%K crosses ABOVE %D while
+  // %K < lowLine) rides --up and a bear cross (%K crosses BELOW %D while %K > upLine) rides
+  // --down, so the bars follow the Up/Down colors setting (red-up under data-updown="east")
+  // exactly like the candles — they used to be hardcoded green/red.
   const stochHiData = (rows: Bar[], k: (number | null)[], d: (number | null)[], upLine: number, lowLine: number) => {
     const bull = crossUpsBelow(k, d, lowLine); const bear = crossDownsAbove(k, d, upLine);
-    return rows.map((r, i) => (bull[i] ? { time: r.time, value: 1, color: "rgba(38,194,129,0.22)" } : bear[i] ? { time: r.time, value: 1, color: "rgba(240,86,107,0.22)" } : { time: r.time }));
+    const bullCol = withAlpha(dirUp(), 0.22), bearCol = withAlpha(dirDown(), 0.22);
+    return rows.map((r, i) => (bull[i] ? { time: r.time, value: 1, color: bullCol } : bear[i] ? { time: r.time, value: 1, color: bearCol } : { time: r.time }));
   };
   const buildStochRsiPane = (chart: IChartApi, rows: Bar[], closes: number[], pane: number): ISeriesApi<any>[] => {
     const p = P("stochrsi"); const sr = cmStoch(rows.map(r => r.h), rows.map(r => r.l), closes, p.length, p.smoothK, p.smoothD);
@@ -928,8 +951,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const kS = chart.addSeries(LineSeries, { color: p.kCol, lineWidth: p.width as any, lastValueVisible: true, title: axTitle("%K") }, pane);
     const dS = chart.addSeries(LineSeries, { color: p.dCol, lineWidth: 1, lastValueVisible: true, title: axTitle("%D") }, pane);
     kS.setData(toLine(rows, sr.k)); dS.setData(toLine(rows, sr.d));
-    // CM_Stochastic_MTF upper/lower/mid guide lines (80 / 20 / 50 by default)
-    try { kS.createPriceLine({ price: p.upLine, color: "rgba(240,86,107,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: p.lowLine, color: "rgba(38,194,129,.25)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: 50, color: "rgba(214,218,227,.15)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
+    // CM_Stochastic_MTF upper/lower/mid guide lines (80 / 20 / 50 by default). Overbought is the
+    // down side and oversold the up side, so both ride the tokens and flip with the setting.
+    try { kS.createPriceLine({ price: p.upLine, color: withAlpha(dirDown(), 0.25), lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: p.lowLine, color: withAlpha(dirUp(), 0.25), lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); kS.createPriceLine({ price: 50, color: "rgba(214,218,227,.15)", lineWidth: 1, lineStyle: 2, axisLabelVisible: false } as any); } catch {}
     // Return order keeps kS@0/dS@1 stable for the in-place update path; the highlight histogram rides at [2]
     // (a real series → the teardown loops removeSeries it for free).
     return [kS, dS, hlS];
@@ -942,7 +966,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const up = crossUps(line, sig); const dn = crossDowns(line, sig); const markers: any[] = [];
     for (let i = 0; i < rows.length; i++) {
       if (!up[i] && !dn[i]) continue;
-      markers.push({ time: rows[i].time, position: "atPriceMiddle", price: (line[i]! + sig[i]!) / 2, shape: "circle", size: 1, color: up[i] ? "rgba(38,194,129,1)" : "rgba(240,86,107,1)" });
+      markers.push({ time: rows[i].time, position: "atPriceMiddle", price: (line[i]! + sig[i]!) / 2, shape: "circle", size: 1, color: up[i] ? dirUp() : dirDown() });
     }
     try { macdMarkersRef.current = createSeriesMarkers(lineSeries, markers as any); } catch {}
   };
@@ -1131,8 +1155,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (ich.spanA[i] != null) spAData.push({ time: ich.futureTimes[i], value: ich.spanA[i]! });
       if (ich.spanB[i] != null) spBData.push({ time: ich.futureTimes[i], value: ich.spanB[i]! });
     }
-    const spAS = chart.addSeries(LineSeries, { color: "rgba(38,194,129,0.6)", lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Span A" }, 0);
-    const spBS = chart.addSeries(LineSeries, { color: "rgba(240,86,107,0.6)", lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Span B" }, 0);
+    // Span A is the bullish edge of the cloud and Span B the bearish one — both ride the Up/Down
+    // setting via p.spanACol/p.spanBCol (the fill params, opaque-ified here for the rails).
+    const spAS = chart.addSeries(LineSeries, { color: withAlpha(p.spanACol, 0.6), lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Span A" }, 0);
+    const spBS = chart.addSeries(LineSeries, { color: withAlpha(p.spanBCol, 0.6), lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "Span B" }, 0);
     spAS.setData(spAData); spBS.setData(spBData);
     // Store cloud data for SVG polygon rendering
     indOverlayRef.current["ichimoku"] = { ich, futureTimes: ich.futureTimes };
@@ -1162,8 +1188,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const colored = rows.map((r, i) => {
       const st = rb.state[i], su = rb.shortUp[i];
       let col: string;
-      if (st === "ribbonUp") col = su ? "#26c281" : "rgba(38,194,129,0.45)";
-      else if (st === "ribbonDown") col = su === false ? "#f0566b" : "rgba(240,86,107,0.45)";
+      // p.colUp/p.colDn already carry the Up/Down setting (and any user override); the weak
+      // states are the same hue at 0.45 rather than a second hardcoded green/red.
+      if (st === "ribbonUp") col = su ? p.colUp : withAlpha(p.colUp, 0.45);
+      else if (st === "ribbonDown") col = su === false ? p.colDn : withAlpha(p.colDn, 0.45);
       else col = "#8b93a3";
       return chartTyp === "bars"
         ? { time: r.time, open: r.o, high: r.h, low: r.l, close: r.c, color: col }
@@ -4595,8 +4623,11 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             pts.push({ x, yA, yB });
           }
           if (pts.length >= 2) {
-            // Draw two polygons: one for where spanA > spanB (green), one for spanA < spanB (red)
-            // Approach: walk forward along spanA top, then backward along spanB — split at crossovers
+            // Draw two polygons: one for where spanA > spanB (bullish cloud), one for spanA < spanB
+            // (bearish). Approach: walk forward along spanA top, then backward along spanB — split at
+            // crossovers. The fills come from the indicator's own Span A/B params, which carry the
+            // Up/Down colors setting; they used to be hardcoded green/red and ignored the params.
+            const ip = P("ichimoku");
             const greenPts: string[] = [], redPts: string[] = [];
             // Simple approach: draw rectangle per segment
             for (let i = 0; i < pts.length - 1; i++) {
@@ -4605,7 +4636,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
               const isGreen = avgA <= avgB; // yA < yB means spanA price > spanB price (higher price = lower y)
               const poly = mk("polygon", {
                 points: `${p0.x},${p0.yA} ${p1.x},${p1.yA} ${p1.x},${p1.yB} ${p0.x},${p0.yB}`,
-                fill: isGreen ? "rgba(38,194,129,0.18)" : "rgba(240,86,107,0.18)",
+                fill: isGreen ? ip.spanACol : ip.spanBCol,
                 stroke: "none",
               });
               svgEl.appendChild(poly);
@@ -4619,6 +4650,8 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         const data = indOverlayRef.current["ribbon"];
         if (data) {
           const { rb, rows: rbRows } = data as { rb: ReturnType<typeof trendRibbon>; rows: Bar[] };
+          // fillUp/fillDn carry the Up/Down colors setting; the neutral state is hue-less by design.
+          const rp = P("ribbon");
           const pts: { x: number; yF: number; yS: number; state: string }[] = [];
           for (let i = 0; i < rbRows.length; i++) {
             const f = rb.emaFast[i], s = rb.emaSlow[i]; if (f == null || s == null) continue;
@@ -4628,7 +4661,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           }
           for (let i = 0; i < pts.length - 1; i++) {
             const p0 = pts[i], p1 = pts[i + 1];
-            const fill = p0.state === "ribbonUp" ? "rgba(38,194,129,0.12)" : p0.state === "ribbonDown" ? "rgba(240,86,107,0.12)" : "rgba(139,147,163,0.07)";
+            const fill = p0.state === "ribbonUp" ? rp.fillUp : p0.state === "ribbonDown" ? rp.fillDn : "rgba(139,147,163,0.07)";
             svgEl.appendChild(mk("polygon", {
               points: `${p0.x},${p0.yF} ${p1.x},${p1.yF} ${p1.x},${p1.yS} ${p0.x},${p0.yS}`,
               fill, stroke: "none",
@@ -6779,7 +6812,10 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (chartType === "bars") priceS.applyOptions({ upColor: settings.candleUpColor || t.up, downColor: settings.candleDownColor || t.down });
         else if (isValueChartType(chartType)) {
           if (chartType === "area") priceS.applyOptions({ lineColor: t.brand2 });
-          else if (chartType === "baseline") priceS.applyOptions({ topLineColor: t.up, bottomLineColor: t.down });
+          else if (chartType === "baseline") priceS.applyOptions({
+            topLineColor: t.up, topFillColor1: withAlpha(t.up, 0.28), topFillColor2: withAlpha(t.up, 0.03),
+            bottomLineColor: t.down, bottomFillColor1: withAlpha(t.down, 0.03), bottomFillColor2: withAlpha(t.down, 0.28),
+          });
           else priceS.applyOptions({ color: t.brand2 });
         }
         else priceS.applyOptions({
@@ -6794,12 +6830,15 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     }
     // recolor the volume histogram by re-setData with token-derived up/down fills (no series churn)
     const vol = indSeriesRef.current.get("vol"); if (vol && vol[0]) { try { vol[0].setData(volData(barsRef.current)); } catch {} }
-    // DT indicators that resolve --up/--down (or derived colors) at BUILD time need a rebuild on flip:
-    // cvd baseline colors, ttmsq momentum shades, adx ±DI, pivots R/S price lines. Flips are rare —
-    // the full rebuild path is the sanctioned fix (skip on mount: csNonce 0 = initial run).
+    // Indicators that resolve --up/--down (or a directional param) at BUILD time need a rebuild on
+    // flip: cvd baseline colors, ttmsq momentum shades, adx ±DI, pivots R/S price lines, options
+    // levels — plus the classic set, whose crossover bars/dots, guide lines, cloud and ribbon fills
+    // are all directional. Flips are rare, so the full rebuild path is the sanctioned fix (skip on
+    // mount: csNonce 0 = initial run). Volume is recolored in place just above; `gaps` draws on the
+    // signal layer and picks its params up from the renderSignals call below.
     if (csNonce > 0 && barsRef.current.length) {
-      const dtDirectional = ["cvd", "ttmsq", "adx", "pivots", "optlevels"];
-      if (dtDirectional.some((k) => indicatorsRef.current.has(k))) { try { rebuildIndicators(); } catch {} }
+      const directional = ["cvd", "ttmsq", "adx", "pivots", "optlevels", "stochrsi", "macd", "ichimoku", "ribbon", "supertrend"];
+      if (directional.some((k) => indicatorsRef.current.has(k))) { try { rebuildIndicators(); } catch {} }
     }
     renderSignalsRef.current(); renderRef.current();
     // eslint-disable-next-line

@@ -922,6 +922,20 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
   const favTFMounted = useRef(false); const setMounted = useRef(false); const dtmMounted = useRef(false);
   useEffect(() => { if (!hidMounted.current) { hidMounted.current = true; return; } localStorage.setItem("mm.indHidden", JSON.stringify([...hidden])); }, [hidden]);
   useEffect(() => { if (!ipMounted.current) { ipMounted.current = true; return; } localStorage.setItem("mm.indParams", JSON.stringify(indParams)); }, [indParams]);
+  // Up/Down colors flip: re-run every built-in through withDefaults so its DIRECTIONAL style params
+  // move to the new convention. ChartPanel already normalizes at draw time, so this is what keeps the
+  // Settings dialog swatches (and the persisted blob) telling the same story as the chart. A color the
+  // user picked themselves matches neither convention's default and is left alone. Suite keys aren't
+  // in the built-in registry and are skipped, exactly like the load path above.
+  useEffect(() => {
+    const onFlip = () => setIndParams((p) => {
+      const next = { ...p };
+      for (const k of IND_ORDER) next[k] = withDefaults(k, p[k]);
+      return next;
+    });
+    window.addEventListener("mm:updown", onFlip);
+    return () => window.removeEventListener("mm:updown", onFlip);
+  }, []);
   useEffect(() => { if (!cmpCfgMounted.current) { cmpCfgMounted.current = true; return; } localStorage.setItem("mm.cmpCfg", JSON.stringify(compareCfg)); }, [compareCfg]);
   useEffect(() => { localStorage.setItem("mm.ct", JSON.stringify(chartType)); }, [chartType]);
   useEffect(() => { localStorage.setItem("mm.tf", JSON.stringify(tf)); }, [tf]);
