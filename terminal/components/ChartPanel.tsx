@@ -31,6 +31,7 @@ import { calculateAnchoredVwap, calculateFixedRangeVolumeProfile, calculateRegre
 import { cloneDrawing, constrainScreenAngle, translateDrawingAnchors } from "@/lib/drawing-engine/interaction";
 import { calculatePositionMetrics, fibonacciSettings, positionSettings, type FibonacciLabelMode } from "@/lib/drawing-engine/settings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
+import { priceTagTop, crosshairLabelHalf } from "@/lib/priceTagPlacement";
 import { setActivePaneCoords, getActivePaneCoords } from "@/lib/paneCoords";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
 import { parseComposite, alignAndSum } from "@/lib/composite";
@@ -653,6 +654,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const sigRef = useRef<SVGSVGElement | null>(null);
   const priceTagRef = useRef<HTMLDivElement | null>(null);  // TradingView-style last-price + countdown tag on the right axis
   const tagTimerRef = useRef<number | null>(null);          // 1s ticker so the bar-close countdown stays live
+  // y (price-pane coords) of the crosshair's axis price label, null when no crosshair is on the price
+  // pane — renderPriceTag slides the badge clear of it so the hovered price is never covered.
+  const crossLabelYRef = useRef<number | null>(null);
   const watermarkPluginRef = useRef<{ applyOptions: (opts: Record<string, any>) => void } | null>(null); // v5 text watermark plugin
   const brandBugRef = useRef<HTMLDivElement | null>(null);  // C5 — shell-only DOM brand bug (never created on web)
   // Mirrors the last `visible` passed to the watermark plugin. The plugin API is write-only
@@ -2870,6 +2874,28 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // price-pane coordinates (signal pills, gap zones, drawings, ichimoku/ribbon fills, the
     // last-price tag) must clear/hide itself instead of painting over the maximized pane.
     const priceProjHidden = () => { const c = paneCtl.current; return c.maximized != null && c.maximized !== "__price__"; };
+
+    // ── crosshair dodge (the badge NEVER covers the price you are pointing at) ──
+    // Placement geometry lives in lib/priceTagPlacement (pure + unit-tested); this side owns the
+    // measurements it needs. See that module's header for why the badge yields to the crosshair label.
+    const priceIdx = () => { try { return priceSeriesRef.current?.getPane()?.paneIndex() ?? 0; } catch { return 0; } };
+    const axisFontSize = () => { try { return (chart.options() as any).layout?.fontSize || 12; } catch { return 12; } };
+    // Half-extents of the badge around its anchor. It is centred on `top` via translateY(-50%), but
+    // in shell mode globals.css lifts the countdown OUT of the badge box (position:absolute), so the
+    // occupied band is the union of both rects. Cached on the countdown-visibility key: a rect read
+    // per crosshair frame would force a layout flush on every mouse move.
+    let tagBox = { up: 0, down: 0, key: "" };
+    const measureTagBox = (tag: HTMLElement, cdShown: boolean) => {
+      const key = cdShown ? "cd" : "-";
+      if (tagBox.key === key && tagBox.up > 0) return tagBox;
+      const r = tag.getBoundingClientRect();
+      if (!r.height) return tagBox;
+      const mid = r.top + r.height / 2;
+      let top = r.top, bot = r.bottom;
+      if (cdShown) { const rc = tagCd.getBoundingClientRect(); if (rc.height) { top = Math.min(top, rc.top); bot = Math.max(bot, rc.bottom); } }
+      tagBox = { up: mid - top, down: bot - mid, key };
+      return tagBox;
+    };
     const renderPriceTag = () => {
       const tag = priceTagRef.current, s = priceSeriesRef.current;
       if (!tag || !s || dead) return;
@@ -2897,11 +2923,48 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (rem != null && isFinite(rem)) cd = fmtCountdown(rem, isIntradayRef.current);
       }
       tagCd.textContent = cd;
-      tagCd.style.display = cd && countdownVisibleRef.current ? "block" : "none";
+      const cdShown = !!cd && countdownVisibleRef.current;
+      tagCd.style.display = cdShown ? "block" : "none";
       tagSym.style.background = col; tagVal.style.background = col;
-      tag.style.top = Math.round(y) + "px"; tag.style.display = lastValueVisibleRef.current ? "flex" : "none";
+      const shown = lastValueVisibleRef.current;
+      tag.style.display = shown ? "flex" : "none";
+      // dodge the crosshair label when the two boxes collide (see crosshair-dodge note above)
+      const cy = shown ? crossLabelYRef.current : null;
+      let top = y;
+      if (cy != null) {
+        const box = measureTagBox(tag, cdShown);
+        // an unmeasurable badge (never laid out yet) would dodge off a zero-height box — leave it put
+        if (box.up > 0) {
+          let paneH = 0; try { paneH = chart.paneSize(priceIdx()).height; } catch {}
+          top = priceTagTop(y, cy, box, crosshairLabelHalf(axisFontSize()), paneH);
+        }
+      }
+      tag.style.top = Math.round(top) + "px";
     };
     renderTagRef.current = renderPriceTag;
+    // `point.y` is PANE-relative — the same space priceToCoordinate returns — so the crosshair
+    // coordinate and the badge anchor compare directly. Magnet mode snaps the DRAWN label to the
+    // hovered bar's close, so mirror that snap here or the badge would dodge a band nothing is in.
+    const onTagCrosshair = (p: any) => {
+      let y: number | null = null;
+      const pt = p?.point;
+      if (pt && Number.isFinite(pt.y) && (p.paneIndex == null || p.paneIndex === priceIdx())) {
+        y = pt.y;
+        if (chartSettingsRef.current.crosshairMode === 1) {
+          const idx = p.time != null ? (barIdxMap().get(p.time) ?? barIdxMap().get(String(p.time))) : null;
+          const bar = idx != null ? barsRef.current[idx] : null;
+          const s = priceSeriesRef.current;
+          const snapped = bar && s ? (s.priceToCoordinate(bar.c) as number | null) : null;
+          if (snapped != null && Number.isFinite(snapped)) y = snapped;
+        }
+      }
+      const prev = crossLabelYRef.current;
+      if (y == null && prev == null) return;
+      if (y != null && prev != null && Math.abs(prev - y) < 0.5) return;
+      crossLabelYRef.current = y;
+      renderPriceTag();
+    };
+    chart.subscribeCrosshairMove(onTagCrosshair);
     tagTimerRef.current = window.setInterval(() => { if (!dead) renderPriceTag(); }, 1000);
 
     // ── coordinate helpers (read *Ref.current so they stay valid across reloads) ──
@@ -6373,7 +6436,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const chart = chartRef.current, priceS = priceSeriesRef.current, syncId = syncIdRef.current;
     if (syncId == null || !chart || !priceS) return;
     const closeByTime = new Map(barsRef.current.map((r) => [r.time, r.c]));
-    const cleanup = registerPane(syncId, { chart, series: priceS, valueAt: (tm: any) => closeByTime.get(tm as any) ?? null, tf: timeframeRef.current });
+    const cleanup = registerPane(syncId, {
+      chart, series: priceS, valueAt: (tm: any) => closeByTime.get(tm as any) ?? null, tf: timeframeRef.current,
+      // A mirrored crosshair draws the same axis label with no crosshairMove event behind it — feed the
+      // badge its coordinate directly so a synced pane dodges exactly like the pane being driven.
+      onCrosshair: (price) => {
+        const s = priceSeriesRef.current;
+        const y = price == null || !s ? null : (s.priceToCoordinate(price) as number | null);
+        crossLabelYRef.current = y != null && Number.isFinite(y) ? y : null;
+        renderTagRef.current?.();
+      },
+    });
     // v5 subscribe* return void; unsubscribe by passing the SAME handler reference back.
     const onCross = (p: any) => { broadcastCrosshair(syncId, (p.time ?? null) as any); };
     const onRange = (r: any) => { broadcastRange(syncId, r as any); };
