@@ -16,11 +16,13 @@ export type { Bar6, Market } from "./intradayShared";
 export {
   INTRADAY_TFS, isIntradayTf, tfMinutes, classify, resample,
   filterUsEquitySession, resampleUsEquitySession,
+  resampleSessionSegments, HK_SESSION_SEGMENTS,
 } from "./intradayShared";
 import type { Bar6, Market } from "./intradayShared";
 import {
   isIntradayTf, tfMinutes, classify, resample,
   filterUsEquitySession, resampleUsEquitySession,
+  resampleSessionSegments, HK_SESSION_SEGMENTS,
 } from "./intradayShared";
 import { isMacroSymbol, isDailyOnlySymbol, fetchMacroQuotes, macroDisplayTz } from "./macroSymbols";
 
@@ -245,9 +247,11 @@ async function fetchTencent(sym: string, market: Market, tf: string): Promise<Ba
 //   hkMinute/query?code=hk00700    → the live current session (overlaid when it has fresher rows)
 // Rows are "HHMM price cumVol cumAmount" in HK wall-clock (UTC+8) — a last-price series, not OHLC.
 // 1m bars are synthesized (open = previous minute's close within the session, h/l = max/min(o, c),
-// volume = cumulative-counter diff) and coarser tfs resample from that base. Depth is ~5 sessions
-// (≈1,660 1m bars → ~28 clock-hour 1h bars) — thinner than mkline's 640-per-scale, but it is all
-// the free feed carries now. Closing-auction prints (16:01–16:08) come through as ordinary rows.
+// volume = cumulative-counter diff) and coarser tfs resample from that base on SESSION segments.
+// Depth is ~5 sessions and the `days` param cannot buy more (days=10/20/30 all return 5, verified
+// 2026-08-05) — thinner than mkline's 640-per-scale, but it is all the free feed carries now:
+// ≈1,660 1m bars → 30 hourly candles (6 per session) or 10 four-hour candles (2 per session).
+// Closing-auction prints (16:01–16:08) come through as ordinary rows and fold into the 15:00 candle.
 function hkSessionBars(date: string, rows: unknown[]): Bar6[] {
   if (!/^\d{8}$/.test(date)) return [];
   const y = +date.slice(0, 4), mo = +date.slice(4, 6) - 1, d = +date.slice(6, 8);
@@ -291,7 +295,10 @@ async function fetchTencentHK(sym: string, tf: string): Promise<Bar6[]> {
   const base: Bar6[] = [];
   for (const date of [...byDate.keys()].sort()) base.push(...hkSessionBars(date, byDate.get(date)!));
   const minutes = tfMinutes(tf);
-  return minutes <= 1 ? base : resample(base, minutes);
+  // Session-anchored, NOT absolute-clock: HKEX opens at 09:30, breaks for lunch, and prints its
+  // closing auction after 16:00, so plain resample() emitted a half-empty 09:00 candle, a one-print
+  // 12:00 lunch stub and a separate 16:00 auction stub every session (see resampleSessionSegments).
+  return minutes <= 1 ? base : resampleSessionSegments(base, minutes, HK_SESSION_SEGMENTS);
 }
 
 export async function fetchIntraday(sym: string, tf: string, ext: boolean): Promise<Bar6[]> {

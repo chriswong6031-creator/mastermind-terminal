@@ -2599,15 +2599,24 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           g.font = `500 ${Math.round(9 * dpr)}px ${fam}`;
           g.fillText("TERMINAL", logoRight, Math.round(HDR / 2 + 6 * dpr));
           // symbol + tf (right of logo) — full timestamp right-aligned
+          // Effect 1 mounts once and the panel is deliberately NOT keyed by symbol, so the `symbol`
+          // prop captured here is frozen at mount. Read symbolRef (synced every render) or a
+          // snapshot taken after switching tickers stamps the header with the mount-time symbol.
+          const snapSym = symbolRef.current || symbol;
           const symX = logoRight + g.measureText("MASTERMIND").width + Math.round(18 * dpr);
           g.fillStyle = text;
           g.font = `700 ${Math.round(13 * dpr)}px ${fam}`;
           g.textBaseline = "middle";
-          g.fillText(symbol, symX, Math.round(HDR / 2 - 4 * dpr));
-          const symW2 = g.measureText(symbol).width;
+          g.fillText(snapSym, symX, Math.round(HDR / 2 - 4 * dpr));
+          const symW2 = g.measureText(snapSym).width;
           g.fillStyle = mut;
           g.font = `500 ${Math.round(10 * dpr)}px ${fam}`;
           g.fillText(`  ${tf}`, symX + symW2, Math.round(HDR / 2 - 4 * dpr));
+          // The header band is canvas-painted, so the exported ticker has no DOM to assert against.
+          // Expose what was stamped (dev/e2e only) — the stale-symbol regression is invisible otherwise.
+          if (process.env.NODE_ENV !== "production") {
+            (window as unknown as { __mmSnapshotHeader?: { symbol: string; timeframe: string } }).__mmSnapshotHeader = { symbol: snapSym, timeframe: tf };
+          }
           // full timestamp in viewer's local timezone
           const now = new Date();
           const tzOffset = -now.getTimezoneOffset() / 60;
@@ -2674,7 +2683,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
             }
           }
           const date = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}`;
-          const fname = `${symbol}_${tf}_${date}.png`;
+          const fname = `${snapSym}_${tf}_${date}.png`;
           const statusFeedback = (msg: string) => {
             const sEl = statusRef.current;
             if (sEl) { const prev = sEl.innerHTML; sEl.innerHTML = `<b class="up">${msg}</b>`; setTimeout(() => { if (statusRef.current === sEl) paintStatus(barsRef.current, sliceRef.current); else sEl.innerHTML = prev; }, 2500); }
