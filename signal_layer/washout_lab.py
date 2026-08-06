@@ -28,18 +28,17 @@ import pandas as pd
 
 from . import confluence as oracle
 from .backtest import run_backtest
-from .confluence_v2 import _monthly_oversold_dwell
+from .confluence_v2 import (DD_LOOKBACK_3D, DD_MIN, MO_DWELL_MIN, OS_WINDOW,
+                            washout_context)
 
 US_DIR = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard/data/stocks")
 CN_DIR = Path("/Users/chriswong/Documents/Cluade/Macro Dashboard/data/china_stocks")
 
 VARIANTS = ("E-A", "E-B", "E-C", "E-D")   # E-E: cohort store required (NOT-RUN here)
 
-# frozen detection constants (prereg §2 — do not tune)
-DD_LOOKBACK_3D = 84        # ≈ trailing 252 sessions on the 3D grid
-DD_MIN = -0.35             # W2a: drawdown floor
-MO_DWELL_MIN = 3           # W2b: monthly StochRSI-D<20 dwell (months)
-OS_WINDOW = 8              # W3: 3D StochRSI-D<20 within last CONF_W bars
+# frozen detection constants (prereg §2 — do not tune). W1-W3 now live beside the shipped
+# lane in confluence_v2 and are imported above; only the UNPROMOTED variants' constants are
+# still lab-local, because nothing in production may fire on them.
 DIV_LOOK = 12              # E-C: swing-low lookback (3D bars), keeper's look mirrored
 W2_TURN_WINDOW = 4         # E-D: 2W turn availability within last N 3D bars
 
@@ -63,36 +62,20 @@ def washout_masks(daily_close: pd.Series, *, bar_anchor: int = 0, week_parity: i
     if len(rows) < 20:
         return None
 
-    bblk = rows["bear_block"].to_numpy(dtype=bool)
+    # W1-W3 + E-A/E-B come from the PRODUCTION definition (confluence_v2.washout_context) —
+    # the same code the promoted lane emits from, so the panel can never measure a grammar
+    # that differs from the one that ships. E-C/E-D stay here: they were never promoted, so
+    # production has no business carrying them.
+    ctx = washout_context(sig, dc)
+    if ctx is None:
+        return None
+    trig, n = ctx["trig"], len(rows)
     close3 = rows["close"].astype(float)
-
-    # W2a: deep drawdown vs the trailing ~252-session high
-    dd = (close3 / close3.rolling(DD_LOOKBACK_3D, min_periods=20).max() - 1).to_numpy()
-    w2a = dd <= DD_MIN
-    # W2b: protracted monthly oversold (prior CLOSED month, like mo_bull)
-    mo = dc.resample("ME").last().dropna()
-    _mk, md = oracle.stoch_rsi_kd(mo)
-    dwell = _monthly_oversold_dwell(md < 20).shift(1).reindex(rows.index, method="ffill")
-    w2b = dwell.fillna(0).to_numpy() >= MO_DWELL_MIN
-    # W3: oversold visit on the 3D grid
-    w3 = (rows["d"].rolling(OS_WINDOW, min_periods=1).min() < 20).to_numpy()
-
-    washed = bblk & (w2a | w2b) & w3
-    trig = rows["CB"].to_numpy(dtype=bool) & washed
-    n = len(rows)
 
     masks: dict = {"rows": n, "n_trig": int(trig.sum())}
     masks["E-A"] = trig
-
-    # E-B: reclaim-and-hold — confirmation lands on bar i+1, so the mask marks i+1
-    # (the loop fills at mask+1 ⇒ i+2 close; the confirmation delay is priced).
-    cl = close3.to_numpy()
-    eb = np.zeros(n, dtype=bool)
+    masks["E-B"] = ctx["eb"]
     idx = np.flatnonzero(trig)
-    for i in idx:
-        if i + 1 < n and cl[i + 1] > cl[i]:
-            eb[i + 1] = True
-    masks["E-B"] = eb
 
     # E-C: bull divergence at the trigger bar (price LL vs 3D RSI-MACD HL, look=12)
     lows = _swing_lows(close3)

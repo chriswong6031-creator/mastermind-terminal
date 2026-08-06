@@ -41,12 +41,23 @@ SCHEMA_BACKTEST = "backtest_result/v1"
 # docs/RECLAIM_LANE_EVIDENCE.md): n=84 names / 1,169 trades, all five gates pass —
 # pooled expectancy +10.5%, portfolio ratio 1.33x, WR 56.2→58.8, 2022 falsifier −1.1%.
 # In the hashed params so the promoted emission is a NEW source_hash/spec_hash identity.
+# ``washout_lane: "us"`` is the 2026-08-05 scored promotion of the WASHOUT-REVERSAL entry
+# grammar (confluence_v2.washout_events, E-B): the one lane that may fire while bear_block
+# is TRUE. Panel evidence (docs/WASHOUT_REVERSAL_EVIDENCE.md): US passed all six
+# pre-registered gates on both halves (median per-name +5.8%, 2022 falsifier positive);
+# CN measured 54.5% breadth against a 55% bar and the prereg's no-re-cut rule binds, so CN
+# emits the same detection at scored:false — watch tier — and HK/Canada/International
+# follow, never having had a panel at all. The VALUE is the scored market list, not a bool:
+# it is hashed like every other param, so the promoted emission is a new source_hash /
+# spec_hash identity, and widening the lane to another market is itself a new identity that
+# cannot be mistaken for the measured one.
 FLAGSHIP_PARAMS = {
     "confW": 8, "rsiLen": 14, "useMTF": True, "confirmTF": "1W",
     "macd_on": "rsi", "macd_fast": 14, "macd_slow": 60, "macd_signal": 5,
     "buy_rsi_max": 65, "ext_rsi": 70, "rev_bars": 3,
     "no_cut_exits": True,
     "reclaim_lane": True,
+    "washout_lane": "us",
 }
 
 
@@ -105,7 +116,7 @@ def indicator_contract(
              for k in ("w_bull", "above200", "mo_bull", "w2_bull") if k in sig}
 
     v2 = v2 or {}
-    signals = _extract_signals(sig, v2)
+    signals = _extract_signals(sig, v2, symbol)
     state = _state(sig, signals)
     early = (v2.get("early_dots") or [])[-40:]
     warns = (v2.get("warnings") or [])[-40:]
@@ -142,7 +153,24 @@ def indicator_contract(
     }
 
 
-def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
+def _washout_scored(symbol: str) -> bool:
+    """True when the washout lane is SCORED for this symbol's market.
+
+    ``FLAGSHIP_PARAMS["washout_lane"]`` names the markets whose panel passed — "us" today.
+    Everything else emits the same detection at watch tier. The market test is the symbol
+    SUFFIX (the universe's own convention: .SS/.SZ China, .HK Hong Kong, .TO Canada, bare
+    tickers US), so a new market cannot silently inherit a promotion it never earned."""
+    lane = FLAGSHIP_PARAMS.get("washout_lane")
+    if not lane or not (symbol or "").strip():
+        return False      # fail CLOSED: an unidentified symbol never inherits a promotion
+    markets = {m.strip().lower() for m in (lane if isinstance(lane, str) else "").split(",")}
+    sym = (symbol or "").strip().upper()
+    suffix = sym.rsplit(".", 1)[-1] if "." in sym else ""
+    market = {"SS": "cn", "SZ": "cn", "HK": "hk", "TO": "ca", "V": "ca", "L": "uk"}.get(suffix, "us" if not suffix else "intl")
+    return market in markets
+
+
+def _extract_signals(sig: pd.DataFrame, v2: dict | None = None, symbol: str = "") -> list[dict]:
     """Discrete events → the Opus-facing surface: the ONE UNIFIED signal stream.
 
     The stream is ``BUY`` + ``REBUY`` + ``SELL`` only, ordered by ``bar_index``:
@@ -275,6 +303,45 @@ def _extract_signals(sig: pd.DataFrame, v2: dict | None = None) -> list[dict]:
                 "reasons": (["close>sell_price", "weekly_bull", "above200", "debounced"]
                             if kind == "reclaim"
                             else ["bear_block_cleared", "macd_cross_still_live"]),
+                "regime": {"weeklyBull": bool(row.get("w_bull")),
+                           "above200": bool(row.get("above200")),
+                           "monthlyBull": bool(row.get("mo_bull"))},
+            })
+
+    # ── WASHOUT_REV from the v2 washout lane (US-scored since the 2026-08-05 promotion) ──
+    # The one entry grammar that fires INSIDE the bear regime, so it is the only lane that can
+    # speak for a name trading far below its 200dMA — the structural silence the operator kept
+    # hitting when Prophet ranked a CN washout the classic lane could never score.
+    # ``scored`` is the promotion's whole asymmetry: US passed all six pre-registered gates,
+    # CN measured 54.5% breadth against a 55% bar (no-re-cut rule → watch tier), and HK/Canada
+    # never had a panel. A market with no panel NEVER scores. Detection is identical
+    # everywhere, so the watch-tier cohort keeps accruing the evidence a future promotion
+    # would need. quality/quality_reason mirror the reclaim lane's shape so every consumer
+    # that already understands a soft, dated, non-anchoring marker understands this one.
+    washouts = v2.get("washouts") or []
+    if washouts and len(sig):
+        scored_here = _washout_scored(symbol)
+        sidx = sig.index
+        for w in washouts:
+            j = int(sidx.searchsorted(pd.Timestamp(w["ts"]), side="right")) - 1
+            if j < 0:
+                continue
+            row = sig.iloc[j]
+            out.append({
+                "ts": w["ts"],
+                "known_ts": _iso_date(w.get("known_ts"), w["ts"]),
+                "bar_index": j,
+                "type": "WASHOUT_REV",
+                "strength": _strength(row),
+                "price": _num(row.get("close")),
+                "scored": scored_here,
+                "quality": "washout_reversal" if scored_here else "washout_watch",
+                "quality_reason": (
+                    f"washout reversal confirmed — held above the {w.get('trigger_ts')} trigger"
+                    if scored_here
+                    else f"washout reversal — watch tier on this market (held above the {w.get('trigger_ts')} trigger)"
+                ),
+                "reasons": ["bear_block", "washout_context", "reclaim_and_hold"],
                 "regime": {"weeklyBull": bool(row.get("w_bull")),
                            "above200": bool(row.get("above200")),
                            "monthlyBull": bool(row.get("mo_bull"))},

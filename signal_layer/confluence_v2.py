@@ -544,6 +544,92 @@ def warn_events(close: pd.Series) -> list[dict]:
 
 
 # ════════════════════════════════════════════════ repair grammar (re-entry) ═
+# ── WASHOUT-REVERSAL lane (docs/PREREG_WASHOUT_REVERSAL.md §2, frozen 2026-08-02) ──────────
+# The one lane that may fire while ``bear_block`` is TRUE, because the classic lane cannot:
+# every recovery path (trend-reclaim, block-repair, keeper counter-trend) also demands
+# above-200/weekly-bull, so a name that crashed far below its 200dMA is structurally
+# unownable until it rallies 30-40%. Promoted for US on 2026-08-05 (operator go) after E-B
+# passed all six pre-registered gates on both halves; CN measured 54.5% breadth against a
+# 55% bar and ships watch-tier, so the SCORING decision lives at the emission boundary
+# (contracts._extract_signals), never here — detection is identical on every market.
+#
+# These constants and washout_context() are the SINGLE definition: signal_layer.washout_lab
+# imports them rather than keeping its own copy, so the shipped grammar is by construction
+# the grammar the panel measured. tests/test_washout_lane.py pins that equivalence.
+DD_LOOKBACK_3D = 84        # W2a: ≈ trailing 252 sessions on the 3D grid
+DD_MIN = -0.35             # W2a: drawdown floor
+MO_DWELL_MIN = 3           # W2b: monthly StochRSI-D<20 dwell (months)
+OS_WINDOW = 8              # W3: 3D StochRSI-D<20 within the last CONF_W bars
+
+
+def washout_context(sig: pd.DataFrame, daily_close: pd.Series) -> dict | None:
+    """The frozen washout masks on the non-NaN 3D rows of ``sig``.
+
+    Returns ``{"rows": DatetimeIndex, "washed": mask, "trig": mask, "eb": mask}`` or None
+    when the frame is too short. Leak conventions follow production: the monthly leg reads
+    the PRIOR CLOSED bar (shift(1) + ffill, mirroring ``mo_bull``).
+
+    W1 bear_block · W2 (deep drawdown OR protracted monthly oversold) · W3 oversold visit;
+    trigger = the production CB on a washed bar; E-B marks the NEXT bar when it closes
+    higher (the keeper's reclaim-and-hold leg, confirmation delay priced by the caller)."""
+    need = {"macd", "sig", "k", "d", "rsi14"}
+    if not len(sig) or not need.issubset(sig.columns):
+        return None
+    rows = sig.dropna(subset=list(need))
+    n = len(rows)
+    if n < 20:
+        return None
+
+    bblk = rows["bear_block"].to_numpy(dtype=bool)
+    close3 = rows["close"].astype(float)
+
+    # W2a: deep drawdown vs the trailing ~252-session high
+    dd = (close3 / close3.rolling(DD_LOOKBACK_3D, min_periods=20).max() - 1).to_numpy()
+    w2a = dd <= DD_MIN
+    # W2b: protracted monthly oversold (prior CLOSED month, like mo_bull)
+    dc = daily_close.dropna()
+    mo = dc.resample("ME").last().dropna()
+    _mk, md = C.stoch_rsi_kd(mo)
+    dwell = _monthly_oversold_dwell(md < 20).shift(1).reindex(rows.index, method="ffill")
+    w2b = dwell.fillna(0).to_numpy() >= MO_DWELL_MIN
+    # W3: oversold visit on the 3D grid
+    w3 = (rows["d"].rolling(OS_WINDOW, min_periods=1).min() < 20).to_numpy()
+
+    washed = bblk & (w2a | w2b) & w3
+    trig = rows["CB"].to_numpy(dtype=bool) & washed
+
+    # E-B: reclaim-and-hold — the confirmation lands on bar i+1, so the mask marks i+1.
+    cl = close3.to_numpy()
+    eb = np.zeros(n, dtype=bool)
+    for i in np.flatnonzero(trig):
+        if i + 1 < n and cl[i + 1] > cl[i]:
+            eb[i + 1] = True
+    return {"rows": rows.index, "washed": washed, "trig": trig, "eb": eb}
+
+
+def washout_events(sig: pd.DataFrame, daily_close: pd.Series) -> list[dict]:
+    """E-B washout-reversal entries as stream events, chronological.
+
+    ``[{ts, known_ts, trigger_ts, price}]`` on the 3D-row grid. ``ts`` is the confirmation
+    bar (the hold), ``trigger_ts`` the refused CB it confirms — the pair is what makes the
+    marker readable next to the classic lane's ``regime_blocked`` mark on the trigger bar."""
+    ctx = washout_context(sig, daily_close)
+    if ctx is None:
+        return []
+    idx, trig, eb = ctx["rows"], ctx["trig"], ctx["eb"]
+    close3 = sig.loc[idx, "close"].astype(float).to_numpy()
+    out: list[dict] = []
+    for i in np.flatnonzero(eb):
+        # the trigger is the bar immediately before its confirmation (E-B marks i+1)
+        t = i - 1
+        if t < 0 or not trig[t]:
+            continue
+        day = idx[i].strftime("%Y-%m-%d")
+        out.append({"ts": day, "known_ts": day, "trigger_ts": idx[t].strftime("%Y-%m-%d"),
+                    "price": float(close3[i])})
+    return out
+
+
 def reclaim_events(sig: pd.DataFrame, sell_confirms: list[dict]) -> list[dict]:
     """The RE-ENTRY repair lane: display events (scored:false) for the two structural
     holes the 2026-07-15 Mag7 diagnosis verified in the entry grammar.
@@ -693,4 +779,8 @@ def build_v2(sig: pd.DataFrame, close: pd.Series, *,
         # folds them into the stream, model_slice caps the tail. ``reclaims_enabled=False``
         # = the symbol-class exclusion (reclaim_eligible): decay instruments emit none.
         "reclaims": reclaim_events(sig, sell_confirms) if reclaims_enabled else [],
+        # WASHOUT-REVERSAL lane (see washout_events). Detection runs on EVERY market — the
+        # US-only scoring decision is applied at the emission boundary, so a CN name still
+        # gets its watch-tier marker and keeps feeding the reversal_watch cohort.
+        "washouts": washout_events(sig, close),
     }
