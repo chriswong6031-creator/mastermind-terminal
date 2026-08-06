@@ -76,6 +76,7 @@ import BrainWidget from "@/components/BrainWidget";
 import StockAnalysis from "@/components/StockAnalysis";
 import SignalButton from "@/components/SignalButton";
 import TrendRow from "@/components/TrendRow";
+import WashoutTurnRow from "@/components/WashoutTurnRow";
 import { oracleVerdict, deskVerdict } from "@/lib/signalVerdict";
 import { computeTrendState } from "@/lib/trend";
 import { useLive } from "@/lib/live";
@@ -3288,6 +3289,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
               <div style={{ padding: "12px 12px 0" }}>
                 <SignalButton oracle={ov} desk={dv} oracleLabel={t("goldenOracleLbl")} deskLabel={t("researchDeskLbl")} viewLabel={t("signalView")} onView={() => setSignalsOpen(true)} />
                 <TrendRow bars={bars} />
+                <WashoutTurnRow wt={intel?.tape?.washout_turn} zh={lang === "zh"} />
               </div>
               {/* Seasonality is injected via beforeIv so it renders BETWEEN the Analyst gauge and Implied
                   Volatility (order: analysis → Seasonality → IV) rather than after the whole card. */}

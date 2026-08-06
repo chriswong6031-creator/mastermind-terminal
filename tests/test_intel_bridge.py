@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from ingest.pull_macro_intel import (  # noqa: E402
-    _map_ai_dir, build_intel, _is_stale, _build_sector_pulse,
+    _map_ai_dir, build_intel, _is_stale, _build_sector_pulse, _build_washout_turn,
 )
 
 
@@ -388,3 +388,171 @@ class TestSectorPulseBuildIntel:
         sp = intel["tape"]["sector_pulse"]
         assert isinstance(sp["rank"], int)
         assert isinstance(sp["n_themes"], int)
+
+
+# ── washout_turn pass-through tests ──────────────────────────────────────────
+# The weekly dual-read row's source block (macro engine/washout_turn.py). The
+# reference shape is MCD's 2026-07-31 cross at the 6.3rd depth percentile — the
+# miss the row exists to surface.
+
+_FULL_WT = {
+    "state": "WASHOUT_TURN",
+    "since": "2026-07-31",
+    "weeks_since_cross": 1,
+    "depth_pctile": 6.28,
+    "depth_pctile_at_cross": 6.3,
+    "line": -1.84,
+    "sig": -2.01,
+    "hist": 0.17,
+    "stoch_k": 18.4,
+    "stoch_d": 14.9,
+    "weekly_cb": True,
+    "drawdown_pct": -22.7,
+    "data_through": "2026-06-30",
+    "history_weeks": 780,
+    "history_start": "2011-07-01",
+    "history": {"n": 11, "med_13w": 4.24, "med_26w": 7.9, "win_13w": 63.6, "win_26w": 72.7},
+}
+
+
+class TestWashoutTurnHelper:
+    """Unit tests for _build_washout_turn helper."""
+
+    def test_full_valid_block_passes_through_trimmed(self):
+        out = _build_washout_turn(_FULL_WT)
+        assert out is not None
+        assert out["state"] == "WASHOUT_TURN"
+        assert out["since"] == "2026-07-31"
+        assert out["depth_pctile"] == 6.3        # _r(…, 1)
+        assert out["data_through"] == "2026-06-30"
+        assert out["history"] == {"n": 11, "med_13w": 4.2, "med_26w": 7.9}
+
+    def test_internal_fields_omitted(self):
+        """Engine internals must NOT leak into terminal output."""
+        out = _build_washout_turn(_FULL_WT)
+        assert out is not None
+        for key in ("line", "sig", "hist", "stoch_k", "stoch_d", "weekly_cb",
+                    "drawdown_pct", "weeks_since_cross", "depth_pctile_at_cross",
+                    "history_weeks", "history_start"):
+            assert key not in out, f"{key} must not reach the terminal"
+        assert "win_13w" not in out["history"]
+        assert "win_26w" not in out["history"]
+
+    def test_both_valid_states_accepted(self):
+        for state in ("WASHOUT_TURN", "TURN_WATCH"):
+            out = _build_washout_turn({**_FULL_WT, "state": state})
+            assert out is not None and out["state"] == state, f"state={state!r} was rejected"
+
+    def test_unknown_state_rejected(self):
+        assert _build_washout_turn({**_FULL_WT, "state": "SOME_FUTURE_STATE"}) is None
+        assert _build_washout_turn({**_FULL_WT, "state": "washout_turn"}) is None  # case-exact
+
+    def test_missing_state_returns_none(self):
+        wt = {k: v for k, v in _FULL_WT.items() if k != "state"}
+        assert _build_washout_turn(wt) is None
+
+    def test_none_input_returns_none(self):
+        assert _build_washout_turn(None) is None
+
+    def test_non_dict_input_returns_none(self):
+        assert _build_washout_turn("WASHOUT_TURN") is None
+        assert _build_washout_turn([]) is None
+
+    def test_null_optional_fields_omitted_not_nulled(self):
+        wt = {**_FULL_WT, "since": None, "depth_pctile": None, "data_through": None}
+        out = _build_washout_turn(wt)
+        assert out is not None
+        for key in ("since", "depth_pctile", "data_through"):
+            assert key not in out, f"{key} must be omitted, never null"
+        assert out["state"] == "WASHOUT_TURN"
+
+    def test_null_medians_omitted_history_keeps_n(self):
+        """The thin-history case: n survives, the null medians do not."""
+        wt = {**_FULL_WT, "history": {"n": 1, "med_13w": None, "med_26w": None,
+                                      "reason": "insufficient_events"}}
+        out = _build_washout_turn(wt)
+        assert out is not None
+        assert out["history"] == {"n": 1}
+
+    def test_empty_history_dropped_whole(self):
+        wt = {**_FULL_WT, "history": {"n": None, "med_13w": None, "med_26w": None}}
+        out = _build_washout_turn(wt)
+        assert out is not None
+        assert "history" not in out, "an empty history block must be dropped, not emitted as {}"
+
+    def test_non_dict_history_dropped(self):
+        wt = {**_FULL_WT, "history": None}
+        out = _build_washout_turn(wt)
+        assert out is not None and "history" not in out
+
+    def test_uncoercible_n_omitted(self):
+        wt = {**_FULL_WT, "history": {"n": "many", "med_13w": 4.2, "med_26w": 7.9}}
+        out = _build_washout_turn(wt)
+        assert out is not None
+        assert "n" not in out["history"]
+        assert out["history"]["med_13w"] == 4.2
+
+    def test_minimal_block_state_only(self):
+        out = _build_washout_turn({"state": "TURN_WATCH"})
+        assert out == {"state": "TURN_WATCH"}
+
+    def test_n_is_int(self):
+        out = _build_washout_turn({**_FULL_WT, "history": {"n": 11.0}})
+        assert out is not None
+        assert isinstance(out["history"]["n"], int)
+
+
+class TestWashoutTurnBuildIntel:
+    """Integration tests: washout_turn in build_intel output."""
+
+    def _src_with_wt(self, wt, asof="2026-07-01", **kwargs):
+        src = _src(asof=asof, **kwargs)
+        src["washout_turn"] = wt
+        return src
+
+    def test_fresh_with_turn_emits_washout_turn(self):
+        intel = build_intel("MCD", self._src_with_wt(_FULL_WT), today=TODAY)
+        assert "washout_turn" in intel["tape"], "washout_turn must be present when fresh"
+        assert intel["tape"]["washout_turn"]["state"] == "WASHOUT_TURN"
+        assert intel["tape"]["washout_turn"]["depth_pctile"] == 6.3
+
+    def test_fresh_with_watch_emits_washout_turn(self):
+        src = self._src_with_wt({**_FULL_WT, "state": "TURN_WATCH"})
+        intel = build_intel("MCD", src, today=TODAY)
+        assert intel["tape"]["washout_turn"]["state"] == "TURN_WATCH"
+
+    def test_fresh_without_block_omits_field(self):
+        """No washout_turn in source → field absent (not null) in output."""
+        intel = build_intel("MCD", _src(), today=TODAY)
+        assert "washout_turn" not in intel["tape"], (
+            "washout_turn must be absent (not null) when not in source"
+        )
+
+    def test_fresh_with_null_block_omits_field(self):
+        src = _src()
+        src["washout_turn"] = None
+        intel = build_intel("MCD", src, today=TODAY)
+        assert "washout_turn" not in intel["tape"]
+
+    def test_stale_with_turn_drops_washout_turn(self):
+        """A stale weekly window must never render as a live one."""
+        src = self._src_with_wt(_FULL_WT, asof="2026-06-25")  # 6 days old → stale
+        intel = build_intel("MCD", src, today=TODAY)
+        assert intel["tape"]["stale"] is True
+        assert "washout_turn" not in intel["tape"], (
+            "washout_turn must be dropped when tape is stale"
+        )
+
+    def test_fresh_with_unknown_state_omits_field(self):
+        """Unknown states must not reach the terminal."""
+        src = self._src_with_wt({**_FULL_WT, "state": "mystery"})
+        intel = build_intel("MCD", src, today=TODAY)
+        assert "washout_turn" not in intel["tape"]
+
+    def test_sector_pulse_and_washout_turn_coexist(self):
+        """The two pass-throughs are independent — neither shadows the other."""
+        src = self._src_with_wt(_FULL_WT)
+        src["sector_pulse"] = _FULL_PULSE
+        intel = build_intel("MCD", src, today=TODAY)
+        assert intel["tape"]["sector_pulse"]["heat"] == "heating"
+        assert intel["tape"]["washout_turn"]["state"] == "WASHOUT_TURN"

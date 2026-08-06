@@ -447,6 +447,9 @@ const LEX: Record<string, [string, string]> = {
   trendRange: ["Range", "区间"],
   trendDowntrend: ["Downtrend", "下降趋势"],
   trendHorizon: ["weeks–months", "数周至数月"],
+  // weekly washout-turn row — the head carries the state semantics, so the label stays the
+  // grain (avoids saying 转向 twice in zh)
+  wtLbl: ["Weekly", "周线"],
   trendColState: ["State", "状态"],
   trendColEdge60: ["edge 60d", "超额60日"],
   backtestedNote: ["backtested · 6yr daily→3D", "回测 · 6年 日线→3日"],

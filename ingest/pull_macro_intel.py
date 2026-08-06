@@ -56,6 +56,17 @@ factordata local-source (2026-07-24):
      refresh_fund.sh step 9b keeps ~/.mm-factordata fresh via an authenticated rsync
      from the droplet's /opt/macro checkout.
 
+washout_turn pass-through (weekly dual-read row):
+ 10. When the source stockdata JSON contains a top-level ``washout_turn`` block, a
+     trimmed subset is forwarded into the intel/v1 output under ``tape.washout_turn``.
+     Trimmed shape: {state, since, depth_pctile, data_through,
+     history: {n, med_13w, med_26w}}; each field is omitted when absent/uncoercible
+     and ``history`` is dropped whole when it would be empty.
+     state ∈ WASHOUT_TURN | TURN_WATCH — any other value is treated as absent.
+     The same stale gate as §6 applies (a stale weekly window must not render as a
+     live one), and an absent/null source block means the field is omitted from the
+     output, never emitted as null (§7).  Consumers MUST handle the missing field.
+
 Usage:
     python ingest/pull_macro_intel.py [SYM ...]        # explicit symbols (default: DEFAULT list)
     python ingest/pull_macro_intel.py --only AAPL      # same as positional
@@ -350,6 +361,68 @@ def _build_sector_pulse(src_pulse: object) -> dict | None:
     return out
 
 
+# ── washout_turn helpers ───────────────────────────────────────────────────────
+# HARD INVARIANT (same shape as _VALID_HEAT): only these two states are forwarded
+# to the Terminal.  Anything else from the source is dropped (treated as absent)
+# so a future dashboard experiment cannot push an unknown state into the UI.
+_VALID_WASHOUT_STATES = frozenset({"WASHOUT_TURN", "TURN_WATCH"})
+
+
+def _build_washout_turn(src_wt: object) -> dict | None:
+    """Extract a trimmed washout_turn dict from the raw stockdata block.
+
+    Returns None when the block is absent, null, not a dict, or carries a state
+    outside _VALID_WASHOUT_STATES.  Callers that receive None must omit the field
+    from the output entirely — never write ``washout_turn: null``.
+
+    Trimmed fields passed through:
+        state, since, depth_pctile, data_through, history{n, med_13w, med_26w}
+
+    Fields intentionally omitted (dashboard-internal / not read by the row):
+        weeks_since_cross, depth_pctile_at_cross, line, sig, hist, stoch_k,
+        stoch_d, weekly_cb, drawdown_pct, history_weeks, history_start,
+        history.win_13w, history.win_26w, history.reason
+    """
+    if not isinstance(src_wt, dict):
+        return None
+
+    state = _str(src_wt.get("state"))
+    if not state or state not in _VALID_WASHOUT_STATES:
+        return None  # unknown or missing state → treat as absent
+
+    out: dict = {"state": state}
+
+    for key in ("since", "data_through"):
+        v = _str(src_wt.get(key))
+        if v is not None:
+            out[key] = v
+
+    depth = _r(src_wt.get("depth_pctile"), 1)
+    if depth is not None:
+        out["depth_pctile"] = depth
+
+    # history: the prior-turn base rates. The row prints the thin-history disclosure
+    # instead of a summary when these are missing, so each field is omitted (never
+    # null) and an empty history block is dropped whole.
+    src_hist = src_wt.get("history")
+    if isinstance(src_hist, dict):
+        hist: dict = {}
+        n = src_hist.get("n")
+        if n is not None:
+            try:
+                hist["n"] = int(n)
+            except (TypeError, ValueError):
+                pass
+        for key in ("med_13w", "med_26w"):
+            v = _r(src_hist.get(key), 1)
+            if v is not None:
+                hist[key] = v
+        if hist:
+            out["history"] = hist
+
+    return out
+
+
 def _is_stale(asof: str | None, today: date, max_days: int) -> bool:
     """Return True if asof is absent or older than max_days calendar days."""
     if not asof:
@@ -442,6 +515,14 @@ def build_intel(sym: str, src: dict, today: date | None = None) -> dict:
         pulse = _build_sector_pulse(src.get("sector_pulse"))
         if pulse is not None:
             tape["sector_pulse"] = pulse
+
+    # ── washout_turn pass-through ─────────────────────────────────────────────
+    # Same stale gate: a weekly turn read is a WINDOW, and a stale window must not
+    # render as a live one.  Absent/null source → field omitted (never null).
+    if not stale:
+        wt = _build_washout_turn(src.get("washout_turn"))
+        if wt is not None:
+            tape["washout_turn"] = wt
 
     # ── cards.ai_judgment ────────────────────────────────────────────────────
     size = conviction.get("size") or {}
