@@ -405,6 +405,11 @@ svg{display:block}
 /* SOFT: a real dated engine event outside the scored lane (RECLAIM re-entry) — colored and
    dated but hollow, so it can never be mistaken for the backtested solid-star signal. */
 .sig-btn-half.sig-btn-soft>svg path{fill:transparent;stroke:var(--vc);stroke-width:1.6}
+/* BLOCKED: the engine refused a still-live entry trigger. When the refusal IS the read the
+   label says so; when it rides under a fresher sell anchor the sub-line is the only place it
+   can speak, so give that line the caution hue — two names in the same engine state must not
+   render as two different-looking cards purely on the age of the older sell. */
+.sig-btn-half.sig-btn-blocked .sig-btn-sub{color:var(--signal)}
 /* View: the seam sits between the halves in the flex column — its top edge IS their shared
    boundary; the pill is centered on that edge, straddling both rectangles symmetrically */
 .sig-btn-seam{position:relative;display:block;height:0;z-index:2;pointer-events:none}

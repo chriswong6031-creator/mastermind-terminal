@@ -8,6 +8,10 @@ interface Half {
   stance?: boolean;
   /** a real dated event outside the scored lane (RECLAIM) — hollow, no full authority */
   soft?: boolean;
+  /** the engine refused a still-live entry trigger. When that refusal is the primary read the
+   *  label already says so; when it rides under a fresher sell anchor this is the only marker,
+   *  so the same engine state can't render as two different-looking cards. */
+  blocked?: boolean;
 }
 
 interface Props {
@@ -26,7 +30,8 @@ export default function SignalButton({ oracle, desk, oracleLabel, deskLabel, vie
     deskLabel + (desk.note ? ` — ${desk.note}` : "");
   const oracleCls =
     "sig-btn-half sig-btn-go" +
-    (oracle.stance ? " sig-btn-stance" : oracle.soft ? " sig-btn-soft" : oracle.dim ? " sig-btn-stale" : "");
+    (oracle.stance ? " sig-btn-stance" : oracle.soft ? " sig-btn-soft" : oracle.dim ? " sig-btn-stale" : "") +
+    (oracle.blocked ? " sig-btn-blocked" : "");
   return (
     <button className="sig-btn" onClick={onView} title={title}>
       <span className={oracleCls} style={{ ["--vc" as any]: oracle.color }}>
