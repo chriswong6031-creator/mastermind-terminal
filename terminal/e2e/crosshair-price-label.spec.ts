@@ -32,19 +32,27 @@ test("the last-price badge yields the axis to the crosshair's price label", asyn
   await expect(page.locator(".mm-ptag")).toBeVisible({ timeout: 45_000 });
   await expect.poll(async () => (await tagGeom(page))?.anchor ?? 0, { timeout: 45_000 }).toBeGreaterThan(0);
 
-  const rest = (await tagGeom(page))!;
-  const crossY = rest.anchor;                                   // hover dead-on the last price
-  const x = rest.wrapLeft + rest.wrapWidth * 0.55;              // inside the plot, clear of the axis
+  const geom = (await tagGeom(page))!;
+  const x = geom.wrapLeft + geom.wrapWidth * 0.55;              // inside the plot, clear of the axis
+  const offChart = () => page.mouse.move(geom.wrapLeft + 4, 4); // above the pane → crosshair cleared
+
+  // Anchors are re-measured with the crosshair CLEARED rather than reused across steps: a quote
+  // landing mid-test moves the last price (and with it the badge) by a few pixels, which an
+  // absolute comparison would read as a dodge that never happened.
+  await offChart();
+  const anchor = (await tagGeom(page))!.top;
 
   // 1. the crosshair sitting on the last price pushes the badge fully clear of the label box
-  await page.mouse.move(x, rest.wrapTop + crossY - 40);
-  await page.mouse.move(x, rest.wrapTop + crossY);
-  await expect.poll(async () => (await tagGeom(page))?.top ?? 0, { timeout: 10_000 }).toBeGreaterThan(rest.anchor);
+  await page.mouse.move(x, geom.wrapTop + anchor - 40);
+  await page.mouse.move(x, geom.wrapTop + anchor);
+  await expect.poll(async () => (await tagGeom(page))?.top ?? 0, { timeout: 10_000 }).toBeGreaterThan(anchor);
   const dodged = (await tagGeom(page))!;
-  const labelTop = crossY - LABEL_HALF, labelBottom = crossY + LABEL_HALF;
-  expect(dodged.boxTop >= labelBottom || dodged.boxBottom <= labelTop).toBe(true);
+  expect(dodged.boxTop >= anchor + LABEL_HALF || dodged.boxBottom <= anchor - LABEL_HALF).toBe(true);
 
   // 2. a crosshair that never touched the badge leaves it on the price
-  await page.mouse.move(x, rest.wrapTop + crossY - 80);
-  await expect.poll(async () => (await tagGeom(page))?.top ?? 0, { timeout: 10_000 }).toBe(rest.anchor);
+  await offChart();
+  const anchorNow = (await tagGeom(page))!.top;
+  await page.mouse.move(x, geom.wrapTop + anchorNow - 80);
+  await expect.poll(async () => Math.abs(((await tagGeom(page))?.top ?? -999) - anchorNow), { timeout: 10_000 })
+    .toBeLessThanOrEqual(1);
 });

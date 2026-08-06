@@ -679,7 +679,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const instrumentColorRef = useRef<string>(instrumentColor || "#64748b");
   // intraday dead-end empty-state overlay ("Back to Daily") — built in Effect 1, toggled from Effect 2
   const emptyRef = useRef<HTMLDivElement | null>(null);
-  const showEmptyRef = useRef<(msg: string) => void>(() => {});
+  const showEmptyRef = useRef<(msg: string, action?: "daily" | null) => void>(() => {});
   const hideEmptyRef = useRef<() => void>(() => {});
   // SVG layer for indicator overlays (ichimoku cloud, ribbon fill, vprofile, volbox)
   const indSvgRef = useRef<SVGSVGElement | null>(null);
@@ -717,6 +717,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const quote = liveQuoteRef.current;
     const settings = chartSettingsRef.current;
     if (!priceSeries || isIntradayRef.current || replayIdxRef.current != null) return;
+    if (chartDataSymRef.current !== symbolRef.current) return;   // never annotate another symbol's series
     if (classify(symbolRef.current) !== "us" || isMacroSymbol(symbolRef.current)) return;
     if (settings.extendedLineVisible === false) return;
     if (!quote?.extSession || quote.extPrice == null || !Number.isFinite(quote.extPrice) || quote.extPrice <= 0) return;
@@ -2330,8 +2331,37 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // barsRef/fullBarsRef so the status line, sig-mark snapping and pane-sync map stay consistent.
   // Guards (any → no-op): no chart/series, intraday TF, replay active, basis not spliceable,
   // no quote/last, or the daily source is empty.
+  /**
+   * Roll the pane back to EMPTY. A symbol whose bars never arrive (no `/data/<sym>.json`, an empty
+   * composite, a dead intraday feed) used to leave the PREVIOUS symbol's series on screen under the
+   * new symbol's badge — and the live-quote splice then printed the new symbol's price onto those
+   * bars (000001.SS's 3,878 spliced onto 300363.SZ's ~17 CNY candles: one giant candle, a 0–4400
+   * scale, and a status line reading +1881%). Clearing `chartDataSymRef` also tells every
+   * symbol-guarded consumer (splice, options levels, drawings) that this pane is unpainted.
+   */
+  const clearChartData = () => {
+    barsRef.current = []; fullBarsRef.current = []; dailyBarsRef.current = []; closesRef.current = [];
+    barIdxRef.current = { src: null, map: new Map() };
+    sliceRef.current = null; sigMarksRef.current = []; earlyDotsRef.current = []; warnMarksRef.current = [];
+    chartDataSymRef.current = "";
+    clearExtendedPriceLine();
+    clearAllIndicators();
+    const chart = chartRef.current;
+    if (chart) for (const s of cmpSeriesRef.current.values()) { try { chart.removeSeries(s); } catch {} }
+    cmpSeriesRef.current.clear();
+    try { priceSeriesRef.current?.setData([]); } catch {}
+    rebuildPaneMeta();             // the legend must not advertise studies that are no longer drawn
+    if (onMeta) onMeta({ total: 0 });
+    renderTagRef.current?.();      // no bars → the last-price badge hides itself
+    renderSignalsRef.current();    // drop the previous symbol's markers / gap zones
+    renderRef.current();
+  };
+
   const applyLiveSplice = () => {
     const priceS = priceSeriesRef.current; if (!priceS) return;
+    // The bars on the canvas must belong to THIS symbol (see clearChartData) — a quote must never
+    // be spliced onto another symbol's series.
+    if (chartDataSymRef.current !== symbolRef.current) return;
     if (isIntradayRef.current) return;                     // intraday is already live
     if (replayIdxRef.current != null) return;              // never splice under replay
     const q = liveQuoteRef.current;
@@ -4529,7 +4559,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     empty.innerHTML = `<div class="ce-msg" style="color:var(--text-2);font-size:13px;max-width:320px;line-height:1.5"></div><button class="ce-btn" style="cursor:pointer;font:600 12px var(--font-ui),system-ui;color:var(--text);background:var(--panel-2);border:1px solid var(--line-3);border-radius:6px;padding:7px 14px">Back to Daily</button>`;
     wrap.appendChild(empty); emptyRef.current = empty;
     empty.querySelector(".ce-btn")!.addEventListener("pointerdown", (e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("mm:set-tf", { detail: { tf: "D" } })); });
-    showEmptyRef.current = (msg: string) => { const e2 = emptyRef.current; if (!e2) return; const m = e2.querySelector(".ce-msg"); if (m) m.textContent = msg; e2.style.display = "flex"; };
+    // `action` gates the CTA: the intraday dead-end offers "Back to Daily", but the DAILY dead-end
+    // (no /data file for this symbol) must not — the daily timeframe is where the user already is.
+    showEmptyRef.current = (msg: string, action: "daily" | null = "daily") => {
+      const e2 = emptyRef.current; if (!e2) return;
+      const m = e2.querySelector(".ce-msg"); if (m) m.textContent = msg;
+      const b = e2.querySelector<HTMLElement>(".ce-btn"); if (b) b.style.display = action === "daily" ? "" : "none";
+      e2.style.display = "flex";
+    };
     hideEmptyRef.current = () => { const e2 = emptyRef.current; if (e2) e2.style.display = "none"; };
 
     // ── Countdown-to-bar-close chip (Day Trade Mode feature) ──
@@ -6198,6 +6235,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         earlyDotsRef.current = []; warnMarksRef.current = [];   // GC v2 side channels: daily-only too
         dailyBarsRef.current = [];               // splice is daily-only; disable it here
         if (!bars.length) {
+          clearChartData();   // never leave the previous symbol's series under this symbol's badge
           // Differentiate a feed/entitlement/config failure ("POLYGON_API_KEY not set", "polygon 403",
           // "unauthenticated", …) from a genuinely-empty symbol. Both dead-end the intraday chart, so
           // surface a "Back to Daily" affordance instead of a blank chart.
@@ -6298,7 +6336,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         );
         const summed = alignAndSum(legBars);
         if (!summed.length) {
+          clearChartData();
           if (statusRef.current) statusRef.current.textContent = "No shared data for composite.";
+          showEmptyRef.current(`No overlapping data for ${symbol}. Its legs share no common dates.`, null);
           announceTerminalVisualReady(symbol, "empty");
           return;
         }
@@ -6310,7 +6350,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (cancelled || epochRef.current !== epoch) return;
         sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)
         if (!ohlc?.bars?.length) {
+          clearChartData();
           if (statusRef.current) statusRef.current.textContent = "No data for this symbol.";
+          showEmptyRef.current(`No daily history for ${symbol} yet.`, null);
           announceTerminalVisualReady(symbol, "empty");
           return;
         }

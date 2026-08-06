@@ -372,6 +372,28 @@ def yahoo_symbols() -> list[str]:
     ]
 
 
+def ohlc_symbols() -> list[str]:
+    """Symbols whose DAILY HISTORY comes from the Yahoo chart endpoint.
+
+    A superset of yahoo_symbols(): the mainland-China indices take their live QUOTES from Tencent,
+    but Tencent serves no daily history and nothing else wrote them a `/data/<sym>.json`, so they
+    shipped searchable-but-unchartable — a live price in the rail above a dead-ended chart. Yahoo
+    carries the same codes, so history comes from there while the quote leg stays exactly as it is.
+
+    Read off the _INDICES section by market group rather than pattern-matched, for the same reason
+    fred_symbols() is: a China index code (000001.SS) has no shape that separates it from an A-share
+    ticker (000001.SZ), and only this section can put a symbol on the leg. A new CN index row picks
+    up history automatically.
+
+    Yahoo's coverage of these five is uneven — as of 2026-08-05 it returns full 5y history for
+    000001.SS / 000300.SS / 399001.SZ and a single bar for 000905.SS / 399006.SZ. The fetcher's
+    depth guard drops the thin ones rather than writing a one-bar "chart"; they stay quote-only
+    until Yahoo backfills, and the Terminal's empty state says so plainly.
+    """
+    cn = [s.sym for s in _INDICES if s.mkt in ("SSE", "SZSE")]
+    return yahoo_symbols() + cn
+
+
 def fred_symbols() -> list[str]:
     """Symbols whose daily series comes from FRED — the source of truth for fetch_fred_daily.py.
 
