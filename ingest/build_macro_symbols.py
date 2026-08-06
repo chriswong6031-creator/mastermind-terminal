@@ -12,9 +12,13 @@ exactly how the 2026-07-11 manifest 8,740 -> 34 incident happened (see terminal-
 
 Sources
     Yahoo spark   quotes for ^indices, =F futures, =X FX, DX-Y.NYB   (DELAYED — see below)
-    Yahoo chart   daily OHLC for the same set
-    (CN indices route to Tencent and crypto to Coinbase at REQUEST time via the Next app; this
-     script only needs to put their rows in the manifest so they are searchable.)
+    Yahoo chart   daily OHLC for that set PLUS the mainland-China indices
+    (CN indices and crypto take their live QUOTES from Tencent / Coinbase at REQUEST time via
+     the Next app — that leg is untouched. But Tencent serves no daily history, so until the
+     2026-08-05 fix the four CN index rows were searchable with no chart behind them: the
+     Terminal dead-ended on "No data for this symbol" under a live price. Their history now
+     comes off the Yahoo chart endpoint, which carries the same codes. Crypto keeps its own
+     OHLC lane in refresh_crypto_ohlc.py.)
 
 Honesty note: everything on the Yahoo leg is delayed, not real-time. Index values, CME futures
 and the ICE dollar index all need licensed real-time feeds. The manifest row carries no basis
@@ -35,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from macro_catalog import (  # noqa: E402
-    CATALOG, duplicates, manifest_rows, retired_symbols, yahoo_symbols,
+    CATALOG, duplicates, manifest_rows, ohlc_symbols, retired_symbols, yahoo_symbols,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,6 +51,9 @@ CHART = "https://query1.finance.yahoo.com/v8/finance/chart"
 # Yahoo's spark endpoint 400s past ~20 symbols and returns ZERO results rather than a partial
 # answer, so an oversized batch silently loses everything. Confirmed at 23; stay well under.
 SPARK_BATCH = 18
+# Minimum daily bars for a macro series to be worth publishing. Every instrument in the catalog
+# is decades old, so anything thinner is Yahoo failing to serve history, not a young symbol.
+MIN_OHLC_BARS = 30
 
 
 def _get(url: str, timeout: int = 20) -> dict:
@@ -77,6 +84,33 @@ def fetch_quotes(syms: list[str]) -> dict[str, dict]:
             out[sym] = {"last": round(float(last), 6), "chg": round(chg, 4) if chg is not None else None}
         time.sleep(0.3)   # be a polite client; this runs once a night
     return out
+
+
+def publish_decision(fetched: int, have: int) -> str:
+    """What to do with a fetched macro series: "write" | "keep" | "drop".
+
+    A truncated Yahoo response must never BECOME the chart. It arrives two ways: a code Yahoo
+    quotes but has no history for (000905.SS / 399006.SZ answer with exactly one bar), and a
+    transient hiccup on a symbol that was fine yesterday — which would otherwise overwrite a
+    good 5y series with a stub. So a fetch has to clear the floor AND not be a fraction of what
+    is already published; the 5y window drifts a bar a day, so the disk comparison is "less than
+    half", never an exact count, or normal daily updates would freeze.
+
+    "drop" removes a stub that is ALREADY on disk (USDCNH=X shipped as a single 2026-08-05 bar —
+    one candle presented as a chart). Only ever a file that is itself under the floor: a series
+    with real depth is never deleted, whatever the fetch returned.
+    """
+    if fetched >= MIN_OHLC_BARS and (not have or fetched * 2 >= have):
+        return "write"
+    return "drop" if 0 < have < MIN_OHLC_BARS else "keep"
+
+
+def existing_bar_count(path: Path) -> int:
+    """Bars already published for this symbol — 0 when there is no readable file yet."""
+    try:
+        return len(json.loads(path.read_text()).get("bars") or [])
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return 0
 
 
 def fetch_ohlc(sym: str) -> list[list]:
@@ -200,17 +234,33 @@ def main() -> int:
           f"(+{added} new, {updated} enriched, -{len(removed)} retired)")
 
     if not args.no_ohlc:
-        wrote = 0
-        for sym in yahoo_symbols():
+        wrote, thin, dropped = 0, [], []
+        targets = ohlc_symbols()
+        for sym in targets:
             bars = fetch_ohlc(sym)
-            if not bars:
-                continue
-            (out_dir / f"{sym}.json").write_text(json.dumps(
-                {"t": sym, "o": 1, "src": "yahoo", "bar_quality": "real_ohlc", "bars": bars},
-                separators=(",", ":")))
-            wrote += 1
+            path = out_dir / f"{sym}.json"
+            have = existing_bar_count(path)
+            decision = publish_decision(len(bars), have)
+            if decision == "write":
+                path.write_text(json.dumps(
+                    {"t": sym, "o": 1, "src": "yahoo", "bar_quality": "real_ohlc", "bars": bars},
+                    separators=(",", ":")))
+                wrote += 1
+            else:
+                if decision == "drop":
+                    try:
+                        path.unlink()
+                        dropped.append(f"{sym}({have}b)")
+                    except OSError as e:
+                        print(f"  ohlc {sym}: stub unlink failed: {e}", file=sys.stderr)
+                if bars:
+                    thin.append(f"{sym}({len(bars)}b, disk {have})")
             time.sleep(0.25)
-        print(f"ohlc: wrote {wrote}/{len(yahoo_symbols())} series")
+        print(f"ohlc: wrote {wrote}/{len(targets)} series")
+        if thin:
+            print(f"ohlc: too thin to publish — {', '.join(thin)}", file=sys.stderr)
+        if dropped:
+            print(f"ohlc: removed stub series (chart now reads as no-data) — {', '.join(dropped)}", file=sys.stderr)
 
     return 0
 

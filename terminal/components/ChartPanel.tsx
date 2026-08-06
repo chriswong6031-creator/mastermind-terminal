@@ -31,6 +31,7 @@ import { calculateAnchoredVwap, calculateFixedRangeVolumeProfile, calculateRegre
 import { cloneDrawing, constrainScreenAngle, translateDrawingAnchors } from "@/lib/drawing-engine/interaction";
 import { calculatePositionMetrics, fibonacciSettings, positionSettings, type FibonacciLabelMode } from "@/lib/drawing-engine/settings";
 import { registerPane, broadcastCrosshair, broadcastRange } from "@/lib/paneSync";
+import { priceTagTop, crosshairLabelHalf } from "@/lib/priceTagPlacement";
 import { setActivePaneCoords, getActivePaneCoords } from "@/lib/paneCoords";
 import { getJSON, getSliceAndOhlc, getCompositeOhlc, getOhlc } from "@/lib/dataCache";
 import { parseComposite, alignAndSum } from "@/lib/composite";
@@ -653,6 +654,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const sigRef = useRef<SVGSVGElement | null>(null);
   const priceTagRef = useRef<HTMLDivElement | null>(null);  // TradingView-style last-price + countdown tag on the right axis
   const tagTimerRef = useRef<number | null>(null);          // 1s ticker so the bar-close countdown stays live
+  // y (price-pane coords) of the crosshair's axis price label, null when no crosshair is on the price
+  // pane — renderPriceTag slides the badge clear of it so the hovered price is never covered.
+  const crossLabelYRef = useRef<number | null>(null);
   const watermarkPluginRef = useRef<{ applyOptions: (opts: Record<string, any>) => void } | null>(null); // v5 text watermark plugin
   const brandBugRef = useRef<HTMLDivElement | null>(null);  // C5 — shell-only DOM brand bug (never created on web)
   // Mirrors the last `visible` passed to the watermark plugin. The plugin API is write-only
@@ -675,7 +679,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   const instrumentColorRef = useRef<string>(instrumentColor || "#64748b");
   // intraday dead-end empty-state overlay ("Back to Daily") — built in Effect 1, toggled from Effect 2
   const emptyRef = useRef<HTMLDivElement | null>(null);
-  const showEmptyRef = useRef<(msg: string) => void>(() => {});
+  const showEmptyRef = useRef<(msg: string, action?: "daily" | null) => void>(() => {});
   const hideEmptyRef = useRef<() => void>(() => {});
   // SVG layer for indicator overlays (ichimoku cloud, ribbon fill, vprofile, volbox)
   const indSvgRef = useRef<SVGSVGElement | null>(null);
@@ -713,6 +717,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const quote = liveQuoteRef.current;
     const settings = chartSettingsRef.current;
     if (!priceSeries || isIntradayRef.current || replayIdxRef.current != null) return;
+    if (chartDataSymRef.current !== symbolRef.current) return;   // never annotate another symbol's series
     if (classify(symbolRef.current) !== "us" || isMacroSymbol(symbolRef.current)) return;
     if (settings.extendedLineVisible === false) return;
     if (!quote?.extSession || quote.extPrice == null || !Number.isFinite(quote.extPrice) || quote.extPrice <= 0) return;
@@ -2326,8 +2331,37 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
   // barsRef/fullBarsRef so the status line, sig-mark snapping and pane-sync map stay consistent.
   // Guards (any → no-op): no chart/series, intraday TF, replay active, basis not spliceable,
   // no quote/last, or the daily source is empty.
+  /**
+   * Roll the pane back to EMPTY. A symbol whose bars never arrive (no `/data/<sym>.json`, an empty
+   * composite, a dead intraday feed) used to leave the PREVIOUS symbol's series on screen under the
+   * new symbol's badge — and the live-quote splice then printed the new symbol's price onto those
+   * bars (000001.SS's 3,878 spliced onto 300363.SZ's ~17 CNY candles: one giant candle, a 0–4400
+   * scale, and a status line reading +1881%). Clearing `chartDataSymRef` also tells every
+   * symbol-guarded consumer (splice, options levels, drawings) that this pane is unpainted.
+   */
+  const clearChartData = () => {
+    barsRef.current = []; fullBarsRef.current = []; dailyBarsRef.current = []; closesRef.current = [];
+    barIdxRef.current = { src: null, map: new Map() };
+    sliceRef.current = null; sigMarksRef.current = []; earlyDotsRef.current = []; warnMarksRef.current = [];
+    chartDataSymRef.current = "";
+    clearExtendedPriceLine();
+    clearAllIndicators();
+    const chart = chartRef.current;
+    if (chart) for (const s of cmpSeriesRef.current.values()) { try { chart.removeSeries(s); } catch {} }
+    cmpSeriesRef.current.clear();
+    try { priceSeriesRef.current?.setData([]); } catch {}
+    rebuildPaneMeta();             // the legend must not advertise studies that are no longer drawn
+    if (onMeta) onMeta({ total: 0 });
+    renderTagRef.current?.();      // no bars → the last-price badge hides itself
+    renderSignalsRef.current();    // drop the previous symbol's markers / gap zones
+    renderRef.current();
+  };
+
   const applyLiveSplice = () => {
     const priceS = priceSeriesRef.current; if (!priceS) return;
+    // The bars on the canvas must belong to THIS symbol (see clearChartData) — a quote must never
+    // be spliced onto another symbol's series.
+    if (chartDataSymRef.current !== symbolRef.current) return;
     if (isIntradayRef.current) return;                     // intraday is already live
     if (replayIdxRef.current != null) return;              // never splice under replay
     const q = liveQuoteRef.current;
@@ -2764,6 +2798,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           }),
         };
       };
+      // Crosshair-dodge test hook. The crosshair is canvas-drawn and its coordinate lives in a
+      // ref, so a test driving it with synthetic pointer moves has no way to know the move
+      // REGISTERED — it can only sleep and hope. That raced on CI (a tablet run asserted the
+      // dodge one frame before the crosshair landed and read the badge still on the price).
+      // Exposing the two numbers the dodge is computed from lets the test wait for the state
+      // it is asserting about instead of a timeout.
+      (window as any).__mmCrosshairDodge = () => {
+        const tag = priceTagRef.current;
+        return {
+          crossY: crossLabelYRef.current,                          // null = no crosshair on the price pane
+          tagTop: tag ? parseFloat(tag.style.top || "0") : null,   // pane-space anchor the badge renders at
+        };
+      };
     }
 
     // ── create the ONE chart (the hard invariant — exactly one renderer instance — now
@@ -2870,6 +2917,28 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     // price-pane coordinates (signal pills, gap zones, drawings, ichimoku/ribbon fills, the
     // last-price tag) must clear/hide itself instead of painting over the maximized pane.
     const priceProjHidden = () => { const c = paneCtl.current; return c.maximized != null && c.maximized !== "__price__"; };
+
+    // ── crosshair dodge (the badge NEVER covers the price you are pointing at) ──
+    // Placement geometry lives in lib/priceTagPlacement (pure + unit-tested); this side owns the
+    // measurements it needs. See that module's header for why the badge yields to the crosshair label.
+    const priceIdx = () => { try { return priceSeriesRef.current?.getPane()?.paneIndex() ?? 0; } catch { return 0; } };
+    const axisFontSize = () => { try { return (chart.options() as any).layout?.fontSize || 12; } catch { return 12; } };
+    // Half-extents of the badge around its anchor. It is centred on `top` via translateY(-50%), but
+    // in shell mode globals.css lifts the countdown OUT of the badge box (position:absolute), so the
+    // occupied band is the union of both rects. Cached on the countdown-visibility key: a rect read
+    // per crosshair frame would force a layout flush on every mouse move.
+    let tagBox = { up: 0, down: 0, key: "" };
+    const measureTagBox = (tag: HTMLElement, cdShown: boolean) => {
+      const key = cdShown ? "cd" : "-";
+      if (tagBox.key === key && tagBox.up > 0) return tagBox;
+      const r = tag.getBoundingClientRect();
+      if (!r.height) return tagBox;
+      const mid = r.top + r.height / 2;
+      let top = r.top, bot = r.bottom;
+      if (cdShown) { const rc = tagCd.getBoundingClientRect(); if (rc.height) { top = Math.min(top, rc.top); bot = Math.max(bot, rc.bottom); } }
+      tagBox = { up: mid - top, down: bot - mid, key };
+      return tagBox;
+    };
     const renderPriceTag = () => {
       const tag = priceTagRef.current, s = priceSeriesRef.current;
       if (!tag || !s || dead) return;
@@ -2897,11 +2966,48 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (rem != null && isFinite(rem)) cd = fmtCountdown(rem, isIntradayRef.current);
       }
       tagCd.textContent = cd;
-      tagCd.style.display = cd && countdownVisibleRef.current ? "block" : "none";
+      const cdShown = !!cd && countdownVisibleRef.current;
+      tagCd.style.display = cdShown ? "block" : "none";
       tagSym.style.background = col; tagVal.style.background = col;
-      tag.style.top = Math.round(y) + "px"; tag.style.display = lastValueVisibleRef.current ? "flex" : "none";
+      const shown = lastValueVisibleRef.current;
+      tag.style.display = shown ? "flex" : "none";
+      // dodge the crosshair label when the two boxes collide (see crosshair-dodge note above)
+      const cy = shown ? crossLabelYRef.current : null;
+      let top = y;
+      if (cy != null) {
+        const box = measureTagBox(tag, cdShown);
+        // an unmeasurable badge (never laid out yet) would dodge off a zero-height box — leave it put
+        if (box.up > 0) {
+          let paneH = 0; try { paneH = chart.paneSize(priceIdx()).height; } catch {}
+          top = priceTagTop(y, cy, box, crosshairLabelHalf(axisFontSize()), paneH);
+        }
+      }
+      tag.style.top = Math.round(top) + "px";
     };
     renderTagRef.current = renderPriceTag;
+    // `point.y` is PANE-relative — the same space priceToCoordinate returns — so the crosshair
+    // coordinate and the badge anchor compare directly. Magnet mode snaps the DRAWN label to the
+    // hovered bar's close, so mirror that snap here or the badge would dodge a band nothing is in.
+    const onTagCrosshair = (p: any) => {
+      let y: number | null = null;
+      const pt = p?.point;
+      if (pt && Number.isFinite(pt.y) && (p.paneIndex == null || p.paneIndex === priceIdx())) {
+        y = pt.y;
+        if (chartSettingsRef.current.crosshairMode === 1) {
+          const idx = p.time != null ? (barIdxMap().get(p.time) ?? barIdxMap().get(String(p.time))) : null;
+          const bar = idx != null ? barsRef.current[idx] : null;
+          const s = priceSeriesRef.current;
+          const snapped = bar && s ? (s.priceToCoordinate(bar.c) as number | null) : null;
+          if (snapped != null && Number.isFinite(snapped)) y = snapped;
+        }
+      }
+      const prev = crossLabelYRef.current;
+      if (y == null && prev == null) return;
+      if (y != null && prev != null && Math.abs(prev - y) < 0.5) return;
+      crossLabelYRef.current = y;
+      renderPriceTag();
+    };
+    chart.subscribeCrosshairMove(onTagCrosshair);
     tagTimerRef.current = window.setInterval(() => { if (!dead) renderPriceTag(); }, 1000);
 
     // ── coordinate helpers (read *Ref.current so they stay valid across reloads) ──
@@ -4466,7 +4572,14 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     empty.innerHTML = `<div class="ce-msg" style="color:var(--text-2);font-size:13px;max-width:320px;line-height:1.5"></div><button class="ce-btn" style="cursor:pointer;font:600 12px var(--font-ui),system-ui;color:var(--text);background:var(--panel-2);border:1px solid var(--line-3);border-radius:6px;padding:7px 14px">Back to Daily</button>`;
     wrap.appendChild(empty); emptyRef.current = empty;
     empty.querySelector(".ce-btn")!.addEventListener("pointerdown", (e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("mm:set-tf", { detail: { tf: "D" } })); });
-    showEmptyRef.current = (msg: string) => { const e2 = emptyRef.current; if (!e2) return; const m = e2.querySelector(".ce-msg"); if (m) m.textContent = msg; e2.style.display = "flex"; };
+    // `action` gates the CTA: the intraday dead-end offers "Back to Daily", but the DAILY dead-end
+    // (no /data file for this symbol) must not — the daily timeframe is where the user already is.
+    showEmptyRef.current = (msg: string, action: "daily" | null = "daily") => {
+      const e2 = emptyRef.current; if (!e2) return;
+      const m = e2.querySelector(".ce-msg"); if (m) m.textContent = msg;
+      const b = e2.querySelector<HTMLElement>(".ce-btn"); if (b) b.style.display = action === "daily" ? "" : "none";
+      e2.style.display = "flex";
+    };
     hideEmptyRef.current = () => { const e2 = emptyRef.current; if (e2) e2.style.display = "none"; };
 
     // ── Countdown-to-bar-close chip (Day Trade Mode feature) ──
@@ -6052,7 +6165,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (dragCleanup) dragCleanup();
       drawingTransactionRef.current = false;
       window.removeEventListener("mm:snapshot", snapshot);
-      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; delete (window as any).__mmChartAxisOpts; } catch {} }
+      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; delete (window as any).__mmChartAxisOpts; delete (window as any).__mmCrosshairDodge; } catch {} }
       if (onKey) window.removeEventListener("keydown", onKey);
       if (winDown) window.removeEventListener("pointerdown", winDown);
       window.removeEventListener("pointerup", onProjectionPointerEnd);
@@ -6135,6 +6248,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         earlyDotsRef.current = []; warnMarksRef.current = [];   // GC v2 side channels: daily-only too
         dailyBarsRef.current = [];               // splice is daily-only; disable it here
         if (!bars.length) {
+          clearChartData();   // never leave the previous symbol's series under this symbol's badge
           // Differentiate a feed/entitlement/config failure ("POLYGON_API_KEY not set", "polygon 403",
           // "unauthenticated", …) from a genuinely-empty symbol. Both dead-end the intraday chart, so
           // surface a "Back to Daily" affordance instead of a blank chart.
@@ -6235,7 +6349,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         );
         const summed = alignAndSum(legBars);
         if (!summed.length) {
+          clearChartData();
           if (statusRef.current) statusRef.current.textContent = "No shared data for composite.";
+          showEmptyRef.current(`No overlapping data for ${symbol}. Its legs share no common dates.`, null);
           announceTerminalVisualReady(symbol, "empty");
           return;
         }
@@ -6247,7 +6363,9 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         if (cancelled || epochRef.current !== epoch) return;
         sliceRef.current = slice;   // authoritative slice for replay sig-mark re-resolution (Effect 4)
         if (!ohlc?.bars?.length) {
+          clearChartData();
           if (statusRef.current) statusRef.current.textContent = "No data for this symbol.";
+          showEmptyRef.current(`No daily history for ${symbol} yet.`, null);
           announceTerminalVisualReady(symbol, "empty");
           return;
         }
@@ -6373,7 +6491,17 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     const chart = chartRef.current, priceS = priceSeriesRef.current, syncId = syncIdRef.current;
     if (syncId == null || !chart || !priceS) return;
     const closeByTime = new Map(barsRef.current.map((r) => [r.time, r.c]));
-    const cleanup = registerPane(syncId, { chart, series: priceS, valueAt: (tm: any) => closeByTime.get(tm as any) ?? null, tf: timeframeRef.current });
+    const cleanup = registerPane(syncId, {
+      chart, series: priceS, valueAt: (tm: any) => closeByTime.get(tm as any) ?? null, tf: timeframeRef.current,
+      // A mirrored crosshair draws the same axis label with no crosshairMove event behind it — feed the
+      // badge its coordinate directly so a synced pane dodges exactly like the pane being driven.
+      onCrosshair: (price) => {
+        const s = priceSeriesRef.current;
+        const y = price == null || !s ? null : (s.priceToCoordinate(price) as number | null);
+        crossLabelYRef.current = y != null && Number.isFinite(y) ? y : null;
+        renderTagRef.current?.();
+      },
+    });
     // v5 subscribe* return void; unsubscribe by passing the SAME handler reference back.
     const onCross = (p: any) => { broadcastCrosshair(syncId, (p.time ?? null) as any); };
     const onRange = (r: any) => { broadcastRange(syncId, r as any); };

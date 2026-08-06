@@ -5,7 +5,10 @@
 // so a $192 NVDA crosshair lands on BTC's candle at the same date, not at $192.
 import type { IChartApi, ISeriesApi, Time } from "lightweight-charts";
 
-type Peer = { chart: IChartApi; series: ISeriesApi<any>; valueAt: (t: Time) => number | null; tf: string; suppress?: number };
+// `onCrosshair` fires on a peer whenever THIS bus moves or clears its crosshair: setCrosshairPosition
+// is a synthetic position and deliberately fires no crosshairMove event, so a pane that reacts to its
+// own crosshair (the last-price badge dodging the axis label) would never hear about a mirrored one.
+type Peer = { chart: IChartApi; series: ISeriesApi<any>; valueAt: (t: Time) => number | null; tf: string; suppress?: number; onCrosshair?: (price: number | null) => void };
 
 const peers = new Map<number, Peer>();
 let enabled = false;
@@ -13,7 +16,7 @@ let applying = false; // crosshair re-entrancy guard (range uses per-peer suppre
 
 export function setPaneSync(on: boolean) {
   enabled = on;
-  if (!on) peers.forEach((p) => { try { p.chart.clearCrosshairPosition(); } catch {} });
+  if (!on) peers.forEach((p) => { try { p.chart.clearCrosshairPosition(); p.onCrosshair?.(null); } catch {} });
 }
 export function paneSyncEnabled() { return enabled; }
 
@@ -32,8 +35,8 @@ export function broadcastCrosshair(fromId: number, time: Time | null) {
       if (id === fromId || (self && p.tf !== self.tf)) return;   // only mirror same-timeframe panes
       try {
         const v = time == null ? null : p.valueAt(time);
-        if (time == null || v == null) p.chart.clearCrosshairPosition();
-        else p.chart.setCrosshairPosition(v, time, p.series);
+        if (time == null || v == null) { p.chart.clearCrosshairPosition(); p.onCrosshair?.(null); }
+        else { p.chart.setCrosshairPosition(v, time, p.series); p.onCrosshair?.(v); }
       } catch { /* peer may be mid-teardown */ }
     });
   } finally { applying = false; }

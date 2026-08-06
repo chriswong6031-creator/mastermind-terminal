@@ -1,5 +1,6 @@
 "use client";
 import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useLang, useT } from "@/lib/i18n";
 import { CMP_PALETTE, CmpMode, CmpCfg } from "@/lib/compare";
 import { parseComposite, compositeExpr, validateLegs } from "@/lib/composite";
@@ -24,6 +25,10 @@ const isBuy = (v: string | null) => v === "BUY" || v === "REBUY" || v === "RECLA
 
 /** The phone ticker picker presents at the Drawings sheet's detents — one drawer idiom. */
 const SEARCH_DETENTS = [62, 96] as const;
+
+// Roughly what the add-to-list popover measures (header + a few list rows + "New list"). Only used
+// to decide whether it opens below the row or above it, so an approximation is enough.
+const PICKER_H = 190;
 
 // Category tab order + their i18n keys (bilingual labels — no hardcoded English in JSX).
 const CATS: { id: string; key: string }[] = [
@@ -80,7 +85,12 @@ export default function SearchModal({
   const [railCreating, setRailCreating] = useState(false);   // inline "+ New list" input open
   const [railName, setRailName] = useState("");
   const [picker, setPicker] = useState<string | null>(null);  // symbol whose add-to-list picker is open
-  const [pickerUp, setPickerUp] = useState(false);            // flip picker above the row when no room below
+  // Viewport-anchored geometry for that picker. It used to be an absolute child of the row, which
+  // put it inside `.sres` (overflow:auto) — so on a SHORT result list the scroller is barely taller
+  // than the row and clipped the popover to a sliver: the add button looked dead because the list
+  // menu it opened was invisible (reported 2026-08-05 on a one-hit 明阳电气 search, 8px of a 123px
+  // popover showing). Fixed positioning takes it out of every ancestor's clip.
+  const [pickerPos, setPickerPos] = useState<{ right: number; top?: number; bottom?: number; up: boolean } | null>(null);
   const [pickerNew, setPickerNew] = useState(false);          // inline "new list" inside the picker
   const [pickerNewName, setPickerNewName] = useState("");
   const [justAdded, setJustAdded] = useState<{ sym: string; list: string } | null>(null);  // inline confirm
@@ -98,7 +108,7 @@ export default function SearchModal({
       setRecentlyViewed(getRecentlyViewed());
       setView(seed ? "search" : "home");
       setRailCreating(false); setRailName("");
-      setPicker(null); setPickerUp(false); setPickerNew(false); setPickerNewName("");
+      setPicker(null); setPickerPos(null); setPickerNew(false); setPickerNewName("");
       setJustAdded(null);
       // Opening the mobile ticker picker is a navigation action, so it must land on the active
       // watchlist without also summoning the keyboard. Desktop symbol search, seeded type-ahead,
@@ -115,6 +125,16 @@ export default function SearchModal({
 
   useEffect(() => { if (railCreating) setTimeout(() => railInputRef.current?.focus(), 10); }, [railCreating]);
   useEffect(() => { if (pickerNew) setTimeout(() => pickerNewRef.current?.focus(), 10); }, [pickerNew]);
+  // The picker is anchored to a row's viewport rect, so anything that moves the row underneath it
+  // (scrolling the result list, resizing) leaves it floating over nothing — close it instead of
+  // re-projecting on every frame. Capture phase: `.sres` scrolls do not bubble to window.
+  useEffect(() => {
+    if (!picker) return;
+    const close = () => { setPicker(null); setPickerPos(null); };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => { window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); };
+  }, [picker]);
   useEffect(() => () => { if (addedTimer.current) clearTimeout(addedTimer.current); }, []);
 
   const deferredQ = useDeferredValue(q);
@@ -274,14 +294,19 @@ export default function SearchModal({
       onAdd(sym);
       flashAdded(sym, lists[0]?.name || activeList || "Watchlist");
     } else {
-      // Flip the picker upward when the row is in the lower part of the scroll area, so the popover
-      // (which lives inside the overflow:auto .sres) isn't clipped at the bottom.
-      const scroller = rowEl?.closest(".sres") as HTMLElement | null;
-      if (rowEl && scroller) {
-        const rr = rowEl.getBoundingClientRect(), sr = scroller.getBoundingClientRect();
-        const roomBelow = sr.bottom - rr.bottom;
-        setPickerUp(roomBelow < 180 && (rr.top - sr.top) > roomBelow);   // ~picker height; flip if tighter below
-      } else setPickerUp(false);
+      // Anchor to the row in VIEWPORT space: the popover is position:fixed, so the only room that
+      // matters is the window's, not the scroller's (see pickerPos). Flip it above the row when
+      // the space below can't hold it and the space above can.
+      if (rowEl) {
+        const rr = rowEl.getBoundingClientRect();
+        const roomBelow = window.innerHeight - rr.bottom;
+        const up = roomBelow < PICKER_H && rr.top > roomBelow;
+        setPickerPos({
+          right: Math.max(8, window.innerWidth - rr.right + 8),   // matches the old right:8px inset
+          ...(up ? { bottom: window.innerHeight - rr.top + 2 } : { top: rr.bottom - 2 }),
+          up,
+        });
+      } else setPickerPos(null);
       setPicker(sym); setPickerNew(false); setPickerNewName("");
     }
   }
@@ -408,9 +433,17 @@ export default function SearchModal({
                 </button>
           )}
         </div>
-        {/* Add-to-list picker popover (F, multi-list) — anchored under the row. */}
-        {picker === s && (
-          <div className={`s-pick${pickerUp ? " s-pick-up" : ""}`} onClick={(e) => e.stopPropagation()}>
+        {/* Add-to-list picker popover (F, multi-list) — anchored to the row in VIEWPORT space and
+            PORTALLED to the body: it sits between two clips otherwise (`.sres` scrolls, `.smodal`
+            hides overflow for its rounded corners), and both cropped it (see pickerPos). React
+            events still bubble through the component tree, so the row's stopPropagation and the
+            scrim's target check behave exactly as they did in place. */}
+        {picker === s && portal(
+          <div className={`s-pick${pickerPos?.up ? " s-pick-up" : ""}`}
+            style={pickerPos
+              ? { position: "fixed", right: pickerPos.right, top: pickerPos.top, bottom: pickerPos.bottom, left: "auto" }
+              : undefined}
+            onClick={(e) => e.stopPropagation()}>
             <div className="s-pick-hd">{t("chooseListHd")}</div>
             {lists.map((l) => {
               const has = l.symbols.some((x) => x.symbol === s);
@@ -440,6 +473,11 @@ export default function SearchModal({
         )}
       </div>
     );
+  }
+
+  /** Portal a popover to the body, or render it in place while there is no document (SSR). */
+  function portal(node: React.ReactNode) {
+    return typeof document === "undefined" ? node : createPortal(node, document.body);
   }
 
   const body = (

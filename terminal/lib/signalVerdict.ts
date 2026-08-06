@@ -15,6 +15,10 @@ export interface Verdict {
   /** a real, dated engine event that is NOT in the scored lane (RECLAIM re-entry) — renders
    *  dated and colored but without full signal authority (hollow treatment). */
   soft?: boolean;
+  /** the engine refused an entry trigger that is still live (dated, within the staleness
+   *  window) — true whether that refusal IS the primary read or rides under a fresher
+   *  anchor, so the same engine state can never render as two different-looking cards. */
+  blocked?: boolean;
 }
 
 // A verdict older than this many calendar days (≈5 of the engine's 3-day bars) is history,
@@ -117,6 +121,20 @@ export function anchorSignal<S extends { ts?: unknown; type?: unknown; quality?:
     }
   }
   return { anchor: null, blockedTail };
+}
+
+/** A refused entry trigger recent enough to still be a caution: BUY-side, dated, within the
+ *  staleness window. Shared by the fresh-anchor branch (where it rides along with the anchor)
+ *  and the caution branch (where it IS the read), so one rule decides "is this block still live". */
+function freshBlockedEntry<S extends { type?: unknown; ts?: unknown; known_ts?: unknown; quality_reason?: unknown }>(
+  blockedTail: S | null,
+  now: number,
+): S | null {
+  if (!blockedTail) return null;
+  const u = String(blockedTail.type ?? "").toUpperCase();
+  if (!BUYISH.includes(u) && u !== "RECLAIM") return null;
+  const age = ageDays(signalKnownTs(blockedTail), now);
+  return age != null && age <= ORACLE_STALE_DAYS ? blockedTail : null;
 }
 
 function eventColor(u: string): string {
@@ -227,13 +245,31 @@ export function oracleVerdict(
     // lane-disagreement note only between the two SCORED lanes (a RECLAIM primary is
     // EXPECTED to differ from the scored manifest verdict — not a data fault).
     if (!soft && mv && mv !== effU) notes.push(zh ? `数据通道不一致（清单通道：${mv}）` : `data lanes disagree (screener lane: ${mv})`);
+    // ── the refused entry NEWER than this anchor still has to be disclosed ──
+    // `blockedTail` is by construction newer than the anchor, so when the anchor is fresh it is
+    // fresh too — yet this branch used to return before the caution branch below could speak,
+    // and a refused entry trigger from days ago vanished behind a "Sell" from a week earlier.
+    // Two names in identical engine states (flat, entries regime-gated) then rendered as
+    // completely different cards purely on the age of the older sell. The anchor stays the
+    // primary read — it is the scored truth — but the block rides with it, dated.
+    const freshBlock = freshBlockedEntry(blockedTail, now);
+    if (freshBlock) {
+      notes.push(
+        `${fmtDate(signalKnownTs(freshBlock)!, zh)} ${eventLabel(String(freshBlock.type).toUpperCase(), zh)} ` +
+        (zh ? "被趋势闸拦截 — 非入场信号" : "blocked by the regime gate — not an entry") +
+        (freshBlock.quality_reason ? ` (${freshBlock.quality_reason})` : ""),
+      );
+    }
     return {
       label: eventLabel(effU, zh),
       color: eventColor(effU),
       raw: effU,
-      sub: fmtDate(effKnownTs!, zh),
+      sub: fmtDate(effKnownTs!, zh) + (freshBlock
+        ? ` · ${zh ? "入场被拦截" : "entry blocked"} ${fmtDate(signalKnownTs(freshBlock)!, zh)}`
+        : ""),
       dim: false,
       soft,
+      blocked: !!freshBlock,
       note: notes.join(" · "),
     };
   }
@@ -249,17 +285,15 @@ export function oracleVerdict(
   // language — and the stance demotes to tooltip context. Never green, never a Buy verb
   // (stance law); the engine's refusal stays the scored-lane truth (raw=BLOCKED_ENTRY,
   // never the event type, so no consumer can mistake it for an anchorable signal).
-  const btU = blockedTail ? String(blockedTail.type).toUpperCase() : null;
-  const btKnownTs = signalKnownTs(blockedTail);
-  const btAge = ageDays(btKnownTs, now);
-  if (blockedTail && btU && (BUYISH.includes(btU) || btU === "RECLAIM")
-      && btAge != null && btAge <= ORACLE_STALE_DAYS) {
+  const liveBlock = freshBlockedEntry(blockedTail, now);
+  const btKnownTs = signalKnownTs(liveBlock);
+  if (liveBlock) {
     const notes: string[] = [
       zh ? "入场触发被趋势闸拦截 — 非入场信号" : "entry trigger blocked by the regime gate — not an entry",
       horizon,
     ];
-    if (blockedTail.price != null) notes.push(`@ ${blockedTail.price}`);
-    if (blockedTail.quality_reason) notes.push(String(blockedTail.quality_reason));
+    if (liveBlock.price != null) notes.push(`@ ${liveBlock.price}`);
+    if (liveBlock.quality_reason) notes.push(String(liveBlock.quality_reason));
     const btStance = st && hasRegime ? computeStance(st, trend, zh) : null;
     if (btStance) notes.push(`${zh ? "当前姿态" : "current stance"}: ${btStance.label}`);
     const btEcho = effU ?? scored ?? mv;
@@ -277,6 +311,7 @@ export function oracleVerdict(
       sub: fmtDate(btKnownTs!, zh),
       dim: false,
       soft: true,
+      blocked: true,
       note: notes.join(" · "),
     };
   }
