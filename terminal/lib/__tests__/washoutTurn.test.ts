@@ -35,13 +35,28 @@ describe("washoutTurnRead — turn, full history", () => {
     expect(r.receipt).toBe("深度：自身历史最低 6.3% · 类似转向 n=11：13周中位 4.2% · 26周中位 7.9%");
   });
 
-  it("carries no falsifier / act-now vocabulary in any front-facing string", () => {
-    const r = washoutTurnRead(MCD, false, NOW)!;
-    const all = [r.head, r.detail, r.stance, r.receipt].join(" ");
-    for (const banned of ["validated", "falsif", "refut", "buy", "sell", "target"]) {
-      expect(all.toLowerCase()).not.toContain(banned);
+});
+
+describe("washoutTurnRead — front-facing vocabulary", () => {
+  // Front-facing copy law: falsifier/refutation language stays on the Calibration Lab, and a
+  // watch row never carries an act-now verb. Every state × language cell is scanned, zh
+  // included — a banned term that only appears in the zh watch head is still shipped copy.
+  const BANNED = [
+    "validated", "证伪", "falsifier", "falsif", "refuted", "refut",
+    "buy now", "act now", "buy", "sell", "target",
+  ];
+  for (const state of ["WASHOUT_TURN", "TURN_WATCH"] as const) {
+    for (const zh of [false, true]) {
+      it(`keeps ${state} / ${zh ? "zh" : "en"} clear of banned vocabulary`, () => {
+        const r = washoutTurnRead({ ...MCD, state }, zh, NOW)!;
+        expect(r).not.toBeNull();
+        const all = [r.head, r.detail ?? "", r.stance, r.receipt].join(" ").toLowerCase();
+        for (const banned of BANNED) {
+          expect(all, `${state} / ${zh ? "zh" : "en"} leaked "${banned}"`).not.toContain(banned.toLowerCase());
+        }
+      });
     }
-  });
+  }
 });
 
 describe("washoutTurnRead — watch state", () => {
@@ -123,12 +138,101 @@ describe("washoutTurnRead — data-through suffix", () => {
     );
   });
 
+  it("holds the boundary exactly: 3.000d is inside, +1ms is past", () => {
+    // data_through parses at midnight UTC; the threshold is a strict `>`.
+    const dt = "2026-08-02";
+    const exact = Date.parse("2026-08-05T00:00:00Z"); // exactly 3 days
+    expect(washoutTurnRead({ ...MCD, data_through: dt }, false, exact)!.receipt)
+      .not.toContain("data through");
+    expect(washoutTurnRead({ ...MCD, data_through: dt }, false, exact + 1)!.receipt)
+      .toContain(" · data through 2026-08-02");
+  });
+
   it("ignores an absent or unparseable data_through", () => {
     const noDt = { ...MCD } as Record<string, unknown>;
     delete noDt.data_through;
     expect(washoutTurnRead(noDt, false, NOW)!.receipt).not.toContain("data through");
     expect(washoutTurnRead({ ...MCD, data_through: "not-a-date" }, false, NOW)!.receipt)
       .not.toContain("data through");
+  });
+
+  it("rejects a date-shaped string that is not a real day", () => {
+    // Date.parse rolls "2026-02-30" forward to 2026-03-02 and returns finite — without the
+    // round-trip guard the row printed a day that never existed, verbatim.
+    const r = washoutTurnRead({ ...MCD, data_through: "2026-02-30" }, false, NOW)!;
+    expect(r.receipt).not.toContain("data through");
+    expect(r.receipt).not.toContain("2026-02-30");
+    expect(r.receipt).not.toContain("2026-03-02");
+    expect(washoutTurnRead({ ...MCD, data_through: "2026-13-01" }, false, NOW)!.receipt)
+      .not.toContain("data through");
+  });
+
+  it("rejects a data_through carrying a time component, without throwing", () => {
+    const r = washoutTurnRead({ ...MCD, data_through: "2026-07-31T00:00:00Z" }, false, NOW)!;
+    expect(r.receipt).not.toContain("data through");
+    expect(r.receipt).toBe(
+      "depth: bottom 6.3% of own history · similar turns n=11: 13w median 4.2% · 26w median 7.9%",
+    );
+  });
+
+  it("rejects a non-string data_through", () => {
+    for (const bad of [20260731, {}, [], true]) {
+      expect(washoutTurnRead({ ...MCD, data_through: bad }, false, NOW)!.receipt)
+        .not.toContain("data through");
+    }
+  });
+});
+
+describe("washoutTurnRead — hostile field shapes", () => {
+  // The bridge trims and rounds, but this formatter renders whatever the tape hands it. A
+  // half-migrated or hand-rolled block must still read as one of the pinned forms.
+  const HOSTILE: Array<[string, Record<string, unknown>]> = [
+    ["depth NaN", { ...MCD, depth_pctile: NaN }],
+    ["depth {}", { ...MCD, depth_pctile: {} }],
+    ["depth Infinity", { ...MCD, depth_pctile: Infinity }],
+    ["depth string", { ...MCD, depth_pctile: "6.3" }],
+    ["med NaN", { ...MCD, history: { n: 11, med_13w: NaN, med_26w: 7.9 } }],
+    ["med {}", { ...MCD, history: { n: 11, med_13w: {}, med_26w: {} } }],
+    ["med Infinity", { ...MCD, history: { n: 11, med_13w: Infinity, med_26w: 7.9 } }],
+    ["n string", { ...MCD, history: { n: "11", med_13w: 4.2, med_26w: 7.9 } }],
+    ["n NaN", { ...MCD, history: { n: NaN, med_13w: 4.2, med_26w: 7.9 } }],
+    ["history []", { ...MCD, history: [] }],
+    ["since 0", { ...MCD, since: 0 }],
+    ["since false", { ...MCD, since: false }],
+    ["since {}", { ...MCD, since: {} }],
+    ["since []", { ...MCD, since: [] }],
+    ["since empty", { ...MCD, since: "" }],
+    ["data_through 2026-02-30", { ...MCD, data_through: "2026-02-30" }],
+    ["everything hostile", { state: "TURN_WATCH", since: {}, depth_pctile: NaN,
+                             data_through: [], history: { n: {}, med_13w: NaN, med_26w: {} } }],
+  ];
+
+  it("never prints NaN, undefined, Infinity, or [object Object]", () => {
+    for (const [name, wt] of HOSTILE) {
+      for (const zh of [false, true]) {
+        const r = washoutTurnRead(wt, zh, NOW);
+        expect(r, `${name} (${zh ? "zh" : "en"}) rendered nothing`).not.toBeNull();
+        const all = [r!.head, r!.detail ?? "", r!.stance, r!.receipt].join(" ");
+        for (const bad of ["NaN", "undefined", "Infinity", "[object Object]", "null"]) {
+          expect(all, `${name} (${zh ? "zh" : "en"}) leaked ${bad}: ${all}`).not.toContain(bad);
+        }
+      }
+    }
+  });
+
+  it("degrades each hostile field to its pinned placeholder form", () => {
+    expect(washoutTurnRead({ ...MCD, since: 0 }, false, NOW)!.detail)
+      .toBe("weekly momentum crossed up from a deep base · since —");
+    expect(washoutTurnRead({ ...MCD, depth_pctile: NaN }, false, NOW)!.receipt)
+      .toBe("depth: bottom —% of own history · similar turns n=11: 13w median 4.2% · 26w median 7.9%");
+    // a NaN median must not unlock the summary — it falls to the thin form
+    expect(washoutTurnRead({ ...MCD, history: { n: 11, med_13w: NaN, med_26w: 7.9 } }, false, NOW)!.receipt)
+      .toBe("depth: bottom 6.3% of own history · too few prior turns to summarize (n=11)");
+    // an uncountable n is 0 prior turns
+    expect(washoutTurnRead({ ...MCD, history: { n: "11", med_13w: 4.2, med_26w: 7.9 } }, false, NOW)!.receipt)
+      .toBe("depth: bottom 6.3% of own history · too few prior turns to summarize (n=0)");
+    expect(washoutTurnRead({ ...MCD, history: { n: NaN } }, true, NOW)!.receipt)
+      .toBe("深度：自身历史最低 6.3% · 历史样本不足（n=0）");
   });
 });
 

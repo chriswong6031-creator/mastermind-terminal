@@ -34,6 +34,16 @@ const STALE_DAYS = 3;
 const MIN_EVENTS = 8;
 
 const VALID_STATES: ReadonlySet<string> = new Set(["WASHOUT_TURN", "TURN_WATCH"]);
+// data_through must be a bare calendar day. A time component, a number, or a garbled string
+// all mean "we cannot honestly date this receipt" — the suffix is dropped, never echoed.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** a real, finite number. The bridge rounds and omits, but this row renders whatever the tape
+ *  hands it: a hand-rolled or half-migrated block can still carry NaN, Infinity, "11", or {},
+ *  and `!= null` waves every one of those through into the sentence. */
+function isNum(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
 
 /** the trimmed tape.washout_turn block — only the fields the read consumes */
 interface WashoutTurnBlock {
@@ -60,7 +70,11 @@ export function washoutTurnRead(
   if (typeof state !== "string" || !VALID_STATES.has(state)) return null;
   const turn = state === "WASHOUT_TURN";
 
-  const since = w.since ?? "—";
+  // Every interpolation site is guarded, not nullish-coalesced: `since: 0` / `false` / `[]` are
+  // all non-null and would render as "since 0" / "since false" / "since ". The row's contract is
+  // that a hostile block still reads as one of the pinned forms — never NaN, [object Object],
+  // undefined, or an impossible date.
+  const since = typeof w.since === "string" && w.since ? w.since : "—";
   const head = turn
     ? (zh ? "洗盘转向" : "Washout turn")
     : (zh ? "深部筑底 — 动能回升中" : "Deep base — momentum curling up");
@@ -72,12 +86,13 @@ export function washoutTurnRead(
     : "watch — early turn; windows, not certainties";
 
   // ── receipt ──────────────────────────────────────────────────────────────────
-  const dp = w.depth_pctile ?? "—";
+  const dp = isNum(w.depth_pctile) ? w.depth_pctile : "—";
   const hist = w.history;
-  const n = hist?.n ?? 0;
+  const rawN = hist?.n;
+  const n = isNum(rawN) ? rawN : 0;   // an uncountable n is 0 prior turns, never "NaN"
   const med13 = hist?.med_13w;
   const med26 = hist?.med_26w;
-  const summarizable = typeof n === "number" && n >= MIN_EVENTS && med13 != null && med26 != null;
+  const summarizable = n >= MIN_EVENTS && isNum(med13) && isNum(med26);
   let receipt = summarizable
     ? (zh
       ? `深度：自身历史最低 ${dp}% · 类似转向 n=${n}：13周中位 ${med13}% · 26周中位 ${med26}%`
@@ -87,9 +102,15 @@ export function washoutTurnRead(
       : `depth: bottom ${dp}% of own history · too few prior turns to summarize (n=${n})`);
 
   const dt = w.data_through;
-  if (typeof dt === "string" && dt) {
+  if (typeof dt === "string" && DATE_RE.test(dt)) {
     const t = Date.parse(`${dt}T00:00:00Z`);
-    if (Number.isFinite(t) && now - t > STALE_DAYS * DAY_MS) {
+    // Round-trip guard: Date.parse does NOT reject an out-of-range day — "2026-02-30" rolls
+    // forward to Mar 2 and comes back finite, and the suffix would then print a date that
+    // never existed. A day that does not re-format to itself is not a date we can quote.
+    // (Order is load-bearing: new Date(NaN).toISOString() throws, so the finite check is first.)
+    if (Number.isFinite(t)
+        && new Date(t).toISOString().slice(0, 10) === dt
+        && now - t > STALE_DAYS * DAY_MS) {
       receipt += zh ? ` · 数据截至 ${dt}` : ` · data through ${dt}`;
     }
   }
