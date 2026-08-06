@@ -2798,6 +2798,19 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
           }),
         };
       };
+      // Crosshair-dodge test hook. The crosshair is canvas-drawn and its coordinate lives in a
+      // ref, so a test driving it with synthetic pointer moves has no way to know the move
+      // REGISTERED — it can only sleep and hope. That raced on CI (a tablet run asserted the
+      // dodge one frame before the crosshair landed and read the badge still on the price).
+      // Exposing the two numbers the dodge is computed from lets the test wait for the state
+      // it is asserting about instead of a timeout.
+      (window as any).__mmCrosshairDodge = () => {
+        const tag = priceTagRef.current;
+        return {
+          crossY: crossLabelYRef.current,                          // null = no crosshair on the price pane
+          tagTop: tag ? parseFloat(tag.style.top || "0") : null,   // pane-space anchor the badge renders at
+        };
+      };
     }
 
     // ── create the ONE chart (the hard invariant — exactly one renderer instance — now
@@ -6152,7 +6165,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
       if (dragCleanup) dragCleanup();
       drawingTransactionRef.current = false;
       window.removeEventListener("mm:snapshot", snapshot);
-      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; delete (window as any).__mmChartAxisOpts; } catch {} }
+      if (process.env.NODE_ENV !== "production") { try { delete (window as any).__mmChartSeriesTitles; delete (window as any).__mmChartAxisOpts; delete (window as any).__mmCrosshairDodge; } catch {} }
       if (onKey) window.removeEventListener("keydown", onKey);
       if (winDown) window.removeEventListener("pointerdown", winDown);
       window.removeEventListener("pointerup", onProjectionPointerEnd);
