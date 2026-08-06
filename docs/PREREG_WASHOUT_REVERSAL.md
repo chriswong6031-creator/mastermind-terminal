@@ -128,3 +128,24 @@ appended as the tombstone.
   (54.5% vs 55%) → CN stays watch-tier (`reversal_watch` shelf, §5.4). E-C/E-D
   sample-starved (ACCRUE). E-E NOT-RUN (no cohort store on the lab host). Scored
   promotion NOT executed — awaiting operator go per §5.3.
+- 2026-08-05: **operator go for US E-B** ("US E-B yes"). Scope is exactly what the panel
+  earned and nothing more:
+  - **US: scored promotion executed.** E-B (trigger + next-3D-bar hold) joins the scored
+    stream behind `FLAGSHIP_PARAMS["washout_lane"]`, which is a HASHED param — the
+    promoted emission is a new `source_hash`/`spec_hash` identity, exactly as
+    `reclaim_lane` was on 2026-07-16. Distinct marker type and hollow glyph: it never
+    wears the classic lane's solid star.
+  - **CN: NOT promoted, unchanged.** G4 breadth measured 54.5% against a 55% bar, and
+    §4's no-re-cut rule binds. CN names emit the same detection at `scored:false` —
+    watch-tier only — and the `reversal_watch` cohort keeps accruing the forward
+    evidence any future CN attempt would need. The asymmetry is release-noted per §3.
+  - **HK / Canada / International: NOT promoted.** Neither panel was ever run, and a
+    lane may not ship scored on a market it was not measured on. They follow CN's
+    watch-tier treatment until they have their own confirmation panel.
+  - E-A / E-C / E-D / E-E remain unpromoted; ACCRUE status unchanged. No threshold moved.
+  - DO-NOTs of §6 re-affirmed: `bear_block`, the keeper, the recipe vetoes and the exits
+    are untouched; `confluence.py` stays byte-identical (golden-gate parity artifact).
+  Operator note recorded with the go: the reason this lane exists is that Prophet ranks
+  CN washout candidates the classic lane structurally cannot score. The promotion closes
+  that gap on US only; on CN the honest reconciliation stays "ranked candidate, watch
+  tier" — the measured per-name median there is +0.95% against US's +5.8%.
