@@ -1041,7 +1041,10 @@ table.scr2 tbody tr.empty-row:hover,table.scr2 tbody tr.scr2-skel-row:hover,tabl
 
 /* ── add-to-list picker popover (Part F, multi-list) ── */
 .sres .r{position:relative}
-.s-pick{position:absolute;top:calc(100% - 2px);right:8px;left:auto;z-index:20;min-width:190px;max-width:min(260px,86vw);padding:5px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid var(--pop-edge);border-radius:var(--r-md);box-shadow:var(--pop-shadow),var(--pop-sheen);animation:sFadeIn .14s var(--ease)}
+/* Portalled to the body and anchored to its row in viewport space (SearchModal pickerPos), so it
+   clears BOTH clips it used to sit inside — the .sres scroller and .smodal's overflow:hidden. The
+   z-index has to beat .scrim's 60 now that it is no longer a descendant of the modal. */
+.s-pick{position:fixed;top:calc(100% - 2px);right:8px;left:auto;z-index:70;min-width:190px;max-width:min(260px,86vw);padding:5px;background:var(--pop-bg);-webkit-backdrop-filter:var(--pop-blur);backdrop-filter:var(--pop-blur);border:1px solid var(--pop-edge);border-radius:var(--r-md);box-shadow:var(--pop-shadow),var(--pop-sheen);animation:sFadeIn .14s var(--ease)}
 /* flip above the row when there is no room below (rows near the bottom of the scroll area) */
 .s-pick.s-pick-up{top:auto;bottom:calc(100% - 2px)}
 .s-pick-hd{font:600 9px/1 var(--font-ui);letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);padding:7px 9px 6px}
