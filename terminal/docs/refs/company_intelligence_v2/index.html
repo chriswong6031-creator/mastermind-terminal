@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Company Intelligence v2 — reference compositions</title>
+<link rel="stylesheet" href="composition.css"></head>
+<body><div class="civ-frame">
+<h1 style="margin:0 0 6px;font:680 22px/1.2 var(--font-ui);letter-spacing:-.02em">Company Intelligence v2 — reference compositions</h1>
+<p style="margin:0 0 var(--sp-4);color:var(--text-2);font:520 12px/1.6 var(--font-ui);max-width:70ch">
+This is a <b>specification</b>, not an implementation. Each page renders one release-law state from one
+named golden-corpus case. Screenshots at 1440 / 820 / 390 are in <code>shots/</code>.</p>
+<p class="civ-sheetnote"><span>corpus <code>2026-08-06T00:00:00+00:00</code></span>
+<span>manifest sha256 <code>3001e25ab8baf92b…</code></span>
+<span>234 cases / 130 issuers</span></p>
+<div class="ci-panel"><div class="civ-index-scroll"><table class="civ-index" style="width:100%;border-collapse:collapse;font:530 11.5px/1.5 var(--font-ui)">
+<thead><tr style="color:var(--muted);font:700 9.5px/1 var(--font-ui);letter-spacing:.1em;text-transform:uppercase">
+<th style="text-align:left;padding:8px">page</th><th style="text-align:left;padding:8px">state</th>
+<th style="text-align:left;padding:8px">case</th><th style="text-align:left;padding:8px">sym</th>
+<th style="text-align:left;padding:8px">issuer</th><th style="text-align:left;padding:8px">difficulty</th>
+<th style="text-align:left;padding:8px">v2 outcome</th><th style="text-align:left;padding:8px">spans</th></tr></thead>
+<tbody><tr><td><a href="01-populated.html">01-populated</a> <a href="01-populated.zh.html" style="color:var(--muted)">zh</a></td><td>populated</td><td><code>CIE-GC-0113</code></td><td class="num">BAC</td><td>Bank of America Corporation</td><td>bank_basis</td><td>exact_receipt</td><td class="num">6</td></tr><tr><td><a href="02-partial.html">02-partial</a> <a href="02-partial.zh.html" style="color:var(--muted)">zh</a></td><td>partial</td><td><code>CIE-GC-0147</code></td><td class="num">NET</td><td>Cloudflare, Inc.</td><td>missing_transcript</td><td>typed_absence</td><td class="num">0</td></tr><tr><td><a href="03-stale.html">03-stale</a> <a href="03-stale.zh.html" style="color:var(--muted)">zh</a></td><td>stale</td><td><code>CIE-GC-0063</code></td><td class="num">AZN</td><td>AstraZeneca PLC</td><td>dual_listing</td><td>exact_receipt</td><td class="num">5</td></tr><tr><td><a href="04-corrected.html">04-corrected</a> <a href="04-corrected.zh.html" style="color:var(--muted)">zh</a></td><td>corrected</td><td><code>CIE-GC-0018</code></td><td class="num">BA</td><td>The Boeing Company</td><td>amendment</td><td>exact_receipt</td><td class="num">4</td></tr><tr><td><a href="05-blocked.html">05-blocked</a> <a href="05-blocked.zh.html" style="color:var(--muted)">zh</a></td><td>blocked</td><td><code>CIE-GC-0211</code></td><td class="num">AMD</td><td>Advanced Micro Devices, Inc.</td><td>future_dated_quarantine</td><td>quarantined</td><td class="num">0</td></tr><tr><td><a href="06-empty.html">06-empty</a> <a href="06-empty.zh.html" style="color:var(--muted)">zh</a></td><td>empty</td><td><code>CIE-GC-0187</code></td><td class="num">UAL</td><td>United Airlines Holdings, Inc.</td><td>changed_slide_family</td><td>typed_absence</td><td class="num">0</td></tr><tr><td><a href="07-provider-down.html">07-provider-down</a> <a href="07-provider-down.zh.html" style="color:var(--muted)">zh</a></td><td>provider_down</td><td><code>CIE-GC-0221</code></td><td class="num">BK</td><td>The Bank of New York Mellon Corporation</td><td>edgar_identity_join</td><td>typed_absence</td><td class="num">1</td></tr></tbody></table></div></div>
+<style>.civ-index-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}.civ-index{min-width:720px}.civ-index td{padding:9px 8px;border-top:1px solid var(--line-2)}.civ-index a{color:var(--brand-2)}
+.civ-index code{font:500 9.5px/1.4 var(--font-code);color:var(--text-2)}</style>
+</div></body></html>

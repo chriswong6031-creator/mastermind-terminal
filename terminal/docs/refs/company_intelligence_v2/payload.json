@@ -1,0 +1,1134 @@
+{
+ "generated_from": {
+  "manifest": "research/company_intelligence/GOLDEN_CORPUS_MANIFEST.json",
+  "manifest_sha256": "3001e25ab8baf92b0bb6c1c17a5696d9b20adc9da8e3ab57442793d3a1c7ef01",
+  "documents_sha256": "34db2500614903c1fe28011d808aefec4f024f3f692bc86272e8157b562bd655",
+  "corpus_generated_utc": "2026-08-06T00:00:00+00:00",
+  "observation_time": {
+   "observed_at": "2026-08-06T00:00:00+00:00",
+   "meaning": "The corpus's frozen 'now'. Every quarantined case carries a record_timestamp strictly after this instant, so the violation is checkable rather than merely labelled. Availability timestamps must prove no consumer outran its source (Wave 1 acceptance)."
+  },
+  "counts": {
+   "issuers_registered": 130,
+   "issuers_with_cases": 130,
+   "cases": 234,
+   "difficult_events": 234,
+   "distinct_event_ids": 234,
+   "cases_with_exact_span_receipt": 140,
+   "documents": 220,
+   "by_difficulty_class": {
+    "fiscal_year_ambiguity": 16,
+    "amendment": 16,
+    "duplicate_release": 14,
+    "share_class": 16,
+    "dual_listing": 20,
+    "gaap_vs_non_gaap": 16,
+    "units_currency": 14,
+    "bank_basis": 12,
+    "insurer_basis": 10,
+    "reit_basis": 12,
+    "missing_transcript": 14,
+    "missing_release": 12,
+    "pdf_table": 14,
+    "changed_slide_family": 12,
+    "speaker_role_error": 12,
+    "future_dated_quarantine": 10,
+    "edgar_identity_join": 14
+   },
+   "by_expected_v2_outcome": {
+    "duplicate_collapsed": 16,
+    "exact_receipt": 155,
+    "quarantined": 14,
+    "typed_absence": 49
+   },
+   "by_expected_receipt_locator_kind": {
+    "text_span": 140,
+    "table_cell": 12,
+    "slide_region": 3
+   }
+  }
+ },
+ "provenance_note": "PROVENANCE. Ticker symbols and issuer display names are public identifiers and are real. Every document body is SYNTHETIC prose written for this corpus -- no third-party transcript, press release, or filing body is copied into this repository, in line with the R0-D instruction to store hashes and minimal permitted excerpts rather than raw sources. CIK numbers, accession numbers, generation ids and transport lineage hashes are format-valid but synthetic. Everything hashed here is hashed for real: fixture sha256 values are over the committed bytes, transcript body_sha256 values use the production canonical_transcript_body_bytes(), and every exact-span receipt is produced by the production receipt_for_span(), which replays the byte slice and raises if it disagrees.",
+ "compositions": [
+  {
+   "slug": "01-populated",
+   "state": "populated",
+   "surface": "brief",
+   "case_id": "CIE-GC-0113",
+   "case": {
+    "case_id": "CIE-GC-0113",
+    "difficulty_class": "bank_basis",
+    "difficult": true,
+    "label": "Bank of America Corporation has no industrial revenue line; the comparable figure is net interest income plus non-interest income, and the margin figure is NIM.",
+    "issuer_id": "iss_20cb7cc402b3f345",
+    "issuer_kind": "bank",
+    "display_name": "Bank of America Corporation",
+    "ticker": "BAC",
+    "listing_mic": "XNYS",
+    "share_class": "common",
+    "trading_currency": "USD",
+    "reporting_currency": "USD",
+    "fiscal_year": 2024,
+    "fiscal_quarter": 1,
+    "fiscal_year_end_month": 12,
+    "call_date": "2024-02-12",
+    "event_key_company_intelligence": "BAC|2024|Q1",
+    "event_id_company_intelligence": "cie_e216685384c6fb90c90c034a",
+    "transcript_id": "2024Q1",
+    "event_key_earnings_narrative": "BAC/2024Q1",
+    "transcript_present": true,
+    "release_present": true,
+    "excerpt_document_id": "doc_ed0af7b98a9b2671a9dd",
+    "receipt": {
+     "source_sha256": "44423d8e32c40b21584ddf6497343a3b3f8b084695e5182cb354a8b74a0a44b8",
+     "segment_index": 2,
+     "segment_sha256": "f9e58fef064c25fce73fbdc741dc6f8b4d5886dd4d78d50d1e3e4af2fc0cbbda",
+     "segment_bytes": 185,
+     "span_start_byte": 92,
+     "span_end_byte": 185,
+     "text_sha256": "06346f16fc542b996a81012c700c76742494bab62c66d0dae6ff488c8e47b028"
+    },
+    "document_revisions": [
+     {
+      "revision": 1,
+      "document_kind": "release",
+      "source_sha256": "4a4c52ee1c785449de859b2ad0960c391247b7ff74a46194c8a4b1c21cf2ec6e",
+      "supersedes_source_sha256": null,
+      "accession_synthetic": "0001006660-24-428423"
+     }
+    ],
+    "v1_claim_citations_pending": true,
+    "expected_v2_outcome": "exact_receipt",
+    "expected_receipt_locator_kind": "text_span",
+    "expected_event_identity": "preserved",
+    "quarantine": null
+   },
+   "issuer": {
+    "issuer_id": "iss_20cb7cc402b3f345",
+    "display_name": "Bank of America Corporation",
+    "kind": "bank",
+    "primary_ticker": "BAC",
+    "fiscal_year_end_month": 12,
+    "reporting_currency": "USD",
+    "cik_synthetic": 1006660,
+    "listings": [
+     {
+      "ticker": "BAC",
+      "mic": "XNYS",
+      "share_class": "common",
+      "is_primary": true,
+      "trading_currency": "USD"
+     }
+    ]
+   },
+   "edgar": null,
+   "document": {
+    "document_id": "doc_ed0af7b98a9b2671a9dd",
+    "ticker": "BAC",
+    "transcript_id": "2024Q1",
+    "document_kind": "transcript",
+    "body_sha256": "44423d8e32c40b21584ddf6497343a3b3f8b084695e5182cb354a8b74a0a44b8",
+    "body_bytes": 1158,
+    "provenance": "synthetic",
+    "title": "Bank of America Corporation Q1 2024 Earnings Call",
+    "period": "Q1 2024",
+    "date": "2024-02-12",
+    "segment_count": 4
+   },
+   "claims": [
+    {
+     "segment_index": 1,
+     "paragraph": 2,
+     "speaker": "Dana Whitfield",
+     "role": "Chief Executive Officer",
+     "span_start_byte": 28,
+     "span_end_byte": 112,
+     "segment_sha256": "2b364eb4b3ed22ff93dd7408d2dbb06a448547cb6a48f45be7d8c7dbc1843330",
+     "text_sha256": "a366538cbed8f6d6b8598c931e5e029938a5e016da47e79f691ade4ca6e208db",
+     "text": "closed Q1 2024 with demand broadly in line with the plan we laid out ninety days ago",
+     "claim_id": "stance",
+     "inside_committed_span": false
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 0,
+     "span_end_byte": 53,
+     "segment_sha256": "f9e58fef064c25fce73fbdc741dc6f8b4d5886dd4d78d50d1e3e4af2fc0cbbda",
+     "text_sha256": "f937993075727fa7f9acca360e6f227670ce4eb729e015c8cf1763d4af21cfa7",
+     "text": "Net interest income was $24.9 billion for the quarter",
+     "claim_id": "nii",
+     "inside_committed_span": false
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 58,
+     "span_end_byte": 90,
+     "segment_sha256": "f9e58fef064c25fce73fbdc741dc6f8b4d5886dd4d78d50d1e3e4af2fc0cbbda",
+     "text_sha256": "73eaad3dd5967be4470d8b346e1477adb99d08b58d4f6d069772790ce458320b",
+     "text": "the net interest margin was 2.0%",
+     "claim_id": "nim",
+     "inside_committed_span": false
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 92,
+     "span_end_byte": 138,
+     "segment_sha256": "f9e58fef064c25fce73fbdc741dc6f8b4d5886dd4d78d50d1e3e4af2fc0cbbda",
+     "text_sha256": "c98625c188fd02d04cf90870216dd215da52d1e81b688b930c0f2b39d5883ec1",
+     "text": "Provision for credit losses was $1,123 million",
+     "claim_id": "provision",
+     "inside_committed_span": true
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 144,
+     "span_end_byte": 184,
+     "segment_sha256": "f9e58fef064c25fce73fbdc741dc6f8b4d5886dd4d78d50d1e3e4af2fc0cbbda",
+     "text_sha256": "9dcb3112c76670117a0aeda49197b268b1bb8d66ea9c77694724e79143b7ff05",
+     "text": "our CET1 ratio ended the period at 12.7%",
+     "claim_id": "cet1",
+     "inside_committed_span": true
+    },
+    {
+     "segment_index": 3,
+     "paragraph": 4,
+     "speaker": "Priya Raghunathan",
+     "role": "Analyst, Ridgeline Research",
+     "span_start_byte": 53,
+     "span_end_byte": 100,
+     "segment_sha256": "4dcc2496cc07807b89928e54729b222b526e3762508127c6ed05a38296379ae8",
+     "text_sha256": "d1bfbfec733c6a278e7ee702ba810ca83745bd80d086ad8275ae099ae376b588",
+     "text": "how much of the 2.0% move is mix versus pricing",
+     "claim_id": "qa",
+     "inside_committed_span": false
+    }
+   ],
+   "committed_receipt_verified": true,
+   "segments": [
+    {
+     "speaker": "Operator",
+     "role": "Operator",
+     "text": "Good afternoon and welcome to the Bank of America Corporation Q1 2024 earnings conference call. All participants will be in listen-only mode. Please note this event is being recorded."
+    },
+    {
+     "speaker": "Dana Whitfield",
+     "role": "Chief Executive Officer",
+     "text": "Bank of America Corporation closed Q1 2024 with demand broadly in line with the plan we laid out ninety days ago, and we exited the quarter with the cost base we committed to."
+    },
+    {
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "text": "Net interest income was $24.9 billion for the quarter and the net interest margin was 2.0%. Provision for credit losses was $1,123 million, and our CET1 ratio ended the period at 12.7%."
+    },
+    {
+     "speaker": "Priya Raghunathan",
+     "role": "Analyst, Ridgeline Research",
+     "text": "Thanks for taking the question. Can you walk through how much of the 2.0% move is mix versus pricing, and whether you expect the same input costs to carry into next quarter?"
+    }
+   ],
+   "committed_receipt_text": "Provision for credit losses was $1,123 million, and our CET1 ratio ended the period at 12.7%."
+  },
+  {
+   "slug": "02-partial",
+   "state": "partial",
+   "surface": "brief",
+   "case_id": "CIE-GC-0147",
+   "case": {
+    "case_id": "CIE-GC-0147",
+    "difficulty_class": "missing_transcript",
+    "difficult": true,
+    "label": "NET published the release for this period but no call transcript is available.",
+    "issuer_id": "iss_e2ffa4f10657fdc4",
+    "issuer_kind": "general",
+    "display_name": "Cloudflare, Inc.",
+    "ticker": "NET",
+    "listing_mic": "XNAS",
+    "share_class": "common",
+    "trading_currency": "USD",
+    "reporting_currency": "USD",
+    "fiscal_year": 2024,
+    "fiscal_quarter": 1,
+    "fiscal_year_end_month": 12,
+    "call_date": "2024-02-12",
+    "event_key_company_intelligence": "NET|2024|Q1",
+    "event_id_company_intelligence": "cie_fc62fb8256b425ef017bf840",
+    "transcript_id": "2024Q1",
+    "event_key_earnings_narrative": "NET/2024Q1",
+    "transcript_present": false,
+    "release_present": true,
+    "excerpt_document_id": null,
+    "receipt": null,
+    "document_revisions": [
+     {
+      "revision": 1,
+      "document_kind": "release",
+      "source_sha256": "756bb886e58fd94e931d3136606deca068ed7c966b7de5eba5e10e20619a229b",
+      "supersedes_source_sha256": null,
+      "accession_synthetic": "0001404721-24-285543"
+     }
+    ],
+    "v1_claim_citations_pending": true,
+    "expected_v2_outcome": "typed_absence",
+    "expected_receipt_locator_kind": null,
+    "expected_event_identity": "preserved",
+    "quarantine": null
+   },
+   "issuer": {
+    "issuer_id": "iss_e2ffa4f10657fdc4",
+    "display_name": "Cloudflare, Inc.",
+    "kind": "general",
+    "primary_ticker": "NET",
+    "fiscal_year_end_month": 12,
+    "reporting_currency": "USD",
+    "cik_synthetic": 1404721,
+    "listings": [
+     {
+      "ticker": "NET",
+      "mic": "XNAS",
+      "share_class": "common",
+      "is_primary": true,
+      "trading_currency": "USD"
+     }
+    ]
+   },
+   "edgar": null,
+   "document": null,
+   "claims": [],
+   "committed_receipt_verified": null
+  },
+  {
+   "slug": "03-stale",
+   "state": "stale",
+   "surface": "brief",
+   "case_id": "CIE-GC-0063",
+   "case": {
+    "case_id": "CIE-GC-0063",
+    "difficulty_class": "dual_listing",
+    "difficult": true,
+    "label": "AZN is one venue line of AstraZeneca PLC; the home line reports the same event in USD.",
+    "issuer_id": "iss_6a780a2e122c630c",
+    "issuer_kind": "dual_listed",
+    "display_name": "AstraZeneca PLC",
+    "ticker": "AZN",
+    "listing_mic": "XNYS",
+    "share_class": "ADR",
+    "trading_currency": "USD",
+    "reporting_currency": "USD",
+    "fiscal_year": 2024,
+    "fiscal_quarter": 2,
+    "fiscal_year_end_month": 12,
+    "call_date": "2024-05-07",
+    "event_key_company_intelligence": "AZN|2024|Q2",
+    "event_id_company_intelligence": "cie_5124df85f0fd48579cdf5031",
+    "transcript_id": "2024Q2",
+    "event_key_earnings_narrative": "AZN/2024Q2",
+    "transcript_present": true,
+    "release_present": true,
+    "excerpt_document_id": "doc_8c9165d7e0a78ae9e754",
+    "receipt": {
+     "source_sha256": "c306960207b8782fec5a71bfc4835b2e5ae6690e7c7baccb3236f086489664b9",
+     "segment_index": 2,
+     "segment_sha256": "28890f877cc02e1e35abd1ac64410487ccdff6843307fe62d22732fa536bba46",
+     "segment_bytes": 213,
+     "span_start_byte": 0,
+     "span_end_byte": 137,
+     "text_sha256": "87c280d0f6d18c4b8f12aab5719f7112a60c486130f017c1a711e3470b48dd7b"
+    },
+    "document_revisions": [
+     {
+      "revision": 1,
+      "document_kind": "release",
+      "source_sha256": "57be9c089c17c15e8e26f00356dc286a9ddf12498b134a23cb1da152badbdb80",
+      "supersedes_source_sha256": null,
+      "accession_synthetic": "0001551822-24-287862"
+     }
+    ],
+    "v1_claim_citations_pending": true,
+    "expected_v2_outcome": "exact_receipt",
+    "expected_receipt_locator_kind": "text_span",
+    "expected_event_identity": "preserved",
+    "quarantine": null
+   },
+   "issuer": {
+    "issuer_id": "iss_6a780a2e122c630c",
+    "display_name": "AstraZeneca PLC",
+    "kind": "dual_listed",
+    "primary_ticker": "AZN",
+    "fiscal_year_end_month": 12,
+    "reporting_currency": "USD",
+    "cik_synthetic": 1551822,
+    "listings": [
+     {
+      "ticker": "AZN",
+      "mic": "XNYS",
+      "share_class": "ADR",
+      "is_primary": true,
+      "trading_currency": "USD"
+     },
+     {
+      "ticker": "AZN.L",
+      "mic": "XLON",
+      "share_class": "ordinary",
+      "is_primary": false,
+      "trading_currency": "USD"
+     }
+    ]
+   },
+   "edgar": null,
+   "document": {
+    "document_id": "doc_8c9165d7e0a78ae9e754",
+    "ticker": "AZN",
+    "transcript_id": "2024Q2",
+    "document_kind": "transcript",
+    "body_sha256": "c306960207b8782fec5a71bfc4835b2e5ae6690e7c7baccb3236f086489664b9",
+    "body_bytes": 1151,
+    "provenance": "synthetic",
+    "title": "AstraZeneca PLC Q2 2024 Earnings Call",
+    "period": "Q2 2024",
+    "date": "2024-05-07",
+    "segment_count": 4
+   },
+   "claims": [
+    {
+     "segment_index": 1,
+     "paragraph": 2,
+     "speaker": "Dana Whitfield",
+     "role": "Chief Executive Officer",
+     "span_start_byte": 16,
+     "span_end_byte": 100,
+     "segment_sha256": "b3fc1265a26ad73d4af79607cc70091ec1183e74b4639b76db5c6b5fc1362425",
+     "text_sha256": "81b16d11f509cc08a1b588636f6d23ebf18cf33af4997f36e7ff54334bf8bf82",
+     "text": "closed Q2 2024 with demand broadly in line with the plan we laid out ninety days ago",
+     "claim_id": "stance",
+     "inside_committed_span": false
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 0,
+     "span_end_byte": 48,
+     "segment_sha256": "28890f877cc02e1e35abd1ac64410487ccdff6843307fe62d22732fa536bba46",
+     "text_sha256": "765cddd2375b0a19d675917e4db1064b3be791a7872fafc23fc3179ed1f030fe",
+     "text": "Total revenue was $148.1 billion for the quarter",
+     "claim_id": "revenue",
+     "inside_committed_span": true
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 54,
+     "span_end_byte": 100,
+     "segment_sha256": "28890f877cc02e1e35abd1ac64410487ccdff6843307fe62d22732fa536bba46",
+     "text_sha256": "6f9797b4946839b0a53e065e9631de2d8f1e9eeeff18e6ac2a8941c289358539",
+     "text": "non-GAAP diluted earnings per share were $8.51",
+     "claim_id": "eps",
+     "inside_committed_span": true
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 102,
+     "span_end_byte": 136,
+     "segment_sha256": "28890f877cc02e1e35abd1ac64410487ccdff6843307fe62d22732fa536bba46",
+     "text_sha256": "87aed0daf97e5eae6cec57d2660931a4e80836c01f05a8947efc990c5e3bcf26",
+     "text": "Operating margin finished at 31.1%",
+     "claim_id": "margin",
+     "inside_committed_span": true
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 138,
+     "span_end_byte": 213,
+     "segment_sha256": "28890f877cc02e1e35abd1ac64410487ccdff6843307fe62d22732fa536bba46",
+     "text_sha256": "7e9ba0023bd0eadab3c0c7cc82958abcda399efeb1d6bb7acee850a0f30f9cd1",
+     "text": "We are guiding next quarter to a range of $139.2 billion to $142.0 billion.",
+     "claim_id": "guidance",
+     "inside_committed_span": false
+    }
+   ],
+   "committed_receipt_verified": true,
+   "segments": [
+    {
+     "speaker": "Operator",
+     "role": "Operator",
+     "text": "Good afternoon and welcome to the AstraZeneca PLC Q2 2024 earnings conference call. All participants will be in listen-only mode. Please note this event is being recorded."
+    },
+    {
+     "speaker": "Dana Whitfield",
+     "role": "Chief Executive Officer",
+     "text": "AstraZeneca PLC closed Q2 2024 with demand broadly in line with the plan we laid out ninety days ago, and we exited the quarter with the cost base we committed to."
+    },
+    {
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "text": "Total revenue was $148.1 billion for the quarter, and non-GAAP diluted earnings per share were $8.51. Operating margin finished at 31.1%. We are guiding next quarter to a range of $139.2 billion to $142.0 billion."
+    },
+    {
+     "speaker": "Priya Raghunathan",
+     "role": "Analyst, Ridgeline Research",
+     "text": "Thanks for taking the question. Can you walk through how much of the 31.1% move is mix versus pricing, and whether you expect the same input costs to carry into next quarter?"
+    }
+   ],
+   "committed_receipt_text": "Total revenue was $148.1 billion for the quarter, and non-GAAP diluted earnings per share were $8.51. Operating margin finished at 31.1%."
+  },
+  {
+   "slug": "04-corrected",
+   "state": "corrected",
+   "surface": "brief",
+   "case_id": "CIE-GC-0018",
+   "case": {
+    "case_id": "CIE-GC-0018",
+    "difficulty_class": "amendment",
+    "difficult": true,
+    "label": "BA filed an amended release after the original; the amended revision restates one reported figure while the logical event is unchanged.",
+    "issuer_id": "iss_296d71a7f66e75b7",
+    "issuer_kind": "general",
+    "display_name": "The Boeing Company",
+    "ticker": "BA",
+    "listing_mic": "XNAS",
+    "share_class": "common",
+    "trading_currency": "USD",
+    "reporting_currency": "USD",
+    "fiscal_year": 2024,
+    "fiscal_quarter": 2,
+    "fiscal_year_end_month": 12,
+    "call_date": "2024-05-08",
+    "event_key_company_intelligence": "BA|2024|Q2",
+    "event_id_company_intelligence": "cie_4ac2a2bc48c7959ed81b6098",
+    "transcript_id": "2024Q2",
+    "event_key_earnings_narrative": "BA/2024Q2",
+    "transcript_present": true,
+    "release_present": true,
+    "excerpt_document_id": "doc_8daadcd2c454efe71a2c",
+    "receipt": {
+     "source_sha256": "8c4f406c6379326dde26536d91f35ffe7943517fb0ed038caba2e74ad5fbe936",
+     "segment_index": 2,
+     "segment_sha256": "2c0f630ffc1dfd70e7416f98daea06b826701354a84d5bc39dc2142b054e50e7",
+     "segment_bytes": 214,
+     "span_start_byte": 139,
+     "span_end_byte": 214,
+     "text_sha256": "3b933268649b0d2fc798a1e14d3e6151bdf950766c2b4ae28772b333579cde53"
+    },
+    "document_revisions": [
+     {
+      "revision": 1,
+      "document_kind": "release",
+      "source_sha256": "50bfbf004c652d4b813340bae2838543cba57fd10350ddd7abc14426f0495cb7",
+      "supersedes_source_sha256": null,
+      "accession_synthetic": "0001638375-24-541874"
+     },
+     {
+      "revision": 2,
+      "document_kind": "release_amendment",
+      "source_sha256": "74bf482f8782aafd7de27406a4254976ae9e1b21096f771ce038fefd4ace7432",
+      "supersedes_source_sha256": "50bfbf004c652d4b813340bae2838543cba57fd10350ddd7abc14426f0495cb7",
+      "accession_synthetic": "0001638375-24-583285"
+     }
+    ],
+    "v1_claim_citations_pending": true,
+    "expected_v2_outcome": "exact_receipt",
+    "expected_receipt_locator_kind": "text_span",
+    "expected_event_identity": "preserved",
+    "quarantine": null
+   },
+   "issuer": {
+    "issuer_id": "iss_296d71a7f66e75b7",
+    "display_name": "The Boeing Company",
+    "kind": "general",
+    "primary_ticker": "BA",
+    "fiscal_year_end_month": 12,
+    "reporting_currency": "USD",
+    "cik_synthetic": 1638375,
+    "listings": [
+     {
+      "ticker": "BA",
+      "mic": "XNAS",
+      "share_class": "common",
+      "is_primary": true,
+      "trading_currency": "USD"
+     }
+    ]
+   },
+   "edgar": null,
+   "document": {
+    "document_id": "doc_8daadcd2c454efe71a2c",
+    "ticker": "BA",
+    "transcript_id": "2024Q2",
+    "document_kind": "transcript",
+    "body_sha256": "8c4f406c6379326dde26536d91f35ffe7943517fb0ed038caba2e74ad5fbe936",
+    "body_bytes": 1160,
+    "provenance": "synthetic",
+    "title": "The Boeing Company Q2 2024 Earnings Call",
+    "period": "Q2 2024",
+    "date": "2024-05-08",
+    "segment_count": 4
+   },
+   "claims": [
+    {
+     "segment_index": 1,
+     "paragraph": 2,
+     "speaker": "Dana Whitfield",
+     "role": "Chief Executive Officer",
+     "span_start_byte": 109,
+     "span_end_byte": 165,
+     "segment_sha256": "0e8f0ac9d66588b4af0a5b226d42ab305f06aa093b8372a05a6f379af030f805",
+     "text_sha256": "23fbebb89c77f3d49e8f5ce8e1f201b7e9049f1ca867d383e0e9581f8458f90d",
+     "text": "we exited the quarter with the cost base we committed to",
+     "claim_id": "stance",
+     "inside_committed_span": false
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 0,
+     "span_end_byte": 48,
+     "segment_sha256": "2c0f630ffc1dfd70e7416f98daea06b826701354a84d5bc39dc2142b054e50e7",
+     "text_sha256": "94426e0142792f132c7c1432fe5a5a3d4029f141efe82ded236093b94443aea6",
+     "text": "Total revenue was $171.1 billion for the quarter",
+     "claim_id": "revenue",
+     "inside_committed_span": false
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 54,
+     "span_end_byte": 101,
+     "segment_sha256": "2c0f630ffc1dfd70e7416f98daea06b826701354a84d5bc39dc2142b054e50e7",
+     "text_sha256": "07ff6f1a8acf70017ac406669fdf0e14f18c66a551dba2d8b9611801915b00fe",
+     "text": "non-GAAP diluted earnings per share were $11.46",
+     "claim_id": "eps",
+     "inside_committed_span": false
+    },
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 139,
+     "span_end_byte": 214,
+     "segment_sha256": "2c0f630ffc1dfd70e7416f98daea06b826701354a84d5bc39dc2142b054e50e7",
+     "text_sha256": "3b933268649b0d2fc798a1e14d3e6151bdf950766c2b4ae28772b333579cde53",
+     "text": "We are guiding next quarter to a range of $157.4 billion to $163.7 billion.",
+     "claim_id": "guidance",
+     "inside_committed_span": true
+    }
+   ],
+   "committed_receipt_verified": true,
+   "segments": [
+    {
+     "speaker": "Operator",
+     "role": "Operator",
+     "text": "Good afternoon and welcome to the The Boeing Company Q2 2024 earnings conference call. All participants will be in listen-only mode. Please note this event is being recorded."
+    },
+    {
+     "speaker": "Dana Whitfield",
+     "role": "Chief Executive Officer",
+     "text": "The Boeing Company closed Q2 2024 with demand broadly in line with the plan we laid out ninety days ago, and we exited the quarter with the cost base we committed to."
+    },
+    {
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "text": "Total revenue was $171.1 billion for the quarter, and non-GAAP diluted earnings per share were $11.46. Operating margin finished at 40.0%. We are guiding next quarter to a range of $157.4 billion to $163.7 billion."
+    },
+    {
+     "speaker": "Priya Raghunathan",
+     "role": "Analyst, Ridgeline Research",
+     "text": "Thanks for taking the question. Can you walk through how much of the 40.0% move is mix versus pricing, and whether you expect the same input costs to carry into next quarter?"
+    }
+   ],
+   "committed_receipt_text": "We are guiding next quarter to a range of $157.4 billion to $163.7 billion."
+  },
+  {
+   "slug": "05-blocked",
+   "state": "blocked",
+   "surface": "event",
+   "case_id": "CIE-GC-0211",
+   "case": {
+    "case_id": "CIE-GC-0211",
+    "difficulty_class": "future_dated_quarantine",
+    "difficult": true,
+    "label": "AMD carries a period/timestamp later than the observation time and must be quarantined rather than published.",
+    "issuer_id": "iss_0fd3e4e71b62f777",
+    "issuer_kind": "general",
+    "display_name": "Advanced Micro Devices, Inc.",
+    "ticker": "AMD",
+    "listing_mic": "XNAS",
+    "share_class": "common",
+    "trading_currency": "USD",
+    "reporting_currency": "USD",
+    "fiscal_year": 2027,
+    "fiscal_quarter": 1,
+    "fiscal_year_end_month": 12,
+    "call_date": "2027-02-12",
+    "event_key_company_intelligence": "AMD|2027|Q1",
+    "event_id_company_intelligence": "cie_d17a6d04322b50ac826cbbbe",
+    "transcript_id": "2027Q1",
+    "event_key_earnings_narrative": "AMD/2027Q1",
+    "transcript_present": true,
+    "release_present": true,
+    "excerpt_document_id": "doc_f0028e2cfec800a0e4b2",
+    "receipt": null,
+    "document_revisions": [
+     {
+      "revision": 1,
+      "document_kind": "release",
+      "source_sha256": "375876cd0c85d65d294117945e7b3f1961081593a53817bce98473f1d1b35f67",
+      "supersedes_source_sha256": null,
+      "accession_synthetic": "0001244935-27-639167"
+     }
+    ],
+    "v1_claim_citations_pending": true,
+    "expected_v2_outcome": "quarantined",
+    "expected_receipt_locator_kind": null,
+    "expected_event_identity": "preserved",
+    "quarantine": {
+     "observed_at": "2026-08-06T00:00:00+00:00",
+     "offending_field": "event.call_date",
+     "record_timestamp": "2027-02-12T00:00:00+00:00",
+     "reason": "the fiscal period ends after the observation time"
+    }
+   },
+   "issuer": {
+    "issuer_id": "iss_0fd3e4e71b62f777",
+    "display_name": "Advanced Micro Devices, Inc.",
+    "kind": "general",
+    "primary_ticker": "AMD",
+    "fiscal_year_end_month": 12,
+    "reporting_currency": "USD",
+    "cik_synthetic": 1244935,
+    "listings": [
+     {
+      "ticker": "AMD",
+      "mic": "XNAS",
+      "share_class": "common",
+      "is_primary": true,
+      "trading_currency": "USD"
+     }
+    ]
+   },
+   "edgar": null,
+   "document": {
+    "document_id": "doc_f0028e2cfec800a0e4b2",
+    "ticker": "AMD",
+    "transcript_id": "2027Q1",
+    "document_kind": "transcript",
+    "body_sha256": "652e211cb62c675ddc755baf685f26e26f74183916f6edbf74e34bb07c5d8955",
+    "body_bytes": 1189,
+    "provenance": "synthetic",
+    "title": "Advanced Micro Devices, Inc. Q1 2027 Earnings Call",
+    "period": "Q1 2027",
+    "date": "2027-02-12",
+    "segment_count": 4
+   },
+   "claims": [],
+   "committed_receipt_verified": null,
+   "segments": [
+    {
+     "speaker": "Operator",
+     "role": "Operator",
+     "text": "Good afternoon and welcome to the Advanced Micro Devices, Inc. Q1 2027 earnings conference call. All participants will be in listen-only mode. Please note this event is being recorded."
+    },
+    {
+     "speaker": "Dana Whitfield",
+     "role": "Chief Executive Officer",
+     "text": "Advanced Micro Devices, Inc. closed Q1 2027 with demand broadly in line with the plan we laid out ninety days ago, and we exited the quarter with the cost base we committed to."
+    },
+    {
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "text": "Total revenue was $104.9 billion for the quarter, and non-GAAP diluted earnings per share were $5.31. Operating margin finished at 22.9%. We are guiding next quarter to a range of $96.5 billion to $104.2 billion."
+    },
+    {
+     "speaker": "Priya Raghunathan",
+     "role": "Analyst, Ridgeline Research",
+     "text": "Thanks for taking the question. Can you walk through how much of the 22.9% move is mix versus pricing, and whether you expect the same input costs to carry into next quarter?"
+    }
+   ]
+  },
+  {
+   "slug": "06-empty",
+   "state": "empty",
+   "surface": "slides",
+   "case_id": "CIE-GC-0187",
+   "case": {
+    "case_id": "CIE-GC-0187",
+    "difficulty_class": "changed_slide_family",
+    "difficult": true,
+    "label": "UAL restructured its recurring slide exhibit this period; the prior series definition does not carry forward.",
+    "issuer_id": "iss_9dd912ab0bf732c5",
+    "issuer_kind": "general",
+    "display_name": "United Airlines Holdings, Inc.",
+    "ticker": "UAL",
+    "listing_mic": "XNAS",
+    "share_class": "common",
+    "trading_currency": "USD",
+    "reporting_currency": "USD",
+    "fiscal_year": 2024,
+    "fiscal_quarter": 1,
+    "fiscal_year_end_month": 12,
+    "call_date": "2024-02-12",
+    "event_key_company_intelligence": "UAL|2024|Q1",
+    "event_id_company_intelligence": "cie_b88f662e88c8ef6f20ae82b6",
+    "transcript_id": "2024Q1",
+    "event_key_earnings_narrative": "UAL/2024Q1",
+    "transcript_present": true,
+    "release_present": true,
+    "excerpt_document_id": "doc_583a683cb81eb99f4b96",
+    "receipt": null,
+    "document_revisions": [
+     {
+      "revision": 1,
+      "document_kind": "release",
+      "source_sha256": "7bbce266143f0128f7a586c7462a946e9f79b6f3214b3e9e30e9addda751e666",
+      "supersedes_source_sha256": null,
+      "accession_synthetic": "0001149003-24-865295"
+     }
+    ],
+    "v1_claim_citations_pending": true,
+    "expected_v2_outcome": "typed_absence",
+    "expected_receipt_locator_kind": null,
+    "expected_event_identity": "preserved",
+    "quarantine": null
+   },
+   "issuer": {
+    "issuer_id": "iss_9dd912ab0bf732c5",
+    "display_name": "United Airlines Holdings, Inc.",
+    "kind": "general",
+    "primary_ticker": "UAL",
+    "fiscal_year_end_month": 12,
+    "reporting_currency": "USD",
+    "cik_synthetic": 1149003,
+    "listings": [
+     {
+      "ticker": "UAL",
+      "mic": "XNAS",
+      "share_class": "common",
+      "is_primary": true,
+      "trading_currency": "USD"
+     }
+    ]
+   },
+   "edgar": null,
+   "document": {
+    "document_id": "doc_583a683cb81eb99f4b96",
+    "ticker": "UAL",
+    "transcript_id": "2024Q1",
+    "document_kind": "transcript",
+    "body_sha256": "454cff5411dc01d465d9a910c7210131d94367e834d69ac3ef88ada1ded030c7",
+    "body_bytes": 1193,
+    "provenance": "synthetic",
+    "title": "United Airlines Holdings, Inc. Q1 2024 Earnings Call",
+    "period": "Q1 2024",
+    "date": "2024-02-12",
+    "segment_count": 4
+   },
+   "claims": [],
+   "committed_receipt_verified": null,
+   "segments": [
+    {
+     "speaker": "Operator",
+     "role": "Operator",
+     "text": "Good afternoon and welcome to the United Airlines Holdings, Inc. Q1 2024 earnings conference call. All participants will be in listen-only mode. Please note this event is being recorded."
+    },
+    {
+     "speaker": "Dana Whitfield",
+     "role": "Chief Executive Officer",
+     "text": "United Airlines Holdings, Inc. closed Q1 2024 with demand broadly in line with the plan we laid out ninety days ago, and we exited the quarter with the cost base we committed to."
+    },
+    {
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "text": "Total revenue was $33.5 billion for the quarter, and non-GAAP diluted earnings per share were $9.23. Operating margin finished at 26.9%. We are guiding next quarter to a range of $34.2 billion to $35.2 billion."
+    },
+    {
+     "speaker": "Priya Raghunathan",
+     "role": "Analyst, Ridgeline Research",
+     "text": "Thanks for taking the question. Can you walk through how much of the 26.9% move is mix versus pricing, and whether you expect the same input costs to carry into next quarter?"
+    }
+   ]
+  },
+  {
+   "slug": "07-provider-down",
+   "state": "provider_down",
+   "surface": "search",
+   "case_id": "CIE-GC-0221",
+   "case": {
+    "case_id": "CIE-GC-0221",
+    "difficulty_class": "edgar_identity_join",
+    "difficult": true,
+    "label": "BK's 8-K is seen by both EDGAR readers in this estate under disjoint keys (cik+filing_date vs cik+accession), so the two views cannot be joined.",
+    "issuer_id": "iss_f0a41f48468429a7",
+    "issuer_kind": "bank",
+    "display_name": "The Bank of New York Mellon Corporation",
+    "ticker": "BK",
+    "listing_mic": "XNYS",
+    "share_class": "common",
+    "trading_currency": "USD",
+    "reporting_currency": "USD",
+    "fiscal_year": 2024,
+    "fiscal_quarter": 1,
+    "fiscal_year_end_month": 12,
+    "call_date": "2024-02-12",
+    "event_key_company_intelligence": "BK|2024|Q1",
+    "event_id_company_intelligence": "cie_9072a7d7aea1a91596b862ce",
+    "transcript_id": "2024Q1",
+    "event_key_earnings_narrative": "BK/2024Q1",
+    "transcript_present": true,
+    "release_present": true,
+    "excerpt_document_id": "doc_d5382d11317b2c7b00fe",
+    "receipt": null,
+    "document_revisions": [
+     {
+      "revision": 1,
+      "document_kind": "release",
+      "source_sha256": "a70a2e7050964bd1149b09552a68ce6277a2bd668e7e6a4fec0ad4567c50091c",
+      "supersedes_source_sha256": null,
+      "accession_synthetic": "0001387752-24-669681"
+     }
+    ],
+    "v1_claim_citations_pending": true,
+    "expected_v2_outcome": "typed_absence",
+    "expected_receipt_locator_kind": null,
+    "expected_event_identity": "preserved",
+    "quarantine": null
+   },
+   "issuer": {
+    "issuer_id": "iss_f0a41f48468429a7",
+    "display_name": "The Bank of New York Mellon Corporation",
+    "kind": "bank",
+    "primary_ticker": "BK",
+    "fiscal_year_end_month": 12,
+    "reporting_currency": "USD",
+    "cik_synthetic": 1387752,
+    "listings": [
+     {
+      "ticker": "BK",
+      "mic": "XNYS",
+      "share_class": "common",
+      "is_primary": true,
+      "trading_currency": "USD"
+     }
+    ]
+   },
+   "edgar": {
+    "case_ref": "CIE-GC-0221",
+    "ticker": "BK",
+    "expected_v2_outcome": "typed_absence",
+    "collector_edgar_earnings_8k_row": {
+     "ticker": "BK",
+     "cik": 1387752,
+     "filing_date": "2024-02-12",
+     "acceptance_datetime": "2024-02-12T21:07:14.000Z",
+     "items": "2.02,9.01"
+    },
+    "engine_edgar_earnings_wire_row": {
+     "id": "BK-0001387752-24-669681",
+     "accession": "0001387752-24-669681",
+     "ticker": "BK",
+     "when": "2026-08-06T00:00:00+00:00",
+     "when_semantics": "wall_clock_at_processing_not_source_timestamp"
+    },
+    "joinable_keys_today": [
+     "ticker"
+    ],
+    "missing_for_join": {
+     "collector_edgar_earnings_8k": [
+      "accession"
+     ],
+     "engine_edgar_earnings_wire": [
+      "cik",
+      "filing_date",
+      "acceptance_datetime"
+     ]
+    }
+   },
+   "document": {
+    "document_id": "doc_d5382d11317b2c7b00fe",
+    "ticker": "BK",
+    "transcript_id": "2024Q1",
+    "document_kind": "transcript",
+    "body_sha256": "0c7093271750bccea89e316a1e384d563815a641a93f8325786ecc681c748b53",
+    "body_bytes": 1193,
+    "provenance": "synthetic",
+    "title": "The Bank of New York Mellon Corporation Q1 2024 Earnings Call",
+    "period": "Q1 2024",
+    "date": "2024-02-12",
+    "segment_count": 4
+   },
+   "claims": [
+    {
+     "segment_index": 2,
+     "paragraph": 3,
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "span_start_byte": 0,
+     "span_end_byte": 90,
+     "segment_sha256": "4ff2495ff598d8971ba5755eb07555e46e21d7839f7ec4a870289003493466e4",
+     "text_sha256": "d414797d4e70db3d2503d5751e46c034781e0ffb3f2c9c3de13062e810b0984a",
+     "text": "Net interest income was $19.4 billion for the quarter and the net interest margin was 2.5%",
+     "claim_id": "hit",
+     "inside_committed_span": false
+    }
+   ],
+   "committed_receipt_verified": null,
+   "segments": [
+    {
+     "speaker": "Operator",
+     "role": "Operator",
+     "text": "Good afternoon and welcome to the The Bank of New York Mellon Corporation Q1 2024 earnings conference call. All participants will be in listen-only mode. Please note this event is being recorded."
+    },
+    {
+     "speaker": "Dana Whitfield",
+     "role": "Chief Executive Officer",
+     "text": "The Bank of New York Mellon Corporation closed Q1 2024 with demand broadly in line with the plan we laid out ninety days ago, and we exited the quarter with the cost base we committed to."
+    },
+    {
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "text": "Net interest income was $19.4 billion for the quarter and the net interest margin was 2.5%. Provision for credit losses was $1,853 million, and our CET1 ratio ended the period at 11.0%."
+    },
+    {
+     "speaker": "Priya Raghunathan",
+     "role": "Analyst, Ridgeline Research",
+     "text": "Thanks for taking the question. Can you walk through how much of the 2.5% move is mix versus pricing, and whether you expect the same input costs to carry into next quarter?"
+    }
+   ]
+  }
+ ],
+ "referenced_only": [
+  {
+   "slug": null,
+   "state": null,
+   "surface": null,
+   "case_id": "CIE-GC-0033",
+   "case": {
+    "case_id": "CIE-GC-0033",
+    "difficulty_class": "duplicate_release",
+    "difficult": true,
+    "label": "CSCO's release arrived twice (newswire copy and EDGAR exhibit) with different document hashes and the same content payload.",
+    "issuer_id": "iss_1e477f590d4613e6",
+    "issuer_kind": "general",
+    "display_name": "Cisco Systems, Inc.",
+    "ticker": "CSCO",
+    "listing_mic": "XNAS",
+    "share_class": "common",
+    "trading_currency": "USD",
+    "reporting_currency": "USD",
+    "fiscal_year": 2024,
+    "fiscal_quarter": 1,
+    "fiscal_year_end_month": 7,
+    "call_date": "2024-02-12",
+    "event_key_company_intelligence": "CSCO|2024|Q1",
+    "event_id_company_intelligence": "cie_ff1479d084ba1bda85d9838f",
+    "transcript_id": "2024Q1",
+    "event_key_earnings_narrative": "CSCO/2024Q1",
+    "transcript_present": true,
+    "release_present": true,
+    "excerpt_document_id": "doc_8add1a3a347d42fad22c",
+    "receipt": null,
+    "document_revisions": [
+     {
+      "revision": 1,
+      "document_kind": "release",
+      "source_sha256": "7fc5d53107406213906d01de41e4e1f806ba8e40a649d56f9df3947178ec4a00",
+      "supersedes_source_sha256": null,
+      "accession_synthetic": "0001502137-24-569826"
+     },
+     {
+      "revision": 2,
+      "document_kind": "release_duplicate",
+      "source_sha256": "40446e493bd694347a6082b3ad9325bfcc1aa084737d64f027ed0ea3cfa70db0",
+      "supersedes_source_sha256": "7fc5d53107406213906d01de41e4e1f806ba8e40a649d56f9df3947178ec4a00",
+      "accession_synthetic": "0001502137-24-324683"
+     }
+    ],
+    "v1_claim_citations_pending": true,
+    "expected_v2_outcome": "duplicate_collapsed",
+    "expected_receipt_locator_kind": null,
+    "expected_event_identity": "preserved",
+    "quarantine": null
+   },
+   "issuer": {
+    "issuer_id": "iss_1e477f590d4613e6",
+    "display_name": "Cisco Systems, Inc.",
+    "kind": "general",
+    "primary_ticker": "CSCO",
+    "fiscal_year_end_month": 7,
+    "reporting_currency": "USD",
+    "cik_synthetic": 1502137,
+    "listings": [
+     {
+      "ticker": "CSCO",
+      "mic": "XNAS",
+      "share_class": "common",
+      "is_primary": true,
+      "trading_currency": "USD"
+     }
+    ]
+   },
+   "edgar": null,
+   "document": {
+    "document_id": "doc_8add1a3a347d42fad22c",
+    "ticker": "CSCO",
+    "transcript_id": "2024Q1",
+    "document_kind": "transcript",
+    "body_sha256": "ea0704c38f9b28c3235fcab1d8536904a9143316d3742805bb953cb404f8985f",
+    "body_bytes": 1164,
+    "provenance": "synthetic",
+    "title": "Cisco Systems, Inc. Q1 2024 Earnings Call",
+    "period": "Q1 2024",
+    "date": "2024-02-12",
+    "segment_count": 4
+   },
+   "claims": [],
+   "committed_receipt_verified": null,
+   "segments": [
+    {
+     "speaker": "Operator",
+     "role": "Operator",
+     "text": "Good afternoon and welcome to the Cisco Systems, Inc. Q1 2024 earnings conference call. All participants will be in listen-only mode. Please note this event is being recorded."
+    },
+    {
+     "speaker": "Dana Whitfield",
+     "role": "Chief Executive Officer",
+     "text": "Cisco Systems, Inc. closed Q1 2024 with demand broadly in line with the plan we laid out ninety days ago, and we exited the quarter with the cost base we committed to."
+    },
+    {
+     "speaker": "Miren Okafor",
+     "role": "Chief Financial Officer",
+     "text": "Total revenue was $154.8 billion for the quarter, and non-GAAP diluted earnings per share were $3.17. Operating margin finished at 37.6%. We are guiding next quarter to a range of $157.9 billion to $172.1 billion."
+    },
+    {
+     "speaker": "Priya Raghunathan",
+     "role": "Analyst, Ridgeline Research",
+     "text": "Thanks for taking the question. Can you walk through how much of the 37.6% move is mix versus pricing, and whether you expect the same input costs to carry into next quarter?"
+    }
+   ]
+  }
+ ]
+}
