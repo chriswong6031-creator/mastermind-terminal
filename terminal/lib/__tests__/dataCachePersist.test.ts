@@ -710,3 +710,85 @@ describe("idbJsonStore — self-heal when the DB exists without the 'json' store
     expect(idb._isIdbDead()).toBe(false);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// onRevalidate — the SWR result must reach the CALLER, not just the cache
+//
+// REGRESSION (production, 2026-08-07): every reload is a full memory miss and any
+// persisted record is past the 60s TTL, so `/data/manifest.json` was ALWAYS served
+// from IndexedDB via the "stale-swr" branch. `getJSON` resolved once — with the stale
+// board — and the revalidated copy landed only in the cache. Consumers fetch on mount,
+// so the Terminal painted whatever this browser cached on its LAST visit and never
+// corrected it: the app showed the 2026-08-05 session while the network served 08-06.
+// ───────────────────────────────────────────────────────────────────────────
+describe("dataCache.onRevalidate — a stale-while-revalidate serve corrects itself", () => {
+  let fake: ReturnType<typeof makeFakeIndexedDB>;
+  const realIDB = (globalThis as any).indexedDB;
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    fake = makeFakeIndexedDB();
+    (globalThis as any).indexedDB = fake;
+  });
+
+  afterEach(() => {
+    if (realIDB === undefined) delete (globalThis as any).indexedDB;
+    else (globalThis as any).indexedDB = realIDB;
+    globalThis.fetch = realFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("delivers the revalidated manifest after serving the stale one from IDB", async () => {
+    const { idb, dc } = await freshModules();
+    const url = "/data/manifest.json";
+    const staleBoard = { as_of: "2026-08-05", symbols: { NVDA: { last: 219.22, chg: 3.43 } } };
+    const freshBoard = { as_of: "2026-08-06", symbols: { NVDA: { last: 222.985, chg: 1.82 } } };
+    // Persisted two days ago — exactly the state of a browser revisiting the Terminal.
+    await idb.idbPut(url, staleBoard, Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(freshBoard) } as any),
+    ) as any;
+
+    const seen: any[] = [];
+    const first = await dc.getJSON(url, { onRevalidate: (m) => seen.push(m) });
+
+    // Instant paint is preserved: the caller still gets the persisted board immediately.
+    expect(first).toEqual(staleBoard);
+
+    await new Promise((r) => setTimeout(r, 20));
+    // ...and is then handed the corrected one. Before the fix `seen` stayed empty and
+    // the 08-05 board was pinned for the life of the page.
+    expect(seen).toEqual([freshBoard]);
+  });
+
+  it("does not fire when the persisted copy is still fresh (no network, no callback)", async () => {
+    const { idb, dc } = await freshModules();
+    const url = "/data/manifest.json";
+    const board = { as_of: "2026-08-06", symbols: {} };
+    await idb.idbPut(url, board, Date.now()); // within the 60s TTL
+
+    const fetchSpy = vi.fn(() => Promise.reject(new Error("network must not be called")));
+    globalThis.fetch = fetchSpy as any;
+
+    const seen: any[] = [];
+    expect(await dc.getJSON(url, { onRevalidate: (m) => seen.push(m) })).toEqual(board);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(seen).toEqual([]);
+  });
+
+  it("a throwing consumer cannot break the cache commit", async () => {
+    const { idb, dc } = await freshModules();
+    const url = "/data/manifest.json";
+    await idb.idbPut(url, { as_of: "old" }, Date.now() - 10 * 60_000);
+    const freshBoard = { as_of: "new" };
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(freshBoard) } as any),
+    ) as any;
+
+    await dc.getJSON(url, { onRevalidate: () => { throw new Error("consumer blew up"); } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dc.peek(url)).toEqual(freshBoard);
+  });
+});

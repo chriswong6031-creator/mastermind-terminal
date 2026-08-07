@@ -153,7 +153,10 @@ export default function AlertsView({ email }: { email: string }) {
       .catch(() => {})
       .finally(() => { if (alive) setLoaded(true); });
     // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
-    getJSON("/data/manifest.json").then((m) => { if (alive) setSyms(Object.keys(m?.symbols || {})); }).catch(() => {});
+    // onRevalidate so a symbol added by the latest ingest is selectable on the first load
+    // after it lands, rather than only after this browser's cached manifest expires.
+    const applySyms = (m: any) => { if (alive) setSyms(Object.keys(m?.symbols || {})); };
+    getJSON("/data/manifest.json", { onRevalidate: applySyms }).then(applySyms).catch(() => {});
     // D1: prefill from ?sym= ?price= ?type= query params (set by terminal "Add alert" context menu)
     try {
       const sp = new URLSearchParams(window.location.search);

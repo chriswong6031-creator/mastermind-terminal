@@ -215,7 +215,13 @@ describe("AnchorCache refreshes when the daily file rolls inside one ET session"
     store = new Store(manifestPath, cache);
     store.loadManifestIfStale(true);
     await cache.resolve("MSFT", NOW_AFTERHOURS);
-    store.setQuote("MSFT", { last: 489.13, market: "us" }, NOW_AFTERHOURS);
+    // The pre-roll quote is the PLACEHOLDER polygon.js writes when no AM bar has landed:
+    // last = manifest.last = the previous session's close. (It used to be an arbitrary
+    // 489.13, which is a state production never reaches — _onAM stamps regularSessionDate
+    // on every real print, and non-RTH bars go to the ext lane, never to `last`. With a
+    // distinct print in `last` the store now trusts it rather than the completed session,
+    // so the fixture has to be the placeholder it always claimed to be.)
+    store.setQuote("MSFT", { last: CLOSE_PREVIOUS, market: "us" }, NOW_AFTERHOURS);
 
     const stale = store.getQuotes(["MSFT"], NOW_AFTERHOURS).MSFT;
     const previousSessionMove = (CLOSE_PREVIOUS - CLOSE_DAY_BEFORE) / CLOSE_DAY_BEFORE * 100;

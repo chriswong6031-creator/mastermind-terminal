@@ -38,7 +38,9 @@ export default function PortfolioView({ symbols, email }: { symbols: string[]; e
     setEffSymbols(GUEST_SEED);
   }, [symbols]);
   // manifest via dataCache (dedup + SWR) + mounted guard — mirrors ScreenerView (batch 1).
-  useEffect(() => { let alive = true; getJSON("/data/manifest.json").then((m) => { if (alive) setMan(m?.symbols || {}); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); }); return () => { alive = false; }; }, []);
+  // onRevalidate: dataCache serves the persisted manifest stale on every load; without it
+  // the book would be marked to whatever prices this browser last cached (see lib/dataCache.ts).
+  useEffect(() => { let alive = true; getJSON("/data/manifest.json", { onRevalidate: (m) => { if (alive) setMan(m?.symbols || {}); } }).then((m) => { if (alive) setMan(m?.symbols || {}); }).catch(() => {}).finally(() => { if (alive) setLoaded(true); }); return () => { alive = false; }; }, []);
 
   const rows = effSymbols.map((s) => ({ sym: s, ...(man[s] || {} as Row) })).filter((r) => r.name);
   const buys = rows.filter((r) => isBuy(r.verdict));

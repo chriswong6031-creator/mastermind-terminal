@@ -826,11 +826,20 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
       if (started) return;
       started = true;
       btMark("manifest-fetch-start");
-      getJSON("/data/manifest.json").then((m) => {
+      // onRevalidate is not optional polish: a reload is always a full memory miss, so the
+      // persisted copy is always past its TTL and dataCache serves it stale. Without this
+      // the board would be pinned to whatever this browser cached on its LAST visit — which
+      // is how the Terminal painted the 08-05 session on 08-07 (see lib/dataCache.ts).
+      const applyManifest = (m: Manifest) => {
+        setMan(m);
+        loadCoverage(Object.keys(m.symbols || {}));
+      };
+      getJSON("/data/manifest.json", {
+        onRevalidate: (m) => { if (alive && m) applyManifest(m); },
+      }).then((m) => {
         if (alive && m) {
           btMark("manifest-fetch-done");
-          setMan(m);
-          loadCoverage(Object.keys(m.symbols || {}));
+          applyManifest(m);
         }
       }).catch(() => {});
     };

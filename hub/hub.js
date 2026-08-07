@@ -33,6 +33,7 @@ const { OKX } = require("./lib/okx");
 const { Polygon } = require("./lib/polygon");
 const { ExtFeed } = require("./lib/extfeed");
 const { MacroFeed } = require("./lib/macrofeed");
+const { SnapshotFeed } = require("./lib/snapshot");
 const {
   classify,
   isMacroSymbol,
@@ -64,6 +65,16 @@ const extFeed = new ExtFeed({
 // Macro feed (futures / indices / FX / dollar index). Keyless — no env required.
 // Kill-switch: MACRO_FEED_DISABLE=1 (read inside the constructor).
 const macroFeed = new MacroFeed();
+
+// REST snapshot leg — today's session for US symbols the AM.* stream is not carrying.
+// The stream idle-sweeps subscriptions after 30 minutes, so this is the normal state for
+// anything outside the flagship 37; without this leg those symbols fall back to the
+// NIGHTLY manifest and display the previous session's close. Kill-switch:
+// HUB_DISABLE_SNAPSHOT=1 (reverts to exactly the pre-2026-08-07 behaviour).
+const snapshotFeed = new SnapshotFeed({
+  apiKey: process.env.POLYGON_API_KEY || process.env.MASSIVE_API_KEY || "",
+  disabled: process.env.HUB_DISABLE_SNAPSHOT === "1",
+});
 
 const MAX_SYMS_PER_REQUEST = 200;
 const FAILOVER_MS = 60 * 1000; // Coinbase down/backoff > 60s → OKX
@@ -148,6 +159,7 @@ function handleHealth(res) {
     polygon: polygon ? polygon.health() : { disabled: DISABLE_US },
     extFeed: extFeed.health(),
     macroFeed: macroFeed.health(),
+    snapshotFeed: snapshotFeed.stats(),
     ts: Math.floor(Date.now() / 1000),
   });
 }
@@ -171,12 +183,12 @@ function handleQuotes(res, url) {
   //                AnchorCache has no daily file for them).
   //   us         → Polygon sub + warm the anchor cache + ext LRU tracking.
   applyDemand(syms, now, {
-    polygon, anchorCache, extFeed, macroFeed, disableUS: DISABLE_US,
+    polygon, anchorCache, extFeed, macroFeed, snapshotFeed, disableUS: DISABLE_US,
   });
 
   // macro → served from MacroFeed; crypto/us → served from the Store; cn/hk/ca → absent.
   // Response contract is unchanged: a flat { SYM: quote } object, present entries only.
-  const out = buildQuotesResponse(syms, now, { store, macroFeed, extFeed });
+  const out = buildQuotesResponse(syms, now, { store, macroFeed, extFeed, snapshotFeed });
   sendJSON(res, 200, out);
 }
 

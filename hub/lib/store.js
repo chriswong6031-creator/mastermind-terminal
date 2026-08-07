@@ -134,7 +134,11 @@ class Store {
   // extFeed is optional; when provided, ext fields (extPrice/extChg/extTs/extSession/
   // extSource) are merged for US symbols during extended-hours windows. They are
   // NEVER emitted during RTH. Passed by hub.js; null when ext feed is disabled.
-  getQuotes(symList, nowMs, extFeed) {
+  //
+  // snapshotFeed is optional; when provided, a US symbol carrying NO print from today's
+  // regular session adopts the REST snapshot's session (see lib/snapshot.js). Without it
+  // such a symbol falls back to the nightly manifest and shows the PREVIOUS session.
+  getQuotes(symList, nowMs, extFeed, snapshotFeed) {
     const out = {};
     const now = nowMs != null ? nowMs : Date.now();
     for (const sym of symList) {
@@ -163,12 +167,28 @@ class Store {
       const dayRef = close != null ? close : typeof q.last === "number" ? q.last : null;
       const hasCurrentRegularSession =
         q.regularSessionDate != null && q.regularSessionDate === etDate(now);
-      // Before today's RTH begins (or after a restart with only an EOD
-      // placeholder), keep the last completed session's performance.
+      // A placeholder quote (polygon.js _writePlaceholder) carries `last` = manifest.last,
+      // which is the very close the AnchorCache resolves as `prevClose` — so the difference
+      // is a STRUCTURAL ZERO, an artifact of comparing a number with itself, not a flat
+      // tape. Publish the last completed session's move instead.
+      //
+      // Two independent conditions must BOTH hold, and the pair is what makes this safe:
+      //   !hasCurrentRegularSession — no print from today has ever landed for this symbol
+      //   structuralZero            — the number we would publish is `x - x`
+      // A symbol that genuinely trades flat has a real print, so it carries today's
+      // regularSessionDate and still reports an honest 0.00% through the branch below.
+      //
+      // This deliberately does NOT exclude RTH. It used to (`marketSession !== "rth"`), on
+      // the assumption that a live print always exists during the session — but a symbol
+      // whose subscription was idle-swept, LRU-evicted, or has simply not yet been sent an
+      // AM bar has no such print, and every one of them served a fabricated "0.00%" for the
+      // whole session (operator-reported 2026-08-07).
+      const structuralZero =
+        dayRef != null && Math.abs(dayRef - anchor.prevClose) < 1e-9;
       const usePreviousSession =
-        marketSession !== "rth" &&
         close == null &&
         !hasCurrentRegularSession &&
+        structuralZero &&
         anchor.prevSessionChg != null &&
         Number.isFinite(anchor.prevSessionChg);
       const prevSessionChg =
@@ -206,6 +226,53 @@ class Store {
       else delete fresh.stale_anchor;
       this.quotes.set(sym, fresh); // persist so /health + later reads agree
       out[sym] = fresh;
+    }
+
+    // ── REST snapshot: adopt today's session when the tape never delivered one ──
+    // The streaming AM.* feed is idle-swept after 30 minutes, so outside the flagship 37
+    // the normal state for a symbol is "no live subscription". Without this leg the only
+    // fallback was `manifest.last` — a NIGHTLY artifact carrying the PREVIOUS session's
+    // close — which is how SKY read 91.52 after closing at 94.66 (operator, 2026-08-07).
+    //
+    // Runs BEFORE the ext merge so `closeRef` below sees the real regular close and the
+    // post-market percentage is measured from today's close rather than yesterday's.
+    // No-op when the feed is absent/disabled, and it never overrides a symbol the tape
+    // IS carrying for today — the stream stays authoritative whenever it has data.
+    if (snapshotFeed) {
+      for (const sym of symList) {
+        const q = out[sym];
+        if (!q || q.market !== "us") continue;
+        if (q.regularSessionDate != null && q.regularSessionDate === etDate(now)) continue;
+        const snap = snapshotFeed.get(sym, now);
+        if (!snap) continue;
+
+        const fresh = { ...q };
+        fresh.last = snap.close;
+        if (snap.open != null) fresh.open = snap.open;
+        if (snap.high != null) fresh.high = snap.high;
+        if (snap.low != null) fresh.low = snap.low;
+        if (snap.vol != null) fresh.vol = snap.vol;
+        if (snap.prevClose != null) fresh.prevClose = snap.prevClose;
+        if (snap.chg != null) fresh.chg = snap.chg;
+        // `close` means "today's OFFICIAL close" — only true once the bell has rung.
+        // During RTH day.c is merely the latest print, so it stays in `last` alone.
+        const session = classifySession(now);
+        if (session === "post" || session === "overnight") fresh.close = snap.close;
+        else delete fresh.close;
+        // Today's session is in hand; the previous session's move is no longer the answer.
+        delete fresh.prevSessionChg;
+        fresh.regularSessionDate = snap.date;
+        fresh.regularSession = "rth";
+        fresh.marketSession = session;
+        fresh.ts = snap.ts;
+        fresh.live = false;
+        fresh.source = "polygon-snapshot";
+        fresh.basis = "DELAYED_15M";
+        fresh.anchor_source = "snapshot";
+        delete fresh.stale_anchor;
+        this.quotes.set(sym, fresh); // persist so /health + later reads agree
+        out[sym] = fresh;
+      }
     }
 
     // ── Ext fields: merge extPrice/extChg/extTs/extSession/extSource ──────────

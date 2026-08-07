@@ -78,7 +78,7 @@ function classify(sym) {
  * @param {boolean} [deps.disableUS]   HUB_DISABLE_US
  */
 function applyDemand(syms, nowMs, deps = {}) {
-  const { polygon, anchorCache, extFeed, macroFeed, disableUS } = deps;
+  const { polygon, anchorCache, extFeed, macroFeed, snapshotFeed, disableUS } = deps;
   if (!Array.isArray(syms)) return;
   for (const sym of syms) {
     // Daily-only FRED series have NO leg here: not Polygon (no such ticker), not the ext feed
@@ -91,7 +91,13 @@ function applyDemand(syms, nowMs, deps = {}) {
       if (macroFeed) macroFeed.demand(sym);
       continue;
     }
-    if (disableUS || !polygon || !polygon.isHealthy() || classify(sym) !== "us") continue;
+    if (classify(sym) !== "us") continue;
+    // The REST snapshot leg is demanded for EVERY US symbol, independent of the Polygon
+    // WebSocket's health and of `disableUS`: it is precisely the symbols the stream is not
+    // carrying — idle-swept, LRU-evicted, or never yet delivered a bar — that would
+    // otherwise fall back to the nightly manifest and show the previous session.
+    if (snapshotFeed) snapshotFeed.demand(sym, nowMs);
+    if (disableUS || !polygon || !polygon.isHealthy()) continue;
     polygon.ensureSubscribed(sym);
     // Fire-and-forget: resolve the anchor so the cache is warm for the next request.
     if (anchorCache) anchorCache.resolve(sym, nowMs).catch(() => {});
@@ -112,7 +118,7 @@ function applyDemand(syms, nowMs, deps = {}) {
  * @returns {Object<string,object>} flat { SYM: quote }
  */
 function buildQuotesResponse(syms, nowMs, deps = {}) {
-  const { store, macroFeed, extFeed } = deps;
+  const { store, macroFeed, extFeed, snapshotFeed } = deps;
   const out = {};
   if (!Array.isArray(syms) || syms.length === 0) return out;
 
@@ -131,7 +137,7 @@ function buildQuotesResponse(syms, nowMs, deps = {}) {
   }
 
   if (store && storeSyms.length) {
-    const served = store.getQuotes(storeSyms, nowMs, extFeed);
+    const served = store.getQuotes(storeSyms, nowMs, extFeed, snapshotFeed);
     for (const sym of Object.keys(served)) out[sym] = served[sym];
   }
 
