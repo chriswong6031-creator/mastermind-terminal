@@ -291,9 +291,10 @@ export default function ScreenerView({ email }: { email: string }) {
   // ── fetch manifest via dataCache (dedup + SWR) + mounted guard ─────────
   useEffect(() => {
     let alive = true;
-    getJSON("/data/manifest.json")
-      .then((m: any) => {
-        if (!alive) return;
+    // onRevalidate: dataCache serves the persisted manifest stale on every load, so without
+    // it the screener — including the "as of" date it prints — would show whatever board
+    // this browser last cached. An honest-looking date on a stale table is the worst case.
+    const apply = (m: any) => {
         setAsOf(m.as_of || "");
         setRows(
           Object.entries(m.symbols || {}).map(([sym, r]: any) => {
@@ -330,7 +331,11 @@ export default function ScreenerView({ email }: { email: string }) {
           })
         );
         setLoaded(true);
-      })
+    };
+    getJSON("/data/manifest.json", {
+      onRevalidate: (m: any) => { if (alive && m) apply(m); },
+    })
+      .then((m: any) => { if (alive && m) apply(m); })
       .catch(() => { if (alive) { setErr(true); setLoaded(true); } });
     return () => { alive = false; };
   }, [reloadN]);

@@ -65,6 +65,22 @@ const neg404 = new Set<string>();
 export interface GetOpts {
   ttl?: number;   // milliseconds; default 60_000
   swr?: boolean;  // stale-while-revalidate; default true
+  /**
+   * Called with the REVALIDATED payload when a stale-while-revalidate serve is later
+   * corrected by the network. Without it, `getJSON` resolves once — with the stale value —
+   * and the fresh copy lands only in the cache, so a consumer that fetches on mount keeps
+   * the stale snapshot for the life of the page.
+   *
+   * That is not theoretical: every reload is a full memory miss, and any persisted record
+   * is older than the 60s TTL, so `/data/manifest.json` was served from IndexedDB on EVERY
+   * load. A browser that last had the Terminal open two sessions ago painted that board —
+   * prices, %, and the Screener's own "as of" date — and never corrected it (verified on
+   * production 2026-08-07: the app showed the 08-05 close while the network served 08-06).
+   *
+   * Fires at most once per getJSON call, and only when the revalidation actually returns
+   * data. Consumers must guard it with their own mounted flag.
+   */
+  onRevalidate?: (data: any) => void;
 }
 
 const DEFAULT_TTL = 60_000;
@@ -84,7 +100,9 @@ function touch(url: string, entry: Entry): void {
 }
 
 // ── Core fetch: issues the request, writes/evicts on settle ──
-function doFetch(url: string, entry: Entry): Promise<any> {
+// onRevalidate (optional) is invoked with the committed payload — the hook that lets a
+// background SWR refresh reach the caller that was already handed the stale value.
+function doFetch(url: string, entry: Entry, onRevalidate?: (data: any) => void): Promise<any> {
   const inflight: Promise<any> = fetch(url)
     .then((r) => {
       if (r.ok) return r.json();
@@ -111,6 +129,11 @@ function doFetch(url: string, entry: Entry): Promise<any> {
           // is a true no-op when IDB is unavailable (SSR / private browsing).
           if (idbAvailable()) {
             void idbPut(url, committed.data, committed.ts);
+          }
+          // Hand the corrected payload to the caller that already received the stale one.
+          // Isolated: a throwing consumer must not break the cache commit above.
+          if (onRevalidate) {
+            try { onRevalidate(data); } catch { /* consumer's problem, not the cache's */ }
           }
         }
       }
@@ -189,7 +212,7 @@ export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
       // returned to the caller before the fetch starts).
       const staleData = entry.data;
       const bgEntry: Entry = { data: staleData, ts: entry.ts, inflight: null };
-      doFetch(url, bgEntry); // fire-and-forget
+      doFetch(url, bgEntry, opts?.onRevalidate); // fire-and-forget
       return Promise.resolve(staleData);
     }
 
@@ -220,9 +243,10 @@ export async function getJSON(url: string, opts?: GetOpts): Promise<any> {
       if (decision === "stale-swr") {
         const seeded: Entry = { data: rec.data, ts: rec.ts, inflight: null };
         touch(url, seeded);
-        // Serve stale from disk immediately; revalidate in the background.
+        // Serve stale from disk immediately; revalidate in the background. This is THE
+        // path every reload takes for the manifest, so the callback matters most here.
         const bgEntry: Entry = { data: rec.data, ts: rec.ts, inflight: null };
-        doFetch(url, bgEntry); // fire-and-forget
+        doFetch(url, bgEntry, opts?.onRevalidate); // fire-and-forget
         return Promise.resolve(rec.data);
       }
       // decision === "refetch" (stale + swr=false): fall through to blocking fetch.
