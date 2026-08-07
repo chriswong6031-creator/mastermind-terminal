@@ -5,6 +5,7 @@
 
 import { useEffect } from "react";
 import { IND_DEFS, isIndKey } from "@/lib/indicators";
+import { tPlain } from "@/lib/i18n";
 
 export default function IndicatorSource({ indKey, onClose }: { indKey: string; onClose: () => void }) {
   useEffect(() => {
@@ -20,8 +21,8 @@ export default function IndicatorSource({ indKey, onClose }: { indKey: string; o
       <div className="ind-src" onClick={(e) => e.stopPropagation()}>
         <div className="is-head">
           <b>{def.label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.pine</b>
-          <span className="badge" style={{ marginLeft: 8 }}>PINE v6 · built-in</span>
-          <span className="x" onClick={onClose} aria-label="Close">✕</span>
+          <span className="badge" style={{ marginLeft: 8 }}>{tPlain("peBuiltIn", "PINE v6 · built-in")}</span>
+          <span className="x" onClick={onClose} aria-label={tPlain("smClose", "Close")}>✕</span>
         </div>
         <pre className="src-code">{def.source}</pre>
         <div className="is-foot">

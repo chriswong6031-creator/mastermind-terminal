@@ -74,7 +74,8 @@ export default async function Terminal({ searchParams }: { searchParams: Promise
     // Still nothing after the retries — render the honest holding screen, but with
     // AUTO-RECOVERY (bounded refresh loop + manual Retry), never a dead end.
     const { default: ProvisioningRetry } = await import("@/components/ProvisioningRetry");
-    return <main className="center"><div className="hero"><h1 style={{ fontSize: 20 }}>Setting up your workspace…</h1><p className="tag">One moment — provisioning your default watchlist.</p><ProvisioningRetry /></div></main>;
+    const { T } = await import("@/components/LocalizedCopy");
+    return <main className="center"><div className="hero"><T as="h1" k="provSettingUp" style={{ fontSize: 20 }} /><T as="p" k="provOneMoment" className="tag" /><ProvisioningRetry /></div></main>;
   }
   const { data: syms } = await supabase
     .from("watchlist_symbols").select("symbol,section").eq("watchlist_id", active.id).order("position");

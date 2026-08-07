@@ -420,7 +420,7 @@ export default function ChartFrameBar({
           disabled={!isIntraday || !extendedEligible}
           onClick={() => isIntraday && extendedEligible && onSettings({ extHours: !s.extHours })}
           title={isIntraday && extendedEligible ? (s.extHours ? t("ethOff") : t("ethOn")) : undefined}
-          aria-label="Extended trading hours"
+          aria-label={t("cfbExtendedHours")}
         >ETH</button>
         {/* ADJ chip — always passive (display-only; we only serve adjusted data) */}
         <span className="cfb-chip cfb-chip-adj" title={t("adjTip")}>ADJ</span>

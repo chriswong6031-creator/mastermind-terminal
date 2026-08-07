@@ -19,7 +19,7 @@ import type { Lang } from "@/lib/i18n";
 
 const PROPHET_LEX = {
   // ── Tab / surface header ───────────────────────────────────────────────────
-  tabProphet:       ["Prophet", "预言台"],
+  tabProphet:       ["Prophet", "Prophet"],
   tabSubtitle:      ["Managed-pick desk", "主动选股台"],
   // Reworded (D3 honesty pass): "Managed signal intelligence" implied options provenance
   // this desk does not have. The eyebrow now states what it is and how often it moves.
@@ -239,7 +239,7 @@ const PROPHET_LEX = {
 
   // ── Loading / error states ─────────────────────────────────────────────────
   loading:    ["Loading…", "加载中…"],
-  error:      ["Could not load prophet data.", "无法加载预言台数据。"],
+  error:      ["Could not load prophet data.", "无法加载 Prophet 数据。"],
   retry:      ["Retry", "重试"],
   asOf:       ["as of", "更新于"],
 } as const;
