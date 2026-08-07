@@ -199,6 +199,37 @@ export function spliceDaily(daily: Bar[], q: { last?: number; open?: number; hig
   return [...daily, bar];
 }
 
+/**
+ * May this quote's regular-session value be drawn as the daily bar for `sessionDate`?
+ *
+ * US extended prints live on a separate line and must NEVER become a daily candle. The regular
+ * session's own value may: during RTH it is the forming bar, and AFTER THE BELL IT IS THE
+ * COMPLETED ONE.
+ *
+ * This used to be `marketSession === "rth"` alone, which conflated the two and left the chart a
+ * full session behind every evening: the daily file does not roll until the ~23:00 ET EOD writer,
+ * so from 16:00 to 23:00 the candles sat on yesterday while the header showed today's close
+ * (operator-reported 2026-08-07, alongside the quote-side half of the same gap).
+ *
+ * `regularSessionDate === sessionDate` is the precise test — it says this quote's REGULAR session
+ * is the very day being spliced. Safe because the hub guarantees `last`/`close` are regular-session
+ * values (extended prints exist only in the ext* namespace), and in pre-market or the overnight
+ * window before an open, `regularSessionDate` is still the PRIOR day — so nothing is ever drawn
+ * for a session that has not traded yet.
+ *
+ * Non-US markets (and macro symbols) are unaffected: they have no separate extended lane here.
+ */
+export function canSpliceRegularBar(
+  sym: string,
+  q: { marketSession?: string; regularSessionDate?: string } | null | undefined,
+  sessionDate: string | null,
+): boolean {
+  if (!q || sessionDate == null) return false;
+  if (classify(sym) !== "us" || isMacroSymbol(sym)) return true;
+  if (q.marketSession === "rth") return true;
+  return q.regularSessionDate === sessionDate;
+}
+
 // Fold a spliced DAILY array into the final resampled bucket for tf∈{3D,W,1M}. Returns the ONE
 // bucket (time key + OHLCV) that `series.update()` should push — reusing the existing bucketer so
 // the time key matches whatever Effect 2 produced (never invents a bucket unless the new daily date
@@ -2366,15 +2397,13 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     if (replayIdxRef.current != null) return;              // never splice under replay
     const q = liveQuoteRef.current;
     if (!q || q.last == null || !isFinite(q.last)) return;
-    // US extended prints live on a separate line. Never create or patch a
-    // regular daily candle while the exchange is outside RTH.
-    if (classify(symbolRef.current) === "us" && !isMacroSymbol(symbolRef.current) && q.marketSession !== "rth") return;
     if (!SPLICE_BASES.has(q.basis || "")) return;          // EOD / missing basis → no splice
     const daily = dailyBarsRef.current; if (!daily.length) return;
     const tf = timeframeRef.current;
     const market = classify(symbol);
     const sd = sessionDateOf(q.ts, market);
     if (sd == null) return;
+    if (!canSpliceRegularBar(symbolRef.current, q, sd)) return;
     const spliced = spliceDaily(daily, q, sd);
     if (spliced === daily) return;                         // nothing changed (older session)
     // fold to the bar the chart actually plots at this TF, then push it via update()

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { spliceDaily } from "@/components/ChartPanel";
+import { spliceDaily, canSpliceRegularBar } from "@/components/ChartPanel";
 import { parseTencentFields } from "@/lib/intradaySources";
 
 // Regression: at the China market open, Tencent's premarket call-auction snapshot reports
@@ -70,5 +70,52 @@ describe("spliceDaily — no $0 spike from a zero-open premarket quote", () => {
     const out = spliceDaily(daily, { last: 12.2, open: 11.9, high: 12.35, low: 11.85, vol: 500 }, "2026-07-21");
     const bar = out[out.length - 1];
     expect(bar).toEqual({ time: "2026-07-21", o: 11.9, h: 12.35, l: 11.85, c: 12.2, v: 500 });
+  });
+});
+
+// ── canSpliceRegularBar — the post-close chart gap ───────────────────────────
+//
+// REGRESSION (operator-reported 2026-08-07): the daily OHLC file does not roll until the
+// ~23:00 ET EOD writer, so between 16:00 and 23:00 the only source of today's completed bar
+// is the live quote. The guard was `marketSession === "rth"`, which blocked exactly that
+// window — the header showed SKY's 94.66 close while the candles still ended at yesterday's
+// 91.52. Extended prints must still never become a daily candle.
+describe("canSpliceRegularBar — today's completed session belongs on the chart", () => {
+  const TODAY = "2026-08-07";
+  const YESTERDAY = "2026-08-06";
+
+  it("RTH: splices the forming bar", () => {
+    expect(canSpliceRegularBar("SKY", { marketSession: "rth", regularSessionDate: TODAY }, TODAY)).toBe(true);
+  });
+
+  it("post-close: splices today's COMPLETED bar (the reported gap)", () => {
+    expect(canSpliceRegularBar("SKY", { marketSession: "post", regularSessionDate: TODAY }, TODAY)).toBe(true);
+  });
+
+  it("overnight after the bell, before the daily file rolls: still splices today", () => {
+    expect(canSpliceRegularBar("SKY", { marketSession: "overnight", regularSessionDate: TODAY }, TODAY)).toBe(true);
+  });
+
+  it("pre-market: does NOT draw a bar for a session that has not traded", () => {
+    expect(canSpliceRegularBar("SKY", { marketSession: "pre", regularSessionDate: YESTERDAY }, TODAY)).toBe(false);
+  });
+
+  it("post-close with no print from today at all (placeholder): draws nothing", () => {
+    expect(canSpliceRegularBar("SKY", { marketSession: "post", regularSessionDate: undefined }, TODAY)).toBe(false);
+  });
+
+  it("never splices a quote whose regular session is a DIFFERENT day", () => {
+    expect(canSpliceRegularBar("SKY", { marketSession: "post", regularSessionDate: YESTERDAY }, TODAY)).toBe(false);
+  });
+
+  it("non-US markets are unaffected — they have no separate extended lane here", () => {
+    expect(canSpliceRegularBar("0700.HK", { marketSession: undefined }, TODAY)).toBe(true);
+    expect(canSpliceRegularBar("600000.SS", { marketSession: undefined }, TODAY)).toBe(true);
+    expect(canSpliceRegularBar("BTC-USD", { marketSession: undefined }, TODAY)).toBe(true);
+  });
+
+  it("returns false with no quote or no session date", () => {
+    expect(canSpliceRegularBar("SKY", null, TODAY)).toBe(false);
+    expect(canSpliceRegularBar("SKY", { marketSession: "rth" }, null)).toBe(false);
   });
 });
