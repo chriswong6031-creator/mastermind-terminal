@@ -818,13 +818,13 @@ const LEX: Record<string, [string, string]> = {
   briefEyebrow: ["Your book today", "今日你的账本"],
   briefAsOf: ["as of {asof}", "截至 {asof}"],
   briefStale: ["data as of {asof}", "数据截至 {asof}"],
-  briefUncovered: ["No desk coverage yet for: {names}", "以下暂无台面覆盖：{names}"],
+  briefUncovered: ["No desk coverage yet for: {names}", "以下标的暂无研究台覆盖：{names}"],
   briefUnavailable: ["Your book brief is unavailable right now.", "你的账本简报暂时无法加载。"],
   briefLoading: ["Reading your book…", "正在解读你的账本…"],
   // teaser (Free / Insider → 403)
-  briefTeaserWhat: ["Your holdings, read through the desks' daily work — exposure, signal states, earnings clock and filings on your own names, in plain words. Part of Pro.", "把你的持仓交给台面每日研判 —— 用大白话讲清你名下的敞口、信号状态、财报节奏与备案动向。Pro 专享。"],
+  briefTeaserWhat: ["Your holdings, read through the desks' daily work — exposure, signal states, earnings clock and filings on your own names, in plain words. Part of Pro.", "把你的持仓交给研究台每日研判 —— 用大白话讲清你名下的敞口、信号状态、财报节奏与备案动向。Pro 专享。"],
   briefSampleTag: ["Sample", "示例"],
-  briefSample: ["41% of your book is Technology — today's desk read on Technology is Cautious (a bounce, not a turn).", "你账本的 41% 在科技板块 —— 台面今日对科技的研判是「谨慎」（是反弹，不是反转）。"],
+  briefSample: ["41% of your book is Technology — today's desk read on Technology is Cautious (a bounce, not a turn).", "你账本的 41% 在科技板块 —— 研究台今日对科技的研判是「谨慎」（是反弹，不是反转）。"],
   briefUpsell: ["See your book with Pro", "用 Pro 查看你的账本"],
   // alerts
   pageAlerts: ["Alerts", "提醒"],
