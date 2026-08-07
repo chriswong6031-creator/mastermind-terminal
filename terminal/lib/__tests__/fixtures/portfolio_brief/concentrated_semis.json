@@ -7,7 +7,7 @@
   "book": { "n": 9, "covered": 8, "uncovered": ["FOO"] },
   "headline": {
     "en": "Your book leans hard into semiconductors, and today's desk read there is Cautious — a bounce, not a turn.",
-    "zh": "你的账本重仓半导体，而台面今日对该板块的研判是「谨慎」—— 是反弹，不是反转。"
+    "zh": "你的账本重仓半导体，而研究台今日对该板块的研判是「谨慎」—— 是反弹，不是反转。"
   },
   "sections": [
     {
@@ -17,7 +17,7 @@
       "lines": [
         {
           "en": "41% of your book is Technology — today's desk read on Technology is Cautious (a bounce, not a turn), so your effective diversification is thinner than it looks.",
-          "zh": "你账本的 41% 在科技板块 —— 台面今日对科技的研判是「谨慎」（是反弹，不是反转），所以你的有效分散度比看上去更薄。"
+          "zh": "你账本的 41% 在科技板块 —— 研究台今日对科技的研判是「谨慎」（是反弹，不是反转），所以你的有效分散度比看上去更薄。"
         }
       ]
     },
@@ -50,7 +50,7 @@
       "lines": [
         {
           "en": "The filings desks touched 2 of your names this week: a Congress buy in NVDA and a fund trim in AAPL.",
-          "zh": "本周备案台面触及你 2 只标的：NVDA 出现一笔国会买入，AAPL 出现一笔基金减持。"
+          "zh": "本周备案台触及你 2 只标的：NVDA 出现一笔国会买入，AAPL 出现一笔基金减持。"
         }
       ]
     }
