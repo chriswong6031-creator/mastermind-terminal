@@ -4,8 +4,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { BrandMark } from "@/components/BrandMark";
+import { useT } from "@/lib/i18n";
 
 function LoginForm() {
+  const t = useT();
   const params = useSearchParams();
   const [mode, setMode] = useState<"signin" | "signup">(params.get("mode") === "signup" ? "signup" : "signin");
   const [email, setEmail] = useState("");
@@ -51,13 +53,13 @@ function LoginForm() {
         <input id="auth-pw" className="field" type="password" required minLength={6} value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" />
         {err && <div className="err">{err}</div>}
         <button className="btn btn-primary" style={{ width: "100%", marginTop: 18 }} disabled={busy}>
-          {busy ? "…" : mode === "signin" ? "Sign in" : "Create account"}
+          {busy ? "…" : mode === "signin" ? t("lgSignIn") : t("lgCreateAccount")}
         </button>
         <div className="alt">
           {mode === "signin" ? (
-            <>New here? <a className="lnk" href="https://www.mastermind-x.com/?signup=1">Create your free account</a></>
+            <>{t("lgNewHere")} <a className="lnk" href="https://www.mastermind-x.com/?signup=1">{t("lgCreateFree")}</a></>
           ) : (
-            <>Already have an account? <button type="button" className="lnk" onClick={() => switchMode("signin")}>Sign in</button></>
+            <>{t("lgHaveAccount")} <button type="button" className="lnk" onClick={() => switchMode("signin")}>{t("lgSignIn")}</button></>
           )}
         </div>
       </form>

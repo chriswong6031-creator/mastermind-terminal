@@ -30,12 +30,13 @@ function NumberField({ value, min, max, step = 1, onChange }: { value: number; m
 }
 
 function ColorField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const t = useT();
   const apply = (hex: string) => onChange(hexToRgba(hex, alphaOf(value)));
   return (
     <span className="is-color">
       <span className="is-sw-cur" style={{ background: value }} />
       {SWATCHES.map((s) => <button key={s} className={`is-sw${value === s ? " on" : ""}`} style={{ background: s }} title={s} onClick={() => apply(s)} />)}
-      <input type="color" value={hexOf(value)} onChange={(e) => apply(e.target.value)} aria-label="custom color" />
+      <input type="color" value={hexOf(value)} onChange={(e) => apply(e.target.value)} aria-label={t("customColor")} />
     </span>
   );
 }

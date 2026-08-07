@@ -4475,7 +4475,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         <div data-a="copypx" class="ctx-row"><span class="ctx-ico">${icoCopy}</span><span class="ctx-lbl">${escH("Copy price")} <strong>${pxLabel}</strong></span></div>
         <div data-a="paste" class="ctx-row ctx-dis"><span class="ctx-ico">${icoPaste}</span><span class="ctx-lbl">${escH("Paste")}</span><span class="ctx-kbd">⌘V</span></div>
         <div class="sep"></div>
-        <div data-a="alert" class="ctx-row"><span class="ctx-ico">${icoBell}</span><span class="ctx-lbl">Add alert on <b>${escH(sym)}</b> at ${pxLabel}&hellip;</span><span class="ctx-kbd">⌥A</span></div>
+        <div data-a="alert" class="ctx-row"><span class="ctx-ico">${icoBell}</span><span class="ctx-lbl">${escH(tPlain("cpAddAlertOn", "Add alert on"))} <b>${escH(sym)}</b> @ ${pxLabel}&hellip;</span><span class="ctx-kbd">⌥A</span></div>
         <div class="sep"></div>
         ${ctxRow("lockv", icoLock, escH("Lock vertical cursor line by time"), "", locked ? " ctx-checked" : "")}
         <div class="sep"></div>
@@ -4569,7 +4569,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
     //    `mm:set-tf` (TerminalShell owns the listener → setTf on the active pane). Kept out of the CSS
     //    files (styling is inline) so it lives entirely in this component. ──
     const empty = document.createElement("div"); empty.className = "chart-empty"; empty.style.cssText = "position:absolute;inset:0;z-index:6;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:24px;pointer-events:auto";
-    empty.innerHTML = `<div class="ce-msg" style="color:var(--text-2);font-size:13px;max-width:320px;line-height:1.5"></div><button class="ce-btn" style="cursor:pointer;font:600 12px var(--font-ui),system-ui;color:var(--text);background:var(--panel-2);border:1px solid var(--line-3);border-radius:6px;padding:7px 14px">Back to Daily</button>`;
+    empty.innerHTML = `<div class="ce-msg" style="color:var(--text-2);font-size:13px;max-width:320px;line-height:1.5"></div><button class="ce-btn" style="cursor:pointer;font:600 12px var(--font-ui),system-ui;color:var(--text);background:var(--panel-2);border:1px solid var(--line-3);border-radius:6px;padding:7px 14px">${tPlain("cpBackToDaily", "Back to Daily")}</button>`;
     wrap.appendChild(empty); emptyRef.current = empty;
     empty.querySelector(".ce-btn")!.addEventListener("pointerdown", (e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("mm:set-tf", { detail: { tf: "D" } })); });
     // `action` gates the CTA: the intraday dead-end offers "Back to Daily", but the DAILY dead-end
@@ -7254,7 +7254,7 @@ export default function ChartPanel({ symbol, chartType = "candles", indicators, 
         {/* GC v2: toggle the early-dots + arm/confirm warning overlay (side channels) */}
         {oracleVisible && <span className="mm" role="button" tabIndex={0} onClick={() => setShowDetail((v) => !v)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShowDetail((v) => !v); } }}
-          title="Toggle early dots & structure-break warnings"
+          title={tPlain("cpOracleToggle", "Toggle early dots & structure-break warnings")}
           style={{ cursor: "pointer", opacity: showDetail ? 1 : 0.5 }}>
           <i style={{ background: "var(--muted)" }} />{showDetail ? "⚠ detail" : "⚠ off"}
         </span>}

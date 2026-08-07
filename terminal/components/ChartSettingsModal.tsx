@@ -83,7 +83,7 @@ export default function ChartSettingsModal({
 
   function selectTemplate(value: string) {
     if (value === "__save") {
-      const name = window.prompt("Template name");
+      const name = window.prompt(t("smTemplateName"));
       if (!name?.trim()) return;
       const next = { ...templates, [name.trim()]: settings };
       try { localStorage.setItem(TEMPLATE_KEY, JSON.stringify(next)); } catch {}
@@ -110,13 +110,13 @@ export default function ChartSettingsModal({
       <div className="sm-modal" role="dialog" aria-modal="true" aria-label={t("smTitle")}>
         <div className="sm-header">
           <span className="sm-title">{t("smTitle")}</span>
-          <button className="sm-close" onClick={cancel} aria-label="Close">
+          <button className="sm-close" onClick={cancel} aria-label={t("smClose")}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
 
         <div className="sm-body">
-          <nav className="sm-tabs" aria-label="Chart settings sections">
+          <nav className="sm-tabs" aria-label={t("smSections")}>
             {tabs.map(({ key, label }) => (
               <button
                 key={key}
@@ -139,16 +139,16 @@ export default function ChartSettingsModal({
         <footer className="sm-footer">
           <div className="sm-template-wrap">
             <select className="sm-select sm-template" value="" onChange={(event) => { selectTemplate(event.target.value); event.currentTarget.value = ""; }}>
-              <option value="">Template</option>
-              <option value="__default">Restore defaults</option>
+              <option value="">{t("smTemplate")}</option>
+              <option value="__default">{t("smRestoreDefaults")}</option>
               {Object.keys(templates).sort().map((name) => <option key={name} value={name}>{name}</option>)}
-              <option value="__save">Save current…</option>
+              <option value="__save">{t("smSaveCurrent")}</option>
             </select>
-            <button className="sm-reset" onClick={resetTab}>Reset tab</button>
+            <button className="sm-reset" onClick={resetTab}>{t("smResetTabBtn")}</button>
           </div>
           <div className="sm-footer-actions">
-            <button className="sm-cancel" onClick={cancel}>Cancel</button>
-            <button className="sm-ok" onClick={onClose}>OK</button>
+            <button className="sm-cancel" onClick={cancel}>{t("smCancel")}</button>
+            <button className="sm-ok" onClick={onClose}>{t("smOK")}</button>
           </div>
         </footer>
       </div>
@@ -223,9 +223,10 @@ function ColorPair({ first, second, onFirst, onSecond }: {
   onFirst: (value: string) => void;
   onSecond: (value: string) => void;
 }) {
+  const t = useT();
   return <div className="sm-color-pair">
-    <ColorControl value={first} fallback={cssToken("--up", "#26c281")} onChange={onFirst} title="Up color" />
-    <ColorControl value={second} fallback={cssToken("--down", "#f23645")} onChange={onSecond} title="Down color" />
+    <ColorControl value={first} fallback={cssToken("--up", "#26c281")} onChange={onFirst} title={t("smUpColor")} />
+    <ColorControl value={second} fallback={cssToken("--down", "#f23645")} onChange={onSecond} title={t("smDownColor")} />
   </div>;
 }
 
@@ -249,53 +250,55 @@ function SymbolTab({ settings, onSettings, extendedEligible, intraday }: {
   extendedEligible: boolean;
   intraday: boolean;
 }) {
+  const t = useT();
   const s = settings;
   return <div className="sm-section-list">
-    <Section title="Candles">
-      <CheckRow label="Color bars based on previous close" value={s.colorBarsPrevClose} onChange={(value) => onSettings({ colorBarsPrevClose: value })} />
-      <CheckRow label="Body" value={s.candleBodyVisible} onChange={(value) => onSettings({ candleBodyVisible: value })}>
+    <Section title={t("smCandles")}>
+      <CheckRow label={t("smColorPrevClose")} value={s.colorBarsPrevClose} onChange={(value) => onSettings({ colorBarsPrevClose: value })} />
+      <CheckRow label={t("smBody")} value={s.candleBodyVisible} onChange={(value) => onSettings({ candleBodyVisible: value })}>
         <ColorPair first={s.candleUpColor} second={s.candleDownColor} onFirst={(value) => onSettings({ candleUpColor: value })} onSecond={(value) => onSettings({ candleDownColor: value })} />
       </CheckRow>
-      <CheckRow label="Borders" value={s.candleBordersVisible} onChange={(value) => onSettings({ candleBordersVisible: value })}>
+      <CheckRow label={t("smBorders")} value={s.candleBordersVisible} onChange={(value) => onSettings({ candleBordersVisible: value })}>
         <ColorPair first={s.candleUpBorder} second={s.candleDownBorder} onFirst={(value) => onSettings({ candleUpBorder: value })} onSecond={(value) => onSettings({ candleDownBorder: value })} />
       </CheckRow>
-      <CheckRow label="Wick" value={s.candleWicksVisible} onChange={(value) => onSettings({ candleWicksVisible: value })}>
+      <CheckRow label={t("smWick")} value={s.candleWicksVisible} onChange={(value) => onSettings({ candleWicksVisible: value })}>
         <ColorPair first={s.candleUpWick} second={s.candleDownWick} onFirst={(value) => onSettings({ candleUpWick: value })} onSecond={(value) => onSettings({ candleDownWick: value })} />
       </CheckRow>
     </Section>
-    <Section title="Data modification">
+    <Section title={t("smDataMod")}>
       <SelectRow
-        label="Session"
+        label={t("smSession")}
         value={extendedEligible && s.extHours ? "extended" : "regular"}
         disabled={!extendedEligible}
         onChange={(value) => onSettings({ extHours: extendedEligible && value === "extended" })}
-        options={[{ value: "regular", label: "Regular" }, { value: "extended", label: "Extended" }]}
+        options={[{ value: "regular", label: t("smSessionRegular") }, { value: "extended", label: t("smSessionExtended") }]}
       />
-      {!extendedEligible && <p className="sm-help">Extended sessions are available only for U.S. equities. China, Hong Kong, Canada, and crypto keep their native sessions.</p>}
-      {extendedEligible && !intraday && <p className="sm-help">This preference applies on 12-hour and lower intervals. Daily and higher charts keep regular candles and show the live extended-session price as a separate line.</p>}
-      <SelectRow label="Precision" value={s.precision} onChange={(value) => onSettings({ precision: value as ChartSettings["precision"] })}
-        options={[{ value: "auto", label: "Default" }, { value: "2", label: "0.01" }, { value: "3", label: "0.001" }, { value: "4", label: "0.0001" }]} />
+      {!extendedEligible && <p className="sm-help">{t("smExtUsOnly")}</p>}
+      {extendedEligible && !intraday && <p className="sm-help">{t("smExtIntradayOnly")}</p>}
+      <SelectRow label={t("smPrecision")} value={s.precision} onChange={(value) => onSettings({ precision: value as ChartSettings["precision"] })}
+        options={[{ value: "auto", label: t("smPrecDefault") }, { value: "2", label: "0.01" }, { value: "3", label: "0.001" }, { value: "4", label: "0.0001" }]} />
     </Section>
   </div>;
 }
 
 function StatusTab({ settings: s, onSettings }: { settings: ChartSettings; onSettings: Patch }) {
+  const t = useT();
   return <div className="sm-section-list">
-    <Section title="Instrument">
-      <CheckRow label="Logo" value={s.showLogo} onChange={(value) => onSettings({ showLogo: value })} />
-      <CheckRow label="Title" value={s.showSymbolName} onChange={(value) => onSettings({ showSymbolName: value })}>
+    <Section title={t("smInstrument")}>
+      <CheckRow label={t("smLogo")} value={s.showLogo} onChange={(value) => onSettings({ showLogo: value })} />
+      <CheckRow label={t("smTitleRow")} value={s.showSymbolName} onChange={(value) => onSettings({ showSymbolName: value })}>
         <select className="sm-select" value={s.titleMode} onChange={(event) => onSettings({ titleMode: event.target.value as ChartSettings["titleMode"] })}>
-          <option value="ticker">Ticker</option><option value="name">Name</option><option value="both">Name and ticker</option>
+          <option value="ticker">{t("smTicker")}</option><option value="name">{t("smName")}</option><option value="both">{t("smNameTicker")}</option>
         </select>
       </CheckRow>
-      <CheckRow label="Chart values" value={s.showOHLC} onChange={(value) => onSettings({ showOHLC: value })} />
-      <CheckRow label="Bar change values" value={s.showBarChange} onChange={(value) => onSettings({ showBarChange: value })} />
-      <CheckRow label="Volume" value={s.showVolume} onChange={(value) => onSettings({ showVolume: value })} />
-      <CheckRow label="Last day change values" value={s.showLastDayChange} onChange={(value) => onSettings({ showLastDayChange: value })} />
+      <CheckRow label={t("smChartValues")} value={s.showOHLC} onChange={(value) => onSettings({ showOHLC: value })} />
+      <CheckRow label={t("smBarChange")} value={s.showBarChange} onChange={(value) => onSettings({ showBarChange: value })} />
+      <CheckRow label={t("smVolume")} value={s.showVolume} onChange={(value) => onSettings({ showVolume: value })} />
+      <CheckRow label={t("smLastDayChange")} value={s.showLastDayChange} onChange={(value) => onSettings({ showLastDayChange: value })} />
     </Section>
-    <Section title="Indicators">
-      <CheckRow label="Titles" value={s.showIndicatorTitles} onChange={(value) => onSettings({ showIndicatorTitles: value })} />
-      <CheckRow label="Background" value={s.indicatorBackgroundOpacity > 0} onChange={(value) => onSettings({ indicatorBackgroundOpacity: value ? 70 : 0 })}>
+    <Section title={t("smIndicators")}>
+      <CheckRow label={t("smTitles")} value={s.showIndicatorTitles} onChange={(value) => onSettings({ showIndicatorTitles: value })} />
+      <CheckRow label={t("smBackground")} value={s.indicatorBackgroundOpacity > 0} onChange={(value) => onSettings({ indicatorBackgroundOpacity: value ? 70 : 0 })}>
         <input className="sm-range" type="range" min="0" max="100" value={s.indicatorBackgroundOpacity} onChange={(event) => onSettings({ indicatorBackgroundOpacity: Number(event.target.value) })} />
       </CheckRow>
     </Section>
@@ -307,77 +310,81 @@ function ScalesTab({ settings: s, onSettings, chartApi }: { settings: ChartSetti
     onSettings({ autoScale: value });
     try { chartApi?.priceScale(s.scaleLeft ? "left" : "right").setAutoScale(value); } catch {}
   }
+  const t = useT();
   return <div className="sm-section-list">
-    <Section title="Price scale">
-      <SelectRow label="Scale mode" value={s.mode} onChange={(value) => onSettings({ mode: Number(value) as PriceScaleMode })}
-        options={[{ value: PriceScaleMode.Normal, label: "Regular" }, { value: PriceScaleMode.Percentage, label: "Percentage" }, { value: PriceScaleMode.IndexedTo100, label: "Indexed to 100" }, { value: PriceScaleMode.Logarithmic, label: "Logarithmic" }]} />
-      <SelectRow label="Scales placement" value={s.scaleLeft ? "left" : "right"} onChange={(value) => onSettings({ scaleLeft: value === "left" })}
-        options={[{ value: "right", label: "Right" }, { value: "left", label: "Left" }]} />
-      <CheckRow label="Auto scale" value={s.autoScale} onChange={applyAuto} />
-      <CheckRow label="Invert scale" value={s.invertScale} onChange={(value) => onSettings({ invertScale: value })} />
+    <Section title={t("smPriceScale")}>
+      <SelectRow label={t("smScaleMode")} value={s.mode} onChange={(value) => onSettings({ mode: Number(value) as PriceScaleMode })}
+        options={[{ value: PriceScaleMode.Normal, label: t("qsgRegular") }, { value: PriceScaleMode.Percentage, label: t("qsgPercent") }, { value: PriceScaleMode.IndexedTo100, label: t("qsgIndexed") }, { value: PriceScaleMode.Logarithmic, label: t("qsgLog") }]} />
+      <SelectRow label={t("smScalePlacement")} value={s.scaleLeft ? "left" : "right"} onChange={(value) => onSettings({ scaleLeft: value === "left" })}
+        options={[{ value: "right", label: t("smPlacementRight") }, { value: "left", label: t("smPlacementLeft") }]} />
+      <CheckRow label={t("smAutoScale")} value={s.autoScale} onChange={applyAuto} />
+      <CheckRow label={t("smInvertScale")} value={s.invertScale} onChange={(value) => onSettings({ invertScale: value })} />
     </Section>
-    <Section title="Price labels & lines">
-      <CheckRow label="Countdown to bar close" value={s.countdownVisible} onChange={(value) => onSettings({ countdownVisible: value })} />
-      <CheckRow label="Symbol value and line" value={s.lastValueVisible && s.priceLineVisible}
+    <Section title={t("smPriceLabels")}>
+      <CheckRow label={t("smCountdown")} value={s.countdownVisible} onChange={(value) => onSettings({ countdownVisible: value })} />
+      <CheckRow label={t("smSymbolValueLine")} value={s.lastValueVisible && s.priceLineVisible}
         onChange={(value) => onSettings({ lastValueVisible: value, priceLineVisible: value })} />
-      <CheckRow label="Pre/post/overnight market" value={s.extendedLineVisible} onChange={(value) => onSettings({ extendedLineVisible: value })}>
+      <CheckRow label={t("smPrePostOvernight")} value={s.extendedLineVisible} onChange={(value) => onSettings({ extendedLineVisible: value })}>
         <div className="sm-color-pair three">
-          <ColorControl value={s.preMarketColor} fallback="#ff9800" onChange={(value) => onSettings({ preMarketColor: value })} title="Pre-market" />
-          <ColorControl value={s.postMarketColor} fallback="#2962ff" onChange={(value) => onSettings({ postMarketColor: value })} title="After-hours" />
-          <ColorControl value={s.overnightColor} fallback="#9c27b0" onChange={(value) => onSettings({ overnightColor: value })} title="Overnight" />
+          <ColorControl value={s.preMarketColor} fallback="#ff9800" onChange={(value) => onSettings({ preMarketColor: value })} title={t("smPreMarket")} />
+          <ColorControl value={s.postMarketColor} fallback="#2962ff" onChange={(value) => onSettings({ postMarketColor: value })} title={t("smAfterHours")} />
+          <ColorControl value={s.overnightColor} fallback="#9c27b0" onChange={(value) => onSettings({ overnightColor: value })} title={t("smOvernight")} />
         </div>
       </CheckRow>
     </Section>
-    <Section title="Time scale">
-      <SelectRow label="Time hours format" value={s.hourFormat} onChange={(value) => onSettings({ hourFormat: value as "12" | "24" })}
-        options={[{ value: "24", label: "24-hours" }, { value: "12", label: "12-hours" }]} />
+    <Section title={t("smTimeScale")}>
+      <SelectRow label={t("smHourFormat")} value={s.hourFormat} onChange={(value) => onSettings({ hourFormat: value as "12" | "24" })}
+        options={[{ value: "24", label: t("smHour24") }, { value: "12", label: t("smHour12") }]} />
     </Section>
   </div>;
 }
 
 function CanvasTab({ settings: s, onSettings }: { settings: ChartSettings; onSettings: Patch }) {
+  const t = useT();
   return <div className="sm-section-list">
-    <Section title="Chart basic styles">
-      <SelectRow label="Background" value={s.backgroundType} onChange={(value) => onSettings({ backgroundType: value as "solid" | "gradient" })}
-        options={[{ value: "solid", label: "Solid" }, { value: "gradient", label: "Gradient" }]} />
-      <div className="sm-row"><span className="sm-row-label">Background colors</span><div className="sm-color-pair">
+    <Section title={t("smBasicStyles")}>
+      <SelectRow label={t("smBackground")} value={s.backgroundType} onChange={(value) => onSettings({ backgroundType: value as "solid" | "gradient" })}
+        options={[{ value: "solid", label: t("smBgSolid") }, { value: "gradient", label: t("smBgGradient") }]} />
+      <div className="sm-row"><span className="sm-row-label">{t("smBackgroundColors")}</span><div className="sm-color-pair">
         <ColorControl value={s.backgroundTop} fallback={cssToken("--chart-bg", "#101521")} onChange={(value) => onSettings({ backgroundTop: value })} />
         <ColorControl value={s.backgroundBottom} fallback={cssToken("--chart-bg", "#101521")} onChange={(value) => onSettings({ backgroundBottom: value })} />
       </div></div>
-      <CheckRow label="Vertical grid lines" value={s.gridVVisible} onChange={(value) => onSettings({ gridVVisible: value })}>
+      <CheckRow label={t("smGridV")} value={s.gridVVisible} onChange={(value) => onSettings({ gridVVisible: value })}>
         <ColorControl value={s.gridVColor} fallback={cssToken("--grid", "#202838")} onChange={(value) => onSettings({ gridVColor: value })} />
       </CheckRow>
-      <CheckRow label="Horizontal grid lines" value={s.gridHVisible} onChange={(value) => onSettings({ gridHVisible: value })}>
+      <CheckRow label={t("smGridH")} value={s.gridHVisible} onChange={(value) => onSettings({ gridHVisible: value })}>
         <ColorControl value={s.gridHColor} fallback={cssToken("--grid", "#202838")} onChange={(value) => onSettings({ gridHColor: value })} />
       </CheckRow>
-      <div className="sm-row"><span className="sm-row-label">Pane separators</span><ColorControl value={s.paneSeparatorColor} fallback={cssToken("--line", "#2a3242")} onChange={(value) => onSettings({ paneSeparatorColor: value })} /></div>
-      <div className="sm-row"><span className="sm-row-label">Crosshair</span><ColorControl value={s.crosshairColor} fallback="#9598a1" onChange={(value) => onSettings({ crosshairColor: value })} /></div>
-      <CheckRow label="Watermark" value={s.showWatermark} onChange={(value) => onSettings({ showWatermark: value })}>
+      <div className="sm-row"><span className="sm-row-label">{t("smPaneSeparators")}</span><ColorControl value={s.paneSeparatorColor} fallback={cssToken("--line", "#2a3242")} onChange={(value) => onSettings({ paneSeparatorColor: value })} /></div>
+      <div className="sm-row"><span className="sm-row-label">{t("smCrosshair")}</span><ColorControl value={s.crosshairColor} fallback="#9598a1" onChange={(value) => onSettings({ crosshairColor: value })} /></div>
+      <CheckRow label={t("smWatermark")} value={s.showWatermark} onChange={(value) => onSettings({ showWatermark: value })}>
         <ColorControl value={s.watermarkColor} fallback="#788296" onChange={(value) => onSettings({ watermarkColor: value })} />
       </CheckRow>
     </Section>
-    <Section title="Scales">
-      <div className="sm-row"><span className="sm-row-label">Text</span><div className="sm-inline">
+    <Section title={t("smScales")}>
+      <div className="sm-row"><span className="sm-row-label">{t("smText")}</span><div className="sm-inline">
         <ColorControl value={s.scaleTextColor} fallback={cssToken("--muted", "#8b93a6")} onChange={(value) => onSettings({ scaleTextColor: value })} />
         <select className="sm-select small" value={s.scaleFontSize} onChange={(event) => onSettings({ scaleFontSize: Number(event.target.value) })}>
           {[10, 11, 12, 13, 14, 16].map((size) => <option key={size}>{size}</option>)}
         </select>
       </div></div>
-      <div className="sm-row"><span className="sm-row-label">Lines</span><ColorControl value={s.scaleLineColor} fallback={cssToken("--line", "#2a3242")} onChange={(value) => onSettings({ scaleLineColor: value })} /></div>
+      <div className="sm-row"><span className="sm-row-label">{t("smLines")}</span><ColorControl value={s.scaleLineColor} fallback={cssToken("--line", "#2a3242")} onChange={(value) => onSettings({ scaleLineColor: value })} /></div>
     </Section>
-    <Section title="Buttons">
-      <SelectRow label="Pane" value={s.paneButtons} onChange={(value) => onSettings({ paneButtons: value as ChartSettings["paneButtons"] })} options={visibilityOptions} />
+    <Section title={t("smButtons")}>
+      <SelectRow label={t("smPane")} value={s.paneButtons} onChange={(value) => onSettings({ paneButtons: value as ChartSettings["paneButtons"] })} options={visibilityOptions(t)} />
     </Section>
-    <Section title="Margins">
-      <NumberRow label="Top" value={s.scaleMarginsTop} min={0} max={50} suffix="%" onChange={(value) => onSettings({ scaleMarginsTop: value })} />
-      <NumberRow label="Bottom" value={s.scaleMarginsBottom} min={0} max={50} suffix="%" onChange={(value) => onSettings({ scaleMarginsBottom: value })} />
-      <NumberRow label="Right" value={s.rightOffsetBars} min={0} max={100} suffix="bars" onChange={(value) => onSettings({ rightOffsetBars: value })} />
+    <Section title={t("smMargins")}>
+      <NumberRow label={t("smMarginTop")} value={s.scaleMarginsTop} min={0} max={50} suffix="%" onChange={(value) => onSettings({ scaleMarginsTop: value })} />
+      <NumberRow label={t("smMarginBottom")} value={s.scaleMarginsBottom} min={0} max={50} suffix="%" onChange={(value) => onSettings({ scaleMarginsBottom: value })} />
+      <NumberRow label={t("smMarginRight")} value={s.rightOffsetBars} min={0} max={100} suffix={t("smBarsSuffix")} onChange={(value) => onSettings({ rightOffsetBars: value })} />
     </Section>
   </div>;
 }
 
-const visibilityOptions = [
-  { value: "always", label: "Always visible" },
-  { value: "hover", label: "Visible on mouse over" },
-  { value: "never", label: "Hidden" },
+// Built per render so the labels follow the active language rather than freezing
+// at module-evaluation time.
+const visibilityOptions = (t: (key: string) => string) => [
+  { value: "always", label: t("smVisAlways") },
+  { value: "hover", label: t("smVisHover") },
+  { value: "never", label: t("smVisNever") },
 ];

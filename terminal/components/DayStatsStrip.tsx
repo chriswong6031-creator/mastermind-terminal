@@ -189,7 +189,7 @@ export default function DayStatsStrip({ bars, market, dailyBars = [] }: DayStats
   };
 
   return (
-    <div className={styles.strip} role="region" aria-label="Day Stats">
+    <div className={styles.strip} role="region" aria-label={t("dsDayStats")}>
       {/* Gap */}
       <div className={styles.cell}>
         <span className={styles.lbl}>{t("dsGap")}</span>

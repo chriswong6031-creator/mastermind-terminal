@@ -3087,7 +3087,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
           fetches never touch ChartPanel), so shell mode drops the rail while dossier mode keeps
           it and drops the chart. The resizer is desktop-only chrome — never in a native shell. */}
       {!shellMode && (
-      <div className="rail-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" onMouseDown={startRailResize}><span /></div>
+      <div className="rail-resizer" role="separator" aria-orientation="vertical" aria-label={t("shResizeSidebar")} onMouseDown={startRailResize}><span /></div>
       )}
       {(!shellMode || dossierMode) && (<>
       <aside className="rail">
@@ -3303,7 +3303,7 @@ export default function TerminalShell({ symbols, email, initialSymbol, shellMode
             </div>
           </div>
         </div>
-        <a className="logo-attribution" href="https://logo.dev" target="_blank" rel="noopener">Logos provided by Logo.dev</a>
+        <a className="logo-attribution" href="https://logo.dev" target="_blank" rel="noopener">{t("shLogoCredit")}</a>
       </aside>
       </>)}
 

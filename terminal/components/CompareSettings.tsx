@@ -9,12 +9,13 @@ const alphaOf = (c: string) => { const m = /rgba?\([^)]*,\s*([\d.]+)\s*\)/i.exec
 const hexToRgba = (hex: string, a: number) => { let h = hex.replace("#", ""); if (h.length === 3) h = h.split("").map((x) => x + x).join(""); const n = parseInt(h, 16); const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255; return a >= 1 ? `#${h}` : `rgba(${r}, ${g}, ${b}, ${a})`; };
 
 function ColorField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const t = useT();
   const apply = (hex: string) => onChange(hexToRgba(hex, alphaOf(value)));
   return (
     <span className="is-color">
       <span className="is-sw-cur" style={{ background: value }} />
       {SWATCHES.map((s) => <button key={s} className={`is-sw${value === s ? " on" : ""}`} style={{ background: s }} title={s} onClick={() => apply(s)} />)}
-      <input type="color" value={hexOf(value)} onChange={(e) => apply(e.target.value)} aria-label="custom color" />
+      <input type="color" value={hexOf(value)} onChange={(e) => apply(e.target.value)} aria-label={t("customColor")} />
     </span>
   );
 }
